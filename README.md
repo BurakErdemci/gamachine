@@ -111,8 +111,8 @@ label, context size and price beside each name. A provider you have no key for s
 shows up, marked unconfirmed, because "this model exists" and "your account has it"
 are two different claims.
 
-**Autonomous agentic loop** — task → think → call a tool → evaluate → repeat, capped
-at 15 iterations. Every step streams live over SSE, and Stop cancels at both layers:
+**Autonomous agentic loop** — task → think → call a tool → evaluate → repeat, stopped
+by a progress guard (five identical tool/argument/result repeats) with a hard fuse at 300 steps. Every step streams live over SSE, and Stop cancels at both layers:
 it cuts the stream *and* rejects the pending approval gates on the backend.
 
 **One approval gate for all of them** — file writes open a side-by-side diff, deletes

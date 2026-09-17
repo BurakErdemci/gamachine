@@ -73,7 +73,7 @@ nothing recorded it before.
 
 | What | Value |
 |---|---|
-| Vendored at | `dc539b6`, 30 May 2026 — a plain file copy |
+| Vendored at | upstream `680ba458` (9.6.9-beta.7, May 2026) — a plain file copy; measured by tree diff 17 Sep 2026, the earlier `dc539b6` does not exist upstream |
 | `Server/pyproject.toml` | `9.6.8` — byte-identical to upstream tag `v9.6.8` |
 | `MCPForUnity/package.json` | `9.6.9-beta.7` — **no upstream tag carries this**; it comes from upstream's `beta` branch, which is also its default branch |
 | Local commits since | **45**, touching this directory |

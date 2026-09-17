@@ -113,7 +113,7 @@ olmayan sağlayıcı listeden kaybolmuyor, "doğrulanmadı" diye işaretleniyor 
 "bu model var" ile "senin hesabında var" iki ayrı iddia.
 
 **Otonom agentic döngü** — görev → düşün → araç çağır → değerlendir → tekrarla;
-15 iterasyonda sınırlı. Her adım SSE ile canlı akıyor ve Dur düğmesi iki katmanda
+ilerleme koruması durduruyor (aynı araç/argüman/sonuç beş kez tekrarlarsa), sert sigorta 300 adım. Her adım SSE ile canlı akıyor ve Dur düğmesi iki katmanda
 birden iptal ediyor: akışı kesiyor *ve* backend'de bekleyen onay kapılarını reddediyor.
 
 **Hepsi için tek onay kapısı** — dosya yazımında yan yana diff, silmede içerik
