@@ -43,7 +43,8 @@ export const useChat = (
   const [activity, setActivity] = useState<ChatActivity | null>(null);
   // The approval mode is global and lives in the backend (closed-loop.md §5):
   // external MCP clients carry no request, so a per-request field could never
-  // make them auto. Until the backend answers, the UI shows step - the safe side.
+  // make them auto. Until the backend answers, the UI shows step - the safe side
+  // (a fresh install then reads auto from the backend; nothing is written here).
   const [generationMode, setGenerationModeState] = useState<GenerationMode>('step');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [tempTitle, setTempTitle] = useState('');
@@ -60,7 +61,9 @@ export const useChat = (
         let legacy: string | null = null;
         try { legacy = window.localStorage.getItem(LEGACY_MODE_KEY); } catch { /* storage blocked */ }
         // One-time migration: the backend has never stored a mode, so the
-        // renderer's old localStorage choice becomes the global one.
+        // renderer's old localStorage choice becomes the global one. Without a
+        // valid old value nothing is written, so the backend's fresh-install
+        // default stays unsaved and a later explicit choice is the first write.
         if (!res.data?.stored && (legacy === 'auto' || legacy === 'step') && ipc?.invoke) {
           const out = await ipc.invoke('approval-mode-set', legacy, 'migrate');
           mode = out?.mode === 'auto' ? 'auto' : 'step';

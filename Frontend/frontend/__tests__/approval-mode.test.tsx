@@ -93,18 +93,34 @@ describe('useChat · backend-owned mode', () => {
     expect(window.localStorage.getItem(KEY)).toBeNull()
   })
 
-  it('migrates the old localStorage value once when the backend has none', async () => {
-    window.localStorage.setItem(KEY, 'auto')
-    mockedGet.mockResolvedValue({ data: { mode: 'step', stored: false } })
-    ipcInvoke.mockResolvedValue({ mode: 'auto', previous: 'step' })
+  it('migrates the old localStorage value once, over the fresh-install auto', async () => {
+    window.localStorage.setItem(KEY, 'step')
+    mockedGet.mockResolvedValue({ data: { mode: 'auto', stored: false } })
+    ipcInvoke.mockResolvedValue({ mode: 'step', previous: 'auto' })
+    const { result } = hook()
+    await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith('approval-mode-set', 'step', 'migrate'))
+    await waitFor(() => expect(window.localStorage.getItem(KEY)).toBeNull())
+    expect(result.current.generationMode).toBe('step')
+  })
+
+  it('a fresh install shows the backend auto and writes nothing', async () => {
+    mockedGet.mockResolvedValue({ data: { mode: 'auto', stored: false } })
     const { result } = hook()
     await waitFor(() => expect(result.current.generationMode).toBe('auto'))
-    expect(ipcInvoke).toHaveBeenCalledWith('approval-mode-set', 'auto', 'migrate')
+    expect(ipcInvoke).not.toHaveBeenCalled()
     expect(window.localStorage.getItem(KEY)).toBeNull()
   })
 
-  it('defaults to step with nothing stored anywhere', async () => {
-    mockedGet.mockResolvedValue({ data: { mode: 'step', stored: false } })
+  it('an invalid old value is not migrated', async () => {
+    window.localStorage.setItem(KEY, 'plan')
+    mockedGet.mockResolvedValue({ data: { mode: 'auto', stored: false } })
+    const { result } = hook()
+    await waitFor(() => expect(result.current.generationMode).toBe('auto'))
+    expect(ipcInvoke).not.toHaveBeenCalled()
+  })
+
+  it('shows step and writes nothing until the backend answers', async () => {
+    mockedGet.mockReturnValue(new Promise(() => {}))
     const { result } = hook()
     await waitFor(() => expect(mockedGet).toHaveBeenCalled())
     expect(result.current.generationMode).toBe('step')

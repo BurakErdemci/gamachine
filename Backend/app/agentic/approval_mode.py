@@ -15,9 +15,13 @@ LOCAL_APP_TOKEN is not enough on its own: it sits in the Unity MCP server's
 environment and in a 0600 file that every model-run child can read, so any of
 them could otherwise flip itself into auto mode.
 
+Default (owner decision, 25 Sep 2026): a fresh install, where nothing was ever
+saved, starts in auto. A saved choice always wins and survives restarts.
+
 Known limit: the persisted value is only as trustworthy as the user's data
-directory; a same-user process that edits the SQLite file changes the mode
-from the NEXT launch on. The value is therefore read once at startup and logged.
+directory; a same-user process that edits the SQLite file (or deletes the row,
+which now reads as a fresh install) changes the mode from the NEXT launch on.
+The value is therefore read once at startup and logged.
 """
 
 from __future__ import annotations
@@ -30,11 +34,13 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 MODES = ("auto", "step")
-DEFAULT_MODE = "step"
+FRESH_INSTALL_MODE = "auto"
+# Before the store is read, and whenever it cannot be trusted.
+FALLBACK_MODE = "step"
 _SETTING_KEY = "approval_mode"
 
 _LOCK = threading.Lock()
-_mode: str = DEFAULT_MODE
+_mode: str = FALLBACK_MODE
 _stored: bool = False
 _store: Any = None
 _ui_secret: bytes = b""
@@ -43,21 +49,25 @@ _ui_secret: bytes = b""
 def bind_store(store: Any) -> None:
     """Attach the persistence layer (DatabaseManager) and load the saved mode.
 
-    Anything other than an exact stored "auto"/"step" leaves the default: an
-    unreadable or tampered value must fall to step, never to auto.
+    Only a clean read that finds no row at all is a fresh install (auto). An
+    unreadable or tampered value must fall to step, never fail open to auto.
     """
     global _store, _mode, _stored
     value: Optional[str] = None
+    read_ok = False
     try:
         value = store.get_setting(_SETTING_KEY)
+        read_ok = True
     except Exception as exc:
         logger.error("[approval-mode] saved mode could not be read: %s", exc)
     with _LOCK:
         _store = store
         if isinstance(value, str) and value in MODES:
             _mode, _stored = value, True
+        elif read_ok and value is None:
+            _mode, _stored = FRESH_INSTALL_MODE, False
         else:
-            _mode, _stored = DEFAULT_MODE, False
+            _mode, _stored = FALLBACK_MODE, False
     logger.info("[approval-mode] startup mode=%s (stored=%s)", _mode, _stored)
 
 
@@ -145,4 +155,4 @@ def check_ui_secret(presented: str) -> bool:
 def _reset_for_tests() -> None:
     global _mode, _stored, _store, _ui_secret
     with _LOCK:
-        _mode, _stored, _store, _ui_secret = DEFAULT_MODE, False, None, b""
+        _mode, _stored, _store, _ui_secret = FALLBACK_MODE, False, None, b""

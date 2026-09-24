@@ -172,18 +172,39 @@ def test_write_through_the_ipc_path_is_accepted(monkeypatch):
 
 # ── persistence ──────────────────────────────────────────────────────────────
 
-def test_mode_is_persisted_and_unset_install_defaults_to_step(tmp_path):
+def test_fresh_install_starts_in_auto_without_storing_it(tmp_path):
     from database import DatabaseManager
 
     db = DatabaseManager(db_path=str(tmp_path / "t.db"))
     approval_mode.bind_store(db)
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "auto"
+    # Not written: the renderer's one-time legacy migration keys off this.
     assert approval_mode.is_stored() is False
+    assert db.get_setting("approval_mode") is None
+
+
+def test_mode_is_persisted_across_restarts(tmp_path):
+    from database import DatabaseManager
+
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    approval_mode.bind_store(db)
 
     approval_mode.set_mode("auto", source="test")
     approval_mode._reset_for_tests()
     approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
     assert approval_mode.current_mode() == "auto"
+    assert approval_mode.is_stored() is True
+
+
+def test_explicit_step_survives_a_restart_despite_the_auto_default(tmp_path):
+    from database import DatabaseManager
+
+    approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
+    assert approval_mode.current_mode() == "auto"
+    approval_mode.set_mode("step", source="test")
+    approval_mode._reset_for_tests()
+    approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
+    assert approval_mode.current_mode() == "step"
     assert approval_mode.is_stored() is True
 
 
@@ -194,6 +215,14 @@ def test_tampered_stored_value_falls_to_step(tmp_path):
     db.set_setting("approval_mode", "AUTO ")
     approval_mode.bind_store(db)
     assert approval_mode.current_mode() == "step"
+
+
+def test_unreadable_store_falls_to_step():
+    store = MagicMock()
+    store.get_setting.side_effect = OSError("database is locked")
+    approval_mode.bind_store(store)
+    assert approval_mode.current_mode() == "step"
+    assert approval_mode.is_stored() is False
 
 
 def test_ui_secret_check_is_fail_closed():
