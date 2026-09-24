@@ -15,6 +15,8 @@ def test_opus_5_and_4_8_keep_distinct_api_model_ids(anthropic_client):
     anthropic_client.return_value = MagicMock()
 
     assert AnthropicProvider("test-key", "claude-opus-5").model_name == "claude-opus-5"
+    # "opus-5-5" also contains "opus-5": the 5.5 branch must win, not collapse to Opus 5.
+    assert AnthropicProvider("test-key", "claude-opus-5-5").model_name == "claude-opus-5-5"
     assert AnthropicProvider("test-key", "claude-opus-4-8").model_name == "claude-opus-4-8"
 
 
@@ -40,6 +42,18 @@ def test_opus_5_is_selectable_on_the_claude_code_side():
     assert "claude-opus-5" in subscription
     assert "claude-opus-4-8" in subscription
     assert subscription["claude-opus-5"]["provider"] == "subscription"
+    assert subscription["claude-opus-5-5"]["name"] == "Claude Opus 5.5 (CLI)"
+
+
+def test_gpt_6_sol_and_luna_are_offered_on_the_codex_side():
+    router = create_config_router(MagicMock())
+    route = next(route for route in router.routes if route.path == "/available-models")
+    catalog = asyncio.run(route.endpoint())
+    subscription = {model["id"]: model for model in catalog["subscription"]}
+
+    assert subscription["gpt-6-sol"]["name"] == "Codex (GPT-6 Sol)"
+    assert subscription["gpt-6-luna"]["name"] == "Codex (GPT-6 Luna)"
+    assert subscription["gpt-6-astra"]["name"] == "Codex (GPT-6 Astra)"
 
 
 @patch("providers.api_providers.anthropic.Anthropic")

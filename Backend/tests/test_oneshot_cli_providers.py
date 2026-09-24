@@ -67,6 +67,13 @@ class TestManagerRouting(unittest.TestCase):
         astra = self._get("gpt-6-astra")
         self.assertIsInstance(astra, CodexProvider)
         self.assertEqual(astra.binary_name, "gpt-6-astra")
+        for mid in ("gpt-6-sol", "gpt-6-luna"):
+            codex = self._get(mid)
+            self.assertIsInstance(codex, CodexProvider)
+            self.assertEqual(codex.binary_name, mid)
+        opus_55 = self._get("claude-opus-5-5")
+        self.assertIsInstance(opus_55, ClaudeCodeProvider)
+        self.assertEqual(opus_55.binary_name, "claude-opus-5-5")
         from providers.agy_provider import AgyProvider
         for mid, gorunen in (("gemini-3.8-flash", "Gemini 3.8 Flash (High)"),
                              ("gemini-3.7-flash", "Gemini 3.7 Flash (High)")):

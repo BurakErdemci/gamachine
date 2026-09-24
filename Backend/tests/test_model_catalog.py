@@ -349,6 +349,10 @@ def test_new_model_ids_still_derive_an_openrouter_identity():
     assert model_catalog.openrouter_id_for("google", "gemini-3.8-flash") == "google/gemini-3.8-flash"
     assert model_catalog.openrouter_id_for("google", "gemini-3.7-flash") == "google/gemini-3.7-flash"
     assert model_catalog.openrouter_id_for("openai", "gpt-6-astra") == "openai/gpt-6-astra"
+    assert model_catalog.openrouter_id_for("openai", "gpt-6-sol") == "openai/gpt-6-sol"
+    assert model_catalog.openrouter_id_for("openai", "gpt-6-luna") == "openai/gpt-6-luna"
+    assert model_catalog.openrouter_id_for("anthropic", "claude-opus-5-5") == "anthropic/claude-opus-5-5"
     # Ve hiçbiri sohbet-dışı filtresine takılmıyor
-    for mid in ("gemini-3.8-flash", "gemini-3.7-flash", "gpt-6-astra"):
+    for mid in ("gemini-3.8-flash", "gemini-3.7-flash", "gpt-6-astra", "gpt-6-sol",
+                "gpt-6-luna", "claude-opus-5-5"):
         assert model_catalog.is_chat_model(mid), mid

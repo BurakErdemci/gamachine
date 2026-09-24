@@ -451,9 +451,11 @@ def create_config_router(db):
     # Codex modelleri: statik liste. Hesap/plan cevabı tutarsız olabildiği için
     # bunlara kalıcı UI kilidi uygulanmaz; kullanıcı modeli her zaman deneyebilir.
     _CODEX_MODELS = [
-        # Codex 0.153.x does not list GPT-6 in its own picker but accepts it
-        # via `-m` (installed 0.153.4), so it is offered here by hand.
+        # Ids as listed by Codex's own model catalog (~/.codex/models_cache.json,
+        # fetched 24 Sep 2026 by codex-cli 0.156.1: gpt-6-astra/sol/luna visible).
         {"id": "gpt-6-astra",   "name": "GPT-6 Astra",    "provider": "subscription"},
+        {"id": "gpt-6-sol",     "name": "GPT-6 Sol",      "provider": "subscription"},
+        {"id": "gpt-6-luna",    "name": "GPT-6 Luna",     "provider": "subscription"},
         {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra",  "provider": "subscription"},
         {"id": "gpt-5.6-sol",   "name": "GPT-5.6 Sol",    "provider": "subscription"},
         {"id": "gpt-5.6-luna",  "name": "GPT-5.6 Luna",   "provider": "subscription"},
@@ -491,6 +493,7 @@ def create_config_router(db):
                 {"id": "claude-sonnet-5",      "name": "Claude Sonnet 5 (CLI)",         "provider": "subscription"},
                 {"id": "claude-fable-5-1",     "name": "Claude Fable 5.1 (CLI)",        "provider": "subscription"},
                 {"id": "claude-fable-5",       "name": "Claude Fable 5 (CLI)",          "provider": "subscription"},
+                {"id": "claude-opus-5-5",      "name": "Claude Opus 5.5 (CLI)",         "provider": "subscription"},
                 {"id": "claude-opus-5",        "name": "Claude Opus 5 (CLI)",           "provider": "subscription"},
                 {"id": "claude-opus-4-8",      "name": "Claude 4.8 Opus (CLI)",         "provider": "subscription"},
                 {"id": "claude-sonnet-4-6",    "name": "Claude 4.6 Sonnet (CLI)",       "provider": "subscription"},

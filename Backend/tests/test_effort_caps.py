@@ -71,6 +71,16 @@ def test_gpt6_drops_none_and_minimal_but_gains_xhigh_and_max():
         "cli_config": {"model_reasoning_effort": "xhigh"}}
 
 
+def test_new_models_share_their_siblings_effort_levels():
+    # Codex's model cache lists low..max for both (24 Sep 2026); Opus 5.5 takes low..max.
+    for p in ("subscription", "openai"):
+        astra = get_effort_caps(p, "gpt-6-astra")["levels"]
+        assert get_effort_caps(p, "gpt-6-sol")["levels"] == astra
+        assert get_effort_caps(p, "gpt-6-luna")["levels"] == astra
+    for p in ("subscription", "anthropic"):
+        assert get_effort_caps(p, "claude-opus-5-5")["levels"] == get_effort_caps(p, "claude-opus-5")["levels"]
+
+
 def test_gemini_37_and_38_have_no_minimal_and_use_thinking_level():
     for m in ("gemini-3.7-flash", "gemini-3.8-flash"):
         caps = get_effort_caps("google", m)
