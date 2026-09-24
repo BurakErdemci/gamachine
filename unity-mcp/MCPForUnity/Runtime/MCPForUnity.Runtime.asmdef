@@ -1,7 +1,9 @@
 {
     "name": "MCPForUnity.Runtime",
     "rootNamespace": "MCPForUnity.Runtime",
-    "references": [],
+    "references": [
+        "Unity.InputSystem"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
@@ -9,6 +11,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.inputsystem",
+            "expression": "1.1.0",
+            "define": "MCP_FOR_UNITY_INPUT_SYSTEM"
+        }
+    ],
     "noEngineReferences": false
-} 
+}
