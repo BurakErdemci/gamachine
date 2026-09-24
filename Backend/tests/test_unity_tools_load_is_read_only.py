@@ -23,7 +23,7 @@ ve asıl tehlikeli kartı da okunmadan geçirtiyor.
 import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -43,10 +43,12 @@ class _SahteArac:
 
 def _yukle(sahte_araclar):
     """`load_unity_tools_async`'i sahte bir sunucuyla koşturur, çağrıları döndürür."""
-    with patch.object(unity_mcp_tools, "_fetch_tools_from_server",
-                      AsyncMock(return_value=sahte_araclar)) as _fetch, \
-         patch.object(unity_mcp_tools, "_call_tool_on_server",
-                      AsyncMock(return_value={"ok": True})) as cagri:
+    # The client is now one long-lived session object; both of its entry
+    # points are replaced, so the load path can only reach Unity through them.
+    with patch.object(unity_mcp_tools._client, "list_tools",
+                      MagicMock(return_value=sahte_araclar)), \
+         patch.object(unity_mcp_tools._client, "call_tool",
+                      MagicMock(return_value={"ok": True})) as cagri:
         sonuc = asyncio.run(unity_mcp_tools.load_unity_tools_async())
     return sonuc, cagri
 
@@ -78,10 +80,10 @@ def test_execute_code_OZELLIKLE_cagrilmaz():
 def test_TERS_YON_yukleme_basarisizsa_yine_cagri_yok():
     # Hata yolunda da sessiz kalmalı: "bağlanamadım" diye Unity'ye yazmak,
     # arızayı bildirmek için arızalı yolu kullanmak olurdu.
-    with patch.object(unity_mcp_tools, "_fetch_tools_from_server",
-                      AsyncMock(side_effect=RuntimeError("Unity yok"))), \
-         patch.object(unity_mcp_tools, "_call_tool_on_server",
-                      AsyncMock()) as cagri:
+    with patch.object(unity_mcp_tools._client, "list_tools",
+                      MagicMock(side_effect=RuntimeError("Unity yok"))), \
+         patch.object(unity_mcp_tools._client, "call_tool",
+                      MagicMock()) as cagri:
         sonuc = asyncio.run(unity_mcp_tools.load_unity_tools_async())
 
     assert sonuc is False

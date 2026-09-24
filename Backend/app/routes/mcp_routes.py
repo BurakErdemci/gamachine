@@ -88,12 +88,14 @@ async def get_unity_mcp_status(x_session_token: str = Header(alias="X-Session-To
 async def get_unity_console(x_session_token: str = Header(alias="X-Session-Token", default="")):
     """Unity Editor Console loglarını döner (read_console MCP tool)."""
     _check_token(x_session_token)
-    from tools.unity_mcp_tools import is_unity_tool, get_unity_tool_functions
+    from tools.unity_mcp_tools import is_unity_tool, call_unity_tool
     if not is_unity_tool("read_console"):
         return {"logs": [], "connected": False}
     try:
-        fn = get_unity_tool_functions().get("read_console")
-        result = fn(count=50) if fn else {}
+        # Off the event loop and short: a UI poll must not hold the backend for
+        # the agent-call budget.
+        import asyncio
+        result = await asyncio.to_thread(call_unity_tool, "read_console", {"count": 50}, 15.0)
         logs = result.get("logs") or result.get("result") or []
         return {"logs": logs, "connected": True}
     except Exception as e:

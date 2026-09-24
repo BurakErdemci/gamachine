@@ -488,6 +488,18 @@ def _no_progress_text(tool_name: "str | None") -> str:
     )
 
 
+def _split_data_url(url: str) -> "tuple[str, str]":
+    """`data:<mime>;base64,<data>` -> (mime, data).
+
+    The mime was hardcoded to image/jpeg while the only image source was the
+    editor screenshot; Unity MCP returns PNG, and Anthropic rejects a media
+    type that does not match the bytes.
+    """
+    head, _, data = url.partition(",")
+    mime = head[5:].split(";", 1)[0] if head.startswith("data:") else ""
+    return (mime or "image/jpeg"), data
+
+
 def _gemini_fn_response(fc, name: str, response: dict):
     """Gemini function-response part; carries the call id when present.
 
@@ -1501,11 +1513,12 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                     break
                 if screenshot_b64:
                     import base64 as _b64
-                    raw_bytes = _b64.b64decode(screenshot_b64.split(",", 1)[1])
+                    _mime, _data = _split_data_url(screenshot_b64)
+                    raw_bytes = _b64.b64decode(_data)
                     # Gemini tool-role Content'ine inline_data KONULAMAZ (400 INVALID_ARGUMENT).
                     # Görseli ayrı user-role Content olarak biriktir (aşağıda eklenir).
                     screenshot_parts.append(
-                        gtypes.Part(inline_data=gtypes.Blob(mime_type="image/jpeg", data=raw_bytes))
+                        gtypes.Part(inline_data=gtypes.Blob(mime_type=_mime, data=raw_bytes))
                     )
 
             # Arada metin varsa (AI'ın açıklaması) yield et
@@ -1743,12 +1756,13 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 })
 
                 if screenshot_b64:
+                    _mime, _data = _split_data_url(screenshot_b64)
                     content = [
                         {"type": "text", "text": result_str},
                         {"type": "image", "source": {
                             "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": screenshot_b64.split(",", 1)[1],
+                            "media_type": _mime,
+                            "data": _data,
                         }},
                     ]
                 else:
