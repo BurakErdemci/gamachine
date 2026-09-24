@@ -1,7 +1,8 @@
-import { LogOut, Settings, Trash2, X, Gamepad2, Loader2, Globe, Key, Check } from "lucide-react";
+import { LogOut, Settings, Trash2, X, Gamepad2, Loader2, Globe, Key, Check, Cpu, Hand } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useState } from "react";
 
-import { AIConfig, AvailableModels } from "./types";
+import { AIConfig, AvailableModels, GenerationMode } from "./types";
 import { ModelAvatar } from "./ModelAvatar";
 import { UnityMCPStatus } from "../../hooks/home/useAIConfig";
 import { useLang, type Lang } from "../../lib/i18n";
@@ -47,7 +48,11 @@ interface SettingsModalProps {
   onToggleUnityMcp: () => void;
   lang: Lang;
   onLangChange: (l: Lang) => void;
+  approvalMode?: GenerationMode;
+  onApprovalModeChange?: (mode: GenerationMode) => void;
 }
+
+type SettingsTab = 'general' | 'mode';
 
 
 export const SettingsModal = ({
@@ -65,8 +70,15 @@ export const SettingsModal = ({
   onToggleUnityMcp,
   lang,
   onLangChange,
+  approvalMode,
+  onApprovalModeChange,
 }: SettingsModalProps) => {
   const { t } = useLang();
+  const [tab, setTab] = useState<SettingsTab>('general');
+  const TABS: { id: SettingsTab; label: string }[] = [
+    { id: 'general', label: t('settings.tabGeneral') },
+    { id: 'mode', label: t('settings.tabMode') },
+  ];
   const UNITY_STATUS_CONFIG: Record<UnityMCPStatus, { label: string; dot: string; bg: string; border: string }> = {
     off:       { label: t('unity.off'),       dot: "bg-slate-600",                bg: "bg-slate-900/50",   border: "border-slate-700/50" },
     // `blocked` satırının yokluğu ÇALIŞMA ANINDA çökme üretiyordu: aşağıda
@@ -132,7 +144,26 @@ export const SettingsModal = ({
               <X size={18} />
             </button>
           </div>
+          <div role="tablist" className="flex gap-1 px-5 pt-3 shrink-0">
+            {TABS.map(item => (
+              <button
+                key={item.id}
+                role="tab"
+                type="button"
+                aria-selected={tab === item.id}
+                onClick={() => setTab(item.id)}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors border ${
+                  tab === item.id
+                    ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
+                    : 'bg-transparent border-transparent text-slate-500 hover:text-slate-300 hover:bg-white/[0.04]'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
           <div className="space-y-4 px-5 py-4 overflow-y-auto custom-scrollbar">
+            {tab === 'general' && (<>
             <div>
               <label className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-2">{t('settings.provider')}</label>
               <div className="grid grid-cols-3 gap-1.5">
@@ -277,6 +308,39 @@ export const SettingsModal = ({
                 ))}
               </div>
             </div>
+            </>)}
+
+            {tab === 'mode' && (
+              <div className="space-y-2">
+                <label className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-1">{t('settings.tabMode')}</label>
+                {([
+                  { id: 'auto' as GenerationMode, icon: <Cpu size={14} />, label: t('mode.auto'), explain: t('settings.modeAutoExplain') },
+                  { id: 'step' as GenerationMode, icon: <Hand size={14} />, label: t('mode.step'), explain: t('settings.modeStepExplain') },
+                ]).map(option => {
+                  const selected = approvalMode === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      disabled={!onApprovalModeChange}
+                      onClick={() => onApprovalModeChange?.(option.id)}
+                      className={`w-full flex items-start gap-3 p-3 rounded-xl border text-left transition-all disabled:opacity-50 ${
+                        selected
+                          ? 'border-blue-500/60 bg-blue-500/10'
+                          : 'border-white/[0.07] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/15'
+                      }`}
+                    >
+                      <span className={`mt-0.5 shrink-0 ${selected ? 'text-blue-400' : 'text-slate-500'}`}>{option.icon}</span>
+                      <span className="flex-1 min-w-0">
+                        <span className={`block text-xs font-semibold ${selected ? 'text-blue-300' : 'text-slate-200'}`}>{option.label}</span>
+                        <span className="block text-[10.5px] text-slate-400 mt-0.5 leading-relaxed">{option.explain}</span>
+                      </span>
+                      {selected && <Check size={12} className="text-blue-400 shrink-0 mt-0.5" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="flex gap-3 pt-2 mt-2 border-t border-white/[0.06]">
               <button

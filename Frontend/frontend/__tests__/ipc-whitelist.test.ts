@@ -72,8 +72,16 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // zincirini, uçuştaki okuma bütçesini ve karar fonksiyonunu aynen paylaşıyor;
   // yalnız beyaz listesi (IMAGE_FILE_EXTENSIONS) ve tavanı (IMAGE_MAX_BYTES)
   // kendine ait, yani yüzey tarayıcının çözebildiği görsel biçimleriyle sınırlı.
-  it('tam olarak 28 kanal içerir', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(28)
+  //
+  // 28 → 29, 25 Eyl 2026: 'approval-mode-set' eklendi. Küresel onay modunu
+  // (auto/step) yalnız uygulama arayüzü değiştirebilsin diye yazma ana süreçten
+  // geçiyor; backend'e giden UI sırrı renderer'a hiç verilmiyor.
+  it('tam olarak 29 kanal içerir', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(29)
+  })
+
+  it("approval-mode-set kanalı whitelist'te", () => {
+    expect(ALLOWED_INVOKE_CHANNELS.has('approval-mode-set')).toBe(true)
   })
 
   it("read-image-file kanalı whitelist'te", () => {

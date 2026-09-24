@@ -10,6 +10,7 @@ import { parseContextReport } from '../../lib/contextReport';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
+const LEGACY_MODE_KEY = 'unityai-generation-mode';
 
 export const useChat = (
   API: string,
@@ -40,23 +41,63 @@ export const useChat = (
   // Canlı aktivite: Claude'un o an ne yaptığı (düşünüyor/araç/subagent) + token sayacı.
   // Backend status event'lerinden beslenir; done/error/stop'ta temizlenir.
   const [activity, setActivity] = useState<ChatActivity | null>(null);
-  // Auto/Adım seçimi uygulama yeniden açılınca kaybolmamalı. SSR ile istemci
-  // arasında hydration farkı üretmemek için ilk render Auto, kayıt hydrate edilir.
-  const [generationMode, setGenerationModeState] = useState<GenerationMode>('auto');
+  // The approval mode is global and lives in the backend (closed-loop.md §5):
+  // external MCP clients carry no request, so a per-request field could never
+  // make them auto. Until the backend answers, the UI shows step - the safe side.
+  const [generationMode, setGenerationModeState] = useState<GenerationMode>('step');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [tempTitle, setTempTitle] = useState('');
 
   useEffect(() => {
-    const stored = window.localStorage.getItem('unityai-generation-mode');
-    if (stored === 'auto' || stored === 'step') {
-      setGenerationModeState(stored);
-    }
-  }, []);
+    if (!API || !user?.sessionToken) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await axios.get(`${API}/approval-mode`, {
+          headers: { 'X-Session-Token': user.sessionToken },
+        });
+        let mode: GenerationMode = res.data?.mode === 'auto' ? 'auto' : 'step';
+        let legacy: string | null = null;
+        try { legacy = window.localStorage.getItem(LEGACY_MODE_KEY); } catch { /* storage blocked */ }
+        // One-time migration: the backend has never stored a mode, so the
+        // renderer's old localStorage choice becomes the global one.
+        if (!res.data?.stored && (legacy === 'auto' || legacy === 'step') && ipc?.invoke) {
+          const out = await ipc.invoke('approval-mode-set', legacy, 'migrate');
+          mode = out?.mode === 'auto' ? 'auto' : 'step';
+          legacy = null;
+        }
+        if (res.data?.stored || legacy === null) {
+          try { window.localStorage.removeItem(LEGACY_MODE_KEY); } catch { /* storage blocked */ }
+        }
+        if (!cancelled) setGenerationModeState(mode);
+      } catch {
+        // 401 while the token is still the initial 'local'; the effect reruns
+        // when the real token arrives.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [API, user?.sessionToken]);
 
-  const setGenerationMode = useCallback((mode: GenerationMode) => {
-    setGenerationModeState(mode);
-    window.localStorage.setItem('unityai-generation-mode', mode);
-  }, []);
+  // Writes go renderer -> Electron main -> backend: only main holds the UI
+  // secret the backend demands, so model-run processes cannot flip the mode.
+  const setGenerationMode = useCallback(async (mode: GenerationMode, source: 'chat' | 'settings' = 'chat') => {
+    if (!ipc?.invoke) {
+      showToast(cevir('mode.writeUnavailable'), 'error');
+      return;
+    }
+    try {
+      const out = await ipc.invoke('approval-mode-set', mode, source);
+      const applied: GenerationMode = out?.mode === 'auto' ? 'auto' : 'step';
+      setGenerationModeState(applied);
+      if (applied === 'auto') {
+        // The backend approved every open card on the switch; drop the in-chat ones.
+        pendingCommandQueueRef.current = [];
+        setPendingCommand(null);
+      }
+    } catch (e) {
+      showToast(cevir('mode.writeFailed', { hata: e instanceof Error ? e.message : String(e) }), 'error');
+    }
+  }, [showToast]);
   
   const abortControllerRef = useRef<AbortController | null>(null);
   // Paralel araç çağrılarında (ör. Bash + Write, ya da iki Write) birden fazla

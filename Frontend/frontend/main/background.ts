@@ -58,6 +58,13 @@ const localAppToken = useDockerBackend && process.env.LOCAL_APP_TOKEN
   ? process.env.LOCAL_APP_TOKEN
   : randomUUID()
 
+// Second secret, only for flipping the global approval mode. LOCAL_APP_TOKEN
+// is not enough: the Unity MCP server gets it in its env and model-run child
+// processes can read its 0600 file, so any of them could switch itself into
+// auto mode. This one lives only here and in the backend process (handed over
+// stdin at spawn), and the renderer reaches it only through 'approval-mode-set'.
+const uiSecret = randomUUID()
+
 const isProd = process.env.NODE_ENV === 'production'
 let pyBackendProcess: ChildProcess | null = null
 let backendPort: number | null = null
@@ -691,6 +698,29 @@ handleSecure('path-exists', async (_event, targetPath: string) => {
 
 handleSecure('app-token-get', () => localAppToken)
 
+handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown) => {
+  if (mode !== 'auto' && mode !== 'step') {
+    throw new Error('Geçersiz çalışma modu.')
+  }
+  const src = source === 'settings' || source === 'chat' || source === 'migrate' ? source : 'ui'
+  try {
+    const response = await axios.post(
+      `${getBackendBaseUrl()}/approval-mode`,
+      { mode, source: src },
+      {
+        timeout: 10000,
+        headers: { 'X-Session-Token': localAppToken, 'X-Gamachine-UI-Secret': uiSecret },
+      },
+    )
+    console.log(`[approval-mode] ${response.data?.previous} -> ${response.data?.mode} (source=${src})`)
+    return response.data
+  } catch (error) {
+    const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+    console.error('[approval-mode] write failed:', detail || (error as Error)?.message)
+    throw new Error(detail || 'Çalışma modu backend’e iletilemedi.')
+  }
+})
+
 // The renderer picks a folder with a HOST path, but in Docker mode the backend
 // is a different filesystem namespace where that path does not exist — only the
 // mount does. Sending the host path unchanged is what an audit caught on
@@ -1017,11 +1047,15 @@ async function startPythonBackend() {
   backendPort = selectedPort
 
   pyBackendProcess = spawn(pythonExec, spawnArgs, {
-    stdio: ['ignore', 'pipe', 'pipe'],
+    // stdin is a pipe only to hand over the UI secret (see `uiSecret`); it is
+    // closed right after, so nothing the backend spawns can read it later.
+    stdio: ['pipe', 'pipe', 'pipe'],
     cwd: backendDir,
     detached: false, // process group ile başlat — kapanırken tüm child'lar ölsün
-    env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PORT: String(selectedPort), LOCAL_APP_TOKEN: localAppToken },
+    env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PORT: String(selectedPort), LOCAL_APP_TOKEN: localAppToken, GAMACHINE_UI_SECRET_STDIN: '1' },
   });
+  pyBackendProcess.stdin?.on('error', (err) => console.error('[approval-mode] UI secret not delivered:', err))
+  pyBackendProcess.stdin?.end(`${uiSecret}\n`)
 
   const safeLog = (...args: any[]) => { try { console.log(...args) } catch { /* EIO — socket kapandı */ } }
   const safeErr = (...args: any[]) => { try { console.error(...args) } catch { /* EIO — socket kapandı */ } }
