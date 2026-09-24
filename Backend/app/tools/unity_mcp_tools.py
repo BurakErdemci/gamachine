@@ -26,8 +26,9 @@ from mcp.shared.exceptions import McpError
 
 logger = logging.getLogger(__name__)
 
-# Tool groups sent to function-calling providers. `playtest` does not exist yet
-# (closed-loop.md §3); a missing group is simply empty.
+# Tool groups sent to function-calling providers. `playtest` (game_hooks,
+# play_session, play_step, play_capture, run_playtest) is enabled by default on
+# the server next to `core` (tool_registry.DEFAULT_ENABLED_GROUPS).
 EXPORTED_GROUPS = ("core", "playtest")
 
 # A write call waits in the server's approval gate for up to 10 s (POST) + 180 s
