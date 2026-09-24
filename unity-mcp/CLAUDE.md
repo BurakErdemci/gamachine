@@ -70,7 +70,7 @@ from services.registry import mcp_for_unity_tool
 
 @mcp_for_unity_tool(
     description="Does something in Unity.",
-    group="core",  # core (default), vfx, animation, ui, scripting_ext, testing, probuilder, profiling, docs
+    group="core",  # core (default), playtest, vfx, animation, ui, scripting_ext, testing, probuilder, profiling, docs
 )
 async def manage_something(
     ctx: Context,
@@ -82,7 +82,7 @@ async def manage_something(
     return response
 ```
 
-The `group` parameter controls tool visibility. Only `"core"` is enabled by default. Non-core groups (vfx, animation, etc.) start disabled and are toggled via `manage_tools`.
+The `group` parameter controls tool visibility. `"core"` and `"playtest"` are enabled by default. Other groups (vfx, animation, etc.) start disabled and are toggled via `manage_tools`.
 
 ### Python CLI Error Handling
 CLI commands (not MCP tools) use the `@handle_unity_errors` decorator:

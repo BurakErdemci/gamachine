@@ -29,7 +29,7 @@ def register_all_tools(mcp: FastMCP, *, project_scoped_tools: bool = True):
     functions will be automatically registered.
 
     After registration, non-default tool groups are disabled at the server level
-    so that new sessions only see the *core* tools (plus always-visible meta-tools).
+    so that new sessions only see the default groups (core, playtest) plus always-visible meta-tools.
     Clients can activate additional groups at any time via ``manage_tools``.
     """
     logger.info("Auto-discovering MCP for Unity Server tools...")

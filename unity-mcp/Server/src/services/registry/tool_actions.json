@@ -875,6 +875,65 @@
       "param_dependent": [],
       "evidence": "unity-mcp/Server/src/services/tools/unity_reflect.py:27",
       "note": "readOnlyHint=True, destructiveHint=False. Free-text action validated against ALL_ACTIONS (unity_reflect.py:11); confirmed against the C# switch at UnityReflect.cs:118. Pure reflection over loaded assemblies."
+    },
+    "game_hooks": {
+      "action_param": "action",
+      "tool_level": null,
+      "read_actions": [
+        "list",
+        "get"
+      ],
+      "write_actions": [
+        "call"
+      ],
+      "param_dependent": [],
+      "evidence": "unity-mcp/Server/src/services/tools/game_hooks.py:13",
+      "note": "Playtest group (P4 contract). list enumerates hooks the game opted into; get evaluates state hooks (static properties/fields or GameHooks.State getters) and serialises their values -- no asset, file or scene write. call invokes an action hook, which is arbitrary game code (level.restart, input.jump), so it is a write. Caveat accepted by the contract: a state getter is game code too, and a getter with side effects would run uncarded; the game owns its hooks."
+    },
+    "play_session": {
+      "action_param": "action",
+      "tool_level": null,
+      "read_actions": [
+        "status"
+      ],
+      "write_actions": [
+        "start",
+        "stop"
+      ],
+      "param_dependent": [],
+      "evidence": "unity-mcp/Server/src/services/tools/play_session.py:21",
+      "note": "start can load a scene, enters play mode (domain reload), changes Time.captureDeltaTime/fixedDeltaTime, runInBackground and InputSettings in memory, adds virtual input devices and calls hook level.restart. stop restores all of that and exits play. status only reports playing/paused/frame/time."
+    },
+    "play_step": {
+      "action_param": null,
+      "tool_level": "write",
+      "read_actions": [],
+      "write_actions": [],
+      "param_dependent": [],
+      "evidence": "unity-mcp/Server/src/services/tools/play_step.py:89",
+      "note": "Advances the game by N frames with injected input and optional autopilot hook calls -- mutates live game state; captures write PNGs under Library/GamachineCaptures/."
+    },
+    "play_capture": {
+      "action_param": null,
+      "tool_level": "write",
+      "read_actions": [],
+      "write_actions": [],
+      "param_dependent": [],
+      "evidence": "unity-mcp/Server/src/services/tools/play_capture.py:16",
+      "note": "Writes a full-resolution PNG under <project>/Library/GamachineCaptures/ on every call (same reasoning as manage_camera screenshot: a file on disk is a write even though the call looks passive)."
+    },
+    "run_playtest": {
+      "action_param": "action",
+      "tool_level": null,
+      "default_action": "start",
+      "read_actions": [],
+      "write_actions": [
+        "start",
+        "status"
+      ],
+      "param_dependent": [],
+      "evidence": "unity-mcp/Server/src/services/tools/run_playtest.py:58",
+      "note": "start runs whole scenarios: scene loads, play mode enter/exit, hook calls, input, captures on disk. Defaults to start when action is omitted (run_playtest.py, RunPlaytestTool.cs). status only reads the last job's progress/results (RunPlaytestTool.Status -> PlaytestRunner.StatusData) and is a read candidate, but the P4 contract classifies everything in the group except game_hooks list/get and play_session status as write, and widening the pinned read surface is the owner's call -- kept write (fail-closed) until then."
     }
   }
 }

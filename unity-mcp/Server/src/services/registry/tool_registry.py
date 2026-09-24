@@ -25,9 +25,10 @@ TOOL_GROUPS: dict[str, str] = {
     "testing": "Test runner & async test jobs",
     "probuilder": "ProBuilder 3D modeling – requires com.unity.probuilder package",
     "profiling": "Unity Profiler session control, counters, memory snapshots & Frame Debugger",
+    "playtest": "Deterministic play sessions: game hooks, frame stepping with input, capture, scenario runs (on by default)",
 }
 
-DEFAULT_ENABLED_GROUPS: set[str] = {"core"}
+DEFAULT_ENABLED_GROUPS: set[str] = {"core", "playtest"}
 
 
 def mcp_for_unity_tool(
