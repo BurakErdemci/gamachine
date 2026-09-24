@@ -16,6 +16,7 @@ from code_detector import CodeDetector
 from schemas import ChatRequest, NewConversationRequest, RenameRequest
 
 from agentic.agent_runner import AgentRunner
+from agentic import approval_mode
 from rag.memory_manager import memory_manager
 from rag.project_rag import ProjectRAG
 
@@ -1078,7 +1079,9 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             conversation_id=request.conversation_id,
             images=request.images,
             videos=request.videos,
-            generation_mode=request.generation_mode,
+            # The global mode decides; `request.generation_mode` is still
+            # accepted for old clients but no longer trusted for approval.
+            generation_mode=approval_mode.current_mode(),
             effort_level=request.effort_level,
             ultracode=request.ultracode,
             resume_id=_resume_id,
@@ -1309,30 +1312,23 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         mcp_owner = body.get("conversation_id")
         if type(mcp_owner) is not int:
             mcp_owner = _UNKNOWN_OWNER
-        _register_gate(gate_id, mcp_owner, kind="external")
-        # Sadece aktif OpenCode Auto turunun tek kullanımlık anahtarı ve birebir
-        # workspace eşleşmesi varsa kart oluşturmadan onayla. Step modu, eski
-        # anahtarlar ve doğrudan MCP çağrıları mevcut manuel akışta kalır.
-        from agentic.approval_policy import should_auto_approve, ambient_auto_approve
-        turn_token = body.get("approval_turn_token")
-        # Anahtarlı yol dar ve olduğu gibi duruyor. Anahtar YOKSA çağıran
-        # unityMCP sunucusudur (ayrı süreç, tek kullanımlık anahtarı hiç
-        # görmüyor) ve o durumda tek sorabileceğimiz şey "şu an Auto modda
-        # koşan bir tur var mı". Bu ayrım olmadan K1'in kapısı Auto modda da
-        # kart çıkarırdı — kullanıcının açıkça istemediği davranış.
-        if should_auto_approve(turn_token, body.get("workspace_path", "")) or (
-            not turn_token and ambient_auto_approve()
-        ):
-            result = {
+        # Global auto mode (owner decision, 25 Sep 2026): no card for anyone,
+        # with or without a conversation - external MCP clients included.
+        # Nothing is registered, so an auto request leaves no pending entry.
+        #
+        # The per-turn exemptions that used to live here (OpenCode turn token,
+        # "every running turn is auto") are gone on purpose: every turn now
+        # takes its mode from this same global value, so in steady state they
+        # were equal to it, and after a flip to step they would have kept
+        # approving the rest of a turn that started in auto.
+        if approval_mode.is_auto():
+            return {
                 "status": "resolved",
                 "approved": True,
                 "automatic": True,
                 "gate_id": gate_id,
             }
-            _mcp_results[gate_id] = result
-            _mcp_result_ts[gate_id] = time()
-            _release_gate(gate_id)
-            return result
+        _register_gate(gate_id, mcp_owner, kind="external")
         _mcp_pending[gate_id] = {
             "tool": body.get("tool"),
             "params": body.get("params", {}),
@@ -1406,6 +1402,67 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             return {"status": "ok"}
         return {"status": "gate_not_found"}
 
+    def _approve_all_pending() -> int:
+        """Switching to auto resolves every open approval card as approved.
+
+        Both kinds: MCP gates the frontend polls (`_mcp_pending`) and in-process
+        gates an agent is awaiting (Claude/Codex/cloud cards). Question gates
+        are not approvals and stay open.
+        """
+        approved = 0
+        for gate_id in list(_mcp_pending):
+            _mcp_results[gate_id] = {"status": "resolved", "approved": True, "automatic": True}
+            _mcp_result_ts[gate_id] = time()
+            _mcp_pending.pop(gate_id, None)
+            _release_gate(gate_id)
+            approved += 1
+        for gate_id, event in list(_APPROVAL_GATES.items()):
+            if event.is_set():
+                continue
+            _APPROVAL_RESULTS[gate_id] = True
+            event.set()
+            approved += 1
+        return approved
+
+    @router.get("/approval-mode")
+    async def get_approval_mode(x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return {"mode": approval_mode.current_mode(), "stored": approval_mode.is_stored()}
+
+    @router.post("/approval-mode")
+    async def set_approval_mode(
+        body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+        x_ui_secret: str = Header(alias="X-Gamachine-UI-Secret", default=""),
+        x_maintenance: str = Header(alias="X-UnityAI-Maintenance", default=""),
+    ):
+        """Only the app UI may flip the mode (renderer -> Electron main -> here).
+
+        LOCAL_APP_TOKEN alone is refused: the Unity MCP server and model-run
+        children can read it. The UI secret reaches only Electron main and this
+        process (see `approval_mode`). The maintenance header marks the product's
+        own MCP maintenance calls, never a UI action, so it is refused outright.
+        """
+        _check_token(x_session_token)
+        if x_maintenance:
+            logger.warning("[approval-mode] write refused: maintenance header present")
+            raise HTTPException(status_code=403, detail="Mod bu kanaldan değiştirilemez.")
+        if not approval_mode.check_ui_secret(x_ui_secret):
+            logger.warning("[approval-mode] write refused: UI secret missing or wrong")
+            raise HTTPException(
+                status_code=403,
+                detail="Çalışma modu yalnız uygulama arayüzünden değiştirilebilir.",
+            )
+        mode = body.get("mode")
+        if mode not in approval_mode.MODES:
+            raise HTTPException(status_code=400, detail="mode 'auto' ya da 'step' olmalı.")
+        source = body.get("source") if body.get("source") in ("settings", "chat", "migrate") else "ui"
+        previous = approval_mode.set_mode(mode, source=source)
+        drained = _approve_all_pending() if mode == "auto" else 0
+        if drained:
+            logger.warning("[approval-mode] %d pending card(s) approved by the switch to auto", drained)
+        return {"mode": mode, "previous": previous, "approved_pending": drained}
+
     @router.get("/mcp-pending")
     async def mcp_pending_list(x_session_token: str = Header(alias="X-Session-Token", default="")):
         """Frontend'in açık onay isteklerini SSE yerine polling ile alması için."""
@@ -1457,7 +1514,9 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             conversation_id=request.conversation_id,
             images=request.images,
             videos=request.videos,
-            generation_mode=request.generation_mode,
+            # The global mode decides; `request.generation_mode` is still
+            # accepted for old clients but no longer trusted for approval.
+            generation_mode=approval_mode.current_mode(),
             effort_level=request.effort_level,
             ultracode=request.ultracode,
             resume_id=_resume_id,

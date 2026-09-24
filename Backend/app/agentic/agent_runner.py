@@ -876,7 +876,14 @@ class AgentRunner:
         yazımda onay istemek kullanıcıyı refleks-onaya alıştırır — bu kapıyı
         güçlendirmez, tamamen değersizleştirir. Silme ise seyrek ve geri alınamaz.
         Yazma zaten `_validate_path` ile workspace'e hapsedilmiş durumda.
+
+        Global auto mode shows no card on any path (owner decision, 25 Sep 2026).
+        Read live rather than from `self.generation_mode` so a flip to step
+        bites on the very next call of a running turn.
         """
+        from agentic import approval_mode
+        if approval_mode.is_auto():
+            return None
         if tool_name == "run_command":
             command = tool_args.get("command", "")
             return command if _is_dangerous_command(command, self.workspace_path) else None

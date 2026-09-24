@@ -245,6 +245,10 @@ app = FastAPI(
 db = DatabaseManager(db_path=db_path)
 PROGRESS_STORE = {}
 
+from agentic import approval_mode  # noqa: E402
+
+approval_mode.bind_store(db)
+
 _ALLOWED_ORIGINS = [
     "http://localhost:8888",    # Nextron dev renderer
     "http://127.0.0.1:8888",
@@ -281,7 +285,40 @@ def health_check():
 
 
 
+def _read_ui_secret_from_stdin(timeout_s: float = 5.0) -> None:
+    """Electron main writes the UI secret as the first stdin line and closes the pipe.
+
+    Stdin, not env or a file: the Unity MCP server and model-run children inherit
+    the environment and can read the token file, and the secret exists precisely
+    so that they cannot flip the approval mode. Read before uvicorn starts, i.e.
+    before any child is spawned; the pipe is empty afterwards.
+    """
+    if os.environ.pop("GAMACHINE_UI_SECRET_STDIN", "") != "1" or sys.stdin is None:
+        return
+    import threading
+
+    box: list = []
+
+    def _read() -> None:
+        try:
+            box.append(sys.stdin.readline())
+        except Exception as exc:
+            box.append(exc)
+
+    reader = threading.Thread(target=_read, daemon=True)
+    reader.start()
+    reader.join(timeout_s)
+    line = box[0] if box and isinstance(box[0], str) else ""
+    if line.strip():
+        approval_mode.set_ui_secret(line.strip())
+        logger.info("[approval-mode] UI secret received from Electron main.")
+    else:
+        logger.error("[approval-mode] UI secret expected on stdin but not received; "
+                     "approval-mode writes will be refused.")
+
+
 if __name__ == "__main__":
+    _read_ui_secret_from_stdin()
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     # MCP server subprocess'leri bu URL'yi kullanır

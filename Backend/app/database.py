@@ -147,6 +147,12 @@ class DatabaseManager:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (user_id, provider_type),
                 FOREIGN KEY (user_id) REFERENCES users (id))''')
+            # App-wide settings that must survive restarts but belong to no
+            # conversation (today: the global approval mode).
+            cursor.execute('''CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL)''')
             # Migration: conversations tablosuna memory_summary sütunu ekle
             try:
                 cursor.execute("ALTER TABLE conversations ADD COLUMN memory_summary TEXT DEFAULT ''")
@@ -491,6 +497,21 @@ class DatabaseManager:
                 (conv_id, 'assistant', f'📝 **Sohbet özetlendi.**\n\n{summary}', '[]', now)
             )
             conn.commit()
+
+    # ===================== APP SETTINGS =====================
+    def get_setting(self, key: str) -> Optional[str]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute('SELECT value FROM app_settings WHERE key = ?', (key,)).fetchone()
+            return row[0] if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                'INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+                (key, value, now),
+            )
 
     # ===================== WORKSPACE =====================
     def _ensure_workspace_table(self):

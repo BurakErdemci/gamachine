@@ -37,6 +37,15 @@ def _allow_tokenless_local_api(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _approval_mode_starts_in_step():
+    # Module-level state: a test that switches to auto must not leak it.
+    from agentic import approval_mode
+    approval_mode._reset_for_tests()
+    yield
+    approval_mode._reset_for_tests()
+
+
 # ── Platform yeteneği kapıları ───────────────────────────────────────────────
 #
 # Sorun (ölçüldü 30 Tem 2026, Windows 11 / Python 3.13): aynı ağaç macOS'ta 824

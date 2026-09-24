@@ -658,7 +658,12 @@ class TestOpenCodeApprovalPolicy(unittest.TestCase):
         app = FastAPI()
         app.include_router(create_conversation_router(MagicMock(), {}))
 
+        from agentic import approval_mode
+
         with tempfile.TemporaryDirectory() as workspace, TestClient(app) as client:
+            # The decision now follows the global approval mode (25 Sep 2026);
+            # the turn token no longer grants anything on its own.
+            approval_mode.set_mode("auto", source="test")
             auto_token = begin_opencode_turn(workspace, "auto")
             try:
                 auto = client.post("/mcp-approval-request", json={
@@ -678,6 +683,7 @@ class TestOpenCodeApprovalPolicy(unittest.TestCase):
             finally:
                 end_opencode_turn(auto_token)
 
+            approval_mode.set_mode("step", source="test")
             step_token = begin_opencode_turn(workspace, "step")
             try:
                 step = client.post("/mcp-approval-request", json={
