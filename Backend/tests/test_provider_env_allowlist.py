@@ -218,7 +218,15 @@ class TestUnityMcpSpawnOrtami:
         monkeypatch.setattr(
             os.path, "expanduser", lambda p: p.replace("~", str(tmp_path), 1)
         )
-        monkeypatch.setattr(mcp_port_guard, "foreign_port_owners", lambda port: [])
+        # start_server() asks both what answers on 8080 and which process owns it.
+        # Left real, a live listener there (e.g. a Unity MCP server that is slow
+        # or answers 401) turns either answer foreign and the spawn is refused.
+        monkeypatch.setattr(mcp_port_guard, "foreign_port_owner_infos", lambda port: [])
+        monkeypatch.setattr(
+            um,
+            "probe_port_identity",
+            lambda port: um.Occupant(um.ServerIdentity.NONE, "faked in test"),
+        )
         monkeypatch.setattr(um.UnityMCPManager, "is_running", lambda self: False)
         monkeypatch.setattr(
             um.UnityMCPManager, "_ensure_writable_resources", lambda self: None
