@@ -392,6 +392,11 @@ class AgyProvider(BaseCLIProvider):
             merged_servers = dict(migrated_cfg.get("mcpServers", {}))
             merged_servers.update(config.get("mcpServers", {}))  # taze unityai/unityMCP kazanır
             merged_servers.pop("antigravity", None)
+            if not unity_mcp_url:
+                # The merge above only adds; without this an old entry (e.g.
+                # the pre-K3 keyless http one) survives here while the server
+                # is off, and agy tries it on every start.
+                merged_servers.pop("unityMCP", None)
             out_cfg = dict(migrated_cfg)
             out_cfg["mcpServers"] = merged_servers
             out_cfg.pop("disabledTools", None)  # geçersiz key → agy tüm dosyayı yoksayar
@@ -413,13 +418,14 @@ class AgyProvider(BaseCLIProvider):
         settings["mcpServers"]["unityai"] = dict(unityai_entry)
         settings["toolPermission"] = "always-proceed"  # --dangerously-skip-permissions flag'i YERİNE (canlı doğrulandı: geçerli değer, flag'siz auto-approve → skill-derail'i tetiklemez)
         settings["disabledTools"] = self._AGY_DISABLED_TOOLS
-        if unity_mcp_url:
-            settings["mcpServers"]["unityMCP"] = {
-                "serverUrl": unity_mcp_url,
-                "type": "http", "trust": True,
-            }
-        else:
-            settings["mcpServers"].pop("unityMCP", None)
+        # No unityMCP here, and an old one is removed. agy does not read
+        # mcpServers from settings.json at all (measured 25 Sep 2026, agy
+        # 1.2.8: a server declared only here was never started), and the old
+        # keyless entry only answered 401. Adding the X-API-Key header would
+        # work for agy's own http client (measured), but would put the secret
+        # back into a ~/.gemini file shared with another assistant (K3). The
+        # stdio bridge in mcp_config.json above is the one working entry.
+        settings["mcpServers"].pop("unityMCP", None)
 
         try:
             with open(settings_path, "w") as f:
@@ -438,13 +444,8 @@ class AgyProvider(BaseCLIProvider):
         global_settings.setdefault("mcpServers", {})["unityai"] = dict(unityai_entry)
         global_settings["toolPermission"] = "always-proceed"  # --dangerously-skip-permissions YERİNE (geçerli değer, flag'siz auto-approve)
         global_settings["disabledTools"] = self._AGY_DISABLED_TOOLS
-        if unity_mcp_url:
-            global_settings["mcpServers"]["unityMCP"] = {
-                "serverUrl": unity_mcp_url,
-                "type": "http", "trust": True,
-            }
-        else:
-            global_settings["mcpServers"].pop("unityMCP", None)
+        # Same reason as the settings.json above: never read, keyless, 401.
+        global_settings["mcpServers"].pop("unityMCP", None)
 
         try:
             with open(global_settings_path, "w") as f:
