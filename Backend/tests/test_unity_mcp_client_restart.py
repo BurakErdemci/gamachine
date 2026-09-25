@@ -22,8 +22,10 @@ import agentic.agent_runner  # noqa: F401  (tools <-> agentic import cycle, see 
 from tools import unity_mcp_tools as umt  # noqa: E402
 from tests.mcp_restart_server import RestartableMCPServer  # noqa: E402
 
-# What mcp 2.x raises for a 404 on a session it holds (streamable_http post_writer).
-SESSION_TERMINATED = dict(code=types.INVALID_REQUEST, message="Session terminated")
+# What a caller sees for the server's 404 on an unknown session (mcp 2.2 passes
+# the 404's JSON-RPC body through). The fakes below have no HTTP layer, so the
+# client can only go by this text for them.
+SESSION_NOT_FOUND = dict(code=types.INVALID_REQUEST, message="Session not found")
 
 
 class _Session:
@@ -51,7 +53,7 @@ class _Server:
 
     async def call(self, session, name, params):
         if session.index in self.lost:
-            raise MCPError(**SESSION_TERMINATED)
+            raise MCPError(**SESSION_NOT_FOUND)
         if self.fail_with is not None:
             exc, self.fail_with = self.fail_with, None
             raise exc
@@ -123,12 +125,30 @@ def test_connection_closed_is_a_clear_turkish_error_and_is_not_retried(fake):
     assert len(fake.sessions) == 2
 
 
-def test_only_the_404_rendering_counts_as_a_lost_session():
-    assert umt._is_session_lost(MCPError(**SESSION_TERMINATED))
-    assert umt._is_session_lost(MCPError(code=-32600, message="Session not found"))
-    assert not umt._is_session_lost(MCPError(code=-32600, message="Bad Request"))
-    assert not umt._is_session_lost(MCPError(code=types.REQUEST_TIMEOUT, message="Timed out"))
-    assert not umt._is_session_lost(RuntimeError("Session terminated"))
+def test_without_http_only_the_servers_404_texts_count_as_a_lost_session():
+    lost = lambda exc: umt._is_session_lost(exc, observes_http=False)  # noqa: E731
+    assert lost(MCPError(**SESSION_NOT_FOUND))
+    assert lost(MCPError(code=-32600, message="Not Found: Session has been terminated"))
+    # The SDK's own wording for a bodyless 404 - also what an audit fake used
+    # for a post-dispatch loss; with the real transport it never occurs.
+    assert not lost(MCPError(code=-32600, message="Session terminated"))
+    assert not lost(MCPError(code=-32603, message="Session terminated before the request completed"))
+    assert not lost(MCPError(code=-32600, message="Bad Request"))
+    assert not lost(MCPError(code=-32601, message="Session not found"))
+    assert not lost(MCPError(code=types.REQUEST_TIMEOUT, message="Timed out"))
+    assert not lost(RuntimeError("Session not found"))
+
+
+def test_with_http_only_the_transport_mark_counts_as_a_lost_session():
+    lost = lambda exc: umt._is_session_lost(exc, observes_http=True)  # noqa: E731
+    mark = {umt._SESSION_LOST_KEY: umt._SESSION_LOST_MARK}
+    assert lost(MCPError(code=-32600, message="anything", data=mark))
+    # Text alone never counts: an SDK or server rewording cannot widen the match.
+    assert not lost(MCPError(**SESSION_NOT_FOUND))
+    assert not lost(MCPError(code=-32600, message="Not Found: Session has been terminated"))
+    assert not lost(MCPError(code=-32600, message="Session not found",
+                             data={umt._SESSION_LOST_KEY: "forged"}))
+    assert umt._default_session_factory.observes_http_404 is True
 
 
 def test_input_required_is_a_clear_error_and_keeps_the_session(fake):
@@ -206,3 +226,108 @@ def test_tool_list_reloads_after_a_restart(real):
     assert names == {"echo", "mutate"}
     real.restart()
     assert {t.name for t in umt._client.list_tools()} == names
+
+
+# ── the real transport against scripted answers (HTTP status decides) ──────
+
+TERMINATED_404 = (404, {"Content-Type": "application/json"},
+                  {"jsonrpc": "2.0", "id": None,
+                   "error": {"code": -32600, "message": "Not Found: Session has been terminated"}})
+
+
+def _scripted(on_call):
+    """A minimal MCP server; `on_call(message, session_id)` answers tools/call."""
+    state = {"inits": 0, "calls": []}
+
+    def respond(message, headers):
+        method = message.get("method")
+        if method == "initialize":
+            state["inits"] += 1
+            return (200, {"Content-Type": "application/json",
+                          "Mcp-Session-Id": f"s{state['inits']}"},
+                    {"jsonrpc": "2.0", "id": message["id"], "result": {
+                        "protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "scripted", "version": "1"}}})
+        if "id" not in message:
+            return (202, {}, b"")
+        if method == "tools/list":
+            return (200, {"Content-Type": "application/json"},
+                    {"jsonrpc": "2.0", "id": message["id"], "result": {"tools": []}})
+        state["calls"].append(headers.get("Mcp-Session-Id"))
+        return on_call(message, headers.get("Mcp-Session-Id"))
+    return state, respond
+
+
+def _ok(message):
+    return (200, {"Content-Type": "application/json"},
+            {"jsonrpc": "2.0", "id": message["id"],
+             "result": {"content": [{"type": "text", "text": "ran"}]}})
+
+
+@contextlib.contextmanager
+def _real_client(respond):
+    from tests.mcp_restart_server import ScriptedHTTPServer
+    srv = ScriptedHTTPServer(respond)
+    client = umt._UnityMCPClient()
+    try:
+        with mock.patch.object(umt, "_endpoint", lambda: (srv.url, {})), \
+                mock.patch.object(umt, "_client", client):
+            yield srv
+    finally:
+        client.close()
+        srv.close()
+
+
+def test_the_servers_terminated_session_404_reconnects_and_runs_once():
+    """audit missed-session-recovery: the transport-level 404 reads
+    "Not Found: Session has been terminated", which the text match missed."""
+    runs = []
+
+    def on_call(message, sid):
+        if sid == "s1" and runs:
+            return TERMINATED_404
+        runs.append(sid)
+        return _ok(message)
+    state, respond = _scripted(on_call)
+    with _real_client(respond):
+        assert _text(umt.call_unity_tool("mutate", {}, timeout=15)) == "ran"
+        assert _text(umt.call_unity_tool("mutate", {}, timeout=15)) == "ran"
+    assert runs == ["s1", "s2"]  # the 404'd attempt ran nothing
+    assert state["calls"] == ["s1", "s1", "s2"] and state["inits"] == 2
+
+
+def test_a_session_error_answered_after_dispatch_is_not_retried():
+    """The realistic form of the rejected ambiguous-mutation-retry probe: a
+    200 answer whose error text matches the old list must not be retried."""
+    def on_call(message, sid):
+        return (200, {"Content-Type": "application/json"},
+                {"jsonrpc": "2.0", "id": message["id"],
+                 "error": {"code": -32600, "message": "Session not found"}})
+    state, respond = _scripted(on_call)
+    with _real_client(respond):
+        result = umt.call_unity_tool("mutate", {}, timeout=15)
+    assert result["success"] is False and "Session not found" in result["error"]
+    assert state["calls"] == ["s1"] and state["inits"] == 1
+
+
+def test_a_post_dispatch_session_loss_is_not_retried():
+    def on_call(message, sid):
+        return (500, {"Content-Type": "application/json"},
+                {"jsonrpc": "2.0", "id": None, "error": {
+                    "code": -32603, "message": "Session terminated before the request completed"}})
+    state, respond = _scripted(on_call)
+    with _real_client(respond):
+        result = umt.call_unity_tool("mutate", {}, timeout=15)
+    assert result["success"] is False
+    assert state["calls"] == ["s1"] and state["inits"] == 1
+
+
+def test_a_404_without_a_json_body_is_still_keyed_on_the_status():
+    def on_call(message, sid):
+        if sid == "s1":
+            return (404, {"Content-Type": "text/plain"}, b"gone")
+        return _ok(message)
+    state, respond = _scripted(on_call)
+    with _real_client(respond):
+        assert _text(umt.call_unity_tool("mutate", {}, timeout=15)) == "ran"
+    assert state["calls"] == ["s1", "s2"]

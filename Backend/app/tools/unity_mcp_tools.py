@@ -15,7 +15,9 @@ import asyncio
 import concurrent.futures
 import contextlib
 import contextvars
+import json
 import logging
+import secrets
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
@@ -23,7 +25,8 @@ import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
-from mcp.types import CONNECTION_CLOSED, InputRequiredResult, ToolListChangedNotification
+from mcp.types import (CONNECTION_CLOSED, INVALID_REQUEST, InputRequiredResult,
+                       ToolListChangedNotification)
 
 logger = logging.getLogger(__name__)
 
@@ -69,24 +72,74 @@ class _SessionLost(UnityMCPError):
         super().__init__(_SESSION_LOST_MSG)
 
 
-def _is_session_lost(exc: BaseException) -> bool:
-    """True only for the client's rendering of an HTTP 404 on a request.
+# Proof that an error came from an HTTP 404 on a POST carrying our session id.
+# Minted per process so no server answer can carry it.
+_SESSION_LOST_MARK = secrets.token_hex(16)
+_SESSION_LOST_KEY = "gamachine_http_404"
+# The server's own 404 bodies (mcp 2.2 session manager / transport). Used only
+# for a session factory that cannot see HTTP statuses (see _is_session_lost).
+_SERVER_404_TEXTS = ("Session not found", "Not Found: Session has been terminated")
 
-    mcp 2.x turns a 404 on a session it holds into MCPError(-32600, "Session
-    terminated") on the client side (streamable_http post_writer); a 404 whose
-    body is a JSON-RPC error surfaces that error instead ("Session not found").
-    A server that answered the request itself never produces either. A 404 is
-    the session lookup failing before dispatch, so the request provably did not
-    run - the one
-    failure where retrying a mutation is safe. The old code read it as a
-    healthy JSON-RPC error and kept the dead session forever (measured 25 Sep
-    2026 after a server restart: "Session terminated" on every call).
+
+class _SessionLossTransport(httpx2.AsyncBaseTransport):
+    """Marks every HTTP 404 answering a POST that carried an Mcp-Session-Id.
+
+    A 404 is the server's session lookup failing before dispatch (mcp 2.2:
+    session manager "Session not found", transport "Not Found: Session has
+    been terminated"; after dispatch a lost session is a 500), so the request
+    provably did not run - the one failure where retrying a mutation is safe.
+    The SDK hands the 404's JSON-RPC body to the caller verbatim, so the retry
+    used to key on message text; the server's terminated-session wording was
+    missed (audit finding missed-session-recovery), and a future SDK could
+    reuse a matched text for a post-dispatch loss. The body is replaced here
+    with an error carrying _SESSION_LOST_MARK, and only that mark counts.
+    """
+
+    def __init__(self, inner: httpx2.AsyncBaseTransport):
+        self._inner = inner
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        response = await self._inner.handle_async_request(request)
+        if (response.status_code != 404 or request.method != "POST"
+                or not request.headers.get("mcp-session-id")):
+            return response
+        try:
+            message = json.loads(request.content)
+        except (httpx2.RequestNotRead, ValueError, TypeError):
+            return response
+        if not isinstance(message, dict) or message.get("id") is None:
+            return response  # a notification; the SDK expects no answer to it
+        original = (await response.aread())[:200]
+        await response.aclose()
+        logger.info("[UnityMCP] HTTP 404 on session POST %r: %r", message.get("method"), original)
+        body = {"jsonrpc": "2.0", "id": message["id"], "error": {
+            "code": INVALID_REQUEST, "message": "Session not found (HTTP 404)",
+            "data": {_SESSION_LOST_KEY: _SESSION_LOST_MARK}}}
+        return httpx2.Response(404, headers={"content-type": "application/json"},
+                               content=json.dumps(body).encode("utf-8"), request=request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def _is_session_lost(exc: BaseException, observes_http: bool) -> bool:
+    """True only when the request was refused by an HTTP 404 (pre-dispatch).
+
+    With the real transport (`observes_http`) only _SessionLossTransport's mark
+    counts; message text is ignored, so an SDK or server wording change can
+    neither widen nor narrow the match. A factory without HTTP (test doubles)
+    has only the error to go by: the server's own 404 texts. The SDK's
+    synthesized "Session terminated" is not among them; with the real
+    transport it never occurs, as every such 404 body is replaced.
     """
     if not isinstance(exc, MCPError):
         return False
     error = getattr(exc, "error", None)
-    return (getattr(error, "message", None) in ("Session terminated", "Session not found")
-            and getattr(error, "code", None) in (32600, -32600))
+    if observes_http:
+        data = getattr(error, "data", None)
+        return isinstance(data, dict) and data.get(_SESSION_LOST_KEY) == _SESSION_LOST_MARK
+    return (getattr(error, "code", None) == INVALID_REQUEST
+            and getattr(error, "message", None) in _SERVER_404_TEXTS)
 
 
 def _endpoint() -> tuple[str, dict]:
@@ -151,11 +204,19 @@ def _default_session_factory(message_handler):
     async def _open():
         url, headers = _endpoint()
         timeout = httpx2.Timeout(CONNECT_TIMEOUT_S, read=HTTP_READ_TIMEOUT_S)
-        async with httpx2.AsyncClient(headers=headers, timeout=timeout) as http:
+        # An explicit transport also drops env proxies, which a 127.0.0.1
+        # server never wants.
+        transport = _SessionLossTransport(httpx2.AsyncHTTPTransport())
+        async with httpx2.AsyncClient(headers=headers, timeout=timeout,
+                                      transport=transport) as http:
             async with streamable_http_client(url, http_client=http) as (read, write):
                 async with ClientSession(read, write, message_handler=message_handler) as session:
                     yield session, (url, tuple(sorted(headers.items())))
     return _open()
+
+
+# The client reads this to decide how a lost session is recognized.
+_default_session_factory.observes_http_404 = True
 
 
 def _endpoint_key() -> Optional[tuple]:
@@ -196,6 +257,7 @@ class _UnityMCPClient:
     def __init__(self, session_factory: Callable = _default_session_factory,
                  endpoint_key: Callable[[], Optional[tuple]] = _endpoint_key):
         self._factory = session_factory
+        self._observes_http = getattr(session_factory, "observes_http_404", False)
         self._endpoint_key = endpoint_key
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
@@ -436,7 +498,7 @@ class _UnityMCPClient:
                 result = await self._await_on(conn, session.list_tools())
             except Exception as exc:
                 failed = True
-                if _is_session_lost(exc):
+                if _is_session_lost(exc, self._observes_http):
                     raise _SessionLost() from exc
                 raise
             finally:
@@ -455,7 +517,7 @@ class _UnityMCPClient:
                     name, params, read_timeout_seconds=float(timeout),
                     allow_input_required=True))
             except MCPError as exc:
-                if _is_session_lost(exc):
+                if _is_session_lost(exc, self._observes_http):
                     failed = True
                     raise _SessionLost() from exc
                 if getattr(exc.error, "code", None) == CONNECTION_CLOSED:
