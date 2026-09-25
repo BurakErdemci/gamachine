@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from fastmcp import Context
 
+from services.registry.tool_actions import READ, classify, sole_value
 from services.tools import get_unity_instance_from_context
 from services.tools.utils import parse_json_payload
 from transport.unity_transport import send_with_unity_instance
@@ -33,12 +34,14 @@ POLL_SLACK_S = 30.0
 TRANSPORT_GAP_S = 60.0
 
 # The only playtest sends Unity may receive twice. Everything else changes game or
-# editor state (game_hooks get included: it can invoke an action hook).
+# editor state (game_hooks get included: it runs the game's own state getters,
+# which may have side effects; action hooks are refused by C#).
 RESENDABLE = frozenset({
     ("play_session", "status"),
     ("run_playtest", "status"),
     ("game_hooks", "list"),
 })
+PLAYTEST_COMMANDS = frozenset({"game_hooks", "play_session", "play_step", "play_capture", "run_playtest"})
 
 # Module-level aliases so tests can fake the clock without patching asyncio's own.
 monotonic = time.monotonic
@@ -61,9 +64,17 @@ def _send_fn(command: str, params: dict[str, Any]) -> Callable:
     function; the HTTP path never resends after sending, and its pre-send wait for
     the plugin to reconnect (what retry_on_reload means there) is left as it was.
     """
-    if (command, params.get("action")) in RESENDABLE:
+    if is_resendable(command, params):
         return async_send_command_with_retry
     return functools.partial(async_send_command_with_retry, retry_on_reload=False)
+
+
+def is_resendable(command: str, params: dict[str, Any]) -> bool:
+    """May Unity receive this command twice? Playtest commands only when in
+    RESENDABLE; any other command only when the approval ledger proves it a read."""
+    if command in PLAYTEST_COMMANDS:
+        return (command, sole_value(params, "action")) in RESENDABLE
+    return classify(command, params) == READ
 
 
 async def send(ctx: Context, command: str, params: dict[str, Any]) -> dict[str, Any]:

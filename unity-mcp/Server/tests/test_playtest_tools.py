@@ -721,3 +721,49 @@ def test_http_transport_keeps_waiting_for_the_plugin_before_a_mutation(monkeypat
     run(common.send(CTX, "play_session", {"action": "start"}))
     assert hub_send.await_count == 1
     assert hub_send.await_args.kwargs["retry_on_reload"] is True
+
+
+# ---------------------------------------------------------------------------
+# batch_execute over the legacy transport follows the same resend rule
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def legacy_batch(legacy_unity, monkeypatch):
+    import services.tools.batch_execute as batch_module
+
+    monkeypatch.setattr(batch_module, "get_unity_instance_from_context", AsyncMock(return_value=None))
+    monkeypatch.setattr(batch_module, "_get_max_commands_from_editor_state", AsyncMock(return_value=25))
+    return batch_module, legacy_unity
+
+
+@pytest.mark.parametrize("commands", [
+    [{"tool": "play_step", "params": {"frames": 1}}],
+    [{"tool": "game_hooks", "params": {"action": "call", "name": "level.restart"}}],
+    [{"tool": "game_hooks", "params": {"action": "list"}},
+     {"tool": "manage_gameobject", "params": {"action": "create", "name": "Cube"}}],
+    [{"tool": "game_hooks", "params": {"action": "list", "action_": "call", "name": "level.restart"}}],
+    [{"tool": "run_playtest", "params": {"action": "status"}},
+     {"tool": "play_session", "params": {"action": "start"}}],
+])
+def test_legacy_reload_reply_does_not_resend_a_batched_mutation(legacy_batch, commands):
+    """Promoted from external audit probes (2026-09-25): batch_execute used the
+    default retrying sender, so a batched play_step went out twice."""
+    batch_module, conn = legacy_batch
+    run(batch_module.batch_execute(CTX, commands))
+    assert len(conn.sends) == 1
+    assert conn.sends[0][2] == 0
+
+
+def test_legacy_reload_reply_still_resends_a_batch_of_reads(legacy_batch):
+    batch_module, conn = legacy_batch
+    run(batch_module.batch_execute(CTX, [
+        {"tool": "game_hooks", "params": {"action": "list"}},
+        {"tool": "play_session", "params": {"action": "status"}},
+        {"tool": "read_console", "params": {"action": "get"}},
+    ]))
+    assert len(conn.sends) == 2
+
+
+def test_playtest_commands_match_the_playtest_group(registered):
+    names = {name for name, t in registered.items() if t.get("group") == common.GROUP}
+    assert names == set(common.PLAYTEST_COMMANDS)

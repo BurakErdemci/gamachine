@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import functools
 from typing import Annotated, Any
 
 from fastmcp import Context
@@ -9,6 +10,7 @@ from mcp.types import ToolAnnotations
 
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
+from services.tools._playtest_common import is_resendable
 from transport.unity_transport import send_with_unity_instance
 from transport.legacy.unity_connection import async_send_command_with_retry
 
@@ -143,8 +145,14 @@ async def batch_execute(
     if max_parallelism is not None:
         payload["maxParallelism"] = int(max_parallelism)
 
+    # The legacy sender resends the whole batch after a "reloading" reply, although
+    # Unity may already have run it; only a batch of resendable commands may go
+    # twice (external audit 2026-09-25: a batched play_step was sent twice).
+    send_fn = async_send_command_with_retry
+    if not all(is_resendable(c["tool"], c["params"]) for c in normalized_commands):
+        send_fn = functools.partial(async_send_command_with_retry, retry_on_reload=False)
     return await send_with_unity_instance(
-        async_send_command_with_retry,
+        send_fn,
         unity_instance,
         "batch_execute",
         payload,

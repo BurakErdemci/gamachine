@@ -130,6 +130,18 @@ def _spellings(params: Mapping[str, Any], param: str) -> list[tuple[bool, Any]]:
     return out
 
 
+def sole_value(params: Mapping[str, Any], param: str) -> Any:
+    """
+    ``params[param]`` when that literal key is the only spelling any layer
+    could read as ``param``; otherwise None, which callers must treat as
+    "unknown" rather than "absent".
+    """
+    spellings = _spellings(params, param)
+    if len(spellings) == 1 and spellings[0][0]:
+        return spellings[0][1]
+    return None
+
+
 def _is_read_by_param(rule: Mapping[str, Any], params: Mapping[str, Any]) -> bool:
     """
     Evaluate one ``param_dependent`` rule against a call's parameters.
