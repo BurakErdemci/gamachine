@@ -65,7 +65,12 @@ _BEKLEME_BUTCESI = 180.0   # sn — diff okuyup karar vermek için makul süre
 
 
 class ApprovalDenied(RuntimeError):
-    """Kapı reddetti. FastMCP bunu araç hatasına çeviriyor, çağrı ÇALIŞMIYOR."""
+    """The gate refused; the call does NOT run.
+
+    FastMCP does not turn this into a tool error by itself (it is not a
+    FastMCPError): the MCP path converts it to ToolError in
+    UnityInstanceMiddleware.on_call_tool, /api/command answers 403.
+    """
 
 
 def _headers() -> dict[str, str]:

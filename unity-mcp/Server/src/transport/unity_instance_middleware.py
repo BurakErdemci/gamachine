@@ -24,6 +24,7 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from core.config import config
 from core.constants import UNITY_INSTANCE_HEADER, UNITY_INSTANCE_QUERY_PARAM
 from services.registry import get_registered_tools
+from transport.approval_gate import ApprovalDenied
 from transport.plugin_hub import PluginHub
 
 logger = logging.getLogger("mcp-for-unity-server")
@@ -404,7 +405,14 @@ class UnityInstanceMiddleware(Middleware):
             # here into one; FastMCP 4 answers with a JSON-RPC protocol error
             # instead (measured with the live probe, 25 Sep 2026).
             raise ToolError(str(exc)) from exc
-        await self._require_approval(context)
+        try:
+            await self._require_approval(context)
+        except ApprovalDenied as exc:
+            # The model must read WHY it was refused, or in step mode it just
+            # retries. Raised as-is, the 2026-07-28 runner masked it to
+            # "Internal server error" and the old era got a JSON-RPC error
+            # instead of a tool result (tests/test_live_approval_denial.py).
+            raise ToolError(str(exc)) from exc
         return await call_next(context)
 
     async def _require_approval(self, context: MiddlewareContext) -> None:

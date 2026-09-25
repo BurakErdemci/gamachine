@@ -364,9 +364,17 @@ def test_middleware_kapiyi_GERCEKTEN_cagiriyor(monkeypatch):
         ulasildi.append(True)
         return "UNITY'YE ULAŞTI"
 
-    with pytest.raises(ApprovalDenied):
+    # The module's own ToolError: in a full run tests/integration/conftest.py
+    # has stubbed fastmcp for the session, so the real class is not the one
+    # raised. It must be a ToolError so the model gets a tool result with the
+    # reason (test_live_approval_denial.py measures that over the wire).
+    from transport import unity_instance_middleware
+
+    with pytest.raises(unity_instance_middleware.ToolError) as raised:
         _kos(mw.on_call_tool(
             _SahteBaglam("manage_gameobject", {"action": "create"}), call_next))
+    assert isinstance(raised.value.__cause__, ApprovalDenied)
+    assert "kablolama sınaması" in str(raised.value)
     assert ulasildi == [], "kapı reddetti ama çağrı yine de Unity'ye gitti"
 
 
