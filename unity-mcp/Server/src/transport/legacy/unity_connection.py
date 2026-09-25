@@ -550,17 +550,20 @@ class UnityConnectionPool:
             if self._default_instance_id:
                 instance_identifier = self._default_instance_id
                 logger.debug(f"Using default instance: {instance_identifier}")
+            elif len(instances) == 1:
+                return instances[0]
             else:
-                # Use the most recently active instance
-                # Instances with no heartbeat (None) should be sorted last (use 0 as sentinel)
-                sorted_instances = sorted(
-                    instances,
-                    key=lambda inst: inst.last_heartbeat.timestamp() if inst.last_heartbeat else 0.0,
-                    reverse=True,
+                # Refuse rather than guess. This used to pick the most recently
+                # active Editor, so an unnamed write could land in a project the
+                # caller never meant (audit 25 Sep 2026); the HTTP transport
+                # already refuses here, and the server instructions say it errors.
+                ids = ", ".join(sorted(inst.id for inst in instances))
+                raise ConnectionError(
+                    f"Multiple Unity instances are connected ({ids}). Pass "
+                    f"unity_instance on the tool call (Name@hash, a hash prefix, "
+                    f"or the port number), or set UNITY_MCP_DEFAULT_INSTANCE for "
+                    f"this server. Read mcpforunity://instances for the values."
                 )
-                logger.info(
-                    f"No instance specified, using most recent: {sorted_instances[0].id}")
-                return sorted_instances[0]
 
         identifier = instance_identifier.strip()
 
@@ -642,7 +645,8 @@ class UnityConnectionPool:
 
         Args:
             instance_identifier: Optional identifier (name, hash, name@hash, etc.)
-                                If None, uses default or most recent instance
+                                If None: the default instance, else the sole one;
+                                several connected is an error
 
         Returns:
             UnityConnection to the specified instance
@@ -720,7 +724,8 @@ def get_unity_connection(instance_identifier: str | None = None) -> UnityConnect
 
     Args:
         instance_identifier: Optional identifier for specific Unity instance.
-                           If None, uses default or most recent instance.
+                           If None: the default instance, else the sole one;
+                           several connected is an error.
 
     Returns:
         UnityConnection to the specified or default Unity instance
