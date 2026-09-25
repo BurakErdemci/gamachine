@@ -314,25 +314,28 @@ export const SettingsModal = ({
               <div className="space-y-2">
                 <label className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-1">{t('settings.tabMode')}</label>
                 {([
-                  { id: 'auto' as GenerationMode, icon: <Cpu size={14} />, label: t('mode.auto'), explain: t('settings.modeAutoExplain') },
-                  { id: 'step' as GenerationMode, icon: <Hand size={14} />, label: t('mode.step'), explain: t('settings.modeStepExplain') },
+                  { id: 'auto' as GenerationMode, icon: <Cpu size={14} />, label: t('settings.modeAutoTitle'), explain: t('settings.modeAutoExplain'), warn: true },
+                  { id: 'step' as GenerationMode, icon: <Hand size={14} />, label: t('settings.modeStepTitle'), explain: t('settings.modeStepExplain'), warn: false },
                 ]).map(option => {
                   const selected = approvalMode === option.id;
+                  // The auto card stays red whether or not it is selected: the
+                  // warning is about the mode itself, not about the current choice.
                   return (
                     <button
                       key={option.id}
                       type="button"
                       disabled={!onApprovalModeChange}
                       onClick={() => onApprovalModeChange?.(option.id)}
+                      data-warn={option.warn ? 'true' : undefined}
                       className={`w-full flex items-start gap-3 p-3 rounded-xl border text-left transition-all disabled:opacity-50 ${
                         selected
                           ? 'border-blue-500/60 bg-blue-500/10'
                           : 'border-white/[0.07] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/15'
-                      }`}
+                      } ${option.warn ? 'border-l-[3px] border-l-red-500' : ''}`}
                     >
-                      <span className={`mt-0.5 shrink-0 ${selected ? 'text-blue-400' : 'text-slate-500'}`}>{option.icon}</span>
+                      <span className={`mt-0.5 shrink-0 ${option.warn ? 'text-red-400' : selected ? 'text-blue-400' : 'text-slate-500'}`}>{option.icon}</span>
                       <span className="flex-1 min-w-0">
-                        <span className={`block text-xs font-semibold ${selected ? 'text-blue-300' : 'text-slate-200'}`}>{option.label}</span>
+                        <span className={`block text-xs ${option.warn ? 'font-bold tracking-wide text-red-400' : selected ? 'font-semibold text-blue-300' : 'font-semibold text-slate-200'}`}>{option.label}</span>
                         <span className="block text-[10.5px] text-slate-400 mt-0.5 leading-relaxed">{option.explain}</span>
                       </span>
                       {selected && <Check size={12} className="text-blue-400 shrink-0 mt-0.5" />}

@@ -24,7 +24,7 @@ vi.mock('axios', () => {
 import axios from 'axios'
 import { SettingsModal } from '../renderer/components/home/SettingsModal'
 import { useChat } from '../renderer/hooks/home/useChat'
-import { cevir } from '../renderer/lib/i18n'
+import { cevir, aktifDilAyarla, translations } from '../renderer/lib/i18n'
 
 const mockedGet = (axios as any).get as ReturnType<typeof vi.fn>
 const KEY = 'unityai-generation-mode'
@@ -61,8 +61,41 @@ describe('SettingsModal · Çalışma modu sekmesi', () => {
     render(<SettingsModal {...props} approvalMode="step" onApprovalModeChange={onChange} />)
     fireEvent.click(screen.getByRole('tab', { name: cevir('settings.tabMode') }))
     expect(screen.getByText(cevir('settings.modeAutoExplain'))).toBeTruthy()
-    fireEvent.click(screen.getByText(cevir('mode.auto')))
+    fireEvent.click(screen.getByText(cevir('settings.modeAutoTitle')))
     expect(onChange).toHaveBeenCalledWith('auto')
+  })
+
+  it('the auto card is red whether or not it is selected; step is not', () => {
+    for (const mode of ['auto', 'step'] as const) {
+      render(<SettingsModal {...props} approvalMode={mode} onApprovalModeChange={vi.fn()} />)
+      fireEvent.click(screen.getByRole('tab', { name: cevir('settings.tabMode') }))
+      const autoTitle = screen.getByText(cevir('settings.modeAutoTitle'))
+      const autoCard = autoTitle.closest('button')!
+      const stepCard = screen.getByText(cevir('settings.modeStepTitle')).closest('button')!
+      expect(autoTitle.className).toContain('text-red-400')
+      expect(autoCard.className).toContain('border-l-red-500')
+      expect(stepCard.className).not.toContain('red')
+      expect(screen.getByText(cevir('settings.modeStepExplain'))).toBeTruthy()
+      cleanup()
+    }
+  })
+
+  it('the new mode-card wording is in both languages, without the removed trust line', () => {
+    aktifDilAyarla('tr')
+    expect(cevir('settings.modeAutoTitle')).toBe('⚠ OTO MOD — ONAY YOK')
+    expect(cevir('settings.modeStepTitle')).toBe('✋ Adım adım')
+    expect(cevir('settings.modeAutoExplain')).toContain('izinleri atla')
+    aktifDilAyarla('en')
+    try {
+      expect(cevir('settings.modeAutoTitle')).toBe('⚠ AUTO MODE — NO APPROVALS')
+      expect(cevir('settings.modeStepTitle')).toBe('✋ Step by step')
+      expect(cevir('settings.modeAutoExplain')).toContain('bypass permissions')
+    } finally {
+      aktifDilAyarla('tr')
+    }
+    for (const lang of ['tr', 'en'] as const) {
+      expect(translations[lang]['settings.modeAutoExplain']).not.toMatch(/güvendiğin|trusted/i)
+    }
   })
 })
 
