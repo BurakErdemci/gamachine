@@ -152,12 +152,21 @@ def _propagate_to_live_sessions(auto: bool) -> None:
     approval request of their running process, so for them a flip bites within
     the current turn.
 
-    What it cannot reach: agy and the one-shot CLIs (cursor, copilot, opencode,
-    kimi) carry the attribute, but nothing in their running process reads it;
-    their approval behaviour is fixed when the process is spawned (agent_runner
-    passes `interactive=` then, agy_provider's one-shot analyze hard-codes
-    auto). Such a process keeps that behaviour for its own built-in tools until
-    it exits. Only its Unity MCP calls follow a flip at once, because
+    agy: its built-in tools are gated by a workspace hook fixed at spawn time
+    (agy_session reads current_mode() then; the hook exists only in step
+    mode). Setting the flag rewrites the hook's state file from current_mode(),
+    so a flip to auto frees a live step-mode process at once. A flip to step
+    cannot tighten a process spawned in auto (it has no hook): its built-in
+    tools stay ungated until the current turn ends, and the next turn respawns
+    it with the hook.
+
+    What it cannot reach: the one-shot CLIs (cursor, copilot, opencode, kimi)
+    carry the attribute, but nothing in their running process reads it; their
+    approval behaviour is fixed when the process is spawned (agent_runner
+    passes `interactive=` then). Such a process keeps that behaviour for its
+    own built-in tools until it exits.
+
+    For every client, Unity MCP calls follow a flip at once, because
     /mcp-approval-request reads current_mode() on every request. Nothing here
     kills a running process.
     """
