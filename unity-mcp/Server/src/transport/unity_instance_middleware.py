@@ -18,6 +18,7 @@ from threading import RLock
 import logging
 import time
 
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 from core.config import config
@@ -395,7 +396,14 @@ class UnityInstanceMiddleware(Middleware):
 
     async def on_call_tool(self, context: MiddlewareContext, call_next):
         """Inject active Unity instance into tool context if available."""
-        await self._inject_unity_instance(context)
+        try:
+            await self._inject_unity_instance(context)
+        except ValueError as exc:
+            # A bad unity_instance / ?instance= is the caller's mistake and the
+            # model must see it as a tool result. FastMCP 3 turned a ValueError
+            # here into one; FastMCP 4 answers with a JSON-RPC protocol error
+            # instead (measured with the live probe, 25 Sep 2026).
+            raise ToolError(str(exc)) from exc
         await self._require_approval(context)
         return await call_next(context)
 

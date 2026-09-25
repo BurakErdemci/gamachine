@@ -452,3 +452,23 @@ async def test_batch_execute_rejects_inner_unity_instance():
 
     with pytest.raises(ValueError, match="Per-command instance routing is not supported inside batch_execute"):
         await batch_execute(ctx, commands=commands)
+
+
+@pytest.mark.asyncio
+async def test_bad_instance_on_a_tool_call_is_a_tool_error(monkeypatch):
+    """Not a bare ValueError: FastMCP 4 would send that as a protocol error,
+    which the model does not get to read as the call's result."""
+    from fastmcp.exceptions import ToolError
+
+    instances = [SimpleNamespace(id="Proj@abc123", hash="abc123")]
+    mw = _make_middleware(monkeypatch, pool_instances=instances)
+    ctx = DummyContext()
+    call = SimpleNamespace(fastmcp_context=ctx,
+                           message=SimpleNamespace(name="read_console",
+                                                   arguments={"unity_instance": "xyz"}))
+
+    async def call_next(_):
+        raise AssertionError("must not run")
+
+    with pytest.raises(ToolError, match="No running Unity instance"):
+        await mw.on_call_tool(call, call_next)

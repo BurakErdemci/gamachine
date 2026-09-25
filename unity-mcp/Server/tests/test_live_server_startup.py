@@ -9,6 +9,10 @@ WHICH FAILURE IT CAME FROM
 
 WHAT IT PINS
     * The server starts and stays up.
+    * Everything below holds over BOTH protocol eras: the 2025 initialize
+      handshake (spoken raw, as an mcp 1.x client does; the Gamachine backend
+      stays on mcp 1.x) and 2026-07-28 via the mcp 2 SDK client (what Claude
+      Code negotiates). The new-era half needs mcp>=2 in the test env.
     * /mcp serves EXACTLY the list it served before tool profiles existed, in
       the same order (PINNED_DEFAULT_LIST, captured from cf53613 on FastMCP
       3.4.7 with no Unity Editor connected).
@@ -188,3 +192,65 @@ def test_a_connected_client_hears_tools_list_changed_when_unity_registers(report
     rode on a FastMCP monkeypatch that FastMCP 4 removed."""
     assert "notifications/tools/list_changed" in report["list_changed_methods"], report[
         "list_changed_methods"]
+
+
+# ── The 2026-07-28 protocol (mcp 2 SDK client) ───────────────────────────────
+
+def _new_era(report):
+    new = report["new_era"]
+    if "skipped" in new:
+        pytest.skip(new["skipped"])
+    return new
+
+
+@pytest.mark.parametrize("path", ["/mcp", "/mcp/gamachine", "/mcp/full"])
+def test_new_era_serves_the_same_lists(report, path):
+    new = _new_era(report)["lists"][path]
+    assert new.get("protocol") == "2026-07-28", new
+    assert new["names"] == report["old_era"][path]["names"]
+
+
+def test_new_era_lists_carry_a_short_private_cache_hint(report):
+    extra = _new_era(report)["lists"]["/mcp"]["result_extra"]
+    assert extra.get("ttlMs") == 1000, extra
+    assert extra.get("cacheScope") == "private", extra
+
+
+def test_new_era_needs_the_secret_and_a_real_profile(report):
+    """The mcp 2 client reports only "Server returned an error response"; the
+    401/404 status codes are pinned above by the raw requests, which hit the
+    same ASGI layer. Here: the connection is refused and nothing is listed."""
+    new = _new_era(report)
+    for case in ("no_key", "unknown_profile"):
+        assert "exception" in new[case] and "names" not in new[case], new[case]
+
+
+def test_new_era_manage_tools(report):
+    new = _new_era(report)
+    assert '"path":"/mcp/full"' in new["full_list_groups"]["text"].replace(" ", "")
+    assert '"success":false' in new["activate"]["text"].replace(" ", "")
+
+
+def test_new_era_routing_and_refusal(report):
+    if "skipped" in report["new_era_routing"]:
+        pytest.skip(report["new_era_routing"]["skipped"])
+    routing = report["new_era_routing"]
+    assert routing["query_param"]["reached"] == ["ProbeB"], routing["query_param"]
+    assert routing["unrouted"]["reached"] == [], routing["unrouted"]
+    assert "Multiple Unity instances" in routing["unrouted"]["text"]
+    assert routing["gamachine_refuses_meta_tool"]["is_error"] is True
+
+
+def test_stdio_transport_starts_and_lists_every_group(report):
+    """stdio shares the startup path but not the transport; every group is
+    enabled there until Unity reports its toggles."""
+    stdio = report["stdio"]
+    assert stdio.get("protocol") == "2025-06-18", stdio
+    # 51 tools minus execute_custom_tool (not project-scoped in this run)
+    assert stdio.get("tool_count") == 50, stdio
+
+
+def test_probe_servers_are_gone_and_their_files_removed(report):
+    """Cleanup is part of the test: the temp dir can only be deleted once no
+    server process holds a file in it."""
+    assert report["workdir_removed"] is True

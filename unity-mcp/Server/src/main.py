@@ -470,6 +470,14 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
         name="mcp-for-unity-server",
         lifespan=server_lifespan,
         instructions=_build_instructions(project_scoped_tools),
+        # Client-side cache hints (2026-07-28 clients that opt in). FastMCP
+        # applies ONE hint to tools/list and resources/read alike, and
+        # editor_state is a resource clients poll while Unity compiles, so the
+        # TTL stays at the 1 s minimum. Private: the list depends on the
+        # profile URL and on which Editor is connected, so it must never be
+        # shared across callers.
+        cache_ttl=1,
+        cache_scope="private",
     )
 
     global custom_tool_service

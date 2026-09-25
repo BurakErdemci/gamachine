@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 import sys
@@ -317,6 +318,97 @@ def routing_scenario(base: str, editors: FakeEditors) -> dict:
     return out
 
 
+def _new_era_sdk():
+    """The mcp>=2 client, or the reason it is not available (mcp 1.x installed)."""
+    try:
+        import importlib.metadata
+        if int(importlib.metadata.version("mcp").split(".")[0]) < 2:
+            return None, "mcp < 2: no 2026-07-28 client"
+        import httpx2
+        from mcp import Client
+        from mcp.client.streamable_http import streamable_http_client
+    except ImportError as exc:
+        return None, f"import failed: {exc}"
+    return (httpx2, Client, streamable_http_client), None
+
+
+def new_era(base: str, editors: "FakeEditors | None" = None) -> dict:
+    """The same checks over the 2026-07-28 protocol (server/discover, no initialize),
+    the one Claude Code 2.1.282 negotiates (P1 spike)."""
+    sdk, why_not = _new_era_sdk()
+    if sdk is None:
+        return {"skipped": why_not}
+    httpx2, Client, streamable_http_client = sdk
+    import asyncio
+
+    def groups_of(tool) -> list:
+        meta = tool.model_dump(by_alias=True).get("_meta") or {}
+        tags = (meta.get("fastmcp") or {}).get("tags") or []
+        return sorted(t.split(":", 1)[1] for t in tags if isinstance(t, str) and t.startswith("group:"))
+
+    async def session(path: str, key: str | None, work):
+        headers = {"X-API-Key": key} if key is not None else {}
+        async with httpx2.AsyncClient(headers=headers, timeout=httpx2.Timeout(30, read=60)) as http:
+            async with Client(streamable_http_client(base + path, http_client=http),
+                              mode="auto") as client:
+                return await work(client)
+
+    async def listing(client):
+        raw = await client.session.list_tools()
+        dumped = raw.model_dump(by_alias=True)
+        return {
+            "protocol": client.protocol_version,
+            "names": [t.name for t in raw.tools],
+            "groups": {t.name: groups_of(t) for t in raw.tools},
+            "result_extra": {k: v for k, v in dumped.items() if k != "tools" and v is not None},
+        }
+
+    def call(name, arguments):
+        async def work(client):
+            result = await client.call_tool(name, arguments)
+            text = " ".join(getattr(b, "text", "") for b in result.content)
+            return {"protocol": client.protocol_version, "is_error": result.is_error, "text": text}
+        return work
+
+    async def guarded(path, key, work):
+        before = len(editors.commands()) if editors else 0
+        try:
+            out = await session(path, key, work)
+        except BaseException as exc:  # noqa: BLE001 - the failure IS the observation
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+                exc = exc.exceptions[0]
+            out = {"exception": f"{type(exc).__name__}: {exc}"[:400]}
+        if editors:
+            await asyncio.sleep(0.2)
+            out["reached"] = [p for p, _ in editors.commands()[before:]]
+        return out
+
+    async def run():
+        if editors is not None:
+            return {
+                "query_param": await guarded("/mcp?instance=bbbb2222", SECRET,
+                                             call("read_console", {"action": "get", "count": 1})),
+                "unrouted": await guarded("/mcp", SECRET,
+                                          call("read_console", {"action": "get", "count": 1})),
+                "gamachine_refuses_meta_tool": await guarded(
+                    "/mcp/gamachine", SECRET, call("manage_tools", {"action": "list_groups"})),
+            }
+        return {
+            "lists": {p: await guarded(p, SECRET, listing)
+                      for p in ("/mcp", "/mcp/gamachine", "/mcp/full")},
+            "no_key": await guarded("/mcp", None, listing),
+            "unknown_profile": await guarded("/mcp/not-a-profile", SECRET, listing),
+            "full_list_groups": await guarded("/mcp/full", SECRET,
+                                              call("manage_tools", {"action": "list_groups"})),
+            "activate": await guarded("/mcp", SECRET,
+                                      call("manage_tools", {"action": "activate", "group": "vfx"})),
+        }
+
+    return asyncio.run(run())
+
+
 def start_server(port: int, workdir: pathlib.Path, log) -> subprocess.Popen:
     src = pathlib.Path(__file__).resolve().parent.parent / "src"
     env = dict(os.environ)
@@ -356,53 +448,140 @@ def wait_healthy(proc: subprocess.Popen, base: str) -> tuple[bool, float]:
     return False, time.monotonic() - started
 
 
+def stdio_check(workdir: pathlib.Path) -> dict:
+    """main.py --transport stdio: initialize, tools/list, one call, over pipes."""
+    src = pathlib.Path(__file__).resolve().parent.parent / "src"
+    env = dict(os.environ)
+    env.update({"UNITY_MCP_SKIP_STARTUP_CONNECT": "1", "DISABLE_TELEMETRY": "true",
+                "UNITY_MCP_DISABLE_TELEMETRY": "true", "MCP_DISABLE_TELEMETRY": "true",
+                "UNITY_MCP_LOG_DIR": str(workdir / "stdio-logs")})
+    env.pop("UNITY_MCP_TRANSPORT", None)
+    proc = subprocess.Popen([sys.executable, str(src / "main.py"), "--transport", "stdio"],
+                            cwd=str(src), env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    result: dict = {}
+    reply: dict = {}
+
+    def send(message: dict) -> None:
+        proc.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
+        proc.stdin.flush()
+
+    def receive() -> dict:
+        # A blocked readline must not hang the suite if the server dies silently.
+        def read() -> None:
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    return
+                message = json.loads(line)
+                if "id" in message:
+                    reply["message"] = message
+                    return
+        reply.clear()
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        reader.join(timeout=60)
+        return reply.get("message") or {}
+
+    try:
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": OLD_PROTOCOL, "capabilities": {},
+            "clientInfo": {"name": "live-probe", "version": "0"}}})
+        result["protocol"] = (receive().get("result") or {}).get("protocolVersion")
+        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        result["tool_count"] = len((receive().get("result") or {}).get("tools") or [])
+    finally:
+        proc.stdin.close()
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=15)
+        proc.stdout.close()
+    return result
+
+
+def remove_workdir(path: pathlib.Path) -> bool:
+    """Delete the probe's temp dir, waiting for the servers' file handles.
+
+    On Windows `.venv/Scripts/python.exe` is a launcher that runs the real
+    interpreter as a child (visible as a parent/child pair with the same
+    command line). terminate() stops the launcher; the child follows a moment
+    later, still holding its log file, so an immediate rmtree fails with
+    WinError 32 (measured 25 Sep 2026). Success here also shows that no server
+    process is left holding the directory.
+    """
+    deadline = time.monotonic() + 20
+    while True:
+        try:
+            shutil.rmtree(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(0.25)
+
+
 def run(paths: list[str]) -> dict:
     report: dict = {}
+    workdir = pathlib.Path(tempfile.mkdtemp(prefix="unity-mcp-live-probe-"))
+    try:
+        _serve_and_probe(workdir, paths, report)
+    finally:
+        report["workdir_removed"] = remove_workdir(workdir)
+    return report
+
+
+def _serve_and_probe(workdir: pathlib.Path, paths: list[str], report: dict) -> None:
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
-    with tempfile.TemporaryDirectory(prefix="unity-mcp-live-probe-") as tmp:
-        workdir = pathlib.Path(tmp)
-        # Closed before the directory is removed: Windows cannot delete a file
-        # that is still open.
-        log = open(workdir / "server.out", "wb")
-        proc = start_server(port, workdir, log)
+    # Closed before the directory is removed: Windows cannot delete a file
+    # that is still open.
+    log = open(workdir / "server.out", "wb")
+    proc = start_server(port, workdir, log)
+    try:
+        healthy, waited = wait_healthy(proc, base)
+        report["healthy"] = healthy
+        report["startup_seconds"] = round(waited, 2)
+        if not healthy:
+            report["exit_code"] = proc.poll()
+            return
+        report["old_era"] = {p: old_era_list_tools(base, p, SECRET) for p in paths}
+        report["old_era_no_key"] = {p: old_era_list_tools(base, p, None) for p in paths}
+        report["old_era_calls"] = old_era_calls(base)
+        report["new_era"] = new_era(base)
+        listener = ListChangedListener(base)
+        listener.start()
+        editors = FakeEditors(port)
+        editors.start()
         try:
-            healthy, waited = wait_healthy(proc, base)
-            report["healthy"] = healthy
-            report["startup_seconds"] = round(waited, 2)
-            if not healthy:
-                report["exit_code"] = proc.poll()
-                return report
-            report["old_era"] = {p: old_era_list_tools(base, p, SECRET) for p in paths}
-            report["old_era_no_key"] = {p: old_era_list_tools(base, p, None) for p in paths}
-            report["old_era_calls"] = old_era_calls(base)
-            listener = ListChangedListener(base)
-            listener.start()
-            editors = FakeEditors(port)
-            editors.start()
-            try:
-                report["editors_connected"] = wait_for_editors(base, 2)
-                if report["editors_connected"]:
-                    report["with_editors"] = {
-                        p: old_era_list_tools(base, p, SECRET)
-                        for p in ("/mcp", "/mcp/gamachine", "/mcp/full")}
-                    report["routing"] = routing_scenario(base, editors)
-                report["list_changed_methods"] = list(listener.methods)
-            finally:
-                editors.close()
-                listener.close()
-            report["still_running"] = proc.poll() is None
+            report["editors_connected"] = wait_for_editors(base, 2)
+            if report["editors_connected"]:
+                report["with_editors"] = {
+                    p: old_era_list_tools(base, p, SECRET)
+                    for p in ("/mcp", "/mcp/gamachine", "/mcp/full")}
+                report["routing"] = routing_scenario(base, editors)
+                report["new_era_routing"] = new_era(base, editors)
+            report["list_changed_methods"] = list(listener.methods)
         finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=15)
-            log.close()
-            report["server_output_tail"] = (
-                (workdir / "server.out").read_bytes()[-4000:].decode("utf-8", "replace"))
-    return report
+            editors.close()
+            listener.close()
+        report["still_running"] = proc.poll() is None
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=15)
+        log.close()
+        report["server_output_tail"] = (
+            (workdir / "server.out").read_bytes()[-4000:].decode("utf-8", "replace"))
+    report["stdio"] = stdio_check(workdir)
 
 
 def main() -> int:

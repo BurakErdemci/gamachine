@@ -28,14 +28,17 @@ classifiers = [
 ]
 keywords = ["mcp", "unity", "ai", "model context protocol", "gamedev", "unity3d", "automation", "llm", "agent"]
 requires-python = ">=3.10"
-# fastmcp and mcp are pinned exactly: Gamachine starts the server with
-# `uvx --from <Server dir>`, which ignores uv.lock, so a range here let
-# production drift to the newest release (25 Sep 2026: fastmcp 3.4.7 live
-# while the suite ran 3.0.2). Bump them on purpose, together with uv.lock.
+# fastmcp and mcp are pinned exactly: a range here once let production drift
+# to the newest release (25 Sep 2026: fastmcp 3.4.7 live while the suite ran
+# 3.0.2). Bump them on purpose, together with uv.lock, which Gamachine's
+# launcher now exports as constraints for `uvx --from <Server dir>`.
+# fastmcp 4 / mcp 2 serve both the 2025 handshake protocol and 2026-07-28 on
+# the same URL; tests/test_live_server_startup.py starts the server and talks
+# both.
 dependencies = [
  "httpx>=0.27.2",
- "fastmcp==3.4.7",
- "mcp==1.30.0",
+ "fastmcp==4.0.9",
+ "mcp==2.2.0",
  "pydantic>=2.12.5",
  "tomli>=2.3.0",
  "fastapi>=0.104.0",
