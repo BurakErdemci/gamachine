@@ -131,7 +131,10 @@ async def request_approval(
     # approval_gate.py` aynı anda aynı şekilde düzeltildi. İkisinin bütçesi
     # BİLEREK aynı: aynı kartı bekleyen iki istemciden birinin erken pes etmesi,
     # kartın bir tarafta yaşayıp diğerinde ölmesi demek.
-    _BEKLEME_BUTCESI = 180.0
+    # 150 s, not 180: agy cancels every MCP call at exactly 180 s and its timeout
+    # cannot be configured, so an approval near 180 s would run after agy had
+    # already told the model "timed out" (measured 25 Sep 2026, commit d6c2232).
+    _BEKLEME_BUTCESI = 150.0
     logger.info(f"[approval_bridge] Kullanıcı cevabı bekleniyor (gate: {gate_id})")
     bitis = time.monotonic() + _BEKLEME_BUTCESI
     i = 0

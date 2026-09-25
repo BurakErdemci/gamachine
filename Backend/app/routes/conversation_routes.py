@@ -398,15 +398,17 @@ def create_conversation_router(db, progress_store):
     # sözlükte kalıcı birikiyordu.
     MCP_RESULT_TTL = 600
 
-    # Kart, KİMSE BEKLEMİYORKEN ekranda kalmamalı. Her iki istemci de 180 sn'de
-    # pes edip reddediyor; kayıt 600 sn yaşadığı için arada 7 dakikalık bir
+    # Kart, KİMSE BEKLEMİYORKEN ekranda kalmamalı. Her iki istemci de bekleme
+    # bütçesi dolunca pes edip reddediyor; kayıt 600 sn yaşadığı için arada bir
     # pencere vardı ve orada (denetim bulgusu, 31 Tem 2026):
     #   • `/mcp-pending` kartı sunmaya devam ediyordu,
     #   • kullanıcı onaylayabiliyor ve "komut başlatılıyor" yazısını görüyordu,
     #   • ama toplayacak istemci kalmadığı için hiçbir şey çalışmıyordu,
     #   • ve tek-kart kuyruğu tıkalı kaldığı için YENİ kartlar da gelmiyordu.
-    # 200 sn = 180 + pay: istemcinin son yoklaması ile süpürme yarışmasın.
-    MCP_PENDING_TTL = 200
+    # Both clients now give up at 150 s (agy cuts every MCP call at 180 s).
+    # 170 s = 10 s POST budget + 150 s wait + margin, so the sweep does not race
+    # the client's last poll.
+    MCP_PENDING_TTL = 170
 
     def _sweep_mcp_gates() -> None:
         """İki aşamalı süpürme: önce bekleyeni kalmayan KART, sonra kayıt.
