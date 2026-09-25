@@ -181,3 +181,10 @@ def test_an_unknown_connection_default_is_an_error_not_a_fallback(report):
     call = report["routing"]["unknown_default"]
     assert call["is_error"], call
     assert "ffff0000" in call["text"], call
+
+
+def test_a_connected_client_hears_tools_list_changed_when_unity_registers(report):
+    """PluginHub announces Unity's tool set to clients already connected; this
+    rode on a FastMCP monkeypatch that FastMCP 4 removed."""
+    assert "notifications/tools/list_changed" in report["list_changed_methods"], report[
+        "list_changed_methods"]

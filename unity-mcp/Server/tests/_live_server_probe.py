@@ -129,6 +129,43 @@ class OldEraSession:
                 "structured": result.get("structuredContent"), "error": body.get("error")}
 
 
+class ListChangedListener:
+    """Holds an old-protocol session's standalone SSE stream (GET) open and
+    records the JSON-RPC methods that arrive on it."""
+
+    def __init__(self, base: str):
+        self.session = OldEraSession(base, "/mcp", SECRET)
+        self.methods: list[str] = []
+        self.ready = threading.Event()
+        self.thread = threading.Thread(target=self._listen, daemon=True)
+
+    def start(self) -> None:
+        self.session.__enter__()
+        self.thread.start()
+        self.ready.wait(timeout=10)
+
+    def close(self) -> None:
+        self.session.__exit__(None, None, None)
+
+    def _listen(self) -> None:
+        headers = dict(self.session.headers)
+        headers["Accept"] = "text/event-stream"
+        try:
+            with httpx.stream("GET", self.session.url, headers=headers,
+                              timeout=httpx.Timeout(5.0, read=None)) as response:
+                self.ready.set()
+                for line in response.iter_lines():
+                    if line.startswith("data:"):
+                        try:
+                            self.methods.append(json.loads(line[5:].strip()).get("method"))
+                        except ValueError:
+                            pass
+        except httpx.HTTPError:
+            pass
+        finally:
+            self.ready.set()
+
+
 def old_era_list_tools(base: str, path: str, key: str | None) -> dict:
     with OldEraSession(base, path, key) as session:
         if session.status != 200:
@@ -339,6 +376,8 @@ def run(paths: list[str]) -> dict:
             report["old_era"] = {p: old_era_list_tools(base, p, SECRET) for p in paths}
             report["old_era_no_key"] = {p: old_era_list_tools(base, p, None) for p in paths}
             report["old_era_calls"] = old_era_calls(base)
+            listener = ListChangedListener(base)
+            listener.start()
             editors = FakeEditors(port)
             editors.start()
             try:
@@ -348,8 +387,10 @@ def run(paths: list[str]) -> dict:
                         p: old_era_list_tools(base, p, SECRET)
                         for p in ("/mcp", "/mcp/gamachine", "/mcp/full")}
                     report["routing"] = routing_scenario(base, editors)
+                report["list_changed_methods"] = list(listener.methods)
             finally:
                 editors.close()
+                listener.close()
             report["still_running"] = proc.poll() is None
         finally:
             proc.terminate()

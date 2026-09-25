@@ -10,7 +10,7 @@ from services.tools import register_all_tools
 from core.telemetry import record_milestone, record_telemetry, MilestoneType, RecordType, get_package_version
 from services.resources import register_all_resources
 from transport.plugin_registry import PluginRegistry
-from transport.plugin_hub import PluginHub
+from transport.plugin_hub import McpSessionTrackingMiddleware, PluginHub
 from services.custom_tool_service import (
     CustomToolService,
     resolve_project_id_for_unity_instance,
@@ -174,7 +174,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
     if _plugin_registry is None:
         _plugin_registry = PluginRegistry()
         loop = asyncio.get_running_loop()
-        PluginHub.configure(_plugin_registry, loop, mcp=server)
+        PluginHub.configure(_plugin_registry, loop)
 
     # Record server startup telemetry
     start_time = time.time()
@@ -797,7 +797,11 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
                 logger.exception("CLI custom tools error: %s", e)
                 return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-    # Profile filter first: FastMCP runs middleware in registration order, and
+    # Remembers client connections so Unity tool-set changes can be announced
+    # with tools/list_changed (PluginHub._notify_mcp_tool_list_changed).
+    mcp.add_middleware(McpSessionTrackingMiddleware())
+
+    # Profile filter next: FastMCP runs middleware in registration order, and
     # an out-of-profile call must be refused before the approval gate (inside
     # UnityInstanceMiddleware) shows the user a card for it.
     mcp.add_middleware(ToolProfileMiddleware())

@@ -8,10 +8,12 @@ import os
 import time
 import uuid
 import weakref
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
 from starlette.endpoints import WebSocketEndpoint
 from starlette.websockets import WebSocket, WebSocketState
+
+from fastmcp.server.middleware import Middleware
 
 from core.config import config
 from core.constants import API_KEY_HEADER
@@ -20,8 +22,6 @@ from models.models import MCPResponse
 from transport.plugin_registry import PluginRegistry
 from services.api_key_service import ApiKeyService
 
-if TYPE_CHECKING:
-    from fastmcp import FastMCP
 from transport.models import (
     WelcomeMessage,
     RegisteredMessage,
@@ -38,30 +38,46 @@ from transport.models import (
 logger = logging.getLogger(__name__)
 
 # ---------- MCP session tracking ----------
-# FastMCP doesn't expose active MCP client sessions.  We patch
-# ``MiddlewareServerSession.__aenter__`` once to register every new
-# session so we can send ``tools/list_changed`` notifications later.
+# FastMCP does not expose its active client connections, and tools/list_changed
+# has to reach the ones already connected when Unity changes its tool set. A
+# FastMCP middleware records every connection that has a standing channel for
+# server-initiated messages, as it sends its first message.
+#
+# This used to be a monkeypatch of fastmcp.server.low_level.MiddlewareServerSession
+# .__aenter__, which FastMCP 4 removed: SDK 2 builds a ServerSession per
+# request, and the P1 spike (25 Sep 2026) crashed at startup on that import.
+# The long-lived object is now the session's Connection; in SDK 1 it is the
+# ServerSession itself. Both expose send_tool_list_changed().
 _active_mcp_sessions: weakref.WeakSet = weakref.WeakSet()
-_session_tracking_installed = False
 
 
-def _install_session_tracking() -> None:
-    """Patch *MiddlewareServerSession* to track active MCP client sessions."""
-    global _session_tracking_installed
-    if _session_tracking_installed:
-        return
-    _session_tracking_installed = True
+def _notification_target(session: Any) -> Any | None:
+    """What to send list_changed to for this session, or None if nothing can carry it."""
+    # SDK 2: `_connection` is the only handle on the Connection; there is no
+    # public accessor on ServerSession.
+    connection = getattr(session, "_connection", None)
+    if connection is None:
+        # SDK 1: the ServerSession lives as long as the client connection.
+        return session if hasattr(session, "send_tool_list_changed") else None
+    # A 2026-07-28 connection without a standalone stream would drop it anyway.
+    if not getattr(connection, "has_standalone_channel", False):
+        return None
+    return connection
 
-    from fastmcp.server.low_level import MiddlewareServerSession
 
-    _original_aenter = MiddlewareServerSession.__aenter__
+class McpSessionTrackingMiddleware(Middleware):
+    """Remembers the connections tools/list_changed can be sent to."""
 
-    async def _tracking_aenter(self):  # type: ignore[override]
-        result = await _original_aenter(self)
-        _active_mcp_sessions.add(self)
-        return result
-
-    MiddlewareServerSession.__aenter__ = _tracking_aenter  # type: ignore[assignment]
+    async def on_message(self, context, call_next):
+        try:
+            ctx = context.fastmcp_context
+            session = ctx.session if ctx is not None else None
+            target = _notification_target(session) if session is not None else None
+            if target is not None:
+                _active_mcp_sessions.add(target)
+        except Exception:
+            logger.debug("MCP session tracking failed", exc_info=True)
+        return await call_next(context)
 
 
 class PluginDisconnectedError(RuntimeError):
@@ -108,7 +124,6 @@ class PluginHub(WebSocketEndpoint):
         "read_console", "get_editor_state", "ping"}
 
     _registry: PluginRegistry | None = None
-    _mcp: FastMCP | None = None
     _connections: dict[str, WebSocket] = {}
     # command_id -> {"future": Future, "session_id": str}
     _pending: dict[str, dict[str, Any]] = {}
@@ -124,16 +139,11 @@ class PluginHub(WebSocketEndpoint):
         cls,
         registry: PluginRegistry,
         loop: asyncio.AbstractEventLoop | None = None,
-        mcp: FastMCP | None = None,
     ) -> None:
         cls._registry = registry
-        cls._mcp = mcp
         cls._loop = loop or asyncio.get_running_loop()
         # Ensure coordination primitives are bound to the configured loop
         cls._lock = asyncio.Lock()
-        # Start tracking MCP client sessions for tool-change notifications
-        if mcp is not None:
-            _install_session_tracking()
 
     @classmethod
     def is_configured(cls) -> bool:
@@ -524,7 +534,7 @@ class PluginHub(WebSocketEndpoint):
         logger.info(
             f"Registered {len(payload.tools)} tools for session {session_id}")
 
-        # Sync server-level FastMCP visibility so new MCP client sessions
+        # Sync the server-level group state so new MCP client sessions
         # (e.g. new Claude Code conversations) see the correct tool set.
         self._sync_server_tool_visibility(payload.tools)
 
