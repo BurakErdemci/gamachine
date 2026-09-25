@@ -263,7 +263,7 @@ def shape_image_result(response: dict[str, Any], image_key: str | None = None) -
     if not isinstance(fields, dict) or not fields.get("image_base64"):
         return response
 
-    from fastmcp.server.server import ToolResult
+    from fastmcp.tools import ToolResult
     from mcp.types import ImageContent, TextContent
 
     image_b64 = fields["image_base64"]

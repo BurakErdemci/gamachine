@@ -1,7 +1,7 @@
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
-from fastmcp.server.server import ToolResult
+from fastmcp.tools import ToolResult
 from mcp.types import ToolAnnotations
 
 from services.registry import mcp_for_unity_tool

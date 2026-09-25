@@ -77,7 +77,7 @@ class _DummyMiddlewareContext:
 
 
 class _DummyToolResult:
-    """Stub for fastmcp.server.server.ToolResult"""
+    """Stub for fastmcp.tools.ToolResult"""
     def __init__(self, content=None, is_error=False):
         self.content = content or []
         self.is_error = is_error
@@ -96,19 +96,19 @@ fastmcp_exceptions.ToolError = _DummyToolError
 fastmcp.exceptions = fastmcp_exceptions
 sys.modules.setdefault("fastmcp.exceptions", fastmcp_exceptions)
 
-# Stub fastmcp.server, fastmcp.server.middleware, fastmcp.server.server submodules
+# Stub fastmcp.server, fastmcp.server.middleware and fastmcp.tools submodules
 fastmcp_server = types.ModuleType("fastmcp.server")
 fastmcp_server_middleware = types.ModuleType("fastmcp.server.middleware")
 fastmcp_server_middleware.Middleware = _DummyMiddleware
 fastmcp_server_middleware.MiddlewareContext = _DummyMiddlewareContext
-fastmcp_server_server = types.ModuleType("fastmcp.server.server")
-fastmcp_server_server.ToolResult = _DummyToolResult
+fastmcp_tools = types.ModuleType("fastmcp.tools")
+fastmcp_tools.ToolResult = _DummyToolResult
 fastmcp.server = fastmcp_server
+fastmcp.tools = fastmcp_tools
 fastmcp_server.middleware = fastmcp_server_middleware
-fastmcp_server.server = fastmcp_server_server
 sys.modules.setdefault("fastmcp.server", fastmcp_server)
 sys.modules.setdefault("fastmcp.server.middleware", fastmcp_server_middleware)
-sys.modules.setdefault("fastmcp.server.server", fastmcp_server_server)
+sys.modules.setdefault("fastmcp.tools", fastmcp_tools)
 
 # Stub mcp.types for TextContent, ImageContent, ToolAnnotations
 _mcp_types = sys.modules.get("mcp.types")

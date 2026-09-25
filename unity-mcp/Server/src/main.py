@@ -822,19 +822,15 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
             config.api_key_cache_ttl,
         )
 
-    # Mount plugin websocket hub at /hub/plugin when HTTP transport is active.
-    # NOTE: Uses FastMCP private API because custom_route() only supports HTTP
-    # methods, not WebSocket. _additional_http_routes accepts Starlette Route
-    # objects and is still present in FastMCP 3.x.
-    existing_routes = [
-        route for route in mcp._get_additional_http_routes()
-        if isinstance(route, WebSocketRoute) and route.path in ("/hub/plugin", "/mcp/hub/plugin")
-    ]
-    if not existing_routes:
-        mcp._additional_http_routes.append(
-            WebSocketRoute("/hub/plugin", PluginHub))
-        mcp._additional_http_routes.append(
-            WebSocketRoute("/mcp/hub/plugin", PluginHub))
+    # Mount the plugin WebSocket hub at /hub/plugin (and under the transport
+    # prefix). This is the one private FastMCP attribute left, on purpose:
+    # custom_route() only builds HTTP routes, and neither FastMCP 3.4.7 nor
+    # 4.0.9 has a public way to add a WebSocket route (checked in both
+    # sources, 25 Sep 2026; FastMCP's own contrib component_manager appends to
+    # the same list). tests/test_local_authz_matrix.py fails if these routes
+    # disappear from the built app.
+    mcp._additional_http_routes.append(WebSocketRoute("/hub/plugin", PluginHub))
+    mcp._additional_http_routes.append(WebSocketRoute("/mcp/hub/plugin", PluginHub))
 
     # Register all tools
     register_all_tools(mcp, project_scoped_tools=project_scoped_tools)
@@ -860,10 +856,17 @@ Environment Variables:
   UNITY_MCP_HTTP_HOST   HTTP server host (overrides URL host)
   UNITY_MCP_HTTP_PORT   HTTP server port (overrides URL port)
   UNITY_MCP_LOCAL_API_TOKEN   Shared secret guarding a local (non remote-hosted) server.
-                              Sent in the X-API-Key header by the /api/* REST routes, and
-                              appended to the MCP transport path (-> /mcp/<secret>) so that
-                              MCP clients can carry it in the URL alone. Unset => the /api/*
-                              routes are not exposed and HTTP transport refuses to start.
+                              Clients send it in the X-API-Key header, both to the /api/*
+                              REST routes and to the MCP transport (/mcp, /mcp/<profile>).
+                              It is never part of a URL. Unset => the /api/* routes are
+                              not exposed and HTTP transport refuses to start.
+
+MCP transport URLs (HTTP):
+  /mcp             tools of the enabled groups plus meta-tools
+  /mcp/gamachine   core + playtest only
+  /mcp/full        every tool group
+  ?instance=<Name@hash> on any of them (or an X-Unity-Instance header) routes
+  every call on that connection to one Unity instance.
 
 Examples:
   # Use specific Unity project as default

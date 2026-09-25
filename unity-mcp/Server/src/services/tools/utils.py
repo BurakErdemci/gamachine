@@ -408,7 +408,7 @@ def extract_screenshot_images(response: dict[str, Any]) -> "ToolResult | None":
 
     Shared screenshot handling (used by manage_camera).
     """
-    from fastmcp.server.server import ToolResult
+    from fastmcp.tools import ToolResult
     from mcp.types import TextContent, ImageContent
 
     if not isinstance(response, dict) or not response.get("success"):

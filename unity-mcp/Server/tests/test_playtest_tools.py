@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastmcp.server.server import ToolResult
+from fastmcp.tools import ToolResult
 from mcp.types import ImageContent, TextContent
 
 import services.tools._playtest_common as common
