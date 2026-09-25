@@ -62,13 +62,20 @@ namespace MCPForUnity.Editor.Tools.Playtest
             }
             // Runtime statics (driver, virtual devices) do not survive a reload; a session left "active" by a
             // reload in play mode is re-applied, one left over in edit mode is closed.
-            if (s.active && !EditorApplication.isPlaying)
-            {
-                s.active = false;
-                PlaytestInput.ForgetOriginals();
-            }
+            if (s.active && !EditorApplication.isPlaying) CloseStaleSession();
             EditorApplication.update += Tick;
             EditorApplication.playModeStateChanged += OnPlayModeChanged;
+        }
+
+        /// <summary>
+        /// Closes a session whose play-mode exit never restored it. Its Time, runInBackground and Input System
+        /// changes outlive the reload, so they are put back before the saved originals are dropped.
+        /// </summary>
+        private static void CloseStaleSession()
+        {
+            // A throw here would fail the static constructor and take the whole playtest surface down with it.
+            try { RestoreRuntime(); }
+            catch (Exception e) { McpLog.Warn($"[Playtest] Restoring a stale session failed: {e.Message}"); }
         }
 
         private static void Save() => SessionState.SetString(Key, JsonUtility.ToJson(s));
