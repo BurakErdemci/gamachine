@@ -15,15 +15,35 @@ Mcp-Session-Id and answers 404 {"id":"server-error", ... "Session not found"}.
 The old bridge forwarded that body unchanged, the client kept waiting for a
 response with its own id, and every later call timed out (measured: 4 x 30 s,
 then "Connection closed"). Now:
-  - 404 on a request that carried a session id -> drop the id, replay the
-    client's stored `initialize` + `notifications/initialized`, retry the
-    original message ONCE. Safe: a 404 is the session lookup failing, so the
-    server never ran the request.
+  - 404 on a request that carried a session id -> replay the client's stored
+    `initialize` + `notifications/initialized`, retry the original message
+    ONCE. Safe: a 404 is the session lookup failing, so the server never ran
+    the request.
+  - A replay that fails (server still starting: 503, refused) leaves the
+    bridge marked "needs re-init"; every later message retries the replay
+    first and is sent only after it succeeds. The first version dropped the
+    session id before the replay, so after one failed replay every call went
+    out without a session and got 400 "Missing session ID" forever (audit
+    finding bridge-stuck-after-failed-reinit, 25 Sep 2026).
   - Every request gets exactly one response carrying its own id; a server
     error with a foreign id is rewritten, a missing answer is synthesized.
   - Connection refused (server down or restarting) -> a clear error for that
     request; the next request recovers through the 404 path.
   - The negotiated MCP-Protocol-Version header is sent on every later POST.
+
+Deadline. Each request has ONE overall deadline (HTTP_TIMEOUT_S), re-armed as
+the socket timeout before every read. urllib's timeout was per read and the
+server's SSE keepalive comments reset it, so a request with no answer waited
+forever (audit finding unbounded-request-wait, 25 Sep 2026). When the deadline
+passes the request is answered with "outcome unknown": it may have run in Unity.
+
+Concurrency. The stdin reader sends messages in stdin order: a message's bytes
+are fully written before the next line is read. Only the wait for a request's
+response runs on a worker thread, so a request parked on an approval card no
+longer holds up a notifications/cancelled or a parallel read. `initialize` and
+notifications are finished on the reader thread (nothing may overtake the
+handshake). Responses can come back out of order; JSON-RPC clients match them
+by id.
 
 Scope: client-initiated requests and notifications. Server-initiated messages
 that arrive inside a POST's SSE stream are forwarded; a standalone GET stream
@@ -31,14 +51,29 @@ is not opened (unityMCP tools are synchronous).
 
 Usage:  UNITY_MCP_URL=http://127.0.0.1:8080/mcp python codex_unitymcp_bridge.py
 """
+import http.client
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
+import threading
+import time
+import urllib.parse
 
 DEFAULT_URL = "http://127.0.0.1:8080/mcp"
-HTTP_TIMEOUT_S = 180
+# Overall budget per request. The server holds a write for up to 10 s (POST)
+# + its approval card wait (180 s today, 150 s after the server change of
+# 25 Sep 2026), and the tool still has to run after the click. 240 s leaves
+# >= 50 s of run time on either card budget and matches the backend client's
+# CALL_TIMEOUT_S, so both clients give up at the same moment.
+HTTP_TIMEOUT_S = 240
+CONNECT_TIMEOUT_S = 10
+# The replayed handshake is two small POSTs; a server that needs longer is not
+# up yet, and the reader thread must not sit on the session lock for minutes.
+REINIT_TIMEOUT_S = 30
+# Notifications are answered 202 at once; they run on the reader thread.
+NOTIFY_TIMEOUT_S = 30
+# Worker threads waiting on responses at once; the reader blocks beyond this.
+MAX_IN_FLIGHT = 16
 
 _REINIT_ID_PREFIX = "gamachine-bridge-reinit-"
 
@@ -48,9 +83,12 @@ MSG_UNREACHABLE = ("Unity MCP sunucusuna bağlanılamadı (kapalı ya da yeniden
                    "yeniden bağlanır.")
 MSG_CONNECTION_LOST = ("Unity MCP bağlantısı çağrı sürerken koptu; çağrının Unity'de "
                        "çalışıp çalışmadığı bilinmiyor. Bir sonraki çağrı yeniden bağlanır.")
-MSG_TIMEOUT = ("Unity MCP {seconds} sn içinde yanıt vermedi (zaman aşımı); çağrının "
-               "Unity'de çalışıp çalışmadığı bilinmiyor.")
-MSG_REINIT_FAILED = ("Unity MCP sunucusu yeniden başlamış ve yeni oturum açılamadı: {detail}")
+MSG_TIMEOUT = ("Unity MCP {seconds:g} sn içinde yanıt vermedi (zaman aşımı); çağrının "
+               "sonucu bilinmiyor: Unity işlemi uygulamış olabilir. Tekrar denemeden "
+               "önce Unity'deki durumu kontrol et.")
+MSG_REINIT_FAILED = ("Unity MCP sunucusu yeniden başlamış ve yeni oturum henüz açılamadı "
+                     "({detail}); bu çağrı Unity'ye gönderilmedi. Bir sonraki çağrı yeniden "
+                     "bağlanmayı dener.")
 MSG_NO_ANSWER = "Unity MCP sunucusu bu isteğe yanıt vermedi (HTTP {status})."
 MSG_BRIDGE_ERROR = "Unity MCP köprü hatası: {detail}"
 
@@ -86,7 +124,15 @@ def _read_shared_secret():
 
 
 class _Unreachable(Exception):
-    """The POST never reached the server (connection refused / reset on connect)."""
+    """The POST never reached the server (connection refused / connect timeout)."""
+
+
+class _DeadlineExceeded(Exception):
+    """The request's overall deadline passed while waiting for the answer."""
+
+
+class _ReinitFailed(Exception):
+    """The session could not be rebuilt; the message was not sent."""
 
 
 class _Reply:
@@ -95,12 +141,27 @@ class _Reply:
         self.messages = messages
 
 
+class _Pending:
+    """A POST whose bytes are on the wire and whose answer is still unread."""
+
+    def __init__(self, message, conn, sock, deadline, session_id):
+        self.message = message
+        self.conn = conn
+        self.sock = sock
+        self.deadline = deadline
+        self.session_id = session_id
+
+
 def _error(req_id, message, code=-32603):
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 
 def _is_request(message):
     return isinstance(message, dict) and "method" in message and message.get("id") is not None
+
+
+def _answers(out, req_id):
+    return any("method" not in m and m.get("id") == req_id for m in out)
 
 
 class Bridge:
@@ -114,56 +175,121 @@ class Bridge:
         self._init_request = None
         self._initialized_note = None
         self._reinit_seq = 0
+        # True from a lost session until a replayed handshake succeeds; while
+        # set, nothing but the replay is sent.
+        self._needs_reinit = False
+        # Guards the session state above; held across a replay so no request
+        # goes out on a half-built session.
+        self._lock = threading.RLock()
+        self._emit_lock = threading.Lock()
+        self._stdout = None
 
     # ── HTTP ────────────────────────────────────────────────────────────
-    def _post(self, message):
-        """POSTs one JSON-RPC message; returns the status and every JSON-RPC
-        message in the body (JSON or SSE). Raises _Unreachable when the server
-        was never reached."""
-        data = json.dumps(message).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-        }
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
-        if self.session_id:
-            headers["Mcp-Session-Id"] = self.session_id
-        if self.protocol_version and message.get("method") != "initialize":
-            headers["MCP-Protocol-Version"] = self.protocol_version
-        req = urllib.request.Request(self.url, data=data, headers=headers, method="POST")
+    def _send(self, message, deadline):
+        """Connects and writes one POST; returns a _Pending. Raises _Unreachable
+        when nothing reached the server."""
+        parts = urllib.parse.urlsplit(self.url)
+        conn_cls = (http.client.HTTPSConnection if parts.scheme == "https"
+                    else http.client.HTTPConnection)
+        path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+        is_init = message.get("method") == "initialize"
+        with self._lock:
+            session_id = None if is_init else self.session_id
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            }
+            if self.api_key:
+                headers["X-API-Key"] = self.api_key
+            if session_id:
+                headers["Mcp-Session-Id"] = session_id
+            if self.protocol_version and not is_init:
+                headers["MCP-Protocol-Version"] = self.protocol_version
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _DeadlineExceeded()
+        conn = conn_cls(parts.hostname, parts.port,
+                        timeout=min(CONNECT_TIMEOUT_S, remaining))
         try:
-            resp = urllib.request.urlopen(req, timeout=self.timeout)
-        except urllib.error.HTTPError as e:
-            resp = e  # an error status still carries a JSON-RPC body
-        except urllib.error.URLError as e:
-            # Only failures before any byte was sent land here (refused,
-            # unresolvable); a request that went out cannot have executed yet.
-            raise _Unreachable(str(e.reason)) from e
+            conn.connect()
+        except OSError as e:
+            conn.close()
+            raise _Unreachable(str(e)) from e
+        # Kept separately: http.client drops conn.sock once it hands out a
+        # response that closes the connection, but that response reads from it.
+        sock = conn.sock
+        try:
+            conn.request("POST", path, body=json.dumps(message).encode("utf-8"),
+                         headers=headers)
+        except BaseException:
+            conn.close()
+            raise
+        return _Pending(message, conn, sock, deadline, session_id)
 
-        status = getattr(resp, "status", None) or resp.getcode()
-        sid = resp.headers.get("Mcp-Session-Id")
-        if sid and status < 400:
-            self.session_id = sid
-        ctype = (resp.headers.get("Content-Type") or "").lower()
+    @staticmethod
+    def _arm(pending):
+        remaining = pending.deadline - time.monotonic()
+        if remaining <= 0:
+            raise _DeadlineExceeded()
+        # -1: http.client closed it after the last body byte of a closing
+        # response; the next read returns b"" without touching the socket.
+        if pending.sock.fileno() != -1:
+            pending.sock.settimeout(remaining)
 
-        out = []
-        if "text/event-stream" in ctype:
-            data_lines = []
-            for raw in resp:
-                line = raw.decode("utf-8", "replace").rstrip("\r\n")
-                if line.startswith("data:"):
-                    data_lines.append(line[5:].lstrip())
-                elif line == "" and data_lines:
+    def _receive(self, pending):
+        """Reads the answer to a sent POST within its deadline: the status and
+        every JSON-RPC message in the body (JSON or SSE)."""
+        try:
+            self._arm(pending)
+            resp = pending.conn.getresponse()
+            status = resp.status
+            sid = resp.getheader("Mcp-Session-Id")
+            if sid and status < 400 and pending.message.get("method") == "initialize":
+                # Only a handshake assigns the session. With concurrent calls a
+                # late answer on an old session echoes that session's id and
+                # must not bring it back.
+                with self._lock:
+                    self.session_id = sid
+            ctype = (resp.getheader("Content-Type") or "").lower()
+            req_id = pending.message.get("id") if _is_request(pending.message) else None
+
+            out = []
+            if "text/event-stream" in ctype:
+                data_lines = []
+                while True:
+                    self._arm(pending)
+                    raw = resp.readline()
+                    if not raw:
+                        break
+                    line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                    if line.startswith("data:"):
+                        data_lines.append(line[5:].lstrip())
+                    elif line == "" and data_lines:
+                        self._collect("\n".join(data_lines), out)
+                        data_lines = []
+                        if req_id is not None and _answers(out, req_id):
+                            break  # our answer is in; the SDK client stops here too
+                if data_lines:
                     self._collect("\n".join(data_lines), out)
-                    data_lines = []
-            if data_lines:
-                self._collect("\n".join(data_lines), out)
-        else:
-            body = resp.read()
-            if body.strip():
-                self._collect(body.decode("utf-8", "replace"), out)
-        return _Reply(status, out)
+            else:
+                chunks = []
+                while True:
+                    self._arm(pending)
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                body = b"".join(chunks)
+                if body.strip():
+                    self._collect(body.decode("utf-8", "replace"), out)
+            return _Reply(status, out)
+        except TimeoutError as e:  # socket.timeout: the re-armed deadline hit
+            raise _DeadlineExceeded() from e
+        finally:
+            pending.conn.close()
+
+    def _post(self, message, deadline):
+        return self._receive(self._send(message, deadline))
 
     @staticmethod
     def _collect(payload, out):
@@ -177,71 +303,136 @@ class Bridge:
             out.append(parsed)
 
     # ── session recovery ───────────────────────────────────────────────
-    def _reinitialize(self):
+    def _reinitialize(self, deadline):
         """Opens a fresh server session by replaying the client's own
-        handshake. Returns None on success, else a short failure reason."""
+        handshake. Caller holds self._lock. Returns None on success, else a
+        short failure reason; on failure the bridge stays marked, so the next
+        message tries again. Raises _Unreachable when the server is down."""
+        self._needs_reinit = True
         self.session_id = None
         # The token file may have been created since start-up.
         self.api_key = self._secret_reader() or self.api_key
+        deadline = min(deadline, time.monotonic() + REINIT_TIMEOUT_S)
         self._reinit_seq += 1
         init = dict(self._init_request)
         init["id"] = f"{_REINIT_ID_PREFIX}{self._reinit_seq}"
-        reply = self._post(init)
-        result = next((m.get("result") for m in reply.messages
-                       if m.get("id") == init["id"] and isinstance(m.get("result"), dict)), None)
-        if reply.status >= 400 or result is None:
-            return f"HTTP {reply.status}"
-        version = result.get("protocolVersion")
-        if version:
-            if self.protocol_version and version != self.protocol_version:
-                self._log(f"re-initialize negotiated {version}, client has {self.protocol_version}")
-            self.protocol_version = version
-        note = self._initialized_note or {"jsonrpc": "2.0", "method": "notifications/initialized"}
-        self._post(note)
+        try:
+            reply = self._post(init, deadline)
+            result = next((m.get("result") for m in reply.messages
+                           if m.get("id") == init["id"] and isinstance(m.get("result"), dict)),
+                          None)
+            if reply.status >= 400 or result is None or not self.session_id:
+                self.session_id = None
+                return f"HTTP {reply.status}"
+            version = result.get("protocolVersion")
+            if version:
+                if self.protocol_version and version != self.protocol_version:
+                    self._log(f"re-initialize negotiated {version}, client has {self.protocol_version}")
+                self.protocol_version = version
+            note = self._initialized_note or {"jsonrpc": "2.0", "method": "notifications/initialized"}
+            note_reply = self._post(note, deadline)
+            if note_reply.status >= 400:
+                self.session_id = None
+                return f"HTTP {note_reply.status}"
+        except _Unreachable:
+            raise
+        except _DeadlineExceeded:
+            self.session_id = None
+            return "zaman aşımı"
+        except (OSError, http.client.HTTPException) as e:
+            self.session_id = None
+            return f"bağlantı koptu: {e}"
+        self._needs_reinit = False
         self._log("server session lost (404); re-initialized")
         return None
 
-    # ── one client message ─────────────────────────────────────────────
-    def handle(self, message):
-        """Forwards one client message; returns what goes back to the client."""
-        is_request = _is_request(message)
-        method = message.get("method") if isinstance(message, dict) else None
-        if method == "initialize":
-            self._init_request = message
-            self.session_id = None
-            self.protocol_version = None
-        elif method == "notifications/initialized":
-            self._initialized_note = message
-
-        try:
-            had_session = self.session_id is not None
-            reply = self._post(message)
-            if (reply.status == 404 and had_session and method != "initialize"
-                    and self._init_request is not None):
-                failure = self._reinitialize()
+    def _ensure_session(self, deadline):
+        """Rebuilds a lost session before a message goes out."""
+        with self._lock:
+            if self._needs_reinit and self._init_request is not None:
+                failure = self._reinitialize(deadline)
                 if failure is not None:
-                    return [_error(message.get("id"), MSG_REINIT_FAILED.format(detail=failure))
-                            ] if is_request else []
-                # Exactly one retry; a second 404 is reported, not looped.
-                reply = self._post(message)
-        except _Unreachable:
-            return [_error(message.get("id"), MSG_UNREACHABLE)] if is_request else []
-        except TimeoutError:
-            return [_error(message.get("id"), MSG_TIMEOUT.format(seconds=self.timeout))
-                    ] if is_request else []
-        except (ConnectionError, OSError) as e:
-            # The request was sent and the link broke while waiting: it may
-            # have run in Unity, so this is never retried.
-            self._log(f"connection lost mid-request: {e}")
-            return [_error(message.get("id"), MSG_CONNECTION_LOST)] if is_request else []
-        except Exception as e:  # noqa: BLE001 - the client must always get an answer
-            return [_error(message.get("id"), MSG_BRIDGE_ERROR.format(detail=e))] if is_request else []
+                    raise _ReinitFailed(failure)
 
-        if method == "initialize" and is_request:
+    def _recover(self, lost_session, deadline):
+        """After a 404 on `lost_session`: rebuild the session, unless a
+        concurrent request already did."""
+        with self._lock:
+            if self.session_id == lost_session or self.session_id is None:
+                self._needs_reinit = True
+        self._ensure_session(deadline)
+
+    # ── one client message ─────────────────────────────────────────────
+    def _start(self, message):
+        """The ordered half: records handshake state, rebuilds a lost session
+        and writes the POST. Returns a _Pending, or the final answer (a list)
+        when nothing was sent."""
+        method = message.get("method")
+        timeout = self.timeout if _is_request(message) else min(self.timeout, NOTIFY_TIMEOUT_S)
+        deadline = time.monotonic() + timeout
+        with self._lock:
+            if method == "initialize":
+                self._init_request = message
+                self.session_id = None
+                self.protocol_version = None
+                self._needs_reinit = False
+            elif method == "notifications/initialized":
+                self._initialized_note = message
+        try:
+            if method != "initialize":
+                self._ensure_session(deadline)
+            return self._send(message, deadline)
+        except Exception as e:  # noqa: BLE001 - the client must always get an answer
+            return self._failure(message, e)
+
+    def _finish(self, pending):
+        """The concurrent half: reads the answer, recovers a lost session once."""
+        message = pending.message
+        method = message.get("method")
+        try:
+            reply = self._receive(pending)
+            if (reply.status == 404 and pending.session_id is not None
+                    and method != "initialize" and self._init_request is not None):
+                self._recover(pending.session_id, pending.deadline)
+                # Exactly one retry; a second 404 is reported, not looped.
+                retry = self._send(message, pending.deadline)
+                reply = self._receive(retry)
+                if reply.status == 404 and retry.session_id is not None:
+                    with self._lock:
+                        if self.session_id == retry.session_id:
+                            self._needs_reinit = True
+        except Exception as e:  # noqa: BLE001 - the client must always get an answer
+            return self._failure(message, e)
+
+        if method == "initialize" and _is_request(message):
             for m in reply.messages:
                 if m.get("id") == message.get("id") and isinstance(m.get("result"), dict):
-                    self.protocol_version = m["result"].get("protocolVersion") or None
+                    with self._lock:
+                        self.protocol_version = m["result"].get("protocolVersion") or None
         return self._fit(message, reply)
+
+    def handle(self, message):
+        """Forwards one client message; returns what goes back to the client."""
+        step = self._start(message)
+        return step if isinstance(step, list) else self._finish(step)
+
+    def _failure(self, message, exc):
+        if not _is_request(message):
+            return []
+        req_id = message.get("id")
+        if isinstance(exc, _Unreachable):
+            return [_error(req_id, MSG_UNREACHABLE)]
+        if isinstance(exc, _ReinitFailed):
+            return [_error(req_id, MSG_REINIT_FAILED.format(detail=exc))]
+        if isinstance(exc, _DeadlineExceeded):
+            self._log(f"request {req_id!r} passed its {self.timeout:g} s deadline")
+            return [_error(req_id, MSG_TIMEOUT.format(seconds=self.timeout))]
+        if isinstance(exc, (OSError, http.client.HTTPException)):
+            # The request was sent and the link broke while waiting: it may
+            # have run in Unity, so this is never retried.
+            self._log(f"connection lost mid-request: {exc}")
+            return [_error(req_id, MSG_CONNECTION_LOST)]
+        return [_error(req_id, MSG_BRIDGE_ERROR.format(detail=exc))]
 
     def _fit(self, message, reply):
         """Keeps server-initiated messages, and makes sure a request gets exactly
@@ -278,6 +469,15 @@ class Bridge:
         # Windows (cp1254 here) and would garble non-ASCII tool arguments.
         stdin = stdin or sys.stdin.buffer
         self._stdout = stdout or sys.stdout.buffer
+        slots = threading.BoundedSemaphore(MAX_IN_FLIGHT)
+        workers = []
+
+        def finish(pending):
+            try:
+                self._emit_all(self._finish(pending))
+            finally:
+                slots.release()
+
         for raw in stdin:
             line = raw.decode("utf-8", "replace").strip() if isinstance(raw, bytes) else raw.strip()
             if not line:
@@ -288,12 +488,38 @@ class Bridge:
                 continue
             if not isinstance(message, dict):
                 continue
-            for r in self.handle(message):
-                self._emit(r)
+            concurrent = _is_request(message) and message.get("method") != "initialize"
+            if concurrent:
+                slots.acquire()
+            step = self._start(message)
+            if isinstance(step, list) or not concurrent:
+                if concurrent:
+                    slots.release()
+                self._emit_all(step if isinstance(step, list) else self._finish(step))
+                continue
+            worker = threading.Thread(target=finish, args=(step,), daemon=True,
+                                      name=f"bridge-{message.get('id')}")
+            worker.start()
+            workers = [w for w in workers if w.is_alive()] + [worker]
+        # EOF: every request already read still gets its answer; each worker is
+        # bounded by its own deadline.
+        for worker in workers:
+            worker.join()
+
+    def _emit_all(self, objs):
+        # One lock for the whole batch: a request's server-initiated messages
+        # stay next to its response, and lines never interleave.
+        with self._emit_lock:
+            for obj in objs:
+                try:
+                    self._stdout.write((json.dumps(obj) + "\n").encode("utf-8"))
+                    self._stdout.flush()
+                except (OSError, ValueError) as e:  # the client is gone
+                    self._log(f"stdout closed: {e}")
+                    return
 
     def _emit(self, obj):
-        self._stdout.write((json.dumps(obj) + "\n").encode("utf-8"))
-        self._stdout.flush()
+        self._emit_all([obj])
 
     @staticmethod
     def _log(text):

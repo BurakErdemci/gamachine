@@ -10,6 +10,8 @@ import asyncio
 import json
 import os
 import sys
+import threading
+import time
 
 import pytest
 
@@ -259,3 +261,266 @@ def test_stdio_client_survives_a_restart_through_the_bridge_process(server, tmp_
     assert down == cb.MSG_UNREACHABLE
     assert third.content[0].text == "ğüş"
     assert server.executions["echo"] == 3
+
+
+# ── a failed replay (audit: bridge-stuck-after-failed-reinit) ───────────────
+
+def _restartable_script(state):
+    """s1 is lost once state["restarted"]; replays fail while state["starting"]."""
+    def respond(message, headers):
+        if message.get("method") == "initialize":
+            state["inits"] += 1
+            if state.get("starting"):
+                return (503, {"Content-Type": "application/json"},
+                        {"jsonrpc": "2.0", "id": None,
+                         "error": {"code": -32603, "message": "starting"}})
+            return _init_result(message, session=f"s{state['inits']}")
+        if "id" not in message:
+            return (202, {}, b"")
+        sid = headers.get("Mcp-Session-Id")
+        if sid is None:
+            return (400, {"Content-Type": "application/json"},
+                    {"jsonrpc": "2.0", "id": None,
+                     "error": {"code": -32600, "message": "Bad Request: Missing session ID"}})
+        if sid == "s1" and state.get("restarted"):
+            return SESSION_NOT_FOUND
+        state["runs"].append(message["id"])
+        return (200, {"Content-Type": "application/json"},
+                {"jsonrpc": "2.0", "id": message["id"], "result": {"content": []}})
+    return respond
+
+
+def test_a_failed_replay_is_retried_by_the_next_call_and_nothing_runs_twice():
+    state = {"inits": 0, "runs": []}
+    srv = ScriptedHTTPServer(_restartable_script(state))
+    bridge = _bridge(srv.url)
+    try:
+        _handshake(bridge)
+        state.update(restarted=True, starting=True)
+        [failed] = bridge.handle(_call(2, "mutate"))
+        state["starting"] = False
+        answers = [bridge.handle(_call(i, "mutate")) for i in (3, 4)]
+    finally:
+        srv.close()
+    assert failed["id"] == 2
+    assert failed["error"]["message"] == cb.MSG_REINIT_FAILED.format(detail="HTTP 503")
+    assert answers == [[{"jsonrpc": "2.0", "id": i, "result": {"content": []}}] for i in (3, 4)]
+    # Call 2 reached the server once (the 404'd attempt) and ran nowhere; 3 and
+    # 4 ran once each; no call ever went out without a session.
+    assert state["runs"] == [3, 4]
+    calls = [m["id"] for m, _ in srv.requests if m.get("method") == "tools/call"]
+    assert calls == [2, 3, 4]
+    assert all(h.get("Mcp-Session-Id") for m, h in srv.requests
+               if m.get("method") == "tools/call")
+    assert state["inits"] == 3  # the client's own, the failed replay, the good one
+
+
+def test_a_replay_that_cannot_connect_keeps_the_bridge_marked(server):
+    bridge = _bridge(server.url)
+    _handshake(bridge)
+    bridge._needs_reinit = True  # as after a 404 whose replay hit a dead server
+    server.stop()
+    [down] = bridge.handle(_call(5))
+    assert down["error"]["message"] == cb.MSG_UNREACHABLE
+    assert bridge._needs_reinit
+    server.start()
+    [up] = bridge.handle(_call(6))
+    assert _text(up) == "t6"
+    assert not bridge._needs_reinit
+    assert server.executions["echo"] == 1
+
+
+# ── one overall deadline (audit: unbounded-request-wait) ────────────────────
+
+def _keepalive_forever(stop):
+    def chunks():
+        while not stop.wait(0.05):
+            yield b": keepalive\n\n"
+    return chunks()
+
+
+def test_sse_keepalives_do_not_extend_the_deadline():
+    stop = threading.Event()
+    srv = ScriptedHTTPServer(
+        lambda m, h: (200, {"Content-Type": "text/event-stream"}, _keepalive_forever(stop)))
+    bridge = cb.Bridge(srv.url, secret_reader=lambda: "", timeout=0.5)
+    try:
+        started = time.monotonic()
+        [reply] = bridge.handle(_call(7, "mutate"))
+        elapsed = time.monotonic() - started
+    finally:
+        stop.set()
+        srv.close()
+    assert reply == {"jsonrpc": "2.0", "id": 7, "error": {
+        "code": -32603, "message": cb.MSG_TIMEOUT.format(seconds=0.5)}}
+    assert "bilinmiyor" in reply["error"]["message"]
+    assert 0.45 < elapsed < 2.0, elapsed
+
+
+def test_a_server_that_never_sends_a_status_line_hits_the_deadline():
+    release = threading.Event()
+
+    def respond(message, headers):
+        release.wait(10)
+        return (200, {"Content-Type": "application/json"},
+                {"jsonrpc": "2.0", "id": message["id"], "result": {}})
+    srv = ScriptedHTTPServer(respond)
+    try:
+        started = time.monotonic()
+        [reply] = cb.Bridge(srv.url, secret_reader=lambda: "", timeout=0.4).handle(_call(8))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        srv.close()
+    assert reply["error"]["message"] == cb.MSG_TIMEOUT.format(seconds=0.4)
+    assert elapsed < 2.0, elapsed
+
+
+def test_the_default_deadline_outlasts_the_approval_wait():
+    # 10 s POST + 180 s card today (150 s after the server change) + run time.
+    assert cb.HTTP_TIMEOUT_S >= 10 + 180 + 30
+
+
+# ── concurrent stdin loop: order of sends, one answer per id ────────────────
+
+class _Stdout:
+    def __init__(self):
+        self.lines = []
+        self._cond = threading.Condition()
+
+    def write(self, data):
+        with self._cond:
+            self.lines.extend(json.loads(x) for x in data.decode("utf-8").splitlines() if x)
+            self._cond.notify_all()
+
+    def flush(self):
+        pass
+
+    def wait_for(self, predicate, timeout=10):
+        with self._cond:
+            assert self._cond.wait_for(lambda: predicate(self.lines), timeout), self.lines
+
+
+def _line(message):
+    return (json.dumps(message) + "\n").encode("utf-8")
+
+
+def test_a_parked_call_does_not_hold_up_a_cancel_or_a_parallel_call():
+    release = threading.Event()
+    seen_cancel = threading.Event()
+
+    def respond(message, headers):
+        method = message.get("method")
+        if method == "initialize":
+            return _init_result(message)
+        if method == "notifications/cancelled":
+            seen_cancel.set()
+        if "id" not in message:
+            return (202, {}, b"")
+        if message["params"]["name"] == "slow":
+            release.wait(10)  # e.g. parked on an approval card
+        return (200, {"Content-Type": "application/json"},
+                {"jsonrpc": "2.0", "id": message["id"],
+                 "result": {"content": [{"type": "text", "text": message["params"]["name"]}]}})
+
+    srv = ScriptedHTTPServer(respond)
+    out = _Stdout()
+    checked = threading.Event()
+
+    def stdin():
+        yield _line(INIT)
+        out.wait_for(lambda lines: any(m.get("id") == 0 for m in lines))
+        yield _line(INITIALIZED)
+        yield _line(_call(1, "slow"))
+        yield _line(_call(2, "fast"))
+        yield _line({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                     "params": {"requestId": 1}})
+        yield _line(_call(3, "fast"))
+        # Call 1 is still parked: the fast calls and the cancel must be through.
+        out.wait_for(lambda lines: {2, 3} <= {m.get("id") for m in lines})
+        assert seen_cancel.wait(5)
+        assert 1 not in {m.get("id") for m in out.lines}
+        checked.set()
+        release.set()
+
+    try:
+        _bridge(srv.url).run(stdin=stdin(), stdout=out)
+    finally:
+        release.set()
+        srv.close()
+    assert checked.is_set()
+    ids = [m.get("id") for m in out.lines]
+    assert sorted(ids) == [0, 1, 2, 3], ids  # exactly one answer per request
+    assert ids.index(1) > ids.index(2) and ids.index(1) > ids.index(3)
+    assert {m["id"]: m["result"]["content"][0]["text"] for m in out.lines if m["id"]} == {
+        1: "slow", 2: "fast", 3: "fast"}
+    # Connections were opened in stdin order.
+    order = [m.get("id", m.get("method")) for m in srv.accepted]
+    assert order == [0, "notifications/initialized", 1, 2, "notifications/cancelled", 3]
+
+
+def test_concurrent_404s_replay_the_handshake_once():
+    state = {"inits": 0, "runs": [], "restarted": True}
+    gate = threading.Barrier(2, timeout=5)
+    base = _restartable_script(state)
+
+    def respond(message, headers):
+        if message.get("method") == "tools/call" and headers.get("Mcp-Session-Id") == "s1":
+            gate.wait()  # both calls are in flight on s1 before either sees its 404
+        return base(message, headers)
+
+    srv = ScriptedHTTPServer(respond)
+    out = _Stdout()
+
+    def stdin():
+        yield _line(INIT)
+        out.wait_for(lambda lines: any(m.get("id") == 0 for m in lines))
+        yield _line(INITIALIZED)
+        yield _line(_call(1, "mutate"))
+        yield _line(_call(2, "mutate"))
+
+    try:
+        _bridge(srv.url).run(stdin=stdin(), stdout=out)
+    finally:
+        srv.close()
+    assert sorted(m["id"] for m in out.lines if m["id"]) == [1, 2]
+    assert all("result" in m for m in out.lines)
+    assert sorted(state["runs"]) == [1, 2]
+    assert state["inits"] == 2  # the client's own + exactly one replay
+
+
+def test_a_late_answer_on_the_old_session_does_not_bring_it_back():
+    release = threading.Event()
+    state = {"inits": 0, "runs": []}
+    base = _restartable_script(state)
+
+    def respond(message, headers):
+        if message.get("method") == "tools/call" and message["params"]["name"] == "slow":
+            state["restarted"] = True  # the server restarts while this one runs
+            release.wait(10)
+            return (200, {"Content-Type": "application/json", "Mcp-Session-Id": "s1"},
+                    {"jsonrpc": "2.0", "id": message["id"], "result": {"content": []}})
+        return base(message, headers)
+
+    srv = ScriptedHTTPServer(respond)
+    out = _Stdout()
+    bridge = _bridge(srv.url)
+
+    def stdin():
+        yield _line(INIT)
+        out.wait_for(lambda lines: any(m.get("id") == 0 for m in lines))
+        yield _line(INITIALIZED)
+        yield _line(_call(1, "slow"))
+        yield _line(_call(2, "mutate"))
+        out.wait_for(lambda lines: any(m.get("id") == 2 for m in lines))
+        release.set()
+        out.wait_for(lambda lines: any(m.get("id") == 1 for m in lines))
+        yield _line(_call(3, "mutate"))
+
+    try:
+        bridge.run(stdin=stdin(), stdout=out)
+    finally:
+        release.set()
+        srv.close()
+    assert bridge.session_id == "s2"
+    assert state["runs"] == [2, 3] and state["inits"] == 2

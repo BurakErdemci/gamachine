@@ -83,33 +83,80 @@ class RestartableMCPServer:
 
 
 class ScriptedHTTPServer:
-    """`respond(message, headers)` returns (status, extra_headers, body)."""
+    """`respond(message, headers)` returns (status, extra_headers, body).
+
+    `body` is a dict (sent as JSON), bytes, or an iterator of bytes chunks,
+    which is streamed without Content-Length (e.g. SSE keepalives) until it
+    ends. POSTs are handled concurrently, so `respond` may block.
+    `accepted` lists the messages in the order their connections were
+    accepted, which is the order a client opened them.
+    """
 
     def __init__(self, respond):
         self.requests = []
+        self._accept_seq = []
+        self._by_address = {}
+        self._lock = threading.Lock()
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 message = json.loads(self.rfile.read(length) or b"{}")
-                outer.requests.append((message, self.headers))  # case-insensitive
+                with outer._lock:
+                    outer.requests.append((message, self.headers))  # case-insensitive
+                    outer._by_address[self.client_address] = message
                 status, headers, body = respond(message, self.headers)
-                payload = body if isinstance(body, bytes) else json.dumps(body).encode()
                 self.send_response(status)
                 for key, value in (headers or {}).items():
                     self.send_header(key, value)
-                self.send_header("Content-Length", str(len(payload)))
+                if isinstance(body, (bytes, dict, list)) or body is None:
+                    payload = body if isinstance(body, bytes) else json.dumps(body).encode()
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
+                self.send_header("Connection", "close")
                 self.end_headers()
-                self.wfile.write(payload)
+                try:
+                    for chunk in body:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    pass
+
+            def do_GET(self):
+                # No standalone SSE stream here; an SDK client probes for one.
+                self.send_response(405)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_DELETE(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
 
             def log_message(self, *args):
                 pass
 
-        self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        class Server(http.server.ThreadingHTTPServer):
+            daemon_threads = True
+
+            def process_request(self, request, client_address):
+                # Runs on the accept loop, one connection at a time.
+                with outer._lock:
+                    outer._accept_seq.append(client_address)
+                super().process_request(request, client_address)
+
+        self._httpd = Server(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}/mcp"
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
+
+    @property
+    def accepted(self) -> list:
+        with self._lock:
+            return [self._by_address[a] for a in self._accept_seq if a in self._by_address]
 
     def close(self) -> None:
         self._httpd.shutdown()
