@@ -5,7 +5,7 @@ Dosya yazmaya çalışan terminal komutları DiffViewer'a yönlendirilir.
 import os
 import re
 import subprocess
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from unity_ai_mcp.approval_bridge import request_approval
 from unity_ai_mcp.tools.file_tools import _resolve
@@ -57,7 +57,7 @@ def _parse_file_write(command: str):
     return None
 
 
-def register_bash_tool(mcp: FastMCP, get_workspace: callable):
+def register_bash_tool(mcp: MCPServer, get_workspace: callable):
 
     async def _run_command(command: str) -> str:
         workspace = get_workspace()

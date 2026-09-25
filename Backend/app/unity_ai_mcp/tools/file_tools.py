@@ -4,14 +4,14 @@ MCP Dosya Araçları — save_file/delete_file direkt yazar, bash onay gerektiri
 import logging
 import os
 from pathlib import Path
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from unity_ai_mcp.approval_bridge import request_approval
 
 logger = logging.getLogger(__name__)
 
 
-def register_file_tools(mcp: FastMCP, get_workspace: callable):
+def register_file_tools(mcp: MCPServer, get_workspace: callable):
 
     @mcp.tool()
     async def read_file(path: str) -> str:

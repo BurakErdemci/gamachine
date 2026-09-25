@@ -30,7 +30,7 @@ import sys
 import argparse
 import asyncio
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from unity_ai_mcp.tools.file_tools import register_file_tools
 from unity_ai_mcp.tools.bash_tool import register_bash_tool
@@ -42,12 +42,12 @@ def get_workspace() -> str:
     return _workspace_path or os.getcwd()
 
 
-def create_server(workspace: str = "") -> FastMCP:
+def create_server(workspace: str = "") -> MCPServer:
     global _workspace_path
     if workspace:
         _workspace_path = workspace
 
-    mcp = FastMCP(
+    mcp = MCPServer(
         name="unityai",
         instructions=(
             "Unity projesi üzerinde çalışan bir AI asistanısın. "
