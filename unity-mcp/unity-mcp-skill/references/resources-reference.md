@@ -558,7 +558,7 @@ Assets/Prefabs/Player.prefab → Assets%2FPrefabs%2FPlayer.prefab
 }
 ```
 
-**Use with:** `set_active_instance(instance="MyProject@abc123")`
+**Use with:** `unity_instance="MyProject@abc123"` on a tool call, or `?instance=MyProject@abc123` on the MCP URL. `set_active_instance` only checks an id; it does not pin routing.
 
 ---
 

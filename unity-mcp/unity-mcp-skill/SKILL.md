@@ -255,14 +255,17 @@ while True:
 
 ## Multi-Instance Workflow
 
-When multiple Unity Editors are running:
+With exactly one Unity Editor connected, every call reaches it automatically. When multiple Unity Editors are running, route each call; the server does not remember a selection:
 
 ```python
 # 1. List instances via resource: mcpforunity://instances
-# 2. Set active instance
-set_active_instance(instance="MyProject@abc123")
-# 3. All subsequent calls route to that instance
+# 2. Pass unity_instance on each call (Name@hash or a hash prefix)
+manage_scene(action="get_active", unity_instance="MyProject@abc123")
+# Or fix the instance for the whole connection in the client config:
+#   ?instance=MyProject@abc123 on the MCP URL, or an X-Unity-Instance header
 ```
+
+`set_active_instance` does not pin anything: it only checks an identifier and returns `success=false` with the exact `Name@hash` and how to route to it. With several Editors connected and no instance given, the call is refused.
 
 ## Error Recovery
 
@@ -271,7 +274,8 @@ set_active_instance(instance="MyProject@abc123")
 | Tools return "busy" | Compilation in progress | Wait, check `editor_state` |
 | "stale_file" error | File changed since SHA | Re-fetch SHA with `get_sha`, retry |
 | Connection lost | Domain reload | Wait ~5s, reconnect |
-| Commands fail silently | Wrong instance | Check `set_active_instance` |
+| Commands hit the wrong Editor or are refused | Several instances connected | Pass `unity_instance` on the call (see Multi-Instance Workflow) |
+| "not part of /mcp/..." or "not enabled on /mcp" | Tool's group is outside this URL's profile | Connect to `/mcp/full`, or enable the group in the Unity Editor's tool settings and run `manage_tools(action="sync")` |
 
 ## Reference Files
 

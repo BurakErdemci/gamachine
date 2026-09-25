@@ -77,13 +77,15 @@ batch_execute(
 
 ### set_active_instance
 
-Route commands to a specific Unity instance (multi-instance workflows).
+Checks a Unity instance identifier. It does **not** pin routing: nothing is stored, and it always returns `success=false` with the resolved `Name@hash` and how to route to it.
 
 ```python
 set_active_instance(
-    instance="ProjectName@abc123"  # str, required - Name@hash or hash prefix
+    instance="ProjectName@abc123"  # str, required - Name@hash, hash prefix, project name, or port (stdio only)
 )
 ```
+
+To route calls with several Editors connected, pass `unity_instance` on each tool call, or connect with `?instance=ProjectName@abc123` on the MCP URL (or an `X-Unity-Instance` header). With one Editor connected, calls reach it automatically.
 
 ### refresh_unity
 
@@ -1428,7 +1430,7 @@ See also: [ProBuilder Workflow Guide](probuilder-guide.md) for detailed patterns
 
 ### `manage_profiler`
 
-Unity Profiler session control, counter reads, memory snapshots, and Frame Debugger. Group: `profiling` (opt-in via `manage_tools`).
+Unity Profiler session control, counter reads, memory snapshots, and Frame Debugger. Group: `profiling` (not on `/mcp` by default: enable it in the Unity Editor's tool settings, or connect to `/mcp/full`).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|

@@ -1905,7 +1905,7 @@ refresh_unity(mode="force", compile="request", wait_for_ready=True)
 
 ## API Verification Workflows
 
-> These tools live in the opt-in `docs` group. Activate it first: `manage_tools(action="activate", group="docs")`
+> These tools live in the opt-in `docs` group, which `/mcp` does not list by default. `manage_tools` cannot add it mid-connection: connect to `/mcp/full`, or enable the group in the Unity Editor's tool settings and run `manage_tools(action="sync")`.
 
 ### Full API Verification Before Writing Code
 
