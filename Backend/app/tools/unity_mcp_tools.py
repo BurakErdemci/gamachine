@@ -92,31 +92,26 @@ _UNKNOWN_404_KEY = "gamachine_http_404_unknown"
 # is answered before the request reaches a handler.
 _SERVER_404_TEXTS = ("Session not found", "Not Found: Session has been terminated",
                      "Not Found: Invalid or expired session ID")
-# Bytes the server sends for one of those (measured from mcp 2.2.0's
-# _error_response / _create_error_response): no request id, no data.
-_SERVER_404_BODY_MAX = 512
+# The exact bytes and Content-Type the server sends for those, measured 26 Sep
+# 2026 from mcp 2.2.0's _error_response / _create_error_response over HTTP
+# (uvicorn) and rendered in the live Unity MCP server's own environment
+# (mcp 2.2.0, starlette 1.7.0, pydantic 2.13.5): compact JSON, no BOM, no
+# whitespace, no charset parameter. Matched byte for byte: json.loads also
+# accepts a BOM, surrounding whitespace or reordered keys, none of which the
+# server sends, so any of them means some other peer wrote the 404.
+_SERVER_404_CONTENT_TYPE = "application/json"
+_SERVER_404_BODIES = frozenset(
+    b'{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"%s"}}' % text.encode("ascii")
+    for text in _SERVER_404_TEXTS)
 _CALL_404_UNKNOWN_MSG = ("Unity MCP sunucusu çağrıyı HTTP 404 ile yanıtladı, ama bu sunucunun "
                          "'oturum bulunamadı' yanıtı değil; çağrının Unity'de çalışıp çalışmadığı "
                          "bilinmiyor. Tekrar denemeden önce Unity'deki durumu kontrol et.")
 
 
 def _is_server_session_loss_body(content_type: str, raw: bytes) -> bool:
-    """True only for the exact JSON-RPC error mcp 2.2.0 answers a lost session
-    with: {"jsonrpc": "2.0", "id": null, "error": {"code": -32600,
-    "message": <one of _SERVER_404_TEXTS>}} and nothing else."""
-    if not content_type.lower().startswith("application/json") or len(raw) > _SERVER_404_BODY_MAX:
-        return False
-    try:
-        body = json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
-        return False
-    if not isinstance(body, dict) or set(body) != {"jsonrpc", "id", "error"}:
-        return False
-    error = body["error"]
-    return (body["jsonrpc"] == "2.0" and body["id"] is None
-            and isinstance(error, dict) and set(error) == {"code", "message"}
-            and type(error["code"]) is int and error["code"] == INVALID_REQUEST
-            and error["message"] in _SERVER_404_TEXTS)
+    """True only for the exact response mcp 2.2.0 answers a lost session with
+    (_SERVER_404_BODIES under _SERVER_404_CONTENT_TYPE), byte for byte."""
+    return content_type == _SERVER_404_CONTENT_TYPE and bytes(raw) in _SERVER_404_BODIES
 
 
 class _SessionLossTransport(httpx2.AsyncBaseTransport):
@@ -152,7 +147,10 @@ class _SessionLossTransport(httpx2.AsyncBaseTransport):
             return response  # a notification; the SDK expects no answer to it
         raw = await response.aread()
         await response.aclose()
-        lost = _is_server_session_loss_body(response.headers.get("content-type", ""), raw)
+        # aread() undoes a Content-Encoding; the server never sets one, so a
+        # decoded body did not come from it, however well it matches.
+        lost = (response.headers.get("content-encoding") is None
+                and _is_server_session_loss_body(response.headers.get("content-type", ""), raw))
         logger.info("[UnityMCP] HTTP 404 on session POST %r (%s): %r", message.get("method"),
                     "session lost" if lost else "outcome unknown", raw[:200])
         if lost:

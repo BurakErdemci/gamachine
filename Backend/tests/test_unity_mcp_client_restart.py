@@ -9,6 +9,7 @@ answers at once with one Turkish sentence.
 """
 import asyncio
 import contextlib
+import gzip
 import time
 import types as pytypes
 from unittest import mock
@@ -230,9 +231,14 @@ def test_tool_list_reloads_after_a_restart(real):
 
 # ── the real transport against scripted answers (HTTP status decides) ──────
 
-TERMINATED_404 = (404, {"Content-Type": "application/json"},
-                  {"jsonrpc": "2.0", "id": None,
-                   "error": {"code": -32600, "message": "Not Found: Session has been terminated"}})
+def _server_404(text):
+    """The session-loss 404 exactly as mcp 2.2.0 sends it: its own serializer."""
+    from mcp.server.streamable_http_manager import _error_response
+    response = _error_response(text, 404)
+    return (404, {"Content-Type": response.headers["content-type"]}, bytes(response.body))
+
+
+TERMINATED_404 = _server_404("Not Found: Session has been terminated")
 
 
 def _scripted(on_call):
@@ -323,9 +329,7 @@ def test_a_post_dispatch_session_loss_is_not_retried():
 
 
 def test_the_servers_expired_session_id_404_reconnects_and_runs_once():
-    expired = (404, {"Content-Type": "application/json"},
-               {"jsonrpc": "2.0", "id": None,
-                "error": {"code": -32600, "message": "Not Found: Invalid or expired session ID"}})
+    expired = _server_404("Not Found: Invalid or expired session ID")
 
     def on_call(message, sid):
         return expired if sid == "s1" else _ok(message)
@@ -336,6 +340,7 @@ def test_the_servers_expired_session_id_404_reconnects_and_runs_once():
 
 
 _SESSION_LOSS_ERROR = {"code": -32600, "message": "Session not found"}
+_SERVER_LOST_BYTES = _server_404("Session not found")[2]
 OTHER_404S = {
     "no JSON body": ({"Content-Type": "text/plain"}, b"gone"),
     "JSON body without content type": ({}, {"jsonrpc": "2.0", "id": None,
@@ -360,6 +365,22 @@ OTHER_404S = {
     "text as substring": ({"Content-Type": "application/json"},
                           {"jsonrpc": "2.0", "id": None,
                            "error": {"code": -32600, "message": "Session not found, retry"}}),
+    # verification round 2, 26 Sep 2026: the same object in bytes or headers the
+    # server never sends. json.loads accepted each of them.
+    "server object, spaced JSON": ({"Content-Type": "application/json"},
+                                   {"jsonrpc": "2.0", "id": None, "error": _SESSION_LOSS_ERROR}),
+    "UTF-8 BOM": ({"Content-Type": "application/json"}, b"\xef\xbb\xbf" + _SERVER_LOST_BYTES),
+    "trailing space": ({"Content-Type": "application/json"}, _SERVER_LOST_BYTES + b" "),
+    "trailing newline": ({"Content-Type": "application/json"}, _SERVER_LOST_BYTES + b"\n"),
+    "leading space": ({"Content-Type": "application/json"}, b" " + _SERVER_LOST_BYTES),
+    "reordered keys": ({"Content-Type": "application/json"},
+                       b'{"id":null,"jsonrpc":"2.0","error":{"code":-32600,"message":"Session not found"}}'),
+    "content type suffix": ({"Content-Type": "application/json-extra"}, _SERVER_LOST_BYTES),
+    "content type with charset": ({"Content-Type": "application/json; charset=utf-8"},
+                                  _SERVER_LOST_BYTES),
+    "upper-case content type": ({"Content-Type": "Application/JSON"}, _SERVER_LOST_BYTES),
+    "gzip content encoding": ({"Content-Type": "application/json", "Content-Encoding": "gzip"},
+                              gzip.compress(_SERVER_LOST_BYTES)),
 }
 
 
@@ -388,5 +409,9 @@ def test_the_session_loss_body_matches_what_mcp_sends():
              for text in umt._SERVER_404_TEXTS[1:]]
     for response in sent:
         assert umt._is_server_session_loss_body(response.headers["content-type"], response.body)
+    # Measured 26 Sep 2026 (mcp 2.2.0): compact, no charset. A change here in a
+    # future SDK narrows the match to "outcome unknown"; it never widens it.
+    assert {bytes(r.body) for r in sent} == umt._SERVER_404_BODIES
+    assert {r.headers["content-type"] for r in sent} == {"application/json"}
     assert not umt._is_server_session_loss_body("application/json", b"[]")
     assert not umt._is_server_session_loss_body("application/json", b"\xff")
