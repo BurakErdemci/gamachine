@@ -71,8 +71,11 @@ class UnityMCPManager:
         import hashlib
         h = hashlib.sha256()
         try:
+            # uv.lock is hashed because the launch is pinned to it: a cached
+            # tool env built from the previous lock would keep old versions.
             for root in (os.path.join(self.server_dir, "src"),
-                         os.path.join(self.server_dir, "pyproject.toml")):
+                         os.path.join(self.server_dir, "pyproject.toml"),
+                         os.path.join(self.server_dir, "uv.lock")):
                 if os.path.isfile(root):
                     h.update(os.path.basename(root).encode())
                     with open(root, "rb") as fh:
@@ -280,6 +283,62 @@ class UnityMCPManager:
         return "uvx"
 
     @staticmethod
+    def _get_uv(uvx: str) -> str:
+        """`uv` next to the chosen `uvx` (the bundled uv/ folder and every
+        installer ship both), else the one on PATH."""
+        import shutil
+        import sys
+        if os.path.isabs(uvx):
+            sibling = os.path.join(os.path.dirname(uvx),
+                                   "uv.exe" if sys.platform == "win32" else "uv")
+            if os.path.isfile(sibling):
+                return sibling
+        return shutil.which("uv") or "uv"
+
+    def _lock_constraints(self, uvx: str, env: dict) -> Optional[str]:
+        """Exports unity-mcp/Server/uv.lock as a constraints file for uvx.
+
+        Why: `uvx --from <dir>` resolves the server's dependency tree afresh and
+        ignores uv.lock, so only the two exact pins in pyproject held and every
+        transitive package floated to whatever PyPI had that day. `--constraints`
+        bounds each installed package to its locked version. `uv export` rather
+        than parsing uv.lock by hand: the lock forks by Python version and
+        platform, and the export keeps those markers.
+
+        None -> launch unpinned (logged). A failed export must not take the
+        Unity tools away; the old behaviour is the fallback, not an outage.
+        """
+        lock = os.path.join(self.server_dir, "uv.lock")
+        if not os.path.isfile(lock):
+            logger.warning("[UnityMCP] uv.lock yok (%s); sunucu sabitlenmeden başlatılıyor.", lock)
+            return None
+        out_dir = os.path.join(os.path.expanduser("~"), ".unity_architect_ai")
+        os.makedirs(out_dir, exist_ok=True)
+        out = os.path.join(out_dir, "unity_mcp_constraints.txt")
+        cmd = [
+            self._get_uv(uvx), "export",
+            "--project", self.server_dir,
+            "--frozen",  # the lock as it is; never re-resolve at launch
+            "--format", "requirements.txt",
+            "--no-hashes", "--no-header", "--no-annotate",
+            "--no-emit-project",  # `-e .` is not a valid constraint
+            "--no-dev", "--all-extras",
+            "--output-file", out,
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
+        except Exception as e:
+            logger.warning("[UnityMCP] uv.lock dışa aktarılamadı (%s); sunucu sabitlenmeden "
+                           "başlatılıyor.", e)
+            return None
+        if res.returncode != 0 or not os.path.isfile(out):
+            tail = (res.stderr or res.stdout or "").strip().splitlines()[-1:] or [""]
+            logger.warning("[UnityMCP] uv.lock dışa aktarılamadı (çıkış %s: %s); sunucu "
+                           "sabitlenmeden başlatılıyor.", res.returncode, tail[0])
+            return None
+        return out
+
+    @staticmethod
     def _load_or_create_local_api_token() -> str:
         """Yerel paylaşımlı sırrı kalıcı dosyadan okur, yoksa üretip yazar.
 
@@ -430,7 +489,16 @@ class UnityMCPManager:
                 "DISABLE_TELEMETRY": "true",
                 "UNITY_MCP_DISABLE_TELEMETRY": "true",
                 "MCP_DISABLE_TELEMETRY": "true",
+                # FastMCP checks pypi.org for a newer release when it prints
+                # its start banner; a local tool server has no business
+                # phoning out (and it stalls a start on a filtered network).
+                "FASTMCP_CHECK_FOR_UPDATES": "off",
             })
+            constraints = self._lock_constraints(uvx, mcp_env)
+            if constraints:
+                # uvx options must precede the command; "--from" opens the tail.
+                at = cmd.index("--from")
+                cmd[at:at] = ["--constraints", constraints]
             self.process = subprocess.Popen(
                 cmd,
                 stdout=log_file,
