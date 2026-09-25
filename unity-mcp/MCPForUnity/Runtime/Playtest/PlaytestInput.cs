@@ -54,10 +54,11 @@ namespace MCPForUnity.Runtime.Playtest
         public static JObject BeginSession()
         {
             var settings = InputSystem.settings;
-            if (!s_SessionActive)
+            if (!s_SessionActive && !LoadOriginals())
             {
                 s_OrigBackground = settings.backgroundBehavior;
                 s_OrigEditorBehavior = settings.editorInputBehaviorInPlayMode;
+                SaveOriginals();
             }
             // Property setters apply the change in memory without dirtying the settings asset.
             settings.backgroundBehavior = InputSettings.BackgroundBehavior.IgnoreFocus;
@@ -85,20 +86,78 @@ namespace MCPForUnity.Runtime.Playtest
             RemoveDevice(ref s_Keyboard);
             RemoveDevice(ref s_Mouse);
             RemoveDevice(ref s_Gamepad);
-            if (s_SessionActive)
+            RemoveUnreferencedSessionDevices();
+            if (s_SessionActive || LoadOriginals())
             {
                 var settings = InputSystem.settings;
                 settings.backgroundBehavior = s_OrigBackground;
                 settings.editorInputBehaviorInPlayMode = s_OrigEditorBehavior;
             }
+            ForgetOriginals();
             s_SessionActive = false;
             s_LastPrologueFrame = -1;
+        }
+
+        // The originals live in SessionState because a domain reload during a session clears these statics while the
+        // changed settings stay in effect: they must be neither lost nor recaptured as new originals.
+        private const string OriginalsKey = "MCPForUnity.Playtest.InputOriginals";
+
+        private static bool LoadOriginals()
+        {
+#if UNITY_EDITOR
+            var parts = UnityEditor.SessionState.GetString(OriginalsKey, "").Split('|');
+            if (parts.Length == 2
+                && Enum.TryParse<InputSettings.BackgroundBehavior>(parts[0], out var background)
+                && Enum.TryParse<InputSettings.EditorInputBehaviorInPlayMode>(parts[1], out var editorBehavior))
+            {
+                s_OrigBackground = background;
+                s_OrigEditorBehavior = editorBehavior;
+                return true;
+            }
+#endif
+            return false;
+        }
+
+        private static void SaveOriginals()
+        {
+#if UNITY_EDITOR
+            UnityEditor.SessionState.SetString(OriginalsKey, $"{s_OrigBackground}|{s_OrigEditorBehavior}");
+#endif
+        }
+
+        /// <summary>Drops the saved originals of a session that ended without <see cref="EndSession"/>.</summary>
+        public static void ForgetOriginals()
+        {
+#if UNITY_EDITOR
+            UnityEditor.SessionState.EraseString(OriginalsKey);
+#endif
         }
 
         private static void RemoveDevice<T>(ref T device) where T : InputDevice
         {
             if (device != null && device.added) InputSystem.RemoveDevice(device);
             device = null;
+        }
+
+        /// <summary>Virtual devices added before a domain reload outlive it, but the references to them do not.</summary>
+        private static void RemoveUnreferencedSessionDevices()
+        {
+            var leftovers = new List<InputDevice>();
+            foreach (var device in InputSystem.devices)
+                if (IsSessionDeviceName(device.name)) leftovers.Add(device);
+            foreach (var device in leftovers) InputSystem.RemoveDevice(device);
+        }
+
+        private static bool IsSessionDeviceName(string name)
+        {
+            foreach (var prefix in new[] { "PlaytestKeyboard", "PlaytestMouse", "PlaytestGamepad" })
+            {
+                if (name == null || !name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                for (int i = prefix.Length; i < name.Length; i++)
+                    if (!char.IsDigit(name[i])) return false;
+                return true;
+            }
+            return false;
         }
 
         private static Keyboard EnsureKeyboard()
@@ -205,6 +264,7 @@ namespace MCPForUnity.Runtime.Playtest
         public static bool DrivesPrologue => false;
         public static UnityEngine.Object SettingsObject => null;
         public static JObject BeginSession() => new JObject { ["input_system"] = false };
+        public static void ForgetOriginals() { }
         public static void EndSession()
         {
             s_Queue.Clear();

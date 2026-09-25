@@ -62,7 +62,11 @@ namespace MCPForUnity.Editor.Tools.Playtest
             }
             // Runtime statics (driver, virtual devices) do not survive a reload; a session left "active" by a
             // reload in play mode is re-applied, one left over in edit mode is closed.
-            if (s.active && !EditorApplication.isPlaying) s.active = false;
+            if (s.active && !EditorApplication.isPlaying)
+            {
+                s.active = false;
+                PlaytestInput.ForgetOriginals();
+            }
             EditorApplication.update += Tick;
             EditorApplication.playModeStateChanged += OnPlayModeChanged;
         }
