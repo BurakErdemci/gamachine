@@ -42,7 +42,7 @@ def test_adaptive_only_families_never_get_budget_tokens(model):
 @pytest.mark.parametrize("model", [
     "claude-opus-4-6",
     "claude-sonnet-4-6",
-    "claude-4-6-sonnet",  # the id AnthropicProvider maps plain "sonnet" to
+    "claude-4-6-sonnet",  # invalid id the provider emitted before; may still be stored
 ])
 def test_4_6_family_uses_adaptive_without_display(model):
     assert anthropic_thinking_param(model) == {"type": "adaptive"}
@@ -106,3 +106,20 @@ def test_budget_stays_below_max_tokens():
     provider.analyze_code_with_thinking("prompt", max_tokens=1)
     kwargs = client.messages.create.call_args.kwargs
     assert kwargs["thinking"]["budget_tokens"] < kwargs["max_tokens"]
+
+
+@pytest.mark.parametrize("choice, sent_model, expected", [
+    ("sonnet", "claude-sonnet-5", ADAPTIVE_SUMMARIZED),
+    ("claude-sonnet-4-6", "claude-sonnet-4-6", {"type": "adaptive"}),
+    ("claude-4-6-sonnet", "claude-sonnet-4-6", {"type": "adaptive"}),
+    ("haiku", "claude-haiku-4-5", BUDGET),
+    ("claude-4-5-haiku", "claude-haiku-4-5", BUDGET),
+])
+def test_mapped_ids_keep_their_thinking_config(choice, sent_model, expected):
+    provider, client = _provider(choice)
+
+    provider.analyze_code_with_thinking("prompt", max_tokens=4096)
+
+    kwargs = client.messages.create.call_args.kwargs
+    assert kwargs["model"] == sent_model
+    assert kwargs["thinking"] == expected

@@ -278,7 +278,8 @@ ANTHROPIC_THINKING_HEADROOM = 8000
 # "claude-opus-4-8", "claude-sonnet-4-5-20250929", "claude-opus-4-20250514".
 # The minor must be a single digit so a date suffix is never read as one.
 _CLAUDE_FAMILY_FIRST_RE = re.compile(r"(?:opus|sonnet|haiku)-(\d{1,2})(?:-(\d)(?!\d))?(?!\d)")
-# "claude-3-7-sonnet-20250219", and the provider's own "claude-4-6-sonnet".
+# "claude-3-7-sonnet-20250219", and the invalid "claude-4-6-sonnet" this
+# provider emitted before its ids were fixed (may still be stored).
 _CLAUDE_VERSION_FIRST_RE = re.compile(r"claude-(\d{1,2})(?:-(\d))?-(?:opus|sonnet|haiku)")
 
 
@@ -324,11 +325,17 @@ class AnthropicProvider(AIProvider):
     def __init__(self, api_key: str, model_name: str = "claude-sonnet-4-6"):
         self.client = anthropic.Anthropic(api_key=api_key)
 
+        # Ids per the claude-api skill model table (Sep 2026). A Sonnet choice
+        # without a version means the current generation there, i.e. Sonnet 5.
+        # "4-6-sonnet" / "4-5-haiku" are the invalid ids this class used to emit
+        # (every call 404'd); a name stored from that era still resolves.
         raw_name = model_name.lower() if model_name else ""
         if "sonnet-5" in raw_name:
             self.model_name = "claude-sonnet-5"
-        elif "sonnet-4-6" in raw_name or "sonnet" in raw_name:
-            self.model_name = "claude-4-6-sonnet"
+        elif "sonnet-4-6" in raw_name or "4-6-sonnet" in raw_name:
+            self.model_name = "claude-sonnet-4-6"
+        elif "sonnet" in raw_name:
+            self.model_name = "claude-sonnet-5"
         elif "fable-5-1" in raw_name:
             self.model_name = "claude-fable-5-1"
         elif "fable" in raw_name:
@@ -339,10 +346,10 @@ class AnthropicProvider(AIProvider):
             self.model_name = "claude-opus-5"
         elif "opus" in raw_name:
             self.model_name = "claude-opus-4-8"
-        elif "haiku-4-5" in raw_name or "haiku" in raw_name:
-            self.model_name = "claude-4-5-haiku"
+        elif "haiku" in raw_name:
+            self.model_name = "claude-haiku-4-5"
         else:
-            self.model_name = "claude-4-6-sonnet"
+            self.model_name = "claude-sonnet-4-6"
 
     def analyze_code(self, prompt: str, max_tokens: int = 4096, images: Optional[List[str]] = None) -> str:
         try:

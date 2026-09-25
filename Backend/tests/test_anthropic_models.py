@@ -1,7 +1,10 @@
 import asyncio
+import re
 import os
 import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
@@ -77,3 +80,48 @@ def test_fable_5_1_is_selectable_on_the_claude_code_side():
     assert "claude-fable-5-1" in subscription
     assert "claude-fable-5" in subscription
     assert subscription["claude-fable-5-1"]["name"] == "Claude Fable 5.1 (CLI)"
+
+
+# Valid ids per the claude-api skill model table (Sep 2026). The provider used to
+# emit "claude-4-6-sonnet" / "claude-4-5-haiku", which are not API ids, so every
+# call on a Sonnet 4.6 or Haiku choice 404'd.
+_VALID_ANTHROPIC_IDS = {
+    "claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5",
+    "claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5",
+}
+
+
+@pytest.mark.parametrize("choice, expected", [
+    ("claude-sonnet-4-6", "claude-sonnet-4-6"),
+    ("claude-sonnet-5", "claude-sonnet-5"),
+    # A Sonnet without a version is the current generation (skill: "sonnet" -> claude-sonnet-5).
+    ("sonnet", "claude-sonnet-5"),
+    ("claude-sonnet-4-5-20250929", "claude-sonnet-5"),
+    ("haiku", "claude-haiku-4-5"),
+    ("claude-haiku-4-5", "claude-haiku-4-5"),
+    ("claude-haiku-4-5-20251001", "claude-haiku-4-5"),
+    # Names stored while the provider emitted the invalid ids still resolve.
+    ("claude-4-6-sonnet", "claude-sonnet-4-6"),
+    ("claude-4-5-haiku", "claude-haiku-4-5"),
+    (None, "claude-sonnet-4-6"),
+    ("", "claude-sonnet-4-6"),
+])
+@patch("providers.api_providers.anthropic.Anthropic")
+def test_sonnet_and_haiku_choices_map_to_valid_api_ids(anthropic_client, choice, expected):
+    anthropic_client.return_value = MagicMock()
+
+    model_name = AnthropicProvider("test-key", choice).model_name
+
+    assert model_name == expected
+    assert model_name in _VALID_ANTHROPIC_IDS
+
+
+@pytest.mark.parametrize("choice", [
+    "sonnet", "claude-sonnet-4-6", "haiku", "claude-4-6-sonnet", "claude-4-5-haiku",
+    "opus", "fable", "claude-opus-5-5", None,
+])
+@patch("providers.api_providers.anthropic.Anthropic")
+def test_provider_never_emits_a_version_first_id(anthropic_client, choice):
+    anthropic_client.return_value = MagicMock()
+
+    assert not re.match(r"claude-\d", AnthropicProvider("test-key", choice).model_name)
