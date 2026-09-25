@@ -249,7 +249,7 @@ class AgyProvider(BaseCLIProvider):
         # 1. Lokal antigravity-cli settings.json
         settings_path = os.path.expanduser("~/.gemini/antigravity-cli/settings.json")
         try:
-            with open(settings_path) as f:
+            with open(settings_path, encoding="utf-8-sig") as f:
                 settings = json.load(f)
         except Exception:
             settings = {"colorScheme": "dark", "trustedWorkspaces": []}
@@ -262,7 +262,7 @@ class AgyProvider(BaseCLIProvider):
                 trusted.append(workspace)
             settings["trustedWorkspaces"] = trusted
         try:
-            with open(settings_path, "w") as f:
+            with open(settings_path, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2)
         except Exception as e:
             logger.warning(f"[CLIProvider] Lokal agy settings.json model güncellenemedi: {e}")
@@ -270,7 +270,7 @@ class AgyProvider(BaseCLIProvider):
         # 2. Global ~/.gemini/settings.json
         global_settings_path = os.path.expanduser("~/.gemini/settings.json")
         try:
-            with open(global_settings_path) as f:
+            with open(global_settings_path, encoding="utf-8-sig") as f:
                 global_settings = json.load(f)
         except Exception:
             global_settings = {}
@@ -283,7 +283,7 @@ class AgyProvider(BaseCLIProvider):
                 global_trusted.append(workspace)
             global_settings["trustedWorkspaces"] = global_trusted
         try:
-            with open(global_settings_path, "w") as f:
+            with open(global_settings_path, "w", encoding="utf-8") as f:
                 json.dump(global_settings, f, indent=2)
         except Exception as e:
             logger.warning(f"[CLIProvider] Global settings.json model güncellenemedi: {e}")
@@ -333,7 +333,7 @@ class AgyProvider(BaseCLIProvider):
         # 1. ~/.gemini/antigravity-cli/mcp_config.json güncelle
         config_path = os.path.expanduser("~/.gemini/antigravity-cli/mcp_config.json")
         try:
-            with open(config_path) as f:
+            with open(config_path, encoding="utf-8-sig") as f:
                 config = json.load(f)
         except Exception:
             config = {}
@@ -366,7 +366,7 @@ class AgyProvider(BaseCLIProvider):
             config["mcpServers"].pop("unityMCP", None)
 
         try:
-            with open(config_path, "w") as f:
+            with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
             logger.info(f"[CLIProvider] agy mcp_config.json güncellendi: {backend_url} → {workspace}")
         except Exception as e:
@@ -384,7 +384,7 @@ class AgyProvider(BaseCLIProvider):
         try:
             migrated_cfg = {}
             try:
-                with open(migrated_path) as f:
+                with open(migrated_path, encoding="utf-8-sig") as f:
                     _raw = f.read().strip()
                     migrated_cfg = json.loads(_raw) if _raw else {}
             except Exception:
@@ -401,7 +401,7 @@ class AgyProvider(BaseCLIProvider):
             out_cfg["mcpServers"] = merged_servers
             out_cfg.pop("disabledTools", None)  # geçersiz key → agy tüm dosyayı yoksayar
             os.makedirs(os.path.dirname(migrated_path), exist_ok=True)
-            with open(migrated_path, "w") as f:
+            with open(migrated_path, "w", encoding="utf-8") as f:
                 json.dump(out_cfg, f, indent=2)
             logger.info(f"[CLIProvider] agy MIGRATED mcp_config.json yazıldı ({len(merged_servers)} server): {migrated_path}")
         except Exception as e:
@@ -410,7 +410,7 @@ class AgyProvider(BaseCLIProvider):
         # 2. ~/.gemini/antigravity-cli/settings.json güncelle
         settings_path = os.path.expanduser("~/.gemini/antigravity-cli/settings.json")
         try:
-            with open(settings_path) as f:
+            with open(settings_path, encoding="utf-8-sig") as f:
                 settings = json.load(f)
         except Exception:
             settings = {"colorScheme": "dark", "trustedWorkspaces": []}
@@ -428,7 +428,7 @@ class AgyProvider(BaseCLIProvider):
         settings["mcpServers"].pop("unityMCP", None)
 
         try:
-            with open(settings_path, "w") as f:
+            with open(settings_path, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2)
             logger.info(f"[CLIProvider] agy settings.json güncellendi: {backend_url} → {workspace}")
         except Exception as e:
@@ -437,7 +437,7 @@ class AgyProvider(BaseCLIProvider):
         # 3. Global ~/.gemini/settings.json güncelle
         global_settings_path = os.path.expanduser("~/.gemini/settings.json")
         try:
-            with open(global_settings_path) as f:
+            with open(global_settings_path, encoding="utf-8-sig") as f:
                 global_settings = json.load(f)
         except Exception:
             global_settings = {}
@@ -448,7 +448,7 @@ class AgyProvider(BaseCLIProvider):
         global_settings["mcpServers"].pop("unityMCP", None)
 
         try:
-            with open(global_settings_path, "w") as f:
+            with open(global_settings_path, "w", encoding="utf-8") as f:
                 json.dump(global_settings, f, indent=2)
             logger.info(f"[CLIProvider] Global settings.json güncellendi: {backend_url} → {workspace}")
         except Exception as e:

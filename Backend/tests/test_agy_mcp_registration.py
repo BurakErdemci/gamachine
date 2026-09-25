@@ -73,3 +73,24 @@ class TestAgyMcpRegistration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAgySettingsEncoding(unittest.TestCase):
+    """agy writes its settings as UTF-8; a locale-encoded read (cp1252 on this
+    machine) turned a Turkish workspace path into mojibake that grew on every
+    agy round trip (seen in a real antigravity-cli/settings.json)."""
+
+    def test_non_ascii_trusted_workspace_survives_a_round_trip(self):
+        with tempfile.TemporaryDirectory() as home:
+            real_expand = os.path.expanduser
+            path = os.path.join(home, ".gemini", "antigravity-cli", "settings.json")
+            os.makedirs(os.path.dirname(path))
+            workspace = os.path.join("C:", "Unity Projeler", "Körebe")
+            with open(path, "w", encoding="utf-8") as f:
+                # Raw UTF-8 bytes, as agy writes them.
+                json.dump({"trustedWorkspaces": [workspace]}, f, ensure_ascii=False)
+            with patch.object(agy_provider.os.path, "expanduser",
+                              side_effect=lambda p: p.replace("~", home, 1) if p.startswith("~") else real_expand(p)):
+                AgyProvider()._set_agy_model("Gemini 3.8 Flash (High)", workspace)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["trustedWorkspaces"], [workspace])
