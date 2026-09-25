@@ -43,26 +43,46 @@ class TestAgyStepGate(unittest.TestCase):
         entries = self.read_hooks()[STEP_GATE_KEY]["PreToolUse"]
         self.assertEqual([e["matcher"] for e in entries], [
             "write_to_file", "replace_file_content", "multi_replace_file_content",
-            "sed_file", "notebook_edit"])
-        # run_command carries the unityai bridge and must stay callable.
-        self.assertNotIn("run_command", STEP_GATE_TOOLS)
+            "sed_file", "notebook_edit", "send_command_input", "run_command"])
+        # MCP calls are gated by the server's approval gate, never here.
         self.assertNotIn("call_mcp_tool", STEP_GATE_TOOLS)
         command = entries[0]["hooks"][0]["command"]
         self.assertTrue(os.path.exists(command))
         self.assertNotIn('"', command)
         with open(os.path.join(self.ws, ".gitignore"), encoding="utf-8") as f:
             self.assertIn(".agents/hooks.json", f.read())
+        with open(os.path.join(self.home, ".unity_architect_ai", "agy", "step-gate.json"),
+                  encoding="utf-8") as f:
+            state = json.load(f)
+        self.assertEqual(state["mode"], "step")
+        self.assertEqual(state["launcher"], AgyProvider()._launcher_path("unityai"))
 
-    def test_generated_script_prints_a_deny_decision(self):
-        AgyProvider()._write_step_gate(self.ws, step_mode=True)
-        command = self.read_hooks()[STEP_GATE_KEY]["PreToolUse"][0]["hooks"][0]["command"]
+    def run_shim(self, payload: dict) -> dict:
+        if not hasattr(self, "shim"):
+            self.shim = self.read_hooks()[STEP_GATE_KEY]["PreToolUse"][0]["hooks"][0]["command"]
+        command = self.shim
         argv = ["cmd", "/c", command] if sys.platform == "win32" else [command]
-        out = subprocess.run(argv, input=b'{"toolCall":{"name":"write_to_file"}}',
-                             capture_output=True, timeout=30)
+        out = subprocess.run(argv, input=json.dumps(payload).encode(),
+                             capture_output=True, timeout=60)
         self.assertEqual(out.returncode, 0, out.stderr)
-        decision = json.loads(out.stdout.decode("utf-8").strip())
-        self.assertEqual(decision["decision"], "deny")
-        self.assertIn("unityai save-file", decision["reason"])
+        return json.loads(out.stdout.decode("utf-8").strip())
+
+    def test_generated_shim_runs_the_backend_hook(self):
+        AgyProvider()._write_step_gate(self.ws, step_mode=True)
+        launcher = AgyProvider()._launcher_path("unityai")
+        bridge = (f'& "{launcher}" delete-file --path "a.txt"' if sys.platform == "win32"
+                  else f'{launcher} delete-file --path "a.txt"')
+        write = self.run_shim({"toolCall": {"name": "write_to_file", "args": {}}})
+        self.assertEqual(write["decision"], "deny")
+        self.assertIn("unityai save-file", write["reason"])
+        shell = self.run_shim({"toolCall": {"name": "run_command",
+                                            "args": {"CommandLine": "python -c \"open('x','w')\""}}})
+        self.assertEqual(shell["decision"], "deny")
+        ok = self.run_shim({"toolCall": {"name": "run_command", "args": {"CommandLine": bridge}}})
+        self.assertEqual(ok["decision"], "allow")
+        # A flip to auto reaches a hook that is already installed.
+        AgyProvider()._write_step_gate(self.ws, step_mode=False)
+        self.assertEqual(self.run_shim({"toolCall": {"name": "write_to_file"}})["decision"], "allow")
 
     def test_user_hooks_are_kept_and_auto_removes_only_ours(self):
         os.makedirs(os.path.dirname(self.hooks_path))

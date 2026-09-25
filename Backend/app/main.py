@@ -48,8 +48,9 @@ os.environ["PATH"] = os.pathsep.join(
 #   backend mcp-server [--workspace X]  → unity_ai_mcp.server.main (Claude/Codex MCP)
 #   backend unityai <save-file|...>     → unityai_cli.main (agy köprüsü)
 #   backend codex-mcp-bridge <http_url> → providers.codex_unitymcp_bridge (Codex stdio köprüsü)
+#   backend agy-hook --state <file>     → agy_step_gate.main (agy step-mode PreToolUse hook)
 # FastAPI/uvicorn app'i kurmadan erken dön — bu komutlar HTTP server başlatmaz.
-if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bridge"):
+if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bridge", "agy-hook"):
     _sub_mode = sys.argv[1]
     sys.argv = [sys.argv[0]] + sys.argv[2:]
     if _sub_mode == "mcp-server":
@@ -62,6 +63,11 @@ if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bri
         from providers.codex_unitymcp_bridge import main as _sub_main
         _sub_main()
         sys.exit(0)
+    elif _sub_mode == "agy-hook":
+        # Runs on every gated agy tool call, so it must not import providers/
+        # (that package pulls in every provider SDK, 3.3 s measured).
+        from agy_step_gate import main as _sub_main
+        sys.exit(_sub_main())
     else:  # unityai
         from unityai_cli import main as _sub_main
         sys.exit(_sub_main())

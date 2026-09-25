@@ -6,6 +6,7 @@ import shutil
 import logging
 from typing import Optional
 from .cli_base import BaseCLIProvider
+from agy_step_gate import GATED_TOOLS, PS_UTF8_PREFIX, RUN_TOOL, write_state
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +21,24 @@ logger = logging.getLogger(__name__)
 # always-proceed). With the hook, a file write has to go through
 # `unityai save-file`, which raises an approval card.
 #
-# run_command is NOT in this list: it carries the unityai bridge itself, and
-# telling a unityai call from any other shell command needs a hook that reads
-# the command line, which needs a script the frozen build can run (a backend
-# subcommand). Until then a shell write in step mode is stopped only by the
-# prompt rule.
-STEP_GATE_TOOLS = (
-    "write_to_file", "replace_file_content", "multi_replace_file_content",
-    "sed_file", "notebook_edit",
-)
+# run_command is gated too: the hook (`backend agy-hook`, agy_step_gate.py)
+# allows only the exact unityai bridge call shapes and denies every other
+# command line. The rule and why it is strict are in agy_step_gate.py.
+STEP_GATE_TOOLS = GATED_TOOLS + (RUN_TOOL,)
 STEP_GATE_KEY = "gamachine-step-gate"
 STEP_GATE_HOOKS_FILE = ".agents/hooks.json"
-# Echoed by a cmd.exe script: must stay free of & | < > ^ %.
-STEP_GATE_REASON = ("Gamachine step mode: built-in file writes are blocked. Write files "
-                    "only with unityai save-file, so an approval card is shown.")
+
+
+def _gate_dir() -> str:
+    return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "agy")
+
+
+def write_gate_state(auto: bool) -> None:
+    """Mode and launcher the hook reads on every call. Written at spawn and on
+    every mode flip, so a flip to auto frees a running step turn at once."""
+    launcher = AgyProvider()._launcher_path("unityai")
+    write_state(os.path.join(_gate_dir(), "step-gate.json"),
+                "auto" if auto else "step", launcher)
 
 
 def _short_path(path: str) -> str:
@@ -115,6 +120,44 @@ class AgyProvider(BaseCLIProvider):
         finally:
             await session.close()
 
+    @staticmethod
+    def _unityai_call_rules(unityai_cli: str, windows: bool = None) -> str:
+        """The exact call shapes agy_step_gate allows, per platform.
+
+        agy runs commands in Windows PowerShell 5.1 on Windows (measured). The
+        bash heredoc once given here does not parse there; the model then fell
+        back to a double-quoted here-string, which expanded $HOME inside the
+        file content before unityai saw it (measured: the card showed the
+        expanded text). The single-quoted here-string is literal.
+        """
+        windows = (sys.platform == "win32") if windows is None else windows
+        if windows:
+            call = f'& "{unityai_cli}"'
+            write = (
+                "1. CREATE or EDIT a file — pipe the content with a single-quoted\n"
+                "   PowerShell here-string (the closing '@ starts its own line). Keep the\n"
+                "   first line exactly as shown: without it non-ASCII letters become '?':\n"
+                "   run_command:\n"
+                f"   {PS_UTF8_PREFIX}\n"
+                "   @'\n"
+                "   ...full file content here...\n"
+                f"   '@ | {call} save-file --path \"<rel/path>\" --content-stdin\n"
+                "   Use @' '@ (single quotes) ONLY — @\" \"@ expands $ and corrupts the file.\n")
+        else:
+            call = f'"{unityai_cli}"' if " " in unityai_cli else unityai_cli
+            write = (
+                "1. CREATE or EDIT a file — pipe the content via stdin (handles multiline):\n"
+                f"   run_command: {call} save-file --path \"<rel/path>\" --content-stdin <<'UNITYAI_EOF'\n"
+                "   ...full file content here...\n"
+                "   UNITYAI_EOF\n")
+        return (
+            write
+            + "   FORBIDDEN for writing files: python -c, printf, echo, cat, tee, Set-Content,\n"
+            "   Out-File or redirection (>). They bypass approval and are refused.\n"
+            f"2. DELETE a file:    run_command: {call} delete-file --path \"<rel/path>\"\n"
+            "3. SHELL commands (git, npm, mkdir, rm, mv, etc.), one command per call:\n"
+            f"   run_command: {call} bash --command \"<shell command>\"\n")
+
     def _stream_instructions(self) -> str:
         """Keep the existing tool approval bridge guidance on the stdin path."""
         unityai_cli = self._launcher_path("unityai")
@@ -145,16 +188,11 @@ class AgyProvider(BaseCLIProvider):
             "calling 'unityai' with its ABSOLUTE PATH:\n"
             f"  {unityai_cli}\n\n"
             "CRITICAL RULES — follow exactly:\n"
-            "1. CREATE or EDIT a file — pipe the content via stdin (handles multiline):\n"
-            f"   run_command: {unityai_cli} save-file --path \"<rel/path>\" --content-stdin <<'UNITYAI_EOF'\n"
-            "   ...full file content here...\n"
-            "   UNITYAI_EOF\n"
-            "   FORBIDDEN for writing files: python3 -c, printf, echo, cat, tee, or shell\n"
-            "   redirection (>). These bypass user approval. ALWAYS use unityai save-file.\n"
-            f"2. DELETE a file:    run_command: {unityai_cli} delete-file --path \"<rel/path>\"\n"
-            f"3. SHELL commands (git, npm, mkdir, rm, mv, etc.):\n"
-            f"   run_command: {unityai_cli} bash --command \"<shell command>\"\n"
-            "4. To READ a file or LIST a directory you MAY use your own view_file / list_dir.\n\n"
+            + self._unityai_call_rules(unityai_cli) +
+            "4. To READ a file or LIST a directory you MAY use your own view_file / list_dir.\n"
+            "5. Run unityai ALONE: nothing before or after it in the same command, no\n"
+            "   && ; | or redirection. Values in --path/--command must not contain quotes\n"
+            "   or any of $ ` & | < > ^ % ! ( ) — such a command is refused.\n\n"
             "Every write, delete and shell command MUST go through unityai so the user can\n"
             "approve it in the IDE. SCOPE: Only the current workspace. No unprompted test files.\n\n"
             "REPLY STYLE — match the reply length to the task:\n"
@@ -173,20 +211,34 @@ class AgyProvider(BaseCLIProvider):
         )
 
     @staticmethod
+    def _hook_argv(state_path: str) -> list:
+        """argv of `backend agy-hook`, dev and frozen (same split as bridge_argv)."""
+        if getattr(sys, "frozen", False):
+            return [sys.executable, "agy-hook", "--state", state_path]
+        main_py = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.py")
+        return [sys.executable, main_py, "agy-hook", "--state", state_path]
+
+    @staticmethod
     def _step_gate_command() -> str:
-        """Writes the deny script under Gamachine's own user folder and returns
-        the hook command. Rewritten on every call, so an edited copy cannot
-        linger."""
-        gate_dir = os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "agy")
+        """Writes the shim that runs `backend agy-hook` and returns the hook
+        command. Rewritten on every call, so an edited copy cannot linger.
+
+        A shim because agy re-escapes quotes in a hook command (measured), so
+        the backend's own path, which may hold spaces (Program Files), cannot
+        be written into hooks.json directly; inside the shim quoting works.
+        """
+        gate_dir = _gate_dir()
         os.makedirs(gate_dir, exist_ok=True)
-        payload = json.dumps({"decision": "deny", "reason": STEP_GATE_REASON})
+        argv = AgyProvider._hook_argv(os.path.join(gate_dir, "step-gate.json"))
         if sys.platform == "win32":
             path = os.path.join(gate_dir, "step-gate.cmd")
-            # `more` drains the hook's stdin; the shape was measured through agy.
-            body = "@echo off\r\n>nul more\r\necho " + payload + "\r\n"
+            line = " ".join('"%s"' % a.replace("%", "%%") for a in argv)
+            body = "@echo off\r\n" + line + "\r\n"
         else:
+            import shlex
             path = os.path.join(gate_dir, "step-gate.sh")
-            body = "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '" + payload + "'\n"
+            body = "#!/bin/sh\nexec " + " ".join(shlex.quote(a) for a in argv) + "\n"
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(body)
         if sys.platform != "win32":
@@ -203,9 +255,14 @@ class AgyProvider(BaseCLIProvider):
 
         Returns False when the gate could not be written; the caller logs it.
         agy reads this file when it starts, so a mode change needs a respawn
-        (agy_session does that).
+        (agy_session does that). The hook's state file is written first: a
+        hook that cannot read it denies.
         """
         from .workspace_config import ensure_gitignored, guvenli_config_yaz
+        try:
+            write_gate_state(auto=not step_mode)
+        except OSError as e:
+            logger.error("[agy] step gate state not written (%s); gated calls will be denied", e)
         path = os.path.join(os.path.realpath(workspace), *STEP_GATE_HOOKS_FILE.split("/"))
         existed = os.path.exists(path)
         hooks = {}

@@ -101,6 +101,7 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
             patch.object(AgyProvider, "_write_mcp_config", return_value=""),
             patch.object(AgyProvider, "_set_agy_model"),
             patch.object(AgyProvider, "_write_step_gate", return_value=True),
+            patch("providers.agy_provider.write_gate_state"),
             patch.object(AgyProvider, "_stream_instructions", return_value=""),
             patch.object(agy_session, "_global_auto_mode", side_effect=lambda: self.auto),
             patch.object(agy_session.asyncio, "create_subprocess_exec", side_effect=self.spawn),
@@ -243,6 +244,19 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(session.auto_approve)
         argv = self.spawns[1][0]
         self.assertEqual(argv[argv.index("--conversation") + 1], SESSION_ID)
+
+    async def test_mode_flip_refreshes_hook_state_of_a_live_step_process(self):
+        from providers import agy_provider
+        self.auto = False
+        session = agy_session.get_session(11)
+        await self.collect(session)
+        agy_provider.write_gate_state.reset_mock()
+        # _propagate_to_live_sessions sets the flag; the file follows the
+        # GLOBAL mode, not the value that was set.
+        self.auto = True
+        session.auto_approve = False
+        agy_provider.write_gate_state.assert_called_once_with(auto=True)
+        self.assertEqual(len(self.processes), 1)
 
     async def test_unreadable_mode_spawns_in_step_mode(self):
         from agentic import approval_mode

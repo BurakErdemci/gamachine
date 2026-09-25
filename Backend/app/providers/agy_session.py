@@ -78,15 +78,37 @@ class AgyStreamSession(SaglayiciSahipligi):
         self.cwd = os.path.abspath(cwd)
         self.session_id = resume_id if conversation_id >= 0 else None
         self.model = None
-        self.auto_approve = False
         self._spawned_auto: Optional[bool] = None
         self._active_process = None
+        self._auto_approve = False
         self._stderr_task = None
         self._stderr_tail = b""
         self._usage_totals = {}
         self._num_turns = 0
         self._stop_lock = asyncio.Lock()
         self._sahiplik_kur()
+
+    @property
+    def auto_approve(self) -> bool:
+        return self._auto_approve
+
+    @auto_approve.setter
+    def auto_approve(self, value: bool) -> None:
+        """approval_mode._propagate_to_live_sessions sets this on every flip.
+
+        The value itself is not trusted (agent_runner also sets it from the
+        request): while a process is live, the hook's state file is rewritten
+        from the global mode, so a running step hook starts allowing at once
+        after a flip to auto. A flip to step still needs the respawn in
+        _start: a process spawned in auto has no hook to tighten.
+        """
+        self._auto_approve = bool(value)
+        if self.is_live and self._spawned_auto is False:
+            try:
+                from .agy_provider import write_gate_state
+                write_gate_state(auto=_global_auto_mode())
+            except Exception:
+                logger.warning("[agy] step gate state not refreshed", exc_info=True)
 
     @property
     def is_live(self) -> bool:
