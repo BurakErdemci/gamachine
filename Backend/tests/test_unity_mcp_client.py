@@ -180,6 +180,16 @@ def test_a_failing_call_does_not_close_the_session_under_a_call_in_flight(server
     assert len(fake.sessions) == 2, "the healthy session keeps being reused"
 
 
+def test_cancellation_propagates_out_of_call_unity_tool():
+    class _Cancelled:
+        def call_tool(self, *args, **kwargs):
+            raise asyncio.CancelledError()
+
+    with mock.patch.object(umt, "_client", _Cancelled()):
+        with pytest.raises(asyncio.CancelledError):
+            umt.call_unity_tool("play_step", {})
+
+
 def test_server_restart_is_detected_by_endpoint_change():
     fake = _FakeServer()
     key = {"v": ("url-1",)}

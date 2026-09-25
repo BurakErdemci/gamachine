@@ -367,7 +367,9 @@ def call_unity_tool(tool_name: str, params: Dict[str, Any],
     try:
         return _result_to_dict(_client.call_tool(tool_name, params, timeout=timeout))
     except BaseException as exc:  # noqa: BLE001 - ExceptionGroup is a BaseException subclass too
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        # A cancelled caller must stay cancelled; reporting it as a tool failure
+        # would let the cancelled turn carry on.
+        if isinstance(exc, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)):
             raise
         message = _describe_failure(exc)
         logger.warning("[UnityMCP] %s failed: %s", tool_name, message)
