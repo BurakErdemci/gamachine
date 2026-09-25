@@ -70,6 +70,10 @@
       "description": "Search for content within Unity project files"
     },
     {
+      "name": "game_hooks",
+      "description": "Read state hooks and call action hooks the game exposes (playtest group)"
+    },
+    {
       "name": "get_sha",
       "description": "Get SHA hash of script content"
     },
@@ -96,6 +100,10 @@
     {
       "name": "manage_editor",
       "description": "Control Unity Editor state, play mode, preferences, undo/redo"
+    },
+    {
+      "name": "manage_fbx",
+      "description": "Configure FBX rigs, avatars, and animation clips"
     },
     {
       "name": "manage_gameobject",
@@ -158,12 +166,16 @@
       "description": "Work with Unity shaders"
     },
     {
+      "name": "manage_sprite",
+      "description": "Slice sprite sheets and set up 2D sprite animation"
+    },
+    {
       "name": "manage_texture",
       "description": "Create and modify textures with patterns, gradients, and noise"
     },
     {
       "name": "manage_tools",
-      "description": "Manage which tool groups are visible in this session"
+      "description": "List tool groups and which are available on this connection's URL; the tool list is fixed per URL (/mcp, /mcp/gamachine, /mcp/full)"
     },
     {
       "name": "manage_ui",
@@ -174,12 +186,28 @@
       "description": "Manage Visual Effects, particle systems, and trails"
     },
     {
+      "name": "play_capture",
+      "description": "Capture the game camera at the current paused play-session frame (playtest group)"
+    },
+    {
+      "name": "play_session",
+      "description": "Start, inspect, and stop a deterministic paused play session (playtest group)"
+    },
+    {
+      "name": "play_step",
+      "description": "Advance a paused play session by an exact number of frames with scripted input (playtest group)"
+    },
+    {
       "name": "read_console",
       "description": "Read Unity Editor console output (logs, warnings, errors)"
     },
     {
       "name": "refresh_unity",
       "description": "Refresh Unity Editor asset database"
+    },
+    {
+      "name": "run_playtest",
+      "description": "Run *.playtest.json scenario files, each in a fresh play session (playtest group)"
     },
     {
       "name": "run_tests",
@@ -191,7 +219,7 @@
     },
     {
       "name": "set_active_instance",
-      "description": "Set the active Unity Editor instance for multi-instance workflows"
+      "description": "Check a Unity instance identifier and report how to route calls to it (does not pin; pass unity_instance per call)"
     },
     {
       "name": "unity_docs",
