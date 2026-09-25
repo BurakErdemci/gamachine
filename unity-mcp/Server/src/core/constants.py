@@ -18,3 +18,12 @@ LOCAL_API_TOKEN_ENV = "UNITY_MCP_LOCAL_API_TOKEN"
 # read), the argv of the registration commands, and error logs. Clients were
 # measured to support headers before the switch -- see core/local_auth.py.
 MCP_TRANSPORT_BASE_PATH = "/mcp"
+
+# Request-level default Unity instance for the MCP transport: a client can pin
+# routing for everything it sends by putting the instance in its connection
+# URL (/mcp?instance=Name@hash) or in this header. There is no server-side
+# per-session pin: the 2026-07-28 protocol has no session to pin to, and the
+# old pin fell back to one process-global key, so one client's
+# set_active_instance re-routed every other client.
+UNITY_INSTANCE_HEADER = "X-Unity-Instance"
+UNITY_INSTANCE_QUERY_PARAM = "instance"

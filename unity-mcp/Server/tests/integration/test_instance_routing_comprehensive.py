@@ -1,18 +1,22 @@
 """
 Comprehensive test suite for Unity instance routing.
 
-These tests validate that set_active_instance correctly routes subsequent
-tool calls to the intended Unity instance across ALL tool categories.
+These tests validate that each tool call is routed to the intended Unity
+instance across ALL tool categories.
 
-DESIGN: Single source of truth via middleware state:
-- set_active_instance tool stores instance per session in UnityInstanceMiddleware
-- Middleware injects instance into ctx.set_state() for each tool call
+DESIGN: routing is decided per request by UnityInstanceMiddleware (the call's
+unity_instance argument, the connection's ?instance= / X-Unity-Instance, or
+the sole connected instance). There is no per-session pin; set_active_instance
+only resolves an identifier.
+- Middleware injects instance into request-scoped ctx.set_state() for each call
 - get_unity_instance_from_context() reads from ctx.get_state()
 - All tools (GameObject, Script, Asset, etc.) use get_unity_instance_from_context()
 """
 import pytest
 from unittest.mock import AsyncMock, Mock, MagicMock, patch
 from fastmcp import Context
+
+from types import SimpleNamespace
 
 from core.config import config
 from transport.unity_instance_middleware import UnityInstanceMiddleware
@@ -21,68 +25,17 @@ from services.tools.set_active_instance import set_active_instance as set_active
 from transport.models import SessionList, SessionDetails
 
 
-class TestInstanceRoutingBasics:
-    """Test basic middleware functionality."""
+def _identity_resolution(middleware):
+    """Accept any identifier as-is; resolution has its own tests."""
+    async def _identity(value, _ctx):
+        return value
 
-    @pytest.mark.asyncio
-    async def test_middleware_stores_and_retrieves_instance(self):
-        """Middleware should store and retrieve instance per session."""
-        middleware = UnityInstanceMiddleware()
-        ctx = Mock(spec=Context)
-        ctx.session_id = "test-session-1"
-        ctx.client_id = "test-client-1"
+    middleware._resolve_instance_value = _identity
 
-        # Set active instance
-        await middleware.set_active_instance(ctx, "TestProject@abc123")
 
-        # Retrieve should return same instance
-        assert await middleware.get_active_instance(ctx) == "TestProject@abc123"
-
-    @pytest.mark.asyncio
-    async def test_middleware_isolates_sessions(self):
-        """Different sessions should have independent instance selections."""
-        middleware = UnityInstanceMiddleware()
-
-        ctx1 = Mock(spec=Context)
-        ctx1.session_id = "session-1"
-        ctx1.client_id = "client-1"
-
-        ctx2 = Mock(spec=Context)
-        ctx2.session_id = "session-2"
-        ctx2.client_id = "client-2"
-
-        # Set different instances for different sessions
-        await middleware.set_active_instance(ctx1, "Project1@aaa")
-        await middleware.set_active_instance(ctx2, "Project2@bbb")
-
-        # Each session should retrieve its own instance
-        assert await middleware.get_active_instance(ctx1) == "Project1@aaa"
-        assert await middleware.get_active_instance(ctx2) == "Project2@bbb"
-
-    @pytest.mark.asyncio
-    async def test_middleware_fallback_to_client_id(self):
-        """When session_id unavailable, should use client_id."""
-        middleware = UnityInstanceMiddleware()
-
-        ctx = Mock(spec=Context)
-        ctx.session_id = None
-        ctx.client_id = "client-123"
-
-        await middleware.set_active_instance(ctx, "Project@xyz")
-        assert await middleware.get_active_instance(ctx) == "Project@xyz"
-
-    @pytest.mark.asyncio
-    async def test_middleware_fallback_to_global(self):
-        """When no session/client id, should use 'global' key."""
-        middleware = UnityInstanceMiddleware()
-
-        ctx = Mock(spec=Context)
-        ctx.session_id = None
-        ctx.client_id = None
-        ctx.get_state = AsyncMock(return_value=None)
-
-        await middleware.set_active_instance(ctx, "Project@global")
-        assert await middleware.get_active_instance(ctx) == "Project@global"
+def _tool_call(ctx, name, **arguments):
+    return SimpleNamespace(fastmcp_context=ctx,
+                           message=SimpleNamespace(name=name, arguments=dict(arguments)))
 
 
 @pytest.mark.usefixtures("onay_kapisi_devre_disi")
@@ -102,12 +55,8 @@ class TestInstanceRoutingIntegration:
                              v, **_: state_storage.__setitem__(k, v))
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
 
-        # Create middleware context
-        middleware_ctx = Mock()
-        middleware_ctx.fastmcp_context = ctx
-
-        # Set active instance
-        await middleware.set_active_instance(ctx, "TestProject@abc123")
+        _identity_resolution(middleware)
+        middleware_ctx = _tool_call(ctx, "manage_scene", unity_instance="TestProject@abc123")
 
         # Mock call_next
         async def mock_call_next(ctx):
@@ -195,19 +144,17 @@ class TestInstanceRoutingHTTP:
             "services.tools.set_active_instance.PluginHub.get_sessions",
             AsyncMock(return_value=fake_sessions),
         )
-        monkeypatch.setattr(
-            "services.tools.set_active_instance.get_unity_instance_middleware",
-            lambda: middleware,
-        )
 
         result = await set_active_instance_tool(ctx, "Ramble@8e29de57")
 
-        assert result["success"] is True
-        assert await middleware.get_active_instance(ctx) == "Ramble@8e29de57"
+        # Resolved, but nothing pinned -- and it says so.
+        assert result["success"] is False
+        assert result["data"] == {"instance": "Ramble@8e29de57", "pinned": False}
+        assert "?instance=Ramble@8e29de57" in result["error"]
 
     @pytest.mark.asyncio
     async def test_set_active_instance_http_hash_only(self, monkeypatch):
-        """Hash-only selection should resolve via PluginHub registry."""
+        """A hash prefix resolves to the full Name@hash via PluginHub sessions."""
         middleware = UnityInstanceMiddleware()
         ctx = Mock(spec=Context)
         ctx.session_id = "http-session-2"
@@ -231,15 +178,11 @@ class TestInstanceRoutingHTTP:
             "services.tools.set_active_instance.PluginHub.get_sessions",
             AsyncMock(return_value=fake_sessions),
         )
-        monkeypatch.setattr(
-            "services.tools.set_active_instance.get_unity_instance_middleware",
-            lambda: middleware,
-        )
 
-        result = await set_active_instance_tool(ctx, "UnityMCPTests@cc8756d4")
+        result = await set_active_instance_tool(ctx, "cc87")
 
-        assert result["success"] is True
-        assert await middleware.get_active_instance(ctx) == "UnityMCPTests@cc8756d4"
+        assert result["success"] is False
+        assert result["data"]["instance"] == "UnityMCPTests@cc8756d4"
 
     @pytest.mark.asyncio
     async def test_set_active_instance_http_hash_missing(self, monkeypatch):
@@ -253,10 +196,6 @@ class TestInstanceRoutingHTTP:
         monkeypatch.setattr(
             "services.tools.set_active_instance.PluginHub.get_sessions",
             AsyncMock(return_value=fake_sessions),
-        )
-        monkeypatch.setattr(
-            "services.tools.set_active_instance.get_unity_instance_middleware",
-            lambda: middleware,
         )
 
         result = await set_active_instance_tool(ctx, "Unknown@deadbeef")
@@ -282,10 +221,6 @@ class TestInstanceRoutingHTTP:
             "services.tools.set_active_instance.PluginHub.get_sessions",
             AsyncMock(return_value=fake_sessions),
         )
-        monkeypatch.setattr(
-            "services.tools.set_active_instance.get_unity_instance_middleware",
-            lambda: middleware,
-        )
 
         result = await set_active_instance_tool(ctx, "abc")
 
@@ -310,13 +245,10 @@ class TestInstanceRoutingRaceConditions:
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
 
         instances = ["Project1@aaa", "Project2@bbb", "Project3@ccc"]
+        _identity_resolution(middleware)
 
         for instance in instances:
-            await middleware.set_active_instance(ctx, instance)
-
-            # Create middleware context
-            middleware_ctx = Mock()
-            middleware_ctx.fastmcp_context = ctx
+            middleware_ctx = _tool_call(ctx, "manage_scene", unity_instance=instance)
 
             async def mock_call_next(ctx):
                 return {"success": True}
@@ -329,8 +261,8 @@ class TestInstanceRoutingRaceConditions:
 
     @pytest.mark.asyncio
     async def test_set_then_immediate_create_script(self):
-        """Setting instance then immediately creating script should route correctly."""
-        # This reproduces the bug: set_active_instance → create_script went to wrong instance
+        """A create_script call carrying unity_instance must route to it."""
+        # Originally reproduced: set_active_instance -> create_script went to the wrong instance.
 
         middleware = UnityInstanceMiddleware()
         ctx = Mock(spec=Context)
@@ -343,12 +275,8 @@ class TestInstanceRoutingRaceConditions:
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
         ctx.request_context = None
 
-        # Set active instance
-        await middleware.set_active_instance(ctx, "ramble@8e29de57")
-
-        # Simulate middleware intercepting create_script call
-        middleware_ctx = Mock()
-        middleware_ctx.fastmcp_context = ctx
+        _identity_resolution(middleware)
+        middleware_ctx = _tool_call(ctx, "create_script", unity_instance="ramble@8e29de57")
 
         async def mock_create_script_call(ctx):
             # This simulates what create_script does
@@ -361,7 +289,7 @@ class TestInstanceRoutingRaceConditions:
         # Verify create_script would route to correct instance
         result = await mock_create_script_call(ctx)
         assert result["routed_to"] == "ramble@8e29de57", \
-            "create_script must route to the instance set by set_active_instance"
+            "create_script must route to the instance named on the call"
 
 
 @pytest.mark.usefixtures("onay_kapisi_devre_disi")
@@ -371,11 +299,9 @@ class TestInstanceRoutingSequentialOperations:
     @pytest.mark.asyncio
     async def test_four_script_creation_sequence(self):
         """
-        Reproduce the exact failure:
-        1. set_active(ramble) → create_script1 → should go to ramble
-        2. set_active(UnityMCPTests) → create_script2 → should go to UnityMCPTests
-        3. set_active(ramble) → create_script3 → should go to ramble
-        4. set_active(UnityMCPTests) → create_script4 → should go to UnityMCPTests
+        Reproduce the original failure shape with per-call routing:
+        create_script1..4 alternate between ramble and UnityMCPTests and each
+        must land on the instance named on that call.
 
         ACTUAL BEHAVIOR:
         - Script1 went to UnityMCPTests (WRONG)
@@ -388,10 +314,10 @@ class TestInstanceRoutingSequentialOperations:
         # Track which instance each script was created in
         script_routes = {}
 
+        _identity_resolution(middleware)
+
         async def simulate_create_script(ctx, script_name, expected_instance):
-            # Inject state via middleware
-            middleware_ctx = Mock()
-            middleware_ctx.fastmcp_context = ctx
+            middleware_ctx = _tool_call(ctx, "create_script", unity_instance=expected_instance)
 
             async def mock_tool_call(middleware_ctx):
                 # The middleware passes the middleware_ctx, we need the fastmcp_context
@@ -414,16 +340,12 @@ class TestInstanceRoutingSequentialOperations:
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
 
         # Execute sequence
-        await middleware.set_active_instance(ctx, "ramble@8e29de57")
         expected1 = await simulate_create_script(ctx, "Script1", "ramble@8e29de57")
 
-        await middleware.set_active_instance(ctx, "UnityMCPTests@cc8756d4")
         expected2 = await simulate_create_script(ctx, "Script2", "UnityMCPTests@cc8756d4")
 
-        await middleware.set_active_instance(ctx, "ramble@8e29de57")
         expected3 = await simulate_create_script(ctx, "Script3", "ramble@8e29de57")
 
-        await middleware.set_active_instance(ctx, "UnityMCPTests@cc8756d4")
         expected4 = await simulate_create_script(ctx, "Script4", "UnityMCPTests@cc8756d4")
 
         # Assertions - these will FAIL until the bug is fixed
@@ -446,7 +368,7 @@ Prerequisites:
 - MCP server connected to both instances
 
 Test Categories:
-1. ✅ Middleware State Management (4 tests)
+1. (removed with the per-session pin)
 2. ✅ Middleware Integration (2 tests)
 3. ✅ get_unity_instance_from_context (2 tests)
 4. ✅ Tool Category Coverage (11 categories)
@@ -457,8 +379,8 @@ Total: 21 tests
 
 DESIGN:
 Single source of truth via middleware state:
-- set_active_instance stores instance per session in UnityInstanceMiddleware
-- Middleware injects instance into ctx.set_state() for each tool call
+- Routing is resolved per request (argument, connection default, sole instance)
+- Middleware injects instance into request-scoped ctx.set_state() for each tool call
 - get_unity_instance_from_context() reads from ctx.get_state()
 - All tools use get_unity_instance_from_context()
 

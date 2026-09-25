@@ -54,13 +54,16 @@ async def test_auto_selects_single_instance_via_pluginhub(monkeypatch):
     selected = await middleware._maybe_autoselect_instance(ctx)
 
     assert selected == "Ramble@deadbeef"
-    assert await middleware.get_active_instance(ctx) == "Ramble@deadbeef"
     assert call_count["sessions"] == 1
+    # Nothing was remembered: the auto-selection is not a pin.
+    assert await ctx.get_state("unity_instance") is None
 
     await middleware._inject_unity_instance(middleware_context)
 
     assert await ctx.get_state("unity_instance") == "Ramble@deadbeef"
-    assert call_count["sessions"] == 1
+    # Re-evaluated per request, so a second instance connecting later stops
+    # implicit routing instead of silently sticking to the first one.
+    assert call_count["sessions"] == 2
 
 
 @pytest.mark.asyncio
@@ -98,7 +101,7 @@ async def test_auto_selects_single_instance_via_stdio(monkeypatch):
     selected = await middleware._maybe_autoselect_instance(ctx)
 
     assert selected == "UnityMCPTests@cc8756d4"
-    assert await middleware.get_active_instance(ctx) == "UnityMCPTests@cc8756d4"
+    assert await ctx.get_state("unity_instance") is None
 
     await middleware._inject_unity_instance(middleware_context)
 
@@ -136,4 +139,4 @@ async def test_auto_select_handles_stdio_errors(monkeypatch):
     selected = await middleware._maybe_autoselect_instance(ctx)
 
     assert selected is None
-    assert await middleware.get_active_instance(ctx) is None
+    assert await ctx.get_state("unity_instance") is None

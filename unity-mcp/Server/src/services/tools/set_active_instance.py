@@ -6,7 +6,6 @@ from mcp.types import ToolAnnotations
 
 from services.registry import mcp_for_unity_tool
 from transport.legacy.unity_connection import get_unity_connection_pool
-from transport.unity_instance_middleware import get_unity_instance_middleware
 from transport.plugin_hub import PluginHub
 from core.config import config
 
@@ -14,7 +13,13 @@ from core.config import config
 @mcp_for_unity_tool(
     unity_target=None,
     group=None,
-    description="Set the active Unity instance for this client/session. Accepts Name@hash, hash prefix, project name, or port number (stdio only).",
+    description=(
+        "Deprecated: does NOT pin routing any more. Checks a Unity instance identifier "
+        "(Name@hash, hash prefix, project name, or port number in stdio mode) and returns "
+        "the exact Name@hash plus how to route calls to it: pass unity_instance on each "
+        "tool call, or connect with ?instance=<Name@hash> on the MCP URL. With one "
+        "instance connected, calls reach it without any selection."
+    ),
     annotations=ToolAnnotations(
         title="Set Active Instance",
     ),
@@ -46,17 +51,7 @@ async def set_active_instance(
                 "success": False,
                 "error": f"No Unity instance found on port {value}. Available: {available}."
             }
-        resolved_id = match.id
-        middleware = get_unity_instance_middleware()
-        await middleware.set_active_instance(ctx, resolved_id)
-        return {
-            "success": True,
-            "message": f"Active instance set to {resolved_id}",
-            "data": {
-                "instance": resolved_id,
-                "session_key": await middleware.get_session_key(ctx),
-            },
-        }
+        return _not_pinned(match.id)
 
     # Discover running instances based on transport
     if transport == "http":
@@ -143,18 +138,25 @@ async def set_active_instance(
             "error": "Internal error: Instance resolution failed."
         }
 
-    # Store selection in middleware (session-scoped)
-    middleware = get_unity_instance_middleware()
-    # We use middleware.set_active_instance to persist the selection.
-    # The session key is an internal detail but useful for debugging response.
-    await middleware.set_active_instance(ctx, resolved.id)
-    session_key = await middleware.get_session_key(ctx)
+    return _not_pinned(resolved.id)
 
+
+def _not_pinned(instance_id: str) -> dict[str, Any]:
+    """success=False on purpose: the call's name promises a pin that no longer happens.
+
+    It used to store the selection under the caller's client_id, and without
+    one under the constant key "global" -- so in local mode one client's call
+    re-routed every other client connected to the server. The 2026-07-28
+    protocol has no session to store it under at all.
+    """
     return {
-        "success": True,
-        "message": f"Active instance set to {resolved.id}",
-        "data": {
-            "instance": resolved.id,
-            "session_key": session_key,
-        },
+        "success": False,
+        "error": (
+            f"set_active_instance does not pin routing any more; nothing was changed. "
+            f"'{instance_id}' is a valid instance. Route calls to it by passing "
+            f"unity_instance='{instance_id}' on each tool call, or connect with "
+            f"?instance={instance_id} on the MCP URL (or an X-Unity-Instance header). "
+            "With only one instance connected, calls reach it automatically."
+        ),
+        "data": {"instance": instance_id, "pinned": False},
     }

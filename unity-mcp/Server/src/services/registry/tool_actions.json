@@ -847,7 +847,7 @@
       "write_actions": [],
       "param_dependent": [],
       "evidence": "unity-mcp/Server/src/services/tools/set_active_instance.py:14",
-      "note": "unity_target=None -- the Unity project is never touched; it only discovers instances and stores the selection in server-side session state. Blast-radius caveat, deliberately not treated as a write: changing routing redirects every SUBSEQUENT write to a different Editor. Those writes are still classified and gated on their own calls, so the gate is not bypassed -- but the approval card for them will name a different Editor than the user may expect."
+      "note": "unity_target=None -- the Unity project is never touched; it only discovers instances and resolves the identifier. It no longer stores a selection (routing is per call: unity_instance argument, ?instance= / X-Unity-Instance on the connection, or the sole instance), so it cannot redirect later writes; it always answers success=false with the resolved Name@hash and how to route to it."
     },
     "unity_docs": {
       "action_param": "action",

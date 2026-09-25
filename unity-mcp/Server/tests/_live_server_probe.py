@@ -35,6 +35,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import httpx
@@ -163,6 +164,122 @@ def old_era_calls(base: str) -> dict:
     return out
 
 
+class FakeEditors:
+    """Two fake Unity Editors on /hub/plugin, answering commands with canned data.
+
+    Runs its own event loop on a thread so the probe itself can stay synchronous.
+    Records which editor received each command, which is how routing is observed.
+    """
+
+    EDITORS = (("ProbeA", "aaaa1111"), ("ProbeB", "bbbb2222"))
+    TOOLS = ["read_console", "manage_scene", "manage_gameobject", "manage_editor",
+             "play_step", "play_session", "play_capture", "game_hooks", "run_playtest"]
+
+    def __init__(self, port: int):
+        self.url = f"ws://127.0.0.1:{port}/hub/plugin"
+        self.received: list[tuple[str, str]] = []
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def close(self) -> None:
+        self.stop.set()
+        self.thread.join(timeout=10)
+
+    def commands(self) -> list[tuple[str, str]]:
+        with self.lock:
+            return list(self.received)
+
+    def _run(self) -> None:
+        import asyncio
+        asyncio.run(self._main())
+
+    async def _main(self) -> None:
+        import asyncio
+        await asyncio.gather(*(self._editor(name, h) for name, h in self.EDITORS))
+
+    async def _editor(self, project: str, project_hash: str) -> None:
+        import asyncio
+        from websockets.asyncio.client import connect
+
+        async with connect(self.url, additional_headers={"X-API-Key": SECRET}) as ws:
+            await ws.recv()  # welcome
+            await ws.send(json.dumps({"type": "register", "project_name": project,
+                                      "project_hash": project_hash,
+                                      "unity_version": "6000.0.0f1"}))
+            registered = json.loads(await ws.recv())
+            session_id = registered.get("session_id")
+            await ws.send(json.dumps({"type": "register_tools", "tools": [
+                {"name": n, "description": f"fake {n}"} for n in self.TOOLS]}))
+            while not self.stop.is_set():
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                msg = json.loads(raw)
+                if msg.get("type") == "ping":
+                    await ws.send(json.dumps({"type": "pong", "session_id": session_id}))
+                elif msg.get("type") == "execute":
+                    if msg.get("name") == "ping":
+                        # PluginHub's readiness check before fast-fail commands.
+                        result = {"status": "success", "result": {"message": "pong"}}
+                    else:
+                        with self.lock:
+                            self.received.append((project, msg.get("name")))
+                        result = {"success": True, "message": f"{project} answered",
+                                  "data": []}
+                    await ws.send(json.dumps({"type": "command_result", "id": msg["id"],
+                                              "result": result}))
+
+
+def wait_for_editors(base: str, count: int) -> bool:
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        try:
+            body = httpx.get(base + "/api/instances", headers={"X-API-Key": SECRET},
+                             timeout=2.0).json()
+            if len(body.get("instances") or []) >= count:
+                return True
+        except (httpx.HTTPError, ValueError):
+            pass
+        time.sleep(0.25)
+    return False
+
+
+def routing_scenario(base: str, editors: FakeEditors) -> dict:
+    """Which editor each call reaches, per routing input. See test_live_server_startup."""
+    out: dict = {}
+
+    def routed(label: str, path: str, arguments: dict, headers: dict | None = None,
+               tool: str = "read_console") -> None:
+        before = len(editors.commands())
+        with OldEraSession(base, path, SECRET) as session:
+            session.headers.update(headers or {})
+            call = session.call_tool(tool, arguments)
+        time.sleep(0.2)
+        call["reached"] = [p for p, _ in editors.commands()[before:]]
+        out[label] = call
+
+    routed("query_param", "/mcp?instance=aaaa1111", {"action": "get", "count": 1})
+    routed("header", "/mcp", {"action": "get", "count": 1},
+           headers={"X-Unity-Instance": "ProbeB@bbbb2222"})
+    routed("argument", "/mcp", {"action": "get", "count": 1, "unity_instance": "aaaa"})
+    routed("argument_beats_query", "/mcp?instance=aaaa1111",
+           {"action": "get", "count": 1, "unity_instance": "ProbeB@bbbb2222"})
+    routed("profile_path_keeps_query", "/mcp/gamachine?instance=bbbb2222",
+           {"action": "get", "count": 1})
+    routed("set_active_instance", "/mcp", {"instance": "ProbeA@aaaa1111"},
+           tool="set_active_instance")
+    # A different client, after someone else "set" an instance: two editors are
+    # connected and this call names none, so it must be refused, not routed.
+    routed("unrouted_other_client", "/mcp", {"action": "get", "count": 1})
+    routed("unknown_default", "/mcp?instance=ffff0000", {"action": "get", "count": 1})
+    return out
+
+
 def start_server(port: int, workdir: pathlib.Path, log) -> subprocess.Popen:
     src = pathlib.Path(__file__).resolve().parent.parent / "src"
     env = dict(os.environ)
@@ -222,6 +339,17 @@ def run(paths: list[str]) -> dict:
             report["old_era"] = {p: old_era_list_tools(base, p, SECRET) for p in paths}
             report["old_era_no_key"] = {p: old_era_list_tools(base, p, None) for p in paths}
             report["old_era_calls"] = old_era_calls(base)
+            editors = FakeEditors(port)
+            editors.start()
+            try:
+                report["editors_connected"] = wait_for_editors(base, 2)
+                if report["editors_connected"]:
+                    report["with_editors"] = {
+                        p: old_era_list_tools(base, p, SECRET)
+                        for p in ("/mcp", "/mcp/gamachine", "/mcp/full")}
+                    report["routing"] = routing_scenario(base, editors)
+            finally:
+                editors.close()
             report["still_running"] = proc.poll() is None
         finally:
             proc.terminate()

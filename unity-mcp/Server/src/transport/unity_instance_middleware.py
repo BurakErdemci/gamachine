@@ -1,9 +1,18 @@
 """
-Middleware for managing Unity instance selection per session.
+Middleware that routes each MCP request to a Unity instance.
 
-This middleware intercepts all tool calls and injects the active Unity instance
-into request-scoped state (set_state(..., serializable=False)), allowing tools to
-access it via ctx.get_state("unity_instance") for the rest of that request only.
+Routing is decided per request, in this order:
+  1. the `unity_instance` argument of the tool call (popped before validation)
+  2. the connection's default: ?instance=... on the MCP URL, or the
+     X-Unity-Instance header
+  3. the sole connected instance, when exactly one is connected (local mode)
+The result goes into request-scoped state (set_state(..., serializable=False)),
+which tools read via ctx.get_state("unity_instance") for that request only.
+
+There is deliberately no server-side "active instance" per session. It used to
+exist, keyed by client_id and otherwise by the constant "global", so in local
+mode one client's set_active_instance re-routed every other client, and on the
+2026-07-28 protocol there is no session to key it by at all.
 """
 from threading import RLock
 import logging
@@ -12,6 +21,7 @@ import time
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 from core.config import config
+from core.constants import UNITY_INSTANCE_HEADER, UNITY_INSTANCE_QUERY_PARAM
 from services.registry import get_registered_tools
 from transport.plugin_hub import PluginHub
 
@@ -58,8 +68,6 @@ class UnityInstanceMiddleware(Middleware):
 
     def __init__(self):
         super().__init__()
-        self._active_by_key: dict[str, str] = {}
-        self._lock = RLock()
         self._metadata_lock = RLock()
         self._unity_managed_tool_names: set[str] = set()
         self._tool_alias_to_unity_target: dict[str, str] = {}
@@ -69,43 +77,20 @@ class UnityInstanceMiddleware(Middleware):
         self._tool_visibility_refresh_interval_seconds = 0.5
         self._has_logged_empty_registry_warning = False
 
-    async def get_session_key(self, ctx) -> str:
-        """
-        Derive a stable key for the calling session.
-
-        Prioritizes client_id for stability.
-        In remote-hosted mode, falls back to user_id for session isolation.
-        Otherwise falls back to 'global' (assuming single-user local mode).
-        """
-        client_id = getattr(ctx, "client_id", None)
-        if isinstance(client_id, str) and client_id:
-            return client_id
-
-        # In remote-hosted mode, use user_id so different users get isolated instance selections
-        user_id = await ctx.get_state("user_id")
-        if isinstance(user_id, str) and user_id:
-            return f"user:{user_id}"
-
-        # Fallback to global for local dev stability
-        return "global"
-
-    async def set_active_instance(self, ctx, instance_id: str) -> None:
-        """Store the active instance for this session."""
-        key = await self.get_session_key(ctx)
-        with self._lock:
-            self._active_by_key[key] = instance_id
-
-    async def get_active_instance(self, ctx) -> str | None:
-        """Retrieve the active instance for this session."""
-        key = await self.get_session_key(ctx)
-        with self._lock:
-            return self._active_by_key.get(key)
-
-    async def clear_active_instance(self, ctx) -> None:
-        """Clear the stored instance for this session."""
-        key = await self.get_session_key(ctx)
-        with self._lock:
-            self._active_by_key.pop(key, None)
+    @staticmethod
+    def _request_default_instance() -> str | None:
+        """The instance this connection asked for in its URL or headers."""
+        try:
+            from fastmcp.server.dependencies import get_http_request
+            request = get_http_request()
+        except Exception:
+            # stdio or outside an HTTP request.
+            return None
+        value = request.query_params.get(UNITY_INSTANCE_QUERY_PARAM)
+        if not value:
+            value = request.headers.get(UNITY_INSTANCE_HEADER)
+        value = (value or "").strip()
+        return value or None
 
     async def _discover_instances(self, ctx) -> list:
         """
@@ -227,11 +212,11 @@ class UnityInstanceMiddleware(Middleware):
 
     async def _maybe_autoselect_instance(self, ctx) -> str | None:
         """
-        Auto-select the sole Unity instance when no active instance is set.
+        The sole connected Unity instance, or None.
 
-        Note: This method both *discovers* and *persists* the selection via
-        `set_active_instance` as a side-effect, since callers expect the selection
-        to stick for subsequent tool/resource calls in the same session.
+        Evaluated on every request and never remembered: when a second
+        instance connects, requests stop being routed implicitly instead of
+        silently sticking to whichever one happened to be first.
         """
         try:
             transport = (config.transport_mode or "stdio").lower()
@@ -250,17 +235,12 @@ class UnityInstanceMiddleware(Middleware):
                         if hash_value:
                             ids.append(f"{project}@{hash_value}")
                     if len(ids) == 1:
-                        chosen = ids[0]
-                        await self.set_active_instance(ctx, chosen)
-                        logger.info(
-                            "Auto-selected sole Unity instance via PluginHub: %s",
-                            chosen,
-                        )
-                        return chosen
+                        logger.debug("Routing to sole Unity instance via PluginHub: %s", ids[0])
+                        return ids[0]
                     if len(ids) > 1:
                         logger.info(
-                            "Multiple Unity instances found (%d). Pass unity_instance on any tool call "
-                            "or call set_active_instance to choose one. Available: %s",
+                            "Multiple Unity instances found (%d). Pass unity_instance on the tool "
+                            "call or connect with ?instance=<Name@hash>. Available: %s",
                             len(ids), ", ".join(ids),
                         )
                 except (ConnectionError, ValueError, KeyError, TimeoutError, AttributeError) as exc:
@@ -288,17 +268,12 @@ class UnityInstanceMiddleware(Middleware):
                     ids = [getattr(inst, "id", None) for inst in instances]
                     ids = [inst_id for inst_id in ids if inst_id]
                     if len(ids) == 1:
-                        chosen = ids[0]
-                        await self.set_active_instance(ctx, chosen)
-                        logger.info(
-                            "Auto-selected sole Unity instance via stdio discovery: %s",
-                            chosen,
-                        )
-                        return chosen
+                        logger.debug("Routing to sole Unity instance via stdio discovery: %s", ids[0])
+                        return ids[0]
                     if len(ids) > 1:
                         logger.info(
-                            "Multiple Unity instances found (%d). Pass unity_instance on any tool call "
-                            "or call set_active_instance to choose one. Available: %s",
+                            "Multiple Unity instances found (%d). Pass unity_instance on the tool "
+                            "call. Available: %s",
                             len(ids), ", ".join(ids),
                         )
                 except (ConnectionError, ValueError, KeyError, TimeoutError, AttributeError) as exc:
@@ -368,7 +343,10 @@ class UnityInstanceMiddleware(Middleware):
                     logger.debug("Per-call unity_instance resolved to: %s", active_instance)
 
         if not active_instance:
-            active_instance = await self.get_active_instance(ctx)
+            default = self._request_default_instance()
+            if default:
+                # Same resolution and errors as the per-call argument.
+                active_instance = await self._resolve_instance_value(default, ctx)
         if not active_instance:
             active_instance = await self._maybe_autoselect_instance(ctx)
         if active_instance:

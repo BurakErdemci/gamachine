@@ -4,21 +4,11 @@ from .test_helpers import DummyContext
 
 
 @pytest.mark.asyncio
-async def test_manage_gameobject_uses_session_state(monkeypatch):
-    """Test that tools use session-stored active instance via middleware"""
-
-    from transport.unity_instance_middleware import UnityInstanceMiddleware, set_unity_instance_middleware
-
-    # Arrange: Initialize middleware and set a session-scoped active instance
-    middleware = UnityInstanceMiddleware()
-    set_unity_instance_middleware(middleware)
-
+async def test_manage_gameobject_uses_request_state(monkeypatch):
+    """Tools route to the instance the middleware put in request state."""
     ctx = DummyContext()
-    await middleware.set_active_instance(ctx, "SessionProj@AAAA1111")
-    assert await middleware.get_active_instance(ctx) == "SessionProj@AAAA1111"
-
-    # Simulate middleware injection into request state
-    await ctx.set_state("unity_instance", "SessionProj@AAAA1111")
+    # What UnityInstanceMiddleware injects for this request
+    await ctx.set_state("unity_instance", "SessionProj@AAAA1111", serializable=False)
 
     captured = {}
 
@@ -35,7 +25,7 @@ async def test_manage_gameobject_uses_session_state(monkeypatch):
         fake_send,
     )
 
-    # Act: call tool - should use session state from context
+    # Act: call tool - should use the request state from context
     res = await mg.manage_gameobject(
         ctx,
         action="create",
@@ -43,7 +33,7 @@ async def test_manage_gameobject_uses_session_state(monkeypatch):
         primitive_type="Sphere",
     )
 
-    # Assert: uses session-stored instance
+    # Assert: uses the routed instance
     assert res.get("success") is True
     assert captured.get("command_type") == "manage_gameobject"
     assert captured.get("instance_id") == "SessionProj@AAAA1111"
@@ -53,15 +43,8 @@ async def test_manage_gameobject_uses_session_state(monkeypatch):
 async def test_manage_gameobject_without_active_instance(monkeypatch):
     """Test that tools work with no active instance set (uses None/default)"""
 
-    from transport.unity_instance_middleware import UnityInstanceMiddleware, set_unity_instance_middleware
-
-    # Arrange: Initialize middleware with no active instance set
-    middleware = UnityInstanceMiddleware()
-    set_unity_instance_middleware(middleware)
-
     ctx = DummyContext()
-    assert await middleware.get_active_instance(ctx) is None
-    # Don't set any state in context
+    # Don't set any state in context: nothing was routed for this request
 
     captured = {}
 

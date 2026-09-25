@@ -13,6 +13,7 @@ The tests serve as regression detectors for any future changes to the transport 
 """
 
 import asyncio
+import sys
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, Mock, MagicMock, patch, call
@@ -102,110 +103,86 @@ async def configured_plugin_hub(plugin_registry):
 # SESSION MANAGEMENT & ROUTING TESTS
 # ============================================================================
 
-class TestUnityInstanceMiddlewareSessionManagement:
-    """Test instance routing and per-session state management."""
+def _route_via_connection_default(middleware, instance_id):
+    """Make `instance_id` this connection's default (?instance= / X-Unity-Instance)."""
+    middleware._request_default_instance = lambda: instance_id
+
+    async def _identity(value, _ctx):
+        return value
+
+    middleware._resolve_instance_value = _identity
+
+
+class TestPerRequestRouting:
+    """Routing is decided per request; nothing is pinned per session.
+
+    The old per-session store fell back to the key "global" whenever a client
+    sent no client_id -- every local client -- so one client's
+    set_active_instance re-routed all the others.
+    """
+
+    def test_middleware_has_no_session_pin_to_share(self):
+        middleware = UnityInstanceMiddleware()
+        for gone in ("set_active_instance", "get_active_instance",
+                     "clear_active_instance", "get_session_key", "_active_by_key"):
+            assert not hasattr(middleware, gone), gone
+
+    @staticmethod
+    def _fake_dependencies(monkeypatch, get_http_request):
+        # A module in sys.modules works whether fastmcp is real or the
+        # session-wide stub from tests/integration/conftest.py.
+        import types
+        deps = types.ModuleType("fastmcp.server.dependencies")
+        deps.get_http_request = get_http_request
+        monkeypatch.setitem(sys.modules, "fastmcp.server.dependencies", deps)
+
+    def test_connection_default_reads_query_then_header(self, monkeypatch):
+        request = SimpleNamespace(query_params={"instance": " Q@1 "},
+                                  headers={"X-Unity-Instance": "H@2"})
+        self._fake_dependencies(monkeypatch, lambda: request)
+        assert UnityInstanceMiddleware._request_default_instance() == "Q@1"
+        request.query_params = {}
+        assert UnityInstanceMiddleware._request_default_instance() == "H@2"
+        request.headers = {}
+        assert UnityInstanceMiddleware._request_default_instance() is None
+
+    def test_connection_default_is_none_outside_http(self, monkeypatch):
+        def no_request():
+            raise RuntimeError("No active HTTP request found.")
+
+        self._fake_dependencies(monkeypatch, no_request)
+        assert UnityInstanceMiddleware._request_default_instance() is None
 
     @pytest.mark.asyncio
-    async def test_middleware_stores_instance_per_session(self, mock_context):
-        """
-        Current behavior: Middleware maintains independent instance selection
-        per session using get_session_key() derivation.
-        """
-        middleware = UnityInstanceMiddleware()
-        instance_id = "TestProject@abc123def456"
-
-        await middleware.set_active_instance(mock_context, instance_id)
-        retrieved = await middleware.get_active_instance(mock_context)
-
-        assert retrieved == instance_id, \
-            "Middleware must store and retrieve instance per session"
-
-    @pytest.mark.asyncio
-    async def test_middleware_uses_client_id_over_session_id(self):
-        """
-        Current behavior: get_session_key() prioritizes client_id for stability,
-        falling back to 'global' when unavailable.
-        """
+    async def test_two_clients_route_independently(self, onay_kapisi_devre_disi):
+        """Client 1 on ?instance=P1, client 2 on ?instance=P2, client 3 with
+        neither and two instances connected: 3 must get NO instance, not
+        whichever one another client picked."""
         middleware = UnityInstanceMiddleware()
 
-        ctx = Mock()
-        ctx.client_id = "stable-client-id"
-        ctx.session_id = "unstable-session-id"
+        async def no_autoselect(_ctx):
+            return None
 
-        key = await middleware.get_session_key(ctx)
-        assert key == "stable-client-id"
+        middleware._maybe_autoselect_instance = no_autoselect
 
-    @pytest.mark.asyncio
-    async def test_middleware_falls_back_to_global_key(self):
-        """
-        Current behavior: When client_id is None/missing, use 'global' key.
-        This allows single-user local mode to work without session tracking.
-        """
-        middleware = UnityInstanceMiddleware()
+        async def call(instance):
+            state = {}
+            ctx = Mock()
+            ctx.set_state = AsyncMock(side_effect=lambda k, v, **_: state.__setitem__(k, v))
+            ctx.get_state = AsyncMock(side_effect=lambda k: state.get(k))
+            if instance:
+                _route_via_connection_default(middleware, instance)
+            else:
+                middleware._request_default_instance = lambda: None
+            mw_ctx = SimpleNamespace(fastmcp_context=ctx,
+                                     message=SimpleNamespace(name="manage_scene", arguments={}))
+            await middleware.on_call_tool(mw_ctx, AsyncMock(return_value="ok"))
+            return state.get("unity_instance")
 
-        ctx = Mock()
-        ctx.client_id = None
-        ctx.session_id = "session-id"
-        ctx.get_state = AsyncMock(return_value=None)
-
-        key = await middleware.get_session_key(ctx)
-        assert key == "global"
-
-    @pytest.mark.asyncio
-    async def test_middleware_isolates_multiple_sessions(self):
-        """
-        Current behavior: Different sessions (different client_ids) maintain
-        separate instance selections.
-        """
-        middleware = UnityInstanceMiddleware()
-
-        ctx1 = Mock()
-        ctx1.client_id = "client-1"
-        ctx1.session_id = "session-1"
-
-        ctx2 = Mock()
-        ctx2.client_id = "client-2"
-        ctx2.session_id = "session-2"
-
-        await middleware.set_active_instance(ctx1, "Project1@hash1")
-        await middleware.set_active_instance(ctx2, "Project2@hash2")
-
-        assert await middleware.get_active_instance(ctx1) == "Project1@hash1"
-        assert await middleware.get_active_instance(ctx2) == "Project2@hash2"
-
-    @pytest.mark.asyncio
-    async def test_middleware_clear_instance(self, mock_context):
-        """
-        Current behavior: clear_active_instance() removes stored instance
-        for the session, allowing reset to None.
-        """
-        middleware = UnityInstanceMiddleware()
-        instance_id = "TestProject@xyz"
-
-        await middleware.set_active_instance(mock_context, instance_id)
-        assert await middleware.get_active_instance(mock_context) == instance_id
-
-        await middleware.clear_active_instance(mock_context)
-        assert await middleware.get_active_instance(mock_context) is None
-
-    @pytest.mark.asyncio
-    async def test_middleware_thread_safe_updates(self):
-        """
-        Current behavior: Middleware uses RLock to serialize access to
-        _active_by_key dictionary.
-        """
-        middleware = UnityInstanceMiddleware()
-        ctx = Mock()
-        ctx.client_id = "client-123"
-        ctx.session_id = "session-123"
-
-        # Rapidly update instances (would race without locking)
-        for i in range(10):
-            instance = f"Project{i}@hash{i}"
-            await middleware.set_active_instance(ctx, instance)
-
-        # Final state should be consistent
-        assert await middleware.get_active_instance(ctx) == "Project9@hash9"
+        assert await call("Project1@hash1") == "Project1@hash1"
+        assert await call("Project2@hash2") == "Project2@hash2"
+        assert await call(None) is None
+        assert await call("Project1@hash1") == "Project1@hash1"
 
 
 # ============================================================================
@@ -226,7 +203,7 @@ class TestUnityInstanceMiddlewareInjection:
         middleware = UnityInstanceMiddleware()
         instance_id = "Project@abc123"
 
-        await middleware.set_active_instance(mock_context, instance_id)
+        _route_via_connection_default(middleware, instance_id)
 
         # Create middleware context wrapper
         middleware_ctx = Mock()
@@ -252,7 +229,7 @@ class TestUnityInstanceMiddlewareInjection:
         middleware = UnityInstanceMiddleware()
         instance_id = "Project@hash123"
 
-        await middleware.set_active_instance(mock_context, instance_id)
+        _route_via_connection_default(middleware, instance_id)
 
         middleware_ctx = Mock()
         middleware_ctx.fastmcp_context = mock_context
@@ -724,8 +701,8 @@ class TestAutoSelectInstance:
     @pytest.mark.asyncio
     async def test_autoselect_via_plugin_hub_single_instance(self, mock_context):
         """
-        Current behavior: When single instance is available via PluginHub,
-        auto-select it and store in middleware state.
+        When a single instance is available via PluginHub, route to it --
+        for this request only; nothing is remembered for the next one.
         """
         middleware = UnityInstanceMiddleware()
 
@@ -748,7 +725,7 @@ class TestAutoSelectInstance:
                 instance = await middleware._maybe_autoselect_instance(mock_context)
 
         assert instance == "TestProject@abc123"
-        assert await middleware.get_active_instance(mock_context) == "TestProject@abc123"
+        mock_context.set_state.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_autoselect_fails_with_multiple_instances(self, mock_context):
@@ -1460,22 +1437,6 @@ class TestTransportEdgeCases:
 
         assert instance is None
 
-    @pytest.mark.asyncio
-    async def test_middleware_handles_client_id_false_but_not_none(self):
-        """
-        Current behavior: get_session_key checks isinstance(client_id, str) AND len,
-        so falsy non-string values fall through to 'global'.
-        """
-        middleware = UnityInstanceMiddleware()
-
-        ctx = Mock()
-        ctx.client_id = ""  # Empty string
-        ctx.session_id = "session-id"
-        ctx.get_state = AsyncMock(return_value=None)
-
-        key = await middleware.get_session_key(ctx)
-        assert key == "global"  # Empty string doesn't pass isinstance+truthy check
-
     def test_plugin_hub_encoding_is_json(self):
         """
         Current behavior: PluginHub WebSocketEndpoint uses JSON encoding.
@@ -1500,65 +1461,29 @@ class TestTransportIntegration:
     """Test realistic integration scenarios."""
 
     @pytest.mark.asyncio
-    async def test_middleware_and_registry_interaction(self, mock_context, plugin_registry):
-        """
-        Current behavior: Middleware stores instance selection, which
-        can be used to route commands via registry lookup.
-        """
-        middleware = UnityInstanceMiddleware()
-
-        # Register a session in the registry
-        await plugin_registry.register(
-            session_id="sess-interact",
-            project_name="Project",
-            project_hash="hash-interact",
-            unity_version="2022.3"
-        )
-
-        # Middleware stores the instance
-        await middleware.set_active_instance(mock_context, "Project@hash-interact")
-
-        # Application can use middleware to route
-        instance = await middleware.get_active_instance(mock_context)
-        assert instance == "Project@hash-interact"
-
-        # And registry to find session
-        resolved_id = await plugin_registry.get_session_id_by_hash("hash-interact")
-        assert resolved_id == "sess-interact"
-
-    @pytest.mark.asyncio
-    async def test_registry_and_middleware_complete_flow(self, mock_context, plugin_registry):
-        """
-        Current behavior: Integrated flow - register session in registry,
-        select it in middleware, then route by hash lookup.
-        """
-        # Setup
-        middleware = UnityInstanceMiddleware()
-
-        # 1. Plugin connects and registers in registry
+    async def test_connection_default_routes_through_registry_lookup(
+            self, mock_context, plugin_registry, onay_kapisi_devre_disi):
+        """Register a session, route a call to it via the connection default,
+        then resolve the injected instance back to the session by hash."""
         await plugin_registry.register(
             session_id="sess-complete",
             project_name="CompleteProject",
             project_hash="hash-complete",
             unity_version="2022.3"
         )
+        middleware = UnityInstanceMiddleware()
+        _route_via_connection_default(middleware, "CompleteProject@hash-complete")
+        mw_ctx = SimpleNamespace(fastmcp_context=mock_context,
+                                 message=SimpleNamespace(name="manage_scene", arguments={}))
+        await middleware.on_call_tool(mw_ctx, AsyncMock(return_value="ok"))
 
-        # 2. User selects instance via middleware
-        await middleware.set_active_instance(mock_context, "CompleteProject@hash-complete")
-
-        # 3. Tools route using both middleware + registry
-        selected_instance = await middleware.get_active_instance(mock_context)
+        selected_instance = await mock_context.get_state("unity_instance")
         assert selected_instance == "CompleteProject@hash-complete"
-
-        # Extract hash and resolve back to session
         hash_part = selected_instance.split("@")[1]
         resolved_session = await plugin_registry.get_session_id_by_hash(hash_part)
         assert resolved_session == "sess-complete"
-
-        # 4. Verify session has the correct data
         session = await plugin_registry.get_session(resolved_session)
         assert session.project_name == "CompleteProject"
-        assert session.unity_version == "2022.3"
 
 
 # ============================================================================

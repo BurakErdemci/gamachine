@@ -71,6 +71,11 @@ def _make_middleware(monkeypatch, *, transport="stdio", plugin_hub_configured=Fa
     return middleware
 
 
+def _connection_default(mw, value):
+    """The client connected with ?instance=<value> (or X-Unity-Instance)."""
+    mw._request_default_instance = lambda: value
+
+
 # ---------------------------------------------------------------------------
 # Pop behaviour
 # ---------------------------------------------------------------------------
@@ -99,8 +104,8 @@ async def test_arguments_without_unity_instance_untouched(monkeypatch):
 
     ctx = DummyContext()
     ctx.client_id = "client-1"
-    # Seed a persisted instance so auto-select isn't needed
-    await mw.set_active_instance(ctx, "Proj@abc123")
+    # A connection default so auto-select isn't needed
+    _connection_default(mw, "Proj@abc123")
 
     args = {"action": "get_active", "name": "Test"}
     mw_ctx = DummyMiddlewareContext(ctx, arguments=args)
@@ -130,48 +135,72 @@ async def test_inline_routes_to_specified_instance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_inline_does_not_persist_to_session(monkeypatch):
-    """Per-call unity_instance must not change the session-persisted instance."""
+async def test_inline_does_not_persist_to_the_next_call(monkeypatch):
+    """Per-call unity_instance routes that call only; the next call goes back
+    to the connection's default."""
     instances = [
         SimpleNamespace(id="ProjA@aaa111", hash="aaa111"),
         SimpleNamespace(id="ProjB@bbb222", hash="bbb222"),
     ]
     mw = _make_middleware(monkeypatch, pool_instances=instances)
+    _connection_default(mw, "ProjA@aaa111")
 
     ctx = DummyContext()
     ctx.client_id = "client-1"
-    await mw.set_active_instance(ctx, "ProjA@aaa111")
 
     # Call 1: inline override to ProjB
     mw_ctx1 = DummyMiddlewareContext(ctx, arguments={"unity_instance": "bbb222"})
     await mw._inject_unity_instance(mw_ctx1)
     assert await ctx.get_state("unity_instance") == "ProjB@bbb222"
 
-    # Call 2: no inline — must revert to session-persisted ProjA
+    # Call 2: no inline -- back to the connection default ProjA
     mw_ctx2 = DummyMiddlewareContext(ctx, arguments={})
     await mw._inject_unity_instance(mw_ctx2)
     assert await ctx.get_state("unity_instance") == "ProjA@aaa111"
 
 
 @pytest.mark.asyncio
-async def test_inline_overrides_session_persisted_instance(monkeypatch):
-    """Inline unity_instance takes precedence over session-persisted instance."""
+async def test_inline_overrides_connection_default(monkeypatch):
+    """Inline unity_instance takes precedence over ?instance= on the connection."""
     instances = [
         SimpleNamespace(id="ProjA@aaa111", hash="aaa111"),
         SimpleNamespace(id="ProjB@bbb222", hash="bbb222"),
     ]
     mw = _make_middleware(monkeypatch, pool_instances=instances)
+    _connection_default(mw, "ProjA@aaa111")
 
     ctx = DummyContext()
     ctx.client_id = "client-1"
-    await mw.set_active_instance(ctx, "ProjA@aaa111")
-
     mw_ctx = DummyMiddlewareContext(ctx, arguments={"unity_instance": "ProjB@bbb222"})
     await mw._inject_unity_instance(mw_ctx)
 
     assert await ctx.get_state("unity_instance") == "ProjB@bbb222"
-    # Session still pinned to ProjA
-    assert await mw.get_active_instance(ctx) == "ProjA@aaa111"
+
+
+@pytest.mark.asyncio
+async def test_connection_default_resolves_like_the_argument(monkeypatch):
+    """?instance=abc (hash prefix) resolves to Name@hash, and an unknown value
+    is an error rather than a silent fall-through to auto-select."""
+    instances = [SimpleNamespace(id="Proj@abc123", hash="abc123")]
+    mw = _make_middleware(monkeypatch, pool_instances=instances)
+    ctx = DummyContext()
+
+    _connection_default(mw, "abc")
+    await mw._inject_unity_instance(DummyMiddlewareContext(ctx, arguments={}))
+    assert await ctx.get_state("unity_instance") == "Proj@abc123"
+
+    _connection_default(mw, "Ghost@deadbeef")
+    with pytest.raises(ValueError, match="not found"):
+        await mw._inject_unity_instance(DummyMiddlewareContext(ctx, arguments={}))
+
+
+@pytest.mark.asyncio
+async def test_routing_is_written_request_scoped(monkeypatch):
+    instances = [SimpleNamespace(id="Proj@abc123", hash="abc123")]
+    mw = _make_middleware(monkeypatch, pool_instances=instances)
+    ctx = DummyContext()
+    await mw._inject_unity_instance(DummyMiddlewareContext(ctx, arguments={"unity_instance": "abc"}))
+    assert ctx.state_serializable["unity_instance"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -307,12 +336,12 @@ async def test_no_match_raises(monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_none_unity_instance_falls_through_to_session(monkeypatch):
-    """None value for unity_instance falls through to session-persisted instance."""
-    mw = _make_middleware(monkeypatch)
+async def test_none_unity_instance_falls_through_to_connection_default(monkeypatch):
+    """None value for unity_instance falls through to the connection default."""
+    mw = _make_middleware(monkeypatch, pool_instances=[SimpleNamespace(id="Proj@abc123", hash="abc123")])
+    _connection_default(mw, "Proj@abc123")
     ctx = DummyContext()
     ctx.client_id = "client-1"
-    await mw.set_active_instance(ctx, "Proj@abc123")
 
     mw_ctx = DummyMiddlewareContext(ctx, arguments={"unity_instance": None, "action": "x"})
 
@@ -322,12 +351,12 @@ async def test_none_unity_instance_falls_through_to_session(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_empty_string_unity_instance_falls_through_to_session(monkeypatch):
-    """Empty string unity_instance falls through to session-persisted instance."""
-    mw = _make_middleware(monkeypatch)
+async def test_empty_string_unity_instance_falls_through_to_connection_default(monkeypatch):
+    """Empty string unity_instance falls through to the connection default."""
+    mw = _make_middleware(monkeypatch, pool_instances=[SimpleNamespace(id="Proj@abc123", hash="abc123")])
+    _connection_default(mw, "Proj@abc123")
     ctx = DummyContext()
     ctx.client_id = "client-1"
-    await mw.set_active_instance(ctx, "Proj@abc123")
 
     mw_ctx = DummyMiddlewareContext(ctx, arguments={"unity_instance": "  "})
 
@@ -338,11 +367,11 @@ async def test_empty_string_unity_instance_falls_through_to_session(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_resource_read_unaffected(monkeypatch):
-    """on_read_resource with no .arguments attribute routes via session state normally."""
-    mw = _make_middleware(monkeypatch)
+    """on_read_resource with no .arguments attribute routes via the connection default."""
+    mw = _make_middleware(monkeypatch, pool_instances=[SimpleNamespace(id="Proj@abc123", hash="abc123")])
+    _connection_default(mw, "Proj@abc123")
     ctx = DummyContext()
     ctx.client_id = "client-1"
-    await mw.set_active_instance(ctx, "Proj@abc123")
 
     # ReadResourceRequestParams has .uri not .arguments
     resource_ctx = SimpleNamespace(
@@ -361,13 +390,10 @@ async def test_resource_read_unaffected(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_set_active_instance_port_stdio(monkeypatch):
-    """set_active_instance accepts a port number in stdio mode and resolves to Name@hash."""
+    """set_active_instance resolves a port number in stdio mode to Name@hash,
+    and says it did not pin anything."""
     monkeypatch.setattr(config, "transport_mode", "stdio")
     monkeypatch.setattr(config, "http_remote_hosted", False)
-
-    from transport.unity_instance_middleware import UnityInstanceMiddleware, set_unity_instance_middleware
-    mw = UnityInstanceMiddleware()
-    set_unity_instance_middleware(mw)
 
     pool_instance = SimpleNamespace(id="Proj@abc123", hash="abc123", port=6401)
 
@@ -385,9 +411,9 @@ async def test_set_active_instance_port_stdio(monkeypatch):
 
     result = await set_active_instance(ctx, instance="6401")
 
-    assert result["success"] is True
-    assert result["data"]["instance"] == "Proj@abc123"
-    assert await mw.get_active_instance(ctx) == "Proj@abc123"
+    assert result["success"] is False
+    assert result["data"] == {"instance": "Proj@abc123", "pinned": False}
+    assert "unity_instance='Proj@abc123'" in result["error"]
 
 
 @pytest.mark.asyncio

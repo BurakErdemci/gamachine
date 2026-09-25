@@ -129,27 +129,20 @@ class TestInstanceListResourceIsolation:
 class TestSetActiveInstanceIsolation:
     @pytest.mark.asyncio
     async def test_set_active_instance_only_sees_own_sessions(self, monkeypatch):
-        """set_active_instance should only offer sessions belonging to the current user."""
+        """set_active_instance should only resolve sessions belonging to the current user."""
         monkeypatch.setattr(config, "http_remote_hosted", True)
         monkeypatch.setattr(config, "transport_mode", "http")
         await _setup_two_user_registry()
 
         from services.tools.set_active_instance import set_active_instance
-        from transport.unity_instance_middleware import UnityInstanceMiddleware
         from tests.integration.test_helpers import DummyContext
-
-        middleware = UnityInstanceMiddleware()
-        monkeypatch.setattr(
-            "services.tools.set_active_instance.get_unity_instance_middleware",
-            lambda: middleware,
-        )
 
         ctx = DummyContext()
         await ctx.set_state("user_id", "userA")
 
         result = await set_active_instance(ctx, "ProjectAlpha@hashA1")
-        assert result["success"] is True
-        assert await middleware.get_active_instance(ctx) == "ProjectAlpha@hashA1"
+        # Resolved (it is userA's), but nothing is pinned any more.
+        assert result["data"] == {"instance": "ProjectAlpha@hashA1", "pinned": False}
 
     @pytest.mark.asyncio
     async def test_set_active_instance_rejects_other_users_instance(self, monkeypatch):
@@ -159,14 +152,7 @@ class TestSetActiveInstanceIsolation:
         await _setup_two_user_registry()
 
         from services.tools.set_active_instance import set_active_instance
-        from transport.unity_instance_middleware import UnityInstanceMiddleware
         from tests.integration.test_helpers import DummyContext
-
-        middleware = UnityInstanceMiddleware()
-        monkeypatch.setattr(
-            "services.tools.set_active_instance.get_unity_instance_middleware",
-            lambda: middleware,
-        )
 
         ctx = DummyContext()
         await ctx.set_state("user_id", "userA")
@@ -174,3 +160,27 @@ class TestSetActiveInstanceIsolation:
         # UserA tries to select UserB's instance -> should fail
         result = await set_active_instance(ctx, "ProjectBeta@hashB1")
         assert result["success"] is False
+        assert "data" not in result
+
+    @pytest.mark.asyncio
+    async def test_connection_default_cannot_reach_another_users_instance(self, monkeypatch):
+        """?instance= on userA's connection naming userB's Editor must not route there."""
+        monkeypatch.setattr(config, "http_remote_hosted", True)
+        monkeypatch.setattr(config, "transport_mode", "http")
+        await _setup_two_user_registry()
+
+        from transport.unity_instance_middleware import UnityInstanceMiddleware
+        from tests.integration.test_helpers import DummyContext
+        from unittest.mock import AsyncMock
+        from types import SimpleNamespace
+
+        middleware = UnityInstanceMiddleware()
+        monkeypatch.setattr(middleware, "_resolve_user_id", AsyncMock(return_value="userA"))
+        monkeypatch.setattr(middleware, "_request_default_instance", lambda: "ProjectBeta@hashB1")
+
+        ctx = DummyContext()
+        with pytest.raises(ValueError, match="not found"):
+            await middleware._inject_unity_instance(
+                SimpleNamespace(fastmcp_context=ctx, message=SimpleNamespace(arguments={})))
+        assert await ctx.get_state("unity_instance") is None
+

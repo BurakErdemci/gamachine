@@ -56,46 +56,18 @@ class TestMiddlewareAuthEnforcement:
         middleware_ctx = Mock()
         middleware_ctx.fastmcp_context = ctx
 
-        # Set an active instance so the middleware doesn't try to auto-select
-        await middleware.set_active_instance(ctx, "Proj@hash1")
+        # Route via the connection default so the middleware doesn't try to
+        # auto-select (disabled in remote-hosted mode anyway)
+        monkeypatch.setattr(middleware, "_request_default_instance", lambda: "Proj@hash1")
+        monkeypatch.setattr(config, "transport_mode", "http")
         # Register a matching session so resolution doesn't fail
         await registry.register("s1", "Proj", "hash1", "2022", user_id="user-55")
 
         await middleware._inject_unity_instance(middleware_ctx)
 
         assert await ctx.get_state("user_id") == "user-55"
-
-
-class TestMiddlewareSessionKey:
-    @pytest.mark.asyncio
-    async def test_get_session_key_uses_user_id_fallback(self):
-        """When no client_id, middleware should use user:$user_id as session key."""
-        from transport.unity_instance_middleware import UnityInstanceMiddleware
-
-        middleware = UnityInstanceMiddleware()
-
-        ctx = DummyContext()
-        # Simulate no client_id attribute
-        if hasattr(ctx, "client_id"):
-            delattr(ctx, "client_id")
-        await ctx.set_state("user_id", "user-77")
-
-        key = await middleware.get_session_key(ctx)
-        assert key == "user:user-77"
-
-    @pytest.mark.asyncio
-    async def test_get_session_key_prefers_client_id(self):
-        """client_id should take precedence over user_id."""
-        from transport.unity_instance_middleware import UnityInstanceMiddleware
-
-        middleware = UnityInstanceMiddleware()
-
-        ctx = DummyContext()
-        ctx.client_id = "client-abc"
-        await ctx.set_state("user_id", "user-77")
-
-        key = await middleware.get_session_key(ctx)
-        assert key == "client-abc"
+        assert ctx.state_serializable["user_id"] is False
+        assert await ctx.get_state("unity_instance") == "Proj@hash1"
 
 
 class TestAutoSelectDisabledRemoteHosted:

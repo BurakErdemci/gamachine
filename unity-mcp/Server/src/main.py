@@ -313,8 +313,9 @@ Tool lists (HTTP transport):
 
 Targeting Unity instances:
 - Use the resource mcpforunity://instances to list active Unity sessions (Name@hash).
-- When multiple instances are connected, call set_active_instance with the exact Name@hash before using tools/resources to pin routing for the whole session. The server will error if multiple are connected and no active instance is set.
-- Alternatively, pass unity_instance as a parameter on any individual tool call to route just that call (e.g. unity_instance="MyGame@abc123", unity_instance="abc" for a hash prefix, or unity_instance="6401" for a port number in stdio mode). This does not change the session default.
+- With exactly one instance connected, every call goes to it automatically.
+- With several connected, route each call by passing unity_instance on it (e.g. unity_instance="MyGame@abc123", unity_instance="abc" for a hash prefix, or unity_instance="6401" for a port number in stdio mode). A client can also fix the instance for its whole connection with ?instance=MyGame@abc123 on the MCP URL or an X-Unity-Instance header. The server errors if several are connected and neither is given.
+- There is no per-session pin: set_active_instance only checks an identifier and reports how to route to it.
 
 Important Workflows:
 

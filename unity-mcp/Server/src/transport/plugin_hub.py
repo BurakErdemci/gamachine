@@ -75,14 +75,13 @@ class NoUnitySessionError(RuntimeError):
 class InstanceSelectionRequiredError(RuntimeError):
     """Raised when the caller must explicitly select a Unity instance."""
 
-    _SELECTION_REQUIRED = (
-        "Unity instance selection is required. "
-        "Call set_active_instance with Name@hash from mcpforunity://instances."
+    _HOW_TO_SELECT = (
+        "Pass unity_instance=<Name@hash> on the tool call, or connect with "
+        "?instance=<Name@hash> on the MCP URL (or the X-Unity-Instance header). "
+        "Read mcpforunity://instances for the available Name@hash values."
     )
-    _MULTIPLE_INSTANCES = (
-        "Multiple Unity instances are connected. "
-        "Call set_active_instance with Name@hash from mcpforunity://instances."
-    )
+    _SELECTION_REQUIRED = "Unity instance selection is required. " + _HOW_TO_SELECT
+    _MULTIPLE_INSTANCES = "Multiple Unity instances are connected. " + _HOW_TO_SELECT
 
     def __init__(self, message: str | None = None):
         super().__init__(message or self._SELECTION_REQUIRED)

@@ -10,6 +10,7 @@ from mcp.types import ToolAnnotations
 from services.registry import mcp_for_unity_tool
 from transport.unity_instance_middleware import get_unity_instance_middleware
 from transport.plugin_hub import PluginHub
+from transport.tool_profiles import current_profile
 
 
 @mcp_for_unity_tool(
@@ -46,15 +47,12 @@ async def debug_request_context(ctx: Context) -> dict[str, Any]:
     # List all ctx attributes for debugging
     ctx_attrs = [attr for attr in dir(ctx) if not attr.startswith("_")]
 
-    # Get session state info via middleware
+    # Routing is resolved per request (see UnityInstanceMiddleware); there is
+    # no per-session store to dump any more.
     middleware = get_unity_instance_middleware()
-    derived_key = await middleware.get_session_key(ctx)
-    active_instance = await middleware.get_active_instance(ctx)
-
-    # Debugging middleware internals
-    # NOTE: These fields expose internal implementation details and may change between versions.
-    with middleware._lock:
-        all_keys = list(middleware._active_by_key.keys())
+    routed_instance = await ctx.get_state("unity_instance")
+    routed_session_id = await ctx.get_state("unity_session_id")
+    connection_default = middleware._request_default_instance()
 
     # Debugging PluginHub state
     plugin_hub_configured = PluginHub.is_configured()
@@ -76,10 +74,11 @@ async def debug_request_context(ctx: Context) -> dict[str, Any]:
                 "session_id": ctx_session_id,
                 "client_id": ctx_client_id,
             },
-            "session_state": {
-                "derived_key": derived_key,
-                "active_instance": active_instance,
-                "all_keys_in_store": all_keys,
+            "routing": {
+                "unity_instance": routed_instance,
+                "unity_session_id": routed_session_id,
+                "connection_default_instance": connection_default,
+                "tool_profile": current_profile().name,
                 "plugin_hub_configured": plugin_hub_configured,
                 "middleware_id": id(middleware),
             },
