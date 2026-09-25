@@ -23,6 +23,7 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 from core.config import config
 from core.constants import UNITY_INSTANCE_HEADER, UNITY_INSTANCE_QUERY_PARAM
+from services.protection_rules import meta_refusal
 from services.registry import get_registered_tools
 from transport.approval_gate import ApprovalDenied
 from transport.plugin_hub import PluginHub
@@ -405,6 +406,13 @@ class UnityInstanceMiddleware(Middleware):
             # here into one; FastMCP 4 answers with a JSON-RPC protocol error
             # instead (measured with the live probe, 25 Sep 2026).
             raise ToolError(str(exc)) from exc
+        # A fixed rule, not a card: before the gate, so it holds in auto mode
+        # and step mode shows no card for a call that would be refused anyway.
+        mesaj = getattr(context, "message", None)
+        refusal = meta_refusal(getattr(mesaj, "name", None) or "",
+                               getattr(mesaj, "arguments", None))
+        if refusal:
+            raise ToolError(refusal)
         try:
             await self._require_approval(context)
         except ApprovalDenied as exc:

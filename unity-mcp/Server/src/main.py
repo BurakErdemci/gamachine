@@ -561,6 +561,13 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
                 if not command_type:
                     return JSONResponse({"success": False, "error": "Missing 'type' field"}, status_code=400)
 
+                # Same fixed rule as the MCP path (UnityInstanceMiddleware),
+                # ahead of the approval gate and of the maintenance exemption.
+                from services.protection_rules import meta_refusal
+                refusal = meta_refusal(command_type, params)
+                if refusal:
+                    return JSONResponse({"success": False, "error": refusal}, status_code=403)
+
                 from transport.approval_gate import ApprovalDenied, kapiyi_gec, urun_bakim_cagrisi_mi
 
                 # Get available sessions
