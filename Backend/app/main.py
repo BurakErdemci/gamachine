@@ -48,7 +48,7 @@ os.environ["PATH"] = os.pathsep.join(
 #   backend mcp-server [--workspace X]  → unity_ai_mcp.server.main (Claude/Codex MCP)
 #   backend unityai <save-file|...>     → unityai_cli.main (agy köprüsü)
 #   backend codex-mcp-bridge <http_url> → providers.codex_unitymcp_bridge (Codex stdio köprüsü)
-#   backend agy-hook --state <file>     → agy_step_gate.main (agy step-mode PreToolUse hook)
+#   backend agy-hook --state <file>     → agy_step_gate.main (agy PreToolUse hook, every approval mode)
 # FastAPI/uvicorn app'i kurmadan erken dön — bu komutlar HTTP server başlatmaz.
 if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bridge", "agy-hook"):
     _sub_mode = sys.argv[1]
