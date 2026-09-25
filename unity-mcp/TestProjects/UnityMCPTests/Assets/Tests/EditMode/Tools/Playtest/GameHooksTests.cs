@@ -31,6 +31,7 @@ namespace MCPForUnityTests.Editor.Tools.Playtest
         {
             GameHooks.Unregister("test.runtime.value");
             GameHooks.Unregister("test.fixture.count");
+            GameHooks.Unregister("test.runtime.noargs");
         }
 
         [Test]
@@ -86,6 +87,41 @@ namespace MCPForUnityTests.Editor.Tools.Playtest
             GameHooks.Action("test.runtime.value", args => args?["x"]?.Value<int>() * 2);
             Assert.IsTrue(GameHooks.TryCall("test.runtime.value", new JObject { ["x"] = 21 }, out var r, out _));
             Assert.AreEqual(42, r.Value<int>());
+        }
+
+        [Test]
+        public void Get_RefusesActionHooksWithoutInvokingThem()
+        {
+            int calls = 0;
+            GameHooks.Action("test.runtime.noargs", _ => ++calls);
+            PlaytestHookFixture.LastSeed = -1;
+
+            Assert.IsFalse(GameHooks.TryGet("test.runtime.noargs", out var v, out var err));
+            Assert.IsNull(v);
+            StringAssert.Contains("is an action", err);
+            Assert.IsFalse(GameHooks.TryGet("test.fixture.restart", out _, out _));
+
+            var named = JObject.FromObject(GameHooksTool.HandleCommand(new JObject
+            { ["action"] = "get", ["names"] = new JArray("test.fixture.count", "test.runtime.noargs") }));
+            Assert.IsFalse((bool)named["success"]);
+            StringAssert.Contains("game_hooks call", (string)named["error"]);
+            Assert.AreEqual("action", (string)named["data"]["kind"]);
+
+            var single = JObject.FromObject(GameHooksTool.HandleCommand(new JObject { ["action"] = "get", ["name"] = "test.fixture.restart" }));
+            Assert.IsFalse((bool)single["success"]);
+
+            var all = JObject.FromObject(GameHooksTool.HandleCommand(new JObject { ["action"] = "get" }));
+            Assert.IsTrue((bool)all["success"]);
+            var values = (JObject)all["data"]["values"];
+            Assert.IsNotNull(values["test.fixture.count"]);
+            Assert.IsNull(values["test.runtime.noargs"]);
+            Assert.IsNull(values["test.fixture.restart"]);
+            var actions = all["data"]["actions"].Select(t => (string)t).ToList();
+            CollectionAssert.Contains(actions, "test.runtime.noargs");
+            CollectionAssert.Contains(actions, "test.fixture.restart");
+
+            Assert.AreEqual(0, calls);
+            Assert.AreEqual(-1, PlaytestHookFixture.LastSeed);
         }
 
         [Test]

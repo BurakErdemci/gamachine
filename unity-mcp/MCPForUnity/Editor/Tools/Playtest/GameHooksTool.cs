@@ -26,17 +26,22 @@ namespace MCPForUnity.Editor.Tools.Playtest
                         problems = PlaytestHookDiscovery.Problems.Count > 0 ? PlaytestHookDiscovery.Problems : null,
                     });
                 case "get":
+                    bool all = !(@params["names"] is JArray) && @params["name"] == null;
                     var names = @params["names"] is JArray arr
                         ? arr.Select(t => t.ToString()).ToList()
-                        : @params["name"] != null ? new[] { @params["name"].ToString() }.ToList() : GameHooks.StateNames();
+                        : !all ? new[] { @params["name"].ToString() }.ToList() : GameHooks.StateNames();
                     var values = new JObject();
                     foreach (var n in names)
                     {
                         if (!GameHooks.TryGet(n, out var v, out var err))
-                            return new ErrorResponse(err, new { name = n, close_matches = GameHooks.CloseMatches(n, 3) });
+                            return new ErrorResponse(err, GameHooks.KindOf(n) == GameHooks.KindAction
+                                ? (object)new { name = n, kind = GameHooks.KindAction }
+                                : new { name = n, close_matches = GameHooks.CloseMatches(n, 3) });
                         values[n] = v;
                     }
-                    return new SuccessResponse($"{values.Count} values.", new { values });
+                    if (!all) return new SuccessResponse($"{values.Count} values.", new { values });
+                    var actions = GameHooks.ActionNames();
+                    return new SuccessResponse($"{values.Count} values.", new { values, actions = actions.Count > 0 ? actions : null });
                 case "call":
                     string name = @params["name"]?.ToString();
                     if (string.IsNullOrEmpty(name)) return new ErrorResponse("'name' is required for call.");

@@ -124,16 +124,22 @@ namespace MCPForUnity.Editor.Tools.Playtest
             if (!PlaytestSession.Active) { tcs.SetResult(Error("no active play session; call play_session start first")); return tcs.Task; }
 
             PlaytestHookDiscovery.Ensure();
-            if (spec.UntilHook != null && !GameHooks.Exists(spec.UntilHook))
-            { tcs.SetResult(Error(GameHooks.UnknownMessage(spec.UntilHook))); return tcs.Task; }
-            if (spec.Watch != null)
-                foreach (var n in spec.Watch)
-                    if (!GameHooks.Exists(n)) { tcs.SetResult(Error(GameHooks.UnknownMessage(n))); return tcs.Task; }
+            var readErr = ReadableError(spec.UntilHook);
+            if (readErr == null && spec.Watch != null) readErr = spec.Watch.Select(ReadableError).FirstOrDefault(e => e != null);
+            if (readErr != null) { tcs.SetResult(Error(readErr)); return tcs.Task; }
 
             s_Run = new Run { Spec = spec, Tcs = tcs, Clock = Stopwatch.StartNew() };
             if (!EditorApplication.isPaused) EditorApplication.isPaused = true;
             EditorApplication.update += Tick;
             return tcs.Task;
+        }
+
+        private static string ReadableError(string hook)
+        {
+            if (hook == null) return null;
+            var kind = GameHooks.KindOf(hook);
+            if (kind == null) return GameHooks.UnknownMessage(hook);
+            return kind == GameHooks.KindState ? null : GameHooks.NotReadableMessage(hook);
         }
 
         public static void Abort(string reason)

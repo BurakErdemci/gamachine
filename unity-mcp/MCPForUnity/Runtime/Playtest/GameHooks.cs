@@ -151,7 +151,19 @@ namespace MCPForUnity.Runtime.Playtest
         public static List<string> StateNames() =>
             List().Where(h => h.Kind == KindState).Select(h => h.Name).ToList();
 
-        /// <summary>Reads a hook as JSON. State hooks return their value; an action hook is called with no args.</summary>
+        public static List<string> ActionNames() =>
+            List().Where(h => h.Kind == KindAction).Select(h => h.Name).ToList();
+
+        /// <summary>The hook's kind (<see cref="KindState"/> or <see cref="KindAction"/>), or null when unknown.</summary>
+        public static string KindOf(string name) => Find(name)?.Kind;
+
+        public static string NotReadableMessage(string name) =>
+            $"hook '{name}' is an action, not a readable value; run it with game_hooks call.";
+
+        /// <summary>
+        /// Reads a state hook as JSON. Action hooks are refused, never invoked: callers treat a read as side-effect
+        /// free (game_hooks get is approved as a read), so running an action here would bypass that approval.
+        /// </summary>
         public static bool TryGet(string name, out JToken value, out string error)
         {
             value = null;
@@ -161,9 +173,14 @@ namespace MCPForUnity.Runtime.Playtest
                 error = UnknownMessage(name);
                 return false;
             }
+            if (e.Kind != KindState)
+            {
+                error = NotReadableMessage(name);
+                return false;
+            }
             try
             {
-                value = PlaytestJson.ToJson(e.Kind == KindState ? e.Getter() : e.Invoke(null));
+                value = PlaytestJson.ToJson(e.Getter());
                 error = null;
                 return true;
             }
