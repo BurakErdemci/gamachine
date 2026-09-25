@@ -111,19 +111,72 @@ namespace MCPForUnity.Editor.Tools.Playtest
             return d;
         }
 
+        private static string ProjectRoot => Path.GetFullPath(Path.GetDirectoryName(Application.dataPath) ?? ".");
+
+        /// <summary>
+        /// Full path of <paramref name="path"/> (project-relative or rooted) when it lies under the project's Assets
+        /// folder and nothing below Assets on the way is a junction or symbolic link; otherwise null and an error.
+        /// </summary>
+        internal static string ConfineToAssets(string projectRoot, string path, out string error)
+        {
+            error = null;
+            char[] seps = { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
+            string assets = Path.GetFullPath(Path.Combine(projectRoot, "Assets")).TrimEnd(seps);
+            string full;
+            try
+            {
+                full = Path.GetFullPath(Path.Combine(projectRoot, path ?? "")).TrimEnd(seps);
+            }
+            catch (Exception e)
+            {
+                error = $"invalid path '{path}': {e.Message}";
+                return null;
+            }
+            var cmp = Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (!full.StartsWith(assets + Path.DirectorySeparatorChar, cmp) && !string.Equals(full, assets, cmp))
+            {
+                error = $"path '{path}' is outside the project's Assets folder.";
+                return null;
+            }
+            // Links are refused, not followed: this runtime has no API that reads a link's target, and a link below
+            // Assets can point anywhere on disk while the path still looks project-relative.
+            for (string p = full; p != null && p.Length > assets.Length; p = Path.GetDirectoryName(p))
+            {
+                if ((File.Exists(p) || Directory.Exists(p)) && (File.GetAttributes(p) & FileAttributes.ReparsePoint) != 0)
+                {
+                    error = $"path '{path}' goes through a junction or symbolic link ({p}); playtest files must be real files under Assets.";
+                    return null;
+                }
+            }
+            return full;
+        }
+
         private static List<string> FindScenarios(string path, string glob, out string error)
         {
             error = null;
-            string root = Path.GetDirectoryName(Application.dataPath) ?? ".";
-            string Rel(string full) => Path.GetFullPath(full).Substring(Path.GetFullPath(root).Length).TrimStart('\\', '/').Replace('\\', '/');
+            string root = ProjectRoot;
+            string Rel(string full) => full.Substring(root.Length).TrimStart('\\', '/').Replace('\\', '/');
+
+            List<string> Confined(IEnumerable<string> files, out string err)
+            {
+                err = null;
+                var list = new List<string>();
+                foreach (var f in files)
+                {
+                    var full = ConfineToAssets(root, f, out err);
+                    if (full == null) return null;
+                    list.Add(Rel(full));
+                }
+                return list.OrderBy(x => x, StringComparer.Ordinal).ToList();
+            }
 
             if (!string.IsNullOrEmpty(path))
             {
-                string full = Path.IsPathRooted(path) ? path : Path.Combine(root, path);
+                string full = ConfineToAssets(root, path, out error);
+                if (full == null) return null;
                 if (File.Exists(full)) return new List<string> { Rel(full) };
                 if (Directory.Exists(full))
-                    return Directory.GetFiles(full, "*.playtest.json", SearchOption.AllDirectories).Select(Rel)
-                        .OrderBy(x => x, StringComparer.Ordinal).ToList();
+                    return Confined(Directory.GetFiles(full, "*.playtest.json", SearchOption.AllDirectories), out error);
                 error = $"path not found: {path}";
                 return null;
             }
@@ -131,8 +184,8 @@ namespace MCPForUnity.Editor.Tools.Playtest
             var pattern = "^" + Regex.Escape((glob ?? DefaultGlob).Replace('\\', '/'))
                 .Replace(@"\*\*/", "(.*/)?").Replace(@"\*\*", ".*").Replace(@"\*", "[^/]*").Replace(@"\?", "[^/]") + "$";
             var rx = new Regex(pattern, RegexOptions.IgnoreCase);
-            return Directory.GetFiles(Path.Combine(root, "Assets"), "*.json", SearchOption.AllDirectories).Select(Rel)
-                .Where(f => rx.IsMatch(f)).OrderBy(x => x, StringComparer.Ordinal).ToList();
+            return Confined(Directory.GetFiles(Path.Combine(root, "Assets"), "*.json", SearchOption.AllDirectories)
+                .Where(f => rx.IsMatch(Rel(Path.GetFullPath(f)))), out error);
         }
 
         private static void Tick()
@@ -277,10 +330,11 @@ namespace MCPForUnity.Editor.Tools.Playtest
         {
             error = null;
             JObject sc;
+            string full = ConfineToAssets(ProjectRoot, file, out error);
+            if (full == null) return null;
             try
             {
-                string root = Path.GetDirectoryName(Application.dataPath) ?? ".";
-                sc = JObject.Parse(File.ReadAllText(Path.Combine(root, file)));
+                sc = JObject.Parse(File.ReadAllText(full));
             }
             catch (Exception e)
             {
