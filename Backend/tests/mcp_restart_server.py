@@ -57,7 +57,10 @@ class RestartableMCPServer:
     def start(self) -> None:
         self.generation += 1
         config = uvicorn.Config(self._app(), host="127.0.0.1", port=self.port,
-                                log_level="error", lifespan="on")
+                                log_level="error", lifespan="on",
+                                # A real restart kills open streams; waiting on
+                                # the client's GET stream cost 15 s per stop.
+                                timeout_graceful_shutdown=0.5)
         self._server = uvicorn.Server(config)
         self._thread = threading.Thread(target=self._server.run, daemon=True)
         self._thread.start()

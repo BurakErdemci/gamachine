@@ -397,20 +397,23 @@ def test_a_refresh_in_flight_during_unload_cannot_repopulate_tools(server):
 
     entered, release, applied = threading.Event(), threading.Event(), threading.Event()
     original_list = _FakeSession.list_tools
-    original_apply = umt._apply_tool_list
+    original_load = umt.load_unity_tools
 
     async def _slow_list(self):
         entered.set()
         await asyncio.to_thread(release.wait, 5)
         return await original_list(self)
 
-    def _apply(*args):
+    # "Finished" is the refresh returning, not reaching _apply_tool_list: since
+    # P3 a list in flight on a connection that close() stops is aborted at once
+    # instead of running on, so either ending must leave the cache empty.
+    def _load():
         try:
-            return original_apply(*args)
+            return original_load()
         finally:
             applied.set()
 
-    with mock.patch.object(_FakeSession, "list_tools", _slow_list),             mock.patch.object(umt, "_apply_tool_list", _apply):
+    with mock.patch.object(_FakeSession, "list_tools", _slow_list),             mock.patch.object(umt, "load_unity_tools", _load):
         fake.tools.append(_tool("play_step", "playtest"))
         _notify_list_changed(fake, client)
         assert entered.wait(5), "the refresh never reached list_tools"

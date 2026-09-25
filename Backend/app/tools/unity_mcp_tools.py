@@ -24,6 +24,7 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.shared.exceptions import McpError
+from mcp.types import CONNECTION_CLOSED
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,13 @@ CALL_TIMEOUT_S = 240.0
 CONNECT_TIMEOUT_S = 15.0
 LIST_TIMEOUT_S = 15.0
 
-_UNREACHABLE_MSG = ("Unity MCP sunucusuna bağlanılamadı. Unity MCP anahtarı açık mı, "
-                    "Unity Editor çalışıyor mu?")
+_UNREACHABLE_MSG = ("Unity MCP sunucusuna bağlanılamadı (kapalı ya da yeniden başlıyor). "
+                    "Unity MCP anahtarı açık mı, Unity Editor çalışıyor mu? Sunucu ayağa "
+                    "kalkınca sonraki çağrı kendiliğinden yeniden bağlanır.")
+_CONNECTION_LOST_MSG = ("Unity MCP bağlantısı çağrı sürerken koptu; çağrının Unity'de "
+                        "çalışıp çalışmadığı bilinmiyor. Sonraki çağrı yeniden bağlanır.")
+_SESSION_LOST_MSG = ("Unity MCP sunucusu yeniden başlamış; yeni oturum açıldı ama sunucu "
+                     "onu da tanımadı.")
 
 
 class UnityMCPError(RuntimeError):
@@ -49,6 +55,31 @@ class UnityMCPError(RuntimeError):
 
 class _RefreshAbandoned(UnityMCPError):
     """A refresh from before close() tried to open a session after it."""
+
+
+class _SessionLost(UnityMCPError):
+    """The server no longer knows our session and did not run the request."""
+
+    def __init__(self):
+        super().__init__(_SESSION_LOST_MSG)
+
+
+def _is_session_lost(exc: BaseException) -> bool:
+    """True only for the client's rendering of an HTTP 404 on a request.
+
+    mcp 1.x turns that 404 into McpError(32600, "Session terminated") on the
+    client side (streamable_http._send_session_terminated_error); a server that
+    answered the request itself never produces it. A 404 is the session lookup
+    failing before dispatch, so the request provably did not run - the one
+    failure where retrying a mutation is safe. The old code read it as a
+    healthy JSON-RPC error and kept the dead session forever (measured 25 Sep
+    2026 after a server restart: "Session terminated" on every call).
+    """
+    if not isinstance(exc, McpError):
+        return False
+    error = getattr(exc, "error", None)
+    return (getattr(error, "message", None) in ("Session terminated", "Session not found")
+            and getattr(error, "code", None) in (32600, -32600))
 
 
 def _endpoint() -> tuple[str, dict]:
@@ -143,6 +174,7 @@ class _Connection:
         self.stop = asyncio.Event()
         self.active = 0
         self.broken = False
+        self.error: Optional[BaseException] = None
 
     def reusable(self) -> bool:
         return (self.session is not None and not self.broken
@@ -212,6 +244,7 @@ class _UnityMCPClient:
                     ready.set_result(session)
                 await conn.stop.wait()
         except Exception as exc:  # ExceptionGroup included; reported to the waiter
+            conn.error = exc
             if not ready.done():
                 ready.set_exception(exc)
             else:
@@ -250,6 +283,29 @@ class _UnityMCPClient:
                 self._request_refresh()
             conn.active += 1
             return conn, session
+
+    async def _await_on(self, conn: _Connection, coro):
+        """Awaits `coro` unless the connection's transport dies first.
+
+        Measured 25 Sep 2026: with the server down, a call's POST failed and the
+        transport task died at once, yet the call kept waiting for its full read
+        timeout (240 s in production) before reporting anything.
+        """
+        task = asyncio.ensure_future(coro)
+        owner = conn.owner
+        try:
+            if owner is None:
+                return await task
+            await asyncio.wait({task, owner}, return_when=asyncio.FIRST_COMPLETED)
+        except BaseException:
+            task.cancel()
+            raise
+        if task.done():
+            return task.result()
+        task.cancel()
+        await asyncio.wait({task})
+        raise UnityMCPError(_describe_failure(conn.error) if conn.error is not None
+                            else _CONNECTION_LOST_MSG)
 
     async def _release(self, conn: _Connection, failed: bool) -> None:
         if failed:
@@ -336,42 +392,62 @@ class _UnityMCPClient:
             logger.warning("[UnityMCP] tool list refresh failed: %s", exc)
 
     # ── public (sync, bounded) ───────────────────────────────────────────
+    @staticmethod
+    async def _retry_if_session_lost(once, what: str):
+        """Runs `once`; after a lost session (server restart) runs it exactly
+        one more time on a fresh connection. A second loss is reported."""
+        try:
+            return await once()
+        except _SessionLost:
+            logger.info("[UnityMCP] server restarted (session not found); "
+                        "reconnecting and retrying %s once", what)
+        return await once()
+
     def list_tools(self, timeout: float = LIST_TIMEOUT_S) -> List:
         epoch = _refresh_epoch.get()
 
-        async def _go():
+        async def _once():
             conn, session = await self._acquire(refresh_on_connect=False, epoch=epoch)
             failed = False
             try:
-                result = await session.list_tools()
-            except Exception:
+                result = await self._await_on(conn, session.list_tools())
+            except Exception as exc:
                 failed = True
+                if _is_session_lost(exc):
+                    raise _SessionLost() from exc
                 raise
             finally:
                 await self._release(conn, failed)
             return result.tools
-        return self.run(_go(), timeout)
+        return self.run(self._retry_if_session_lost(_once, "tools/list"), timeout)
 
     def call_tool(self, name: str, params: Dict[str, Any], timeout: float = CALL_TIMEOUT_S):
-        async def _go():
+        async def _once():
             conn, session = await self._acquire()
             failed = False
             try:
-                return await session.call_tool(
-                    name, params, read_timeout_seconds=timedelta(seconds=timeout))
-            except McpError:
+                return await self._await_on(conn, session.call_tool(
+                    name, params, read_timeout_seconds=timedelta(seconds=timeout)))
+            except McpError as exc:
+                if _is_session_lost(exc):
+                    failed = True
+                    raise _SessionLost() from exc
+                if getattr(exc.error, "code", None) == CONNECTION_CLOSED:
+                    failed = True
+                    raise UnityMCPError(_CONNECTION_LOST_MSG) from exc
                 # A JSON-RPC error answer: the session itself is healthy.
                 raise
             except Exception:
                 # No automatic retry: the call may already have reached Unity,
                 # and running a mutation twice is worse than reporting a failure.
-                # The next call reconnects.
+                # The next call reconnects. (A lost session is the one exception,
+                # above: its 404 proves the call never ran.)
                 failed = True
                 raise
             finally:
                 await self._release(conn, failed)
         # Small margin so the MCP read timeout (a clean McpError) fires first.
-        return self.run(_go(), timeout + 2)
+        return self.run(self._retry_if_session_lost(_once, name), timeout + 2)
 
     def close(self, timeout: float = 10.0) -> None:
         if self._loop is None or self._thread is None or not self._thread.is_alive():
