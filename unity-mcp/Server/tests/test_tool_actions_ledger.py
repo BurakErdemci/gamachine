@@ -158,6 +158,8 @@ PINNED_READ_SURFACE: frozenset[str] = frozenset({
     "manage_vfx:vfx_list_templates",
     "play_session:status",
     "read_console:get",
+    # Owner decision 25 Sep 2026: status only reports the last playtest job.
+    "run_playtest:status",
     "set_active_instance:*",
     "unity_docs:get_doc",
     "unity_docs:get_manual",
@@ -680,6 +682,10 @@ def test_a_param_dependent_pivot_is_seen_under_every_spelling():
     ("manage_script", {"action": "read", "a_ction": "delete", "name": "X", "path": "Assets"}),
     ("read_console", {"action": "get", "properties": {"action": "clear"}}),
     ("read_console", {"action": "get", "properties": '{"action": "clear"}'}),
+    ("run_playtest", {"action": "status", "action_": "start"}),
+    ("run_playtest", {"action_": "start", "action": "status"}),
+    ("run_playtest", {"action": "status", "Action": "start"}),
+    ("run_playtest", {"action": "status", "properties": {"action": "start"}}),
 ])
 def test_colliding_action_keys_are_writes(tool_name, params):
     """
@@ -705,6 +711,13 @@ def test_a_lone_renamed_action_key_must_be_a_read_under_every_reading():
     # manage_script has no default, so the ignored reading cannot be proven a read.
     assert classify("manage_script", {"action_": "read"}) == WRITE
     assert classify("manage_script", {"action": "read", "name": "X"}) == READ
+    # run_playtest defaults to the write `start`, so a lone renamed `status`
+    # is read by a direct call as start.
+    assert classify("run_playtest", {"action_": "status"}) == WRITE
+    assert classify("run_playtest", {"action": "status"}) == READ
+    assert classify("run_playtest", {"action": "STATUS"}) == READ
+    assert classify("run_playtest", {}) == WRITE
+    assert classify("run_playtest", {"action": "start", "path": "Assets/Playtests"}) == WRITE
 
 
 def test_a_param_dependent_pivot_must_be_absent_under_every_spelling():

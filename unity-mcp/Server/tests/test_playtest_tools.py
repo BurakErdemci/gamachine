@@ -141,7 +141,7 @@ def test_http_startup_leaves_playtest_visible(monkeypatch):
         ("play_capture", {}, WRITE),
         ("run_playtest", {}, WRITE),
         ("run_playtest", {"action": "start"}, WRITE),
-        ("run_playtest", {"action": "status"}, WRITE),
+        ("run_playtest", {"action": "status"}, READ),
     ],
 )
 def test_classification(tool, params, expected):

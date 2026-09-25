@@ -926,14 +926,15 @@
       "action_param": "action",
       "tool_level": null,
       "default_action": "start",
-      "read_actions": [],
-      "write_actions": [
-        "start",
+      "read_actions": [
         "status"
+      ],
+      "write_actions": [
+        "start"
       ],
       "param_dependent": [],
       "evidence": "unity-mcp/Server/src/services/tools/run_playtest.py:58",
-      "note": "start runs whole scenarios: scene loads, play mode enter/exit, hook calls, input, captures on disk. Defaults to start when action is omitted (run_playtest.py, RunPlaytestTool.cs). status only reads the last job's progress/results (RunPlaytestTool.Status -> PlaytestRunner.StatusData) and is a read candidate, but the P4 contract classifies everything in the group except game_hooks list/get and play_session status as write, and widening the pinned read surface is the owner's call -- kept write (fail-closed) until then."
+      "note": "start runs whole scenarios: scene loads, play mode enter/exit, hook calls, input, captures on disk. Defaults to start when action is omitted (run_playtest.py, RunPlaytestTool.cs). status only reads the last job's progress/results (RunPlaytestTool.Status -> PlaytestRunner.StatusData builds a JObject from the job fields; the server forwards only {action: status}) -- read by owner decision 25 Sep 2026."
     }
   }
 }
