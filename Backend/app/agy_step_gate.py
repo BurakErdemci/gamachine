@@ -1,8 +1,13 @@
-"""Step-mode PreToolUse hook for agy (`backend agy-hook --state <file>`).
+"""PreToolUse hook for agy (`backend agy-hook --state <file>`).
 
 agy runs this for its built-in file writers, run_command and
 send_command_input (see providers/agy_provider.py, _write_step_gate). It
 reads the hook payload on stdin and prints {"decision": "allow"|"deny"}.
+
+It is installed in both approval modes: the state file's "mode" decides.
+"auto" allows every call, "step" applies the rules below. A process spawned
+in auto must still be gated after a flip to step, and agy reads its hooks
+only at start, so the mode cannot live in hooks.json.
 
 Why a top-level module and not providers/: importing anything under
 `providers` runs the package __init__, which imports every provider SDK

@@ -3,10 +3,11 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from collections.abc import Hashable, Mapping
 from typing import AsyncGenerator, Dict, Optional
 
-from .agy_provider import AgyProvider
+from .agy_provider import AgyProvider, AgyStepGateError, _gate_write_failed, gate_state_path
 from .cli_base import BaseCLIProvider, _CREATE_NO_WINDOW, build_spawn_env
 from .saglayici_sahipligi import SaglayiciSahipligi, oturumu_kapat
 from secret_redaction import redact_secrets
@@ -26,18 +27,54 @@ class AgyWorkspaceError(RuntimeError):
 
 
 def _global_auto_mode() -> bool:
-    """The one global approval mode, read at spawn time.
+    """The one global approval mode.
 
-    Not `self.auto_approve` from the request: agy fixes its hooks when it
-    starts, so the value that counts is the backend's at that moment.
-    Unreadable counts as step (fail closed).
+    Not `self.auto_approve` from the request: the hook's state file must
+    follow the backend's mode, whoever set the flag. Unreadable counts as
+    step (fail closed).
     """
     try:
         from agentic import approval_mode
         return approval_mode.is_auto()
     except Exception:
-        logger.warning("[agy] approval mode unreadable; spawning in step mode", exc_info=True)
+        logger.warning("[agy] approval mode unreadable; treating it as step", exc_info=True)
         return False
+
+
+# Read-the-mode-then-write must not interleave: flip A reads auto, flip B
+# reads step and writes, A writes auto -> step mode with an allowing hook.
+_GATE_STATE_LOCK = threading.Lock()
+
+
+def _sync_gate_state() -> bool:
+    """Rewrite the hook's state file from the global mode, now.
+
+    Every agy process has the hook (agy_provider._write_step_gate installs it
+    in both modes) and the hook reads this one global file on every tool
+    call, so this is what makes a flip bite on a running process.
+
+    False only when step mode is on and the file may still say auto; the
+    caller must then stop the process. A failed write in step mode first tries
+    to delete the file, since a hook with no state file denies everything.
+    """
+    from . import agy_provider
+    with _GATE_STATE_LOCK:
+        auto = _global_auto_mode()
+        try:
+            agy_provider.write_gate_state(auto=auto)
+            return True
+        except Exception:
+            logger.warning("[agy] gate state not rewritten (auto=%s)", auto, exc_info=True)
+            if auto:
+                return True  # a stale "step" only over-restricts
+            try:
+                os.remove(agy_provider.gate_state_path())
+                return True
+            except FileNotFoundError:
+                return True
+            except OSError:
+                logger.error("[agy] stale gate state could not be removed", exc_info=True)
+                return False
 
 
 # Observed agy tool payloads nest three or four levels; 40 is far above that and
@@ -73,12 +110,12 @@ class AgyStreamSession(SaglayiciSahipligi):
     def __init__(self, conversation_id: int, *, resume_id: Optional[str] = None,
                  cwd: str = "."):
         # A negative conversation ID marks a throwaway one-shot session; it is
-        # never registered in _SESSIONS or the _RESUME_IDS store.
+        # never in the _RESUME_IDS store, and sits in _SESSIONS only while its
+        # process lives (see _start).
         self.conversation_id = conversation_id
         self.cwd = os.path.abspath(cwd)
         self.session_id = resume_id if conversation_id >= 0 else None
         self.model = None
-        self._spawned_auto: Optional[bool] = None
         self._active_process = None
         self._auto_approve = False
         self._stderr_task = None
@@ -98,17 +135,19 @@ class AgyStreamSession(SaglayiciSahipligi):
 
         The value itself is not trusted (agent_runner also sets it from the
         request): while a process is live, the hook's state file is rewritten
-        from the global mode, so a running step hook starts allowing at once
-        after a flip to auto. A flip to step still needs the respawn in
-        _start: a process spawned in auto has no hook to tighten.
+        from the global mode, so a flip either way bites on that process's
+        next tool call. It has the hook whatever mode it was spawned in.
         """
         self._auto_approve = bool(value)
-        if self.is_live and self._spawned_auto is False:
+        if self.is_live and not _sync_gate_state():
+            # Step mode and the hook may still allow: this process must not
+            # keep running. Its turn then ends with the exit error.
+            logger.error("[agy] gate state stale in step mode; stopping pid=%s",
+                         getattr(self._active_process, "pid", None))
             try:
-                from .agy_provider import write_gate_state
-                write_gate_state(auto=_global_auto_mode())
+                self._active_process.kill()
             except Exception:
-                logger.warning("[agy] step gate state not refreshed", exc_info=True)
+                logger.exception("[agy] could not stop the child with a stale gate state")
 
     @property
     def is_live(self) -> bool:
@@ -202,7 +241,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         return was_live
 
     async def close(self, *, preserve_resume: bool = False) -> None:
-        if self.conversation_id >= 0 and _SESSIONS.get(self.conversation_id) is self:
+        if _SESSIONS.get(self.conversation_id) is self:
             _SESSIONS.pop(self.conversation_id, None)
         if not preserve_resume and self.conversation_id >= 0:
             _RESUME_IDS.pop((self.conversation_id, self.cwd), None)
@@ -215,18 +254,23 @@ class AgyStreamSession(SaglayiciSahipligi):
         if not os.path.isdir(cwd):
             raise AgyWorkspaceError("agy workspace directory does not exist.")
         # The process holds ~/.gemini/settings.json state and the workspace
-        # hooks for its life. Model and approval-mode changes require closing
-        # and respawning, while retaining the UUID.
+        # hooks for its life. A model change requires closing and respawning,
+        # while retaining the UUID. An approval-mode change does not: every
+        # process has the hook, and the mode is only in the hook's state file.
         auto = _global_auto_mode()
-        self.auto_approve = auto
+        self._auto_approve = auto
         if self._active_process is not None and (
             not self.is_live or self.model != model or self.cwd != cwd
-            or self._spawned_auto != auto
         ):
             await self._stop_process()
         if self._kapandi:
             raise RuntimeError("agy session was stopped.")
         if self.is_live:
+            # Self-healing before each turn on a kept process: a flip whose
+            # rewrite failed must not carry into this turn.
+            if not _sync_gate_state():
+                await self._stop_process(force=True)
+                raise AgyStepGateError(_gate_write_failed(gate_state_path(), "yazılamadı"))
             return ""
         if self.cwd != cwd:
             self.session_id = (_RESUME_IDS.get((self.conversation_id, cwd))
@@ -239,12 +283,10 @@ class AgyStreamSession(SaglayiciSahipligi):
         # These existing helpers are mocked by the fake-process tests.
         provider._write_mcp_config(cwd)
         provider._set_agy_model(provider._pending_agy_model, cwd)
-        # In step mode this raises AgyStepGateError unless the gate is verifiably
-        # installed, so agy is never spawned ungated; stream() turns the raise
-        # into the user's error message. False is auto mode's leftover entry.
-        if not provider._write_step_gate(cwd, step_mode=not auto):
-            logger.error("[agy] step gate entry not removed (auto mode) cwd=%s", cwd)
-        self._spawned_auto = auto
+        # In either mode this raises AgyStepGateError unless the gate is
+        # verifiably installed, so agy is never spawned ungated; stream() turns
+        # the raise into the user's error message.
+        provider._write_step_gate(cwd, step_mode=not auto)
         instructions = provider._stream_instructions()
         self._stderr_tail = b""
         self._usage_totals = {}
@@ -261,11 +303,21 @@ class AgyStreamSession(SaglayiciSahipligi):
         self.active_provider = self
         self._stderr_task = asyncio.create_task(self._drain_stderr(process))
         self.model = model
+        if self.conversation_id < 0:
+            # Visible to approval_mode's flip propagation while it runs; close()
+            # removes it. A one-shot is never looked up by id.
+            _SESSIONS[self.conversation_id] = self
         logger.info("[agy] child spawned pid=%s cwd=%s model=%s",
                     getattr(process, "pid", None), cwd, model)
         if self._kapandi:
             await self._stop_process(force=True)
             raise RuntimeError("agy session was stopped during startup.")
+        # A flip while the state was written or the process was created found
+        # no live process to update. agy makes no tool call before its first
+        # stdin line, which stream() writes only after this returns.
+        if _global_auto_mode() != auto and not _sync_gate_state():
+            await self._stop_process(force=True)
+            raise AgyStepGateError(_gate_write_failed(gate_state_path(), "yazılamadı"))
         return instructions
 
     async def _close_safely(self, *, preserve_resume: bool = True) -> None:
@@ -534,5 +586,10 @@ async def close_session(conversation_id: int) -> None:
 
 async def close_all_sessions() -> None:
     for conversation_id in list(_SESSIONS):
+        if conversation_id < 0:
+            session = _SESSIONS.get(conversation_id)
+            if session is not None:
+                await session.close()
+            continue
         await close_session(conversation_id)
     _RESUME_IDS.clear()

@@ -84,31 +84,79 @@ class TestAgyStepGate(unittest.TestCase):
         AgyProvider()._write_step_gate(self.ws, step_mode=False)
         self.assertEqual(self.run_shim({"toolCall": {"name": "write_to_file"}})["decision"], "allow")
 
-    def test_user_hooks_are_kept_and_auto_removes_only_ours(self):
+    def test_user_hooks_are_kept_and_auto_keeps_our_entry(self):
         os.makedirs(os.path.dirname(self.hooks_path))
         user = {"lint": {"PostToolUse": [{"matcher": "run_command", "hooks": [{"command": "x"}]}]}}
         with open(self.hooks_path, "w", encoding="utf-8") as f:
             json.dump(user, f)
         provider = AgyProvider()
         self.assertTrue(provider._write_step_gate(self.ws, step_mode=True))
-        both = self.read_hooks()
-        self.assertEqual(both["lint"], user["lint"])
-        self.assertIn(STEP_GATE_KEY, both)
+        step = self.read_hooks()
+        self.assertEqual(step["lint"], user["lint"])
+        self.assertIn(STEP_GATE_KEY, step)
+        # Auto keeps the hook: only the state file tells it which mode is on.
         self.assertTrue(provider._write_step_gate(self.ws, step_mode=False))
-        self.assertEqual(self.read_hooks(), user)
+        self.assertEqual(self.read_hooks(), step)
+        self.assertEqual(self.read_state()["mode"], "auto")
         # A file that existed before is the user's: we do not gitignore it.
         self.assertFalse(os.path.exists(os.path.join(self.ws, ".gitignore")))
 
-    def test_auto_mode_without_a_file_creates_nothing(self):
+    def test_auto_mode_installs_the_hook_with_an_auto_state(self):
         self.assertTrue(AgyProvider()._write_step_gate(self.ws, step_mode=False))
-        self.assertFalse(os.path.exists(self.hooks_path))
+        entries = self.read_hooks()[STEP_GATE_KEY]["PreToolUse"]
+        self.assertEqual([e["matcher"] for e in entries], list(STEP_GATE_TOOLS))
+        self.assertEqual(self.read_state()["mode"], "auto")
+        with open(os.path.join(self.ws, ".gitignore"), encoding="utf-8") as f:
+            self.assertIn(".agents/hooks.json", f.read())
+
+    def test_process_spawned_in_auto_is_gated_after_a_flip_to_step(self):
+        # The verification round's window: agy spawned in auto keeps the hooks
+        # it read at start, so the flip must bite through the state file alone.
+        AgyProvider()._write_step_gate(self.ws, step_mode=False)
+        self.assertEqual(self.run_shim({"toolCall": {"name": "write_to_file"}})["decision"], "allow")
+        agy_provider.write_gate_state(auto=False)  # what a flip does
+        write = self.run_shim({"toolCall": {"name": "write_to_file", "args": {}}})
+        self.assertEqual(write["decision"], "deny")
+        shell = self.run_shim({"toolCall": {"name": "run_command",
+                                            "args": {"CommandLine": "echo x > a.txt"}}})
+        self.assertEqual(shell["decision"], "deny")
+
+    def test_failed_state_rewrite_in_step_mode_fails_closed(self):
+        from agy_step_gate import decide
+        from providers import agy_session
+        state = os.path.join(self.home, ".unity_architect_ai", "agy", "step-gate.json")
+        write = {"toolCall": {"name": "write_to_file", "args": {}}}
+        agy_provider.write_gate_state(auto=True)
+        with patch.object(agy_session, "_global_auto_mode", return_value=False), \
+                patch.object(agy_provider, "write_gate_state", side_effect=OSError("locked")):
+            # The stale "auto" file is removed; a hook with no state denies.
+            self.assertTrue(agy_session._sync_gate_state())
+            self.assertFalse(os.path.exists(state))
+            self.assertEqual(decide(json.dumps(write).encode(), state)["decision"], "deny")
+            self.assertTrue(agy_session._sync_gate_state())  # already absent
+        agy_provider.write_gate_state(auto=True)
+        with patch.object(agy_session, "_global_auto_mode", return_value=False), \
+                patch.object(agy_provider, "write_gate_state", side_effect=OSError("locked")), \
+                patch.object(agy_session.os, "remove", side_effect=PermissionError("locked")):
+            self.assertFalse(agy_session._sync_gate_state())
+        with patch.object(agy_session, "_global_auto_mode", return_value=True), \
+                patch.object(agy_provider, "write_gate_state", side_effect=OSError("locked")):
+            self.assertTrue(agy_session._sync_gate_state())  # stale step only over-restricts
+        with patch.object(agy_session, "_global_auto_mode", return_value=False):
+            self.assertTrue(agy_session._sync_gate_state())
+        self.assertEqual(self.read_state()["mode"], "step")
+
+    def read_state(self):
+        with open(os.path.join(self.home, ".unity_architect_ai", "agy", "step-gate.json"),
+                  encoding="utf-8") as f:
+            return json.load(f)
 
     def write_user_file(self, text):
         os.makedirs(os.path.dirname(self.hooks_path), exist_ok=True)
         with open(self.hooks_path, "w", encoding="utf-8") as f:
             f.write(text)
 
-    def test_unreadable_user_file_is_left_alone_and_step_mode_refuses(self):
+    def test_unreadable_user_file_is_left_alone_and_every_mode_refuses(self):
         for text in ("{not json", "[1, 2]", '"text"', "{", "\xff\xfe"):
             with self.subTest(text=text):
                 self.write_user_file(text)
@@ -120,8 +168,13 @@ class TestAgyStepGate(unittest.TestCase):
                 self.assertIn("silin", message)
                 with open(self.hooks_path, encoding="utf-8") as f:
                     self.assertEqual(f.read(), text)
-                # Auto mode only needs our entry gone; it reports, never raises.
-                self.assertFalse(AgyProvider()._write_step_gate(self.ws, step_mode=False))
+                # Auto refuses too: a process spawned there must stay gateable.
+                with self.assertRaises(AgyStepGateError) as caught:
+                    AgyProvider()._write_step_gate(self.ws, step_mode=False)
+                self.assertIn("agy başlatılmadı", str(caught.exception))
+                self.assertIn("Otomatik moddasınız", str(caught.exception))
+                with open(self.hooks_path, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), text)
 
     def test_state_file_not_written_refuses_even_with_a_stale_auto_state(self):
         agy_provider.write_gate_state(auto=True)  # left over from an auto session
@@ -138,12 +191,27 @@ class TestAgyStepGate(unittest.TestCase):
                 AgyProvider()._write_step_gate(self.ws, step_mode=True)
         self.assertIn("doğrulanamadı", str(caught.exception))
 
-    def test_hooks_write_refused_raises_in_step_mode(self):
-        with patch("providers.workspace_config.guvenli_config_yaz", return_value=False):
+    def test_hooks_write_refused_raises_in_every_mode(self):
+        for step_mode in (True, False):
+            with self.subTest(step_mode=step_mode):
+                with patch("providers.workspace_config.guvenli_config_yaz", return_value=False):
+                    with self.assertRaises(AgyStepGateError) as caught:
+                        AgyProvider()._write_step_gate(self.ws, step_mode=step_mode)
+                self.assertIn(self.hooks_path, str(caught.exception))
+                self.assertFalse(os.path.exists(self.hooks_path))
+
+    def test_auto_state_not_written_refuses(self):
+        with patch.object(agy_provider, "write_gate_state", side_effect=OSError("disk full")):
             with self.assertRaises(AgyStepGateError) as caught:
-                AgyProvider()._write_step_gate(self.ws, step_mode=True)
-        self.assertIn(self.hooks_path, str(caught.exception))
-        self.assertFalse(os.path.exists(self.hooks_path))
+                AgyProvider()._write_step_gate(self.ws, step_mode=False)
+        self.assertIn("disk full", str(caught.exception))
+
+    def test_stale_step_state_is_caught_by_the_read_back_in_auto(self):
+        agy_provider.write_gate_state(auto=False)
+        with patch.object(agy_provider, "write_gate_state"):
+            with self.assertRaises(AgyStepGateError) as caught:
+                AgyProvider()._write_step_gate(self.ws, step_mode=False)
+        self.assertIn("doğrulanamadı", str(caught.exception))
 
     def test_shim_write_failure_raises_in_step_mode(self):
         with patch.object(AgyProvider, "_step_gate_command", side_effect=PermissionError("locked")):

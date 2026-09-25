@@ -228,22 +228,121 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(argv[argv.index("--conversation") + 1], SESSION_ID)
         self.assertEqual(AgyProvider._set_agy_model.call_args.args[0], "Gemini 3.8 Flash (High)")
 
-    async def test_approval_mode_change_respawns_with_gate_and_preserves_uuid(self):
-        # agy reads workspace hooks only at start, so a flip must respawn.
+    async def test_approval_mode_change_keeps_the_process_and_rewrites_its_state(self):
+        # Every process has the hook, so a flip needs no respawn: the next turn
+        # rewrites the state file the hook reads.
+        from providers import agy_provider
         session = agy_session.get_session(11)
         await self.collect(session)
         self.assertEqual(AgyProvider._write_step_gate.call_args.kwargs, {"step_mode": False})
-        await self.collect(session)
-        self.assertEqual(len(self.processes), 1)
+        agy_provider.write_gate_state.reset_mock()
         self.auto = False
-        # Without the respawn the turn would wait on the old, drained process.
-        await asyncio.wait_for(self.collect(session), 5)
-        self.assertEqual(len(self.processes), 2)
-        self.assertIsNotNone(self.processes[0].returncode)
-        self.assertEqual(AgyProvider._write_step_gate.call_args.kwargs, {"step_mode": True})
+        await asyncio.wait_for(self.collect(session, "second turn"), 5)
+        self.assertEqual(len(self.processes), 1)
+        self.assertIsNone(self.processes[0].returncode)
+        agy_provider.write_gate_state.assert_called_once_with(auto=False)
         self.assertFalse(session.auto_approve)
-        argv = self.spawns[1][0]
-        self.assertEqual(argv[argv.index("--conversation") + 1], SESSION_ID)
+
+    async def test_flip_to_step_during_an_auto_turn_reaches_the_hook_state(self):
+        # The previously accepted window: a process spawned in auto, mid-turn.
+        from agentic import approval_mode
+        from providers import agy_provider
+        release = asyncio.Event()
+        self.plans = [{"release": release}]
+        session = agy_session.get_session(11)
+        turn = asyncio.create_task(self.collect(session))
+        await asyncio.wait_for(self.wait_for_process_write(), 5)
+        agy_provider.write_gate_state.reset_mock()
+        self.auto = False
+        approval_mode._propagate_to_live_sessions(False)
+        agy_provider.write_gate_state.assert_called_once_with(auto=False)
+        release.set()
+        events = await asyncio.wait_for(turn, 5)
+        self.assertEqual(events[-1]["type"], "done")
+
+    async def wait_for_process_write(self):
+        while not self.processes:
+            await asyncio.sleep(0)
+        await self.processes[0].written.wait()
+
+    async def test_flip_during_spawn_is_written_before_the_first_stdin_line(self):
+        # The verification round's window: auto when the state was written,
+        # step by the time the process exists (no live process to update yet).
+        from providers import agy_provider
+        order = []
+        agy_provider.write_gate_state.side_effect = lambda auto: order.append(
+            ("state", auto, sum(len(p.stdin.lines) for p in self.processes)))
+        real_spawn = self.spawn
+
+        async def flipping_spawn(*argv, **kwargs):
+            self.auto = False
+            return await real_spawn(*argv, **kwargs)
+
+        with patch.object(agy_session.asyncio, "create_subprocess_exec", side_effect=flipping_spawn):
+            events = await self.collect()
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(AgyProvider._write_step_gate.call_args.kwargs, {"step_mode": False})
+        self.assertIn(("state", False, 0), order)
+
+    async def test_stale_state_after_spawn_stops_the_process(self):
+        from providers import agy_provider
+        real_spawn = self.spawn
+
+        async def flipping_spawn(*argv, **kwargs):
+            self.auto = False
+            return await real_spawn(*argv, **kwargs)
+
+        with patch.object(agy_session, "_sync_gate_state", return_value=False), \
+                patch.object(agy_session.asyncio, "create_subprocess_exec", side_effect=flipping_spawn):
+            events = await self.collect()
+        self.assertEqual([e["type"] for e in events], ["error"])
+        self.assertIn("agy başlatılmadı", events[0]["message"])
+        self.assertIsNotNone(self.processes[0].returncode)
+        self.assertEqual(self.processes[0].stdin.lines, [])
+
+    async def test_stale_state_at_turn_start_stops_a_kept_process(self):
+        session = agy_session.get_session(11)
+        await self.collect(session)
+        with patch.object(agy_session, "_sync_gate_state", return_value=False):
+            events = await self.collect(session, "second turn")
+        self.assertEqual([e["type"] for e in events], ["error"])
+        self.assertIsNotNone(self.processes[0].returncode)
+        self.assertEqual(len(self.processes[0].stdin.lines), 1)
+
+    async def test_setter_kills_a_live_process_whose_state_stays_stale(self):
+        self.auto = False
+        session = agy_session.get_session(11)
+        await self.collect(session)
+        with patch.object(agy_session, "_sync_gate_state", return_value=False):
+            session.auto_approve = False
+        self.assertTrue(self.processes[0].killed)
+
+    async def test_one_shot_session_is_reached_by_a_flip_while_it_runs(self):
+        from agentic import approval_mode
+        from providers import agy_provider
+        release = asyncio.Event()
+        self.plans = [{"release": release}]
+        session = agy_session.get_session(-7)
+        turn = asyncio.create_task(self.collect(session))
+        await asyncio.wait_for(self.wait_for_process_write(), 5)
+        self.assertIs(agy_session._SESSIONS.get(-7), session)
+        self.assertIsNone(agy_session.peek_session(-7))
+        agy_provider.write_gate_state.reset_mock()
+        self.auto = False
+        approval_mode._propagate_to_live_sessions(False)
+        agy_provider.write_gate_state.assert_called_once_with(auto=False)
+        release.set()
+        await asyncio.wait_for(turn, 5)
+        await session.close()
+        self.assertNotIn(-7, agy_session._SESSIONS)
+
+    async def test_close_all_sessions_stops_a_running_one_shot(self):
+        session = agy_session.get_session(-8)
+        await self.collect(session)
+        self.assertIn(-8, agy_session._SESSIONS)
+        await agy_session.close_all_sessions()
+        self.assertNotIn(-8, agy_session._SESSIONS)
+        self.assertIsNotNone(self.processes[0].returncode)
 
     async def test_mode_flip_refreshes_hook_state_of_a_live_step_process(self):
         from providers import agy_provider

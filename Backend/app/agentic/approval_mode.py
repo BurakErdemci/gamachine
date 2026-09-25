@@ -152,13 +152,12 @@ def _propagate_to_live_sessions(auto: bool) -> None:
     approval request of their running process, so for them a flip bites within
     the current turn.
 
-    agy: its built-in tools are gated by a workspace hook fixed at spawn time
-    (agy_session reads current_mode() then; the hook exists only in step
-    mode). Setting the flag rewrites the hook's state file from current_mode(),
-    so a flip to auto frees a live step-mode process at once. A flip to step
-    cannot tighten a process spawned in auto (it has no hook): its built-in
-    tools stay ungated until the current turn ends, and the next turn respawns
-    it with the hook.
+    agy: its built-in tools are gated by a workspace hook that every agy
+    process gets at spawn, in both modes (a failed install refuses the spawn).
+    The hook reads a state file on every tool call, and setting the flag
+    rewrites that file from current_mode(), so a flip either way bites on the
+    process's next tool call, one-shot agy sessions included (they sit in
+    agy_session._SESSIONS while their process lives).
 
     What it cannot reach: the one-shot CLIs (cursor, copilot, opencode, kimi)
     carry the attribute, but nothing in their running process reads it; their
