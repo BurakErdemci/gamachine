@@ -29,6 +29,10 @@ namespace MCPForUnity.Editor.Tools.Playtest
         internal const int MaxFramesPerJob = 108000;
         internal const double MaxPerfSecondsPerScenario = 120;
         internal const double MaxPerfSecondsPerJob = 600;
+        // 600 s is also what a step without timeout_seconds gets, so the cap only bounds explicit values.
+        internal const double MaxStepTimeoutSeconds = 600;
+        // Wall clock from job start: no scenario starts after it, and step timeouts are cut to what is left.
+        internal const double MaxSecondsPerJob = 3600;
 
         [Serializable]
         private class Job
@@ -78,18 +82,18 @@ namespace MCPForUnity.Editor.Tools.Playtest
             if (files.Count == 0) return $"No scenario files matched {(path ?? glob ?? DefaultGlob)}.";
             if (files.Count > MaxScenariosPerJob)
                 return $"{files.Count} scenario files matched; one run_playtest job runs at most {MaxScenariosPerJob}. Narrow path or glob.";
-            int totalFrames = 0;
+            long totalFrames = 0;
             double totalPerf = 0;
             foreach (var file in files)
             {
                 // Other load errors are reported as that scenario's result when it runs, as before.
-                var sc = LoadScenario(file, out var loadErr, out int frames);
+                var sc = LoadScenario(file, out var loadErr, out long frames);
                 if (frames > MaxFramesPerScenario) return $"{file}: {loadErr}";
                 totalFrames += frames;
+                if (totalFrames > MaxFramesPerJob)
+                    return $"The matched scenarios step more than {MaxFramesPerJob} frames in total (reached {totalFrames} by {file}); one run_playtest job steps at most {MaxFramesPerJob}. Split the run with path or glob.";
                 totalPerf += PerfSeconds(sc);
             }
-            if (totalFrames > MaxFramesPerJob)
-                return $"The matched scenarios step {totalFrames} frames in total; one run_playtest job steps at most {MaxFramesPerJob}. Split the run with path or glob.";
             if (totalPerf > MaxPerfSecondsPerJob)
                 return $"The matched scenarios request {totalPerf:0.#} s of perf sampling; one run_playtest job allows at most {MaxPerfSecondsPerJob:0} s. Split the run with path or glob.";
 
@@ -138,7 +142,8 @@ namespace MCPForUnity.Editor.Tools.Playtest
 
         /// <summary>
         /// Full path of <paramref name="path"/> (project-relative or rooted) when it lies under the project's Assets
-        /// folder and nothing below Assets on the way is a junction or symbolic link; otherwise null and an error.
+        /// folder and neither Assets nor anything below it on the way is a junction or symbolic link; otherwise null
+        /// and an error.
         /// </summary>
         internal static string ConfineToAssets(string projectRoot, string path, out string error)
         {
@@ -163,7 +168,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             }
             // Links are refused, not followed: this runtime has no API that reads a link's target, and a link below
             // Assets can point anywhere on disk while the path still looks project-relative.
-            for (string p = full; p != null && p.Length > assets.Length; p = Path.GetDirectoryName(p))
+            for (string p = full; p != null && p.Length >= assets.Length; p = Path.GetDirectoryName(p))
             {
                 if ((File.Exists(p) || Directory.Exists(p)) && (File.GetAttributes(p) & FileAttributes.ReparsePoint) != 0)
                 {
@@ -249,6 +254,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
                     var result = new JObject { ["scenario"] = sc?["name"]?.ToString() ?? Path.GetFileName(file), ["path"] = file };
                     SetCurrent(result);
                     if (err != null) { Fail(err, stop: false); return; }
+                    if (JobSecondsLeft() <= 0) { Fail($"not started: the job used its {MaxSecondsPerJob:0} s wall-clock budget", stop: false); return; }
                     string startErr = PlaytestSession.BeginStart(sc["scene"]?.ToString(), ScenarioSeed(sc), ScenarioDt(sc), true, 120, false);
                     if (startErr != null) { Fail("play_session start: " + startErr, stop: false); return; }
                     s_Job.phase = "starting";
@@ -345,12 +351,18 @@ namespace MCPForUnity.Editor.Tools.Playtest
             Save();
         }
 
+        private static double JobSecondsLeft() => MaxSecondsPerJob - (Now - s_Job.started);
+
+        /// <summary>Watchdog for one scenario step: its own timeout, capped, and never past the job's budget.</summary>
+        internal static double StepTimeout(double? requested, double jobSecondsLeft) =>
+            Math.Min(Math.Min(requested ?? MaxStepTimeoutSeconds, MaxStepTimeoutSeconds), jobSecondsLeft);
+
         private static int ScenarioSeed(JObject sc) => s_Job.hasSeedOverride ? s_Job.seedOverride : sc["seed"]?.Value<int?>() ?? 0;
 
         private static float ScenarioDt(JObject sc) => sc["fixed_dt"]?.Value<float?>() ?? 1f / 60f;
 
         /// <summary>Reads and validates a scenario; <paramref name="frames"/> is the sum of its steps' frames.</summary>
-        private static JObject LoadScenario(string file, out string error, out int frames)
+        private static JObject LoadScenario(string file, out string error, out long frames)
         {
             error = null;
             frames = 0;
@@ -374,11 +386,11 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 var perr = PlaytestStepper.Parse(so, out var spec);
                 if (perr != null) { error = "step: " + perr; return sc; }
                 frames += spec.Frames;
-            }
-            if (frames > MaxFramesPerScenario)
-            {
-                error = $"scenario steps {frames} frames; a scenario steps at most {MaxFramesPerScenario}.";
-                return sc;
+                if (frames > MaxFramesPerScenario)
+                {
+                    error = $"scenario steps more than {MaxFramesPerScenario} frames; a scenario steps at most {MaxFramesPerScenario}.";
+                    return sc;
+                }
             }
             if (sc["expect"] != null && !(sc["expect"] is JArray)) { error = "'expect' must be a list"; return sc; }
             if (sc["perf"] != null && !(sc["perf"] is JObject)) { error = "'perf' must be an object {seconds}"; return sc; }
@@ -398,7 +410,12 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 PlaytestStepper.Parse(step, out var spec);
                 spec.InlineImage = false;
                 spec.CaptureLabel = result["scenario"]?.ToString() ?? "scenario";
-                if (step["timeout_seconds"] == null) spec.TimeoutS = 600;
+                spec.TimeoutS = StepTimeout(step["timeout_seconds"] == null ? (double?)null : spec.TimeoutS, JobSecondsLeft());
+                if (spec.TimeoutS <= 0)
+                {
+                    runError = $"stopped: the job used its {MaxSecondsPerJob:0} s wall-clock budget";
+                    break;
+                }
                 var data = await PlaytestStepper.Start(spec);
                 if (data["stopped_by"] == null)
                 {
@@ -452,7 +469,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 Time.captureDeltaTime = 0f;
                 PlaytestPerf.Start();
                 EditorApplication.isPaused = false;
-                await WaitSeconds(Math.Min(perfSeconds, MaxPerfSecondsPerScenario));
+                await WaitSeconds(Math.Max(0, Math.Min(Math.Min(perfSeconds, MaxPerfSecondsPerScenario), JobSecondsLeft())));
                 EditorApplication.isPaused = true;
                 perf = PlaytestPerf.Finish();
                 perf["seconds"] = perfSeconds;

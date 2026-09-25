@@ -81,6 +81,18 @@ namespace MCPForUnityTests.Editor.Tools.Playtest
         }
 
         [Test]
+        public void StepTimeout_IsCappedAndNeverOutlivesTheJobBudget()
+        {
+            double cap = PlaytestRunner.MaxStepTimeoutSeconds;
+            Assert.AreEqual(cap, PlaytestRunner.StepTimeout(null, PlaytestRunner.MaxSecondsPerJob));
+            Assert.AreEqual(30, PlaytestRunner.StepTimeout(30, PlaytestRunner.MaxSecondsPerJob));
+            Assert.AreEqual(cap, PlaytestRunner.StepTimeout(1e9, PlaytestRunner.MaxSecondsPerJob));
+            Assert.AreEqual(cap, PlaytestRunner.StepTimeout(double.PositiveInfinity, PlaytestRunner.MaxSecondsPerJob));
+            Assert.AreEqual(12, PlaytestRunner.StepTimeout(1e9, 12));
+            Assert.LessOrEqual(PlaytestRunner.StepTimeout(30, -5), 0);
+        }
+
+        [Test]
         public void ConfineToAssets_AcceptsOnlyPathsUnderAssets()
         {
             Assert.IsNotNull(PlaytestRunner.ConfineToAssets(_project, "Assets/Playtests/a.playtest.json", out var err), err);
@@ -120,6 +132,29 @@ namespace MCPForUnityTests.Editor.Tools.Playtest
             Assert.IsNull(PlaytestRunner.ConfineToAssets(_project, "Assets/Playtests/linked/case.playtest.json", out var err));
             StringAssert.Contains("junction or symbolic link", err);
             Assert.IsNull(PlaytestRunner.ConfineToAssets(_project, "Assets/Playtests/linked", out err));
+            StringAssert.Contains("junction or symbolic link", err);
+        }
+
+        [Test]
+        public void ConfineToAssets_RejectsLinkedAssetsRoot()
+        {
+            string linkedProject = Path.Combine(_tmp, "linked-project");
+            Directory.CreateDirectory(linkedProject);
+            _link = Path.Combine(linkedProject, "Assets");
+            string target = Path.Combine(_tmp, "outside");
+            var psi = Path.DirectorySeparatorChar == '\\'
+                ? new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{_link}\" \"{target}\"")
+                : new ProcessStartInfo("ln", $"-s \"{target}\" \"{_link}\"");
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            using (var p = Process.Start(psi))
+            {
+                if (!p.WaitForExit(10000)) p.Kill();
+            }
+            if (!File.Exists(Path.Combine(_link, "case.playtest.json")))
+                Assert.Ignore("could not create a directory link on this machine");
+
+            Assert.IsNull(PlaytestRunner.ConfineToAssets(linkedProject, "Assets/case.playtest.json", out var err));
             StringAssert.Contains("junction or symbolic link", err);
         }
 
