@@ -382,6 +382,44 @@ def test_tools_list_changed_refreshes_the_cache(server):
     assert umt.is_unity_tool("play_step")
 
 
+def test_a_list_changed_burst_runs_one_refresh_at_a_time_plus_one_follow_up():
+    client = umt._UnityMCPClient()
+    release = threading.Event()
+    lock = threading.Lock()
+    state = {"active": 0, "peak": 0, "runs": 0}
+
+    def _refresh():
+        with lock:
+            state["active"] += 1
+            state["runs"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        release.wait(5)
+        with lock:
+            state["active"] -= 1
+
+    client.on_tools_changed = _refresh
+    note = types.ServerNotification(
+        types.ToolListChangedNotification(method="notifications/tools/list_changed"))
+
+    async def _burst():
+        await client._on_message(note)
+        while state["active"] == 0:
+            await asyncio.sleep(0.01)
+        # These arrive while the first refresh runs.
+        for _ in range(7):
+            await client._on_message(note)
+        await asyncio.sleep(0.2)
+        release.set()
+        await asyncio.sleep(0.3)
+
+    try:
+        client.run(_burst(), timeout=10)
+    finally:
+        release.set()
+    assert state["peak"] == 1
+    assert state["runs"] == 2, "changes during a refresh are covered by exactly one follow-up"
+
+
 def test_schema_token_estimate_is_chars_over_four():
     defs = [{"name": "a", "description": "b", "parameters": {}}]
     assert umt.estimate_schema_tokens(defs) == len(json.dumps(defs)) // 4

@@ -149,6 +149,8 @@ class _UnityMCPClient:
         self._conn: Optional[_Connection] = None
         self._retired: set = set()
         self._connect_lock: Optional[asyncio.Lock] = None
+        self._refresh_task: Optional[asyncio.Task] = None
+        self._refresh_again = False
         self.on_tools_changed: Optional[Callable[[], None]] = None
 
     # ── loop thread ──────────────────────────────────────────────────────
@@ -224,8 +226,8 @@ class _UnityMCPClient:
                     self._conn = None
                 await self._shutdown(conn)
                 raise
-            if refresh_on_connect and self.on_tools_changed is not None:
-                loop.create_task(self._notify_tools_changed())
+            if refresh_on_connect:
+                self._request_refresh()
             conn.active += 1
             return conn, session
 
@@ -274,7 +276,25 @@ class _UnityMCPClient:
         root = getattr(message, "root", None)
         if type(root).__name__ == "ToolListChangedNotification":
             logger.info("[UnityMCP] tools/list_changed received; refreshing tool list")
-            asyncio.get_running_loop().create_task(self._notify_tools_changed())
+            self._request_refresh()
+
+    def _request_refresh(self) -> None:
+        """At most one refresh runs; changes that arrive during it schedule exactly
+        one follow-up, so a notification burst cannot fan out into concurrent
+        refreshes that overwrite each other's cache."""
+        if self.on_tools_changed is None:
+            return
+        if self._refresh_task is not None and not self._refresh_task.done():
+            self._refresh_again = True
+            return
+        self._refresh_task = asyncio.get_running_loop().create_task(self._refresh_loop())
+
+    async def _refresh_loop(self) -> None:
+        while True:
+            self._refresh_again = False
+            await self._notify_tools_changed()
+            if not self._refresh_again:
+                return
 
     async def _notify_tools_changed(self) -> None:
         callback = self.on_tools_changed
