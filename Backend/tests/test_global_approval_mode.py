@@ -176,6 +176,7 @@ def test_fresh_install_starts_in_auto_without_storing_it(tmp_path):
     from database import DatabaseManager
 
     db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(db)
     assert approval_mode.current_mode() == "auto"
     # Not written: the renderer's one-time legacy migration keys off this.
@@ -199,6 +200,7 @@ def test_mode_is_persisted_across_restarts(tmp_path):
 def test_explicit_step_survives_a_restart_despite_the_auto_default(tmp_path):
     from database import DatabaseManager
 
+    approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
     assert approval_mode.current_mode() == "auto"
     approval_mode.set_mode("step", source="test")
@@ -206,6 +208,78 @@ def test_explicit_step_survives_a_restart_despite_the_auto_default(tmp_path):
     approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
     assert approval_mode.current_mode() == "step"
     assert approval_mode.is_stored() is True
+
+
+class _FreshStore:
+    def __init__(self):
+        self.rows = {}
+
+    def get_setting(self, key):
+        return self.rows.get(key)
+
+    def set_setting(self, key, value):
+        self.rows[key] = value
+
+
+def test_fresh_install_without_a_ui_secret_starts_in_step():
+    """Docker backend / uvicorn reload worker: no secret, so auto could never be left."""
+    store = _FreshStore()
+    approval_mode.bind_store(store)
+    assert approval_mode.current_mode() == "step"
+    assert approval_mode.is_stored() is False
+    assert store.rows == {}
+    with _client() as client:
+        assert client.get("/approval-mode").json() == {"mode": "step", "stored": False}
+
+
+def test_fresh_install_default_follows_a_secret_read_after_bind():
+    """Electron path: main binds the store at import, reads the stdin secret later."""
+    approval_mode.bind_store(_FreshStore())
+    assert approval_mode.current_mode() == "step"
+    approval_mode.set_ui_secret(UI_SECRET)
+    assert approval_mode.current_mode() == "auto"
+    with _client() as client:
+        resp = _flip(client, "step")
+        assert resp.status_code == 200
+        assert resp.json()["previous"] == "auto"
+    assert approval_mode.current_mode() == "step"
+
+
+def test_stored_auto_wins_without_a_ui_secret():
+    store = _FreshStore()
+    store.rows["approval_mode"] = "auto"
+    approval_mode.bind_store(store)
+    assert approval_mode.current_mode() == "auto"
+    assert approval_mode.is_stored() is True
+
+
+def test_real_main_picks_the_fresh_default_after_the_stdin_secret(tmp_path):
+    """Imports the real main.py: import alone is what the reload worker runs,
+    the stdin read is what Electron's spawn adds afterwards."""
+    import subprocess
+    import sys
+
+    app_dir = os.path.join(os.path.dirname(__file__), "..", "app")
+    program = (
+        "import os, sys; sys.path.insert(0, os.environ['APP_DIR']);"
+        "import local_token_file;"
+        "local_token_file._TOKEN_DIR = os.environ['TMP_DIR'];"
+        "local_token_file._TOKEN_PATH = os.path.join(os.environ['TMP_DIR'], 'tok');"
+        "import main;"
+        "from agentic import approval_mode;"
+        "print('after-import', approval_mode.current_mode());"
+        "main._read_ui_secret_from_stdin();"
+        "print('after-stdin', approval_mode.current_mode(), approval_mode.is_stored())"
+    )
+    env = dict(os.environ, APP_DIR=app_dir, TMP_DIR=str(tmp_path),
+               DB_PATH=str(tmp_path / "fresh.db"), GAMACHINE_UI_SECRET_STDIN="1")
+    env.pop("LOCAL_APP_TOKEN", None)
+    done = subprocess.run([sys.executable, "-c", program], env=env, input="electron-secret\n",
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.strip().splitlines()
+    assert "after-import step" in lines
+    assert "after-stdin auto False" in lines
 
 
 def test_tampered_stored_value_falls_to_step(tmp_path):

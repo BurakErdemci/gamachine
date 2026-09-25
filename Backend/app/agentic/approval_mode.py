@@ -17,6 +17,11 @@ them could otherwise flip itself into auto mode.
 
 Default (owner decision, 25 Sep 2026): a fresh install, where nothing was ever
 saved, starts in auto. A saved choice always wins and survives restarts.
+Exception: a process that holds no UI secret (Docker backend, which Electron
+never spawns; the uvicorn reload worker, where main's __main__ block never
+ran) could never be switched out of auto, so its fresh-install mode is step.
+That is decided on every read, not in bind_store(): main binds the store at
+import time and only reads the secret later, in __main__.
 
 Known limit: the persisted value is only as trustworthy as the user's data
 directory; a same-user process that edits the SQLite file (or deletes the row,
@@ -42,6 +47,9 @@ _SETTING_KEY = "approval_mode"
 _LOCK = threading.Lock()
 _mode: str = FALLBACK_MODE
 _stored: bool = False
+# A clean read found no saved row; the effective mode then depends on whether a
+# UI secret is configured at the time of asking.
+_fresh_install: bool = False
 _store: Any = None
 _ui_secret: bytes = b""
 
@@ -49,10 +57,10 @@ _ui_secret: bytes = b""
 def bind_store(store: Any) -> None:
     """Attach the persistence layer (DatabaseManager) and load the saved mode.
 
-    Only a clean read that finds no row at all is a fresh install (auto). An
+    Only a clean read that finds no row at all is a fresh install. An
     unreadable or tampered value must fall to step, never fail open to auto.
     """
-    global _store, _mode, _stored
+    global _store, _mode, _stored, _fresh_install
     value: Optional[str] = None
     read_ok = False
     try:
@@ -63,17 +71,28 @@ def bind_store(store: Any) -> None:
     with _LOCK:
         _store = store
         if isinstance(value, str) and value in MODES:
-            _mode, _stored = value, True
+            _mode, _stored, _fresh_install = value, True, False
         elif read_ok and value is None:
-            _mode, _stored = FRESH_INSTALL_MODE, False
+            _mode, _stored, _fresh_install = FALLBACK_MODE, False, True
         else:
-            _mode, _stored = FALLBACK_MODE, False
-    logger.info("[approval-mode] startup mode=%s (stored=%s)", _mode, _stored)
+            _mode, _stored, _fresh_install = FALLBACK_MODE, False, False
+        fresh = _fresh_install
+    if fresh:
+        logger.info("[approval-mode] startup: fresh install, %s with a UI secret, %s without",
+                    FRESH_INSTALL_MODE, FALLBACK_MODE)
+    else:
+        logger.info("[approval-mode] startup mode=%s (stored=%s)", _mode, _stored)
+
+
+def _effective_mode_locked() -> str:
+    if _fresh_install:
+        return FRESH_INSTALL_MODE if _ui_secret else FALLBACK_MODE
+    return _mode
 
 
 def current_mode() -> str:
     with _LOCK:
-        return _mode
+        return _effective_mode_locked()
 
 
 def is_auto() -> bool:
@@ -90,24 +109,37 @@ def set_mode(mode: str, source: str = "ui") -> str:
     """Persist and apply a new mode; returns the previous one."""
     if mode not in MODES:
         raise ValueError(f"unknown approval mode: {mode!r}")
-    global _mode, _stored
+    global _mode, _stored, _fresh_install
     with _LOCK:
-        previous = _mode
+        previous = _effective_mode_locked()
         store = _store
     if store is not None:
         # Persist first: a mode that is live but not saved would silently
         # revert on the next launch.
         store.set_setting(_SETTING_KEY, mode)
     with _LOCK:
-        _mode, _stored = mode, True
+        _mode, _stored, _fresh_install = mode, True, False
     logger.warning("[approval-mode] %s -> %s (source=%s)", previous, mode, source)
     _propagate_to_live_sessions(mode == "auto")
     return previous
 
 
 def _propagate_to_live_sessions(auto: bool) -> None:
-    """Running CLI sessions snapshot the mode per turn; update them in place so a
-    flip applies to the rest of the current turn too (step must bite at once)."""
+    """Update the auto_approve flag of registered CLI sessions in place.
+
+    What this reaches: Claude SDK and Codex sessions read auto_approve on every
+    approval request of their running process, so for them a flip bites within
+    the current turn.
+
+    What it cannot reach: agy and the one-shot CLIs (cursor, copilot, opencode,
+    kimi) carry the attribute, but nothing in their running process reads it;
+    their approval behaviour is fixed when the process is spawned (agent_runner
+    passes `interactive=` then, agy_provider's one-shot analyze hard-codes
+    auto). Such a process keeps that behaviour for its own built-in tools until
+    it exits. Only its Unity MCP calls follow a flip at once, because
+    /mcp-approval-request reads current_mode() on every request. Nothing here
+    kills a running process.
+    """
     targets = (
         ("providers.claude_sdk_session", "_SESSIONS"),
         ("providers.codex_session", "_SESSIONS"),
@@ -153,6 +185,7 @@ def check_ui_secret(presented: str) -> bool:
 
 
 def _reset_for_tests() -> None:
-    global _mode, _stored, _store, _ui_secret
+    global _mode, _stored, _store, _ui_secret, _fresh_install
     with _LOCK:
         _mode, _stored, _store, _ui_secret = FALLBACK_MODE, False, None, b""
+        _fresh_install = False
