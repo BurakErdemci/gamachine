@@ -459,6 +459,69 @@ def test_a_parked_call_does_not_hold_up_a_cancel_or_a_parallel_call():
     assert order == [0, "notifications/initialized", 1, 2, "notifications/cancelled", 3]
 
 
+def test_a_request_beyond_the_cap_is_refused_at_once_and_a_cancel_still_flows():
+    """verification round 26 Sep 2026 (cancellation-head-of-line-blocking):
+    with MAX_IN_FLIGHT calls parked, request 17 used to park the stdin reader,
+    so the cancel behind it was not forwarded until a worker finished."""
+    limit = cb.MAX_IN_FLIGHT
+    release = threading.Event()
+    seen_cancel = threading.Event()
+
+    def respond(message, headers):
+        method = message.get("method")
+        if method == "initialize":
+            return _init_result(message)
+        if method == "notifications/cancelled":
+            seen_cancel.set()
+        if "id" not in message:
+            return (202, {}, b"")
+        if message["params"]["name"] == "slow":
+            release.wait(10)
+        return (200, {"Content-Type": "application/json"},
+                {"jsonrpc": "2.0", "id": message["id"],
+                 "result": {"content": [{"type": "text", "text": message["params"]["name"]}]}})
+
+    srv = ScriptedHTTPServer(respond)
+    out = _Stdout()
+    checked = threading.Event()
+    over = limit + 1
+
+    def stdin():
+        yield _line(INIT)
+        out.wait_for(lambda lines: any(m.get("id") == 0 for m in lines))
+        yield _line(INITIALIZED)
+        for i in range(1, limit + 1):
+            yield _line(_call(i, "slow"))
+        yield _line(_call(over, "mutate"))
+        yield _line({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                     "params": {"requestId": 1}})
+        # All parked calls are still held: the refusal and the cancel are through.
+        out.wait_for(lambda lines: any(m.get("id") == over for m in lines))
+        assert seen_cancel.wait(5)
+        assert not ({m.get("id") for m in out.lines} & set(range(1, limit + 1)))
+        checked.set()
+        release.set()
+        out.wait_for(lambda lines: set(range(1, limit + 1)) <= {m.get("id") for m in lines})
+        # A freed slot takes the next request as before.
+        yield _line(_call(over + 1, "fast"))
+
+    try:
+        _bridge(srv.url).run(stdin=stdin(), stdout=out)
+    finally:
+        release.set()
+        srv.close()
+    assert checked.is_set()
+    ids = [m.get("id") for m in out.lines]
+    assert sorted(ids) == list(range(0, over + 2)), ids  # exactly one answer per request
+    [refused] = [m for m in out.lines if m.get("id") == over]
+    assert refused["error"]["code"] == cb.BUSY_ERROR_CODE
+    assert refused["error"]["message"] == cb.MSG_BUSY.format(limit=limit)
+    sent = [m.get("id", m.get("method")) for m in srv.accepted]
+    assert over not in sent  # refused, never sent to the server
+    assert sent == ([0, "notifications/initialized"] + list(range(1, limit + 1))
+                    + ["notifications/cancelled", over + 1])
+
+
 def test_concurrent_404s_replay_the_handshake_once():
     state = {"inits": 0, "runs": [], "restarted": True}
     gate = threading.Barrier(2, timeout=5)

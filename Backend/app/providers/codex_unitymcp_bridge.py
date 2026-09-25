@@ -43,7 +43,8 @@ response runs on a worker thread, so a request parked on an approval card no
 longer holds up a notifications/cancelled or a parallel read. `initialize` and
 notifications are finished on the reader thread (nothing may overtake the
 handshake). Responses can come back out of order; JSON-RPC clients match them
-by id.
+by id. At most MAX_IN_FLIGHT requests wait at once; one more is answered at
+once with an error and never sent, so the reader never waits for a worker.
 
 Scope: client-initiated requests and notifications. Server-initiated messages
 that arrive inside a POST's SSE stream are forwarded; a standalone GET stream
@@ -72,8 +73,11 @@ CONNECT_TIMEOUT_S = 10
 REINIT_TIMEOUT_S = 30
 # Notifications are answered 202 at once; they run on the reader thread.
 NOTIFY_TIMEOUT_S = 30
-# Worker threads waiting on responses at once; the reader blocks beyond this.
+# Worker threads waiting on responses at once. A request beyond this is
+# answered at once with MSG_BUSY and never sent; the reader never waits here.
 MAX_IN_FLIGHT = 16
+# JSON-RPC implementation-defined server error: the bridge refused the request.
+BUSY_ERROR_CODE = -32000
 
 _REINIT_ID_PREFIX = "gamachine-bridge-reinit-"
 
@@ -90,6 +94,8 @@ MSG_REINIT_FAILED = ("Unity MCP sunucusu yeniden başlamış ve yeni oturum hen�
                      "({detail}); bu çağrı Unity'ye gönderilmedi. Bir sonraki çağrı yeniden "
                      "bağlanmayı dener.")
 MSG_NO_ANSWER = "Unity MCP sunucusu bu isteğe yanıt vermedi (HTTP {status})."
+MSG_BUSY = ("Unity MCP köprüsünde zaten {limit} çağrı yanıt bekliyor; bu çağrı Unity'ye "
+            "gönderilmedi. Bekleyen çağrılardan biri bitince yeniden dene.")
 MSG_BRIDGE_ERROR = "Unity MCP köprü hatası: {detail}"
 
 
@@ -489,8 +495,15 @@ class Bridge:
             if not isinstance(message, dict):
                 continue
             concurrent = _is_request(message) and message.get("method") != "initialize"
-            if concurrent:
-                slots.acquire()
+            if concurrent and not slots.acquire(blocking=False):
+                # Waiting here parked the reader, so a notifications/cancelled
+                # behind this line was not forwarded until a worker finished
+                # (verification round, 26 Sep 2026). Refused, not queued: it
+                # was never sent, so its one answer can say so.
+                self._log(f"request {message.get('id')!r} refused: {MAX_IN_FLIGHT} in flight")
+                self._emit(_error(message.get("id"), MSG_BUSY.format(limit=MAX_IN_FLIGHT),
+                                  code=BUSY_ERROR_CODE))
+                continue
             step = self._start(message)
             if isinstance(step, list) or not concurrent:
                 if concurrent:
