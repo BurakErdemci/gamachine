@@ -133,8 +133,8 @@ jobs:
         working-directory: unity-mcp/Server
         run: |
           python -m pip install --upgrade pip
-          # `-e .` paketin KENDİ bağımlılıklarını pyproject'teki aralıklardan
-          # kurar (fastmcp <4 üst sınırı orada yazılı).
+          # `-e .` installs the package's own dependencies from pyproject
+          # (fastmcp and mcp are pinned exactly there, to what production runs).
           pip install -e .
           # Test araçları AYRI ve SABİT sürümle — `[dev]` extra'sı
           # `pytest>=8.0.0` diyor, yani bir major sürüm ürün değişmeden kapıyı
