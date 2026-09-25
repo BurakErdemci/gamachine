@@ -8,6 +8,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
 import { render, screen, cleanup, fireEvent, renderHook, act, waitFor } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const ipcInvoke = vi.hoisted(() => {
   const invoke = vi.fn()
@@ -23,6 +25,7 @@ vi.mock('axios', () => {
 
 import axios from 'axios'
 import { SettingsModal } from '../renderer/components/home/SettingsModal'
+import { GenerationModeSelector } from '../renderer/components/home/GenerationModeSelector'
 import { useChat } from '../renderer/hooks/home/useChat'
 import { cevir, aktifDilAyarla, translations } from '../renderer/lib/i18n'
 
@@ -95,6 +98,39 @@ describe('SettingsModal · Çalışma modu sekmesi', () => {
     }
     for (const lang of ['tr', 'en'] as const) {
       expect(translations[lang]['settings.modeAutoExplain']).not.toMatch(/güvendiğin|trusted/i)
+    }
+  })
+})
+
+describe('Auto-mode warning lives on the chat mode selector', () => {
+  it('auto shows the red tone, a red dot and the warning tooltip', () => {
+    render(<GenerationModeSelector value="auto" onChange={vi.fn()} />)
+    const button = screen.getByText(cevir('mode.auto')).closest('button')!
+    expect(button.getAttribute('title')).toBe(cevir('mode.autoWarning'))
+    expect(button.className).toContain('text-red-400')
+    expect(screen.getByTestId('auto-mode-dot')).toBeTruthy()
+  })
+
+  it('step keeps its plain look', () => {
+    render(<GenerationModeSelector value="step" onChange={vi.fn()} />)
+    const button = screen.getByText(cevir('mode.step')).closest('button')!
+    expect(button.getAttribute('title')).toBeNull()
+    expect(button.className).not.toContain('red')
+    expect(screen.queryByTestId('auto-mode-dot')).toBeNull()
+  })
+
+  it('the tooltip wording exists in both languages', () => {
+    expect(translations.tr['mode.autoWarning']).toBe('Oto mod — onay kartı yok')
+    expect(translations.en['mode.autoWarning']).toBe('Auto mode — no approval cards')
+  })
+
+  it('the header badge is gone', () => {
+    const home = readFileSync(resolve(__dirname, '../renderer/pages/home.tsx'), 'utf8')
+    expect(home).not.toContain('mode.indicator')
+    expect(home).not.toContain('mode.autoWarning')
+    for (const lang of ['tr', 'en'] as const) {
+      expect(translations[lang]['mode.indicator']).toBeUndefined()
+      expect(translations[lang]['mode.indicatorTitle']).toBeUndefined()
     }
   })
 })

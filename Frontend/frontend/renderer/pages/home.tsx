@@ -618,15 +618,6 @@ export default function Home() {
                 "Unity açık olmalı" diyordu — yanlış talimat, çünkü o durumda
                 sorun Unity değil portun sahibi. Ayrıca satır içi olduğu sürece
                 hiçbiri DOM'da sınanamıyordu. */}
-            {chat.generationMode === 'auto' && (
-              <span
-                title={t('mode.indicatorTitle')}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-[10px] font-semibold text-amber-300 whitespace-nowrap"
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                {t('mode.indicator')}
-              </span>
-            )}
             <UnityMcpToggle
               status={ai.unityMcpStatus}
               toggling={ai.unityMcpToggling}

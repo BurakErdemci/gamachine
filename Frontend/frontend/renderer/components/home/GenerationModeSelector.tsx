@@ -35,12 +35,18 @@ export const GenerationModeSelector = ({ value, onChange }: GenerationModeSelect
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  const autoWarning = current.id === 'auto';
+
   return (
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(v => !v)}
-        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium text-slate-500 hover:text-slate-300 transition-colors"
+        title={autoWarning ? t('mode.autoWarning') : undefined}
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+          autoWarning ? 'text-red-400 hover:text-red-300' : 'text-slate-500 hover:text-slate-300'
+        }`}
       >
+        {autoWarning && <span data-testid="auto-mode-dot" className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />}
         {current.icon}
         {current.label}
         <ChevronDown size={10} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
