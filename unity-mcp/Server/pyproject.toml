@@ -28,10 +28,14 @@ classifiers = [
 ]
 keywords = ["mcp", "unity", "ai", "model context protocol", "gamedev", "unity3d", "automation", "llm", "agent"]
 requires-python = ">=3.10"
+# fastmcp and mcp are pinned exactly: Gamachine starts the server with
+# `uvx --from <Server dir>`, which ignores uv.lock, so a range here let
+# production drift to the newest release (25 Sep 2026: fastmcp 3.4.7 live
+# while the suite ran 3.0.2). Bump them on purpose, together with uv.lock.
 dependencies = [
  "httpx>=0.27.2",
- "fastmcp>=3.0.2,<4",
- "mcp>=1.16.0",
+ "fastmcp==3.4.7",
+ "mcp==1.30.0",
  "pydantic>=2.12.5",
  "tomli>=2.3.0",
  "fastapi>=0.104.0",
