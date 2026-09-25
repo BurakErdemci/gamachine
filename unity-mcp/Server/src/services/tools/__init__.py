@@ -28,9 +28,9 @@ def register_all_tools(mcp: FastMCP, *, project_scoped_tools: bool = True):
     Any .py file in this directory or subdirectories with @mcp_for_unity_tool decorated
     functions will be automatically registered.
 
-    After registration, non-default tool groups are disabled at the server level
-    so that new sessions only see the default groups (core, playtest) plus always-visible meta-tools.
-    Clients can activate additional groups at any time via ``manage_tools``.
+    After registration the server-level group state is set: in HTTP mode only
+    the default groups (core, playtest) are enabled until Unity reports its own
+    toggles; the /mcp/full profile shows every group regardless.
     """
     logger.info("Auto-discovering MCP for Unity Server tools...")
     # Dynamic import of all modules in this directory
@@ -68,26 +68,26 @@ def register_all_tools(mcp: FastMCP, *, project_scoped_tools: bool = True):
 
     logger.info(f"Registered {len(tools)} MCP tools")
 
-    # In HTTP mode, disable non-default groups at the server level so new
-    # sessions start lean.  Unity will re-enable groups via register_tools
+    # In HTTP mode, start with only the default groups enabled so new clients
+    # start lean. Unity replaces this set via register_tools
     # (PluginHub._sync_server_tool_visibility) once it connects.
-    # In stdio mode we skip this: the legacy TCP bridge has no register_tools
-    # message, so disabled groups would stay invisible for the entire session.
-    # Tools with group=None (no tag) are unaffected and always visible.
+    # In stdio mode every group starts enabled: the legacy TCP bridge has no
+    # register_tools message, so disabled groups would stay invisible for the
+    # entire session. Tools with group=None (no tag) are unaffected.
     from core.config import config as server_config
+    from transport.tool_profiles import set_server_enabled_groups
 
     if (server_config.transport_mode or "stdio").lower() == "http":
+        set_server_enabled_groups(DEFAULT_ENABLED_GROUPS)
         groups_to_disable = set(TOOL_GROUPS.keys()) - DEFAULT_ENABLED_GROUPS
-        for group_name in sorted(groups_to_disable):
-            tag = f"group:{group_name}"
-            mcp.disable(tags={tag}, components={"tool"})
-            logger.debug(f"Disabled tool group at startup: {group_name}")
         logger.info(
             f"Default tool groups: {', '.join(sorted(DEFAULT_ENABLED_GROUPS))}. "
             f"Disabled: {', '.join(sorted(groups_to_disable))}. "
-            "Use manage_tools to activate more."
+            "Unity's tool settings override this once it connects; "
+            "/mcp/full lists every group."
         )
     else:
+        set_server_enabled_groups(TOOL_GROUPS.keys())
         logger.info(
             "Stdio transport: all tool groups enabled at startup. "
             "Will sync with Unity's tool states after connecting."

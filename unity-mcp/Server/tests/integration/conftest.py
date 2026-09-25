@@ -83,9 +83,18 @@ class _DummyToolResult:
         self.is_error = is_error
 
 
+class _DummyToolError(Exception):
+    """Stub for fastmcp.exceptions.ToolError"""
+
+
 fastmcp.FastMCP = _DummyFastMCP
 fastmcp.Context = _DummyContext
 sys.modules.setdefault("fastmcp", fastmcp)
+
+fastmcp_exceptions = types.ModuleType("fastmcp.exceptions")
+fastmcp_exceptions.ToolError = _DummyToolError
+fastmcp.exceptions = fastmcp_exceptions
+sys.modules.setdefault("fastmcp.exceptions", fastmcp_exceptions)
 
 # Stub fastmcp.server, fastmcp.server.middleware, fastmcp.server.server submodules
 fastmcp_server = types.ModuleType("fastmcp.server")

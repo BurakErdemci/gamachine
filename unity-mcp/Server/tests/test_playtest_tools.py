@@ -92,39 +92,35 @@ def test_playtest_group_is_enabled_by_default_next_to_core():
 class _RecordingMCP:
     """Stands in for FastMCP: tests/integration/conftest.py stubs the real one for the whole session."""
 
-    def __init__(self):
-        self.disabled_tags: set[str] = set()
-
     def tool(self, **_kwargs):
         return lambda fn: fn
 
-    def disable(self, *, tags, components):
-        assert components == {"tool"}
-        self.disabled_tags |= set(tags)
-
 
 def test_http_startup_leaves_playtest_visible(monkeypatch):
-    """register_all_tools disables every non-default group in HTTP mode; playtest must survive."""
+    """register_all_tools enables only the default groups in HTTP mode; playtest must be one."""
     from core.config import config
     import services.registry.tool_registry as registry_module
     from services.tools import register_all_tools
+    from transport import tool_profiles
 
     tools_dir = Path(__file__).parent.parent / "src" / "services" / "tools"
     list(discover_modules(tools_dir, "services.tools"))
     # register_all_tools swaps each registry entry's func for the wrapped one in place;
     # other tests inspect the raw function signatures, so put them back.
     saved = [(entry, entry["func"]) for entry in registry_module._tool_registry]
+    before = tool_profiles.server_enabled_groups()
     monkeypatch.setattr(config, "transport_mode", "http")
-    mcp = _RecordingMCP()
     try:
-        register_all_tools(mcp)
+        register_all_tools(_RecordingMCP())
+        enabled = tool_profiles.server_enabled_groups()
     finally:
         for entry, func in saved:
             entry["func"] = func
+        tool_profiles.set_server_enabled_groups(before)
 
-    assert "group:playtest" not in mcp.disabled_tags
-    assert "group:core" not in mcp.disabled_tags
-    assert "group:vfx" in mcp.disabled_tags, "non-default groups must still start hidden"
+    assert "playtest" in enabled
+    assert "core" in enabled
+    assert "vfx" not in enabled, "non-default groups must still start hidden"
 
 
 @pytest.mark.parametrize(

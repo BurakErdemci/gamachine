@@ -45,15 +45,14 @@ def _probe_method(route):
 
 
 def build_report(secret: str, login_url: str) -> dict:
-    from starlette.middleware import Middleware
     from starlette.routing import WebSocketRoute
     from starlette.testclient import TestClient
     from starlette.websockets import WebSocketDisconnect
 
     from core.config import config
     from core.constants import API_KEY_HEADER
-    from core.local_auth import LocalTokenHeaderMiddleware
     import main as server_main
+    from transport.tool_profiles import PROFILES
 
     # Set before building: /api/command, /api/instances and /api/custom-tools
     # are registered CONDITIONALLY on a secret being present, so configuration
@@ -67,7 +66,7 @@ def build_report(secret: str, login_url: str) -> dict:
     mcp = server_main.create_mcp_server(project_scoped_tools=False)
     app = mcp.http_app(
         path=server_main.resolve_http_transport_path(),
-        middleware=[Middleware(LocalTokenHeaderMiddleware)],
+        middleware=server_main.build_transport_middleware(),
     )
     client = TestClient(app, raise_server_exceptions=False)
 
@@ -106,6 +105,16 @@ def build_report(secret: str, login_url: str) -> dict:
             response = client.request(method, path, headers=headers, json={})
             http[key][label] = response.status_code
 
+    # Tool profiles are served from the one /mcp route by an ASGI rewrite, so
+    # they never appear in app.routes; they are enumerated from the profile
+    # table instead, plus one name that is not a profile.
+    profile_paths = {}
+    for path in [f"/mcp/{name}" for name in PROFILES] + ["/mcp/not-a-profile"]:
+        profile_paths[path] = {
+            label: client.post(path, headers=headers, json={}).status_code
+            for label, headers in credentials.items()
+        }
+
     health = client.get("/health")
     login = client.get("/api/auth/login-url")
 
@@ -113,6 +122,7 @@ def build_report(secret: str, login_url: str) -> dict:
         "routes": routes,
         "http": http,
         "websocket": websocket,
+        "profile_paths": profile_paths,
         # The `/mcp/<secret>` path form was removed; an old config must fail
         # closed rather than keep working while leaking the secret into files.
         "legacy_secret_path_status": client.post(f"/mcp/{secret}", json={}).status_code,

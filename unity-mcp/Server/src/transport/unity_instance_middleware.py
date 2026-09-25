@@ -511,7 +511,12 @@ class UnityInstanceMiddleware(Middleware):
 
     def _should_filter_tool_listing(self) -> bool:
         transport = (config.transport_mode or "stdio").lower()
-        return transport == "http" and PluginHub.is_configured()
+        if not (transport == "http" and PluginHub.is_configured()):
+            return False
+        # A static profile (/mcp/full) lists tools independent of what the
+        # Unity Editor has registered.
+        from transport.tool_profiles import current_profile
+        return current_profile().follows_unity
 
     async def _resolve_enabled_tool_names_for_context(
         self,

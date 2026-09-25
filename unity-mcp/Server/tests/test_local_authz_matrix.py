@@ -316,6 +316,22 @@ def test_protected_route_lets_a_valid_credential_through(matrix, path):
         )
 
 
+def test_every_tool_profile_path_is_behind_the_same_gate(matrix):
+    """/mcp/<profile> serves the same tools as /mcp, execute_code included, so
+    it needs the same secret. Unknown names must answer 401 too, before the
+    404: an anonymous caller must not learn which profile names exist."""
+    profile_paths = matrix["profile_paths"]
+    assert "/mcp/gamachine" in profile_paths and "/mcp/full" in profile_paths
+    for path, statuses in profile_paths.items():
+        assert statuses["anonymous"] == 401, f"{path}: {statuses}"
+        assert statuses["invalid"] == 401, f"{path}: {statuses}"
+        if path == "/mcp/not-a-profile":
+            assert statuses["valid"] == 404, f"{path}: {statuses}"
+        else:
+            # Same harness artifact as /mcp in VALID_CREDENTIAL_EXPECTED.
+            assert statuses["valid"] in VALID_CREDENTIAL_EXPECTED["/mcp"], f"{path}: {statuses}"
+
+
 @pytest.mark.parametrize("header_name", ["X-API-Key", "x-api-key", "X-Api-Key"])
 def test_the_api_key_header_is_matched_case_insensitively_end_to_end(matrix, header_name):
     """Measured 2026-07-27: claude and codex send `x-api-key`, kimi sends

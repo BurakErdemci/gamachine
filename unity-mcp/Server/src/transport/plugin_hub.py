@@ -110,9 +110,6 @@ class PluginHub(WebSocketEndpoint):
 
     _registry: PluginRegistry | None = None
     _mcp: FastMCP | None = None
-    # Index into mcp._transforms where Unity's server-level overrides start.
-    # Transforms before this index are startup defaults; at and after are Unity syncs.
-    _unity_transform_start: int | None = None
     _connections: dict[str, WebSocket] = {}
     # command_id -> {"future": Future, "session_id": str}
     _pending: dict[str, dict[str, Any]] = {}
@@ -555,26 +552,17 @@ class PluginHub(WebSocketEndpoint):
 
     @classmethod
     def _sync_server_tool_visibility(cls, registered_tools: list) -> None:
-        """Sync FastMCP server-level tool group visibility to match Unity's state.
+        """Mirror Unity's enabled tool groups into the server-level group state.
 
         When Unity sends ``register_tools``, some groups may have been toggled
-        on/off via the Unity Editor GUI.  We mirror that state at the FastMCP
-        server level so that **new** MCP client sessions (e.g. a fresh Claude
-        Code conversation) see the correct tool set without requiring
-        ``manage_tools`` activation.
-
-        The startup ``register_all_tools()`` disables non-default groups via
-        ``mcp.disable(tags=...)``.  Here we append ``mcp.enable(tags=...)``
-        transforms for groups that Unity has enabled, effectively overriding
-        the startup defaults.  FastMCP processes transforms in order so later
-        ``enable`` calls override earlier ``disable`` calls.
+        on/off via the Unity Editor GUI. A group counts as enabled when Unity
+        registered at least one of its tools. The state is read per request by
+        ``transport.tool_profiles``; every call replaces it wholesale, so a
+        group Unity stopped registering is disabled again.
         """
-        mcp = cls._mcp
-        if mcp is None:
-            return
-
         try:
             from services.registry import get_group_tool_names, TOOL_GROUPS
+            from transport.tool_profiles import set_server_enabled_groups
 
             registered_names: set[str] = set()
             for tool in registered_tools:
@@ -583,42 +571,17 @@ class PluginHub(WebSocketEndpoint):
                     registered_names.add(name)
 
             group_tools = get_group_tool_names()
-
-            # Reset Unity overrides: trim transforms back to where Unity started,
-            # then re-apply based on current registered tools.
-            if cls._unity_transform_start is not None:
-                mcp._transforms = mcp._transforms[:cls._unity_transform_start]
-            else:
-                # First time: record where startup transforms end.
-                cls._unity_transform_start = len(mcp._transforms)
-
-            enabled_groups: list[str] = []
-            disabled_groups: list[str] = []
-
-            for group_name in sorted(TOOL_GROUPS.keys()):
-                tool_names = group_tools.get(group_name, [])
-                has_any_registered = any(n in registered_names for n in tool_names)
-
-                if has_any_registered:
-                    # Override the startup disable with an enable.
-                    tag = f"group:{group_name}"
-                    mcp.enable(tags={tag}, components={"tool"})
-                    enabled_groups.append(group_name)
-                else:
-                    # Group not present in Unity's registered tools — disable it.
-                    tag = f"group:{group_name}"
-                    mcp.disable(tags={tag}, components={"tool"})
-                    disabled_groups.append(group_name)
-
-            if enabled_groups or disabled_groups:
-                logger.info(
-                    "Server-level tool visibility synced from Unity: "
-                    "enabled=[%s], disabled=[%s], total_transforms=%d, unity_start=%d",
-                    ", ".join(enabled_groups),
-                    ", ".join(disabled_groups),
-                    len(mcp._transforms),
-                    cls._unity_transform_start or 0,
-                )
+            enabled_groups = [
+                group_name for group_name in sorted(TOOL_GROUPS.keys())
+                if any(n in registered_names for n in group_tools.get(group_name, []))
+            ]
+            disabled_groups = [g for g in sorted(TOOL_GROUPS.keys()) if g not in enabled_groups]
+            set_server_enabled_groups(enabled_groups)
+            logger.info(
+                "Server-level tool groups synced from Unity: enabled=[%s], disabled=[%s]",
+                ", ".join(enabled_groups),
+                ", ".join(disabled_groups),
+            )
         except Exception:
             logger.debug(
                 "Failed to sync server-level tool visibility",
@@ -632,9 +595,7 @@ class PluginHub(WebSocketEndpoint):
         After server-level tool visibility is updated (e.g. when Unity reports
         its registered tools), existing MCP clients (especially stdio-based
         ones like Claude Code) must be told to re-fetch the tool list.
-        FastMCP's ``mcp.enable()``/``mcp.disable()`` update the server-level
-        transforms but do **not** push notifications to already-connected
-        sessions — we do that here.
+        Nothing else pushes that notification.
         """
         sessions = list(_active_mcp_sessions)
         if not sessions:

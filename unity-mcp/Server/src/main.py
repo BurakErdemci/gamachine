@@ -18,6 +18,7 @@ from services.custom_tool_service import (
 from core.config import config
 from core.constants import API_KEY_HEADER, LOCAL_API_TOKEN_ENV, MCP_TRANSPORT_BASE_PATH
 from core.local_auth import LocalTokenHeaderMiddleware, require_local_token
+from transport.tool_profiles import ProfilePathMiddleware, ToolProfileMiddleware
 from starlette.routing import WebSocketRoute
 from starlette.responses import JSONResponse
 import argparse
@@ -446,6 +447,19 @@ def resolve_http_transport_path() -> str | None:
     return MCP_TRANSPORT_BASE_PATH
 
 
+def build_transport_middleware() -> list[Middleware]:
+    """ASGI middleware for the HTTP transport, outermost first.
+
+    The shared-secret gate is outermost so every /mcp/* path, profile or not,
+    answers 401 without the key. The profile rewrite runs inside it.
+    """
+    middleware: list[Middleware] = []
+    if not config.http_remote_hosted:
+        middleware.append(Middleware(LocalTokenHeaderMiddleware))
+    middleware.append(Middleware(ProfilePathMiddleware))
+    return middleware
+
+
 def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
     mcp = FastMCP(
         name="mcp-for-unity-server",
@@ -778,6 +792,11 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
                 logger.exception("CLI custom tools error: %s", e)
                 return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+    # Profile filter first: FastMCP runs middleware in registration order, and
+    # an out-of-profile call must be refused before the approval gate (inside
+    # UnityInstanceMiddleware) shows the user a card for it.
+    mcp.add_middleware(ToolProfileMiddleware())
+
     # Initialize and register middleware for session-based Unity instance routing
     # Using the singleton getter ensures we use the same instance everywhere
     unity_middleware = get_unity_instance_middleware()
@@ -1093,9 +1112,7 @@ Examples:
         # connected Editor, and the listener answers any process on this machine.
         # The gate is an ASGI middleware rather than a secret in the path because
         # a URL gets written to disk and printed; a header does not.
-        transport_middleware = (
-            [] if config.http_remote_hosted else [Middleware(LocalTokenHeaderMiddleware)]
-        )
+        transport_middleware = build_transport_middleware()
         logger.info(f"Starting FastMCP with HTTP transport on {host}:{port}")
         mcp.run(transport=transport, host=host, port=port, path=mcp_path,
                 middleware=transport_middleware)
