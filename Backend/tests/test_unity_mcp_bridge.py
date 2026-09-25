@@ -10,7 +10,6 @@ import asyncio
 import json
 import os
 import sys
-from datetime import timedelta
 
 import pytest
 
@@ -227,7 +226,7 @@ def test_the_replayed_initialize_uses_a_bridge_id_and_is_not_forwarded():
 def test_stdio_client_survives_a_restart_through_the_bridge_process(server, tmp_path):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
-    from mcp.shared.exceptions import McpError
+    from mcp.shared.exceptions import MCPError
 
     argv = cb.bridge_argv()
     env = dict(os.environ)
@@ -240,7 +239,7 @@ def test_stdio_client_survives_a_restart_through_the_bridge_process(server, tmp_
         async with stdio_client(params) as (r, w):
             async with ClientSession(r, w) as session:
                 await session.initialize()
-                timeout = timedelta(seconds=15)
+                timeout = 15.0
                 first = await session.call_tool("echo", {"text": "a"}, read_timeout_seconds=timeout)
                 await asyncio.to_thread(server.restart)
                 second = await session.call_tool("echo", {"text": "b"}, read_timeout_seconds=timeout)
@@ -248,7 +247,7 @@ def test_stdio_client_survives_a_restart_through_the_bridge_process(server, tmp_
                 try:
                     await session.call_tool("echo", {"text": "c"}, read_timeout_seconds=timeout)
                     down = None
-                except McpError as exc:
+                except MCPError as exc:
                     down = exc.error.message
                 await asyncio.to_thread(server.start)
                 third = await session.call_tool("echo", {"text": "ğüş"}, read_timeout_seconds=timeout)

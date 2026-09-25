@@ -1,6 +1,6 @@
 """Test servers for the Unity MCP restart tests (P3).
 
-`RestartableMCPServer` is the MCP SDK's own FastMCP served over streamable HTTP
+`RestartableMCPServer` is the MCP SDK's own MCPServer served over streamable HTTP
 on a fixed port. Stopping and starting it again throws away every session,
 which is what a Unity MCP restart does: a stale Mcp-Session-Id gets the real
 404 {"id":"server-error", ... "Session not found"} from the SDK session manager.
@@ -17,7 +17,7 @@ import threading
 import time
 
 import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 
 def free_port() -> int:
@@ -39,7 +39,7 @@ class RestartableMCPServer:
         return f"http://127.0.0.1:{self.port}/mcp"
 
     def _app(self):
-        mcp = FastMCP("restart-test")
+        mcp = MCPServer("restart-test")
         counts = self.executions
 
         @mcp.tool()

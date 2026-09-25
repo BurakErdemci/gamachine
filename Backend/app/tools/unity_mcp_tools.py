@@ -17,14 +17,13 @@ import contextlib
 import contextvars
 import logging
 import threading
-from datetime import timedelta
 from typing import Any, Callable, Dict, List, Optional
 
-import httpx
+import httpx2
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
-from mcp.shared.exceptions import McpError
-from mcp.types import CONNECTION_CLOSED
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.exceptions import MCPError
+from mcp.types import CONNECTION_CLOSED, InputRequiredResult, ToolListChangedNotification
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +38,10 @@ EXPORTED_GROUPS = ("core", "playtest")
 CALL_TIMEOUT_S = 240.0
 CONNECT_TIMEOUT_S = 15.0
 LIST_TIMEOUT_S = 15.0
+# Read timeout of the HTTP client: must outlast CALL_TIMEOUT_S, or a slow call
+# would fail as a transport read error instead of the MCP request timeout.
+# 300 s is what mcp 1.x streamablehttp_client used by default.
+HTTP_READ_TIMEOUT_S = 300.0
 
 _UNREACHABLE_MSG = ("Unity MCP sunucusuna bağlanılamadı (kapalı ya da yeniden başlıyor). "
                     "Unity MCP anahtarı açık mı, Unity Editor çalışıyor mu? Sunucu ayağa "
@@ -47,6 +50,8 @@ _CONNECTION_LOST_MSG = ("Unity MCP bağlantısı çağrı sürerken koptu; çağ
                         "çalışıp çalışmadığı bilinmiyor. Sonraki çağrı yeniden bağlanır.")
 _SESSION_LOST_MSG = ("Unity MCP sunucusu yeniden başlamış; yeni oturum açıldı ama sunucu "
                      "onu da tanımadı.")
+_INPUT_REQUIRED_MSG = ("Unity MCP aracı '{name}' tamamlanmadı: sunucu ek girdi istedi "
+                       "(input_required) ve Gamachine bu isteği yanıtlayamıyor.")
 
 
 class UnityMCPError(RuntimeError):
@@ -67,15 +72,17 @@ class _SessionLost(UnityMCPError):
 def _is_session_lost(exc: BaseException) -> bool:
     """True only for the client's rendering of an HTTP 404 on a request.
 
-    mcp 1.x turns that 404 into McpError(32600, "Session terminated") on the
-    client side (streamable_http._send_session_terminated_error); a server that
-    answered the request itself never produces it. A 404 is the session lookup
-    failing before dispatch, so the request provably did not run - the one
+    mcp 2.x turns a 404 on a session it holds into MCPError(-32600, "Session
+    terminated") on the client side (streamable_http post_writer); a 404 whose
+    body is a JSON-RPC error surfaces that error instead ("Session not found").
+    A server that answered the request itself never produces either. A 404 is
+    the session lookup failing before dispatch, so the request provably did not
+    run - the one
     failure where retrying a mutation is safe. The old code read it as a
     healthy JSON-RPC error and kept the dead session forever (measured 25 Sep
     2026 after a server restart: "Session terminated" on every call).
     """
-    if not isinstance(exc, McpError):
+    if not isinstance(exc, MCPError):
         return False
     error = getattr(exc, "error", None)
     return (getattr(error, "message", None) in ("Session terminated", "Session not found")
@@ -129,10 +136,10 @@ def _describe_failure(exc: BaseException) -> str:
         if isinstance(leaf, UnityMCPError):
             return str(leaf)
     for leaf in leaves:
-        if isinstance(leaf, (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError)):
+        if isinstance(leaf, (httpx2.ConnectError, httpx2.ConnectTimeout, ConnectionError)):
             return _UNREACHABLE_MSG
     for leaf in leaves:
-        if isinstance(leaf, (TimeoutError, asyncio.TimeoutError, httpx.TimeoutException)):
+        if isinstance(leaf, (TimeoutError, asyncio.TimeoutError, httpx2.TimeoutException)):
             return "Unity MCP yanıt vermedi (zaman aşımı)."
     first = leaves[0] if leaves else exc
     return f"Unity MCP hatası: {type(first).__name__}: {first}"
@@ -143,9 +150,11 @@ def _default_session_factory(message_handler):
     @contextlib.asynccontextmanager
     async def _open():
         url, headers = _endpoint()
-        async with streamablehttp_client(url, headers=headers, timeout=CONNECT_TIMEOUT_S) as (read, write, _):
-            async with ClientSession(read, write, message_handler=message_handler) as session:
-                yield session, (url, tuple(sorted(headers.items())))
+        timeout = httpx2.Timeout(CONNECT_TIMEOUT_S, read=HTTP_READ_TIMEOUT_S)
+        async with httpx2.AsyncClient(headers=headers, timeout=timeout) as http:
+            async with streamable_http_client(url, http_client=http) as (read, write):
+                async with ClientSession(read, write, message_handler=message_handler) as session:
+                    yield session, (url, tuple(sorted(headers.items())))
     return _open()
 
 
@@ -301,6 +310,19 @@ class _UnityMCPClient:
             task.cancel()
             raise
         if task.done():
+            exc = None if task.cancelled() else task.exception()
+            if (isinstance(exc, MCPError) and exc.code == CONNECTION_CLOSED
+                    and not owner.done()):
+                # mcp 2.x fails the pending request with CONNECTION_CLOSED as the
+                # transport dies, before its task has finished with the cause.
+                # A refused connect means the request was never sent, which the
+                # user should read as "unreachable", not "dropped mid-call"
+                # (measured 25 Sep 2026 with the server stopped).
+                await asyncio.wait({owner}, timeout=2)
+            if (isinstance(exc, MCPError) and exc.code == CONNECTION_CLOSED
+                    and conn.error is not None
+                    and _describe_failure(conn.error) == _UNREACHABLE_MSG):
+                raise UnityMCPError(_UNREACHABLE_MSG) from exc
             return task.result()
         task.cancel()
         await asyncio.wait({task})
@@ -356,8 +378,9 @@ class _UnityMCPClient:
                 await self._shutdown(conn)
 
     async def _on_message(self, message) -> None:
-        root = getattr(message, "root", None)
-        if type(root).__name__ == "ToolListChangedNotification":
+        # mcp 2.x hands over the notification itself (1.x wrapped it in a
+        # ServerNotification root model), or a transport Exception.
+        if isinstance(message, ToolListChangedNotification):
             logger.info("[UnityMCP] tools/list_changed received; refreshing tool list")
             self._request_refresh()
 
@@ -426,9 +449,12 @@ class _UnityMCPClient:
             conn, session = await self._acquire()
             failed = False
             try:
-                return await self._await_on(conn, session.call_tool(
-                    name, params, read_timeout_seconds=timedelta(seconds=timeout)))
-            except McpError as exc:
+                # allow_input_required: without it mcp 2.x raises a bare
+                # RuntimeError, which would mark this healthy session broken.
+                result = await self._await_on(conn, session.call_tool(
+                    name, params, read_timeout_seconds=float(timeout),
+                    allow_input_required=True))
+            except MCPError as exc:
                 if _is_session_lost(exc):
                     failed = True
                     raise _SessionLost() from exc
@@ -446,7 +472,12 @@ class _UnityMCPClient:
                 raise
             finally:
                 await self._release(conn, failed)
-        # Small margin so the MCP read timeout (a clean McpError) fires first.
+            if isinstance(result, InputRequiredResult):
+                # The server paused the tool for input (elicitation, sampling)
+                # that this client cannot give; the tool did not complete.
+                raise UnityMCPError(_INPUT_REQUIRED_MSG.format(name=name))
+            return result
+        # Small margin so the MCP read timeout (a clean MCPError) fires first.
         return self.run(self._retry_if_session_lost(_once, name), timeout + 2)
 
     def close(self, timeout: float = 10.0) -> None:
@@ -477,10 +508,10 @@ def _result_to_dict(result) -> Dict[str, Any]:
     for block in result.content or []:
         kind = getattr(block, "type", None)
         if kind == "image" and getattr(block, "data", None):
-            images.append((getattr(block, "mimeType", None) or "image/png", block.data))
+            images.append((getattr(block, "mime_type", None) or "image/png", block.data))
         elif hasattr(block, "text"):
             text_parts.append(block.text)
-    out: Dict[str, Any] = {"success": not result.isError, "result": "\n".join(text_parts)}
+    out: Dict[str, Any] = {"success": not result.is_error, "result": "\n".join(text_parts)}
     if images:
         mime, data = images[0]
         out["image_base64"] = f"data:{mime};base64,{data}"
@@ -517,8 +548,8 @@ def _make_tool_function(tool_name: str):
 def _mcp_schema_to_tool_def(mcp_tool) -> Dict:
     """MCP Tool nesnesini tool_registry formatına çevirir."""
     schema = {}
-    if hasattr(mcp_tool, 'inputSchema') and mcp_tool.inputSchema:
-        s = mcp_tool.inputSchema
+    s = getattr(mcp_tool, "input_schema", None)
+    if s:
         schema = {
             "type": s.get("type", "object"),
             "properties": s.get("properties", {}),

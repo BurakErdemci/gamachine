@@ -1,7 +1,7 @@
 """Backend Unity MCP client across server restarts (P3).
 
 Baseline (25 Sep 2026, fastmcp 3.4.7): after a restart every call failed with
-"McpError: Session terminated" and the client kept the dead session until the
+"McpError: Session terminated" (mcp 1.x) and the client kept the dead session until the
 toggle unloaded it; with the server down a call waited its full read timeout.
 Pinned here: a lost session reconnects and retries exactly once (its 404 proves
 the call never ran), every other failure keeps the no-retry rule, and downtime
@@ -13,16 +13,17 @@ import time
 import types as pytypes
 from unittest import mock
 
-import httpx
+import httpx2
 import pytest
 from mcp import types
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 
 import agentic.agent_runner  # noqa: F401  (tools <-> agentic import cycle, see test_unity_mcp_client)
 from tools import unity_mcp_tools as umt  # noqa: E402
 from tests.mcp_restart_server import RestartableMCPServer  # noqa: E402
 
-SESSION_TERMINATED = types.ErrorData(code=32600, message="Session terminated")
+# What mcp 2.x raises for a 404 on a session it holds (streamable_http post_writer).
+SESSION_TERMINATED = dict(code=types.INVALID_REQUEST, message="Session terminated")
 
 
 class _Session:
@@ -35,7 +36,7 @@ class _Session:
     async def list_tools(self):
         return pytypes.SimpleNamespace(tools=[])
 
-    async def call_tool(self, name, params, read_timeout_seconds=None):
+    async def call_tool(self, name, params, read_timeout_seconds=None, **_kwargs):
         return await self.server.call(self, name, params)
 
 
@@ -50,7 +51,7 @@ class _Server:
 
     async def call(self, session, name, params):
         if session.index in self.lost:
-            raise McpError(SESSION_TERMINATED)
+            raise MCPError(**SESSION_TERMINATED)
         if self.fail_with is not None:
             exc, self.fail_with = self.fail_with, None
             raise exc
@@ -97,7 +98,7 @@ def test_a_second_lost_session_is_reported_and_not_looped(fake):
 
 
 def test_a_json_rpc_error_answer_is_not_retried_and_keeps_the_session(fake):
-    fake.fail_with = McpError(types.ErrorData(code=-32602, message="bad params"))
+    fake.fail_with = MCPError(code=-32602, message="bad params")
     result = umt.call_unity_tool("manage_scene", {})
     assert result["success"] is False and "bad params" in result["error"]
     assert umt.call_unity_tool("manage_scene", {})["success"] is True
@@ -105,7 +106,7 @@ def test_a_json_rpc_error_answer_is_not_retried_and_keeps_the_session(fake):
 
 
 def test_a_transport_failure_after_sending_is_never_retried(fake):
-    fake.fail_with = httpx.ReadError("connection reset")
+    fake.fail_with = httpx2.ReadError("connection reset")
     result = umt.call_unity_tool("manage_gameobject", {"action": "create"})
     assert result["success"] is False
     assert fake.executions == 0 and len(fake.sessions) == 1
@@ -114,7 +115,7 @@ def test_a_transport_failure_after_sending_is_never_retried(fake):
 
 
 def test_connection_closed_is_a_clear_turkish_error_and_is_not_retried(fake):
-    fake.fail_with = McpError(types.ErrorData(code=types.CONNECTION_CLOSED, message="Connection closed"))
+    fake.fail_with = MCPError(code=types.CONNECTION_CLOSED, message="Connection closed")
     result = umt.call_unity_tool("manage_gameobject", {"action": "create"})
     assert result == {"success": False, "error": umt._CONNECTION_LOST_MSG}
     assert len(fake.sessions) == 1
@@ -123,11 +124,29 @@ def test_connection_closed_is_a_clear_turkish_error_and_is_not_retried(fake):
 
 
 def test_only_the_404_rendering_counts_as_a_lost_session():
-    assert umt._is_session_lost(McpError(SESSION_TERMINATED))
-    assert umt._is_session_lost(McpError(types.ErrorData(code=-32600, message="Session not found")))
-    assert not umt._is_session_lost(McpError(types.ErrorData(code=-32600, message="Bad Request")))
-    assert not umt._is_session_lost(McpError(types.ErrorData(code=408, message="Timed out")))
+    assert umt._is_session_lost(MCPError(**SESSION_TERMINATED))
+    assert umt._is_session_lost(MCPError(code=-32600, message="Session not found"))
+    assert not umt._is_session_lost(MCPError(code=-32600, message="Bad Request"))
+    assert not umt._is_session_lost(MCPError(code=types.REQUEST_TIMEOUT, message="Timed out"))
     assert not umt._is_session_lost(RuntimeError("Session terminated"))
+
+
+def test_input_required_is_a_clear_error_and_keeps_the_session(fake):
+    """mcp 2.x can answer tools/call with InputRequiredResult; this client
+    cannot supply the input, so it must never read as a success."""
+    fake.fail_with = None
+    original = fake.call
+
+    async def _input_required(session, name, params):
+        fake.call = original
+        return types.InputRequiredResult(request_state="opaque")
+
+    fake.call = _input_required
+    result = umt.call_unity_tool("manage_scene", {})
+    assert result == {"success": False,
+                      "error": umt._INPUT_REQUIRED_MSG.format(name="manage_scene")}
+    assert umt.call_unity_tool("manage_scene", {})["success"] is True
+    assert len(fake.sessions) == 1, "the session is healthy; only the call failed"
 
 
 # ── the real transport against the MCP SDK's own server ─────────────────────

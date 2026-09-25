@@ -28,7 +28,8 @@ h11==0.16.0
 httpcore==1.0.9
 httplib2==0.31.1
 httpx==0.28.1
-idna==3.11
+# 3.20: httpx2 2.13 (mcp 2.x, anthropic) requires idna>=3.18.
+idna==3.20
 jiter==0.12.0
 ollama==0.6.1
 openai>=1.20.0
@@ -76,18 +77,16 @@ tqdm==4.70.0
 # an exact pin a later colorama could enter the frozen installer with no diff here
 # (audit probe, 3 Sep 2026).
 colorama==0.4.6
-# MCP SDK 2.x is a breaking rewrite. claude-agent-sdk 0.2.159 allows it
-# (mcp<3), but the backend stays on 1.x for now: mcp 2.2 brings two new
-# packages (httpx2, mcp-types) that the owner reviews before they enter, and
-# needs a port of tools/unity_mcp_tools.py (McpError -> MCPError,
-# streamablehttp_client -> streamable_http_client with an httpx2 client) and of
-# the unityai server (mcp.server.fastmcp -> mcp.server.mcpserver.MCPServer).
-# The 1.x client works with the FastMCP 4 server (it still serves the old
-# protocol revisions) and recovers from server restarts on its own (P3).
+# MCP SDK 2.x (25 Sep 2026, owner-approved together with its two new packages,
+# httpx2 and mcp-types). The port: tools/unity_mcp_tools.py (McpError ->
+# MCPError, streamable_http_client over an httpx2.AsyncClient, snake_case
+# result fields, InputRequiredResult reported as an error) and the unityai
+# server (mcp.server.fastmcp -> mcp.server.mcpserver.MCPServer).
+# claude-agent-sdk 0.2.159 declares mcp<3.
 # The separate `fastmcp` package was dropped here (25 Sep 2026): nothing in the
-# backend imports it (`mcp.server.fastmcp` is the SDK's own copy) and the full
-# Backend suite passes with `import fastmcp` blocked.
-mcp>=1.23.0,<2
+# backend imports it and the full Backend suite passes with `import fastmcp`
+# blocked. (fastmcp 3.x also caps mcp<2.)
+mcp>=2.2.0,<3
 tomli
 Pillow>=10.0.0
 pywin32>=306; sys_platform == "win32"

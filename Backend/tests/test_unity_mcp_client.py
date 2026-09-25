@@ -13,7 +13,7 @@ import time
 import types as pytypes
 from unittest import mock
 
-import httpx
+import httpx2
 import pytest
 from mcp import types
 
@@ -42,7 +42,7 @@ class _FakeSession:
     async def list_tools(self):
         return pytypes.SimpleNamespace(tools=list(self.owner.tools))
 
-    async def call_tool(self, name, params, read_timeout_seconds=None):
+    async def call_tool(self, name, params, read_timeout_seconds=None, **_kwargs):
         return await self.owner.call_impl(name, params)
 
 
@@ -115,7 +115,7 @@ def test_a_hanging_call_times_out_instead_of_hanging(server):
 def test_connection_failure_in_an_exception_group_reads_as_one_sentence(server):
     fake, _ = server
     fake.fail_connect = ExceptionGroup(
-        "unhandled errors in a TaskGroup", [httpx.ConnectError("All connection attempts failed")])
+        "unhandled errors in a TaskGroup", [httpx2.ConnectError("All connection attempts failed")])
     result = umt.call_unity_tool("manage_scene", {})
     assert result == {"success": False, "error": umt._UNREACHABLE_MSG}
 
@@ -127,7 +127,7 @@ def test_a_failed_call_drops_the_session_and_the_next_call_reconnects(server):
     async def _flaky(name, params):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise httpx.ReadError("connection reset")
+            raise httpx2.ReadError("connection reset")
         return types.CallToolResult(content=[types.TextContent(type="text", text="back")])
 
     fake.call_impl = _flaky
@@ -153,7 +153,7 @@ def test_a_failing_call_does_not_close_the_session_under_a_call_in_flight(server
             closed_while_a_ran.append(fake.closed)
             return types.CallToolResult(content=[types.TextContent(type="text", text="A done")])
         if name == "B":
-            raise httpx.ReadError("connection reset")
+            raise httpx2.ReadError("connection reset")
         return types.CallToolResult(content=[types.TextContent(type="text", text=f"{name} ok")])
 
     fake.call_impl = _impl
@@ -209,11 +209,13 @@ def test_server_restart_is_detected_by_endpoint_change():
 def test_image_content_becomes_image_base64_with_its_mime():
     result = types.CallToolResult(content=[
         types.TextContent(type="text", text='{"success": true}'),
-        types.ImageContent(type="image", data="iVBORw0KGgo=", mimeType="image/png"),
+        # Not image/png: that is also the fallback, so it would hide a mime lost
+        # in the mcp 2.x rename mimeType -> mime_type.
+        types.ImageContent(type="image", data="/9j/4AAQ", mimeType="image/jpeg"),
         types.ImageContent(type="image", data="AAAA", mimeType="image/png"),
     ])
     out = umt._result_to_dict(result)
-    assert out["image_base64"] == "data:image/png;base64,iVBORw0KGgo="
+    assert out["image_base64"] == "data:image/jpeg;base64,/9j/4AAQ"
     assert out["result"] == '{"success": true}'
     assert out["images_omitted"] == 1
 
@@ -373,8 +375,7 @@ def test_tools_list_changed_refreshes_the_cache(server):
     assert umt.load_unity_tools() is True
     fake.tools.append(_tool("play_step", "playtest"))
 
-    note = types.ServerNotification(
-        types.ToolListChangedNotification(method="notifications/tools/list_changed"))
+    note = types.ToolListChangedNotification(method="notifications/tools/list_changed")
     client.run(fake.handlers[-1](note), 5)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and not umt.is_unity_tool("play_step"):
@@ -383,8 +384,7 @@ def test_tools_list_changed_refreshes_the_cache(server):
 
 
 def _notify_list_changed(fake, client):
-    note = types.ServerNotification(
-        types.ToolListChangedNotification(method="notifications/tools/list_changed"))
+    note = types.ToolListChangedNotification(method="notifications/tools/list_changed")
     client.run(fake.handlers[-1](note), 5)
 
 
@@ -501,8 +501,7 @@ def test_a_list_changed_burst_runs_one_refresh_at_a_time_plus_one_follow_up():
             state["active"] -= 1
 
     client.on_tools_changed = _refresh
-    note = types.ServerNotification(
-        types.ToolListChangedNotification(method="notifications/tools/list_changed"))
+    note = types.ToolListChangedNotification(method="notifications/tools/list_changed")
 
     async def _burst():
         await client._on_message(note)
