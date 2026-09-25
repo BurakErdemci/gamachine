@@ -142,11 +142,11 @@ Unity plugins connecting via WebSocket (`/hub/plugin`) are validated during the 
 
 ### Session Isolation
 
-Each user can only see and interact with their own Unity instances. When User A calls `set_active_instance` or lists instances, they only see Unity editors that connected with User A's API key. User B's sessions are invisible to User A.
+Each user can only see and interact with their own Unity instances. When User A lists instances or targets one with `unity_instance`, they only see Unity editors that connected with User A's API key. User B's sessions are invisible to User A.
 
 ### Auto-Select Disabled
 
-In local mode, the server automatically selects the sole connected Unity instance. In remote-hosted mode, this auto-selection is disabled. Users must explicitly call `set_active_instance` with a `Name@hash` from the `mcpforunity://instances` resource.
+In local mode, the server routes a call to the sole connected Unity instance when no instance is given. In remote-hosted mode, this auto-selection is disabled. Users must name the instance with a `Name@hash` from the `mcpforunity://instances` resource: pass `unity_instance` on each tool call, or connect with `?instance=Name@hash` on the MCP URL (or an `X-Unity-Instance` header). The server keeps no per-session selection; `set_active_instance` only checks an identifier and does not pin routing.
 
 ### CLI Routes Disabled
 

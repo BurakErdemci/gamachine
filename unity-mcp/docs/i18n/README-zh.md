@@ -165,11 +165,11 @@ openupm add com.coplaydev.unity-mcp
 <details>
 <summary><strong>多个 Unity 实例</strong></summary>
 
-MCP for Unity 支持多个 Unity Editor 实例。要将操作定向到某个特定实例：
+MCP for Unity 支持多个 Unity Editor 实例。只连接了一个实例时，所有调用自动发往该实例。要将操作定向到某个特定实例：
 
-1. 让你的大语言模型检查 `unity_instances` 资源
-2. 使用 `set_active_instance` 并传入 `Name@hash`（例如 `MyProject@abc123`）
-3. 后续所有工具都会路由到该实例
+1. 让你的大语言模型检查 `mcpforunity://instances` 资源
+2. 在每次工具调用中传入 `unity_instance`，值为 `Name@hash`（例如 `MyProject@abc123`）；或在 MCP URL 上加 `?instance=MyProject@abc123`（或 `X-Unity-Instance` 请求头），让该连接的所有调用都发往该实例
+3. 服务器不保存按会话的选择：`set_active_instance` 只校验标识符，不会固定路由
 </details>
 
 <details>

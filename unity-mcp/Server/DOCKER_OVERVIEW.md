@@ -79,7 +79,7 @@ In this mode:
 
 - All MCP tool/resource calls and Unity plugin WebSocket connections require a valid `X-API-Key` header.
 - Each user only sees Unity instances that connected with their API key.
-- Users must explicitly call `set_active_instance` to select a Unity instance.
+- Users must name the Unity instance on each call (`unity_instance`) or on the connection (`?instance=Name@hash` or an `X-Unity-Instance` header); `set_active_instance` does not pin routing.
 
 **Remote-hosted environment variables:**
 
