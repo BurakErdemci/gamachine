@@ -38,6 +38,7 @@ from core.constants import MCP_TRANSPORT_BASE_PATH
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware
 from services.registry import TOOL_GROUPS
+from services.registry.tool_actions import nested_tool_names
 
 logger = logging.getLogger("mcp-for-unity-server")
 
@@ -211,15 +212,43 @@ class ToolProfileMiddleware(Middleware):
         return [t for t in tools if profile.allows(tool_groups(t))]
 
     async def on_call_tool(self, context, call_next):
-        name = getattr(getattr(context, "message", None), "name", None)
+        message = getattr(context, "message", None)
+        name = getattr(message, "name", None)
         if isinstance(name, str) and name:
             profile = current_profile()
-            tool = await context.fastmcp_context.fastmcp.get_tool(name)
+            server = context.fastmcp_context.fastmcp
+            tool = await server.get_tool(name)
             if tool is not None:
                 groups = tool_groups(tool)
                 if not profile.allows(groups):
                     raise ToolError(_refusal(name, groups, profile))
+            await _check_nested_calls(server, name, getattr(message, "arguments", None), profile)
         return await call_next(context)
+
+
+async def _check_nested_calls(server: Any, name: str, arguments: Any, profile: ToolProfile) -> None:
+    """Refuse a batch whose sub-calls are not all on the profile, before any runs.
+
+    Audit 25 Sep 2026: on /mcp/gamachine manage_vfx was refused as a direct
+    call but ran inside batch_execute, because only the outer name was checked.
+    A sub-call name the server does not know counts as ungrouped: it passes
+    where ungrouped tools do (/mcp, /mcp/full) and is refused on gamachine.
+    """
+    sub_names = nested_tool_names(name, arguments if isinstance(arguments, dict) else {})
+    if sub_names is None:
+        raise ToolError(
+            f"'{name}' was refused before running anything: its calls are nested "
+            f"too deeply to check against {profile.path} ({profile.name} profile).")
+    refused: list[str] = []
+    for sub_name in dict.fromkeys(sub_names):
+        sub_tool = await server.get_tool(sub_name)
+        groups = tool_groups(sub_tool) if sub_tool is not None else set()
+        if not profile.allows(groups):
+            refused.append(_refusal(sub_name, groups, profile))
+    if refused:
+        raise ToolError(
+            f"'{name}' was refused before running anything: "
+            + " ".join(refused))
 
 
 def _refusal(name: str, groups: set[str], profile: ToolProfile) -> str:

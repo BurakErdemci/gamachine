@@ -268,6 +268,57 @@ def _classify_action(entry: Mapping[str, Any], action: Any, params: Mapping[str,
     return WRITE
 
 
+def nested_tool_names(tool_name: str, params: Mapping[str, Any] | None,
+                      *, _depth: int = 0) -> list[str] | None:
+    """
+    Every sub-call name a nested-call tool (``batch_execute``) could dispatch,
+    recursively; ``[]`` for a tool that carries no nested calls.
+
+    ``classify`` can read the batch literally because it fails closed: a
+    spelling it misses lands on the write side and still gets a card. A caller
+    that ALLOWS or REFUSES by name (the URL tool profiles) has no such fallback,
+    so here the command list, the tool key and the params key are matched with
+    the collision fold (``_key_folded``): a spelling any layer might rename
+    into the real key is included. Names themselves are exact, because both
+    Python ``batch_execute`` and C# ``CommandRegistry`` look them up exactly.
+
+    Returns None when nesting goes past ``_MAX_DEPTH``: the names cannot all be
+    known, and a caller deciding by name must refuse.
+    """
+    entry = tool_entry(tool_name)
+    recursive_field = entry.get("recursive_field") if entry else None
+    if not recursive_field or not isinstance(params, Mapping):
+        return []
+    if _depth >= _MAX_DEPTH:
+        return None
+    tool_key = _key_folded(entry.get("recursive_tool_key", "tool"))
+    params_key = _key_folded(entry.get("recursive_params_key", "params"))
+    commands_key = _key_folded(recursive_field)
+    names: list[str] = []
+    for key, commands in params.items():
+        if not (isinstance(key, str) and _key_folded(key) == commands_key):
+            continue
+        if not isinstance(commands, (list, tuple)):
+            continue
+        for command in commands:
+            if not isinstance(command, Mapping):
+                continue
+            inner_names = [v for k, v in command.items()
+                           if isinstance(k, str) and _key_folded(k) == tool_key
+                           and isinstance(v, str)]
+            inner_params = [v for k, v in command.items()
+                            if isinstance(k, str) and _key_folded(k) == params_key
+                            and isinstance(v, Mapping)]
+            for inner_name in inner_names:
+                names.append(inner_name)
+                for inner in inner_params or [{}]:
+                    deeper = nested_tool_names(inner_name, inner, _depth=_depth + 1)
+                    if deeper is None:
+                        return None
+                    names.extend(deeper)
+    return names
+
+
 def is_read_only(tool_name: str, params: Mapping[str, Any] | None = None) -> bool:
     """Convenience wrapper for gate code that only wants a boolean."""
     return classify(tool_name, params) == READ

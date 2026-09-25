@@ -8,7 +8,7 @@ server group state Unity drives, and refusal ordering.
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -227,6 +227,98 @@ def test_in_profile_and_unknown_tools_reach_the_next_layer(monkeypatch):
     # Unknown tool: FastMCP's own not-found error is the right answer.
     ctx = _call_context(None)
     assert asyncio.run(ToolProfileMiddleware().on_call_tool(ctx, call_next)) == "ok"
+
+
+# ── Sub-calls inside batch_execute (audit 25 Sep 2026: manage_vfx was refused
+#    directly on /mcp/gamachine but ran inside a batch) ──────────────────────
+
+_REGISTERED = {
+    "batch_execute": _tool("batch_execute", "core"),
+    "manage_gameobject": _tool("manage_gameobject", "core"),
+    "play_step": _tool("play_step", "playtest"),
+    "manage_vfx": _tool("manage_vfx", "vfx"),
+    "manage_tools": _tool("manage_tools"),
+}
+
+
+def _batch_context(arguments):
+    fastmcp = SimpleNamespace(get_tool=AsyncMock(side_effect=lambda n: _REGISTERED.get(n)))
+    return SimpleNamespace(
+        message=SimpleNamespace(name="batch_execute", arguments=arguments),
+        fastmcp_context=SimpleNamespace(fastmcp=fastmcp),
+    )
+
+
+def _batch(*names, key="tool"):
+    return {"commands": [{key: n, "params": {}} for n in names]}
+
+
+def _refused(profile_name, arguments):
+    """The refusal text, or None when the batch reached the next layer."""
+    from fastmcp.exceptions import ToolError
+    set_server_enabled_groups(DEFAULT_ENABLED_GROUPS)
+    profile = PROFILES.get(profile_name, DEFAULT_PROFILE)
+    call_next = AsyncMock(return_value="ok")
+    try:
+        with patch.object(tool_profiles, "current_profile", lambda: profile):
+            asyncio.run(ToolProfileMiddleware().on_call_tool(_batch_context(arguments), call_next))
+    except ToolError as exc:
+        call_next.assert_not_called()
+        return str(exc)
+    call_next.assert_called_once()
+    return None
+
+
+def test_batch_with_an_out_of_profile_sub_call_is_refused_whole():
+    error = _refused("gamachine", _batch("manage_gameobject", "manage_vfx"))
+    assert error is not None
+    assert "manage_vfx" in error and "before running anything" in error
+    assert "/mcp/gamachine" in error
+
+
+def test_batch_of_in_profile_sub_calls_goes_through():
+    assert _refused("gamachine", _batch("manage_gameobject", "play_step")) is None
+
+
+def test_batch_sub_call_on_a_disabled_group_is_refused_on_the_default_profile():
+    assert _refused("default", _batch("manage_vfx")) is not None
+
+
+def test_full_profile_lets_every_sub_call_through():
+    assert _refused("full", _batch("manage_vfx", "manage_tools", "not_a_tool")) is None
+
+
+def test_unknown_sub_call_counts_as_ungrouped():
+    """Refused where ungrouped tools are (gamachine), allowed where they are not."""
+    assert _refused("gamachine", _batch("not_a_tool")) is not None
+    assert _refused("default", _batch("not_a_tool")) is None
+
+
+def test_sub_call_in_a_nested_batch_is_checked():
+    nested = {"commands": [{"tool": "batch_execute",
+                            "params": _batch("manage_vfx")}]}
+    assert _refused("gamachine", nested) is not None
+
+
+@pytest.mark.parametrize("arguments", [
+    # A second spelling some layer may rename into the real key must be
+    # checked too (same fold as the approval classifier's collision rule).
+    {"commands": [{"tool": "manage_gameobject", "Tool": "manage_vfx", "params": {}}]},
+    {"commands": [{"tool": "manage_gameobject", "tool_": "manage_vfx"}]},
+    {"commands": [{"tool": "manage_gameobject"}], "Commands": [{"tool": "manage_vfx"}]},
+    {"commands": [{"tool": "batch_execute",
+                   "Params": {"commands_": [{"tool": "manage_vfx"}]}}]},
+])
+def test_folded_key_spellings_are_suspects(arguments):
+    assert _refused("gamachine", arguments) is not None
+
+
+def test_nesting_past_the_limit_is_refused():
+    arguments = _batch("manage_gameobject")
+    for _ in range(12):
+        arguments = {"commands": [{"tool": "batch_execute", "params": arguments}]}
+    error = _refused("full", arguments)
+    assert error is not None and "nested too deeply" in error
 
 
 def test_current_profile_outside_http_is_the_default():
