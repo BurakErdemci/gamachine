@@ -25,8 +25,8 @@ import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
-from mcp.types import (CONNECTION_CLOSED, INVALID_REQUEST, InputRequiredResult,
-                       ToolListChangedNotification)
+from mcp.types import (CONNECTION_CLOSED, INVALID_REQUEST, REQUEST_TIMEOUT,
+                       InputRequiredResult, ToolListChangedNotification)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,13 @@ _SESSION_LOST_MSG = ("Unity MCP sunucusu yeniden başlamış; yeni oturum açıl
                      "onu da tanımadı.")
 _INPUT_REQUIRED_MSG = ("Unity MCP aracı '{name}' tamamlanmadı: sunucu ek girdi istedi "
                        "(input_required) ve Gamachine bu isteği yanıtlayamıyor.")
+# A call that timed out may have passed its approval card and run (or still be
+# running) in Unity; "zaman aşımı" alone read as "nothing happened" and invited
+# a blind retry of a write (audit finding ambiguous-outcome-message, 25 Sep 2026).
+_CALL_TIMEOUT_MSG = ("Unity MCP çağrısı {seconds} sn içinde bitmedi (zaman aşımı); sonucu "
+                     "bilinmiyor: Unity işlemi uygulamış olabilir. Tekrar denemeden önce "
+                     "Unity'deki durumu kontrol et.")
+_LIST_TIMEOUT_MSG = "Unity MCP çağrısı {seconds} sn içinde bitmedi (zaman aşımı)."
 
 
 class UnityMCPError(RuntimeError):
@@ -293,7 +300,7 @@ class _UnityMCPClient:
             self._loop, self._thread = loop, thread
             return loop
 
-    def run(self, coro, timeout: float):
+    def run(self, coro, timeout: float, timeout_message: Optional[str] = None):
         """Runs `coro` on the client loop from any thread; raises on timeout."""
         loop = self._ensure_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
@@ -301,7 +308,8 @@ class _UnityMCPClient:
             return future.result(timeout=timeout)
         except concurrent.futures.TimeoutError:
             future.cancel()
-            raise UnityMCPError(f"Unity MCP çağrısı {int(timeout)} sn içinde bitmedi (zaman aşımı).")
+            raise UnityMCPError(timeout_message
+                                or _LIST_TIMEOUT_MSG.format(seconds=f"{timeout:g}"))
 
     # ── session lifecycle (runs on the client loop) ──────────────────────
     async def _session_owner(self, conn: _Connection, ready: asyncio.Future) -> None:
@@ -507,6 +515,8 @@ class _UnityMCPClient:
         return self.run(self._retry_if_session_lost(_once, "tools/list"), timeout)
 
     def call_tool(self, name: str, params: Dict[str, Any], timeout: float = CALL_TIMEOUT_S):
+        timed_out = _CALL_TIMEOUT_MSG.format(seconds=f"{timeout:g}")
+
         async def _once():
             conn, session = await self._acquire()
             failed = False
@@ -523,6 +533,10 @@ class _UnityMCPClient:
                 if getattr(exc.error, "code", None) == CONNECTION_CLOSED:
                     failed = True
                     raise UnityMCPError(_CONNECTION_LOST_MSG) from exc
+                if getattr(exc.error, "code", None) == REQUEST_TIMEOUT:
+                    # The SDK gave up waiting and sent a cancel; the session
+                    # is healthy, but the call may have run.
+                    raise UnityMCPError(timed_out) from exc
                 # A JSON-RPC error answer: the session itself is healthy.
                 raise
             except Exception:
@@ -540,7 +554,8 @@ class _UnityMCPClient:
                 raise UnityMCPError(_INPUT_REQUIRED_MSG.format(name=name))
             return result
         # Small margin so the MCP read timeout (a clean MCPError) fires first.
-        return self.run(self._retry_if_session_lost(_once, name), timeout + 2)
+        return self.run(self._retry_if_session_lost(_once, name), timeout + 2,
+                        timeout_message=timed_out)
 
     def close(self, timeout: float = 10.0) -> None:
         if self._loop is None or self._thread is None or not self._thread.is_alive():

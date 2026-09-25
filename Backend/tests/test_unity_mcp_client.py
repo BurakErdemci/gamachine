@@ -112,6 +112,52 @@ def test_a_hanging_call_times_out_instead_of_hanging(server):
     assert elapsed < 10
 
 
+def test_a_timed_out_call_says_its_outcome_is_unknown(server):
+    """audit ambiguous-outcome-message: past its approval card a write may have
+    run; the message must not read as "nothing happened"."""
+    fake, _ = server
+
+    async def _never(name, params):
+        await asyncio.sleep(3600)
+
+    fake.call_impl = _never
+    result = umt.call_unity_tool("manage_gameobject", {}, timeout=0.3)
+    assert result == {"success": False,
+                      "error": umt._CALL_TIMEOUT_MSG.format(seconds="0.3")}
+    assert "bilinmiyor" in result["error"] and "kontrol et" in result["error"]
+
+
+def test_the_sdk_request_timeout_reads_the_same_and_keeps_the_session(server):
+    fake, _ = server
+    calls = []
+
+    async def _sdk_timeout(name, params):
+        calls.append(name)
+        if len(calls) == 1:
+            from mcp.shared.exceptions import MCPError
+            raise MCPError(code=types.REQUEST_TIMEOUT, message="Request 'tools/call' timed out")
+        return types.CallToolResult(content=[types.TextContent(type="text", text="ok")])
+
+    fake.call_impl = _sdk_timeout
+    result = umt.call_unity_tool("manage_gameobject", {}, timeout=240)
+    assert result == {"success": False, "error": umt._CALL_TIMEOUT_MSG.format(seconds="240")}
+    assert umt.call_unity_tool("manage_scene", {})["success"] is True
+    assert calls == ["manage_gameobject", "manage_scene"]  # never retried
+    assert len(fake.sessions) == 1
+
+
+def test_a_list_timeout_keeps_the_plain_message(server):
+    fake, client = server
+
+    async def _slow_list():
+        await asyncio.sleep(3600)
+
+    with mock.patch.object(_FakeSession, "list_tools", lambda self: _slow_list()):
+        with pytest.raises(umt.UnityMCPError) as err:
+            client.list_tools(timeout=0.3)
+    assert str(err.value) == umt._LIST_TIMEOUT_MSG.format(seconds="0.3")
+
+
 def test_connection_failure_in_an_exception_group_reads_as_one_sentence(server):
     fake, _ = server
     fake.fail_connect = ExceptionGroup(
