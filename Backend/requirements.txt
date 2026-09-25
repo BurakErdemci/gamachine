@@ -74,8 +74,13 @@ tqdm==4.70.0
 # an exact pin a later colorama could enter the frozen installer with no diff here
 # (audit probe, 3 Sep 2026).
 colorama==0.4.6
-mcp
-fastmcp
+# MCP SDK 2.x is a breaking rewrite and claude-agent-sdk 0.2.128 declares
+# mcp<2.0.0,>=1.23.0; the backend client stays on 1.x even after the Unity
+# MCP server moves to FastMCP 4 (it still serves the old protocol revisions).
+# The separate `fastmcp` package was dropped here (25 Sep 2026): nothing in the
+# backend imports it (`mcp.server.fastmcp` is the SDK's own copy) and the full
+# Backend suite passes with `import fastmcp` blocked.
+mcp>=1.23.0,<2
 tomli
 Pillow>=10.0.0
 pywin32>=306; sys_platform == "win32"
