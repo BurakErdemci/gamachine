@@ -27,10 +27,17 @@ before or after:
   <newline>UNITYAI_EOF                                   (posix only)
 
 LAUNCHER is the exact launcher path (bare, "..." or '...'). A VALUE is one
-token that holds none of the characters PowerShell, POSIX shells or cmd.exe
-treat specially. BODY is data: both quoted forms are literal, and the only
-text that could end them early (a line starting with '@, or a line equal to
-UNITYAI_EOF) is refused inside it.
+token built only from allow-listed characters (_VALUE_CHARS). BODY is data:
+both quoted forms are literal, and the only text that could end them early (a
+line starting with a quote character and @, or a line equal to UNITYAI_EOF) is
+refused inside it.
+
+Quotes are not only ASCII (measured 25 Sep 2026, Windows PowerShell 5.1 via
+-EncodedCommand): U+201C/U+201D/U+201E close a "..." string, U+2018/U+2019/
+U+201A/U+201B close a '...' one, and a line starting with any of those four
+plus @ ends a @'...'@ here-string. Each let a second statement run with no
+card while this parser saw one token. So values are allow-listed, not
+filtered through a deny-list: a character nobody thought of is refused.
 """
 import json
 import os
@@ -51,8 +58,10 @@ WRITE_REASON = ("Gamachine step mode: built-in file writes are blocked. Write fi
 RUN_REASON = (
     "Gamachine step mode: shell commands are blocked; only the unityai bridge may run, in "
     "exactly the form given in your instructions (save-file, delete-file, read-file, "
-    "list-dir, bash). Argument values may not contain quotes or any of $ ` & | < > ^ % ! ( ), "
-    "and nothing may come before or after the unityai call.")
+    "list-dir, bash). Argument values may hold only ASCII letters, digits, spaces, Turkish "
+    "letters and - _ . / \\ : , + = @ # ~ * ? [ ] { } (no quotes inside, none of "
+    "; $ ` & | < > ^ % ! ( ), no typographic quotes or dashes), and nothing may come "
+    "before or after the unityai call.")
 FAIL_REASON = "Gamachine step gate could not verify this call, so it is blocked."
 
 _SUBCOMMANDS = {
@@ -66,7 +75,16 @@ _SUBCOMMANDS = {
 _REQUIRED = {"save-file": {"--path"}, "delete-file": {"--path"}, "read-file": {"--path"},
              "list-dir": set(), "bash": {"--command"}}
 _BARE = re.compile(r"[A-Za-z0-9_.\-/\\:]+")
-_FORBIDDEN = set("\"'$`&|<>^%!()")
+_FORBIDDEN = set("\"'$`&|<>^%!();")
+# Turkish letters, circumflexed vowels included (kâğıt): the only non-ASCII a
+# value may hold. Measured 25 Sep 2026: all reach unityai intact through
+# PowerShell 5.1 -> unityai.cmd %* -> Python argv.
+_TURKISH_LETTERS = "çÇğĞıİöÖşŞüÜâÂîÎûÛ"
+_VALUE_CHARS = frozenset({chr(c) for c in range(0x20, 0x7F)} - _FORBIDDEN
+                         | set(_TURKISH_LETTERS))
+# What PowerShell 5.1 may read as a quote. U+FF02/U+FF07 did not close a string
+# in the measurement; they are listed anyway at no cost.
+_QUOTE_LIKE = frozenset("\"'‘’‚‛“”„＂＇")
 _HEREDOC = " <<'UNITYAI_EOF'"
 _HEREDOC_END = "UNITYAI_EOF"
 # Windows PowerShell 5.1 pipes text to a native program in $OutputEncoding,
@@ -82,7 +100,13 @@ def _value_ok(text: str) -> bool:
     # from this parser.
     if text.endswith("\\"):
         return False
-    return not any(c in _FORBIDDEN or ord(c) < 0x20 or c == "\x7f" for c in text)
+    return all(c in _VALUE_CHARS for c in text)
+
+
+def _ends_here_string(line: str) -> bool:
+    # PowerShell 5.1 ends @'...'@ at a column-0 quote character followed by @,
+    # curly ones included (measured); indented, it is data.
+    return len(line) >= 2 and line[0] in _QUOTE_LIKE and line[1] == "@"
 
 
 def _tokens(line: str):
@@ -132,6 +156,8 @@ def _invocation_ok(line: str, launcher: str, windows: bool, *, stdin: bool) -> b
     quote, first = toks[0]
     if not launcher or not _same_path(first, launcher, windows):
         return False
+    if any(c in _QUOTE_LIKE or c in "$`" for c in first):
+        return False  # PowerShell would end or expand the string inside the path
     if windows and quote and not call_op:
         return False  # a quoted path without & is a string expression, not a call
     squote, sub = toks[1]
@@ -183,10 +209,9 @@ def unityai_command_allowed(command: str, launcher: str, windows: bool) -> bool:
             lines = lines[1:]
         if lines[0] != "@'":
             return False
-        end = next((k for k in range(1, len(lines)) if lines[k].startswith("'@")), None)
-        if end is None or end != len(lines) - 1:
+        if len(lines) < 2 or any(_ends_here_string(line) for line in lines[1:-1]):
             return False
-        tail = lines[end]
+        tail = lines[-1]
         if not tail.startswith("'@ | "):
             return False
         return _invocation_ok(tail[len("'@ | "):], launcher, windows, stdin=True)

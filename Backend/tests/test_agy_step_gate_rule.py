@@ -32,6 +32,13 @@ WIN_ALLOWED = [
     f'& "{WIN_L}" save-file --path "a.txt" --content "short text"',
     gate.PS_UTF8_PREFIX + "\n@'\nTürkçe şğü\n'@ | "
     f'& "{WIN_L}" save-file --path "a.txt" --content-stdin',
+    # Turkish in values (measured: reaches unityai intact through PowerShell 5.1)
+    f'& "{WIN_L}" read-file --path "Sahneler/Bölüm İçerik şğüçöı ÇĞÜŞÖ kâğıt îû ÂÎÛ.txt"',
+    f'& "{WIN_L}" bash --command "git commit -m Türkçe_düzeltme"',
+    f'& "{WIN_L}" bash --command "npm run build -- --mode=dev #x ~ * ? [a] {{b}} + , @ :"',
+    # the body is data: typographic quotes are fine away from column 0
+    gate.PS_UTF8_PREFIX + "\n@'\nTürkçe “alıntı” ’x’ ’@ mid-line\n  ’@ indented\n'@ | "
+    f'& "{WIN_L}" save-file --path "a.txt" --content-stdin',
 ]
 
 WIN_DENIED = [
@@ -85,7 +92,38 @@ WIN_DENIED = [
     gate.PS_UTF8_PREFIX + "\n" f'& "{WIN_L}" delete-file --path "a"',
     # bash heredoc does not parse in PowerShell: refused on Windows
     f"{WIN_L} save-file --path a --content-stdin <<'UNITYAI_EOF'\nx\nUNITYAI_EOF",
+    # ';' is refused even where it is inert (one command per call)
+    f'& "{WIN_L}" bash --command "git status ; git log"',
+    f'& "{WIN_L}" bash --command "a;b"',
 ]
+
+# Characters PowerShell 5.1 reads as quotes. Measured 25 Sep 2026 (-EncodedCommand):
+# the first seven closed the string and ran the second statement; FF02/FF07 did not.
+DOUBLE_QUOTES = ["“", "”", "„", "＂"]
+SINGLE_QUOTES = ["‘", "’", "‚", "‛", "＇"]
+# Other look-alikes: dashes (PowerShell reads them as '-' in operators),
+# non-ASCII spaces, zero-width and bidi controls, BOM, line/paragraph separators.
+LOOKALIKES = ["–", "—", "―", "−", " ", " ", "　",
+              "​", "‮", "﻿", " ", " ", "\u0085", "­",
+              "＄", "＆", "｜", "；", ";", "″", "´", "`"]
+_EVIL = "Set-Content -Path m.txt -Value ran"
+for _q in DOUBLE_QUOTES + SINGLE_QUOTES:
+    WIN_DENIED += [
+        f'& "{WIN_L}" bash --command "x{_q} ; {_EVIL} ; {_q}"',
+        f"& '{WIN_L}' bash --command 'x{_q} ; {_EVIL} ; {_q}'",
+        f'& "{WIN_L}" bash --command "x{_q} {_EVIL} {_q}"',
+        f'& "{WIN_L}" delete-file --path "a{_q}b"',
+        f'& "{WIN_L}" bash --command {_q}x{_q}',
+        # a here-string ends at a column-0 quote character followed by @
+        gate.PS_UTF8_PREFIX + "\n@'\nbody\n" + _q + "@ | Out-Null ; " + _EVIL + " ; @" + _q
+        + "\nmore\n'@ | " f'& "{WIN_L}" save-file --path "a.txt" --content-stdin',
+        "@'\n" + _q + "@\n'@ | " f'& "{WIN_L}" save-file --path "a.txt" --content-stdin',
+    ]
+for _c in LOOKALIKES:
+    WIN_DENIED += [f'& "{WIN_L}" bash --command "a{_c}b"',
+                   f'& "{WIN_L}" read-file --path "a{_c}.txt"',
+                   f'& "{WIN_L}"{_c}bash --command "a"',
+                   f'& "{WIN_L}" bash{_c}--command "a"']
 
 POSIX_ALLOWED = [
     f"{POSIX_L} delete-file --path \"notes/a.txt\"",
@@ -129,6 +167,25 @@ class TestAllowRule(unittest.TestCase):
         for command in POSIX_DENIED:
             with self.subTest(command=command):
                 self.assertFalse(gate.unityai_command_allowed(command, POSIX_L, windows=False))
+
+    def test_value_characters_are_an_allow_list(self):
+        # Pinned: widening this set is a security decision, not a refactor.
+        ascii_ok = {chr(c) for c in range(0x20, 0x7F)} - set("\"'$`&|<>^%!();")
+        self.assertEqual(gate._VALUE_CHARS, frozenset(ascii_ok | set("çÇğĞıİöÖşŞüÜâÂîÎûÛ")))
+        for code in range(0x80, 0x10000):
+            c = chr(code)
+            if c not in "çÇğĞıİöÖşŞüÜâÂîÎûÛ":
+                self.assertFalse(gate._value_ok(f"a{c}b"), f"U+{code:04X}")
+
+    def test_posix_values_use_the_same_allow_list(self):
+        for q in DOUBLE_QUOTES + SINGLE_QUOTES + LOOKALIKES + [";"]:
+            self.assertFalse(gate.unityai_command_allowed(
+                f'{POSIX_L} bash --command "a{q}b"', POSIX_L, windows=False))
+
+    def test_launcher_with_a_quote_or_dollar_is_not_trusted(self):
+        for odd in ("C:\\Users\\O\u2019Brien\\unityai.cmd", "C:\\Users\\a$b\\unityai.cmd"):
+            self.assertFalse(gate.unityai_command_allowed(
+                f'& "{odd}" list-dir', odd, windows=True))
 
     def test_empty_or_wrong_types_are_denied(self):
         for command, launcher in [("", WIN_L), (None, WIN_L), (f'& "{WIN_L}" list-dir', ""),

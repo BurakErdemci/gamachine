@@ -201,8 +201,10 @@ class AgyProvider(BaseCLIProvider):
             + self._unityai_call_rules(unityai_cli) +
             "4. To READ a file or LIST a directory you MAY use your own view_file / list_dir.\n"
             "5. Run unityai ALONE: nothing before or after it in the same command, no\n"
-            "   && ; | or redirection. Values in --path/--command must not contain quotes\n"
-            "   or any of $ ` & | < > ^ % ! ( ) — such a command is refused.\n\n"
+            "   && ; | or redirection. Values in --path/--command may hold only ASCII\n"
+            "   letters, digits, spaces, Turkish letters and - _ . / \\ : , + = @ # ~ * ? [ ] { }.\n"
+            "   No quotes inside a value, none of ; $ ` & | < > ^ % ! ( ), and no\n"
+            "   typographic quotes or dashes — such a command is refused.\n\n"
             "Every write, delete and shell command MUST go through unityai so the user can\n"
             "approve it in the IDE. SCOPE: Only the current workspace. No unprompted test files.\n\n"
             "REPLY STYLE — match the reply length to the task:\n"
