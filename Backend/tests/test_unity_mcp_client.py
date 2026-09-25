@@ -382,6 +382,85 @@ def test_tools_list_changed_refreshes_the_cache(server):
     assert umt.is_unity_tool("play_step")
 
 
+def _notify_list_changed(fake, client):
+    note = types.ServerNotification(
+        types.ToolListChangedNotification(method="notifications/tools/list_changed"))
+    client.run(fake.handlers[-1](note), 5)
+
+
+def test_a_refresh_in_flight_during_unload_cannot_repopulate_tools(server):
+    """Promoted from an external audit probe (2026-09-25): a refresh already
+    running when the user turned the tools off wrote the cache back."""
+    fake, client = server
+    fake.tools = [_tool("read_console", "core")]
+    assert umt.load_unity_tools() is True
+
+    entered, release, applied = threading.Event(), threading.Event(), threading.Event()
+    original_list = _FakeSession.list_tools
+    original_apply = umt._apply_tool_list
+
+    async def _slow_list(self):
+        entered.set()
+        await asyncio.to_thread(release.wait, 5)
+        return await original_list(self)
+
+    def _apply(*args):
+        try:
+            return original_apply(*args)
+        finally:
+            applied.set()
+
+    with mock.patch.object(_FakeSession, "list_tools", _slow_list),             mock.patch.object(umt, "_apply_tool_list", _apply):
+        fake.tools.append(_tool("play_step", "playtest"))
+        _notify_list_changed(fake, client)
+        assert entered.wait(5), "the refresh never reached list_tools"
+        sessions = len(fake.sessions)
+        umt.unload_unity_tools()
+        release.set()
+        assert applied.wait(5), "the in-flight refresh never finished"
+
+    assert umt.get_unity_tool_definitions() == []
+    assert not umt.is_unity_tool("read_console")
+    assert len(fake.sessions) == sessions, "the refresh must not reconnect after unload"
+
+
+def test_a_refresh_that_reaches_list_tools_after_unload_does_not_reconnect(server):
+    fake, client = server
+    fake.tools = [_tool("read_console", "core")]
+    assert umt.load_unity_tools() is True
+
+    entered, release, done = threading.Event(), threading.Event(), threading.Event()
+
+    def _held_refresh():
+        entered.set()
+        release.wait(5)
+        try:
+            umt._refresh_after_change()
+        finally:
+            done.set()
+
+    client.on_tools_changed = _held_refresh
+    _notify_list_changed(fake, client)
+    assert entered.wait(5)
+    sessions = len(fake.sessions)
+    umt.unload_unity_tools()
+    release.set()
+    assert done.wait(5)
+    assert len(fake.sessions) == sessions
+    assert umt.get_unity_tool_definitions() == []
+
+
+def test_tools_load_again_after_an_unload(server):
+    fake, _ = server
+    fake.tools = [_tool("read_console", "core")]
+    assert umt.load_unity_tools() is True
+    umt.unload_unity_tools()
+    assert umt.get_unity_tool_definitions() == []
+    assert umt.load_unity_tools() is True
+    assert [t["name"] for t in umt.get_unity_tool_definitions()] == ["read_console"]
+    assert umt.is_unity_tool("read_console")
+
+
 def test_a_list_changed_burst_runs_one_refresh_at_a_time_plus_one_follow_up():
     client = umt._UnityMCPClient()
     release = threading.Event()

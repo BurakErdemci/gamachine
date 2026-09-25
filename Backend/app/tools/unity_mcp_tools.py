@@ -14,6 +14,7 @@ sentence instead of an `ExceptionGroup` repr.
 import asyncio
 import concurrent.futures
 import contextlib
+import contextvars
 import logging
 import threading
 from datetime import timedelta
@@ -46,6 +47,10 @@ class UnityMCPError(RuntimeError):
     """A failure already phrased for the user."""
 
 
+class _RefreshAbandoned(UnityMCPError):
+    """A refresh from before close() tried to open a session after it."""
+
+
 def _endpoint() -> tuple[str, dict]:
     """MCP transport adresi — her çağrıda yeniden hesaplanır.
 
@@ -67,6 +72,14 @@ def _endpoint() -> tuple[str, dict]:
 # Cache — toggle açıldığında doldurulur
 _cached_tools: List[Dict] = []
 _cached_functions: Dict[str, Any] = {}
+# unload_unity_tools() bumps _generation. The cache is served only while
+# _cached_generation matches it, so a refresh that started before an unload and
+# finishes after it cannot bring the tools back (external audit 2026-09-25).
+_generation = 0
+_cached_generation = 0
+_cache_lock = threading.Lock()
+_refresh_epoch: "contextvars.ContextVar[Optional[int]]" = contextvars.ContextVar(
+    "unity_mcp_refresh_epoch", default=None)
 
 
 def _leaf_exceptions(exc: BaseException) -> List[BaseException]:
@@ -151,6 +164,11 @@ class _UnityMCPClient:
         self._connect_lock: Optional[asyncio.Lock] = None
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_again = False
+        # Bumped by close(). A refresh captures it before handing off to its
+        # worker thread, and a list_tools from that thread may not open a new
+        # session once it has moved on: close() means the user turned the
+        # tools off, and a late refresh reconnecting would undo that.
+        self._epoch = 0
         self.on_tools_changed: Optional[Callable[[], None]] = None
 
     # ── loop thread ──────────────────────────────────────────────────────
@@ -201,11 +219,13 @@ class _UnityMCPClient:
         finally:
             conn.session = None
 
-    async def _acquire(self, refresh_on_connect: bool = True):
+    async def _acquire(self, refresh_on_connect: bool = True, epoch: Optional[int] = None):
         """Returns (connection, session) with the caller counted as in flight."""
         if self._connect_lock is None:
             self._connect_lock = asyncio.Lock()
         async with self._connect_lock:
+            if epoch is not None and epoch != self._epoch:
+                raise _RefreshAbandoned("Unity MCP tools were unloaded; refresh abandoned.")
             current = self._endpoint_key()
             conn = self._conn
             if conn is not None and conn.reusable():
@@ -265,6 +285,13 @@ class _UnityMCPClient:
         conn.session = None
 
     async def _close_all(self) -> None:
+        self._epoch += 1
+        self._refresh_again = False
+        if self._refresh_task is not None and not self._refresh_task.done():
+            # Stops a refresh that has not reached its worker thread yet; one
+            # already there is held off by the epoch check in _acquire.
+            self._refresh_task.cancel()
+        self._refresh_task = None
         conns = [self._conn, *self._retired]
         self._conn = None
         self._retired.clear()
@@ -300,6 +327,9 @@ class _UnityMCPClient:
         callback = self.on_tools_changed
         if callback is None:
             return
+        # to_thread copies the context, so list_tools on the worker thread sees
+        # the epoch this refresh belongs to.
+        _refresh_epoch.set(self._epoch)
         try:
             await asyncio.to_thread(callback)
         except Exception as exc:
@@ -307,8 +337,10 @@ class _UnityMCPClient:
 
     # ── public (sync, bounded) ───────────────────────────────────────────
     def list_tools(self, timeout: float = LIST_TIMEOUT_S) -> List:
+        epoch = _refresh_epoch.get()
+
         async def _go():
-            conn, session = await self._acquire(refresh_on_connect=False)
+            conn, session = await self._acquire(refresh_on_connect=False, epoch=epoch)
             failed = False
             try:
                 result = await session.list_tools()
@@ -446,16 +478,23 @@ def estimate_schema_tokens(tool_defs: List[Dict]) -> int:
     return len(json.dumps(tool_defs, ensure_ascii=False)) // 4
 
 
-def _apply_tool_list(mcp_tools) -> None:
-    global _cached_tools, _cached_functions
+def _apply_tool_list(mcp_tools, generation: int) -> bool:
+    global _cached_tools, _cached_functions, _cached_generation
     exported = _select_exported(mcp_tools)
-    _cached_tools = [_mcp_schema_to_tool_def(t) for t in exported]
-    _cached_functions = {t.name: _make_tool_function(t.name) for t in exported}
+    tools = [_mcp_schema_to_tool_def(t) for t in exported]
+    functions = {t.name: _make_tool_function(t.name) for t in exported}
+    with _cache_lock:
+        if generation != _generation:
+            logger.info("[UnityMCP] tools were unloaded during the refresh; list discarded")
+            return False
+        _cached_tools, _cached_functions = tools, functions
+        _cached_generation = generation
     logger.info(
         "[UnityMCP] %d/%d tool exported (groups %s, ~%d schema tokens): %s",
-        len(_cached_tools), len(mcp_tools), "+".join(EXPORTED_GROUPS),
-        estimate_schema_tokens(_cached_tools), [t["name"] for t in _cached_tools],
+        len(tools), len(mcp_tools), "+".join(EXPORTED_GROUPS),
+        estimate_schema_tokens(tools), [t["name"] for t in tools],
     )
+    return True
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -463,15 +502,20 @@ def _apply_tool_list(mcp_tools) -> None:
 def load_unity_tools() -> bool:
     """Sync versiyon — CLI/test context'inden çağrılır."""
     global _cached_tools, _cached_functions
+    generation = _generation
     try:
-        _apply_tool_list(_client.list_tools())
-        return True
+        return _apply_tool_list(_client.list_tools(), generation)
     except BaseException as e:  # noqa: BLE001
         if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
+        if isinstance(e, _RefreshAbandoned):
+            # A refresh from before an unload; the cache is not its to clear.
+            return False
         logger.warning(f"[UnityMCP] Tool listesi alınamadı: {_describe_failure(e)}")
-        _cached_tools = []
-        _cached_functions = {}
+        with _cache_lock:
+            if generation == _generation:
+                _cached_tools = []
+                _cached_functions = {}
         return False
 
 
@@ -504,20 +548,29 @@ async def load_unity_tools_async() -> bool:
 
 def unload_unity_tools():
     """Toggle OFF olduğunda cache'i temizler ve oturumu kapatır."""
-    global _cached_tools, _cached_functions
-    _cached_tools = []
-    _cached_functions = {}
+    global _cached_tools, _cached_functions, _generation
+    with _cache_lock:
+        _generation += 1
+        _cached_tools = []
+        _cached_functions = {}
     _client.close()
     logger.info("[UnityMCP] Tool'lar kaldırıldı.")
 
 
+def _cache_is_current() -> bool:
+    return _cached_generation == _generation
+
+
 def get_unity_tool_definitions() -> List[Dict]:
-    return list(_cached_tools)
+    with _cache_lock:
+        return list(_cached_tools) if _cache_is_current() else []
 
 
 def get_unity_tool_functions() -> Dict[str, Any]:
-    return dict(_cached_functions)
+    with _cache_lock:
+        return dict(_cached_functions) if _cache_is_current() else {}
 
 
 def is_unity_tool(tool_name: str) -> bool:
-    return tool_name in _cached_functions
+    with _cache_lock:
+        return _cache_is_current() and tool_name in _cached_functions
