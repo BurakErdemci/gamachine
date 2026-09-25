@@ -48,9 +48,12 @@ _BACKEND_URL = os.environ.get(
     "UNITYAI_URL", os.environ.get("ANTIGRAVITY_URL", "http://localhost:8000")
 )
 
-# `approval_bridge.py` ile BİLEREK aynı: aynı uçları, aynı bekleme bütçesiyle
-# kullanan iki istemcinin farklı zaman aşımlarına sahip olması, aynı kartın bir
-# tarafta yaşayıp diğerinde ölmesi demek olurdu.
+# Budgets are shared with Backend/app/unity_ai_mcp/approval_bridge.py (same
+# endpoints) and bound the backend's card sweep (MCP_PENDING_TTL in
+# Backend/app/routes/conversation_routes.py, "wait + margin"). This file's wait
+# dropped to 150 s on 25 Sep 2026; until those two follow, a card this gate
+# gave up on is withdrawn explicitly (_withdraw_card) rather than left to the
+# sweep.
 #
 # ⚠️ Bütçeler DUVAR SAATİNE bağlı, deneme SAYISINA değil — ve fark 33 dakika.
 # Denetim turu ölçtü (31 Tem 2026): "180 sn" diye yazılmış yoklama döngüsü,
@@ -61,7 +64,19 @@ _BACKEND_URL = os.environ.get(
 # büyümüyor.
 _POST_BUTCESI = 10.0       # sn — ürün henüz açılıyorsa yetişsin
 _BEKLEME_ADIMI = 0.5
-_BEKLEME_BUTCESI = 180.0   # sn — diff okuyup karar vermek için makul süre
+# 150 s, not 180: agy cancels every MCP call at exactly 180 s ("timed out after
+# 3m0s", not configurable) and tells the model it timed out. With 10 s of POST
+# budget plus a 180 s card wait, an approval near the end was dispatched to
+# Unity after agy had already given up, and the model's retry wrote twice
+# (audit 25 Sep 2026). 10 + 150 = 160 s leaves Unity 20 s to run the call and
+# answer inside agy's deadline. The cancel agy sends at 180 s is honoured too
+# (see _onay_iste); this budget covers an approval that lands just before it.
+_BEKLEME_BUTCESI = 150.0
+# Withdrawing a card is best effort and must not hold up the refusal.
+_GERI_CEKME_BUTCESI = 3.0
+
+# Background withdrawals, referenced so the event loop cannot drop them early.
+_pending_withdrawals: set[asyncio.Task] = set()
 
 
 class ApprovalDenied(RuntimeError):
@@ -83,9 +98,55 @@ def _headers() -> dict[str, str]:
     return {"X-Session-Token": token} if token else {}
 
 
+async def _withdraw_card(gate_id: str) -> None:
+    """Take a card nobody is waiting for off the user's screen.
+
+    The backend has no withdraw route; resolving the card as not approved
+    through /mcp-approval-respond is what removes it from /mcp-pending, and a
+    click that arrives later gets "gate_expired" instead of a false "ok".
+    Without this the card stayed up to the backend's 200 s sweep, and an
+    approval on it reported success while nothing ran.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_GERI_CEKME_BUTCESI) as client:
+            await client.post(
+                f"{_BACKEND_URL}/mcp-approval-respond/{gate_id}",
+                json={"approved": False},
+                headers=_headers(),
+            )
+    except Exception as e:
+        logger.warning("[approval-gate] could not withdraw card %s: %s", gate_id, e)
+
+
+def _withdraw_card_in_background(gate_id: str) -> None:
+    # A separate task, because the cancelled one cannot await anything more:
+    # the MCP dispatcher cancels through an anyio scope, which re-raises on
+    # every await inside it.
+    task = asyncio.get_running_loop().create_task(_withdraw_card(gate_id))
+    _pending_withdrawals.add(task)
+    task.add_done_callback(_pending_withdrawals.discard)
+
+
 async def _onay_iste(tool_name: str, params: Mapping[str, Any]) -> dict:
-    """Backend'e sorar. Dönen sözlükte `approved` bool'u vardır."""
+    """Backend'e sorar. Dönen sözlükte `approved` bool'u vardır.
+
+    A client that gives up on the call cancels this coroutine: mcp 2.2 cancels
+    the handler on `notifications/cancelled` in the session era (agy's) and on
+    a closed response stream in 2026-07-28 (measured 25 Sep 2026, both eras:
+    polling stops, nothing is dispatched). The card is then withdrawn so the
+    user cannot approve a call that will never run.
+    """
     gate_id = uuid.uuid4().hex[:10]
+    try:
+        return await _ask_and_wait(gate_id, tool_name, params)
+    except asyncio.CancelledError:
+        logger.info("[approval-gate] %s cancelled by the client; withdrawing card %s",
+                    tool_name, gate_id)
+        _withdraw_card_in_background(gate_id)
+        raise
+
+
+async def _ask_and_wait(gate_id: str, tool_name: str, params: Mapping[str, Any]) -> dict:
     govde = {
         "gate_id": gate_id,
         "tool": tool_name,
@@ -164,6 +225,7 @@ async def _onay_iste(tool_name: str, params: Mapping[str, Any]) -> dict:
             if i % 20 == 1:
                 logger.warning("[approval-gate] sonuç yoklaması hatası: %s", e)
 
+    await _withdraw_card(gate_id)
     return {
         "approved": False,
         "error": f"Onay zaman aşımına uğradı ({int(_BEKLEME_BUTCESI)} sn).",

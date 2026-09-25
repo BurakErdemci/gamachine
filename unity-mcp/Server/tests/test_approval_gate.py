@@ -316,6 +316,89 @@ def test_yoklama_butcesi_SAYIYA_degil_saate_bagli(monkeypatch):
     assert gecen < 5.0, f"bütçe aşıldı: {gecen:.1f} sn"
 
 
+# ── Card wait vs agy's fixed 180 s MCP timeout (audit 25 Sep 2026) ───────────
+
+AGY_MCP_TIMEOUT_S = 180.0  # "timed out after 3m0s"; agy offers no setting for it
+
+
+def test_the_gate_answers_before_agy_gives_up():
+    """An approval near the end of the card wait must still be dispatched,
+    run and answered inside agy's deadline, or agy reports a timeout for a
+    call Unity ran and the model's retry writes twice. 15 s is kept for Unity."""
+    worst_case = approval_gate._POST_BUTCESI + approval_gate._BEKLEME_BUTCESI
+    assert worst_case + 15.0 <= AGY_MCP_TIMEOUT_S, worst_case
+
+
+class _PendingBackend:
+    """Accepts the card, keeps it pending, records every request."""
+
+    calls: list = []
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, json=None, **k):
+        _PendingBackend.calls.append(("POST", url, json))
+        return _Yanit(200, {"status": "ok"})
+
+    async def get(self, url, **k):
+        _PendingBackend.calls.append(("GET", url, None))
+        return _Yanit(200, {"status": "pending"})
+
+
+def _withdrawals():
+    return [(url, body) for method, url, body in _PendingBackend.calls
+            if method == "POST" and "/mcp-approval-respond/" in url]
+
+
+@pytest.fixture
+def pending_backend(monkeypatch):
+    _PendingBackend.calls = []
+    monkeypatch.setattr(approval_gate.httpx, "AsyncClient", _PendingBackend)
+    monkeypatch.setattr(approval_gate, "_BEKLEME_ADIMI", 0.02)
+    return _PendingBackend
+
+
+def test_the_gates_own_timeout_withdraws_the_card(pending_backend, monkeypatch):
+    """Before: the card stayed on screen until the backend's sweep, and an
+    approval clicked there reported success while nothing ran."""
+    monkeypatch.setattr(approval_gate, "_BEKLEME_BUTCESI", 0.1)
+    with pytest.raises(ApprovalDenied):
+        _kos(kapiyi_gec("manage_asset", {"action": "create"}))
+    opened = [body["gate_id"] for method, url, body in pending_backend.calls
+              if url.endswith("/mcp-approval-request")]
+    assert _withdrawals() == [
+        (f"{approval_gate._BACKEND_URL}/mcp-approval-respond/{opened[0]}", {"approved": False})]
+
+
+def test_a_client_cancel_stops_the_wait_and_withdraws_the_card(pending_backend):
+    """What the MCP layer does when agy sends notifications/cancelled (or a
+    2026-07-28 client closes its stream): it cancels the handler. The wait must
+    end there, nothing may run, and the card must leave the screen."""
+
+    async def scenario():
+        task = asyncio.ensure_future(kapiyi_gec("manage_asset", {"action": "create"}))
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        polls_at_cancel = sum(1 for c in pending_backend.calls if c[0] == "GET")
+        await asyncio.gather(*approval_gate._pending_withdrawals)
+        await asyncio.sleep(0.1)
+        return polls_at_cancel
+
+    polls_at_cancel = _kos(scenario())
+    assert polls_at_cancel > 0, "the wait never started; the test proves nothing"
+    assert sum(1 for c in pending_backend.calls if c[0] == "GET") == polls_at_cancel
+    assert len(_withdrawals()) == 1 and _withdrawals()[0][1] == {"approved": False}
+
+
 # ── kablolama: kapı VAR olmak yetmez, BAĞLI olmalı ──────────────────────────
 
 
