@@ -58,8 +58,13 @@ class TestAgyMcpRegistration(unittest.TestCase):
         for key in ("migrated", "cli_mcp"):
             entry = self.servers(key)["unityMCP"]
             self.assertIn("codex-mcp-bridge", entry["args"])
-            self.assertEqual(entry["env"], {"UNITY_MCP_URL": URL})
+            # agy's own keys are blanked for the child (agy passes its whole env).
+            self.assertEqual(entry["env"], {"UNITY_MCP_URL": URL, "GEMINI_API_KEY": "",
+                                            "GOOGLE_API_KEY": "", "GOOGLE_APPLICATION_CREDENTIALS": ""})
             self.assertNotIn("headers", entry)
+            unityai_env = self.servers(key)["unityai"]["env"]
+            for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"):
+                self.assertEqual(unityai_env[name], "")
         for key in ("cli_settings", "global_settings"):
             self.assertNotIn("unityMCP", self.servers(key))
         self.assertIn("meshy", self.servers("migrated"))

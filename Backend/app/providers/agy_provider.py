@@ -26,6 +26,16 @@ logger = logging.getLogger(__name__)
 # command line. The rule and why it is strict are in agy_step_gate.py.
 STEP_GATE_TOOLS = GATED_TOOLS + (RUN_TOOL,)
 STEP_GATE_KEY = "gamachine-step-gate"
+
+# agy hands its whole environment, Gemini/Google keys included, to every stdio
+# MCP server it starts (measured: the child saw both 39-character keys). An
+# entry's own env wins over the inherited one (measured: set to "", the child
+# saw them empty), so the entries Gamachine writes blank them; neither the
+# unityai server nor the Unity MCP bridge reads them. Entries Gamachine does
+# not write (meshy, playwright, added by the user or the IDE) keep the leak.
+AGY_CHILD_SECRET_BLANKS = {
+    "GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "GOOGLE_APPLICATION_CREDENTIALS": "",
+}
 STEP_GATE_HOOKS_FILE = ".agents/hooks.json"
 
 
@@ -377,7 +387,7 @@ class AgyProvider(BaseCLIProvider):
         # Bu env sözlüğü ~/.gemini/settings.json'a yazılıyor — token oraya
         # girmiyor: dosya paylaşımlı (Jarvan da aynı dosyayı kullanıyor) ve
         # sırrın config'e yayılması denetimin C grubu bulgusuydu.
-        env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace}
+        env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace, **AGY_CHILD_SECRET_BLANKS}
 
         # 0. unityai CLI env dosyası — agy run_command env'i propagate etmese bile
         #    CLI doğru backend'e/token'a/workspace'e bağlanmayı garanti eder.
@@ -416,7 +426,7 @@ class AgyProvider(BaseCLIProvider):
             _argv = bridge_argv()
             config["mcpServers"]["unityMCP"] = {
                 "command": _argv[0], "args": _argv[1:],
-                "env": {"UNITY_MCP_URL": unity_mcp_url},
+                "env": {"UNITY_MCP_URL": unity_mcp_url, **AGY_CHILD_SECRET_BLANKS},
                 "trust": True,
             }
         else:
