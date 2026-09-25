@@ -390,7 +390,7 @@ class AgentEvent:
 # ── Termination contract (the frontend consumes this) ───────────────────────
 #
 # `done` payload: {"iterations": int, "stop_reason": "complete"|"max_iterations"
-# |"no_progress", "max_reached": bool}. Before this contract the ceiling emitted
+# |"no_progress"|"max_tokens", "max_reached": bool}. Before this contract the ceiling emitted
 # a `done` byte-identical to a normal finish apart from a `max_reached` flag
 # nothing read, so a truncated run was indistinguishable from a successful one.
 #
@@ -436,7 +436,39 @@ _STOP_TEXTS = {
         "ederdim. Ne yapmamı istediğini biraz daha açarsan farklı bir yol "
         "deneyebilirim."
     ),
+    "max_tokens": (
+        "⚠️ Cevabım tek yanıt için ayrılan uzunluk sınırına takıldı ve yarıda "
+        "kesildi; yukarıdaki metin eksik olabilir. İşi daha küçük parçalara "
+        "bölerek yeni bir istekle devam edebiliriz."
+    ),
 }
+
+
+# Anthropic agent loop output cap per family. The loop sends no `thinking`
+# param, but per the claude-api skill Fable/Mythos, Opus 5, Opus 5.5 and
+# Sonnet 5 think by default (omitting `thinking` runs adaptive), and thinking
+# tokens count toward max_tokens: at the old 4096 a turn could spend the cap
+# thinking and return cut short. 16000 is the skill's non-streaming default
+# (all these families allow 128K), and it stays under the SDK's non-streaming
+# guard, which raises above ~21.3K (3600 s * max_tokens / 128000 > 600 s).
+# Billing is per generated token, so a higher cap costs only when used.
+# Families that run without thinking here keep 4096, the whole of which is
+# visible output.
+ANTHROPIC_LOOP_MAX_TOKENS_THINKING = 16000
+ANTHROPIC_LOOP_MAX_TOKENS = 4096
+
+
+def _anthropic_loop_max_tokens(model_name: str) -> int:
+    from providers.effort_caps import claude_version
+    m = (model_name or "").lower()
+    if "fable" in m or "mythos" in m:
+        return ANTHROPIC_LOOP_MAX_TOKENS_THINKING
+    version = claude_version(m)
+    # Unrecognised ids are treated as newer than the table, like the thinking
+    # and effort gates do.
+    if version is None or version >= (5, 0):
+        return ANTHROPIC_LOOP_MAX_TOKENS_THINKING
+    return ANTHROPIC_LOOP_MAX_TOKENS
 
 
 def provider_retry_code(err_msg: str) -> "str | None":
@@ -1674,7 +1706,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 # Kalp atışı: OpenAI ve Gemini yollarıyla aynı yardımcı.
                 _istek = asyncio.create_task(client.messages.create(
                     model=self.model_name,
-                    max_tokens=4096,
+                    max_tokens=_anthropic_loop_max_tokens(self.model_name),
                     system=_sys_blocks,
                     messages=messages,
                     tools=anthropic_tools,
@@ -1704,7 +1736,21 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             for text_block in text_blocks:
                 if text_block.text:
                     yield AgentEvent("text", {"content": text_block.text})
-            
+
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                # Used to pass as a normal finish. A tool_use cut at the cap
+                # carries partial input, so no tool of this turn is run.
+                partial_text = "\n".join(b.text for b in text_blocks if b.text)
+                yield AgentEvent("turn_usage", {
+                    "input_tokens": _turn_in, "output_tokens": _turn_out, "cost_usd": None,
+                    "duration_ms": int((time.time() - _turn_t0) * 1000),
+                })
+                if partial_text:
+                    yield AgentEvent("response", {"content": partial_text})
+                for _ev in _stop_events(iteration + 1, "max_tokens"):
+                    yield _ev
+                return
+
             if not tool_calls:
                 # Final yanıt
                 final_text = "\n".join(b.text for b in text_blocks if b.text)
