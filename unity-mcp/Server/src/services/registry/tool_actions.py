@@ -71,59 +71,85 @@ def _action_list(entry: Mapping[str, Any], key: str) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str))
 
 
-def _normalize_key(key: str) -> str:
-    """``autoRepair`` -> ``auto_repair``, mirroring the server's own normaliser."""
-    out: list[str] = []
-    for index, char in enumerate(key):
-        if char.isupper():
-            if index:
-                out.append("_")
-            out.append(char.lower())
-        else:
-            out.append(char)
-    return "".join(out)
-
-
-def _param_value(params: Mapping[str, Any], param: str) -> Any:
+def _key_folded(key: str) -> str:
     """
-    The value of ``param`` under ANY spelling the server would accept.
+    One name for every spelling that some layer can turn into the same key.
 
-    The gate classifies the payload as the model sent it, but
-    ``ParamNormalizerMiddleware`` converts camelCase to snake_case before
-    FastMCP ever validates it - so the server and this classifier were looking
-    at two different key sets. An exact-key lookup therefore misses
-    ``autoRepair`` while the C# side happily reads it, and a missing key is the
-    READ side of every rule we have: a pure spelling change turned a gated call
-    into an exempt one. Found by an external audit 2026-07-29 on
-    ``manage_scene validate autoRepair=true``, which reached ValidateScene(true).
-    That particular row is gone (manage_scene is now write throughout), but the
-    mechanism was not, and it would have come back with the next multi-word
-    pivot parameter.
-
-    Any spelling that carries a value wins, because "cannot prove absent" must
-    land on the write side.
+    The layers between this gate and the C# handler rename keys in several ways:
+    ``ParamNormalizerMiddleware`` (camelCase -> snake_case), C#
+    ``BatchExecute.NormalizeParameterKeys`` (``StringCaseUtility.ToCamelCase``:
+    drop each ``_``, upper-case the next letter, later key wins), and the
+    ``NormalizeKey`` of ``manage_animation`` / ``manage_vfx`` (``action``
+    matched case-insensitively, plus ToCamelCase). Every one of those only
+    removes underscores and changes case, so two keys that can meet after any
+    of them are equal once underscores are dropped and case is folded. The fold
+    is deliberately looser than any single layer: it only decides which keys
+    are suspects, and a suspect lands on the write side.
     """
-    if params.get(param) is not None:
-        return params[param]
-    target = _normalize_key(param)
+    return key.replace("_", "").lower()
+
+
+def _properties_container(params: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """
+    The ``properties`` objects that C# ``manage_animation`` / ``manage_vfx``
+    flatten into the top level (``ExtractProperties``: key matched
+    case-insensitively, value an object or a JSON string of one).
+    """
+    found: list[Mapping[str, Any]] = []
     for key, value in params.items():
-        if isinstance(key, str) and value is not None and _normalize_key(key) == target:
-            return value
-    return None
+        if not isinstance(key, str) or _key_folded(key) != "properties":
+            continue
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                continue
+        if isinstance(value, Mapping):
+            found.append(value)
+    return found
+
+
+def _spellings(params: Mapping[str, Any], param: str) -> list[tuple[bool, Any]]:
+    """
+    Every ``(is_literal_top_level_key, value)`` pair a layer could read as ``param``.
+
+    Measured 2026-09-25 (external audit): ``{"action": "get", "action_": "call"}``
+    was classified by the literal ``action`` while C# batch normalisation
+    renamed ``action_`` to ``action`` and let it overwrite the first, so Unity
+    ran the write with no approval card.
+    """
+    target = _key_folded(param)
+    out: list[tuple[bool, Any]] = []
+    for key, value in params.items():
+        if isinstance(key, str) and _key_folded(key) == target:
+            out.append((key == param, value))
+    for container in _properties_container(params):
+        for key, value in container.items():
+            if isinstance(key, str) and _key_folded(key) == target:
+                out.append((False, value))
+    return out
 
 
 def _is_read_by_param(rule: Mapping[str, Any], params: Mapping[str, Any]) -> bool:
-    """Evaluate one ``param_dependent`` rule against a call's parameters."""
+    """
+    Evaluate one ``param_dependent`` rule against a call's parameters.
+
+    Every spelling of the pivot has to agree with the read side: which one a
+    layer ends up reading depends on key order and on which normaliser runs, so
+    one spelling saying "absent" proves nothing while another carries a value.
+    The original hole here was ``manage_scene validate autoRepair=true``, which
+    an exact-key lookup read as omitted (external audit 2026-07-29).
+    """
     param = rule.get("param")
     if not isinstance(param, str) or not param:
         # A rule with no usable pivot cannot prove anything.
         return False
     when = rule.get("read_when", "omitted")
-    value = _param_value(params, param)
+    values = [value for _, value in _spellings(params, param)]
     if when == "omitted":
-        return value is None
+        return all(value is None for value in values)
     if when == "falsy":
-        return not value
+        return not any(values)
     # An unknown rule kind must not silently read as a permission. Treat it as
     # "cannot prove read" so the call is gated.
     return False
@@ -175,7 +201,27 @@ def classify(tool_name: str, params: Mapping[str, Any] | None = None, *, _depth:
     if not action_param:
         return WRITE
 
-    action = params.get(action_param)
+    spellings = _spellings(params, action_param)
+    if len(spellings) > 1:
+        # Which spelling wins differs per layer (key order, which normaliser
+        # runs), so no single one of them is the action Unity will execute.
+        return WRITE
+    if not spellings:
+        candidates: list[Any] = [None]
+    elif spellings[0][0]:
+        candidates = [spellings[0][1]]
+    else:
+        # A renamed or nested spelling: some layers read it as the action,
+        # others ignore it and fall back to the default. Both must be reads.
+        candidates = [spellings[0][1], None]
+    for action in candidates:
+        if _classify_action(entry, action, params) == WRITE:
+            return WRITE
+    return READ
+
+
+def _classify_action(entry: Mapping[str, Any], action: Any, params: Mapping[str, Any]) -> str:
+    """Classify one candidate value of the action parameter."""
     if action is None:
         action = entry.get("default_action")
     if not isinstance(action, str):

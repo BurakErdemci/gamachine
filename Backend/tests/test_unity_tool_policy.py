@@ -202,6 +202,18 @@ def test_batch_execute_is_only_exempt_when_every_inner_call_reads():
     assert not policy.is_unity_mcp_read_only(f"{UNITY}batch_execute", mixed)
 
 
+@pytest.mark.parametrize("tool, params", [
+    ("game_hooks", {"action": "get", "action_": "call", "name": "level.restart"}),
+    ("manage_script", {"action": "read", "action_": "delete", "name": "X", "path": "Assets"}),
+])
+def test_colliding_action_keys_are_never_exempt(tool, params):
+    """C# batch normalisation folds `action_` into `action` (later key wins), so
+    the literal `action` is not what Unity runs (external audit 2026-09-25)."""
+    assert not policy.is_unity_mcp_read_only(f"{UNITY}{tool}", params)
+    batch = {"commands": [{"tool": tool, "params": params}]}
+    assert not policy.is_unity_mcp_read_only(f"{UNITY}batch_execute", batch)
+
+
 def test_non_unity_tools_are_never_exempted_here():
     """Bu politika yalnız unityMCP'yi sınıflandırır; Write/Bash kendi yollarından geçer."""
     assert not policy.is_unity_mcp_read_only("Write", {"file_path": "/tmp/x"})

@@ -672,6 +672,49 @@ def test_a_param_dependent_pivot_is_seen_under_every_spelling():
     assert _is_read_by_param(falsy_rule, {"autoRepair": True}) is False
 
 
+@pytest.mark.parametrize("tool_name, params", [
+    ("game_hooks", {"action": "get", "action_": "call", "name": "level.restart"}),
+    ("manage_script", {"action": "read", "action_": "delete", "name": "X", "path": "Assets"}),
+    ("manage_script", {"action_": "delete", "action": "read", "name": "X", "path": "Assets"}),
+    ("manage_script", {"action": "read", "Action": "delete", "name": "X", "path": "Assets"}),
+    ("manage_script", {"action": "read", "a_ction": "delete", "name": "X", "path": "Assets"}),
+    ("read_console", {"action": "get", "properties": {"action": "clear"}}),
+    ("read_console", {"action": "get", "properties": '{"action": "clear"}'}),
+])
+def test_colliding_action_keys_are_writes(tool_name, params):
+    """
+    Two keys that any layer can fold into `action` make the call a write.
+
+    Promoted from an external audit probe (2026-09-25): C# BatchExecute renames
+    `action_` to `action` and the later key overwrites the earlier, so
+    `{action: "get", action_: "call"}` executed `call` while this classifier
+    read `get`. manage_animation / manage_vfx additionally match `action`
+    case-insensitively and flatten `properties` into the top level.
+    """
+    assert classify(tool_name, params) == WRITE
+    batch = {"commands": [{"tool": tool_name, "params": params}]}
+    assert classify("batch_execute", batch) == WRITE
+
+
+def test_a_lone_renamed_action_key_must_be_a_read_under_every_reading():
+    # Batch normalisation turns `action_` into `action`; a direct call ignores it
+    # and falls back to the default. read_console: "clear" is a write either way
+    # it is read, "get" is a read either way.
+    assert classify("read_console", {"action_": "clear"}) == WRITE
+    assert classify("read_console", {"action_": "get"}) == READ
+    # manage_script has no default, so the ignored reading cannot be proven a read.
+    assert classify("manage_script", {"action_": "read"}) == WRITE
+    assert classify("manage_script", {"action": "read", "name": "X"}) == READ
+
+
+def test_a_param_dependent_pivot_must_be_absent_under_every_spelling():
+    rule = {"action": "status", "param": "auto_repair", "read_when": "omitted"}
+    assert _is_read_by_param(rule, {"auto_repair": None, "autoRepair": True}) is False
+    falsy_rule = {"action": "status", "param": "auto_repair", "read_when": "falsy"}
+    assert _is_read_by_param(falsy_rule, {"auto_repair": False, "autoRepair": True}) is False
+    assert _is_read_by_param(falsy_rule, {"auto_repair": False, "autoRepair": 0}) is True
+
+
 def test_a_malformed_action_list_cannot_become_a_wildcard():
     """
     `action in read_actions` is a substring test when read_actions is a string.
