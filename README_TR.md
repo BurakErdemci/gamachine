@@ -176,7 +176,7 @@ sürdürmek, kodla arasındaki sürüklenmeyi büyütüyor. README iki dilli kal
 | [Engineering notes](docs/engineering-notes.md) | Kararlar, hatalar ve bedelleri |
 | [Architecture](docs/architecture.md) | Süreç yerleşimi, agentic döngü, araç katmanı, SSE |
 | [Approval & security](docs/security.md) | Neyin onaylandığı, neyin bilerek onaylanmadığı |
-| [Unity MCP integration](docs/unity-mcp.md) | 46 Editor aracı ve girdi sistemi |
+| [Unity MCP integration](docs/unity-mcp.md) | 51 Editor aracı, URL'ye göre sabit araç listesi ve girdi sistemi |
 | [Supported providers](docs/providers.md) | Bütün CLI ajanları, bulut API'leri, yerel modeller |
 | [Building from source](docs/building.md) | Geliştirme kurulumu ve dmg / installer üretimi |
 

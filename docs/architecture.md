@@ -63,7 +63,8 @@ layer, and the SSE event stream. For the reasoning behind these choices see
                          ┌─────────────────┐
                          │   Unity MCP     │
                          │ (CoplayDev)     │  ← uvx bundled
-                         │   46 tools      │
+                         │ 51 tools, fixed │
+                         │ list per URL    │
                          └────────┬────────┘
                                   ▼
                          ┌─────────────────┐
@@ -122,7 +123,7 @@ Tool usage is a layer **independent** of the provider. When a model wants to rea
 ### MCP servers the backend runs
 
 1. **unityai MCP** (`Backend/app/unity_ai_mcp/server.py`) — `save_file`, `delete_file`, `read_file`, `list_directory`, `bash`/`run_terminal_command`/`execute_shell_command`. Write/delete/command operations are routed to the approval panel via `approval_bridge`.
-2. **Unity MCP** (CoplayDev/unity-mcp) — 46 tools for the Unity Editor (scene, GameObject, prefab, input…), over HTTP at `127.0.0.1:8080`.
+2. **Unity MCP** (CoplayDev/unity-mcp) — 51 tools for the Unity Editor (scene, GameObject, prefab, input, playtest…), over HTTP at `127.0.0.1:8080`. The list is fixed by the URL: `/mcp` (groups enabled in the Editor plus meta-tools, 36 with no Editor), `/mcp/gamachine` (core + playtest, 31), `/mcp/full` (every group, 51); all need `X-API-Key`. See [unity-mcp.md](unity-mcp.md).
 
 ### When are MCP configs written?
 

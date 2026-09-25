@@ -172,7 +172,7 @@ viewer, live thinking block, and a bilingual TR/EN interface.
 | [Engineering notes](docs/engineering-notes.md) | The decisions, the mistakes, and what they cost |
 | [Architecture](docs/architecture.md) | Process layout, agentic loop, tool layer, SSE stream |
 | [Approval & security](docs/security.md) | What is gated, what deliberately isn't, and why |
-| [Unity MCP integration](docs/unity-mcp.md) | The 46 Editor tools and the input system |
+| [Unity MCP integration](docs/unity-mcp.md) | The 51 Editor tools, the fixed tool list per URL, and the input system |
 | [Supported providers](docs/providers.md) | Every CLI agent, cloud API and local model |
 | [Building from source](docs/building.md) | Dev setup and producing a dmg / installer |
 
