@@ -22,6 +22,9 @@ never spawns; the uvicorn reload worker, where main's __main__ block never
 ran) could never be switched out of auto, so its fresh-install mode is step.
 That is decided on every read, not in bind_store(): main binds the store at
 import time and only reads the secret later, in __main__.
+The same holds for a SAVED auto (external audit 2026-09-25): such a process
+reads it as step. The row itself is left alone, so the real app, which has a
+secret, still sees the user's choice.
 
 Known limit: the persisted value is only as trustworthy as the user's data
 directory; a same-user process that edits the SQLite file (or deletes the row,
@@ -50,6 +53,9 @@ _stored: bool = False
 # A clean read found no saved row; the effective mode then depends on whether a
 # UI secret is configured at the time of asking.
 _fresh_install: bool = False
+# _mode came from the saved row (not from set_mode in this process).
+_from_row: bool = False
+_warned_row_auto_without_secret: bool = False
 _store: Any = None
 _ui_secret: bytes = b""
 
@@ -60,7 +66,7 @@ def bind_store(store: Any) -> None:
     Only a clean read that finds no row at all is a fresh install. An
     unreadable or tampered value must fall to step, never fail open to auto.
     """
-    global _store, _mode, _stored, _fresh_install
+    global _store, _mode, _stored, _fresh_install, _from_row
     value: Optional[str] = None
     read_ok = False
     try:
@@ -70,7 +76,8 @@ def bind_store(store: Any) -> None:
         logger.error("[approval-mode] saved mode could not be read: %s", exc)
     with _LOCK:
         _store = store
-        if isinstance(value, str) and value in MODES:
+        _from_row = isinstance(value, str) and value in MODES
+        if _from_row:
             _mode, _stored, _fresh_install = value, True, False
         elif read_ok and value is None:
             _mode, _stored, _fresh_install = FALLBACK_MODE, False, True
@@ -84,15 +91,29 @@ def bind_store(store: Any) -> None:
         logger.info("[approval-mode] startup mode=%s (stored=%s)", _mode, _stored)
 
 
+def _row_auto_without_secret_locked() -> bool:
+    return _from_row and _mode == "auto" and not _ui_secret
+
+
 def _effective_mode_locked() -> str:
     if _fresh_install:
         return FRESH_INSTALL_MODE if _ui_secret else FALLBACK_MODE
+    if _row_auto_without_secret_locked():
+        return FALLBACK_MODE
     return _mode
 
 
 def current_mode() -> str:
+    global _warned_row_auto_without_secret
     with _LOCK:
-        return _effective_mode_locked()
+        mode = _effective_mode_locked()
+        warn = _row_auto_without_secret_locked() and not _warned_row_auto_without_secret
+        if warn:
+            _warned_row_auto_without_secret = True
+    if warn:
+        logger.warning("[approval-mode] saved mode is auto but no UI secret is configured, "
+                       "so nothing could switch it off; running as %s", FALLBACK_MODE)
+    return mode
 
 
 def is_auto() -> bool:
@@ -109,7 +130,7 @@ def set_mode(mode: str, source: str = "ui") -> str:
     """Persist and apply a new mode; returns the previous one."""
     if mode not in MODES:
         raise ValueError(f"unknown approval mode: {mode!r}")
-    global _mode, _stored, _fresh_install
+    global _mode, _stored, _fresh_install, _from_row
     with _LOCK:
         previous = _effective_mode_locked()
         store = _store
@@ -118,7 +139,7 @@ def set_mode(mode: str, source: str = "ui") -> str:
         # revert on the next launch.
         store.set_setting(_SETTING_KEY, mode)
     with _LOCK:
-        _mode, _stored, _fresh_install = mode, True, False
+        _mode, _stored, _fresh_install, _from_row = mode, True, False, False
     logger.warning("[approval-mode] %s -> %s (source=%s)", previous, mode, source)
     _propagate_to_live_sessions(mode == "auto")
     return previous
@@ -185,7 +206,8 @@ def check_ui_secret(presented: str) -> bool:
 
 
 def _reset_for_tests() -> None:
-    global _mode, _stored, _store, _ui_secret, _fresh_install
+    global _mode, _stored, _store, _ui_secret, _fresh_install, _from_row
+    global _warned_row_auto_without_secret
     with _LOCK:
         _mode, _stored, _store, _ui_secret = FALLBACK_MODE, False, None, b""
-        _fresh_install = False
+        _fresh_install = _from_row = _warned_row_auto_without_secret = False

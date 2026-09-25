@@ -192,6 +192,7 @@ def test_mode_is_persisted_across_restarts(tmp_path):
 
     approval_mode.set_mode("auto", source="test")
     approval_mode._reset_for_tests()
+    approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
     assert approval_mode.current_mode() == "auto"
     assert approval_mode.is_stored() is True
@@ -245,12 +246,37 @@ def test_fresh_install_default_follows_a_secret_read_after_bind():
     assert approval_mode.current_mode() == "step"
 
 
-def test_stored_auto_wins_without_a_ui_secret():
+def test_stored_auto_reads_as_step_without_a_ui_secret():
+    """Promoted from an external audit probe (2026-09-25): a no-secret process
+    (Docker, uvicorn reload worker) whose database holds "auto" stayed in auto
+    with no way to switch it off. The row is left for the app with a secret."""
     store = _FreshStore()
     store.rows["approval_mode"] = "auto"
     approval_mode.bind_store(store)
-    assert approval_mode.current_mode() == "auto"
+    assert approval_mode.current_mode() == "step"
     assert approval_mode.is_stored() is True
+    assert store.rows == {"approval_mode": "auto"}
+    with _client() as client:
+        assert client.get("/approval-mode").json() == {"mode": "step", "stored": True}
+        assert _flip(client, "auto", secret="").status_code == 403
+    assert approval_mode.current_mode() == "step"
+
+
+def test_stored_auto_wins_once_a_ui_secret_is_configured():
+    store = _FreshStore()
+    store.rows["approval_mode"] = "auto"
+    approval_mode.bind_store(store)
+    approval_mode.set_ui_secret(UI_SECRET)
+    assert approval_mode.current_mode() == "auto"
+
+
+def test_stored_step_stays_step_either_way():
+    store = _FreshStore()
+    store.rows["approval_mode"] = "step"
+    approval_mode.bind_store(store)
+    assert approval_mode.current_mode() == "step"
+    approval_mode.set_ui_secret(UI_SECRET)
+    assert approval_mode.current_mode() == "step"
 
 
 def test_real_main_picks_the_fresh_default_after_the_stdin_secret(tmp_path):
