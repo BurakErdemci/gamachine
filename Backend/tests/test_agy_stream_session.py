@@ -258,6 +258,20 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         agy_provider.write_gate_state.assert_called_once_with(auto=True)
         self.assertEqual(len(self.processes), 1)
 
+    async def test_step_mode_without_a_verified_gate_never_spawns(self):
+        from providers.agy_provider import AgyStepGateError
+        self.auto = False
+        AgyProvider._write_step_gate.side_effect = AgyStepGateError("kapı kurulamadı: X")
+        events = await self.collect()
+        self.assertEqual(self.spawns, [])
+        self.assertEqual([e["type"] for e in events], ["error"])
+        self.assertIn("kapı kurulamadı: X", events[0]["message"])
+        # A later turn tries again, and spawns once the gate is in place.
+        AgyProvider._write_step_gate.side_effect = None
+        events = await self.collect()
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(len(self.spawns), 1)
+
     async def test_unreadable_mode_spawns_in_step_mode(self):
         from agentic import approval_mode
         with patch.object(approval_mode, "is_auto", side_effect=RuntimeError("store gone")):

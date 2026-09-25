@@ -43,6 +43,38 @@ def _gate_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "agy")
 
 
+class AgyStepGateError(RuntimeError):
+    """Step mode is on and the gate is not verifiably installed, so agy is not
+    started. The message reaches the user as is, hence Turkish."""
+
+
+_GATE_HEAD = ("Adım adım onay modu açık, ama onay kapısı kurulamadığı için agy "
+              "başlatılmadı (kapı olmadan agy her yazma ve komutu onay sormadan çalıştırırdı).\n")
+
+
+def _gate_hooks_unreadable(path: str, detail) -> str:
+    return (_GATE_HEAD
+            + f"Sorun: {path} dosyası okunamıyor ya da geçerli bir JSON nesnesi değil ({detail}).\n"
+            "Bu dosyada size ait hook'lar olabileceği için Gamachine ona dokunmadı. Dosyayı "
+            "düzeltin (en dışta { ... } olan geçerli bir JSON olmalı) ya da içinde sizin "
+            "eklediğiniz bir şey yoksa silin; sonra mesajınızı yeniden gönderin.")
+
+
+def _gate_write_failed(path: str, detail) -> str:
+    return (_GATE_HEAD
+            + f"Sorun: {path} yazılamadı ({detail}).\n"
+            "Dosyanın ve klasörünün yazılabilir olduğundan emin olun (izin, dolu disk, dosyayı "
+            "kilitleyen bir program ya da çalışma klasörünün dışına yönlendirilmiş bir klasör "
+            "olabilir); sonra mesajınızı yeniden gönderin.")
+
+
+def _gate_not_verified(path: str, detail) -> str:
+    return (_GATE_HEAD
+            + f"Sorun: {path} yazıldı ama geri okunduğunda onay kapısı doğrulanamadı ({detail}).\n"
+            "Dosyayı aynı anda değiştiren başka bir program olabilir; onu kapatıp mesajınızı "
+            "yeniden gönderin.")
+
+
 def write_gate_state(auto: bool) -> None:
     """Mode and launcher the hook reads on every call. Written at spawn and on
     every mode flip, so a flip to auto frees a running step turn at once."""
@@ -265,17 +297,32 @@ class AgyProvider(BaseCLIProvider):
         """Adds (step) or removes (auto) Gamachine's entry in the workspace
         `.agents/hooks.json`, keeping every other hook the user has there.
 
-        Returns False when the gate could not be written; the caller logs it.
+        Step mode: raises AgyStepGateError unless the gate is verifiably in
+        place (state file and hooks.json read back from disk). agy always runs
+        under toolPermission always-proceed, so a spawn without the hook would
+        run every write and shell command with no card; the caller must not
+        spawn. Auto mode: returns False when our entry could not be removed,
+        which only over-restricts; the caller logs it.
+
         agy reads this file when it starts, so a mode change needs a respawn
         (agy_session does that). The hook's state file is written first: a
         hook that cannot read it denies.
+
+        A malformed hooks.json is refused, not backed up and rewritten: agy's
+        own parser may accept what json.load rejects (unmeasured), so the
+        user's hooks could be live, and replacing the file would switch them
+        off even with a backup kept.
         """
         from .workspace_config import ensure_gitignored, guvenli_config_yaz
+        path = os.path.join(os.path.realpath(workspace), *STEP_GATE_HOOKS_FILE.split("/"))
+        state_path = os.path.join(_gate_dir(), "step-gate.json")
         try:
             write_gate_state(auto=not step_mode)
         except OSError as e:
-            logger.error("[agy] step gate state not written (%s); gated calls will be denied", e)
-        path = os.path.join(os.path.realpath(workspace), *STEP_GATE_HOOKS_FILE.split("/"))
+            # A stale "auto" state file would make an installed hook allow everything.
+            logger.error("[agy] step gate state not written (%s)", e)
+            if step_mode:
+                raise AgyStepGateError(_gate_write_failed(state_path, e)) from e
         existed = os.path.exists(path)
         hooks = {}
         if existed:
@@ -285,11 +332,16 @@ class AgyProvider(BaseCLIProvider):
                 if not isinstance(hooks, dict):
                     raise ValueError("top level is not an object")
             except (OSError, ValueError) as e:
-                # Overwriting would delete the user's own hooks; leave the file alone.
-                logger.error("[agy] %s is unreadable (%s); step gate NOT installed", path, e)
+                logger.error("[agy] %s is unreadable (%s); left untouched", path, e)
+                if step_mode:
+                    raise AgyStepGateError(_gate_hooks_unreadable(path, e)) from e
                 return False
+        command = None
         if step_mode:
-            command = self._step_gate_command()
+            try:
+                command = self._step_gate_command()
+            except OSError as e:
+                raise AgyStepGateError(_gate_write_failed(_gate_dir(), e)) from e
             hooks[STEP_GATE_KEY] = {"PreToolUse": [
                 {"matcher": tool, "hooks": [{"type": "command", "command": command, "timeout": 10}]}
                 for tool in STEP_GATE_TOOLS
@@ -300,11 +352,37 @@ class AgyProvider(BaseCLIProvider):
             return True
         if not guvenli_config_yaz(workspace, STEP_GATE_HOOKS_FILE, json.dumps(hooks, indent=2)):
             logger.error("[agy] %s could not be written; step gate state unchanged", path)
+            if step_mode:
+                raise AgyStepGateError(_gate_write_failed(path, "güvenli yazma reddedildi"))
             return False
         if step_mode and not existed:
             # Only a file we created: it holds an absolute path of this machine.
             ensure_gitignored(workspace, [STEP_GATE_HOOKS_FILE])
+        if step_mode:
+            problem = self._step_gate_problem(path, state_path, command)
+            if problem:
+                logger.error("[agy] step gate not verified: %s", problem)
+                raise AgyStepGateError(_gate_not_verified(path, problem))
         return True
+
+    def _step_gate_problem(self, path: str, state_path: str, command: str) -> Optional[str]:
+        """What agy and the hook will read, re-read from disk; None when it is our gate."""
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                state = json.load(f)
+            if state.get("mode") != "step" or state.get("launcher") != self._launcher_path("unityai"):
+                return f"{state_path} adım modunu göstermiyor"
+            with open(path, encoding="utf-8-sig") as f:
+                entries = json.load(f)[STEP_GATE_KEY]["PreToolUse"]
+            want = [{"matcher": tool, "hooks": [{"type": "command", "command": command, "timeout": 10}]}
+                    for tool in STEP_GATE_TOOLS]
+            if entries != want:
+                return f"{path} içindeki {STEP_GATE_KEY} kaydı beklenenden farklı"
+            if not os.path.isfile(command):
+                return f"{command} bulunamadı"
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            return f"{type(e).__name__}: {e}"
+        return None
 
     def _set_agy_model(self, agy_model_name: str, workspace: str = ""):
         """~/.gemini/antigravity-cli/settings.json ve global ~/.gemini/settings.json

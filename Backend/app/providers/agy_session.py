@@ -239,8 +239,11 @@ class AgyStreamSession(SaglayiciSahipligi):
         # These existing helpers are mocked by the fake-process tests.
         provider._write_mcp_config(cwd)
         provider._set_agy_model(provider._pending_agy_model, cwd)
+        # In step mode this raises AgyStepGateError unless the gate is verifiably
+        # installed, so agy is never spawned ungated; stream() turns the raise
+        # into the user's error message. False is auto mode's leftover entry.
         if not provider._write_step_gate(cwd, step_mode=not auto):
-            logger.error("[agy] step gate not in the wanted state (auto=%s) cwd=%s", auto, cwd)
+            logger.error("[agy] step gate entry not removed (auto mode) cwd=%s", cwd)
         self._spawned_auto = auto
         instructions = provider._stream_instructions()
         self._stderr_tail = b""
