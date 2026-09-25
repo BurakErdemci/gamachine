@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import shutil
@@ -7,6 +8,49 @@ from typing import Optional
 from .cli_base import BaseCLIProvider
 
 logger = logging.getLogger(__name__)
+
+# Step mode gate for agy's own file-writing tools.
+#
+# `disabledTools` no longer turns them off: agy 1.2.8 still lists and runs
+# write_to_file with it set (measured 25 Sep 2026, the file was created). No
+# `toolPermission` value separates them from MCP calls either: request-review
+# still lets write_to_file edit the workspace and refuses MCP calls, strict
+# refuses everything. A workspace PreToolUse hook does separate them (measured:
+# writes denied with our reason, call_mcp_tool untouched, even under
+# always-proceed). With the hook, a file write has to go through
+# `unityai save-file`, which raises an approval card.
+#
+# run_command is NOT in this list: it carries the unityai bridge itself, and
+# telling a unityai call from any other shell command needs a hook that reads
+# the command line, which needs a script the frozen build can run (a backend
+# subcommand). Until then a shell write in step mode is stopped only by the
+# prompt rule.
+STEP_GATE_TOOLS = (
+    "write_to_file", "replace_file_content", "multi_replace_file_content",
+    "sed_file", "notebook_edit",
+)
+STEP_GATE_KEY = "gamachine-step-gate"
+STEP_GATE_HOOKS_FILE = ".agents/hooks.json"
+# Echoed by a cmd.exe script: must stay free of & | < > ^ %.
+STEP_GATE_REASON = ("Gamachine step mode: built-in file writes are blocked. Write files "
+                    "only with unityai save-file, so an approval card is shown.")
+
+
+def _short_path(path: str) -> str:
+    """8.3 form of a Windows path, or the path unchanged if there is none.
+
+    agy hands a hook command to the shell with its quotes escaped, so a quoted
+    path with a space fails (measured: '\\"C:\\...' not found). A failing hook
+    still blocks the tool, but the model then sees a shell error instead of the
+    reason, so the path is shortened to lose the space.
+    """
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf))
+        return buf.value if 0 < n < len(buf) else path
+    except Exception:
+        return path
 
 
 class AgyProvider(BaseCLIProvider):
@@ -55,7 +99,6 @@ class AgyProvider(BaseCLIProvider):
         from providers.agy_session import AgyStreamSession
         workspace = cwd or "."
         session = AgyStreamSession(-(int(time.time() * 1000) & 0x7FFFFFFF), cwd=workspace)
-        session.auto_approve = True
         collected = ""
         try:
             async for ev in session.stream(prompt, model=self.binary_name, cwd=workspace):
@@ -128,6 +171,71 @@ class AgyProvider(BaseCLIProvider):
             "- LANGUAGE: ALWAYS reply in the language the user writes in (Turkish user →\n"
             "  Turkish reply), including resumed conversations. Never drift to English.\n\n"
         )
+
+    @staticmethod
+    def _step_gate_command() -> str:
+        """Writes the deny script under Gamachine's own user folder and returns
+        the hook command. Rewritten on every call, so an edited copy cannot
+        linger."""
+        gate_dir = os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "agy")
+        os.makedirs(gate_dir, exist_ok=True)
+        payload = json.dumps({"decision": "deny", "reason": STEP_GATE_REASON})
+        if sys.platform == "win32":
+            path = os.path.join(gate_dir, "step-gate.cmd")
+            # `more` drains the hook's stdin; the shape was measured through agy.
+            body = "@echo off\r\n>nul more\r\necho " + payload + "\r\n"
+        else:
+            path = os.path.join(gate_dir, "step-gate.sh")
+            body = "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '" + payload + "'\n"
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(body)
+        if sys.platform != "win32":
+            os.chmod(path, 0o700)
+        command = _short_path(path) if sys.platform == "win32" else path
+        if " " in command:
+            logger.warning("[agy] step gate path has a space (%s); the hook will fail "
+                           "closed and the model sees a shell error, not the reason", command)
+        return command
+
+    def _write_step_gate(self, workspace: str, step_mode: bool) -> bool:
+        """Adds (step) or removes (auto) Gamachine's entry in the workspace
+        `.agents/hooks.json`, keeping every other hook the user has there.
+
+        Returns False when the gate could not be written; the caller logs it.
+        agy reads this file when it starts, so a mode change needs a respawn
+        (agy_session does that).
+        """
+        from .workspace_config import ensure_gitignored, guvenli_config_yaz
+        path = os.path.join(os.path.realpath(workspace), *STEP_GATE_HOOKS_FILE.split("/"))
+        existed = os.path.exists(path)
+        hooks = {}
+        if existed:
+            try:
+                with open(path, encoding="utf-8-sig") as f:
+                    hooks = json.load(f)
+                if not isinstance(hooks, dict):
+                    raise ValueError("top level is not an object")
+            except (OSError, ValueError) as e:
+                # Overwriting would delete the user's own hooks; leave the file alone.
+                logger.error("[agy] %s is unreadable (%s); step gate NOT installed", path, e)
+                return False
+        if step_mode:
+            command = self._step_gate_command()
+            hooks[STEP_GATE_KEY] = {"PreToolUse": [
+                {"matcher": tool, "hooks": [{"type": "command", "command": command, "timeout": 10}]}
+                for tool in STEP_GATE_TOOLS
+            ]}
+        elif STEP_GATE_KEY in hooks:
+            hooks.pop(STEP_GATE_KEY)
+        else:
+            return True
+        if not guvenli_config_yaz(workspace, STEP_GATE_HOOKS_FILE, json.dumps(hooks, indent=2)):
+            logger.error("[agy] %s could not be written; step gate state unchanged", path)
+            return False
+        if step_mode and not existed:
+            # Only a file we created: it holds an absolute path of this machine.
+            ensure_gitignored(workspace, [STEP_GATE_HOOKS_FILE])
+        return True
 
     def _set_agy_model(self, agy_model_name: str, workspace: str = ""):
         """~/.gemini/antigravity-cli/settings.json ve global ~/.gemini/settings.json

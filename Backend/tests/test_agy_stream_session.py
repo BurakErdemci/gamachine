@@ -14,6 +14,7 @@ from providers.agy_provider import AgyProvider
 from providers.cli_base import BaseCLIProvider
 
 
+REAL_GLOBAL_AUTO_MODE = agy_session._global_auto_mode
 FIXTURE = Path(__file__).parent / "fixtures/agy_stream_json_sample.ndjson"
 EVENTS = [json.loads(line) for line in FIXTURE.read_text(encoding="utf-8").splitlines() if line]
 SESSION_ID = EVENTS[0]["conversation_id"]
@@ -99,9 +100,12 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
             patch.object(AgyProvider, "_resolve_exec", side_effect=lambda command: command),
             patch.object(AgyProvider, "_write_mcp_config", return_value=""),
             patch.object(AgyProvider, "_set_agy_model"),
+            patch.object(AgyProvider, "_write_step_gate", return_value=True),
             patch.object(AgyProvider, "_stream_instructions", return_value=""),
+            patch.object(agy_session, "_global_auto_mode", side_effect=lambda: self.auto),
             patch.object(agy_session.asyncio, "create_subprocess_exec", side_effect=self.spawn),
         ]
+        self.auto = True
         for item in self.patches:
             item.start()
 
@@ -222,6 +226,30 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         argv = self.spawns[1][0]
         self.assertEqual(argv[argv.index("--conversation") + 1], SESSION_ID)
         self.assertEqual(AgyProvider._set_agy_model.call_args.args[0], "Gemini 3.8 Flash (High)")
+
+    async def test_approval_mode_change_respawns_with_gate_and_preserves_uuid(self):
+        # agy reads workspace hooks only at start, so a flip must respawn.
+        session = agy_session.get_session(11)
+        await self.collect(session)
+        self.assertEqual(AgyProvider._write_step_gate.call_args.kwargs, {"step_mode": False})
+        await self.collect(session)
+        self.assertEqual(len(self.processes), 1)
+        self.auto = False
+        # Without the respawn the turn would wait on the old, drained process.
+        await asyncio.wait_for(self.collect(session), 5)
+        self.assertEqual(len(self.processes), 2)
+        self.assertIsNotNone(self.processes[0].returncode)
+        self.assertEqual(AgyProvider._write_step_gate.call_args.kwargs, {"step_mode": True})
+        self.assertFalse(session.auto_approve)
+        argv = self.spawns[1][0]
+        self.assertEqual(argv[argv.index("--conversation") + 1], SESSION_ID)
+
+    async def test_unreadable_mode_spawns_in_step_mode(self):
+        from agentic import approval_mode
+        with patch.object(approval_mode, "is_auto", side_effect=RuntimeError("store gone")):
+            self.assertFalse(REAL_GLOBAL_AUTO_MODE())
+        with patch.object(approval_mode, "is_auto", return_value=True):
+            self.assertTrue(REAL_GLOBAL_AUTO_MODE())
 
     async def test_restart_uses_uuid_from_existing_disk_store_interface(self):
         session = agy_session.get_session(11, resume_id=SESSION_ID)

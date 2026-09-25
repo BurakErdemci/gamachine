@@ -25,6 +25,21 @@ class AgyWorkspaceError(RuntimeError):
     """The requested workspace was invalid before the live child was touched."""
 
 
+def _global_auto_mode() -> bool:
+    """The one global approval mode, read at spawn time.
+
+    Not `self.auto_approve` from the request: agy fixes its hooks when it
+    starts, so the value that counts is the backend's at that moment.
+    Unreadable counts as step (fail closed).
+    """
+    try:
+        from agentic import approval_mode
+        return approval_mode.is_auto()
+    except Exception:
+        logger.warning("[agy] approval mode unreadable; spawning in step mode", exc_info=True)
+        return False
+
+
 # Observed agy tool payloads nest three or four levels; 40 is far above that and
 # far below CPython's 1000-frame limit, so a hostile 2000-level child payload is
 # truncated here instead of raising RecursionError and killing the turn.
@@ -64,6 +79,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self.session_id = resume_id if conversation_id >= 0 else None
         self.model = None
         self.auto_approve = False
+        self._spawned_auto: Optional[bool] = None
         self._active_process = None
         self._stderr_task = None
         self._stderr_tail = b""
@@ -176,10 +192,14 @@ class AgyStreamSession(SaglayiciSahipligi):
             raise RuntimeError("agy session was stopped.")
         if not os.path.isdir(cwd):
             raise AgyWorkspaceError("agy workspace directory does not exist.")
-        # The process holds ~/.gemini/settings.json state for its life. Model
-        # changes require closing and respawning, while retaining the UUID.
+        # The process holds ~/.gemini/settings.json state and the workspace
+        # hooks for its life. Model and approval-mode changes require closing
+        # and respawning, while retaining the UUID.
+        auto = _global_auto_mode()
+        self.auto_approve = auto
         if self._active_process is not None and (
             not self.is_live or self.model != model or self.cwd != cwd
+            or self._spawned_auto != auto
         ):
             await self._stop_process()
         if self._kapandi:
@@ -197,6 +217,9 @@ class AgyStreamSession(SaglayiciSahipligi):
         # These existing helpers are mocked by the fake-process tests.
         provider._write_mcp_config(cwd)
         provider._set_agy_model(provider._pending_agy_model, cwd)
+        if not provider._write_step_gate(cwd, step_mode=not auto):
+            logger.error("[agy] step gate not in the wanted state (auto=%s) cwd=%s", auto, cwd)
+        self._spawned_auto = auto
         instructions = provider._stream_instructions()
         self._stderr_tail = b""
         self._usage_totals = {}
