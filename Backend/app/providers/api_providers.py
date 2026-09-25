@@ -7,6 +7,7 @@ from google.genai import types as gtypes
 import anthropic
 from typing import Optional, List
 from .base import AIProvider, ThinkingResult
+from .effort_caps import claude_version as _claude_version
 
 import logging
 logger = logging.getLogger(__name__)
@@ -274,22 +275,6 @@ ANTHROPIC_THINKING_BUDGET = 8000
 # Extra max_tokens on thinking requests: thinking counts toward max_tokens in
 # both modes, and budget_tokens must stay strictly below max_tokens.
 ANTHROPIC_THINKING_HEADROOM = 8000
-
-# "claude-opus-4-8", "claude-sonnet-4-5-20250929", "claude-opus-4-20250514".
-# The minor must be a single digit so a date suffix is never read as one.
-_CLAUDE_FAMILY_FIRST_RE = re.compile(r"(?:opus|sonnet|haiku)-(\d{1,2})(?:-(\d)(?!\d))?(?!\d)")
-# "claude-3-7-sonnet-20250219", and the invalid "claude-4-6-sonnet" this
-# provider emitted before its ids were fixed (may still be stored).
-_CLAUDE_VERSION_FIRST_RE = re.compile(r"claude-(\d{1,2})(?:-(\d))?-(?:opus|sonnet|haiku)")
-
-
-def _claude_version(model_name: str) -> Optional[tuple]:
-    m = (model_name or "").lower()
-    match = _CLAUDE_VERSION_FIRST_RE.search(m) or _CLAUDE_FAMILY_FIRST_RE.search(m)
-    if not match:
-        return None
-    return int(match.group(1)), int(match.group(2) or 0)
-
 
 def anthropic_thinking_param(model_name: str) -> Optional[dict]:
     """The `thinking` value for a Messages API request that wants reasoning back,

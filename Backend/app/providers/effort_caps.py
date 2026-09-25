@@ -19,7 +19,51 @@ map_effort(...) SÖZLEŞMESİ — dönen dict anahtarları (hepsi opsiyonel, aut
 """
 from __future__ import annotations
 
+import re
+from typing import Optional
+
 CANON_ORDER = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+# "claude-opus-4-8", "claude-sonnet-4-5-20250929", "claude-opus-4-20250514".
+# The minor must be a single digit so a date suffix is never read as one.
+_CLAUDE_FAMILY_FIRST_RE = re.compile(r"(?:opus|sonnet|haiku)-(\d{1,2})(?:-(\d)(?!\d))?(?!\d)")
+# "claude-3-7-sonnet-20250219", and the invalid "claude-4-6-sonnet" the API
+# provider emitted before its ids were fixed (may still be stored).
+_CLAUDE_VERSION_FIRST_RE = re.compile(r"claude-(\d{1,2})(?:-(\d))?-(?:opus|sonnet|haiku)")
+
+
+def claude_version(model_name: str) -> Optional[tuple]:
+    """(major, minor) of an Opus/Sonnet/Haiku id, or None (Fable/Mythos, unknown)."""
+    m = (model_name or "").lower()
+    match = _CLAUDE_VERSION_FIRST_RE.search(m) or _CLAUDE_FAMILY_FIRST_RE.search(m)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2) or 0)
+
+
+def _anthropic_api_effort_levels(model_name: str) -> list[str]:
+    """output_config.effort support per family, from the claude-api skill's
+    "Thinking & Effort" table (Sep 2026): low..max incl. xhigh on Fable/Mythos,
+    Opus 4.7+ / 5.x and Sonnet 5; no xhigh on Opus 4.6 / Sonnet 4.6; only
+    low/medium/high on Opus 4.5; an error on Sonnet 4.5, Haiku 4.5 and older.
+    """
+    m = (model_name or "").lower()
+    full = ["low", "medium", "high", "xhigh", "max"]
+    if "fable" in m or "mythos" in m:
+        return full
+    version = claude_version(m)
+    if version is None:
+        # Unrecognised id: assume a family newer than this table, as
+        # api_providers.anthropic_thinking_param does. Nothing is sent unless
+        # the user picks a level, so the cost of a wrong guess is one 400.
+        return full
+    if version >= (4, 7):
+        return full
+    if version == (4, 6):
+        return ["low", "medium", "high", "max"]
+    if version == (4, 5) and "opus" in m:
+        return ["low", "medium", "high"]
+    return []
 
 
 def _caps(levels: list[str], note: str = "") -> dict:
@@ -79,11 +123,10 @@ def get_effort_caps(provider_type: str, model_name: str) -> dict:
         return _caps(["auto", "off", "low", "medium", "high"], "Gemini 2.5: düşünme bütçesi (token) ile.")
 
     if p == "anthropic":
-        if "haiku" in m or "4-5" in m:
+        levels = _anthropic_api_effort_levels(m)
+        if not levels:
             return _caps(["auto"], "Bu model API'de effort desteklemez.")
-        if "4-6" in m:
-            return _caps(["auto", "low", "medium", "high", "max"])
-        return _caps(["auto", "low", "medium", "high", "xhigh", "max"])
+        return _caps(["auto"] + levels)
 
     if p in ("openai",):
         if m.startswith("gpt-6"):

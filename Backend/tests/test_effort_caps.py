@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 from providers.effort_caps import get_effort_caps, map_effort
 
@@ -90,3 +92,54 @@ def test_gemini_37_and_38_have_no_minimal_and_use_thinking_level():
         assert map_effort("google", m, "minimal") == {}, m
     # 3.6 minimal'i KAYBETMEDİ — daralma yalnız yeni ikiliye ait
     assert "minimal" in get_effort_caps("google", "gemini-3.6-flash")["levels"]
+
+
+# Per-family output_config.effort support, claude-api skill "Thinking & Effort"
+# table (Sep 2026). Before this table the gate only excluded ids containing
+# "haiku"/"4-5", so Opus 4.1 / Sonnet 4.0 / 3.x were offered (and sent) effort.
+_FULL = ["auto", "low", "medium", "high", "xhigh", "max"]
+
+
+
+@pytest.mark.parametrize("model, levels", [
+    ("claude-fable-5-1", _FULL),
+    ("claude-fable-5", _FULL),
+    ("claude-mythos-5-1", _FULL),
+    ("claude-opus-5-5", _FULL),
+    ("claude-opus-5", _FULL),
+    ("claude-opus-4-8", _FULL),
+    ("claude-opus-4-7", _FULL),
+    ("claude-sonnet-5", _FULL),
+    ("claude-opus-4-6", ["auto", "low", "medium", "high", "max"]),
+    ("claude-sonnet-4-6", ["auto", "low", "medium", "high", "max"]),
+    ("claude-4-6-sonnet", ["auto", "low", "medium", "high", "max"]),
+    ("claude-opus-4-5-20251101", ["auto", "low", "medium", "high"]),
+    ("claude-sonnet-4-5-20250929", ["auto"]),
+    ("claude-haiku-4-5-20251001", ["auto"]),
+    ("claude-opus-4-1-20250805", ["auto"]),
+    ("claude-opus-4-20250514", ["auto"]),
+    ("claude-sonnet-4-20250514", ["auto"]),
+    ("claude-3-7-sonnet-20250219", ["auto"]),
+    ("claude-3-haiku-20240307", ["auto"]),
+    ("claude-some-future-model", _FULL),
+])
+def test_anthropic_api_effort_follows_documented_support(model, levels):
+    assert get_effort_caps("anthropic", model)["levels"] == levels
+
+
+@pytest.mark.parametrize("model", [
+    "claude-opus-4-1-20250805", "claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219",
+    "claude-sonnet-4-5-20250929", "claude-haiku-4-5",
+])
+def test_unsupported_anthropic_models_are_never_sent_effort(model):
+    for level in ("low", "medium", "high", "xhigh", "max"):
+        assert map_effort("anthropic", model, level) == {}, (model, level)
+
+
+def test_effort_levels_beyond_a_family_are_not_sent():
+    assert map_effort("anthropic", "claude-opus-4-5", "xhigh") == {}
+    assert map_effort("anthropic", "claude-opus-4-5", "high") == {
+        "anthropic_extra_body": {"output_config": {"effort": "high"}}}
+    assert map_effort("anthropic", "claude-sonnet-4-6", "xhigh") == {}
+    assert map_effort("anthropic", "claude-sonnet-4-6", "max") == {
+        "anthropic_extra_body": {"output_config": {"effort": "max"}}}
