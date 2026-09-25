@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using MCPForUnity.Editor.Tools.Playtest;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
+using UnityEditor;
+using UnityEngine;
 
 namespace MCPForUnityTests.Editor.Tools.Playtest
 {
@@ -11,6 +14,9 @@ namespace MCPForUnityTests.Editor.Tools.Playtest
         private string _tmp;
         private string _project;
         private string _link;
+
+        // A folder ending in ~ is under Assets for the path check but never imported by Unity.
+        private static string BudgetDir => Path.Combine(Application.dataPath, "PlaytestBudgetTests~");
 
         [SetUp]
         public void SetUp()
@@ -32,6 +38,46 @@ namespace MCPForUnityTests.Editor.Tools.Playtest
                 else File.Delete(_link);
             }
             if (Directory.Exists(_tmp)) Directory.Delete(_tmp, true);
+            if (Directory.Exists(BudgetDir)) Directory.Delete(BudgetDir, true);
+        }
+
+        private static string WriteScenarios(string set, int count, int steps, int framesPerStep, double perfSeconds = 0)
+        {
+            string dir = Path.Combine(BudgetDir, set);
+            Directory.CreateDirectory(dir);
+            for (int i = 0; i < count; i++)
+            {
+                var sc = new JObject
+                {
+                    ["steps"] = new JArray(Enumerable.Range(0, steps).Select(_ => new JObject { ["frames"] = framesPerStep })),
+                };
+                if (perfSeconds > 0) sc["perf"] = new JObject { ["seconds"] = perfSeconds };
+                File.WriteAllText(Path.Combine(dir, $"s{i:000}.playtest.json"), sc.ToString());
+            }
+            return $"Assets/PlaytestBudgetTests~/{set}";
+        }
+
+        private static string StartError(string path)
+        {
+            var run = JObject.FromObject(RunPlaytestTool.HandleCommand(new JObject { ["path"] = path }));
+            Assert.IsFalse((bool)run["success"], $"a job started for {path}");
+            return (string)run["error"];
+        }
+
+        [Test]
+        public void RunPlaytest_RefusesJobsOverTheWorkCaps()
+        {
+            if (EditorApplication.isPlaying || PlaytestSession.Busy || PlaytestRunner.Running)
+                Assert.Ignore("needs an idle editor");
+
+            StringAssert.Contains($"at most {PlaytestRunner.MaxFramesPerScenario}",
+                StartError(WriteScenarios("scenario", 1, 11, 3600)));
+            StringAssert.Contains($"at most {PlaytestRunner.MaxFramesPerJob}",
+                StartError(WriteScenarios("job", 4, 9, 3400)));
+            StringAssert.Contains($"at most {PlaytestRunner.MaxScenariosPerJob}",
+                StartError(WriteScenarios("count", PlaytestRunner.MaxScenariosPerJob + 1, 1, 1)));
+            StringAssert.Contains("perf sampling",
+                StartError(WriteScenarios("perf", 6, 1, 1, PlaytestRunner.MaxPerfSecondsPerScenario)));
         }
 
         [Test]

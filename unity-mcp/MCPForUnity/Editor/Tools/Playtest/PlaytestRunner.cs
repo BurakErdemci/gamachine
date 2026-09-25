@@ -23,6 +23,13 @@ namespace MCPForUnity.Editor.Tools.Playtest
         private const string Key = "MCPForUnity.Playtest.Runner";
         private const string DefaultGlob = "Assets/Playtests/**/*.playtest.json";
 
+        // Bounds on the editor time one request can claim (the four LoopLab scenarios step 737 frames in total).
+        internal const int MaxScenariosPerJob = 100;
+        internal const int MaxFramesPerScenario = 36000;
+        internal const int MaxFramesPerJob = 108000;
+        internal const double MaxPerfSecondsPerScenario = 120;
+        internal const double MaxPerfSecondsPerJob = 600;
+
         [Serializable]
         private class Job
         {
@@ -69,6 +76,22 @@ namespace MCPForUnity.Editor.Tools.Playtest
             var files = FindScenarios(path, glob, out var err);
             if (err != null) return err;
             if (files.Count == 0) return $"No scenario files matched {(path ?? glob ?? DefaultGlob)}.";
+            if (files.Count > MaxScenariosPerJob)
+                return $"{files.Count} scenario files matched; one run_playtest job runs at most {MaxScenariosPerJob}. Narrow path or glob.";
+            int totalFrames = 0;
+            double totalPerf = 0;
+            foreach (var file in files)
+            {
+                // Other load errors are reported as that scenario's result when it runs, as before.
+                var sc = LoadScenario(file, out var loadErr, out int frames);
+                if (frames > MaxFramesPerScenario) return $"{file}: {loadErr}";
+                totalFrames += frames;
+                totalPerf += PerfSeconds(sc);
+            }
+            if (totalFrames > MaxFramesPerJob)
+                return $"The matched scenarios step {totalFrames} frames in total; one run_playtest job steps at most {MaxFramesPerJob}. Split the run with path or glob.";
+            if (totalPerf > MaxPerfSecondsPerJob)
+                return $"The matched scenarios request {totalPerf:0.#} s of perf sampling; one run_playtest job allows at most {MaxPerfSecondsPerJob:0} s. Split the run with path or glob.";
 
             s_Job = new Job
             {
@@ -222,7 +245,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
                     if (s_Job.index == 0 && Now - s_Job.started < 0.5) return;
                     if (s_Job.index >= s_Job.files.Length) { Finish(); return; }
                     string file = CurrentFile();
-                    var sc = LoadScenario(file, out var err);
+                    var sc = LoadScenario(file, out var err, out _);
                     var result = new JObject { ["scenario"] = sc?["name"]?.ToString() ?? Path.GetFileName(file), ["path"] = file };
                     SetCurrent(result);
                     if (err != null) { Fail(err, stop: false); return; }
@@ -240,7 +263,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
                         Fail("play_session start: " + message, stop: true);
                         return;
                     }
-                    var sc = LoadScenario(CurrentFile(), out _);
+                    var sc = LoadScenario(CurrentFile(), out _, out _);
                     s_StepsTask = RunScenario(sc, Current());
                     s_Job.phase = "steps";
                     Save();
@@ -326,9 +349,11 @@ namespace MCPForUnity.Editor.Tools.Playtest
 
         private static float ScenarioDt(JObject sc) => sc["fixed_dt"]?.Value<float?>() ?? 1f / 60f;
 
-        private static JObject LoadScenario(string file, out string error)
+        /// <summary>Reads and validates a scenario; <paramref name="frames"/> is the sum of its steps' frames.</summary>
+        private static JObject LoadScenario(string file, out string error, out int frames)
         {
             error = null;
+            frames = 0;
             JObject sc;
             string full = ConfineToAssets(ProjectRoot, file, out error);
             if (full == null) return null;
@@ -346,8 +371,14 @@ namespace MCPForUnity.Editor.Tools.Playtest
             foreach (var st in steps)
             {
                 if (!(st is JObject so)) { error = "every step must be an object"; return sc; }
-                var perr = PlaytestStepper.Parse(so, out _);
+                var perr = PlaytestStepper.Parse(so, out var spec);
                 if (perr != null) { error = "step: " + perr; return sc; }
+                frames += spec.Frames;
+            }
+            if (frames > MaxFramesPerScenario)
+            {
+                error = $"scenario steps {frames} frames; a scenario steps at most {MaxFramesPerScenario}.";
+                return sc;
             }
             if (sc["expect"] != null && !(sc["expect"] is JArray)) { error = "'expect' must be a list"; return sc; }
             if (sc["perf"] != null && !(sc["perf"] is JObject)) { error = "'perf' must be an object {seconds}"; return sc; }
@@ -421,7 +452,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 Time.captureDeltaTime = 0f;
                 PlaytestPerf.Start();
                 EditorApplication.isPaused = false;
-                await WaitSeconds(Math.Min(perfSeconds, 120));
+                await WaitSeconds(Math.Min(perfSeconds, MaxPerfSecondsPerScenario));
                 EditorApplication.isPaused = true;
                 perf = PlaytestPerf.Finish();
                 perf["seconds"] = perfSeconds;
@@ -441,6 +472,20 @@ namespace MCPForUnity.Editor.Tools.Playtest
             result["state_hash"] = PlaytestJson.StateHash(stateEnd);
             if (runError != null) result["error"] = runError;
             return result;
+        }
+
+        /// <summary>Perf seconds the scenario will actually sample; 0 when unreadable (the run reports that error).</summary>
+        private static double PerfSeconds(JObject sc)
+        {
+            try
+            {
+                var seconds = sc?["perf"] is JObject perf ? perf["seconds"]?.Value<double?>() ?? 0 : 0;
+                return Math.Max(0, Math.Min(seconds, MaxPerfSecondsPerScenario));
+            }
+            catch (Exception e) when (e is FormatException || e is InvalidCastException)
+            {
+                return 0;
+            }
         }
 
         private static Task WaitSeconds(double seconds)
