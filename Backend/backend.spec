@@ -103,6 +103,9 @@ a = Analysis(
         'ollama',
         'httpx',
         'httpcore',
+        # httpx2: the transport of anthropic >= 1 and of the MCP SDK 2.x client
+        'httpx2',
+        'httpcore2',
         # google-generativeai + grpc
         'google.generativeai',
         'google.ai.generativelanguage',
@@ -119,10 +122,12 @@ a = Analysis(
         'unity_ai_mcp.tools.bash_tool',
         'unityai_cli',
         'providers.codex_unitymcp_bridge',
-        # FastMCP (MCP server transport)
+        # MCP SDK 2.x: MCPServer (was mcp.server.fastmcp in 1.x; that module now
+        # raises on import) and the wire types, a separate top-level package.
         'mcp',
         'mcp.server',
-        'mcp.server.fastmcp',
+        'mcp.server.mcpserver',
+        'mcp_types',
     ] + _cas_hidden + _vosk_hidden,
     hookspath=[],
     hooksconfig={},
