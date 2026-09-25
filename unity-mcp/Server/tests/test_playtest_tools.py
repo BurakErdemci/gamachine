@@ -648,3 +648,76 @@ def test_play_step_is_never_retried(unity, clock):
     unity.responses = [LOST]
     assert run(play_step(CTX, frames=10)) == LOST
     assert len(unity.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Legacy stdio transport: a "reloading" reply never makes a mutation go out twice
+# ---------------------------------------------------------------------------
+
+class _ReloadingLegacyConnection:
+    """First reply asks for a reload retry, as a legacy Unity socket does mid-reload."""
+
+    def __init__(self):
+        self.sends: list[tuple[str, dict, int | None]] = []
+
+    def send_command(self, command, params, max_attempts=None):
+        self.sends.append((command, dict(params), max_attempts))
+        if len(self.sends) == 1:
+            return {"success": False, "hint": "retry", "error": "Unity is reloading"}
+        return {"success": True, "message": "ok", "data": {}}
+
+
+@pytest.fixture
+def legacy_unity(monkeypatch):
+    from core.config import config
+    from transport.legacy import unity_connection
+
+    conn = _ReloadingLegacyConnection()
+    monkeypatch.setattr(config, "transport_mode", "stdio")
+    monkeypatch.setattr(unity_connection, "get_unity_connection", lambda instance_id=None: conn)
+    monkeypatch.setattr(unity_connection.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(common, "get_unity_instance_from_context", AsyncMock(return_value=None))
+    return conn
+
+
+@pytest.mark.parametrize("command,params", [
+    ("play_session", {"action": "start"}),
+    ("play_session", {"action": "stop"}),
+    ("run_playtest", {"action": "start"}),
+    ("play_step", {"frames": 1}),
+    ("play_capture", {}),
+    ("game_hooks", {"action": "call", "name": "level.restart"}),
+    ("game_hooks", {"action": "get", "names": ["level.restart"]}),
+])
+def test_legacy_reload_reply_does_not_resend_a_mutation(legacy_unity, command, params):
+    result = run(common.send(CTX, command, params))
+    assert common.is_transport_failure(result)
+    assert len(legacy_unity.sends) == 1
+    # Connection-level resends after a socket error are off for them too.
+    assert legacy_unity.sends[0][2] == 0
+
+
+@pytest.mark.parametrize("command,params", [
+    ("play_session", {"action": "status"}),
+    ("run_playtest", {"action": "status"}),
+    ("game_hooks", {"action": "list"}),
+])
+def test_legacy_reload_reply_still_resends_idempotent_reads(legacy_unity, command, params):
+    result = run(common.send(CTX, command, params))
+    assert result["success"] is True
+    assert len(legacy_unity.sends) == 2
+
+
+def test_http_transport_keeps_waiting_for_the_plugin_before_a_mutation(monkeypatch):
+    """On HTTP retry_on_reload only gates the pre-send reconnect wait; nothing is resent."""
+    from core.config import config
+    from transport import unity_transport
+
+    hub_send = AsyncMock(return_value={"success": True, "data": {}})
+    monkeypatch.setattr(config, "transport_mode", "http")
+    monkeypatch.setattr(config, "http_remote_hosted", False)
+    monkeypatch.setattr(unity_transport.PluginHub, "send_command_for_instance", hub_send)
+    monkeypatch.setattr(common, "get_unity_instance_from_context", AsyncMock(return_value="inst"))
+    run(common.send(CTX, "play_session", {"action": "start"}))
+    assert hub_send.await_count == 1
+    assert hub_send.await_args.kwargs["retry_on_reload"] is True

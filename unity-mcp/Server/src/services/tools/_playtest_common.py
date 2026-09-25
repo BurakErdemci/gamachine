@@ -6,6 +6,7 @@ wrappers import it.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import time
 from typing import Any, Callable
@@ -31,6 +32,14 @@ POLL_SLACK_S = 30.0
 # the plugin to reconnect, a timed-out wait costs 30 s); failing this long means Unity is gone.
 TRANSPORT_GAP_S = 60.0
 
+# The only playtest sends Unity may receive twice. Everything else changes game or
+# editor state (game_hooks get included: it can invoke an action hook).
+RESENDABLE = frozenset({
+    ("play_session", "status"),
+    ("run_playtest", "status"),
+    ("game_hooks", "list"),
+})
+
 # Module-level aliases so tests can fake the clock without patching asyncio's own.
 monotonic = time.monotonic
 sleep = asyncio.sleep
@@ -44,10 +53,23 @@ def _as_dict(result: Any) -> dict[str, Any]:
     return {"success": False, "error": str(result)}
 
 
+def _send_fn(command: str, params: dict[str, Any]) -> Callable:
+    """The legacy stdio sender, told not to resend unless the command is resendable.
+
+    Its default resends the same command after a "reloading" reply, although Unity
+    may already have acted on the first one. Only the legacy path calls this
+    function; the HTTP path never resends after sending, and its pre-send wait for
+    the plugin to reconnect (what retry_on_reload means there) is left as it was.
+    """
+    if (command, params.get("action")) in RESENDABLE:
+        return async_send_command_with_retry
+    return functools.partial(async_send_command_with_retry, retry_on_reload=False)
+
+
 async def send(ctx: Context, command: str, params: dict[str, Any]) -> dict[str, Any]:
     unity_instance = await get_unity_instance_from_context(ctx)
     result = await send_with_unity_instance(
-        async_send_command_with_retry, unity_instance, command, params
+        _send_fn(command, params), unity_instance, command, params
     )
     return _as_dict(result)
 
