@@ -535,6 +535,8 @@ _ANCHORS: Dict[Tuple[str, str], int] = {
     ("app/providers/codex_session.py", "fetch_codex_skills"): 1,
     ("app/providers/oneshot_cli.py", "probe_named_models"): 1,
     ("app/unity_ai_mcp/unity_mcp_manager.py", "UnityMCPManager.start_server"): 1,
+    # 2026-09-25 (P3): `uv export` of the server lock before the uvx launch.
+    ("app/unity_ai_mcp/unity_mcp_manager.py", "UnityMCPManager._lock_constraints"): 1,
     # 2026-07-29'da kapatılanlar
     ("app/providers/claude_provider.py", "ClaudeCodeProvider._register_mcp"): 4,
     ("app/providers/codex_provider.py", "CodexProvider._register_mcp"): 4,

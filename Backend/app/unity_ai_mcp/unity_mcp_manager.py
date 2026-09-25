@@ -295,7 +295,7 @@ class UnityMCPManager:
                 return sibling
         return shutil.which("uv") or "uv"
 
-    def _lock_constraints(self, uvx: str, env: dict) -> Optional[str]:
+    def _lock_constraints(self, uvx: str) -> Optional[str]:
         """Exports unity-mcp/Server/uv.lock as a constraints file for uvx.
 
         Why: `uvx --from <dir>` resolves the server's dependency tree afresh and
@@ -325,8 +325,14 @@ class UnityMCPManager:
             "--no-dev", "--all-extras",
             "--output-file", out,
         ]
+        import sys as _sys
+        _app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _app_dir not in _sys.path:
+            _sys.path.insert(0, _app_dir)
+        from providers.cli_base import build_spawn_env
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                                 env=build_spawn_env(family="uvx"))
         except Exception as e:
             logger.warning("[UnityMCP] uv.lock dışa aktarılamadı (%s); sunucu sabitlenmeden "
                            "başlatılıyor.", e)
@@ -494,7 +500,7 @@ class UnityMCPManager:
                 # phoning out (and it stalls a start on a filtered network).
                 "FASTMCP_CHECK_FOR_UPDATES": "off",
             })
-            constraints = self._lock_constraints(uvx, mcp_env)
+            constraints = self._lock_constraints(uvx)
             if constraints:
                 # uvx options must precede the command; "--from" opens the tail.
                 at = cmd.index("--from")

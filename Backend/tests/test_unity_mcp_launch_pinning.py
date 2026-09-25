@@ -39,14 +39,14 @@ def launch(monkeypatch, tmp_path):
 
 def test_fastmcp_update_check_is_off(launch):
     manager, box, mp = launch
-    mp.setattr(um.UnityMCPManager, "_lock_constraints", lambda self, uvx, env: None)
+    mp.setattr(um.UnityMCPManager, "_lock_constraints", lambda self, uvx: None)
     assert manager.start_server() is True
     assert box["env"]["FASTMCP_CHECK_FOR_UPDATES"] == "off"
 
 
 def test_lock_constraints_go_before_the_uvx_command(launch):
     manager, box, mp = launch
-    mp.setattr(um.UnityMCPManager, "_lock_constraints", lambda self, uvx, env: "/x/c.txt")
+    mp.setattr(um.UnityMCPManager, "_lock_constraints", lambda self, uvx: "/x/c.txt")
     assert manager.start_server() is True
     cmd = box["cmd"]
     at = cmd.index("--constraints")
@@ -81,7 +81,7 @@ def _norm(name):
 def test_the_exported_constraints_equal_the_lock(monkeypatch, tmp_path):
     monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path), 1))
     manager = um.UnityMCPManager()
-    path = manager._lock_constraints(shutil.which("uvx") or "uvx", dict(os.environ))
+    path = manager._lock_constraints(shutil.which("uvx") or "uvx")
     assert path is not None
 
     with open(os.path.join(manager.server_dir, "uv.lock"), "rb") as fh:
