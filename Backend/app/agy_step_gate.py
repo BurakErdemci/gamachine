@@ -68,6 +68,10 @@ RUN_REASON = (
     "; $ ` & | < > ^ % ! ( ), no typographic quotes or dashes), and nothing may come "
     "before or after the unityai call.")
 FAIL_REASON = "Gamachine step gate could not verify this call, so it is blocked."
+# Written for a child whose session is closing (agy_session.close): it denies
+# every call in either approval mode.
+CLOSED_MODE = "closed"
+CLOSED_REASON = "Gamachine closed this agy session; no tool may run in it."
 
 _SUBCOMMANDS = {
     # flag -> takes a value
@@ -242,6 +246,8 @@ def decide(raw: bytes, state_path: str, windows: bool = None) -> dict:
         return _deny(FAIL_REASON)
     if mode == "auto":
         return {"decision": "allow"}
+    if mode == CLOSED_MODE:
+        return _deny(CLOSED_REASON)
     if mode != "step":
         return _deny(FAIL_REASON)
     try:

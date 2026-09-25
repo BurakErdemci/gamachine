@@ -6,7 +6,7 @@ import shutil
 import logging
 from typing import Optional
 from .cli_base import BaseCLIProvider
-from agy_step_gate import GATED_TOOLS, PS_UTF8_PREFIX, RUN_TOOL, write_state
+from agy_step_gate import CLOSED_MODE, GATED_TOOLS, PS_UTF8_PREFIX, RUN_TOOL, write_state
 
 logger = logging.getLogger(__name__)
 
@@ -91,11 +91,15 @@ def gate_state_path() -> str:
     return os.path.join(_gate_dir(), "step-gate.json")
 
 
-def write_gate_state(auto: bool) -> None:
+def write_gate_state(auto: bool, closed: bool = False) -> None:
     """Mode and launcher the hook reads on every call ("auto" allows every
     call, "step" applies agy_step_gate's grammar). Written at spawn and on
     every mode flip, so a flip in either direction bites on a running agy's
-    next tool call."""
+    next tool call. `closed` writes CLOSED_MODE, which denies every call: a
+    closing session's child never needs a tool again (agy_session.close)."""
+    if closed:
+        write_state(gate_state_path(), CLOSED_MODE, "")
+        return
     launcher = AgyProvider()._launcher_path("unityai")
     write_state(gate_state_path(), "auto" if auto else "step", launcher)
 

@@ -310,9 +310,48 @@ class AgyStreamSession(SaglayiciSahipligi):
         await self._stop_process(force=True)
         return was_live
 
+    def _retire_gate(self) -> None:
+        """First step of close(): deny-all, then deregister; the stop follows.
+
+        A closing child never needs a tool again. So before its session leaves
+        _SESSIONS, its hook is made to deny everything and the child is sent
+        its kill; it stays in _GATED_CHILDREN until reaped, so a flip in the
+        gap still reaches its file. The state file is shared by every agy
+        child, so it is set to "closed" only when no other child may be
+        reading it; otherwise it keeps following the mode (the other children
+        need it), which in step mode already denies per the step grammar.
+        """
+        from . import agy_provider
+        with _gate_lock():
+            process = self._active_process
+            if process is not None:
+                if _GATED_CHILDREN.get(self._gate_token, process) is not process:
+                    self._gate_token = None
+                if self._gate_token is None:
+                    self._gate_token = object()  # a child not spawned by _start
+                _GATED_CHILDREN[self._gate_token] = process
+                others = any(token is not self._gate_token for token in _GATED_CHILDREN) or any(
+                    session is not self and _may_have_child(session)
+                    for session in _SESSIONS.values())
+                if not others:
+                    try:
+                        agy_provider.write_gate_state(auto=False, closed=True)
+                    except Exception:
+                        logger.warning("[agy] closed gate state not written", exc_info=True)
+                        _remove_gate_state()  # if this fails too, the kill below stops it
+                if process.returncode is None:
+                    try:
+                        process.kill()
+                    except Exception:
+                        # Already gone, or the kill failed: the reap below
+                        # retries it, and the child stays tracked until then.
+                        logger.debug("[agy] kill on close failed pid=%s",
+                                     getattr(process, "pid", None), exc_info=True)
+            if _SESSIONS.get(self.conversation_id) is self:
+                _SESSIONS.pop(self.conversation_id, None)
+
     async def close(self, *, preserve_resume: bool = False) -> None:
-        if _SESSIONS.get(self.conversation_id) is self:
-            _SESSIONS.pop(self.conversation_id, None)
+        self._retire_gate()
         if not preserve_resume and self.conversation_id >= 0:
             _RESUME_IDS.pop((self.conversation_id, self.cwd), None)
         await oturumu_kapat(self)

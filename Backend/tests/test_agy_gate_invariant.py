@@ -300,6 +300,84 @@ class TestSpawnAndClose(GateStateCase, unittest.IsolatedAsyncioTestCase):
                 p.stop()
         self.assertEqual(agy_session._GATED_CHILDREN, {})
 
+    async def _close_until_deregistered(self, session):
+        """Start close() while the child cannot be reaped yet (stop lock held)."""
+        await session._stop_lock.acquire()
+        close = asyncio.create_task(session.close())
+        for _ in range(1000):
+            if session.conversation_id not in agy_session._SESSIONS and session._kapandi:
+                return close
+            if close.done():
+                close.result()  # surfaces the error that ended close() early
+            await asyncio.sleep(0)
+        self.fail("close() never reached its stop")
+
+    async def test_a_lone_closing_child_is_denied_everything_before_it_leaves_the_registry(self):
+        approval_mode.set_mode("auto")
+        session = self.live_session(unkillable=True)
+        agy_provider.write_gate_state(auto=True)
+        deregistered_with = []
+
+        class Registry(dict):
+            def pop(inner, key, *default):
+                deregistered_with.append(self.file_mode())
+                return dict.pop(inner, key, *default)
+        registry = Registry(agy_session._SESSIONS)
+        with patch.object(agy_session, "_SESSIONS", registry):
+            close = await self._close_until_deregistered(session)
+            self.assertEqual(deregistered_with, ["closed"])
+            self.assertEqual(decide(WRITE, self.state)["decision"], "deny")
+            # The kill failed and the child lives on: a flip still reaches it.
+            approval_mode.set_mode("step")
+            self.assertEqual(self.file_mode(), "step")
+            self.assertEqual(decide(SHELL, self.state)["decision"], "deny")
+            session._active_process.unkillable = False
+            session._stop_lock.release()
+            await close
+        self.assertTrue(session._active_process is None)
+        self.assertEqual(agy_session._GATED_CHILDREN, {})
+
+    async def test_closing_next_to_another_live_child_keeps_the_file_following_the_mode(self):
+        """The file is shared: "closed" would deny the other child too. The
+        closing child stays gated, so the next flip to step still reaches it."""
+        approval_mode.set_mode("auto")
+        other = self.live_session(conversation_id=32)
+        closing = self.live_session(conversation_id=33, unkillable=True)
+        agy_provider.write_gate_state(auto=True)
+        close = await self._close_until_deregistered(closing)
+        self.assertEqual(self.file_mode(), "auto")
+        self.assertIn(closing._gate_token, agy_session._GATED_CHILDREN)
+        seen, observe = self.record_publishes()
+        with observe:
+            approval_mode.set_mode("step")
+        self.assertEqual(seen, [("step", "step")])
+        closing._active_process.unkillable = False
+        closing._stop_lock.release()
+        await close
+        self.assertFalse(other._active_process.killed)
+
+    async def test_close_kills_the_child_before_deregistering(self):
+        session = self.live_session()
+        close = await self._close_until_deregistered(session)
+        self.assertTrue(session._active_process.killed)
+        session._stop_lock.release()
+        await close
+
+
+class TestClosedState(unittest.TestCase):
+    def test_closed_state_denies_every_call_even_the_bridge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = os.path.join(tmp, "state.json")
+            with open(state, "w", encoding="utf-8") as f:
+                json.dump({"mode": "closed", "launcher": ""}, f)
+            launcher = "unityai"
+            bridge = json.dumps({"toolCall": {"name": "run_command", "args": {
+                "CommandLine": f"{launcher} delete-file --path a.txt"}}}).encode()
+            for payload in (WRITE, SHELL, bridge):
+                decision = decide(payload, state, windows=False)
+                self.assertEqual(decision["decision"], "deny")
+                self.assertIn("closed", decision["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
