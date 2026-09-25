@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import sys
 import threading
 from typing import Any, Optional
 
@@ -48,6 +49,38 @@ FALLBACK_MODE = "step"
 _SETTING_KEY = "approval_mode"
 
 _LOCK = threading.Lock()
+
+# The owner's red line: whenever the mode is step, no agy built-in write or
+# shell command runs without a card. agy's hook reads one state file on every
+# gated tool call, so the invariant enforced here is:
+#
+#   At every instant at which current_mode() returns "step", every live or
+#   closing agy child's hook state file denies per the step grammar: it says
+#   "step" (or "closed"), or it is absent or unreadable, which the hook
+#   treats as deny.
+#
+# It holds by construction, through one ordering rule under this one lock,
+# which covers both the publish of the mode and every write of that file:
+#   - a change whose effective mode is step first tightens the agy state
+#     (_tighten_agy_gates: write step, else remove the file, else kill the
+#     children), and only then publishes;
+#   - a change to auto publishes first, then loosens (the file follows the
+#     published mode, rewritten by the live sessions' setters);
+#   - every other writer (agy_session: the flag setter, turn start, spawn,
+#     post-spawn resync, close) reads the published mode under this lock and
+#     writes in the same critical section, so none can write auto after step
+#     was published, and none can interleave between a tighten and its publish.
+# Before this (verification round 2, 26 Sep 2026) the mode was published
+# first and the file rewritten under a separate lock: overlapping flips left
+# step published while the file still said auto.
+#
+# Reentrant: set_mode holds it while _propagate_to_live_sessions runs the agy
+# flag setter, which takes it again. Lock order is GATE_LOCK, then _LOCK;
+# _LOCK is never held while taking GATE_LOCK. It is taken on the event loop as
+# well as on request threads, so nothing may await while holding it, and no
+# code that holds it waits on the loop.
+GATE_LOCK = threading.RLock()
+
 _mode: str = FALLBACK_MODE
 _stored: bool = False
 # A clean read found no saved row; the effective mode then depends on whether a
@@ -74,16 +107,23 @@ def bind_store(store: Any) -> None:
         read_ok = True
     except Exception as exc:
         logger.error("[approval-mode] saved mode could not be read: %s", exc)
-    with _LOCK:
-        _store = store
-        _from_row = isinstance(value, str) and value in MODES
-        if _from_row:
-            _mode, _stored, _fresh_install = value, True, False
-        elif read_ok and value is None:
-            _mode, _stored, _fresh_install = FALLBACK_MODE, False, True
-        else:
-            _mode, _stored, _fresh_install = FALLBACK_MODE, False, False
-        fresh = _fresh_install
+    from_row = isinstance(value, str) and value in MODES
+    if from_row:
+        new = (value, True, False)
+    elif read_ok and value is None:
+        new = (FALLBACK_MODE, False, True)
+    else:
+        new = (FALLBACK_MODE, False, False)
+    with GATE_LOCK:
+        with _LOCK:
+            after = _effective(new[0], new[2], from_row, _ui_secret)
+        if after == "step":
+            _tighten_agy_gates()
+        with _LOCK:
+            _store = store
+            _from_row = from_row
+            _mode, _stored, _fresh_install = new
+            fresh = _fresh_install
     if fresh:
         logger.info("[approval-mode] startup: fresh install, %s with a UI secret, %s without",
                     FRESH_INSTALL_MODE, FALLBACK_MODE)
@@ -95,12 +135,16 @@ def _row_auto_without_secret_locked() -> bool:
     return _from_row and _mode == "auto" and not _ui_secret
 
 
-def _effective_mode_locked() -> str:
-    if _fresh_install:
-        return FRESH_INSTALL_MODE if _ui_secret else FALLBACK_MODE
-    if _row_auto_without_secret_locked():
+def _effective(mode: str, fresh_install: bool, from_row: bool, ui_secret: bytes) -> str:
+    if fresh_install:
+        return FRESH_INSTALL_MODE if ui_secret else FALLBACK_MODE
+    if from_row and mode == "auto" and not ui_secret:
         return FALLBACK_MODE
-    return _mode
+    return mode
+
+
+def _effective_mode_locked() -> str:
+    return _effective(_mode, _fresh_install, _from_row, _ui_secret)
 
 
 def current_mode() -> str:
@@ -131,18 +175,38 @@ def set_mode(mode: str, source: str = "ui") -> str:
     if mode not in MODES:
         raise ValueError(f"unknown approval mode: {mode!r}")
     global _mode, _stored, _fresh_install, _from_row
-    with _LOCK:
-        previous = _effective_mode_locked()
-        store = _store
-    if store is not None:
-        # Persist first: a mode that is live but not saved would silently
-        # revert on the next launch.
-        store.set_setting(_SETTING_KEY, mode)
-    with _LOCK:
-        _mode, _stored, _fresh_install, _from_row = mode, True, False, False
+    # One critical section from persist to propagation (see GATE_LOCK): two
+    # overlapping flips can no longer interleave their publish and their
+    # state writes, nor leave the saved and the live mode different.
+    with GATE_LOCK:
+        with _LOCK:
+            previous = _effective_mode_locked()
+            store = _store
+        if store is not None:
+            # Persist first: a mode that is live but not saved would silently
+            # revert on the next launch.
+            store.set_setting(_SETTING_KEY, mode)
+        if mode == "step":
+            _tighten_agy_gates()  # before step is published, never after
+        with _LOCK:
+            _mode, _stored, _fresh_install, _from_row = mode, True, False, False
+        _propagate_to_live_sessions(mode == "auto")
     logger.warning("[approval-mode] %s -> %s (source=%s)", previous, mode, source)
-    _propagate_to_live_sessions(mode == "auto")
     return previous
+
+
+def _tighten_agy_gates() -> None:
+    """Make every agy child's hook deny per the step grammar; the caller
+    publishes step only after this returns. Caller holds GATE_LOCK.
+
+    A raise propagates on purpose: the caller then never publishes step, so
+    the invariant holds either way (the flip fails instead).
+    """
+    module = sys.modules.get("providers.agy_session")
+    if module is None:
+        # Never imported: this process has spawned no agy child.
+        return
+    module.tighten_gate_state()
 
 
 def _propagate_to_live_sessions(auto: bool) -> None:
@@ -154,10 +218,12 @@ def _propagate_to_live_sessions(auto: bool) -> None:
 
     agy: its built-in tools are gated by a workspace hook that every agy
     process gets at spawn, in both modes (a failed install refuses the spawn).
-    The hook reads a state file on every tool call, and setting the flag
-    rewrites that file from current_mode(), so a flip either way bites on the
-    process's next tool call, one-shot agy sessions included (they sit in
-    agy_session._SESSIONS while their process lives).
+    The hook reads a state file on every tool call. A flip to step has
+    already written that file before the mode was published
+    (_tighten_agy_gates); setting the flag here rewrites it from the
+    published mode, which is how a flip to auto loosens it. Either way the
+    flip bites on the process's next tool call, one-shot agy sessions
+    included. The caller holds GATE_LOCK.
 
     What it cannot reach: the one-shot CLIs (cursor, copilot, opencode, kimi)
     carry the attribute, but nothing in their running process reads it; their
@@ -175,8 +241,6 @@ def _propagate_to_live_sessions(auto: bool) -> None:
         ("providers.agy_session", "_SESSIONS"),
         ("providers.oneshot_cli", "_SESSIONS"),
     )
-    import sys
-
     for module_name, attr in targets:
         module = sys.modules.get(module_name)
         if module is None:
@@ -194,9 +258,17 @@ def _propagate_to_live_sessions(auto: bool) -> None:
 # ── UI secret ────────────────────────────────────────────────────────────────
 
 def set_ui_secret(secret: str) -> None:
+    # The secret decides the effective mode of a fresh install or a saved
+    # auto, so setting it is a mode change like set_mode (see GATE_LOCK).
     global _ui_secret
-    with _LOCK:
-        _ui_secret = (secret or "").encode("utf-8")
+    new = (secret or "").encode("utf-8")
+    with GATE_LOCK:
+        with _LOCK:
+            after = _effective(_mode, _fresh_install, _from_row, new)
+        if after == "step":
+            _tighten_agy_gates()
+        with _LOCK:
+            _ui_secret = new
 
 
 def ui_secret_configured() -> bool:
@@ -214,8 +286,10 @@ def check_ui_secret(presented: str) -> bool:
 
 
 def _reset_for_tests() -> None:
+    # Tests only, and deliberately no _tighten_agy_gates: a test's leftover
+    # agy session would otherwise write the real home's gate state file.
     global _mode, _stored, _store, _ui_secret, _fresh_install, _from_row
     global _warned_row_auto_without_secret
-    with _LOCK:
+    with GATE_LOCK, _LOCK:
         _mode, _stored, _store, _ui_secret = FALLBACK_MODE, False, None, b""
         _fresh_install = _from_row = _warned_row_auto_without_secret = False

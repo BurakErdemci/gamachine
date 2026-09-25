@@ -3,7 +3,6 @@ import asyncio
 import json
 import logging
 import os
-import threading
 from collections.abc import Hashable, Mapping
 from typing import AsyncGenerator, Dict, Optional
 
@@ -41,24 +40,54 @@ def _global_auto_mode() -> bool:
         return False
 
 
-# Read-the-mode-then-write must not interleave: flip A reads auto, flip B
-# reads step and writes, A writes auto -> step mode with an allowing hook.
-_GATE_STATE_LOCK = threading.Lock()
+def _gate_lock():
+    """approval_mode.GATE_LOCK, the one lock over the mode's publish and every
+    write of the hook's state file. The invariant it enforces, and the
+    ordering rule every writer here follows, are stated there.
+
+    Imported late: the agentic package imports agent_runner, which imports
+    providers, so a module-level import here would be circular.
+    """
+    from agentic import approval_mode
+    return approval_mode.GATE_LOCK
+
+
+# Every agy child whose hook may read the state file, from the spawn's state
+# write until the child is reaped: token -> process (None while spawning). A
+# closing child stays here after close() drops its session from _SESSIONS,
+# which is what lets a flip to step still reach it (verification round 2,
+# 26 Sep 2026: close deregistered first, so a flip in that gap found no
+# session and left the closing child's hook in auto). Guarded by _gate_lock().
+_GATED_CHILDREN: Dict[object, object] = {}
+
+
+def _remove_gate_state() -> bool:
+    """True when the state file is gone (a hook with no state file denies)."""
+    from . import agy_provider
+    try:
+        os.remove(agy_provider.gate_state_path())
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        logger.error("[agy] gate state could not be removed", exc_info=True)
+        return False
 
 
 def _sync_gate_state() -> bool:
-    """Rewrite the hook's state file from the global mode, now.
+    """Rewrite the hook's state file from the published global mode, now.
 
     Every agy process has the hook (agy_provider._write_step_gate installs it
     in both modes) and the hook reads this one global file on every tool
-    call, so this is what makes a flip bite on a running process.
+    call. The mode is read and the file written under _gate_lock(), so this
+    can never write auto after step was published.
 
     False only when step mode is on and the file may still say auto; the
     caller must then stop the process. A failed write in step mode first tries
     to delete the file, since a hook with no state file denies everything.
     """
     from . import agy_provider
-    with _GATE_STATE_LOCK:
+    with _gate_lock():
         auto = _global_auto_mode()
         try:
             agy_provider.write_gate_state(auto=auto)
@@ -67,14 +96,49 @@ def _sync_gate_state() -> bool:
             logger.warning("[agy] gate state not rewritten (auto=%s)", auto, exc_info=True)
             if auto:
                 return True  # a stale "step" only over-restricts
-            try:
-                os.remove(agy_provider.gate_state_path())
-                return True
-            except FileNotFoundError:
-                return True
-            except OSError:
-                logger.error("[agy] stale gate state could not be removed", exc_info=True)
-                return False
+            return _remove_gate_state()
+
+
+_UNKNOWN = object()
+
+
+def _may_have_child(session) -> bool:
+    # A registered object this module cannot inspect counts as having one.
+    return getattr(session, "_active_process", _UNKNOWN) is not None
+
+
+def _kill_gated_children() -> None:
+    processes = [p for p in _GATED_CHILDREN.values() if p is not None]
+    processes += [s._active_process for s in _SESSIONS.values()
+                  if getattr(s, "_active_process", None) is not None]
+    for process in processes:
+        try:
+            process.kill()
+        except Exception:
+            logger.exception("[agy] could not stop pid=%s", getattr(process, "pid", None))
+
+
+def tighten_gate_state() -> None:
+    """approval_mode calls this under GATE_LOCK before it publishes step.
+
+    Nothing reads the file when no agy child exists, and a spawn writes it
+    under the same lock, so then there is nothing to do. Otherwise the file
+    must deny per the step grammar before step is published: write step,
+    else remove it, else stop every child that could read it.
+    """
+    from . import agy_provider
+    with _gate_lock():
+        if not _GATED_CHILDREN and not any(_may_have_child(s) for s in _SESSIONS.values()):
+            return
+        try:
+            agy_provider.write_gate_state(auto=False)
+            return
+        except Exception:
+            logger.warning("[agy] gate state not tightened to step", exc_info=True)
+        if _remove_gate_state():
+            return
+        logger.error("[agy] gate state still allows; stopping every agy child before step")
+        _kill_gated_children()
 
 
 # Observed agy tool payloads nest three or four levels; 40 is far above that and
@@ -117,6 +181,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self.session_id = resume_id if conversation_id >= 0 else None
         self.model = None
         self._active_process = None
+        self._gate_token = None  # this child's key in _GATED_CHILDREN
         self._auto_approve = False
         self._stderr_task = None
         self._stderr_tail = b""
@@ -230,6 +295,11 @@ class AgyStreamSession(SaglayiciSahipligi):
                 if self.active_provider is self:
                     self.active_provider = None
             if reaped:
+                # Only a reaped child stops being gated; one that could not be
+                # killed stays tracked, so later flips still reach its file.
+                with _gate_lock():
+                    if _GATED_CHILDREN.get(self._gate_token) is process:
+                        _GATED_CHILDREN.pop(self._gate_token, None)
                 logger.info("[agy] child stopped pid=%s exit_status=%s",
                             pid, getattr(process, "returncode", None))
             else:
@@ -283,21 +353,40 @@ class AgyStreamSession(SaglayiciSahipligi):
         # These existing helpers are mocked by the fake-process tests.
         provider._write_mcp_config(cwd)
         provider._set_agy_model(provider._pending_agy_model, cwd)
-        # In either mode this raises AgyStepGateError unless the gate is
-        # verifiably installed, so agy is never spawned ungated; stream() turns
-        # the raise into the user's error message.
-        provider._write_step_gate(cwd, step_mode=not auto)
-        instructions = provider._stream_instructions()
-        self._stderr_tail = b""
-        self._usage_totals = {}
-        self._num_turns = 0
-        process = await asyncio.create_subprocess_exec(
-            *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE, cwd=cwd,
-            env=build_spawn_env(family="agy", overrides={"NO_COLOR": "1"}),
-            creationflags=_CREATE_NO_WINDOW,
-            limit=BaseCLIProvider._CLI_STREAM_LIMIT_BYTES,
-        )
+        token = object()
+        try:
+            # The mode is read and the state written in one critical section
+            # (the ordering rule at approval_mode.GATE_LOCK), and the child is
+            # gated from this write on: a flip to step before the spawn below
+            # rewrites this file before step is published.
+            with _gate_lock():
+                auto = _global_auto_mode()
+                self._auto_approve = auto
+                _GATED_CHILDREN[token] = None
+                # In either mode this raises AgyStepGateError unless the gate
+                # is verifiably installed, so agy is never spawned ungated;
+                # stream() turns the raise into the user's error message.
+                provider._write_step_gate(cwd, step_mode=not auto)
+            instructions = provider._stream_instructions()
+            self._stderr_tail = b""
+            self._usage_totals = {}
+            self._num_turns = 0
+            process = await asyncio.create_subprocess_exec(
+                *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, cwd=cwd,
+                env=build_spawn_env(family="agy", overrides={"NO_COLOR": "1"}),
+                creationflags=_CREATE_NO_WINDOW,
+                limit=BaseCLIProvider._CLI_STREAM_LIMIT_BYTES,
+            )
+        except BaseException:
+            # No child: asyncio kills and waits one it created when the spawn
+            # is cancelled.
+            with _gate_lock():
+                _GATED_CHILDREN.pop(token, None)
+            raise
+        with _gate_lock():
+            _GATED_CHILDREN[token] = process
+            self._gate_token = token
         # Register before draining stdin, so Stop can reach a blocked writer.
         self._active_process = process
         self.active_provider = self
