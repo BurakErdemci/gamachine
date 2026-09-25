@@ -20,7 +20,8 @@ from services.registry import (
     name="tool_groups",
     description=(
         "Available tool groups and their tools. "
-        "Use manage_tools to activate/deactivate groups per session.\n\n"
+        "Which groups a client sees is fixed by its URL: /mcp, /mcp/gamachine "
+        "or /mcp/full.\n\n"
         "URI: mcpforunity://tool-groups"
     ),
 )

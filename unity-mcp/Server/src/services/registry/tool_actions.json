@@ -620,7 +620,7 @@
       "write_actions": [],
       "param_dependent": [],
       "evidence": "unity-mcp/Server/src/services/tools/manage_tools.py:43",
-      "note": "Server-only meta-tool: no Unity command is sent. activate/deactivate/reset change per-session FastMCP tool visibility, discarded when the session ends; sync only READS the get_tool_states resource. Classified read despite readOnlyHint=False. Enabling a group is not a gate bypass -- the tools it exposes are still classified individually on their own calls."
+      "note": "Server-only meta-tool: no Unity command is sent. activate/deactivate/reset change nothing and return an error pointing at the profile URLs (tool lists are fixed per URL, not per session); list_groups reads server state; sync only READS the get_tool_states resource and updates the server-level group state. Classified read despite readOnlyHint=False. A group becoming visible is not a gate bypass -- the tools it exposes are still classified individually on their own calls."
     },
     "manage_ui": {
       "action_param": "action",

@@ -65,44 +65,79 @@ def _parse_rpc_body(response: httpx.Response) -> dict | None:
     return response.json()
 
 
-def old_era_list_tools(base: str, path: str, key: str | None) -> dict:
-    """initialize -> notifications/initialized -> tools/list, as an mcp 1.x client does."""
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-    }
-    if key is not None:
-        headers["X-API-Key"] = key
-    url = base + path
-    with httpx.Client(timeout=30.0) as http:
-        init = http.post(url, headers=headers, json={
-            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+class OldEraSession:
+    """initialize -> notifications/initialized, then requests, as an mcp 1.x client does."""
+
+    def __init__(self, base: str, path: str, key: str | None):
+        self.url = base + path
+        self.headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if key is not None:
+            self.headers["X-API-Key"] = key
+        self.http = httpx.Client(timeout=30.0)
+        self.next_id = 1
+        self.status: int | None = None
+        self.protocol: str | None = None
+
+    def __enter__(self) -> "OldEraSession":
+        init = self.http.post(self.url, headers=self.headers, json={
+            "jsonrpc": "2.0", "id": self._id(), "method": "initialize",
             "params": {
                 "protocolVersion": OLD_PROTOCOL,
                 "capabilities": {},
                 "clientInfo": {"name": "live-probe", "version": "0"},
             },
         })
+        self.status = init.status_code
         if init.status_code != 200:
-            return {"status": init.status_code}
-        init_body = _parse_rpc_body(init) or {}
-        session_headers = dict(headers)
+            return self
+        body = _parse_rpc_body(init) or {}
         session_id = init.headers.get("mcp-session-id")
         if session_id:
-            session_headers["mcp-session-id"] = session_id
-        negotiated = (init_body.get("result") or {}).get("protocolVersion")
-        if negotiated:
-            session_headers["mcp-protocol-version"] = negotiated
-        http.post(url, headers=session_headers,
-                  json={"jsonrpc": "2.0", "method": "notifications/initialized"})
-        listed = http.post(url, headers=session_headers,
-                           json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        body = _parse_rpc_body(listed) or {}
+            self.headers["mcp-session-id"] = session_id
+        self.protocol = (body.get("result") or {}).get("protocolVersion")
+        if self.protocol:
+            self.headers["mcp-protocol-version"] = self.protocol
+        self.http.post(self.url, headers=self.headers,
+                       json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.http.close()
+
+    def _id(self) -> int:
+        self.next_id += 1
+        return self.next_id
+
+    def request(self, method: str, params: dict | None = None) -> tuple[int, dict]:
+        payload = {"jsonrpc": "2.0", "id": self._id(), "method": method}
+        if params is not None:
+            payload["params"] = params
+        response = self.http.post(self.url, headers=self.headers, json=payload)
+        return response.status_code, (_parse_rpc_body(response) or {})
+
+    def call_tool(self, name: str, arguments: dict) -> dict:
+        status, body = self.request("tools/call", {"name": name, "arguments": arguments})
+        result = body.get("result") or {}
+        text = " ".join(
+            block.get("text", "") for block in (result.get("content") or [])
+            if isinstance(block, dict))
+        return {"status": status, "is_error": result.get("isError"), "text": text,
+                "structured": result.get("structuredContent"), "error": body.get("error")}
+
+
+def old_era_list_tools(base: str, path: str, key: str | None) -> dict:
+    with OldEraSession(base, path, key) as session:
+        if session.status != 200:
+            return {"status": session.status}
+        status, body = session.request("tools/list")
         result = body.get("result") or {}
         tools = result.get("tools") or []
         return {
-            "status": listed.status_code,
-            "protocol": negotiated,
+            "status": status,
+            "protocol": session.protocol,
             "names": [t.get("name") for t in tools],
             "groups": {
                 t.get("name"): sorted(
@@ -114,6 +149,18 @@ def old_era_list_tools(base: str, path: str, key: str | None) -> dict:
             "result_extra": {k: v for k, v in result.items() if k != "tools"},
             "error": body.get("error"),
         }
+
+
+def old_era_calls(base: str) -> dict:
+    """Tool calls whose answer does not need a Unity Editor."""
+    out = {}
+    with OldEraSession(base, "/mcp", SECRET) as session:
+        out["mcp_activate"] = session.call_tool("manage_tools", {"action": "activate", "group": "vfx"})
+    with OldEraSession(base, "/mcp/full", SECRET) as session:
+        out["full_list_groups"] = session.call_tool("manage_tools", {"action": "list_groups"})
+    with OldEraSession(base, "/mcp/gamachine", SECRET) as session:
+        out["gamachine_manage_tools"] = session.call_tool("manage_tools", {"action": "list_groups"})
+    return out
 
 
 def start_server(port: int, workdir: pathlib.Path, log) -> subprocess.Popen:
@@ -174,6 +221,7 @@ def run(paths: list[str]) -> dict:
                 return report
             report["old_era"] = {p: old_era_list_tools(base, p, SECRET) for p in paths}
             report["old_era_no_key"] = {p: old_era_list_tools(base, p, None) for p in paths}
+            report["old_era_calls"] = old_era_calls(base)
             report["still_running"] = proc.poll() is None
         finally:
             proc.terminate()

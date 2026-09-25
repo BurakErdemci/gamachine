@@ -104,3 +104,23 @@ def test_unknown_profile_is_404(report):
 @pytest.mark.parametrize("path", PROFILE_PATHS)
 def test_every_profile_path_needs_the_shared_secret(report, path):
     assert report["old_era_no_key"][path]["status"] == 401
+
+
+def test_manage_tools_toggle_is_an_explicit_error_not_a_false_success(report):
+    call = report["old_era_calls"]["mcp_activate"]
+    assert call["status"] == 200, call
+    assert '"success":false' in call["text"].replace(" ", ""), call
+    assert "/mcp/full" in call["text"], call
+
+
+def test_list_groups_names_the_profile_it_was_called_on(report):
+    call = report["old_era_calls"]["full_list_groups"]
+    assert call["status"] == 200 and not call["is_error"], call
+    assert '"path":"/mcp/full"' in call["text"].replace(" ", ""), call
+
+
+def test_a_tool_outside_the_profile_is_refused(report):
+    """manage_tools is a meta-tool: not part of what the backend exports."""
+    call = report["old_era_calls"]["gamachine_manage_tools"]
+    assert call["is_error"] or call["error"], call
+    assert "/mcp/gamachine" in (call["text"] + str(call["error"])), call

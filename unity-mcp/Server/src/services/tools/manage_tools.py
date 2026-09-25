@@ -1,37 +1,38 @@
 """
-manage_tools - server-only meta-tool for dynamic tool group activation.
+manage_tools - server-only meta-tool for tool group discovery.
 
-This tool lets the AI assistant (or user) discover available tool groups
-and selectively enable / disable them for the current session. Activating
-a group makes its tools appear in tool listings; deactivating hides them.
-
-Works on all transports (stdio, HTTP, SSE) via FastMCP 3.x native
-per-session visibility.
+Tool lists are fixed per URL profile (transport.tool_profiles), not toggled
+per session. activate / deactivate / reset used to edit FastMCP's
+per-session visibility; on the MCP 2026-07-28 protocol there is no session,
+and the P1 spike measured `deactivate` answering success while hiding
+nothing. They now say so and point at the profile URLs instead.
 """
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
 from mcp.types import ToolAnnotations
 
+from core.config import config
 from services.registry import (
     mcp_for_unity_tool,
     TOOL_GROUPS,
     DEFAULT_ENABLED_GROUPS,
     get_group_tool_names,
 )
+from transport import tool_profiles
 
 
 @mcp_for_unity_tool(
     unity_target=None,
     group=None,
     description=(
-        "Manage which tool groups are visible in this session. "
-        "Actions: list_groups (show all groups and their status), "
-        "activate (enable a group), deactivate (disable a group), "
-        "sync (refresh visibility from Unity Editor's toggle states), "
-        "reset (restore defaults). "
-        "Activating a group makes its tools appear; deactivating hides them. "
-        "Use sync after toggling tools in the Unity Editor GUI."
+        "Inspect tool groups. Actions: list_groups (groups, which are available "
+        "on the URL this client connected to, and the other profile URLs), "
+        "sync (refresh group state from the Unity Editor's tool toggles). "
+        "The tool list is fixed per URL: /mcp (enabled groups), "
+        "/mcp/gamachine (core + playtest), /mcp/full (every group). "
+        "activate / deactivate / reset no longer change anything; they return "
+        "an error explaining which URL to connect to instead."
     ),
     annotations=ToolAnnotations(
         title="Manage Tools",
@@ -46,39 +47,15 @@ async def manage_tools(
     ],
     group: Annotated[
         str | None,
-        "Group name (required for activate / deactivate). "
+        "Group name (only used in the error for activate / deactivate). "
         "Valid groups: " + ", ".join(sorted(TOOL_GROUPS.keys()))
     ] = None,
 ) -> dict[str, Any]:
     if action == "list_groups":
-        return await _list_groups(ctx)
+        return _list_groups()
 
-    if action in ("activate", "deactivate"):
-        if not group:
-            return {"error": f"group is required for {action}"}
-        group = group.strip().lower()
-        if group not in TOOL_GROUPS:
-            return {"error": f"Unknown group '{group}'. Valid: {', '.join(sorted(TOOL_GROUPS))}"}
-
-    if action == "activate":
-        tag = f"group:{group}"
-        await ctx.info(f"Activating tool group: {group}")
-        await ctx.enable_components(tags={tag}, components={"tool"})
-        return {
-            "activated": group,
-            "tools": get_group_tool_names().get(group, []),
-            "message": f"Group '{group}' is now visible. Its tools will appear in tool listings.",
-        }
-
-    if action == "deactivate":
-        tag = f"group:{group}"
-        await ctx.info(f"Deactivating tool group: {group}")
-        await ctx.disable_components(tags={tag}, components={"tool"})
-        return {
-            "deactivated": group,
-            "tools": get_group_tool_names().get(group, []),
-            "message": f"Group '{group}' is now hidden.",
-        }
+    if action in ("activate", "deactivate", "reset"):
+        return {"success": False, "error": _no_session_toggles(action, group)}
 
     if action == "sync":
         await ctx.info("Syncing tool visibility from Unity Editor...")
@@ -89,8 +66,7 @@ async def manage_tools(
             if result.get("unsupported"):
                 msg = (
                     "The connected Unity Editor does not support tool state syncing yet. "
-                    "Update the MCPForUnity package to the latest version, then try again. "
-                    "In the meantime, use activate/deactivate actions to toggle groups manually."
+                    "Update the MCPForUnity package to the latest version, then try again."
                 )
             else:
                 msg = f"Failed to sync tool visibility from Unity. Is Unity running? ({msg})"
@@ -108,55 +84,66 @@ async def manage_tools(
             ),
         }
 
-    if action == "reset":
-        await ctx.info("Resetting tool visibility to defaults")
-        await ctx.reset_visibility()
-        return {
-            "reset": True,
-            "default_groups": sorted(DEFAULT_ENABLED_GROUPS),
-            "message": "Tool visibility restored to server defaults.",
-        }
-
     return {"error": f"Unknown action '{action}'"}
 
 
-async def _list_groups(ctx: Context) -> dict[str, Any]:
-    """Build the list_groups response with group metadata and tool names."""
+def _is_http() -> bool:
+    return (config.transport_mode or "stdio").lower() == "http"
+
+
+def _no_session_toggles(action: str, group: str | None) -> str:
+    what = f"'{group}'" if group else "a group"
+    if action == "reset":
+        head = "manage_tools reset has nothing to reset: tool lists are not changed per session."
+    else:
+        head = f"manage_tools {action} cannot change which tools this client sees ({what})."
+    if _is_http():
+        return (
+            f"{head} The tool list is fixed by the URL the client connects to: "
+            f"{tool_profiles.profile_urls_note()}. Reconnect to the profile you need, "
+            "for example /mcp/full for every group. A group can also be turned on "
+            "for /mcp in the Unity Editor's tool settings, followed by "
+            "manage_tools(action='sync')."
+        )
+    return (
+        f"{head} Over stdio every group the Unity Editor has enabled is listed. "
+        "Turn groups on or off in the Unity Editor's tool settings, then run "
+        "manage_tools(action='sync')."
+    )
+
+
+def _list_groups() -> dict[str, Any]:
+    """Groups, whether each is available on the current profile, and how to switch."""
     group_tools = get_group_tool_names()
-
-    # Determine current session-enabled state for each group.
-    # Session rules accumulate; the last rule whose tags include "group:<name>" wins.
-    session_enabled: dict[str, bool] = {}
-    try:
-        rules = await ctx._get_visibility_rules()
-        for rule in rules:
-            tags = rule.get("tags") or []
-            enabled = rule.get("enabled", True)
-            for tag in tags:
-                if isinstance(tag, str) and tag.startswith("group:"):
-                    group_name = tag[len("group:"):]
-                    session_enabled[group_name] = enabled
-    except Exception:
-        pass  # No active session or unsupported – fall back to defaults
-
+    profile = tool_profiles.current_profile()
+    server_enabled = tool_profiles.server_enabled_groups()
     groups = []
     for name in sorted(TOOL_GROUPS.keys()):
-        if name in session_enabled:
-            currently_enabled = session_enabled[name]
-        else:
-            currently_enabled = name in DEFAULT_ENABLED_GROUPS
         groups.append({
             "name": name,
             "description": TOOL_GROUPS[name],
-            "enabled": currently_enabled,
+            "enabled": profile.allows({name}),
+            "enabled_server_wide": name in server_enabled,
             "default_enabled": name in DEFAULT_ENABLED_GROUPS,
             "tools": group_tools.get(name, []),
             "tool_count": len(group_tools.get(name, [])),
         })
-    return {
-        "groups": groups,
-        "note": (
-            "Use activate/deactivate to toggle groups for this session. "
-            "Tools with group=None (server meta-tools) are always visible."
-        ),
-    }
+    result: dict[str, Any] = {"groups": groups}
+    if _is_http():
+        result["profile"] = {"name": profile.name, "path": profile.path}
+        result["profiles"] = [
+            {"name": p.name, "path": p.path, "description": p.description}
+            for p in [tool_profiles.DEFAULT_PROFILE, *tool_profiles.PROFILES.values()]
+        ]
+        result["note"] = (
+            f"'enabled' is for this URL ({profile.path}). To see a different set, "
+            "reconnect to another profile URL; the list does not change within a "
+            "connection. Tools with group=None (server meta-tools) are listed on "
+            "/mcp and /mcp/full."
+        )
+    else:
+        result["note"] = (
+            "Over stdio 'enabled' follows the Unity Editor's tool settings; change "
+            "them there and run manage_tools(action='sync')."
+        )
+    return result
