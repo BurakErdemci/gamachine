@@ -352,6 +352,30 @@ def is_chat_model(model_id: str) -> bool:
     return not any(p in m for p in _SOHBET_DISI)
 
 
+# OpenRouter writes an Anthropic minor version with a dot where the Messages
+# API id has a dash (anthropic/claude-opus-5.5 vs claude-opus-5-5, measured
+# 25 Sep 2026). The trailing (?!\d) keeps a date suffix from being read as a
+# minor: claude-opus-4-20250514 has none.
+_ANTHROPIC_FAMILY_MAJOR = r"^(claude-(?:opus|sonnet|haiku|fable|mythos)-\d+)"
+_ANTHROPIC_DASH_MINOR_RE = re.compile(_ANTHROPIC_FAMILY_MAJOR + r"-(\d)(?!\d)")
+_ANTHROPIC_DOT_MINOR_RE = re.compile(_ANTHROPIC_FAMILY_MAJOR + r"\.(\d)(?!\d)")
+
+
+def native_id_from_openrouter(provider: str, local_id: str) -> Optional[str]:
+    """The provider's own id for an OpenRouter row, or None when it has none.
+
+    Rows from OpenRouter's catalogue are offered when the provider's live list
+    is unavailable, and the id picked there is sent to the provider's API as
+    is. For Anthropic that id must be the dashed one, and a routing variant
+    (`:batch`) exists only on OpenRouter.
+    """
+    if provider != "anthropic":
+        return local_id
+    if ":" in local_id:
+        return None
+    return _ANTHROPIC_DOT_MINOR_RE.sub(r"\1-\2", local_id)
+
+
 def openrouter_id_for(provider: str, model_id: str) -> Optional[str]:
     """Yerel kimlikten OpenRouter kimliğini türet.
 
@@ -365,6 +389,8 @@ def openrouter_id_for(provider: str, model_id: str) -> Optional[str]:
     ns = _OR_NAMESPACE.get(provider)
     if ns is None:
         return None
+    if provider == "anthropic":
+        model_id = _ANTHROPIC_DASH_MINOR_RE.sub(r"\1.\2", model_id)
     return f"{ns}/{model_id}" if ns else model_id
 
 

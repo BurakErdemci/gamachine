@@ -315,7 +315,17 @@ class AnthropicProvider(AIProvider):
         # "4-6-sonnet" / "4-5-haiku" are the invalid ids this class used to emit
         # (every call 404'd); a name stored from that era still resolves.
         raw_name = model_name.lower() if model_name else ""
-        if "sonnet-5" in raw_name:
+        # The picker's keyless fallback list is OpenRouter's catalogue, which
+        # spells versions with a dot and adds routing variants such as
+        # ":batch" (anthropic/claude-opus-5.5:batch, measured 25 Sep 2026);
+        # the Messages API ids use dashes and have no variants.
+        raw_name = raw_name.split(":", 1)[0].replace(".", "-")
+        if re.match(r"claude-opus-\d", raw_name):
+            # Every Opus generation is its own choice (owner decision 25 Sep
+            # 2026). The substring chain below sent claude-opus-4-7 and 4-6 as
+            # claude-opus-4-8, and the dotted 5.5 as claude-opus-5.
+            self.model_name = raw_name
+        elif "sonnet-5" in raw_name:
             self.model_name = "claude-sonnet-5"
         elif "sonnet-4-6" in raw_name or "4-6-sonnet" in raw_name:
             self.model_name = "claude-sonnet-4-6"

@@ -104,6 +104,45 @@ def test_a_provider_whose_live_list_failed_is_unknown_not_keyless():
     assert _bul(sonuc["cloud"], "claude-opus-5", "anthropic")["verified"] is False
 
 
+# Rows as OpenRouter's public catalogue lists them (measured 25 Sep 2026).
+OR_ANTHROPIC_OPUS = {
+    or_id: {"name": name, "context_length": 1000000, "pricing": {"prompt": "0.000005"}}
+    for or_id, name in [
+        ("anthropic/claude-opus-5.5", "Anthropic: Claude Opus 5.5"),
+        ("anthropic/claude-opus-5.5:batch", "Anthropic: Claude Opus 5.5 (batch)"),
+        ("anthropic/claude-opus-5", "Anthropic: Claude Opus 5"),
+        ("anthropic/claude-opus-5:batch", "Anthropic: Claude Opus 5 (batch)"),
+        ("anthropic/claude-opus-4.8", "Anthropic: Claude Opus 4.8"),
+        ("anthropic/claude-opus-4.8:batch", "Anthropic: Claude Opus 4.8 (batch)"),
+    ]
+}
+
+
+def test_the_keyless_anthropic_list_offers_every_opus_by_its_api_id():
+    sonuc = _katalog({}, {}, or_katalog=OR_ANTHROPIC_OPUS)
+    anthropic_ids = sorted(m["id"] for m in sonuc["cloud"] if m["provider"] == "anthropic")
+
+    assert anthropic_ids == ["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]
+    m = _bul(sonuc["cloud"], "claude-opus-5-5", "anthropic")
+    assert m["name"] == "Anthropic: Claude Opus 5.5"
+    # The OpenRouter toggle still sends OpenRouter's own id.
+    assert m["openrouter_id"] == "anthropic/claude-opus-5.5"
+
+
+def test_live_anthropic_rows_find_their_openrouter_entry():
+    canli = {"claude-opus-5-5": "Claude Opus 5.5", "claude-opus-5": "Claude Opus 5",
+             "claude-opus-4-8": "Claude Opus 4.8"}
+    sonuc = _katalog({"anthropic": "sk-x"}, {"anthropic": canli}, or_katalog=OR_ANTHROPIC_OPUS)
+
+    for mid, or_id in [("claude-opus-5-5", "anthropic/claude-opus-5.5"),
+                       ("claude-opus-5", "anthropic/claude-opus-5"),
+                       ("claude-opus-4-8", "anthropic/claude-opus-4.8")]:
+        m = _bul(sonuc["cloud"], mid, "anthropic")
+        assert m["verified"] is True
+        assert m["openrouter_id"] == or_id
+        assert m["context_length"] == 1000000
+
+
 def test_non_chat_models_are_kept_out_of_a_chat_picker():
     sonuc = _katalog({"openai": "sk-x"},
                      {"openai": {"gpt-9": "gpt-9", "text-embedding-4": "text-embedding-4",

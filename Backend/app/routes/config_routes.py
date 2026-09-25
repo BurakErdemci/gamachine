@@ -422,7 +422,10 @@ def create_config_router(db):
             for or_id, kayit in sorted(or_katalog.items()):
                 if not or_id.startswith(onek) or not model_catalog.is_chat_model(or_id):
                     continue
-                yerel = or_id.split("/", 1)[1]
+                yerel = model_catalog.native_id_from_openrouter(
+                    saglayici, or_id.split("/", 1)[1])
+                if not yerel:
+                    continue
                 model = {"id": yerel, "name": kayit["name"], "provider": saglayici,
                          "verified": False, "source": "openrouter",
                          "openrouter_id": or_id}

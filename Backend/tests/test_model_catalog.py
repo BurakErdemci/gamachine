@@ -351,7 +351,10 @@ def test_new_model_ids_still_derive_an_openrouter_identity():
     assert model_catalog.openrouter_id_for("openai", "gpt-6-astra") == "openai/gpt-6-astra"
     assert model_catalog.openrouter_id_for("openai", "gpt-6-sol") == "openai/gpt-6-sol"
     assert model_catalog.openrouter_id_for("openai", "gpt-6-luna") == "openai/gpt-6-luna"
-    assert model_catalog.openrouter_id_for("anthropic", "claude-opus-5-5") == "anthropic/claude-opus-5-5"
+    # OpenRouter spells the Anthropic minor with a dot (catalogue, 25 Sep 2026).
+    assert model_catalog.openrouter_id_for("anthropic", "claude-opus-5-5") == "anthropic/claude-opus-5.5"
+    assert model_catalog.openrouter_id_for("anthropic", "claude-opus-5") == "anthropic/claude-opus-5"
+    assert model_catalog.openrouter_id_for("anthropic", "claude-opus-4-20250514") == "anthropic/claude-opus-4-20250514"
     # Ve hiçbiri sohbet-dışı filtresine takılmıyor
     for mid in ("gemini-3.8-flash", "gemini-3.7-flash", "gpt-6-astra", "gpt-6-sol",
                 "gpt-6-luna", "claude-opus-5-5"):

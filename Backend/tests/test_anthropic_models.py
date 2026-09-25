@@ -23,6 +23,56 @@ def test_opus_5_and_4_8_keep_distinct_api_model_ids(anthropic_client):
     assert AnthropicProvider("test-key", "claude-opus-4-8").model_name == "claude-opus-4-8"
 
 
+# Owner decision 25 Sep 2026: on the API path every Opus generation is a
+# separate choice. Ids and families per the claude-api skill model table.
+_OPUS_API = [
+    # id, thinking param, effort levels offered, agent-loop max_tokens
+    ("claude-opus-5-5", {"type": "adaptive", "display": "summarized"},
+     ["auto", "low", "medium", "high", "xhigh", "max"], 16000),
+    ("claude-opus-5", {"type": "adaptive", "display": "summarized"},
+     ["auto", "low", "medium", "high", "xhigh", "max"], 16000),
+    ("claude-opus-4-8", {"type": "adaptive", "display": "summarized"},
+     ["auto", "low", "medium", "high", "xhigh", "max"], 4096),
+]
+
+
+@pytest.mark.parametrize("model_id, thinking, effort_levels, loop_max_tokens", _OPUS_API)
+@patch("providers.api_providers.anthropic.Anthropic")
+def test_each_opus_generation_reaches_the_api_as_itself(
+        anthropic_client, model_id, thinking, effort_levels, loop_max_tokens):
+    from agentic.agent_runner import _anthropic_loop_max_tokens
+    from providers.api_providers import anthropic_thinking_param
+    from providers.effort_caps import get_effort_caps
+
+    anthropic_client.return_value = MagicMock()
+
+    sent = AnthropicProvider("test-key", model_id).model_name
+    assert sent == model_id
+    assert anthropic_thinking_param(sent) == thinking
+    assert get_effort_caps("anthropic", sent)["levels"] == effort_levels
+    assert _anthropic_loop_max_tokens(sent) == loop_max_tokens
+
+
+@pytest.mark.parametrize("choice, expected", [
+    # OpenRouter's spelling, which the keyless fallback list used to offer.
+    ("claude-opus-5.5", "claude-opus-5-5"),
+    ("claude-opus-4.8", "claude-opus-4-8"),
+    ("claude-opus-5.5:batch", "claude-opus-5-5"),
+    # Older generations the account may list are not rewritten to 4.8.
+    ("claude-opus-4-7", "claude-opus-4-7"),
+    ("claude-opus-4-6", "claude-opus-4-6"),
+    ("claude-opus-4-5-20251101", "claude-opus-4-5-20251101"),
+    # A free-form name still resolves.
+    ("opus", "claude-opus-4-8"),
+    ("Opus", "claude-opus-4-8"),
+])
+@patch("providers.api_providers.anthropic.Anthropic")
+def test_opus_choices_are_never_collapsed_into_another_generation(anthropic_client, choice, expected):
+    anthropic_client.return_value = MagicMock()
+
+    assert AnthropicProvider("test-key", choice).model_name == expected
+
+
 def test_opus_5_is_selectable_on_the_claude_code_side():
     """Abonelik (CLI) listesi hâlâ elle yazılı ve Opus 5 orada olmalı.
 
