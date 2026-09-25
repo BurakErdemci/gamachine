@@ -322,12 +322,71 @@ def test_a_post_dispatch_session_loss_is_not_retried():
     assert state["calls"] == ["s1"] and state["inits"] == 1
 
 
-def test_a_404_without_a_json_body_is_still_keyed_on_the_status():
+def test_the_servers_expired_session_id_404_reconnects_and_runs_once():
+    expired = (404, {"Content-Type": "application/json"},
+               {"jsonrpc": "2.0", "id": None,
+                "error": {"code": -32600, "message": "Not Found: Invalid or expired session ID"}})
+
     def on_call(message, sid):
-        if sid == "s1":
-            return (404, {"Content-Type": "text/plain"}, b"gone")
-        return _ok(message)
+        return expired if sid == "s1" else _ok(message)
     state, respond = _scripted(on_call)
     with _real_client(respond):
         assert _text(umt.call_unity_tool("mutate", {}, timeout=15)) == "ran"
-    assert state["calls"] == ["s1", "s2"]
+    assert state["calls"] == ["s1", "s2"] and state["inits"] == 2
+
+
+_SESSION_LOSS_ERROR = {"code": -32600, "message": "Session not found"}
+OTHER_404S = {
+    "no JSON body": ({"Content-Type": "text/plain"}, b"gone"),
+    "JSON body without content type": ({}, {"jsonrpc": "2.0", "id": None,
+                                            "error": _SESSION_LOSS_ERROR}),
+    # The verification round's probe: the handler ran, then a 404 carried the id.
+    "request id set": ({"Content-Type": "application/json"},
+                       {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600,
+                                                             "message": "late route error"}}),
+    "server text but request id set": ({"Content-Type": "application/json"},
+                                       {"jsonrpc": "2.0", "id": 1, "error": _SESSION_LOSS_ERROR}),
+    "other text": ({"Content-Type": "application/json"},
+                   {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Not Found"}}),
+    "other code": ({"Content-Type": "application/json"},
+                   {"jsonrpc": "2.0", "id": None, "error": {"code": -32603,
+                                                            "message": "Session not found"}}),
+    "extra data": ({"Content-Type": "application/json"},
+                   {"jsonrpc": "2.0", "id": None,
+                    "error": dict(_SESSION_LOSS_ERROR, data={"x": 1})}),
+    "extra top-level key": ({"Content-Type": "application/json"},
+                            {"jsonrpc": "2.0", "id": None, "error": _SESSION_LOSS_ERROR,
+                             "result": {}}),
+    "text as substring": ({"Content-Type": "application/json"},
+                          {"jsonrpc": "2.0", "id": None,
+                           "error": {"code": -32600, "message": "Session not found, retry"}}),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(OTHER_404S))
+def test_any_other_404_is_an_unknown_outcome_and_not_retried(shape):
+    """verification round 26 Sep 2026 (ambiguous-outcome-write-retry): only
+    the server's own session-loss body proves the call did not run."""
+    headers, body = OTHER_404S[shape]
+
+    def on_call(message, sid):
+        return (404, headers, body) if sid == "s1" else _ok(message)
+    state, respond = _scripted(on_call)
+    with _real_client(respond):
+        result = umt.call_unity_tool("mutate", {}, timeout=15)
+    assert result == {"success": False, "error": umt._CALL_404_UNKNOWN_MSG}
+    assert state["calls"] == ["s1"] and state["inits"] == 1
+
+
+def test_the_session_loss_body_matches_what_mcp_sends():
+    from http import HTTPStatus
+    from mcp.server.streamable_http import StreamableHTTPServerTransport
+    from mcp.server.streamable_http_manager import _error_response
+    sent = [_error_response("Session not found", 404)]
+    transport = StreamableHTTPServerTransport(mcp_session_id="abc")
+    sent += [transport._create_error_response(text, HTTPStatus.NOT_FOUND)
+             for text in umt._SERVER_404_TEXTS[1:]]
+    for response in sent:
+        assert umt._is_server_session_loss_body(response.headers["content-type"], response.body)
+    assert not umt._is_server_session_loss_body("application/json", b"[]")
+    assert not umt._is_server_session_loss_body("application/json", b"\xff")

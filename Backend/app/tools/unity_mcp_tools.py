@@ -79,27 +79,61 @@ class _SessionLost(UnityMCPError):
         super().__init__(_SESSION_LOST_MSG)
 
 
-# Proof that an error came from an HTTP 404 on a POST carrying our session id.
-# Minted per process so no server answer can carry it.
+# Proof that an error came from the server's own session-loss 404 on a POST
+# carrying our session id, or from any other 404 there. Minted per process so
+# no server answer can carry them.
 _SESSION_LOST_MARK = secrets.token_hex(16)
 _SESSION_LOST_KEY = "gamachine_http_404"
-# The server's own 404 bodies (mcp 2.2 session manager / transport). Used only
-# for a session factory that cannot see HTTP statuses (see _is_session_lost).
-_SERVER_404_TEXTS = ("Session not found", "Not Found: Session has been terminated")
+_UNKNOWN_404_MARK = secrets.token_hex(16)
+_UNKNOWN_404_KEY = "gamachine_http_404_unknown"
+# The server's own session-loss 404 messages (mcp 2.2.0: session manager
+# "Session not found" for an unknown id, transport "Not Found: Session has
+# been terminated" and "Not Found: Invalid or expired session ID"). Every one
+# is answered before the request reaches a handler.
+_SERVER_404_TEXTS = ("Session not found", "Not Found: Session has been terminated",
+                     "Not Found: Invalid or expired session ID")
+# Bytes the server sends for one of those (measured from mcp 2.2.0's
+# _error_response / _create_error_response): no request id, no data.
+_SERVER_404_BODY_MAX = 512
+_CALL_404_UNKNOWN_MSG = ("Unity MCP sunucusu çağrıyı HTTP 404 ile yanıtladı, ama bu sunucunun "
+                         "'oturum bulunamadı' yanıtı değil; çağrının Unity'de çalışıp çalışmadığı "
+                         "bilinmiyor. Tekrar denemeden önce Unity'deki durumu kontrol et.")
+
+
+def _is_server_session_loss_body(content_type: str, raw: bytes) -> bool:
+    """True only for the exact JSON-RPC error mcp 2.2.0 answers a lost session
+    with: {"jsonrpc": "2.0", "id": null, "error": {"code": -32600,
+    "message": <one of _SERVER_404_TEXTS>}} and nothing else."""
+    if not content_type.lower().startswith("application/json") or len(raw) > _SERVER_404_BODY_MAX:
+        return False
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    if not isinstance(body, dict) or set(body) != {"jsonrpc", "id", "error"}:
+        return False
+    error = body["error"]
+    return (body["jsonrpc"] == "2.0" and body["id"] is None
+            and isinstance(error, dict) and set(error) == {"code", "message"}
+            and type(error["code"]) is int and error["code"] == INVALID_REQUEST
+            and error["message"] in _SERVER_404_TEXTS)
 
 
 class _SessionLossTransport(httpx2.AsyncBaseTransport):
-    """Marks every HTTP 404 answering a POST that carried an Mcp-Session-Id.
+    """Classifies every HTTP 404 answering a POST that carried an Mcp-Session-Id.
 
-    A 404 is the server's session lookup failing before dispatch (mcp 2.2:
-    session manager "Session not found", transport "Not Found: Session has
-    been terminated"; after dispatch a lost session is a 500), so the request
-    provably did not run - the one failure where retrying a mutation is safe.
-    The SDK hands the 404's JSON-RPC body to the caller verbatim, so the retry
-    used to key on message text; the server's terminated-session wording was
-    missed (audit finding missed-session-recovery), and a future SDK could
-    reuse a matched text for a post-dispatch loss. The body is replaced here
-    with an error carrying _SESSION_LOST_MARK, and only that mark counts.
+    The server's session lookup fails before dispatch with a fixed JSON-RPC
+    body (_is_server_session_loss_body), so such a request provably did not
+    run - the one failure where retrying a mutation is safe. That body is
+    replaced with an error carrying _SESSION_LOST_MARK, and only that mark
+    lets the client retry. The SDK hands a 404's JSON-RPC body to the caller
+    verbatim, so the retry used to key on message text (audit finding
+    missed-session-recovery), and then on the status alone.
+
+    Any other 404 (a proxy, a routing failure after the handler ran: the
+    verification round of 26 Sep 2026 saw a write run twice that way) says
+    nothing about whether the call ran. Its body is replaced with an error
+    carrying _UNKNOWN_404_MARK: reported as an unknown outcome, never retried.
     """
 
     def __init__(self, inner: httpx2.AsyncBaseTransport):
@@ -116,12 +150,18 @@ class _SessionLossTransport(httpx2.AsyncBaseTransport):
             return response
         if not isinstance(message, dict) or message.get("id") is None:
             return response  # a notification; the SDK expects no answer to it
-        original = (await response.aread())[:200]
+        raw = await response.aread()
         await response.aclose()
-        logger.info("[UnityMCP] HTTP 404 on session POST %r: %r", message.get("method"), original)
-        body = {"jsonrpc": "2.0", "id": message["id"], "error": {
-            "code": INVALID_REQUEST, "message": "Session not found (HTTP 404)",
-            "data": {_SESSION_LOST_KEY: _SESSION_LOST_MARK}}}
+        lost = _is_server_session_loss_body(response.headers.get("content-type", ""), raw)
+        logger.info("[UnityMCP] HTTP 404 on session POST %r (%s): %r", message.get("method"),
+                    "session lost" if lost else "outcome unknown", raw[:200])
+        if lost:
+            error = {"code": INVALID_REQUEST, "message": "Session not found (HTTP 404)",
+                     "data": {_SESSION_LOST_KEY: _SESSION_LOST_MARK}}
+        else:
+            error = {"code": INVALID_REQUEST, "message": "HTTP 404, outcome unknown",
+                     "data": {_UNKNOWN_404_KEY: _UNKNOWN_404_MARK}}
+        body = {"jsonrpc": "2.0", "id": message["id"], "error": error}
         return httpx2.Response(404, headers={"content-type": "application/json"},
                                content=json.dumps(body).encode("utf-8"), request=request)
 
@@ -130,11 +170,12 @@ class _SessionLossTransport(httpx2.AsyncBaseTransport):
 
 
 def _is_session_lost(exc: BaseException, observes_http: bool) -> bool:
-    """True only when the request was refused by an HTTP 404 (pre-dispatch).
+    """True only when the request was refused by the server's session-loss 404 (pre-dispatch).
 
     With the real transport (`observes_http`) only _SessionLossTransport's mark
-    counts; message text is ignored, so an SDK or server wording change can
-    neither widen nor narrow the match. A factory without HTTP (test doubles)
+    counts, and it marks only the server's exact session-loss body; an SDK or
+    server wording change can narrow the match (the 404 then reads as an
+    unknown outcome, not retried) but never widen it. A factory without HTTP (test doubles)
     has only the error to go by: the server's own 404 texts. The SDK's
     synthesized "Session terminated" is not among them; with the real
     transport it never occurs, as every such 404 body is replaced.
@@ -147,6 +188,13 @@ def _is_session_lost(exc: BaseException, observes_http: bool) -> bool:
         return isinstance(data, dict) and data.get(_SESSION_LOST_KEY) == _SESSION_LOST_MARK
     return (getattr(error, "code", None) == INVALID_REQUEST
             and getattr(error, "message", None) in _SERVER_404_TEXTS)
+
+
+def _is_unknown_404(exc: BaseException) -> bool:
+    """A 404 on a session POST that was not the server's session-loss answer."""
+    data = getattr(getattr(exc, "error", None), "data", None)
+    return (isinstance(exc, MCPError) and isinstance(data, dict)
+            and data.get(_UNKNOWN_404_KEY) == _UNKNOWN_404_MARK)
 
 
 def _endpoint() -> tuple[str, dict]:
@@ -530,6 +578,10 @@ class _UnityMCPClient:
                 if _is_session_lost(exc, self._observes_http):
                     failed = True
                     raise _SessionLost() from exc
+                if _is_unknown_404(exc):
+                    # Not the server's session lookup: the call may have run.
+                    failed = True
+                    raise UnityMCPError(_CALL_404_UNKNOWN_MSG) from exc
                 if getattr(exc.error, "code", None) == CONNECTION_CLOSED:
                     failed = True
                     raise UnityMCPError(_CONNECTION_LOST_MSG) from exc
@@ -543,7 +595,7 @@ class _UnityMCPClient:
                 # No automatic retry: the call may already have reached Unity,
                 # and running a mutation twice is worse than reporting a failure.
                 # The next call reconnects. (A lost session is the one exception,
-                # above: its 404 proves the call never ran.)
+                # above: the server's session-loss 404 proves the call never ran.)
                 failed = True
                 raise
             finally:
