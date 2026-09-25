@@ -26,6 +26,7 @@ class DummyContext:
         self.session_id = str(uuid.uuid4())
         # Add state storage to mimic FastMCP context state
         self._state = {}
+        self.state_serializable = {}
 
         class _RequestContext:
             def __init__(self, meta):
@@ -46,9 +47,15 @@ class DummyContext:
     async def error(self, message):
         self.log_error.append(message)
 
-    async def set_state(self, key, value):
-        """Set state value (mimics FastMCP context.set_state)"""
+    async def set_state(self, key, value, *, serializable=True):
+        """Set state value (mimics FastMCP context.set_state).
+
+        `serializable` is recorded so tests can assert that routing state is
+        request-scoped (serializable=False) rather than written to the session
+        store, which leaked one entry per request on the 2026-07-28 protocol.
+        """
         self._state[key] = value
+        self.state_serializable[key] = serializable
 
     async def get_state(self, key, default=None):
         """Get state value (mimics FastMCP context.get_state)"""

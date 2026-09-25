@@ -2,7 +2,8 @@
 Middleware for managing Unity instance selection per session.
 
 This middleware intercepts all tool calls and injects the active Unity instance
-into the request-scoped state, allowing tools to access it via ctx.get_state("unity_instance").
+into request-scoped state (set_state(..., serializable=False)), allowing tools to
+access it via ctx.get_state("unity_instance") for the rest of that request only.
 """
 from threading import RLock
 import logging
@@ -343,8 +344,13 @@ class UnityInstanceMiddleware(Middleware):
             raise RuntimeError(
                 "API key authentication required. Provide a valid X-API-Key header."
             )
+        # Request-scoped (serializable=False) on purpose. The default session
+        # store keys every entry by session id with a 24 h TTL; on the
+        # 2026-07-28 protocol each request is its own "session", so the P1
+        # spike measured 200 calls -> 802 stored entries that nothing ever
+        # read again. These values are recomputed on every request anyway.
         if user_id:
-            await ctx.set_state("user_id", user_id)
+            await ctx.set_state("user_id", user_id, serializable=False)
 
         # Per-call routing: check if this tool call explicitly specifies unity_instance.
         # context.message.arguments is a mutable dict on CallToolRequestParams; resource
@@ -405,9 +411,9 @@ class UnityInstanceMiddleware(Middleware):
                         exc_info=True
                     )
 
-            await ctx.set_state("unity_instance", active_instance)
+            await ctx.set_state("unity_instance", active_instance, serializable=False)
             if session_id is not None:
-                await ctx.set_state("unity_session_id", session_id)
+                await ctx.set_state("unity_session_id", session_id, serializable=False)
 
     async def on_call_tool(self, context: MiddlewareContext, call_next):
         """Inject active Unity instance into tool context if available."""

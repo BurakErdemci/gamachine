@@ -60,7 +60,7 @@ def mock_context():
     ctx.client_id = "test-client-456"
 
     state_storage = {}
-    ctx.set_state = AsyncMock(side_effect=lambda k, v: state_storage.__setitem__(k, v))
+    ctx.set_state = AsyncMock(side_effect=lambda k, v, **_: state_storage.__setitem__(k, v))
     ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
     ctx.info = AsyncMock()
 
@@ -241,7 +241,7 @@ class TestUnityInstanceMiddlewareInjection:
         await middleware.on_call_tool(middleware_ctx, mock_call_next)
 
         assert call_next_called, "Middleware must call next handler"
-        mock_context.set_state.assert_called_with("unity_instance", instance_id)
+        mock_context.set_state.assert_called_with("unity_instance", instance_id, serializable=False)
 
     @pytest.mark.asyncio
     async def test_middleware_injects_into_resource_context(self, mock_context):
@@ -262,7 +262,7 @@ class TestUnityInstanceMiddlewareInjection:
 
         await middleware.on_read_resource(middleware_ctx, mock_call_next)
 
-        mock_context.set_state.assert_called_with("unity_instance", instance_id)
+        mock_context.set_state.assert_called_with("unity_instance", instance_id, serializable=False)
 
     @pytest.mark.asyncio
     async def test_middleware_does_not_inject_when_no_instance(self, mock_context):

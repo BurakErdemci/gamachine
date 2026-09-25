@@ -99,7 +99,7 @@ class TestInstanceRoutingIntegration:
         ctx.session_id = "test-session"
         state_storage = {}
         ctx.set_state = AsyncMock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+                             v, **_: state_storage.__setitem__(k, v))
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
 
         # Create middleware context
@@ -118,7 +118,7 @@ class TestInstanceRoutingIntegration:
 
         # Verify state was injected
         ctx.set_state.assert_called_once_with(
-            "unity_instance", "TestProject@abc123")
+            "unity_instance", "TestProject@abc123", serializable=False)
 
     @pytest.mark.asyncio
     async def test_get_unity_instance_from_context_checks_state(self):
@@ -160,7 +160,7 @@ class TestInstanceRoutingToolCategories:
         state_storage = {"unity_instance": instance_id}
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
         ctx.set_state = AsyncMock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+                             v, **_: state_storage.__setitem__(k, v))
 
         return ctx
 
@@ -177,7 +177,7 @@ class TestInstanceRoutingHTTP:
         ctx.session_id = "http-session"
         state_storage = {}
         ctx.set_state = AsyncMock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+                             v, **_: state_storage.__setitem__(k, v))
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
 
         monkeypatch.setattr(config, "transport_mode", "http")
@@ -213,7 +213,7 @@ class TestInstanceRoutingHTTP:
         ctx.session_id = "http-session-2"
         state_storage = {}
         ctx.set_state = AsyncMock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+                             v, **_: state_storage.__setitem__(k, v))
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
 
         monkeypatch.setattr(config, "transport_mode", "http")
@@ -306,7 +306,7 @@ class TestInstanceRoutingRaceConditions:
 
         state_storage = {}
         ctx.set_state = AsyncMock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+                             v, **_: state_storage.__setitem__(k, v))
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
 
         instances = ["Project1@aaa", "Project2@bbb", "Project3@ccc"]
@@ -339,7 +339,7 @@ class TestInstanceRoutingRaceConditions:
 
         state_storage = {}
         ctx.set_state = AsyncMock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+                             v, **_: state_storage.__setitem__(k, v))
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
         ctx.request_context = None
 
@@ -410,7 +410,7 @@ class TestInstanceRoutingSequentialOperations:
 
         state_storage = {}
         ctx.set_state = AsyncMock(side_effect=lambda k,
-                             v: state_storage.__setitem__(k, v))
+                             v, **_: state_storage.__setitem__(k, v))
         ctx.get_state = AsyncMock(side_effect=lambda k: state_storage.get(k))
 
         # Execute sequence
