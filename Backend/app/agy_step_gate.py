@@ -5,7 +5,9 @@ send_command_input (see providers/agy_provider.py, _write_step_gate). It
 reads the hook payload on stdin and prints {"decision": "allow"|"deny"}.
 
 It is installed in both approval modes: the state file's "mode" decides.
-"auto" allows every call, "step" applies the rules below. A process spawned
+"auto" allows every call, "step" applies the rules below. In both, the fixed
+Unity file rule (unity_file_guard: no .meta writes/deletes/moves, no raw
+writes to Unity YAML assets) is checked first and can only deny. A process spawned
 in auto must still be gated after a flip to step, and agy reads its hooks
 only at start, so the mode cannot live in hooks.json.
 
@@ -49,6 +51,8 @@ import os
 import re
 import sys
 import tempfile
+
+import unity_file_guard  # stdlib-only, like this file
 
 # Built-in agy tools that write files, plus send_command_input (it types
 # into a running process, e.g. a shell a unityai bash call started).
@@ -235,6 +239,39 @@ def _deny(reason: str) -> dict:
     return {"decision": "deny", "reason": reason}
 
 
+# agy's file writers name their target in TargetFile, one variant in target_file
+# (read from the agy binary's tool schemas, 26 Sep 2026). notebook_edit takes
+# only .ipynb paths, so it can never name a protected Unity file.
+_FILE_WRITERS = ("write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file")
+
+
+def _unity_file_refusal(raw: bytes):
+    """The fixed Unity file rule (unity_file_guard), in every mode.
+
+    It can only deny. An unreadable payload returns None and is left to the
+    mode rules, so this adds no allow path and changes no mode's verdict for
+    calls the rule does not name.
+    """
+    try:
+        call = json.loads(raw.decode("utf-8"))["toolCall"]
+        name = call["name"]
+        args = call.get("args") or {}
+    except Exception:
+        return None
+    if not isinstance(args, dict):
+        return None
+    if name == RUN_TOOL:
+        cwd = args.get("Cwd") if isinstance(args.get("Cwd"), str) else ""
+        return unity_file_guard.check_shell(args.get("CommandLine"), cwd or os.getcwd())
+    if name in _FILE_WRITERS:
+        for key, value in args.items():
+            if isinstance(key, str) and key.replace("_", "").lower() == "targetfile":
+                refusal = unity_file_guard.check_write(value, os.getcwd())
+                if refusal is not None:
+                    return refusal
+    return None
+
+
 def decide(raw: bytes, state_path: str, windows: bool = None) -> dict:
     windows = (sys.platform == "win32") if windows is None else windows
     try:
@@ -244,6 +281,10 @@ def decide(raw: bytes, state_path: str, windows: bool = None) -> dict:
         launcher = state["launcher"]
     except Exception:
         return _deny(FAIL_REASON)
+    if mode in ("auto", "step"):
+        refusal = _unity_file_refusal(raw)
+        if refusal is not None:
+            return _deny(refusal.message)
     if mode == "auto":
         return {"decision": "allow"}
     if mode == CLOSED_MODE:

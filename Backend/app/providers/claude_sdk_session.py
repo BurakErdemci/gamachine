@@ -52,6 +52,7 @@ from agentic.command_gates import APPROVAL_TIMEOUT_S
 # unityMCP salt-okuma sınıflandırması. `spawn_env` ile aynı desen: app kökündeki
 # modül çıplak adla import ediliyor (`backend.spec` `pathex=['app']` taşıyor).
 from unity_tool_policy import is_unity_mcp_read_only
+import unity_file_guard
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,22 @@ async def warmup_slash_commands(cwd: Optional[str] = None,
 
 
 _FILE_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+# Claude Code on Windows can run commands through a PowerShell tool as well as Bash.
+_SHELL_TOOLS = ("Bash", "PowerShell")
+
+
+def _unity_file_refusal(tool_name: str, inp: dict, workspace: str):
+    inp = inp if isinstance(inp, dict) else {}
+    if tool_name in _FILE_WRITE_TOOLS:
+        for key in ("file_path", "path", "notebook_path"):
+            refusal = unity_file_guard.check_write(inp.get(key), workspace)
+            if refusal is not None:
+                return refusal
+        return None
+    if tool_name in _SHELL_TOOLS:
+        return unity_file_guard.check_shell(inp.get("command"), workspace)
+    return None
+
 
 # Salt-okunur / yan-etkisiz araçlar → onay sormadan otomatik izin (gürültü azaltma).
 # MUTASYON araçları (Bash, Write/Edit, manage_gameobject/components/ui/material,
@@ -1048,6 +1065,14 @@ class ClaudeSDKSession:
                     await out_q.put({"type": "tool_result", "tool": tool_name, "success": False,
                                      "summary": f"🚫 Workspace dışı yazım engellendi: {fp}"})
                 return PermissionResultDeny(message=f"'{fp}' workspace dışında — güvenlik nedeniyle reddedildi.")
+
+        refusal = _unity_file_refusal(tool_name, input_data, self.cwd or "")
+        if refusal is not None:
+            logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] Unity file rule refused {tool_name}: {refusal.path}")
+            if out_q is not None:
+                await out_q.put({"type": "tool_result", "tool": tool_name, "success": False,
+                                 "summary": refusal.summary})
+            return PermissionResultDeny(message=refusal.message)
 
         # Oto mod: onay kartı gösterme, otomatik izin ver (path güvenliği yukarıda uygulandı)
         if self.auto_approve:

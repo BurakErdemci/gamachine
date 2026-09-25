@@ -36,6 +36,7 @@ import subprocess
 from unity_ai_mcp.approval_bridge import request_approval
 from unity_ai_mcp.tools.file_tools import _resolve
 from unity_ai_mcp.tools.bash_tool import _auto_safe_argv, _is_safe, _parse_file_write
+import unity_file_guard
 
 
 def _workspace() -> str:
@@ -73,6 +74,10 @@ def cmd_list_dir(args) -> int:
 def cmd_save_file(args) -> int:
     workspace = _workspace()
     abs_path = _resolve(args.path, workspace)
+    refusal = unity_file_guard.check_write(abs_path, workspace)
+    if refusal is not None:
+        print(f"❌ {refusal.message}")
+        return 1
 
     content = sys.stdin.read() if args.content_stdin else (args.content or "")
 
@@ -106,6 +111,10 @@ def cmd_save_file(args) -> int:
 def cmd_delete_file(args) -> int:
     workspace = _workspace()
     abs_path = _resolve(args.path, workspace)
+    refusal = unity_file_guard.check_delete(abs_path, workspace)
+    if refusal is not None:
+        print(f"❌ {refusal.message}")
+        return 1
     if not os.path.exists(abs_path):
         print(f"Hata: Dosya bulunamadı: {args.path}")
         return 1
@@ -133,6 +142,10 @@ def cmd_delete_file(args) -> int:
 def cmd_bash(args) -> int:
     workspace = _workspace()
     command = args.command
+    refusal = unity_file_guard.check_shell(command, workspace)
+    if refusal is not None:
+        print(f"❌ {refusal.message}")
+        return 1
 
     # Terminalle dosya yazma girişimi → DiffViewer'a yönlendir (MCP bash_tool ile aynı)
     file_write = _parse_file_write(command)
@@ -142,6 +155,10 @@ def cmd_bash(args) -> int:
             print("❌ Boş dosya oluşturma reddedildi. İçerikle birlikte 'unityai save-file' kullan.")
             return 1
         abs_path = _resolve(path, workspace)
+        refusal = unity_file_guard.check_write(abs_path, workspace)
+        if refusal is not None:
+            print(f"❌ {refusal.message}")
+            return 1
         original = ""
         if os.path.exists(abs_path):
             try:

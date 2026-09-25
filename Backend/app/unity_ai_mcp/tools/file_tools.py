@@ -7,6 +7,7 @@ from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 
 from unity_ai_mcp.approval_bridge import request_approval
+import unity_file_guard
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,9 @@ def register_file_tools(mcp: MCPServer, get_workspace: callable):
         """Dosya oluşturur veya düzenler. ONAY GEREKTİRİR."""
         workspace = get_workspace()
         abs_path = _resolve(path, workspace)
+        refusal = unity_file_guard.check_write(abs_path, workspace)
+        if refusal is not None:
+            return f"❌ {refusal.message}"
 
         original = ""
         if os.path.exists(abs_path):
@@ -77,6 +81,9 @@ def register_file_tools(mcp: MCPServer, get_workspace: callable):
         """Dosyayı siler. ONAY GEREKTİRİR."""
         workspace = get_workspace()
         abs_path = _resolve(path, workspace)
+        refusal = unity_file_guard.check_delete(abs_path, workspace)
+        if refusal is not None:
+            return f"❌ {refusal.message}"
 
         if not os.path.exists(abs_path):
             return f"Hata: Dosya bulunamadı: {path}"

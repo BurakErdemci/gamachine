@@ -31,6 +31,7 @@ import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 
+import unity_file_guard
 from agentic.command_gates import APPROVAL_GATES, APPROVAL_RESULTS, APPROVAL_TIMEOUT_S
 from agentic.command_gates import register_gate, release_gate
 
@@ -223,6 +224,39 @@ async def fetch_codex_skills(cwd: Optional[str] = None, force: bool = False) -> 
 # so a handful covers every reachable ordering; the bound exists so a long
 # session cannot grow the set without limit.
 _RETIRED_TURN_IDS_MAX = 8
+# fileChange items whose paths wait for their approval request. Codex asks for
+# approval of one patch at a time, so a handful covers it.
+_FILE_CHANGES_MAX = 64
+
+
+def _change_refusal(path, kind, move_path, base: str):
+    if kind == "delete":
+        return unity_file_guard.check_delete(path, base)
+    if move_path:
+        return unity_file_guard.check_move(path, move_path, base)
+    return unity_file_guard.check_write(path, base)
+
+
+def _file_change_refusal(changes, base: str):
+    """The Unity file rule over a v2 fileChange item's `changes`
+    ([{path, kind: {type, move_path}, diff}], codex-cli 0.157.0 schema)."""
+    for change in changes or ():
+        if not isinstance(change, dict):
+            continue
+        kind = change.get("kind") if isinstance(change.get("kind"), dict) else {}
+        refusal = _change_refusal(change.get("path"), kind.get("type"),
+                                  kind.get("move_path"), base)
+        if refusal is not None:
+            return refusal
+    return None
+
+
+def _command_text(command) -> str:
+    # v1 execCommandApproval sends argv; v2 sends one string.
+    if isinstance(command, list):
+        return " ".join(f'"{a}"' if isinstance(a, str) and " " in a and '"' not in a else str(a)
+                        for a in command)
+    return command if isinstance(command, str) else ""
 
 
 def _notification_turn_id(params: dict) -> Optional[str]:
@@ -488,6 +522,8 @@ class CodexSession:
         self._retired_turn_ids: "collections.deque[str]" = collections.deque(
             maxlen=_RETIRED_TURN_IDS_MAX)
         self._active_gate_ids: Set[str] = set()
+        # itemId -> changes of fileChange items (see `_remember_file_change`).
+        self._file_changes: "collections.OrderedDict[str, list]" = collections.OrderedDict()
         # İlk turda DB bağlam özeti enjekte edildi mi (sonraki turlarda thread hatırlıyor)
         self._ctx_injected = False
 
@@ -681,7 +717,53 @@ class CodexSession:
             asyncio.create_task(self._handle_server_request(msg))
         elif has_method:
             # notification (stream)
+            self._remember_file_change(msg)
             await self._handle_notification(msg)
+
+    def _remember_file_change(self, msg: dict) -> None:
+        """Keep a fileChange item's paths for its approval request.
+
+        `item/fileChange/requestApproval` carries only itemId; the paths are in
+        the item notifications. This runs in the read loop, in wire order, and
+        before the stale-turn filter and the no-queue return of
+        `_handle_notification`, so every item seen is remembered.
+        """
+        method = msg.get("method")
+        params = msg.get("params") or {}
+        if method in ("item/started", "item/completed"):
+            item = params.get("item") or {}
+            if not isinstance(item, dict) or item.get("type") != "fileChange":
+                return
+            item_id, changes = item.get("id"), item.get("changes")
+            if method == "item/completed":
+                self._file_changes.pop(item_id, None)
+                return
+        elif method == "item/fileChange/patchUpdated":
+            item_id, changes = params.get("itemId"), params.get("changes")
+        else:
+            return
+        if isinstance(item_id, str) and isinstance(changes, list):
+            self._file_changes[item_id] = changes
+            self._file_changes.move_to_end(item_id)
+            while len(self._file_changes) > _FILE_CHANGES_MAX:
+                self._file_changes.popitem(last=False)
+
+    def _unity_file_refusal(self, method: str, params: dict):
+        base = self.cwd or ""
+        if method == "item/fileChange/requestApproval":
+            return _file_change_refusal(self._file_changes.get(params.get("itemId")), base)
+        if method == "applyPatchApproval":
+            changes = params.get("fileChanges")
+            for path, change in (changes.items() if isinstance(changes, dict) else ()):
+                change = change if isinstance(change, dict) else {}
+                refusal = _change_refusal(path, change.get("type"), change.get("move_path"), base)
+                if refusal is not None:
+                    return refusal
+            return None
+        if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
+            cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else ""
+            return unity_file_guard.check_shell(_command_text(params.get("command")), cwd or base)
+        return None
 
     # ── Server→Client request: native onay köprüsü ───────────────────────
     async def _handle_server_request(self, msg: dict):
@@ -723,6 +805,15 @@ class CodexSession:
 
     async def _resolve_approval(self, method: str, params: dict) -> str:
         """Onay isteğini kartla/oto çöz → 'accept' | 'decline'."""
+        # Fixed Unity file rule, before the mode: no card, and auto cannot pass it.
+        # Codex's decline has no reason field, so the model only sees a decline.
+        refusal = self._unity_file_refusal(method, params)
+        if refusal is not None:
+            logger.warning(f"[CodexSession:{self.conversation_id}] Unity file rule declined {method}: {refusal.path}")
+            if self._out_q is not None:
+                await self._out_q.put({"type": "tool_result", "tool": method, "success": False,
+                                       "summary": refusal.summary})
+            return "decline"
         # Oto mod: kart gösterme, otomatik onayla
         if self.auto_approve:
             return "accept"

@@ -9,6 +9,7 @@ from mcp.server.mcpserver import MCPServer
 
 from unity_ai_mcp.approval_bridge import request_approval
 from unity_ai_mcp.tools.file_tools import _resolve
+import unity_file_guard
 
 from agentic.command_safety import (  # noqa: F401  (tek kaynak — bkz command_safety.py)
     auto_safe_argv as _auto_safe_argv,
@@ -61,6 +62,9 @@ def register_bash_tool(mcp: MCPServer, get_workspace: callable):
 
     async def _run_command(command: str) -> str:
         workspace = get_workspace()
+        refusal = unity_file_guard.check_shell(command, workspace)
+        if refusal is not None:
+            return f"❌ {refusal.message}"
 
         # Terminalle dosya yazma girişimi → DiffViewer'a yönlendir
         file_write = _parse_file_write(command)
@@ -70,6 +74,9 @@ def register_bash_tool(mcp: MCPServer, get_workspace: callable):
             if not new_content.strip():
                 return "❌ Boş dosya oluşturma reddedildi. Dosya içeriğiyle birlikte mcp__unityai__save_file kullan."
             abs_path = _resolve(path, workspace)
+            refusal = unity_file_guard.check_write(abs_path, workspace)
+            if refusal is not None:
+                return f"❌ {refusal.message}"
             original = ""
             if os.path.exists(abs_path):
                 try:

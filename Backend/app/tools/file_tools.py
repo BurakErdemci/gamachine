@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import unity_file_guard
+
 logger = logging.getLogger(__name__)
 
 # Güvenlik: Sadece workspace içinde çalış
@@ -62,6 +64,9 @@ def write_file(file_path: str, content: str, workspace_path: str) -> dict:
     """Belirtilen dosyaya içerik yazar. Klasör yoksa oluşturur."""
     try:
         abs_path = _validate_path(file_path, workspace_path)
+        refusal = unity_file_guard.check_write(abs_path, workspace_path)
+        if refusal is not None:
+            return {"success": False, "error": refusal.message}
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -120,6 +125,9 @@ def delete_file(file_path: str, workspace_path: str) -> dict:
     """
     try:
         abs_path = _validate_path(file_path, workspace_path)
+        refusal = unity_file_guard.check_delete(abs_path, workspace_path)
+        if refusal is not None:
+            return {"success": False, "error": refusal.message}
         if not os.path.exists(abs_path):
             return {"success": False, "error": f"Dosya bulunamadı: {file_path}"}
         
@@ -155,6 +163,9 @@ def run_command(command: str, workspace_path: str) -> dict:
     yolu üç ayrı yerdeydi ve bu üçüncüsü `shell=True` ile kalmıştı. Yani
     ayrıştırıcı/çalıştırıcı uyuşmazlığı sınıfı bu yoldan hâlâ açıktı.
     """
+    refusal = unity_file_guard.check_shell(command, workspace_path)
+    if refusal is not None:
+        return {"success": False, "error": refusal.message}
     try:
         # Git ve diğer araçların interaktif soru sormasını engelle
         env = os.environ.copy()
