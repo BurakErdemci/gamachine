@@ -206,6 +206,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
 
         private static void Fail(string message)
         {
+            bool failedStart = s.op == OpStart;
             var data = PendingData();
             s.op = "";
             s.phase = "";
@@ -213,6 +214,9 @@ namespace MCPForUnity.Editor.Tools.Playtest
             s.outcomeIsError = true;
             s.outcomeMessage = message;
             Save();
+            // A failed start (hook error, exception in apply, timeout) leaves no usable session, so nothing it
+            // changed may outlive it: no caller is obliged to send a stop after an error.
+            if (failedStart) RestoreRuntime();
         }
 
         private static void OnPlayModeChanged(PlayModeStateChange change)
@@ -299,13 +303,16 @@ namespace MCPForUnity.Editor.Tools.Playtest
 
         private static void Apply()
         {
-            PlaytestDriver.Install();
             if (!s.active)
             {
                 s.origRunInBackground = Application.runInBackground;
                 s.origCaptureDt = Time.captureDeltaTime;
                 s.origFixedDt = Time.fixedDeltaTime;
+                // Active before the first change, so RestoreRuntime undoes a partial apply that throws.
+                s.active = true;
+                Save();
             }
+            PlaytestDriver.Install();
             Application.runInBackground = true;
             Time.captureDeltaTime = s.fixedDt;
             Time.fixedDeltaTime = s.fixedDt;
@@ -313,8 +320,6 @@ namespace MCPForUnity.Editor.Tools.Playtest
             var input = PlaytestInput.BeginSession();
             var settingsObj = PlaytestInput.SettingsObject;
             if (settingsObj != null) input["settings_is_asset"] = EditorUtility.IsPersistent(settingsObj);
-            s.active = true;
-            Save();
 
             PlaytestHookDiscovery.Ensure();
             bool restarted = false;
@@ -371,14 +376,26 @@ namespace MCPForUnity.Editor.Tools.Playtest
         private static void RestoreRuntime()
         {
             if (!s.active) return;
-            PlaytestStepper.Abort("play session stopped");
-            PlaytestDriver.Uninstall();
-            PlaytestInput.EndSession();
-            Time.captureDeltaTime = s.origCaptureDt;
-            Time.fixedDeltaTime = s.origFixedDt;
-            Application.runInBackground = s.origRunInBackground;
-            s.active = false;
-            Save();
+            try
+            {
+                try
+                {
+                    PlaytestStepper.Abort("play session stopped");
+                    PlaytestDriver.Uninstall();
+                }
+                finally
+                {
+                    PlaytestInput.EndSession();
+                }
+            }
+            finally
+            {
+                Time.captureDeltaTime = s.origCaptureDt;
+                Time.fixedDeltaTime = s.origFixedDt;
+                Application.runInBackground = s.origRunInBackground;
+                s.active = false;
+                Save();
+            }
         }
     }
 }
