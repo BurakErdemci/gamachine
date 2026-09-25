@@ -117,6 +117,26 @@ namespace MCPForUnity.Editor.Tools
                     continue;
                 }
 
+                string collisionError = StringCaseUtility.FindNormalizedKeyCollision(
+                    rawParams.Properties().Select(p => p.Name), ToCamelCase);
+                if (collisionError != null)
+                {
+                    invocationFailureCount++;
+                    anyCommandFailed = true;
+                    commandResults.Add(new
+                    {
+                        tool = toolName,
+                        callSucceeded = false,
+                        error = collisionError
+                    });
+                    serializedResults.Add(null);
+                    if (failFast)
+                    {
+                        break;
+                    }
+                    continue;
+                }
+
                 if (!TryResolveReferences(commandParams, serializedResults, out string refError))
                 {
                     invocationFailureCount++;

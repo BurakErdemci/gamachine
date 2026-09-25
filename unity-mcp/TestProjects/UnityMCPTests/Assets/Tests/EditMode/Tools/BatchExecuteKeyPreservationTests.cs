@@ -124,6 +124,39 @@ namespace MCPForUnityTests.Editor.Tools
         }
 
         [Test]
+        public void InnerKeysCollidingAfterNormalization_AreRefusedWithoutExecuting()
+        {
+            string goName = "BatchCollisionGO_" + System.Guid.NewGuid().ToString("N").Substring(0, 8);
+            var batchParams = new JObject
+            {
+                ["commands"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["tool"] = "manage_gameobject",
+                        ["params"] = new JObject
+                        {
+                            ["action"] = "find",
+                            ["action_"] = "create",
+                            ["name"] = goName
+                        }
+                    }
+                }
+            };
+
+            var resultObj = JObject.FromObject(BatchExecute.HandleCommand(batchParams).GetAwaiter().GetResult());
+
+            Assert.IsFalse(resultObj.Value<bool>("success"), resultObj.ToString());
+            var entry = resultObj["data"]["results"][0];
+            Assert.IsFalse(entry.Value<bool>("callSucceeded"));
+            StringAssert.Contains("action_", entry.Value<string>("error"));
+            var created = GameObject.Find(goName);
+            if (created != null)
+                Object.DestroyImmediate(created);
+            Assert.IsNull(created, "A refused command must not run");
+        }
+
+        [Test]
         public void Regression_CreateGameObject_StillWorksViaBatch()
         {
             string goName = "BatchCreatedGO_" + System.Guid.NewGuid().ToString("N").Substring(0, 8);

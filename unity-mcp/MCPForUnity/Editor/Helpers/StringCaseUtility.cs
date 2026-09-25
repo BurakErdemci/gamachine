@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -68,6 +69,36 @@ namespace MCPForUnity.Editor.Helpers
                 string.IsNullOrEmpty(part) ? "" : char.ToUpperInvariant(part[0]) + part.Substring(1)));
 
             return first + rest;
+        }
+
+        /// <summary>
+        /// Returns an error naming the first two keys that <paramref name="normalize"/> maps to the
+        /// same name, or null when every key stays distinct.
+        /// </summary>
+        /// <remarks>
+        /// Callers that fold keys into a new object must refuse on a collision instead of letting
+        /// the later key win: the approval gate classifies the payload by its literal keys, so
+        /// {action:"get", action_:"call"} was gated as a read and executed as a write.
+        /// </remarks>
+        public static string FindNormalizedKeyCollision(IEnumerable<string> keys, Func<string, string> normalize)
+        {
+            if (keys == null || normalize == null)
+                return null;
+
+            var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var key in keys)
+            {
+                var normalized = normalize(key);
+                if (normalized == null)
+                    continue;
+                if (seen.TryGetValue(normalized, out var earlier))
+                {
+                    return $"Parameters '{earlier}' and '{key}' both resolve to '{normalized}'; " +
+                           "send only one of them. The command was not executed.";
+                }
+                seen[normalized] = key;
+            }
+            return null;
         }
     }
 }

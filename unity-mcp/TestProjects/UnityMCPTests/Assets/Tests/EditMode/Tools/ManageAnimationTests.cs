@@ -63,6 +63,22 @@ namespace MCPForUnityTests.Editor.Tools
         }
 
         [Test]
+        public void HandleCommand_KeysCollidingAfterNormalization_AreRefusedWithoutExecuting()
+        {
+            string clipPath = $"{TempRoot}/Collision.anim";
+            var paramsObj = new JObject
+            {
+                ["action"] = "clip_get_info",
+                ["action_"] = "clip_create",
+                ["clipPath"] = clipPath,
+            };
+            var result = ToJObject(ManageAnimation.HandleCommand(paramsObj));
+            Assert.IsFalse(result.Value<bool>("success"), result.ToString());
+            Assert.That(result["message"].ToString(), Does.Contain("action_"));
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath));
+        }
+
+        [Test]
         public void HandleCommand_UnknownAnimatorAction_ReturnsError()
         {
             var paramsObj = new JObject { ["action"] = "animator_nonexistent" };

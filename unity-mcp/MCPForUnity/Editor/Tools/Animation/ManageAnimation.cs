@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using MCPForUnity.Editor.Helpers;
@@ -39,8 +40,9 @@ namespace MCPForUnity.Editor.Tools.Animation
             { "blend_type", "blendType" },
         };
 
-        private static JObject NormalizeParams(JObject source)
+        private static JObject NormalizeParams(JObject source, out string collision)
         {
+            collision = null;
             if (source == null)
             {
                 return new JObject();
@@ -48,6 +50,20 @@ namespace MCPForUnity.Editor.Tools.Animation
 
             var normalized = new JObject();
             var properties = ExtractProperties(source);
+            var topLevel = source.Properties()
+                .Where(prop => !string.Equals(prop.Name, "properties", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // Top-level keys deliberately override 'properties'; a collision inside either set does not.
+            collision = StringCaseUtility.FindNormalizedKeyCollision(
+                            properties?.Properties().Select(prop => prop.Name), key => NormalizeKey(key, true))
+                        ?? StringCaseUtility.FindNormalizedKeyCollision(
+                            topLevel.Select(prop => prop.Name), key => NormalizeKey(key, true));
+            if (collision != null)
+            {
+                return null;
+            }
+
             if (properties != null)
             {
                 foreach (var prop in properties.Properties())
@@ -56,12 +72,8 @@ namespace MCPForUnity.Editor.Tools.Animation
                 }
             }
 
-            foreach (var prop in source.Properties())
+            foreach (var prop in topLevel)
             {
-                if (string.Equals(prop.Name, "properties", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
                 normalized[NormalizeKey(prop.Name, true)] = NormalizeToken(prop.Value);
             }
 
@@ -160,7 +172,11 @@ namespace MCPForUnity.Editor.Tools.Animation
 
         public static object HandleCommand(JObject @params)
         {
-            JObject normalizedParams = NormalizeParams(@params);
+            JObject normalizedParams = NormalizeParams(@params, out string collision);
+            if (collision != null)
+            {
+                return new { success = false, message = collision };
+            }
             string action = normalizedParams["action"]?.ToString();
             if (string.IsNullOrEmpty(action))
             {
