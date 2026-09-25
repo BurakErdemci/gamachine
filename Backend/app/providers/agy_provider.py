@@ -83,6 +83,65 @@ def write_gate_state(auto: bool) -> None:
                 "auto" if auto else "step", launcher)
 
 
+def _read_json_config(path: str, default: dict = None) -> Optional[dict]:
+    """A config file's top-level object, `default` (or {}) when the file is
+    missing or empty, None when it exists but cannot be used.
+
+    None means leave the file alone: these files hold the user's own entries
+    (meshy, playwright, trustedWorkspaces), and rewriting an unparseable one
+    from scratch deleted them (audit 25 Sep 2026: a stray comma, a cp1254
+    byte or a top-level array each lost the user's data).
+    """
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return dict(default or {})
+    except OSError as e:
+        logger.warning("[agy] %s could not be read (%s); left untouched", path, e)
+        return None
+    try:
+        text = raw.decode("utf-8-sig")
+        data = json.loads(text) if text.strip() else dict(default or {})
+    except ValueError as e:
+        logger.warning("[agy] %s is not valid UTF-8 JSON (%s); left untouched", path, e)
+        return None
+    if not isinstance(data, dict):
+        logger.warning("[agy] %s top level is not an object; left untouched", path)
+        return None
+    return data
+
+
+def _write_json_config(path: str, data: dict) -> bool:
+    """Atomic write (temp file + os.replace), so a crash or a full disk
+    mid-write cannot leave half a file. A symlinked config is written through
+    to its target, and the target's permission bits are kept."""
+    import stat
+    import tempfile
+    target = os.path.realpath(path)
+    directory = os.path.dirname(target)
+    tmp = None
+    try:
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".gamachine-", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        if os.name != "nt" and os.path.exists(target):
+            os.chmod(tmp, stat.S_IMODE(os.stat(target).st_mode))  # mkstemp made it 0600
+        os.replace(tmp, target)
+        return True
+    except OSError as e:
+        logger.warning("[agy] %s could not be written (%s)", path, e)
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return False
+
+
 def _short_path(path: str) -> str:
     """8.3 form of a Windows path, or the path unchanged if there is none.
 
@@ -393,47 +452,29 @@ class AgyProvider(BaseCLIProvider):
         bu sayede eski stale değer (örn. önceki oturumdan "Gemini 3.5 Flash (High)")
         üzerine yazılır — canlı doğrulandı (2026-07-24): stale key kalınca model
         kendini yanlış tanıtıyordu, güncel display-name yazılınca düzeliyor."""
-        # 1. Lokal antigravity-cli settings.json
-        settings_path = os.path.expanduser("~/.gemini/antigravity-cli/settings.json")
-        try:
-            with open(settings_path, encoding="utf-8-sig") as f:
-                settings = json.load(f)
-        except Exception:
-            settings = {"colorScheme": "dark", "trustedWorkspaces": []}
-        settings["model"] = agy_model_name
-        settings["toolPermission"] = "always-proceed"  # --dangerously-skip-permissions flag'i YERİNE (canlı doğrulandı: geçerli değer, flag'siz auto-approve → skill-derail'i tetiklemez)
-        settings["disabledTools"] = self._AGY_DISABLED_TOOLS
-        if workspace:
+        # 1. Lokal antigravity-cli settings.json, 2. global ~/.gemini/settings.json.
+        # toolPermission always-proceed: --dangerously-skip-permissions flag'i YERİNE
+        # (canlı doğrulandı: geçerli değer, flag'siz auto-approve → skill-derail'i tetiklemez).
+        for path, default in (
+            ("~/.gemini/antigravity-cli/settings.json", {"colorScheme": "dark", "trustedWorkspaces": []}),
+            ("~/.gemini/settings.json", {}),
+        ):
+            settings_path = os.path.expanduser(path)
+            settings = _read_json_config(settings_path, default)
+            if settings is None:
+                continue
             trusted = settings.get("trustedWorkspaces", [])
-            if workspace not in trusted:
-                trusted.append(workspace)
-            settings["trustedWorkspaces"] = trusted
-        try:
-            with open(settings_path, "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=2)
-        except Exception as e:
-            logger.warning(f"[CLIProvider] Lokal agy settings.json model güncellenemedi: {e}")
-
-        # 2. Global ~/.gemini/settings.json
-        global_settings_path = os.path.expanduser("~/.gemini/settings.json")
-        try:
-            with open(global_settings_path, encoding="utf-8-sig") as f:
-                global_settings = json.load(f)
-        except Exception:
-            global_settings = {}
-        global_settings["model"] = agy_model_name
-        global_settings["toolPermission"] = "always-proceed"  # --dangerously-skip-permissions YERİNE (geçerli değer, flag'siz auto-approve)
-        global_settings["disabledTools"] = self._AGY_DISABLED_TOOLS
-        if workspace:
-            global_trusted = global_settings.get("trustedWorkspaces", [])
-            if workspace not in global_trusted:
-                global_trusted.append(workspace)
-            global_settings["trustedWorkspaces"] = global_trusted
-        try:
-            with open(global_settings_path, "w", encoding="utf-8") as f:
-                json.dump(global_settings, f, indent=2)
-        except Exception as e:
-            logger.warning(f"[CLIProvider] Global settings.json model güncellenemedi: {e}")
+            if workspace and not isinstance(trusted, list):
+                logger.warning("[agy] %s trustedWorkspaces is not a list; left untouched", settings_path)
+                continue
+            settings["model"] = agy_model_name
+            settings["toolPermission"] = "always-proceed"
+            settings["disabledTools"] = self._AGY_DISABLED_TOOLS
+            if workspace:
+                if workspace not in trusted:
+                    trusted.append(workspace)
+                settings["trustedWorkspaces"] = trusted
+            _write_json_config(settings_path, settings)
 
         logger.info(f"[CLIProvider] agy model → {agy_model_name}, trusted → {workspace}")
 
@@ -477,19 +518,8 @@ class AgyProvider(BaseCLIProvider):
             "env": env, "trust": True,
         }
 
-        # 1. ~/.gemini/antigravity-cli/mcp_config.json güncelle
-        config_path = os.path.expanduser("~/.gemini/antigravity-cli/mcp_config.json")
-        try:
-            with open(config_path, encoding="utf-8-sig") as f:
-                config = json.load(f)
-        except Exception:
-            config = {}
-        config.setdefault("mcpServers", {}).pop("antigravity", None)
-        config["mcpServers"]["unityai"] = dict(unityai_entry)
-        # disabledTools mcp_config.json'da OLMAMALI — agy geçersiz key görünce tüm dosyayı
-        # yoksayarak MCP server'ları başlatmaz. disabledTools sadece settings.json'da olmalı.
-        config.pop("disabledTools", None)
-
+        # Each file is read with _read_json_config: one that exists but cannot
+        # be parsed is skipped and left as it is, never rebuilt from scratch.
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         # K3: `serverUrl` + `headers` (düz metin `X-API-Key`) yerine stdio
         # köprüsü. Bu dosya `~/.gemini`'de duruyor ve başka bir asistanla
@@ -501,23 +531,39 @@ class AgyProvider(BaseCLIProvider):
         # kayıt bu dosyada çalışıyor. Aynı biçim opencode ve copilot'ta canlı
         # doğrulandı (1 Ağu 2026). None → kayıt silinir.
         unity_mcp_url = unity_mcp_manager.mcp_url(host="127.0.0.1")
+        ours = {"unityai": dict(unityai_entry)}
         if unity_mcp_url:
             from .codex_unitymcp_bridge import bridge_argv
             _argv = bridge_argv()
-            config["mcpServers"]["unityMCP"] = {
+            ours["unityMCP"] = {
                 "command": _argv[0], "args": _argv[1:],
                 "env": {"UNITY_MCP_URL": unity_mcp_url, **AGY_CHILD_SECRET_BLANKS},
                 "trust": True,
             }
-        else:
-            config["mcpServers"].pop("unityMCP", None)
 
-        try:
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
-            logger.info(f"[CLIProvider] agy mcp_config.json güncellendi: {backend_url} → {workspace}")
-        except Exception as e:
-            logger.warning(f"[CLIProvider] agy mcp_config.json yazılamadı: {e}")
+        def servers_of(cfg: Optional[dict], path: str) -> Optional[dict]:
+            if cfg is None:
+                return None
+            servers = cfg.setdefault("mcpServers", {})
+            if not isinstance(servers, dict):
+                logger.warning("[agy] %s mcpServers is not an object; left untouched", path)
+                return None
+            return servers
+
+        # 1. ~/.gemini/antigravity-cli/mcp_config.json
+        config_path = os.path.expanduser("~/.gemini/antigravity-cli/mcp_config.json")
+        config = _read_json_config(config_path)
+        config_servers = servers_of(config, config_path)
+        if config_servers is not None:
+            config_servers.pop("antigravity", None)
+            config_servers.update(ours)
+            if not unity_mcp_url:
+                config_servers.pop("unityMCP", None)
+            # disabledTools mcp_config.json'da OLMAMALI — agy geçersiz key görünce tüm dosyayı
+            # yoksayarak MCP server'ları başlatmaz. disabledTools sadece settings.json'da olmalı.
+            config.pop("disabledTools", None)
+            if _write_json_config(config_path, config):
+                logger.info(f"[CLIProvider] agy mcp_config.json güncellendi: {backend_url} → {workspace}")
 
         # 1b. GÖÇ SONRASI yol: ~/.gemini/config/mcp_config.json
         # KRİTİK (2026-07-14 canlı doğrulandı, agy 1.1.2): agy artık MCP server'larını
@@ -528,43 +574,22 @@ class AgyProvider(BaseCLIProvider):
         # görünüyor (canlı: meshy_check_balance çağrısı PASS). Migrated dosyada zaten olan
         # (IDE'nin eklediği meshy/playwright gibi) server'ları koru; taze unityai/unityMCP öncelikli.
         migrated_path = os.path.expanduser("~/.gemini/config/mcp_config.json")
-        try:
-            migrated_cfg = {}
-            try:
-                with open(migrated_path, encoding="utf-8-sig") as f:
-                    _raw = f.read().strip()
-                    migrated_cfg = json.loads(_raw) if _raw else {}
-            except Exception:
-                migrated_cfg = {}
-            merged_servers = dict(migrated_cfg.get("mcpServers", {}))
-            merged_servers.update(config.get("mcpServers", {}))  # taze unityai/unityMCP kazanır
+        migrated_cfg = _read_json_config(migrated_path)
+        merged_servers = servers_of(migrated_cfg, migrated_path)
+        if merged_servers is not None:
+            # taze unityai/unityMCP kazanır; eski dosya okunamadıysa yalnız bizimkiler
+            merged_servers.update(config_servers if config_servers is not None else ours)
             merged_servers.pop("antigravity", None)
             if not unity_mcp_url:
                 # The merge above only adds; without this an old entry (e.g.
                 # the pre-K3 keyless http one) survives here while the server
                 # is off, and agy tries it on every start.
                 merged_servers.pop("unityMCP", None)
-            out_cfg = dict(migrated_cfg)
-            out_cfg["mcpServers"] = merged_servers
-            out_cfg.pop("disabledTools", None)  # geçersiz key → agy tüm dosyayı yoksayar
-            os.makedirs(os.path.dirname(migrated_path), exist_ok=True)
-            with open(migrated_path, "w", encoding="utf-8") as f:
-                json.dump(out_cfg, f, indent=2)
-            logger.info(f"[CLIProvider] agy MIGRATED mcp_config.json yazıldı ({len(merged_servers)} server): {migrated_path}")
-        except Exception as e:
-            logger.warning(f"[CLIProvider] agy migrated mcp_config.json yazılamadı: {e}")
+            migrated_cfg.pop("disabledTools", None)  # geçersiz key → agy tüm dosyayı yoksayar
+            if _write_json_config(migrated_path, migrated_cfg):
+                logger.info(f"[CLIProvider] agy MIGRATED mcp_config.json yazıldı ({len(merged_servers)} server): {migrated_path}")
 
-        # 2. ~/.gemini/antigravity-cli/settings.json güncelle
-        settings_path = os.path.expanduser("~/.gemini/antigravity-cli/settings.json")
-        try:
-            with open(settings_path, encoding="utf-8-sig") as f:
-                settings = json.load(f)
-        except Exception:
-            settings = {"colorScheme": "dark", "trustedWorkspaces": []}
-        settings.setdefault("mcpServers", {}).pop("antigravity", None)
-        settings["mcpServers"]["unityai"] = dict(unityai_entry)
-        settings["toolPermission"] = "always-proceed"  # --dangerously-skip-permissions flag'i YERİNE (canlı doğrulandı: geçerli değer, flag'siz auto-approve → skill-derail'i tetiklemez)
-        settings["disabledTools"] = self._AGY_DISABLED_TOOLS
+        # 2. ~/.gemini/antigravity-cli/settings.json, 3. global ~/.gemini/settings.json.
         # No unityMCP here, and an old one is removed. agy does not read
         # mcpServers from settings.json at all (measured 25 Sep 2026, agy
         # 1.2.8: a server declared only here was never started), and the old
@@ -572,31 +597,21 @@ class AgyProvider(BaseCLIProvider):
         # work for agy's own http client (measured), but would put the secret
         # back into a ~/.gemini file shared with another assistant (K3). The
         # stdio bridge in mcp_config.json above is the one working entry.
-        settings["mcpServers"].pop("unityMCP", None)
-
-        try:
-            with open(settings_path, "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=2)
-            logger.info(f"[CLIProvider] agy settings.json güncellendi: {backend_url} → {workspace}")
-        except Exception as e:
-            logger.warning(f"[CLIProvider] agy settings.json yazılamadı: {e}")
-
-        # 3. Global ~/.gemini/settings.json güncelle
-        global_settings_path = os.path.expanduser("~/.gemini/settings.json")
-        try:
-            with open(global_settings_path, encoding="utf-8-sig") as f:
-                global_settings = json.load(f)
-        except Exception:
-            global_settings = {}
-        global_settings.setdefault("mcpServers", {})["unityai"] = dict(unityai_entry)
-        global_settings["toolPermission"] = "always-proceed"  # --dangerously-skip-permissions YERİNE (geçerli değer, flag'siz auto-approve)
-        global_settings["disabledTools"] = self._AGY_DISABLED_TOOLS
-        # Same reason as the settings.json above: never read, keyless, 401.
-        global_settings["mcpServers"].pop("unityMCP", None)
-
-        try:
-            with open(global_settings_path, "w", encoding="utf-8") as f:
-                json.dump(global_settings, f, indent=2)
-            logger.info(f"[CLIProvider] Global settings.json güncellendi: {backend_url} → {workspace}")
-        except Exception as e:
-            logger.warning(f"[CLIProvider] Global settings.json yazılamadı: {e}")
+        for path, default in (
+            ("~/.gemini/antigravity-cli/settings.json", {"colorScheme": "dark", "trustedWorkspaces": []}),
+            ("~/.gemini/settings.json", {}),
+        ):
+            settings_path = os.path.expanduser(path)
+            settings = _read_json_config(settings_path, default)
+            servers = servers_of(settings, settings_path)
+            if servers is None:
+                continue
+            servers.pop("antigravity", None)
+            servers["unityai"] = dict(unityai_entry)
+            servers.pop("unityMCP", None)
+            # --dangerously-skip-permissions flag'i YERİNE (canlı doğrulandı: geçerli
+            # değer, flag'siz auto-approve → skill-derail'i tetiklemez)
+            settings["toolPermission"] = "always-proceed"
+            settings["disabledTools"] = self._AGY_DISABLED_TOOLS
+            if _write_json_config(settings_path, settings):
+                logger.info(f"[CLIProvider] agy {settings_path} güncellendi: {backend_url} → {workspace}")
