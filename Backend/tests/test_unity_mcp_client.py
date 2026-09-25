@@ -450,6 +450,27 @@ def test_a_refresh_that_reaches_list_tools_after_unload_does_not_reconnect(serve
     assert umt.get_unity_tool_definitions() == []
 
 
+def test_a_refresh_that_starts_after_the_generation_bump_is_cleared_by_unload(server):
+    """Audit verify2 finding 1: a refresh that begins between unload's generation
+    bump and `close()` reads the NEW generation and a still-open client, so its
+    publish is accepted. Simulated by running that refresh inside close()."""
+    fake, client = server
+    fake.tools = [_tool("read_console", "core")]
+    assert umt.load_unity_tools() is True
+    original_close = client.close
+
+    def _close_with_racing_refresh():
+        assert umt.load_unity_tools() is True, "the racing refresh must publish"
+        original_close()
+
+    with mock.patch.object(client, "close", _close_with_racing_refresh):
+        umt.unload_unity_tools()
+
+    assert umt.get_unity_tool_definitions() == []
+    assert umt.get_unity_tool_functions() == {}
+    assert not umt.is_unity_tool("read_console")
+
+
 def test_tools_load_again_after_an_unload(server):
     fake, _ = server
     fake.tools = [_tool("read_console", "core")]

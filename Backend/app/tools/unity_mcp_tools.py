@@ -554,6 +554,13 @@ def unload_unity_tools():
         _cached_tools = []
         _cached_functions = {}
     _client.close()
+    # A refresh that started after the bump above saw the new generation and a
+    # still-open client, so its publish was accepted. Bumping again also voids
+    # one that has listed but not yet published.
+    with _cache_lock:
+        _generation += 1
+        _cached_tools = []
+        _cached_functions = {}
     logger.info("[UnityMCP] Tool'lar kaldırıldı.")
 
 
