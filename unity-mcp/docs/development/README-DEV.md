@@ -38,7 +38,17 @@ After switching, open Package Manager in Unity and Refresh to re-resolve package
 
 ## Tool Selection & the Meta-Tool
 
-MCP for Unity organizes tools into **groups** (Core, VFX & Shaders, Animation, UI Toolkit, Scripting Extensions, Testing). You can selectively enable or disable tools to control which capabilities are exposed to AI clients — reducing context window usage and focusing the AI on relevant tools.
+MCP for Unity organizes tools into **groups** (Core, Playtest, Docs, VFX & Shaders, Animation, UI Toolkit, Scripting Extensions, Testing, ProBuilder, Profiling). Core and Playtest are on by default; Playtest holds the deterministic play-session tools (`game_hooks`, `play_session`, `play_step`, `play_capture`, `run_playtest`). You can selectively enable or disable tools to control which capabilities are exposed to AI clients — reducing context window usage and focusing the AI on relevant tools.
+
+Over HTTP, the tool list a client sees is fixed by the URL it connects to, and does not change within a connection (every URL requires the `X-API-Key` header; an unknown profile answers 404):
+
+| URL | Tools |
+|-----|-------|
+| `/mcp` | Groups enabled in the Unity Editor (core + playtest by default) plus the server meta-tools; 36 tools when no Editor has connected |
+| `/mcp/gamachine` | core + playtest only, no meta-tools (31 tools); what the Gamachine backend exports |
+| `/mcp/full` | Every group, regardless of the Editor's toggles (51 tools) |
+
+The Editor toggles below only affect `/mcp` and `/mcp/gamachine`.
 
 ### Using the Tools Tab in the Editor
 
@@ -57,9 +67,9 @@ Tool visibility changes work differently depending on the transport mode:
 **HTTP mode** (recommended):
 
 1. Toggling a tool calls `ReregisterToolsAsync()`, which sends the updated enabled tool list to the Python server over WebSocket.
-2. The server updates its internal tool visibility via `mcp.enable()`/`mcp.disable()` per group.
-3. The server sends a `tools/list_changed` MCP notification to all connected client sessions.
-4. Already-connected clients (Claude Desktop, VS Code, etc.) automatically receive the updated tool list.
+2. The server replaces its set of enabled groups (`Server/src/transport/tool_profiles.py`); a group counts as enabled when Unity registered at least one of its tools.
+3. The server sends a `tools/list_changed` MCP notification to connected clients that keep a notification stream open.
+4. Clients that handle the notification re-fetch the list. Others (Claude Code among them) keep the list they got when they connected until they reconnect.
 
 **Stdio mode**:
 
@@ -69,21 +79,21 @@ Tool visibility changes work differently depending on the transport mode:
 
 ### The `manage_tools` Meta-Tool
 
-The server exposes a built-in `manage_tools` tool (always visible, not group-gated) that AIs can call directly:
+The server exposes a built-in `manage_tools` tool (not group-gated; listed on `/mcp` and `/mcp/full`, not on `/mcp/gamachine`) that AIs can call directly:
 
 | Action | Description |
 |--------|-------------|
-| `list_groups` | Lists all tool groups with their tools and enable/disable status |
-| `activate` | Enables a tool group by name (e.g., `group="vfx"`) |
-| `deactivate` | Disables a tool group by name |
+| `list_groups` | Lists all tool groups with their tools, whether each is available on the URL the call came in on, and (HTTP) the current profile and the other profile URLs |
+| `activate` | Changes nothing: returns `success=false` and points at the profile URLs (HTTP) or the Editor's tool settings plus `sync` (stdio) |
+| `deactivate` | Same as `activate` |
 | `sync` | Pulls current tool states from Unity and syncs server visibility (essential for stdio mode) |
-| `reset` | Restores default tool visibility |
+| `reset` | Same as `activate`: there is no per-session state to reset |
 
 ### When You Need to Reconfigure
 
 After toggling tools on/off, MCP clients need to learn about the changes:
 
-- **HTTP mode**: Changes propagate automatically via `tools/list_changed`. Most clients pick this up immediately. If a client doesn't, click **Reconfigure Clients** on the Tools tab, or go to Clients tab and click Configure.
+- **HTTP mode**: Changes reach `/mcp` and `/mcp/gamachine` at once; calls are checked against the current group state. Clients that handle `tools/list_changed` refresh their list; others need to reconnect. If a client doesn't pick the change up, click **Reconfigure Clients** on the Tools tab, or go to Clients tab and click Configure. For every tool without touching the toggles, point the client at `/mcp/full`.
 - **Stdio mode**: The server process needs to be told about changes. Either ask the AI to call `manage_tools(action='sync')`, or restart the MCP session. Click **Reconfigure Clients** to re-register all clients with updated config.
 
 ## Running Tests

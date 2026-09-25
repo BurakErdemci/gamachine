@@ -38,7 +38,17 @@ python mcp_source.py
 
 ## 工具选择与 Meta-Tool
 
-MCP for Unity 将工具组织为**分组**（Core、VFX & Shaders、Animation、UI Toolkit、Scripting Extensions、Testing）。你可以选择性地启用或禁用工具，以控制哪些能力暴露给 AI 客户端——减少上下文窗口占用，让 AI 专注于相关工具。
+MCP for Unity 将工具组织为**分组**（Core、Playtest、Docs、VFX & Shaders、Animation、UI Toolkit、Scripting Extensions、Testing、ProBuilder、Profiling）。Core 和 Playtest 默认启用；Playtest 包含确定性试玩工具（`game_hooks`、`play_session`、`play_step`、`play_capture`、`run_playtest`）。你可以选择性地启用或禁用工具，以控制哪些能力暴露给 AI 客户端——减少上下文窗口占用，让 AI 专注于相关工具。
+
+在 HTTP 模式下，客户端看到的工具列表由其连接的 URL 决定，在一次连接内不会改变（所有 URL 都需要 `X-API-Key` 请求头；未知的 profile 返回 404）：
+
+| URL | 工具 |
+|-----|------|
+| `/mcp` | Unity Editor 中启用的分组（默认 core + playtest）加上服务器 meta-tools；Editor 未连接时共 36 个工具 |
+| `/mcp/gamachine` | 仅 core + playtest，不含 meta-tools（31 个工具）；即 Gamachine 后端导出的集合 |
+| `/mcp/full` | 所有分组，不受 Editor 开关影响（51 个工具） |
+
+下文的 Editor 开关只影响 `/mcp` 和 `/mcp/gamachine`。
 
 ### 使用编辑器中的 Tools 标签页
 
@@ -57,9 +67,9 @@ MCP for Unity 将工具组织为**分组**（Core、VFX & Shaders、Animation、
 **HTTP 模式**（推荐）：
 
 1. 切换工具会调用 `ReregisterToolsAsync()`，通过 WebSocket 将更新后的启用工具列表发送到 Python 服务器。
-2. 服务器通过 `mcp.enable()`/`mcp.disable()` 按分组更新内部工具可见性。
-3. 服务器向所有已连接的客户端会话发送 `tools/list_changed` MCP 通知。
-4. 已连接的客户端（Claude Desktop、VS Code 等）自动接收更新后的工具列表。
+2. 服务器替换其启用分组集合（`Server/src/transport/tool_profiles.py`）；Unity 注册了某分组中至少一个工具时，该分组即视为启用。
+3. 服务器向保持通知流打开的已连接客户端发送 `tools/list_changed` MCP 通知。
+4. 处理该通知的客户端会重新获取列表；其他客户端（包括 Claude Code）在重新连接前保留连接时获得的列表。
 
 **Stdio 模式**：
 
@@ -69,21 +79,21 @@ MCP for Unity 将工具组织为**分组**（Core、VFX & Shaders、Animation、
 
 ### `manage_tools` Meta-Tool
 
-服务器暴露一个内置的 `manage_tools` 工具（始终可见，不受分组限制），AI 可以直接调用：
+服务器暴露一个内置的 `manage_tools` 工具（不受分组限制；在 `/mcp` 和 `/mcp/full` 上列出，`/mcp/gamachine` 上没有），AI 可以直接调用：
 
 | Action | 描述 |
 |--------|------|
-| `list_groups` | 列出所有工具分组及其工具和启用/禁用状态 |
-| `activate` | 按名称启用一个工具分组（例如 `group="vfx"`） |
-| `deactivate` | 按名称禁用一个工具分组 |
+| `list_groups` | 列出所有工具分组及其工具、每个分组在本次调用所用 URL 上是否可用，以及（HTTP）当前 profile 和其他 profile URL |
+| `activate` | 不做任何更改：返回 `success=false`，并指向各 profile URL（HTTP）或 Editor 工具设置加 `sync`（stdio） |
+| `deactivate` | 同 `activate` |
 | `sync` | 从 Unity 拉取当前工具状态并同步服务器可见性（stdio 模式必需） |
-| `reset` | 恢复默认工具可见性 |
+| `reset` | 同 `activate`：没有按会话保存的状态可重置 |
 
 ### 何时需要重新配置
 
 切换工具启用/禁用后，MCP 客户端需要获知这些变更：
 
-- **HTTP 模式**：变更通过 `tools/list_changed` 自动传播。大多数客户端会立即更新。如果客户端未更新，请在 Tools 标签页点击 **Reconfigure Clients**，或前往 Clients 标签页点击 Configure。
+- **HTTP 模式**：变更立即作用于 `/mcp` 和 `/mcp/gamachine`，工具调用按当前分组状态检查。处理 `tools/list_changed` 的客户端会刷新列表，其他客户端需要重新连接。如果客户端未更新，请在 Tools 标签页点击 **Reconfigure Clients**，或前往 Clients 标签页点击 Configure。若不想改动开关而需要全部工具，请让客户端连接 `/mcp/full`。
 - **Stdio 模式**：服务器进程需要被告知变更。可以让 AI 调用 `manage_tools(action='sync')`，或重启 MCP 会话。点击 **Reconfigure Clients** 以使用更新后的配置重新注册所有客户端。
 
 ## 运行测试
