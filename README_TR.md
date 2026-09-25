@@ -121,7 +121,7 @@ birden iptal ediyor: akışı kesiyor *ve* backend'de bekleyen onay kapıların�
 geçiyor. Neyin onaylandığı ve neyin **bilerek** onaylanmadığı yazılı:
 [Approval scope](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
 
-**Canlı Unity Editor kontrolü, kurulum yok** — MCP üzerinden 46 Editor aracı: sahne,
+**Canlı Unity Editor kontrolü, kurulum yok** — MCP üzerinden 51 Editor aracı: sahne,
 GameObject, prefab, materyal, fizik, build ayarları. Ayrıca
 [oyunu oynayabiliyor](docs/unity-mcp.md#-the-ai-can-now-play-the-game-manage_input):
 play moduna giriyor, girdi gönderiyor, ekran görüntüsü alıp yaptığı işi
