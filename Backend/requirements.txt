@@ -1,10 +1,12 @@
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anthropic>=0.19.0
-# Taban 0.2.110'dan yükseltildi: ClaudeAgentOptions.max_buffer_size bu tabanda
-# var olduğu ÖLÇÜLMEDİ, ve seçenek olmadan görsel taşıyan oturumlar 1 MiB'de
-# düşüyor (bkz. claude_sdk_session._SDK_STDOUT_LIMIT_BYTES). 0.2.128 ölçüldü.
-claude-agent-sdk>=0.2.128
+# Floor history: 0.2.110 -> 0.2.128 because ClaudeAgentOptions.max_buffer_size
+# was not measured below it (image-carrying sessions drop at 1 MiB without it,
+# see claude_sdk_session._SDK_STDOUT_LIMIT_BYTES). 25 Sep 2026: 0.2.159, the
+# newest release (bundles Claude Code 2.1.281, declares mcp>=1.23,<3); the full
+# Backend suite passes on it.
+claude-agent-sdk>=0.2.159
 anyio==4.12.1
 bcrypt>=4.0.0
 keyring>=25.0.0
@@ -74,9 +76,14 @@ tqdm==4.70.0
 # an exact pin a later colorama could enter the frozen installer with no diff here
 # (audit probe, 3 Sep 2026).
 colorama==0.4.6
-# MCP SDK 2.x is a breaking rewrite and claude-agent-sdk 0.2.128 declares
-# mcp<2.0.0,>=1.23.0; the backend client stays on 1.x even after the Unity
-# MCP server moves to FastMCP 4 (it still serves the old protocol revisions).
+# MCP SDK 2.x is a breaking rewrite. claude-agent-sdk 0.2.159 allows it
+# (mcp<3), but the backend stays on 1.x for now: mcp 2.2 brings two new
+# packages (httpx2, mcp-types) that the owner reviews before they enter, and
+# needs a port of tools/unity_mcp_tools.py (McpError -> MCPError,
+# streamablehttp_client -> streamable_http_client with an httpx2 client) and of
+# the unityai server (mcp.server.fastmcp -> mcp.server.mcpserver.MCPServer).
+# The 1.x client works with the FastMCP 4 server (it still serves the old
+# protocol revisions) and recovers from server restarts on its own (P3).
 # The separate `fastmcp` package was dropped here (25 Sep 2026): nothing in the
 # backend imports it (`mcp.server.fastmcp` is the SDK's own copy) and the full
 # Backend suite passes with `import fastmcp` blocked.
