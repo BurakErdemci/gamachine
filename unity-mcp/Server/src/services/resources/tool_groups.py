@@ -41,5 +41,9 @@ async def get_tool_groups(ctx: Context) -> dict[str, Any]:
         "groups": groups,
         "total_groups": len(groups),
         "default_enabled": sorted(DEFAULT_ENABLED_GROUPS),
-        "usage": "Call manage_tools(action='activate', group='<name>') to enable a group.",
+        "usage": (
+            "The tool list is fixed by the connection URL: /mcp (enabled groups), "
+            "/mcp/gamachine (core + playtest), /mcp/full (every group). "
+            "Reconnect with another URL to use a group that is not listed."
+        ),
     }
