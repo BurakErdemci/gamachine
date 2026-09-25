@@ -113,6 +113,29 @@ def _endpoint_key() -> Optional[tuple]:
     return (url, tuple(sorted(headers.items())))
 
 
+class _Connection:
+    """One MCP session, the task that owns its transport, and its callers.
+
+    A failed call marks only its own connection broken. Calls still in flight on
+    it finish there; new calls get a fresh connection; the broken one is closed
+    when its last caller leaves. Closing it at once used to cut off a peer call,
+    e.g. a write waiting minutes on an approval card, which then reported a
+    failure although Unity could still run it.
+    """
+
+    def __init__(self) -> None:
+        self.session = None
+        self.key: Optional[tuple] = None
+        self.owner: Optional[asyncio.Task] = None
+        self.stop = asyncio.Event()
+        self.active = 0
+        self.broken = False
+
+    def reusable(self) -> bool:
+        return (self.session is not None and not self.broken
+                and self.owner is not None and not self.owner.done())
+
+
 class _UnityMCPClient:
     """One MCP session on one loop thread; every public call is bounded in time."""
 
@@ -123,10 +146,8 @@ class _UnityMCPClient:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._start_lock = threading.Lock()
-        self._session = None
-        self._session_key: Optional[tuple] = None
-        self._owner: Optional[asyncio.Task] = None
-        self._stop: Optional[asyncio.Event] = None
+        self._conn: Optional[_Connection] = None
+        self._retired: set = set()
         self._connect_lock: Optional[asyncio.Lock] = None
         self.on_tools_changed: Optional[Callable[[], None]] = None
 
@@ -160,58 +181,94 @@ class _UnityMCPClient:
             raise UnityMCPError(f"Unity MCP çağrısı {int(timeout)} sn içinde bitmedi (zaman aşımı).")
 
     # ── session lifecycle (runs on the client loop) ──────────────────────
-    async def _session_owner(self, ready: asyncio.Future, stop: asyncio.Event) -> None:
+    async def _session_owner(self, conn: _Connection, ready: asyncio.Future) -> None:
         # anyio cancel scopes must be exited by the task that entered them, so
         # one task owns the transport for its whole life; callers only send.
         try:
             async with self._factory(self._on_message) as (session, key):
                 await session.initialize()
-                self._session, self._session_key = session, key
+                conn.session, conn.key = session, key
                 if not ready.done():
                     ready.set_result(session)
-                await stop.wait()
+                await conn.stop.wait()
         except Exception as exc:  # ExceptionGroup included; reported to the waiter
             if not ready.done():
                 ready.set_exception(exc)
             else:
                 logger.warning("[UnityMCP] session closed: %s", _describe_failure(exc))
         finally:
-            self._session, self._session_key = None, None
+            conn.session = None
 
-    async def _get_session(self, refresh_on_connect: bool = True):
+    async def _acquire(self, refresh_on_connect: bool = True):
+        """Returns (connection, session) with the caller counted as in flight."""
         if self._connect_lock is None:
             self._connect_lock = asyncio.Lock()
         async with self._connect_lock:
             current = self._endpoint_key()
-            if self._session is not None and self._owner is not None and not self._owner.done():
-                if current is None or current == self._session_key:
-                    return self._session
+            conn = self._conn
+            if conn is not None and conn.reusable():
+                if current is None or current == conn.key:
+                    conn.active += 1
+                    return conn, conn.session
                 logger.info("[UnityMCP] server endpoint changed; reconnecting")
-            await self._close_session()
+            await self._retire(conn)
             loop = asyncio.get_running_loop()
             ready: asyncio.Future = loop.create_future()
-            self._stop = asyncio.Event()
-            self._owner = loop.create_task(self._session_owner(ready, self._stop))
+            conn = _Connection()
+            self._conn = conn
+            conn.owner = loop.create_task(self._session_owner(conn, ready))
             try:
                 session = await asyncio.wait_for(ready, timeout=CONNECT_TIMEOUT_S)
             except BaseException:
-                await self._close_session()
+                if self._conn is conn:
+                    self._conn = None
+                await self._shutdown(conn)
                 raise
             if refresh_on_connect and self.on_tools_changed is not None:
                 loop.create_task(self._notify_tools_changed())
-            return session
+            conn.active += 1
+            return conn, session
 
-    async def _close_session(self) -> None:
-        owner, stop = self._owner, self._stop
-        self._owner, self._stop = None, None
-        if stop is not None:
-            stop.set()
+    async def _release(self, conn: _Connection, failed: bool) -> None:
+        if failed:
+            conn.broken = True
+        conn.active -= 1
+        if conn.active > 0 or (conn is self._conn and not conn.broken):
+            return
+        if self._conn is conn:
+            self._conn = None
+        self._retired.discard(conn)
+        await self._shutdown(conn)
+
+    async def _retire(self, conn: Optional[_Connection]) -> None:
+        """Stops handing `conn` out; closes it now or when its last call ends."""
+        if conn is None:
+            return
+        if self._conn is conn:
+            self._conn = None
+        if conn.active > 0:
+            self._retired.add(conn)
+        else:
+            await self._shutdown(conn)
+
+    @staticmethod
+    async def _shutdown(conn: _Connection) -> None:
+        conn.stop.set()
+        owner = conn.owner
         if owner is not None and not owner.done():
             try:
                 await asyncio.wait_for(owner, timeout=5)
             except BaseException:
                 owner.cancel()
-        self._session, self._session_key = None, None
+        conn.session = None
+
+    async def _close_all(self) -> None:
+        conns = [self._conn, *self._retired]
+        self._conn = None
+        self._retired.clear()
+        for conn in conns:
+            if conn is not None:
+                await self._shutdown(conn)
 
     async def _on_message(self, message) -> None:
         root = getattr(message, "root", None)
@@ -231,18 +288,22 @@ class _UnityMCPClient:
     # ── public (sync, bounded) ───────────────────────────────────────────
     def list_tools(self, timeout: float = LIST_TIMEOUT_S) -> List:
         async def _go():
-            session = await self._get_session(refresh_on_connect=False)
+            conn, session = await self._acquire(refresh_on_connect=False)
+            failed = False
             try:
                 result = await session.list_tools()
             except Exception:
-                await self._close_session()
+                failed = True
                 raise
+            finally:
+                await self._release(conn, failed)
             return result.tools
         return self.run(_go(), timeout)
 
     def call_tool(self, name: str, params: Dict[str, Any], timeout: float = CALL_TIMEOUT_S):
         async def _go():
-            session = await self._get_session()
+            conn, session = await self._acquire()
+            failed = False
             try:
                 return await session.call_tool(
                     name, params, read_timeout_seconds=timedelta(seconds=timeout))
@@ -253,8 +314,10 @@ class _UnityMCPClient:
                 # No automatic retry: the call may already have reached Unity,
                 # and running a mutation twice is worse than reporting a failure.
                 # The next call reconnects.
-                await self._close_session()
+                failed = True
                 raise
+            finally:
+                await self._release(conn, failed)
         # Small margin so the MCP read timeout (a clean McpError) fires first.
         return self.run(_go(), timeout + 2)
 
@@ -262,7 +325,7 @@ class _UnityMCPClient:
         if self._loop is None or self._thread is None or not self._thread.is_alive():
             return
         try:
-            self.run(self._close_session(), timeout)
+            self.run(self._close_all(), timeout)
         except Exception as exc:
             logger.debug("[UnityMCP] close: %s", exc)
 

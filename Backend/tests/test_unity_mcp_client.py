@@ -8,6 +8,7 @@ exported tool set (core + playtest, stable order) refreshed on list_changed.
 import asyncio
 import contextlib
 import json
+import threading
 import time
 import types as pytypes
 from unittest import mock
@@ -52,6 +53,7 @@ class _FakeServer:
         self.fail_connect = fail_connect
         self.sessions = []
         self.handlers = []
+        self.closed = 0
 
     @staticmethod
     async def _text(name, params):
@@ -67,7 +69,10 @@ class _FakeServer:
             session = _FakeSession(server)
             server.sessions.append(session)
             server.handlers.append(message_handler)
-            yield session, ("endpoint",)
+            try:
+                yield session, ("endpoint",)
+            finally:
+                server.closed += 1
         return _open()
 
 
@@ -132,6 +137,47 @@ def test_a_failed_call_drops_the_session_and_the_next_call_reconnects(server):
     assert second == {"success": True, "result": "back"}
     assert len(fake.sessions) == 2, "the failed call must not be retried on the same session"
     assert calls["n"] == 2, "a failed call is reported, never re-sent (it may have reached Unity)"
+
+
+def test_a_failing_call_does_not_close_the_session_under_a_call_in_flight(server):
+    """A write waiting on an approval card must not lose its session because a
+    peer call failed; the failed session is dropped once the write is done."""
+    fake, client = server
+    a_started, b_failed = threading.Event(), threading.Event()
+    closed_while_a_ran = []
+
+    async def _impl(name, params):
+        if name == "A":
+            a_started.set()
+            await asyncio.to_thread(b_failed.wait, 5)
+            closed_while_a_ran.append(fake.closed)
+            return types.CallToolResult(content=[types.TextContent(type="text", text="A done")])
+        if name == "B":
+            raise httpx.ReadError("connection reset")
+        return types.CallToolResult(content=[types.TextContent(type="text", text=f"{name} ok")])
+
+    fake.call_impl = _impl
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(a=umt.call_unity_tool("A", {}, timeout=10)))
+    worker.start()
+    try:
+        assert a_started.wait(5)
+        assert umt.call_unity_tool("B", {})["success"] is False
+        # A new call goes to a fresh session while A still runs on the old one.
+        assert umt.call_unity_tool("C", {}) == {"success": True, "result": "C ok"}
+        assert len(fake.sessions) == 2
+        assert fake.closed == 0
+    finally:
+        b_failed.set()
+        worker.join(10)
+    assert result["a"] == {"success": True, "result": "A done"}
+    assert closed_while_a_ran == [0]
+    deadline = time.monotonic() + 5
+    while fake.closed < 1 and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert fake.closed == 1, "the broken session closes once its last call is done"
+    assert umt.call_unity_tool("D", {})["success"] is True
+    assert len(fake.sessions) == 2, "the healthy session keeps being reused"
 
 
 def test_server_restart_is_detected_by_endpoint_change():
