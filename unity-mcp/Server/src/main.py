@@ -455,8 +455,9 @@ def resolve_http_transport_path() -> str | None:
 def build_transport_middleware() -> list[Middleware]:
     """ASGI middleware for the HTTP transport, outermost first.
 
-    The shared-secret gate is outermost so every /mcp/* path, profile or not,
-    answers 401 without the key. The profile rewrite runs inside it.
+    The shared-secret gate is outermost and deny-by-default: every HTTP path
+    except GET/HEAD /health, profile or not, answers 401 without the key. The
+    profile rewrite runs inside it.
     """
     middleware: list[Middleware] = []
     if not config.http_remote_hosted:

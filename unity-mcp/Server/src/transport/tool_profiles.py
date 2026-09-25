@@ -157,6 +157,13 @@ class ProfilePathMiddleware:
     Must sit INSIDE LocalTokenHeaderMiddleware so that an unauthenticated
     caller gets 401 for every /mcp/* path and learns nothing about which
     profile names exist. WebSocket scopes pass untouched (/mcp/hub/plugin).
+
+    Matching is exact: "/mcp" itself, "/mcp/" (left to FastMCP), or
+    "/mcp/<profile>" with at most one trailing slash, the name looked up by
+    dict equality. Every other path starting with "/mcp" is a 404 HERE,
+    because Starlette's route regex ^/mcp$ also matches "/mcp<LF>" (Python `$`
+    matches before a trailing newline) and would serve the default transport
+    for a spelling nothing else recognised (audit 25 Sep 2026, POST /mcp%0A).
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -167,20 +174,17 @@ class ProfilePathMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
-        prefix = MCP_TRANSPORT_BASE_PATH + "/"
-        if not path.startswith(prefix):
+        base = MCP_TRANSPORT_BASE_PATH
+        if path in (base, base + "/") or not path.startswith(base):
             await self.app(scope, receive, send)
             return
-        name = path[len(prefix):].rstrip("/")
-        if not name:
-            # "/mcp/" is the transport itself; leave it to FastMCP.
-            await self.app(scope, receive, send)
-            return
-        profile = PROFILES.get(name)
+        rest = path[len(base):]
+        name = rest[1:-1] if rest.endswith("/") else rest[1:]
+        profile = PROFILES.get(name) if rest.startswith("/") else None
         if profile is None:
             response = JSONResponse(
                 {"success": False,
-                 "error": f"Unknown tool profile '{name}'. Available: {profile_urls_note()}."},
+                 "error": f"Unknown tool profile path {path!r}. Available: {profile_urls_note()}."},
                 status_code=404,
             )
             await response(scope, receive, send)

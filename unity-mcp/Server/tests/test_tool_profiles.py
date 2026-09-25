@@ -81,6 +81,20 @@ def test_unknown_profile_is_a_404_not_the_default_list():
     assert status == 404
 
 
+# Starlette's ^/mcp$ route regex also matches "/mcp\n": any /mcp spelling this
+# middleware does not recognise exactly must be answered here, never passed on
+# to be served as the default transport (audit 25 Sep 2026, POST /mcp%0A).
+@pytest.mark.parametrize("path", [
+    "/mcp\n", "/mcp\r", "/mcp\r\n", "/mcp\x00", "/mcpx", "/mcp//", "/mcp//full",
+    "/mcp/full\n", "/mcp/full//", "/mcp/full/x", "/mcp/../mcp", "/mcp/FULL",
+    "/mcp/hub/plugin",
+])
+def test_inexact_transport_spellings_are_404(path):
+    scope, status = _run_asgi(path)
+    assert scope is None, f"{path!r} was passed on to the transport"
+    assert status == 404
+
+
 @pytest.mark.parametrize("path", ["/mcp", "/mcp/", "/health", "/api/instances"])
 def test_other_paths_pass_through_untouched(path):
     scope, status = _run_asgi(path)

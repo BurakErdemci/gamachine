@@ -1,17 +1,18 @@
-"""The header gate must cover the MCP transport and NOTHING else.
+"""The header gate is deny-by-default, and /health is the one door left open.
 
-Regression for a live-only failure. LocalTokenHeaderMiddleware is handed to
-FastMCP as `middleware=`, and FastMCP applies that to the whole Starlette app
-rather than to the transport mount. The first version therefore also guarded
-/health, which is deliberately unauthenticated because the desktop app polls it
-to decide whether the server is up. /health answered 401, the liveness probe
-read that as "not running", and the product's toggle spun forever with no way
-to cancel it.
+Two failures shaped this file, one in each direction:
 
-Neither the unit suites nor twelve audit probes caught it: every one of them
-exercised the transport, and none asserted that the open route stayed open. A
-security gate is only correct if it is the right SIZE, and the too-wide
-direction is the one nobody writes a test for.
+* Too WIDE (2026-07-27, live-only): the first gate also guarded /health, which
+  the desktop app polls to decide whether the server is up. /health answered
+  401, the liveness probe read that as "not running", and the product's toggle
+  spun forever. None of the suites asserted that the open route stayed open.
+* Too NARROW (2026-09-25 audit): the gate listed the paths to PROTECT
+  (`== "/mcp"` or `startswith("/mcp/")`). POST /mcp%0A decodes to "/mcp\n",
+  which that list skipped while Starlette's ^/mcp$ route regex still matched
+  it, so initialize and tools/list answered with no key. The gate now lists
+  what is OPEN and compares by exact equality.
+
+The same corpus runs over a real uvicorn socket in test_transport_path_corpus.py.
 """
 
 import asyncio
@@ -36,7 +37,7 @@ class _Sentinel:
         await send({"type": "http.response.body", "body": b""})
 
 
-def _run(path, headers=(), scope_type="http"):
+def _run(path, headers=(), scope_type="http", method="POST"):
     inner = _Sentinel()
     mw = LocalTokenHeaderMiddleware(inner)
     status = {}
@@ -48,7 +49,8 @@ def _run(path, headers=(), scope_type="http"):
     async def receive():
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    scope = {"type": scope_type, "path": path, "headers": list(headers)}
+    scope = {"type": scope_type, "method": method, "path": path,
+             "headers": list(headers)}
     asyncio.run(mw(scope, receive, send))
     return inner.called, status.get("code")
 
@@ -61,17 +63,44 @@ def _local_mode(monkeypatch):
 
 # ── The gate must not be too WIDE (the bug that shipped) ────────────────────
 
-@pytest.mark.parametrize("path", ["/health", "/api/instances", "/api/command",
-                                  "/register-tools", "/"])
-def test_non_transport_routes_are_not_touched(path):
-    """/health especially: the toggle's liveness probe depends on it.
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_health_stays_open(method):
+    """The toggle's liveness probe depends on it."""
+    passed_through, _ = _run("/health", method=method)
+    assert passed_through, f"{method} /health was blocked by the gate"
 
-    /api/* and /register-tools are not "unprotected" here - they call
-    require_local_token themselves. This middleware simply must not be the
-    thing that answers for them.
-    """
-    passed_through, _ = _run(path)
-    assert passed_through, f"{path} was blocked by the transport gate"
+
+# ── Deny by default: everything else needs the secret ──────────────────────
+
+# Every spelling here was either a real bypass (/mcp%0A, measured 25 Sep 2026)
+# or a neighbour of one. The gate sees the DECODED path, which is what these are.
+UNLISTED_PATHS = [
+    "/", "/api/instances", "/api/command", "/api/custom-tools",
+    "/api/auth/login-url", "/register-tools", "/hub/plugin",
+    "/mcp\n", "/mcp\r", "/mcp\r\n", "/mcp\x00", "/mcp/", "//mcp", "/MCP",
+    "/Mcp", "/mcp/full\n", "/mcp/../mcp", "/mcp/not-a-profile",
+    "/health\n", "/health/", "/Health", "//health", "/health\x00",
+]
+
+
+@pytest.mark.parametrize("path", UNLISTED_PATHS)
+def test_unlisted_path_without_header_is_rejected(path):
+    passed_through, code = _run(path)
+    assert not passed_through, f"{path!r} got through without the secret"
+    assert code == 401
+
+
+def test_health_by_another_method_is_not_open():
+    """Open means GET/HEAD /health, not the path under any method."""
+    passed_through, code = _run("/health", method="POST")
+    assert not passed_through
+    assert code == 401
+
+
+@pytest.mark.parametrize("path", ["/api/instances", "/register-tools", "/mcp/full"])
+def test_unlisted_path_with_header_goes_through(path):
+    passed_through, _ = _run(path, [(b"x-api-key", SECRET.encode())])
+    assert passed_through
 
 
 def test_websocket_scope_is_not_touched():

@@ -20,8 +20,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from core.config import config
-from core.constants import (API_KEY_HEADER, LOCAL_API_TOKEN_ENV,
-                            MCP_TRANSPORT_BASE_PATH)
+from core.constants import API_KEY_HEADER, LOCAL_API_TOKEN_ENV
 
 # Well-known path of the file holding the shared secret. Referenced here only to
 # make the rejection log actionable; the file is written by the process that
@@ -67,32 +66,57 @@ def require_local_token(request: Request) -> JSONResponse | None:
     return None
 
 
+# The ONLY HTTP requests the local server answers without the shared secret.
+#
+# Deny by default: before 25 Sep 2026 the gate listed what to PROTECT
+# (`path == "/mcp" or path.startswith("/mcp/")`) and let everything else through
+# to handlers that were supposed to check the secret themselves. POST /mcp%0A
+# decodes to "/mcp\n": that list skipped it, while Starlette's route regex
+# ^/mcp$ still matched it (Python's `$` also matches before a trailing newline),
+# so initialize and tools/list answered with no key. Listing what is OPEN, and
+# comparing by exact equality, closes that class for every path spelling at once.
+#
+# /health: the desktop app's liveness probe (Frontend TerminalPanel polls it with
+# no header). Gating it on 2026-07-27 made the toggle read 401 as "not running"
+# and hang with no way to cancel. It returns a fixed blob and touches no Unity
+# state. GET and HEAD only: Starlette serves HEAD for every GET route.
+#
+# WebSocket scopes are not HTTP requests and are left alone: the plugin hub
+# (/hub/plugin, /mcp/hub/plugin) authenticates on connect, before accept(), and
+# closes with 4401 without the secret (tests/test_local_authz_matrix.py).
+OPEN_HTTP_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    ("GET", "/health"),
+    ("HEAD", "/health"),
+})
+
+
+def is_open_http_route(method: str, path: str) -> bool:
+    """Exact (method, path) membership. Never a prefix, a regex or `$`."""
+    return (method, path) in OPEN_HTTP_ROUTES
+
+
 class LocalTokenHeaderMiddleware:
-    """ASGI gate that lets the MCP transport authenticate by HEADER, not by URL.
+    """ASGI gate: in local mode every HTTP request needs the shared secret in
+    the X-API-Key header, except the few listed in OPEN_HTTP_ROUTES.
 
-    Why this exists: the secret used to ride in the transport's URL path
-    (`/mcp/<secret>`) because header support "had not been verified" across the
-    MCP clients this project drives. That was an assumption, and it was measured
-    to be wrong on 2026-07-27 -- claude, kimi and codex all deliver a configured
-    header on every MCP request (codex only under the key `http_headers`; the
-    obvious-looking `headers` is accepted and then silently dropped, which is the
-    worst failure shape there is and is exactly why this was measured instead of
-    read).
+    It exists so the MCP transport can authenticate by HEADER rather than by a
+    secret in its URL. The secret used to ride in the path (`/mcp/<secret>`)
+    because header support "had not been verified" across the MCP clients this
+    project drives; measured on 2026-07-27, claude, kimi and codex all deliver a
+    configured header on every MCP request (codex only under the key
+    `http_headers`; the obvious-looking `headers` is accepted and then silently
+    dropped). A URL is not a credential container: it lands in workspace
+    `.mcp.json` files the model can read, in `ps` output and in log lines. The
+    path form is NOT kept as a fallback; an old config fails closed with 401.
 
-    A URL is not a credential container: it is written into workspace
-    `.mcp.json` files the model itself can read, it appears in `ps` output when a
-    registration command runs, and it lands in log lines verbatim. A header does
-    none of that. Four separate findings in one audit came from that single
-    choice.
+    FastMCP applies `middleware=` to the whole Starlette app, so this guards
+    every route, not only the transport. /api/* and /register-tools still call
+    require_local_token themselves: two checks of the same secret, so a route
+    that forgets its own check is still covered, and a handler moved outside
+    this app keeps its gate.
 
-    The `/mcp/<secret>` path form is NOT kept as a fallback: keeping it would
-    preserve exactly the leak this class exists to remove. An old config now
-    fails closed with 401 instead of working while leaking.
-
-    Header lookup is CASE-INSENSITIVE on purpose: the same measurement showed
-    claude and codex emit `x-api-key` while kimi emits `X-API-Key`. A
-    case-sensitive comparison would have rejected two clients out of three, and
-    only in the field.
+    Header lookup is CASE-INSENSITIVE on purpose: claude and codex emit
+    `x-api-key`, kimi emits `X-API-Key` (measured 2026-07-27).
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -103,28 +127,11 @@ class LocalTokenHeaderMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # SCOPE THIS TO THE TRANSPORT PATH ONLY.
-        #
-        # FastMCP applies `middleware=` to the whole Starlette app, not to the
-        # transport mount alone. The first version of this class therefore
-        # guarded every route - including /health, which is deliberately open
-        # because the desktop app polls it to decide whether the server is up.
-        # /health started answering 401, the liveness probe read that as "not
-        # running", and the toggle sat spinning forever with no way to cancel it.
-        # Caught in live testing, not by any unit test or probe: both suites
-        # exercised the transport, and nothing asserted that /health stays open.
-        #
-        # Everything else keeps the guard it already had: /api/* and
-        # /register-tools call require_local_token themselves, and the WebSocket
-        # hub authenticates on connect. This middleware exists only so the MCP
-        # transport can authenticate by header instead of by a secret in its URL.
-        path = scope.get("path", "")
-        base = MCP_TRANSPORT_BASE_PATH
-        if not (path == base or path.startswith(base + "/")):
+        if is_open_http_route(scope.get("method", ""), scope.get("path", "")):
             await self.app(scope, receive, send)
             return
 
-        # Starlette lowercases nothing for us here: headers arrive as raw bytes.
+        # Headers arrive as raw bytes; nothing has lowercased them yet.
         wanted = API_KEY_HEADER.lower().encode("latin-1")
         provided: str | None = None
         for raw_name, raw_value in scope.get("headers", []):
@@ -135,8 +142,8 @@ class LocalTokenHeaderMiddleware:
         if not local_token_matches(provided):
             response = JSONResponse(
                 {"success": False,
-                 "error": f"Missing or invalid {API_KEY_HEADER}. The local MCP "
-                          f"transport requires the shared secret from "
+                 "error": f"Missing or invalid {API_KEY_HEADER}. This local "
+                          f"server requires the shared secret from "
                           f"{LOCAL_API_TOKEN_FILE_HINT}."},
                 status_code=401,
             )
