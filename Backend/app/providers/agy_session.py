@@ -19,7 +19,32 @@ _USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens",
                "thinking_tokens", "total_tokens")
 _DRAIN_MAX_LINES = 200
 _DRAIN_MAX_SECONDS = 0.5
+# Turns are serialized machine-wide, so a second agy chat waits for another
+# chat's whole turn and looked frozen. `code` lets the UI use its own language;
+# `detail` is the fallback for a client that does not know the code.
+_QUEUED_EVENT = {"type": "status", "code": "agy_queued",
+                 "detail": "Sırada — başka bir agy sohbetinin turu bitince başlayacak"}
+_STARTED_EVENT = {"type": "status", "code": "agy_started", "detail": "Çalışıyor…"}
 logger = logging.getLogger(__name__)
+
+
+def _turn_lock_busy(lock: asyncio.Lock) -> bool:
+    """Would acquiring the agy turn lock wait? Mirrors Lock.acquire's fast path:
+    a just-released lock whose woken waiter has not run yet is still taken."""
+    waiters = getattr(lock, "_waiters", None) or ()
+    return lock.locked() or any(not waiter.cancelled() for waiter in waiters)
+
+
+def _discard_lock_acquire(task: "asyncio.Future", lock: asyncio.Lock) -> None:
+    """Abandon an acquire task; a lock it already won is released, not stranded."""
+    def _release_if_won(done: "asyncio.Future") -> None:
+        if not done.cancelled() and done.exception() is None:
+            lock.release()
+    if task.done():
+        _release_if_won(task)
+    else:
+        task.cancel()
+        task.add_done_callback(_release_if_won)
 
 
 class AgyWorkspaceError(RuntimeError):
@@ -249,7 +274,38 @@ class AgyStreamSession(SaglayiciSahipligi):
         self._usage_totals = {}
         self._num_turns = 0
         self._stop_lock = asyncio.Lock()
+        self._closed_event = asyncio.Event()
         self._sahiplik_kur()
+
+    def kapandi_isaretle(self) -> None:
+        super().kapandi_isaretle()
+        self._closed_event.set()  # ends a turn queued in _acquire_turn_lock
+
+    async def _acquire_turn_lock(self, lock: asyncio.Lock) -> bool:
+        """Wait for the global agy turn lock; False when the session closed first.
+
+        The acquire is its own task so Stop (close_session) can end a queued
+        wait without cancelling the caller. Awaiting the lock directly kept a
+        stopped turn in the lock's queue until the running turn finished.
+        """
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        acquire = asyncio.ensure_future(lock.acquire())
+        closed = asyncio.ensure_future(self._closed_event.wait())
+        won = False
+        try:
+            done, _ = await asyncio.wait({acquire, closed}, timeout=5,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                logger.info("[agy] turn lock wait exceeded five seconds conv=%s waited=%.1fs",
+                            self.conversation_id, loop.time() - started)
+                await asyncio.wait({acquire, closed}, return_when=asyncio.FIRST_COMPLETED)
+            won = acquire.done() and not acquire.cancelled() and acquire.exception() is None
+            return won
+        finally:
+            closed.cancel()
+            if not won:
+                _discard_lock_acquire(acquire, lock)
 
     @property
     def auto_approve(self) -> bool:
@@ -609,29 +665,23 @@ class AgyStreamSession(SaglayiciSahipligi):
         completed = False
         preserve_live_process = False
         lock_acquired = False
-        lock_wait_logged = False
+        # Released as the object it was acquired as, even if the class
+        # attribute is rebound meanwhile (tests patch it).
+        turn_lock = BaseCLIProvider._AGY_LOCK
         loop = asyncio.get_running_loop()
         tool_calls = set()
         tool_results = set()
         try:
             async with asyncio.timeout(BaseCLIProvider._AGY_MAX_TOTAL):
-                lock_wait_started = loop.time()
-                try:
-                    await asyncio.wait_for(BaseCLIProvider._AGY_LOCK.acquire(), timeout=5)
-                except asyncio.TimeoutError:
-                    lock_waited = loop.time() - lock_wait_started
-                    logger.info("[agy] turn lock wait exceeded five seconds conv=%s waited=%.1fs",
-                                self.conversation_id, lock_waited)
-                    lock_wait_logged = True
-                    await BaseCLIProvider._AGY_LOCK.acquire()
-                lock_acquired = True
-                lock_waited = loop.time() - lock_wait_started
-                if lock_waited > 5 and not lock_wait_logged:
-                    logger.info("[agy] turn lock wait exceeded five seconds conv=%s waited=%.1fs",
-                                self.conversation_id, lock_waited)
-                if self._kapandi:
+                queued = _turn_lock_busy(turn_lock)
+                if queued:
+                    yield _redact_event(_QUEUED_EVENT)
+                lock_acquired = await self._acquire_turn_lock(turn_lock)
+                if not lock_acquired or self._kapandi:
                     yield _redact_event({"type": "error", "message": "agy session was stopped."})
                     return
+                if queued:
+                    yield _redact_event(_STARTED_EVENT)
                 started = loop.time()
                 instructions = await self._start(model, os.path.abspath(cwd or self.cwd))
                 process = self._active_process
@@ -773,7 +823,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                     await self._close_safely(preserve_resume=True)
             finally:
                 if lock_acquired:
-                    BaseCLIProvider._AGY_LOCK.release()
+                    turn_lock.release()
 
 
 # Keep the public ownership type used by existing stop/lifecycle callers.
