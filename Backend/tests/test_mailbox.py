@@ -1,0 +1,659 @@
+"""Chat mailbox: the AI of chat A leaves a note for chat B.
+
+Contract under test: a note is sent only from a chat of the local user with
+a turn in flight, never from or to a side chat, never to itself or to another
+user's chat; step mode raises a card owned by A whose answer queues or refuses
+it, auto mode queues at once; loops are bounded by depth and by a per-pair
+rate; B's wake turn runs on the note read from the DB (never on the client's
+text) and a delivered note is not delivered again; a busy B waits; queued
+notes survive a restart; deleting a chat takes its notes and denies its cards.
+"""
+import asyncio
+import sqlite3
+import types
+from collections import defaultdict
+
+import pytest
+from cryptography.fernet import Fernet
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+import agentic.agent_runner as ar
+import routes.conversation_routes as cr
+from agentic import approval_mode, approval_policy, mailbox, wake_queue
+from agentic.approval_policy import ambient_turn
+from agentic.command_gates import GATE_OWNERS
+from database import DatabaseManager
+from rag.memory_manager import memory_manager
+
+H = {"X-Session-Token": ""}
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "AppData"))
+    monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
+    monkeypatch.setattr(cr, "WAKE_ALL_POLL_S", 0.02)
+    mem_dir = tmp_path / "memories"
+    mem_dir.mkdir()
+    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
+    wake_queue.reset_all()
+    approval_policy._TURNS_BY_CONVERSATION.clear()
+    mailbox._TURN_DEPTH.clear()
+    db = DatabaseManager(str(tmp_path / "mail.db"))
+    db.save_ai_config(1, "subscription", "gpt-5.4", "")
+
+    async def _no_close(_cid):
+        return None
+
+    from providers import agy_session, claude_sdk_session, codex_session, oneshot_cli
+    monkeypatch.setattr(claude_sdk_session, "close_session", _no_close)
+    monkeypatch.setattr(codex_session, "close_session", _no_close)
+    monkeypatch.setattr(agy_session, "close_session", _no_close)
+    monkeypatch.setattr(oneshot_cli, "close_conversation_sessions", _no_close)
+    app = FastAPI()
+    router = cr.create_conversation_router(db, {})
+    app.include_router(router)
+    with TestClient(app) as client:
+        yield types.SimpleNamespace(db=db, client=client, router=router)
+    wake_queue.reset_all()
+    approval_policy._TURNS_BY_CONVERSATION.clear()
+    mailbox._TURN_DEPTH.clear()
+
+
+def _chat(db, title, user_id=1):
+    return db.create_conversation(user_id, title)
+
+
+def _rows(db, sql, args=()):
+    with sqlite3.connect(db.db_path) as conn:
+        return conn.execute(sql, args).fetchall()
+
+
+def _send(client, a, b, body="merhaba", in_flight=True):
+    payload = {"conversation_id": a, "to": b, "body": body}
+    if in_flight:
+        with ambient_turn(".", "step", a):
+            return client.post("/mailbox/send", json=payload, headers=H)
+    return client.post("/mailbox/send", json=payload, headers=H)
+
+
+def _pending(client):
+    return client.get("/mcp-pending", headers=H).json()["pending"]
+
+
+@pytest.fixture
+def auto(monkeypatch):
+    monkeypatch.setattr(approval_mode, "is_auto", lambda: True)
+
+
+# ── who may send, to whom ────────────────────────────────────────────────────
+
+def test_send_is_refused_from_a_side_row(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    side = env.db.create_side_chat(a, 1)
+    r = _send(env.client, side, b)
+    assert r.status_code == 403
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
+    assert wake_queue.pending(b) == 0
+
+
+def test_send_is_refused_to_a_side_row(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    side = env.db.create_side_chat(b, 1)
+    assert _send(env.client, a, side).status_code == 403
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
+
+
+def test_send_is_refused_to_self(env, auto):
+    a = _chat(env.db, "A")
+    assert _send(env.client, a, a).status_code == 400
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
+
+
+def test_send_is_refused_to_another_users_chat(env, auto):
+    a = _chat(env.db, "A")
+    foreign = _chat(env.db, "someone else", user_id=2)
+    assert _send(env.client, a, foreign).status_code == 404
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
+    assert wake_queue.pending(foreign) == 0
+
+
+def test_send_from_another_users_chat_is_404(env, auto):
+    foreign = _chat(env.db, "someone else", user_id=2)
+    b = _chat(env.db, "B")
+    assert _send(env.client, foreign, b).status_code == 404
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
+
+
+def test_send_is_refused_from_a_chat_with_no_turn_in_flight(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    assert _send(env.client, a, b, in_flight=False).status_code == 403
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
+
+
+@pytest.mark.parametrize("body", ["", "   ", "x" * (mailbox.MAX_BODY_CHARS + 1)])
+def test_send_refuses_an_empty_or_oversized_body(env, auto, body):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    assert _send(env.client, a, b, body=body).status_code == 400
+
+
+# ── step and auto mode ───────────────────────────────────────────────────────
+
+def test_step_mode_raises_a_mail_card_owned_by_the_sender(env):
+    a, b = _chat(env.db, "Yazan"), _chat(env.db, "Okuyan")
+    r = _send(env.client, a, b, body="build bitti")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["status"] == "pending"
+    gate = data["gate_id"]
+    try:
+        card = _pending(env.client)[gate]
+        assert card["conversation_id"] == a
+        assert card["tool"] == "send_chat_message" and card["kind"] == "mail"
+        assert card["params"] == {"from_id": a, "from_title": "Yazan", "to_id": b,
+                                  "to_title": "Okuyan", "body": "build bitti"}
+        assert GATE_OWNERS[gate] == a
+        assert _rows(env.db, "SELECT status, gate_id FROM mailbox") == [("pending_approval", gate)]
+        assert wake_queue.pending(b) == 0
+    finally:
+        GATE_OWNERS.pop(gate, None)
+
+
+def test_step_mode_deny_marks_the_note_rejected_and_wakes_nobody(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    data = _send(env.client, a, b).json()
+    r = env.client.post(f"/mcp-approval-respond/{data['gate_id']}", json={"approved": False}, headers=H)
+    assert r.json()["status"] == "ok"
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("rejected",)]
+    assert wake_queue.pending(b) == 0
+    assert data["gate_id"] not in _pending(env.client)
+    status = env.client.get(f"/mailbox/status/{data['mail_id']}",
+                            params={"conversation_id": a}, headers=H).json()
+    assert status["status"] == "rejected"
+
+
+def test_step_mode_approve_queues_the_note_and_wakes_the_recipient(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    data = _send(env.client, a, b).json()
+    env.client.post(f"/mcp-approval-respond/{data['gate_id']}", json={"approved": True}, headers=H)
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
+    assert wake_queue.pending(b) == 1
+    assert mailbox.is_mail_notice(wake_queue.drain(b)[0])
+
+
+def test_the_card_timing_out_refuses_the_note(env, monkeypatch):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    data = _send(env.client, a, b).json()
+    # The sending tool gave up waiting: its cancel denies the card.
+    r = env.client.post(f"/mailbox/cancel/{data['mail_id']}", json={"conversation_id": a}, headers=H)
+    assert r.json()["status"] == "rejected"
+    assert data["gate_id"] not in _pending(env.client)
+    late = env.client.post(f"/mcp-approval-respond/{data['gate_id']}", json={"approved": True}, headers=H)
+    assert late.json()["status"] == "gate_expired"
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("rejected",)]
+    assert wake_queue.pending(b) == 0
+
+
+def test_a_card_nobody_answers_is_swept_and_its_note_refused(env, monkeypatch):
+    import time as real_time
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    data = _send(env.client, a, b).json()
+    # The next poll happens after the card's TTL (nobody left waiting on it).
+    monkeypatch.setattr(cr, "time", lambda: real_time.time() + 200)
+    assert data["gate_id"] not in _pending(env.client)
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("rejected",)]
+    assert wake_queue.pending(b) == 0
+
+
+def test_switching_to_auto_approves_a_waiting_mail_card(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b)
+    approve_all = next(c for c in env.router.routes
+                       if getattr(c, "path", "") == "/approval-mode" and "POST" in c.methods).endpoint
+    # `_approve_all_pending` runs inside the mode route, which needs the UI
+    # secret; reach it the way that route does.
+    from agentic import approval_mode as am
+    am.set_ui_secret("s")
+    try:
+        asyncio.run(approve_all(body={"mode": "auto"}, x_session_token="", x_ui_secret="s",
+                                x_maintenance=""))
+    finally:
+        am._reset_for_tests()
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
+    assert wake_queue.pending(b) == 1
+
+
+def test_stop_in_the_sender_denies_its_mail_card(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    data = _send(env.client, a, b).json()
+    env.client.post(f"/chat-stop/{a}", headers=H)
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("rejected",)]
+    assert data["gate_id"] not in _pending(env.client)
+
+
+def test_auto_mode_queues_at_once_without_a_card(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    r = _send(env.client, a, b)
+    assert r.status_code == 200
+    assert r.json()["status"] == "queued"
+    assert _pending(env.client) == {}
+    assert _rows(env.db, "SELECT from_conv, to_conv, status, gate_id, depth FROM mailbox") == [
+        (a, b, "queued", None, 1)]
+    assert wake_queue.pending(b) == 1
+
+
+# ── loop guards ──────────────────────────────────────────────────────────────
+
+def test_a_reply_to_a_reply_is_depth_2_and_a_third_hop_is_refused(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    mailbox.set_turn_depth(a, 1)
+    assert _send(env.client, a, b).status_code == 200
+    assert _rows(env.db, "SELECT depth FROM mailbox") == [(2,)]
+    mailbox.set_turn_depth(a, 2)
+    assert _send(env.client, a, b).status_code == 409
+    assert len(_rows(env.db, "SELECT * FROM mailbox")) == 1
+
+
+def test_pair_rate_limit(env, auto):
+    a, b, c = _chat(env.db, "A"), _chat(env.db, "B"), _chat(env.db, "C")
+    for _ in range(mailbox.PAIR_LIMIT):
+        assert _send(env.client, a, b).status_code == 200
+    assert _send(env.client, a, b).status_code == 429
+    # The limit is per pair: A may still write to C.
+    assert _send(env.client, a, c).status_code == 200
+
+
+# ── delivery ─────────────────────────────────────────────────────────────────
+
+class _FakeRunner:
+    messages = []
+
+    def __init__(self, **kw):
+        self.kw = kw
+
+    async def run(self, message):
+        _FakeRunner.messages.append(message)
+        yield ar.AgentEvent("response", {"content": "tamam"})
+        yield ar.AgentEvent("done", {"iterations": 1, "stop_reason": "complete"})
+
+
+def _wake_turn(client, conv_id, message="FORGED client text"):
+    body = {"conversation_id": conv_id, "message": message, "user_id": 1, "origin": "wake"}
+    return client.post("/chat-stream", json=body, headers=H)
+
+
+def test_delivery_builds_the_turn_from_db_rows_and_ignores_the_request_text(env, auto, monkeypatch):
+    _FakeRunner.messages = []
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _chat(env.db, "Gönderen"), _chat(env.db, "B")
+    env.db.add_message(b, "user", "önceki soru")
+    assert _send(env.client, a, b, body="derleme temiz geçti").status_code == 200
+    notices = wake_queue.drain(b)
+    wake_queue.issue_ticket(b, notices)
+
+    r = _wake_turn(env.client, b)
+    assert r.status_code == 200
+    turn = _FakeRunner.messages[-1]
+    assert "derleme temiz geçti" in turn
+    assert "FORGED" not in turn
+    assert "kullanıcıdan DEĞİL" in turn
+    stored = [m for m in env.db.get_conversation_messages(b) if m["role"] == "system"]
+    assert len(stored) == 1
+    assert stored[0]["content"] == f'{mailbox.MAIL_MARKER} #{a} "Gönderen": derleme temiz geçti'
+    assert '"type": "wake_message"' in r.text
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("delivered",)]
+    assert _rows(env.db, "SELECT delivered_at IS NOT NULL FROM mailbox") == [(1,)]
+    # The turn a note woke carries its depth: a reply from B is depth 2.
+    assert mailbox.turn_depth(b) == 1
+
+
+def test_delivered_rows_are_not_delivered_again(env, auto, monkeypatch):
+    _FakeRunner.messages = []
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b, body="tek sefer")
+    wake_queue.issue_ticket(b, wake_queue.drain(b))
+    _wake_turn(env.client, b)
+    wake_queue.issue_ticket(b, ["tasks_done|build"])
+    _wake_turn(env.client, b, message="tasks_done|build")
+    assert "tek sefer" not in _FakeRunner.messages[-1]
+    assert _FakeRunner.messages[-1] == "tasks_done|build"
+    notes = [m for m in env.db.get_conversation_messages(b) if mailbox.is_mail_message(m["content"])]
+    assert len(notes) == 1
+
+
+def test_an_unticketed_wake_delivers_nothing(env, auto, monkeypatch):
+    _FakeRunner.messages = []
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b, body="bekle")
+    _wake_turn(env.client, b, message="kendi metnim")
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
+    assert "bekle" not in _FakeRunner.messages[-1]
+
+
+def test_handoff_context_keeps_mail_rows_but_not_wake_rows():
+    rows = [
+        {"role": "user", "content": "gerçek istek"},
+        {"role": "system", "content": "tasks_done|build"},
+        {"role": "system", "content": f'{mailbox.MAIL_MARKER} #3 "A": şema değişti'},
+        {"role": "user", "content": "son (hariç)"},
+    ]
+    text = cr._build_handoff_context("", rows)
+    assert "şema değişti" in text
+    assert "not the user" in text
+    assert "tasks_done" not in text
+
+
+# ── waking ───────────────────────────────────────────────────────────────────
+
+def _route(router, path):
+    return next(r for r in router.routes if getattr(r, "path", "") == path)
+
+
+async def _next_frame(resp, timeout):
+    it = resp.body_iterator
+    while True:
+        chunk = await asyncio.wait_for(it.__anext__(), timeout=timeout)
+        chunk = chunk if isinstance(chunk, str) else chunk.decode("utf-8")
+        if chunk.startswith("data: "):
+            return chunk
+
+
+def test_a_busy_recipient_waits_until_its_turn_ends(env, auto):
+    """No Claude session is involved: the block comes from the turn registry
+    every provider's AgentRunner.run writes to."""
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b)
+    route = _route(env.router, "/wake-stream-all")
+
+    async def run():
+        resp = await route.endpoint(x_session_token="")
+        with ambient_turn(".", "auto", b):
+            # Not wait_for: cancelling the pending read would close the stream.
+            reader = asyncio.ensure_future(_next_frame(resp, 5.0))
+            done, _ = await asyncio.wait({reader}, timeout=0.4)
+            assert not done, "woken while its turn was still running"
+            assert wake_queue.pending(b) == 1
+        frame = await asyncio.wait_for(reader, 3.0)
+        await resp.body_iterator.aclose()
+        return frame
+
+    frame = asyncio.run(run())
+    assert f'"conversation_id": {b}' in frame
+    assert wake_queue.ticket_outstanding(b)
+
+
+def test_the_all_chats_stream_skips_side_rows_and_other_users(env):
+    a = _chat(env.db, "A")
+    side = env.db.create_side_chat(a, 1)
+    foreign = _chat(env.db, "x", user_id=2)
+    wake_queue.enqueue(side, "tasks_done|x")
+    wake_queue.enqueue(foreign, "tasks_done|y")
+    route = _route(env.router, "/wake-stream-all")
+
+    async def run():
+        resp = await route.endpoint(x_session_token="")
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await _next_frame(resp, 0.3)
+        finally:
+            await resp.body_iterator.aclose()
+
+    asyncio.run(run())
+    assert wake_queue.pending(side) == 1 and wake_queue.pending(foreign) == 1
+
+
+def test_queued_notes_are_re_armed_after_a_restart(env, auto, tmp_path):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b, body="restart öncesi")
+    # A note still waiting on its card cannot be answered after a restart.
+    env.db.add_mail(a, b, "kartta kaldı", "pending_approval", "old-gate", 1)
+    wake_queue.reset_all()                       # the process died
+    router = cr.create_conversation_router(env.db, {})   # and came back
+    assert _rows(env.db, "SELECT body, status FROM mailbox ORDER BY id") == [
+        ("restart öncesi", "queued"), ("kartta kaldı", "rejected")]
+    assert wake_queue.pending(b) == 0
+    route = _route(router, "/conversations/{conv_id}/wake-stream")
+
+    async def run():
+        resp = await route.endpoint(conv_id=b, x_session_token="")
+        return await _next_frame(resp, 2.0)
+
+    frame = asyncio.run(run())
+    assert '"type": "wake"' in frame and "mail|" in frame
+
+
+def test_a_note_dropped_by_a_user_message_is_re_armed(env, auto, monkeypatch):
+    _FakeRunner.messages = []
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b)
+    body = {"conversation_id": b, "message": "benim mesajım", "user_id": 1}
+    env.client.post("/chat-stream", json=body, headers=H)
+    assert wake_queue.pending(b) == 0            # the user message drained it
+    route = _route(env.router, "/wake-stream-all")
+
+    async def run():
+        resp = await route.endpoint(x_session_token="")
+        try:
+            return await _next_frame(resp, 2.0)
+        finally:
+            await resp.body_iterator.aclose()
+
+    assert f'"conversation_id": {b}' in asyncio.run(run())
+
+
+# ── deleting ─────────────────────────────────────────────────────────────────
+
+def test_deleting_the_recipient_removes_its_notes_and_denies_the_card(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    data = _send(env.client, a, b).json()
+    assert env.client.delete(f"/conversations/{b}", headers=H).status_code == 200
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
+    assert data["gate_id"] not in _pending(env.client)
+    result = env.client.get(f"/mcp-approval-result/{data['gate_id']}", headers=H).json()
+    assert result["approved"] is False
+
+
+def test_deleting_a_root_family_removes_notes_of_every_member(env, auto):
+    a = _chat(env.db, "A")
+    env.db.add_message(a, "user", "x")
+    branch = env.db.create_branch(a)["id"]
+    c = _chat(env.db, "C")
+    _send(env.client, branch, c)
+    _send(env.client, c, a)
+    assert len(_rows(env.db, "SELECT * FROM mailbox")) == 2
+    env.client.delete(f"/conversations/{a}", headers=H)
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
+
+
+def test_a_branch_copies_no_mail(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    env.db.add_message(a, "user", "x")
+    _send(env.client, b, a)
+    branch = env.db.create_branch(a)["id"]
+    assert _rows(env.db, "SELECT COUNT(*) FROM mailbox WHERE to_conv = ? OR from_conv = ?",
+                 (branch, branch)) == [(0,)]
+
+
+# ── ownership of the mailbox routes ──────────────────────────────────────────
+
+def test_status_and_cancel_answer_only_the_sending_chat(env):
+    a, b, c = _chat(env.db, "A"), _chat(env.db, "B"), _chat(env.db, "C")
+    foreign = _chat(env.db, "x", user_id=2)
+    data = _send(env.client, a, b).json()
+    mid = data["mail_id"]
+    get = lambda conv: env.client.get(f"/mailbox/status/{mid}", params={"conversation_id": conv}, headers=H)
+    assert get(a).status_code == 200 and get(a).json()["status"] == "pending_approval"
+    assert get(c).status_code == 404          # another chat of the same user
+    assert get(b).status_code == 404          # even the recipient
+    assert get(foreign).status_code == 404    # another user's chat
+    for conv in (c, foreign):
+        r = env.client.post(f"/mailbox/cancel/{mid}", json={"conversation_id": conv}, headers=H)
+        assert r.status_code == 404
+    assert data["gate_id"] in _pending(env.client)
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("pending_approval",)]
+    GATE_OWNERS.pop(data["gate_id"], None)
+
+
+def test_chat_list_excludes_the_caller_and_side_rows_and_refuses_foreign_ids(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    side = env.db.create_side_chat(a, 1)
+    foreign = _chat(env.db, "x", user_id=2)
+    with ambient_turn(".", "step", b):
+        r = env.client.get("/mailbox/chats", params={"conversation_id": a}, headers=H)
+    assert r.status_code == 200
+    chats = r.json()["chats"]
+    assert [c["id"] for c in chats] == [b]
+    assert chats[0]["busy"] is True
+    assert f"#{b}" in r.json()["text"]
+    assert side not in [c["id"] for c in chats] and foreign not in [c["id"] for c in chats]
+    assert env.client.get("/mailbox/chats", params={"conversation_id": foreign},
+                          headers=H).status_code == 404
+
+
+# ── carriers ─────────────────────────────────────────────────────────────────
+
+def test_claude_mail_server_entry_is_identical_across_two_turns(monkeypatch, tmp_path):
+    from tests.test_mcp_approval_owner import _claude_session_kwargs
+    first = _claude_session_kwargs(monkeypatch, tmp_path, 7)["mcp_servers"]
+    second = _claude_session_kwargs(monkeypatch, tmp_path, 7)["mcp_servers"]
+    assert first == second
+    entry = first[mailbox.CLAUDE_SERVER_NAME]
+    assert entry["env"]["GAMACHINE_CONVERSATION_ID"] == "7"
+    assert entry["args"][-1] == "mail-mcp-server"
+    assert "LOCAL_APP_TOKEN" not in entry["env"]
+    cached = types.SimpleNamespace(effort=None, model=None, cwd=str(tmp_path),
+                                   mcp_servers=first, read_only=False)
+    assert ar._oturum_yeniden_kurma_gerekceleri(
+        cached, model=None, effort=None, workspace=str(tmp_path), mcp_servers=second) == []
+
+
+def test_a_read_only_claude_session_gets_no_mail_server(monkeypatch, tmp_path):
+    import subprocess
+    from providers import claude_sdk_session
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+    captured = []
+
+    class _Sess:
+        session_id = None
+        auto_approve = False
+
+        def __init__(self, kw):
+            captured.append(kw)
+
+        async def stream(self, _m):
+            return
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(unity_mcp_manager, "mcp_url", lambda host="localhost": None)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0))
+    monkeypatch.setattr(claude_sdk_session, "get_session", lambda cid, **kw: _Sess(kw))
+    runner = ar.AgentRunner(provider_type="subscription", api_key="", model_name="claude-x",
+                            workspace_path=str(tmp_path), conversation_id=9,
+                            generation_mode="auto", read_only=True)
+
+    async def run():
+        async for _ in runner._run_claude_session("hi"):
+            pass
+
+    asyncio.run(run())
+    assert mailbox.CLAUDE_SERVER_NAME not in captured[0]["mcp_servers"]
+
+
+def test_claude_allows_the_mail_tools_without_its_own_card_except_read_only():
+    from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+    from providers.claude_sdk_session import ClaudeSDKSession
+
+    async def decide(read_only):
+        sess = ClaudeSDKSession(conversation_id=4343, cwd=".", auto_approve=False,
+                                approval_timeout=1.0, read_only=read_only)
+        sess._out_q = asyncio.Queue()
+        out = await sess._can_use_tool("mcp__gamachineMail__send_chat_message",
+                                       {"to_chat_id": 2, "message": "x"}, None)
+        return out, sess._out_q.qsize()
+
+    allowed, cards = asyncio.run(decide(False))
+    assert isinstance(allowed, PermissionResultAllow) and cards == 0
+    denied, cards = asyncio.run(decide(True))
+    assert isinstance(denied, PermissionResultDeny) and cards == 0
+
+
+def test_tool_registry_send_path_uses_the_runner_chat_not_a_model_argument(env, auto):
+    from tools import tool_registry
+    a, b, c = _chat(env.db, "A"), _chat(env.db, "B"), _chat(env.db, "C")
+
+    async def run():
+        with ambient_turn(".", "auto", a):
+            return await tool_registry.execute_tool_async(
+                "send_chat_message", {"to_chat_id": b, "message": "api", "conversation_id": c},
+                ".", a)
+
+    result = asyncio.run(run())
+    assert result["success"] is True, result
+    assert _rows(env.db, "SELECT from_conv, to_conv, body, status FROM mailbox") == [
+        (a, b, "api", "queued")]
+    listed = asyncio.run(tool_registry.execute_tool_async("list_chats", {}, ".", a))
+    assert listed["success"] and f"#{b}" in listed["content"] and f"#{a} " not in listed["content"]
+
+
+def test_tool_registry_send_path_waits_for_the_card_in_step_mode(env, monkeypatch):
+    from tools import tool_registry
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+
+    async def run():
+        with ambient_turn(".", "step", a):
+            task = asyncio.create_task(tool_registry.execute_tool_async(
+                "send_chat_message", {"to_chat_id": b, "message": "onaylı"}, ".", a))
+            for _ in range(50):
+                await asyncio.sleep(0.02)
+                pending = await _route(env.router, "/mcp-pending").endpoint(x_session_token="")
+                if pending["pending"]:
+                    break
+            gate = next(iter(pending["pending"]))
+            await _route(env.router, "/mcp-approval-respond/{gate_id}").endpoint(
+                gate_id=gate, body={"approved": True}, x_session_token="")
+            return await asyncio.wait_for(task, 5.0)
+
+    result = asyncio.run(run())
+    assert result["success"] is True, result
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
+
+
+def test_a_read_only_runner_may_list_but_not_send():
+    runner = ar.AgentRunner(provider_type="openai", api_key="", model_name="gpt-x",
+                            workspace_path=".", conversation_id=5, read_only=True)
+    names = [t["name"] for t in runner._tool_definitions()]
+    assert "list_chats" in names and "send_chat_message" not in names
+    result, _ = asyncio.run(runner._execute_tool_with_approval(
+        "send_chat_message", {"to_chat_id": 6, "message": "x"}))
+    assert result["success"] is False
+
+
+def test_the_mail_server_exposes_only_the_two_mail_tools_and_unityai_has_them_too():
+    from unity_ai_mcp.mail_server import create_server as mail_server
+    from unity_ai_mcp.server import create_server as unityai_server
+
+    async def names(server):
+        return sorted(t.name for t in await server.list_tools())
+
+    assert asyncio.run(names(mail_server())) == ["list_chats", "send_chat_message"]
+    assert {"list_chats", "send_chat_message"} <= set(asyncio.run(names(unityai_server("."))))
+
+
+def test_the_frozen_build_can_start_the_mail_server():
+    import os
+    backend = os.path.join(os.path.dirname(__file__), "..")
+    with open(os.path.join(backend, "backend.spec"), encoding="utf-8") as f:
+        spec = f.read()
+    with open(os.path.join(backend, "app", "main.py"), encoding="utf-8") as f:
+        main = f.read()
+    assert "'unity_ai_mcp.mail_server'" in spec and "'unity_ai_mcp.tools.mailbox_tools'" in spec
+    assert '"mail-mcp-server"' in main and "unity_ai_mcp.mail_server" in main

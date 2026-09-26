@@ -120,6 +120,9 @@ a = Analysis(
         'unity_ai_mcp.approval_bridge',
         'unity_ai_mcp.tools.file_tools',
         'unity_ai_mcp.tools.bash_tool',
+        #   backend mail-mcp-server   → unity_ai_mcp.mail_server.main
+        'unity_ai_mcp.mail_server',
+        'unity_ai_mcp.tools.mailbox_tools',
         'unityai_cli',
         'providers.codex_unitymcp_bridge',
         # MCP SDK 2.x: MCPServer (was mcp.server.fastmcp in 1.x; that module now

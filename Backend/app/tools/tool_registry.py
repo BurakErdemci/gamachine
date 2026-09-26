@@ -169,6 +169,40 @@ TOOL_DEFINITIONS = [
             "required": []
         }
     },
+    {
+        "name": "list_chats",
+        "description": (
+            "Kullanıcının bu uygulamadaki diğer sohbetlerini listeler (numara, başlık, "
+            "şu an çalışıyor mu). send_chat_message ile not göndermeden önce hedefi bulmak için."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "send_chat_message",
+        "description": (
+            "Kullanıcının başka bir sohbetine (başka bir AI oturumuna) not bırakır. O sohbet "
+            "boştaysa notla hemen uyanır, çalışıyorsa turu bitince okur. Adım modunda kullanıcı "
+            "önce onaylar. Yalnız gerçekten o sohbetin bilmesi gereken bir şey için kullan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "to_chat_id": {
+                    "type": "integer",
+                    "description": "Hedef sohbetin numarası (list_chats'ten)"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Not metni (en fazla 4000 karakter)"
+                }
+            },
+            "required": ["to_chat_id", "message"]
+        }
+    },
 ]
 
 
@@ -191,7 +225,58 @@ _TOOL_FUNCTIONS: Dict[str, Callable] = {
 }
 
 # Hangi tool'lar conversation_id parametresi alıyor
-_TOOLS_NEEDING_CONV_ID = {"save_to_memory", "recall_memory"}
+_TOOLS_NEEDING_CONV_ID = {"save_to_memory", "recall_memory", "list_chats", "send_chat_message"}
+
+
+async def _list_chats(conversation_id=None) -> Dict[str, Any]:
+    from agentic import mailbox
+    service = mailbox.get_service()
+    if service is None:
+        return {"success": False, "error": "Sohbet posta kutusu hazır değil."}
+    return {"success": True, "content": mailbox.format_chat_list(service.list_chats(conversation_id))}
+
+
+async def _send_chat_message(to_chat_id=None, message=None, conversation_id=None) -> Dict[str, Any]:
+    from agentic import mailbox
+    service = mailbox.get_service()
+    if service is None:
+        return {"success": False, "error": "Sohbet posta kutusu hazır değil."}
+    # The injected id is the runner's own chat, never a model argument.
+    result = await service.send_and_wait(conversation_id, to_chat_id, message)
+    text = mailbox.describe_send_result(result)
+    if result.get("status") in (mailbox.STATUS_QUEUED, mailbox.STATUS_DELIVERED):
+        return {"success": True, "content": text}
+    return {"success": False, "error": text}
+
+
+# Awaited on the event loop, not in a worker thread: the step-mode card they
+# wait on is resolved by a route on that same loop.
+_ASYNC_TOOL_FUNCTIONS: Dict[str, Callable] = {
+    "list_chats": _list_chats,
+    "send_chat_message": _send_chat_message,
+}
+
+
+def is_async_tool(tool_name: str) -> bool:
+    return tool_name in _ASYNC_TOOL_FUNCTIONS
+
+
+async def execute_tool_async(tool_name: str, arguments: Dict[str, Any], workspace_path: str,
+                             conversation_id=None) -> Dict[str, Any]:
+    func = _ASYNC_TOOL_FUNCTIONS.get(tool_name)
+    if func is None:
+        return {"success": False, "error": f"Bilinmeyen araç: {tool_name}"}
+    args = dict(arguments or {})
+    args.pop("conversation_id", None)
+    if tool_name in _TOOLS_NEEDING_CONV_ID:
+        args["conversation_id"] = conversation_id
+    try:
+        return await func(**args)
+    except TypeError as e:
+        return {"success": False, "error": f"Geçersiz argüman: {e}"}
+    except Exception as e:
+        logger.error(f"  🔧 Tool [{tool_name}] HATA: {e}")
+        return {"success": False, "error": str(e)}
 
 # Hangi tool'lar doğrudan workspace_path parametresi alıyor
 _TOOLS_NEEDING_WORKSPACE = {"search_in_project", "find_files", "read_file", "write_file", "list_directory", "delete_file", "run_command"}
@@ -211,6 +296,9 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any], workspace_path: str,
         except Exception as e:
             logger.error(f"  🎮 Unity Tool [{tool_name}] HATA: {e}")
             return {"success": False, "error": str(e)}
+
+    if is_async_tool(tool_name):
+        return {"success": False, "error": f"{tool_name} execute_tool_async ile çağrılmalı."}
 
     # Standart araç
     func = _TOOL_FUNCTIONS.get(tool_name)

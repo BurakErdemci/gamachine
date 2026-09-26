@@ -22,7 +22,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,10 @@ class _ConvWake:
 
 _QUEUES: Dict[int, _ConvWake] = {}
 _WAKE_TICKETS: Dict[int, float] = {}
+# The notices a ticket's frame carried. The turn that consumes the ticket
+# reads them here, not from the client's request, when it must know them
+# (mail delivery keeps the other notices of the same frame).
+_TICKET_NOTICES: Dict[int, List[str]] = {}
 
 
 def _entry(conv_id: int) -> _ConvWake:
@@ -86,7 +90,7 @@ def drain(conv_id: int) -> List[str]:
     return out
 
 
-def issue_ticket(conv_id: int) -> None:
+def issue_ticket(conv_id: int, notices: Optional[List[str]] = None) -> None:
     """Mark that the backend has issued one wake frame for this conversation."""
     if not conv_id:
         return
@@ -94,8 +98,20 @@ def issue_ticket(conv_id: int) -> None:
     for ticket_conv, issued_at in list(_WAKE_TICKETS.items()):
         if now - issued_at >= WAKE_TICKET_TTL:
             _WAKE_TICKETS.pop(ticket_conv, None)
+            _TICKET_NOTICES.pop(ticket_conv, None)
     if conv_id not in _WAKE_TICKETS:
         _WAKE_TICKETS[conv_id] = now
+        _TICKET_NOTICES[conv_id] = list(notices or [])
+
+
+def take_ticket_notices(conv_id: int) -> List[str]:
+    """The notices of the frame whose ticket was just consumed (once)."""
+    return _TICKET_NOTICES.pop(conv_id, [])
+
+
+def pending_conversations() -> List[int]:
+    """Conversations with at least one notice waiting."""
+    return [cid for cid, e in list(_QUEUES.items()) if e.notices]
 
 
 def ticket_outstanding(conv_id: int) -> bool:
@@ -105,6 +121,7 @@ def ticket_outstanding(conv_id: int) -> bool:
         return False
     if monotonic() - issued_at >= WAKE_TICKET_TTL:
         _WAKE_TICKETS.pop(conv_id, None)
+        _TICKET_NOTICES.pop(conv_id, None)
         return False
     return True
 
@@ -167,6 +184,7 @@ def reset(conv_id: int) -> None:
         e.event.set()
         _QUEUES.pop(conv_id, None)
     _WAKE_TICKETS.pop(conv_id, None)
+    _TICKET_NOTICES.pop(conv_id, None)
 
 
 def release(conv_id: int) -> None:
@@ -184,3 +202,4 @@ def reset_all() -> None:
         e.event.set()
     _QUEUES.clear()
     _WAKE_TICKETS.clear()
+    _TICKET_NOTICES.clear()

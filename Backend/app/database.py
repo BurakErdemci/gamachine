@@ -168,6 +168,20 @@ class DatabaseManager:
                     cursor.execute(f"ALTER TABLE conversations ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
                     pass
+            # Chat mailbox (agentic/mailbox.py). No FOREIGN KEY: connections
+            # here do not enable FKs, so `_delete_rows` removes the rows itself.
+            cursor.execute('''CREATE TABLE IF NOT EXISTS mailbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_conv INTEGER NOT NULL,
+                to_conv INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                status TEXT NOT NULL,
+                gate_id TEXT,
+                depth INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT,
+                delivered_at TEXT)''')
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS idx_mailbox_to_status ON mailbox (to_conv, status)')
             conn.commit()
 
     def _migrate_ai_configs_table(self, conn: sqlite3.Connection):
@@ -457,6 +471,7 @@ class DatabaseManager:
             # `conversations.id` AUTOINCREMENT olduğu için id yeniden kullanılmıyor,
             # yani yanlış geçmiş gösterme riski YOK — bu yalnız çöp temizliği.
             conn.execute('DELETE FROM cli_sessions WHERE conversation_id = ?', (conv_id,))
+            conn.execute('DELETE FROM mailbox WHERE from_conv = ? OR to_conv = ?', (conv_id, conv_id))
             conn.execute('DELETE FROM conversations WHERE id = ?', (conv_id,))
             self._delete_side_rows_of(conn, [conv_id])
             conn.commit()
@@ -480,6 +495,9 @@ class DatabaseManager:
         marks = ','.join('?' * len(ids))
         conn.execute(f'DELETE FROM messages WHERE conversation_id IN ({marks})', ids)
         conn.execute(f'DELETE FROM cli_sessions WHERE conversation_id IN ({marks})', ids)
+        conn.execute(
+            f'DELETE FROM mailbox WHERE from_conv IN ({marks}) OR to_conv IN ({marks})',
+            list(ids) + list(ids))
         conn.execute(f'DELETE FROM conversations WHERE id IN ({marks})', ids)
 
     def delete_conversation_family(self, conv_id: int) -> List[int]:
@@ -584,6 +602,113 @@ class DatabaseManager:
             self._delete_rows(conn, ids)
             conn.commit()
             return ids
+
+    # ===================== CHAT MAILBOX =====================
+    _MAIL_COLS = 'id, from_conv, to_conv, body, status, gate_id, depth, created_at, delivered_at'
+
+    @staticmethod
+    def _mail_row(r) -> Dict[str, Any]:
+        return {"id": r[0], "from_conv": r[1], "to_conv": r[2], "body": r[3], "status": r[4],
+                "gate_id": r[5], "depth": r[6], "created_at": r[7], "delivered_at": r[8]}
+
+    def get_conversation_title(self, conv_id: int) -> Optional[str]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute('SELECT title FROM conversations WHERE id = ?', (conv_id,)).fetchone()
+            return (row[0] or "") if row else None
+
+    def list_mail_chats(self, user_id: int) -> List[Dict[str, Any]]:
+        """The user's chats a note can go to: every row but side chats."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            rows = conn.execute(
+                'SELECT id, title, parent_id, hidden FROM conversations '
+                'WHERE user_id = ? AND side_of IS NULL ORDER BY updated_at DESC, id DESC',
+                (user_id,)).fetchall()
+            return [{"id": r[0], "title": r[1] or "", "is_branch": r[2] is not None,
+                     "hidden": bool(r[3])} for r in rows]
+
+    def add_mail(self, from_conv: int, to_conv: int, body: str, status: str,
+                 gate_id: Optional[str] = None, depth: int = 0) -> Optional[int]:
+        """Insert a note; None if either chat is gone or is a side chat.
+
+        The check and the insert share one transaction, so a family delete on
+        another connection cannot leave a row naming a deleted chat.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            n = conn.execute(
+                'SELECT COUNT(*) FROM conversations WHERE id IN (?, ?) AND side_of IS NULL',
+                (from_conv, to_conv)).fetchone()[0]
+            if from_conv == to_conv or n != 2:
+                return None
+            cur = conn.execute(
+                'INSERT INTO mailbox (from_conv, to_conv, body, status, gate_id, depth, created_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (from_conv, to_conv, body, status, gate_id, depth, now))
+            conn.commit()
+            return cur.lastrowid
+
+    def get_mail(self, mail_id: int) -> Optional[Dict[str, Any]]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute(f'SELECT {self._MAIL_COLS} FROM mailbox WHERE id = ?',
+                               (mail_id,)).fetchone()
+            return self._mail_row(row) if row else None
+
+    def set_mail_status(self, mail_id: int, status: str, from_status: str) -> bool:
+        """Move one row from `from_status` to `status`; False if it was not there."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cur = conn.execute('UPDATE mailbox SET status = ? WHERE id = ? AND status = ?',
+                               (status, mail_id, from_status))
+            conn.commit()
+            return cur.rowcount == 1
+
+    def count_mail_since(self, from_conv: int, to_conv: int, since: str) -> int:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            return conn.execute(
+                'SELECT COUNT(*) FROM mailbox WHERE from_conv = ? AND to_conv = ? AND created_at >= ?',
+                (from_conv, to_conv, since)).fetchone()[0]
+
+    def claim_queued_mail(self, to_conv: int) -> List[Dict[str, Any]]:
+        """Mark every queued note of `to_conv` delivered and return them, oldest
+        first, with the sender's title; one transaction, so a note is handed
+        out once."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            rows = conn.execute(
+                f'SELECT {", ".join("m." + c.strip() for c in self._MAIL_COLS.split(","))}, c.title '
+                'FROM mailbox m LEFT JOIN conversations c ON c.id = m.from_conv '
+                'WHERE m.to_conv = ? AND m.status = ? ORDER BY m.id ASC',
+                (to_conv, "queued")).fetchall()
+            out = []
+            for r in rows:
+                item = self._mail_row(r)
+                item["from_title"] = r[9] or ""
+                item["status"] = "delivered"
+                item["delivered_at"] = now
+                out.append(item)
+            if out:
+                marks = ','.join('?' * len(out))
+                conn.execute(
+                    f'UPDATE mailbox SET status = ?, delivered_at = ? WHERE id IN ({marks})',
+                    ["delivered", now] + [m["id"] for m in out])
+            conn.commit()
+            return out
+
+    def queued_mail_targets(self) -> List[int]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            return [r[0] for r in conn.execute(
+                'SELECT DISTINCT to_conv FROM mailbox WHERE status = ? ORDER BY to_conv',
+                ("queued",))]
+
+    def reject_pending_mail(self) -> int:
+        """Startup: a card that waited in the previous process can no longer be
+        answered, so its note is refused rather than left pending forever."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cur = conn.execute('UPDATE mailbox SET status = ? WHERE status = ?',
+                               ("rejected", "pending_approval"))
+            conn.commit()
+            return cur.rowcount
 
     # ===================== YENİ: MESAJLAR =====================
     def add_message(self, conversation_id: int, role: str, content: str, smells: list = None) -> int:

@@ -222,6 +222,8 @@ _AUTO_ALLOW_TOOLS = {
     "Read", "Glob", "Grep", "LS", "NotebookRead",
     "TodoWrite", "ToolSearch", "WebFetch", "WebSearch",
 }
+# The chat-mailbox server's tools, allowed without a card (see `_can_use_tool`).
+from agentic.mailbox import CLAUDE_TOOL_NAMES as _MAIL_TOOLS  # noqa: E402
 
 # Chat'te gösterilmeyecek düşük-değerli iç araçlar (görünürlük; onay akışını etkilemez).
 # NOT: "Task" artık BURADA DEĞİL — subagent çağrıları "Subagent" chip'i olarak görünür.
@@ -1062,6 +1064,12 @@ class ClaudeSDKSession:
         if self.read_only:
             logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] read-only session denied {tool_name}")
             return PermissionResultDeny(message="Yan sohbet salt okunur; bu araç reddedildi.")
+
+        # Chat mailbox tools: the backend raises its own card for a note in
+        # step mode, so a second card here would ask twice. After the
+        # read-only branch on purpose, unlike `_AUTO_ALLOW_TOOLS`.
+        if tool_name in _MAIL_TOOLS:
+            return PermissionResultAllow(updated_input=input_data)
 
         # AskUserQuestion → A/B/C seçim kartı
         if tool_name == "AskUserQuestion":

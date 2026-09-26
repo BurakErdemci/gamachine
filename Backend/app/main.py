@@ -50,12 +50,18 @@ os.environ["PATH"] = os.pathsep.join(
 #   backend unityai <save-file|...>     → unityai_cli.main (agy köprüsü)
 #   backend codex-mcp-bridge <http_url> → providers.codex_unitymcp_bridge (Codex stdio köprüsü)
 #   backend agy-hook --state <file>     → agy_step_gate.main (agy PreToolUse hook, every approval mode)
+#   backend mail-mcp-server             → unity_ai_mcp.mail_server.main (Claude chats' mail tools)
 # FastAPI/uvicorn app'i kurmadan erken dön — bu komutlar HTTP server başlatmaz.
-if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bridge", "agy-hook"):
+if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bridge", "agy-hook",
+                                         "mail-mcp-server"):
     _sub_mode = sys.argv[1]
     sys.argv = [sys.argv[0]] + sys.argv[2:]
     if _sub_mode == "mcp-server":
         from unity_ai_mcp.server import main as _sub_main
+        _sub_main()
+        sys.exit(0)
+    elif _sub_mode == "mail-mcp-server":
+        from unity_ai_mcp.mail_server import main as _sub_main
         _sub_main()
         sys.exit(0)
     elif _sub_mode == "codex-mcp-bridge":

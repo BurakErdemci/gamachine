@@ -35,8 +35,8 @@ import anthropic
 import openai
 
 from tools.tool_registry import (
-    TOOL_DEFINITIONS, execute_tool, get_openai_tool_declarations,
-    get_gemini_tool_declarations, _all_tool_definitions,
+    TOOL_DEFINITIONS, execute_tool, execute_tool_async, is_async_tool,
+    get_openai_tool_declarations, get_gemini_tool_declarations, _all_tool_definitions,
 )
 from prompts import SYSTEM_PROMPT
 from providers.unity_script_tools import DISALLOWED_UNITY_TOOLS
@@ -825,6 +825,8 @@ _HANDOFF_HEADER = (
 _READ_ONLY_BUILTIN_TOOLS = frozenset({
     "read_file", "search_in_project", "find_files", "list_directory",
     "recall_memory", "capture_unity_screenshot",
+    # Lists chat titles only; `send_chat_message` stays out (a side row never mails).
+    "list_chats",
 })
 # Built-in Claude Code tools kept out of a read-only session at connect time;
 # `_can_use_tool` denies them too, this only keeps them out of the model's view.
@@ -1066,6 +1068,9 @@ class AgentRunner:
         if getattr(self, "read_only", False) and not _read_only_tool_allowed(tool_name, tool_args):
             logger.warning("[read-only] conv=%s refused %s", self.conversation_id, tool_name)
             return {"success": False, "error": _READ_ONLY_REFUSAL}, []
+        if is_async_tool(tool_name):
+            return await execute_tool_async(
+                tool_name, tool_args, self.workspace_path, self.conversation_id), []
         result = await asyncio.to_thread(
             execute_tool, tool_name, tool_args, self.workspace_path, self.conversation_id
         )
@@ -2576,6 +2581,13 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                         env=build_spawn_env(env_family("claude")))
         except Exception as e:
             logger.warning(f"[ClaudeSession] MCP temizleme/yazma hatası: {e}")
+        # Chat mailbox: a separate server with the two mail tools only. A side
+        # chat never mails, so its read-only session does not get it.
+        if not getattr(self, "read_only", False):
+            from agentic import mailbox as _mailbox
+            _mail_entry = _mailbox.claude_server_entry(self.conversation_id)
+            if _mail_entry is not None:
+                mcp_servers_cfg[_mailbox.CLAUDE_SERVER_NAME] = _mail_entry
 
         model = self.model_name if (self.model_name or "").startswith("claude-") else None
 
