@@ -81,6 +81,9 @@ def should_auto_approve(token: str | None, workspace_path: str) -> bool:
 
 _AMBIENT_AUTO = 0
 _AMBIENT_TOPLAM = 0
+# conversation_id -> turns of that chat running now. Lets /mcp-approval-request
+# accept a card's claimed owner only while that chat has a turn in flight.
+_TURNS_BY_CONVERSATION: dict[int, int] = {}
 
 
 class ambient_turn:
@@ -93,8 +96,12 @@ class ambient_turn:
     İKİ sayaç tutuluyor, biri değil — sebebi aşağıda `ambient_auto_approve`'da.
     """
 
-    def __init__(self, workspace_path: str, generation_mode: str) -> None:
+    def __init__(self, workspace_path: str, generation_mode: str,
+                 conversation_id: int | None = None) -> None:
         self._auto = generation_mode == "auto"
+        self._conversation = (
+            conversation_id if type(conversation_id) is int and conversation_id > 0 else None
+        )
 
     def __enter__(self) -> "ambient_turn":
         global _AMBIENT_AUTO, _AMBIENT_TOPLAM
@@ -102,6 +109,10 @@ class ambient_turn:
             _AMBIENT_TOPLAM += 1
             if self._auto:
                 _AMBIENT_AUTO += 1
+            if self._conversation is not None:
+                _TURNS_BY_CONVERSATION[self._conversation] = (
+                    _TURNS_BY_CONVERSATION.get(self._conversation, 0) + 1
+                )
         return self
 
     def __exit__(self, *_exc) -> None:
@@ -110,7 +121,19 @@ class ambient_turn:
             _AMBIENT_TOPLAM = max(0, _AMBIENT_TOPLAM - 1)
             if self._auto:
                 _AMBIENT_AUTO = max(0, _AMBIENT_AUTO - 1)
+            if self._conversation is not None:
+                left = _TURNS_BY_CONVERSATION.get(self._conversation, 0) - 1
+                if left > 0:
+                    _TURNS_BY_CONVERSATION[self._conversation] = left
+                else:
+                    _TURNS_BY_CONVERSATION.pop(self._conversation, None)
         return None
+
+
+def conversation_turn_in_flight(conversation_id: int) -> bool:
+    """Is a turn of this conversation running in AgentRunner.run right now?"""
+    with _LOCK:
+        return _TURNS_BY_CONVERSATION.get(conversation_id, 0) > 0
 
 
 def ambient_auto_approve() -> bool:

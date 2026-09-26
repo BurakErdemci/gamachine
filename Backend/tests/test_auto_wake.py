@@ -377,7 +377,12 @@ def test_closing_a_claude_session_releases_its_pending_gate():
 
 
 def test_stop_denies_only_the_stopping_conversations_mcp_gates():
-    """Stop in one conversation must not resolve another conversation's card."""
+    """Stop in one conversation must not resolve another conversation's card.
+
+    Both chats have a turn in flight: a claimed owner is only accepted then
+    (test_mcp_approval_owner.py), otherwise the card is unowned.
+    """
+    from agentic.approval_policy import ambient_turn
     from agentic.command_gates import GATE_OWNERS
 
     kapilar = ("stop-own", "stop-foreign", "stop-unowned")
@@ -398,14 +403,16 @@ def test_stop_denies_only_the_stopping_conversations_mcp_gates():
                 for gid in kapilar}
 
     try:
-        sonuc = asyncio.run(run_it())
+        with ambient_turn(".", "step", 1), ambient_turn(".", "step", 2):
+            sonuc = asyncio.run(run_it())
     finally:
         for gid in kapilar:
             GATE_OWNERS.pop(gid, None)
 
     assert sonuc["stop-own"] == {"status": "resolved", "approved": False}
     assert sonuc["stop-foreign"] == {"status": "pending"}
-    # Unknown owner is denied WITH the stopping conversation, on purpose: the
-    # approval bridge sends no `conversation_id` today, so sparing unowned cards
-    # would leave Stop unable to release the ones it exists to release.
+    # Unknown owner is denied WITH the stopping conversation, on purpose: several
+    # carriers still send no `conversation_id` and an unverifiable claim is
+    # stored unowned, so sparing unowned cards would leave Stop unable to
+    # release the ones it exists to release.
     assert sonuc["stop-unowned"] == {"status": "resolved", "approved": False}

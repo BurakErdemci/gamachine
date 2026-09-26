@@ -486,12 +486,12 @@ def create_conversation_router(db, progress_store):
         that conversation's caller got a rejection nobody asked for.
 
         UNKNOWN OWNER is denied together with the stopping conversation's own
-        cards. Deliberate: the approval bridge does not send `conversation_id`
-        yet (see `/mcp-approval-request`), so today EVERY card it opens is
-        unowned; sparing them would leave Stop unable to release the very cards
-        it exists to release, and the bridge would block for its full 180 s
-        wait. The only conversation this can affect is one that has no owner
-        recorded either - the same blind spot `_wake_blocked` already fails
+        cards. Deliberate: several carriers still send no `conversation_id`, and
+        `/mcp-approval-request` stores a claim it cannot verify as unowned, so
+        sparing them would leave Stop unable to release the very cards it
+        exists to release, and the caller would block for its full wait. The
+        only conversation this can affect is one that has no owner recorded
+        either - the same blind spot `_wake_blocked` already fails
         safe on - whereas skipping an owned foreign gate is now guaranteed.
         `conversation_id=None` keeps the unscoped meaning for `/mcp-abort-all`.
         """
@@ -1340,6 +1340,31 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
     # eski yorum öyle diyordu ve yanlıştı) → kullanıcı karar verir →
     # /mcp-approval-respond/{gate_id} → köprü /mcp-approval-result ile öğrenir.
 
+    def _verified_mcp_owner(claimed: Any, token: str) -> tuple:
+        """(owner, "") when the claimed chat can be trusted, else (_UNKNOWN_OWNER, why).
+
+        The claim arrives from another process, and a card shown in the wrong
+        chat is worse than an unowned one (Stop in that chat would deny it, in
+        this chat it would never show). So the chat must exist, be the local
+        user's, and have a turn in flight now: a card only comes out of a
+        running turn, and a claim naming an idle chat is stale or wrong.
+        """
+        if claimed is None:
+            return _UNKNOWN_OWNER, "no conversation_id in the body"
+        if type(claimed) is not int or claimed <= 0:
+            return _UNKNOWN_OWNER, f"conversation_id {claimed!r} is not a positive int"
+        try:
+            owner = db.get_conversation_owner(claimed)
+        except Exception as exc:
+            return _UNKNOWN_OWNER, f"conversation {claimed} lookup failed ({type(exc).__name__})"
+        local_user, _ = get_current_user(db, token)
+        if type(owner) is not int or owner != local_user:
+            return _UNKNOWN_OWNER, f"conversation {claimed} does not exist or is not the local user's"
+        from agentic.approval_policy import conversation_turn_in_flight
+        if not conversation_turn_in_flight(claimed):
+            return _UNKNOWN_OWNER, f"conversation {claimed} has no turn in flight"
+        return claimed, ""
+
     @router.post("/mcp-approval-request")
     async def mcp_approval_request(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
         """MCP server'dan gelen onay isteğini saklar. Frontend /mcp-pending ile yoklar."""
@@ -1347,9 +1372,6 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         gate_id = body.get("gate_id")
         if not gate_id:
             raise HTTPException(status_code=400, detail="gate_id gerekli")
-        mcp_owner = body.get("conversation_id")
-        if type(mcp_owner) is not int:
-            mcp_owner = _UNKNOWN_OWNER
         # Global auto mode (owner decision, 25 Sep 2026): no card for anyone,
         # with or without a conversation - external MCP clients included.
         # Nothing is registered, so an auto request leaves no pending entry.
@@ -1366,25 +1388,26 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                 "automatic": True,
                 "gate_id": gate_id,
             }
+        mcp_owner, why_unowned = _verified_mcp_owner(
+            body.get("conversation_id"), x_session_token)
         _register_gate(gate_id, mcp_owner, kind="external")
         _mcp_pending[gate_id] = {
             "tool": body.get("tool"),
             "params": body.get("params", {}),
             "workspace_path": body.get("workspace_path", ""),
+            "conversation_id": None if mcp_owner is _UNKNOWN_OWNER else mcp_owner,
         }
         _mcp_results[gate_id] = {"status": "pending"}
         _mcp_result_ts[gate_id] = time()
         if mcp_owner is _UNKNOWN_OWNER:
             # Not papered over with a guessed owner: an unowned card blocks
-            # AUTO-WAKE for EVERY conversation until it resolves, and the caller
-            # (unity_ai_mcp/approval_bridge.py and the unity-mcp server's
-            # approval_gate.py) never puts `conversation_id` in the body. The
-            # gap is the caller's to close; until then it is logged, not hidden.
+            # AUTO-WAKE for EVERY conversation until it resolves, and Stop in
+            # any chat denies it. Logged with the reason so a carrier that
+            # should have named its chat shows up.
             logger.warning(
-                "[mcp-approval] gate %s açıldı ama gövdede `conversation_id` yok "
-                "— sahipsiz kart çözülene kadar TÜM konuşmalarda AUTO-WAKE'i "
-                "bloklar. Çağıranın bu alanı göndermesi gerekiyor.",
-                gate_id,
+                "[mcp-approval] gate %s is unowned (%s): it blocks AUTO-WAKE in "
+                "every conversation until it resolves.",
+                gate_id, why_unowned,
             )
         return {"status": "ok", "gate_id": gate_id}
 
