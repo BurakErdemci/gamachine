@@ -104,12 +104,33 @@ def _changed(status: dict[str, Any]) -> dict[str, Any] | None:
     return changed if isinstance(changed, dict) else None
 
 
-def _changed_count(status: dict[str, Any]) -> int:
-    changed = _changed(status)
-    try:
-        return int(changed.get("count") or 0) if changed else 0
-    except (TypeError, ValueError):
-        return 0
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+# Every flag a verdict reads; CompileTracker.GetStatus always sends them as booleans.
+_FLAGS = ("is_compiling", "is_updating", "compilation_failed_now", "last_failed", "reload_done_after_finish")
+
+
+def malformed_field(status: dict[str, Any], *, scan: bool = True) -> str | None:
+    """The first field a verdict depends on that is missing or not in the shape
+    CompileTracker.GetStatus sends, or None. A missing value must not default to
+    "nothing changed" / "not compiling": that default is what reads as clean."""
+    for key in ("epoch", "finished_epoch"):
+        value = status.get(key)
+        if not _is_int(value) or value < 0:
+            return f"{key}={value!r}"
+    if status["finished_epoch"] > status["epoch"]:
+        return f"finished_epoch={status['finished_epoch']} is ahead of epoch={status['epoch']}"
+    if scan:
+        changed = status.get("scripts_changed_since_compile")
+        count = changed.get("count") if isinstance(changed, dict) else None
+        if not _is_int(count) or count < 0:
+            return f"scripts_changed_since_compile={changed!r}"
+    for key in _FLAGS:
+        if not isinstance(status.get(key), bool):
+            return f"{key}={status.get(key)!r}"
+    return None
 
 
 def _base(verdict: str, note: str | None, status: dict[str, Any] | None) -> dict[str, Any]:
@@ -134,6 +155,19 @@ def unknown_verdict(problem: str | None) -> dict[str, Any]:
     return _base("unknown", note, None)
 
 
+def malformed_verdict(status: dict[str, Any], field: str) -> dict[str, Any]:
+    return _base("unknown", f"compile status is malformed ({field}); compile result unknown - "
+                            "call compile_status", status)
+
+
+def restarted_verdict(status: dict[str, Any], epoch_before: int) -> dict[str, Any]:
+    """The epoch counter lives in SessionState, so a new editor session starts it at
+    0 again; nothing read after that proves anything about a change made before it."""
+    return _base("unknown", f"editor restarted during the wait - call compile_status "
+                            f"(compile epoch went from {epoch_before} back to {status.get('epoch')})",
+                 status)
+
+
 def _errors_verdict(status: dict[str, Any], note: str | None = None) -> dict[str, Any]:
     out = _base("errors", note, status)
     out["errors"] = status.get("errors") or []
@@ -142,19 +176,29 @@ def _errors_verdict(status: dict[str, Any], note: str | None = None) -> dict[str
     return out
 
 
+def _untracked_errors_verdict(status: dict[str, Any], note: str) -> dict[str, Any]:
+    out = _base("errors", note + "; call refresh_unity(compile='request') to list the compiler errors", status)
+    out["errors"] = []
+    out["error_count"] = None
+    return out
+
+
 def live_verdict(status: dict[str, Any] | None, problem: str | None = None) -> dict[str, Any]:
     """Verdict for the Editor's state right now, from one get_compile_status read."""
     if status is None:
         return unknown_verdict(problem)
+    bad = malformed_field(status)
+    if bad:
+        return malformed_verdict(status, bad)
 
-    epoch = status.get("epoch") or 0
-    finished = status.get("finished_epoch") or 0
-    if status.get("is_compiling") or epoch > finished:
+    epoch = status["epoch"]
+    finished = status["finished_epoch"]
+    if status["is_compiling"] or epoch > finished:
         return _base("compiling", "compilation in progress - error list is not final", status)
-    if status.get("is_updating"):
+    if status["is_updating"]:
         return _base("pending", "asset import in progress - a compile may follow", status)
 
-    changed = _changed_count(status)
+    changed = status["scripts_changed_since_compile"]["count"]
     if changed:
         out = _base(
             "stale",
@@ -162,27 +206,26 @@ def live_verdict(status: dict[str, Any] | None, problem: str | None = None) -> d
             "call refresh_unity to compile them",
             status,
         )
-        if status.get("last_failed"):
+        if status["last_failed"]:
             out["last_compile_errors"] = status.get("errors") or []
         return out
 
     if epoch == 0:
-        if status.get("compilation_failed_now"):
-            out = _base(
-                "errors",
-                "Unity reports failed script compilation from before compiles were tracked in this "
-                "session; call refresh_unity(compile='request') to list the compiler errors",
-                status,
-            )
-            out["errors"] = []
-            out["error_count"] = None
-            return out
+        if status["compilation_failed_now"]:
+            return _untracked_errors_verdict(
+                status, "Unity reports failed script compilation from before compiles were tracked in this session")
         return _base("clean", "no compile this session and no scripts changed since the domain loaded", status)
 
-    if status.get("last_failed"):
+    if status["last_failed"]:
         return _errors_verdict(status)
-    if not status.get("reload_done_after_finish"):
+    if not status["reload_done_after_finish"]:
         return _base("pending", "compile finished without errors; domain reload not done yet", status)
+    if status["compilation_failed_now"]:
+        # A compile only rebuilds the assemblies whose sources changed, so a clean
+        # epoch can follow a failed one while the failed assembly is still broken.
+        return _untracked_errors_verdict(
+            status, f"Unity reports failed script compilation although the last tracked compile "
+                    f"(epoch {epoch}) had no errors: an assembly it did not rebuild still fails")
     out = _base("clean", None, status)
     out["error_count"] = 0
     out["warning_count"] = status.get("warning_count")
@@ -239,6 +282,12 @@ async def await_compile_verdict(
         out["waited_s"] = round(time.monotonic() - t0, 2)
         return out
 
+    def _judge(read: StatusRead) -> dict[str, Any]:
+        status = read.status
+        if status is not None and e0 is not None and _is_int(status.get("epoch")) and status["epoch"] < e0:
+            return restarted_verdict(status, e0)
+        return live_verdict(status, read.problem)
+
     while True:
         read = await read_compile_status(unity_instance, scan=False)
         now = time.monotonic()
@@ -248,24 +297,26 @@ async def await_compile_verdict(
             if read.unsupported:
                 return _finish(unknown_verdict("unsupported"))
         else:
+            bad = malformed_field(status, scan=False)
+            if bad:
+                return _finish(malformed_verdict(status, bad))
             last_status = status
-            epoch = status.get("epoch") or 0
-            finished = status.get("finished_epoch") or 0
-            busy = bool(status.get("is_compiling") or status.get("is_updating") or epoch > finished)
+            epoch = status["epoch"]
+            if e0 is not None and epoch < e0:
+                return _finish(restarted_verdict(status, e0))
+            busy = bool(status["is_compiling"] or status["is_updating"] or epoch > status["finished_epoch"])
             seen_busy = seen_busy or busy
             started = (e0 is not None and epoch > e0) or (e0 is None and seen_busy)
 
             if started and not busy:
-                if e0 is not None and status.get("last_failed"):
+                if e0 is not None and status["last_failed"]:
                     return _finish(_errors_verdict(status))
-                if status.get("last_failed") or status.get("reload_done_after_finish"):
-                    final = await read_compile_status(unity_instance, scan=True, attempts=2)
-                    verdict = live_verdict(final.status, final.problem)
+                if status["last_failed"] or status["reload_done_after_finish"]:
+                    verdict = _judge(await read_compile_status(unity_instance, scan=True, attempts=2))
                     if verdict["verdict"] not in ("compiling", "pending"):
                         return _finish(verdict)
             elif not started and not busy and now >= start_deadline:
-                final = await read_compile_status(unity_instance, scan=True, attempts=2)
-                verdict = live_verdict(final.status, final.problem)
+                verdict = _judge(await read_compile_status(unity_instance, scan=True, attempts=2))
                 if verdict["verdict"] == "clean":
                     verdict["note"] = ("no compile needed: no compile started after the change "
                                        "and no script changed on disk since the last compile")

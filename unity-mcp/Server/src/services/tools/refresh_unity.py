@@ -21,8 +21,12 @@ import services.resources.editor_state as editor_state
 from services.tools.compile_status import (
     CompileBaseline,
     await_compile_verdict,
+    live_verdict,
+    malformed_field,
     read_compile_status,
+    restarted_verdict,
     snapshot_compile_epoch,
+    unknown_verdict,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,17 +71,6 @@ async def wait_for_editor_ready(ctx: Context, timeout_s: float = 30.0) -> tuple[
     return (False, time.monotonic() - start)
 
 
-def is_reloading_rejection(resp: Any) -> bool:
-    """True when Unity rejected a command because it thinks it is reloading.
-
-    The command was never executed, so retrying is safe.
-    """
-    if not isinstance(resp, dict) or resp.get("success"):
-        return False
-    data = resp.get("data") or {}
-    return data.get("reason") == "reloading" and resp.get("hint") == "retry"
-
-
 def is_connection_lost_after_send(resp: Any) -> bool:
     """True when a mutation's response indicates TCP was lost after command was sent.
 
@@ -103,13 +96,15 @@ async def send_mutation(
     *,
     verify_after_disconnect: Callable[[], Awaitable[dict | None]] | None = None,
 ) -> dict | Any:
-    """Send a non-idempotent mutation with reload recovery.
+    """Send a non-idempotent mutation exactly once, with reload recovery.
 
-    Handles the full retry/recovery pattern for script mutations:
-    1. Send with retry_on_reload=False (don't re-send if Unity is reloading)
-    2. If reloading rejection (command never executed) → wait + retry once
-    3. If connection lost after send → wait + verify via callback
-    4. Wait for editor readiness before returning
+    1. Send with retry_on_reload=False; a retry/reloading reply is returned as is.
+       The only producer of {hint: retry, data.reason: reloading} is the legacy
+       sender's reload wait (transport/legacy/unity_connection.py:896), reached
+       after it already sent the command (:846) on a reply it read as reloading by
+       message text (:769) - so that reply does not prove the command did not run.
+    2. If connection lost after send → wait + verify via callback
+    3. Wait for editor readiness before returning
 
     Args:
         verify_after_disconnect: async callable returning a replacement response
@@ -123,15 +118,6 @@ async def send_mutation(
         params,
         retry_on_reload=False,
     )
-    if is_reloading_rejection(resp):
-        await wait_for_editor_ready(ctx)
-        resp = await unity_transport.send_with_unity_instance(
-            _legacy_conn.async_send_command_with_retry,
-            unity_instance,
-            command,
-            params,
-            retry_on_reload=False,
-        )
     if is_connection_lost_after_send(resp) and verify_after_disconnect:
         await wait_for_editor_ready(ctx)
         verified = await verify_after_disconnect()
@@ -246,12 +232,12 @@ async def refresh_unity(
         elif hint == "retry" or "could not connect" in err:
             # Retryable error - proceed to wait loop if wait_for_ready
             if not wait_for_ready:
-                return MCPResponse(**response_dict)
+                return _with_compile(response_dict, unknown_verdict(f"refresh did not complete: {err[:100]}"))
             recovered_from_disconnect = True
         else:
             # Non-recoverable error - connection issue unrelated to domain reload
             logger.warning(f"refresh_unity: Non-recoverable error (compile={compile}): {err[:100]}")
-            return MCPResponse(**response_dict)
+            return _with_compile(response_dict, unknown_verdict(f"refresh did not complete: {err[:100]}"))
 
     # Optional server-side wait loop (defensive): if Unity tool doesn't wait or returns quickly,
     # poll the canonical editor_state resource until ready or timeout.
@@ -265,7 +251,8 @@ async def refresh_unity(
             return MCPResponse(
                 success=False,
                 message="Refresh triggered but timed out after 60s waiting for editor readiness.",
-                data={"timeout": True, "wait_seconds": 60.0},
+                data={"timeout": True, "wait_seconds": 60.0,
+                      "compile": unknown_verdict("editor not ready 60s after the refresh")},
             )
 
     # After readiness is restored, clear any external-dirty flag for this instance so future tools can proceed cleanly.
@@ -289,12 +276,19 @@ async def refresh_unity(
         )
 
     if compile_verdict is not None:
-        if response_dict.get("data") is None:
-            response_dict["data"] = {}
-        if isinstance(response_dict["data"], dict):
-            response_dict["data"]["compile"] = compile_verdict
-        return MCPResponse(**response_dict)
+        return _with_compile(response_dict, compile_verdict)
     return MCPResponse(**response_dict) if isinstance(response, dict) else response
+
+
+def _with_compile(response_dict: dict[str, Any], verdict: dict[str, Any]) -> MCPResponse:
+    data = response_dict.get("data")
+    if data is None:
+        data = response_dict["data"] = {}
+    if isinstance(data, dict):
+        data["compile"] = verdict
+    else:
+        response_dict["data"] = {"value": data, "compile": verdict}
+    return MCPResponse(**response_dict)
 
 
 async def _compile_verdict_after_refresh(
@@ -302,24 +296,31 @@ async def _compile_verdict_after_refresh(
     baseline: CompileBaseline,
     compile: str,
 ) -> dict[str, Any] | None:
-    """The compile verdict for a refresh, or None when the refresh touched no scripts.
+    """The compile verdict for a refresh, or None when a readable status proves the
+    refresh touched no scripts and the last compile is final and clean. A status
+    that cannot be read or trusted gives verdict unknown, never None.
 
     resulting_state in the Unity reply is one isCompiling sample taken as the
     handler returns; on Unity 6 the handler skips its own wait when a compile was
     requested, so it read "compiling" and a read_console right after showed 0
     errors (5/5 compiles, Matchday, 11 Sep 2026).
     """
-    if compile == "request":
+    if compile == "request" or baseline.problem == "unsupported":
         return await await_compile_verdict(unity_instance, baseline)
-    if baseline.epoch is None:
-        return None
-    after = await read_compile_status(unity_instance, scan=True)
+    after = await read_compile_status(unity_instance, scan=True, attempts=2)
     status = after.status
-    if status is None:
-        return None
-    epoch = status.get("epoch") or 0
-    busy = bool(status.get("is_compiling") or epoch > (status.get("finished_epoch") or 0))
-    changed = (status.get("scripts_changed_since_compile") or {}).get("count") or 0
-    if epoch > baseline.epoch or busy or changed:
+    if status is None or malformed_field(status):
+        return live_verdict(status, after.problem)
+    epoch = status["epoch"]
+    if baseline.epoch is not None and epoch < baseline.epoch:
+        return restarted_verdict(status, baseline.epoch)
+    busy = status["is_compiling"] or status["is_updating"] or epoch > status["finished_epoch"]
+    changed = status["scripts_changed_since_compile"]["count"]
+    if (baseline.epoch is not None and epoch > baseline.epoch) or busy or changed:
         return await await_compile_verdict(unity_instance, baseline)
-    return None
+    verdict = live_verdict(status)
+    # Without a baseline there is no proof the refresh compiled nothing, so even
+    # a clean verdict is reported.
+    if verdict["verdict"] == "clean" and baseline.epoch is not None:
+        return None
+    return verdict

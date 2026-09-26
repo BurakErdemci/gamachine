@@ -50,11 +50,12 @@ def step(st, console=()):
 
 
 class FakeEditor:
-    def __init__(self, steps, unsupported=False):
+    def __init__(self, steps, unsupported=False, write_reply=None):
         self.steps = steps
         self.index = 0
         self.calls = []
         self.unsupported = unsupported
+        self.write_reply = write_reply
         self.returned_at_step = None
 
     def current(self):
@@ -90,6 +91,8 @@ class FakeEditor:
         if command_type == "manage_script":
             if params.get("action") in ("read", "get_sha"):
                 return {"success": True, "data": {"contents": "public class Probe {}\n", "sha256": "abc"}}
+            if self.write_reply is not None:
+                return dict(self.write_reply)
             return {"success": True, "message": "written", "data": {}}
         raise AssertionError(f"unexpected command {command_type}")
 
@@ -461,6 +464,250 @@ def test_failed_before_tracking_does_not_claim_a_count():
     out = cs.live_verdict(status(0, reloaded=False, failed_now=True))
     assert out["error_count"] is None
     assert "refresh_unity(compile='request')" in out["note"]
+
+
+# ── a status that cannot be trusted is never clean ────────────────────────────
+
+def _without(st, key):
+    return {k: v for k, v in st.items() if k != key}
+
+
+def _with_changed(value):
+    return {**status(2), "scripts_changed_since_compile": value}
+
+
+MALFORMED = [
+    (_with_changed({"count": "not-a-number"}), "scripts_changed_since_compile"),
+    (_with_changed({"paths": []}), "scripts_changed_since_compile"),
+    (_with_changed({"count": True}), "scripts_changed_since_compile"),
+    (_with_changed({"count": -1}), "scripts_changed_since_compile"),
+    (_with_changed(None), "scripts_changed_since_compile"),
+    (_with_changed([0]), "scripts_changed_since_compile"),
+    (_without(status(2), "scripts_changed_since_compile"), "scripts_changed_since_compile"),
+    (status(2, 3), "finished_epoch=3 is ahead of epoch=2"),
+    ({**status(2), "epoch": "2"}, "epoch='2'"),
+    ({**status(2), "finished_epoch": None}, "finished_epoch=None"),
+    ({**status(2), "finished_epoch": 2.0}, "finished_epoch=2.0"),
+    ({**status(2), "epoch": True, "finished_epoch": 1}, "epoch=True"),
+    (_without(status(2), "compilation_failed_now"), "compilation_failed_now"),
+    ({**status(2), "reload_done_after_finish": "yes"}, "reload_done_after_finish"),
+    (_without(status(2), "is_compiling"), "is_compiling"),
+]
+
+
+@pytest.mark.parametrize("st, field", MALFORMED)
+def test_malformed_status_is_unknown_naming_the_field(st, field):
+    out = cs.live_verdict(st)
+    assert out["verdict"] == "unknown", out
+    assert field in out["note"], out
+    _never_claims_zero_errors_unproven(out)
+
+
+@pytest.mark.asyncio
+async def test_compile_status_tool_with_malformed_status_is_unknown(editor_factory):
+    editor_factory([step(_with_changed({"count": "x"}))])
+    resp = await cs.compile_status(DummyContext())
+    assert resp["data"]["verdict"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_read_console_with_malformed_status_says_unknown(editor_factory):
+    editor_factory([step(status(2, 3))])
+    resp = await _read_console()
+    assert resp["compile_state"]["verdict"] == "unknown"
+    assert "finished_epoch" in resp["compile_state"]["note"]
+
+
+@pytest.mark.asyncio
+async def test_wait_with_malformed_poll_status_is_unknown(editor_factory):
+    editor = editor_factory([step(status(5)), step({**status(6), "finished_epoch": "6"})])
+    result = await _create(wait_for_compile=True)
+    assert result["verdict"] == "unknown", result
+    assert "finished_epoch" in result["note"]
+    assert len(editor.commands("manage_script")) == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_with_malformed_final_scan_is_unknown(editor_factory):
+    """The poll reads without the file scan; the final read that decides clean has it."""
+    editor_factory([step(status(5)), step(status(6)),
+                    step(_without(status(6), "scripts_changed_since_compile"))])
+    result = await _create(wait_for_compile=True)
+    assert result["verdict"] == "unknown", result
+    assert "scripts_changed_since_compile" in result["note"]
+
+
+# ── an editor restart during the wait is not a clean compile ──────────────────
+
+@pytest.mark.asyncio
+async def test_epoch_below_baseline_in_the_poll_is_unknown(editor_factory):
+    editor_factory([step(status(5)), step(status(0, reloaded=False))])
+    result = await _create(wait_for_compile=True)
+    assert result["verdict"] == "unknown", result
+    assert "editor restarted during the wait - call compile_status" in result["note"]
+    assert result["epoch_before"] == 5
+
+
+@pytest.mark.asyncio
+async def test_epoch_below_baseline_in_the_final_read_is_unknown(editor_factory):
+    """Restart between the finishing poll and the final scan read."""
+    editor_factory([step(status(5)), step(status(6)), step(status(1))])
+    result = await _create(wait_for_compile=True)
+    assert result["verdict"] == "unknown", result
+    assert "editor restarted during the wait" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_epoch_reset_direct_wait_after_restart_is_unknown(editor_factory):
+    editor_factory([step(status(2))])
+    result = await cs.await_compile_verdict(None, cs.CompileBaseline(5), max_wait_s=0.2, start_window_s=0)
+    assert result["verdict"] == "unknown", result
+
+
+@pytest.mark.asyncio
+async def test_without_a_baseline_a_low_epoch_keeps_the_start_window_rule(editor_factory):
+    editor_factory([step(status(0, reloaded=False))])
+    result = await cs.await_compile_verdict(None, cs.CompileBaseline(None, "unreadable: x"),
+                                            max_wait_s=0.3, start_window_s=0)
+    assert result["verdict"] == "clean", result
+    assert "no compile needed" in result["note"]
+
+
+# ── Unity's live compile-failed flag outranks a later clean epoch ─────────────
+
+def test_failed_now_after_a_clean_tracked_compile_is_errors():
+    out = cs.live_verdict(status(7, reloaded=True, failed_now=True))
+    assert out["verdict"] == "errors", out
+    assert out["error_count"] is None
+    assert out["errors"] == []
+    assert "refresh_unity(compile='request')" in out["note"]
+
+
+def test_failed_now_waits_for_the_reload_first():
+    """Inside compilationFinished the flag still holds the previous compile's
+    result (CompileTracker.OnCompilationFinished), so before the reload it is pending."""
+    assert cs.live_verdict(status(7, reloaded=False, failed_now=True))["verdict"] == "pending"
+
+
+def test_failed_now_with_a_failed_tracked_compile_keeps_its_errors():
+    out = cs.live_verdict(status(7, failed=True, errors=[CS0029], failed_now=True))
+    assert out["verdict"] == "errors"
+    assert out["error_count"] == 1
+    assert out["errors"][0]["code"] == "CS0029"
+
+
+@pytest.mark.asyncio
+async def test_skipped_failed_epoch_masked_by_a_later_partial_compile_is_errors(editor_factory):
+    """Baseline 5; epoch 6 (this write) failed; epoch 7 rebuilt another assembly
+    clean before the first poll. Only Unity's live flag still shows the failure."""
+    editor_factory([step(status(5)), step(status(7, reloaded=True, failed_now=True))])
+    result = await _create(wait_for_compile=True)
+    assert result["verdict"] == "errors", result
+    assert result["error_count"] is None
+
+
+@pytest.mark.asyncio
+async def test_no_compile_needed_is_not_clean_while_unity_reports_failure(editor_factory):
+    editor_factory([step(status(5, reloaded=True, failed_now=True))])
+    result = await _create(wait_for_compile=True)
+    assert result["verdict"] == "errors", result
+    assert "no compile needed" not in result.get("note", "")
+
+
+# ── a script write goes to Unity once, even after a reloading reply ───────────
+
+RELOADING = {"success": False, "error": "Unity is reloading; please retry", "hint": "retry",
+             "data": {"reason": "reloading", "retry_after_ms": 250}}
+
+
+@pytest.mark.asyncio
+async def test_reloading_reply_to_a_write_is_not_resent(editor_factory):
+    editor = editor_factory([step(status(5))], write_reply=RELOADING)
+    tools = setup_script_tools()
+    resp = await tools["create_script"](
+        DummyContext(), path="Assets/Scripts/Probe.cs", contents="public class Probe {}")
+    assert resp["success"] is False, resp
+    assert len(editor.commands("manage_script")) == 1
+
+
+@pytest.mark.asyncio
+async def test_reloading_reply_to_manage_script_create_is_not_resent(editor_factory):
+    editor = editor_factory([step(status(5))], write_reply=RELOADING)
+    tools = setup_script_tools()
+    await tools["manage_script"](
+        DummyContext(), action="create", name="Probe", path="Assets/Scripts",
+        contents="public class Probe {}")
+    assert len([c for c in editor.commands("manage_script") if c[1].get("action") == "create"]) == 1
+
+
+# ── refresh_unity always says what it knows about the compile ─────────────────
+
+@pytest.mark.asyncio
+async def test_refresh_with_unreadable_status_after_it_is_unknown(editor_factory):
+    editor_factory([step(status(5))] + [step(UNREADABLE)])
+    resp = await _refresh(compile="none")
+    assert resp["success"] is True
+    assert resp["data"]["compile"]["verdict"] == "unknown", resp
+
+
+@pytest.mark.asyncio
+async def test_refresh_with_status_unreadable_throughout_is_unknown(editor_factory):
+    editor_factory([step(UNREADABLE)])
+    resp = await _refresh(compile="none")
+    assert resp["data"]["compile"]["verdict"] == "unknown", resp
+
+
+@pytest.mark.asyncio
+async def test_refresh_with_malformed_status_after_it_is_unknown(editor_factory):
+    editor_factory([step(status(5)), step(_with_changed({"count": "x"}))])
+    resp = await _refresh(compile="none")
+    assert resp["data"]["compile"]["verdict"] == "unknown", resp
+
+
+@pytest.mark.asyncio
+async def test_refresh_after_an_editor_restart_is_unknown(editor_factory):
+    editor_factory([step(status(5)), step(status(0, reloaded=False))])
+    resp = await _refresh(compile="none")
+    assert resp["data"]["compile"]["verdict"] == "unknown", resp
+    assert "editor restarted" in resp["data"]["compile"]["note"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_without_script_activity_still_reports_a_failed_compile(editor_factory):
+    editor_factory([step(status(5, failed=True, errors=[CS0029], reloaded=False))])
+    resp = await _refresh(compile="none")
+    assert resp["data"]["compile"]["verdict"] == "errors", resp
+
+
+@pytest.mark.asyncio
+async def test_refresh_without_a_baseline_reports_even_a_clean_verdict(editor_factory):
+    editor_factory([step(UNREADABLE)] * 2 + [step(status(6, reloaded=True))])
+    resp = await _refresh(compile="none")
+    assert resp["data"]["compile"]["verdict"] == "clean", resp
+
+
+@pytest.mark.asyncio
+async def test_refresh_with_plugin_without_the_handler_is_unknown(editor_factory):
+    editor_factory([step(status(5))], unsupported=True)
+    resp = await _refresh(compile="none")
+    assert resp["data"]["compile"]["verdict"] == "unknown", resp
+
+
+@pytest.mark.asyncio
+async def test_refresh_failures_after_the_send_carry_an_unknown_verdict(editor_factory, monkeypatch):
+    import services.tools.refresh_unity as refresh_mod
+    editor_factory([step(status(5))])
+    real_send = refresh_mod.unity_transport.send_with_unity_instance
+
+    async def send(send_fn, instance, command, params, **kwargs):
+        if command == "refresh_unity":
+            return {"success": False, "error": "Unity did not respond within 30s", "hint": "retry"}
+        return await real_send(send_fn, instance, command, params, **kwargs)
+
+    monkeypatch.setattr(refresh_mod.unity_transport, "send_with_unity_instance", send)
+    resp = await _refresh(compile="none", wait_for_ready=False)
+    assert resp["success"] is False
+    assert resp["data"]["compile"]["verdict"] == "unknown", resp
 
 
 # ── registration: ledger and profiles ─────────────────────────────────────────

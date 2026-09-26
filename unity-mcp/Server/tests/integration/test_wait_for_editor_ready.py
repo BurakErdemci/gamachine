@@ -2,7 +2,6 @@ import asyncio
 import os
 import pytest
 
-from services.tools.refresh_unity import is_reloading_rejection
 from .test_helpers import DummyContext
 
 
@@ -102,25 +101,6 @@ async def test_exception_during_poll_keeps_trying(monkeypatch):
     assert call_count >= 3
 
 
-def test_is_reloading_rejection_true():
-    """Detects a reloading rejection response."""
-    resp = {"success": False, "error": "Unity is reloading", "data": {"reason": "reloading"}, "hint": "retry"}
-    assert is_reloading_rejection(resp) is True
-
-
-def test_is_reloading_rejection_false_on_success():
-    assert is_reloading_rejection({"success": True, "data": {"reason": "reloading"}, "hint": "retry"}) is False
-
-
-def test_is_reloading_rejection_false_on_other_error():
-    assert is_reloading_rejection({"success": False, "error": "timeout", "data": {}, "hint": "retry"}) is False
-
-
-def test_is_reloading_rejection_false_on_non_dict():
-    assert is_reloading_rejection("some string") is False
-    assert is_reloading_rejection(None) is False
-
-
 # --- is_connection_lost_after_send tests ---
 
 from services.tools.refresh_unity import is_connection_lost_after_send
@@ -177,25 +157,46 @@ async def test_send_mutation_returns_success_directly(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_mutation_retries_on_reloading_rejection(monkeypatch):
-    """Reloading rejection triggers one retry after wait."""
+async def test_send_mutation_does_not_resend_after_reloading_rejection(monkeypatch):
+    """The transport's only reloading reply comes after it already sent the
+    command (unity_connection.py:846 then :896), so the write is not sent again."""
     from services.tools import refresh_unity as mod
 
     call_count = 0
+    rejection = {"success": False, "data": {"reason": "reloading"}, "hint": "retry"}
 
     async def fake_send(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        if call_count == 1:
-            return {"success": False, "data": {"reason": "reloading"}, "hint": "retry"}
-        return {"success": True, "data": {"retried": True}}
+        return rejection if call_count == 1 else {"success": True, "data": {"retried": True}}
 
     monkeypatch.setattr(mod.unity_transport, "send_with_unity_instance", fake_send)
 
     ctx = DummyContext()
     resp = await send_mutation(ctx, None, "manage_script", {"action": "create"})
-    assert resp.get("success") is True
-    assert call_count == 2
+    assert resp == rejection
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_send_mutation_with_verify_does_not_resend_after_reloading_rejection(monkeypatch):
+    from services.tools import refresh_unity as mod
+
+    sent = []
+
+    async def fake_send(send_fn, instance, command, params, **kwargs):
+        sent.append((command, kwargs.get("retry_on_reload")))
+        return {"success": False, "error": "Unity is reloading; please retry",
+                "data": {"reason": "reloading"}, "hint": "retry"}
+
+    async def fake_verify():
+        return None
+
+    monkeypatch.setattr(mod.unity_transport, "send_with_unity_instance", fake_send)
+    resp = await send_mutation(DummyContext(), None, "manage_script", {"action": "update"},
+                               verify_after_disconnect=fake_verify)
+    assert resp["success"] is False
+    assert sent == [("manage_script", False)]
 
 
 @pytest.mark.asyncio
