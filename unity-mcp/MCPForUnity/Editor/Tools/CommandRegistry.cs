@@ -19,14 +19,16 @@ namespace MCPForUnity.Editor.Tools
         public string CommandName { get; }
         public Func<JObject, object> SyncHandler { get; }
         public Func<JObject, Task<object>> AsyncHandler { get; }
+        public bool IsResource { get; }
 
         public bool IsAsync => AsyncHandler != null;
 
-        public HandlerInfo(string commandName, Func<JObject, object> syncHandler, Func<JObject, Task<object>> asyncHandler)
+        public HandlerInfo(string commandName, Func<JObject, object> syncHandler, Func<JObject, Task<object>> asyncHandler, bool isResource = false)
         {
             CommandName = commandName;
             SyncHandler = syncHandler;
             AsyncHandler = asyncHandler;
+            IsResource = isResource;
         }
     }
 
@@ -156,7 +158,7 @@ namespace MCPForUnity.Editor.Tools
                 if (typeof(Task).IsAssignableFrom(method.ReturnType))
                 {
                     var asyncHandler = CreateAsyncHandlerDelegate(method, commandName);
-                    handlerInfo = new HandlerInfo(commandName, null, asyncHandler);
+                    handlerInfo = new HandlerInfo(commandName, null, asyncHandler, isResource);
                 }
                 else
                 {
@@ -164,7 +166,7 @@ namespace MCPForUnity.Editor.Tools
                         typeof(Func<JObject, object>),
                         method
                     );
-                    handlerInfo = new HandlerInfo(commandName, handler, null);
+                    handlerInfo = new HandlerInfo(commandName, handler, null, isResource);
                 }
 
                 _handlers[commandName] = handlerInfo;
@@ -223,18 +225,38 @@ namespace MCPForUnity.Editor.Tools
         {
             var handlerInfo = GetHandlerInfo(commandName);
 
-            if (handlerInfo.IsAsync)
-            {
-                ExecuteAsyncHandler(handlerInfo, @params, commandName, tcs);
-                return null;
-            }
-
-            if (handlerInfo.SyncHandler == null)
+            if (!handlerInfo.IsAsync && handlerInfo.SyncHandler == null)
             {
                 throw new InvalidOperationException($"Handler for '{commandName}' does not provide a synchronous implementation");
             }
 
-            return handlerInfo.SyncHandler(@params);
+            // One Undo group per top-level agent action; nested calls (batch_execute) join it.
+            var scope = McpActionJournal.Begin(commandName, @params, handlerInfo.IsResource);
+            var previous = McpActionJournal.Enter(scope);
+            try
+            {
+                if (handlerInfo.IsAsync)
+                {
+                    ExecuteAsyncHandler(handlerInfo, @params, commandName, tcs, scope);
+                    return null;
+                }
+
+                object result;
+                try
+                {
+                    result = handlerInfo.SyncHandler(@params);
+                }
+                catch (Exception ex)
+                {
+                    McpActionJournal.Complete(scope, null, ex);
+                    throw;
+                }
+                return McpActionJournal.Complete(scope, result, null);
+            }
+            finally
+            {
+                McpActionJournal.Exit(scope, previous);
+            }
         }
 
         /// <summary>
@@ -247,6 +269,7 @@ namespace MCPForUnity.Editor.Tools
         {
             var handlerInfo = GetHandlerInfo(commandName);
             var payload = @params ?? new JObject();
+            McpActionJournal.NoteNested(commandName, payload);
 
             if (handlerInfo.IsAsync)
             {
@@ -322,7 +345,8 @@ namespace MCPForUnity.Editor.Tools
             HandlerInfo handlerInfo,
             JObject parameters,
             string commandName,
-            TaskCompletionSource<string> tcs)
+            TaskCompletionSource<string> tcs,
+            McpActionScope scope = null)
         {
             if (handlerInfo.AsyncHandler == null)
             {
@@ -337,14 +361,20 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception ex)
             {
+                McpActionJournal.Complete(scope, null, ex);
                 ReportAsyncFailure(commandName, tcs, ex);
                 return;
             }
 
             if (handlerTask == null)
             {
-                CompleteAsyncCommand(commandName, tcs, null);
+                CompleteAsyncCommand(commandName, tcs, McpActionJournal.Complete(scope, null, null));
                 return;
+            }
+
+            if (scope != null)
+            {
+                handlerTask = McpActionJournal.Track(scope, handlerTask);
             }
 
             async void AwaitHandler()

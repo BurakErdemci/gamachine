@@ -410,6 +410,12 @@ namespace MCPForUnity.Editor.Services.Transport
                     syncLogStatus = "ERROR";
                     syncLogError = errResp.Error;
                 }
+                else if (result is JObject annotated && annotated.Value<bool?>("success") == false)
+                {
+                    // McpActionJournal hands back annotated results as JObject.
+                    syncLogStatus = "ERROR";
+                    syncLogError = annotated.Value<string>("error");
+                }
                 McpLogRecord.Log(command.type, parameters, logType, syncLogStatus, sw?.ElapsedMilliseconds ?? 0, syncLogError);
 
                 var response = new { status = "success", result };
