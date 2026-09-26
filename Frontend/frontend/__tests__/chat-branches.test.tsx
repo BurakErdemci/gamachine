@@ -97,7 +97,12 @@ beforeEach(() => {
     }
     return { data: {} }
   })
-  mocked.put.mockReset().mockImplementation(async (url: string, body: any) => ({ data: { id: Number(String(url).split('/').at(-2)), hidden: body.hidden } }))
+  // Stored like the server would, since a stored hide is followed by a list read.
+  mocked.put.mockReset().mockImplementation(async (url: string, body: any) => {
+    const id = Number(String(url).split('/').at(-2))
+    serverList = serverList.map(c => (c.id === id ? { ...c, hidden: body.hidden } : c))
+    return { data: { id, hidden: body.hidden } }
+  })
   mocked.delete.mockReset()
 })
 

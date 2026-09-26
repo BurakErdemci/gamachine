@@ -76,7 +76,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
   const { t } = useLang();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const fam = familyOf(conversations, familyRootId(conversations, activeConvId));
+  const fam = familyOf(conversations, familyRootId(conversations, activeConvId), activeConvId);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -102,7 +102,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
       <div role="tablist" aria-label={t('branch.tabs')} className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto no-scrollbar">
         {tabs.map(conv => {
           const active = conv.id === activeConvId;
-          const isBranch = conv.parent_id != null;
+          const isBranch = conv.id !== fam.root?.id;
           return (
             <div
               key={conv.id}

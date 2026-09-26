@@ -13,16 +13,25 @@ export const STATUS_DOT: Record<ConvStatus, { className: string; label: TKey }> 
 // outranks work in progress, which outranks a finished-unread turn.
 const PRIORITY: ConvStatus[] = ['awaiting', 'running', 'unread'];
 
-export const rootIdOf = (conv: Pick<Conversation, 'id' | 'parent_id'>): number => conv.parent_id ?? conv.id;
+// A branch whose root is not in the list (deleted elsewhere, or not listed
+// yet) stands as a root of its own; otherwise nothing would lead to it.
+const branchParentIn = (conversations: Conversation[], conv: Pick<Conversation, 'parent_id'>): number | null =>
+  conv.parent_id != null && conversations.some(c => c.id === conv.parent_id) ? conv.parent_id : null;
+
+export const rootIdOf = (conversations: Conversation[], conv: Pick<Conversation, 'id' | 'parent_id'>): number =>
+  branchParentIn(conversations, conv) ?? conv.id;
+
+export const isBranchIn = (conversations: Conversation[], conv: Pick<Conversation, 'parent_id'>): boolean =>
+  branchParentIn(conversations, conv) != null;
 
 export const rootsOf = (conversations: Conversation[]): Conversation[] =>
-  conversations.filter(c => c.parent_id == null);
+  conversations.filter(c => !isBranchIn(conversations, c));
 
 /** Root id of the family `convId` belongs to; `convId` itself when it is not listed. */
 export const familyRootId = (conversations: Conversation[], convId: number | null): number | null => {
   if (convId == null) return null;
   const conv = conversations.find(c => c.id === convId);
-  return conv ? rootIdOf(conv) : convId;
+  return conv ? rootIdOf(conversations, conv) : convId;
 };
 
 export interface Family {
@@ -36,15 +45,20 @@ export interface Family {
 const byCreation = (a: Conversation, b: Conversation) =>
   (a.created_at || '').localeCompare(b.created_at || '') || a.id - b.id;
 
-export const familyOf = (conversations: Conversation[], rootId: number | null): Family => {
+/**
+ * `activeId` counts as visible even when hidden: the chat on screen always has
+ * a tab, whatever the list says (a failed reopen, another client's hide).
+ */
+export const familyOf = (conversations: Conversation[], rootId: number | null, activeId: number | null = null): Family => {
   if (rootId == null) return { root: null, branches: [], visible: [], hidden: [] };
   const root = conversations.find(c => c.id === rootId) ?? null;
-  const branches = conversations.filter(c => c.parent_id === rootId).sort(byCreation);
+  const branches = conversations.filter(c => c.id !== rootId && c.parent_id === rootId).sort(byCreation);
+  const shown = (b: Conversation) => !b.hidden || b.id === activeId;
   return {
     root,
     branches,
-    visible: branches.filter(b => !b.hidden),
-    hidden: branches.filter(b => b.hidden),
+    visible: branches.filter(shown),
+    hidden: branches.filter(b => !shown(b)),
   };
 };
 

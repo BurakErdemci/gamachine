@@ -9,7 +9,7 @@ import { cevir } from '../../lib/i18n';
 import { parseContextReport } from '../../lib/contextReport';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { apiHataMesaji } from '../../lib/apiError';
-import { familyOf } from '../../lib/convFamily';
+import { familyOf, familyRootId, isBranchIn } from '../../lib/convFamily';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -330,11 +330,24 @@ export const useChat = (
     setPendingGenFiles: (v: any) => void; setPendingDelete: (v: any) => void;
   } | null>(null);
 
+  // Only the newest list request may write the list: an older answer was read
+  // before a later hide, unhide or branch and would undo it. A local change
+  // bumps this too, so reads already in flight cannot overwrite it.
+  const listSeqRef = useRef(0);
+  // Hide/unhide requests the server may not have stored yet; laid over any
+  // list read while they are in flight. The token tells overlapping requests
+  // for the same chat apart.
+  const pendingHiddenRef = useRef(new Map<number, { hidden: boolean; token: number }>());
+
   const fetchConversations = useCallback(async (userId: number) => {
     if (!API) return;
+    const seq = ++listSeqRef.current;
     try {
       const res = await axios.get(`${API}/conversations/${userId}`);
-      setConversations(res.data);
+      if (seq !== listSeqRef.current) return;
+      const pending = pendingHiddenRef.current;
+      setConversations(!Array.isArray(res.data) || pending.size === 0 ? res.data
+        : res.data.map((c: Conversation) => (pending.has(c.id) ? { ...c, hidden: pending.get(c.id)!.hidden } : c)));
     } catch (err) { console.error("Sohbet listesi hatası:", err); }
   }, [API]);
 
@@ -385,27 +398,42 @@ export const useChat = (
   }, [API, patchConv, refreshContextUsage, rt]);
 
   // Optimistic: the tab moves at once and moves back if the server refuses.
+  // Either way the list is read again afterwards, so the server's state wins.
   const setBranchHidden = useCallback(async (convId: number, hidden: boolean) => {
     if (!API) return false;
     const mark = (h: boolean) =>
       setConversations(prev => prev.map(c => (c.id === convId ? { ...c, hidden: h } : c)));
+    const pending = pendingHiddenRef.current;
+    const token = ++listSeqRef.current;
+    pending.set(convId, { hidden, token });
     mark(hidden);
+    const settle = () => {
+      const latest = pending.get(convId)?.token === token;
+      if (latest) pending.delete(convId);
+      return latest;
+    };
     try {
       await axios.put(`${API}/conversations/${convId}/hidden`, { hidden });
+      settle();
       return true;
     } catch (err) {
-      mark(!hidden);
+      // A later request for the same chat owns its state; do not roll it back.
+      if (settle()) mark(!hidden);
       showToast(apiHataMesaji(err, cevir('branch.hideFailed')), 'error');
       return false;
+    } finally {
+      if (user) void fetchConversations(user.id);
     }
-  }, [API, showToast]);
+  }, [API, fetchConversations, showToast, user]);
 
   const selectConversation = useCallback(async (conv: Conversation) => {
     if (editingId) return;
     // Every way into a chat (closed-branches menu, notification click) lands
-    // here, and a chat on screen must have a tab.
+    // here. Not awaited: the tab does not depend on it, since the chat on
+    // screen is always drawn as a tab (familyOf's activeId), so a failed
+    // unhide cannot leave it tabless.
     const listed = conversationsRef.current.find(c => c.id === conv.id) ?? conv;
-    if (listed.parent_id != null && listed.hidden) void setBranchHidden(conv.id, false);
+    if (isBranchIn(conversationsRef.current, listed) && listed.hidden) void setBranchHidden(conv.id, false);
     setActiveConvId(conv.id);
     // Switching never cancels anything. A chat whose client copy holds more
     // than the server's (a running turn, an open card bound to a client
@@ -494,9 +522,10 @@ export const useChat = (
       const res = await axios.post(`${API}/conversations/${sourceId}/branch`);
       const created = res.data as Conversation;
       setConversations(prev => (prev.some(c => c.id === created.id) ? prev : [...prev, created]));
+      // Started now so it supersedes list reads made before the server had it.
+      void fetchConversations(user.id);
       // A chat the user opened meanwhile stays on screen; the tab still appears.
       if (selectionRef.current === selection) await selectConversation(created);
-      void fetchConversations(user.id);
       return created.id;
     } catch (err: any) {
       const fallback = err?.response?.status === 409 ? 'branch.busy' : 'branch.failed';
@@ -510,9 +539,9 @@ export const useChat = (
   const closeBranch = useCallback(async (convId: number) => {
     const list = conversationsRef.current;
     const conv = list.find(c => c.id === convId);
-    if (!conv || conv.parent_id == null) return false;
+    if (!conv || !isBranchIn(list, conv)) return false;
     if (activeConvIdRef.current === convId) {
-      const fam = familyOf(list, conv.parent_id);
+      const fam = familyOf(list, familyRootId(list, convId), convId);
       const tabs = [fam.root, ...fam.visible].filter((c): c is Conversation => !!c);
       const next = tabs[tabs.findIndex(c => c.id === convId) - 1];
       if (next) void selectConversation(next);
