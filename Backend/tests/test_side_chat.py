@@ -214,6 +214,11 @@ def test_chat_stop_on_a_side_chat_does_not_deny_an_unowned_card(env):
     assert client.delete(f"/conversations/{side}/side", headers=H).status_code == 200
     assert "unowned" in client.get("/mcp-pending", headers=H).json()["pending"]
 
+    # Codex sideaudit: after the sweep the side id has no row; its Stop
+    # must still leave other chats' unowned cards alone.
+    assert client.post(f"/chat-stop/{side}", headers=H).status_code == 200
+    assert "unowned" in client.get("/mcp-pending", headers=H).json()["pending"]
+
     # The main chat's Stop keeps its old meaning: unowned cards are denied.
     client.post(f"/chat-stop/{main}", headers=H)
     assert "unowned" not in client.get("/mcp-pending", headers=H).json()["pending"]

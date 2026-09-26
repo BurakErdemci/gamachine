@@ -1593,13 +1593,16 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                 stopped = True
             # A side chat's cards are refused before they exist, so its Stop
             # has none to deny; the Stop-style denial of UNOWNED cards would
-            # hit the main chat's.
+            # hit the main chat's. A chat with no row (a swept side chat, a
+            # deleted one) had its own cards purged already: its Stop must
+            # not reach anyone's unowned cards either (Codex sideaudit).
             try:
-                is_side = _side_main_of(conversation_id) is not None
+                ordinary = (db.get_conversation_owner(conversation_id) is not None
+                            and _side_main_of(conversation_id) is None)
             except Exception:
-                logger.warning("[chat-stop] side lookup failed for %s", conversation_id)
-                is_side = False
-            if not is_side and _abort_pending_mcp_approvals(conversation_id):
+                logger.warning("[chat-stop] chat lookup failed for %s", conversation_id)
+                ordinary = False
+            if ordinary and _abort_pending_mcp_approvals(conversation_id):
                 stopped = True
             return {"status": "ok" if stopped else "no_session"}
         except Exception as e:
