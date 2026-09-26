@@ -302,6 +302,35 @@ class TestFlipOrdering(GateStateCase, unittest.TestCase):
         self.assertEqual(approval_mode.current_mode(), "step")
         self.assertEqual(self.file_mode(), "step")
 
+    def test_a_secret_change_that_makes_auto_effective_loosens_the_gate(self):
+        """set_ui_secret published auto but left a live child's hook on its
+        earlier step state, denying tools the published mode allows."""
+        class FreshStore:
+            def get_setting(self, key):
+                return None
+        approval_mode.set_ui_secret("")
+        approval_mode.bind_store(FreshStore())
+        self.assertEqual(approval_mode.current_mode(), "step")  # fresh install, no secret
+        session = self.live_session()
+        agy_provider.write_gate_state(auto=False)
+        approval_mode.set_ui_secret("ui-secret")
+        self.assertEqual(approval_mode.current_mode(), "auto")
+        self.assertEqual(self.file_mode(), "auto")
+        self.assertEqual(decide(WRITE, self.state)["decision"], "allow")
+        self.assertTrue(session.auto_approve)
+
+    def test_a_secret_set_before_any_session_writes_nothing(self):
+        """main.py sets the secret before uvicorn starts: nothing to loosen yet."""
+        class FreshStore:
+            def get_setting(self, key):
+                return None
+        approval_mode.set_ui_secret("")
+        approval_mode.bind_store(FreshStore())
+        with patch.object(agy_provider, "write_gate_state") as write:
+            approval_mode.set_ui_secret("ui-secret")
+        write.assert_not_called()
+        self.assertEqual(approval_mode.current_mode(), "auto")
+
     def test_no_agy_child_means_no_write(self):
         agy_session._SESSIONS[5] = agy_session.AgyStreamSession(5, cwd=self.tmp.name)
         with patch.object(agy_provider, "write_gate_state") as write:

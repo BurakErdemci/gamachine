@@ -287,11 +287,17 @@ def set_ui_secret(secret: str) -> None:
     new = (secret or "").encode("utf-8")
     with GATE_LOCK:
         with _LOCK:
+            before = _effective_mode_locked()
             after = _effective(_mode, _fresh_install, _from_row, new)
         if after == "step":
             _tighten_agy_gates()
         with _LOCK:
             _ui_secret = new
+        if after != before:
+            # As set_mode: live sessions follow, which is how a flip to auto
+            # loosens agy's hook. main.py calls this before uvicorn starts,
+            # when no session exists and this touches nothing.
+            _propagate_to_live_sessions(after == "auto")
 
 
 def ui_secret_configured() -> bool:
