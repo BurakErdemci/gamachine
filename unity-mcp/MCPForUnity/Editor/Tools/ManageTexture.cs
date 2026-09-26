@@ -116,6 +116,9 @@ namespace MCPForUnity.Editor.Tools
             }
 
             string fullPath = AssetPathUtility.SanitizeAssetPath(path);
+            var targetError = ValidateRawWriteTarget(fullPath, out string absolutePath);
+            if (targetError != null)
+                return targetError;
             EnsureDirectoryExists(fullPath);
 
             try
@@ -202,7 +205,7 @@ namespace MCPForUnity.Editor.Tools
                     UnityEngine.Object.DestroyImmediate(texture);
                     return new ErrorResponse($"Failed to encode texture for '{fullPath}'");
                 }
-                File.WriteAllBytes(GetAbsolutePath(fullPath), imageData);
+                File.WriteAllBytes(absolutePath, imageData);
 
                 AssetDatabase.ImportAsset(fullPath, ImportAssetOptions.ForceUpdate);
 
@@ -282,7 +285,9 @@ namespace MCPForUnity.Editor.Tools
                     if (texture == null)
                         return new ErrorResponse($"Failed to load texture at path: {fullPath}");
 
-                    string absolutePath = GetAbsolutePath(fullPath);
+                    var targetError = ValidateRawWriteTarget(fullPath, out string absolutePath);
+                    if (targetError != null)
+                        return targetError;
                     byte[] fileData = File.ReadAllBytes(absolutePath);
                     Texture2D editableTexture = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false);
                     editableTexture.LoadImage(fileData);
@@ -406,6 +411,9 @@ namespace MCPForUnity.Editor.Tools
             }
 
             string fullPath = AssetPathUtility.SanitizeAssetPath(path);
+            var targetError = ValidateRawWriteTarget(fullPath, out string absolutePath);
+            if (targetError != null)
+                return targetError;
             EnsureDirectoryExists(fullPath);
 
             Texture2D texture = null;
@@ -429,7 +437,7 @@ namespace MCPForUnity.Editor.Tools
                 {
                     return new ErrorResponse($"Failed to encode texture for '{fullPath}'");
                 }
-                File.WriteAllBytes(GetAbsolutePath(fullPath), imageData);
+                File.WriteAllBytes(absolutePath, imageData);
 
                 AssetDatabase.ImportAsset(fullPath, ImportAssetOptions.ForceUpdate);
 
@@ -495,6 +503,9 @@ namespace MCPForUnity.Editor.Tools
             }
 
             string fullPath = AssetPathUtility.SanitizeAssetPath(path);
+            var targetError = ValidateRawWriteTarget(fullPath, out string absolutePath);
+            if (targetError != null)
+                return targetError;
             EnsureDirectoryExists(fullPath);
 
             Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
@@ -509,7 +520,7 @@ namespace MCPForUnity.Editor.Tools
                 {
                     return new ErrorResponse($"Failed to encode texture for '{fullPath}'");
                 }
-                File.WriteAllBytes(GetAbsolutePath(fullPath), imageData);
+                File.WriteAllBytes(absolutePath, imageData);
 
                 AssetDatabase.ImportAsset(fullPath, ImportAssetOptions.ForceUpdate);
 
@@ -1098,6 +1109,62 @@ namespace MCPForUnity.Editor.Tools
         private static bool AssetExists(string path)
         {
             return !string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(path));
+        }
+
+        // Exactly what TextureOps.EncodeTexture produces; any other name would receive PNG bytes.
+        private static readonly string[] RawWriteExtensions = { ".png", ".jpg", ".jpeg" };
+
+        private static bool IsRawWriteExtension(string extension)
+        {
+            return Array.Exists(RawWriteExtensions,
+                e => string.Equals(e, extension, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Gate for every File.WriteAllBytes in this tool. Returns null when the target may be written.
+        /// </summary>
+        private static ErrorResponse ValidateRawWriteTarget(string assetPath, out string absolutePath)
+        {
+            absolutePath = null;
+            string allowed = string.Join(", ", RawWriteExtensions);
+            if (string.IsNullOrEmpty(assetPath))
+                return new ErrorResponse("Invalid texture path.");
+            if (!IsRawWriteExtension(Path.GetExtension(assetPath)))
+                return new ErrorResponse(
+                    $"Refusing to write image bytes to '{assetPath}': the extension must be one of {allowed}.");
+
+            try
+            {
+                absolutePath = Path.GetFullPath(GetAbsolutePath(assetPath));
+            }
+            catch (Exception e)
+            {
+                return new ErrorResponse($"Invalid texture path '{assetPath}': {e.Message}");
+            }
+
+            if (!File.Exists(absolutePath))
+                return null;
+
+            // Windows resolves NTFS 8.3 aliases, so "LONGNA~1.PNG" can open "LongName.pngx" or a
+            // .prefab/.meta. Unity's Mono lists only long names (measured: the alias pattern returns
+            // nothing), so a file that exists but is not listed under the requested name is an alias.
+            string[] onDisk = Directory.GetFiles(
+                Path.GetDirectoryName(absolutePath), Path.GetFileName(absolutePath));
+            if (onDisk.Length == 0)
+                return new ErrorResponse(
+                    $"Refusing to write image bytes to '{assetPath}': it opens a file stored under a " +
+                    "different name (an NTFS 8.3 short-name alias).");
+            if (onDisk.Length != 1 || !IsRawWriteExtension(Path.GetExtension(onDisk[0])))
+                return new ErrorResponse(
+                    $"Refusing to write image bytes to '{assetPath}': the file on disk is " +
+                    $"'{Path.GetFileName(onDisk[0])}', not one of {allowed}.");
+
+            Type existingType = AssetDatabase.GetMainAssetTypeAtPath(assetPath);
+            if (existingType == null || !typeof(Texture).IsAssignableFrom(existingType))
+                return new ErrorResponse(
+                    $"Refusing to overwrite '{assetPath}': the existing file is not a texture asset at that path.");
+
+            return null;
         }
 
         private static void EnsureDirectoryExists(string assetPath)
