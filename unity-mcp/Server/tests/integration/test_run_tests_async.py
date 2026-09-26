@@ -433,3 +433,83 @@ async def test_get_test_job_running_poll_does_not_read_compile_status(monkeypatc
     assert resp.data.status == "running"
     assert resp.data.compile is None
     assert "get_compile_status" not in sent
+
+
+# --- The start and clear commands are sent once, even when Unity answers "reloading". ---
+
+class _FakeConnection:
+    def __init__(self, first_reply):
+        self.first_reply = first_reply
+        self.calls = []
+
+    def send_command(self, command_type, params, max_attempts=None):
+        if command_type == "get_compile_status":
+            return {"success": True, "data": _compile_status()}
+        self.calls.append(command_type)
+        if len(self.calls) == 1:
+            return self.first_reply
+        return _STARTED
+
+
+_RELOADING_REPLIES = [
+    {"success": False, "data": {"reason": "reloading", "retry_after_ms": 1}},
+    {"success": False, "state": "reloading"},
+    {"success": False, "error": "Unity is reloading; please retry"},
+]
+
+
+async def _forwarding_router(send_fn, unity_instance, *args, **kwargs):
+    return await send_fn(*args, **kwargs)
+
+
+async def _kwarg_dropping_router(send_fn, unity_instance, command_type, params, **kwargs):
+    return await send_fn(command_type, params, retry_ms=1, max_retries=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("router", [_forwarding_router, _kwarg_dropping_router], ids=["forwarding", "kwarg-dropping"])
+@pytest.mark.parametrize("first_reply", _RELOADING_REPLIES, ids=["data-reason", "state", "message"])
+@pytest.mark.parametrize("clear_stuck", [False, True], ids=["start", "clear"])
+async def test_run_tests_reload_reply_is_not_resent(monkeypatch, router, first_reply, clear_stuck):
+    import services.tools.run_tests as mod
+    import transport.legacy.unity_connection as legacy
+
+    conn = _FakeConnection(first_reply)
+    monkeypatch.setattr(legacy, "get_unity_connection", lambda instance_id=None: conn)
+    monkeypatch.setattr(mod.unity_transport, "send_with_unity_instance", router)
+
+    async def no_preflight(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mod, "preflight", no_preflight)
+    resp = await mod.run_tests(DummyContext(), clear_stuck=clear_stuck)
+
+    assert conn.calls == ["run_tests"]
+    assert resp.success is False
+    assert resp.hint == "retry"
+    assert resp.data["reason"] == "reloading"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clear_stuck", [False, True], ids=["start", "clear"])
+async def test_run_tests_asks_the_router_not_to_retry(monkeypatch, clear_stuck):
+    """The HTTP route reads retry_on_reload from the router's keyword arguments."""
+    import services.tools.run_tests as mod
+
+    seen = []
+
+    async def recording_router(send_fn, unity_instance, command_type, params, **kwargs):
+        if command_type == "run_tests":
+            seen.append(kwargs.get("retry_on_reload"))
+        if command_type == "get_compile_status":
+            return {"success": True, "data": _compile_status()}
+        return _STARTED
+
+    async def no_preflight(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(mod.unity_transport, "send_with_unity_instance", recording_router)
+    monkeypatch.setattr(mod, "preflight", no_preflight)
+    await mod.run_tests(DummyContext(), clear_stuck=clear_stuck)
+
+    assert seen == [False]

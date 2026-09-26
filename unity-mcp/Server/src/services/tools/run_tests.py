@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
 from typing import Annotated, Any, Literal
@@ -16,7 +17,7 @@ from services.tools import get_unity_instance_from_context
 from services.tools.compile_status import live_verdict, read_compile_status
 from services.tools.preflight import preflight
 import transport.unity_transport as unity_transport
-from transport.legacy.unity_connection import async_send_command_with_retry
+from transport.legacy.unity_connection import _is_reloading_response, async_send_command_with_retry
 from transport.plugin_hub import PluginHub
 from utils.focus_nudge import nudge_unity_focus, should_nudge, reset_nudge_backoff
 
@@ -164,6 +165,27 @@ async def _compile_verdict(unity_instance: str | None) -> tuple[dict[str, Any], 
     return live_verdict(read.status, read.problem), read.unsupported
 
 
+# The start and clear commands are not idempotent. The legacy sender's reload retry
+# resends after a reply it reads as reloading, and that reply can follow execution
+# (the same class refresh_unity.send_mutation handles for script writes). Bound into
+# the sender as well, so a router that drops keyword arguments cannot re-enable it.
+_send_once = functools.partial(async_send_command_with_retry, retry_on_reload=False)
+
+
+async def _send_run_command(unity_instance: str | None, params: dict[str, Any]) -> Any:
+    response = await unity_transport.send_with_unity_instance(
+        _send_once, unity_instance, "run_tests", params, retry_on_reload=False)
+    succeeded = response.get("success", True) if isinstance(response, dict) else getattr(response, "success", False)
+    if not succeeded and _is_reloading_response(response):
+        return MCPResponse(
+            success=False, error="Unity is reloading; please retry", hint="retry",
+            message=("Unity answered that it is reloading. The command was not resent and may already have run; "
+                     "retrying is safe: a second start is refused while a job runs, a second clear finds "
+                     "nothing to clear."),
+            data={"reason": "reloading", "retry_after_ms": 1000})
+    return response
+
+
 def _compile_refusal(verdict: dict[str, Any]) -> MCPResponse:
     kind = verdict["verdict"]
     if kind == "errors":
@@ -242,12 +264,9 @@ async def run_tests(
     # Before init_timeout validation and preflight: requires_no_tests would reject the very call
     # that exists to release the orphaned job.
     if clear_stuck:
-        response = await unity_transport.send_with_unity_instance(
-            async_send_command_with_retry,
-            unity_instance,
-            "run_tests",
-            {"clear_stuck": True},
-        )
+        response = await _send_run_command(unity_instance, {"clear_stuck": True})
+        if isinstance(response, MCPResponse):
+            return response
         if isinstance(response, dict):
             return MCPResponse(**response)
         return MCPResponse(success=False, error=str(response))
@@ -300,13 +319,9 @@ async def run_tests(
     if init_timeout is not None and init_timeout > 0:
         params["initTimeout"] = init_timeout
 
-    response = await unity_transport.send_with_unity_instance(
-        async_send_command_with_retry,
-        unity_instance,
-        "run_tests",
-        params,
-    )
-
+    response = await _send_run_command(unity_instance, params)
+    if isinstance(response, MCPResponse):
+        return response
     if isinstance(response, dict):
         if not response.get("success", True):
             return MCPResponse(**response)
