@@ -848,7 +848,6 @@ export const useChat = (
     } catch (err: any) {
       if (err?.name !== 'AbortError' && ownsTurn()) {
         lossy = true;
-        errored = true;
         updateMessages(prev => [...prev, { id: Date.now() + 2, role: 'assistant', content: cevir('chat.errorOccurred'), smells: [], timestamp: new Date().toISOString() }]);
       }
     } finally {
@@ -860,7 +859,9 @@ export const useChat = (
         patchConv(targetConvId, r => ({
           loading: false, activity: null, unread: !visible, unsynced: !visible,
           clientOnly: r.clientOnly || lossy,
-          // A stream that ended without `done`/`response` did not finish.
+          // Failed = the backend reported an error, or the stream ended without
+          // `done`/`response`. A transport error AFTER `done` does not undo a
+          // finished turn (Codex notifyaudit, done-then-read-error).
           turnEnd: { seq: ++eventSeqRef.current, failed: errored || !finishedCleanly },
         }));
         if (!visible && finishedCleanly && !lossy) void syncFinished(targetConvId);

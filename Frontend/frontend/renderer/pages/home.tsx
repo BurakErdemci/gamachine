@@ -402,6 +402,7 @@ export default function Home() {
     attention: chat.attention,
     trayGates: mcp.unknownGates,
     bridgeSynced: mcp.synced,
+    screenCardOpen: !!fs.pendingDelete || !!fs.pendingGenFiles,
     onOpenConversation: (conv) => { chat.selectConversation(conv); setIsChatOpen(true); },
   });
 

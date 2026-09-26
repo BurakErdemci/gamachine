@@ -89,6 +89,7 @@ const Harness: React.FC = () => {
     attention: chat.attention,
     trayGates: mcp.unknownGates,
     bridgeSynced: mcp.synced,
+    screenCardOpen: false,
     onOpenConversation: chat.selectConversation,
   })
   api = { chat, mcp }

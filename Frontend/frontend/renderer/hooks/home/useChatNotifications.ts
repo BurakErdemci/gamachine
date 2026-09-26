@@ -22,8 +22,13 @@ import { stripBidi } from '../../lib/modelText';
 
 const getIpc = () => (typeof window !== 'undefined' ? (window as any).ipc : null);
 
-/** Remembered event ids before the set is pruned to the ones still present. */
-const SEEN_MAX = 2000;
+/**
+ * Remembered event ids before the oldest absent ones are evicted. At-most-once
+ * holds within this many newer events: a card parked while its chat is left
+ * drops out of `attention`, and if this many other events pass before it comes
+ * back it can fire again. Ids are short strings, so the bound costs little.
+ */
+const SEEN_MAX = 20000;
 /** Chat titles are shortened so the event text after them survives the main process cap. */
 const TITLE_MAX = 60;
 
@@ -52,12 +57,19 @@ interface ChatNotificationsParams {
   trayGates: Array<{ gateId: string }>;
   /** The bridge poll has answered once; see `useMCPApproval().synced`. */
   bridgeSynced: boolean;
+  /**
+   * A file card is open in the page's slot. That slot only ever holds the
+   * on-screen chat's card and is not part of the chat's runtime, so without
+   * this the chat looked idle and its turn end announced "finished" over an
+   * open card (Codex notifyaudit, open-file-card).
+   */
+  screenCardOpen: boolean;
   /** Opens a chat the way a sidebar click does. */
   onOpenConversation: (conv: Conversation) => void;
 }
 
 export const useChatNotifications = ({
-  conversations, activeConvId, attention, trayGates, bridgeSynced, onOpenConversation,
+  conversations, activeConvId, attention, trayGates, bridgeSynced, screenCardOpen, onOpenConversation,
 }: ChatNotificationsParams) => {
   const seenRef = useRef<Set<string>>(new Set());
   const syncedBeforeRef = useRef(false);
@@ -91,11 +103,12 @@ export const useChatNotifications = ({
       const newApproval = a.approvals.map(k => fresh(`${id}|${k}`)).includes(true);
       const newBridge = a.bridgeGates.map(g => fresh(`${id}|bridge:${g}`)).includes(true) && !baseline;
       const ended = a.turnEnd && fresh(`${id}|turn:${a.turnEnd.seq}`) ? a.turnEnd : null;
+      const awaiting = a.awaiting || (id === activeConvId && screenCardOpen);
       if (id === activeConvId && attended) continue;
       const name = () => chatName(conversationsRef.current, id);
       if ((newApproval || newBridge) && !awaitingBefore[id]) {
         out.push({ title: cevir('notify.title'), body: cevir('notify.awaiting', { baslik: name() }), conversationId: id });
-      } else if (ended && !a.awaiting && !newApproval && !newBridge) {
+      } else if (ended && !awaiting && !newApproval && !newBridge) {
         // A turn that ends with a card still open is announced by the card.
         out.push({
           title: cevir('notify.title'),
@@ -111,7 +124,14 @@ export const useChatNotifications = ({
 
     awaitingBeforeRef.current = Object.fromEntries(
       Object.entries(attention).map(([key, a]) => [key, a.awaiting]));
-    if (seen.size > SEEN_MAX) seenRef.current = present;
+    // Evict the oldest ids that are not present now (Set iteration is
+    // insertion order). The old prune replaced the set with only the present
+    // ids, so a briefly absent id fired again right after 2000 events (Codex
+    // notifyaudit, seen-pruning).
+    for (const key of seen) {
+      if (seen.size <= SEEN_MAX) break;
+      if (!present.has(key)) seen.delete(key);
+    }
 
     const ipc = getIpc();
     if (!ipc?.invoke) return;
@@ -122,7 +142,7 @@ export const useChatNotifications = ({
         console.warn('[notify] not shown:', err);
       }
     }
-  }, [attention, trayGates, bridgeSynced, activeConvId]);
+  }, [attention, trayGates, bridgeSynced, screenCardOpen, activeConvId]);
 
   useEffect(() => {
     const ipc = getIpc();
