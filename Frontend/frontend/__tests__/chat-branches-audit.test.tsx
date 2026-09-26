@@ -205,3 +205,38 @@ describe('audit · failed reopen', () => {
     expect(result.current.activeConvId).toBe(1)
   })
 })
+
+// Codex verifyf: sent in parallel, an older hide could be stored after a newer
+// reopen and hide the branch again. One chat's writes now go out in order.
+describe('audit · hide/unhide write order', () => {
+  it('sends a reopen only after the pending hide is stored, so the reopen wins', async () => {
+    const outstanding: Array<{ hidden: boolean; resolve: () => void }> = []
+    mocked.put.mockImplementation((url: string, body: { hidden: boolean }) => {
+      const id = Number(String(url).split('/').at(-2))
+      return new Promise(resolve => outstanding.push({
+        hidden: body.hidden,
+        resolve: () => {
+          serverList = serverList.map(c => (c.id === id ? { ...c, hidden: body.hidden } : c))
+          resolve({ data: { id, hidden: body.hidden } })
+        },
+      }))
+    })
+    const { result } = hook()
+    await act(async () => { await result.current.fetchConversations(1) })
+    const branch = result.current.conversations.find(c => c.id === 2)!
+    await act(async () => { await result.current.selectConversation(branch) })
+    let closing!: Promise<boolean>
+    act(() => { closing = result.current.closeBranch(2) })
+    await flush()
+    act(() => { void result.current.selectConversation(result.current.conversations.find(c => c.id === 2)!) })
+    await flush()
+    expect(outstanding.map(x => x.hidden)).toEqual([true])
+    await act(async () => { outstanding[0].resolve(); await closing })
+    await flush()
+    expect(outstanding.map(x => x.hidden)).toEqual([true, false])
+    await act(async () => { outstanding[1].resolve() })
+    await flush()
+    expect(serverList.find(c => c.id === 2)?.hidden).toBe(false)
+    expect(result.current.conversations.find(c => c.id === 2)?.hidden).toBe(false)
+  })
+})

@@ -338,6 +338,9 @@ export const useChat = (
   // list read while they are in flight. The token tells overlapping requests
   // for the same chat apart.
   const pendingHiddenRef = useRef(new Map<number, { hidden: boolean; token: number }>());
+  // One chat's hide/unhide PUTs go out one after another: sent in parallel, an
+  // older hide could be stored after a newer reopen (Codex verifyf).
+  const hiddenWritesRef = useRef(new Map<number, Promise<unknown>>());
 
   const fetchConversations = useCallback(async (userId: number) => {
     if (!API) return;
@@ -412,8 +415,13 @@ export const useChat = (
       if (latest) pending.delete(convId);
       return latest;
     };
+    const writes = hiddenWritesRef.current;
+    const write = (writes.get(convId) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => axios.put(`${API}/conversations/${convId}/hidden`, { hidden }));
+    writes.set(convId, write);
     try {
-      await axios.put(`${API}/conversations/${convId}/hidden`, { hidden });
+      await write;
       settle();
       return true;
     } catch (err) {
@@ -422,6 +430,7 @@ export const useChat = (
       showToast(apiHataMesaji(err, cevir('branch.hideFailed')), 'error');
       return false;
     } finally {
+      if (writes.get(convId) === write) writes.delete(convId);
       if (user) void fetchConversations(user.id);
     }
   }, [API, fetchConversations, showToast, user]);
