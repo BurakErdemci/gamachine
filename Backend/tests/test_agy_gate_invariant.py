@@ -352,15 +352,30 @@ class TestSpawnAndClose(GateStateCase, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session._active_process is None)
         self.assertEqual(agy_session._GATED_CHILDREN, {})
 
+    async def _close_until_retired(self, session):
+        """Start close() and hold it before its stop, past _retire_gate."""
+        await session._stop_lock.acquire()
+        close = asyncio.create_task(session.close())
+        for _ in range(1000):
+            if session._kapandi:
+                return close
+            if close.done():
+                close.result()
+            await asyncio.sleep(0)
+        self.fail("close() never reached its stop")
+
     async def test_closing_next_to_another_live_child_keeps_the_file_following_the_mode(self):
-        """The file is shared: "closed" would deny the other child too. The
-        closing child stays gated, so the next flip to step still reaches it."""
+        """The file is shared: "closed" would deny the other child too, so only
+        the kill ends the closing child's access. While that kill fails it
+        stays registered and gated (verification round 3: it was deregistered
+        while still able to write), and the next flip to step reaches it."""
         approval_mode.set_mode("auto")
         other = self.live_session(conversation_id=32)
         closing = self.live_session(conversation_id=33, unkillable=True)
         agy_provider.write_gate_state(auto=True)
-        close = await self._close_until_deregistered(closing)
+        close = await self._close_until_retired(closing)
         self.assertEqual(self.file_mode(), "auto")
+        self.assertIs(agy_session._SESSIONS.get(33), closing)
         self.assertIn(closing._gate_token, agy_session._GATED_CHILDREN)
         seen, observe = self.record_publishes()
         with observe:
@@ -369,7 +384,23 @@ class TestSpawnAndClose(GateStateCase, unittest.IsolatedAsyncioTestCase):
         closing._active_process.unkillable = False
         closing._stop_lock.release()
         await close
+        self.assertNotIn(33, agy_session._SESSIONS)
+        self.assertNotIn(closing._gate_token, agy_session._GATED_CHILDREN)
         self.assertFalse(other._active_process.killed)
+
+    async def test_a_closed_session_kept_by_a_failed_kill_is_replaced_on_reopen(self):
+        approval_mode.set_mode("auto")
+        self.live_session(conversation_id=32)
+        closing = self.live_session(conversation_id=33, unkillable=True)
+        agy_provider.write_gate_state(auto=True)
+        close = await self._close_until_retired(closing)
+        reopened = agy_session.get_session(33, cwd=self.tmp.name)
+        self.assertIsNot(reopened, closing)
+        self.assertFalse(reopened._kapandi)
+        closing._active_process.unkillable = False
+        closing._stop_lock.release()
+        await close
+        self.assertIs(agy_session._SESSIONS.get(33), reopened)
 
     async def test_close_kills_the_child_before_deregistering(self):
         session = self.live_session()

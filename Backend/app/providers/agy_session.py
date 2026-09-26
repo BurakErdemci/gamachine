@@ -336,10 +336,17 @@ class AgyStreamSession(SaglayiciSahipligi):
         child, so it is set to "closed" only when no other child may be
         reading it; otherwise it keeps following the mode (the other children
         need it), which in step mode already denies per the step grammar.
+
+        So beside another child in auto mode, only the kill takes this child's
+        write access away. If that kill fails, the session stays registered
+        until the child is reaped (close() deregisters it then), instead of
+        leaving a live, writing child that no session owns (verification
+        round 3, 26 Sep 2026).
         """
         from . import agy_provider
         with _gate_lock():
             process = self._active_process
+            still_writing = False
             if process is not None:
                 if _GATED_CHILDREN.get(self._gate_token, process) is not process:
                     self._gate_token = None
@@ -349,12 +356,15 @@ class AgyStreamSession(SaglayiciSahipligi):
                 others = any(token is not self._gate_token for token in _GATED_CHILDREN) or any(
                     session is not self and _may_have_child(session)
                     for session in _SESSIONS.values())
+                denied = False
                 if not others:
                     try:
                         agy_provider.write_gate_state(auto=False, closed=True)
+                        denied = True
                     except Exception:
                         logger.warning("[agy] closed gate state not written", exc_info=True)
-                        _remove_gate_state()  # if this fails too, the kill below stops it
+                        # If this fails too, the kill below stops it.
+                        denied = _remove_gate_state()
                 if process.returncode is None:
                     try:
                         process.kill()
@@ -363,7 +373,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                         # retries it, and the child stays tracked until then.
                         logger.debug("[agy] kill on close failed pid=%s",
                                      getattr(process, "pid", None), exc_info=True)
-            if _SESSIONS.get(self.conversation_id) is self:
+                        still_writing = not denied and process.returncode is None
+            if not still_writing and _SESSIONS.get(self.conversation_id) is self:
                 _SESSIONS.pop(self.conversation_id, None)
 
     async def close(self, *, preserve_resume: bool = False) -> None:
@@ -372,6 +383,12 @@ class AgyStreamSession(SaglayiciSahipligi):
             _RESUME_IDS.pop((self.conversation_id, self.cwd), None)
         await oturumu_kapat(self)
         await self._stop_process(force=True)
+        with _gate_lock():
+            # _retire_gate kept a child it could not stop registered; once the
+            # reap untracks it, the session can go.
+            if (_GATED_CHILDREN.get(self._gate_token) is None
+                    and _SESSIONS.get(self.conversation_id) is self):
+                _SESSIONS.pop(self.conversation_id, None)
 
     async def _start(self, model: str, cwd: str) -> str:
         if self._kapandi:
@@ -704,7 +721,9 @@ def get_session(conversation_id: int, *, resume_id: Optional[str] = None,
     if conversation_id < 0:
         return AgyStreamSession(conversation_id, cwd=cwd)
     session = _SESSIONS.get(conversation_id)
-    if session is None:
+    if session is None or session._kapandi:
+        # A closed session left registered by a failed kill (see _retire_gate)
+        # cannot run turns; its child stays in _GATED_CHILDREN either way.
         known_id = _RESUME_IDS.get((conversation_id, os.path.abspath(cwd)), resume_id)
         session = AgyStreamSession(conversation_id, resume_id=known_id, cwd=cwd)
         _SESSIONS[conversation_id] = session
