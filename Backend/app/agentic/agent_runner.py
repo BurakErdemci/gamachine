@@ -2260,6 +2260,9 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 "model_name": model_name,
                 "api_key": getattr(self, "api_key", ""),
             })
+            # Every process this provider spawns works for this chat only
+            # (cli_base turns it into GAMACHINE_CONVERSATION_ID, if valid).
+            p._conversation_id = self.conversation_id
             return p
 
         provider = _make_provider(self.model_name)

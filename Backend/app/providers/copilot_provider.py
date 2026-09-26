@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import tempfile
-from .cli_base import BaseCLIProvider
+from .cli_base import BaseCLIProvider, conversation_env
 from .oneshot_cli import resolve_copilot_cmd, split_model_id
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,23 @@ class CopilotProvider(BaseCLIProvider):
 
     fresh_session_id = None    # ilk tur için bizim ürettiğimiz uuid (--session-id)
     _mcp_cfg_path = None       # bu tur için yazılan geçici MCP config dosyası
+
+    async def analyze_code(self, *args, **kwargs):
+        try:
+            async for event in super().analyze_code(*args, **kwargs):
+                yield event
+        finally:
+            self._drop_mcp_cfg()
+
+    def _drop_mcp_cfg(self):
+        """Deletes this turn's temp MCP config once copilot has exited; one
+        file per turn otherwise piles up in the temp dir."""
+        path, self._mcp_cfg_path = self._mcp_cfg_path, None
+        if path:
+            try:
+                os.remove(path)
+            except OSError as e:
+                logger.warning("[CopilotProvider] %s silinemedi: %s", path, e)
 
     def _build_cmd(self, prompt: str, thinking_level: str = "medium", workspace: str = None) -> list:
         base = resolve_copilot_cmd()
@@ -109,8 +126,14 @@ class CopilotProvider(BaseCLIProvider):
         """Session-bazlı MCP config dosyası yazar (--additional-mcp-config @path)."""
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 
+        self._drop_mcp_cfg()
+        path = None
         try:
-            unityai_env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace}
+            # The file is this turn's alone, so it can name the chat too.
+            # copilot also passes its own env to these servers (measured), and
+            # an entry's env wins, so both carry the same value or neither.
+            owner_env = conversation_env(getattr(self, "_conversation_id", None))
+            unityai_env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace, **owner_env}
             # Token config dosyasına yazılmıyor — 0600 dosyadan okunuyor
             # (bkz. local_token_file). Bu dosya model tarafından okunabilir.
 
@@ -135,7 +158,7 @@ class CopilotProvider(BaseCLIProvider):
                     "type": "local",
                     "command": _argv[0],
                     "args": _argv[1:],
-                    "env": {"UNITY_MCP_URL": unity_mcp_url},
+                    "env": {"UNITY_MCP_URL": unity_mcp_url, **owner_env},
                     "tools": ["*"],
                 }
 
@@ -164,4 +187,9 @@ class CopilotProvider(BaseCLIProvider):
             logger.info(f"[CopilotProvider] session MCP config yazıldı: {path}")
         except Exception as e:
             self._mcp_cfg_path = None
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
             logger.warning(f"[CopilotProvider] MCP config yazılamadı: {e}")

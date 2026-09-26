@@ -67,6 +67,86 @@ class TestTrustedMcpConfig(unittest.TestCase):
 
         self.assertNotIn("unityMCP", config["mcp_servers"])
 
+    def test_forwarded_env_goes_to_registered_servers_only(self):
+        # unityMCP registered but the server is down: it still gets the name,
+        # so a bridge that connects later names the chat too.
+        with self._manager_modules(running=False), patch(
+            "providers.codex_session._configured_codex_mcp_names",
+            return_value={"unityMCP", "someone_elses"},
+        ):
+            config = _trusted_mcp_config(forward_env=("GAMACHINE_CONVERSATION_ID",))
+
+        self.assertEqual(config["mcp_servers"], {
+            "unityMCP": {"env_vars": ["GAMACHINE_CONVERSATION_ID"]},
+        })
+
+    def test_no_forwarded_env_adds_no_env_vars(self):
+        with self._manager_modules(running=True), patch(
+            "providers.codex_session._configured_codex_mcp_names",
+            return_value={"unityai", "unityMCP"},
+        ):
+            config = _trusted_mcp_config()
+
+        for entry in config["mcp_servers"].values():
+            self.assertNotIn("env_vars", entry)
+
+
+class TestCodexSessionNamesItsChat(unittest.IsolatedAsyncioTestCase):
+    """Codex hands a stdio MCP child only its default env + `env` + `env_vars`
+    (measured, 0.157.0), so the id must be in the app-server's env AND named in
+    the thread config, or neither bridge sees it."""
+
+    async def _start(self, conversation_id):
+        from providers import codex_session as cs
+
+        spawned = {}
+        requests = []
+
+        async def fake_spawn(*argv, **kwargs):
+            spawned.update(argv=argv, env=kwargs["env"])
+            return MagicMock()
+
+        async def fake_request(method, params=None, timeout=None):
+            requests.append((method, params))
+            if method == "thread/start":
+                return {"result": {"thread": {"id": "t1"}, "approvalsReviewer": "user"}}
+            return {"result": {}}
+
+        async def no_read_loop():
+            return None
+
+        manager = MagicMock()
+        manager.unity_mcp_manager.is_running.return_value = True
+        session = CodexSession(conversation_id)
+        with patch.object(cs.asyncio, "create_subprocess_exec", side_effect=fake_spawn), \
+                patch.object(session, "_request", side_effect=fake_request), \
+                patch.object(session, "_notify", AsyncMock()), \
+                patch.object(session, "_read_loop", side_effect=no_read_loop), \
+                patch.object(cs, "_configured_codex_mcp_names",
+                             return_value={"unityai", "unityMCP"}), \
+                patch.dict(sys.modules, {"unity_ai_mcp.unity_mcp_manager": manager}), \
+                patch.dict(os.environ, {"GAMACHINE_CONVERSATION_ID": "999"}):
+            await session.start()
+        thread_config = dict(requests)["thread/start"]["config"]
+        return spawned["env"], thread_config
+
+    async def test_a_chat_session_passes_its_id_to_both_servers(self):
+        env, config = await self._start(7)
+        self.assertEqual(env["GAMACHINE_CONVERSATION_ID"], "7")
+        for name in ("unityai", "unityMCP"):
+            self.assertEqual(config["mcp_servers"][name], {
+                "default_tools_approval_mode": "approve",
+                "env_vars": ["GAMACHINE_CONVERSATION_ID"],
+            })
+
+    async def test_throwaway_ids_name_no_chat(self):
+        # The backend's own env must not leak through either (999 is set).
+        for conversation_id in (0, -3):
+            env, config = await self._start(conversation_id)
+            self.assertNotIn("GAMACHINE_CONVERSATION_ID", env)
+            for entry in config["mcp_servers"].values():
+                self.assertNotIn("env_vars", entry)
+
 
 class TestCodexApprovalResponses(unittest.IsolatedAsyncioTestCase):
     async def test_client_request_omits_jsonrpc_wire_field(self):

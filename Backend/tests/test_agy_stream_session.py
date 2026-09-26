@@ -138,6 +138,15 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("--conversation", self.spawns[0][0])
         self.assertEqual([e["content"] for e in first if e["type"] == "text"], ["OK\n"])
 
+    async def test_the_child_env_names_its_chat_only_for_a_real_one(self):
+        # agy hands its env to the Unity MCP bridge; a one-shot (< 0) has no
+        # chat, and the backend's own value (999) must never pass through.
+        with patch.dict("os.environ", {"GAMACHINE_CONVERSATION_ID": "999"}):
+            await self.collect(agy_session.get_session(11))
+            await self.collect(agy_session.get_session(-7))
+        self.assertEqual(self.spawns[0][1]["env"]["GAMACHINE_CONVERSATION_ID"], "11")
+        self.assertNotIn("GAMACHINE_CONVERSATION_ID", self.spawns[1][1]["env"])
+
     async def test_utf8_long_multiline_prompt_only_on_stdin(self):
         message = "private prompt: şİ🙂\n" * 4000
         await self.collect(message=message)

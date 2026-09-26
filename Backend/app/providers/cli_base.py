@@ -34,6 +34,7 @@ from spawn_env import (  # noqa: F401  (yeniden dışa verim — bkz. yukarı)
     _FAMILY_PREFIXES,
     env_family,
     build_spawn_env,
+    conversation_env,
 )
 
 
@@ -418,10 +419,13 @@ class BaseCLIProvider(AIProvider):
             # anahtarını ve backend bearer'ını görüyordu. Aile, kullanıcının
             # seçtiği modele göre belirleniyor: Claude kendi anahtarını alır,
             # Cursor almaz (bkz. _PROVIDER_ENV_ALLOWLIST).
+            # `_conversation_id` is set only by the chat runner; side calls
+            # (summaries, probes) have none and their children stay unowned.
             _env = build_spawn_env(
                 family=env_family(self.binary_name),
                 overrides={"NO_COLOR": "1", "TERM": "xterm-256color",
-                           "COLUMNS": "220", "LINES": "50"},
+                           "COLUMNS": "220", "LINES": "50",
+                           **conversation_env(getattr(self, "_conversation_id", None))},
             )
 
             # CLI binary bu PC'de kurulu mu? Değilse korkunç traceback yerine temiz uyarı ver.

@@ -234,3 +234,20 @@ def build_spawn_env(family: Optional[str] = None,
     if overrides:
         env.update(overrides)
     return env
+
+
+# The unityai approval bridge and the Unity MCP stdio bridge read this to name
+# the chat their approval cards belong to.
+CONVERSATION_ENV = "GAMACHINE_CONVERSATION_ID"
+
+
+def conversation_env(conversation_id) -> Dict[str, str]:
+    """`overrides` entry naming the chat a spawned CLI works for, or {}.
+
+    Only for a process dedicated to one chat: ids <= 0 are throwaway one-shots
+    and side calls have none, and a card owned by the wrong chat is worse than
+    an unowned one. Same guard as the Claude session's header (agent_runner).
+    """
+    if type(conversation_id) is int and conversation_id > 0:
+        return {CONVERSATION_ENV: str(conversation_id)}
+    return {}

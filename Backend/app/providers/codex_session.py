@@ -29,7 +29,7 @@ import os
 import sys
 import uuid
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set
+from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Set
 
 import unity_file_guard
 from agentic.command_gates import APPROVAL_GATES, APPROVAL_RESULTS, APPROVAL_TIMEOUT_S
@@ -435,13 +435,19 @@ def dogrula_onay_hakemi(sonuc, conversation_id="?") -> "str | None":
     return hakem
 
 
-def _trusted_mcp_config() -> dict:
+def _trusted_mcp_config(forward_env: Sequence[str] = ()) -> dict:
     """IDE'nin kendi MCP'leri için Codex-katmanı onay politikasını üret.
 
     unityai içindeki kalıcı dosya/terminal mutasyonları kendi ``approval_bridge``
     kapısından geçer. unityMCP sahne işlemleri de tasarım gereği doğrudan çalışır.
     Bu nedenle Codex'in ikinci bir MCP onayı istemesi hem gereksizdir hem de
     app-server istemcisinde çift-onay üretir.
+
+    ``forward_env``: names Codex should hand to our stdio servers. Codex gives a
+    stdio MCP child only its default set + ``env`` + ``env_vars`` (measured,
+    0.157.0: GAMACHINE_CONVERSATION_ID in the app-server's env did not reach the
+    child; ``env_vars`` in this thread config did, the same override as ``-c``
+    on the app-server argv did not).
     """
     configured = _configured_codex_mcp_names()
     servers = {}
@@ -454,6 +460,12 @@ def _trusted_mcp_config() -> dict:
     except Exception as exc:
         # Unity yöneticisi henüz yüklenmemişse unityai yine kullanılabilir.
         logger.debug("[CodexSession] unityMCP onay politikası belirlenemedi: %s", exc)
+    if forward_env:
+        # Registered names only: an entry without a transport makes Codex
+        # reject the whole thread/start.
+        for name in ("unityai", "unityMCP"):
+            if name in configured:
+                servers.setdefault(name, {})["env_vars"] = list(forward_env)
     return {"mcp_servers": servers}
 
 
@@ -550,7 +562,9 @@ class CodexSession:
         # giriş yapan kurulumlar kırılmasın), ama Anthropic/Gemini anahtarları ve
         # backend sırları geçmez — ölçüm ve gerekçe cli_base.build_spawn_env'de.
         from providers.cli_base import build_spawn_env
-        env = build_spawn_env(family="codex", overrides={"NO_COLOR": "1"})
+        from spawn_env import conversation_env
+        owner_env = conversation_env(self.conversation_id)
+        env = build_spawn_env(family="codex", overrides={"NO_COLOR": "1", **owner_env})
         self._proc = await asyncio.create_subprocess_exec(
             *spawn,
             stdin=asyncio.subprocess.PIPE,
@@ -598,7 +612,7 @@ class CodexSession:
             # geçiriyordu. Kalıcı app-server yolu da aynı güven modelini thread
             # config'i üzerinden taşımalı; aksi halde salt-okunur MCP araçları
             # bile "user rejected MCP tool call" ile düşer.
-            "config": _trusted_mcp_config(),
+            "config": _trusted_mcp_config(forward_env=tuple(owner_env)),
         }
         if self.model:
             params["model"] = self.model

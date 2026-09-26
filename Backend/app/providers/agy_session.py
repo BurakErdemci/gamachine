@@ -10,6 +10,7 @@ from .agy_provider import AgyProvider, AgyStepGateError, _gate_write_failed, gat
 from .cli_base import BaseCLIProvider, _CREATE_NO_WINDOW, build_spawn_env
 from .saglayici_sahipligi import SaglayiciSahipligi, oturumu_kapat
 from secret_redaction import redact_secrets
+from spawn_env import conversation_env
 
 _SESSIONS: Dict[int, "AgyStreamSession"] = {}
 # Retain an init UUID even if a process dies before done can reach the disk store.
@@ -505,7 +506,11 @@ class AgyStreamSession(SaglayiciSahipligi):
             process = await asyncio.create_subprocess_exec(
                 *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, cwd=cwd,
-                env=build_spawn_env(family="agy", overrides={"NO_COLOR": "1"}),
+                # agy hands its whole env to stdio MCP servers (measured), so
+                # the unityMCP bridge sees the chat id without a config entry;
+                # the config files are shared by every chat.
+                env=build_spawn_env(family="agy", overrides={
+                    "NO_COLOR": "1", **conversation_env(self.conversation_id)}),
                 creationflags=_CREATE_NO_WINDOW,
                 limit=BaseCLIProvider._CLI_STREAM_LIMIT_BYTES,
             )

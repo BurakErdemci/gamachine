@@ -86,7 +86,10 @@ def _capture_async_spawn(monkeypatch, module):
     return box
 
 
-def _drive_cli_provider(monkeypatch, tmp_path, binary_name):
+_UNSET = object()
+
+
+def _drive_cli_provider(monkeypatch, tmp_path, binary_name, conversation_id=_UNSET):
     """`BaseCLIProvider.analyze_code`'u gerçekten koşturur, spawn env'ini döndürür."""
     box = _capture_async_spawn(monkeypatch, cli_base)
     monkeypatch.setattr(BaseCLIProvider, "_write_mcp_config", lambda self, ws: "")
@@ -94,6 +97,8 @@ def _drive_cli_provider(monkeypatch, tmp_path, binary_name):
     monkeypatch.setattr(BaseCLIProvider, "_resolve_exec", staticmethod(lambda cmd: list(cmd)))
 
     provider = BaseCLIProvider(binary_name=binary_name)
+    if conversation_id is not _UNSET:
+        provider._conversation_id = conversation_id
 
     async def run():
         async for _ in provider.analyze_code("merhaba", cwd=str(tmp_path)):
@@ -180,6 +185,27 @@ class TestCliProviderSpawnOrtami:
         assert env["TERM"] == "xterm-256color"
         assert env["COLUMNS"] == "220"
         assert env["LINES"] == "50"
+
+
+class TestOneShotChildNamesItsChat:
+    """The Unity MCP bridge and the unityai server a one-shot CLI starts read
+    GAMACHINE_CONVERSATION_ID from the env the CLI hands them (opencode and
+    copilot pass their whole env, measured). It comes from the chat runner,
+    never from the backend's own env, and only for a real chat id."""
+
+    @pytest.mark.parametrize("binary", ["cursor-gpt-5.2", "copilot-auto",
+                                        "opencode:opencode-go/kimi-k3", "kimi-k2"])
+    def test_a_chat_turn_names_its_chat(self, monkeypatch, tmp_path, binary):
+        monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", "999")
+        env = _drive_cli_provider(monkeypatch, tmp_path, binary, conversation_id=7)
+        assert env["GAMACHINE_CONVERSATION_ID"] == "7"
+
+    @pytest.mark.parametrize("conversation_id", [_UNSET, None, 0, -4, "7", True, 7.0])
+    def test_no_real_chat_names_none(self, monkeypatch, tmp_path, conversation_id):
+        monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", "999")
+        env = _drive_cli_provider(monkeypatch, tmp_path, "cursor-gpt-5.2",
+                                  conversation_id=conversation_id)
+        assert "GAMACHINE_CONVERSATION_ID" not in env
 
 
 # ── 2. codex_session: kalıcı app-server'ın İKİ ayrı spawn noktası ────────────

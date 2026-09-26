@@ -936,5 +936,123 @@ class TestModelListParsers(unittest.TestCase):
         self.assertNotIn("opencode:google/gemini-3.5-flash", ids)
 
 
+
+class TestOneShotTurnNamesItsChat(unittest.TestCase):
+    """The runner tells every provider it makes (the Auto fallback included)
+    which chat it works for; cli_base turns that into GAMACHINE_CONVERSATION_ID."""
+
+    def test_runner_hands_the_conversation_id_to_the_provider(self):
+        from agentic.agent_runner import AgentRunner
+        from providers.oneshot_cli import _SESSIONS
+
+        class FakeProvider:
+            resume_session_id = None
+            seen = None
+
+            async def analyze_code(self, *args, **kwargs):
+                self.seen = self._conversation_id
+                yield {"type": "final", "text": "tamam"}
+
+        for conversation_id in (994, -994):
+            _SESSIONS.clear()
+            provider = FakeProvider()
+            runner = AgentRunner(provider_type="subscription", api_key="",
+                                 model_name="cursor-gpt-5.2", workspace_path=os.getcwd(),
+                                 conversation_id=conversation_id)
+
+            async def collect():
+                return [e async for e in runner._run_oneshot_cli_session("selam", "cursor")]
+
+            with patch("ai_providers.AIProviderManager.get_provider", return_value=provider):
+                asyncio.run(collect())
+            # The raw id; the > 0 guard is conversation_env's (tested with cli_base).
+            self.assertEqual(provider.seen, conversation_id)
+        _SESSIONS.clear()
+
+
+class TestCopilotTurnMcpConfig(unittest.TestCase):
+    """copilot's --additional-mcp-config file is written per turn, so it can
+    carry the chat id, and it is deleted when the turn ends."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp.name
+        self.patches = [
+            patch.dict(os.environ, {"HOME": self.tmp, "USERPROFILE": self.tmp}),
+            patch.object(tempfile, "tempdir", self.tmp),
+            patch("unity_ai_mcp.unity_mcp_manager.unity_mcp_manager.mcp_url",
+                  return_value="http://127.0.0.1:8080/mcp"),
+        ]
+        for item in self.patches:
+            item.start()
+
+    def tearDown(self):
+        for item in reversed(self.patches):
+            item.stop()
+        self._tmp.cleanup()
+
+    def _run_turn(self, conversation_id):
+        from providers.cli_base import BaseCLIProvider
+        from providers.copilot_provider import CopilotProvider
+
+        seen = {}
+
+        async def fake_base_turn(provider, *args, **kwargs):
+            provider._register_mcp("launcher", self.tmp, "http://127.0.0.1:8000")
+            seen["path"] = provider._mcp_cfg_path
+            with open(seen["path"], encoding="utf-8") as f:
+                seen["servers"] = json.load(f)["mcpServers"]
+            yield {"type": "final", "text": "ok"}
+
+        provider = CopilotProvider(binary_name="copilot-auto")
+        if conversation_id is not None:
+            provider._conversation_id = conversation_id
+
+        async def collect():
+            return [e async for e in provider.analyze_code("hi", cwd=self.tmp)]
+
+        with patch.object(BaseCLIProvider, "analyze_code", fake_base_turn):
+            asyncio.run(collect())
+        return provider, seen
+
+    def test_the_file_names_the_chat_and_is_deleted_after_the_turn(self):
+        provider, seen = self._run_turn(7)
+        self.assertEqual(set(seen["servers"]), {"unityai", "unityMCP"})
+        for server in seen["servers"].values():
+            self.assertEqual(server["env"]["GAMACHINE_CONVERSATION_ID"], "7")
+        self.assertFalse(os.path.exists(seen["path"]))
+        self.assertIsNone(provider._mcp_cfg_path)
+
+    def test_no_real_chat_writes_no_id_and_still_deletes(self):
+        for conversation_id in (None, 0, -2):
+            _, seen = self._run_turn(conversation_id)
+            for server in seen["servers"].values():
+                self.assertNotIn("GAMACHINE_CONVERSATION_ID", server["env"])
+            self.assertFalse(os.path.exists(seen["path"]))
+
+    def test_a_failed_turn_deletes_the_file_too(self):
+        from providers.cli_base import BaseCLIProvider
+        from providers.copilot_provider import CopilotProvider
+
+        seen = {}
+
+        async def failing_turn(provider, *args, **kwargs):
+            provider._register_mcp("launcher", self.tmp, "http://127.0.0.1:8000")
+            seen["path"] = provider._mcp_cfg_path
+            raise RuntimeError("copilot died")
+            yield  # pragma: no cover
+
+        provider = CopilotProvider(binary_name="copilot-auto")
+
+        async def collect():
+            return [e async for e in provider.analyze_code("hi", cwd=self.tmp)]
+
+        with patch.object(BaseCLIProvider, "analyze_code", failing_turn):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(collect())
+        self.assertTrue(seen["path"])
+        self.assertFalse(os.path.exists(seen["path"]))
+
+
 if __name__ == "__main__":
     unittest.main()
