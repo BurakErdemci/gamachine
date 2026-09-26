@@ -37,7 +37,7 @@ YAML_ASSET_EXTENSIONS = frozenset(ext.lower() for ext in (
 META_EXTENSION = ".meta"
 
 META_MESSAGE = ("Refused: {path} is a Unity .meta file. Unity owns .meta files; "
-                "move/rename/delete assets with manage_asset so the GUID stays intact.")
+                "target the asset's own path (not its .meta) with manage_asset move/rename/delete, so the GUID stays intact.")
 YAML_WRITE_MESSAGE = (
     "Refused: {path} is a Unity-serialized YAML asset and must not be written as raw text. "
     "Use the Unity MCP tools (manage_scene, manage_prefabs, manage_gameobject, "

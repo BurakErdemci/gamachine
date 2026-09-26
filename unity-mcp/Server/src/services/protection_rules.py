@@ -25,7 +25,7 @@ from services.registry.tool_actions import (
 
 META_MESSAGE = (
     "Refused: {path} is a Unity .meta file. Unity owns .meta files; "
-    "move/rename/delete assets with manage_asset so the GUID stays intact."
+    "target the asset's own path (not its .meta) with manage_asset move/rename/delete, so the GUID stays intact."
 )
 
 # Folded parameter names (``_key_folded``) that can carry a file path.
