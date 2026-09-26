@@ -290,20 +290,20 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   
   // Pending Actions
   const [pendingGenFiles, setPendingGenFiles] = useState<{ files: PendingFile[]; messageId: number } | null>(null);
-  const [pendingDelete, _setPendingDelete] = useState<{ path: string; messageId: number } | null>(null);
-  // Tek slot, ama istek TEK gelmiyor: paralel araç çağrılarında ikinci silme
-  // isteği birincinin kartını ekrandan siliyordu ve birinci cevapsız kalıp
-  // zaman aşımına düşüyordu (30 Ağu 2026 denetimi; komut ve soru kartlarında
-  // aynı kuyruk zaten vardı, yalnız silmede yoktu).
-  const pendingDeleteQueueRef = useRef<Array<{ path: string; messageId: number }>>([]);
+  // One card on screen, but requests do not come one at a time: with parallel
+  // tool calls a second delete request used to erase the first card, which
+  // then went unanswered until its gate timed out (30 Aug 2026 audit). So the
+  // slot is the head of a queue.
+  type DeleteCard = { path: string; messageId: number };
+  const [pendingDeletes, setPendingDeletes] = useState<DeleteCard[]>([]);
+  const pendingDelete = pendingDeletes[0] ?? null;
 
-  const setPendingDelete = useCallback((val: { path: string; messageId: number } | null) => {
-    _setPendingDelete(prev => {
-      // null = karar verildi (onay ya da iptal) → sıradakini göster
-      if (val === null) return pendingDeleteQueueRef.current.shift() || null;
-      if (prev) { pendingDeleteQueueRef.current.push(val); return prev; }
-      return val;
-    });
+  // null = the shown card was decided, show the next; a card joins the queue.
+  // The function form edits the whole queue: a chat that is left takes its
+  // own cards out of it (useChat `releaseCards`).
+  const setPendingDelete = useCallback((val: DeleteCard | null | ((list: DeleteCard[]) => DeleteCard[])) => {
+    setPendingDeletes(list =>
+      typeof val === 'function' ? val(list) : val === null ? list.slice(1) : [...list, val]);
   }, []);
 
   const fetchLastWorkspace = useCallback(async (userId: number) => {

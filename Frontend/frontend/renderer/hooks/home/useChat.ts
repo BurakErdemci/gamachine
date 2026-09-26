@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import axios from 'axios';
 import { Message, Conversation, UserData, AIConfig, GenerationMode, ChatActivity, ContextUsage } from '../../components/home/types';
 import { PendingFile } from '../../components/home/FileCreationApproval';
@@ -47,21 +48,25 @@ interface ConvRuntime {
   pendingQuestion: PendingQuestion | null;
   questionQueue: PendingQuestion[];
   // File cards (generated files, delete) live in useFileSystem's single slot,
-  // which only the chat on screen may fill. A background chat's card waits
+  // which only the chat on screen may fill. A background chat's card, and an
+  // unanswered one taken back out of the slot when its chat is left, waits
   // here and is handed over when that chat is opened.
   parkedCards: Array<() => void>;
   // A turn finished while another chat was on screen.
   unread: boolean;
-  // The client copy holds something the server copy would drop (notices, an
-  // error bubble, a card bound to a client message id), so opening the chat
-  // shows it as is instead of refetching.
+  // That turn has not been re-read from the server yet (its ids are client
+  // ids), so opening the chat shows the live copy instead of refetching.
   unsynced: boolean;
+  // The list holds content the server copy lacks (an error bubble, a notice,
+  // a slash card). Unlike `unsynced` this survives being opened and later
+  // turns: only replacing the list from the server clears it.
+  clientOnly: boolean;
 }
 
 const EMPTY_RUNTIME: ConvRuntime = {
   messages: [], loading: false, activity: null, contextUsage: null,
   pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
-  parkedCards: [], unread: false, unsynced: false,
+  parkedCards: [], unread: false, unsynced: false, clientOnly: false,
 };
 
 // Runtime key while no conversation is selected. Database ids start at 1.
@@ -69,7 +74,10 @@ const NO_CONV = 0;
 const keyOf = (id: number | null | undefined) => id ?? NO_CONV;
 
 const hasClientState = (r: ConvRuntime) =>
-  r.loading || !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0 || r.unsynced;
+  r.loading || !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0
+  || r.unsynced || r.clientOnly;
+
+type SlotSetter = (val: any) => void;
 
 export const useChat = (
   API: string,
@@ -85,10 +93,9 @@ export const useChat = (
   // Stream loops, the Stop button and the wake channel outlive the render that
   // created them; they read the chat on screen from here, never from a closure.
   const activeConvIdRef = useRef<number | null>(null);
-  const setActiveConvId = useCallback((id: number | null) => {
-    activeConvIdRef.current = id;
-    setActiveConvIdState(id);
-  }, []);
+  // Bumped by every selection, so an async step that started before one can
+  // tell it no longer decides what is on screen.
+  const selectionRef = useRef(0);
 
   // Writes land in the ref first, so consecutive stream events see each
   // other's result in event order (the old per-field updaters needed
@@ -106,6 +113,44 @@ export const useChat = (
     runtimesRef.current = rest;
     setRuntimes(rest);
   }, []);
+
+  // The useFileSystem setters each chat's file cards were handed to.
+  const cardSlotsRef = useRef<Map<number, { gen?: SlotSetter; del?: SlotSetter }>>(new Map());
+
+  // Takes a chat's unanswered file cards back out of the shared slots; with
+  // `keep` they are parked for the chat's return, otherwise dropped. Left in
+  // the slot, the next chat's card replaced them (generated files) or queued
+  // unseen behind them (delete).
+  const releaseCards = useCallback((convId: number, keep: boolean) => {
+    const slots = cardSlotsRef.current.get(convId);
+    if (!slots) return;
+    // ChatPanel draws a card under the message whose id it carries, so that
+    // message's chat owns it; bridge cards (MCP_MSG_ID) belong to no chat.
+    const ids = new Set(rt(convId).messages.map(m => m.id));
+    const mine = (c: any) => !!c && ids.has(c.messageId);
+    let gen: any = null;
+    let dels: any[] = [];
+    // Only the slot knows whether the user already answered a card, so it is
+    // read through updaters; flushSync runs them now instead of at the next
+    // render, because what they find decides whether anything is parked.
+    flushSync(() => {
+      slots.gen?.((prev: any) => { gen = mine(prev) ? prev : null; return gen ? null : prev; });
+      slots.del?.((list: any[]) => { dels = list.filter(mine); return list.filter(c => !mine(c)); });
+    });
+    if (!keep || (!gen && dels.length === 0)) return;
+    patchConv(convId, r => ({ parkedCards: [...r.parkedCards, () => {
+      if (gen) slots.gen?.(gen);
+      dels.forEach(d => slots.del?.(d));
+    }] }));
+  }, [patchConv, rt]);
+
+  const setActiveConvId = useCallback((id: number | null) => {
+    const leaving = activeConvIdRef.current;
+    selectionRef.current += 1;
+    if (leaving && leaving !== id) releaseCards(leaving, true);
+    activeConvIdRef.current = id;
+    setActiveConvIdState(id);
+  }, [releaseCards]);
 
   const screen = runtimes[keyOf(activeConvId)] ?? EMPTY_RUNTIME;
   const messages = screen.messages;
@@ -283,7 +328,7 @@ export const useChat = (
       const res = await axios.get(`${API}/conversations/${convId}/messages`);
       // A turn that started while this request was out owns the list now: the
       // server copy has neither its placeholder nor its streamed text yet.
-      if (!rt(convId).loading) patchConv(convId, () => ({ messages: res.data, unsynced: false }));
+      if (!rt(convId).loading) patchConv(convId, () => ({ messages: res.data, unsynced: false, clientOnly: false }));
       await refreshContextUsage(convId);
     } catch (err) { console.error("Mesaj hatası:", err); }
   }, [API, patchConv, refreshContextUsage, rt]);
@@ -314,6 +359,9 @@ export const useChat = (
     if (!(await confirmDialog(cevir('chat.deleteConfirm')))) return;
     try {
       await axios.delete(`${API}/conversations/${convId}`);
+      // Its cards leave the slot while its messages still say which they are.
+      releaseCards(convId, false);
+      cardSlotsRef.current.delete(convId);
       // Clearing the turn first makes a still-running loop stop writing, so the
       // deleted chat's entry is not recreated by a late chunk.
       turnRef.current.delete(convId);
@@ -323,7 +371,7 @@ export const useChat = (
       if (activeConvIdRef.current === convId) setActiveConvId(null);
       fetchConversations(user.id);
     } catch (err) { console.error("Sohbet silme hatası:", err); }
-  }, [API, dropConv, fetchConversations, setActiveConvId, user]);
+  }, [API, dropConv, fetchConversations, releaseCards, setActiveConvId, user]);
 
   const saveRename = useCallback(async (convId: number) => {
     if (!tempTitle.trim()) { setEditingId(null); return; }
@@ -337,11 +385,17 @@ export const useChat = (
   const createNewConversation = useCallback(async (title?: string) => {
     const baslik = title ?? cevir('sidebar.newChat');
     if (!user || !API) return null;
+    const selection = selectionRef.current;
     try {
       const res = await axios.post(`${API}/conversations`, { user_id: user.id, title: baslik });
       await fetchConversations(user.id);
       patchConv(res.data.id, () => ({ ...EMPTY_RUNTIME }));
-      setActiveConvId(res.data.id);
+      // A chat the user opened while this was in flight stays on screen; the
+      // new chat still exists and is returned to the caller (a send from the
+      // empty screen keeps it as its target).
+      if (selectionRef.current === selection || activeConvIdRef.current === null) {
+        setActiveConvId(res.data.id);
+      }
       return res.data.id;
     } catch (err) { console.error("Yeni sohbet hatası:", err); return null; }
   }, [API, fetchConversations, patchConv, setActiveConvId, user]);
@@ -352,7 +406,8 @@ export const useChat = (
   // bubbles or slash cards, and re-iding the list would orphan an open card.
   const syncFinished = useCallback(async (convId: number) => {
     const notSyncable = (r: ConvRuntime) =>
-      !r.unsynced || r.loading || !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0;
+      !r.unsynced || r.clientOnly || r.loading || !!r.pendingCommand || !!r.pendingQuestion
+      || r.parkedCards.length > 0;
     if (!API || notSyncable(rt(convId))) return;
     try {
       const res = await axios.get(`${API}/conversations/${convId}/messages`);
@@ -413,7 +468,12 @@ export const useChat = (
     const onScreen = () => activeConvIdRef.current === targetConvId;
     // File cards go straight to useFileSystem's slot only while this chat is
     // on screen; otherwise they wait in this chat's entry (see `parkedCards`).
-    const fileCard = (handOver: () => void) => {
+    const fileCard = (kind: 'gen' | 'del', card: { messageId: number; [field: string]: unknown }) => {
+      const set: SlotSetter = kind === 'gen' ? setPendingGenFiles : setPendingDelete;
+      const handOver = () => {
+        cardSlotsRef.current.set(targetConvId, { ...cardSlotsRef.current.get(targetConvId), [kind]: set });
+        set(card);
+      };
       if (onScreen()) handOver();
       else patchConv(targetConvId, r => ({ parkedCards: [...r.parkedCards, handOver] }));
     };
@@ -701,8 +761,7 @@ export const useChat = (
                   : { pendingQuestion: item });
               }
               if (data.type === 'pending_delete' && data.path) {
-                const card = { path: data.path, messageId: aiMsgId };
-                fileCard(() => setPendingDelete(card));
+                fileCard('del', { path: data.path, messageId: aiMsgId });
               }
               if (data.type === 'refresh_file_tree') refreshFileTree();
               if (data.type === 'done') refreshFileTree();
@@ -728,8 +787,7 @@ export const useChat = (
                     });
                   }
                   // Message ID'yi state'ten doğrula veya doğrudan kullan
-                  const card = { files: withPaths, messageId: aiMsgId };
-                  fileCard(() => setPendingGenFiles(card));
+                  fileCard('gen', { files: withPaths, messageId: aiMsgId });
                 }
               }
             }
@@ -748,7 +806,10 @@ export const useChat = (
         turnRef.current.delete(targetConvId);
         controllersRef.current.delete(targetConvId);
         const visible = onScreen();
-        patchConv(targetConvId, () => ({ loading: false, activity: null, unread: !visible, unsynced: !visible }));
+        patchConv(targetConvId, r => ({
+          loading: false, activity: null, unread: !visible, unsynced: !visible,
+          clientOnly: r.clientOnly || lossy,
+        }));
         if (!visible && finishedCleanly && !lossy) void syncFinished(targetConvId);
       }
     }
@@ -893,7 +954,7 @@ export const useChat = (
       if (res.data.status === 'success') {
         if (res.data.summary) {
           const msgRes = await axios.get(`${API}/conversations/${activeConvId}/messages`);
-          patchConv(activeConvId, () => ({ messages: msgRes.data }));
+          patchConv(activeConvId, () => ({ messages: msgRes.data, unsynced: false, clientOnly: false }));
           // Eskiden buraya sabit `percent: 5` yazılıyordu — sıkıştırmadan sonra
           // doluluğun ne olduğu ölçülmeden, makul görünen bir sayıyla. Gösterge
           // artık tek kaynaktan tazeleniyor.
