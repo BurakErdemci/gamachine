@@ -23,6 +23,7 @@ export const tr = {
   'sidebar.statusRunning': 'Çalışıyor',
   'sidebar.statusAwaiting': 'Onay bekliyor',
   'sidebar.statusUnread': 'Bitti, okunmadı',
+  'sidebar.awaitingCount': 'Onay bekleyen sohbet: {sayi}',
   // Desktop notifications (useChatNotifications)
   'notify.title': 'Gamachine',
   'notify.untitledChat': 'Adsız sohbet',
@@ -572,6 +573,7 @@ export const en: Record<keyof typeof tr, string> = {
   'sidebar.statusRunning': 'Running',
   'sidebar.statusAwaiting': 'Awaiting approval',
   'sidebar.statusUnread': 'Finished, unread',
+  'sidebar.awaitingCount': 'Chats awaiting approval: {sayi}',
   // Desktop notifications (useChatNotifications)
   'notify.title': 'Gamachine',
   'notify.untitledChat': 'Untitled chat',

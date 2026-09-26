@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, GitBranchPlus, X } from 'lucide-react';
 import { useLang } from '../../lib/i18n';
-import { STATUS_DOT, familyOf, familyRootId } from '../../lib/convFamily';
+import { STATUS_DOT, familyOf, familyRootId, mostUrgent } from '../../lib/convFamily';
 import type { Conversation } from './types';
 import type { ConvStatus } from '../../hooks/home/useChat';
 
@@ -156,6 +156,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
               menuOpen ? 'bg-white/[0.06] text-slate-200' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'
             }`}
           >
+            <StatusDot status={mostUrgent(convStatus, fam.hidden.map(c => c.id))} testId="closed-branches-status" />
             {t('branch.closed', { sayi: fam.hidden.length })}
             <ChevronDown size={11} />
           </button>

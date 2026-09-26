@@ -62,6 +62,13 @@ export const familyOf = (conversations: Conversation[], rootId: number | null, a
   };
 };
 
+/**
+ * Chats waiting on a decision, the one on screen excluded: its card is
+ * already in front of the user, so counting it would point nowhere new.
+ */
+export const awaitingElsewhere = (convStatus: Record<number, ConvStatus> | undefined, activeId: number | null): number =>
+  Object.entries(convStatus ?? {}).filter(([id, s]) => s === 'awaiting' && Number(id) !== activeId).length;
+
 /** Most urgent status among `ids`, or undefined when none of them has one. */
 export const mostUrgent = (convStatus: Record<number, ConvStatus> | undefined, ids: number[]): ConvStatus | undefined => {
   if (!convStatus) return undefined;

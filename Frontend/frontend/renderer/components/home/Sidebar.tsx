@@ -18,7 +18,8 @@ import {
 import { Conversation, FileEntry, UserData } from './types';
 import { FileTree } from './FileTree';
 import type { ConvStatus } from '../../hooks/home/useChat';
-import { STATUS_DOT, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
+import { STATUS_DOT, awaitingElsewhere, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
+import { AwaitingBadge } from './AwaitingBadge';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -122,13 +123,17 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           <button
             key={tab}
             onClick={() => setSidebarTab(tab)}
-            className={`flex-1 py-1.5 rounded-lg text-[10px] font-semibold tracking-wider uppercase transition-colors ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[10px] font-semibold tracking-wider uppercase transition-colors ${
               sidebarTab === tab
                 ? 'bg-white/[0.06] text-slate-100'
                 : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'
             }`}
           >
             {label}
+            {/* The rows that carry the status are hidden behind the Files tab. */}
+            {tab === 'chats' && sidebarTab !== 'chats' && (
+              <AwaitingBadge count={awaitingElsewhere(convStatus, activeConvId)} testId="chats-tab-awaiting" />
+            )}
           </button>
         ))}
       </div>

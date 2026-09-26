@@ -5,6 +5,8 @@ module.exports = {
     content: [
     './renderer/pages/**/*.{js,ts,jsx,tsx}',
     './renderer/components/**/*.{js,ts,jsx,tsx}',
+    // Shared class maps live here too (convFamily's STATUS_DOT).
+    './renderer/lib/**/*.{js,ts,jsx,tsx}',
   ],
   theme: {
     colors: {
@@ -18,6 +20,7 @@ module.exports = {
       indigo: colors.indigo,
       green: colors.green,
       emerald: colors.emerald,
+      amber: colors.amber,
       orange: colors.orange,
       red: colors.red,
       yellow: colors.yellow,

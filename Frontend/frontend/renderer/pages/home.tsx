@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 import {
-  ChevronLeft, ChevronRight, Terminal as TerminalIcon,
+  Terminal as TerminalIcon,
   Code2, Activity, X, PanelRightClose,
   Zap, Code, Layout, MessageSquare, ArrowDown
 } from 'lucide-react';
@@ -39,7 +39,8 @@ import { useAutoScroll } from '../hooks/home/useAutoScroll';
 import { McpApprovalCards } from '../components/home/McpApprovalCards';
 import { McpUnknownTray } from '../components/home/McpUnknownTray';
 import { ChatTabs, BranchButton, hasBranches } from '../components/home/ChatTabs';
-import { rootsOf } from '../lib/convFamily';
+import { SidebarToggle } from '../components/home/AwaitingBadge';
+import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
 // this app needs, and off the server render (it touches WebGL on mount).
@@ -607,9 +608,11 @@ export default function Home() {
       <div className="flex-1 flex flex-col min-w-0 border-r border-white/[0.06]">
         <div className="h-12 border-b border-white/[0.06] flex items-center justify-between px-4 bg-white/[0.015] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
-            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-1.5 hover:bg-white/[0.06] rounded-lg text-slate-500 hover:text-slate-300 transition-all shrink-0">
-              {isSidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-            </button>
+            <SidebarToggle
+              open={isSidebarOpen}
+              onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
+              awaiting={awaitingElsewhere(chat.convStatus, chat.activeConvId)}
+            />
             <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className={`p-1.5 hover:bg-white/[0.06] rounded-lg transition-all shrink-0 ${isTerminalOpen ? 'text-blue-400 bg-blue-500/10' : 'text-slate-500 hover:text-slate-300'}`}>
               <TerminalIcon size={16} />
             </button>
