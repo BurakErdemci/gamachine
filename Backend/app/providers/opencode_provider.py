@@ -90,7 +90,8 @@ def _read_text(path: str) -> Optional[str]:
     try:
         with open(path, "r", encoding="utf-8", newline="") as f:
             return f.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # A file replaced with non-UTF-8 bytes is simply "not ours".
         return None
 
 

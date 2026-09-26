@@ -405,3 +405,12 @@ def test_spawn_env_drops_a_shadow_changed_after_install(tmp_path, shadow_root, t
     else:
         (shadow_root / "tool" / "run.ts").write_text("export default {}", encoding="utf-8")
     assert "OPENCODE_CONFIG_DIR" not in p._turn_spawn_env()
+
+
+def test_non_utf8_shadow_file_denies_bash_instead_of_raising(tmp_path, shadow_root):
+    """Codex ocverify: UnicodeDecodeError escaped and failed the turn."""
+    p, _ = _register(tmp_path / "ws")
+    (shadow_root / "tool" / "bash.ts").write_bytes(b"\xff\xfe\xff")
+    assert "OPENCODE_CONFIG_DIR" not in p._turn_spawn_env()
+    from providers.opencode_provider import install_bash_shadow
+    assert install_bash_shadow() == str(shadow_root)
