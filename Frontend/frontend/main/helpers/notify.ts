@@ -22,7 +22,7 @@ const ALLOWED_KEYS = new Set(['title', 'body', 'conversationId'])
 
 // C0/C1 controls and bidi overrides/isolates. A toast is plain text; none of
 // these carry meaning there, and the bidi ones can reorder what is read.
-const UNSAFE_CHARS = /[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069\u200E\u200F]/g
+const UNSAFE_CHARS = /[\u0000-\u001F\u007F-\u009F\u061C\u202A-\u202E\u2066-\u2069\u200E\u200F]/g
 
 const clean = (s: string, max: number): string => {
   const flat = s.replace(UNSAFE_CHARS, ' ').replace(/\s+/g, ' ').trim()

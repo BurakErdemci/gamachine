@@ -19,4 +19,4 @@
  * Nothing in this product legitimately needs these characters.
  */
 export const stripBidi = (s: string): string =>
-  s.replace(/[\u202A-\u202E\u2066-\u2069\u200E\u200F]/g, '');
+  s.replace(/[\u061C\u202A-\u202E\u2066-\u2069\u200E\u200F]/g, '');
