@@ -23,7 +23,6 @@ import { FileDeleteApproval } from './FileDeleteApproval';
 import { CommandApproval } from './CommandApproval';
 import { QuestionApproval } from './QuestionApproval';
 import { DiffViewer, DiffData } from './DiffViewer';
-import AgentPlan, { Task as AgentTask } from '../ui/agent-plan';
 import { postMcpDecision, decisionToast, GateFailure } from '../../hooks/home/gateResponse';
 import { McpActiveGate } from '../../hooks/home/useMCPApproval';
 import { McpApprovalCards } from './McpApprovalCards';
@@ -51,7 +50,6 @@ interface ChatPanelProps {
   analyzeProject: (silent?: boolean) => void;
   openFile: (path: string) => void;
   sendMessage: (msg: string) => void;
-  currentPlan: AgentTask[];
   messagesEndRef: React.RefObject<HTMLDivElement>;
   ipc: any;
   showToast: (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -105,7 +103,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   analyzeProject,
   openFile,
   sendMessage,
-  currentPlan,
   messagesEndRef,
   ipc,
   showToast,
@@ -547,16 +544,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
         )}
 
-        {/* AgentPlan Indicator */}
-        {loading && currentPlan.length > 0 && (
-          <div className="chat-message-enter mb-6">
-            <div className="flex items-center gap-2 mb-2 select-none">
-              <ModelAvatar provider={effectiveProvider} size={14} />
-              <span className="text-[11px] font-medium text-slate-400">{metaName()}</span>
-            </div>
-            <AgentPlan tasks={currentPlan} />
-          </div>
-        )}
         {/* MCP onay kartları — mesaj listesinin DIŞINDA, tek bileşende.
             Kartların markup'ı `McpApprovalCards`'ta duruyor çünkü aynı kartlar
             workspace seçilmemişken de (ChatPanel hiç mount olmadan) çizilmek

@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Message, Conversation, UserData, AIConfig, GenerationMode, ChatActivity, ContextUsage } from '../../components/home/types';
 import { PendingFile } from '../../components/home/FileCreationApproval';
-import { Task } from '../../components/ui/agent-plan';
 import { confirmDialog } from '../../components/ui/ConfirmDialog';
 import { deliveryFromFetch, gateFailure } from './gateResponse';
 import { cevir } from '../../lib/i18n';
@@ -26,7 +25,6 @@ export const useChat = (
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [chatInput, setChatInput] = useState('');
-  const [currentPlan, setCurrentPlan] = useState<Task[]>([]);
   // `null` means "no reading available", NOT "the context is empty". A truthy
   // `{percent: 0, estimated: true}` placeholder used to sit here and stayed put
   // when the context request failed, so a request that only ever errored was
@@ -710,7 +708,6 @@ export const useChat = (
     messages, setMessages,
     loading, setLoading,
     chatInput, setChatInput,
-    currentPlan, setCurrentPlan,
     contextUsage, setContextUsage, applyContextReport,
     isCompacting, setIsCompacting,
     isAnalyzingProject, setIsAnalyzingProject,

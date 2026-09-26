@@ -105,7 +105,6 @@ const renderPanel = (overrides: PanelOverrides = {}) => {
     analyzeProject: vi.fn(),
     openFile: vi.fn(),
     sendMessage: vi.fn(),
-    currentPlan: [],
     messagesEndRef: React.createRef<HTMLDivElement>(),
     ipc,
     showToast,

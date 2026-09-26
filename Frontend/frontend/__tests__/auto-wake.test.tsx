@@ -71,7 +71,6 @@ const renderPanel = (messages: any[]) => {
     analyzeProject: vi.fn(),
     openFile: vi.fn(),
     sendMessage: vi.fn(),
-    currentPlan: [],
     messagesEndRef: React.createRef<HTMLDivElement>(),
     ipc: { invoke: vi.fn().mockResolvedValue({ success: true }) },
     showToast: vi.fn(),
