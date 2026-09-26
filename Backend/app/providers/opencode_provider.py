@@ -79,6 +79,12 @@ class OpenCodeProvider(BaseCLIProvider):
             cmd.append(yuk)
         return cmd
 
+    def _turn_spawn_env(self) -> dict:
+        # opencode 1.18.25 hands its whole env to local MCP children
+        # (measured 26 Sep 2026), so the unityai bridge reads the token there.
+        token = getattr(self, "_approval_turn_token", "")
+        return {"UNITYAI_APPROVAL_TURN_TOKEN": token} if token else {}
+
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
         """Workspace opencode.json'a unityai/unityMCP kaydı + izin politikası yazar."""
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
@@ -88,11 +94,11 @@ class OpenCodeProvider(BaseCLIProvider):
             unityai_env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace}
             # Token config dosyasına yazılmıyor — 0600 dosyadan okunuyor
             # (bkz. local_token_file). Bu dosya model tarafından okunabilir.
-            # Kalıcı bir auto/step bayrağı yazma. Bu tek kullanımlık anahtar yalnız
-            # AgentRunner'daki aktif OpenCode turu boyunca backend'de geçerlidir.
-            approval_turn_token = getattr(self, "_approval_turn_token", "")
-            if approval_turn_token:
-                unityai_env["UNITYAI_APPROVAL_TURN_TOKEN"] = approval_turn_token
+            # The per-turn approval token is NOT written here: this file is
+            # shared by every chat of the workspace, so concurrent turns
+            # overwrote each other's token. It rides in the process env
+            # (_turn_spawn_env). Rewriting the entry also drops a stale token
+            # an older build left in the file.
 
             mcp = {
                 "unityai": {

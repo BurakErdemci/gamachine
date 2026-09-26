@@ -166,20 +166,53 @@ class TestBuildCmd(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-s") + 1], "ses_abc")
         self.assertIn("--format", cmd)
 
-    def test_opencode_mcp_config_gets_ephemeral_approval_token(self):
-        """Aktif tur anahtarı MCP process'ine geçer; auto/step değeri kalıcı yazılmaz."""
+    def test_opencode_turn_token_rides_the_process_env_not_the_shared_file(self):
+        """opencode.json is shared by every chat of a workspace; two concurrent
+        turns overwrote each other's token there. The token goes to this turn's
+        process env, and a stale one left in the file by an older build is gone."""
         from providers.opencode_provider import OpenCodeProvider
 
         p = OpenCodeProvider(binary_name="opencode:opencode-go/kimi-k3")
         p._approval_turn_token = "one-turn-secret"
         with tempfile.TemporaryDirectory() as workspace, _mock_unity_mcp():
+            with open(os.path.join(workspace, "opencode.json"), "w", encoding="utf-8") as f:
+                json.dump({"mcp": {"unityai": {"type": "local", "command": ["old"],
+                           "environment": {"UNITYAI_APPROVAL_TURN_TOKEN": "stale"}}}}, f)
             p._register_mcp("unityai-launcher", workspace, "http://localhost:8000")
             with open(os.path.join(workspace, "opencode.json"), encoding="utf-8") as f:
                 cfg = json.load(f)
 
         env = cfg["mcp"]["unityai"]["environment"]
-        self.assertEqual(env["UNITYAI_APPROVAL_TURN_TOKEN"], "one-turn-secret")
+        self.assertNotIn("UNITYAI_APPROVAL_TURN_TOKEN", env)
         self.assertNotIn("UNITYAI_AUTO_APPROVE", env)
+        self.assertEqual(p._turn_spawn_env(), {"UNITYAI_APPROVAL_TURN_TOKEN": "one-turn-secret"})
+        p._approval_turn_token = ""
+        self.assertEqual(p._turn_spawn_env(), {})
+
+    def test_opencode_spawn_env_carries_the_turn_token(self):
+        from providers import cli_base
+        from providers.opencode_provider import OpenCodeProvider
+
+        p = OpenCodeProvider(binary_name="opencode:opencode-go/kimi-k3")
+        p._approval_turn_token = "one-turn-secret"
+        seen = {}
+
+        def fake_build(family=None, overrides=None):
+            seen.update(overrides or {})
+            raise RuntimeError("stop after env")
+
+        async def run():
+            with patch.object(cli_base, "build_spawn_env", side_effect=fake_build), \
+                 patch.object(OpenCodeProvider, "_write_mcp_config", lambda self, ws: ""), \
+                 patch.object(OpenCodeProvider, "_build_cmd", lambda self, *a, **k: ["opencode"]):
+                try:
+                    async for _ in p.analyze_code("x", cwd="."):
+                        pass
+                except RuntimeError:
+                    pass
+
+        asyncio.run(run())
+        self.assertEqual(seen.get("UNITYAI_APPROVAL_TURN_TOKEN"), "one-turn-secret")
 
 
 class TestEventParsing(unittest.TestCase):

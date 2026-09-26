@@ -296,6 +296,11 @@ class BaseCLIProvider(AIProvider):
         """Subclass'lar kendi MCP kayıt mantığını override eder."""
         pass
 
+    def _turn_spawn_env(self) -> dict:
+        """Extra env for this turn's CLI process only. Per-turn secrets go here,
+        never into a config file several chats of one workspace share."""
+        return {}
+
     def _write_mcp_config(self, workspace: str) -> str:
         """
         Claude Code için workspace'e .mcp.json yazar.
@@ -425,7 +430,8 @@ class BaseCLIProvider(AIProvider):
                 family=env_family(self.binary_name),
                 overrides={"NO_COLOR": "1", "TERM": "xterm-256color",
                            "COLUMNS": "220", "LINES": "50",
-                           **conversation_env(getattr(self, "_conversation_id", None))},
+                           **conversation_env(getattr(self, "_conversation_id", None)),
+                           **self._turn_spawn_env()},
             )
 
             # CLI binary bu PC'de kurulu mu? Değilse korkunç traceback yerine temiz uyarı ver.
