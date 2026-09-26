@@ -811,9 +811,13 @@ class BaseCLIProvider(AIProvider):
                                 # upstream hatası session bozulması değildir; bağlamı koru.
                                 if self.binary_name.startswith("opencode:"):
                                     from .oneshot_cli import (
-                                        RATE_LIMIT_ERROR_RE, opencode_access_message,
+                                        RATE_LIMIT_ERROR_RE, SESSION_OVERFLOW_ERROR_RE,
+                                        opencode_access_message, opencode_error_status,
                                     )
-                                    if RATE_LIMIT_ERROR_RE.search(_err):
+                                    if not SESSION_OVERFLOW_ERROR_RE.search(_err) and (
+                                        opencode_error_status(ev) == 429
+                                        or RATE_LIMIT_ERROR_RE.search(_err)
+                                    ):
                                         # A 429/limit leaves the session intact;
                                         # resetting it lost the chat's context.
                                         _event.update({

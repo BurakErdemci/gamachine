@@ -280,7 +280,33 @@ QUOTA_ERROR_RE = _re.compile(
 # error: a bare "limit reached" also covers "context limit reached", and a
 # session that overflowed its context must be reset, not resumed again.
 RATE_LIMIT_ERROR_RE = _re.compile(
-    r"(\b429\b|rate.?limit|too many requests|usage limit|quota)", _re.I)
+    r"(\b429\b|rate.?limit|too many requests|usage limit|quota|"
+    r"out of (free )?credits)", _re.I)
+
+# Wording of a session that can no longer be resumed. It wins over a 429
+# status: resuming such a session fails the same way on every retry.
+SESSION_OVERFLOW_ERROR_RE = _re.compile(
+    r"(context (limit|length|window)|interrupted session cannot be resumed)", _re.I)
+
+
+def opencode_error_status(event: dict) -> Optional[int]:
+    """HTTP status of an OpenCode `error` event, or None.
+
+    OpenCode puts it at error.data.statusCode; the message text the session
+    decision reads does not carry it, so an "out of credits" 429 read as a
+    broken session and was reset (Codex audit, 26 Sep 2026).
+    """
+    err = event.get("error") if isinstance(event, dict) else None
+    if not isinstance(err, dict):
+        return None
+    for node in (err.get("data"), err):
+        if isinstance(node, dict):
+            code = node.get("statusCode")
+            if isinstance(code, int) and not isinstance(code, bool):
+                return code
+            if isinstance(code, str) and code.strip().isdigit():
+                return int(code.strip())
+    return None
 
 # OpenCode Go kimi zaman gerçek rate-limit nedenini kendi loguna yazıp JSON
 # event'inde yalnız genel bir upstream hatası döndürüyor.

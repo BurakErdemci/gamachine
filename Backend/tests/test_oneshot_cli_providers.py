@@ -494,6 +494,52 @@ class TestEventParsing(unittest.TestCase):
                 error = [e for e in self._run_provider(p, lines) if e["type"] == "error"][0]
                 self.assertTrue(error.get("reset_session"))
 
+    def test_opencode_out_of_credits_429_keeps_resume_session(self):
+        """Codex audit 26 Sep 2026: the 429 status sits in error.data.statusCode,
+        not in the message text, so "out of credits" reset the session."""
+        from providers.opencode_provider import OpenCodeProvider
+
+        for message, status in (
+            ("Error from provider (Console): You are out of credits", 429),
+            ("Insufficient balance for this request", 429),
+            ("You are out of free credits", None),
+        ):
+            with self.subTest(message=message):
+                data = {"message": message, "isRetryable": False}
+                if status is not None:
+                    data["statusCode"] = status
+                p = OpenCodeProvider(binary_name="opencode:opencode/big-pickle")
+                lines = [json.dumps({
+                    "type": "error", "sessionID": "ses_credits",
+                    "error": {"name": "APIError", "data": data},
+                })]
+                error = [e for e in self._run_provider(p, lines) if e["type"] == "error"][0]
+                self.assertEqual(error["reason"], "provider_quota")
+                self.assertNotIn("reset_session", error)
+
+    def test_opencode_overflow_resets_even_with_a_429_status(self):
+        from providers.opencode_provider import OpenCodeProvider
+
+        p = OpenCodeProvider(binary_name="opencode:opencode/big-pickle")
+        lines = [json.dumps({
+            "type": "error", "sessionID": "ses_overflow",
+            "error": {"name": "APIError",
+                      "data": {"message": "Interrupted session cannot be resumed: "
+                                          "context limit reached", "statusCode": 429}},
+        })]
+        error = [e for e in self._run_provider(p, lines) if e["type"] == "error"][0]
+        self.assertTrue(error.get("reset_session"))
+
+    def test_opencode_error_status_reads_the_structured_code(self):
+        from providers.oneshot_cli import opencode_error_status
+
+        self.assertEqual(opencode_error_status(
+            {"error": {"data": {"statusCode": 429}}}), 429)
+        self.assertEqual(opencode_error_status({"error": {"statusCode": "403"}}), 403)
+        self.assertIsNone(opencode_error_status({"error": "plain text"}))
+        self.assertIsNone(opencode_error_status({"error": {"data": {"statusCode": True}}}))
+        self.assertIsNone(opencode_error_status({"content": "x"}))
+
     def test_rate_limit_text_is_never_read_as_an_access_refusal(self):
         """Codex tabaudit: a 429 carrying the Go phrase was shown as "retrying
         will not help". Any quota/limit wording keeps the quota mapping."""
