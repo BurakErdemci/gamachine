@@ -1,18 +1,74 @@
 """Transport helpers for routing commands to Unity."""
 from __future__ import annotations
 
+import contextvars
+import functools
+import inspect
 import logging
-from typing import Awaitable, Callable, TypeVar
+from typing import Any, Awaitable, Callable, TypeVar
 
 from transport.plugin_hub import PluginHub
 from core.config import config
 from core.constants import API_KEY_HEADER
 from services.api_key_service import ApiKeyService
 from models.models import MCPResponse
-from models.unity_response import normalize_unity_response
+from models.unity_response import ACTION_META_KEYS, normalize_unity_response
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+
+
+# Per tool call: the undo/warnings fields of the Unity responses it received. A dict
+# (mutated, never re-set) so sends made from child tasks still reach it.
+_action_meta: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "unity_action_meta", default=None)
+
+
+def _record_action_meta(response: Any) -> None:
+    holder = _action_meta.get()
+    if holder is None or not isinstance(response, dict):
+        return
+    for key in ACTION_META_KEYS:
+        if response.get(key) is not None:
+            holder[key] = response[key]
+
+
+def _merge_action_meta(result: Any, meta: dict[str, Any]) -> Any:
+    if not meta or not isinstance(result, dict):
+        return result
+    if "undo" in meta:
+        result.setdefault("undo", meta["undo"])
+    warnings = meta.get("warnings")
+    if isinstance(warnings, list) and warnings:
+        existing = result.get("warnings")
+        if existing is None:
+            result["warnings"] = list(warnings)
+        elif isinstance(existing, list):
+            existing.extend(w for w in warnings if w not in existing)
+    return result
+
+
+def carry_action_meta(func: Callable[..., Any]) -> Callable[..., Any]:
+    """
+    Re-attach Unity's ``undo``/``warnings`` fields to a tool's return value.
+
+    Many tool wrappers rebuild the success dict (``{"success", "message", "data"}``) and
+    would silently drop them; doing it here covers every tool instead of each wrapper.
+    """
+    if not inspect.iscoroutinefunction(func):
+        return func
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        token = _action_meta.set({})
+        try:
+            result = await func(*args, **kwargs)
+            meta = _action_meta.get() or {}
+        finally:
+            _action_meta.reset(token)
+        return _merge_action_meta(result, meta)
+
+    return wrapper
 
 
 def _is_http_transport() -> bool:
@@ -83,7 +139,9 @@ async def send_with_unity_instance(
                 user_id=user_id,
                 retry_on_reload=retry_on_reload,
             )
-            return normalize_unity_response(raw)
+            normalized = normalize_unity_response(raw)
+            _record_action_meta(normalized)
+            return normalized
         except Exception as exc:
             # NOTE: asyncio.TimeoutError has an empty str() by default, which is confusing for clients.
             err = str(exc) or f"{type(exc).__name__}"
@@ -96,4 +154,6 @@ async def send_with_unity_instance(
 
     if unity_instance:
         kwargs.setdefault("instance_id", unity_instance)
-    return await send_fn(*args, **kwargs)
+    response = await send_fn(*args, **kwargs)
+    _record_action_meta(response)
+    return response

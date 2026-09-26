@@ -5,6 +5,10 @@ from typing import Any, Type
 
 from models.models import MCPResponse
 
+# Fields McpActionJournal (C#) adds to a mutating command's result: the Undo group of the
+# action and prefab-link warnings. Tool wrappers must not drop them.
+ACTION_META_KEYS = ("undo", "warnings")
+
 
 def normalize_unity_response(response: Any) -> Any:
     """Normalize Unity's {status,result} payloads into MCPResponse shape."""
@@ -25,6 +29,9 @@ def normalize_unity_response(response: Any) -> Any:
         return response
 
     payload = result if isinstance(result, dict) else {}
+    action_meta = {k: payload[k] for k in ACTION_META_KEYS if k in payload}
+    if action_meta:
+        payload = {k: v for k, v in payload.items() if k not in action_meta}
     success = status == "success"
     message = payload.get("message") or response.get("message")
     error = payload.get("error") or response.get("error")
@@ -46,6 +53,7 @@ def normalize_unity_response(response: Any) -> Any:
     if not success and not normalized["error"]:
         normalized["error"] = message or "Unity command failed"
 
+    normalized.update(action_meta)
     return normalized
 
 
