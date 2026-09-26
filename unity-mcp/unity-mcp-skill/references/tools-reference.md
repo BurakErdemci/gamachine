@@ -767,7 +767,7 @@ manage_editor(action="deploy_package")     # Copy configured MCPForUnity source 
 manage_editor(action="restore_package")    # Revert to pre-deployment backup
 ```
 
-**Per-action undo:** every mutating tool response carries `undo: {action_id, group, name, undoable: true|false|"partial", note?}`; a `batch_execute` call is one undo step. `undo_action` with that `action_id` (or `undo_group`) reverts only that action, and is refused unless it is still the most recent undo step (so later user edits are never reverted), when `undoable` is false (file changes, GameObject delete), or in play mode. Deleting, reparenting or removing components inside a prefab instance, unpacking one, or deleting a prefab asset adds `warnings: ["prefab_link: ..."]`; warnings never refuse the call.
+**Per-action undo:** every mutating tool response carries `undo: {action_id, group, name, undoable: true|false|"partial", note?}`; a `batch_execute` call is one undo step. `undo_action` with that `action_id` (or `undo_group`) reverts only that action, and is refused unless it is still the most recent undo step (so later user edits are never reverted), when `undoable` is false (file changes), or in play mode. Deleting, reparenting or removing components inside a prefab instance, unpacking one, or deleting a prefab asset adds `warnings: ["prefab_link: ..."]`; warnings never refuse the call.
 
 **Deploy workflow:** Set the source path in MCP for Unity Advanced Settings first. `deploy_package` copies the source into the project's package location, creates a backup, and triggers `AssetDatabase.Refresh`. Follow with `refresh_unity(wait_for_ready=True)` to wait for recompilation.
 

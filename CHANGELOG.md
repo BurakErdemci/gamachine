@@ -40,8 +40,8 @@ Every mutating Unity MCP call is now a single named Unity undo step
 Responses say which step it was and whether Undo can fully revert it. The new
 `manage_editor action=undo_action` reverts exactly one agent action, and refuses
 unless that action is still the latest step, so edits you made afterwards are
-never lost. GameObject deletes and file operations are reported as not fully
-undoable. Every action is logged to `Library/GamachineActions/actions.jsonl` in
+never lost. GameObject deletes are undoable too (upstream #1135); file
+operations are reported as not fully undoable. Every action is logged to `Library/GamachineActions/actions.jsonl` in
 the project, and edits that break or restructure a prefab link come back with a
 `prefab_link` warning.
 

@@ -58,7 +58,7 @@ Scenes, prefabs, materials and other Unity YAML assets (`.unity`, `.prefab`, `.a
 
 ### 3. Undo One Action
 
-Each mutating response carries `undo: {action_id, group, name, undoable}`. To revert your own last action, call `manage_editor(action="undo_action", action_id=...)`. It is refused if anything was done after it (so the user's later edits are never lost) and for `undoable: false` (file changes, GameObject delete). A `batch_execute` call is one undo step. `warnings: ["prefab_link: ..."]` in a response means the change breaks or restructures a prefab link; it was still applied.
+Each mutating response carries `undo: {action_id, group, name, undoable}`. To revert your own last action, call `manage_editor(action="undo_action", action_id=...)`. It is refused if anything was done after it (so the user's later edits are never lost) and for `undoable: false` (file changes). A `batch_execute` call is one undo step. `warnings: ["prefab_link: ..."]` in a response means the change breaks or restructures a prefab link; it was still applied.
 
 ### 4. Use `batch_execute` for Multiple Operations
 

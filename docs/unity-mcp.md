@@ -114,8 +114,7 @@ call, or the user's own edit) makes it refuse, so a later edit is never lost; st
 back with `manage_editor action=undo` or Edit > Undo instead. It also refuses in play
 mode and for `undoable: false` actions.
 
-Not fully undoable, and reported as such: deleting a GameObject (it uses
-`DestroyImmediate`) and file operations (`manage_asset`, `manage_script`, scene
+Not fully undoable, and reported as such: file operations (`manage_asset`, `manage_script`, scene
 save/load, prefab creation ...). Calls made in play mode get no undo group.
 
 Each action is also logged, one JSON line per call, to
