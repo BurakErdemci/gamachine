@@ -158,6 +158,14 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE conversations ADD COLUMN memory_summary TEXT DEFAULT ''")
             except sqlite3.OperationalError:
                 pass  # Sütun zaten var
+            # Branching (tabs): parent_id is always the ROOT's id (one level),
+            # fork_at the id of the last message copied from the source.
+            for col_def in ("parent_id INTEGER", "fork_at INTEGER",
+                            "hidden INTEGER NOT NULL DEFAULT 0"):
+                try:
+                    cursor.execute(f"ALTER TABLE conversations ADD COLUMN {col_def}")
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
 
     def _migrate_ai_configs_table(self, conn: sqlite3.Connection):
@@ -343,20 +351,92 @@ class DatabaseManager:
     def get_user_conversations(self, user_id: int) -> List[Dict[str, Any]]:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
-                'SELECT id, title, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC',
+                'SELECT id, title, created_at, updated_at, parent_id, hidden FROM conversations '
+                'WHERE user_id = ? ORDER BY updated_at DESC',
                 (user_id,)
             ).fetchall()
-            return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3]} for r in rows]
+            return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3],
+                     "parent_id": r[4], "hidden": bool(r[5])} for r in rows]
 
     def get_conversation_owner(self, conv_id: int) -> Optional[int]:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             row = conn.execute('SELECT user_id FROM conversations WHERE id = ?', (conv_id,)).fetchone()
             return row[0] if row else None
 
+    @staticmethod
+    def _touch(conn: sqlite3.Connection, conv_id: int, now: str) -> None:
+        """Bump updated_at of the chat AND its root, so a branch's activity keeps
+        the whole family on top of the sidebar (which lists roots only)."""
+        conn.execute('UPDATE conversations SET updated_at = ? WHERE id = ?', (now, conv_id))
+        conn.execute(
+            'UPDATE conversations SET updated_at = ? '
+            'WHERE id = (SELECT parent_id FROM conversations WHERE id = ?)',
+            (now, conv_id))
+
+    def get_conversation_parent(self, conv_id: int) -> Optional[int]:
+        """parent_id of the chat: None for a root (or an unknown id)."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute('SELECT parent_id FROM conversations WHERE id = ?', (conv_id,)).fetchone()
+            return row[0] if row else None
+
+    def get_branch_ids(self, root_id: int) -> List[int]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            rows = conn.execute(
+                'SELECT id FROM conversations WHERE parent_id = ? ORDER BY id ASC', (root_id,)
+            ).fetchall()
+            return [r[0] for r in rows]
+
+    def create_branch(self, source_id: int, suffix: str = " · dal") -> Optional[Dict[str, Any]]:
+        """Copy a chat into a new branch under its ROOT; None if the source is gone.
+
+        No cli_sessions row is written on purpose: the branch's first turn must
+        get the handoff transcript, not resume the source's CLI session.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            src = conn.execute(
+                'SELECT user_id, title, memory_summary, parent_id FROM conversations WHERE id = ?',
+                (source_id,)
+            ).fetchone()
+            if not src:
+                return None
+            user_id, title, memory_summary, parent_id = src
+            root_id = parent_id or source_id
+            title = title or ""
+            new_title = title if title.endswith(suffix) else title + suffix
+            # Bounding the copy by fork_at makes the recorded fork point exact
+            # even if another connection appends to the source meanwhile.
+            fork_at = conn.execute(
+                'SELECT MAX(id) FROM messages WHERE conversation_id = ?', (source_id,)
+            ).fetchone()[0]
+            cur = conn.execute(
+                'INSERT INTO conversations (user_id, title, created_at, updated_at, memory_summary, '
+                'parent_id, fork_at, hidden) VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
+                (user_id, new_title, now, now, memory_summary or "", root_id, fork_at)
+            )
+            new_id = cur.lastrowid
+            if fork_at is not None:
+                conn.execute(
+                    'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp) '
+                    'SELECT ?, role, content, smells_json, timestamp FROM messages '
+                    'WHERE conversation_id = ? AND id <= ? ORDER BY id',
+                    (new_id, source_id, fork_at)
+                )
+            conn.execute('UPDATE conversations SET updated_at = ? WHERE id = ?', (now, root_id))
+            conn.commit()
+        return {"id": new_id, "title": new_title, "parent_id": root_id, "hidden": False,
+                "created_at": now, "updated_at": now}
+
+    def set_conversation_hidden(self, conv_id: int, hidden: bool) -> None:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('UPDATE conversations SET hidden = ? WHERE id = ?', (1 if hidden else 0, conv_id))
+            conn.commit()
+
     def rename_conversation(self, conv_id: int, new_title: str) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute('UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?', (new_title, now, conv_id))
+            conn.execute('UPDATE conversations SET title = ? WHERE id = ?', (new_title, conv_id))
+            self._touch(conn, conv_id, now)
             conn.commit()
 
     def delete_conversation(self, conv_id: int) -> None:
@@ -380,7 +460,7 @@ class DatabaseManager:
                 (conversation_id, role, content, smells_json, now)
             )
             # Sohbetin updated_at'ini güncelle
-            conn.execute('UPDATE conversations SET updated_at = ? WHERE id = ?', (now, conversation_id))
+            self._touch(conn, conversation_id, now)
             conn.commit()
             return cursor.lastrowid
 
@@ -472,9 +552,10 @@ class DatabaseManager:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
-                'UPDATE conversations SET memory_summary = ?, updated_at = ? WHERE id = ?',
-                (summary, now, conv_id)
+                'UPDATE conversations SET memory_summary = ? WHERE id = ?',
+                (summary, conv_id)
             )
+            self._touch(conn, conv_id, now)
             conn.commit()
 
     def get_memory(self, conv_id: int) -> str:

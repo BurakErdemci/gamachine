@@ -128,3 +128,23 @@ def test_the_session_report_endpoint_checks_the_conversation_too(gercek_token):
     with pytest.raises(HTTPException) as e:
         _uc("/session-report/{conv_id}/{kind}", db, conv_id=999999, kind="usage")
     assert e.value.status_code == 404
+
+
+# ── Branching routes (tabs) ────────────────────────────────────────────────
+
+def test_branching_a_foreign_or_unknown_conversation_is_refused(gercek_token):
+    for owner, status in ((7, 403), (None, 404)):
+        db = _db(owner=owner)
+        with pytest.raises(HTTPException) as e:
+            _uc("/conversations/{conv_id}/branch", db, conv_id=5)
+        assert e.value.status_code == status
+        db.create_branch.assert_not_called()
+
+
+def test_hiding_a_foreign_conversation_is_refused(gercek_token):
+    from schemas import HiddenRequest
+    db = _db(owner=7)
+    with pytest.raises(HTTPException) as e:
+        _uc("/conversations/{conv_id}/hidden", db, conv_id=5, req=HiddenRequest(hidden=True))
+    assert e.value.status_code == 403
+    db.set_conversation_hidden.assert_not_called()

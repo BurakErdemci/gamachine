@@ -29,6 +29,10 @@ class RenameRequest(BaseModel):
     title: str
 
 
+class HiddenRequest(BaseModel):
+    hidden: bool
+
+
 class APIKeySaveRequest(BaseModel):
     provider_type: str
     api_key: str

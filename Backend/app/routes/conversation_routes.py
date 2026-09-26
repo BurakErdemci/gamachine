@@ -13,7 +13,7 @@ from ai_providers import AIProviderManager
 from analyzer import UnityAnalyzer
 from auth_utils import require_conversation_owner, require_user, get_current_user, _check_token
 from code_detector import CodeDetector
-from schemas import ChatRequest, NewConversationRequest, RenameRequest
+from schemas import ChatRequest, HiddenRequest, NewConversationRequest, RenameRequest
 
 from agentic.agent_runner import AgentRunner
 from agentic import approval_mode
@@ -765,9 +765,7 @@ def create_conversation_router(db, progress_store):
             logger.exception("Claude oturum raporu alınamadı")
             return _fallback("error")
 
-    @router.delete("/conversations/{conv_id}")
-    async def delete_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
-        require_conversation_owner(db, x_session_token, conv_id)
+    async def _delete_one_conversation(conv_id: int) -> None:
         db.delete_conversation(conv_id)
         # Memory store'ları temizle (unbounded growth önlemi)
         scope_plan_store.pop(conv_id, None)
@@ -788,13 +786,62 @@ def create_conversation_router(db, progress_store):
         wake_queue.reset(conv_id)
         # Fiziksel hafıza dosyasını sil
         memory_manager.delete_memory(str(conv_id))
-        return {"status": "success"}
+
+    @router.delete("/conversations/{conv_id}")
+    async def delete_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
+        require_conversation_owner(db, x_session_token, conv_id)
+        # A root takes its branches with it (foreign keys are off, so nothing
+        # cascades); a branch goes alone.
+        ids = [conv_id]
+        if db.get_conversation_parent(conv_id) is None:
+            ids += db.get_branch_ids(conv_id)
+        for cid in ids:
+            await _delete_one_conversation(cid)
+        return {"status": "success", "deleted_ids": ids}
 
     @router.put("/conversations/{conv_id}")
     async def rename_conversation(conv_id: int, req: RenameRequest, x_session_token: str = Header(alias="X-Session-Token")):
         require_conversation_owner(db, x_session_token, conv_id)
         db.rename_conversation(conv_id, req.title)
         return {"status": "success"}
+
+    @router.post("/conversations/{conv_id}/branch")
+    async def branch_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
+        """New tab = full copy of the chat from now, then independent.
+
+        Known limits: the copy is text-only (tool activity is not in the DB),
+        and the branch starts without a CLI session, so its first turn sees the
+        history only through the handoff transcript, which is capped (20000
+        chars total, 4000 per message; oldest messages drop first).
+        """
+        require_conversation_owner(db, x_session_token, conv_id)
+        from agentic.approval_policy import conversation_turn_in_flight
+        # No await between this check and the copy: a turn cannot start or
+        # finish in between on this event loop.
+        if conversation_turn_in_flight(conv_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Bu sohbette yanıt hâlâ sürüyor; dal açmak için turun bitmesini bekle.",
+            )
+        branch = db.create_branch(conv_id)
+        if branch is None:
+            raise HTTPException(status_code=404, detail="Sohbet bulunamadı.")
+        memory = memory_manager.load_memory(str(conv_id))
+        if memory is not None:
+            memory_manager.save_memory(str(branch["id"]), memory)
+        return branch
+
+    @router.put("/conversations/{conv_id}/hidden")
+    async def set_conversation_hidden(conv_id: int, req: HiddenRequest,
+                                      x_session_token: str = Header(alias="X-Session-Token")):
+        require_conversation_owner(db, x_session_token, conv_id)
+        if db.get_conversation_parent(conv_id) is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Ana sohbet gizlenemez; yalnız dallar kapatılıp yeniden açılabilir.",
+            )
+        db.set_conversation_hidden(conv_id, req.hidden)
+        return {"id": conv_id, "hidden": req.hidden}
 
     @router.post("/conversations/{conv_id}/compact")
     async def compact_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
