@@ -17,7 +17,7 @@ Unifies the [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp) projec
 
 > Because `uv`/`uvx` is bundled in the packaged app, the user doesn't need to install it separately. If the Unity Editor is closed the toggle can't connect — open Unity first.
 
-> **Approval behavior:** In step mode, unityMCP calls that **mutate** the scene open an approval card on every provider (the Unity MCP server asks before the call reaches Unity); calls that only **read** (hierarchy, console, search) do not. In auto mode no card appears. See [Approval scope](security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
+> **Approval behavior:** In step mode, every unityMCP call classified as a **write** opens an approval card on every provider (the Unity MCP server asks before the call reaches Unity); read-classified calls such as `read_console`, `compile_status` or `find_in_file` pass without one. Scene queries such as `manage_scene action=get_hierarchy` or `find_gameobjects` are write-classified and open a card: those tools first refresh a project changed outside the Editor, which can compile scripts. In auto mode no card appears. See [Approval scope](security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
 
 > **Fixed rule, every mode:** no Unity MCP call may write, delete, move or rename a `.meta` file; the server refuses it before any approval card. Target the asset's own path with `manage_asset` instead, so the GUID stays intact. Agents' own file tools are also refused raw writes to Unity YAML assets (scenes, prefabs, materials ...): these tools are the route for those. See [Fixed Unity file rule](security.md#5-fixed-unity-file-rule-every-approval-mode).
 

@@ -48,11 +48,20 @@ in both modes.
 | Create / edit a file — **cloud API & Ollama** | `write_file` (function calling) | ❌ **No approval, writes directly** |
 | Delete a file | `delete_file` / `unityai` / function calling | ✅ **Delete card appears** |
 | Terminal command | `bash` / `run_command` | ✅ (except safe commands) |
-| unityMCP call that **reads** the scene | `manage_scene action=get_hierarchy`, `read_console`… | ➖ No card (read) |
+| unityMCP call that only **reads** | `read_console`, `compile_status`, `find_in_file`, `get_test_job`… | ➖ No card (read) |
+| unityMCP scene read through a tool that can refresh first | `manage_scene action=get_hierarchy`, `find_gameobjects`… | ✅ **Card appears** (see below) |
 | unityMCP call that **mutates** the scene — **every provider** | `manage_gameobject`, `manage_input`… | ✅ **Card appears** (checked in the Unity MCP server) |
 | Write/delete/move a `.meta` file, or write a Unity YAML asset as raw text, inside a Unity project | any file tool or shell, every provider | 🚫 **Refused in every mode** — a fixed rule, not a card ([§5](#5-fixed-unity-file-rule-every-approval-mode)) |
 | Same, through a shell command | `Bash`, `run_command`… | ⚠️ Heuristic: direct forms refused, indirect ones (variables, scripts) not caught |
 | Same, through `execute_code` / `execute_menu_item` | Unity MCP | ❌ **Not checked** — their effect is not visible in the arguments |
+
+**Why does a hierarchy read show a card?** Eight tools (`find_gameobjects`, `manage_asset`,
+`manage_prefabs`, `manage_scene`, `manage_components`, `manage_gameobject`, `manage_texture`,
+`run_tests`) first refresh the project when the Editor reports changes made outside it, which
+can import assets, compile scripts and reload the domain. That happens before the tool's own
+work, so every action of these tools counts as a write, pure queries such as
+`manage_scene action=get_hierarchy` included (`tool_actions.json`, `_preflight_refresh_note`).
+The read itself works as before; in step mode it just comes with a card.
 
 **Why is `write_file` unapproved on the cloud API path?** Writing code into the workspace is what this product is for. Asking on every write trains reflex-approval, which does not strengthen the gate — it destroys it, and then the delete card that actually matters gets approved by the same reflex. Writes are instead **confined to the workspace** by `_validate_path` (`Path.resolve()` + prefix check). Deletes are rare and irreversible, so they always show a card.
 
