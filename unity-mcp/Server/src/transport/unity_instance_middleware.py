@@ -161,8 +161,10 @@ class UnityInstanceMiddleware(Middleware):
         except Exception:
             request = None
         if request is not None:
-            claims.append(request.headers.get(GAMACHINE_CONVERSATION_HEADER))
-            claims.append(request.query_params.get(GAMACHINE_CONVERSATION_QUERY_PARAM))
+            # getlist: a repeated header or query key is several sources, and
+            # .get would silently pick one of them (Codex s2verify).
+            claims.extend(request.headers.getlist(GAMACHINE_CONVERSATION_HEADER))
+            claims.extend(request.query_params.getlist(GAMACHINE_CONVERSATION_QUERY_PARAM))
         try:
             # The raw _meta of the tools/call request. The middleware's own
             # context.message is rebuilt by FastMCP and keeps only its version key.
@@ -171,18 +173,18 @@ class UnityInstanceMiddleware(Middleware):
             meta = request_context.meta if request_context is not None else None
         except Exception:
             meta = None
-        if isinstance(meta, dict):
-            claims.append(meta.get(GAMACHINE_CONVERSATION_META_KEY))
-        # An empty value is a source that is present and does not parse, so it
-        # drops the claim like any junk value (Codex s2audit, empty-owner-source).
-        present = [claim for claim in claims if claim is not None]
-        if not present:
+        if isinstance(meta, dict) and GAMACHINE_CONVERSATION_META_KEY in meta:
+            claims.append(meta[GAMACHINE_CONVERSATION_META_KEY])
+        # Only present sources are collected, so an empty string or an explicit
+        # null counts as a value that does not parse and drops the claim like
+        # any junk (Codex s2audit empty-owner-source, s2verify null-owner-source).
+        if not claims:
             return None
-        parsed = {parse_conversation_id(claim) for claim in present}
+        parsed = {parse_conversation_id(claim) for claim in claims}
         if len(parsed) == 1 and None not in parsed:
             return parsed.pop()
         _diag.warning("on_call_tool: conversation claim dropped (%r); the card goes unowned",
-                      present)
+                      claims)
         return None
 
     async def _discover_instances(self, ctx) -> list:

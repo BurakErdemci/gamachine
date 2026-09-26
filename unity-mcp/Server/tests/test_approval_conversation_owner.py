@@ -108,9 +108,16 @@ def test_a_read_call_asks_nothing(bodies):
 
 
 class _Request:
-    def __init__(self, headers=None, query=None):
-        self.headers = headers or {}
-        self.query_params = query or {}
+    """Starlette's own containers, so repeated keys behave as on a real request."""
+
+    def __init__(self, headers=None, query=None, raw_headers=None):
+        from starlette.datastructures import Headers, QueryParams
+
+        if raw_headers is not None:
+            self.headers = Headers(raw=[(k.lower().encode(), v.encode()) for k, v in raw_headers])
+        else:
+            self.headers = Headers(headers=headers or {})
+        self.query_params = QueryParams(query or {})
 
 
 def _install_dependencies(monkeypatch, request=None, meta=None):
@@ -169,11 +176,46 @@ def test_disagreeing_sources_drop_the_claim(monkeypatch, request_, meta):
     assert _read(monkeypatch, request=request_, meta=meta) is None
 
 
-@pytest.mark.parametrize("header", ["abc", "0", "-4", "4.0", "٤", ""])
+@pytest.mark.parametrize("header", ["abc", "0", "-4", "4.0", ""])
 def test_junk_header_drops_the_claim_even_beside_a_valid_meta(monkeypatch, header):
     assert _read(monkeypatch,
                  request=_Request(headers={"X-Gamachine-Conversation": header}),
                  meta={"gamachine_conversation": 4}) is None
+
+
+def test_a_unicode_digit_in_the_query_drops_the_claim(monkeypatch):
+    # HTTP header values are latin-1, so a non-ASCII digit can only arrive in
+    # the URL, where it is percent-encoded UTF-8.
+    from starlette.datastructures import QueryParams
+
+    request = _Request()
+    request.query_params = QueryParams("conv=%D9%A4")
+    assert request.query_params.getlist("conv") == ["٤"]
+    assert _read(monkeypatch, request=request, meta={"gamachine_conversation": 4}) is None
+
+
+def test_an_explicit_null_meta_owner_drops_the_claim(monkeypatch):
+    header = _Request(headers={"X-Gamachine-Conversation": "41"})
+    assert _read(monkeypatch, request=header, meta={"gamachine_conversation": None}) is None
+    assert _read(monkeypatch, request=header, meta={"progressToken": 3}) == 41
+
+
+@pytest.mark.parametrize("values,expected", [
+    (["41", "junk"], None),
+    (["41", "42"], None),
+    (["41", "41"], 41),
+])
+def test_every_repeated_header_line_is_a_source(monkeypatch, values, expected):
+    request = _Request(raw_headers=[("X-Gamachine-Conversation", v) for v in values])
+    assert _read(monkeypatch, request=request) is expected
+
+
+def test_every_repeated_query_value_is_a_source(monkeypatch):
+    from starlette.datastructures import QueryParams
+
+    request = _Request()
+    request.query_params = QueryParams("conv=41&conv=junk")
+    assert _read(monkeypatch, request=request) is None
 
 
 def test_nothing_claimed(monkeypatch):
