@@ -458,6 +458,18 @@ class TestEventParsing(unittest.TestCase):
                 self.assertFalse(error["retryable"])
                 self.assertNotIn("reset_session", error)
 
+    def test_rate_limit_text_is_never_read_as_an_access_refusal(self):
+        """Codex tabaudit: a 429 carrying the Go phrase was shown as "retrying
+        will not help". Any quota/limit wording keeps the quota mapping."""
+        from providers.oneshot_cli import opencode_access_message
+
+        self.assertIsNone(opencode_access_message(
+            "429 Too many requests: An active OpenCode Go subscription is "
+            "required to use Go models."))
+        self.assertIsNone(opencode_access_message(
+            "rate limit reached; OpenCode's free tier can only be used from "
+            "within OpenCode"))
+
     def test_cli_timeout_uses_idle_time_not_five_minute_total_runtime(self):
         """Aktif CLI toplam 5 dakikayı geçti diye öldürülmemeli."""
         from providers.cli_base import BaseCLIProvider

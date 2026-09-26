@@ -301,7 +301,13 @@ OPENCODE_FREE_TIER_RE = _re.compile(
 
 
 def opencode_access_message(msg: str) -> Optional[str]:
-    """User-facing text for an OpenCode plan/free-tier refusal, else None."""
+    """User-facing text for an OpenCode plan/free-tier refusal, else None.
+
+    An error that also names a rate limit or quota is left to the quota
+    mapping: a transient limit must never read as "retrying will not help".
+    """
+    if QUOTA_ERROR_RE.search(msg or ""):
+        return None
     if OPENCODE_GO_SUBSCRIPTION_RE.search(msg or ""):
         return ("🔒 Bu model OpenCode Go aboneliği gerektiriyor ve OpenCode hesabında "
                 "etkin bir Go aboneliği görünmüyor. Bu geçici bir yoğunluk değil; tekrar "
