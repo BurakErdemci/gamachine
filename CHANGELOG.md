@@ -18,7 +18,10 @@ errors, clean, compiling, pending, stale, timeout or unknown. "Clean" means the
 code as it is now compiles and the domain reload after it has finished. The
 script tools wait for the compile by default and return the verdict with the
 write, `refresh_unity` returns it too, and `read_console` says when its list is
-not final yet.
+not final yet. `run_tests` does not start a run while scripts do not compile,
+are stale or their status cannot be read, and a test job that passed while the
+scripts stopped compiling is reported as failed, not green. `clear_stuck` now
+releases only a job that is actually stuck.
 
 ### Agents can no longer break asset GUIDs
 

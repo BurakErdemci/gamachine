@@ -245,10 +245,11 @@ manage_gameobject(action="modify", target=instance_id, position=[10, 0, 0])
 ```python
 # 1. Start test run (async)
 result = run_tests(mode="EditMode", test_names=["MyTests.TestSomething"])
-job_id = result["job_id"]
+job_id = result["data"]["job_id"]   # refused (error "compile" / "busy") when scripts are not compiled clean
 
-# 2. Poll for completion
+# 2. Poll for completion: data.status is "running", "succeeded" or "failed"
 result = get_test_job(job_id=job_id, wait_timeout=60, include_failed_tests=True)
+# data.result.summary holds the counts; error "compile" means the pass does not count
 ```
 
 ## Pagination Pattern

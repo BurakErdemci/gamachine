@@ -458,7 +458,7 @@ result = run_tests(
     test_names=["MyTests.TestPlayerMovement", "MyTests.TestEnemySpawn"],
     include_failed_tests=True
 )
-job_id = result["job_id"]
+job_id = result["data"]["job_id"]   # a refusal (error "compile" / "busy") starts no job
 
 # 3. Wait for results
 final_result = get_test_job(
@@ -468,9 +468,14 @@ final_result = get_test_job(
 )
 
 # 4. Check results
-if final_result["status"] == "complete":
-    for test in final_result.get("failed_tests", []):
-        print(f"FAILED: {test['name']}: {test['message']}")
+job = final_result["data"]
+if final_result.get("error") == "compile":
+    print("Not a pass: scripts do not compile or are stale:", job["compile"]["verdict"])
+elif job["status"] == "succeeded":
+    print(job["result"]["summary"])
+elif job["status"] == "failed":
+    for f in job["progress"]["failures_so_far"]:
+        print(f"FAILED: {f['full_name']}: {f['message']}")
 ```
 
 ### Run Tests by Category
@@ -485,8 +490,8 @@ result = run_tests(
 
 # Poll until complete
 while True:
-    status = get_test_job(job_id=result["job_id"], wait_timeout=30)
-    if status["status"] in ["complete", "failed"]:
+    status = get_test_job(job_id=result["data"]["job_id"], wait_timeout=30)
+    if status["data"]["status"] in ["succeeded", "failed"]:
         break
 ```
 
@@ -515,7 +520,7 @@ public class PlayerTests
 
 # 3. Run test (expect pass for this simple test)
 result = run_tests(mode="EditMode", test_names=["PlayerTests.TestPlayerStartsAtOrigin"])
-get_test_job(job_id=result["job_id"], wait_timeout=30)
+get_test_job(job_id=result["data"]["job_id"], wait_timeout=30)
 ```
 
 ---

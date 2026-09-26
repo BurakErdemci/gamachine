@@ -822,7 +822,13 @@ result = run_tests(
     include_failed_tests=True,   # include failure details
     include_details=False        # include all test details
 )
-# Returns: {"job_id": "abc123", ...}
+# Returns: data {job_id, status: "running", mode, compile}; data.compile is the compile_status verdict.
+# No run is started when it refuses:
+#   error "compile": scripts do not compile or changed on disk since the last compile (data.compile says which)
+#   error "busy", hint "retry": compiling (data.reason "compiling") or the compile status could not be
+#     read (data.reason "compile_status_unknown"); an old package without get_compile_status still runs
+#   hint "retry", data.reason "reloading": Unity answered mid-reload; the command was not resent
+# run_tests(clear_stuck=True) releases only a stuck job; a progressing one stays (data.cleared false).
 ```
 
 ### get_test_job
@@ -836,7 +842,15 @@ result = get_test_job(
     include_failed_tests=True,
     include_details=False
 )
-# Returns: {"status": "complete"|"running"|"failed", "results": {...}}
+# data.status: "running" | "succeeded" | "failed" (wait_timeout ran out -> still "running")
+# data.result (succeeded jobs only): {mode, summary: {total, passed, failed, skipped,
+#   durationSeconds, resultState}}, plus per-test entries in result.results with
+#   include_details / include_failed_tests
+# data.progress: completed, total, current test, failures_so_far (the failures of a failed run)
+# data.error: why a job failed without a result (e.g. tests did not start within init_timeout)
+# data.compile (finished jobs): the live compile_status verdict. A succeeded run while scripts do
+#   not compile or are stale comes back success=False, error "compile", data.status "failed",
+#   with data.result kept.
 ```
 
 ---
