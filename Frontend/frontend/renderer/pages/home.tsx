@@ -785,6 +785,8 @@ export default function Home() {
             onSelect={chat.selectConversation}
             onBranch={chat.branchConversation}
             onClose={chat.closeBranch}
+            onRename={chat.renameConversation}
+            onDelete={chat.deleteBranch}
           />
 
           {/* Outside ChatPanel on purpose: these requests belong to no chat,

@@ -62,6 +62,13 @@ export const familyOf = (conversations: Conversation[], rootId: number | null, a
   };
 };
 
+/** The tab left of `convId` in its family's tab row (root first), if any. */
+export const leftTabOf = (conversations: Conversation[], convId: number, activeId: number | null): Conversation | null => {
+  const fam = familyOf(conversations, familyRootId(conversations, convId), activeId);
+  const tabs = [fam.root, ...fam.visible].filter((c): c is Conversation => !!c);
+  return tabs[tabs.findIndex(c => c.id === convId) - 1] ?? null;
+};
+
 /**
  * Chats waiting on a decision, the one on screen excluded: its card is
  * already in front of the user, so counting it would point nowhere new.

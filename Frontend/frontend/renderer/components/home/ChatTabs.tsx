@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, GitBranchPlus, X } from 'lucide-react';
+import { ChevronDown, GitBranchPlus, Pencil, Trash2, X } from 'lucide-react';
 import { useLang } from '../../lib/i18n';
 import { STATUS_DOT, familyOf, familyRootId, mostUrgent } from '../../lib/convFamily';
 import type { Conversation } from './types';
@@ -19,6 +19,30 @@ const StatusDot: React.FC<{ status?: ConvStatus; testId: string }> = ({ status, 
     />
   );
 };
+
+// An outside mousedown, Escape, leaving the window or resizing it closes a popup.
+const useDismiss = (open: boolean, ref: React.RefObject<HTMLElement | null>, close: () => void) => {
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) return;
+    const shut = () => closeRef.current();
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) shut(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('blur', shut);
+    window.addEventListener('resize', shut);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('blur', shut);
+      window.removeEventListener('resize', shut);
+    };
+  }, [open, ref]);
+};
+
+const MENU_WIDTH = 168;
 
 interface BranchButtonProps {
   sourceId: number | null;
@@ -59,6 +83,10 @@ interface ChatTabsProps {
   onSelect: (conv: Conversation) => void;
   onBranch: (sourceId: number) => Promise<unknown>;
   onClose: (convId: number) => void;
+  /** Resolves false when the rename was not stored. */
+  onRename?: (convId: number, title: string) => Promise<boolean>;
+  /** Branch only; asks for confirmation itself. */
+  onDelete?: (convId: number) => Promise<unknown>;
 }
 
 /** True when the chat on screen belongs to a family with any branch, visible or not. */
@@ -71,31 +99,64 @@ export const hasBranches = (conversations: Conversation[], activeConvId: number 
  * then the header carries the lone BranchButton.
  */
 export const ChatTabs: React.FC<ChatTabsProps> = ({
-  conversations, activeConvId, convStatus, branchBlocked, onSelect, onBranch, onClose,
+  conversations, activeConvId, convStatus, branchBlocked, onSelect, onBranch, onClose, onRename, onDelete,
 }) => {
   const { t } = useLang();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [tabMenu, setTabMenu] = useState<{ id: number; x: number; y: number } | null>(null);
+  const tabMenuRef = useRef<HTMLDivElement>(null);
+  const [renaming, setRenaming] = useState<{ id: number; value: string } | null>(null);
+  // Enter commits and the unmounting input then blurs; only the first counts.
+  const renamingRef = useRef(renaming);
+  renamingRef.current = renaming;
   const fam = familyOf(conversations, familyRootId(conversations, activeConvId), activeConvId);
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menuOpen]);
+  useDismiss(menuOpen, menuRef, () => setMenuOpen(false));
+  useDismiss(!!tabMenu, tabMenuRef, () => setTabMenu(null));
 
   useEffect(() => { if (fam.hidden.length === 0) setMenuOpen(false); }, [fam.hidden.length]);
 
+  // Keyboard users land on the first item.
+  useEffect(() => {
+    if (tabMenu) tabMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [tabMenu]);
+
   if (!fam.root || fam.branches.length === 0) return null;
-  const tabs = [fam.root, ...fam.visible];
+  const root = fam.root;
+  const tabs = [root, ...fam.visible];
+  const menuConv = tabMenu ? tabs.find(c => c.id === tabMenu.id) ?? null : null;
+  const menuIsBranch = !!menuConv && menuConv.id !== root.id;
+
+  const openTabMenu = (e: React.MouseEvent<HTMLElement>, convId: number) => {
+    e.preventDefault();
+    let { clientX: x, clientY: y } = e;
+    // The context-menu key reports no pointer position; anchor under the tab.
+    if (x === 0 && y === 0) {
+      const r = e.currentTarget.getBoundingClientRect();
+      x = r.left; y = r.bottom;
+    }
+    setTabMenu({ id: convId, x: Math.max(4, Math.min(x, window.innerWidth - MENU_WIDTH - 4)), y });
+  };
+
+  const onMenuKey = (e: React.KeyboardEvent) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const items = Array.from(tabMenuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+  };
+
+  const commitRename = async () => {
+    const r = renamingRef.current;
+    if (!r) return;
+    renamingRef.current = null;
+    setRenaming(null);
+    const original = conversations.find(c => c.id === r.id)?.title;
+    if (!r.value.trim() || r.value === original || !onRename) return;
+    // Refused: the editor comes back with what was typed.
+    if (!(await onRename(r.id, r.value))) setRenaming(r);
+  };
 
   return (
     <div className="h-9 border-b border-white/[0.06] flex items-center gap-1 px-2 shrink-0 relative">
@@ -112,17 +173,36 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
               }`}
             >
               {active && <span className="absolute left-2 right-2 bottom-0 h-[2px] rounded-full bg-blue-400/80" />}
-              <button
-                type="button"
-                role="tab"
-                aria-selected={active}
-                title={conv.title}
-                onClick={() => { if (!active) onSelect(conv); }}
-                className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
-              >
-                <StatusDot status={convStatus?.[conv.id]} testId={`tab-status-${conv.id}`} />
-                <span className="text-[11px] font-medium truncate">{conv.title}</span>
-              </button>
+              {renaming?.id === conv.id ? (
+                <input
+                  autoFocus
+                  data-testid={`chat-tab-rename-${conv.id}`}
+                  aria-label={t('branch.menuRename')}
+                  value={renaming.value}
+                  onChange={e => setRenaming({ id: conv.id, value: e.target.value })}
+                  onFocus={e => e.currentTarget.select()}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') void commitRename();
+                    if (e.key === 'Escape') { renamingRef.current = null; setRenaming(null); }
+                  }}
+                  onBlur={() => { void commitRename(); }}
+                  className="flex-1 min-w-0 bg-[#000000] text-white text-[11px] px-1.5 py-0.5 rounded border border-blue-500 outline-none"
+                />
+              ) : (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  aria-haspopup="menu"
+                  title={conv.title}
+                  onClick={() => { if (!active) onSelect(conv); }}
+                  onContextMenu={e => openTabMenu(e, conv.id)}
+                  className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
+                >
+                  <StatusDot status={convStatus?.[conv.id]} testId={`tab-status-${conv.id}`} />
+                  <span className="text-[11px] font-medium truncate">{conv.title}</span>
+                </button>
+              )}
               {isBranch && (
                 <button
                   type="button"
@@ -177,6 +257,56 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
                 </button>
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {tabMenu && menuConv && (
+        <div
+          ref={tabMenuRef}
+          role="menu"
+          data-testid="tab-menu"
+          aria-label={menuConv.title}
+          onKeyDown={onMenuKey}
+          onContextMenu={e => e.preventDefault()}
+          style={{ left: tabMenu.x, top: tabMenu.y }}
+          className="fixed z-50 bg-[#111111] border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[160px] text-[12px]"
+        >
+          {onRename && (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="tab-menu-rename"
+              onClick={() => { setTabMenu(null); setRenaming({ id: menuConv.id, value: menuConv.title }); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 focus:bg-slate-800 outline-none text-slate-300 hover:text-white transition-colors"
+            >
+              <Pencil size={13} /> {t('branch.menuRename')}
+            </button>
+          )}
+          {menuIsBranch && (
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="tab-menu-close"
+              onClick={() => { setTabMenu(null); onClose(menuConv.id); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 focus:bg-slate-800 outline-none text-slate-300 hover:text-white transition-colors"
+            >
+              <X size={13} /> {t('branch.menuClose')}
+            </button>
+          )}
+          {menuIsBranch && onDelete && (
+            <>
+              <div className="border-t border-slate-700/50 my-1" />
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="tab-menu-delete"
+                onClick={() => { setTabMenu(null); void onDelete(menuConv.id); }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 focus:bg-slate-800 outline-none text-red-400 hover:text-red-300 transition-colors"
+              >
+                <Trash2 size={13} /> {t('branch.menuDelete')}
+              </button>
+            </>
           )}
         </div>
       )}

@@ -5,11 +5,11 @@ import { Message, Conversation, UserData, AIConfig, GenerationMode, ChatActivity
 import { PendingFile } from '../../components/home/FileCreationApproval';
 import { confirmDialog } from '../../components/ui/ConfirmDialog';
 import { deliveryFromFetch, gateFailure } from './gateResponse';
-import { cevir } from '../../lib/i18n';
+import { cevir, type TKey } from '../../lib/i18n';
 import { parseContextReport } from '../../lib/contextReport';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { apiHataMesaji } from '../../lib/apiError';
-import { familyOf, familyRootId, isBranchIn } from '../../lib/convFamily';
+import { isBranchIn, leftTabOf } from '../../lib/convFamily';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -461,10 +461,14 @@ export const useChat = (
     await fetchMessages(conv.id);
   }, [editingId, fetchMessages, patchConv, rt, setActiveConvId, setBranchHidden]);
 
-  const deleteConversation = useCallback(async (e: React.MouseEvent, convId: number) => {
-    e.stopPropagation();
-    if (!user) return;
-    if (!(await confirmDialog(cevir('chat.deleteConfirm')))) return;
+  // `next` picks the chat to open when the one on screen is deleted; it runs
+  // after the delete, against the list as it stands then. None: empty screen.
+  const removeConversation = useCallback(async (
+    convId: number, confirmText: string,
+    next: () => Conversation | null = () => null, failKey?: TKey,
+  ) => {
+    if (!user) return false;
+    if (!(await confirmDialog(confirmText))) return false;
     try {
       const res = await axios.delete(`${API}/conversations/${convId}`);
       // Deleting a root takes its branches with it; an older backend does not
@@ -483,20 +487,58 @@ export const useChat = (
         controllersRef.current.delete(id);
         dropConv(id);
       }
-      if (activeConvIdRef.current != null && ids.includes(activeConvIdRef.current)) setActiveConvId(null);
+      const target = activeConvIdRef.current != null && ids.includes(activeConvIdRef.current)
+        ? next() : undefined;
+      if (target !== undefined) {
+        // Cleared first: if the move is refused (a sidebar rename in progress)
+        // the screen is empty rather than showing a deleted chat.
+        setActiveConvId(null);
+        if (target && !ids.includes(target.id)) void selectConversation(target);
+      }
       setConversations(prev => prev.filter(c => !ids.includes(c.id)));
       fetchConversations(user.id);
-    } catch (err) { console.error("Sohbet silme hatası:", err); }
-  }, [API, dropConv, fetchConversations, releaseCards, setActiveConvId, user]);
+      return true;
+    } catch (err) {
+      console.error("Sohbet silme hatası:", err);
+      if (failKey) showToast(apiHataMesaji(err, cevir(failKey)), 'error');
+      return false;
+    }
+  }, [API, dropConv, fetchConversations, releaseCards, selectConversation, setActiveConvId, showToast, user]);
+
+  const deleteConversation = useCallback(async (e: React.MouseEvent, convId: number) => {
+    e.stopPropagation();
+    await removeConversation(convId, cevir('chat.deleteConfirm'));
+  }, [removeConversation]);
+
+  // Tab menu: deletes this branch only (the backend leaves the root and its
+  // other branches alone). The tab on screen moves to its left neighbour.
+  const deleteBranch = useCallback(async (convId: number) => {
+    const list = conversationsRef.current;
+    const conv = list.find(c => c.id === convId);
+    if (!conv || !isBranchIn(list, conv)) return false;
+    return removeConversation(convId, cevir('branch.deleteConfirm'),
+      () => leftTabOf(conversationsRef.current, convId, activeConvIdRef.current), 'branch.deleteFailed');
+  }, [removeConversation]);
+
+  // Title is sent as typed; only an all-blank one is refused.
+  const renameConversation = useCallback(async (convId: number, title: string) => {
+    if (!API || !title.trim()) return false;
+    try {
+      await axios.put(`${API}/conversations/${convId}`, { title });
+      setConversations(prev => prev.map(c => (c.id === convId ? { ...c, title } : c)));
+      if (user) void fetchConversations(user.id);
+      return true;
+    } catch (err) {
+      console.error("Yeniden adlandırma hatası:", err);
+      showToast(apiHataMesaji(err, cevir('chat.renameFailed')), 'error');
+      return false;
+    }
+  }, [API, fetchConversations, showToast, user]);
 
   const saveRename = useCallback(async (convId: number) => {
     if (!tempTitle.trim()) { setEditingId(null); return; }
-    try {
-      await axios.put(`${API}/conversations/${convId}`, { title: tempTitle });
-      setEditingId(null);
-      if (user) fetchConversations(user.id);
-    } catch (err) { console.error("Yeniden adlandırma hatası:", err); }
-  }, [API, fetchConversations, tempTitle, user]);
+    if (await renameConversation(convId, tempTitle)) setEditingId(null);
+  }, [renameConversation, tempTitle]);
 
   const createNewConversation = useCallback(async (title?: string) => {
     const baslik = title ?? cevir('sidebar.newChat');
@@ -550,9 +592,7 @@ export const useChat = (
     const conv = list.find(c => c.id === convId);
     if (!conv || !isBranchIn(list, conv)) return false;
     if (activeConvIdRef.current === convId) {
-      const fam = familyOf(list, familyRootId(list, convId), convId);
-      const tabs = [fam.root, ...fam.visible].filter((c): c is Conversation => !!c);
-      const next = tabs[tabs.findIndex(c => c.id === convId) - 1];
+      const next = leftTabOf(list, convId, convId);
       if (next) void selectConversation(next);
     }
     return setBranchHidden(convId, true);
@@ -1220,7 +1260,7 @@ export const useChat = (
     tempTitle, setTempTitle,
     fetchConversations, fetchMessages, createNewConversation,
     selectConversation, deleteConversation, saveRename,
-    branchConversation, setBranchHidden, closeBranch,
+    branchConversation, setBranchHidden, closeBranch, deleteBranch, renameConversation,
     convStatus, attention,
     sendMessage, stopMessage,
     clearHistory, analyzeProject, exportMemory, importMemory, compactConversation,
