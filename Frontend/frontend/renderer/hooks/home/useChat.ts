@@ -435,8 +435,11 @@ export const useChat = (
     }
   }, [API, fetchConversations, showToast, user]);
 
-  const selectConversation = useCallback(async (conv: Conversation) => {
-    if (editingId) return;
+  // The screen moves here unconditionally; `selectConversation` is the user's
+  // click and is refused while a sidebar title is being edited. A handoff
+  // after delete, close or branch must not be refused, or the screen is left
+  // empty while the chat it should show still exists (Codex tabaudit).
+  const openConversation = useCallback(async (conv: Conversation) => {
     // Every way into a chat (closed-branches menu, notification click) lands
     // here. Not awaited: the tab does not depend on it, since the chat on
     // screen is always drawn as a tab (familyOf's activeId), so a failed
@@ -459,7 +462,12 @@ export const useChat = (
     // be a claim about a conversation we have not looked at.
     patchConv(conv.id, () => ({ contextUsage: null, unread: false }));
     await fetchMessages(conv.id);
-  }, [editingId, fetchMessages, patchConv, rt, setActiveConvId, setBranchHidden]);
+  }, [fetchMessages, patchConv, rt, setActiveConvId, setBranchHidden]);
+
+  const selectConversation = useCallback(async (conv: Conversation) => {
+    if (editingId) return;
+    await openConversation(conv);
+  }, [editingId, openConversation]);
 
   // `next` picks the chat to open when the one on screen is deleted; it runs
   // after the delete, against the list as it stands then. None: empty screen.
@@ -490,10 +498,8 @@ export const useChat = (
       const target = activeConvIdRef.current != null && ids.includes(activeConvIdRef.current)
         ? next() : undefined;
       if (target !== undefined) {
-        // Cleared first: if the move is refused (a sidebar rename in progress)
-        // the screen is empty rather than showing a deleted chat.
         setActiveConvId(null);
-        if (target && !ids.includes(target.id)) void selectConversation(target);
+        if (target && !ids.includes(target.id)) void openConversation(target);
       }
       setConversations(prev => prev.filter(c => !ids.includes(c.id)));
       fetchConversations(user.id);
@@ -503,7 +509,7 @@ export const useChat = (
       if (failKey) showToast(apiHataMesaji(err, cevir(failKey)), 'error');
       return false;
     }
-  }, [API, dropConv, fetchConversations, releaseCards, selectConversation, setActiveConvId, showToast, user]);
+  }, [API, dropConv, fetchConversations, openConversation, releaseCards, setActiveConvId, showToast, user]);
 
   const deleteConversation = useCallback(async (e: React.MouseEvent, convId: number) => {
     e.stopPropagation();
@@ -576,14 +582,14 @@ export const useChat = (
       // Started now so it supersedes list reads made before the server had it.
       void fetchConversations(user.id);
       // A chat the user opened meanwhile stays on screen; the tab still appears.
-      if (selectionRef.current === selection) await selectConversation(created);
+      if (selectionRef.current === selection) await openConversation(created);
       return created.id;
     } catch (err: any) {
       const fallback = err?.response?.status === 409 ? 'branch.busy' : 'branch.failed';
       showToast(apiHataMesaji(err, cevir(fallback)), 'error');
       return null;
     }
-  }, [API, fetchConversations, rt, selectConversation, showToast, user]);
+  }, [API, fetchConversations, openConversation, rt, showToast, user]);
 
   // Closing a tab hides the branch; nothing is deleted and a running turn
   // keeps running. Closing the tab on screen moves to its left neighbour.
@@ -593,10 +599,10 @@ export const useChat = (
     if (!conv || !isBranchIn(list, conv)) return false;
     if (activeConvIdRef.current === convId) {
       const next = leftTabOf(list, convId, convId);
-      if (next) void selectConversation(next);
+      if (next) void openConversation(next);
     }
     return setBranchHidden(convId, true);
-  }, [selectConversation, setBranchHidden]);
+  }, [openConversation, setBranchHidden]);
 
   // A turn that finished off screen is re-read from the server once, so its
   // ids and persisted content line up. Only called for a clean finish with
