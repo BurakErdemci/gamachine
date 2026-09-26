@@ -68,7 +68,10 @@ BATCH_SIZE = 10
 
 # --- RATE LIMITING: Kullanıcı başına dakikada max istek ---
 CHAT_RATE_LIMIT: defaultdict = defaultdict(list)
-CHAT_RATE_LIMIT_MAX = 15           # dakikada max istek
+# One budget for every chat of the local user, auto-wake turns included: 15
+# could 429 a user message while a few parallel chats and branches were busy.
+# It stays as a runaway-loop brake, not a provider quota (owner, 26 Sep 2026).
+CHAT_RATE_LIMIT_MAX = 60           # dakikada max istek
 CHAT_RATE_LIMIT_WINDOW = 60        # saniye
 
 
