@@ -325,9 +325,10 @@ Resources vs Tools:
 - Always check related resources before modifying the engine state with tools
 
 Script Management:
-- After creating or modifying scripts (by your own tools or the `manage_script` tool) use `read_console` to check for compilation errors before proceeding
-- Only after successful compilation can new components/types be used
-- You can poll the `editor_state` resource's `isCompiling` field to check if the domain reload is complete
+- The MCP script tools (create_script, script_apply_edits, apply_text_edits, manage_script create) wait for the compile and return its verdict
+- After writing .cs files with your OWN file tools, call `refresh_unity` (compile="request"): Unity does not see them until then, and the result carries the compile verdict
+- `compile_status` gives the live verdict without refreshing: errors / clean / compiling / pending / stale / timeout / unknown. Only "clean" means the code compiled; an empty `read_console` list is not a clean compile
+- Only after a clean verdict can new components/types be used
 
 Scene Setup:
 - Always include a Camera and main Light (Directional Light) in new scenes
@@ -339,7 +340,7 @@ Path Conventions:
 - Use forward slashes (/) in paths for cross-platform compatibility
 
 Console Monitoring:
-- Check `read_console` regularly to catch errors, warnings, and compilation status
+- Check `read_console` regularly to catch runtime errors and warnings; when it adds a `compile_state` field, the list is not final
 - Filter by log type (Error, Warning, Log) to focus on specific issues
 
 Menu Items:
