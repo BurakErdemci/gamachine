@@ -10,7 +10,8 @@ from tools.search_tools import search_in_project, find_files
 from tools.memory_tools import save_to_memory, recall_memory
 from tools.screenshot_tool import capture_unity_screenshot
 from tools.unity_mcp_tools import (
-    get_unity_tool_definitions, get_unity_tool_functions, is_unity_tool
+    call_unity_tool_with_arguments, get_unity_tool_definitions, get_unity_tool_functions,
+    is_unity_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -201,12 +202,10 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any], workspace_path: str,
 
     # Unity MCP tool'u mu?
     if is_unity_tool(tool_name):
-        unity_funcs = get_unity_tool_functions()
-        func = unity_funcs.get(tool_name)
-        if not func:
+        if tool_name not in get_unity_tool_functions():
             return {"success": False, "error": f"Unity tool bulunamadı: {tool_name}"}
         try:
-            result = func(**arguments)
+            result = call_unity_tool_with_arguments(tool_name, arguments, conversation_id)
             logger.info(f"  🎮 Unity Tool [{tool_name}] çalıştırıldı: success={result.get('success', '?')}")
             return result
         except Exception as e:

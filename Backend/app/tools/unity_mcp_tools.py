@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 # play_session, play_step, play_capture, run_playtest) is enabled by default on
 # the server next to `core` (tool_registry.DEFAULT_ENABLED_GROUPS).
 EXPORTED_GROUPS = ("core", "playtest")
+# The _meta key the unity-mcp server reads a call's owning chat from
+# (GAMACHINE_CONVERSATION_META_KEY in unity-mcp/Server/src/core/constants.py).
+CONVERSATION_META_KEY = "gamachine_conversation"
 
 # A write call waits in the server's approval gate for up to 10 s (POST) + 150 s
 # (card) in step mode, so the call budget must be larger or every slow click
@@ -560,7 +563,8 @@ class _UnityMCPClient:
             return result.tools
         return self.run(self._retry_if_session_lost(_once, "tools/list"), timeout)
 
-    def call_tool(self, name: str, params: Dict[str, Any], timeout: float = CALL_TIMEOUT_S):
+    def call_tool(self, name: str, params: Dict[str, Any], timeout: float = CALL_TIMEOUT_S,
+                  meta: Optional[Dict[str, Any]] = None):
         timed_out = _CALL_TIMEOUT_MSG.format(seconds=f"{timeout:g}")
 
         async def _once():
@@ -571,7 +575,7 @@ class _UnityMCPClient:
                 # RuntimeError, which would mark this healthy session broken.
                 result = await self._await_on(conn, session.call_tool(
                     name, params, read_timeout_seconds=float(timeout),
-                    allow_input_required=True))
+                    allow_input_required=True, meta=meta))
             except MCPError as exc:
                 if _is_session_lost(exc, self._observes_http):
                     failed = True
@@ -649,9 +653,15 @@ def _result_to_dict(result) -> Dict[str, Any]:
 
 
 def call_unity_tool(tool_name: str, params: Dict[str, Any],
-                    timeout: float = CALL_TIMEOUT_S) -> Dict[str, Any]:
+                    timeout: float = CALL_TIMEOUT_S,
+                    conversation_id: Optional[int] = None) -> Dict[str, Any]:
+    # Per call, in _meta: this one MCP session serves every chat, so a
+    # connection header could not say which chat an approval card belongs to.
+    meta = None
+    if type(conversation_id) is int and conversation_id > 0:
+        meta = {CONVERSATION_META_KEY: conversation_id}
     try:
-        return _result_to_dict(_client.call_tool(tool_name, params, timeout=timeout))
+        return _result_to_dict(_client.call_tool(tool_name, params, timeout=timeout, meta=meta))
     except BaseException as exc:  # noqa: BLE001 - ExceptionGroup is a BaseException subclass too
         # A cancelled caller must stay cancelled; reporting it as a tool failure
         # would let the cancelled turn carry on.
@@ -662,12 +672,18 @@ def call_unity_tool(tool_name: str, params: Dict[str, Any],
         return {"success": False, "error": message}
 
 
+def call_unity_tool_with_arguments(tool_name: str, arguments: Dict[str, Any],
+                                   conversation_id: Optional[int] = None) -> Dict[str, Any]:
+    """Model arguments (None values dropped) plus the owning chat, kept apart:
+    the chat never travels in the arguments, which the model writes."""
+    params = {k: v for k, v in arguments.items() if v is not None}
+    return call_unity_tool(tool_name, params, conversation_id=conversation_id)
+
+
 def _make_tool_function(tool_name: str):
     """Verilen tool adı için çağrılabilir bir wrapper fonksiyon üretir."""
     def tool_fn(**kwargs) -> Dict[str, Any]:
-        # None değerleri filtrele
-        params = {k: v for k, v in kwargs.items() if v is not None}
-        return call_unity_tool(tool_name, params)
+        return call_unity_tool_with_arguments(tool_name, kwargs)
     tool_fn.__name__ = tool_name
     return tool_fn
 

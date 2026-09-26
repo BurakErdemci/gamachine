@@ -1185,7 +1185,8 @@ class AgentRunner:
         """
         from agentic.approval_policy import ambient_turn
         with ambient_turn(self.workspace_path or ".",
-                          getattr(self, "generation_mode", "auto")):
+                          getattr(self, "generation_mode", "auto"),
+                          getattr(self, "conversation_id", None)):
             async for _event in self._run_inner(user_message):
                 yield _event
 
@@ -2460,10 +2461,16 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 # "type": "http" ZORUNLU — yoksa Claude Code bunu stdio sunucu sanıp
                 # 'command' arar, bulamayınca "invalid MCP server config" ile ATLAR
                 # (Unity araçları manage_scene/manage_gameobject vb. görünmez).
+                _unity_headers = dict(unity_mcp_manager.api_headers())
+                # The session is this conversation's alone (_SESSIONS is keyed
+                # by it), so the header names the chat its approval cards
+                # belong to. The backend trusts it only while a turn runs.
+                if type(self.conversation_id) is int and self.conversation_id > 0:
+                    _unity_headers["X-Gamachine-Conversation"] = str(self.conversation_id)
                 mcp_servers_cfg["unityMCP"] = {
                     "type": "http",
                     "url": unity_mcp_url,
-                    "headers": unity_mcp_manager.api_headers(),
+                    "headers": _unity_headers,
                 }
             # Önceki sürümlerin bu projeye yazdığı `.mcp.json` artık okunmuyor;
             # düz metin `X-API-Key` taşıdığı için diskte de bırakılmıyor.

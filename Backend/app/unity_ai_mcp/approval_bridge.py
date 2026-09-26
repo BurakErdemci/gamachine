@@ -40,6 +40,19 @@ def _get_headers() -> dict:
     return {"X-Session-Token": token} if token else {}
 
 
+def _conversation_id_from_env() -> int | None:
+    """The chat this bridge process was spawned for, from GAMACHINE_CONVERSATION_ID.
+
+    Only a plain positive integer counts; anything else sends no owner, since
+    a card attributed to the wrong chat is worse than an unowned one.
+    """
+    raw = os.environ.get("GAMACHINE_CONVERSATION_ID", "")
+    if not (raw.isascii() and raw.isdigit()):
+        return None
+    value = int(raw)
+    return value if 0 < value < 2**63 else None
+
+
 # ⚠️ ÇAĞIRANLAR İÇİN: dönen sözlükteki `approved` GERÇEK `True` mi diye bakın,
 # doğruluk (truthiness) ile değil. Ölçüldü (31 Tem 2026): `bool("false")`,
 # `bool("no")` ve `bool([0])` hepsi `True`. Bozuk ya da sürüm-uyumsuz bir yanıt
@@ -71,6 +84,16 @@ async def request_approval(
     # yarısını düzeltip diğer yarısını bırakmak, düzeltilmiş sanılan bir
     # gecikme üretiyordu (3. denetim turu, 31 Tem 2026).
     _POST_BUTCESI = 10.0
+    body = {
+        "gate_id": gate_id,
+        "tool": tool_name,
+        "params": params,
+        "workspace_path": workspace_path,
+        "approval_turn_token": os.environ.get("UNITYAI_APPROVAL_TURN_TOKEN", ""),
+    }
+    conversation_id = _conversation_id_from_env()
+    if conversation_id is not None:
+        body["conversation_id"] = conversation_id
     posted = False
     immediate_result = None
     post_bitis = time.monotonic() + _POST_BUTCESI
@@ -82,15 +105,7 @@ async def request_approval(
             async with httpx.AsyncClient(timeout=min(8.0, kalan)) as client:
                 resp = await client.post(
                     f"{BACKEND_URL}/mcp-approval-request",
-                    json={
-                        "gate_id": gate_id,
-                        "tool": tool_name,
-                        "params": params,
-                        "workspace_path": workspace_path,
-                        "approval_turn_token": os.environ.get(
-                            "UNITYAI_APPROVAL_TURN_TOKEN", ""
-                        ),
-                    },
+                    json=body,
                     headers=_get_headers(),
                 )
                 if resp.status_code == 200:
