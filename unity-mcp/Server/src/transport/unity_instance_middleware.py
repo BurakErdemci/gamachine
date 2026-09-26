@@ -14,9 +14,12 @@ exist, keyed by client_id and otherwise by the constant "global", so in local
 mode one client's set_active_instance re-routed every other client, and on the
 2026-07-28 protocol there is no session to key it by at all.
 """
+from contextvars import ContextVar
 from threading import RLock
+import asyncio
 import logging
 import time
+import weakref
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
@@ -31,6 +34,7 @@ from core.constants import (
 )
 from services.protection_rules import meta_refusal
 from services.registry import get_registered_tools
+from services.registry.tool_actions import READ, classify
 from transport.approval_gate import ApprovalDenied, parse_conversation_id
 from transport.plugin_hub import PluginHub
 
@@ -42,6 +46,35 @@ _diag = logging.getLogger("transport.unity_instance_middleware")
 # with it to set or clear the active unity instance.
 _unity_instance_middleware = None
 _middleware_lock = RLock()
+
+# Write calls are serialized per Unity instance, so two chats never interleave
+# mutations on one editor. Module-level so tests can shrink them.
+#
+# A write that ran after its client gave up is the double-write the approval
+# gate already budgets against: agy cancels every call at 180 s, and the gate
+# ends its card wait by 10 + 150 = 160 s to leave Unity 20 s (approval_gate.py).
+# The lock wait is capped by the same line, counted from the call's arrival, so
+# queueing never pushes a dispatch past it. Within that, 30 s: one queued write
+# normally holds the lock for seconds and at most one PluginHub command timeout
+# (30 s); a script write waiting for its compile can hold it for the 90 s compile
+# wait, and waiting that out would eat most of the Gamachine backend's 240 s
+# CALL_TIMEOUT_S, so such a call is told to retry instead.
+WRITE_LOCK_WAIT_S = 30.0
+WRITE_DISPATCH_DEADLINE_S = 160.0
+WRITE_WAIT_LOG_S = 0.5
+# asyncio.wait_for with a timeout <= 0 cancels the acquire before it runs, even
+# on a free lock; this floor gives a spent budget one real try.
+_MIN_LOCK_TRY_S = 0.1
+# Unresolved calls (no instance connected, or several and none chosen) share one
+# key: the tool then picks its own target or fails, so serializing them together
+# is the conservative choice.
+_NO_INSTANCE_KEY = "<unresolved>"
+
+# Instance keys whose write lock the current task already holds. A write whose
+# tool dispatched another write through this middleware (server.call_tool from
+# inside a tool) would otherwise wait on its own lock until the budget ran out.
+_held_write_locks: ContextVar[frozenset[str]] = ContextVar(
+    "unity_held_write_locks", default=frozenset())
 
 
 def get_unity_instance_middleware() -> 'UnityInstanceMiddleware':
@@ -85,6 +118,19 @@ class UnityInstanceMiddleware(Middleware):
         self._last_tool_visibility_refresh = 0.0
         self._tool_visibility_refresh_interval_seconds = 0.5
         self._has_logged_empty_registry_warning = False
+        # Keyed by event loop: an asyncio.Lock binds to the first loop that
+        # waits on it, and this singleton outlives loops (each asyncio.run in tests).
+        self._write_locks: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        self._write_locks_guard = RLock()
+
+    def _write_lock(self, key: str) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        with self._write_locks_guard:
+            per_loop = self._write_locks.setdefault(loop, {})
+            lock = per_loop.get(key)
+            if lock is None:
+                lock = per_loop[key] = asyncio.Lock()
+            return lock
 
     @staticmethod
     def _request_default_instance() -> str | None:
@@ -443,6 +489,7 @@ class UnityInstanceMiddleware(Middleware):
 
     async def on_call_tool(self, context: MiddlewareContext, call_next):
         """Inject active Unity instance into tool context if available."""
+        arrived_at = time.monotonic()
         try:
             await self._inject_unity_instance(context)
         except ValueError as exc:
@@ -466,7 +513,56 @@ class UnityInstanceMiddleware(Middleware):
             # "Internal server error" and the old era got a JSON-RPC error
             # instead of a tool result (tests/test_live_approval_denial.py).
             raise ToolError(str(exc)) from exc
-        return await call_next(context)
+        # Taken only now: holding it while a step-mode card waits would stall
+        # every other chat's write to this editor behind a human.
+        return await self._call_serialized(context, call_next, arrived_at)
+
+    async def _call_serialized(self, context: MiddlewareContext, call_next, arrived_at: float):
+        """Run a write under its instance's lock; reads go straight through."""
+        mesaj = getattr(context, "message", None)
+        params = getattr(mesaj, "arguments", None)
+        if classify(getattr(mesaj, "name", None) or "",
+                    params if isinstance(params, dict) else {}) == READ:
+            return await call_next(context)
+
+        instance = None
+        try:
+            instance = await context.fastmcp_context.get_state("unity_instance")
+        except Exception:
+            pass
+        key = instance if isinstance(instance, str) and instance else _NO_INSTANCE_KEY
+        held = _held_write_locks.get()
+        if key in held:
+            return await call_next(context)
+
+        lock = self._write_lock(key)
+        budget = min(WRITE_LOCK_WAIT_S,
+                     WRITE_DISPATCH_DEADLINE_S - (time.monotonic() - arrived_at))
+        budget = max(budget, _MIN_LOCK_TRY_S)
+        wait_started = time.monotonic()
+        try:
+            # wait_for, not asyncio.timeout: the server still supports 3.10.
+            # A cancelled Lock.acquire never holds the lock and drops its waiter.
+            await asyncio.wait_for(lock.acquire(), budget)
+        except asyncio.TimeoutError:
+            waited = time.monotonic() - wait_started
+            _diag.warning("on_call_tool: write %s on %s gave up after %.2f s waiting for "
+                          "another write to finish", getattr(mesaj, "name", None), key, waited)
+            target = f"Unity instance '{key}'" if key != _NO_INSTANCE_KEY else "The Unity editor"
+            raise ToolError(
+                f"{target} is busy with another write call and did not free "
+                f"up within {waited:.0f} s. This call was NOT sent to Unity and changed "
+                "nothing; retry it in a moment.") from None
+        waited = time.monotonic() - wait_started
+        if waited >= WRITE_WAIT_LOG_S:
+            _diag.info("on_call_tool: write %s on %s waited %.2f s for another write",
+                       getattr(mesaj, "name", None), key, waited)
+        token = _held_write_locks.set(held | {key})
+        try:
+            return await call_next(context)
+        finally:
+            _held_write_locks.reset(token)
+            lock.release()
 
     async def _require_approval(self, context: MiddlewareContext) -> None:
         """Mutasyon araçları kullanıcı onayından geçmeden Unity'ye ulaşmaz.
