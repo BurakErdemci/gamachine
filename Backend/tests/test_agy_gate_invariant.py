@@ -148,8 +148,10 @@ class TestFlipOrdering(GateStateCase, unittest.TestCase):
         with observe, \
                 patch.object(agy_provider, "write_gate_state", side_effect=PermissionError("locked")), \
                 patch.object(agy_session, "_remove_gate_state", return_value=False):
-            with self.assertRaises(agy_provider.AgyStepGateError):
+            with self.assertRaises(agy_provider.AgyStepGateError) as refused:
                 approval_mode.set_mode("step")
+        self.assertEqual(refused.exception.code, "agy_step_refused")
+        self.assertEqual(refused.exception.params, {"pids": "4242"})
         self.assertEqual(seen, [])
         self.assertEqual(approval_mode.current_mode(), "auto")
 
@@ -469,8 +471,9 @@ class TestSpawnAndClose(GateStateCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.file_mode(), "closed")
         reopened = agy_session.get_session(33, cwd=self.tmp.name)
         with patch.object(agy_provider.AgyProvider, "_write_mcp_config", return_value=""),                 patch.object(agy_provider.AgyProvider, "_set_agy_model"),                 patch.object(agy_provider.AgyProvider, "_resolve_exec", side_effect=lambda c: c),                 patch.object(agy_provider.AgyProvider, "_agy_binary", return_value="fake-agy"):
-            with self.assertRaises(agy_provider.AgyStepGateError):
+            with self.assertRaises(agy_provider.AgyStepGateError) as refused:
                 await reopened._start("gemini-3.6-flash", self.tmp.name)
+        self.assertEqual(refused.exception.code, "agy_closed_child_alive")
         self.assertEqual(decide(WRITE, self.state)["decision"], "deny")
         closing._active_process.unkillable = False
         closing._stop_lock.release()

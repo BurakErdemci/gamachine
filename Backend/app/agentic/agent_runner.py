@@ -2225,7 +2225,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 await session.close()
             raise
         except Exception as exc:
-            yield AgentEvent("error", {"message": f"agy session failed: {redact_secrets(str(exc))}"})
+            payload = {"message": f"agy session failed: {redact_secrets(str(exc))}"}
+            if getattr(exc, "code", None):
+                # A coded error (AgyStepGateError) lets the UI use its own language.
+                payload.update(exc.params, code=exc.code)
+            yield AgentEvent("error", payload)
         finally:
             cleanup_dir(attachment_dir)
 

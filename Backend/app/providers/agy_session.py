@@ -191,12 +191,14 @@ def tighten_gate_state() -> None:
         logger.error("[agy] gate state still allows; stopping every agy child before step")
         survivors = _kill_gated_children()
         if survivors:
+            pids = ", ".join(str(getattr(p, "pid", "?")) for p in survivors)
             raise AgyStepGateError(
                 "Adım adım onay moduna geçilemedi: agy'nin onay kapısı "
                 f"({agy_provider.gate_state_path()}) güncellenemedi ve çalışan agy "
-                f"süreci durdurulamadı (pid {', '.join(str(getattr(p, 'pid', '?')) for p in survivors)}).\n"
+                f"süreci durdurulamadı (pid {pids}).\n"
                 "Mod değişmedi. agy sürecini kapatın ya da uygulamayı yeniden başlatın, "
-                "sonra yeniden deneyin.")
+                "sonra yeniden deneyin.",
+                code="agy_step_refused", pids=pids)
 
 
 # Observed agy tool payloads nest three or four levels; 40 is far above that and
@@ -487,7 +489,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                         f"Kapatılan bir agy süreci durdurulamadı (pid {pids}); o çalışırken "
                         "yeni bir agy süreci başlatılmadı, çünkü ikisi aynı onay kapısını "
                         "paylaşıyor. O süreci kapatın ya da uygulamayı yeniden başlatın, "
-                        "sonra mesajınızı yeniden gönderin.")
+                        "sonra mesajınızı yeniden gönderin.",
+                        code="agy_closed_child_alive", pids=pids)
                 auto = _global_auto_mode()
                 self._auto_approve = auto
                 _GATED_CHILDREN[token] = None

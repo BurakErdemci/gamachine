@@ -1465,7 +1465,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         except AgyStepGateError as exc:
             # The flip to step was refused because an agy child could still
             # write; the message says why and what to do (Turkish, user-facing).
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail={
+                "code": exc.code, "message": str(exc), **exc.params})
         drained = _approve_all_pending() if mode == "auto" else 0
         if drained:
             logger.warning("[approval-mode] %d pending card(s) approved by the switch to auto", drained)

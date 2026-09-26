@@ -88,6 +88,14 @@ export const useChat = (
     }
     try {
       const out = await ipc.invoke('approval-mode-set', mode, source);
+      if (out?.refused) {
+        // The mode did not change; say why in the UI's language when the code is known.
+        const refused = out.refused as { code?: string; message?: string; pids?: string };
+        showToast(refused.code === 'agy_step_refused'
+          ? cevir('mode.agyStepRefused', { pids: refused.pids || '?' })
+          : cevir('mode.writeFailed', { hata: refused.message || String(refused.code) }), 'error');
+        return;
+      }
       const applied: GenerationMode = out?.mode === 'auto' ? 'auto' : 'step';
       setGenerationModeState(applied);
       if (applied === 'auto') {
@@ -365,10 +373,11 @@ export const useChat = (
                       provider_unavailable: 'error.providerUnavailable',
                       provider_unreachable: 'error.providerUnreachable',
                       model_no_tools: 'error.modelNoTools',
+                      agy_closed_child_alive: 'error.agyClosedChildAlive',
                     };
                     const anahtar = typeof data.code === 'string' ? kodlu[data.code] : undefined;
                     const metin = anahtar
-                      ? cevir(anahtar as any, { model: data.model || '' })
+                      ? cevir(anahtar as any, { model: data.model || '', pids: data.pids || '?' })
                       : String(data.message);
                     updated.content += (updated.content ? '\n\n' : '') + `❌ ${metin}`;
                   }

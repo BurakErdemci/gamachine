@@ -50,7 +50,12 @@ def _gate_dir() -> str:
 class AgyStepGateError(RuntimeError):
     """The gate is not verifiably installed, so agy is not started (in either
     mode, see _write_step_gate). The message reaches the user as is, hence
-    Turkish."""
+    Turkish; a `code` (with its `params`) lets the UI show its own language."""
+
+    def __init__(self, message: str, *, code: Optional[str] = None, **params):
+        super().__init__(message)
+        self.code = code
+        self.params = params
 
 
 _GATE_HEAD = ("Adım adım onay modu açık, ama onay kapısı kurulamadığı için agy "

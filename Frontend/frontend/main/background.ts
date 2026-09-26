@@ -715,9 +715,17 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
     console.log(`[approval-mode] ${response.data?.previous} -> ${response.data?.mode} (source=${src})`)
     return response.data
   } catch (error) {
-    const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-    console.error('[approval-mode] write failed:', detail || (error as Error)?.message)
-    throw new Error(detail || 'Çalışma modu backend’e iletilemedi.')
+    const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+    if (detail && typeof detail === 'object' && typeof (detail as { code?: unknown }).code === 'string') {
+      // A coded refusal (the flip to step was refused): returned, not thrown, so
+      // the renderer can show it in its own language; an IPC error only carries
+      // a message string.
+      console.error('[approval-mode] refused:', (detail as { code: string }).code)
+      return { refused: detail }
+    }
+    const text = typeof detail === 'string' ? detail : undefined
+    console.error('[approval-mode] write failed:', text || (error as Error)?.message)
+    throw new Error(text || 'Çalışma modu backend’e iletilemedi.')
   }
 })
 

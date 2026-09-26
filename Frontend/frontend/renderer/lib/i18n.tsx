@@ -46,6 +46,7 @@ export const tr = {
   'mode.stepDesc': 'Her değişiklik için onay kartı çıkar',
   'mode.autoWarning': 'Oto mod — onay kartı yok',
   'mode.writeFailed': 'Çalışma modu değiştirilemedi: {hata}',
+  'mode.agyStepRefused': 'Adım adım onay moduna geçilemedi: agy\'nin onay kapısı güncellenemedi ve çalışan agy süreci durdurulamadı (pid {pids}). Mod değişmedi. O agy sürecini kapat ya da uygulamayı yeniden başlat, sonra yeniden dene.',
   'mode.writeUnavailable': 'Çalışma modu yalnız masaüstü uygulamasından değiştirilebilir.',
   'settings.tabGeneral': 'Genel',
   'settings.tabMode': 'Çalışma modu',
@@ -86,6 +87,7 @@ export const tr = {
   'error.providerUnavailable': 'Sağlayıcı üç denemede de meşgul döndü (503). Bu geçici; birazdan tekrar dene.',
   'error.providerUnreachable': 'Sağlayıcıya üç denemede de ulaşılamadı.',
   'error.modelNoTools': '`{model}` modeli araç çağırmayı desteklemiyor, bu yüzden Unity ve dosya araçlarını kullanamıyor. Araç gerektiren işler için araç çağırabilen bir model seç.',
+  'error.agyClosedChildAlive': 'Kapatılan bir agy süreci durdurulamadı (pid {pids}). O çalışırken yeni agy süreci başlatılmadı, çünkü ikisi aynı onay kapısını paylaşıyor. O süreci kapat ya da uygulamayı yeniden başlat, sonra mesajını yeniden gönder.',
   // SettingsModal
   'settings.title': 'AI Yapılandırması',
   'settings.language': 'Dil',
@@ -562,6 +564,7 @@ export const en: Record<keyof typeof tr, string> = {
   'mode.stepDesc': 'An approval card for every change',
   'mode.autoWarning': 'Auto mode — no approval cards',
   'mode.writeFailed': 'Could not change the work mode: {hata}',
+  'mode.agyStepRefused': 'Could not switch to step-by-step approval: agy\'s approval gate could not be updated and the running agy process could not be stopped (pid {pids}). The mode did not change. Close that agy process or restart the app, then try again.',
   'mode.writeUnavailable': 'The work mode can only be changed from the desktop app.',
   'settings.tabGeneral': 'General',
   'settings.tabMode': 'Work mode',
@@ -598,6 +601,7 @@ export const en: Record<keyof typeof tr, string> = {
   'error.providerUnavailable': 'The provider came back busy on all three attempts (503). This is temporary; try again shortly.',
   'error.providerUnreachable': 'The provider could not be reached on any of the three attempts.',
   'error.modelNoTools': 'The `{model}` model does not support tool calling, so it cannot use the Unity or file tools. Pick a model that can call tools for work that needs them.',
+  'error.agyClosedChildAlive': 'A closed agy process could not be stopped (pid {pids}). No new agy process was started while it runs, because both would share one approval gate. Close that process or restart the app, then send your message again.',
   // SettingsModal
   'settings.title': 'AI Configuration',
   'settings.language': 'Language',

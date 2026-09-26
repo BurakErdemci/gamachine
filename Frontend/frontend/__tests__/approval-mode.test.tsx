@@ -217,4 +217,16 @@ describe('useChat · backend-owned mode', () => {
     expect(result.current.generationMode).toBe('step')
     expect(showToast).toHaveBeenCalledWith(expect.stringContaining('reddedildi'), 'error')
   })
+
+  it('a coded refusal keeps the old mode and shows the translated reason', async () => {
+    mockedGet.mockResolvedValue({ data: { mode: 'auto', stored: true } })
+    ipcInvoke.mockResolvedValue({ refused: { code: 'agy_step_refused', message: 'Türkçe metin', pids: '4242' } })
+    const showToast = vi.fn()
+    const { result } = hook(showToast)
+    await waitFor(() => expect(mockedGet).toHaveBeenCalled())
+    await act(async () => { await result.current.setGenerationMode('step') })
+    expect(result.current.generationMode).toBe('auto')
+    expect(showToast).toHaveBeenCalledWith(expect.stringContaining('pid 4242'), 'error')
+    expect(showToast).not.toHaveBeenCalledWith(expect.stringContaining('Türkçe metin'), 'error')
+  })
 })
