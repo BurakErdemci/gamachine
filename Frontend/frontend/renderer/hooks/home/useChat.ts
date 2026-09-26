@@ -247,6 +247,12 @@ export const useChat = (
   const [editingId, setEditingId] = useState<number | null>(null);
   const [tempTitle, setTempTitle] = useState('');
 
+  // A title editor whose chat left the list (deleted from another window) has
+  // no input left to blur, and selectConversation would refuse every click.
+  useEffect(() => {
+    if (editingId != null && !conversations.some(c => c.id === editingId)) setEditingId(null);
+  }, [conversations, editingId]);
+
   useEffect(() => {
     if (!API || !user?.sessionToken) return;
     let cancelled = false;
