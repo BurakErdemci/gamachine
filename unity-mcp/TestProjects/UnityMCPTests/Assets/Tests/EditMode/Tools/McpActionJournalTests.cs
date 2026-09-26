@@ -143,6 +143,58 @@ namespace MCPForUnityTests.Editor.Tools
         }
 
         [Test]
+        public void UndoAction_RevertsTheLatestAction_AndRefusesASecondTime()
+        {
+            string name = Unique("UndoActionTarget");
+            var created = RunSync("manage_gameobject", CreateParams(name));
+            string id = created["undo"].Value<string>("action_id");
+            Assert.IsNotNull(GameObject.Find(name));
+
+            var first = RunSync("manage_editor", new JObject { ["action"] = "undo_action", ["action_id"] = id });
+            Assert.IsTrue(first.Value<bool>("success"), first.ToString());
+            Assert.IsNull(GameObject.Find(name));
+            Assert.IsNull(first["undo"], "undo_action must not open an undo group of its own");
+
+            var second = RunSync("manage_editor", new JObject { ["action"] = "undo_action", ["action_id"] = id });
+            Assert.IsFalse(second.Value<bool>("success"), second.ToString());
+        }
+
+        [Test]
+        public void UndoAction_RefusesWhenALaterEditExists()
+        {
+            string name = Unique("UndoActionOlder");
+            string userName = Unique("UserEdit");
+            var created = RunSync("manage_gameobject", CreateParams(name));
+            string id = created["undo"].Value<string>("action_id");
+
+            Undo.IncrementCurrentGroup();
+            var user = new GameObject(userName);
+            Undo.RegisterCreatedObjectUndo(user, "User edit");
+            Undo.IncrementCurrentGroup();
+
+            var result = RunSync("manage_editor", new JObject { ["action"] = "undo_action", ["action_id"] = id });
+
+            Assert.IsFalse(result.Value<bool>("success"), result.ToString());
+            StringAssert.Contains("not the most recent undo step", result.Value<string>("error"));
+            Assert.IsNotNull(GameObject.Find(name), "nothing may be undone on refusal");
+            Assert.IsNotNull(GameObject.Find(userName), "the user's later edit must survive");
+        }
+
+        [Test]
+        public void UndoAction_RefusesAnActionThatUndoCannotRevert()
+        {
+            string name = Unique("DeletedPlain");
+            new GameObject(name);
+            var deleted = RunSync("manage_gameobject", new JObject { ["action"] = "delete", ["target"] = name, ["searchMethod"] = "by_name" });
+            Assert.AreEqual(false, deleted["undo"].Value<bool>("undoable"), deleted.ToString());
+
+            var result = RunSync("manage_editor", new JObject { ["action"] = "undo_action", ["action_id"] = deleted["undo"].Value<string>("action_id") });
+
+            Assert.IsFalse(result.Value<bool>("success"));
+            StringAssert.Contains("cannot be undone", result.Value<string>("error"));
+        }
+
+        [Test]
         public void ActionLog_IsWrittenUnderLibrary_NotAssets()
         {
             string name = Unique("Logged");

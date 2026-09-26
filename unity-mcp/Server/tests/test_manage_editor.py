@@ -56,7 +56,7 @@ UNITY_FORWARDED_ACTIONS = [
     "play", "pause", "stop", "set_active_tool",
     "add_tag", "remove_tag", "add_layer", "remove_layer",
     "deploy_package", "restore_package",
-    "undo", "redo",
+    "undo", "undo_action", "redo",
 ]
 
 
@@ -95,3 +95,28 @@ def test_undo_omits_none_params(mock_unity):
     assert "layerName" not in params
 
 
+
+
+# ── undo_action ─────────────────────────────────────────────────────
+
+
+def test_undo_action_forwards_action_id(mock_unity):
+    result = asyncio.run(manage_editor(SimpleNamespace(), action="undo_action", action_id="a1b2c3d4"))
+    assert result["success"] is True
+    assert mock_unity["params"] == {"action": "undo_action", "action_id": "a1b2c3d4"}
+
+
+def test_undo_action_forwards_undo_group(mock_unity):
+    asyncio.run(manage_editor(SimpleNamespace(), action="undo_action", undo_group=42))
+    assert mock_unity["params"] == {"action": "undo_action", "undo_group": 42}
+
+
+def test_undo_action_is_in_the_action_literal():
+    tool = next(t for t in get_registered_tools() if t["name"] == "manage_editor")
+    annotation = str(inspect.signature(tool["func"]).parameters["action"].annotation)
+    assert "undo_action" in annotation
+
+
+def test_undo_action_is_classified_as_a_write():
+    from services.registry.tool_actions import WRITE, classify
+    assert classify("manage_editor", {"action": "undo_action", "action_id": "x"}) == WRITE

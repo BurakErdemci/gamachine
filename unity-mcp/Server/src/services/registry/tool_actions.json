@@ -249,11 +249,12 @@
         "restore_package",
         "sync_csproj",
         "undo",
+        "undo_action",
         "redo"
       ],
       "param_dependent": [],
       "evidence": "unity-mcp/Server/src/services/tools/manage_editor.py:12",
-      "note": "telemetry_* short-circuit in Python and never reach Unity, and were classified read for that reason. An audit red team disproved it on 2026-07-29: manage_editor.py:33 reaches is_telemetry_enabled(), which lazily constructs TelemetryCollector, which creates the per-user UnityMCP app-data directory and writes customer_uuid.txt on a fresh profile - even with telemetry disabled. That is a persistent file on disk, so the classification rule at the top of this ledger makes it a write. Carding a status query costs almost nothing; bending the rule for one convenient case costs the rule. sync_csproj writes .sln/.csproj to disk; deploy_package/restore_package copy a package folder and trigger a recompile."
+      "note": "telemetry_* short-circuit in Python and never reach Unity, and were classified read for that reason. An audit red team disproved it on 2026-07-29: manage_editor.py:33 reaches is_telemetry_enabled(), which lazily constructs TelemetryCollector, which creates the per-user UnityMCP app-data directory and writes customer_uuid.txt on a fresh profile - even with telemetry disabled. That is a persistent file on disk, so the classification rule at the top of this ledger makes it a write. Carding a status query costs almost nothing; bending the rule for one convenient case costs the rule. sync_csproj writes .sln/.csproj to disk; deploy_package/restore_package copy a package folder and trigger a recompile. undo_action performs an editor undo of one recorded agent action and appends a line to Library/GamachineActions/actions.jsonl."
     },
     "manage_fbx": {
       "action_param": "action",

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
@@ -35,11 +36,15 @@ namespace MCPForUnity.Editor.Helpers
     {
         internal const string GroupPrefix = "MCP: ";
         internal const long MaxLogBytes = 5 * 1024 * 1024;
+        const int MaxRemembered = 256;
 
         // AsyncLocal, not a static field: async handlers (batch_execute) run across frames and
         // other commands may be dispatched meanwhile; only continuations of this command see it.
         static readonly AsyncLocal<McpActionScope> CurrentScope = new AsyncLocal<McpActionScope>();
         static int _lastOpenedGroup = -1;
+        static readonly Dictionary<string, JObject> Remembered = new Dictionary<string, JObject>();
+        static readonly Queue<string> RememberedOrder = new Queue<string>();
+        static readonly HashSet<string> UndoneIds = new HashSet<string>();
 
         static readonly HashSet<string> UntrackedTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -299,6 +304,7 @@ namespace MCPForUnity.Editor.Helpers
                     ["prefab_warnings"] = new JArray(scope.Warnings),
                     ["ok"] = ok,
                 };
+                Remember(line);
                 AppendLog(line);
                 return annotated;
             }
@@ -349,6 +355,18 @@ namespace MCPForUnity.Editor.Helpers
             return obj;
         }
 
+        static void Remember(JObject line)
+        {
+            string id = line.Value<string>("action_id");
+            if (id == null || Remembered.ContainsKey(id)) return;
+            Remembered[id] = line;
+            RememberedOrder.Enqueue(id);
+            while (RememberedOrder.Count > MaxRemembered)
+            {
+                Remembered.Remove(RememberedOrder.Dequeue());
+            }
+        }
+
         internal static void AppendLog(JObject line)
         {
             try
@@ -368,6 +386,125 @@ namespace MCPForUnity.Editor.Helpers
             {
                 // The log must never break the command it describes.
             }
+        }
+
+        /// <summary>The logged entry for an action, from memory or (after a domain reload) the log file.</summary>
+        internal static JObject FindAction(string actionId, int? group)
+        {
+            bool Matches(JObject e) =>
+                (actionId != null && e.Value<string>("action_id") == actionId)
+                || (actionId == null && group.HasValue && e.Value<int?>("undo_group") == group);
+
+            if (actionId != null && Remembered.TryGetValue(actionId, out var hit)) return hit;
+            if (actionId == null)
+            {
+                JObject latest = null;
+                foreach (var e in Remembered.Values) if (Matches(e)) latest = e;
+                if (latest != null) return latest;
+            }
+            try
+            {
+                string path = LogPath;
+                if (!File.Exists(path)) return null;
+                var lines = File.ReadAllLines(path);
+                for (int i = lines.Length - 1; i >= 0; i--)
+                {
+                    if (string.IsNullOrWhiteSpace(lines[i])) continue;
+                    JObject e;
+                    try { e = JObject.Parse(lines[i]); } catch (JsonException) { continue; }
+                    if (e.Value<string>("tool") != null && e["undo_name"] != null && Matches(e)) return e;
+                }
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        static MethodInfo _getRecords;
+
+        /// <summary>
+        /// Whether the undo stack still holds a group named <paramref name="name"/>; null when
+        /// Unity's internal Undo.GetRecords(List, List) is unavailable in this version.
+        /// </summary>
+        internal static bool? UndoStackContains(string name)
+        {
+            try
+            {
+                _getRecords ??= typeof(Undo).GetMethod("GetRecords", BindingFlags.Static | BindingFlags.NonPublic,
+                    null, new[] { typeof(List<string>), typeof(List<string>) }, null);
+                if (_getRecords == null) return null;
+                var undoRecords = new List<string>();
+                var redoRecords = new List<string>();
+                _getRecords.Invoke(null, new object[] { undoRecords, redoRecords });
+                return undoRecords.Contains(name);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Undoes one agent action, but only while it is the latest undo step: reverting further
+        /// down the stack would also revert whatever the user did after it.
+        /// </summary>
+        internal static object UndoAction(string actionId, int? group)
+        {
+            if (string.IsNullOrEmpty(actionId) && !group.HasValue)
+                return new ErrorResponse("undo_action needs 'action_id' (or 'undo_group') from a previous response's 'undo' object.");
+            if (EditorApplication.isPlaying)
+                return new ErrorResponse("undo_action is not available in play mode; exit play mode first.");
+
+            var entry = FindAction(string.IsNullOrEmpty(actionId) ? null : actionId, group);
+            string label = !string.IsNullOrEmpty(actionId) ? $"action_id '{actionId}'" : $"undo_group {group}";
+            if (entry == null)
+                return new ErrorResponse($"No recorded MCP action with {label}.");
+
+            string id = entry.Value<string>("action_id");
+            string name = entry.Value<string>("undo_name");
+            var undoable = entry["undoable"];
+            string what = $"{entry.Value<string>("tool")} {entry.Value<string>("action")}".Trim();
+
+            if (undoable != null && undoable.Type == JTokenType.Boolean && !(bool)undoable)
+                return new ErrorResponse($"Action {id} ({what}) cannot be undone: it changed files or used APIs outside Unity Undo.");
+            if (string.IsNullOrEmpty(name))
+                return new ErrorResponse($"Action {id} ({what}) has no undo group (it ran in play mode).");
+
+            string latest = Undo.GetCurrentGroupName();
+            bool? onStack = UndoStackContains(name);
+            bool stillApplied = onStack ?? !UndoneIds.Contains(id);
+            if (latest != name || !stillApplied)
+            {
+                string reason = !stillApplied
+                    ? "it has already been undone"
+                    : $"it is not the most recent undo step (the latest is '{latest}')";
+                return new ErrorResponse(
+                    $"Refusing to undo action {id} ({what}): {reason}. undo_action only reverts the latest step so later edits are never lost; "
+                    + "use manage_editor action='undo' to step back one group at a time, or Unity's Edit > Undo.");
+            }
+
+            Undo.PerformUndo();
+            UndoneIds.Add(id);
+            AppendLog(new JObject
+            {
+                ["ts"] = DateTime.UtcNow.ToString("o"),
+                ["tool"] = "manage_editor",
+                ["action"] = "undo_action",
+                ["target_action_id"] = id,
+                ["ok"] = true,
+            });
+
+            bool partial = undoable != null && undoable.Type == JTokenType.String;
+            return new SuccessResponse($"Undid {name}.", new
+            {
+                action_id = id,
+                undone_group = name,
+                undo_group = entry["undo_group"]?.Type == JTokenType.Integer ? entry.Value<int?>("undo_group") : null,
+                tool = entry.Value<string>("tool"),
+                action = entry.Value<string>("action"),
+                undoable,
+                note = partial ? "scene/object changes were reverted; file or project-settings changes, if any, were not" : null,
+                next_group = Undo.GetCurrentGroupName(),
+            });
         }
     }
 }
