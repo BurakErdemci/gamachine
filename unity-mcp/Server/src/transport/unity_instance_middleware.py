@@ -22,10 +22,16 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 from core.config import config
-from core.constants import UNITY_INSTANCE_HEADER, UNITY_INSTANCE_QUERY_PARAM
+from core.constants import (
+    GAMACHINE_CONVERSATION_HEADER,
+    GAMACHINE_CONVERSATION_META_KEY,
+    GAMACHINE_CONVERSATION_QUERY_PARAM,
+    UNITY_INSTANCE_HEADER,
+    UNITY_INSTANCE_QUERY_PARAM,
+)
 from services.protection_rules import meta_refusal
 from services.registry import get_registered_tools
-from transport.approval_gate import ApprovalDenied
+from transport.approval_gate import ApprovalDenied, parse_conversation_id
 from transport.plugin_hub import PluginHub
 
 logger = logging.getLogger("mcp-for-unity-server")
@@ -94,6 +100,45 @@ class UnityInstanceMiddleware(Middleware):
             value = request.headers.get(UNITY_INSTANCE_HEADER)
         value = (value or "").strip()
         return value or None
+
+    @staticmethod
+    def _request_conversation_id() -> int | None:
+        """The Gamachine conversation this call says it works for, or None.
+
+        Sources: the connection (X-Gamachine-Conversation header, ?conv= on the
+        URL) and the call's own _meta, for a client that shares one session
+        across chats. Every source present must parse and agree; one junk or
+        disagreeing value drops the claim, because a card shown in the wrong
+        chat is worse than an unowned one.
+        """
+        claims = []
+        try:
+            from fastmcp.server.dependencies import get_http_request
+            request = get_http_request()
+        except Exception:
+            request = None
+        if request is not None:
+            claims.append(request.headers.get(GAMACHINE_CONVERSATION_HEADER))
+            claims.append(request.query_params.get(GAMACHINE_CONVERSATION_QUERY_PARAM))
+        try:
+            # The raw _meta of the tools/call request. The middleware's own
+            # context.message is rebuilt by FastMCP and keeps only its version key.
+            from fastmcp.server.dependencies import fastmcp_request_ctx
+            request_context = fastmcp_request_ctx.get()
+            meta = request_context.meta if request_context is not None else None
+        except Exception:
+            meta = None
+        if isinstance(meta, dict):
+            claims.append(meta.get(GAMACHINE_CONVERSATION_META_KEY))
+        present = [claim for claim in claims if claim is not None and claim != ""]
+        if not present:
+            return None
+        parsed = {parse_conversation_id(claim) for claim in present}
+        if len(parsed) == 1 and None not in parsed:
+            return parsed.pop()
+        _diag.warning("on_call_tool: conversation claim dropped (%r); the card goes unowned",
+                      present)
+        return None
 
     async def _discover_instances(self, ctx) -> list:
         """
@@ -466,6 +511,7 @@ class UnityInstanceMiddleware(Middleware):
             tool_name,
             params if isinstance(params, dict) else {},
             hedef=hedef if isinstance(hedef, str) else None,
+            conversation_id=self._request_conversation_id(),
         )
 
     async def on_read_resource(self, context: MiddlewareContext, call_next):

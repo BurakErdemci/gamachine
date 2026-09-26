@@ -73,7 +73,9 @@ class FakeBackend:
                 with backend.lock:
                     backend.requests.append({
                         "path": self.path, "tool": body.get("tool"), "params": params,
-                        "token": self.headers.get("X-Session-Token")})
+                        "token": self.headers.get("X-Session-Token"),
+                        "has_conversation": "conversation_id" in body,
+                        "conversation_id": body.get("conversation_id")})
                 if self.path != "/mcp-approval-request":
                     self._reply(404, {})
                 elif scenario == "deny_now":

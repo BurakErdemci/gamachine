@@ -79,6 +79,21 @@ _GERI_CEKME_BUTCESI = 3.0
 _pending_withdrawals: set[asyncio.Task] = set()
 
 
+def parse_conversation_id(value: Any) -> int | None:
+    """A positive int, or None for anything else.
+
+    Strict on purpose: a card attributed to the wrong chat is worse than an
+    unowned one, so " 7", "+7", "7.0", "٧" (int() accepts Unicode digits) and
+    True are all refused rather than coerced.
+    """
+    if type(value) is int:
+        return value if 0 < value < 2**63 else None
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        number = int(value)
+        return number if 0 < number < 2**63 else None
+    return None
+
+
 class ApprovalDenied(RuntimeError):
     """The gate refused; the call does NOT run.
 
@@ -127,7 +142,8 @@ def _withdraw_card_in_background(gate_id: str) -> None:
     task.add_done_callback(_pending_withdrawals.discard)
 
 
-async def _onay_iste(tool_name: str, params: Mapping[str, Any]) -> dict:
+async def _onay_iste(tool_name: str, params: Mapping[str, Any],
+                     conversation_id: int | None = None) -> dict:
     """Backend'e sorar. Dönen sözlükte `approved` bool'u vardır.
 
     A client that gives up on the call cancels this coroutine: mcp 2.2 cancels
@@ -138,7 +154,7 @@ async def _onay_iste(tool_name: str, params: Mapping[str, Any]) -> dict:
     """
     gate_id = uuid.uuid4().hex[:10]
     try:
-        return await _ask_and_wait(gate_id, tool_name, params)
+        return await _ask_and_wait(gate_id, tool_name, params, conversation_id)
     except asyncio.CancelledError:
         logger.info("[approval-gate] %s cancelled by the client; withdrawing card %s",
                     tool_name, gate_id)
@@ -146,8 +162,9 @@ async def _onay_iste(tool_name: str, params: Mapping[str, Any]) -> dict:
         raise
 
 
-async def _ask_and_wait(gate_id: str, tool_name: str, params: Mapping[str, Any]) -> dict:
-    govde = {
+async def _ask_and_wait(gate_id: str, tool_name: str, params: Mapping[str, Any],
+                        conversation_id: int | None = None) -> dict:
+    govde: dict[str, Any] = {
         "gate_id": gate_id,
         "tool": tool_name,
         "params": dict(params or {}),
@@ -157,6 +174,11 @@ async def _ask_and_wait(gate_id: str, tool_name: str, params: Mapping[str, Any])
         # olduğunu kendi bilir.
         "workspace_path": "",
     }
+    conversation_id = parse_conversation_id(conversation_id)
+    if conversation_id is not None:
+        # A claim, not a fact: the backend accepts it only for a chat with a
+        # turn in flight and otherwise keeps the card unowned.
+        govde["conversation_id"] = conversation_id
 
     gonderildi = False
     bitis = time.monotonic() + _POST_BUTCESI
@@ -270,6 +292,7 @@ async def kapiyi_gec(
     tool_name: str,
     params: Mapping[str, Any] | None,
     hedef: str | None = None,
+    conversation_id: int | None = None,
 ) -> None:
     """Yazma ise onay ister; onay yoksa `ApprovalDenied` fırlatır.
 
@@ -298,7 +321,7 @@ async def kapiyi_gec(
     if hedef:
         gosterilecek["unity_instance"] = hedef
 
-    sonuc = await _onay_iste(tool_name, gosterilecek)
+    sonuc = await _onay_iste(tool_name, gosterilecek, conversation_id=conversation_id)
     # Doğruluk (truthiness) DEĞİL kimlik karşılaştırması. Ölçüldü (31 Tem 2026):
     # `bool("false")`, `bool("no")` ve `bool([0])` hepsi `True` dönüyor, yani
     # bozuk ya da sürüm-uyumsuz bir yanıt onay sayılıyordu. Bu dosyanın kendi

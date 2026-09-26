@@ -227,7 +227,7 @@ def test_middleware_refuses_before_the_gate(monkeypatch, approval, tool, params)
     mw = _middleware(monkeypatch)
     asked, reached = [], []
 
-    async def ask(tool_name, shown):
+    async def ask(tool_name, shown, **_kw):
         asked.append(tool_name)
         return approval
 
@@ -247,7 +247,7 @@ def test_middleware_passes_other_calls_to_the_gate(monkeypatch):
     mw = _middleware(monkeypatch)
     asked = []
 
-    async def ask(tool_name, shown):
+    async def ask(tool_name, shown, **_kw):
         asked.append(tool_name)
         return {"approved": True, "automatic": True}
 

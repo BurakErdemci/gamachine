@@ -35,7 +35,7 @@ def sorulanlar(monkeypatch):
     """Kapının backend'e sorduğu her çağrıyı kaydeder; hep ONAY döner."""
     kayit = []
 
-    async def sahte(tool_name, params):
+    async def sahte(tool_name, params, **_kw):
         kayit.append((tool_name, dict(params)))
         return {"approved": True}
 
@@ -45,7 +45,7 @@ def sorulanlar(monkeypatch):
 
 @pytest.fixture
 def reddet(monkeypatch):
-    async def sahte(tool_name, params):
+    async def sahte(tool_name, params, **_kw):
         return {"approved": False, "error": "sınama reddi"}
 
     monkeypatch.setattr(approval_gate, "_onay_iste", sahte)
@@ -176,7 +176,7 @@ def test_karta_HEDEF_proje_yaziliyor(monkeypatch):
     """
     gorulen = []
 
-    async def yakala(tool, params):
+    async def yakala(tool, params, **_kw):
         gorulen.append(dict(params))
         return {"approved": True}
 
@@ -191,7 +191,7 @@ def test_hedef_YOKSA_kart_yine_de_cikiyor(monkeypatch):
     kullanıcıyı 180 sn'lik sessiz bir redde kilitlerdi."""
     gorulen = []
 
-    async def yakala(tool, params):
+    async def yakala(tool, params, **_kw):
         gorulen.append(dict(params))
         return {"approved": True}
 
@@ -208,7 +208,7 @@ def test_onay_ancak_GERCEK_true_ile_veriliyor(monkeypatch):
     sessizce tersine çeviriyordu.
     """
     for bozuk in ["false", "no", [0], 1, "true"]:
-        async def sahte(tool, params, _b=bozuk):
+        async def sahte(tool, params, _b=bozuk, **_kw):
             return {"approved": _b}
 
         monkeypatch.setattr(approval_gate, "_onay_iste", sahte)
@@ -436,7 +436,7 @@ def test_middleware_kapiyi_GERCEKTEN_cagiriyor(monkeypatch):
     """
     mw = _middleware(monkeypatch)
 
-    async def reddet(_tool, _params):
+    async def reddet(_tool, _params, **_kw):
         return {"approved": False, "error": "kablolama sınaması"}
 
     monkeypatch.setattr(approval_gate, "_onay_iste", reddet)
@@ -465,7 +465,7 @@ def test_middleware_ONAYLANINCA_cagriyi_gecirıyor(monkeypatch):
     """Ters yön — yoksa 'her şeyi reddet' diyen bir kapı da yukarıdakini geçerdi."""
     mw = _middleware(monkeypatch)
 
-    async def onayla(_tool, _params):
+    async def onayla(_tool, _params, **_kw):
         return {"approved": True}
 
     monkeypatch.setattr(approval_gate, "_onay_iste", onayla)

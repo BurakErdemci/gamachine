@@ -102,7 +102,7 @@ def onay_kapisi_devre_disi(monkeypatch):
     """
     from transport import approval_gate
 
-    async def _gec(_tool, _params, hedef=None):
+    async def _gec(_tool, _params, hedef=None, conversation_id=None):
         return None
 
     monkeypatch.setattr(approval_gate, "kapiyi_gec", _gec)

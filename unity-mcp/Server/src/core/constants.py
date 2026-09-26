@@ -27,3 +27,11 @@ MCP_TRANSPORT_BASE_PATH = "/mcp"
 # set_active_instance re-routed every other client.
 UNITY_INSTANCE_HEADER = "X-Unity-Instance"
 UNITY_INSTANCE_QUERY_PARAM = "instance"
+
+# The Gamachine conversation a caller works for, so its approval card is
+# attributed to that chat. A connection states it once (header or ?conv= on the
+# URL); a client sharing one session across chats puts it in each call's _meta.
+# Never read from tool arguments: the model writes those.
+GAMACHINE_CONVERSATION_HEADER = "X-Gamachine-Conversation"
+GAMACHINE_CONVERSATION_QUERY_PARAM = "conv"
+GAMACHINE_CONVERSATION_META_KEY = "gamachine_conversation"
