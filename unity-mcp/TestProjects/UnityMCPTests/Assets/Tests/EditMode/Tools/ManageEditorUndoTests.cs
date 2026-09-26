@@ -9,6 +9,19 @@ namespace MCPForUnity.Tests.EditMode.Tools
     [TestFixture]
     public class ManageEditorUndoTests
     {
+        // A blind undo/redo must not replay an earlier test's delete or the user's own edits.
+        [SetUp]
+        public void SetUp()
+        {
+            Undo.ClearAll();
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            Undo.ClearAll();
+        }
+
         [Test]
         public void Undo_ReturnsSuccess()
         {

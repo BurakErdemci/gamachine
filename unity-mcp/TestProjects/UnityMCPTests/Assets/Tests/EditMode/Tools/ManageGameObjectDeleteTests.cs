@@ -15,6 +15,13 @@ namespace MCPForUnityTests.Editor.Tools
     {
         private List<GameObject> testObjects = new List<GameObject>();
 
+        [SetUp]
+        public void SetUp()
+        {
+            // Deletes are undoable: a leftover group would let Undo.PerformUndo restore another test's objects.
+            Undo.ClearAll();
+        }
+
         [TearDown]
         public void TearDown()
         {
@@ -26,6 +33,7 @@ namespace MCPForUnityTests.Editor.Tools
                 }
             }
             testObjects.Clear();
+            Undo.ClearAll();
         }
 
         private GameObject CreateTestObject(string name)

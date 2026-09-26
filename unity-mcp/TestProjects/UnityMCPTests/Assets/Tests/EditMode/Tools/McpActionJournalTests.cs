@@ -29,6 +29,8 @@ namespace MCPForUnityTests.Editor.Tools
         public void SetUp()
         {
             CommandRegistry.Initialize();
+            // An undo here must only revert this test's groups, never an earlier test's delete.
+            Undo.ClearAll();
         }
 
         [TearDown]
@@ -41,6 +43,7 @@ namespace MCPForUnityTests.Editor.Tools
             }
             _names.Clear();
             if (AssetDatabase.IsValidFolder(TempFolder)) AssetDatabase.DeleteAsset(TempFolder);
+            Undo.ClearAll();
         }
 
         string Unique(string prefix)
