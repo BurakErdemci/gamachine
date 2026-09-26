@@ -375,3 +375,33 @@ def test_a_kept_dir_turned_into_a_junction_keeps_bash_denied(shadow_root, tmp_pa
     _winapi.CreateJunction(str(elsewhere), str(shadow_root / "tool"))
     assert install_bash_shadow() is None
     assert (elsewhere / "evil.ts").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="junctions are Windows-only")
+@pytest.mark.parametrize("linked", ["", "tool"])
+def test_a_linked_shadow_dir_is_refused_before_any_write(shadow_root, tmp_path, linked):
+    """Codex ocshadow: the link check ran after the writes had gone through
+    the junction into its target."""
+    import _winapi
+    from providers.opencode_provider import install_bash_shadow
+    target = tmp_path / "target"
+    target.mkdir()
+    if linked:
+        shadow_root.mkdir()
+        _winapi.CreateJunction(str(target), str(shadow_root / linked))
+    else:
+        _winapi.CreateJunction(str(target), str(shadow_root))
+    assert install_bash_shadow() is None
+    assert os.listdir(target) == []
+
+
+@pytest.mark.parametrize("tamper", ["edit", "foreign"])
+def test_spawn_env_drops_a_shadow_changed_after_install(tmp_path, shadow_root, tamper):
+    """Codex ocshadow: the dir was verified at registration only."""
+    p, _ = _register(tmp_path / "ws")
+    assert p._turn_spawn_env().get("OPENCODE_CONFIG_DIR") == str(shadow_root)
+    if tamper == "edit":
+        (shadow_root / "tool" / "bash.ts").write_text("export default {}", encoding="utf-8")
+    else:
+        (shadow_root / "tool" / "run.ts").write_text("export default {}", encoding="utf-8")
+    assert "OPENCODE_CONFIG_DIR" not in p._turn_spawn_env()

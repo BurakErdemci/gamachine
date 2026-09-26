@@ -110,6 +110,13 @@ def install_bash_shadow(root: Optional[str] = None) -> Optional[str]:
     file reads back exactly as shipped, else None (the caller keeps bash
     denied)."""
     root = root or bash_shadow_dir()
+    _, keep_dirs = _shadow_paths(root)
+    # Checked before writing: a junction here would redirect the writes into
+    # its target (Codex ocshadow audit).
+    linked = [d for d in keep_dirs if _is_link(d)]
+    if linked:
+        logger.warning("[OpenCodeProvider] %s is a link; bash stays denied.", linked[0])
+        return None
     try:
         for rel, body in _SHADOW_FILES:
             path = os.path.join(root, *rel.split("/"))
@@ -134,6 +141,47 @@ def install_bash_shadow(root: Optional[str] = None) -> Optional[str]:
 _SHADOW_TOLERATED = {".gitignore"}
 
 
+def _is_link(path: str) -> bool:
+    isjunction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or bool(isjunction and isjunction(path))
+
+
+def _shadow_paths(root: str) -> Tuple[set, set]:
+    """normcase'd (files, dirs) Gamachine ships into the shadow dir, root included."""
+    keep = {os.path.normcase(os.path.join(root, *rel.split("/"))) for rel, _ in _SHADOW_FILES}
+    keep |= {os.path.normcase(os.path.join(root, name)) for name in _SHADOW_TOLERATED}
+    keep_dirs = {os.path.normcase(root)}
+    for path in keep:
+        parent = os.path.dirname(path)
+        while len(parent) > len(os.path.normcase(root)):
+            keep_dirs.add(parent)
+            parent = os.path.dirname(parent)
+    return keep, keep_dirs
+
+
+def shadow_intact(root: str) -> bool:
+    """Read-only recheck right before a spawn: every shipped file as shipped,
+    nothing foreign, no links. Narrows the window between install and the
+    OpenCode load in which another process could swap the tool."""
+    keep, keep_dirs = _shadow_paths(root)
+    if any(_is_link(d) for d in keep_dirs):
+        return False
+    for rel, body in _SHADOW_FILES:
+        if _read_text(os.path.join(root, *rel.split("/"))) != body:
+            return False
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in dirnames:
+                if os.path.normcase(os.path.join(dirpath, name)) not in keep_dirs:
+                    return False
+            for name in filenames:
+                if os.path.normcase(os.path.join(dirpath, name)) not in keep:
+                    return False
+    except OSError:
+        return False
+    return True
+
+
 def _prune_foreign(root: str) -> bool:
     """Removes every entry of the shadow dir that Gamachine did not ship.
 
@@ -145,17 +193,7 @@ def _prune_foreign(root: str) -> bool:
     """
     import shutil
 
-    keep = {os.path.normcase(os.path.join(root, *rel.split("/"))) for rel, _ in _SHADOW_FILES}
-    keep |= {os.path.normcase(os.path.join(root, name)) for name in _SHADOW_TOLERATED}
-    keep_dirs = {os.path.normcase(os.path.dirname(p)) for p in keep}
-    for parent in list(keep_dirs):
-        while len(parent) > len(os.path.normcase(root)):
-            parent = os.path.dirname(parent)
-            keep_dirs.add(parent)
-    def _is_link(path: str) -> bool:
-        isjunction = getattr(os.path, "isjunction", None)
-        return os.path.islink(path) or bool(isjunction and isjunction(path))
-
+    keep, keep_dirs = _shadow_paths(root)
     if _is_link(root):
         logger.warning("[OpenCodeProvider] bash shadow dir is a link; bash stays denied.")
         return False
@@ -321,8 +359,11 @@ class OpenCodeProvider(BaseCLIProvider):
         token = getattr(self, "_approval_turn_token", "")
         env = {"UNITYAI_APPROVAL_TURN_TOKEN": token} if token else {}
         shadow = getattr(self, "_bash_shadow_dir", None)
-        if shadow:
+        if shadow and shadow_intact(shadow):
             env["OPENCODE_CONFIG_DIR"] = shadow
+        elif shadow:
+            logger.warning("[OpenCodeProvider] bash shadow changed after install; "
+                           "this turn runs with bash denied.")
         return env
 
     def _prepare_bash_shadow(self) -> Optional[str]:
