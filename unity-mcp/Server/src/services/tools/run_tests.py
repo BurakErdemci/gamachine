@@ -257,7 +257,9 @@ async def run_tests(
                             "due to domain reload (default: 15000). Recommended: 120000 for PlayMode."] = None,
     clear_stuck: Annotated[bool,
                            "Clear an orphaned running job instead of starting a run. Use when a job "
-                           "was lost to a domain reload and is blocking every subsequent run."] = False,
+                           "was lost to a domain reload and is blocking every subsequent run. Only a stuck "
+                           "job is released (a test running over 60 s, or no progress for 60 s / its init "
+                           "timeout); a job still making progress is left running (data.cleared false)."] = False,
 ) -> RunTestsStartResponse | MCPResponse:
     unity_instance = await get_unity_instance_from_context(ctx)
 

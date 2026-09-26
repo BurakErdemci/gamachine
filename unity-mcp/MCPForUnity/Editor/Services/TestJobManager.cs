@@ -87,24 +87,38 @@ namespace MCPForUnity.Editor.Services
             }
         }
 
-        /// <summary>
-        /// Force-clears any stuck or orphaned test job. Call this when tests get stuck due to
-        /// assembly reloads or other interruptions.
-        /// </summary>
-        /// <returns>True if a job was cleared, false if no running job exists.</returns>
-        public static bool ClearStuckJob()
+        internal enum ClearStuckOutcome
         {
+            NoJob,
+            Cleared,
+            StillProgressing
+        }
+
+        /// <summary>
+        /// Releases the current job slot when the job is stuck or orphaned (e.g. lost to a domain
+        /// reload). A job that is still making progress is left running.
+        /// </summary>
+        internal static ClearStuckOutcome ClearStuckJob(out string jobId, out long quietMs)
+        {
+            quietMs = 0;
             bool cleared = false;
             lock (LockObj)
             {
+                jobId = _currentJobId;
                 if (string.IsNullOrEmpty(_currentJobId))
                 {
-                    return false;
+                    return ClearStuckOutcome.NoJob;
                 }
 
+                long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 if (Jobs.TryGetValue(_currentJobId, out var job) && job.Status == TestJobStatus.Running)
                 {
-                    long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    quietMs = Math.Max(0, now - job.LastUpdateUnixMs);
+                    if (!IsStuck(job) && quietMs <= QuietLimitMs(job))
+                    {
+                        return ClearStuckOutcome.StillProgressing;
+                    }
+
                     job.Status = TestJobStatus.Failed;
                     job.Error = "Job cleared manually (stuck or orphaned)";
                     job.FinishedUnixMs = now;
@@ -116,7 +130,20 @@ namespace MCPForUnity.Editor.Services
                 _currentJobId = null;
             }
             PersistToSessionState(force: true);
-            return cleared;
+            return cleared ? ClearStuckOutcome.Cleared : ClearStuckOutcome.NoJob;
+        }
+
+        // How long a running job may go without a progress event before clear_stuck may release it.
+        // Before RunStarted the job waits on initialization, which may legitimately take its whole
+        // init timeout (a PlayMode run's domain reload).
+        private static long QuietLimitMs(TestJob job)
+        {
+            if (job.TotalTests != null)
+            {
+                return StuckThresholdMs;
+            }
+            long initTimeout = job.InitTimeoutMs > 0 ? job.InitTimeoutMs : DefaultInitializationTimeoutMs;
+            return Math.Max(StuckThresholdMs, initTimeout);
         }
 
         private sealed class PersistedState

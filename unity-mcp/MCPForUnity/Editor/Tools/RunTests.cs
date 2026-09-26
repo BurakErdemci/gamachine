@@ -22,7 +22,17 @@ namespace MCPForUnity.Editor.Tools
                 // Check for clear_stuck action first
                 if (ParamCoercion.CoerceBool(@params?["clear_stuck"], false))
                 {
-                    bool wasCleared = TestJobManager.ClearStuckJob();
+                    var outcome = TestJobManager.ClearStuckJob(out string runningJobId, out long quietMs);
+                    if (outcome == TestJobManager.ClearStuckOutcome.StillProgressing)
+                    {
+                        return Task.FromResult<object>(new SuccessResponse(
+                            $"Test job {runningJobId} is still making progress (last update {quietMs / 1000}s ago); not cleared. "
+                            + "clear_stuck releases a job only after a test runs over 60 s or the job reports no progress "
+                            + "for 60 s (its init timeout while tests have not started). Poll it with get_test_job.",
+                            new { cleared = false, job_id = runningJobId, last_update_ms_ago = quietMs }
+                        ));
+                    }
+                    bool wasCleared = outcome == TestJobManager.ClearStuckOutcome.Cleared;
                     return Task.FromResult<object>(new SuccessResponse(
                         wasCleared ? "Stuck job cleared." : "No running job to clear.",
                         new { cleared = wasCleared }
