@@ -91,10 +91,10 @@ docker run -p 8080:8080 msanatan/mcp-for-unity-server:latest --transport http --
 
 ```bash
 docker build -t unity-mcp-server .
-docker run -p 8080:8080 unity-mcp-server --transport http --http-url http://0.0.0.0:8080
+docker run -p 8080:8080 -e UNITY_MCP_LOCAL_API_TOKEN="<shared secret>" unity-mcp-server --transport http --http-url http://0.0.0.0:8080
 ```
 
-Configure your MCP client with `"url": "http://localhost:8080/mcp"`.
+Configure your MCP client with `"url": "http://localhost:8080/mcp"` and the `X-API-Key` header (see [Local HTTP Authentication](#local-http-authentication)).
 
 ### Option 4: Local Development
 
@@ -145,6 +145,7 @@ These options apply to the `mcp-for-unity` command (whether run via `uvx`, Docke
 - `UNITY_MCP_HTTP_HOST` - HTTP bind host (overrides URL host)
 - `UNITY_MCP_HTTP_PORT` - HTTP bind port (overrides URL port)
 - `UNITY_MCP_HTTP_REMOTE_HOSTED` - Enable remote-hosted mode (`true`, `1`, or `yes`)
+- `UNITY_MCP_LOCAL_API_TOKEN` - Shared secret for a local (not remote-hosted) HTTP server; required, see [Local HTTP Authentication](#local-http-authentication)
 - `UNITY_MCP_DEFAULT_INSTANCE` - Default Unity instance to target (project name, hash, or `Name@hash`)
 - `UNITY_MCP_SKIP_STARTUP_CONNECT=1` - Skip initial Unity connection attempt on startup
 - `UNITY_MCP_LOG_DIR` - Override the rotating server log directory. Default: `%LOCALAPPDATA%\UnityMCP\Logs` (Windows), `~/Library/Application Support/UnityMCP/Logs` (macOS), `$XDG_STATE_HOME/UnityMCP/Logs` (Linux/BSD, defaults to `~/.local/state/UnityMCP/Logs`).
@@ -196,6 +197,49 @@ uvx --from mcpforunityserver mcp-for-unity \
 ```bash
 DISABLE_TELEMETRY=1 uvx --from mcpforunityserver mcp-for-unity --transport stdio
 ```
+
+---
+
+## Local HTTP Authentication
+
+In this fork the HTTP transport never runs unauthenticated. Outside remote-hosted
+mode it needs a shared secret in `UNITY_MCP_LOCAL_API_TOKEN` (an environment
+variable rather than a flag, because argv is visible to every process via `ps`):
+
+- **Deny by default.** Every HTTP request must carry the secret in the `X-API-Key`
+  header: the MCP transport (`/mcp`, `/mcp/gamachine`, `/mcp/full`), the CLI REST
+  routes (`/api/command`, `/api/instances`, `/api/custom-tools`) and
+  `/register-tools`. The only open routes are `GET` and `HEAD` `/health`.
+- **No secret, no server.** Without the variable, `--transport http` exits with
+  code 1 and the `/api/*` routes are not registered.
+- **The Unity plugin reads the same secret** from `~/.unity-mcp/local-api-token` and
+  sends it when its WebSocket connects; a plugin connection without it is closed
+  with code 4401.
+- **Never in the URL.** The old `/mcp/<secret>` form was removed; a config that still
+  uses it gets 401.
+
+```bash
+export UNITY_MCP_LOCAL_API_TOKEN="$(openssl rand -hex 32)"
+mkdir -p ~/.unity-mcp && printf %s "$UNITY_MCP_LOCAL_API_TOKEN" > ~/.unity-mcp/local-api-token
+uv run src/main.py --transport http --http-url http://127.0.0.1:8080
+```
+
+```json
+{
+  "mcpServers": {
+    "UnityMCP": {
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "X-API-Key": "<the shared secret>"
+      }
+    }
+  }
+}
+```
+
+Inside Gamachine the backend (`unity_mcp_manager`) generates the secret, writes the
+token file and starts the server with it; the steps above are only for running the
+server by hand.
 
 ---
 

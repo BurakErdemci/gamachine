@@ -1,6 +1,6 @@
 # Unity MCP integration
 
-The embedded Unity Editor bridge: 51 tools in ten groups, zero-install setup, and
+The embedded Unity Editor bridge: 52 tools in ten groups, zero-install setup, and
 the input system that lets the agent actually play the game it just built.
 
 ---
@@ -17,7 +17,7 @@ Unifies the [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp) projec
 
 > Because `uv`/`uvx` is bundled in the packaged app, the user doesn't need to install it separately. If the Unity Editor is closed the toggle can't connect — open Unity first.
 
-> **Approval behavior:** On the Claude path, unityMCP calls that **mutate** the scene open an approval card; calls that only **read** (hierarchy, console, search) do not. On the Codex and agy paths unityMCP still runs unapproved. See [Approval scope](security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
+> **Approval behavior:** In step mode, unityMCP calls that **mutate** the scene open an approval card on every provider (the Unity MCP server asks before the call reaches Unity); calls that only **read** (hierarchy, console, search) do not. In auto mode no card appears. See [Approval scope](security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
 
 > **Fixed rule, every mode:** no Unity MCP call may write, delete, move or rename a `.meta` file; the server refuses it before any approval card. Target the asset's own path with `manage_asset` instead, so the GUID stays intact. Agents' own file tools are also refused raw writes to Unity YAML assets (scenes, prefabs, materials ...): these tools are the route for those. See [Fixed Unity file rule](security.md#5-fixed-unity-file-rule-every-approval-mode).
 
@@ -39,15 +39,17 @@ Unifies the [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp) projec
 | Orchestration | `batch_execute` (up to 25 commands per call), `execute_code`, `execute_menu_item` |
 
 Not every client sees all of them. The server (fastmcp 4, MCP protocol
-2026-07-28; clients on the older 2025 handshake still work) sorts tools into
-groups and serves a fixed list per URL. Every URL needs the `X-API-Key` header;
-an unknown profile answers 404.
+2026-07-28; clients on the older 2025 handshake still work) decides the list in two
+layers: each tool belongs to a **group** (core and playtest are on by default, the
+other eight are opt-in in the Editor's Tools tab), and the **URL** a client connects
+to is a profile that fixes which groups it gets. Every URL needs the `X-API-Key`
+header; an unknown profile answers 404.
 
 | URL | Tools |
 |---|---|
-| `/mcp` | Groups enabled in the Unity Editor's Tools tab (core + playtest by default) plus five server meta-tools (`manage_tools`, `set_active_instance`, `debug_request_context`, `execute_custom_tool`, `manage_script_capabilities`): 36 tools before an Editor has reported its toggles |
-| `/mcp/gamachine` | core + playtest, no meta-tools: 31 tools, the set the backend exports to API models |
-| `/mcp/full` | Every group, regardless of the Editor's toggles: 51 tools |
+| `/mcp` | Groups enabled in the Unity Editor's Tools tab (core + playtest by default) plus five server meta-tools (`manage_tools`, `set_active_instance`, `debug_request_context`, `execute_custom_tool`, `manage_script_capabilities`): 37 tools before an Editor has reported its toggles |
+| `/mcp/gamachine` | core + playtest, no meta-tools: 32 tools, the set the backend exports to API models |
+| `/mcp/full` | Every group, regardless of the Editor's toggles: 52 tools |
 
 The list does not change within a connection. `manage_tools(action="list_groups")`
 reports which profile the call came in on; `activate`, `deactivate` and `reset`

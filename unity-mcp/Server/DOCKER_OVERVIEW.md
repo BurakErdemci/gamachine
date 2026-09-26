@@ -63,6 +63,37 @@ docker run -p 8080:8080 -e LOG_LEVEL=DEBUG msanatan/mcp-for-unity-server:latest
 
 ---
 
+## Local HTTP Authentication (images built from this fork)
+
+An image built from this fork's `Server/Dockerfile` will not serve HTTP without a
+shared secret outside remote-hosted mode. Pass it as `UNITY_MCP_LOCAL_API_TOKEN`;
+without it `--transport http` exits with code 1. Every HTTP request then needs the
+secret in the `X-API-Key` header (deny by default; only `GET`/`HEAD /health` is
+open), and the Unity plugin reads the same value from
+`~/.unity-mcp/local-api-token` on the host.
+
+```bash
+docker run -p 8080:8080 -e UNITY_MCP_LOCAL_API_TOKEN="<shared secret>" \
+  unity-mcp-server --transport http --http-host 0.0.0.0 --http-port 8080
+```
+
+```json
+{
+  "mcpServers": {
+    "UnityMCP": {
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "X-API-Key": "<shared secret>"
+      }
+    }
+  }
+}
+```
+
+See [Local HTTP Authentication](README.md#local-http-authentication) for details.
+
+---
+
 ## Remote-Hosted Mode
 
 To deploy as a shared remote service with API key authentication and per-user session isolation, pass `--http-remote-hosted` along with an API key validation URL:

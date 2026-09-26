@@ -63,9 +63,9 @@ Today a Unity developer juggles multiple windows for different jobs: one CLI to 
 
 ### Agent × Capability Matrix
 
-| | Chat & Analysis | Write/Edit files (approved) | Terminal (approved) | Live Unity Editor control | Auth source |
+| | Chat & Analysis | Write/Edit files (approved) | Terminal (approved) | Live Unity Editor control (approved) | Auth source |
 |---|:---:|:---:|:---:|:---:|---|
-| **Claude Code** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP — **gated** | your Anthropic subscription |
+| **Claude Code** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP | your Anthropic subscription |
 | **Codex** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP | your OpenAI subscription |
 | **Antigravity / agy** (CLI) | ✅ | ✅ `unityai` bridge | ✅ bridge | ✅ unityMCP (HTTP) | your Google subscription |
 | **GitHub Copilot** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP | your Copilot subscription |
@@ -77,7 +77,7 @@ Today a Unity developer juggles multiple windows for different jobs: one CLI to 
 
 What this matrix delivers is simple but rare: **the experience is identical regardless of the source.** Switching from Codex to Claude Code is one dropdown; the diff viewer, terminal approval and Unity integration you're used to stay exactly the same.
 
-> **Important distinction:** Approval cards appear for **file deletes and dangerous terminal commands** on every path; for **file writes** on the CLI agent paths, but **not on the cloud API / Ollama function-calling path**. For **live Unity scene operations** it depends on the provider: on the Claude path, unityMCP calls that *mutate* the scene now open a card; on Codex and agy they do not. Full table and rationale: [Approval scope](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
+> **Important distinction:** Approval cards appear for **file deletes and dangerous terminal commands** on every path; for **file writes** on the CLI agent paths, but **not on the cloud API / Ollama function-calling path**. For **live Unity scene operations**, calls that *mutate* the scene open a card on every provider, because the Unity MCP server itself asks. All of this is step mode; in auto mode no card appears. Full table and rationale: [Approval scope](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
 
 ---
 
@@ -123,7 +123,7 @@ One rule no mode switches off: inside a Unity project an agent cannot write, del
 or move `.meta` files, or write scenes, prefabs and other Unity YAML assets as raw
 text; it is sent to the Unity tools, which keep the asset GUIDs intact.
 
-**Live Unity Editor control, zero install** — 51 Editor tools over MCP: scenes,
+**Live Unity Editor control, zero install** — 52 Editor tools over MCP: scenes,
 GameObjects, prefabs, materials, physics, build settings. It can also
 [play the game](docs/unity-mcp.md#-the-ai-can-now-play-the-game-manage_input): enter
 play mode, send input, screenshot the result and judge what it built. Script writes
@@ -179,7 +179,7 @@ viewer, live thinking block, and a bilingual TR/EN interface.
 | [Engineering notes](docs/engineering-notes.md) | The decisions, the mistakes, and what they cost |
 | [Architecture](docs/architecture.md) | Process layout, agentic loop, tool layer, SSE stream |
 | [Approval & security](docs/security.md) | What is gated, what deliberately isn't, and why |
-| [Unity MCP integration](docs/unity-mcp.md) | The 51 Editor tools, the fixed tool list per URL, and the input system |
+| [Unity MCP integration](docs/unity-mcp.md) | The 52 Editor tools, the fixed tool list per URL, and the input system |
 | [Supported providers](docs/providers.md) | Every CLI agent, cloud API and local model |
 | [Building from source](docs/building.md) | Dev setup and producing a dmg / installer |
 

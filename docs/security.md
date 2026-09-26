@@ -34,7 +34,13 @@ The flow above applies to the **CLI agents** (Claude Code, Codex, Copilot, Curso
 
 ### ⚠️ Approval scope: what is and isn't confirmed (an honesty note)
 
-The gate does not cover everything. The remaining deliberate trade-offs are **file writes on the cloud API path** and **live Unity scene operations on the Codex/agy paths**:
+The gate does not cover everything. The remaining deliberate trade-off is **file writes on the cloud API path**.
+
+The table describes **step mode**. The app has one global approval mode: in **auto
+mode** (the default on a fresh install) no card appears on any path, for Gamachine's
+own agents and for external MCP clients alike; a saved choice survives restarts.
+The fixed Unity file rule ([§5](#5-fixed-unity-file-rule-every-approval-mode)) holds
+in both modes.
 
 | Operation | Tool | Approval? |
 |---|---|:---:|
@@ -43,8 +49,7 @@ The gate does not cover everything. The remaining deliberate trade-offs are **fi
 | Delete a file | `delete_file` / `unityai` / function calling | ✅ **Delete card appears** |
 | Terminal command | `bash` / `run_command` | ✅ (except safe commands) |
 | unityMCP call that **reads** the scene | `manage_scene action=get_hierarchy`, `read_console`… | ➖ No card (read) |
-| unityMCP call that **mutates** the scene — **Claude path** | `manage_gameobject`, `manage_input`… | ✅ **Card appears** (v2.3.0) |
-| unityMCP call that **mutates** the scene — **Codex / agy** | same tools | ❌ **No approval, runs directly** |
+| unityMCP call that **mutates** the scene — **every provider** | `manage_gameobject`, `manage_input`… | ✅ **Card appears** (checked in the Unity MCP server) |
 | Write/delete/move a `.meta` file, or write a Unity YAML asset as raw text, inside a Unity project | any file tool or shell, every provider | 🚫 **Refused in every mode** — a fixed rule, not a card ([§5](#5-fixed-unity-file-rule-every-approval-mode)) |
 | Same, through a shell command | `Bash`, `run_command`… | ⚠️ Heuristic: direct forms refused, indirect ones (variables, scripts) not caught |
 | Same, through `execute_code` / `execute_menu_item` | Unity MCP | ❌ **Not checked** — their effect is not visible in the arguments |
@@ -53,11 +58,11 @@ The gate does not cover everything. The remaining deliberate trade-offs are **fi
 
 > **In practice:** with a cloud API model, **"create PlayerController.cs"** writes without asking (git can undo it). The same request through Claude Code / Codex / agy shows a diff card. If you want to see every change before it lands, **pick one of the CLI agents.**
 
-**Why does unityMCP differ per provider?** Originally it was ungated everywhere: scene operations are undoable (Ctrl+Z) and a card on every GameObject move made the workflow unusable. v2.3.0 removed that trade-off on the Claude path — but opens a card only for calls that **mutate state**.
+**Why is unityMCP gated in the server, not per provider?** Originally it was ungated everywhere: scene operations are undoable (Ctrl+Z) and a card on every GameObject move made the workflow unusable. v2.3.0 gated the Claude path, opening a card only for calls that **mutate state**. The gate then moved into the Unity MCP server itself (`UnityInstanceMiddleware`), because every provider's Unity traffic, custom tools included, goes through that one point; switching off each client's own approval flag in several places would have left one silently open the day it was forgotten.
 
 The read/write split is not a guess, it is a ledger: `unity-mcp/Server/src/services/registry/tool_actions.json` classifies every action of every tool, and `Backend/app/unity_tool_policy.py` reads it from the source rather than copying it — a copied list previously granted an exemption to an action that did not exist, and that line never matched anything. **If the ledger cannot be read, the policy fails closed:** no exemptions, every call shows a card.
 
-Codex and agy do not have this gate: unityMCP is still handed to them with `default_tools_approval_mode = "approve"` (Codex) and `trust: true` (agy).
+Codex and agy are still handed unityMCP with `default_tools_approval_mode = "approve"` (Codex) and `trust: true` (agy). That only stops the client from asking a second time; the server-side gate still asks before a mutating call reaches Unity.
 
 ### 3. Terminal security
 - Safe (read-only) commands run directly; any command outside the whitelist shows an approval card

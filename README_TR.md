@@ -64,9 +64,9 @@ Bugün bir Unity geliştiricisi farklı işler için farklı pencereler açmak z
 
 ### Ajan × Yetenek Matrisi
 
-| | Sohbet & Analiz | Dosya yaz/düzenle | Terminal (onaylı) | Canlı Unity Editor kontrolü | Auth kaynağı |
+| | Sohbet & Analiz | Dosya yaz/düzenle | Terminal (onaylı) | Canlı Unity Editor kontrolü (onaylı) | Auth kaynağı |
 |---|:---:|:---:|:---:|:---:|---|
-| **Claude Code** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP — **onaylı** | Anthropic aboneliğin |
+| **Claude Code** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP | Anthropic aboneliğin |
 | **Codex** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP | OpenAI aboneliğin |
 | **Antigravity / agy** (CLI) | ✅ | ✅ `unityai` köprüsü — onaylı | ✅ köprü | ✅ unityMCP (HTTP) | Google aboneliğin |
 | **GitHub Copilot** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP | Copilot aboneliğin |
@@ -78,7 +78,7 @@ Bugün bir Unity geliştiricisi farklı işler için farklı pencereler açmak z
 
 Bu matrisin sağladığı şey basit ama nadir: **kaynak ne olursa olsun deneyim aynı.** Codex'ten Claude Code'a geçmek bir açılır menü; alıştığın diff ekranı, terminal onayı ve Unity entegrasyonu olduğu gibi kalır.
 
-> **Önemli ayrım:** Onay kartları **dosya silme ve tehlikeli terminal komutları** için her yolda çıkar; **dosya yazma** için CLI ajanlarında çıkar, **bulut API / Ollama function-calling yolunda çıkmaz**. **Canlı Unity sahne işlemleri** için durum sağlayıcıya göre değişir: Claude yolunda sahneyi *değiştiren* unityMCP çağrıları artık onay kartı açar, Codex ve agy yolunda açmaz. Tam tablo ve gerekçeler: [Onay kapsamı](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
+> **Önemli ayrım:** Onay kartları **dosya silme ve tehlikeli terminal komutları** için her yolda çıkar; **dosya yazma** için CLI ajanlarında çıkar, **bulut API / Ollama function-calling yolunda çıkmaz**. **Canlı Unity sahne işlemlerinde** sahneyi *değiştiren* çağrılar her sağlayıcıda onay kartı açar, çünkü soruyu Unity MCP sunucusunun kendisi soruyor. Bunların hepsi adım modu için geçerli; otomatik modda hiç kart çıkmaz. Tam tablo ve gerekçeler: [Onay kapsamı](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
 
 ---
 
@@ -125,7 +125,7 @@ dosyalarını yazamaz, silemez, taşıyamaz; sahne, prefab ve diğer Unity YAML
 varlıklarını ham metin olarak yazamaz. Varlık GUID'lerini koruyan Unity araçlarına
 yönlendirilir.
 
-**Canlı Unity Editor kontrolü, kurulum yok** — MCP üzerinden 51 Editor aracı: sahne,
+**Canlı Unity Editor kontrolü, kurulum yok** — MCP üzerinden 52 Editor aracı: sahne,
 GameObject, prefab, materyal, fizik, build ayarları. Ayrıca
 [oyunu oynayabiliyor](docs/unity-mcp.md#-the-ai-can-now-play-the-game-manage_input):
 play moduna giriyor, girdi gönderiyor, ekran görüntüsü alıp yaptığı işi
@@ -184,7 +184,7 @@ sürdürmek, kodla arasındaki sürüklenmeyi büyütüyor. README iki dilli kal
 | [Engineering notes](docs/engineering-notes.md) | Kararlar, hatalar ve bedelleri |
 | [Architecture](docs/architecture.md) | Süreç yerleşimi, agentic döngü, araç katmanı, SSE |
 | [Approval & security](docs/security.md) | Neyin onaylandığı, neyin bilerek onaylanmadığı |
-| [Unity MCP integration](docs/unity-mcp.md) | 51 Editor aracı, URL'ye göre sabit araç listesi ve girdi sistemi |
+| [Unity MCP integration](docs/unity-mcp.md) | 52 Editor aracı, URL'ye göre sabit araç listesi ve girdi sistemi |
 | [Supported providers](docs/providers.md) | Bütün CLI ajanları, bulut API'leri, yerel modeller |
 | [Building from source](docs/building.md) | Geliştirme kurulumu ve dmg / installer üretimi |
 
