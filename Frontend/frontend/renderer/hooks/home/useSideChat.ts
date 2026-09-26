@@ -157,8 +157,10 @@ export const useSideChat = (API: string, user: UserData | null) => {
         // The idle sweep took the side chat; a fresh one carries on.
         const fresh = await createSide(mainIdRef.current);
         if (fresh != null && epochRef.current !== epoch) {
-          // Closed while reopening: the new row would outlive the panel.
-          discard(fresh);
+          // Closed while reopening: the new row would outlive the panel -
+          // unless a newer panel already holds it (the backend returns the
+          // open side row of a chat to every create).
+          if (fresh !== sideIdRef.current) discard(fresh);
         } else if (fresh != null) {
           sideIdRef.current = fresh;
           setSideId(fresh);
