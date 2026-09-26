@@ -601,6 +601,12 @@ class TestEditorCommands:
                 cli, ["editor", "tests", "--mode", "EditMode"])
             assert result.exit_code == 0
 
+    def test_editor_tests_clear_stuck_sends_only_the_flag(self, runner, mock_unity_response):
+        with patch("cli.commands.editor.run_command", return_value=mock_unity_response) as mock_run:
+            result = runner.invoke(cli, ["editor", "tests", "--clear-stuck"])
+            assert result.exit_code == 0
+            assert mock_run.call_args[0][:2] == ("run_tests", {"clear_stuck": True})
+
 
 # =============================================================================
 # Prefab Command Tests
