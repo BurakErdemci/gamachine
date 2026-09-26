@@ -49,6 +49,10 @@ class FakeProcess:
         return self.returncode
 
 
+async def _no_sleep(*_args, **_kwargs):
+    return None
+
+
 def _loop_running():
     try:
         asyncio.get_running_loop()
@@ -93,11 +97,13 @@ class GateStateCase:
         self.state = agy_provider.gate_state_path()
         agy_session._SESSIONS.clear()
         agy_session._GATED_CHILDREN.clear()
+        agy_session._RETIRED.clear()
         approval_mode.set_ui_secret("ui-secret")
 
     def tear_down_home(self):
         agy_session._SESSIONS.clear()
         agy_session._GATED_CHILDREN.clear()
+        agy_session._RETIRED.clear()
         self.home_patch.stop()
         self.tmp.cleanup()
 
@@ -146,6 +152,41 @@ class TestFlipOrdering(GateStateCase, unittest.TestCase):
                 approval_mode.set_mode("step")
         self.assertEqual(seen, [])
         self.assertEqual(approval_mode.current_mode(), "auto")
+
+    def test_a_kill_that_works_on_the_second_listing_does_not_refuse_step(self):
+        """Verification round 4: a child is listed once per registry, and a
+        first kill that raised kept it a survivor after the second one worked."""
+        approval_mode.set_mode("auto")
+        session = self.live_session()
+        agy_session._GATED_CHILDREN[object()] = session._active_process
+        process, real_kill, calls = session._active_process, session._active_process.kill, []
+
+        def flaky_kill():
+            calls.append(1)
+            if len(calls) == 1:
+                raise PermissionError("transient")
+            real_kill()
+        process.kill = flaky_kill
+        with patch.object(agy_provider, "write_gate_state", side_effect=PermissionError("locked")),                 patch.object(agy_session, "_remove_gate_state", return_value=False):
+            approval_mode.set_mode("step")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(approval_mode.current_mode(), "step")
+
+    def test_a_failed_save_puts_the_gate_back_to_the_published_mode(self):
+        """Verification round 4: the gate was tightened, the save failed, and
+        the hook kept denying an agy child that runs in auto mode."""
+        approval_mode.set_mode("auto")
+        self.live_session()
+        agy_provider.write_gate_state(auto=True)
+
+        class FailingStore:
+            def set_setting(self, key, value):
+                raise OSError("disk full")
+        with patch.object(approval_mode, "_store", FailingStore()):
+            with self.assertRaises(OSError):
+                approval_mode.set_mode("step")
+        self.assertEqual(approval_mode.current_mode(), "auto")
+        self.assertEqual(decide(WRITE, self.state)["decision"], "allow")
 
     def test_step_is_never_published_while_an_auto_write_holds_the_gate(self):
         """The round-2 probe's interleaving: flip A (auto) is inside its state

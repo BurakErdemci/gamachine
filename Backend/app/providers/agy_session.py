@@ -59,6 +59,41 @@ def _gate_lock():
 # 26 Sep 2026: close deregistered first, so a flip in that gap found no
 # session and left the closing child's hook in auto). Guarded by _gate_lock().
 _GATED_CHILDREN: Dict[object, object] = {}
+# The _GATED_CHILDREN tokens of closed sessions whose kill failed, until their
+# child is stopped. (Not every closing child: one killed but not yet reaped
+# would refuse spawns for nothing.)
+# Only the one shared state file stands between such a child and its tools, so
+# no new child (whose spawn writes that file) starts while one still runs; see
+# _stop_retired_children. Guarded by _gate_lock().
+_RETIRED: set = set()
+
+
+def _stop_retired_children() -> list:
+    """Retry the kill of every closed session's child; returns the survivors.
+
+    Verification round 4 (26 Sep 2026): a lone closing child whose kill failed
+    was denied by a "closed" file, and the next spawn rewrote the file to auto,
+    giving the closed child its tools back. Caller holds _gate_lock().
+    """
+    survivors = []
+    for token in list(_RETIRED):
+        process = _GATED_CHILDREN.get(token)
+        if process is None or getattr(process, "returncode", None) is not None:
+            _RETIRED.discard(token)
+            continue
+        try:
+            process.kill()
+        except Exception:
+            logger.warning("[agy] closed child still not stoppable pid=%s",
+                           getattr(process, "pid", None), exc_info=True)
+            if getattr(process, "returncode", None) is None:
+                survivors.append(process)
+                continue
+        # Killed: the owning session's reap may never run (it was closed), so
+        # the child stops being gated here.
+        _GATED_CHILDREN.pop(token, None)
+        _RETIRED.discard(token)
+    return survivors
 
 
 def _remove_gate_state() -> bool:
@@ -326,6 +361,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                 with _gate_lock():
                     if _GATED_CHILDREN.get(self._gate_token) is process:
                         _GATED_CHILDREN.pop(self._gate_token, None)
+                    _RETIRED.discard(self._gate_token)
                 logger.info("[agy] child stopped pid=%s exit_status=%s",
                             pid, getattr(process, "returncode", None))
             else:
@@ -383,6 +419,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                         # retries it, and the child stays tracked until then.
                         logger.debug("[agy] kill on close failed pid=%s",
                                      getattr(process, "pid", None), exc_info=True)
+                        if process.returncode is None:
+                            _RETIRED.add(self._gate_token)
                         still_writing = not denied and process.returncode is None
             if not still_writing and _SESSIONS.get(self.conversation_id) is self:
                 _SESSIONS.pop(self.conversation_id, None)
@@ -442,6 +480,14 @@ class AgyStreamSession(SaglayiciSahipligi):
             # gated from this write on: a flip to step before the spawn below
             # rewrites this file before step is published.
             with _gate_lock():
+                survivors = _stop_retired_children()
+                if survivors:
+                    pids = ", ".join(str(getattr(p, "pid", "?")) for p in survivors)
+                    raise AgyStepGateError(
+                        f"Kapatılan bir agy süreci durdurulamadı (pid {pids}); o çalışırken "
+                        "yeni bir agy süreci başlatılmadı, çünkü ikisi aynı onay kapısını "
+                        "paylaşıyor. O süreci kapatın ya da uygulamayı yeniden başlatın, "
+                        "sonra mesajınızı yeniden gönderin.")
                 auto = _global_auto_mode()
                 self._auto_approve = auto
                 _GATED_CHILDREN[token] = None
