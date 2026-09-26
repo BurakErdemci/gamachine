@@ -155,6 +155,8 @@ async def warmup_slash_commands(cwd: Optional[str] = None,
             # projenin SessionStart hook'u daha komut listelenirken koşardı.
             setting_sources=setting_sources or CLAUDE_SETTING_SOURCES,
             cwd=ws,
+            # Same as the chat session: none of the owner's own MCP servers.
+            strict_mcp_config=True,
         )
         client = ClaudeSDKClient(options=opts)
         cmds: List[str] = []
@@ -934,6 +936,14 @@ class ClaudeSDKSession:
         opts_kwargs: Dict[str, Any] = dict(
             permission_mode=self.permission_mode,
             setting_sources=self.setting_sources,
+            # Only the MCP servers this app passes in `mcp_servers`. Without it
+            # the "user" setting source loaded every server of the owner's own
+            # Claude Code (measured 26 Sep 2026: ~60, among them a second Unity
+            # server "UnityMCP", Gmail, Drive, Vercel). The model used that
+            # UnityMCP, so its calls carried no X-Gamachine-Conversation header
+            # (approval cards went unowned) and `mcp__UnityMCP__manage_script`
+            # slipped past the `mcp__unityMCP__manage_script` ban.
+            strict_mcp_config=True,
             can_use_tool=self._can_use_tool,
             cwd=self.cwd,
             # Canlı thinking/text delta'ları + token sayacı için şart.
