@@ -82,7 +82,7 @@ async def manage_something(
     return response
 ```
 
-The `group` parameter controls tool visibility. `"core"` and `"playtest"` are enabled by default; other groups (vfx, animation, etc.) start disabled until the Unity Editor's tool settings enable them. Which tools a client sees is fixed by the URL it connects to (`Server/src/transport/tool_profiles.py`): `/mcp` (enabled groups plus meta-tools, list pinned by `tests/test_live_server_startup.py`), `/mcp/gamachine` (core + playtest, what the Gamachine backend exports), `/mcp/full` (every group). There is no per-session toggling: `manage_tools` activate/deactivate return an error pointing at these URLs.
+The `group` parameter controls tool visibility. `"core"` and `"playtest"` are enabled by default; other groups (vfx, animation, etc.) start disabled until the Unity Editor's tool settings enable them. The URL a client connects to fixes its profile (`Server/src/transport/tool_profiles.py`): `/mcp` (the currently enabled groups plus meta-tools, so its list changes when the Editor registers different groups; list pinned by `tests/test_live_server_startup.py`), `/mcp/gamachine` (core + playtest, what the Gamachine backend exports), `/mcp/full` (every group). There is no per-session toggling: `manage_tools` activate/deactivate return an error pointing at these URLs.
 
 ### Python CLI Error Handling
 CLI commands (not MCP tools) use the `@handle_unity_errors` decorator:

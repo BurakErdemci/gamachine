@@ -51,9 +51,14 @@ header; an unknown profile answers 404.
 | `/mcp/gamachine` | core + playtest, no meta-tools: 32 tools, the set the backend exports to API models |
 | `/mcp/full` | Every group, regardless of the Editor's toggles: 52 tools |
 
-The list does not change within a connection. `manage_tools(action="list_groups")`
-reports which profile the call came in on; `activate`, `deactivate` and `reset`
-change nothing and return an error naming these URLs. To reach an opt-in group
+The URL fixes the profile, not a frozen list. `/mcp/gamachine` and `/mcp/full` list
+the same tools for as long as the server runs. `/mcp` filters every `tools/list`
+against the groups currently enabled, and those change whenever the Editor registers
+its tools (when it connects or reconnects, and when its Tools tab toggles change). The
+server then sends `tools/list_changed` to the clients it tracks, so a client on `/mcp`
+should list the tools again when it gets one.
+`manage_tools(action="list_groups")` reports which profile the call came in on;
+`activate`, `deactivate` and `reset` change nothing and return an error naming these URLs. To reach an opt-in group
 (docs, vfx, profiling, ...), enable it in the Tools tab (affects `/mcp`) or
 connect to `/mcp/full`.
 
