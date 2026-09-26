@@ -246,42 +246,54 @@ describe('useChat · wake channel', () => {
     mockedAxios.get.mockReset().mockResolvedValue({ data: [] })
   })
 
-  it('the channel does NOT open when there is no active chat', async () => {
+  it('ONE channel serves every chat and opens without an active chat', async () => {
+    // Chat mailbox: a note must wake a chat in the background, so the channel
+    // is no longer the on-screen chat's (`/conversations/{id}/wake-stream`).
     const fetchMock = vi.fn().mockReturnValue(new Promise(() => {}))
     vi.stubGlobal('fetch', fetchMock)
     hook()
     await act(async () => { await Promise.resolve() })
-    expect(fetchMock.mock.calls.some(c => String(c[0]).includes('/wake-stream'))).toBe(false)
+    const wakeCalls = fetchMock.mock.calls.filter(c => String(c[0]).includes('/wake-stream'))
+    expect(wakeCalls.map(c => String(c[0]))).toEqual([`${API}/wake-stream-all`])
   })
 
   it('a turn starts BY ITSELF when a wake frame arrives (origin=wake)', async () => {
-    // The channel REOPENS once the turn ends (by design). The fake endpoint
-    // therefore gives the wake frame ONCE: in reality the loop stops there
-    // because the queue gets drained and the backend cuts consecutive wakes
-    // off at 3 — the client has NO safety valve of its own, and leaving it
-    // that way on purpose is only correct as long as the server-side valve is
-    // measured.
-    let wakeVerildi = false
+    // The channel stays open; the frame is pushed only after the real send,
+    // since a wake turn borrows its arguments from it. The client has NO
+    // safety valve of its own: the backend cuts consecutive wakes off at 3.
+    let pushWake: (() => void) | null = null
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (String(url).includes('/wake-stream')) {
-        if (wakeVerildi) return new Promise(() => {})
-        wakeVerildi = true
-        return Promise.resolve(sseYanit({
-          type: 'wake', conversation_id: 5, count: 2,
-          notices: ['a', 'b'], text: 'a · b',
-        }))
+        let sent = false
+        return Promise.resolve({
+          ok: true,
+          body: {
+            getReader: () => ({
+              read: () => (sent ? new Promise(() => {}) : new Promise(resolve => {
+                pushWake = () => {
+                  sent = true
+                  resolve({
+                    done: false,
+                    value: new TextEncoder().encode(`data: ${JSON.stringify({
+                      type: 'wake', conversation_id: 5, count: 2,
+                      notices: ['a', 'b'], text: 'a · b',
+                    })}\n\n`),
+                  })
+                }
+              })),
+            }),
+          },
+        })
       }
       return Promise.resolve(sseYanit({ type: 'done', stop_reason: 'complete' }))
     })
     vi.stubGlobal('fetch', fetchMock)
 
     const { result } = hook()
-    // The channel only makes sense AFTER a real send: a wake turn borrows its
-    // language/mode arguments from the last user send.
     await act(async () => {
       await result.current.sendMessage('selam', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn())
     })
-    await act(async () => { await new Promise(r => setTimeout(r, 30)) })
+    await act(async () => { pushWake?.(); await new Promise(r => setTimeout(r, 30)) })
 
     const wakeTuru = fetchMock.mock.calls.filter(
       c => String(c[0]).endsWith('/chat-stream') && JSON.parse(c[1].body).origin === 'wake',

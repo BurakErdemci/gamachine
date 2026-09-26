@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Terminal, X, Check, AlertTriangle, Box } from 'lucide-react';
+import { Terminal, X, Check, AlertTriangle, Box, Mail } from 'lucide-react';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
 
@@ -15,7 +15,7 @@ interface CommandApprovalProps {
    * YANLIŞ söylerdi. Onaylanan bir kabuk komutu değil, Unity projesini
    * değiştiren bir araç çağrısı. Kablolama (onay/ret, gate kimliği) ortak
    * kalıyor — ayrışan yalnız kullanıcının okuduğu şey. */
-  kind?: 'shell' | 'unity';
+  kind?: 'shell' | 'unity' | 'mail';
 }
 
 /** Metin anahtarları BİRLİK tipinde tutuluyor: `t` yalnız bilinen anahtarları
@@ -34,13 +34,25 @@ const METIN = {
     run: 'unityApproval.run',
     warning: 'unityApproval.warning',
   },
+  // A note from one chat's AI to another chat (`send_chat_message`). The
+  // first line of `command` names both chats, the rest is the note itself.
+  mail: {
+    title: 'mailApproval.title',
+    confirm: 'mailApproval.confirm',
+    run: 'mailApproval.run',
+    warning: 'mailApproval.warning',
+  },
 } as const;
 
 export const CommandApproval: React.FC<CommandApprovalProps> = ({ command, onConfirm, onCancel, kind = 'shell' }) => {
   const { t } = useLang();
   const unity = kind === 'unity';
-  const m = METIN[kind];
-  const Ikon = unity ? Box : Terminal;
+  const mail = kind === 'mail';
+  const m = METIN[kind] ?? METIN.shell;
+  const Ikon = mail ? Mail : unity ? Box : Terminal;
+  const breakAt = command.indexOf('\n');
+  const mailRoute = mail ? (breakAt < 0 ? command : command.slice(0, breakAt)) : '';
+  const mailBody = mail && breakAt >= 0 ? command.slice(breakAt + 1).replace(/^\n+/, '') : '';
   return (
     <motion.div
       initial={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -74,6 +86,12 @@ export const CommandApproval: React.FC<CommandApprovalProps> = ({ command, onCon
               * `max-h` olmadan ise uzun bir içerik ONAY/RET düğmelerini ekranın
               * altına itiyordu — kullanıcının kararını göstermeyen bir onay
               * kartı, kartın var olma sebebini ortadan kaldırır. */}
+            {mail ? (
+              <div data-testid="mail-card" className="bg-black/50 rounded-lg px-3 py-2 border border-white/5 max-h-[320px] overflow-y-auto custom-scrollbar">
+                <p data-testid="mail-route" className="text-[11px] text-amber-300 font-semibold mb-1.5 break-all">{stripBidi(mailRoute)}</p>
+                <p data-testid="mail-body" className="text-[12px] text-slate-200 whitespace-pre-wrap break-words leading-relaxed">{stripBidi(mailBody)}</p>
+              </div>
+            ) : (
             <div className="bg-black/50 rounded-lg px-3 py-2 border border-white/5 max-h-[320px] overflow-y-auto custom-scrollbar">
               <code className="block text-[11px] text-emerald-400 font-mono break-all whitespace-pre-wrap leading-relaxed">
                 {!unity && <span className="text-slate-600 mr-1.5 select-none">$</span>}
@@ -88,6 +106,7 @@ export const CommandApproval: React.FC<CommandApprovalProps> = ({ command, onCon
                 {stripBidi(command)}
               </code>
             </div>
+            )}
           </div>
         </div>
 

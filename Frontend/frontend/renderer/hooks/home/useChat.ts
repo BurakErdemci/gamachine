@@ -14,7 +14,7 @@ import { isBranchIn, leftTabOf } from '../../lib/convFamily';
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
 
-type PendingCommand = { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' };
+type PendingCommand = { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' | 'mail' };
 type PendingQuestion = { questions: any[]; gateId: string; messageId: number };
 type SetArg<T> = T | ((prev: T) => T);
 const resolveArg = <T,>(arg: SetArg<T>, prev: T): T =>
@@ -113,6 +113,12 @@ const isAwaiting = (r: ConvRuntime) =>
   !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0 || r.bridgeGates.length > 0;
 
 type SlotSetter = (val: any) => void;
+
+/** What a turn the client starts by itself (AUTO-WAKE) borrows from the page. */
+export type WakeArgs = {
+  lang: string; genMode: GenerationMode; thinkingLevel: any;
+  setPendingGenFiles: (v: any) => void; setPendingDelete: (v: any) => void;
+};
 
 export const useChat = (
   API: string,
@@ -331,10 +337,11 @@ export const useChat = (
   // borrows them from the last real send; if there was no send yet, no wake
   // happens — making up a missing argument would mean starting a turn in a
   // mode the user never chose.
-  const lastSendArgsRef = useRef<{
-    lang: string; genMode: GenerationMode; thinkingLevel: any;
-    setPendingGenFiles: (v: any) => void; setPendingDelete: (v: any) => void;
-  } | null>(null);
+  const lastSendArgsRef = useRef<WakeArgs | null>(null);
+  // The same arguments as the page currently shows them (`setWakeDefaults`),
+  // so a note can wake a chat before the user has sent anything this session.
+  const wakeDefaultsRef = useRef<WakeArgs | null>(null);
+  const setWakeDefaults = useCallback((args: WakeArgs | null) => { wakeDefaultsRef.current = args; }, []);
 
   // Only the newest list request may write the list: an older answer was read
   // before a later hide, unhide or branch and would undo it. A local change
@@ -703,7 +710,9 @@ export const useChat = (
       images: images 
     };
     updateMessages(prev => [...prev, userMsg]);
-    setChatInput('');
+    // The message box holds the user's draft for the chat on screen; a wake
+    // turn (possibly of a chat in the background) never typed into it.
+    if (origin === 'user' && targetOverride == null) setChatInput('');
 
     // Özel kart render edilen slash komutları → asistan mesajını etiketle.
     //   /usage   → Claude (Claude Code) + Codex (app-server rateLimits kartı)
@@ -803,6 +812,12 @@ export const useChat = (
               if (data.conversation_id != null && Number(data.conversation_id) !== targetConvId) continue;
               if (data.type === 'done' || data.type === 'response') finishedCleanly = true;
               if (data.type === 'error') errored = true;
+              if (data.type === 'wake_message' && typeof data.content === 'string') {
+                // A mail wake: the server ran the turn on the stored note, not
+                // on the notice text this row was drawn with.
+                updateMessages(prev => prev.map(msg => (msg.id === userMsg.id ? { ...msg, content: data.content } : msg)));
+                continue;
+              }
               updateMessages(prev => prev.map(msg => {
                 if (msg.id === aiMsgId) {
                   const updated = { ...msg };
@@ -1041,8 +1056,8 @@ export const useChat = (
   }, [API, aiConfig.provider_type, aiConfig.model_name, createNewConversation, fetchConversations, patchConv, rt, suggestFilePath, syncFinished, user, workspacePath]);
 
   // ── AUTO-WAKE channel ────────────────────────────────────────────────────
-  // Once a background task finishes, the backend sends ONE coalesced `wake`
-  // frame from `/wake-stream`; we start the turn from here. There is no
+  // Once a background task finishes (or a note arrives), the backend sends ONE
+  // coalesced `wake` frame per chat; we start the turn from here. There is no
   // server-side loop to resume the turn (one run = one HTTP request), so the
   // client has to be the one deciding to "continue".
   //
@@ -1050,61 +1065,88 @@ export const useChat = (
   // `X-Session-Token` header, and EventSource can't send headers. Putting the
   // token in the query string would write it into the address bar and logs.
   //
-  // `loading` is a dependency: the channel closes while a turn is running and
-  // reopens once it ends. This way a second turn can't be started on top of one
-  // already in flight. It is the ON-SCREEN chat's own flag: a turn running in
-  // another chat does not keep this one from waking. The channel still exists
-  // only for the chat on screen (a background chat does not wake in slice 1).
+  // One channel for EVERY chat (`/wake-stream-all`), not only the one on
+  // screen: a note from another chat must wake a chat in the background. Each
+  // frame names its chat, and the turn runs in that chat's own runtime, so the
+  // screen and the message box stay as they are. The server holds a frame
+  // back while that chat has a turn in flight or a card open, and sends one
+  // frame per chat at a time (ticket); the `loading` check below only covers
+  // a turn this renderer started a moment before.
+  const sendMessageRef = useRef(sendMessage);
+  sendMessageRef.current = sendMessage;
+  const fetchMessagesRef = useRef(fetchMessages);
+  fetchMessagesRef.current = fetchMessages;
+  const userId = user?.id;
+  const sessionToken = user?.sessionToken;
   useEffect(() => {
-    if (!API || !user || !activeConvId || loading) return;
-    const convId = activeConvId;
+    if (!API || userId == null || !sessionToken) return;
     const ac = new AbortController();
     let iptal = false;
+    const pause = (ms: number) => new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, ms);
+      ac.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+    const startWake = async (convId: number, text: string) => {
+      // The page's current choices, else the last real send's; with neither,
+      // dropping the wake beats starting a turn in a mode nobody chose. A
+      // dropped note stays queued on the server and is offered again.
+      const args = wakeDefaultsRef.current ?? lastSendArgsRef.current;
+      if (!args || rt(convId).loading) return;
+      // A chat never opened here has no history in its runtime; the wake
+      // turn's live copy would otherwise be all the user sees on opening it.
+      if (rt(convId).messages.length === 0) await fetchMessagesRef.current(convId);
+      if (iptal) return;
+      void sendMessageRef.current(
+        text, '', args.lang, args.genMode, args.thinkingLevel,
+        args.setPendingGenFiles, args.setPendingDelete,
+        undefined, false, undefined, 'wake', convId,
+      );
+    };
     (async () => {
-      try {
-        const res = await fetch(`${API}/conversations/${convId}/wake-stream`, {
-          headers: { 'X-Session-Token': user.sessionToken },
-          signal: ac.signal,
-        });
-        const reader = res.body?.getReader();
-        if (!reader) return;
-        const decoder = new TextDecoder('utf-8');
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parcalar = buffer.split('\n\n');
-          buffer = parcalar.pop() || '';
-          for (const parca of parcalar) {
-            const satir = parca.split('\n').find(l => l.startsWith('data: '));
-            if (!satir) continue;
-            let data: any;
-            const payload = satir.slice(6);
-            try { data = JSON.parse(payload); } catch (err) {
-              console.warn('[AUTO-WAKE] malformed wake frame:', payload.slice(0, 500), err);
-              continue;
+      while (!iptal) {
+        let retryMs = 2000;
+        try {
+          const res = await fetch(`${API}/wake-stream-all`, {
+            headers: { 'X-Session-Token': sessionToken },
+            signal: ac.signal,
+          });
+          // An older backend without this route: do not hammer it.
+          if (res && res.ok === false) retryMs = 30000;
+          const reader = res?.body?.getReader();
+          if (reader) {
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+            while (!iptal) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const parcalar = buffer.split('\n\n');
+              buffer = parcalar.pop() || '';
+              for (const parca of parcalar) {
+                const satir = parca.split('\n').find(l => l.startsWith('data: '));
+                if (!satir) continue;
+                let data: any;
+                const payload = satir.slice(6);
+                try { data = JSON.parse(payload); } catch (err) {
+                  console.warn('[AUTO-WAKE] malformed wake frame:', payload.slice(0, 500), err);
+                  continue;
+                }
+                if (data?.type !== 'wake' || iptal) continue;
+                const convId = Number(data.conversation_id);
+                if (!Number.isSafeInteger(convId) || convId <= 0) continue;
+                void startWake(convId, String(data.text || ''));
+              }
             }
-            if (data?.type !== 'wake' || iptal) continue;
-            const args = lastSendArgsRef.current;
-            // No args means nothing has been sent yet in this session; in that
-            // case dropping the wake is better than starting a turn in a mode
-            // that was made up.
-            if (!args) continue;
-            void sendMessage(
-              String(data.text || ''), '', args.lang, args.genMode, args.thinkingLevel,
-              args.setPendingGenFiles, args.setPendingDelete,
-              undefined, false, undefined, 'wake', convId,
-            );
           }
+        } catch {
+          // Abort or a dropped connection: a wake is best-effort, not a failure
+          // to show the user. The loop reconnects; the server re-offers notes.
         }
-      } catch {
-        // Abort or a dropped connection: a wake is best-effort, not a failure to
-        // show the user — the chat can still be continued by hand.
+        if (!iptal) await pause(retryMs);
       }
     })();
     return () => { iptal = true; ac.abort(); };
-  }, [API, activeConvId, loading, sendMessage, user]);
+  }, [API, userId, sessionToken, rt]);
 
   const clearHistory = useCallback(async () => {
     if (!activeConvId) return;
@@ -1274,7 +1316,7 @@ export const useChat = (
     selectConversation, deleteConversation, saveRename,
     branchConversation, setBranchHidden, closeBranch, deleteBranch, renameConversation,
     convStatus, attention,
-    sendMessage, stopMessage,
+    sendMessage, stopMessage, setWakeDefaults,
     clearHistory, analyzeProject, exportMemory, importMemory, compactConversation,
     // Kararı backend'e iletir ve İLETİLDİĞİNİ DOĞRULAR. Yanıt gövdesi eskiden
     // hiç okunmuyordu: gate düşmüşse backend {"status":"gate_not_found"} dönüyor,

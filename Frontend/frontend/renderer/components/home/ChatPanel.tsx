@@ -9,7 +9,8 @@ import {
   AlertTriangle,
   Bot,
   Sparkles,
-  RefreshCw
+  RefreshCw,
+  Mail
 } from 'lucide-react';
 import { Message, UserData, FileEntry, GenerationMode, ChatActivity } from './types';
 import { ModelAvatar } from './ModelAvatar';
@@ -27,6 +28,11 @@ import { postMcpDecision, decisionToast, GateFailure } from '../../hooks/home/ga
 import { McpActiveGate } from '../../hooks/home/useMCPApproval';
 import { McpApprovalCards } from './McpApprovalCards';
 import { MessageNotices } from './MessageNotices';
+
+/** Fixed start of a stored note between chats (backend `mailbox.MAIL_MARKER`). */
+export const MAIL_MARKER = '📨';
+export const isMailNote = (msg: Pick<Message, 'role' | 'content'>) =>
+  msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(MAIL_MARKER);
 
 interface ChatPanelProps {
   messages: Message[];
@@ -57,7 +63,7 @@ interface ChatPanelProps {
   setDiffFile: (val: any | null) => void;
   pendingDelete: { path: string; messageId: number } | null;
   setPendingDelete: (val: any | null) => void;
-  pendingCommand: { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' } | null;
+  pendingCommand: { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' | 'mail' } | null;
   setPendingCommand: (val: any | null) => void;
   /** Kararın backend'e ULAŞMADIĞINI döner (`null` = ulaştı). Kart, başarı
    *  iddiasını buna bakarak basar; hata metnini çağrılan taraf kendi basıyor. */
@@ -303,12 +309,29 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 : reason === 'tasks_done'
                   ? 'chat.wakeRow.tasks_done'
                   : null;
+              // A mail notice's detail is only a chat number; the note itself
+              // replaces this row once the turn starts (`wake_message`).
+              if (reason === 'mail') return t('chat.wakeRow.mail');
               return wakeKey ? `${t(wakeKey)} — ${detail}` : part;
             }).join(' · ');
           }
           return (
           <div key={msg.id} className={`chat-message-enter ${msg.role === 'user' ? 'flex justify-end' : ''}`}>
-            {msg.role === 'system' ? (
+            {isMailNote(msg) ? (
+              /* A note another chat's AI left here (backend agentic/mailbox.py).
+                 Its own bubble: not the user's words (no blue bubble), and not
+                 the muted wake row either, since the note is content the user
+                 should read. */
+              <div data-testid="mail-note" className="rounded-xl border border-amber-500/25 bg-amber-950/10 px-4 py-3">
+                <div className="flex items-center gap-2 mb-1.5 text-[11px] font-semibold text-amber-400 select-none">
+                  <Mail size={12} className="shrink-0" />
+                  {t('chat.mailNote')}
+                </div>
+                <p className="text-[13px] text-slate-200 whitespace-pre-wrap break-words leading-relaxed">
+                  {stripBidi(msg.content.slice(MAIL_MARKER.length).trimStart())}
+                </p>
+              </div>
+            ) : msg.role === 'system' ? (
               /* AUTO-WAKE row. This branch is MANDATORY: the ternary below only
                  distinguished assistant/other, so a `system` role would render
                  as a BLUE USER BUBBLE — a sentence the user never wrote would

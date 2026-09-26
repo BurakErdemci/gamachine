@@ -254,6 +254,15 @@ export default function Home() {
   // (/effort-capabilities): provider+model neyi destekliyorsa o. 'auto' = model
   // varsayılanı, hiçbir parametre gönderilmez.
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('auto');
+  // A chat woken by a note from another chat runs with what this page shows
+  // now, even before the user has sent anything this session.
+  const { setWakeDefaults } = chat;
+  useEffect(() => {
+    setWakeDefaults({
+      lang, genMode: chat.generationMode, thinkingLevel,
+      setPendingGenFiles: fs.setPendingGenFiles, setPendingDelete: fs.setPendingDelete,
+    });
+  }, [setWakeDefaults, lang, chat.generationMode, thinkingLevel, fs.setPendingGenFiles, fs.setPendingDelete]);
   const [effortCaps, setEffortCaps] = useState<EffortCaps | null>(null);
   // Claude-only kontrol (ultracode). Sadece subscription + claude-* modelde.
   const [ultracode, setUltracode] = useState(false);

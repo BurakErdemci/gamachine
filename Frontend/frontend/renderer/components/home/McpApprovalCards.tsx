@@ -87,7 +87,7 @@ interface McpApprovalCardsProps {
   setPendingGenFiles: (val: any) => void;
   pendingDelete: { path: string; messageId: number } | null;
   setPendingDelete: (val: any) => void;
-  pendingCommand: { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' } | null;
+  pendingCommand: { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' | 'mail' } | null;
   setPendingCommand: (val: any) => void;
   pendingFix: { data: any; messageId?: number; applied?: boolean; gateId?: string } | null;
   setPendingFix: (val: any) => void;
@@ -411,7 +411,7 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
               onResolved();
               // "çalışıyor" iddiası onay iletilse BİLE erken: komutu köprü
               // bundan sonra başlatıyor ve başlatma da düşebilir.
-              reportDecision(result, t('mcp.sentCommand'));
+              reportDecision(result, t(pendingCommand.kind === 'mail' ? 'mcp.sentMail' : 'mcp.sentCommand'));
             }}
             onCancel={async () => {
               const result = await decide(false);

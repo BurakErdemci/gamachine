@@ -107,7 +107,7 @@ interface MCPApprovalHookParams {
   workspacePath: string | null;
   setPendingGenFiles: (val: { files: PendingFile[]; messageId: number } | null) => void;
   setPendingDelete: (val: { path: string; messageId: number } | null) => void;
-  setPendingCommand: (val: { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' } | null) => void;
+  setPendingCommand: (val: { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' | 'mail' } | null) => void;
   setPendingFix: (val: any) => void;
   // Kararın backend'e ULAŞMADIĞINI kullanıcıya bildirmek için. Opsiyonel:
   // hook'u test/başka bağlamda toast'sız kurmak mümkün kalsın.
@@ -130,6 +130,20 @@ interface MCPApprovalHookParams {
  * uyuşmuyor"; sabiti tek yerden okutmak o sınıfın bu örneğini kapatıyor.
  */
 export const MCP_MSG_ID = -999;
+
+/** Tool name of a note between chats (backend `agentic/mailbox.py`). */
+export const MAIL_TOOL = 'send_chat_message';
+
+/**
+ * The mail card's text: first line "#A "title" → #B "title"", then the note.
+ * CommandApproval (kind 'mail') splits it at the first line break.
+ */
+export const mailOzeti = (params: any): string => {
+  const p = params && typeof params === 'object' ? params : {};
+  const chat = (id: unknown, title: unknown) =>
+    `#${typeof id === 'number' ? id : '?'} "${typeof title === 'string' ? title : ''}"`;
+  return `${chat(p.from_id, p.from_title)} → ${chat(p.to_id, p.to_title)}\n\n${String(p.body ?? '')}`;
+};
 
 /** Yoklama aralığı (ms). Gerekçesi ve ölçümü aşağıdaki useEffect'te. */
 const POLL_INTERVAL_MS = 1000;
@@ -456,6 +470,11 @@ export const useMCPApproval = ({
       } else if (tool === 'bash' && eskiKartCizilebilir) {
         clearActiveCardRef.current = () => setPendingCommand(null);
         setPendingCommand({ command: params.command, gateId, messageId: MCP_MSG_ID });
+      } else if (tool === MAIL_TOOL && typeof yuk.body === 'string') {
+        // A note between chats: its own card, so the user reads "which chat
+        // to which chat, saying what" rather than a tool dump.
+        clearActiveCardRef.current = () => setPendingCommand(null);
+        setPendingCommand({ command: mailOzeti(yuk), gateId, messageId: MCP_MSG_ID, kind: 'mail' });
       } else {
         // Unity araçları ve tanınmayan her şey: TEK bir genel kart.
         //
