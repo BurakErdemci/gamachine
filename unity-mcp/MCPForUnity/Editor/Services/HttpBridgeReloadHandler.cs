@@ -29,6 +29,11 @@ namespace MCPForUnity.Editor.Services
         // from the same condition and drifting apart would make the behaviour unpredictable.
         private static readonly TimeSpan ResumeTailInterval = TimeSpan.FromSeconds(30);
 
+        // The tail loop gives up after this; turning Unity MCP off and on in the app
+        // rewrites its autoconnect script, whose reload resumes the bridge again.
+        // Mirrors WebSocketTransportClient.ReconnectTailBudget.
+        internal static readonly TimeSpan ResumeTailBudget = TimeSpan.FromMinutes(5);
+
         private static int _tailLoopRunning;
 
         static HttpBridgeReloadHandler()
@@ -164,13 +169,15 @@ namespace MCPForUnity.Editor.Services
             string detail = lastException != null ? $": {lastException.Message}" : string.Empty;
             McpLog.Warn(
                 $"Failed to resume HTTP MCP bridge after domain reload{detail} — "
-                + $"retrying every {ResumeTailInterval.TotalSeconds:0} s in the background.");
+                + $"retrying every {ResumeTailInterval.TotalSeconds:0} s for up to "
+                + $"{ResumeTailBudget.TotalMinutes:0} min in the background.");
 
             await ResumeTailLoopAsync();
         }
 
         /// <summary>
-        /// Keeps trying to resume after <see cref="ResumeRetrySchedule"/> is exhausted.
+        /// Keeps trying to resume after <see cref="ResumeRetrySchedule"/> is exhausted,
+        /// for at most <see cref="ResumeTailBudget"/>.
         /// </summary>
         /// <remarks>
         /// Without this the finite schedule (~49 s total) is a hard deadline: a server that
@@ -184,9 +191,16 @@ namespace MCPForUnity.Editor.Services
         /// so the 49 s budget was not merely tight, it was guaranteed to be exceeded, and
         /// the bridge stayed dead until the user intervened by hand.
         ///
-        /// WebSocketTransportClient.AttemptReconnectAsync already retries indefinitely for
-        /// the same reason, but it only covers a connection that was established and then
-        /// dropped — not one that never came up after a domain reload. This closes that gap.
+        /// WebSocketTransportClient.AttemptReconnectAsync retries for the same reason, but it
+        /// only covers a connection that was established and then dropped — not one that
+        /// never came up after a domain reload. This closes that gap.
+        ///
+        /// Bounded since 2026-09-26 (owner's decision: retrying forever is not needed, the
+        /// app's toggle turns it back on). The toggle recovers it because turning Unity MCP
+        /// on rewrites the project's autoconnect script, and its reload sets
+        /// ResumeHttpAfterReload again. `--no-cache` now runs only on the first start after
+        /// the server's source changed; its measured worst case was 2 min 26 s, so the
+        /// 5 min budget still covers it.
         /// </remarks>
         private static async Task ResumeTailLoopAsync()
         {
@@ -199,8 +213,17 @@ namespace MCPForUnity.Editor.Services
 
             try
             {
+                DateTime deadline = DateTime.UtcNow + ResumeTailBudget;
                 while (true)
                 {
+                    if (DateTime.UtcNow >= deadline)
+                    {
+                        McpLog.Warn(
+                            $"Stopped retrying the HTTP MCP bridge after {ResumeTailBudget.TotalMinutes:0} min. "
+                            + "Turn Unity MCP off and on in Gamachine to reconnect.");
+                        return;
+                    }
+
                     try { await Task.Delay(ResumeTailInterval); }
                     catch { return; }
 

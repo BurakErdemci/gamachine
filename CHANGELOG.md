@@ -33,6 +33,14 @@ write the file and keep its `.meta` with it. Shell commands are checked by a
 heuristic, and `execute_code` / `execute_menu_item` cannot be checked; see
 docs/security.md.
 
+### Unity stops retrying a lost connection after 5 minutes
+
+When the Unity MCP server cannot be reached, the Unity Editor used to retry every
+30 s forever. It now stops after 5 minutes and says so in the Unity console;
+turning Unity MCP off and on in Gamachine reconnects it once Unity is in focus.
+5 minutes is about twice the slowest server start measured (a first start after
+the server's code changed).
+
 ### One agent action, one undo step
 
 Every mutating Unity MCP call is now a single named Unity undo step
