@@ -211,20 +211,28 @@ def _compile_status(*, failed=False, changed=0, compiling=False):
     }
 
 
-def _fake_editor(monkeypatch, compile_status, reply):
+_UNSUPPORTED = {"success": False, "error": "Unknown or unsupported command type: get_compile_status"}
+
+
+def _fake_editor(monkeypatch, compile_status, reply, *, compile_reply=None):
+    """compile_reply, when given, is the raw get_compile_status reply (an Exception is raised)."""
+    import services.tools.compile_status as cs
     import services.tools.run_tests as mod
 
     sent = []
+    if compile_reply is None:
+        compile_reply = _UNSUPPORTED if compile_status is None else {"success": True, "data": compile_status}
 
     async def fake_send_with_unity_instance(send_fn, unity_instance, command_type, params, **kwargs):
         sent.append(command_type)
         if command_type == "get_compile_status":
-            if compile_status is None:
-                return {"success": False, "error": "Unknown or unsupported command type: get_compile_status"}
-            return {"success": True, "data": compile_status}
+            if isinstance(compile_reply, Exception):
+                raise compile_reply
+            return compile_reply
         return reply
 
     monkeypatch.setattr(mod.unity_transport, "send_with_unity_instance", fake_send_with_unity_instance)
+    monkeypatch.setattr(cs, "RETRY_DELAY_S", 0)
     return sent
 
 
@@ -271,17 +279,61 @@ async def test_run_tests_busy_while_compiling(monkeypatch):
     assert "run_tests" not in sent
 
 
+# An older package answers get_compile_status as an unknown command, or with no epoch.
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [_compile_status(), None], ids=["clean", "unsupported"])
-async def test_run_tests_starts_when_compile_is_clean_or_unknown(monkeypatch, status):
+@pytest.mark.parametrize("status,compile_reply,verdict", [
+    (_compile_status(), None, "clean"),
+    (None, None, "unknown"),
+    (None, {"success": True, "data": {"message": "ok"}}, "unknown"),
+], ids=["clean", "unsupported-command", "unsupported-no-epoch"])
+async def test_run_tests_starts_when_compile_is_clean_or_unsupported(monkeypatch, status, compile_reply, verdict):
     from services.tools.run_tests import run_tests
 
-    sent = _fake_editor(monkeypatch, status, _STARTED)
+    sent = _fake_editor(monkeypatch, status, _STARTED, compile_reply=compile_reply)
     resp = await run_tests(DummyContext(), mode="EditMode")
 
     assert resp.success is True
     assert resp.data.job_id == "abc123"
+    assert resp.data.compile["verdict"] == verdict
     assert sent[-1] == "run_tests"
+
+
+_MALFORMED = {**_compile_status(), "is_compiling": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compile_reply", [
+    {"success": False, "error": "status read failed"},
+    TimeoutError("timed out"),
+    "not a dict",
+    {"success": True, "data": _MALFORMED},
+], ids=["failed-read", "transport-timeout", "non-dict", "malformed"])
+async def test_run_tests_refuses_when_compile_status_is_unreadable(monkeypatch, compile_reply):
+    from services.tools.run_tests import run_tests
+
+    sent = _fake_editor(monkeypatch, None, _STARTED, compile_reply=compile_reply)
+    resp = await run_tests(DummyContext(), mode="EditMode")
+
+    assert resp.success is False
+    assert resp.error == "busy"
+    assert resp.hint == "retry"
+    assert resp.data["reason"] == "compile_status_unknown"
+    assert resp.data["compile"]["verdict"] == "unknown"
+    assert "run_tests" not in sent
+
+
+@pytest.mark.asyncio
+async def test_run_tests_refuses_on_a_timeout_verdict(monkeypatch):
+    import services.tools.run_tests as mod
+
+    sent = _fake_editor(monkeypatch, _compile_status(), _STARTED)
+    monkeypatch.setattr(mod, "live_verdict", lambda status, problem=None: {"verdict": "timeout"})
+    resp = await mod.run_tests(DummyContext(), mode="EditMode")
+
+    assert resp.success is False
+    assert resp.error == "busy"
+    assert resp.data["compile"]["verdict"] == "timeout"
+    assert "run_tests" not in sent
 
 
 def _finished(total, status="succeeded"):

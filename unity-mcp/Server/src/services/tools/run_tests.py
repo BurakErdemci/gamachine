@@ -103,6 +103,7 @@ class RunTestsStartData(BaseModel):
     mode: str | None = None
     include_details: bool | None = None
     include_failed_tests: bool | None = None
+    compile: dict[str, Any] | None = None
 
 
 class RunTestsStartResponse(MCPResponse):
@@ -151,11 +152,13 @@ class GetTestJobResponse(MCPResponse):
 _UNTRUSTED_COMPILE = ("errors", "stale")
 
 
-async def _compile_verdict(unity_instance: str | None) -> dict[str, Any]:
+async def _compile_verdict(unity_instance: str | None) -> tuple[dict[str, Any], bool]:
+    """The live verdict, and whether an "unknown" one only means the package has no
+    get_compile_status handler (an older package) rather than a failed read."""
     read = await read_compile_status(
         unity_instance, scan=True, attempts=2,
         send_fn=async_send_command_with_retry, route_fn=unity_transport.send_with_unity_instance)
-    return live_verdict(read.status, read.problem)
+    return live_verdict(read.status, read.problem), read.unsupported
 
 
 def _compile_refusal(verdict: dict[str, Any]) -> MCPResponse:
@@ -175,7 +178,7 @@ async def _judge_finished_job(response: dict[str, Any], unity_instance: str | No
     summary = ((data.get("result") or {}).get("summary") or {})
     if data.get("status") != "succeeded" or summary.get("total") != 0:
         return GetTestJobResponse(**response)
-    verdict = await _compile_verdict(unity_instance)
+    verdict, _ = await _compile_verdict(unity_instance)
     if verdict["verdict"] in _UNTRUSTED_COMPILE:
         refusal = _compile_refusal(verdict)
         refusal.message = "The run found 0 tests. " + refusal.message
@@ -189,7 +192,8 @@ async def _judge_finished_job(response: dict[str, Any], unity_instance: str | No
     description=(
         "Starts a Unity test run asynchronously and returns a job_id immediately. Poll with get_test_job for progress. "
         "Refuses with error='compile' and data.compile (the compile_status verdict) when scripts do not compile or "
-        "changed on disk since the last compile, since the run would test old assemblies."
+        "changed on disk since the last compile, since the run would test old assemblies. Answers error='busy' "
+        "(hint retry) while compiling or when the compile status cannot be read."
     ),
     annotations=ToolAnnotations(
         title="Run Tests",
@@ -241,12 +245,20 @@ async def run_tests(
     if isinstance(gate, MCPResponse):
         return gate
 
-    verdict = await _compile_verdict(unity_instance)
+    verdict, unsupported = await _compile_verdict(unity_instance)
     if verdict["verdict"] in _UNTRUSTED_COMPILE:
         return _compile_refusal(verdict)
     if verdict["verdict"] in ("compiling", "pending"):
         return MCPResponse(success=False, error="busy", message="compiling", hint="retry",
                            data={"reason": "compiling", "retry_after_ms": 500, "compile": verdict})
+    # An older package without the handler cannot say either way, so it keeps running tests as it
+    # always did; any other non-clean verdict (a failed, timed-out or malformed read) proves nothing.
+    if verdict["verdict"] != "clean" and not unsupported:
+        return MCPResponse(
+            success=False, error="busy", hint="retry",
+            message=("The compile status could not be read, so it is not known whether scripts compile "
+                     "(data.compile.note says why). No test run was started; retry, or call compile_status."),
+            data={"reason": "compile_status_unknown", "retry_after_ms": 1000, "compile": verdict})
 
     def _coerce_string_list(value) -> list[str] | None:
         if value is None:
@@ -284,6 +296,8 @@ async def run_tests(
     if isinstance(response, dict):
         if not response.get("success", True):
             return MCPResponse(**response)
+        if isinstance(response.get("data"), dict):
+            response = {**response, "data": {**response["data"], "compile": verdict}}
         return RunTestsStartResponse(**response)
     return MCPResponse(success=False, error=str(response))
 
