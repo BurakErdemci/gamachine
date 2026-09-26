@@ -2191,7 +2191,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
     # ═══════════════════════════════════════════════
     async def _run_agy_session(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         """Send one stdin turn to the conversation's persistent agy process."""
-        from providers.agy_session import get_session
+        from providers.agy_session import _RESUME_IDS, get_session
         from providers._attachments import materialize_images, cleanup_dir
         from secret_redaction import redact_secrets
 
@@ -2203,6 +2203,16 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         image_paths, attachment_dir = materialize_images(
             self.images, self.workspace_path, f"agy_conv{self.conversation_id}")
         message = user_message
+        if self.context:
+            # Fresh agy conversation = no id for _start to resume: the id comes
+            # from resume_id/_RESUME_IDS (get_session) or the first turn's init
+            # event, and _start re-reads the store when the workspace changed.
+            # A resumed conversation already holds its own history on disk.
+            cwd = os.path.abspath(self.workspace_path or ".")
+            resume_uuid = (session.session_id if session.cwd == cwd
+                           else _RESUME_IDS.get((self.conversation_id, cwd)))
+            if not resume_uuid:
+                message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
         if image_paths:
             message += "\n\nAttached images; open these files to inspect them:\n"
             message += "\n".join(f"- {path}" for path in image_paths)

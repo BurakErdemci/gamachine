@@ -5,6 +5,7 @@ No CLI, config writer, external service, or filesystem scratch is used here.
 import asyncio
 import copy
 import json
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -561,16 +562,64 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(agy_session.peek_session(11))
         self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
 
-    async def test_runner_emits_native_text_usage_and_done_without_context_injection(self):
+    async def test_runner_emits_native_text_usage_and_done(self):
         from agentic.agent_runner import AgentRunner
         runner = AgentRunner(provider_type="subscription", api_key="", model_name="gemini-3.8-flash",
-                             conversation_id=11, workspace_path=".", context="old history" * 10000)
+                             conversation_id=11, workspace_path=".")
         events = [event async for event in runner._run_agy_session("new user turn")]
         self.assertEqual([e.type for e in events], ["text", "turn_usage", "response", "done"])
         self.assertEqual(events[1].data["input_tokens"], 6335)
         self.assertEqual(events[-1].data["session_id"], SESSION_ID)
         self.assertEqual(events[-1].data["stop_reason"], "complete")
-        self.assertEqual(json.loads(self.processes[0].stdin.lines[0])["message"]["content"], "new user turn")
+        self.assertEqual(self.sent(0), "new user turn")
+
+    # Handoff context: a branch copy or a provider switch reaches agy with a DB
+    # transcript but no agy conversation; without it agy starts with no history.
+    def runner(self, context="USER: earlier task\nASSISTANT: earlier answer", **kwargs):
+        from agentic.agent_runner import AgentRunner
+        kwargs.setdefault("workspace_path", ".")
+        return AgentRunner(provider_type="subscription", api_key="", model_name="gemini-3.8-flash",
+                           conversation_id=11, context=context, **kwargs)
+
+    def sent(self, index, process=0):
+        return json.loads(self.processes[process].stdin.lines[index])["message"]["content"]
+
+    async def test_fresh_session_gets_handoff_context_on_first_turn_only(self):
+        from agentic.agent_runner import _HANDOFF_HEADER
+        runner = self.runner()
+        first = [e async for e in runner._run_agy_session("new user turn")]
+        second = [e async for e in runner._run_agy_session("second turn")]
+        self.assertEqual([first[-1].type, second[-1].type], ["done", "done"])
+        self.assertEqual(self.sent(0), f"new user turn\n\n{_HANDOFF_HEADER}\n{runner.context}")
+        self.assertEqual(self.sent(0).count("new user turn"), 1)
+        self.assertEqual(self.sent(1), "second turn")
+
+    async def test_resumed_session_does_not_get_context_again(self):
+        runner = self.runner(resume_id=SESSION_ID)
+        events = [e async for e in runner._run_agy_session("new user turn")]
+        self.assertEqual(events[-1].type, "done")
+        self.assertIn(SESSION_ID, self.spawns[0][0])
+        self.assertEqual(self.sent(0), "new user turn")
+
+    async def test_session_resumed_from_store_after_close_does_not_get_context(self):
+        agy_session._RESUME_IDS[(11, os.path.abspath("."))] = SESSION_ID
+        events = [e async for e in self.runner()._run_agy_session("new user turn")]
+        self.assertEqual(events[-1].type, "done")
+        self.assertEqual(self.sent(0), "new user turn")
+
+    async def test_empty_context_adds_nothing(self):
+        events = [e async for e in self.runner(context="")._run_agy_session("new user turn")]
+        self.assertEqual(events[-1].type, "done")
+        self.assertEqual(self.sent(0), "new user turn")
+
+    async def test_workspace_change_without_stored_conversation_injects_again(self):
+        from agentic.agent_runner import _HANDOFF_HEADER
+        await self.collect(agy_session.get_session(11, cwd="."))
+        other = str(Path(__file__).parent)
+        runner = self.runner(workspace_path=other)
+        events = [e async for e in runner._run_agy_session("moved turn")]
+        self.assertEqual(events[-1].type, "done")
+        self.assertEqual(self.sent(0, process=1), f"moved turn\n\n{_HANDOFF_HEADER}\n{runner.context}")
 
     async def test_empty_success_response_is_not_replaced_with_fallback(self):
         result = copy.deepcopy(TURNS[0][-1])
