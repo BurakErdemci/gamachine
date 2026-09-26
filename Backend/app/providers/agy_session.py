@@ -113,15 +113,22 @@ def _kill_gated_children() -> list:
     processes = [p for p in _GATED_CHILDREN.values() if p is not None]
     processes += [s._active_process for s in _SESSIONS.values()
                   if getattr(s, "_active_process", None) is not None]
-    survivors = []
+    # A process is listed once per registry it is in; one kill that works stops
+    # it, whatever an earlier attempt raised (verification round 4).
+    stopped, survivors = set(), {}
     for process in processes:
+        if id(process) in stopped:
+            continue
         try:
             process.kill()
         except Exception:
             logger.exception("[agy] could not stop pid=%s", getattr(process, "pid", None))
             if getattr(process, "returncode", None) is None:
-                survivors.append(process)
-    return survivors
+                survivors[id(process)] = process
+                continue
+        stopped.add(id(process))
+        survivors.pop(id(process), None)
+    return list(survivors.values())
 
 
 def tighten_gate_state() -> None:
@@ -306,7 +313,10 @@ class AgyStreamSession(SaglayiciSahipligi):
                 except (asyncio.TimeoutError, asyncio.CancelledError, OSError):
                     self._stderr_task.cancel()
                 self._stderr_task = None
-            if reaped or kill_retry_failed:
+            # A closing child that could not be killed keeps its handle, so a
+            # later close() or spawn retries the kill (verification round 4:
+            # clearing it left no path that could ever stop the child).
+            if reaped or (kill_retry_failed and not self._kapandi):
                 self._active_process = None
                 if self.active_provider is self:
                     self.active_provider = None

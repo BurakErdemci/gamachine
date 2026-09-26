@@ -402,6 +402,39 @@ class TestSpawnAndClose(GateStateCase, unittest.IsolatedAsyncioTestCase):
         await close
         self.assertIs(agy_session._SESSIONS.get(33), reopened)
 
+    async def test_a_later_close_retries_the_kill_of_a_child_that_survived_close(self):
+        """Verification round 4: the failed reap dropped the handle, so no later
+        close could ever stop the child."""
+        approval_mode.set_mode("auto")
+        self.live_session(conversation_id=32)
+        closing = self.live_session(conversation_id=33, unkillable=True)
+        agy_provider.write_gate_state(auto=True)
+        with patch.object(agy_session.asyncio, "sleep", side_effect=_no_sleep):
+            await closing.close()
+        self.assertIsNotNone(closing._active_process)
+        self.assertIs(agy_session._SESSIONS.get(33), closing)
+        closing._active_process.unkillable = False
+        await agy_session.close_session(33)
+        self.assertNotIn(33, agy_session._SESSIONS)
+        self.assertEqual(agy_session._RETIRED, set())
+
+    async def test_no_new_child_starts_while_a_closed_child_survives(self):
+        """Verification round 4: a lone closed child was denied by a "closed"
+        file, and the next spawn's auto write gave it its tools back."""
+        approval_mode.set_mode("auto")
+        closing = self.live_session(conversation_id=33, unkillable=True)
+        agy_provider.write_gate_state(auto=True)
+        close = await self._close_until_retired(closing)
+        self.assertEqual(self.file_mode(), "closed")
+        reopened = agy_session.get_session(33, cwd=self.tmp.name)
+        with patch.object(agy_provider.AgyProvider, "_write_mcp_config", return_value=""),                 patch.object(agy_provider.AgyProvider, "_set_agy_model"),                 patch.object(agy_provider.AgyProvider, "_resolve_exec", side_effect=lambda c: c),                 patch.object(agy_provider.AgyProvider, "_agy_binary", return_value="fake-agy"):
+            with self.assertRaises(agy_provider.AgyStepGateError):
+                await reopened._start("gemini-3.6-flash", self.tmp.name)
+        self.assertEqual(decide(WRITE, self.state)["decision"], "deny")
+        closing._active_process.unkillable = False
+        closing._stop_lock.release()
+        await close
+
     async def test_close_kills_the_child_before_deregistering(self):
         session = self.live_session()
         close = await self._close_until_deregistered(session)

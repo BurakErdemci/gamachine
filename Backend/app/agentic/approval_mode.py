@@ -190,7 +190,15 @@ def set_mode(mode: str, source: str = "ui") -> str:
         if store is not None:
             # Persist before publishing: a mode that is live but not saved would
             # silently revert on the next launch.
-            store.set_setting(_SETTING_KEY, mode)
+            try:
+                store.set_setting(_SETTING_KEY, mode)
+            except Exception:
+                if mode == "step":
+                    # The flip failed, so the gates follow the published mode
+                    # again; else an auto-mode agy child stays denied
+                    # (verification round 4).
+                    _resync_agy_gates()
+                raise
         with _LOCK:
             _mode, _stored, _fresh_install, _from_row = mode, True, False, False
         _propagate_to_live_sessions(mode == "auto")
@@ -210,6 +218,18 @@ def _tighten_agy_gates() -> None:
         # Never imported: this process has spawned no agy child.
         return
     module.tighten_gate_state()
+
+
+def _resync_agy_gates() -> None:
+    """Rewrite agy's hook state file from the published mode. Caller holds
+    GATE_LOCK. Best effort: a failure leaves the file over-restrictive."""
+    module = sys.modules.get("providers.agy_session")
+    if module is None:
+        return
+    try:
+        module._sync_gate_state()
+    except Exception:
+        logger.warning("[approval-mode] agy gate state not restored", exc_info=True)
 
 
 def _propagate_to_live_sessions(auto: bool) -> None:
