@@ -198,3 +198,135 @@ async def test_get_test_job_forwards_job_id(monkeypatch):
     assert resp.success is True
     assert resp.data is not None
     assert resp.data.job_id == "job-1"
+
+
+def _compile_status(*, failed=False, changed=0, compiling=False):
+    return {
+        "is_compiling": compiling, "is_updating": False,
+        "compilation_failed_now": failed, "epoch": 3, "finished_epoch": 3 if not compiling else 2,
+        "last_failed": failed, "reload_done_after_finish": True,
+        "error_count": 1 if failed else 0, "warning_count": 0,
+        "errors": [{"code": "CS0246", "file": "Assets/Tests/ProbeTests.cs", "line": 4}] if failed else [],
+        "scripts_changed_since_compile": {"count": changed, "paths": []},
+    }
+
+
+def _fake_editor(monkeypatch, compile_status, reply):
+    import services.tools.run_tests as mod
+
+    sent = []
+
+    async def fake_send_with_unity_instance(send_fn, unity_instance, command_type, params, **kwargs):
+        sent.append(command_type)
+        if command_type == "get_compile_status":
+            if compile_status is None:
+                return {"success": False, "error": "Unknown or unsupported command type: get_compile_status"}
+            return {"success": True, "data": compile_status}
+        return reply
+
+    monkeypatch.setattr(mod.unity_transport, "send_with_unity_instance", fake_send_with_unity_instance)
+    return sent
+
+
+_STARTED = {"success": True, "data": {"job_id": "abc123", "status": "running", "mode": "EditMode"}}
+
+
+@pytest.mark.asyncio
+async def test_run_tests_refuses_when_scripts_do_not_compile(monkeypatch):
+    from services.tools.run_tests import run_tests
+
+    sent = _fake_editor(monkeypatch, _compile_status(failed=True), _STARTED)
+    resp = await run_tests(DummyContext(), mode="EditMode")
+
+    assert resp.success is False
+    assert resp.error == "compile"
+    assert resp.data["compile"]["verdict"] == "errors"
+    assert resp.data["compile"]["errors"][0]["code"] == "CS0246"
+    assert "run_tests" not in sent
+
+
+@pytest.mark.asyncio
+async def test_run_tests_refuses_when_scripts_changed_since_compile(monkeypatch):
+    from services.tools.run_tests import run_tests
+
+    sent = _fake_editor(monkeypatch, _compile_status(changed=2), _STARTED)
+    resp = await run_tests(DummyContext(), mode="EditMode")
+
+    assert resp.success is False
+    assert resp.data["compile"]["verdict"] == "stale"
+    assert "refresh_unity" in resp.message
+    assert "run_tests" not in sent
+
+
+@pytest.mark.asyncio
+async def test_run_tests_busy_while_compiling(monkeypatch):
+    from services.tools.run_tests import run_tests
+
+    sent = _fake_editor(monkeypatch, _compile_status(compiling=True), _STARTED)
+    resp = await run_tests(DummyContext(), mode="EditMode")
+
+    assert resp.success is False
+    assert resp.error == "busy"
+    assert resp.hint == "retry"
+    assert "run_tests" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [_compile_status(), None], ids=["clean", "unsupported"])
+async def test_run_tests_starts_when_compile_is_clean_or_unknown(monkeypatch, status):
+    from services.tools.run_tests import run_tests
+
+    sent = _fake_editor(monkeypatch, status, _STARTED)
+    resp = await run_tests(DummyContext(), mode="EditMode")
+
+    assert resp.success is True
+    assert resp.data.job_id == "abc123"
+    assert sent[-1] == "run_tests"
+
+
+def _finished(total, status="succeeded"):
+    return {"success": True, "data": {
+        "job_id": "abc123", "status": status, "mode": "EditMode",
+        "result": {"mode": "EditMode", "summary": {
+            "total": total, "passed": total, "failed": 0, "skipped": 0,
+            "durationSeconds": 0.1, "resultState": "Passed"}},
+    }}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait_timeout", [None, 5])
+async def test_get_test_job_zero_tests_with_compile_errors_is_a_failure(monkeypatch, wait_timeout):
+    from services.tools.run_tests import get_test_job
+
+    _fake_editor(monkeypatch, _compile_status(failed=True), _finished(0))
+    resp = await get_test_job(DummyContext(), job_id="abc123", wait_timeout=wait_timeout)
+
+    assert resp.success is False
+    assert resp.error == "compile"
+    assert resp.data["status"] == "failed"
+    assert resp.data["compile"]["verdict"] == "errors"
+    assert resp.message.startswith("The run found 0 tests.")
+
+
+@pytest.mark.asyncio
+async def test_get_test_job_zero_tests_with_clean_compile_stays_green(monkeypatch):
+    from services.tools.run_tests import get_test_job
+
+    _fake_editor(monkeypatch, _compile_status(), _finished(0))
+    resp = await get_test_job(DummyContext(), job_id="abc123")
+
+    assert resp.success is True
+    assert resp.data.status == "succeeded"
+    assert resp.data.compile["verdict"] == "clean"
+
+
+@pytest.mark.asyncio
+async def test_get_test_job_with_tests_does_not_read_compile_status(monkeypatch):
+    from services.tools.run_tests import get_test_job
+
+    sent = _fake_editor(monkeypatch, _compile_status(failed=True), _finished(4))
+    resp = await get_test_job(DummyContext(), job_id="abc123")
+
+    assert resp.success is True
+    assert resp.data.result.summary.total == 4
+    assert "get_compile_status" not in sent

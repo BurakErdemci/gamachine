@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from models import MCPResponse
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
+from services.tools.compile_status import live_verdict, read_compile_status
 from services.tools.preflight import preflight
 import transport.unity_transport as unity_transport
 from transport.legacy.unity_connection import async_send_command_with_retry
@@ -137,15 +138,59 @@ class GetTestJobData(BaseModel):
     progress: TestJobProgress | None = None
     error: str | None = None
     result: RunTestsResult | None = None
+    compile: dict[str, Any] | None = None
 
 
 class GetTestJobResponse(MCPResponse):
     data: GetTestJobData | None = None
 
 
+# With scripts that do not compile, Unity keeps the last good assemblies loaded: a test
+# assembly that just failed to compile is simply absent, and the run reports
+# "succeeded" with 0 tests.
+_UNTRUSTED_COMPILE = ("errors", "stale")
+
+
+async def _compile_verdict(unity_instance: str | None) -> dict[str, Any]:
+    read = await read_compile_status(
+        unity_instance, scan=True, attempts=2,
+        send_fn=async_send_command_with_retry, route_fn=unity_transport.send_with_unity_instance)
+    return live_verdict(read.status, read.problem)
+
+
+def _compile_refusal(verdict: dict[str, Any]) -> MCPResponse:
+    kind = verdict["verdict"]
+    if kind == "errors":
+        message = ("Scripts do not compile (data.compile lists the errors). Tests would run against the "
+                   "last good assemblies, and a test assembly that failed to compile would report 0 tests. "
+                   "Fix the errors, then run the tests again.")
+    else:
+        message = ("Script files changed on disk since the last compile; tests would run the old code. "
+                   "Call refresh_unity(compile='request') and run the tests once its verdict is clean.")
+    return MCPResponse(success=False, error="compile", message=message, data={"compile": verdict})
+
+
+async def _judge_finished_job(response: dict[str, Any], unity_instance: str | None) -> GetTestJobResponse | MCPResponse:
+    data = response.get("data") or {}
+    summary = ((data.get("result") or {}).get("summary") or {})
+    if data.get("status") != "succeeded" or summary.get("total") != 0:
+        return GetTestJobResponse(**response)
+    verdict = await _compile_verdict(unity_instance)
+    if verdict["verdict"] in _UNTRUSTED_COMPILE:
+        refusal = _compile_refusal(verdict)
+        refusal.message = "The run found 0 tests. " + refusal.message
+        refusal.data = {**data, "status": "failed", "compile": verdict}
+        return refusal
+    return GetTestJobResponse(**{**response, "data": {**data, "compile": verdict}})
+
+
 @mcp_for_unity_tool(
     group="testing",
-    description="Starts a Unity test run asynchronously and returns a job_id immediately. Poll with get_test_job for progress.",
+    description=(
+        "Starts a Unity test run asynchronously and returns a job_id immediately. Poll with get_test_job for progress. "
+        "Refuses with error='compile' and data.compile (the compile_status verdict) when scripts do not compile or "
+        "changed on disk since the last compile, since the run would test old assemblies."
+    ),
     annotations=ToolAnnotations(
         title="Run Tests",
         destructiveHint=True,
@@ -196,6 +241,13 @@ async def run_tests(
     if isinstance(gate, MCPResponse):
         return gate
 
+    verdict = await _compile_verdict(unity_instance)
+    if verdict["verdict"] in _UNTRUSTED_COMPILE:
+        return _compile_refusal(verdict)
+    if verdict["verdict"] in ("compiling", "pending"):
+        return MCPResponse(success=False, error="busy", message="compiling", hint="retry",
+                           data={"reason": "compiling", "retry_after_ms": 500, "compile": verdict})
+
     def _coerce_string_list(value) -> list[str] | None:
         if value is None:
             return None
@@ -238,7 +290,10 @@ async def run_tests(
 
 @mcp_for_unity_tool(
     group="testing",
-    description="Polls an async Unity test job by job_id.",
+    description=(
+        "Polls an async Unity test job by job_id. A finished run with 0 tests carries data.compile; if scripts "
+        "do not compile or are stale it is reported as a failure (error='compile'), not a green result."
+    ),
     annotations=ToolAnnotations(
         title="Get Test Job",
         readOnlyHint=True,
@@ -294,7 +349,7 @@ async def get_test_job(
             data = response.get("data", {})
             status = data.get("status", "")
             if status in ("succeeded", "failed", "cancelled"):
-                return GetTestJobResponse(**response)
+                return await _judge_finished_job(response, unity_instance)
 
             # Detect progress and reset exponential backoff
             last_update_unix_ms = data.get("last_update_unix_ms")
@@ -366,4 +421,4 @@ async def get_test_job(
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
 
-    return GetTestJobResponse(**response)
+    return await _judge_finished_job(response, unity_instance)
