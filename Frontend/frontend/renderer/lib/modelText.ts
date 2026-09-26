@@ -16,7 +16,14 @@
  * the stake is higher than in a notice — the label is not just read, it is the
  * value submitted back, so what the user picks can differ from what they saw.
  *
- * Nothing in this product legitimately needs these characters.
+ * Invisible zero-width characters go too (U+200B zero width space, U+2060 word
+ * joiner, U+FEFF zero width no-break space): they draw nothing, so two
+ * different strings look identical on screen. Removing them only drops a line
+ * break hint. U+200C and U+200D are kept: Persian and Indic words are spelled
+ * with the first, emoji sequences are built with the second.
+ *
+ * Nothing in this product legitimately needs the removed characters. The main
+ * process notifier (`main/helpers/notify.ts`) removes the same ones.
  */
 export const stripBidi = (s: string): string =>
-  s.replace(/[\u061C\u202A-\u202E\u2066-\u2069\u200E\u200F]/g, '');
+  s.replace(/[\u061C\u202A-\u202E\u2066-\u2069\u200B\u200E\u200F\u2060\uFEFF]/g, '');

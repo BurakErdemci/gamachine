@@ -919,7 +919,9 @@ export const useChat = (
       }
       fetchConversations(user.id);
     } catch (err: any) {
-      if (err?.name !== 'AbortError' && ownsTurn()) {
+      // After `done`/`response` the answer is complete and the server has it;
+      // a later failure is not the user's to see, and must not block the refetch.
+      if (err?.name !== 'AbortError' && ownsTurn() && !finishedCleanly) {
         lossy = true;
         updateMessages(prev => [...prev, { id: Date.now() + 2, role: 'assistant', content: cevir('chat.errorOccurred'), smells: [], timestamp: new Date().toISOString() }]);
       }

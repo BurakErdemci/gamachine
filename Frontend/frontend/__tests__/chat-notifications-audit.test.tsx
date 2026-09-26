@@ -2,6 +2,8 @@
  * Desktop notification cases found by the Codex audit of 6e4d1a6
  * (.delegate-runs/ARCHIVE/2026-09-26-notifyaudit): an open on-screen file card,
  * a transport error after `done`, seen-id pruning, and the Arabic Letter Mark.
+ * Deferred findings of the same audit: zero-width characters, a second queued
+ * file card, and the error bubble after `done`.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import React from 'react'
@@ -23,7 +25,7 @@ const mockedAxios = axios as unknown as { get: ReturnType<typeof vi.fn> }
 const API = 'http://127.0.0.1:8000'
 const USER = { id: 1, sessionToken: 'tok' } as any
 const CONFIG = { provider_type: 'subscription', model_name: 'claude-opus-5' } as any
-const CONVS = [{ id: 1, title: 'Alpha' }] as any[]
+const CONVS = [{ id: 1, title: 'Alpha' }, { id: 2, title: 'Beta' }] as any[]
 const enc = (ev: object) => new TextEncoder().encode(`data: ${JSON.stringify(ev)}\n\n`)
 
 function makeStream() {
@@ -127,6 +129,38 @@ describe('notification audit cases', () => {
     expect(api.chat.attention[1].turnEnd?.failed).toBe(true)
     expect(notes().map(n => n.body)).toEqual([cevir('notify.failed', { baslik: 'Alpha' })])
   })
+
+  it('announces one wait once when a second file card follows an open one', async () => {
+    await setup()
+    stream.push({ type: 'pending_delete', path: '/ws/x' })
+    await flush()
+    stream.push({ type: 'pending_delete', path: '/ws/y' })
+    await flush()
+    expect(notes().map(n => n.body)).toEqual([cevir('notify.awaiting', { baslik: 'Alpha' })])
+  })
+
+  it('adds no error bubble when a read fails after done', async () => {
+    await setup()
+    stream.push({ type: 'text', content: 'all good' })
+    stream.push({ type: 'done' })
+    await flush()
+    stream.fail(new Error('connection reset after done'))
+    await flush()
+    expect(api.chat.messages.map(m => m.content)).not.toContain(cevir('chat.errorOccurred'))
+  })
+
+  it('still refetches a background chat whose read failed after done', async () => {
+    await setup()
+    stream.push({ type: 'done' })
+    await flush()
+    await act(async () => { await api.chat.selectConversation(CONVS[1]) })
+    await flush()
+    mockedAxios.get.mockClear()
+    stream.fail(new Error('connection reset after done'))
+    await flush()
+    const urls = mockedAxios.get.mock.calls.map(c => String(c[0]))
+    expect(urls).toContain(`${API}/conversations/1/messages`)
+  })
 })
 
 describe('seen-id pruning', () => {
@@ -163,5 +197,26 @@ describe('Arabic Letter Mark', () => {
     expect(parsed!.title).not.toContain('؜')
     expect(parsed!.body).not.toContain('؜')
     expect(stripBidi('a؜b')).toBe('ab')
+  })
+})
+
+describe('zero-width characters', () => {
+  // U+200B zero width space, U+2060 word joiner, U+FEFF zero width no-break space.
+  const hidden = 'sa​fe⁠na﻿me'
+
+  it('are removed from notification text and from stripBidi', () => {
+    const parsed = parseNotifyPayload({ title: hidden, body: hidden })
+    expect(parsed!.title).toBe('safename')
+    expect(parsed!.body).toBe('safename')
+    expect(stripBidi(hidden)).toBe('safename')
+  })
+
+  it('keeps joiners that legitimate text needs', () => {
+    // U+200D builds emoji sequences; U+200C is part of Persian and Indic spelling.
+    const family = '\u{1F468}‍\u{1F469}‍\u{1F467}'
+    const persian = 'می‌خواهم'
+    expect(parseNotifyPayload({ title: family, body: persian })).toEqual({ title: family, body: persian })
+    expect(stripBidi(family)).toBe(family)
+    expect(stripBidi(persian)).toBe(persian)
   })
 })

@@ -23,9 +23,14 @@ const ALLOWED_KEYS = new Set(['title', 'body', 'conversationId'])
 // C0/C1 controls and bidi overrides/isolates. A toast is plain text; none of
 // these carry meaning there, and the bidi ones can reorder what is read.
 const UNSAFE_CHARS = /[\u0000-\u001F\u007F-\u009F\u061C\u202A-\u202E\u2066-\u2069\u200E\u200F]/g
+// Zero width space, word joiner, zero width no-break space: they draw nothing,
+// so two different strings look identical. Deleted rather than spaced, so the
+// toast reads as the chat title does on screen (`stripBidi` removes the same
+// ones). U+200C/U+200D stay: Persian/Indic spelling and emoji sequences need them.
+const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/g
 
 const clean = (s: string, max: number): string => {
-  const flat = s.replace(UNSAFE_CHARS, ' ').replace(/\s+/g, ' ').trim()
+  const flat = s.replace(ZERO_WIDTH, '').replace(UNSAFE_CHARS, ' ').replace(/\s+/g, ' ').trim()
   // Code points, not UTF-16 units, so a cut never splits a surrogate pair.
   const chars = Array.from(flat)
   return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : flat

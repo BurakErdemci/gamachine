@@ -94,6 +94,7 @@ export const useChatNotifications = ({
     syncedBeforeRef.current = bridgeSynced;
     const attended = windowAttended();
     const awaitingBefore = awaitingBeforeRef.current;
+    const awaitingNow: Record<number, boolean> = {};
     const out: NotifyPayload[] = [];
 
     for (const [key, a] of Object.entries(attention)) {
@@ -104,6 +105,7 @@ export const useChatNotifications = ({
       const newBridge = a.bridgeGates.map(g => fresh(`${id}|bridge:${g}`)).includes(true) && !baseline;
       const ended = a.turnEnd && fresh(`${id}|turn:${a.turnEnd.seq}`) ? a.turnEnd : null;
       const awaiting = a.awaiting || (id === activeConvId && screenCardOpen);
+      awaitingNow[id] = awaiting;
       if (id === activeConvId && attended) continue;
       const name = () => chatName(conversationsRef.current, id);
       if ((newApproval || newBridge) && !awaitingBefore[id]) {
@@ -122,8 +124,9 @@ export const useChatNotifications = ({
     // The tray sits outside every chat, so a focused window is enough to see it.
     if (newTray && !attended) out.push({ title: cevir('notify.title'), body: cevir('notify.trayAwaiting') });
 
-    awaitingBeforeRef.current = Object.fromEntries(
-      Object.entries(attention).map(([key, a]) => [key, a.awaiting]));
+    // The on-screen card counts: it lives in the page's slot, not in the chat's
+    // runtime, so `a.awaiting` alone let a second card read as a new wait.
+    awaitingBeforeRef.current = awaitingNow;
     // Evict the oldest ids that are not present now (Set iteration is
     // insertion order). The old prune replaced the set with only the present
     // ids, so a briefly absent id fired again right after 2000 events (Codex
