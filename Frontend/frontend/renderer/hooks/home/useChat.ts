@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import axios from 'axios';
 import { Message, Conversation, UserData, AIConfig, GenerationMode, ChatActivity, ContextUsage } from '../../components/home/types';
 import { PendingFile } from '../../components/home/FileCreationApproval';
@@ -11,6 +11,66 @@ import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
 
+type PendingCommand = { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' };
+type PendingQuestion = { questions: any[]; gateId: string; messageId: number };
+type SetArg<T> = T | ((prev: T) => T);
+const resolveArg = <T,>(arg: SetArg<T>, prev: T): T =>
+  typeof arg === 'function' ? (arg as (p: T) => T)(prev) : arg;
+
+export type ConvStatus = 'running' | 'awaiting' | 'unread';
+
+/**
+ * Everything one conversation owns while it runs. Parallel chats (Phase 3):
+ * a turn keeps streaming after the user opens another chat, so every write a
+ * turn makes goes to ITS conversation's entry. There used to be one shared
+ * copy of all of this, and a background turn wrote into whatever was on
+ * screen (measured: A's answer under B, Stop in B aborting A).
+ */
+interface ConvRuntime {
+  messages: Message[];
+  loading: boolean;
+  // Canlı aktivite: Claude'un o an ne yaptığı (düşünüyor/araç/subagent) + token sayacı.
+  // Backend status event'lerinden beslenir; done/error/stop'ta temizlenir.
+  activity: ChatActivity | null;
+  // `null` means "no reading available", NOT "the context is empty". A truthy
+  // `{percent: 0, estimated: true}` placeholder used to sit here and stayed put
+  // when the context request failed, so a request that only ever errored was
+  // drawn as a confident near-empty gauge. The gauge renders the unavailable
+  // state itself (ControlPanel: `usage.noData`).
+  contextUsage: ContextUsage | null;
+  // Paralel araç çağrılarında (ör. Bash + Write, ya da iki Write) birden fazla
+  // onay/soru aynı anda gelebilir. Tek state'te tutarsak ikincisi birincisini EZER
+  // ve ezilen gate 300sn bekleyip tıkanır ("düşünüyor"da kalır). Bu yüzden bekleyen
+  // ek onay/soruları kuyruğa alıp tek tek gösteririz; biri çözülünce sıradaki açılır.
+  pendingCommand: PendingCommand | null;
+  commandQueue: PendingCommand[];
+  pendingQuestion: PendingQuestion | null;
+  questionQueue: PendingQuestion[];
+  // File cards (generated files, delete) live in useFileSystem's single slot,
+  // which only the chat on screen may fill. A background chat's card waits
+  // here and is handed over when that chat is opened.
+  parkedCards: Array<() => void>;
+  // A turn finished while another chat was on screen.
+  unread: boolean;
+  // The client copy holds something the server copy would drop (notices, an
+  // error bubble, a card bound to a client message id), so opening the chat
+  // shows it as is instead of refetching.
+  unsynced: boolean;
+}
+
+const EMPTY_RUNTIME: ConvRuntime = {
+  messages: [], loading: false, activity: null, contextUsage: null,
+  pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
+  parkedCards: [], unread: false, unsynced: false,
+};
+
+// Runtime key while no conversation is selected. Database ids start at 1.
+const NO_CONV = 0;
+const keyOf = (id: number | null | undefined) => id ?? NO_CONV;
+
+const hasClientState = (r: ConvRuntime) =>
+  r.loading || !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0 || r.unsynced;
+
 export const useChat = (
   API: string,
   user: UserData | null,
@@ -21,24 +81,69 @@ export const useChat = (
   suggestFilePath: (name: string) => string
 ) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConvId, setActiveConvId] = useState<number | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [activeConvId, setActiveConvIdState] = useState<number | null>(null);
+  // Stream loops, the Stop button and the wake channel outlive the render that
+  // created them; they read the chat on screen from here, never from a closure.
+  const activeConvIdRef = useRef<number | null>(null);
+  const setActiveConvId = useCallback((id: number | null) => {
+    activeConvIdRef.current = id;
+    setActiveConvIdState(id);
+  }, []);
+
+  // Writes land in the ref first, so consecutive stream events see each
+  // other's result in event order (the old per-field updaters needed
+  // workarounds for React running them later); the state is the render copy.
+  const runtimesRef = useRef<Record<number, ConvRuntime>>({});
+  const [runtimes, setRuntimes] = useState<Record<number, ConvRuntime>>({});
+  const rt = useCallback((id: number) => runtimesRef.current[id] ?? EMPTY_RUNTIME, []);
+  const patchConv = useCallback((id: number, fn: (r: ConvRuntime) => Partial<ConvRuntime>) => {
+    const cur = runtimesRef.current[id] ?? EMPTY_RUNTIME;
+    runtimesRef.current = { ...runtimesRef.current, [id]: { ...cur, ...fn(cur) } };
+    setRuntimes(runtimesRef.current);
+  }, []);
+  const dropConv = useCallback((id: number) => {
+    const { [id]: _gone, ...rest } = runtimesRef.current;
+    runtimesRef.current = rest;
+    setRuntimes(rest);
+  }, []);
+
+  const screen = runtimes[keyOf(activeConvId)] ?? EMPTY_RUNTIME;
+  const messages = screen.messages;
+  const loading = screen.loading;
+  const activity = screen.activity;
+  const contextUsage = screen.contextUsage;
+
+  const setMessages = useCallback((arg: SetArg<Message[]>) => {
+    patchConv(keyOf(activeConvIdRef.current), r => ({ messages: resolveArg(arg, r.messages) }));
+  }, [patchConv]);
+  const setLoading = useCallback((arg: SetArg<boolean>) => {
+    patchConv(keyOf(activeConvIdRef.current), r => ({ loading: resolveArg(arg, r.loading) }));
+  }, [patchConv]);
+  const setContextUsage = useCallback((arg: SetArg<ContextUsage | null>) => {
+    patchConv(keyOf(activeConvIdRef.current), r => ({ contextUsage: resolveArg(arg, r.contextUsage) }));
+  }, [patchConv]);
+  const setPendingQuestion = useCallback((arg: SetArg<PendingQuestion | null>) => {
+    patchConv(keyOf(activeConvIdRef.current), r => ({ pendingQuestion: resolveArg(arg, r.pendingQuestion) }));
+  }, [patchConv]);
+
+  // The exported command setter is the GLOBAL path: `useMCPApproval` fills it
+  // from `/mcp-pending`, which names no conversation. Until the backend says
+  // which chat a bridge request belongs to (slice 2) the card is not assigned
+  // to one; it shows in whatever chat is on screen, as before. Cards from a
+  // chat's own SSE stream never go through here.
+  const globalCommandRef = useRef<PendingCommand | null>(null);
+  const [globalCommand, setGlobalCommand] = useState<PendingCommand | null>(null);
+  const setPendingCommand = useCallback((arg: SetArg<PendingCommand | null>) => {
+    globalCommandRef.current = resolveArg(arg, globalCommandRef.current);
+    setGlobalCommand(globalCommandRef.current);
+  }, []);
+  const pendingCommand = globalCommand ?? screen.pendingCommand;
+  const pendingQuestion = screen.pendingQuestion;
+
   const [chatInput, setChatInput] = useState('');
-  // `null` means "no reading available", NOT "the context is empty". A truthy
-  // `{percent: 0, estimated: true}` placeholder used to sit here and stayed put
-  // when the context request failed, so a request that only ever errored was
-  // drawn as a confident near-empty gauge. The gauge renders the unavailable
-  // state itself (ControlPanel: `usage.noData`).
-  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [isCompacting, setIsCompacting] = useState(false);
   const [isAnalyzingProject, setIsAnalyzingProject] = useState(false);
   const [pendingFix, setPendingFix] = useState<{ data: any; messageId?: number; applied?: boolean } | null>(null);
-  const [pendingCommand, setPendingCommand] = useState<{ command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' } | null>(null);
-  const [pendingQuestion, setPendingQuestion] = useState<{ questions: any[]; gateId: string; messageId: number } | null>(null);
-  // Canlı aktivite: Claude'un o an ne yaptığı (düşünüyor/araç/subagent) + token sayacı.
-  // Backend status event'lerinden beslenir; done/error/stop'ta temizlenir.
-  const [activity, setActivity] = useState<ChatActivity | null>(null);
   // The approval mode is global and lives in the backend (closed-loop.md §5):
   // external MCP clients carry no request, so a per-request field could never
   // make them auto. Until the backend answers, the UI shows step - the safe side
@@ -99,22 +204,25 @@ export const useChat = (
       const applied: GenerationMode = out?.mode === 'auto' ? 'auto' : 'step';
       setGenerationModeState(applied);
       if (applied === 'auto') {
-        // The backend approved every open card on the switch; drop the in-chat ones.
-        pendingCommandQueueRef.current = [];
+        // The backend approved every open card on the switch; drop the in-chat
+        // ones - in every chat, since the mode is global.
         setPendingCommand(null);
+        for (const id of Object.keys(runtimesRef.current)) {
+          patchConv(Number(id), () => ({ pendingCommand: null, commandQueue: [] }));
+        }
       }
     } catch (e) {
       showToast(cevir('mode.writeFailed', { hata: e instanceof Error ? e.message : String(e) }), 'error');
     }
-  }, [showToast]);
-  
-  const abortControllerRef = useRef<AbortController | null>(null);
-  // Paralel araç çağrılarında (ör. Bash + Write, ya da iki Write) birden fazla
-  // onay/soru aynı anda gelebilir. Tek state'te tutarsak ikincisi birincisini EZER
-  // ve ezilen gate 300sn bekleyip tıkanır ("düşünüyor"da kalır). Bu yüzden bekleyen
-  // ek onay/soruları kuyruğa alıp tek tek gösteririz; biri çözülünce sıradaki açılır.
-  const pendingCommandQueueRef = useRef<Array<{ command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' }>>([]);
-  const pendingQuestionQueueRef = useRef<Array<{ questions: any[]; gateId: string; messageId: number }>>([]);
+  }, [showToast, patchConv, setPendingCommand]);
+
+  // One controller per conversation: Stop in one chat must abort that chat's
+  // stream only.
+  const controllersRef = useRef<Map<number, AbortController>>(new Map());
+  // The turn currently owning each conversation (its assistant message id). A
+  // stopped or superseded stream loop checks it and stops writing, so a late
+  // chunk of an old turn cannot touch the next turn's cards or loading flag.
+  const turnRef = useRef<Map<number, number>>(new Map());
   // AUTO-WAKE: arguments needed to start a turn that this hook does NOT own
   // (language, generation mode, thinking level, and two card setters live in
   // the page component). Since a wake turn starts without user input, it
@@ -141,15 +249,15 @@ export const useChat = (
     if (!API) return;
     try {
       const res = await axios.get(`${API}/conversations/${convId}/context-usage`);
-      setContextUsage(res.data);
+      patchConv(convId, () => ({ contextUsage: res.data }));
     } catch (err) {
       // Keeping the previous reading would attribute a number to a request that
       // failed; falling back to zero would invent one. Only `null` says what
       // actually happened — we do not know.
-      setContextUsage(null);
+      patchConv(convId, () => ({ contextUsage: null }));
       console.error('Bağlam göstergesi hatası:', err);
     }
-  }, [API]);
+  }, [API, patchConv]);
 
   // `/context` raporu geldiğinde göstergeyi TAHMİNDEN gerçek sayıya çevir.
   // Kaba tahmin (harf/200k) modele giden bağlamın en hacimli parçalarını
@@ -167,26 +275,38 @@ export const useChat = (
       estimated: false,
       real: { used: r.used, total: r.total, model: r.model },
     }));
-  }, []);
+  }, [setContextUsage]);
 
   const fetchMessages = useCallback(async (convId: number) => {
     if (!API) return;
     try {
       const res = await axios.get(`${API}/conversations/${convId}/messages`);
-      setMessages(res.data);
+      // A turn that started while this request was out owns the list now: the
+      // server copy has neither its placeholder nor its streamed text yet.
+      if (!rt(convId).loading) patchConv(convId, () => ({ messages: res.data, unsynced: false }));
       await refreshContextUsage(convId);
     } catch (err) { console.error("Mesaj hatası:", err); }
-  }, [API, refreshContextUsage]);
+  }, [API, patchConv, refreshContextUsage, rt]);
 
   const selectConversation = useCallback(async (conv: Conversation) => {
     if (editingId) return;
     setActiveConvId(conv.id);
+    // Switching never cancels anything. A chat whose client copy holds more
+    // than the server's (a running turn, an open card bound to a client
+    // message id, a background turn not yet synced) is shown as it is;
+    // refetching would replace the live list and orphan its cards.
+    const r = rt(conv.id);
+    if (hasClientState(r)) {
+      patchConv(conv.id, () => ({ unread: false, unsynced: false, parkedCards: [] }));
+      r.parkedCards.forEach(handOver => handOver());
+      return;
+    }
     // Nothing has been measured for the new conversation yet — the previous
     // conversation's reading must not carry over, and a zero placeholder would
     // be a claim about a conversation we have not looked at.
-    setContextUsage(null);
+    patchConv(conv.id, () => ({ contextUsage: null, unread: false }));
     await fetchMessages(conv.id);
-  }, [editingId, fetchMessages]);
+  }, [editingId, fetchMessages, patchConv, rt, setActiveConvId]);
 
   const deleteConversation = useCallback(async (e: React.MouseEvent, convId: number) => {
     e.stopPropagation();
@@ -194,13 +314,16 @@ export const useChat = (
     if (!(await confirmDialog(cevir('chat.deleteConfirm')))) return;
     try {
       await axios.delete(`${API}/conversations/${convId}`);
-      if (activeConvId === convId) {
-        setActiveConvId(null);
-        setMessages([]);
-      }
+      // Clearing the turn first makes a still-running loop stop writing, so the
+      // deleted chat's entry is not recreated by a late chunk.
+      turnRef.current.delete(convId);
+      controllersRef.current.get(convId)?.abort();
+      controllersRef.current.delete(convId);
+      dropConv(convId);
+      if (activeConvIdRef.current === convId) setActiveConvId(null);
       fetchConversations(user.id);
     } catch (err) { console.error("Sohbet silme hatası:", err); }
-  }, [API, activeConvId, fetchConversations, user]);
+  }, [API, dropConv, fetchConversations, setActiveConvId, user]);
 
   const saveRename = useCallback(async (convId: number) => {
     if (!tempTitle.trim()) { setEditingId(null); return; }
@@ -217,11 +340,31 @@ export const useChat = (
     try {
       const res = await axios.post(`${API}/conversations`, { user_id: user.id, title: baslik });
       await fetchConversations(user.id);
+      patchConv(res.data.id, () => ({ ...EMPTY_RUNTIME }));
       setActiveConvId(res.data.id);
-      setMessages([]);
       return res.data.id;
     } catch (err) { console.error("Yeni sohbet hatası:", err); return null; }
-  }, [API, fetchConversations, user]);
+  }, [API, fetchConversations, patchConv, setActiveConvId, user]);
+
+  // A turn that finished off screen is re-read from the server once, so its
+  // ids and persisted content line up. Only called for a clean finish with
+  // nothing client-only on it: the server list carries no notices, error
+  // bubbles or slash cards, and re-iding the list would orphan an open card.
+  const syncFinished = useCallback(async (convId: number) => {
+    const notSyncable = (r: ConvRuntime) =>
+      !r.unsynced || r.loading || !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0;
+    if (!API || notSyncable(rt(convId))) return;
+    try {
+      const res = await axios.get(`${API}/conversations/${convId}/messages`);
+      // Opened in the meantime (the user is reading the live copy) or a new
+      // turn started: the server copy would replace what is being looked at.
+      if (notSyncable(rt(convId))) return;
+      patchConv(convId, () => ({ messages: res.data, unsynced: false }));
+      await refreshContextUsage(convId);
+    } catch {
+      // The live copy stays; opening the chat shows it.
+    }
+  }, [API, patchConv, refreshContextUsage, rt]);
 
   const sendMessage = useCallback(async (
     messageContent: string, 
@@ -236,24 +379,48 @@ export const useChat = (
     videos?: any[],                // [{kind:'path',path} | {kind:'url',url}] → converted to frames by the backend
     // 'wake' = a turn the client starts BY ITSELF once a background job finishes.
     // The backend stores this with the `system` role and runs the consecutive-wake counter.
-    origin: 'user' | 'wake' = 'user'
+    origin: 'user' | 'wake' = 'user',
+    // The wake channel names its own conversation; a user send goes to the chat on screen.
+    targetOverride?: number
   ) => {
-    if (loading || !user || !API) return;
-    setLoading(true);
+    if (!user || !API) return;
+    const requested = targetOverride ?? activeConvIdRef.current;
+    // Only THIS chat's running turn blocks a send; other chats run independently.
+    if (rt(keyOf(requested)).loading) return;
+    patchConv(keyOf(requested), () => ({ loading: true }));
     if (origin === 'user') {
       lastSendArgsRef.current = { lang, genMode, thinkingLevel, setPendingGenFiles, setPendingDelete };
     }
-    // Yeni tur: önceki turdan kalmış olabilecek bekleyen onay/soru ve kuyrukları temizle
-    pendingCommandQueueRef.current = [];
-    pendingQuestionQueueRef.current = [];
-    setPendingCommand(null);
-    setPendingQuestion(null);
 
-    let targetConvId = activeConvId;
-    if (!targetConvId) {
-      targetConvId = await createNewConversation();
-      if (!targetConvId) { setLoading(false); return; }
+    let created: number | null = null;
+    if (!requested) {
+      // The no-conversation slot held `loading` only to refuse a double send
+      // while the conversation is being created.
+      created = await createNewConversation();
+      patchConv(NO_CONV, () => ({ loading: false }));
+      if (!created) return;
+      patchConv(created, () => ({ loading: true }));
     }
+    const targetConvId: number = requested || created!;
+    // Yeni tur: bu sohbetin önceki turundan kalmış bekleyen onay/soru ve
+    // kuyruklarını temizle - yalnız bu sohbetin; başka sohbetin kartı onun.
+    patchConv(targetConvId, () => ({
+      pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
+      unread: false, unsynced: false,
+    }));
+    const updateMessages = (fn: (prev: Message[]) => Message[]) =>
+      patchConv(targetConvId, r => ({ messages: fn(r.messages) }));
+    const onScreen = () => activeConvIdRef.current === targetConvId;
+    // File cards go straight to useFileSystem's slot only while this chat is
+    // on screen; otherwise they wait in this chat's entry (see `parkedCards`).
+    const fileCard = (handOver: () => void) => {
+      if (onScreen()) handOver();
+      else patchConv(targetConvId, r => ({ parkedCards: [...r.parkedCards, handOver] }));
+    };
+    // Anything the server copy will not carry (notice, error text, slash card)
+    // makes an off-screen refresh lossy; then the live copy is kept instead.
+    let lossy = false;
+    let finishedCleanly = false;
 
     const userMsg: Message = { 
       id: Date.now(), 
@@ -263,7 +430,7 @@ export const useChat = (
       timestamp: new Date().toISOString(),
       images: images 
     };
-    setMessages(prev => [...prev, userMsg]);
+    updateMessages(prev => [...prev, userMsg]);
     setChatInput('');
 
     // Özel kart render edilen slash komutları → asistan mesajını etiketle.
@@ -281,7 +448,12 @@ export const useChat = (
 
     const aiMsgId = Date.now() + 1;
     let currentAiMsg: Message = { id: aiMsgId, role: 'assistant', content: '', smells: [], timestamp: new Date().toISOString(), thinking: null, tool_calls: [], slashCommand: slashCard };
-    setMessages(prev => [...prev, currentAiMsg]);
+    updateMessages(prev => [...prev, currentAiMsg]);
+    if (slashCard) lossy = true;
+    turnRef.current.set(targetConvId, aiMsgId);
+    const ownsTurn = () => turnRef.current.get(targetConvId) === aiMsgId;
+    const controller = new AbortController();
+    controllersRef.current.set(targetConvId, controller);
 
     // D4-02 (audit, high): a `{kind:'path', path}` video entry carries a HOST
     // path from the folder picker (`open-video-dialog`). In Docker mode the
@@ -316,10 +488,9 @@ export const useChat = (
     }
 
     try {
-      abortControllerRef.current = new AbortController();
       const response = await fetch(`${API}/chat-stream`, {
         method: 'POST',
-        signal: abortControllerRef.current.signal,
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json', 'X-Session-Token': user.sessionToken },
         body: JSON.stringify({
           conversation_id: targetConvId, message: messageContent, language: lang, user_id: user.id,
@@ -344,16 +515,22 @@ export const useChat = (
       const decoder = new TextDecoder('utf-8');
       if (reader) {
         let buffer = '';
-        while (true) {
+        while (ownsTurn()) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n\n');
           buffer = lines.pop() || '';
           for (const line of lines) {
+            // Stopped, superseded by a new turn, or the chat was deleted.
+            if (!ownsTurn()) break;
             if (line.startsWith('data: ')) {
               const data = JSON.parse(line.slice(6));
-              setMessages(prev => prev.map(msg => {
+              // Events carry no conversation id today. If they ever do, one
+              // that names another chat is not this stream's to apply.
+              if (data.conversation_id != null && Number(data.conversation_id) !== targetConvId) continue;
+              if (data.type === 'done' || data.type === 'response') finishedCleanly = true;
+              updateMessages(prev => prev.map(msg => {
                 if (msg.id === aiMsgId) {
                   const updated = { ...msg };
                   if (data.type === 'thinking') updated.thinking = (updated.thinking || '') + (data.text || '');
@@ -380,6 +557,7 @@ export const useChat = (
                       ? cevir(anahtar as any, { model: data.model || '', pids: data.pids || '?' })
                       : String(data.message);
                     updated.content += (updated.content ? '\n\n' : '') + `❌ ${metin}`;
+                    lossy = true;
                   }
                   // Side-pipeline failure (video download/extract today). The run
                   // is NOT killed — the stream keeps going — but the user has to
@@ -398,6 +576,7 @@ export const useChat = (
                       message: String(data.message),
                       detail: detail || undefined,
                     }];
+                    lossy = true;
                   }
                   // A run that hit the iteration cap looked EXACTLY like a run that
                   // finished: `done` only cleared the activity line. The user was
@@ -438,6 +617,7 @@ export const useChat = (
                         message,
                         detail,
                       }];
+                      lossy = true;
                     }
                   }
                   else if (data.type === 'turn_usage') {
@@ -472,6 +652,8 @@ export const useChat = (
                 return msg;
               }));
               // Canlı aktivite göstergesi: status event'leri + türev sinyaller.
+              const setActivity = (fn: (prev: ChatActivity | null) => ChatActivity | null) =>
+                patchConv(targetConvId, r => ({ activity: fn(r.activity) }));
               if (data.type === 'status') {
                 setActivity(prev => ({
                   detail: data.detail || prev?.detail || cevir('activity.working'),
@@ -485,7 +667,6 @@ export const useChat = (
                 const s = data.summary ? ` — ${String(data.summary).slice(0, 60)}` : '';
                 setActivity(prev => ({ detail: `🔧 ${data.tool}${s}`, tokens: prev?.tokens }));
               } else if (data.type === 'done' || data.type === 'error' || data.type === 'response') {
-                setActivity(null);
                 // A terminal event ends the turn, and with it every gate the
                 // turn was holding. Only the activity line used to be cleared,
                 // so a question whose gate had expired stayed on screen: the
@@ -494,36 +675,35 @@ export const useChat = (
                 // QUEUE goes too — a queued card is just one that has not been
                 // shown yet, and it belongs to the same finished turn.
                 //
-                // The queue is emptied INSIDE the updater, not next to it: the
-                // queue is filled from another updater (`question_needed`),
-                // which React runs when it processes the update, not when the
-                // event is parsed. Clearing the ref straight from the stream
-                // loop therefore ran BEFORE the push and a queued card came
-                // back — measured, this exact test was red that way. Updaters
-                // run in order, so this one sees the finished queue. Clearing
-                // twice is a no-op, so a StrictMode double-invocation is safe.
-                setPendingQuestion(() => {
-                  pendingQuestionQueueRef.current = [];
-                  return null;
-                });
+                // The per-chat entry is written synchronously in event order, so
+                // a question queued earlier in the same chunk is already there to
+                // clear (the old React-updater version needed care here).
+                patchConv(targetConvId, () => ({ activity: null, pendingQuestion: null, questionQueue: [] }));
               }
-              if (data.type === 'context_usage') setContextUsage({
+              if (data.type === 'context_usage') patchConv(targetConvId, () => ({ contextUsage: {
                 percent: data.percent,
                 should_compact: data.should_compact,
                 message_count: data.message_count,
                 estimated: data.estimated !== false,
                 last_turn: data.last_turn,
-              });
+              } }));
               if (data.type === 'command_approval_needed') {
                 const item = { command: data.command, gateId: data.gate_id, messageId: aiMsgId };
                 // Zaten gösterilen bir onay varsa sıraya al (paralel araçlarda ezilmesin)
-                setPendingCommand(prev => { if (prev) { pendingCommandQueueRef.current.push(item); return prev; } return item; });
+                patchConv(targetConvId, r => r.pendingCommand
+                  ? { commandQueue: [...r.commandQueue, item] }
+                  : { pendingCommand: item });
               }
               if (data.type === 'question_needed') {
                 const item = { questions: data.questions || [], gateId: data.gate_id, messageId: aiMsgId };
-                setPendingQuestion(prev => { if (prev) { pendingQuestionQueueRef.current.push(item); return prev; } return item; });
+                patchConv(targetConvId, r => r.pendingQuestion
+                  ? { questionQueue: [...r.questionQueue, item] }
+                  : { pendingQuestion: item });
               }
-              if (data.type === 'pending_delete' && data.path) setPendingDelete({ path: data.path, messageId: aiMsgId });
+              if (data.type === 'pending_delete' && data.path) {
+                const card = { path: data.path, messageId: aiMsgId };
+                fileCard(() => setPendingDelete(card));
+              }
               if (data.type === 'refresh_file_tree') refreshFileTree();
               if (data.type === 'done') refreshFileTree();
               // Subscription (claude/codex/agy) provider'larda dosya yazımı MCP/CLI
@@ -548,7 +728,8 @@ export const useChat = (
                     });
                   }
                   // Message ID'yi state'ten doğrula veya doğrudan kullan
-                  setPendingGenFiles({ files: withPaths, messageId: aiMsgId });
+                  const card = { files: withPaths, messageId: aiMsgId };
+                  fileCard(() => setPendingGenFiles(card));
                 }
               }
             }
@@ -557,9 +738,21 @@ export const useChat = (
       }
       fetchConversations(user.id);
     } catch (err: any) {
-      if (err?.name !== 'AbortError') setMessages(prev => [...prev, { id: Date.now() + 2, role: 'assistant', content: cevir('chat.errorOccurred'), smells: [], timestamp: new Date().toISOString() }]);
-    } finally { setLoading(false); setActivity(null); }
-  }, [API, activeConvId, aiConfig.provider_type, createNewConversation, fetchConversations, loading, suggestFilePath, user, workspacePath]);
+      if (err?.name !== 'AbortError' && ownsTurn()) {
+        lossy = true;
+        updateMessages(prev => [...prev, { id: Date.now() + 2, role: 'assistant', content: cevir('chat.errorOccurred'), smells: [], timestamp: new Date().toISOString() }]);
+      }
+    } finally {
+      // A stopped or deleted turn was already cleaned up by whoever ended it.
+      if (ownsTurn()) {
+        turnRef.current.delete(targetConvId);
+        controllersRef.current.delete(targetConvId);
+        const visible = onScreen();
+        patchConv(targetConvId, () => ({ loading: false, activity: null, unread: !visible, unsynced: !visible }));
+        if (!visible && finishedCleanly && !lossy) void syncFinished(targetConvId);
+      }
+    }
+  }, [API, aiConfig.provider_type, aiConfig.model_name, createNewConversation, fetchConversations, patchConv, rt, suggestFilePath, syncFinished, user, workspacePath]);
 
   // ── AUTO-WAKE channel ────────────────────────────────────────────────────
   // Once a background task finishes, the backend sends ONE coalesced `wake`
@@ -573,14 +766,17 @@ export const useChat = (
   //
   // `loading` is a dependency: the channel closes while a turn is running and
   // reopens once it ends. This way a second turn can't be started on top of one
-  // already in flight.
+  // already in flight. It is the ON-SCREEN chat's own flag: a turn running in
+  // another chat does not keep this one from waking. The channel still exists
+  // only for the chat on screen (a background chat does not wake in slice 1).
   useEffect(() => {
     if (!API || !user || !activeConvId || loading) return;
+    const convId = activeConvId;
     const ac = new AbortController();
     let iptal = false;
     (async () => {
       try {
-        const res = await fetch(`${API}/conversations/${activeConvId}/wake-stream`, {
+        const res = await fetch(`${API}/conversations/${convId}/wake-stream`, {
           headers: { 'X-Session-Token': user.sessionToken },
           signal: ac.signal,
         });
@@ -612,7 +808,7 @@ export const useChat = (
             void sendMessage(
               String(data.text || ''), '', args.lang, args.genMode, args.thinkingLevel,
               args.setPendingGenFiles, args.setPendingDelete,
-              undefined, false, undefined, 'wake',
+              undefined, false, undefined, 'wake', convId,
             );
           }
         }
@@ -631,7 +827,7 @@ export const useChat = (
       setMessages([]);
       showToast(cevir('chat.historyCleared'), 'info');
     } catch (err) { showToast(cevir('chat.historyClearFailed'), 'error'); }
-  }, [activeConvId, showToast]);
+  }, [activeConvId, setMessages, showToast]);
 
   const analyzeProject = useCallback(async (silent = false) => {
     if (!user || !API) return;
@@ -651,12 +847,13 @@ export const useChat = (
       if (res.data.status === 'success') {
         if (!silent) {
           showToast(cevir('memory.learned', { sayi: res.data.file_count }), 'success');
-          setMessages(prev => [...prev, { id: Date.now(), role: 'assistant', content: `${cevir('memory.analysisReport')}\n\n${res.data.summary}`, timestamp: new Date().toISOString(), smells: [] }]);
+          const convId = targetConvId;
+          patchConv(convId, r => ({ messages: [...r.messages, { id: Date.now(), role: 'assistant', content: `${cevir('memory.analysisReport')}\n\n${res.data.summary}`, timestamp: new Date().toISOString(), smells: [] }] }));
         }
       }
     } catch (err: any) { if (!silent) showToast(cevir('memory.analysisError'), 'error'); }
     finally { setIsAnalyzingProject(false); }
-  }, [API, activeConvId, createNewConversation, showToast, user]);
+  }, [API, activeConvId, createNewConversation, patchConv, showToast, user]);
 
   const exportMemory = useCallback(async () => {
     if (!activeConvId || !user || !API) return;
@@ -678,10 +875,10 @@ export const useChat = (
       if (res?.content) {
         await axios.post(`${API}/conversations/${activeConvId}/import-memory`, { content: res.content }, { headers: { 'X-Session-Token': user.sessionToken } });
         showToast(cevir('memory.imported'), 'success');
-        setMessages(prev => [...prev, { id: Date.now(), role: 'assistant', content: cevir('memory.importedHeading'), timestamp: new Date().toISOString(), smells: [] }]);
+        patchConv(activeConvId, r => ({ messages: [...r.messages, { id: Date.now(), role: 'assistant', content: cevir('memory.importedHeading'), timestamp: new Date().toISOString(), smells: [] }] }));
       }
     } catch { showToast(cevir('memory.importError'), 'error'); }
-  }, [API, activeConvId, showToast, user]);
+  }, [API, activeConvId, patchConv, showToast, user]);
 
   const compactConversation = useCallback(async () => {
     if (!activeConvId || !API || !user) return;
@@ -696,7 +893,7 @@ export const useChat = (
       if (res.data.status === 'success') {
         if (res.data.summary) {
           const msgRes = await axios.get(`${API}/conversations/${activeConvId}/messages`);
-          setMessages(msgRes.data);
+          patchConv(activeConvId, () => ({ messages: msgRes.data }));
           // Eskiden buraya sabit `percent: 5` yazılıyordu — sıkıştırmadan sonra
           // doluluğun ne olduğu ölçülmeden, makul görünen bir sayıyla. Gösterge
           // artık tek kaynaktan tazeleniyor.
@@ -709,7 +906,49 @@ export const useChat = (
         }
       }
     } catch { showToast(cevir('compact.error'), 'error'); } finally { setIsCompacting(false); }
-  }, [API, activeConvId, showToast, user, refreshContextUsage]);
+  }, [API, activeConvId, patchConv, showToast, user, refreshContextUsage]);
+
+  // Stop acts on the chat on screen and nothing else: its own stream, its own
+  // backend turn, its own cards. The global bridge card (`globalCommand`) is
+  // not this chat's and stays.
+  const stopMessage = useCallback(() => {
+    const convId = activeConvIdRef.current;
+    const key = keyOf(convId);
+    turnRef.current.delete(key);
+    controllersRef.current.get(key)?.abort();
+    controllersRef.current.delete(key);
+    // Claude SDK turunu gerçekten iptal et (bekleyen onay/soru gate'lerini çöz + interrupt)
+    if (convId && user) {
+      fetch(`${API}/chat-stop/${convId}`, {
+        method: 'POST',
+        headers: { 'X-Session-Token': user.sessionToken },
+      }).catch(() => {});
+    }
+    // Bekleyen onay/soru kartlarını ve kuyrukları temizle (backend gate'leri reddetti)
+    patchConv(key, () => ({
+      pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
+      activity: null, loading: false,
+    }));
+  }, [API, patchConv, user]);
+
+  // The chat holding a gate; the screen's chat when none does (a card set
+  // directly through `setPendingQuestion`).
+  const ownerOf = (match: (r: ConvRuntime) => boolean) => {
+    const hit = Object.entries(runtimesRef.current).find(([, r]) => match(r));
+    return hit ? Number(hit[0]) : keyOf(activeConvIdRef.current);
+  };
+
+  const convStatus = useMemo(() => {
+    const out: Record<number, ConvStatus> = {};
+    for (const [key, r] of Object.entries(runtimes)) {
+      const id = Number(key);
+      if (id === NO_CONV) continue;
+      if (r.pendingCommand || r.pendingQuestion || r.parkedCards.length > 0) out[id] = 'awaiting';
+      else if (r.loading) out[id] = 'running';
+      else if (r.unread && id !== activeConvId) out[id] = 'unread';
+    }
+    return out;
+  }, [runtimes, activeConvId]);
 
   return {
     conversations, setConversations,
@@ -729,23 +968,8 @@ export const useChat = (
     tempTitle, setTempTitle,
     fetchConversations, fetchMessages, createNewConversation,
     selectConversation, deleteConversation, saveRename,
-    sendMessage, stopMessage: () => {
-      abortControllerRef.current?.abort();
-      // Claude SDK turunu gerçekten iptal et (bekleyen onay/soru gate'lerini çöz + interrupt)
-      if (activeConvId && user) {
-        fetch(`${API}/chat-stop/${activeConvId}`, {
-          method: 'POST',
-          headers: { 'X-Session-Token': user.sessionToken },
-        }).catch(() => {});
-      }
-      // Bekleyen onay/soru kartlarını ve kuyrukları temizle (backend gate'leri reddetti)
-      pendingCommandQueueRef.current = [];
-      pendingQuestionQueueRef.current = [];
-      setPendingCommand(null);
-      setPendingQuestion(null);
-      setActivity(null);
-      setLoading(false);
-    },
+    convStatus,
+    sendMessage, stopMessage,
     clearHistory, analyzeProject, exportMemory, importMemory, compactConversation,
     // Kararı backend'e iletir ve İLETİLDİĞİNİ DOĞRULAR. Yanıt gövdesi eskiden
     // hiç okunmuyordu: gate düşmüşse backend {"status":"gate_not_found"} dönüyor,
@@ -767,7 +991,13 @@ export const useChat = (
       }
       if (failure) showToast(failure.message, failure.type);
       // Çözüldü → kuyrukta sıradaki onayı göster (yoksa kapat)
-      setPendingCommand(pendingCommandQueueRef.current.shift() || null);
+      if (globalCommandRef.current?.gateId === gateId) {
+        setPendingCommand(null);
+      } else {
+        patchConv(ownerOf(r => r.pendingCommand?.gateId === gateId), r => ({
+          pendingCommand: r.commandQueue[0] ?? null, commandQueue: r.commandQueue.slice(1),
+        }));
+      }
       // Sonucu ÇAĞIRANA da ver: kart, "Komut onaylandı — çalışıyor..." yeşil
       // toast'ını koşulsuz basıyordu; kullanıcı sarı "iletilemedi" ile yeşili
       // aynı anda görüyordu (Toast.tsx:32 toast'ları diziye ekliyor).
@@ -791,7 +1021,9 @@ export const useChat = (
       }
       if (failure) showToast(failure.message, failure.type);
       // Çözüldü → kuyrukta sıradaki soruyu göster (yoksa kapat)
-      setPendingQuestion(pendingQuestionQueueRef.current.shift() || null);
+      patchConv(ownerOf(r => r.pendingQuestion?.gateId === gateId), r => ({
+        pendingQuestion: r.questionQueue[0] ?? null, questionQueue: r.questionQueue.slice(1),
+      }));
     },
   };
 };

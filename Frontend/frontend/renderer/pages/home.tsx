@@ -550,7 +550,7 @@ export default function Home() {
 
       <Sidebar
         isSidebarOpen={isSidebarOpen} sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}
-        conversations={chat.conversations} activeConvId={chat.activeConvId} selectConversation={chat.selectConversation}
+        conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus} selectConversation={chat.selectConversation}
         createNewConversation={chat.createNewConversation} deleteConversation={chat.deleteConversation}
         editingId={chat.editingId} setEditingId={chat.setEditingId} tempTitle={chat.tempTitle} setTempTitle={chat.setTempTitle} saveRename={chat.saveRename}
         workspacePath={fs.workspacePath} closeWorkspace={fs.closeWorkspace} rootFolderPath={fs.rootFolderPath}

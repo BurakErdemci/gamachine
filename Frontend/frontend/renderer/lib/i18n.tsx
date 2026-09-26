@@ -20,6 +20,9 @@ export const tr = {
   'sidebar.newFolder': 'Yeni Klasör',
   'sidebar.rename': 'Yeniden Adlandır',
   'sidebar.delete': 'Sil',
+  'sidebar.statusRunning': 'Çalışıyor',
+  'sidebar.statusAwaiting': 'Onay bekliyor',
+  'sidebar.statusUnread': 'Bitti, okunmadı',
   // ControlPanel
   'thinking.off': 'Kapalı',
   'thinking.low': 'Düşük',
@@ -538,6 +541,9 @@ export const en: Record<keyof typeof tr, string> = {
   'sidebar.newFolder': 'New Folder',
   'sidebar.rename': 'Rename',
   'sidebar.delete': 'Delete',
+  'sidebar.statusRunning': 'Running',
+  'sidebar.statusAwaiting': 'Awaiting approval',
+  'sidebar.statusUnread': 'Finished, unread',
   // ControlPanel
   'thinking.off': 'Off',
   'thinking.low': 'Low',

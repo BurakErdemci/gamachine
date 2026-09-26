@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { useLang } from '../../lib/i18n';
+import { useLang, type TKey } from '../../lib/i18n';
 import { 
   Plus, 
   MessageSquare, 
@@ -17,6 +17,13 @@ import {
 } from 'lucide-react';
 import { Conversation, FileEntry, UserData } from './types';
 import { FileTree } from './FileTree';
+import type { ConvStatus } from '../../hooks/home/useChat';
+
+const STATUS_DOT: Record<ConvStatus, { className: string; label: TKey }> = {
+  running: { className: 'bg-blue-400 animate-pulse', label: 'sidebar.statusRunning' },
+  awaiting: { className: 'bg-amber-400', label: 'sidebar.statusAwaiting' },
+  unread: { className: 'bg-emerald-400', label: 'sidebar.statusUnread' },
+};
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -24,6 +31,7 @@ interface SidebarProps {
   setSidebarTab: (tab: 'chats' | 'files') => void;
   conversations: Conversation[];
   activeConvId: number | null;
+  convStatus?: Record<number, ConvStatus>;
   selectConversation: (conv: Conversation) => void;
   createNewConversation: () => void;
   deleteConversation: (e: React.MouseEvent, id: number) => void;
@@ -82,7 +90,8 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     setEditingId, tempTitle, setTempTitle, saveRename, workspacePath,
     closeWorkspace, rootFolderPath, openFolder, openFilePicker, user,
     setShowSettings, handleLogout, fileTree, treeContextMenu, setTreeContextMenu,
-    treeCreating, startTreeCreate, treeCreateValue, setTreeCreateValue, submitTreeCreate, setTreeCreating
+    treeCreating, startTreeCreate, treeCreateValue, setTreeCreateValue, submitTreeCreate, setTreeCreating,
+    convStatus,
   } = props;
 
   const { t } = useLang();
@@ -138,7 +147,18 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
                     {editingId === conv.id ? (
                       <input autoFocus className="bg-[#000000] text-white text-xs w-full px-2 py-1 rounded border border-blue-500 outline-none" value={tempTitle} onChange={e => setTempTitle(e.target.value)} onBlur={() => saveRename(conv.id)} onKeyDown={e => e.key === 'Enter' && saveRename(conv.id)} onClick={e => e.stopPropagation()} />
                     ) : (
-                      <div className="text-[13px] font-medium truncate">{conv.title}</div>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="text-[13px] font-medium truncate">{conv.title}</div>
+                        {convStatus?.[conv.id] && (
+                          <span
+                            data-testid={`conv-status-${conv.id}`}
+                            role="img"
+                            title={t(STATUS_DOT[convStatus[conv.id]].label)}
+                            aria-label={t(STATUS_DOT[convStatus[conv.id]].label)}
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[convStatus[conv.id]].className}`}
+                          />
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
