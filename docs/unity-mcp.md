@@ -48,15 +48,16 @@ header; an unknown profile answers 404.
 | URL | Tools |
 |---|---|
 | `/mcp` | Groups enabled in the Unity Editor's Tools tab (core + playtest by default) plus five server meta-tools (`manage_tools`, `set_active_instance`, `debug_request_context`, `execute_custom_tool`, `manage_script_capabilities`): 37 tools before an Editor has reported its toggles |
-| `/mcp/gamachine` | core + playtest, no meta-tools: 32 tools, the set the backend exports to API models |
+| `/mcp/gamachine` | core + playtest, no meta-tools, minus a group the Editor turned off: 32 tools with both on (the default), 27 with playtest off; the set the backend exports to API models |
 | `/mcp/full` | Every group, regardless of the Editor's toggles: 52 tools |
 
-The URL fixes the profile, not a frozen list. `/mcp/gamachine` and `/mcp/full` list
-the same tools for as long as the server runs. `/mcp` filters every `tools/list`
-against the groups currently enabled, and those change whenever the Editor registers
-its tools (when it connects or reconnects, and when its Tools tab toggles change). The
-server then sends `tools/list_changed` to the clients it tracks, so a client on `/mcp`
-should list the tools again when it gets one.
+The URL fixes the profile, not a frozen list. Only `/mcp/full` lists the same tools
+for as long as the server runs. `/mcp` and `/mcp/gamachine` filter every `tools/list`
+against the groups currently enabled (`/mcp/gamachine` never adds a group beyond core
+and playtest), and those change whenever the Editor registers its tools (when it
+connects or reconnects, and when its Tools tab toggles change). The server then sends
+`tools/list_changed` to the clients it tracks, so a client on either URL should list
+the tools again when it gets one.
 `manage_tools(action="list_groups")` reports which profile the call came in on;
 `activate`, `deactivate` and `reset` change nothing and return an error naming these URLs. To reach an opt-in group
 (docs, vfx, profiling, ...), enable it in the Tools tab (affects `/mcp`) or
