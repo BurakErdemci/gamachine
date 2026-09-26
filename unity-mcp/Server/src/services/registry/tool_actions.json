@@ -789,6 +789,15 @@
       "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:746",
       "note": "readOnlyHint=True. Returns sha256 and length only, not contents."
     },
+    "compile_status": {
+      "action_param": null,
+      "tool_level": "read",
+      "read_actions": [],
+      "write_actions": [],
+      "param_dependent": [],
+      "evidence": "unity-mcp/Server/src/services/tools/compile_status.py:289",
+      "note": "readOnlyHint=True. Sends only get_compile_status (MCPForUnity/Editor/Resources/Editor/CompileStatus.cs), which reads SessionState counters written by CompileTracker and the mtimes of script files under Assets/ and Packages/. It never calls AssetDatabase.Refresh or requests a compile, so it can run while a compile is pending without starting one."
+    },
     "read_console": {
       "action_param": "action",
       "tool_level": null,

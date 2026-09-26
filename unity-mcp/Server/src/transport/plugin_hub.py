@@ -121,7 +121,7 @@ class PluginHub(WebSocketEndpoint):
     # This helps avoid the Cursor-side ~30s tool-call timeout when Unity is compiling/reloading
     # or is throttled while unfocused.
     _FAST_FAIL_COMMANDS: set[str] = {
-        "read_console", "get_editor_state", "ping"}
+        "read_console", "get_editor_state", "get_compile_status", "ping"}
 
     _registry: PluginRegistry | None = None
     _connections: dict[str, WebSocket] = {}

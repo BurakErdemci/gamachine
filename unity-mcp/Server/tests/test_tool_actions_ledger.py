@@ -73,6 +73,8 @@ UNVERIFIABLE_ACTION_SETS: set[str] = set()
 # To change it: state in the commit message which Unity behaviour justifies the
 # new row, the way the ledger's own `evidence` field does.
 PINNED_READ_SURFACE: frozenset[str] = frozenset({
+    # get_compile_status reads SessionState and file mtimes only; no refresh.
+    "compile_status:*",
     "debug_request_context:*",
     "execute_code:get_history",
     "find_in_file:*",

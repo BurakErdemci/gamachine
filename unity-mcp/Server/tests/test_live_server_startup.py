@@ -37,7 +37,7 @@ PROFILE_PATHS = ["/mcp", "/mcp/gamachine", "/mcp/full", "/mcp/not-a-profile"]
 # --project-scoped-tools (the product's flags). Order is part of the contract:
 # clients cache on it.
 PINNED_DEFAULT_LIST = [
-    "batch_execute", "debug_request_context", "execute_custom_tool",
+    "batch_execute", "compile_status", "debug_request_context", "execute_custom_tool",
     "execute_menu_item", "find_gameobjects", "find_in_file", "game_hooks",
     "manage_asset", "manage_build", "manage_camera", "manage_components",
     "manage_editor", "manage_gameobject", "manage_graphics", "manage_input",
@@ -89,7 +89,7 @@ def test_gamachine_profile_equals_the_backend_export(report):
     gamachine = report["old_era"]["/mcp/gamachine"]
     assert gamachine["status"] == 200, gamachine
     assert gamachine["names"] == exported
-    assert len(exported) == 31
+    assert len(exported) == 32
 
 
 def test_full_profile_lists_every_group(report):
@@ -246,8 +246,8 @@ def test_stdio_transport_starts_and_lists_every_group(report):
     enabled there until Unity reports its toggles."""
     stdio = report["stdio"]
     assert stdio.get("protocol") == "2025-06-18", stdio
-    # 51 tools minus execute_custom_tool (not project-scoped in this run)
-    assert stdio.get("tool_count") == 50, stdio
+    # 52 tools minus execute_custom_tool (not project-scoped in this run)
+    assert stdio.get("tool_count") == 51, stdio
 
 
 def test_probe_servers_are_gone_and_their_files_removed(report):
