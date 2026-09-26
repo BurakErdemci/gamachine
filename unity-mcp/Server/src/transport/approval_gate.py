@@ -88,7 +88,9 @@ def parse_conversation_id(value: Any) -> int | None:
     """
     if type(value) is int:
         return value if 0 < value < 2**63 else None
-    if isinstance(value, str) and value.isascii() and value.isdigit():
+    # 2**63 - 1 has 19 digits. The length cap also keeps int() below its
+    # 4300-digit limit, past which it raises ValueError instead of returning.
+    if isinstance(value, str) and len(value) <= 19 and value.isascii() and value.isdigit():
         number = int(value)
         return number if 0 < number < 2**63 else None
     return None

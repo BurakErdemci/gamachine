@@ -42,6 +42,16 @@ def test_junk_is_refused(value):
     assert parse_conversation_id(value) is None
 
 
+def test_largest_valid_id_parses():
+    assert parse_conversation_id(str(2**63 - 1)) == 2**63 - 1
+
+
+# int() refuses strings over sys.get_int_max_str_digits() (4300) with ValueError.
+@pytest.mark.parametrize("value", ["1" * 20, "9" * 4301, "7" * 100_000], ids=["20", "4301", "100000"])
+def test_overlong_digit_string_is_refused_without_raising(value):
+    assert parse_conversation_id(value) is None
+
+
 # ── the request body ─────────────────────────────────────────────────────────
 
 
