@@ -38,6 +38,19 @@ def _allow_tokenless_local_api(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _opencode_shadow_off(monkeypatch, tmp_path_factory):
+    # OpenCodeProvider._register_mcp writes its bash shadow under the real
+    # home and runs `opencode --version`; several tests call it directly.
+    # Default: version unknown (so no shadow), dir redirected. Tests that
+    # need the shadow opt in.
+    from providers import opencode_provider
+    shadow_root = str(tmp_path_factory.mktemp("opencode-shadow"))
+    monkeypatch.setattr(opencode_provider, "bash_shadow_dir", lambda: shadow_root)
+    monkeypatch.setattr(opencode_provider, "_opencode_version", lambda base: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _approval_mode_starts_in_step():
     # Module-level state: a test that switches to auto must not leak it.
     from agentic import approval_mode

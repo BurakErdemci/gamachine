@@ -1,11 +1,239 @@
 import os
+import re
 import json
+import uuid
 import logging
-from .cli_base import BaseCLIProvider
+import subprocess
+from typing import Optional, Tuple
+from .cli_base import BaseCLIProvider, build_spawn_env, env_family
 from .oneshot_cli import resolve_opencode_cmd, split_model_id
 from .workspace_config import ensure_gitignored, guvenli_config_yaz
 
 logger = logging.getLogger(__name__)
+
+
+# ── bash shadow ───────────────────────────────────────────────────────────
+# OpenCode's Zen server refuses its free models (403 FreeTierError) unless
+# the request's tool list holds bash, glob, grep and read; with
+# permission.bash "deny" the built-in bash is hidden and 7/8 free models were
+# refused (measured 26 Sep 2026, opencode 1.18.25). Exposing the built-in with
+# "ask" is unsafe on Windows: it runs PowerShell, the permission scanner parses
+# bash grammar, and a PowerShell-only command yields no pattern, so the check
+# is skipped (tool/shell.ts ~282) and 5/11 shapes wrote files.
+#
+# Instead a custom tool named `bash` (file name = tool id) replaces the
+# built-in for model turns: tool/registry.ts scans `{tool,tools}/*.{js,ts}` of
+# every config dir, and session/tools.ts keeps the last tool of a name. It
+# lives in a Gamachine-owned dir handed over as OPENCODE_CONFIG_DIR, whose
+# opencode.json is merged after the workspace one (config/config.ts ~438),
+# so "bash": "ask" exists only in a spawn that also loads the shadow.
+# "deny" would hide the shadow too (Permission.disabled matches by name).
+# Measured with real turns: 8/8 free models answered, the model's bash calls
+# returned this text and left nothing on disk.
+#
+# A config dir makes OpenCode npm-install @opencode-ai/plugin into it
+# (config/config.ts ~452) - a runtime download. core/npm.ts install() skips
+# when node_modules exists and every declared name is in the lock root, so
+# the skeleton below pre-places exactly that. The shadow imports nothing.
+_BASH_SHADOW_TS = """\
+// Written by Gamachine; rewritten on every OpenCode turn. It replaces
+// OpenCode's built-in bash tool for Gamachine turns and runs nothing.
+export default {
+  description:
+    "Terminal is disabled in Gamachine. Calling this tool runs nothing. " +
+    "Use the unityai MCP tools (run_terminal_command, save_file, read_file) instead.",
+  args: {
+    command: { type: "string", description: "Ignored; nothing is executed." },
+  },
+  async execute() {
+    return "Terminal is disabled in Gamachine; nothing was run. Use the unityai MCP tools (run_terminal_command) instead."
+  },
+}
+"""
+
+_SHADOW_CONFIG = json.dumps({
+    "$schema": "https://opencode.ai/config.json",
+    "permission": {"edit": "deny", "bash": "ask"},
+    # A denied or headless-rejected call ends the turn without this
+    # (session/processor.ts ~633). Kept out of the workspace file: an older
+    # OpenCode that does not know the key would reject the whole config.
+    "experimental": {"continue_loop_on_deny": True},
+}, indent=2) + "\n"
+
+_SHADOW_FILES: Tuple[Tuple[str, str], ...] = (
+    ("tool/bash.ts", _BASH_SHADOW_TS),
+    ("opencode.json", _SHADOW_CONFIG),
+    ("package.json", json.dumps(
+        {"private": True, "dependencies": {"@opencode-ai/plugin": "*"}}, indent=2) + "\n"),
+    ("package-lock.json", json.dumps({
+        "name": "gamachine-opencode-config", "lockfileVersion": 3, "requires": True,
+        "packages": {"": {"dependencies": {"@opencode-ai/plugin": "*"}}},
+    }, indent=2) + "\n"),
+    ("node_modules/@opencode-ai/plugin/package.json", json.dumps(
+        {"name": "@opencode-ai/plugin", "version": "0.0.0-gamachine-stub", "private": True},
+        indent=2) + "\n"),
+)
+
+# The loader and last-writer-wins behaviour were read and measured on
+# 1.18.25-1.18.32. Outside this range bash stays "deny": free models may be
+# refused again, but the real terminal is never exposed by a changed loader.
+_SHADOW_VERSION_MIN = (1, 18, 25)
+_SHADOW_VERSION_BELOW = (1, 19, 0)
+_version_cache: dict = {}
+
+
+def bash_shadow_dir() -> str:
+    return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "opencode-config")
+
+
+def _read_text(path: str) -> Optional[str]:
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _write_text(path: str, body: str) -> None:
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(body)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def install_bash_shadow(root: Optional[str] = None) -> Optional[str]:
+    """Writes the shadow and its skeleton; returns the dir only when every
+    file reads back exactly as shipped, else None (the caller keeps bash
+    denied)."""
+    root = root or bash_shadow_dir()
+    try:
+        for rel, body in _SHADOW_FILES:
+            path = os.path.join(root, *rel.split("/"))
+            if _read_text(path) == body:
+                continue
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            _write_text(path, body)
+    except OSError as e:
+        logger.warning("[OpenCodeProvider] bash shadow not written (%s); bash stays denied.", e)
+        return None
+    for rel, body in _SHADOW_FILES:
+        if _read_text(os.path.join(root, *rel.split("/"))) != body:
+            logger.warning("[OpenCodeProvider] bash shadow %s did not read back; "
+                           "bash stays denied.", rel)
+            return None
+    if not _prune_foreign(root):
+        return None
+    return root
+
+
+# OpenCode writes this one itself into a config dir (measured).
+_SHADOW_TOLERATED = {".gitignore"}
+
+
+def _prune_foreign(root: str) -> bool:
+    """Removes every entry of the shadow dir that Gamachine did not ship.
+
+    OpenCode loads tool/, plugin/, agent/ ... from every config dir, and the
+    dir is writable by other processes of this account (a Codex sandbox has
+    modify rights on ~/.unity_architect_ai, measured with icacls), so a file
+    dropped here would run in every OpenCode turn. False (bash stays denied)
+    when something foreign cannot be removed.
+    """
+    import shutil
+
+    keep = {os.path.normcase(os.path.join(root, *rel.split("/"))) for rel, _ in _SHADOW_FILES}
+    keep |= {os.path.normcase(os.path.join(root, name)) for name in _SHADOW_TOLERATED}
+    keep_dirs = {os.path.normcase(os.path.dirname(p)) for p in keep}
+    for parent in list(keep_dirs):
+        while len(parent) > len(os.path.normcase(root)):
+            parent = os.path.dirname(parent)
+            keep_dirs.add(parent)
+    def _is_link(path: str) -> bool:
+        isjunction = getattr(os.path, "isjunction", None)
+        return os.path.islink(path) or bool(isjunction and isjunction(path))
+
+    if _is_link(root):
+        logger.warning("[OpenCodeProvider] bash shadow dir is a link; bash stays denied.")
+        return False
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in list(dirnames):
+                path = os.path.join(dirpath, name)
+                if _is_link(path):
+                    # Unlink only: rmtree through a junction deletes its target.
+                    if os.path.normcase(path) in keep_dirs:
+                        logger.warning("[OpenCodeProvider] %s is a link; bash stays denied.", path)
+                        return False
+                    os.rmdir(path) if os.path.isdir(path) and not os.path.islink(path) else os.unlink(path)
+                    dirnames.remove(name)
+                elif os.path.normcase(path) not in keep_dirs:
+                    shutil.rmtree(path)
+                    dirnames.remove(name)
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                if os.path.normcase(path) not in keep:
+                    os.remove(path)
+    except OSError as e:
+        logger.warning("[OpenCodeProvider] foreign file in bash shadow dir not removed "
+                       "(%s); bash stays denied.", e)
+        return False
+    return True
+
+
+def _opencode_version(base: list) -> Optional[tuple]:
+    """(major, minor, patch) of the installed OpenCode, cached per binary."""
+    try:
+        st = os.stat(base[0])
+        key = (base[0], st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = (base[0], None, None)
+    if key in _version_cache:
+        return _version_cache[key]
+    version = None
+    try:
+        out = subprocess.run(
+            [*base, "--version"], capture_output=True, text=True, timeout=20,
+            env=build_spawn_env(env_family("opencode")),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
+        if m:
+            version = tuple(int(x) for x in m.groups())
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning("[OpenCodeProvider] opencode --version failed: %s", e)
+    if version is not None:
+        _version_cache[key] = version
+    return version
+
+
+def shadow_supported() -> bool:
+    base = resolve_opencode_cmd()
+    if not base:
+        return False
+    version = _opencode_version(base)
+    return version is not None and _SHADOW_VERSION_MIN <= version < _SHADOW_VERSION_BELOW
+
+
+def _without_grants(perm) -> dict:
+    """A permission block minus every rule Gamachine sets itself.
+
+    Rules are evaluated last-match-wins in key order (permission/index.ts
+    evaluate/disabled use findLast), so the caller appends its own edit/bash
+    rules AFTER what is left; a string form ("allow") means {"*": "allow"}.
+    """
+    if isinstance(perm, str):
+        perm = {"*": perm}
+    if not isinstance(perm, dict):
+        return {}
+    def _grants_all(k, v):
+        return k == "*" and (v == "allow" or (isinstance(v, dict) and "allow" in v.values()))
+
+    return {k: v for k, v in perm.items()
+            if k not in ("edit", "bash") and not _grants_all(k, v)}
 
 
 class OpenCodeProvider(BaseCLIProvider):
@@ -19,6 +247,8 @@ class OpenCodeProvider(BaseCLIProvider):
     • İzinler: workspace opencode.json'da edit/bash "deny" → dosya/shell
       yalnız unityai MCP'den (onaylı) geçebilir. Kullanıcının mevcut
       opencode.json'ı varsa merge edilir, diğer ayarlarına dokunulmaz.
+      Free models need a visible bash: a verified shadow (see
+      _BASH_SHADOW_TS) turns it into "ask" for that spawn only.
     """
 
     resume_session_id = None   # önceki turun sessionID'si (-s)
@@ -79,16 +309,32 @@ class OpenCodeProvider(BaseCLIProvider):
             cmd.append(yuk)
         return cmd
 
+    def _write_mcp_config(self, workspace: str) -> str:
+        # A shadow verified on an earlier turn of this instance must not
+        # carry over if this turn never reaches _register_mcp.
+        self._bash_shadow_dir = None
+        return super()._write_mcp_config(workspace)
+
     def _turn_spawn_env(self) -> dict:
         # opencode 1.18.25 hands its whole env to local MCP children
         # (measured 26 Sep 2026), so the unityai bridge reads the token there.
         token = getattr(self, "_approval_turn_token", "")
-        return {"UNITYAI_APPROVAL_TURN_TOKEN": token} if token else {}
+        env = {"UNITYAI_APPROVAL_TURN_TOKEN": token} if token else {}
+        shadow = getattr(self, "_bash_shadow_dir", None)
+        if shadow:
+            env["OPENCODE_CONFIG_DIR"] = shadow
+        return env
+
+    def _prepare_bash_shadow(self) -> Optional[str]:
+        if not shadow_supported():
+            return None
+        return install_bash_shadow()
 
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
         """Workspace opencode.json'a unityai/unityMCP kaydı + izin politikası yazar."""
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 
+        self._bash_shadow_dir = None
         try:
             cfg_path = os.path.join(workspace, "opencode.json")
             unityai_env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace}
@@ -138,13 +384,29 @@ class OpenCodeProvider(BaseCLIProvider):
                 except Exception:
                     existing = {}
 
+            # Yazma/shell CLI içinde kapalı → unityai MCP (onaylı) tek yol.
+            # This file never opens bash: "ask" comes only from the shadow
+            # dir (see _SHADOW_CONFIG), so a spawn without the shadow keeps
+            # "deny" even when another chat's turn wrote this file.
+            permission = {**_without_grants(existing.get("permission", {})),
+                          "edit": "deny", "bash": "deny"}
             merged = {
                 "$schema": existing.get("$schema", "https://opencode.ai/config.json"),
                 **existing,
                 "mcp": {**existing.get("mcp", {}), **mcp},
-                # Yazma/shell CLI içinde kapalı → unityai MCP (onaylı) tek yol
-                "permission": {**existing.get("permission", {}), "edit": "deny", "bash": "deny"},
+                "permission": permission,
             }
+            # An agent's own permission is merged after the top-level one
+            # (agent/agent.ts ~293), so a user's agent.build.permission.bash
+            # "allow" would override the deny above.
+            for section in ("agent", "mode"):
+                entries = merged.get(section)
+                if isinstance(entries, dict):
+                    merged[section] = {
+                        name: ({**entry, "permission": _without_grants(entry["permission"])}
+                               if isinstance(entry, dict) and "permission" in entry else entry)
+                        for name, entry in entries.items()
+                    }
             if not unity_mcp_manager.is_running():
                 merged["mcp"].pop("unityMCP", None)
 
@@ -184,5 +446,6 @@ class OpenCodeProvider(BaseCLIProvider):
             logger.info("[OpenCodeProvider] opencode.json yazıldı (unityMCP stdio köprüsü).")
             # Dosyayı yazan nokta girdisini de yazar (bkz. workspace_config).
             ensure_gitignored(workspace, ["opencode.json"])
+            self._bash_shadow_dir = self._prepare_bash_shadow()
         except Exception as e:
             logger.warning(f"[OpenCodeProvider] opencode.json yazılamadı: {e}")
