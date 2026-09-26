@@ -103,6 +103,91 @@ def test_deep_batch_nesting_still_refused():
     assert meta_refusal(tool, params) is not None
 
 
+# ── `target` of an object tool names a scene object, not a file ──────────────
+
+SCENE_OBJECT = "Assets/x.meta"  # a hierarchy path; nothing on disk is named
+
+SCENE_TARGET_ALLOWED = [
+    ("manage_gameobject", {"action": "modify", "target": SCENE_OBJECT, "name": "Renamed"}),
+    ("manage_gameobject", {"action": "modify", "Target": SCENE_OBJECT, "search_method": "by_path"}),
+    ("manage_gameobject", {"action": "look_at", "target": "Cam", "look_at_target": SCENE_OBJECT}),
+    ("manage_gameobject", {"action": "delete", "target": SCENE_OBJECT}),
+    ("manage_material", {"action": "assign_material_to_renderer", "target": SCENE_OBJECT,
+                         "material_path": "Assets/M.mat"}),
+    ("manage_components", {"action": "add", "target": SCENE_OBJECT, "component_type": "Rigidbody"}),
+    ("manage_camera", {"action": "screenshot", "view_target": SCENE_OBJECT}),
+    ("manage_physics", {"action": "add_joint", "target": SCENE_OBJECT, "joint_type": "hinge"}),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": SCENE_OBJECT,
+                        "prefab_path": "Assets/P.prefab"}),
+    ("manage_scene", {"action": "move_to_scene", "target": SCENE_OBJECT}),
+    ("batch_execute", _batch(("manage_gameobject", {"action": "modify", "target": SCENE_OBJECT, "name": "R"}))),
+    ("batch_execute", {"Commands": [{"Tool": "manage_material", "Params": {
+        "action": "assign_material_to_renderer", "target": SCENE_OBJECT, "material_path": "Assets/M.mat"}}]}),
+    ("batch_execute", {"commands": json.dumps([{"tool": "manage_gameobject", "params": {
+        "action": "modify", "target": SCENE_OBJECT, "name": "R"}}])}),
+]
+
+
+@pytest.mark.parametrize("tool,params", SCENE_TARGET_ALLOWED)
+def test_object_target_ending_in_meta_is_allowed(tool, params):
+    assert meta_refusal(tool, params) is None
+
+
+SCENE_TARGET_STILL_REFUSED = [
+    # a real path parameter next to an object target
+    ("manage_material", {"action": "assign_material_to_renderer", "target": "Cube",
+                         "material_path": "Assets/M.mat.meta"}),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "Cube",
+                        "prefab_path": "Assets/P.prefab.meta"}),
+    # an object key only counts at the top level of that tool's params
+    ("manage_gameobject", {"action": "modify", "target": "Cube",
+                           "component_properties": {"target": "Assets/x.meta"}}),
+    ("manage_gameobject", {"action": "modify", "target": json.dumps({"path": "Assets/x.meta"})}),
+    # `target` stays a path for every other tool
+    ("manage_scriptable_object", {"action": "modify", "target": "Assets/Data.asset.meta"}),
+    ("unknown_custom_tool", {"target": "Assets/x.meta"}),
+    ("manage_asset", {"action": "delete", "path": "Assets/X.meta"}),
+    ("manage_asset", {"action": "delete", "target": "Assets/X.meta"}),
+    ("batch_execute", _batch(("manage_gameobject", {"action": "modify", "target": SCENE_OBJECT}),
+                             ("manage_asset", {"action": "delete", "path": "Assets/X.meta"}))),
+    ("batch_execute", {"commands": [{"tool": "manage_asset", "params": {"action": "delete",
+                                                                         "target": "Assets/X.meta"}}]}),
+]
+
+
+@pytest.mark.parametrize("tool,params", SCENE_TARGET_STILL_REFUSED)
+def test_path_parameters_next_to_object_targets_still_refused(tool, params):
+    assert meta_refusal(tool, params) is not None, (tool, params)
+
+
+# ── an NTFS 8.3 alias of a .meta file is the .meta file ──────────────────────
+# ManageTexture create writes its `path` with File.WriteAllBytes, and Windows
+# opens the long file through its short name; AssetDatabase is never asked.
+
+@pytest.mark.parametrize("path", [
+    "Assets/ABCDEF~1.MET",
+    "Assets\\Textures\\XPNG~12.met",
+    "Assets/ABCDEF~1.MET::$DATA",
+    "Assets/ABCDEF~1.MET. ",
+])
+def test_short_name_of_a_meta_file_is_refused(path):
+    assert meta_refusal("manage_texture", {"action": "create", "path": path}) is not None
+    assert meta_refusal("batch_execute", _batch(("manage_asset", {"action": "delete", "path": path}))) is not None
+
+
+@pytest.mark.parametrize("path", ["Assets/ABCDEF~1.PNG", "Assets/backup~1/x.png", "Assets/a.met"])
+def test_names_that_are_not_meta_aliases_pass(path):
+    assert meta_refusal("manage_texture", {"action": "create", "path": path}) is None
+
+
+def test_deep_nesting_refuses_a_meta_short_name():
+    params = {"action": "delete", "path": "Assets/ABCDEF~1.MET"}
+    tool = "manage_asset"
+    for _ in range(40):
+        params, tool = _batch((tool, params)), "batch_execute"
+    assert meta_refusal(tool, params) is not None
+
+
 # ── wiring: UnityInstanceMiddleware.on_call_tool ─────────────────────────────
 
 

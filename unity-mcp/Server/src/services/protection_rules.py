@@ -34,6 +34,35 @@ _PATH_KEY_SUFFIXES = (
     "destination", "dest", "uri", "uris", "target", "targets",
 )
 
+# Parameters that name a GameObject (name, hierarchy path or instance ID) in the
+# tool's schema and C# handler, not a file: a scene object may be called
+# "Assets/x.meta". Folded like every other key. Any other tool keeps treating
+# `target` as a path (manage_scriptable_object's `target` is an asset path).
+_OBJECT_KEYS: dict[str, frozenset[str]] = {
+    tool: frozenset(_key_folded(k) for k in keys) for tool, keys in {
+        "manage_gameobject": ("target", "look_at_target"),
+        "manage_components": ("target",),
+        "manage_material": ("target",),
+        "manage_camera": ("target", "view_target"),
+        "manage_physics": ("target",),
+        "manage_animation": ("target",),
+        "manage_graphics": ("target",),
+        "manage_probuilder": ("target",),
+        "manage_vfx": ("target",),
+        "manage_input": ("target",),
+        "manage_scene": ("target", "scene_view_target"),
+        "manage_sprite": ("target", "scene_target"),
+        "manage_fbx": ("scene_target",),
+        "manage_ui": ("target",),
+        "manage_prefabs": ("target",),
+    }.items()
+}
+
+# The generated NTFS 8.3 name of any *.meta file ends "~<n>.MET". Windows file
+# APIs open the long file through it (ManageTexture create writes its path with
+# File.WriteAllBytes), while the name itself does not end in ".meta".
+_META_SHORT_NAME = re.compile(r"~\d+\.met$")
+
 # Classified write by the ledger only for their AssetDatabase refresh
 # (manage_asset.py preflight); they do not touch the file they name.
 _FILE_READ_ACTIONS = {"manage_asset": {"search", "get_info", "get_components"}}
@@ -44,20 +73,23 @@ _MAX_DEPTH = 16
 def _names_meta(value: str) -> bool:
     leaf = re.split(r"[\\/]", value.strip().strip("\"'").rstrip("\\/"))[-1]
     # Windows writes `x.meta::$DATA` to x.meta and drops trailing dots/spaces.
-    leaf = leaf.split(":", 1)[0].rstrip(" .")
-    return leaf.lower().endswith(".meta")
+    leaf = leaf.split(":", 1)[0].rstrip(" .").lower()
+    return leaf.endswith(".meta") or _META_SHORT_NAME.search(leaf) is not None
 
 
 def _is_path_key(key: Any) -> bool:
     return isinstance(key, str) and _key_folded(key).endswith(_PATH_KEY_SUFFIXES)
 
 
-def _find_meta(value: Any, path_key: bool, depth: int = 0) -> str | None:
-    """First path-like value naming a .meta file, anywhere in ``value``."""
+def _find_meta(value: Any, path_key: bool, depth: int = 0,
+               object_keys: frozenset[str] = frozenset()) -> str | None:
+    """First path-like value naming a .meta file, anywhere in ``value``.
+    ``object_keys`` are top-level keys that name a scene object, not a path."""
     if depth > _MAX_DEPTH:
         # Too deep to walk: refuse if a .meta is mentioned at all.
-        text = json.dumps(value, default=str)
-        return "(deeply nested value)" if ".meta" in text.lower() else None
+        text = json.dumps(value, default=str).lower()
+        named = ".meta" in text or re.search(r"~\d+\.met(?![a-z0-9])", text)
+        return "(deeply nested value)" if named else None
     if isinstance(value, str):
         if path_key and _names_meta(value):
             return value
@@ -72,7 +104,8 @@ def _find_meta(value: Any, path_key: bool, depth: int = 0) -> str | None:
         return None
     if isinstance(value, Mapping):
         for key, inner in value.items():
-            hit = _find_meta(inner, _is_path_key(key), depth + 1)
+            is_path = _is_path_key(key) and _key_folded(key) not in object_keys
+            hit = _find_meta(inner, is_path, depth + 1)
             if hit:
                 return hit
     elif isinstance(value, (list, tuple)):
@@ -147,5 +180,5 @@ def meta_refusal(tool_name: str, params: Any, *, _depth: int = 0) -> str | None:
         return None
     if not _touches_file(tool_name, params):
         return None
-    hit = _find_meta(params, False)
+    hit = _find_meta(params, False, object_keys=_OBJECT_KEYS.get(tool_name, frozenset()))
     return META_MESSAGE.format(path=hit) if hit else None
