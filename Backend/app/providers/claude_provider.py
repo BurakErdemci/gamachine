@@ -149,15 +149,21 @@ class ClaudeCodeProvider(BaseCLIProvider):
         if not self._cli_installed("claude"):
             logger.warning("[CLIProvider] claude CLI bulunamadı, eski MCP kaydı temizliği atlandı.")
             return
-        ClaudeCodeProvider._stale_user_scope_cleaned = True
 
         # Allow-list env, never the parent's (measured 2026-07-29: without
         # env= the child saw LOCAL_APP_TOKEN, the DB key and vendor keys).
         _env = build_spawn_env(env_family(self.binary_name))
+        all_ran = True
         for name in ("unityai", "unityMCP"):
             try:
                 sp.run(self._resolve_exec(["claude", "mcp", "remove", name, "--scope", "user"]),
                        capture_output=True, timeout=5, env=_env)
             except Exception as e:
+                all_ran = False
                 logger.warning(f"[CLIProvider] Claude {name} eski kaydı silinemedi: "
                                f"{redact_secrets(str(e))}")
+        # Marked only once both removals returned (any exit code: a name that
+        # is already gone exits non-zero), so a failed spawn retries next call.
+        # No lock: two first calls may both run it, and remove is idempotent.
+        if all_ran:
+            ClaudeCodeProvider._stale_user_scope_cleaned = True

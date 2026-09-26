@@ -144,6 +144,57 @@ def test_the_stale_entry_cleanup_runs_once_per_process(monkeypatch, tmp_path):
     assert again.calls == []
 
 
+def _cleanup_calls(monkeypatch, tmp_path, run):
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", run)
+    ClaudeCodeProvider("claude-opus-5")._register_mcp("launcher", str(tmp_path), "http://x")
+
+
+def test_a_failed_cleanup_spawn_is_retried_on_the_next_call(monkeypatch, tmp_path):
+    """The flag was set before the removals ran, so one failed spawn skipped
+    the cleanup until the backend restarted."""
+    monkeypatch.setattr(ClaudeCodeProvider, "_stale_user_scope_cleaned", False)
+    monkeypatch.setattr(BaseCLIProvider, "_cli_installed", staticmethod(lambda name: True))
+    monkeypatch.setattr(ClaudeCodeProvider, "_resolve_exec", staticmethod(lambda cmd: list(cmd)))
+
+    def spawn_fails(cmd, **_kw):
+        raise FileNotFoundError("claude")
+    _cleanup_calls(monkeypatch, tmp_path, spawn_fails)
+    assert ClaudeCodeProvider._stale_user_scope_cleaned is False
+
+    retry = _Recorder()
+    _cleanup_calls(monkeypatch, tmp_path, retry)
+    assert [c[3] for c in retry.calls] == ["unityai", "unityMCP"]
+    assert ClaudeCodeProvider._stale_user_scope_cleaned is True
+
+
+def test_one_failed_removal_out_of_two_still_retries(monkeypatch, tmp_path):
+    monkeypatch.setattr(ClaudeCodeProvider, "_stale_user_scope_cleaned", False)
+    monkeypatch.setattr(BaseCLIProvider, "_cli_installed", staticmethod(lambda name: True))
+    monkeypatch.setattr(ClaudeCodeProvider, "_resolve_exec", staticmethod(lambda cmd: list(cmd)))
+    import subprocess
+    ok = _Recorder()
+
+    def second_times_out(cmd, **kw):
+        if "unityMCP" in cmd:
+            raise subprocess.TimeoutExpired(cmd, 5)
+        return ok(cmd, **kw)
+    _cleanup_calls(monkeypatch, tmp_path, second_times_out)
+    assert ClaudeCodeProvider._stale_user_scope_cleaned is False
+
+
+def test_a_nonzero_exit_counts_as_ran(monkeypatch, tmp_path):
+    """`remove` of a name that is not there exits non-zero; that is done."""
+    monkeypatch.setattr(ClaudeCodeProvider, "_stale_user_scope_cleaned", False)
+    monkeypatch.setattr(BaseCLIProvider, "_cli_installed", staticmethod(lambda name: True))
+    monkeypatch.setattr(ClaudeCodeProvider, "_resolve_exec", staticmethod(lambda cmd: list(cmd)))
+
+    class _Missing:
+        returncode = 1
+    _cleanup_calls(monkeypatch, tmp_path, lambda cmd, **kw: _Missing())
+    assert ClaudeCodeProvider._stale_user_scope_cleaned is True
+
+
 def test_the_inline_unityai_entry_matches_the_workspace_mcp_json(monkeypatch, tmp_path):
     """Two places build the unityai entry; they must not drift apart."""
     _unity(monkeypatch, False)
