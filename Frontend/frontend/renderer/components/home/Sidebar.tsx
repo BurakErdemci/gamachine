@@ -132,7 +132,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
             {label}
             {/* The rows that carry the status are hidden behind the Files tab. */}
             {tab === 'chats' && sidebarTab !== 'chats' && (
-              <AwaitingBadge count={awaitingElsewhere(convStatus, activeConvId)} testId="chats-tab-awaiting" />
+              <AwaitingBadge count={awaitingElsewhere(convStatus, activeConvId, conversations)} testId="chats-tab-awaiting" />
             )}
           </button>
         ))}

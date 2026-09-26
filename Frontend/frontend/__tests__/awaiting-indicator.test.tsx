@@ -87,7 +87,7 @@ const Harness: React.FC = () => {
   chat = c
   return (
     <>
-      <SidebarToggle open={open} onToggle={() => _setOpen(!open)} awaiting={awaitingElsewhere(c.convStatus, c.activeConvId)} />
+      <SidebarToggle open={open} onToggle={() => _setOpen(!open)} awaiting={awaitingElsewhere(c.convStatus, c.activeConvId, c.conversations)} />
       <Sidebar
         {...({} as any)}
         isSidebarOpen={open} sidebarTab={tab} setSidebarTab={_setTab}

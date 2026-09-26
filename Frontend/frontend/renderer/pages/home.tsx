@@ -611,7 +611,7 @@ export default function Home() {
             <SidebarToggle
               open={isSidebarOpen}
               onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
-              awaiting={awaitingElsewhere(chat.convStatus, chat.activeConvId)}
+              awaiting={awaitingElsewhere(chat.convStatus, chat.activeConvId, chat.conversations)}
             />
             <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className={`p-1.5 hover:bg-white/[0.06] rounded-lg transition-all shrink-0 ${isTerminalOpen ? 'text-blue-400 bg-blue-500/10' : 'text-slate-500 hover:text-slate-300'}`}>
               <TerminalIcon size={16} />
