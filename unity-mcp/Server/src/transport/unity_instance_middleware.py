@@ -173,7 +173,9 @@ class UnityInstanceMiddleware(Middleware):
             meta = None
         if isinstance(meta, dict):
             claims.append(meta.get(GAMACHINE_CONVERSATION_META_KEY))
-        present = [claim for claim in claims if claim is not None and claim != ""]
+        # An empty value is a source that is present and does not parse, so it
+        # drops the claim like any junk value (Codex s2audit, empty-owner-source).
+        present = [claim for claim in claims if claim is not None]
         if not present:
             return None
         parsed = {parse_conversation_id(claim) for claim in present}

@@ -169,7 +169,7 @@ def test_disagreeing_sources_drop_the_claim(monkeypatch, request_, meta):
     assert _read(monkeypatch, request=request_, meta=meta) is None
 
 
-@pytest.mark.parametrize("header", ["abc", "0", "-4", "4.0", "٤"])
+@pytest.mark.parametrize("header", ["abc", "0", "-4", "4.0", "٤", ""])
 def test_junk_header_drops_the_claim_even_beside_a_valid_meta(monkeypatch, header):
     assert _read(monkeypatch,
                  request=_Request(headers={"X-Gamachine-Conversation": header}),
