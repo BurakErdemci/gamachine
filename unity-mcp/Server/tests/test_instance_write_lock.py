@@ -353,6 +353,61 @@ def test_nested_write_on_the_same_instance_does_not_wait_on_itself(mw, approve_a
     assert events == ["outer-start", "inner", "outer-end", "other"]
 
 
+def test_a_task_spawned_during_a_write_does_not_inherit_its_lock(mw, approve_all):
+    """The re-entry pass belongs to the holding task only; a child task created
+    inside a write must queue like any other chat once that write is over."""
+    events = []
+
+    async def scenario():
+        spawned = {}
+        other_inside = asyncio.Event()
+        release_other = asyncio.Event()
+
+        async def child_write(_context):
+            events.append("child")
+
+        async def outer(_context):
+            async def later():
+                await other_inside.wait()
+                await mw.on_call_tool(_context_write(), child_write)
+            spawned["task"] = asyncio.create_task(later())
+
+        async def other(_context):
+            events.append("other-start")
+            other_inside.set()
+            await release_other.wait()
+            events.append("other-end")
+
+        def _context_write():
+            return _context(WRITE)
+
+        await mw.on_call_tool(_context(WRITE), outer)
+        other_task = asyncio.create_task(mw.on_call_tool(_context(WRITE), other))
+        await other_inside.wait()
+        await asyncio.sleep(0.1)
+        release_other.set()
+        await other_task
+        await spawned["task"]
+
+    asyncio.run(scenario())
+    assert events == ["other-start", "other-end", "child"]
+
+
+def test_a_write_past_its_dispatch_deadline_is_not_sent_even_on_a_free_lock(
+        mw, approve_all, monkeypatch):
+    monkeypatch.setattr(uim, "WRITE_DISPATCH_DEADLINE_S", 0.0)
+
+    async def scenario():
+        async def never(_context):
+            raise AssertionError("dispatched past the deadline")
+
+        with pytest.raises(ToolError, match="NOT sent to Unity"):
+            await mw.on_call_tool(_context(WRITE), never)
+        return mw._write_lock("Game@aaa").locked()
+
+    assert asyncio.run(scenario()) is False
+
+
 @pytest.fixture(scope="module")
 def probe_report():
     completed = subprocess.run(

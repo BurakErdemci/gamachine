@@ -14,7 +14,6 @@ exist, keyed by client_id and otherwise by the constant "global", so in local
 mode one client's set_active_instance re-routed every other client, and on the
 2026-07-28 protocol there is no session to key it by at all.
 """
-from contextvars import ContextVar
 from threading import RLock
 import asyncio
 import logging
@@ -62,19 +61,10 @@ _middleware_lock = RLock()
 WRITE_LOCK_WAIT_S = 30.0
 WRITE_DISPATCH_DEADLINE_S = 160.0
 WRITE_WAIT_LOG_S = 0.5
-# asyncio.wait_for with a timeout <= 0 cancels the acquire before it runs, even
-# on a free lock; this floor gives a spent budget one real try.
-_MIN_LOCK_TRY_S = 0.1
 # Unresolved calls (no instance connected, or several and none chosen) share one
 # key: the tool then picks its own target or fails, so serializing them together
 # is the conservative choice.
 _NO_INSTANCE_KEY = "<unresolved>"
-
-# Instance keys whose write lock the current task already holds. A write whose
-# tool dispatched another write through this middleware (server.call_tool from
-# inside a tool) would otherwise wait on its own lock until the budget ran out.
-_held_write_locks: ContextVar[frozenset[str]] = ContextVar(
-    "unity_held_write_locks", default=frozenset())
 
 
 def get_unity_instance_middleware() -> 'UnityInstanceMiddleware':
@@ -121,6 +111,13 @@ class UnityInstanceMiddleware(Middleware):
         # Keyed by event loop: an asyncio.Lock binds to the first loop that
         # waits on it, and this singleton outlives loops (each asyncio.run in tests).
         self._write_locks: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        # loop -> {instance key: the task holding that lock}. A write whose tool
+        # dispatched another write through this middleware (server.call_tool
+        # from inside a tool) would otherwise wait on its own lock. Keyed by the
+        # task, not a ContextVar: a ContextVar is copied into every child task,
+        # so a task spawned during a write kept the marker after the lock went
+        # to another chat and skipped it (Codex s2audit, contextvar-child-bypass).
+        self._write_holders: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         self._write_locks_guard = RLock()
 
     def _write_lock(self, key: str) -> asyncio.Lock:
@@ -531,14 +528,22 @@ class UnityInstanceMiddleware(Middleware):
         except Exception:
             pass
         key = instance if isinstance(instance, str) and instance else _NO_INSTANCE_KEY
-        held = _held_write_locks.get()
-        if key in held:
+        task = asyncio.current_task()
+        holders = self._write_holders.setdefault(asyncio.get_running_loop(), {})
+        if task is not None and holders.get(key) is task:
             return await call_next(context)
 
         lock = self._write_lock(key)
-        budget = min(WRITE_LOCK_WAIT_S,
-                     WRITE_DISPATCH_DEADLINE_S - (time.monotonic() - arrived_at))
-        budget = max(budget, _MIN_LOCK_TRY_S)
+        remaining = WRITE_DISPATCH_DEADLINE_S - (time.monotonic() - arrived_at)
+        if remaining <= 0:
+            # Past the line the client may already have given up; a free lock
+            # must not turn that into a late write (Codex s2audit).
+            _diag.warning("on_call_tool: write %s on %s not sent, %.1f s past its "
+                          "dispatch deadline", getattr(mesaj, "name", None), key, -remaining)
+            raise ToolError(
+                "The approval took too long for this write to be sent safely. This "
+                "call was NOT sent to Unity and changed nothing; retry it.")
+        budget = min(WRITE_LOCK_WAIT_S, remaining)
         wait_started = time.monotonic()
         try:
             # wait_for, not asyncio.timeout: the server still supports 3.10.
@@ -557,11 +562,11 @@ class UnityInstanceMiddleware(Middleware):
         if waited >= WRITE_WAIT_LOG_S:
             _diag.info("on_call_tool: write %s on %s waited %.2f s for another write",
                        getattr(mesaj, "name", None), key, waited)
-        token = _held_write_locks.set(held | {key})
+        holders[key] = task
         try:
             return await call_next(context)
         finally:
-            _held_write_locks.reset(token)
+            holders.pop(key, None)
             lock.release()
 
     async def _require_approval(self, context: MiddlewareContext) -> None:
