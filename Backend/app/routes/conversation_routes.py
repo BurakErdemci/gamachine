@@ -765,12 +765,27 @@ def create_conversation_router(db, progress_store):
             logger.exception("Claude oturum raporu alınamadı")
             return _fallback("error")
 
-    async def _delete_one_conversation(conv_id: int) -> None:
-        db.delete_conversation(conv_id)
+    def _purge_conversation_state(conv_id: int) -> None:
+        """Synchronous cleanup of a chat whose DB rows are already gone."""
         # Memory store'ları temizle (unbounded growth önlemi)
         scope_plan_store.pop(conv_id, None)
         continuation_store.pop(conv_id, None)
         progress_store.pop(conv_id, None)
+        # Deny, never leave: an open card of a deleted chat was approved by a
+        # later switch to auto (Codex branchaudit, 26 Sep 2026). MCP cards go
+        # the way Stop sends them; in-process gates are woken with no result,
+        # which every waiter reads as a rejection.
+        _abort_pending_mcp_approvals(conv_id)
+        for gate_id in [g for g in (*_APPROVAL_GATES, *_QUESTION_GATES)
+                        if _GATE_OWNERS.get(g) == conv_id]:
+            _release_gate(gate_id, wake=True)
+        # Fiziksel hafıza dosyasını sil
+        try:
+            memory_manager.delete_memory(str(conv_id))
+        except OSError as e:
+            logger.warning(f"[delete] hafıza dosyası silinemedi ({conv_id}): {e}")
+
+    async def _close_conversation_sessions(conv_id: int) -> None:
         # Canlı Claude/Codex session'ı varsa kapat (subprocess sızdırma önlemi)
         try:
             from providers.claude_sdk_session import close_session as _close_claude
@@ -780,23 +795,27 @@ def create_conversation_router(db, progress_store):
             # agy disk-resume durumunu da temizle (UUID→sohbet eşlemesi)
             from providers.agy_session import close_session as _close_agy
             await _close_agy(conv_id)
+            # Cursor/Copilot/OpenCode/Kimi: a running child of a deleted chat
+            # otherwise keeps working (Codex cardaudit, 26 Sep 2026).
+            from providers.oneshot_cli import close_conversation_sessions
+            await close_conversation_sessions(conv_id)
         except Exception as e:
             logger.warning(f"[delete] session kapatma hatası: {e}")
         from agentic import wake_queue
         wake_queue.reset(conv_id)
-        # Fiziksel hafıza dosyasını sil
-        memory_manager.delete_memory(str(conv_id))
 
     @router.delete("/conversations/{conv_id}")
     async def delete_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
         require_conversation_owner(db, x_session_token, conv_id)
-        # A root takes its branches with it (foreign keys are off, so nothing
-        # cascades); a branch goes alone.
-        ids = [conv_id]
-        if db.get_conversation_parent(conv_id) is None:
-            ids += db.get_branch_ids(conv_id)
+        # A root takes its branches with it; a branch goes alone. Every row and
+        # every card is gone BEFORE the first await: deleting one id at a time
+        # let a branch request copy a not-yet-deleted branch under the deleted
+        # root, an orphan that survived (Codex branchaudit, 26 Sep 2026).
+        ids = db.delete_conversation_family(conv_id)
         for cid in ids:
-            await _delete_one_conversation(cid)
+            _purge_conversation_state(cid)
+        for cid in ids:
+            await _close_conversation_sessions(cid)
         return {"status": "success", "deleted_ids": ids}
 
     @router.put("/conversations/{conv_id}")
@@ -823,12 +842,37 @@ def create_conversation_router(db, progress_store):
                 status_code=409,
                 detail="Bu sohbette yanıt hâlâ sürüyor; dal açmak için turun bitmesini bekle.",
             )
+        # Read before creating: a read failure after the commit left a
+        # persisted branch behind a 500.
+        try:
+            memory = memory_manager.load_memory(str(conv_id))
+        except Exception as e:
+            logger.warning(f"[branch] hafıza okunamadı ({conv_id}): {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Sohbetin hafıza dosyası okunamadı; dal açılmadı.",
+            )
         branch = db.create_branch(conv_id)
         if branch is None:
             raise HTTPException(status_code=404, detail="Sohbet bulunamadı.")
-        memory = memory_manager.load_memory(str(conv_id))
         if memory is not None:
-            memory_manager.save_memory(str(branch["id"]), memory)
+            try:
+                memory_manager.save_memory(str(branch["id"]), memory, strict=True)
+            except Exception as e:
+                logger.warning(f"[branch] hafıza kopyalanamadı ({branch['id']}): {e}")
+                # No await since create_branch, so no session, card or store
+                # entry can hang off the new id yet: rows and the partial file
+                # are all there is. Not the full purge on purpose: its Stop-style
+                # MCP abort also denies other chats' unowned cards.
+                db.delete_conversation_family(branch["id"])
+                try:
+                    memory_manager.delete_memory(str(branch["id"]))
+                except OSError as cleanup_error:
+                    logger.warning(f"[branch] yarım hafıza silinemedi: {cleanup_error}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Dalın hafıza kopyası yazılamadı; dal geri alındı.",
+                )
         return branch
 
     @router.put("/conversations/{conv_id}/hidden")

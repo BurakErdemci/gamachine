@@ -19,8 +19,12 @@ class MemoryManager:
     def _get_path(self, chat_id: str) -> Path:
         return self.base_dir / f"memory_{chat_id}.md"
         
-    def save_memory(self, chat_id: str, content: str):
-        """Hafızayı chat bazlı kaydeder."""
+    def save_memory(self, chat_id: str, content: str, *, strict: bool = False):
+        """Hafızayı chat bazlı kaydeder.
+
+        strict=True re-raises the write error; a caller that must not report
+        success on a missing copy (branching) needs to see it.
+        """
         path = self._get_path(chat_id)
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -28,6 +32,8 @@ class MemoryManager:
             logger.info(f"[Memory] Hafıza kaydedildi: {chat_id}")
         except Exception as e:
             logger.error(f"[Memory] Kayıt hatası: {e}")
+            if strict:
+                raise
 
     def load_memory(self, chat_id: str) -> Optional[str]:
         """Hafızayı yükler."""

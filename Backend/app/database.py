@@ -394,6 +394,9 @@ class DatabaseManager:
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            # IMMEDIATE: the root check below and the insert see one snapshot,
+            # so a family delete on another connection cannot land in between.
+            conn.execute('BEGIN IMMEDIATE')
             src = conn.execute(
                 'SELECT user_id, title, memory_summary, parent_id FROM conversations WHERE id = ?',
                 (source_id,)
@@ -402,6 +405,11 @@ class DatabaseManager:
                 return None
             user_id, title, memory_summary, parent_id = src
             root_id = parent_id or source_id
+            if parent_id is not None and conn.execute(
+                'SELECT 1 FROM conversations WHERE id = ?', (root_id,)
+            ).fetchone() is None:
+                # A branch whose root is already deleted: a copy would be an orphan.
+                return None
             title = title or ""
             new_title = title if title.endswith(suffix) else title + suffix
             # Bounding the copy by fork_at makes the recorded fork point exact
@@ -449,6 +457,32 @@ class DatabaseManager:
             conn.execute('DELETE FROM cli_sessions WHERE conversation_id = ?', (conv_id,))
             conn.execute('DELETE FROM conversations WHERE id = ?', (conv_id,))
             conn.commit()
+
+    def delete_conversation_family(self, conv_id: int) -> List[int]:
+        """Delete a chat in one transaction; a root takes its branches with it.
+
+        Returns the deleted ids (root first, then branches by id); [] if the
+        chat is gone. One transaction so no branch can be copied under a root
+        whose family is half deleted.
+        """
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute(
+                'SELECT parent_id FROM conversations WHERE id = ?', (conv_id,)
+            ).fetchone()
+            if row is None:
+                return []
+            ids = [conv_id]
+            if row[0] is None:
+                ids += [r[0] for r in conn.execute(
+                    'SELECT id FROM conversations WHERE parent_id = ? ORDER BY id ASC',
+                    (conv_id,))]
+            marks = ','.join('?' * len(ids))
+            conn.execute(f'DELETE FROM messages WHERE conversation_id IN ({marks})', ids)
+            conn.execute(f'DELETE FROM cli_sessions WHERE conversation_id IN ({marks})', ids)
+            conn.execute(f'DELETE FROM conversations WHERE id IN ({marks})', ids)
+            conn.commit()
+            return ids
 
     # ===================== YENİ: MESAJLAR =====================
     def add_message(self, conversation_id: int, role: str, content: str, smells: list = None) -> int:
