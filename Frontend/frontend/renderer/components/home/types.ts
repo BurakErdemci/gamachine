@@ -37,6 +37,10 @@ export interface Conversation {
   title: string;
   created_at: string;
   updated_at: string;
+  // Branches point at their family's root (the backend flattens nesting);
+  // roots carry null. Absent on an older backend: every chat is then a root.
+  parent_id?: number | null;
+  hidden?: boolean;
 }
 
 // Chat'teki araç chip'i: args = araç girdisi (PARAMETRELER), output = araç sonucu (ÇIKTI),

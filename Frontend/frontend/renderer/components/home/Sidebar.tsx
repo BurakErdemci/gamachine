@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { useLang, type TKey } from '../../lib/i18n';
+import { useLang } from '../../lib/i18n';
 import { 
   Plus, 
   MessageSquare, 
@@ -18,12 +18,7 @@ import {
 import { Conversation, FileEntry, UserData } from './types';
 import { FileTree } from './FileTree';
 import type { ConvStatus } from '../../hooks/home/useChat';
-
-const STATUS_DOT: Record<ConvStatus, { className: string; label: TKey }> = {
-  running: { className: 'bg-blue-400 animate-pulse', label: 'sidebar.statusRunning' },
-  awaiting: { className: 'bg-amber-400', label: 'sidebar.statusAwaiting' },
-  unread: { className: 'bg-emerald-400', label: 'sidebar.statusUnread' },
-};
+import { STATUS_DOT, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -98,6 +93,12 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
 
   if (!user) return null;
 
+  // Branches live in the chat column's tabs; a row stands for its whole family.
+  const roots = rootsOf(conversations);
+  const activeRootId = familyRootId(conversations, activeConvId);
+  const familyIds = (rootId: number) =>
+    [rootId, ...conversations.filter(c => c.parent_id === rootId).map(c => c.id)];
+
   return (
     <motion.aside
       animate={{ width: isSidebarOpen ? 260 : 0, opacity: isSidebarOpen ? 1 : 0 }}
@@ -136,26 +137,29 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
         {sidebarTab === 'chats' ? (
           <div className="p-1.5 space-y-0.5">
             <button onClick={() => createNewConversation()} className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-blue-500 hover:bg-blue-600/10 rounded-lg transition-all font-medium"><Plus size={14} /> {t('sidebar.newChat')}</button>
-            {conversations.map((conv) => (
-              <div key={conv.id} onClick={() => selectConversation(conv)} className={`group relative px-3 py-2.5 rounded-lg transition-all cursor-pointer ${activeConvId === conv.id ? 'bg-white/[0.06] text-slate-100' : 'text-slate-400 hover:bg-white/[0.03] hover:text-slate-200'}`}>
-                {activeConvId === conv.id && (
+            {roots.map((conv) => {
+              const isActive = activeRootId === conv.id;
+              const status = mostUrgent(convStatus, familyIds(conv.id));
+              return (
+              <div key={conv.id} data-testid={`conv-row-${conv.id}`} data-active={isActive || undefined} onClick={() => selectConversation(conv)} className={`group relative px-3 py-2.5 rounded-lg transition-all cursor-pointer ${isActive ? 'bg-white/[0.06] text-slate-100' : 'text-slate-400 hover:bg-white/[0.03] hover:text-slate-200'}`}>
+                {isActive && (
                   <span className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full bg-blue-400/80" />
                 )}
                 <div className="flex items-center gap-2.5">
-                  <MessageSquare size={14} className={activeConvId === conv.id ? "text-blue-400" : "text-slate-600"} />
+                  <MessageSquare size={14} className={isActive ? "text-blue-400" : "text-slate-600"} />
                   <div className="flex-1 overflow-hidden pr-6">
                     {editingId === conv.id ? (
                       <input autoFocus className="bg-[#000000] text-white text-xs w-full px-2 py-1 rounded border border-blue-500 outline-none" value={tempTitle} onChange={e => setTempTitle(e.target.value)} onBlur={() => saveRename(conv.id)} onKeyDown={e => e.key === 'Enter' && saveRename(conv.id)} onClick={e => e.stopPropagation()} />
                     ) : (
                       <div className="flex items-center gap-1.5 min-w-0">
                         <div className="text-[13px] font-medium truncate">{conv.title}</div>
-                        {convStatus?.[conv.id] && (
+                        {status && (
                           <span
                             data-testid={`conv-status-${conv.id}`}
                             role="img"
-                            title={t(STATUS_DOT[convStatus[conv.id]].label)}
-                            aria-label={t(STATUS_DOT[convStatus[conv.id]].label)}
-                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[convStatus[conv.id]].className}`}
+                            title={t(STATUS_DOT[status].label)}
+                            aria-label={t(STATUS_DOT[status].label)}
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[status].className}`}
                           />
                         )}
                       </div>
@@ -169,7 +173,8 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="p-1.5" onClick={() => treeContextMenu && setTreeContextMenu(null)}>

@@ -8,6 +8,8 @@ import { deliveryFromFetch, gateFailure } from './gateResponse';
 import { cevir } from '../../lib/i18n';
 import { parseContextReport } from '../../lib/contextReport';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
+import { apiHataMesaji } from '../../lib/apiError';
+import { familyOf } from '../../lib/convFamily';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -122,6 +124,8 @@ export const useChat = (
   suggestFilePath: (name: string) => string
 ) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const conversationsRef = useRef<Conversation[]>([]);
+  conversationsRef.current = conversations;
   const [activeConvId, setActiveConvIdState] = useState<number | null>(null);
   // Stream loops, the Stop button and the wake channel outlive the render that
   // created them; they read the chat on screen from here, never from a closure.
@@ -380,8 +384,28 @@ export const useChat = (
     } catch (err) { console.error("Mesaj hatası:", err); }
   }, [API, patchConv, refreshContextUsage, rt]);
 
+  // Optimistic: the tab moves at once and moves back if the server refuses.
+  const setBranchHidden = useCallback(async (convId: number, hidden: boolean) => {
+    if (!API) return false;
+    const mark = (h: boolean) =>
+      setConversations(prev => prev.map(c => (c.id === convId ? { ...c, hidden: h } : c)));
+    mark(hidden);
+    try {
+      await axios.put(`${API}/conversations/${convId}/hidden`, { hidden });
+      return true;
+    } catch (err) {
+      mark(!hidden);
+      showToast(apiHataMesaji(err, cevir('branch.hideFailed')), 'error');
+      return false;
+    }
+  }, [API, showToast]);
+
   const selectConversation = useCallback(async (conv: Conversation) => {
     if (editingId) return;
+    // Every way into a chat (closed-branches menu, notification click) lands
+    // here, and a chat on screen must have a tab.
+    const listed = conversationsRef.current.find(c => c.id === conv.id) ?? conv;
+    if (listed.parent_id != null && listed.hidden) void setBranchHidden(conv.id, false);
     setActiveConvId(conv.id);
     // Switching never cancels anything. A chat whose client copy holds more
     // than the server's (a running turn, an open card bound to a client
@@ -398,24 +422,32 @@ export const useChat = (
     // be a claim about a conversation we have not looked at.
     patchConv(conv.id, () => ({ contextUsage: null, unread: false }));
     await fetchMessages(conv.id);
-  }, [editingId, fetchMessages, patchConv, rt, setActiveConvId]);
+  }, [editingId, fetchMessages, patchConv, rt, setActiveConvId, setBranchHidden]);
 
   const deleteConversation = useCallback(async (e: React.MouseEvent, convId: number) => {
     e.stopPropagation();
     if (!user) return;
     if (!(await confirmDialog(cevir('chat.deleteConfirm')))) return;
     try {
-      await axios.delete(`${API}/conversations/${convId}`);
-      // Its cards leave the slot while its messages still say which they are.
-      releaseCards(convId, false);
-      cardSlotsRef.current.delete(convId);
-      // Clearing the turn first makes a still-running loop stop writing, so the
-      // deleted chat's entry is not recreated by a late chunk.
-      turnRef.current.delete(convId);
-      controllersRef.current.get(convId)?.abort();
-      controllersRef.current.delete(convId);
-      dropConv(convId);
-      if (activeConvIdRef.current === convId) setActiveConvId(null);
+      const res = await axios.delete(`${API}/conversations/${convId}`);
+      // Deleting a root takes its branches with it; an older backend does not
+      // list them, and then only the chat itself is known to be gone.
+      const listed = res?.data?.deleted_ids;
+      const ids = Array.from(new Set([convId,
+        ...(Array.isArray(listed) ? listed.map(Number).filter(Number.isSafeInteger) : [])]));
+      for (const id of ids) {
+        // Its cards leave the slot while its messages still say which they are.
+        releaseCards(id, false);
+        cardSlotsRef.current.delete(id);
+        // Clearing the turn first makes a still-running loop stop writing, so
+        // the deleted chat's entry is not recreated by a late chunk.
+        turnRef.current.delete(id);
+        controllersRef.current.get(id)?.abort();
+        controllersRef.current.delete(id);
+        dropConv(id);
+      }
+      if (activeConvIdRef.current != null && ids.includes(activeConvIdRef.current)) setActiveConvId(null);
+      setConversations(prev => prev.filter(c => !ids.includes(c.id)));
       fetchConversations(user.id);
     } catch (err) { console.error("Sohbet silme hatası:", err); }
   }, [API, dropConv, fetchConversations, releaseCards, setActiveConvId, user]);
@@ -446,6 +478,47 @@ export const useChat = (
       return res.data.id;
     } catch (err) { console.error("Yeni sohbet hatası:", err); return null; }
   }, [API, fetchConversations, patchConv, setActiveConvId, user]);
+
+  // "Branch from now": the server copies the source chat's text history into a
+  // new chat under the same root. A chat mid-turn or waiting on a card is
+  // refused here as the server would (409), since the copy would cut the turn.
+  const branchConversation = useCallback(async (sourceId: number) => {
+    if (!user || !API) return null;
+    const src = rt(sourceId);
+    if (src.loading || isAwaiting(src)) {
+      showToast(cevir('branch.busy'), 'error');
+      return null;
+    }
+    const selection = selectionRef.current;
+    try {
+      const res = await axios.post(`${API}/conversations/${sourceId}/branch`);
+      const created = res.data as Conversation;
+      setConversations(prev => (prev.some(c => c.id === created.id) ? prev : [...prev, created]));
+      // A chat the user opened meanwhile stays on screen; the tab still appears.
+      if (selectionRef.current === selection) await selectConversation(created);
+      void fetchConversations(user.id);
+      return created.id;
+    } catch (err: any) {
+      const fallback = err?.response?.status === 409 ? 'branch.busy' : 'branch.failed';
+      showToast(apiHataMesaji(err, cevir(fallback)), 'error');
+      return null;
+    }
+  }, [API, fetchConversations, rt, selectConversation, showToast, user]);
+
+  // Closing a tab hides the branch; nothing is deleted and a running turn
+  // keeps running. Closing the tab on screen moves to its left neighbour.
+  const closeBranch = useCallback(async (convId: number) => {
+    const list = conversationsRef.current;
+    const conv = list.find(c => c.id === convId);
+    if (!conv || conv.parent_id == null) return false;
+    if (activeConvIdRef.current === convId) {
+      const fam = familyOf(list, conv.parent_id);
+      const tabs = [fam.root, ...fam.visible].filter((c): c is Conversation => !!c);
+      const next = tabs[tabs.findIndex(c => c.id === convId) - 1];
+      if (next) void selectConversation(next);
+    }
+    return setBranchHidden(convId, true);
+  }, [selectConversation, setBranchHidden]);
 
   // A turn that finished off screen is re-read from the server once, so its
   // ids and persisted content line up. Only called for a clean finish with
@@ -1101,6 +1174,7 @@ export const useChat = (
     tempTitle, setTempTitle,
     fetchConversations, fetchMessages, createNewConversation,
     selectConversation, deleteConversation, saveRename,
+    branchConversation, setBranchHidden, closeBranch,
     convStatus, attention,
     sendMessage, stopMessage,
     clearHistory, analyzeProject, exportMemory, importMemory, compactConversation,

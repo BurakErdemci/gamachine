@@ -38,6 +38,8 @@ import { useChatNotifications } from '../hooks/home/useChatNotifications';
 import { useAutoScroll } from '../hooks/home/useAutoScroll';
 import { McpApprovalCards } from '../components/home/McpApprovalCards';
 import { McpUnknownTray } from '../components/home/McpUnknownTray';
+import { ChatTabs, BranchButton, hasBranches } from '../components/home/ChatTabs';
+import { rootsOf } from '../lib/convFamily';
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
 // this app needs, and off the server render (it touches WebGL on mount).
@@ -548,6 +550,12 @@ export default function Home() {
   }
 
   const pane = contentPane(fs.previewFile, diffFile, fs.openedFilePath);
+  // Branching copies the chat as it stands; mid-turn or with a card open there
+  // is no settled "now" to copy (the backend answers 409 for the same case).
+  const branchBlocked = chat.loading
+    || (chat.activeConvId != null && chat.convStatus[chat.activeConvId] === 'awaiting')
+    || !!chat.pendingCommand || !!chat.pendingQuestion || !!fs.pendingDelete || !!fs.pendingGenFiles;
+  const familyHasBranches = hasBranches(chat.conversations, chat.activeConvId);
   // Which preview panel the open file belongs to; the two share one slot.
   const previewRoute = fs.previewFile ? routeForFile(fs.previewFile.path) : null;
 
@@ -708,13 +716,13 @@ export default function Home() {
                 ))}
               </div>
               {/* Son sohbetler — boş ekran gerçek bir karşılamaya dönüşsün */}
-              {chat.conversations.length > 0 && (
+              {rootsOf(chat.conversations).length > 0 && (
                 <div className="w-full max-w-lg relative">
                   <div className="text-[10px] uppercase tracking-widest text-slate-600 font-semibold mb-2 text-left">
                     {t('chat.recent')}
                   </div>
                   <div className="space-y-1.5">
-                    {chat.conversations.slice(0, 3).map((conv) => (
+                    {rootsOf(chat.conversations).slice(0, 3).map((conv) => (
                       <button
                         key={conv.id}
                         onClick={() => { chat.selectConversation(conv); setIsChatOpen(true); }}
@@ -758,8 +766,23 @@ export default function Home() {
               />
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Architect Copilot</span>
             </div>
-            <button onClick={() => setIsChatOpen(false)} className="p-1 hover:bg-white/[0.06] rounded transition-all text-slate-500 hover:text-slate-300"><PanelRightClose size={16} /></button>
+            <div className="flex items-center gap-1">
+              {!familyHasBranches && (
+                <BranchButton sourceId={chat.activeConvId} blocked={branchBlocked} onBranch={chat.branchConversation} />
+              )}
+              <button onClick={() => setIsChatOpen(false)} className="p-1 hover:bg-white/[0.06] rounded transition-all text-slate-500 hover:text-slate-300"><PanelRightClose size={16} /></button>
+            </div>
           </div>
+
+          <ChatTabs
+            conversations={chat.conversations}
+            activeConvId={chat.activeConvId}
+            convStatus={chat.convStatus}
+            branchBlocked={branchBlocked}
+            onSelect={chat.selectConversation}
+            onBranch={chat.branchConversation}
+            onClose={chat.closeBranch}
+          />
 
           {/* Outside ChatPanel on purpose: these requests belong to no chat,
               so they stay here whichever chat is open. */}
