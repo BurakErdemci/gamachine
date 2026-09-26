@@ -810,8 +810,17 @@ class BaseCLIProvider(AIProvider):
                                 # Ancak provider yoğunluğu/rate-limit kaynaklı genel
                                 # upstream hatası session bozulması değildir; bağlamı koru.
                                 if self.binary_name.startswith("opencode:"):
-                                    from .oneshot_cli import opencode_access_message
-                                    if opencode_access_message(_err):
+                                    from .oneshot_cli import (
+                                        QUOTA_ERROR_RE, opencode_access_message,
+                                    )
+                                    if QUOTA_ERROR_RE.search(_err):
+                                        # A 429/limit leaves the session intact;
+                                        # resetting it lost the chat's context.
+                                        _event.update({
+                                            "reason": "provider_quota",
+                                            "retryable": True,
+                                        })
+                                    elif opencode_access_message(_err):
                                         # Plan/free-tier refusal: the session is
                                         # intact and a retry gets the same 403.
                                         _event.update({

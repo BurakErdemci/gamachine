@@ -458,6 +458,23 @@ class TestEventParsing(unittest.TestCase):
                 self.assertFalse(error["retryable"])
                 self.assertNotIn("reset_session", error)
 
+    def test_opencode_rate_limit_error_keeps_resume_session(self):
+        """Codex tabverify: a structured 429 without "Upstream request failed"
+        fell to structured_error and reset the session."""
+        from providers.opencode_provider import OpenCodeProvider
+
+        p = OpenCodeProvider(binary_name="opencode:opencode/big-pickle")
+        lines = [json.dumps({
+            "type": "error",
+            "sessionID": "ses_429",
+            "error": {"name": "APIError",
+                      "data": {"message": "429 rate limit exceeded", "statusCode": 429,
+                               "isRetryable": True}},
+        })]
+        error = [e for e in self._run_provider(p, lines) if e["type"] == "error"][0]
+        self.assertEqual(error["reason"], "provider_quota")
+        self.assertNotIn("reset_session", error)
+
     def test_rate_limit_text_is_never_read_as_an_access_refusal(self):
         """Codex tabaudit: a 429 carrying the Go phrase was shown as "retrying
         will not help". Any quota/limit wording keeps the quota mapping."""
