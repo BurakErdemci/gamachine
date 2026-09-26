@@ -430,6 +430,34 @@ class TestEventParsing(unittest.TestCase):
         self.assertTrue(error["retryable"])
         self.assertNotIn("reset_session", error)
 
+    def test_opencode_access_refusals_are_not_retryable_and_keep_session(self):
+        """Go-subscription and free-tier 403s (captured live 26 Sep 2026) are
+        plan refusals, not rate limits; the Go one is wrapped in
+        "Upstream request failed" and must not fall into that branch."""
+        from providers.opencode_provider import OpenCodeProvider
+
+        for model, message in (
+            ("opencode-go/space-bunny-free",
+             "Upstream request failed: An active OpenCode Go subscription is "
+             "required to use Go models."),
+            ("opencode/ling-3.0-flash-fin-free",
+             "Error from provider (Console): OpenCode's free tier can only be "
+             "used from within OpenCode"),
+        ):
+            with self.subTest(model=model):
+                p = OpenCodeProvider(binary_name=f"opencode:{model}")
+                lines = [json.dumps({
+                    "type": "error",
+                    "sessionID": "ses_access",
+                    "error": {"name": "APIError",
+                              "data": {"message": message, "statusCode": 403,
+                                       "isRetryable": False}},
+                })]
+                error = [e for e in self._run_provider(p, lines) if e["type"] == "error"][0]
+                self.assertEqual(error["reason"], "provider_access")
+                self.assertFalse(error["retryable"])
+                self.assertNotIn("reset_session", error)
+
     def test_cli_timeout_uses_idle_time_not_five_minute_total_runtime(self):
         """Aktif CLI toplam 5 dakikayı geçti diye öldürülmemeli."""
         from providers.cli_base import BaseCLIProvider
@@ -500,6 +528,52 @@ class TestOneShotSessionRecovery(unittest.TestCase):
         self.assertIsNone(session.session_id)
         self.assertFalse(session.ctx_injected)
         _SESSIONS.clear()
+
+    def test_opencode_error_text_separates_plan_refusal_from_rate_limit(self):
+        """The Go-subscription 403 used to show the "temporarily refused /
+        rate limit, retry later" text (owner report, 26 Sep 2026)."""
+        from agentic.agent_runner import AgentRunner
+        from providers.oneshot_cli import _SESSIONS
+
+        def run(raw_error):
+            class FakeOpenCodeProvider:
+                resume_session_id = None
+
+                async def analyze_code(self, *args, **kwargs):
+                    yield {"type": "session_meta", "session_id": "ses_keep"}
+                    yield {"type": "error", "content": f"❌ CLI hatası: APIError: {raw_error}"}
+
+            _SESSIONS.clear()
+            runner = AgentRunner(
+                provider_type="subscription", api_key="",
+                model_name="opencode:opencode-go/space-bunny-free",
+                workspace_path=os.getcwd(), conversation_id=995,
+            )
+
+            async def collect():
+                return [e async for e in runner._run_oneshot_cli_session("selam", "opencode")]
+
+            with patch("ai_providers.AIProviderManager.get_provider",
+                       return_value=FakeOpenCodeProvider()):
+                events = asyncio.run(collect())
+            _SESSIONS.clear()
+            return [e.data["message"] for e in events if e.type == "error"][0]
+
+        go = run("Upstream request failed: An active OpenCode Go subscription is "
+                 "required to use Go models.")
+        self.assertIn("OpenCode Go aboneliği gerektiriyor", go)
+        self.assertNotIn("geçici olarak reddetti", go)
+
+        free = run("Error from provider (Console): OpenCode's free tier can only be "
+                   "used from within OpenCode")
+        self.assertIn("yalnız kendi uygulaması içinden", free)
+        self.assertNotIn("geçici olarak reddetti", free)
+
+        upstream = run("Error from provider (Console Go): Upstream request failed")
+        self.assertIn("geçici olarak reddetti", upstream)
+
+        quota = run("Rate limit reached for requests")
+        self.assertIn("kullanım hakkın dolmuş", quota)
 
     def test_cancelled_agy_stream_closes_persistent_session(self):
         from agentic.agent_runner import AgentRunner
@@ -967,6 +1041,17 @@ class TestModelListParsers(unittest.TestCase):
         self.assertEqual(len(models), 3)
         self.assertIn("opencode:opencode-go/kimi-k3", ids)
         self.assertNotIn("opencode:google/gemini-3.5-flash", ids)
+
+    def test_opencode_go_free_suffix_is_labelled_go_not_free(self):
+        """opencode-go/*-free still needs the Go subscription (403, measured
+        26 Sep 2026); only opencode/*-free is the keyless free tier."""
+        from routes.config_routes import _parse_opencode_models
+
+        names = {m["id"]: m["name"] for m in _parse_opencode_models(
+            "opencode/space-bunny-free\nopencode-go/space-bunny-free\nopencode-go/kimi-k3\n")}
+        self.assertEqual(names["opencode:opencode/space-bunny-free"], "Space Bunny (Ücretsiz)")
+        self.assertEqual(names["opencode:opencode-go/space-bunny-free"], "Space Bunny (Go)")
+        self.assertEqual(names["opencode:opencode-go/kimi-k3"], "Kimi K3 (Go)")
 
 
 

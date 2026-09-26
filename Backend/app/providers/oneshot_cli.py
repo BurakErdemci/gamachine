@@ -283,6 +283,38 @@ UPSTREAM_ERROR_RE = _re.compile(
     _re.I,
 )
 
+# OpenCode access refusals: 403 with isRetryable=false, so retrying never
+# helps. Both measured 26 Sep 2026 on opencode 1.18.25. The Go one arrives
+# wrapped in "Upstream request failed", so it must be checked BEFORE
+# UPSTREAM_ERROR_RE or it reads as a transient rate limit.
+#   "Upstream request failed: An active OpenCode Go subscription is required to use Go models."
+#   "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"
+# The free-tier refusal is per model (ling-3.0-flash-fin-free refused,
+# space-bunny-free served) and fired only while the workspace opencode.json
+# set permission.bash to "deny" (4/4 refused with it, 5/5 served without).
+OPENCODE_GO_SUBSCRIPTION_RE = _re.compile(
+    r"opencode go subscription is required|subscription is required to use go models",
+    _re.I,
+)
+OPENCODE_FREE_TIER_RE = _re.compile(
+    r"free tier can only be used from within opencode|FreeTierError", _re.I)
+
+
+def opencode_access_message(msg: str) -> Optional[str]:
+    """User-facing text for an OpenCode plan/free-tier refusal, else None."""
+    if OPENCODE_GO_SUBSCRIPTION_RE.search(msg or ""):
+        return ("🔒 Bu model OpenCode Go aboneliği gerektiriyor ve OpenCode hesabında "
+                "etkin bir Go aboneliği görünmüyor. Bu geçici bir yoğunluk değil; tekrar "
+                "denemek işe yaramaz. Go aboneliğini etkinleştir ya da model seçiciden "
+                "\"(Ücretsiz)\" etiketli bir OpenCode modeli veya başka bir sağlayıcı seç. "
+                "Oturum bağlamı korundu.")
+    if OPENCODE_FREE_TIER_RE.search(msg or ""):
+        return ("🔒 OpenCode bu ücretsiz modeli yalnız kendi uygulaması içinden "
+                "kullandırıyor ve Gamachine'den gelen isteği reddetti. Bu geçici bir "
+                "yoğunluk değil; tekrar denemek işe yaramaz. Başka bir ücretsiz OpenCode "
+                "modeli ya da başka bir sağlayıcı seç. Oturum bağlamı korundu.")
+    return None
+
 
 def clear_plan_caps() -> None:
     """↻ Yenile: Cursor/Copilot named-model yeteneklerini baştan öğren."""

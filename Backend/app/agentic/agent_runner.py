@@ -2367,8 +2367,13 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                             from providers.oneshot_cli import (
                                 QUOTA_ERROR_RE as _QRE,
                                 UPSTREAM_ERROR_RE as _URE,
+                                opencode_access_message,
                             )
-                            if _QRE.search(_msg):
+                            _access = (opencode_access_message(_msg)
+                                       if cli_key == "opencode" else None)
+                            if _access:
+                                _msg = _access + "\n\n" + _msg[:300]
+                            elif _QRE.search(_msg):
                                 _msg = (f"⏳ {cli_key.capitalize()} kullanım hakkın dolmuş görünüyor "
                                         f"(plan kotası). Kota yenilenene kadar başka bir sağlayıcı "
                                         f"seçebilirsin (örn. NVIDIA ücretsiz havuzu veya OpenCode).\n\n"

@@ -155,9 +155,14 @@ def _parse_opencode_models(raw: str) -> list:
         provider, short = line.split("/", 1)
         pretty = short.replace("-", " ").title()
         if short.endswith("-free"):
-            pretty = pretty[:-5].strip() + " (Ücretsiz)"
-        elif provider == "opencode-go":
+            pretty = pretty[:-5].strip()
+        # Provider decides the label, not the "-free" suffix: opencode-go also
+        # lists "-free" ids (space-bunny-free, longcat-2.5-preview-free) and they
+        # still answer 403 "Go subscription is required" (measured 26 Sep 2026).
+        if provider == "opencode-go":
             pretty += " (Go)"
+        elif short.endswith("-free"):
+            pretty += " (Ücretsiz)"
         models.append({"id": f"opencode:{line}", "name": pretty, "provider": "subscription"})
     return models
 

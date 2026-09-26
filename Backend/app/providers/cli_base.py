@@ -810,7 +810,15 @@ class BaseCLIProvider(AIProvider):
                                 # Ancak provider yoğunluğu/rate-limit kaynaklı genel
                                 # upstream hatası session bozulması değildir; bağlamı koru.
                                 if self.binary_name.startswith("opencode:"):
-                                    if re.search(
+                                    from .oneshot_cli import opencode_access_message
+                                    if opencode_access_message(_err):
+                                        # Plan/free-tier refusal: the session is
+                                        # intact and a retry gets the same 403.
+                                        _event.update({
+                                            "reason": "provider_access",
+                                            "retryable": False,
+                                        })
+                                    elif re.search(
                                         r"upstream request failed|service unavailable|"
                                         r"temporarily unavailable",
                                         _err,
