@@ -276,6 +276,12 @@ QUOTA_ERROR_RE = _re.compile(
     r"(usage limit|rate limit|quota|too many requests|\b429\b|"
     r"out of (free )?credits|limit reached|hakk?ınız)", _re.I)
 
+# Narrower than QUOTA_ERROR_RE, for deciding whether a session survives an
+# error: a bare "limit reached" also covers "context limit reached", and a
+# session that overflowed its context must be reset, not resumed again.
+RATE_LIMIT_ERROR_RE = _re.compile(
+    r"(\b429\b|rate.?limit|too many requests|usage limit|quota)", _re.I)
+
 # OpenCode Go kimi zaman gerçek rate-limit nedenini kendi loguna yazıp JSON
 # event'inde yalnız genel bir upstream hatası döndürüyor.
 UPSTREAM_ERROR_RE = _re.compile(

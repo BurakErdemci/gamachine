@@ -475,6 +475,25 @@ class TestEventParsing(unittest.TestCase):
         self.assertEqual(error["reason"], "provider_quota")
         self.assertNotIn("reset_session", error)
 
+    def test_opencode_context_limit_error_still_resets_session(self):
+        """Codex tabverify2: "limit reached" is also a context overflow, and a
+        session that cannot resume must be reset, not retried forever."""
+        from providers.opencode_provider import OpenCodeProvider
+
+        for message in (
+            "ProviderError: Interrupted session cannot be resumed: context limit reached",
+            "maximum context limit reached",
+        ):
+            with self.subTest(message=message):
+                p = OpenCodeProvider(binary_name="opencode:opencode/big-pickle")
+                lines = [json.dumps({
+                    "type": "error",
+                    "sessionID": "ses_overflow",
+                    "error": {"name": "APIError", "data": {"message": message}},
+                })]
+                error = [e for e in self._run_provider(p, lines) if e["type"] == "error"][0]
+                self.assertTrue(error.get("reset_session"))
+
     def test_rate_limit_text_is_never_read_as_an_access_refusal(self):
         """Codex tabaudit: a 429 carrying the Go phrase was shown as "retrying
         will not help". Any quota/limit wording keeps the quota mapping."""
