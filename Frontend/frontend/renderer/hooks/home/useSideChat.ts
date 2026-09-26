@@ -156,7 +156,10 @@ export const useSideChat = (API: string, user: UserData | null) => {
       if (res.status === 404 && mainIdRef.current != null) {
         // The idle sweep took the side chat; a fresh one carries on.
         const fresh = await createSide(mainIdRef.current);
-        if (fresh != null && epochRef.current === epoch) {
+        if (fresh != null && epochRef.current !== epoch) {
+          // Closed while reopening: the new row would outlive the panel.
+          discard(fresh);
+        } else if (fresh != null) {
           sideIdRef.current = fresh;
           setSideId(fresh);
           target = fresh;
@@ -207,7 +210,7 @@ export const useSideChat = (API: string, user: UserData | null) => {
         patch(m => ({ ...m, finished: true }));
       }
     }
-  }, [headers, createSide]);
+  }, [headers, createSide, discard]);
 
   // Best effort: the server's idle sweep catches whatever these miss.
   useEffect(() => {
