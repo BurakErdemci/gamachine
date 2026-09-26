@@ -20,6 +20,24 @@ const resolveArg = <T,>(arg: SetArg<T>, prev: T): T =>
 
 export type ConvStatus = 'running' | 'awaiting' | 'unread';
 
+/** How a chat's last turn ended on its own; a user Stop records nothing. */
+export type TurnEnd = { seq: number; failed: boolean };
+
+/**
+ * What the desktop notifications watch per chat (`useChatNotifications`).
+ * Every id is stable for the request it names, so a re-render or a poll that
+ * reports the same state again produces no new id.
+ */
+export interface ChatAttention {
+  /** Approval requests raised by the chat's own stream: gate ids and file-card markers. */
+  approvals: string[];
+  /** Unity bridge requests this chat owns, as reported by `/mcp-pending`. */
+  bridgeGates: string[];
+  /** Same predicate as the sidebar's "awaiting approval". */
+  awaiting: boolean;
+  turnEnd: TurnEnd | null;
+}
+
 /**
  * Everything one conversation owns while it runs. Parallel chats (Phase 3):
  * a turn keeps streaming after the user opens another chat, so every write a
@@ -58,6 +76,11 @@ interface ConvRuntime {
   // state for `hasClientState`: they are bound to no message, and the chat may
   // have been started by a renderer that has since reloaded.
   bridgeGates: string[];
+  // Sequence number of the newest file card this chat's stream raised; 0 for
+  // none. File cards have no gate id, and a card parked again when its chat
+  // is left must not read as a new request.
+  lastCard: number;
+  turnEnd: TurnEnd | null;
   // A turn finished while another chat was on screen.
   unread: boolean;
   // That turn has not been re-read from the server yet (its ids are client
@@ -72,7 +95,8 @@ interface ConvRuntime {
 const EMPTY_RUNTIME: ConvRuntime = {
   messages: [], loading: false, activity: null, contextUsage: null,
   pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
-  parkedCards: [], bridgeGates: [], unread: false, unsynced: false, clientOnly: false,
+  parkedCards: [], bridgeGates: [], lastCard: 0, turnEnd: null,
+  unread: false, unsynced: false, clientOnly: false,
 };
 
 // Runtime key while no conversation is selected. Database ids start at 1.
@@ -82,6 +106,9 @@ const keyOf = (id: number | null | undefined) => id ?? NO_CONV;
 const hasClientState = (r: ConvRuntime) =>
   r.loading || !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0
   || r.unsynced || r.clientOnly;
+
+const isAwaiting = (r: ConvRuntime) =>
+  !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0 || r.bridgeGates.length > 0;
 
 type SlotSetter = (val: any) => void;
 
@@ -287,6 +314,7 @@ export const useChat = (
   // stopped or superseded stream loop checks it and stops writing, so a late
   // chunk of an old turn cannot touch the next turn's cards or loading flag.
   const turnRef = useRef<Map<number, number>>(new Map());
+  const eventSeqRef = useRef(0);
   // AUTO-WAKE: arguments needed to start a turn that this hook does NOT own
   // (language, generation mode, thinking level, and two card setters live in
   // the page component). Since a wake turn starts without user input, it
@@ -488,6 +516,7 @@ export const useChat = (
     // File cards go straight to useFileSystem's slot only while this chat is
     // on screen; otherwise they wait in this chat's entry (see `parkedCards`).
     const fileCard = (kind: 'gen' | 'del', card: { messageId: number; [field: string]: unknown }) => {
+      patchConv(targetConvId, () => ({ lastCard: ++eventSeqRef.current }));
       const set: SlotSetter = kind === 'gen' ? setPendingGenFiles : setPendingDelete;
       const handOver = () => {
         cardSlotsRef.current.set(targetConvId, { ...cardSlotsRef.current.get(targetConvId), [kind]: set });
@@ -500,6 +529,7 @@ export const useChat = (
     // makes an off-screen refresh lossy; then the live copy is kept instead.
     let lossy = false;
     let finishedCleanly = false;
+    let errored = false;
 
     const userMsg: Message = { 
       id: Date.now(), 
@@ -609,6 +639,7 @@ export const useChat = (
               // that names another chat is not this stream's to apply.
               if (data.conversation_id != null && Number(data.conversation_id) !== targetConvId) continue;
               if (data.type === 'done' || data.type === 'response') finishedCleanly = true;
+              if (data.type === 'error') errored = true;
               updateMessages(prev => prev.map(msg => {
                 if (msg.id === aiMsgId) {
                   const updated = { ...msg };
@@ -817,6 +848,7 @@ export const useChat = (
     } catch (err: any) {
       if (err?.name !== 'AbortError' && ownsTurn()) {
         lossy = true;
+        errored = true;
         updateMessages(prev => [...prev, { id: Date.now() + 2, role: 'assistant', content: cevir('chat.errorOccurred'), smells: [], timestamp: new Date().toISOString() }]);
       }
     } finally {
@@ -828,6 +860,8 @@ export const useChat = (
         patchConv(targetConvId, r => ({
           loading: false, activity: null, unread: !visible, unsynced: !visible,
           clientOnly: r.clientOnly || lossy,
+          // A stream that ended without `done`/`response` did not finish.
+          turnEnd: { seq: ++eventSeqRef.current, failed: errored || !finishedCleanly },
         }));
         if (!visible && finishedCleanly && !lossy) void syncFinished(targetConvId);
       }
@@ -1024,7 +1058,7 @@ export const useChat = (
     for (const [key, r] of Object.entries(runtimes)) {
       const id = Number(key);
       if (id === NO_CONV) continue;
-      if (r.pendingCommand || r.pendingQuestion || r.parkedCards.length > 0 || r.bridgeGates.length > 0) {
+      if (isAwaiting(r)) {
         out[id] = 'awaiting';
       }
       else if (r.loading) out[id] = 'running';
@@ -1032,6 +1066,21 @@ export const useChat = (
     }
     return out;
   }, [runtimes, activeConvId]);
+
+  const attention = useMemo(() => {
+    const out: Record<number, ChatAttention> = {};
+    for (const [key, r] of Object.entries(runtimes)) {
+      const id = Number(key);
+      if (id === NO_CONV) continue;
+      const approvals = [
+        ...[r.pendingCommand, ...r.commandQueue].filter(Boolean).map(c => `cmd:${c!.gateId}`),
+        ...[r.pendingQuestion, ...r.questionQueue].filter(Boolean).map(q => `q:${q!.gateId}`),
+      ];
+      if (r.lastCard) approvals.push(`card:${r.lastCard}`);
+      out[id] = { approvals, bridgeGates: r.bridgeGates, awaiting: isAwaiting(r), turnEnd: r.turnEnd };
+    }
+    return out;
+  }, [runtimes]);
 
   return {
     conversations, setConversations,
@@ -1051,7 +1100,7 @@ export const useChat = (
     tempTitle, setTempTitle,
     fetchConversations, fetchMessages, createNewConversation,
     selectConversation, deleteConversation, saveRename,
-    convStatus,
+    convStatus, attention,
     sendMessage, stopMessage,
     clearHistory, analyzeProject, exportMemory, importMemory, compactConversation,
     // Kararı backend'e iletir ve İLETİLDİĞİNİ DOĞRULAR. Yanıt gövdesi eskiden

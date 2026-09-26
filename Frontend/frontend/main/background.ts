@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import net from 'net'
 import { randomUUID, createHash } from 'crypto'
-import { app, ipcMain, dialog, shell } from 'electron'
+import { app, ipcMain, dialog, shell, BrowserWindow, Notification } from 'electron'
 import serve from 'electron-serve'
 import { createWindow } from './helpers'
 import { spawn, ChildProcess } from 'child_process'
@@ -38,6 +38,7 @@ import {
   WORKSPACE_FINGERPRINT_ALGO,
   hostWorkspaceFingerprint,
 } from './helpers/workspace-fingerprint'
+import { createNotifier } from './helpers/notify'
 
 const useDockerBackend = process.env.USE_DOCKER_BACKEND === 'true'
 
@@ -805,6 +806,17 @@ handleSecure('host-workspace-path', (_event, backendPath: unknown) => {
   return toBackendPath(real, root) ? real : ''
 })
 handleSecure('get-backend-base-url', () => getBackendBaseUrl())
+
+// `Notification` is read inside the closures, not here: test harnesses load
+// this module with an `electron` mock that has no such export.
+const notifier = createNotifier({
+  isSupported: () => Notification.isSupported(),
+  create: (options) => new Notification(options),
+})
+
+// The window to raise on click is the one that asked, not "the first window".
+handleSecure('notify', (event, payload: unknown) =>
+  notifier.show(payload, BrowserWindow.fromWebContents(event.sender)))
 
 function findAvailablePort(): Promise<number> {
   return new Promise((resolve, reject) => {

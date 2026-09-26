@@ -76,8 +76,17 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // 28 → 29, 25 Eyl 2026: 'approval-mode-set' eklendi. Küresel onay modunu
   // (auto/step) yalnız uygulama arayüzü değiştirebilsin diye yazma ana süreçten
   // geçiyor; backend'e giden UI sırrı renderer'a hiç verilmiyor.
-  it('tam olarak 29 kanal içerir', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(29)
+  //
+  // 29 -> 30, 26 Sep 2026: 'notify' (desktop notifications for background
+  // chats). It touches no file and returns no data: the main process shows a
+  // title and a body after checking the payload's shape, and on click sends
+  // back only the conversation id it was given (see helpers/notify.ts).
+  it('tam olarak 30 kanal içerir', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(30)
+  })
+
+  it("notify kanalı whitelist'te", () => {
+    expect(ALLOWED_INVOKE_CHANNELS.has('notify')).toBe(true)
   })
 
   it("approval-mode-set kanalı whitelist'te", () => {

@@ -23,6 +23,13 @@ export const tr = {
   'sidebar.statusRunning': 'Çalışıyor',
   'sidebar.statusAwaiting': 'Onay bekliyor',
   'sidebar.statusUnread': 'Bitti, okunmadı',
+  // Desktop notifications (useChatNotifications)
+  'notify.title': 'Gamachine',
+  'notify.untitledChat': 'Adsız sohbet',
+  'notify.awaiting': '{baslik}: onay bekliyor',
+  'notify.finished': '{baslik}: bitti',
+  'notify.failed': '{baslik}: hatayla durdu',
+  'notify.trayAwaiting': 'Kaynağı bilinmeyen bir onay isteği bekliyor',
   // ControlPanel
   'thinking.off': 'Kapalı',
   'thinking.low': 'Düşük',
@@ -555,6 +562,13 @@ export const en: Record<keyof typeof tr, string> = {
   'sidebar.statusRunning': 'Running',
   'sidebar.statusAwaiting': 'Awaiting approval',
   'sidebar.statusUnread': 'Finished, unread',
+  // Desktop notifications (useChatNotifications)
+  'notify.title': 'Gamachine',
+  'notify.untitledChat': 'Untitled chat',
+  'notify.awaiting': '{baslik}: approval needed',
+  'notify.finished': '{baslik}: finished',
+  'notify.failed': '{baslik}: stopped with an error',
+  'notify.trayAwaiting': 'An approval request from an unknown source is waiting',
   // ControlPanel
   'thinking.off': 'Off',
   'thinking.low': 'Low',

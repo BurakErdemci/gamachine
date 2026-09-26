@@ -34,6 +34,7 @@ import { useFileSystem } from '../hooks/home/useFileSystem';
 import { useChat } from '../hooks/home/useChat';
 import { useAIConfig } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
+import { useChatNotifications } from '../hooks/home/useChatNotifications';
 import { useAutoScroll } from '../hooks/home/useAutoScroll';
 import { McpApprovalCards } from '../components/home/McpApprovalCards';
 import { McpUnknownTray } from '../components/home/McpUnknownTray';
@@ -393,6 +394,16 @@ export default function Home() {
       setIsChatOpen(true);
     }
   }, [mcp.activeGate, hasTrayRequest, chat.pendingCommand, chat.pendingQuestion, fs.pendingDelete]);
+
+  // --- Desktop notifications (background chats) ---
+  useChatNotifications({
+    conversations: chat.conversations,
+    activeConvId: chat.activeConvId,
+    attention: chat.attention,
+    trayGates: mcp.unknownGates,
+    bridgeSynced: mcp.synced,
+    onOpenConversation: (conv) => { chat.selectConversation(conv); setIsChatOpen(true); },
+  });
 
   // --- Save Shortcut (Ctrl+S / Cmd+S) ---
   useEffect(() => {

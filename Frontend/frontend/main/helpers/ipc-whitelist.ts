@@ -28,6 +28,7 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'terminal-spawn',
   'terminal-write',
   'terminal-resize',
+  'notify',
 ])
 
 export function assertAllowedInvokeChannel(channel: string): void {

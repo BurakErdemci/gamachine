@@ -579,9 +579,12 @@ describe('hook ikinci bir karar yolu ihraç ETMEZ', () => {
     // requests with no known source chat, for the tray. The tray decides
     // through `postMcpDecision` like every card; the hook still exports no
     // way to approve or reject.
+    //
+    // `synced` (26 Sep 2026, desktop notifications) is a flag: one poll has
+    // been answered. It decides nothing about any request.
     expect(Object.keys(result.current).sort()).toEqual(
       ['activeGate', 'gateWorkspaceCheckPending', 'gateWorkspaceMismatch',
-       'openWorkspacePath', 'poll', 'resolveActiveGate', 'unknownGates'].sort(),
+       'openWorkspacePath', 'poll', 'resolveActiveGate', 'synced', 'unknownGates'].sort(),
     )
   })
 })

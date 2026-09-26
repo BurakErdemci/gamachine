@@ -297,6 +297,10 @@ export const useMCPApproval = ({
   // Unknown-owner requests are not queued behind the single card slot: each
   // one is drawn in the tray with its own buttons, so several can wait at once.
   const [unknownGates, setUnknownGates] = useState<McpTrayGate[]>([]);
+  // At least one poll has been answered. Requests in that first answer were
+  // already waiting before this renderer existed (a reload, a restart), so the
+  // desktop notifications treat them as known rather than as new.
+  const [synced, setSynced] = useState(false);
   const screenConvRef = useRef(screenConvId);
   screenConvRef.current = screenConvId;
   const onOwnersChangeRef = useRef(onOwnersChange);
@@ -375,6 +379,7 @@ export const useMCPApproval = ({
     // re-render on every poll.
     setUnknownGates(prev =>
       prev.length === unknown.length && prev.every((g, i) => g.gateId === unknown[i].gateId) ? prev : unknown);
+    setSynced(true);
 
     // Açık bir kart varsa yenisini ALMA — kuyruk backend'de bekler.
     if (activeGateRef.current) {
@@ -596,6 +601,8 @@ export const useMCPApproval = ({
     activeGate: visibleGate,
     /** Requests with no known source chat, for the tray outside every chat. */
     unknownGates,
+    /** At least one `/mcp-pending` answer has been applied. */
+    synced,
     /** Gate'in workspace'i üründe açık olandan farklı mı (bilinmiyorsa false). */
     // Karsilastirma BACKEND ad alaninda yapilir. Gate'in tasidigi deger
     // backend'in kendi yolu (Docker'da `/workspace`); `workspacePath` ise
