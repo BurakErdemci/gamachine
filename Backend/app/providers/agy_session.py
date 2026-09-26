@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from collections.abc import Hashable, Mapping
 from typing import AsyncGenerator, Dict, Optional
 
@@ -26,6 +27,21 @@ _QUEUED_EVENT = {"type": "status", "code": "agy_queued",
                  "detail": "Sırada — başka bir agy sohbetinin turu bitince başlayacak"}
 _STARTED_EVENT = {"type": "status", "code": "agy_started", "detail": "Çalışıyor…"}
 logger = logging.getLogger(__name__)
+
+
+def _updater_env(platform: Optional[str] = None) -> Dict[str, str]:
+    """Switches off agy's self-updater on Windows, where it flashes a terminal.
+
+    At most every 15 minutes a starting agy spawns `agy --bg-updater` with no
+    console, and that worker's `agy --version` child gets a new, visible one
+    (measured 26 Sep 2026, agy 1.2.11, Windows 11: one window per check). Our
+    CREATE_NO_WINDOW cannot reach that grandchild, and neither did starting agy
+    on a hidden console (measured). agy accepts "true" only: with "1" the
+    updater still ran (measured). agy still updates when the user runs it.
+    """
+    if (platform or sys.platform) == "win32":
+        return {"AGY_CLI_DISABLE_AUTO_UPDATE": "true"}
+    return {}
 
 
 def _turn_lock_busy(lock: asyncio.Lock) -> bool:
@@ -566,7 +582,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                 # the unityMCP bridge sees the chat id without a config entry;
                 # the config files are shared by every chat.
                 env=build_spawn_env(family="agy", overrides={
-                    "NO_COLOR": "1", **conversation_env(self.conversation_id)}),
+                    "NO_COLOR": "1", **_updater_env(),
+                    **conversation_env(self.conversation_id)}),
                 creationflags=_CREATE_NO_WINDOW,
                 limit=BaseCLIProvider._CLI_STREAM_LIMIT_BYTES,
             )

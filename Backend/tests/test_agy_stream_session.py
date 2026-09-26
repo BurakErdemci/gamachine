@@ -148,6 +148,25 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.spawns[0][1]["env"]["GAMACHINE_CONVERSATION_ID"], "11")
         self.assertNotIn("GAMACHINE_CONVERSATION_ID", self.spawns[1][1]["env"])
 
+    async def test_the_child_starts_windowless_and_without_the_updater_on_windows(self):
+        # agy's updater worker runs detached and its child flashes a console
+        # window; only the env switch keeps it from starting.
+        with patch.dict("os.environ", {"AGY_CLI_DISABLE_AUTO_UPDATE": "false"}):
+            await self.collect(agy_session.get_session(11))
+        kwargs = self.spawns[0][1]
+        self.assertEqual(kwargs["creationflags"], agy_session._CREATE_NO_WINDOW)
+        if agy_session.sys.platform == "win32":
+            self.assertNotEqual(kwargs["creationflags"], 0)
+            self.assertEqual(kwargs["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"], "true")
+        else:
+            self.assertNotIn("AGY_CLI_DISABLE_AUTO_UPDATE", kwargs["env"])
+
+    def test_the_updater_switch_is_windows_only_and_uses_the_accepted_value(self):
+        self.assertEqual(agy_session._updater_env("win32"),
+                         {"AGY_CLI_DISABLE_AUTO_UPDATE": "true"})
+        self.assertEqual(agy_session._updater_env("darwin"), {})
+        self.assertEqual(agy_session._updater_env("linux"), {})
+
     async def test_utf8_long_multiline_prompt_only_on_stdin(self):
         message = "private prompt: şİ🙂\n" * 4000
         await self.collect(message=message)
