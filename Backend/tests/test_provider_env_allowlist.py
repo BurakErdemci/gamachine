@@ -494,6 +494,9 @@ class TestMcpKayitSpawnOrtami:
         monkeypatch.setattr(um.unity_mcp_manager, "mcp_url", lambda *a, **k: "http://127.0.0.1:8080/mcp")
         monkeypatch.setattr(um.unity_mcp_manager, "api_headers", lambda: {"X-API-Key": "sir"})
 
+        # Claude cleans its stale user-scope entries once per process.
+        if hasattr(type(provider), "_stale_user_scope_cleaned"):
+            monkeypatch.setattr(type(provider), "_stale_user_scope_cleaned", False)
         provider._register_mcp("/tmp/launcher", str(tmp_path), "http://localhost:8000")
         assert kutu, "hiç kayıt çağrısı yapılmadı — test kendi kendini ölçüyor"
         return kutu
@@ -502,7 +505,8 @@ class TestMcpKayitSpawnOrtami:
         from providers.claude_provider import ClaudeCodeProvider
         envler = self._kayit_envleri(
             monkeypatch, ClaudeCodeProvider("claude-opus-4-6"), tmp_path)
-        assert len(envler) == 4, f"beklenen 4 kayıt çağrısı, bulunan {len(envler)}"
+        # 2026-09-26: 2, not 4 — no more `add`, only the two stale-entry removals.
+        assert len(envler) == 2, f"beklenen 2 temizlik çağrısı, bulunan {len(envler)}"
         for env in envler:
             assert env is not None, "bir kayıt çağrısı hâlâ env= almıyor"
             assert_no_canaries(env, allowed=("ANTHROPIC_API_KEY",))

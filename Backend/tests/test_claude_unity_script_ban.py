@@ -71,3 +71,18 @@ def test_the_chat_session_gets_the_whole_ban(tmp_path, monkeypatch):
 
     assert "unityMCP" in seen["mcp_servers"]
     assert set(DISALLOWED_UNITY_TOOLS) <= set(seen["disallowed_tools"])
+
+
+def test_the_cli_provider_gets_the_whole_ban(tmp_path, monkeypatch):
+    """Compaction and the analysis routes run through this provider."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    from providers.claude_provider import ClaudeCodeProvider
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+
+    with patch.object(unity_mcp_manager, "is_running", return_value=True), \
+         patch.object(unity_mcp_manager, "mcp_url", return_value="http://127.0.0.1:1/mcp"), \
+         patch.object(unity_mcp_manager, "api_headers", return_value={"X-API-Key": "k"}):
+        cmd = ClaudeCodeProvider("claude-opus-5")._build_cmd("x", workspace=str(tmp_path))
+    banned = set(cmd[cmd.index("--disallowedTools") + 1].split(","))
+    assert set(DISALLOWED_UNITY_TOOLS) <= banned

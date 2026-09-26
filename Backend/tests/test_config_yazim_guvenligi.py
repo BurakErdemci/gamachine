@@ -445,11 +445,12 @@ def test_K3_unityMCP_yazan_her_saglayici_KOPRUYU_kullaniyor():
     değil, bir DEĞİŞMEZ: `providers/` altında hiçbir yer unityMCP kaydına
     `headers` gömmüyor.
 
-    ⛔ TEK İSTİSNA `claude_provider`: `claude mcp add --header` ile kayıt
-    yapıyor ve köprüye GEÇEMİYOR — ölçüldü, Claude CLI'da stdio kaydı
-    `pending`de kalıyor, HTTP `connected` oluyor. Sır argv'de görünüyor ama
-    kalıcı config'e girmiyor (1 Ağu 2026'da `~/.claude.json` okunarak
-    doğrulandı). İstisna burada ADLANDIRILMIŞ olsun ki sessizce büyümesin.
+    ⛔ TEK İSTİSNA `claude_provider`: unityMCP'yi HTTP olarak başlıkla
+    veriyor ve köprüye GEÇEMİYOR — ölçüldü, Claude CLI'da stdio kaydı
+    `pending`de kalıyor, HTTP `connected` oluyor. 26 Eyl 2026'dan beri
+    başlık bir config dosyasına değil satır içi `--mcp-config` JSON'una
+    (argv) giriyor; sır hiçbir dosyaya yazılmıyor. İstisna burada
+    ADLANDIRILMIŞ olsun ki sessizce büyümesin.
     """
     kok = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "app", "providers")

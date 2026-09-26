@@ -1,7 +1,10 @@
 from secret_redaction import redact_secrets
+import json
 import os
+import sys
 import logging
 from .cli_base import BaseCLIProvider
+from .unity_script_tools import DISALLOWED_UNITY_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +27,10 @@ class ClaudeCodeProvider(BaseCLIProvider):
             "Edit",          # → mcp__unityai__save_file
             "MultiEdit",     # → mcp__unityai__save_file
             "NotebookEdit",
-            # unityMCP'nin .cs dosyası yazan aracı → bizim onaylı save_file'ı bypass
-            # ediyordu. Kapatınca tüm .cs yazımı mcp__unityai__save_file'dan (onay) geçer.
-            # GameObject'e script ekleme manage_gameobject/manage_components ile yapılır.
-            "mcp__unityMCP__manage_script",
+            # Every unityMCP tool that writes a .cs file, so all C# goes through
+            # the approved mcp__unityai__save_file. Scripts are attached with
+            # manage_gameobject/manage_components.
+            *DISALLOWED_UNITY_TOOLS,
         ])
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         unity_running = unity_mcp_manager.is_running()
@@ -57,6 +60,13 @@ class ClaudeCodeProvider(BaseCLIProvider):
             "claude", "--model", full_id,
             "--permission-mode", "bypassPermissions",
             "--disallowedTools", disallowed,
+            # Without strict mode the CLI also loads every MCP server of the
+            # owner's own Claude Code (measured 26 Sep 2026: about 60, Gmail,
+            # Drive, Vercel and a second Unity server among them), and under
+            # bypassPermissions text in a compacted conversation could steer
+            # the model into them. Same fix as the chat path (95b5e81).
+            "--strict-mcp-config",
+            "--mcp-config", json.dumps({"mcpServers": self._product_mcp_servers(workspace)}),
             "--output-format", "stream-json",
             "--include-partial-messages",
             "--verbose",
@@ -71,84 +81,83 @@ class ClaudeCodeProvider(BaseCLIProvider):
             cmd += ["-p", yuk]
         return cmd
 
-    def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
-        """
-        Claude Code'un user-scope config'ine unityai ve unityMCP server'larını yazar.
-        Project-scope .mcp.json -p (headless) modda approval gerektirdiği için kullanılamaz.
-        """
-        import subprocess as sp
+    def _product_mcp_servers(self, workspace: str = None) -> dict:
+        """The only MCP servers this CLI run may load (see --strict-mcp-config)."""
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+        # Same entry `_write_mcp_config` writes: no LOCAL_APP_TOKEN, the
+        # launcher reads it from the 0600 token file.
+        servers = {
+            "unityai": {
+                "command": self._launcher_path("run_mcp_server"),
+                "args": ["--workspace", workspace or os.getcwd()],
+                "env": {"UNITYAI_URL": os.environ.get(
+                    "UNITYAI_URL", os.environ.get("ANTIGRAVITY_URL", "http://localhost:8000"))},
+            }
+        }
+        unity_mcp_url = unity_mcp_manager.mcp_url()
+        if unity_mcp_url:
+            # HTTP, not the stdio bridge the other CLIs get: measured, the
+            # Claude CLI leaves a stdio unityMCP `pending` and connects HTTP
+            # (see [[codex-unitymcp-stdio-bridge]]). The key rides in argv,
+            # as the Claude SDK does for chat sessions, and never in a file
+            # the model can read.
+            servers["unityMCP"] = {
+                "type": "http",
+                "url": unity_mcp_url,
+                "headers": unity_mcp_manager.api_headers(),
+            }
+        return servers
+
+    @staticmethod
+    def _resolve_exec(cmd: list) -> list:
+        # cmd.exe re-parses a batch shim's arguments and the JSON's escaped
+        # quotes leave its values unquoted there. Measured 26 Sep 2026: a
+        # workspace path "C:\R&echo INJECTED&\x" inside --mcp-config ran
+        # `echo INJECTED` through a .cmd shim. So spawn the exe behind the npm
+        # shim, as the chat path does, and never hand the JSON to cmd.exe.
+        if sys.platform == "win32" and cmd and cmd[0] == "claude":
+            from .claude_sdk_session import claude_ikilisini_coz
+            exe = claude_ikilisini_coz()
+            if exe:
+                return [exe, *cmd[1:]]
+        spawn = BaseCLIProvider._resolve_exec(cmd)
+        if spawn[:2] == ["cmd", "/c"] and "--mcp-config" in cmd:
+            raise RuntimeError(
+                "Claude Code yalnız bir .cmd kabuğu olarak bulundu ve arkasındaki "
+                "claude.exe bulunamadı; MCP yapılandırması cmd.exe'den güvenle "
+                "geçirilemiyor. Claude Code'u yeniden kurun.")
+        return spawn
+
+    # Class-level on purpose: providers are built per request and the cleanup
+    # below is meant to run once per backend process.
+    _stale_user_scope_cleaned = False
+
+    def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
+        """Registers nothing: `_build_cmd` passes the product's servers inline.
+
+        Older versions added `unityai` and `unityMCP` to the owner's user scope
+        on every call, where his own Claude Code sessions loaded them too. This
+        removes those two, once per process. `claude mcp remove --scope user`
+        matches the key exactly (2.1.283 source: `mcpServers?.[name]`), so the
+        owner's own `UnityMCP` is never touched.
+        """
+        if ClaudeCodeProvider._stale_user_scope_cleaned:
+            return
+        import subprocess as sp
         from .cli_base import build_spawn_env, env_family
 
-        # claude CLI Windows'ta .cmd shim → çıplak isimle CreateProcess patlar (WinError 2).
-        # Tüm sp.run çağrılarını platforma uygun tam yola çöz.
         if not self._cli_installed("claude"):
-            logger.warning("[CLIProvider] claude CLI bulunamadı, MCP kaydı atlandı.")
+            logger.warning("[CLIProvider] claude CLI bulunamadı, eski MCP kaydı temizliği atlandı.")
             return
+        ClaudeCodeProvider._stale_user_scope_cleaned = True
 
-        # İZİN LİSTESİ. Bu yol HER TURDA koşuyor (cli_base:_write_mcp_config →
-        # _register_mcp) ve 2026-07-29'da canlı ölçüldü: `env=` verilmediği için
-        # çocuk süreç altı canary'nin ALTISINI de görüyordu — LOCAL_APP_TOKEN
-        # (backend'in tek yetki kanıtı), API_KEY_ENCRYPTION_KEY (DB şifreleme
-        # anahtarı) ve dört vendor anahtarı. Sohbet spawn'ı 2026-07-28'de
-        # kapatılmıştı ama aynı sınıfın bu noktası açık kalmıştı.
-        #
-        # Aile modelin kendi adından çözülüyor. `claude mcp add/remove`ın PATH,
-        # HOME (→ ~/.claude) ve CLAUDE_CONFIG_DIR dışında bir ihtiyacı yok;
-        # üçü de izin listesinde (taban + "claude" katmanı).
+        # Allow-list env, never the parent's (measured 2026-07-29: without
+        # env= the child saw LOCAL_APP_TOKEN, the DB key and vendor keys).
         _env = build_spawn_env(env_family(self.binary_name))
-
-        # unityai (stdio)
-        try:
-            sp.run(self._resolve_exec(["claude", "mcp", "remove", "unityai", "--scope", "user"]),
-                   capture_output=True, timeout=5, env=_env)
-            sp.run(
-                self._resolve_exec([
-                    "claude", "mcp", "add", "unityai",
-                    "--scope", "user",
-                    "-e", f"UNITYAI_URL={backend_url}",
-                    # Token argv'ye konmuyor (ps ile görünürdü) — 0600 dosyadan okunuyor.
-                    "-e", f"WORKSPACE={workspace}",
-                    "--", launcher, "--workspace", workspace,
-                ]),
-                capture_output=True, timeout=5, check=True, env=_env,
-            )
-            logger.info("[CLIProvider] Claude unityai MCP kaydedildi (user scope).")
-        except Exception as e:
-            logger.warning(f"[CLIProvider] Claude unityai MCP kaydı yapılamadı: {redact_secrets(str(e))}")
-
-        # unityMCP (http) — sadece Unity MCP server çalışıyorsa
-        try:
-            sp.run(self._resolve_exec(["claude", "mcp", "remove", "unityMCP", "--scope", "user"]),
-                   capture_output=True, timeout=5, env=_env)
-            unity_mcp_url = unity_mcp_manager.mcp_url()
-            if unity_mcp_url:
-                sp.run(
-                    self._resolve_exec([
-                        "claude", "mcp", "add", "unityMCP",
-                        "--scope", "user",
-                        "--transport", "http",
-                        # --header ÖLÇÜLDÜ: claude başlığı her MCP isteğinde
-                        # gönderiyor. Sır argv'de görünüyor ama bu komut yalnız
-                        # kayıt anında koşuyor; kalıcı config'e sır girmiyor.
-                        # ⚠️ Bu iddia 1 Ağu 2026'da DOĞRULANDI: kayıttan sonra
-                        # `~/.claude.json`'daki girdi `{"type":"http","url":...}`
-                        # — başlık YOK, sır dosyada YOK.
-                        #
-                        # ⛔ K3'ün TEK bilinçli istisnası burası. Diğer beş
-                        # yazıcı stdio köprüsüne geçti ve sır config'lerden
-                        # tamamen çıktı; burası GEÇEMEZ, çünkü ölçüldü: Claude
-                        # CLI'da stdio kaydı `pending`de kalıyor, HTTP kaydı
-                        # `connected` oluyor (bkz. [[codex-unitymcp-stdio-bridge]]).
-                        # Köprüye çevirmek Unity araçlarını SESSİZCE kaybettirirdi
-                        # — bu takas kabul edilebilir değil. Kalan maruziyet
-                        # kayıt anıyla sınırlı ve kalıcı değil.
-                        *sum([["--header", f"{k}: {v}"]
-                              for k, v in unity_mcp_manager.api_headers().items()], []),
-                        unity_mcp_url,
-                    ]),
-                    capture_output=True, timeout=5, check=True, env=_env,
-                )
-                logger.info("[CLIProvider] Claude unityMCP kaydedildi (user scope).")
-        except Exception as e:
-            logger.warning(f"[CLIProvider] Claude unityMCP kaydı yapılamadı: {redact_secrets(str(e))}")
+        for name in ("unityai", "unityMCP"):
+            try:
+                sp.run(self._resolve_exec(["claude", "mcp", "remove", name, "--scope", "user"]),
+                       capture_output=True, timeout=5, env=_env)
+            except Exception as e:
+                logger.warning(f"[CLIProvider] Claude {name} eski kaydı silinemedi: "
+                               f"{redact_secrets(str(e))}")

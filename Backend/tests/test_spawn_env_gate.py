@@ -538,7 +538,9 @@ _ANCHORS: Dict[Tuple[str, str], int] = {
     # 2026-09-25 (P3): `uv export` of the server lock before the uvx launch.
     ("app/unity_ai_mcp/unity_mcp_manager.py", "UnityMCPManager._lock_constraints"): 1,
     # 2026-07-29'da kapatılanlar
-    ("app/providers/claude_provider.py", "ClaudeCodeProvider._register_mcp"): 4,
+    # 2026-09-26: was 4 (remove+add for two servers); now one `remove` in a
+    # loop over the two stale names, the servers go inline in --mcp-config.
+    ("app/providers/claude_provider.py", "ClaudeCodeProvider._register_mcp"): 1,
     ("app/providers/codex_provider.py", "CodexProvider._register_mcp"): 4,
     ("app/agentic/agent_runner.py", "AgentRunner._run_claude_session"): 1,
     ("app/routes/config_routes.py", "_run_cli_capture"): 1,

@@ -43,6 +43,9 @@ def _mock_unity_mcp(running=False):
     m = MagicMock()
     m.unity_mcp_manager.is_running.return_value = running
     m.unity_mcp_manager.mcp_port = 8080
+    # The real manager returns None while Unity is down; a bare MagicMock
+    # would be truthy and end up in claude's --mcp-config JSON.
+    m.unity_mcp_manager.mcp_url.return_value = None
     return patch.dict(sys.modules, {"unity_ai_mcp": MagicMock(unity_mcp_manager=m.unity_mcp_manager),
                                     "unity_ai_mcp.unity_mcp_manager": m})
 
