@@ -840,7 +840,10 @@ class ClaudeSDKSession:
         auto_approve: bool = False,
         effort: Optional[str] = None,
         resume_id: Optional[str] = None,
+        read_only: bool = False,
     ):
+        # Side chat session: only reads pass `_can_use_tool`, in every mode.
+        self.read_only = bool(read_only)
         # CLI'ın KENDİ diskindeki oturumu geri çağıran kimlik (DB'de saklanıyor).
         # Uygulama yeniden başladığında tam transcript bu sayede geri geliyor;
         # yoksa yalnız 20.000 karakterlik DB enjeksiyonu kalıyor (%71 kayıp ölçüldü).
@@ -1052,6 +1055,13 @@ class ClaudeSDKSession:
         # kütüğün kapatmak için var olduğu sapma sınıfını geri getirirdi.
         if is_unity_mcp_read_only(tool_name, input_data):
             return PermissionResultAllow(updated_input=input_data)
+
+        # Read-only (side chat): every other tool is denied here, BEFORE the
+        # question card and the auto branch, so auto mode cannot let a write
+        # through. No card either: the side panel shows none.
+        if self.read_only:
+            logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] read-only session denied {tool_name}")
+            return PermissionResultDeny(message="Yan sohbet salt okunur; bu araç reddedildi.")
 
         # AskUserQuestion → A/B/C seçim kartı
         if tool_name == "AskUserQuestion":
@@ -1701,6 +1711,8 @@ def _identity_mismatch(sess: "ClaudeSDKSession", kwargs: dict) -> Optional[str]:
         return f"model {sess.model} → {kwargs.get('model')}"
     if "effort" in kwargs and kwargs.get("effort") != sess.effort:
         return f"effort {sess.effort} → {kwargs.get('effort')}"
+    if "read_only" in kwargs and bool(kwargs.get("read_only")) != sess.read_only:
+        return f"read_only {sess.read_only} → {bool(kwargs.get('read_only'))}"
     return None
 
 

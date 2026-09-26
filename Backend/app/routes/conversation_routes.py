@@ -13,7 +13,7 @@ from ai_providers import AIProviderManager
 from analyzer import UnityAnalyzer
 from auth_utils import require_conversation_owner, require_user, get_current_user, _check_token
 from code_detector import CodeDetector
-from schemas import ChatRequest, HiddenRequest, NewConversationRequest, RenameRequest
+from schemas import ChatRequest, HiddenRequest, NewConversationRequest, RenameRequest, SideChatRequest
 
 from agentic.agent_runner import AgentRunner
 from agentic import approval_mode
@@ -379,6 +379,65 @@ def _check_chat_rate_limit(user_id: int):
     CHAT_RATE_LIMIT[user_id].append(now)
 
 
+# ── Side chat (read-only side question over a main chat) ─────────────────────
+# The renderer's copy of the main chat's latest answer is capped to this many
+# characters before it enters the side prompt; the tail is kept, since a
+# streaming answer's newest part is what the user is asking about.
+SIDE_LIVE_CONTEXT_CAP = 8000
+# Previous questions and answers of the same side chat, for the providers
+# that keep no session between turns (the API loops).
+SIDE_HISTORY_CAP = 8000
+SIDE_IDLE_TTL_S = 30 * 60
+SIDE_SWEEP_INTERVAL_S = 5 * 60
+
+_SIDE_REFUSED = "Bu bir yan sohbet; bu işlem yan sohbete uygulanamaz."
+_SIDE_AGY_REFUSED = (
+    "Yan soru Antigravity (agy) ile kullanılamıyor: agy aynı anda tek bir tur "
+    "çalıştırıyor, yani yan soru ana sohbetin turunun bitmesini beklerdi. "
+    "Yan soru için başka bir model seç."
+)
+_SIDE_INSTRUCTION = (
+    "[YAN SORU — SALT OKUNUR] Kullanıcı bunu ana sohbet sürerken yan panelden "
+    "soruyor. Yalnız okuyabilirsin: dosya yazma/düzenleme/silme, komut çalıştırma, "
+    "Unity'de değişiklik ve hafızaya kaydetme YASAK ve reddedilir; deneme. "
+    "Ana sohbetin bağlamına dayanarak kısa ve doğrudan cevap ver.\n"
+    "[SIDE QUESTION — READ-ONLY] Never write or edit files, run commands, change "
+    "Unity or save memory; answer briefly from the main chat's context."
+)
+
+
+def _is_agy_model(provider_type: str, model_name: str) -> bool:
+    """Same prefixes as AgentRunner's subscription routing for agy."""
+    return provider_type == "subscription" and (model_name or "").lower().startswith(("gemini", "agy-"))
+
+
+def _side_history_block(side_messages: list) -> str:
+    lines = []
+    for m in side_messages:
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        label = "YAN SORU" if m.get("role") == "user" else "CEVAP"
+        lines.append(f"{label}: {content}")
+    text = "\n".join(lines)
+    if not text:
+        return ""
+    if len(text) > SIDE_HISTORY_CAP:
+        text = "…[daha eski yan sorular kısaltıldı]\n" + text[-SIDE_HISTORY_CAP:]
+    return "[BU YAN SOHBETTEKİ ÖNCEKİ SORU-CEVAPLAR]\n" + text
+
+
+def _side_live_block(live_context: str, in_flight: bool) -> str:
+    live = (live_context or "").strip()
+    if not live:
+        return ""
+    if len(live) > SIDE_LIVE_CONTEXT_CAP:
+        live = "…[başı kısaltıldı]\n" + live[-SIDE_LIVE_CONTEXT_CAP:]
+    label = ("[ANA SOHBETİN ŞU AN YAZILMAKTA OLAN (YARIM) CEVABI]" if in_flight
+             else "[ANA SOHBETİN EKRANDAKİ SON CEVABI]")
+    return f"{label}\n{live}"
+
+
 def _tag_sse_frame(frame: str, conversation_id: int) -> str:
     """Append `conversation_id` to one `data: {...}` frame.
 
@@ -480,6 +539,17 @@ def create_conversation_router(db, progress_store):
         _mcp_result_ts.pop(gate_id, None)
         _mcp_pending.pop(gate_id, None)
         _release_gate(gate_id)
+
+    def _side_main_of(conv_id: Any) -> Optional[int]:
+        """The main chat of a side chat, else None. The column is an INTEGER,
+        so anything else the DB layer hands back is not a side marker."""
+        side_of = db.get_side_of(conv_id)
+        return side_of if type(side_of) is int else None
+
+    def _refuse_side_chat(conv_id: int) -> None:
+        """A side chat must never be turned into, or handled as, a normal chat."""
+        if _side_main_of(conv_id) is not None:
+            raise HTTPException(status_code=400, detail=_SIDE_REFUSED)
 
     def _abort_pending_mcp_approvals(conversation_id: Optional[int] = None) -> int:
         """Durdur sırasında subprocess'in beklediği MCP gate'lerini reddet.
@@ -808,20 +878,165 @@ def create_conversation_router(db, progress_store):
     @router.delete("/conversations/{conv_id}")
     async def delete_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
         require_conversation_owner(db, x_session_token, conv_id)
+        # A side chat is closed through DELETE /conversations/{id}/side: the
+        # purge below denies unowned cards, which may be the main chat's.
+        _refuse_side_chat(conv_id)
         # A root takes its branches with it; a branch goes alone. Every row and
         # every card is gone BEFORE the first await: deleting one id at a time
         # let a branch request copy a not-yet-deleted branch under the deleted
         # root, an orphan that survived (Codex branchaudit, 26 Sep 2026).
-        ids = db.delete_conversation_family(conv_id)
+        ids, side_ids = db.delete_conversation_family_and_sides(conv_id)
         for cid in ids:
             _purge_conversation_state(cid)
         for cid in ids:
             await _close_conversation_sessions(cid)
+        # Side chats of the deleted ids: sessions only. Their purge would repeat
+        # the Stop-style denial of unowned cards for nothing.
+        for cid in side_ids:
+            await _close_side_sessions(cid)
         return {"status": "success", "deleted_ids": ids}
+
+    async def _close_side_sessions(side_id: int) -> None:
+        """Close a side chat's provider sessions; no purge (see `delete_conversation`)."""
+        await _close_conversation_sessions(side_id)
+        try:
+            from agentic.agent_runner import _LAST_SUB_PROVIDER
+            _LAST_SUB_PROVIDER.pop(side_id, None)
+        except Exception:
+            logger.debug("[side] provider memo not cleared", exc_info=True)
+
+    async def sweep_idle_side_chats(older_than_s: float = SIDE_IDLE_TTL_S) -> List[int]:
+        """Delete side chats idle that long with no turn in flight, then close their sessions."""
+        from agentic.approval_policy import conversations_with_turn_in_flight
+        ids = db.sweep_side_chats(older_than_s, conversations_with_turn_in_flight())
+        for cid in ids:
+            await _close_side_sessions(cid)
+        if ids:
+            logger.info("[side] swept %d idle side chat(s): %s", len(ids), ids)
+        return ids
+
+    # main.py's lifespan runs this every SIDE_SWEEP_INTERVAL_S.
+    router.sweep_idle_side_chats = sweep_idle_side_chats
+
+    @router.post("/conversations/{conv_id}/side")
+    async def open_side_chat(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
+        """Open (or return the open) read-only side chat of a main chat."""
+        user_id, _ = require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
+        side_id = db.create_side_chat(conv_id, user_id)
+        if side_id is None:
+            raise HTTPException(status_code=404, detail="Sohbet bulunamadı.")
+        return {"side_id": side_id, "side_of": conv_id}
+
+    @router.delete("/conversations/{side_id}/side")
+    async def close_side_chat(side_id: int, x_session_token: str = Header(alias="X-Session-Token")):
+        """Discard a side chat: its row first, then its provider sessions.
+
+        Not `_purge_conversation_state`: its Stop-style MCP abort denies every
+        UNOWNED card, and one of those may be the main chat's.
+        """
+        require_conversation_owner(db, x_session_token, side_id)
+        if _side_main_of(side_id) is None:
+            raise HTTPException(status_code=404, detail="Yan sohbet bulunamadı.")
+        # Row before the first await, as in `delete_conversation`: a request
+        # still naming this id is refused as a deleted chat's from here on.
+        db.delete_side_chat(side_id)
+        await _close_side_sessions(side_id)
+        return {"status": "success", "side_id": side_id}
+
+    @router.post("/conversations/{side_id}/side-stream")
+    async def side_stream(side_id: int, req: SideChatRequest,
+                          x_session_token: str = Header(alias="X-Session-Token")):
+        """One read-only side question over the main chat, streamed as SSE.
+
+        Writes nothing about the main chat: no message, title, memory or CLI
+        session of it. The side chat's own question/answer and CLI session are
+        kept on the side row, so follow-up questions continue the side session.
+        """
+        require_conversation_owner(db, x_session_token, side_id)
+        main_id = _side_main_of(side_id)
+        if main_id is None:
+            raise HTTPException(status_code=404, detail="Yan sohbet bulunamadı.")
+        user_id, _ = require_conversation_owner(db, x_session_token, main_id)
+        _check_chat_rate_limit(user_id)
+
+        provider_type, model_name, _, _ = db.get_ai_config(user_id)
+        if _is_agy_model(provider_type, model_name):
+            raise HTTPException(status_code=409, detail=_SIDE_AGY_REFUSED)
+        api_key = (db.get_api_key(user_id, provider_type) or "")
+        workspace_path = db.get_last_workspace(user_id) or ""
+
+        from agentic.approval_policy import conversation_turn_in_flight
+        # `_build_handoff_context` drops the last element (the current user
+        # input on the normal path); every main-chat message is history here.
+        main_history = db.get_conversation_messages(main_id) + [{"role": "user", "content": ""}]
+        parts = [_build_handoff_context(db.get_memory(main_id), main_history)]
+        parts.append(_side_history_block(db.get_conversation_messages(side_id)))
+        context_summary = "\n\n".join(p for p in parts if p)
+
+        # The live answer rides in the message, not the context: session
+        # providers take the context on their first turn only.
+        live = _side_live_block(req.live_context, conversation_turn_in_flight(main_id))
+        combined_msg = "\n\n".join(p for p in (_SIDE_INSTRUCTION, live, f"[YAN SORU]\n{req.message}") if p)
+
+        db.add_message(side_id, "user", req.message)
+
+        _oturum_anahtari = _oturum_saglayici_anahtari(provider_type, model_name)
+        _resume_id = db.get_cli_session(side_id, _oturum_anahtari, workspace_path)
+
+        runner = AgentRunner(
+            provider_type=provider_type,
+            api_key=api_key,
+            model_name=model_name,
+            workspace_path=workspace_path,
+            language=req.language,
+            context=context_summary,
+            thinking_level=req.thinking_level,
+            conversation_id=side_id,
+            images=None,
+            videos=None,
+            generation_mode=approval_mode.current_mode(),
+            effort_level=req.effort_level,
+            ultracode=False,
+            resume_id=_resume_id,
+            # From the DB row, never from the request.
+            read_only=main_id is not None,
+        )
+
+        async def event_generator():
+            entry = _TurnRecord()
+            terminal_gitti = False
+            try:
+                async for event in runner.run(combined_msg):
+                    entry.add(event)
+                    if event.type == "done":
+                        _sid = (event.data or {}).get("session_id")
+                        # Only while the side row exists: a closed side chat
+                        # must not leave a cli_sessions row behind.
+                        if _sid and _side_main_of(side_id) is not None:
+                            db.save_cli_session(side_id, _oturum_anahtari, _sid, workspace_path)
+                    if event.type in ("done", "error"):
+                        terminal_gitti = True
+                    yield event.to_sse()
+                full_response = entry.value()
+                if full_response and _side_main_of(side_id) is not None:
+                    try:
+                        db.add_message(side_id, "assistant", full_response)
+                    except Exception:
+                        logger.exception("[side] answer not stored on the side row")
+            except Exception:
+                logger.exception("[side] streaming error")
+                if not terminal_gitti:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Yan soru akışı sırasında bir hata oluştu. Ayrıntı sunucu loglarında.'})}\n\n"
+
+        return StreamingResponse(
+            _tag_sse_stream(event_generator(), side_id),
+            media_type="text/event-stream")
 
     @router.put("/conversations/{conv_id}")
     async def rename_conversation(conv_id: int, req: RenameRequest, x_session_token: str = Header(alias="X-Session-Token")):
         require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
         db.rename_conversation(conv_id, req.title)
         return {"status": "success"}
 
@@ -835,6 +1050,7 @@ def create_conversation_router(db, progress_store):
         chars total, 4000 per message; oldest messages drop first).
         """
         require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
         from agentic.approval_policy import conversation_turn_in_flight
         # No await between this check and the copy: a turn cannot start or
         # finish in between on this event loop.
@@ -880,6 +1096,7 @@ def create_conversation_router(db, progress_store):
     async def set_conversation_hidden(conv_id: int, req: HiddenRequest,
                                       x_session_token: str = Header(alias="X-Session-Token")):
         require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
         if db.get_conversation_parent(conv_id) is None:
             raise HTTPException(
                 status_code=400,
@@ -901,6 +1118,7 @@ def create_conversation_router(db, progress_store):
         """
         import time as _time
         user_id, _ = require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
 
         messages = db.get_conversation_messages(conv_id)
         msg_count = len(messages)
@@ -982,6 +1200,7 @@ SOHBET:
     async def analyze_project_architecture(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
         """Tüm projeyi tarar ve AI için mimari bir hafıza özeti oluşturur."""
         user_id, _ = require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
         workspace_path = db.get_last_workspace(user_id)
         
         if not workspace_path:
@@ -1074,6 +1293,7 @@ Yanıtını mutlaka [USER_SUMMARY] ve [TECHNICAL_WISDOM] başlıklarıyla ayır.
     async def import_conversation_memory(conv_id: int, req: Dict[str, str], x_session_token: str = Header(alias="X-Session-Token")):
         """Dışarıdan gelen hafıza metnini önce güvenlik kontrolünden geçirir, sonra kaydeder."""
         user_id, _ = require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
         content = req.get("content")
         if not content:
             raise HTTPException(400, "İçerik boş olamaz.")
@@ -1134,6 +1354,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         """
         user_id, _ = require_user(db, x_session_token, request.user_id)
         require_conversation_owner(db, x_session_token, request.conversation_id)
+        _refuse_side_chat(request.conversation_id)
 
         _check_chat_rate_limit(user_id)
 
@@ -1370,7 +1591,15 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             if conversation_id in _AGY_SESSIONS:
                 await close_agy_session(conversation_id)
                 stopped = True
-            if _abort_pending_mcp_approvals(conversation_id):
+            # A side chat's cards are refused before they exist, so its Stop
+            # has none to deny; the Stop-style denial of UNOWNED cards would
+            # hit the main chat's.
+            try:
+                is_side = _side_main_of(conversation_id) is not None
+            except Exception:
+                logger.warning("[chat-stop] side lookup failed for %s", conversation_id)
+                is_side = False
+            if not is_side and _abort_pending_mcp_approvals(conversation_id):
                 stopped = True
             return {"status": "ok" if stopped else "no_session"}
         except Exception as e:
@@ -1466,6 +1695,21 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             # A failed lookup proves nothing; the card stays unowned instead.
             return False
 
+    def _side_chat_claim_refusal(claimed: Any) -> Optional[str]:
+        """Refusal text when the claimed chat is (or may be) a side chat, else None."""
+        if type(claimed) is not int or claimed <= 0:
+            return None
+        try:
+            side_of = _side_main_of(claimed)
+        except Exception as exc:
+            # Cannot tell whether the write comes from a read-only chat.
+            logger.warning("[mcp-approval] side lookup for %s failed (%s): refused",
+                           claimed, type(exc).__name__)
+            return "Sohbet türü doğrulanamadı; yazma reddedildi."
+        if side_of is not None:
+            return "Yan sohbet salt okunur; yazma reddedildi."
+        return None
+
     @router.post("/mcp-approval-request")
     async def mcp_approval_request(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
         """MCP server'dan gelen onay isteğini saklar. Frontend /mcp-pending ile yoklar."""
@@ -1484,6 +1728,17 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                 "approved": False,
                 "gate_id": gate_id,
                 "error": "Bu sohbet silindi; isteği reddedildi.",
+            }
+        # A side chat is read-only in step AND auto mode, so this comes before
+        # the auto approval below. Refused on the raw claim: refusing is the
+        # safe direction, and a false claim can only cost its sender a write.
+        side_refusal = _side_chat_claim_refusal(body.get("conversation_id"))
+        if side_refusal is not None:
+            return {
+                "status": "resolved",
+                "approved": False,
+                "gate_id": gate_id,
+                "error": side_refusal,
             }
         # Global auto mode (owner decision, 25 Sep 2026): no card for anyone,
         # with or without a conversation - external MCP clients included.
@@ -1663,6 +1918,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         """
         user_id, _ = require_user(db, x_session_token, request.user_id)
         require_conversation_owner(db, x_session_token, request.conversation_id)
+        _refuse_side_chat(request.conversation_id)
         _check_chat_rate_limit(user_id)
 
         # 1. Save user message

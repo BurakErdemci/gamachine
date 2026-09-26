@@ -136,6 +136,12 @@ def conversation_turn_in_flight(conversation_id: int) -> bool:
         return _TURNS_BY_CONVERSATION.get(conversation_id, 0) > 0
 
 
+def conversations_with_turn_in_flight() -> set[int]:
+    """Snapshot of every conversation with a turn in AgentRunner.run now."""
+    with _LOCK:
+        return {cid for cid, n in _TURNS_BY_CONVERSATION.items() if n > 0}
+
+
 def ambient_auto_approve() -> bool:
     """Koşan turların HEPSİ Auto modda mı?
 

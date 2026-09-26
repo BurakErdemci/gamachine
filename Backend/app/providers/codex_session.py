@@ -503,8 +503,11 @@ class CodexSession:
         approval_timeout: float = APPROVAL_TIMEOUT_S,
         auto_approve: bool = False,
         effort: Optional[str] = None,
+        read_only: bool = False,
     ):
         self.conversation_id = conversation_id
+        # Side chat session: every approval request is declined, in every mode.
+        self.read_only = bool(read_only)
         self.model = model
         self.cwd = cwd
         # Reasoning effort (minimal..xhigh; max yalnız gpt-5.6). Launch-time config'tir
@@ -827,6 +830,10 @@ class CodexSession:
             if self._out_q is not None:
                 await self._out_q.put({"type": "tool_result", "tool": method, "success": False,
                                        "summary": refusal.summary})
+            return "decline"
+        # Read-only (side chat): declined before the auto branch, and no card.
+        if self.read_only:
+            logger.warning(f"[CodexSession:{self.conversation_id}] read-only session declined {method}")
             return "decline"
         # Oto mod: kart gösterme, otomatik onayla
         if self.auto_approve:

@@ -207,7 +207,8 @@ def _urunun_kaydi_mi(ad: str, tanim: object, sir: Optional[str]) -> bool:
     return False
 
 
-def _oturum_yeniden_kurma_gerekceleri(mevcut, *, model, effort, workspace, mcp_servers) -> List[str]:
+def _oturum_yeniden_kurma_gerekceleri(mevcut, *, model, effort, workspace, mcp_servers,
+                                      read_only: bool = False) -> List[str]:
     """Cache'li oturumun CONNECT-TIME kimliği istenenden farklı mı? Farkların listesi.
 
     Modül düzeyinde ve saf, çünkü asıl çağrı yeri yüzlerce satırlık bir async
@@ -243,6 +244,9 @@ def _oturum_yeniden_kurma_gerekceleri(mevcut, *, model, effort, workspace, mcp_s
         onceki = "var" if getattr(mevcut, "mcp_servers", None) else "yok"
         simdi = "var" if mcp_servers else "yok"
         gerekceler.append(f"unityMCP kaydı {onceki}→{simdi}")
+    # disallowed_tools is connect-time too, and read-only widens it.
+    if bool(getattr(mevcut, "read_only", False)) != bool(read_only):
+        gerekceler.append(f"read_only {getattr(mevcut, 'read_only', False)}→{read_only}")
     return gerekceler
 
 
@@ -816,6 +820,41 @@ _HANDOFF_HEADER = (
     "okuma/tarama/web araması YAPMADAN doğrudan bu geçmişten özetleyerek yanıtla.]"
 )
 
+# Built-in API-loop tools a read-only (side chat) runner may call. Everything
+# else built in writes a file, runs a shell or writes memory.
+_READ_ONLY_BUILTIN_TOOLS = frozenset({
+    "read_file", "search_in_project", "find_files", "list_directory",
+    "recall_memory", "capture_unity_screenshot",
+})
+# Built-in Claude Code tools kept out of a read-only session at connect time;
+# `_can_use_tool` denies them too, this only keeps them out of the model's view.
+_READ_ONLY_DISALLOWED_CLAUDE_TOOLS = (
+    "Bash", "PowerShell", "Write", "Edit", "MultiEdit", "NotebookEdit", "Task",
+)
+_BUILTIN_TOOL_NAMES = frozenset(t["name"] for t in TOOL_DEFINITIONS)
+_READ_ONLY_REFUSAL = "Yan sohbet salt okunur; bu araç reddedildi."
+
+
+def _read_only_tool_declared(tool_name: str) -> bool:
+    """Offered to a read-only runner: read-only built-ins and every Unity tool.
+
+    Unity tools stay declared because most mix read and write actions under
+    one name; which call is a read is decided per call by the ledger.
+    """
+    return tool_name in _READ_ONLY_BUILTIN_TOOLS or tool_name not in _BUILTIN_TOOL_NAMES
+
+
+def _read_only_tool_allowed(tool_name: str, tool_args: object) -> bool:
+    """May a read-only runner execute this call? Unknown means no."""
+    if tool_name in _READ_ONLY_BUILTIN_TOOLS:
+        return True
+    if tool_name in _BUILTIN_TOOL_NAMES:
+        return False
+    from unity_tool_policy import UNITY_MCP_PREFIX, is_unity_mcp_read_only
+    name = tool_name if tool_name.startswith(UNITY_MCP_PREFIX) else UNITY_MCP_PREFIX + tool_name
+    return is_unity_mcp_read_only(name, tool_args if isinstance(tool_args, dict) else {})
+
+
 _CODEX_AUTO_MODE_INSTRUCTION = (
     "[ÇALIŞMA MODU: OTOMATİK] Kullanıcının verdiği görevi tamamlamak için gerekli "
     "dosya değişikliklerini, komutları ve MCP araçlarını doğrudan uygula. "
@@ -847,7 +886,11 @@ class AgentRunner:
         ultracode: bool = False,
         videos: Optional[List[dict]] = None,
         resume_id: Optional[str] = None,
+        read_only: bool = False,
     ):
+        # Side chat: no write of any kind on any path, whatever the approval
+        # mode. The route derives it from the DB (`side_of`), never the client.
+        self.read_only = bool(read_only)
         # CLI'ın kendi diskindeki oturumu geri çağıran kimlik. Route yükleyip
         # veriyor (DB orada); burada yalnız taşınıyor. None ise davranış eski:
         # DB transcript'i enjekte edilir.
@@ -927,7 +970,8 @@ class AgentRunner:
         bites on the very next call of a running turn.
         """
         from agentic import approval_mode
-        if approval_mode.is_auto():
+        # Read-only: no card, `_execute_tool_with_approval` refuses the write.
+        if getattr(self, "read_only", False) or approval_mode.is_auto():
             return None
         if tool_name == "run_command":
             command = tool_args.get("command", "")
@@ -1019,6 +1063,9 @@ class AgentRunner:
         yalnızca aracı çalıştırır. İmza (tuple) geriye-uyum için korunur
         (çağrılar 'result, _ = ...' biçiminde).
         """
+        if getattr(self, "read_only", False) and not _read_only_tool_allowed(tool_name, tool_args):
+            logger.warning("[read-only] conv=%s refused %s", self.conversation_id, tool_name)
+            return {"success": False, "error": _READ_ONLY_REFUSAL}, []
         result = await asyncio.to_thread(
             execute_tool, tool_name, tool_args, self.workspace_path, self.conversation_id
         )
@@ -1034,6 +1081,13 @@ class AgentRunner:
                 f"'{self.provider_type}' sağlayıcısı üzerinden çalışıyorsun. Kimliğin veya hangi "
                 f"model olduğun sorulursa BUNU söyle; farklı bir model (Claude/GPT/Gemini vb.) "
                 f"olduğunu İDDİA ETME.")
+
+    def _tool_definitions(self) -> list:
+        """Every tool definition this runner offers the model."""
+        defs = _all_tool_definitions()
+        if getattr(self, "read_only", False):
+            defs = [t for t in defs if _read_only_tool_declared(t["name"])]
+        return defs
 
     async def _await_provider(
         self, istek: "asyncio.Task", *, iptal_edilebilir: bool = True
@@ -1195,7 +1249,11 @@ class AgentRunner:
         """
         Agentic loop'u çalıştırır. Her adımda AgentEvent yield eder.
         """
-        user_message, _video_warnings = await self._prepare_videos(user_message)
+        if getattr(self, "read_only", False):
+            # Video extraction downloads and writes frames under the workspace.
+            _video_warnings = []
+        else:
+            user_message, _video_warnings = await self._prepare_videos(user_message)
         # Video warnings are emitted BEFORE the provider branch: `_prepare_videos`
         # runs for every provider, so emitting here closes all nine paths at once —
         # putting it inside the branches would again close only one.
@@ -1229,6 +1287,12 @@ class AgentRunner:
                 _cur = "agy"
             else:
                 _cur = "claude"
+
+            if _cur == "agy" and getattr(self, "read_only", False):
+                # agy holds a machine-wide turn lock: a side question would
+                # queue behind the main chat's turn. The route refuses first.
+                yield AgentEvent("error", {"message": "Yan soru agy ile kullanılamıyor."})
+                return
 
             # CLI'lar arası "kaldığı yerden devam": provider değiştiyse hedef CLI'ın
             # (varsa) bayat session'ını kapat → ilk-tur enjeksiyonu tetiklenir, tam
@@ -1270,6 +1334,8 @@ class AgentRunner:
         # Tool tanımlarını Gemini formatına çevir
         # Built-in + Unity MCP araçları (şema Gemini için sanitize edilir → 40+ Unity tool da gelir).
         _gemini_decls = get_gemini_tool_declarations()[0]["function_declarations"]
+        if getattr(self, "read_only", False):
+            _gemini_decls = [d for d in _gemini_decls if _read_only_tool_declared(d["name"])]
         tools = [gtypes.Tool(function_declarations=[
             gtypes.FunctionDeclaration(
                 name=d["name"],
@@ -1619,7 +1685,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         
         # Tool formatı
         anthropic_tools = []
-        for t in _all_tool_definitions():
+        for t in self._tool_definitions():
             # Anthropic expects input_schema instead of parameters
             anthropic_tools.append({
                 "name": t["name"],
@@ -1665,7 +1731,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             
             # Tool formatı
             anthropic_tools = []
-            for t in _all_tool_definitions():
+            for t in self._tool_definitions():
                 anthropic_tools.append({
                     "name": t["name"],
                     "description": t["description"],
@@ -1899,6 +1965,8 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 {self.context or "Yeni sohbet."}"""
         
         openai_tools = get_openai_tool_declarations()
+        if getattr(self, "read_only", False):
+            openai_tools = [t for t in openai_tools if _read_only_tool_declared(t["function"]["name"])]
         
         # İlk mesaj içeriği
         user_content = [{"type": "text", "text": user_message}]
@@ -2493,16 +2561,19 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 }
             # Önceki sürümlerin bu projeye yazdığı `.mcp.json` artık okunmuyor;
             # düz metin `X-API-Key` taşıdığı için diskte de bırakılmıyor.
-            _remove_project_mcp_json(self.workspace_path)
-            # Önceki sürümlerin user-scope'a yazdığı unityai kaydını temizle
-            # (_resolve_exec @staticmethod — provider örneği yaratmaya gerek yok)
-            # env= ZORUNLU: bu da bir üçüncü taraf CLI spawn'ı ve Claude SDK yolu
-            # her turda buradan geçiyor. Verilmezse `claude` süreci
-            # LOCAL_APP_TOKEN'ı ve kullanıcının export ettiği tüm vendor
-            # anahtarlarını görür (aynı sınıf 2026-07-29'da canary ile ölçüldü).
-            _sp.run(BaseCLIProvider._resolve_exec(["claude", "mcp", "remove", "unityai", "--scope", "user"]),
-                    capture_output=True, timeout=5,
-                    env=build_spawn_env(env_family("claude")))
+            # A read-only (side) turn leaves this legacy cleanup to the main
+            # chat's turns: it rewrites a project file and ~/.claude.json.
+            if not getattr(self, "read_only", False):
+                _remove_project_mcp_json(self.workspace_path)
+                # Önceki sürümlerin user-scope'a yazdığı unityai kaydını temizle
+                # (_resolve_exec @staticmethod — provider örneği yaratmaya gerek yok)
+                # env= ZORUNLU: bu da bir üçüncü taraf CLI spawn'ı ve Claude SDK yolu
+                # her turda buradan geçiyor. Verilmezse `claude` süreci
+                # LOCAL_APP_TOKEN'ı ve kullanıcının export ettiği tüm vendor
+                # anahtarlarını görür (aynı sınıf 2026-07-29'da canary ile ölçüldü).
+                _sp.run(BaseCLIProvider._resolve_exec(["claude", "mcp", "remove", "unityai", "--scope", "user"]),
+                        capture_output=True, timeout=5,
+                        env=build_spawn_env(env_family("claude")))
         except Exception as e:
             logger.warning(f"[ClaudeSession] MCP temizleme/yazma hatası: {e}")
 
@@ -2525,9 +2596,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         # `abspath` symlink alias'ında yanlış "değişmedi"/"değişti" der.
         _workspace = self.workspace_path or "."
         _existing = _SESSIONS.get(self.conversation_id)
+        _read_only = bool(getattr(self, "read_only", False))
         _reasons = _oturum_yeniden_kurma_gerekceleri(
             _existing, model=model, effort=desired_effort,
             workspace=_workspace, mcp_servers=mcp_servers_cfg,
+            read_only=_read_only,
         )
         if _reasons:
             logger.info(f"[ClaudeSession] {', '.join(_reasons)}; session yeniden kuruluyor "
@@ -2553,7 +2626,9 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 *DISALLOWED_UNITY_TOOLS,
                 "mcp__unityai__bash",
                 "mcp__unityai__save_file",
+                *(_READ_ONLY_DISALLOWED_CLAUDE_TOOLS if _read_only else ()),
             ],
+            read_only=_read_only,
         )
 
         # Görsel: Claude Code SDK/headless satır-içi image-block'u modele SUNMUYOR
@@ -2655,8 +2730,14 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             _existing is not None
             and os.path.abspath(getattr(_existing, "cwd", None) or ".") != _workspace
         )
-        if _existing is not None and (_effort_changed or _workspace_changed):
+        _ro_changed = (
+            _existing is not None
+            and bool(getattr(_existing, "read_only", False)) != bool(getattr(self, "read_only", False))
+        )
+        if _existing is not None and (_effort_changed or _workspace_changed or _ro_changed):
             reasons = []
+            if _ro_changed:
+                reasons.append("read_only değişti")
             if _effort_changed:
                 reasons.append(f"effort {_existing.effort}→{desired_effort}")
             if _workspace_changed:
@@ -2692,6 +2773,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             model=self.model_name,
             cwd=_workspace,
             effort=desired_effort,
+            read_only=bool(getattr(self, "read_only", False)),
         )
         # Oto mod → onay otomatik accept; Adım/Plan modu → her mutasyonda onay kartı.
         session.auto_approve = (self.generation_mode == "auto")
@@ -2713,7 +2795,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         if self.context and not session._ctx_injected:
             message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
             session._ctx_injected = True
-        if self.generation_mode == "auto":
+        if self.generation_mode == "auto" and not getattr(self, "read_only", False):
             # Native requestApproval zaten otomatik kabul ediliyor. Bu kısa talimat
             # modelin ayrıca metin içinde "yapayım mı?" diye durmasını engeller.
             message = f"{message}\n\n{_CODEX_AUTO_MODE_INSTRUCTION}"

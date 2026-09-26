@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -173,6 +174,17 @@ def _resolve_db_path() -> str:
     return os.path.join(db_folder, "unity_master_v3.db")
 
 
+async def _side_sweep_loop() -> None:
+    """Idle side chats (closed window, lost DELETE) go after SIDE_IDLE_TTL_S."""
+    from routes.conversation_routes import SIDE_SWEEP_INTERVAL_S
+    while True:
+        await asyncio.sleep(SIDE_SWEEP_INTERVAL_S)
+        try:
+            await _conversation_router.sweep_idle_side_chats()
+        except Exception as e:
+            logger.warning(f"[side] idle sweep failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Backend başlarken: 8080'de geçen oturumdan kalmış KENDİ MCP sunucumuz varsa
@@ -190,7 +202,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug(f"[Startup] Port temizleme atlandı: {e}")
 
+    # Side chats are throwaway panels: none survives a restart, and no
+    # provider session of one can exist yet, so the rows alone are dropped.
+    try:
+        swept = db.sweep_side_chats(0)
+        if swept:
+            logger.info(f"[Startup] {len(swept)} yan sohbet kaydı silindi.")
+    except Exception as e:
+        logger.warning(f"[Startup] Yan sohbet temizliği atlandı: {e}")
+    side_sweeper = asyncio.create_task(_side_sweep_loop())
+
     yield
+
+    side_sweeper.cancel()
+    try:
+        await side_sweeper
+    except BaseException:
+        pass
 
     # Backend kapanınca Unity MCP subprocess'i de durdur
     try:
@@ -278,7 +306,8 @@ app.include_router(create_config_router(db))
 app.include_router(create_analysis_router(db))
 app.include_router(create_workspace_router(db))
 app.include_router(create_lsp_router(db))
-app.include_router(create_conversation_router(db, PROGRESS_STORE))
+_conversation_router = create_conversation_router(db, PROGRESS_STORE)
+app.include_router(_conversation_router)
 app.include_router(create_mcp_router())
 app.include_router(create_transcribe_router())
 

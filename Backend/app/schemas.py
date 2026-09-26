@@ -82,6 +82,17 @@ class ChatRequest(BaseModel):
     origin: Literal["user", "wake"] = "user"
 
 
+class SideChatRequest(BaseModel):
+    """One question in a read-only side chat; limits mirror ChatRequest."""
+    message: str = Field(max_length=200_000)
+    # The renderer's copy of the main chat's latest answer (possibly still
+    # streaming). Capped again server-side before it reaches the prompt.
+    live_context: str = Field(default="", max_length=400_000)
+    language: str = "tr"
+    thinking_level: str = "medium"
+    effort_level: str = "medium"
+
+
 class WorkspaceRequest(BaseModel):
     user_id: int
     path: str

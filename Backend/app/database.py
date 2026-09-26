@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timedelta
 import bcrypt
 from typing import List, Dict, Any, Optional, Tuple
 from cryptography.fernet import Fernet, InvalidToken
@@ -160,8 +160,10 @@ class DatabaseManager:
                 pass  # Sütun zaten var
             # Branching (tabs): parent_id is always the ROOT's id (one level),
             # fork_at the id of the last message copied from the source.
+            # side_of: a read-only side chat's main chat. parent_id stays NULL on
+            # a side row so `_touch` never bumps the main chat's family.
             for col_def in ("parent_id INTEGER", "fork_at INTEGER",
-                            "hidden INTEGER NOT NULL DEFAULT 0"):
+                            "hidden INTEGER NOT NULL DEFAULT 0", "side_of INTEGER"):
                 try:
                     cursor.execute(f"ALTER TABLE conversations ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
@@ -352,7 +354,7 @@ class DatabaseManager:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
                 'SELECT id, title, created_at, updated_at, parent_id, hidden FROM conversations '
-                'WHERE user_id = ? ORDER BY updated_at DESC',
+                'WHERE user_id = ? AND side_of IS NULL ORDER BY updated_at DESC',
                 (user_id,)
             ).fetchall()
             return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3],
@@ -398,12 +400,12 @@ class DatabaseManager:
             # so a family delete on another connection cannot land in between.
             conn.execute('BEGIN IMMEDIATE')
             src = conn.execute(
-                'SELECT user_id, title, memory_summary, parent_id FROM conversations WHERE id = ?',
+                'SELECT user_id, title, memory_summary, parent_id, side_of FROM conversations WHERE id = ?',
                 (source_id,)
             ).fetchone()
-            if not src:
+            if not src or src[4] is not None:
                 return None
-            user_id, title, memory_summary, parent_id = src
+            user_id, title, memory_summary, parent_id, _ = src
             root_id = parent_id or source_id
             if parent_id is not None and conn.execute(
                 'SELECT 1 FROM conversations WHERE id = ?', (root_id,)
@@ -456,31 +458,130 @@ class DatabaseManager:
             # yani yanlış geçmiş gösterme riski YOK — bu yalnız çöp temizliği.
             conn.execute('DELETE FROM cli_sessions WHERE conversation_id = ?', (conv_id,))
             conn.execute('DELETE FROM conversations WHERE id = ?', (conv_id,))
+            self._delete_side_rows_of(conn, [conv_id])
             conn.commit()
+
+    @staticmethod
+    def _delete_side_rows_of(conn: sqlite3.Connection, main_ids: List[int]) -> List[int]:
+        """Delete the side chats of `main_ids` inside the caller's transaction."""
+        if not main_ids:
+            return []
+        marks = ','.join('?' * len(main_ids))
+        side_ids = [r[0] for r in conn.execute(
+            f'SELECT id FROM conversations WHERE side_of IN ({marks}) ORDER BY id ASC',
+            main_ids)]
+        DatabaseManager._delete_rows(conn, side_ids)
+        return side_ids
+
+    @staticmethod
+    def _delete_rows(conn: sqlite3.Connection, ids: List[int]) -> None:
+        if not ids:
+            return
+        marks = ','.join('?' * len(ids))
+        conn.execute(f'DELETE FROM messages WHERE conversation_id IN ({marks})', ids)
+        conn.execute(f'DELETE FROM cli_sessions WHERE conversation_id IN ({marks})', ids)
+        conn.execute(f'DELETE FROM conversations WHERE id IN ({marks})', ids)
 
     def delete_conversation_family(self, conv_id: int) -> List[int]:
         """Delete a chat in one transaction; a root takes its branches with it.
 
         Returns the deleted ids (root first, then branches by id); [] if the
         chat is gone. One transaction so no branch can be copied under a root
-        whose family is half deleted.
+        whose family is half deleted. Side chats of every deleted id go too;
+        `delete_conversation_family_and_sides` also returns their ids.
         """
+        return self.delete_conversation_family_and_sides(conv_id)[0]
+
+    def delete_conversation_family_and_sides(self, conv_id: int) -> Tuple[List[int], List[int]]:
+        """`delete_conversation_family`, plus the ids of the side chats it deleted."""
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('BEGIN IMMEDIATE')
             row = conn.execute(
                 'SELECT parent_id FROM conversations WHERE id = ?', (conv_id,)
             ).fetchone()
             if row is None:
-                return []
+                return [], []
             ids = [conv_id]
             if row[0] is None:
                 ids += [r[0] for r in conn.execute(
                     'SELECT id FROM conversations WHERE parent_id = ? ORDER BY id ASC',
                     (conv_id,))]
-            marks = ','.join('?' * len(ids))
-            conn.execute(f'DELETE FROM messages WHERE conversation_id IN ({marks})', ids)
-            conn.execute(f'DELETE FROM cli_sessions WHERE conversation_id IN ({marks})', ids)
-            conn.execute(f'DELETE FROM conversations WHERE id IN ({marks})', ids)
+            self._delete_rows(conn, ids)
+            side_ids = self._delete_side_rows_of(conn, ids)
+            conn.commit()
+            return ids, side_ids
+
+    # ===================== SIDE CHATS =====================
+    def create_side_chat(self, main_id: int, user_id: int) -> Optional[int]:
+        """The open side chat of `main_id`, created if there is none.
+
+        None if the main chat is gone, not the user's, or itself a side chat.
+        No messages are copied and no cli_sessions row is written: the side
+        chat's first turn gets the main chat's transcript as handoff context,
+        never a resume or fork of the main chat's CLI session.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute(
+                'SELECT user_id, side_of FROM conversations WHERE id = ?', (main_id,)
+            ).fetchone()
+            if row is None or row[0] != user_id or row[1] is not None:
+                return None
+            existing = conn.execute(
+                'SELECT id FROM conversations WHERE side_of = ? ORDER BY id DESC LIMIT 1',
+                (main_id,)
+            ).fetchone()
+            if existing:
+                return existing[0]
+            cur = conn.execute(
+                'INSERT INTO conversations (user_id, title, created_at, updated_at, '
+                'parent_id, hidden, side_of) VALUES (?, ?, ?, ?, NULL, 1, ?)',
+                (user_id, "Yan soru", now, now, main_id)
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def get_side_of(self, conv_id: int) -> Optional[int]:
+        """The main chat of a side chat; None for any other id (or an unknown one)."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute(
+                'SELECT side_of FROM conversations WHERE id = ?', (conv_id,)
+            ).fetchone()
+            return row[0] if row else None
+
+    def delete_side_chat(self, side_id: int) -> bool:
+        """Delete one side chat; False if `side_id` is not a side chat."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute(
+                'SELECT side_of FROM conversations WHERE id = ?', (side_id,)
+            ).fetchone()
+            if row is None or row[0] is None:
+                return False
+            self._delete_rows(conn, [side_id])
+            conn.commit()
+            return True
+
+    def sweep_side_chats(self, older_than_s: float, busy_ids=()) -> List[int]:
+        """Delete side chats idle for at least `older_than_s` seconds; returns their ids.
+
+        `older_than_s <= 0` deletes every side chat (startup). Ids in `busy_ids`
+        (a turn in flight) are kept whatever their age.
+        """
+        busy = set(busy_ids or ())
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if older_than_s <= 0:
+                rows = conn.execute(
+                    'SELECT id FROM conversations WHERE side_of IS NOT NULL').fetchall()
+            else:
+                cutoff = (datetime.now() - timedelta(seconds=older_than_s)).strftime("%Y-%m-%d %H:%M:%S")
+                rows = conn.execute(
+                    'SELECT id FROM conversations WHERE side_of IS NOT NULL AND updated_at <= ?',
+                    (cutoff,)).fetchall()
+            ids = [r[0] for r in rows if r[0] not in busy]
+            self._delete_rows(conn, ids)
             conn.commit()
             return ids
 
