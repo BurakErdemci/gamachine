@@ -132,6 +132,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                     GameObject rootToUnlink = PrefabUtility.GetOutermostPrefabInstanceRoot(sourceObject);
                     if (rootToUnlink != null)
                     {
+                        PrefabLinkGuard.WarnUnpack(rootToUnlink);
                         PrefabUtility.UnpackPrefabInstance(rootToUnlink, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
                         McpLog.Info($"[ManagePrefabs] Unpacked prefab instance '{rootToUnlink.name}' before creating new prefab.");
                     }

@@ -128,6 +128,7 @@ namespace MCPForUnity.Editor.Helpers
 
             try
             {
+                PrefabLinkGuard.WarnComponentRemove(component);
                 Undo.DestroyObjectImmediate(component);
                 return true;
             }

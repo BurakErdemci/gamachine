@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Tools;
+using MCPForUnity.Runtime.Helpers;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEditor;
@@ -21,6 +22,7 @@ namespace MCPForUnityTests.Editor.Tools
     /// </summary>
     public class McpActionJournalTests
     {
+        const string TempFolder = "Assets/McpJournalTestTemp";
         readonly List<string> _names = new List<string>();
 
         [SetUp]
@@ -38,6 +40,7 @@ namespace MCPForUnityTests.Editor.Tools
                 while ((go = GameObject.Find(name)) != null) UnityEngine.Object.DestroyImmediate(go);
             }
             _names.Clear();
+            if (AssetDatabase.IsValidFolder(TempFolder)) AssetDatabase.DeleteAsset(TempFolder);
         }
 
         string Unique(string prefix)
@@ -222,6 +225,100 @@ namespace MCPForUnityTests.Editor.Tools
             var result = RunSync("find_gameobjects", new JObject { ["searchTerm"] = "NoSuchObject_McpJournal" });
             Assert.IsNull(result["undo"], result.ToString());
             Assert.AreEqual(before, LogLines().Length);
+        }
+
+        GameObject InstantiateTestPrefab(out string prefabPath)
+        {
+            if (!AssetDatabase.IsValidFolder(TempFolder)) AssetDatabase.CreateFolder("Assets", "McpJournalTestTemp");
+            string rootName = Unique("Car");
+            var root = new GameObject(rootName);
+            var wheel = new GameObject("Wheel");
+            wheel.AddComponent<BoxCollider>();
+            wheel.transform.SetParent(root.transform);
+            prefabPath = $"{TempFolder}/{rootName}.prefab";
+            var asset = PrefabUtility.SaveAsPrefabAsset(root, prefabPath);
+            UnityEngine.Object.DestroyImmediate(root);
+            return (GameObject)PrefabUtility.InstantiatePrefab(asset);
+        }
+
+        [Test]
+        public void Delete_OfAPrefabInstanceChild_Warns()
+        {
+            var instance = InstantiateTestPrefab(out string prefabPath);
+            var wheel = instance.transform.Find("Wheel").gameObject;
+
+            var result = RunSync("manage_gameobject", new JObject
+            {
+                ["action"] = "delete",
+                ["target"] = wheel.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+            });
+
+            var warnings = result["warnings"] as JArray;
+            Assert.IsNotNull(warnings, result.ToString());
+            var warning = warnings.Select(w => w.ToString()).Single();
+            StringAssert.StartsWith("prefab_link:", warning);
+            StringAssert.Contains(instance.name, warning);
+            StringAssert.Contains(prefabPath, warning);
+
+            var line = LogLines().Select(JObject.Parse).Last(l => l.Value<string>("action_id") == result["undo"].Value<string>("action_id"));
+            Assert.AreEqual(1, ((JArray)line["prefab_warnings"]).Count);
+        }
+
+        [Test]
+        public void Delete_OfAPlainObjectOrWholeInstance_DoesNotWarn()
+        {
+            var instance = InstantiateTestPrefab(out _);
+            var result = RunSync("manage_gameobject", new JObject
+            {
+                ["action"] = "delete",
+                ["target"] = instance.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+            });
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            Assert.IsNull(result["warnings"], result.ToString());
+        }
+
+        [Test]
+        public void PrefabLinkGuard_DescribesEachLinkBreakingEdit()
+        {
+            var instance = InstantiateTestPrefab(out string prefabPath);
+            var wheel = instance.transform.Find("Wheel").gameObject;
+            var plain = new GameObject(Unique("Plain"));
+
+            StringAssert.StartsWith("prefab_link:", PrefabLinkGuard.DescribeComponentRemove(wheel.GetComponent<BoxCollider>()));
+            StringAssert.StartsWith("prefab_link:", PrefabLinkGuard.DescribeReparent(wheel));
+            StringAssert.StartsWith("prefab_link:", PrefabLinkGuard.DescribeUnpack(instance));
+            StringAssert.StartsWith("prefab_link:", PrefabLinkGuard.DescribeAssetDelete(prefabPath));
+
+            Assert.IsNull(PrefabLinkGuard.DescribeReparent(instance), "moving a whole instance keeps its link");
+            Assert.IsNull(PrefabLinkGuard.DescribeDelete(plain));
+            Assert.IsNull(PrefabLinkGuard.DescribeComponentRemove(plain.transform));
+            Assert.IsNull(PrefabLinkGuard.DescribeUnpack(plain));
+
+            var added = plain.AddComponent<SphereCollider>();
+            plain.transform.SetParent(instance.transform);
+            Assert.IsNull(PrefabLinkGuard.DescribeDelete(plain), "an added override is not part of the prefab");
+            Assert.IsNull(PrefabLinkGuard.DescribeComponentRemove(added));
+        }
+
+        [Test]
+        public void ComponentRemove_OnAPrefabInstance_Warns()
+        {
+            var instance = InstantiateTestPrefab(out _);
+            var wheel = instance.transform.Find("Wheel").gameObject;
+
+            var result = RunSync("manage_components", new JObject
+            {
+                ["action"] = "remove",
+                ["target"] = wheel.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentType"] = "BoxCollider",
+            });
+
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            StringAssert.StartsWith("prefab_link:", result["warnings"]?[0]?.ToString() ?? "", result.ToString());
+            Assert.AreEqual(true, result["undo"].Value<bool>("undoable"));
         }
     }
 }

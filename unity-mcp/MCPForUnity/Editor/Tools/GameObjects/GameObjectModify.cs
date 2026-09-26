@@ -95,6 +95,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 }
                 if (targetGo.transform.parent != (newParentGo?.transform))
                 {
+                    PrefabLinkGuard.WarnReparent(targetGo);
                     targetGo.transform.SetParent(newParentGo?.transform, true);
                     modified = true;
                 }

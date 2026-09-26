@@ -503,6 +503,7 @@ namespace MCPForUnity.Editor.Tools
 
             try
             {
+                PrefabLinkGuard.WarnAssetDelete(fullPath);
                 bool success = AssetDatabase.DeleteAsset(fullPath);
                 if (success)
                 {
