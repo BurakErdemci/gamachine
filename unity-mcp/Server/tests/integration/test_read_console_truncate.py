@@ -2,6 +2,15 @@ import pytest
 
 from .test_helpers import DummyContext, DummyMCP
 
+# read_console also asks Unity for the compile status. A final, clean compile
+# adds nothing to the response, so these tests keep their original shape.
+CLEAN_COMPILE_STATUS = {"success": True, "data": {
+    "is_compiling": False, "is_updating": False, "compilation_failed_now": False,
+    "epoch": 3, "finished_epoch": 3, "last_failed": False, "error_count": 0,
+    "warning_count": 0, "errors": [], "reload_done_after_finish": True,
+    "scripts_changed_since_compile": {"count": 0, "paths": []},
+}}
+
 
 def setup_console_tools():
     """Setup console-related tools for testing."""
@@ -23,6 +32,8 @@ async def test_read_console_full_default(monkeypatch):
     captured = {}
 
     async def fake_send(_cmd, params, **_kwargs):
+        if _cmd == "get_compile_status":
+            return CLEAN_COMPILE_STATUS
         captured["params"] = params
         return {
             "success": True,
@@ -54,6 +65,8 @@ async def test_read_console_truncated(monkeypatch):
     captured = {}
 
     async def fake_send(_cmd, params, **_kwargs):
+        if _cmd == "get_compile_status":
+            return CLEAN_COMPILE_STATUS
         captured["params"] = params
         return {
             "success": True,
@@ -83,6 +96,8 @@ async def test_read_console_default_count(monkeypatch):
     captured = {}
 
     async def fake_send(_cmd, params, **_kwargs):
+        if _cmd == "get_compile_status":
+            return CLEAN_COMPILE_STATUS
         captured["params"] = params
         return {
             "success": True,
@@ -113,6 +128,8 @@ async def test_read_console_paging(monkeypatch):
     captured = {}
 
     async def fake_send(_cmd, params, **_kwargs):
+        if _cmd == "get_compile_status":
+            return CLEAN_COMPILE_STATUS
         captured["params"] = params
         # Simulate Unity returning paging info matching C# structure
         page_size = params.get("pageSize", 10)
@@ -180,6 +197,8 @@ async def test_read_console_types_json_string(monkeypatch):
     captured = {}
 
     async def fake_send_with_unity_instance(_send_fn, _unity_instance, _command_type, params, **_kwargs):
+        if _command_type == "get_compile_status":
+            return CLEAN_COMPILE_STATUS
         captured["params"] = params
         return {
             "success": True,
@@ -223,6 +242,8 @@ async def test_read_console_types_validation(monkeypatch):
     captured = {}
 
     async def fake_send_with_unity_instance(_send_fn, _unity_instance, _command_type, params, **_kwargs):
+        if _command_type == "get_compile_status":
+            return CLEAN_COMPILE_STATUS
         captured["params"] = params
         return {"success": True, "data": {"lines": []}}
 

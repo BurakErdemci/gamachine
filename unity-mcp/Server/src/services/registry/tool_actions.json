@@ -727,8 +727,8 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
-      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:148",
-      "note": "Writes .cs content under Assets/ and can trigger a recompile via wait_for_compile."
+      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:73",
+      "note": "Writes .cs content under Assets/, which triggers a recompile. wait_for_compile (default true) only waits for that compile and reads its result through get_compile_status; it sends no second write."
     },
     "create_script": {
       "action_param": null,
@@ -736,7 +736,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
-      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:467",
+      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:394",
       "note": "Hardcodes action='create' internally."
     },
     "delete_script": {
@@ -745,7 +745,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
-      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:533",
+      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:461",
       "note": "Hardcodes action='delete' internally."
     },
     "validate_script": {
@@ -754,7 +754,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
-      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:568",
+      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:496",
       "note": "readOnlyHint=True. 'level' is a validation depth, not an action."
     },
     "manage_script": {
@@ -768,7 +768,7 @@
         "delete"
       ],
       "param_dependent": [],
-      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:616",
+      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:544",
       "note": "Tool-level annotation is destructiveHint=True with no readOnlyHint, so the read action is under-declared at tool level -- per-action gating is required to avoid carding every script read."
     },
     "manage_script_capabilities": {
@@ -777,7 +777,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
-      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:706",
+      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:646",
       "note": "unity_target=None -- returns a static capability dict from the Python server, never reaches Unity."
     },
     "get_sha": {
@@ -786,7 +786,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
-      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:746",
+      "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:686",
       "note": "readOnlyHint=True. Returns sha256 and length only, not contents."
     },
     "compile_status": {
@@ -809,7 +809,7 @@
       ],
       "param_dependent": [],
       "default_action": "get",
-      "evidence": "unity-mcp/Server/src/services/tools/read_console.py:23",
+      "evidence": "unity-mcp/Server/src/services/tools/read_console.py:24",
       "note": "'clear' invokes LogEntries.Clear (ReadConsole.cs:205). It destroys ephemeral UI state, not project data, but it is still destructive and must not ride on a blanket tool-level exemption. Defaults to 'get' when action is omitted (read_console.py:52) -- classify() must apply that default rather than treating a missing action as unknown."
     },
     "refresh_unity": {
@@ -818,7 +818,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
-      "evidence": "unity-mcp/Server/src/services/tools/refresh_unity.py:168",
+      "evidence": "unity-mcp/Server/src/services/tools/refresh_unity.py:174",
       "note": "mode/scope/compile are modifiers, not actions. Imports assets and regenerates artifacts even with compile='none'."
     },
     "run_tests": {
@@ -846,7 +846,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
-      "evidence": "unity-mcp/Server/src/services/tools/script_apply_edits.py:671",
+      "evidence": "unity-mcp/Server/src/services/tools/script_apply_edits.py:672",
       "note": "The per-edit 'op' field selects the structured edit; every op is a mutation."
     },
     "set_active_instance": {

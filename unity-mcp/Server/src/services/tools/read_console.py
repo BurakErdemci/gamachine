@@ -8,6 +8,7 @@ from mcp.types import ToolAnnotations
 
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
+from services.tools.compile_status import live_verdict, read_compile_status
 from services.tools.utils import coerce_int, coerce_bool, parse_json_payload
 from transport.unity_transport import send_with_unity_instance
 from transport.legacy.unity_connection import async_send_command_with_retry
@@ -21,7 +22,7 @@ def _strip_stacktrace_from_list(items: list) -> None:
 
 
 @mcp_for_unity_tool(
-    description="Gets messages from or clears the Unity Editor console. Defaults to 10 most recent entries. Use page_size/cursor for paging. Note: For maximum client compatibility, pass count as a quoted string (e.g., '5'). The 'get' action is read-only; 'clear' modifies ephemeral UI state (not project data).",
+    description="Gets messages from or clears the Unity Editor console. Defaults to 10 most recent entries. Use page_size/cursor for paging. Note: For maximum client compatibility, pass count as a quoted string (e.g., '5'). The 'get' action is read-only; 'clear' modifies ephemeral UI state (not project data). An empty error list is not proof of a clean compile: when compilation is running, pending, stale (scripts changed on disk and not yet compiled) or unknown, the response carries a top-level compile_state saying so. After writing .cs files with your own tools call refresh_unity or compile_status first.",
     annotations=ToolAnnotations(
         title="Read Console",
     ),
@@ -145,4 +146,35 @@ async def read_console(
                 _strip_stacktrace_from_list(data)
         except Exception:
             pass
+    if isinstance(resp, dict) and resp.get("success") and action == "get":
+        compile_state = await _compile_state(unity_instance)
+        if compile_state is not None:
+            resp["compile_state"] = compile_state
     return resp if isinstance(resp, dict) else {"success": False, "message": str(resp)}
+
+
+async def _compile_state(unity_instance: str | None) -> dict[str, Any] | None:
+    """None when the last compile is final and clean; otherwise why the console
+    may not show the real compile result.
+
+    The console is read live, so before or during a compile it reports 0 errors:
+    3/3 probes after an agent wrote a broken .cs with its own file tool, and 5/5
+    right after refresh_unity on a larger project (11 Sep 2026).
+    """
+    read = await read_compile_status(
+        unity_instance, scan=True, attempts=2,
+        send_fn=async_send_command_with_retry, route_fn=send_with_unity_instance)
+    verdict = live_verdict(read.status, read.problem)
+    if verdict["verdict"] == "clean":
+        return None
+    state: dict[str, Any] = {"verdict": verdict["verdict"], "note": verdict.get("note")}
+    if verdict["verdict"] == "errors":
+        count = verdict.get("error_count")
+        state["error_count"] = count
+        state["errors"] = (verdict.get("errors") or [])[:5]
+        if not state["note"]:
+            state["note"] = f"the last compile failed with {count} error(s)"
+    changed = verdict.get("scripts_changed_since_compile")
+    if isinstance(changed, dict) and changed.get("count"):
+        state["scripts_changed_since_compile"] = changed
+    return state

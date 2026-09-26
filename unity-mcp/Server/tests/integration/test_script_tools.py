@@ -53,6 +53,8 @@ async def test_sequential_edits_use_precondition(monkeypatch):
     calls = []
 
     async def fake_send(cmd, params, **kwargs):
+        if cmd != "manage_script":
+            return {"success": False, "error": "Unknown or unsupported command type: " + cmd}
         calls.append(params)
         return {"success": True, "sha256": f"hash{len(calls)}"}
 

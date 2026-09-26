@@ -180,6 +180,8 @@ async def test_read_console_during_simulated_reload(monkeypatch):
 
     async def fake_send_command(*args, **kwargs):
         """Simulate successful command execution."""
+        if args and args[0] == "get_compile_status":
+            return {"success": False, "error": "Unity is reloading", "hint": "retry"}
         call_count[0] += 1
         return {
             "success": True,

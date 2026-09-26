@@ -8,7 +8,9 @@ from mcp.types import ToolAnnotations
 
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
+from services.tools.compile_status import await_compile_verdict, snapshot_compile_epoch
 from services.tools.refresh_unity import send_mutation, verify_edit_by_sha
+from services.tools.utils import coerce_bool
 from transport.unity_transport import send_with_unity_instance
 import transport.legacy.unity_connection
 
@@ -68,83 +70,6 @@ def _split_uri(uri: str) -> tuple[str, str]:
     return name, directory
 
 
-async def _await_compile_result(ctx: Context, unity_instance, max_wait_s: float = 90.0) -> dict[str, Any]:
-    """Script mutasyonu sonrası derlemeyi bekleyip sonucu döndürür (wait_for_compile=true).
-
-    Gece-testi geri bildirimi: her script değişikliği "yaz → isCompiling yokla → yokla →
-    read_console" diye 3-4 ayrı tura mal oluyordu. Bu helper aynı akışı SUNUCUDA yapar:
-      1. derlemenin başlamasını bekle (refresh async tetiklenir; hiç başlamazsa not düş),
-      2. bitmesini bekle (domain reload kopmalarına transport retry'ı zaten dayanıklı),
-      3. konsoldan error'ları çekip cevaba iliştir.
-    Dönen şekil: {"compilation_observed": bool, "timed_out": bool, "errors": [...], "error_count": int}
-    """
-    import asyncio
-    import time
-    from services.resources.editor_state import get_editor_state
-
-    async def _compilation() -> dict | None:
-        try:
-            state_resp = await get_editor_state(ctx)
-            state = state_resp.model_dump() if hasattr(state_resp, "model_dump") else state_resp
-            data = state.get("data") if isinstance(state, dict) else None
-            return data.get("compilation") if isinstance(data, dict) else None
-        except Exception:
-            return None
-
-    def _busy(comp: dict | None) -> bool:
-        return isinstance(comp, dict) and (
-            comp.get("is_compiling") is True or comp.get("is_domain_reload_pending") is True
-        )
-
-    deadline = time.monotonic() + float(max_wait_s)
-
-    # 1) Derlemenin başlamasını bekle (yazımdan sonra kısa gecikmeyle tetiklenir).
-    observed = False
-    start_deadline = min(deadline, time.monotonic() + 10.0)
-    while time.monotonic() < start_deadline:
-        if _busy(await _compilation()):
-            observed = True
-            break
-        await asyncio.sleep(0.25)
-
-    # 2) Bitmesini bekle.
-    timed_out = False
-    if observed:
-        while _busy(await _compilation()):
-            if time.monotonic() >= deadline:
-                timed_out = True
-                break
-            await asyncio.sleep(0.4)
-
-    # 3) Konsoldan derleme hatalarını çek (stale hatalar da gerçek editör durumudur).
-    errors: list[Any] = []
-    try:
-        console = await send_with_unity_instance(
-            transport.legacy.unity_connection.async_send_command_with_retry,
-            unity_instance, "read_console",
-            {"action": "get", "types": ["error"], "count": 50,
-             "format": "plain", "includeStacktrace": False},
-        )
-        if isinstance(console, dict) and console.get("success"):
-            cdata = console.get("data")
-            if isinstance(cdata, dict):
-                errors = cdata.get("lines") or cdata.get("entries") or cdata.get("messages") or []
-            elif isinstance(cdata, list):
-                errors = cdata
-    except Exception:
-        pass
-
-    result: dict[str, Any] = {
-        "compilation_observed": observed,
-        "timed_out": timed_out,
-        "error_count": len(errors) if isinstance(errors, list) else 0,
-        "errors": errors,
-    }
-    if not observed:
-        result["note"] = "no compilation started within 10s (change may not have affected scripts, or refresh is pending)"
-    return result
-
-
 @mcp_for_unity_tool(
     unity_target="manage_script",
     description=(
@@ -177,8 +102,9 @@ async def apply_text_edits(
     options: Annotated[dict[str, Any],
                        "Optional options, used to pass additional options to the script editor"] | None = None,
     wait_for_compile: Annotated[bool | str,
-                                "If true, wait for Unity's recompile to finish and include the compile result "
-                                "(error list) in the response — saves separate isCompiling/read_console round-trips."] | None = None,
+                                "Default true: wait for the recompile this change causes and return its verdict "
+                                "in data.compile (errors with CS code/file/line, clean, stale, timeout or unknown). "
+                                "Pass false to return right after the write."] | None = None,
 ) -> dict[str, Any]:
     unity_instance = await get_unity_instance_from_context(ctx)
     await ctx.info(
@@ -411,15 +337,16 @@ async def apply_text_edits(
             return {"success": True, "message": "Edit applied (verified after domain reload).", "data": {"normalizedEdits": normalized_edits}}
         return None
 
+    wait = coerce_bool(wait_for_compile, default=True)
+    baseline = await snapshot_compile_epoch(unity_instance) if wait else None
     resp = await send_mutation(ctx, unity_instance, "manage_script", params, verify_after_disconnect=_verify_edit)
     if isinstance(resp, dict):
         data = resp.setdefault("data", {})
         data.setdefault("normalizedEdits", normalized_edits)
         if warnings:
             data.setdefault("warnings", warnings)
-        from services.tools.utils import coerce_bool as _cb
-        if resp.get("success") and _cb(wait_for_compile, default=False):
-            data["compile"] = await _await_compile_result(ctx, unity_instance)
+        if resp.get("success") and baseline is not None:
+            data["compile"] = await await_compile_verdict(unity_instance, baseline)
         if resp.get("success") and (options or {}).get("force_sentinel_reload"):
             # Optional: flip sentinel via menu if explicitly requested
             try:
@@ -479,8 +406,9 @@ async def create_script(
     script_type: Annotated[str, "Script type (e.g., 'C#')"] | None = None,
     namespace: Annotated[str, "Namespace for the script"] | None = None,
     wait_for_compile: Annotated[bool | str,
-                                "If true, wait for Unity's recompile to finish and include the compile result "
-                                "(error list) in the response — saves separate isCompiling/read_console round-trips."] | None = None,
+                                "Default true: wait for the recompile this change causes and return its verdict "
+                                "in data.compile (errors with CS code/file/line, clean, stale, timeout or unknown). "
+                                "Pass false to return right after the write."] | None = None,
 ) -> dict[str, Any]:
     unity_instance = await get_unity_instance_from_context(ctx)
     await ctx.info(
@@ -521,12 +449,12 @@ async def create_script(
             return {"success": True, "message": "Script created (verified after domain reload).", "data": verify.get("data")}
         return None
 
+    baseline = await snapshot_compile_epoch(unity_instance) if coerce_bool(wait_for_compile, default=True) else None
     resp = await send_mutation(ctx, unity_instance, "manage_script", params, verify_after_disconnect=_verify_create)
     if not isinstance(resp, dict):
         return {"success": False, "message": str(resp)}
-    from services.tools.utils import coerce_bool as _cb
-    if resp.get("success") and _cb(wait_for_compile, default=False):
-        resp.setdefault("data", {})["compile"] = await _await_compile_result(ctx, unity_instance)
+    if resp.get("success") and baseline is not None:
+        resp.setdefault("data", {})["compile"] = await await_compile_verdict(unity_instance, baseline)
     return resp
 
 
@@ -630,6 +558,9 @@ async def manage_script(
     script_type: Annotated[str, "Script type (e.g., 'C#')",
                            "Type hint (e.g., 'MonoBehaviour')"] | None = None,
     namespace: Annotated[str, "Namespace for the script"] | None = None,
+    wait_for_compile: Annotated[bool | str,
+                                "For 'create' (default true): wait for the recompile and return its verdict in "
+                                "data.compile. Pass false to return right after the write."] | None = None,
 ) -> dict[str, Any]:
     unity_instance = await get_unity_instance_from_context(ctx)
     await ctx.info(
@@ -676,7 +607,16 @@ async def manage_script(
                     return {"success": True, "message": "Script deleted (verified after domain reload)."}
                 return None
 
+            baseline = None
+            if action == "create" and coerce_bool(wait_for_compile, default=True):
+                baseline = await snapshot_compile_epoch(unity_instance)
             response = await send_mutation(ctx, unity_instance, "manage_script", params, verify_after_disconnect=_verify_mutation)
+            if isinstance(response, dict) and response.get("success") and baseline is not None:
+                verdict = await await_compile_verdict(unity_instance, baseline)
+                if response.get("data") is None:
+                    response["data"] = {}
+                target = response["data"] if isinstance(response["data"], dict) else response
+                target["compile"] = verdict
 
         if isinstance(response, dict):
             if response.get("success"):

@@ -164,9 +164,15 @@ ROUTING_EXPECTED = {
 }
 
 
+def _editors(reached: list[str]) -> list[str]:
+    # read_console sends two commands to the editor it routes to: read_console
+    # and get_compile_status. Which editors were reached is the property here.
+    return list(dict.fromkeys(reached))
+
+
 @pytest.mark.parametrize("label", sorted(ROUTING_EXPECTED))
 def test_each_call_reaches_only_the_editor_it_names(report, label):
-    assert report["routing"][label]["reached"] == ROUTING_EXPECTED[label], report["routing"][label]
+    assert _editors(report["routing"][label]["reached"]) == ROUTING_EXPECTED[label], report["routing"][label]
 
 
 def test_set_active_instance_says_it_pinned_nothing(report):
@@ -235,7 +241,7 @@ def test_new_era_routing_and_refusal(report):
     if "skipped" in report["new_era_routing"]:
         pytest.skip(report["new_era_routing"]["skipped"])
     routing = report["new_era_routing"]
-    assert routing["query_param"]["reached"] == ["ProbeB"], routing["query_param"]
+    assert _editors(routing["query_param"]["reached"]) == ["ProbeB"], routing["query_param"]
     assert routing["unrouted"]["reached"] == [], routing["unrouted"]
     assert "Multiple Unity instances" in routing["unrouted"]["text"]
     assert routing["gamachine_refuses_meta_tool"]["is_error"] is True

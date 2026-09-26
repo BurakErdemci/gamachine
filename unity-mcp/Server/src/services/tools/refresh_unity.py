@@ -18,6 +18,12 @@ import transport.legacy.unity_connection as _legacy_conn
 from transport.legacy.unity_connection import _extract_response_reason
 from services.state.external_changes_scanner import external_changes_scanner
 import services.resources.editor_state as editor_state
+from services.tools.compile_status import (
+    CompileBaseline,
+    await_compile_verdict,
+    read_compile_status,
+    snapshot_compile_epoch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +172,12 @@ async def verify_edit_by_sha(
 
 
 @mcp_for_unity_tool(
-    description="Request a Unity asset database refresh and optionally a script compilation. Can optionally wait for readiness.",
+    description=(
+        "Request a Unity asset database refresh and optionally a script compilation. Can optionally wait for readiness. "
+        "With compile='request', or when the refresh picks up changed scripts, the result carries data.compile: the "
+        "verdict of that compile (errors with CS code/file/line, clean, stale, timeout or unknown). Call this after "
+        "writing .cs files with your own file tools - Unity does not import them on its own while unfocused."
+    ),
     annotations=ToolAnnotations(
         title="Refresh Unity",
         destructiveHint=True,
@@ -190,6 +201,8 @@ async def refresh_unity(
         "compile": compile,
         "wait_for_ready": bool(wait_for_ready),
     }
+
+    baseline = await snapshot_compile_epoch(unity_instance)
 
     recovered_from_disconnect = False
     # Don't retry on reload - refresh_unity triggers compilation/reload,
@@ -263,11 +276,50 @@ async def refresh_unity(
     except Exception:
         pass
 
+    compile_verdict = await _compile_verdict_after_refresh(unity_instance, baseline, compile)
+
     if recovered_from_disconnect:
+        data: dict[str, Any] = {"recovered_from_disconnect": True}
+        if compile_verdict is not None:
+            data["compile"] = compile_verdict
         return MCPResponse(
             success=True,
             message="Refresh recovered after Unity disconnect/retry; editor is ready.",
-            data={"recovered_from_disconnect": True},
+            data=data,
         )
 
+    if compile_verdict is not None:
+        if response_dict.get("data") is None:
+            response_dict["data"] = {}
+        if isinstance(response_dict["data"], dict):
+            response_dict["data"]["compile"] = compile_verdict
+        return MCPResponse(**response_dict)
     return MCPResponse(**response_dict) if isinstance(response, dict) else response
+
+
+async def _compile_verdict_after_refresh(
+    unity_instance: str | None,
+    baseline: CompileBaseline,
+    compile: str,
+) -> dict[str, Any] | None:
+    """The compile verdict for a refresh, or None when the refresh touched no scripts.
+
+    resulting_state in the Unity reply is one isCompiling sample taken as the
+    handler returns; on Unity 6 the handler skips its own wait when a compile was
+    requested, so it read "compiling" and a read_console right after showed 0
+    errors (5/5 compiles, Matchday, 11 Sep 2026).
+    """
+    if compile == "request":
+        return await await_compile_verdict(unity_instance, baseline)
+    if baseline.epoch is None:
+        return None
+    after = await read_compile_status(unity_instance, scan=True)
+    status = after.status
+    if status is None:
+        return None
+    epoch = status.get("epoch") or 0
+    busy = bool(status.get("is_compiling") or epoch > (status.get("finished_epoch") or 0))
+    changed = (status.get("scripts_changed_since_compile") or {}).get("count") or 0
+    if epoch > baseline.epoch or busy or changed:
+        return await await_compile_verdict(unity_instance, baseline)
+    return None
