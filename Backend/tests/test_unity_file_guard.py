@@ -49,7 +49,10 @@ WRITE_REFUSED = [
     ("Assets/A.overrideController", "yaml"),
     ("Assets/A.OVERRIDECONTROLLER", "yaml"),
     ("ProjectSettings/TagManager.asset", "yaml"),
-    ("Assets\\Prefabs\\Foo.prefab", "yaml"),
+    # On POSIX a backslash is a filename character: this path names one file
+    # in the project root, not a prefab, so only Windows refuses it.
+    pytest.param("Assets\\Prefabs\\Foo.prefab", "yaml",
+                 marks=pytest.mark.skipif(sys.platform != "win32", reason="Windows separator")),
     # Windows drops trailing dots/spaces and writes ::$DATA to the file itself
     ("Assets/a.prefab. ", "yaml"),
     ("Assets/a.meta::$DATA", "meta"),

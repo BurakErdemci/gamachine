@@ -47,6 +47,7 @@ card while this parser saw one token. So values are allow-listed, not
 filtered through a deny-list: a character nobody thought of is refused.
 """
 import json
+import ntpath
 import os
 import re
 import sys
@@ -151,7 +152,9 @@ def _tokens(line: str):
 
 def _same_path(a: str, b: str, windows: bool) -> bool:
     if windows:
-        return os.path.normcase(a) == os.path.normcase(b)
+        # ntpath, not os.path: `windows` says which rules apply, whatever OS
+        # this runs on (on Linux os.path.normcase does not fold case).
+        return ntpath.normcase(a) == ntpath.normcase(b)
     return a == b
 
 
