@@ -408,6 +408,63 @@ def test_a_write_past_its_dispatch_deadline_is_not_sent_even_on_a_free_lock(
     assert asyncio.run(scenario()) is False
 
 
+def test_a_write_whose_deadline_passes_while_it_waits_is_not_sent(
+        mw, approve_all, monkeypatch):
+    """The lock frees up only after the dispatch line: refused, lock left free.
+
+    The middleware's clock is moved on at the release, so the waiter holds the
+    lock inside its real asyncio wait budget but past its dispatch line. Only
+    the module's own reference is replaced: asyncio's timers keep real time.
+    """
+    monkeypatch.setattr(uim, "WRITE_DISPATCH_DEADLINE_S", 0.3)
+    offset = [0.0]
+    real_monotonic = time.monotonic
+    monkeypatch.setattr(uim, "time", types.SimpleNamespace(
+        monotonic=lambda: real_monotonic() + offset[0]))
+
+    async def scenario():
+        release = asyncio.Event()
+        inside = asyncio.Event()
+
+        async def holder_write(_context):
+            inside.set()
+            await release.wait()
+
+        async def never(_context):
+            raise AssertionError("dispatched past the deadline")
+
+        holder = asyncio.create_task(mw.on_call_tool(_context(WRITE), holder_write))
+        await inside.wait()
+        late = asyncio.create_task(mw.on_call_tool(_context(WRITE), never))
+        await asyncio.sleep(0.1)
+        offset[0] = 1.0
+        release.set()
+        await holder
+        with pytest.raises(ToolError, match="NOT sent to Unity"):
+            await late
+        return mw._write_lock("Game@aaa").locked()
+
+    assert asyncio.run(scenario()) is False
+
+
+def test_a_nested_write_past_its_own_deadline_is_not_sent(mw, approve_all, monkeypatch):
+    """The re-entry pass skips the lock wait, not the dispatch line."""
+    async def scenario():
+        async def never(_context):
+            raise AssertionError("expired nested write dispatched")
+
+        async def outer(_outer_context):
+            monkeypatch.setattr(uim, "WRITE_DISPATCH_DEADLINE_S", 0.0)
+            with pytest.raises(ToolError, match="NOT sent to Unity"):
+                await mw.on_call_tool(_context(WRITE), never)
+            return "outer"
+
+        result = await mw.on_call_tool(_context(WRITE), outer)
+        return result, mw._write_lock("Game@aaa").locked()
+
+    assert asyncio.run(scenario()) == ("outer", False)
+
+
 @pytest.fixture(scope="module")
 def probe_report():
     completed = subprocess.run(

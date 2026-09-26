@@ -530,21 +530,27 @@ class UnityInstanceMiddleware(Middleware):
         except Exception:
             pass
         key = instance if isinstance(instance, str) and instance else _NO_INSTANCE_KEY
+
+        def refuse_if_late() -> float:
+            # Past the line the client may already have given up; neither a free
+            # lock, a lock that frees up late, nor the re-entry pass may turn
+            # that into a late write (Codex s2audit, s2verify).
+            remaining = WRITE_DISPATCH_DEADLINE_S - (time.monotonic() - arrived_at)
+            if remaining <= 0:
+                _diag.warning("on_call_tool: write %s on %s not sent, %.1f s past its "
+                              "dispatch deadline", getattr(mesaj, "name", None), key, -remaining)
+                raise ToolError(
+                    "The approval took too long for this write to be sent safely. This "
+                    "call was NOT sent to Unity and changed nothing; retry it.")
+            return remaining
+
+        remaining = refuse_if_late()
         task = asyncio.current_task()
         holders = self._write_holders.setdefault(asyncio.get_running_loop(), {})
         if task is not None and holders.get(key) is task:
             return await call_next(context)
 
         lock = self._write_lock(key)
-        remaining = WRITE_DISPATCH_DEADLINE_S - (time.monotonic() - arrived_at)
-        if remaining <= 0:
-            # Past the line the client may already have given up; a free lock
-            # must not turn that into a late write (Codex s2audit).
-            _diag.warning("on_call_tool: write %s on %s not sent, %.1f s past its "
-                          "dispatch deadline", getattr(mesaj, "name", None), key, -remaining)
-            raise ToolError(
-                "The approval took too long for this write to be sent safely. This "
-                "call was NOT sent to Unity and changed nothing; retry it.")
         budget = min(WRITE_LOCK_WAIT_S, remaining)
         wait_started = time.monotonic()
         try:
@@ -560,6 +566,11 @@ class UnityInstanceMiddleware(Middleware):
                 f"{target} is busy with another write call and did not free "
                 f"up within {waited:.0f} s. This call was NOT sent to Unity and changed "
                 "nothing; retry it in a moment.") from None
+        try:
+            refuse_if_late()
+        except ToolError:
+            lock.release()
+            raise
         waited = time.monotonic() - wait_started
         if waited >= WRITE_WAIT_LOG_S:
             _diag.info("on_call_tool: write %s on %s waited %.2f s for another write",
