@@ -40,3 +40,30 @@ describe('status dot colours are generated', () => {
     expect(missing).toEqual([])
   }, 30000)
 })
+
+// The same bug hid more than the dot: rose (file delete/create cards), sky,
+// neutral, fuchsia, teal and pink were used in components but never
+// generated. Any colour family a source file names must be in the palette.
+describe('every colour family used in the renderer is in the palette', () => {
+  const srcRoot = path.join(root, 'renderer')
+  const fs = require_('node:fs') as typeof import('node:fs')
+  const families = Object.keys(require_('tailwindcss/colors')).filter(k => /^[a-z]+$/.test(k))
+  const pattern = new RegExp(`-(${families.join('|')})-(?:50|[1-9]00|950)(?![0-9])`, 'g')
+
+  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {
+    if (e.name.startsWith('.') || e.name === 'node_modules') return []
+    const p = path.join(dir, e.name)
+    return e.isDirectory() ? walk(p) : /\.(tsx?|jsx?)$/.test(e.name) ? [p] : []
+  })
+
+  it('no source file names a colour family the palette lacks', () => {
+    const palette = new Set(Object.keys(config.theme.colors))
+    const missing = new Map<string, string>()
+    for (const file of walk(srcRoot)) {
+      for (const m of fs.readFileSync(file, 'utf8').matchAll(pattern)) {
+        if (!palette.has(m[1]) && !missing.has(m[1])) missing.set(m[1], path.relative(root, file))
+      }
+    }
+    expect(Object.fromEntries(missing)).toEqual({})
+  })
+})
