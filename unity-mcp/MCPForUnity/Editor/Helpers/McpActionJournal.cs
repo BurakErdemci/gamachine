@@ -90,8 +90,6 @@ namespace MCPForUnity.Editor.Helpers
             ["manage_editor"] = Set("add_tag", "remove_tag", "add_layer", "remove_layer", "deploy_package", "restore_package", "sync_csproj"),
             ["manage_scene"] = Set("create", "load", "save", "close_scene"),
             ["manage_prefabs"] = Set("create_from_gameobject", "modify_contents", "open_prefab_stage", "save_prefab_stage", "close_prefab_stage"),
-            // GameObjectDelete uses Object.DestroyImmediate, which Undo cannot restore.
-            ["manage_gameobject"] = Set("delete"),
             ["manage_material"] = Set("create"),
             ["manage_physics"] = Set("create_physics_material"),
             ["manage_vfx"] = Set("vfx_create_asset"),
@@ -99,7 +97,7 @@ namespace MCPForUnity.Editor.Helpers
 
         static readonly Dictionary<string, HashSet<string>> FullyUndoableActions = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
         {
-            ["manage_gameobject"] = Set("create", "modify", "duplicate", "move_relative", "look_at"),
+            ["manage_gameobject"] = Set("create", "modify", "delete", "duplicate", "move_relative", "look_at"),
             ["manage_components"] = Set("add", "remove", "set_property"),
         };
 

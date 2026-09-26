@@ -186,15 +186,29 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void UndoAction_RefusesAnActionThatUndoCannotRevert()
         {
-            string name = Unique("DeletedPlain");
-            new GameObject(name);
-            var deleted = RunSync("manage_gameobject", new JObject { ["action"] = "delete", ["target"] = name, ["searchMethod"] = "by_name" });
-            Assert.AreEqual(false, deleted["undo"].Value<bool>("undoable"), deleted.ToString());
+            if (!AssetDatabase.IsValidFolder(TempFolder)) AssetDatabase.CreateFolder("Assets", "McpJournalTestTemp");
+            var created = RunSync("manage_material", new JObject { ["action"] = "create", ["materialPath"] = TempFolder + "/NotUndoable.mat" });
+            Assert.AreEqual(false, created["undo"].Value<bool>("undoable"), created.ToString());
 
-            var result = RunSync("manage_editor", new JObject { ["action"] = "undo_action", ["action_id"] = deleted["undo"].Value<string>("action_id") });
+            var result = RunSync("manage_editor", new JObject { ["action"] = "undo_action", ["action_id"] = created["undo"].Value<string>("action_id") });
 
             Assert.IsFalse(result.Value<bool>("success"));
             StringAssert.Contains("cannot be undone", result.Value<string>("error"));
+        }
+
+        [Test]
+        public void UndoAction_RestoresADeletedObject()
+        {
+            string name = Unique("DeletedPlain");
+            new GameObject(name);
+            var deleted = RunSync("manage_gameobject", new JObject { ["action"] = "delete", ["target"] = name, ["searchMethod"] = "by_name" });
+            Assert.AreEqual(true, deleted["undo"].Value<bool>("undoable"), deleted.ToString());
+            Assert.IsNull(GameObject.Find(name));
+
+            var result = RunSync("manage_editor", new JObject { ["action"] = "undo_action", ["action_id"] = deleted["undo"].Value<string>("action_id") });
+
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            Assert.IsNotNull(GameObject.Find(name), "undo_action should bring the deleted object back");
         }
 
         [Test]
