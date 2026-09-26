@@ -188,3 +188,22 @@ def test_deleting_a_chat_closes_its_one_shot_cli_sessions(env):
     finally:
         oneshot_cli._SESSIONS.pop(("copilot", cid), None)
         oneshot_cli._SESSIONS.pop(("copilot", other), None)
+
+
+def test_one_failing_session_close_does_not_skip_the_others(env, monkeypatch):
+    """Codex verifyb: a raising Claude close used to skip Codex, agy and the
+    one-shot CLIs, leaving a deleted chat's child running."""
+    db, client, _, _, _ = env
+    from providers import claude_sdk_session, oneshot_cli
+
+    async def boom(_cid):
+        raise RuntimeError("claude close failed")
+
+    monkeypatch.setattr(claude_sdk_session, "close_session", boom)
+    cid = db.create_conversation(1, "copilot chat")
+    oneshot_cli.get_session("copilot", cid)
+    try:
+        assert client.delete(f"/conversations/{cid}", headers=H).status_code == 200
+        assert ("copilot", cid) not in oneshot_cli._SESSIONS
+    finally:
+        oneshot_cli._SESSIONS.pop(("copilot", cid), None)

@@ -162,7 +162,6 @@ def test_a_turn_in_ANOTHER_chat_does_not_vouch_for_this_claim(gates):
 
 
 @pytest.mark.parametrize("owners", [
-    {},             # no such conversation
     {5: 2},         # someone else's
     {5: "1"},       # not the int the database returns
 ])
@@ -207,7 +206,26 @@ def test_auto_mode_still_answers_before_any_owner_check():
     assert req["status"] == "resolved" and req["approved"] is True
     assert pending == {}
     assert "auto-own" not in GATE_OWNERS
-    db.get_conversation_owner.assert_not_called()
+    # Only the existence check ran; no ownership verification in auto.
+    db.get_conversation_owner.assert_called_once_with(5)
+
+
+@pytest.mark.parametrize("mode", ["step", "auto"])
+def test_a_claim_naming_a_missing_chat_is_refused_without_a_card(gates, mode):
+    """A deleted chat's child can outlive its rows; ids are never reused, so a
+    claim naming a chat with no row is refused, never shown or auto-approved."""
+    from agentic import approval_mode
+
+    approval_mode.set_mode(mode, source="test")
+    try:
+        routes = _routes(_db({}))
+        gates.append("ghost")
+        req, pending = _raise(routes, _card("ghost", 45678))
+    finally:
+        approval_mode.set_mode("step", source="test")
+    assert req["status"] == "resolved" and req["approved"] is False
+    assert pending == {}
+    assert "ghost" not in GATE_OWNERS
 
 
 # ── Stop, end to end through the routes ──────────────────────────────────────
