@@ -32,6 +32,7 @@ import { useAppInitialization } from '../hooks/home/useAppInitialization';
 import { useAuth } from '../hooks/home/useAuth';
 import { useFileSystem } from '../hooks/home/useFileSystem';
 import { useChat } from '../hooks/home/useChat';
+import { useSideChat, sideQuote } from '../hooks/home/useSideChat';
 import { useAIConfig } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
 import { useChatNotifications } from '../hooks/home/useChatNotifications';
@@ -39,6 +40,7 @@ import { useAutoScroll } from '../hooks/home/useAutoScroll';
 import { McpApprovalCards } from '../components/home/McpApprovalCards';
 import { McpUnknownTray } from '../components/home/McpUnknownTray';
 import { ChatTabs, BranchButton, hasBranches } from '../components/home/ChatTabs';
+import { SideChatPanel, SideQuestionButton } from '../components/home/SideChatPanel';
 import { SidebarToggle } from '../components/home/AwaitingBadge';
 import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
 
@@ -108,6 +110,16 @@ export default function Home() {
     fs.refreshFileTree, 
     fs.suggestFilePath
   );
+
+  // Read-only side question over the chat on screen; its own state, never
+  // useChat's runtimes (see useSideChat).
+  const side = useSideChat(API, auth.user);
+  // The panel belongs to the chat it was opened on: switching away from it,
+  // or that chat being deleted, discards the side chat.
+  useEffect(() => {
+    if (side.mainId == null) return;
+    if (chat.activeConvId !== side.mainId || !chat.conversations.some(c => c.id === side.mainId)) side.close();
+  }, [chat.activeConvId, chat.conversations, side.mainId, side.close]);
 
   // Onay kartı teslimi SAĞLAYICIDAN BAĞIMSIZ. Eskiden `effectiveProvider ===
   // 'subscription' && chat.loading` koşuluna bağlıydı; ikisi de yanlıştı, çünkü
@@ -477,6 +489,30 @@ export default function Home() {
     chat.sendMessage(input, unsavedEditorContext, lang, chat.generationMode, thinkingLevel, fs.setPendingGenFiles, fs.setPendingDelete, images, ultracode, videos);
   };
 
+  const toggleSideChat = async (convId: number) => {
+    if (side.mainId === convId) { side.close(); return; }
+    if (!(await side.open(convId))) showToast(t('side.openFailed'), 'error');
+  };
+
+  const askSideQuestion = (question: string) => {
+    // The main chat's answer as it stands on screen, only while it streams:
+    // a finished answer is already in the transcript the backend sends.
+    const lastAnswer = [...chat.messages].reverse().find(m => m.role === 'assistant');
+    void side.ask(question, {
+      liveContext: chat.loading ? (lastAnswer?.content || '') : '',
+      lang,
+      thinkingLevel,
+    });
+  };
+
+  const addSideAnswerToMain = (question: string, answer: string) => {
+    const quote = sideQuote(question, answer, {
+      question: t('side.quoteQuestion'), answer: t('side.quoteAnswer'),
+    });
+    chat.setChatInput(prev => (prev.trim() ? `${prev}\n\n${quote}` : quote));
+    showToast(t('side.added'), 'success');
+  };
+
   const langCtxValue = { lang, setLang, t };
 
   // İmza ambient ışık: aktif modelin marka rengi
@@ -770,6 +806,7 @@ export default function Home() {
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Architect Copilot</span>
             </div>
             <div className="flex items-center gap-1">
+              <SideQuestionButton convId={chat.activeConvId} active={side.isOpen} onOpen={toggleSideChat} />
               {!familyHasBranches && (
                 <BranchButton sourceId={chat.activeConvId} blocked={branchBlocked} onBranch={chat.branchConversation} />
               )}
@@ -830,6 +867,18 @@ export default function Home() {
                 <ArrowDown size={13} />
                 {t('chat.newBelow')}
               </button>
+            )}
+            {/* Over the chat, outside ChatPanel: nothing it shows is part of
+                the main chat until the user adds it to the message box. */}
+            {side.isOpen && (
+              <SideChatPanel
+                messages={side.messages}
+                loading={side.loading}
+                onAsk={askSideQuestion}
+                onStop={side.stop}
+                onClose={side.close}
+                onAddToMain={addSideAnswerToMain}
+              />
             )}
           </div>
 
