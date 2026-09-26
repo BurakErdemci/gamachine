@@ -17,6 +17,12 @@
  * yazıyordu ve sonuncusu öncekilerin üstüne biniyordu. Üstü çizilen istek
  * "görüldü" işaretlendiği için bir daha hiç gösterilmiyor, köprüde 180 sn
  * bekleyip reddediliyordu.
+ *
+ * Routing (Phase 3 slice 2): each entry names its owner chat. The single slot
+ * above only ever holds a request of the chat on screen; another chat's
+ * request waits in the backend (its sidebar row says so) until that chat is
+ * opened. A request with no known owner is not a card in any chat: it goes to
+ * the tray (`McpUnknownTray`), which lists all of them at once.
  */
 import { useEffect, useRef, useCallback, useState } from 'react';
 import axios from 'axios';
@@ -37,7 +43,38 @@ export interface McpActiveGate {
    * göndermiyordu. Boşluk "eşleşiyor" diye okunmamalı — bkz `workspaceMismatch`.
    */
   workspacePath: string;
+  /**
+   * The chat that owns the request (`conversation_id`). `undefined` means the
+   * backend predates ownership and sent no such field: the card follows the
+   * chat on screen, as it always did. `null` is the backend saying it does
+   * not know; such a request never gets here, it goes to the tray.
+   */
+  conversationId?: number | null;
 }
+
+/** A request whose source chat the backend could not name (tray entry). */
+export interface McpTrayGate {
+  gateId: string;
+  tool: string;
+  params: any;
+  workspacePath: string;
+}
+
+/**
+ * Who owns a `/mcp-pending` entry: a chat id, `null` (unknown), or
+ * `undefined` (the field is absent: a backend from before ownership).
+ * Anything malformed counts as unknown, so it lands in the tray where it is
+ * still decidable, never in a chat that did not ask for it.
+ */
+export const gateOwner = (req: any): number | null | undefined => {
+  if (!req || typeof req !== 'object' || !('conversation_id' in req)) return undefined;
+  const id = req.conversation_id;
+  return typeof id === 'number' && Number.isInteger(id) && id > 0 ? id : null;
+};
+
+/** May a card with this owner be drawn in the chat on screen? */
+const belongsOnScreen = (owner: number | null | undefined, screenConvId: number | null | undefined) =>
+  owner === undefined || (owner !== null && owner === screenConvId);
 
 interface MCPApprovalHookParams {
   API: string;
@@ -75,6 +112,13 @@ interface MCPApprovalHookParams {
   // Kararın backend'e ULAŞMADIĞINI kullanıcıya bildirmek için. Opsiyonel:
   // hook'u test/başka bağlamda toast'sız kurmak mümkün kalsın.
   showToast?: (msg: string, type: any) => void;
+  /** The chat on screen. Only its own requests are drawn in the chat panel. */
+  screenConvId?: number | null;
+  /**
+   * Every poll reports which chats own a pending request, so a chat that is
+   * off screen can say "awaiting approval" in the sidebar.
+   */
+  onOwnersChange?: (gatesByConv: Record<number, string[]>) => void;
 }
 
 /**
@@ -246,8 +290,17 @@ export const useMCPApproval = ({
   setPendingCommand,
   setPendingFix,
   showToast,
+  screenConvId,
+  onOwnersChange,
 }: MCPApprovalHookParams) => {
   const [activeGate, setActiveGate] = useState<McpActiveGate | null>(null);
+  // Unknown-owner requests are not queued behind the single card slot: each
+  // one is drawn in the tray with its own buttons, so several can wait at once.
+  const [unknownGates, setUnknownGates] = useState<McpTrayGate[]>([]);
+  const screenConvRef = useRef(screenConvId);
+  screenConvRef.current = screenConvId;
+  const onOwnersChangeRef = useRef(onOwnersChange);
+  onOwnersChangeRef.current = onOwnersChange;
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   /**
    * `activeGate`'in ref ikizi. State değil ref okunuyor çünkü `poll` bir
@@ -304,17 +357,41 @@ export const useMCPApproval = ({
       return;
     }
 
+    // Every entry goes to exactly one place, decided by its owner alone: a
+    // chat (card slot, only while that chat is on screen) or the tray. That is
+    // what keeps one gate from ever being drawn twice.
+    const gatesByConv: Record<number, string[]> = {};
+    const unknown: McpTrayGate[] = [];
+    for (const [gateId, req] of Object.entries(pending)) {
+      const owner = gateOwner(req);
+      if (typeof owner === 'number') (gatesByConv[owner] ||= []).push(gateId);
+      else if (owner === null) {
+        const r = req as { tool?: string; params?: any; workspace_path?: string };
+        unknown.push({ gateId, tool: String(r.tool ?? ''), params: r.params, workspacePath: r.workspace_path || '' });
+      }
+    }
+    onOwnersChangeRef.current?.(gatesByConv);
+    // Same ids, same entries: keep the old array so the tray does not
+    // re-render on every poll.
+    setUnknownGates(prev =>
+      prev.length === unknown.length && prev.every((g, i) => g.gateId === unknown[i].gateId) ? prev : unknown);
+
     // Açık bir kart varsa yenisini ALMA — kuyruk backend'de bekler.
     if (activeGateRef.current) {
-      // Tek istisna: açık kartın gate'i backend'de artık yoksa (TTL süpürdü ya
+      // İstisna: açık kartın gate'i backend'de artık yoksa (TTL süpürdü ya
       // da karar başka bir yoldan verildi) kart ZOMBİ demektir. Temizlenmezse
       // `activeGateRef` sonsuza dek dolu kalır ve BÜTÜN sonraki kartlar bloke
-      // olurdu — kaldırdığımız kilidin daha kötüsü.
-      if (!(activeGateRef.current.gateId in pending)) dismissActive();
-      return;
+      // olurdu — kaldırdığımız kilidin daha kötüsü. The same goes for a card
+      // whose chat is no longer on screen: it leaves the slot undecided and is
+      // drawn again when its chat is opened, since it is still pending.
+      const open = activeGateRef.current;
+      if (open.gateId in pending && belongsOnScreen(open.conversationId, screenConvRef.current)) return;
+      dismissActive();
     }
 
     for (const [gateId, req] of Object.entries(pending)) {
+      const owner = gateOwner(req);
+      if (!belongsOnScreen(owner, screenConvRef.current)) continue;
       const { tool, params, workspace_path: gateWorkspace } = req as {
         tool: string; params: any; workspace_path?: string;
       };
@@ -325,7 +402,7 @@ export const useMCPApproval = ({
       // ÖTEKİ isteğin gate'ini onaylıyordu (dış denetim: `approval-gate-
       // misbinding`, HIGH). Kimliği kartın kendi kaydında taşımak o sınıfı
       // bir örnek yamayarak değil kökten kapatıyor.
-      const gate: McpActiveGate = { gateId, tool, workspacePath: gateWorkspace || '' };
+      const gate: McpActiveGate = { gateId, tool, workspacePath: gateWorkspace || '', conversationId: owner };
       activeGateRef.current = gate;
       setActiveGate(gate);
 
@@ -438,6 +515,24 @@ export const useMCPApproval = ({
     };
   }, [API, enabled]);
 
+  // Switching chats hands the slot to the new chat at once instead of on the
+  // next tick. Skipped on mount: the effect above already polls then, and a
+  // second mount poll is the doubling measured on 31 Aug 2026.
+  const lastScreenRef = useRef(screenConvId);
+  useEffect(() => {
+    if (lastScreenRef.current === screenConvId) return;
+    lastScreenRef.current = screenConvId;
+    const open = activeGateRef.current;
+    if (open && !belongsOnScreen(open.conversationId, screenConvId)) dismissActive();
+    if (API && enabled) void pollFnRef.current();
+  }, [API, enabled, screenConvId, dismissActive]);
+
+  // Filtered at render time too: in the render where the screen changes, the
+  // effect above has not run yet and the previous chat's card would flash in
+  // the new one.
+  const visibleGate = activeGate && belongsOnScreen(activeGate.conversationId, screenConvId)
+    ? activeGate : null;
+
   /**
    * Karar verildikten (ya da kart kapatıldıktan) sonra çağrılır: kartı kaldırır
    * ve sıradaki isteğin gösterilmesine izin verir. Kararı GÖNDERMEZ — gönderme
@@ -498,14 +593,16 @@ export const useMCPApproval = ({
   // bir DOĞRULUK sorusu ve deterministik ölçülebilmeli.
   return {
     poll,
-    activeGate,
+    activeGate: visibleGate,
+    /** Requests with no known source chat, for the tray outside every chat. */
+    unknownGates,
     /** Gate'in workspace'i üründe açık olandan farklı mı (bilinmiyorsa false). */
     // Karsilastirma BACKEND ad alaninda yapilir. Gate'in tasidigi deger
     // backend'in kendi yolu (Docker'da `/workspace`); `workspacePath` ise
     // bilerek ana makinenin yolu. Ikisini ham karsilastirmak Docker modunda
     // HER onay kartinda kirmizi uyusmazlik bandi cikariyordu, yani gercek bir
     // capraz-proje istegi ayirt edilemez hale geliyordu (denetim, 31 Agu 2026).
-    gateWorkspaceMismatch: workspaceMismatch(activeGate?.workspacePath, backendFacingWorkspace),
+    gateWorkspaceMismatch: workspaceMismatch(visibleGate?.workspacePath, backendFacingWorkspace),
     /**
      * Karsilastirma HENUZ YAPILAMIYOR — cevap yolda.
      *
@@ -523,7 +620,7 @@ export const useMCPApproval = ({
      * sonucu ne olursa olsun karsilastirilacak bir sey yok, o bilinmezligi
      * banner zaten `mcp.sourceUnknown` ile soyluyor.
      */
-    gateWorkspaceCheckPending: !!activeGate?.workspacePath && cevirmeBekliyor,
+    gateWorkspaceCheckPending: !!visibleGate?.workspacePath && cevirmeBekliyor,
     openWorkspacePath: workspacePath,
     resolveActiveGate,
   };

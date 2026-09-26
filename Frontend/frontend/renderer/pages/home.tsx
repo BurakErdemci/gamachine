@@ -36,6 +36,7 @@ import { useAIConfig } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
 import { useAutoScroll } from '../hooks/home/useAutoScroll';
 import { McpApprovalCards } from '../components/home/McpApprovalCards';
+import { McpUnknownTray } from '../components/home/McpUnknownTray';
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
 // this app needs, and off the server render (it touches WebGL on mount).
@@ -126,6 +127,10 @@ export default function Home() {
     setPendingCommand: chat.setPendingCommand,
     setPendingFix: chat.setPendingFix,
     showToast: showToast as any,
+    // A request owned by a chat is drawn only in that chat; the rest of the
+    // time its sidebar row says it is waiting.
+    screenConvId: chat.activeConvId,
+    onOwnersChange: chat.setBridgeGates,
   });
 
   // API URL'yi window'a set et — ChatPanel ve diğer bileşenler erişebilsin
@@ -380,11 +385,14 @@ export default function Home() {
   // oysa komut / soru / silme kartları da kapalı panelin içinde kalıyordu —
   // 30 Ağu 2026 denetiminin bulgusu, ve bu deponun ölçülmüş en sık arıza
   // biçimi (kapı yollardan yalnız birine konuyor).
+  // The unknown-source tray sits at the top of the chat column, so it is
+  // hidden by the same closed panel.
+  const hasTrayRequest = mcp.unknownGates.length > 0;
   useEffect(() => {
-    if (mcp.activeGate || chat.pendingCommand || chat.pendingQuestion || fs.pendingDelete) {
+    if (mcp.activeGate || hasTrayRequest || chat.pendingCommand || chat.pendingQuestion || fs.pendingDelete) {
       setIsChatOpen(true);
     }
-  }, [mcp.activeGate, chat.pendingCommand, chat.pendingQuestion, fs.pendingDelete]);
+  }, [mcp.activeGate, hasTrayRequest, chat.pendingCommand, chat.pendingQuestion, fs.pendingDelete]);
 
   // --- Save Shortcut (Ctrl+S / Cmd+S) ---
   useEffect(() => {
@@ -491,10 +499,16 @@ export default function Home() {
             reddediyordu — ürün "güvenli" görünüp kullanılamaz hale geliyordu
             (dış denetim: `approval-card-hidden-by-view-state`).
             Editör yok, o yüzden setDiffFile/onOpenFile/setCode verilmiyor. */}
-        {mcp.activeGate && (
+        {(mcp.activeGate || mcp.unknownGates.length > 0) && (
           <div className="fixed inset-x-0 bottom-0 z-[250] max-h-[70vh] overflow-y-auto
                           border-t border-slate-700 bg-slate-900/95 py-3 backdrop-blur">
             <div className="mx-auto max-w-3xl">
+              <McpUnknownTray
+                gates={mcp.unknownGates}
+                apiBase={API}
+                sessionToken={auth.user?.sessionToken ?? ''}
+                showToast={showToast as any}
+              />
               <McpApprovalCards
                 gate={mcp.activeGate}
                 workspaceMismatch={mcp.gateWorkspaceMismatch}
@@ -734,6 +748,15 @@ export default function Home() {
             </div>
             <button onClick={() => setIsChatOpen(false)} className="p-1 hover:bg-white/[0.06] rounded transition-all text-slate-500 hover:text-slate-300"><PanelRightClose size={16} /></button>
           </div>
+
+          {/* Outside ChatPanel on purpose: these requests belong to no chat,
+              so they stay here whichever chat is open. */}
+          <McpUnknownTray
+            gates={mcp.unknownGates}
+            apiBase={API}
+            sessionToken={auth.user?.sessionToken ?? ''}
+            showToast={showToast as any}
+          />
 
           {/* The scroll listener sits HERE, not on `ChatPanel`'s own root. Measured:
               ChatPanel's root carries `flex-1 overflow-y-auto`, but its parent is a

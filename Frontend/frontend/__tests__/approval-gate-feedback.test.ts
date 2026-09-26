@@ -574,9 +574,14 @@ describe('hook ikinci bir karar yolu ihraç ETMEZ', () => {
     // `gateWorkspaceMismatch` ile aynı kategoriden bir GÖSTERGE — karşılaştırma
     // henüz yapılamadığında banner'ın "eşleşiyor" demesini engelliyor.
     // Kararı hâlâ tek yol veriyor.
+    //
+    // `unknownGates` (26 Sep 2026, parallel chats slice 2) is a LIST of the
+    // requests with no known source chat, for the tray. The tray decides
+    // through `postMcpDecision` like every card; the hook still exports no
+    // way to approve or reject.
     expect(Object.keys(result.current).sort()).toEqual(
       ['activeGate', 'gateWorkspaceCheckPending', 'gateWorkspaceMismatch',
-       'openWorkspacePath', 'poll', 'resolveActiveGate'].sort(),
+       'openWorkspacePath', 'poll', 'resolveActiveGate', 'unknownGates'].sort(),
     )
   })
 })

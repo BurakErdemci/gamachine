@@ -52,6 +52,12 @@ interface ConvRuntime {
   // unanswered one taken back out of the slot when its chat is left, waits
   // here and is handed over when that chat is opened.
   parkedCards: Array<() => void>;
+  // Unity MCP requests this chat owns that are still in `/mcp-pending`. The
+  // cards themselves are rebuilt from the poll whenever the chat is on screen,
+  // so only the ids are kept, for the sidebar's "awaiting approval". Not client
+  // state for `hasClientState`: they are bound to no message, and the chat may
+  // have been started by a renderer that has since reloaded.
+  bridgeGates: string[];
   // A turn finished while another chat was on screen.
   unread: boolean;
   // That turn has not been re-read from the server yet (its ids are client
@@ -66,7 +72,7 @@ interface ConvRuntime {
 const EMPTY_RUNTIME: ConvRuntime = {
   messages: [], loading: false, activity: null, contextUsage: null,
   pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
-  parkedCards: [], unread: false, unsynced: false, clientOnly: false,
+  parkedCards: [], bridgeGates: [], unread: false, unsynced: false, clientOnly: false,
 };
 
 // Runtime key while no conversation is selected. Database ids start at 1.
@@ -171,11 +177,10 @@ export const useChat = (
     patchConv(keyOf(activeConvIdRef.current), r => ({ pendingQuestion: resolveArg(arg, r.pendingQuestion) }));
   }, [patchConv]);
 
-  // The exported command setter is the GLOBAL path: `useMCPApproval` fills it
-  // from `/mcp-pending`, which names no conversation. Until the backend says
-  // which chat a bridge request belongs to (slice 2) the card is not assigned
-  // to one; it shows in whatever chat is on screen, as before. Cards from a
-  // chat's own SSE stream never go through here.
+  // The exported command setter is the bridge path: `useMCPApproval` fills it
+  // from `/mcp-pending`, and only with a request of the chat on screen (or one
+  // from a backend that names no owner); it takes the card back out when that
+  // chat is left. Cards from a chat's own SSE stream never go through here.
   const globalCommandRef = useRef<PendingCommand | null>(null);
   const [globalCommand, setGlobalCommand] = useState<PendingCommand | null>(null);
   const setPendingCommand = useCallback((arg: SetArg<PendingCommand | null>) => {
@@ -183,6 +188,20 @@ export const useChat = (
     setGlobalCommand(globalCommandRef.current);
   }, []);
   const pendingCommand = globalCommand ?? screen.pendingCommand;
+
+  // Called on every `/mcp-pending` poll. Only chats whose list changed are
+  // written, so a steady poll does not re-render anything.
+  const setBridgeGates = useCallback((gatesByConv: Record<number, string[]>) => {
+    const same = (a: string[], b: string[]) => a.length === b.length && a.every((g, i) => g === b[i]);
+    const ids = new Set([
+      ...Object.keys(gatesByConv).map(Number),
+      ...Object.entries(runtimesRef.current).filter(([, r]) => r.bridgeGates.length > 0).map(([k]) => Number(k)),
+    ]);
+    ids.forEach(id => {
+      const next = gatesByConv[id] ?? [];
+      if (!same(rt(id).bridgeGates, next)) patchConv(id, () => ({ bridgeGates: next }));
+    });
+  }, [patchConv, rt]);
   const pendingQuestion = screen.pendingQuestion;
 
   const [chatInput, setChatInput] = useState('');
@@ -970,8 +989,9 @@ export const useChat = (
   }, [API, activeConvId, patchConv, showToast, user, refreshContextUsage]);
 
   // Stop acts on the chat on screen and nothing else: its own stream, its own
-  // backend turn, its own cards. The global bridge card (`globalCommand`) is
-  // not this chat's and stays.
+  // backend turn, its own cards. Bridge cards (`globalCommand`, the tray) are
+  // not cleared here: the backend denies the ones this Stop covers and they
+  // leave with the next `/mcp-pending` poll; the rest stay decidable.
   const stopMessage = useCallback(() => {
     const convId = activeConvIdRef.current;
     const key = keyOf(convId);
@@ -1004,7 +1024,9 @@ export const useChat = (
     for (const [key, r] of Object.entries(runtimes)) {
       const id = Number(key);
       if (id === NO_CONV) continue;
-      if (r.pendingCommand || r.pendingQuestion || r.parkedCards.length > 0) out[id] = 'awaiting';
+      if (r.pendingCommand || r.pendingQuestion || r.parkedCards.length > 0 || r.bridgeGates.length > 0) {
+        out[id] = 'awaiting';
+      }
       else if (r.loading) out[id] = 'running';
       else if (r.unread && id !== activeConvId) out[id] = 'unread';
     }
@@ -1021,7 +1043,7 @@ export const useChat = (
     isCompacting, setIsCompacting,
     isAnalyzingProject, setIsAnalyzingProject,
     pendingFix, setPendingFix,
-    pendingCommand, setPendingCommand,
+    pendingCommand, setPendingCommand, setBridgeGates,
     pendingQuestion, setPendingQuestion,
     activity,
     generationMode, setGenerationMode,
