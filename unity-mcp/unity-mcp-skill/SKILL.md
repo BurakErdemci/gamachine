@@ -29,21 +29,26 @@ Before applying a template:
 
 ## Critical Best Practices
 
-### 1. After Writing/Editing Scripts: Wait for Compilation and Check Console
+### 1. After Writing/Editing Scripts: Read the Compile Verdict
 
 ```python
-# After create_script or script_apply_edits:
-# Both tools already trigger AssetDatabase.ImportAsset + RequestScriptCompilation automatically.
-# No need to call refresh_unity — just wait for compilation to finish, then check console.
+# create_script, script_apply_edits, apply_text_edits and manage_script(action="create")
+# wait for the compile their write causes (wait_for_compile defaults to true)
+# and return its verdict in data.compile.
+result = create_script(path="Assets/Scripts/Foo.cs", contents="...")
+verdict = result["data"]["compile"]["verdict"]
+# "clean"  -> the code compiles and the domain reload finished; new types are usable
+# "errors" -> data.compile.errors lists CS code, file and line
+# anything else (compiling / pending / stale / timeout / unknown) is NOT clean
 
-# 1. Poll editor state until compilation completes
-# Read mcpforunity://editor/state → wait until is_compiling == false
+# After writing .cs files with your OWN file tools, Unity has not seen them yet:
+refresh_unity(compile="request")   # result carries data.compile
 
-# 2. Check for compilation errors
-read_console(types=["error"], count=10, include_stacktrace=True)
+# Live verdict without refreshing (read-only):
+compile_status()
 ```
 
-**Why:** Unity must compile scripts before they're usable. `create_script` and `script_apply_edits` already trigger import and compilation automatically — calling `refresh_unity` afterward is redundant.
+**Why:** An empty `read_console` list is not a clean compile: the console reads 0 errors before and while Unity compiles. When the verdict is not `clean`, `read_console` adds a top-level `compile_state` field saying so. Only `clean` means new components/types can be used.
 
 ### 2. Use `batch_execute` for Multiple Operations
 
@@ -180,7 +185,7 @@ uri="file:///full/path/to/file.cs"
 |----------|-----------|---------|
 | **Scene** | `manage_scene`, `find_gameobjects` | Scene operations, finding objects |
 | **Objects** | `manage_gameobject`, `manage_components` | Creating/modifying GameObjects |
-| **Scripts** | `create_script`, `script_apply_edits`, `validate_script` | C# code management (auto-refreshes on create/edit) |
+| **Scripts** | `create_script`, `script_apply_edits`, `validate_script`, `compile_status` | C# code management (writes wait for the compile and return its verdict in `data.compile`) |
 | **Assets** | `manage_asset`, `manage_prefabs` | Asset operations. **Prefab instantiation** is done via `manage_gameobject(action="create", prefab_path="...")`, not `manage_prefabs`. |
 | **Editor** | `manage_editor`, `execute_menu_item`, `read_console` | Editor control, package deployment (`deploy_package`/`restore_package` actions) |
 | **Testing** | `run_tests`, `get_test_job` | Unity Test Framework |
@@ -198,19 +203,17 @@ uri="file:///full/path/to/file.cs"
 ### Creating a New Script and Using It
 
 ```python
-# 1. Create the script (automatically triggers import + compilation)
-create_script(
+# 1. Create the script (waits for the compile and returns its verdict)
+result = create_script(
     path="Assets/Scripts/PlayerController.cs",
     contents="using UnityEngine;\n\npublic class PlayerController : MonoBehaviour\n{\n    void Update() { }\n}"
 )
 
-# 2. Wait for compilation to finish
-# Read mcpforunity://editor/state → wait until is_compiling == false
+# 2. Check the verdict: only "clean" means the type exists
+# result["data"]["compile"]["verdict"] == "clean"
+# On "errors", fix the listed CS errors; on anything else call compile_status()
 
-# 3. Check for compilation errors
-read_console(types=["error"], count=10)
-
-# 4. Only then attach to GameObject
+# 3. Only then attach to GameObject
 manage_gameobject(action="modify", target="Player", components_to_add=["PlayerController"])
 ```
 
@@ -271,7 +274,8 @@ manage_scene(action="get_active", unity_instance="MyProject@abc123")
 
 | Symptom | Cause | Solution |
 |---------|-------|----------|
-| Tools return "busy" | Compilation in progress | Wait, check `editor_state` |
+| Tools return "busy" | Compilation in progress | Wait, check `editor_state` or `compile_status` |
+| Console is empty but a new type is missing | Unity has not compiled yet | Call `compile_status`; after your own file writes, `refresh_unity(compile="request")` |
 | "stale_file" error | File changed since SHA | Re-fetch SHA with `get_sha`, retry |
 | Connection lost | Domain reload | Wait ~5s, reconnect |
 | Commands hit the wrong Editor or are refused | Several instances connected | Pass `unity_instance` on the call (see Multi-Instance Workflow) |

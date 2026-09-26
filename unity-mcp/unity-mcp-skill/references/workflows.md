@@ -107,19 +107,17 @@ batch_execute(commands=[
 ])
 ```
 
-### Script Overwrites with `manage_script(action="update")`
+### Script Overwrites
 
-When a generated script needs to be rewritten (e.g., to add auto-wiring logic), use `update` instead of deleting and recreating:
+`manage_script` has no `update` action (only `create`, `read`, `delete`). When a generated script needs to be rewritten (e.g., to add auto-wiring logic), edit it in place with `script_apply_edits` (structured) or `apply_text_edits` (ranges) instead of deleting and recreating it. Both wait for the compile and return its verdict:
 
 ```python
-manage_script(
-    action="update",
-    path="Assets/Scripts/MyScript.cs",
-    contents="using UnityEngine;\n\npublic class MyScript : MonoBehaviour { ... }"
+result = script_apply_edits(
+    name="MyScript",
+    path="Assets/Scripts",
+    edits=[{"op": "replace_method", "methodName": "Start", "replacement": "void Start() { ... }"}]
 )
-# manage_script update auto-triggers import + compile — just wait and check console
-# Read mcpforunity://editor/state → wait until is_compiling == false
-read_console(types=["error"], count=10)
+result["data"]["compile"]["verdict"]   # "clean" means it compiled; an empty read_console is not proof
 ```
 
 ---
@@ -212,7 +210,7 @@ for i in range(10):
 
 ```python
 # 1. Create script (automatically triggers import + compilation)
-create_script(
+result = create_script(
     path="Assets/Scripts/EnemyAI.cs",
     contents='''using UnityEngine;
 
@@ -232,14 +230,12 @@ public class EnemyAI : MonoBehaviour
 }'''
 )
 
-# 2. Wait for compilation to finish
-# Read mcpforunity://editor/state → wait until is_compiling == false
-
+# 2. create_script waited for the compile; read its verdict
 # 3. Check for errors
-console = read_console(types=["error"], count=10)
-if console["messages"]:
-    # Handle compilation errors
-    print("Compilation errors:", console["messages"])
+compile = result["data"]["compile"]
+if compile["verdict"] != "clean":
+    # "errors" lists CS code/file/line; any other verdict is not a pass either
+    print("Compile verdict:", compile["verdict"], compile.get("errors"))
 else:
     # 4. Attach to GameObject
     manage_gameobject(action="modify", target="Enemy", components_to_add=["EnemyAI"])
@@ -289,11 +285,8 @@ validate_script(
     level="standard"
 )
 
-# 5. Wait for compilation (script_apply_edits auto-triggers import + compile)
-# Read mcpforunity://editor/state → wait until is_compiling == false
-
-# 6. Check console
-read_console(types=["error"], count=10)
+# 5. script_apply_edits waited for the compile: its result carries data.compile
+# 6. Proceed only on data.compile.verdict == "clean" (or call compile_status())
 ```
 
 ### Add Method to Existing Class
@@ -518,8 +511,7 @@ public class PlayerTests
 }'''
 )
 
-# 2. Wait for compilation (create_script auto-triggers import + compile)
-# Read mcpforunity://editor/state → wait until is_compiling == false
+# 2. create_script waited for the compile: proceed only on data.compile.verdict == "clean"
 
 # 3. Run test (expect pass for this simple test)
 result = run_tests(mode="EditMode", test_names=["PlayerTests.TestPlayerStartsAtOrigin"])
@@ -547,9 +539,9 @@ for error in errors["messages"]:
     # Use find_in_file to locate the problematic code
     pass
 
-# 3. After fixing, refresh and check again
-refresh_unity(mode="force", scope="scripts", compile="request", wait_for_ready=True)
-read_console(types=["error"], count=10)
+# 3. After fixing, refresh and read the verdict (not just the console)
+result = refresh_unity(mode="force", scope="scripts", compile="request", wait_for_ready=True)
+result["data"]["compile"]["verdict"]   # "clean" or "errors" with CS code/file/line
 ```
 
 ### Investigate Missing References
@@ -1815,8 +1807,8 @@ manage_packages(action="add_package", package="com.unity.inputsystem")
 # Poll until domain reload completes
 manage_packages(action="status", job_id="<job_id>")
 
-# 3. Verify no compilation errors
-read_console(types=["error"], count=10)
+# 3. Verify no compilation errors (verdict, not an empty console)
+compile_status()   # expect "clean"
 
 # 4. Confirm it's installed
 manage_packages(action="get_package_info", package="com.unity.inputsystem")
@@ -1881,11 +1873,11 @@ Use `deploy_package` to copy your local MCPForUnity source into the project's in
 # 2. Deploy the updated package (copies source → installed package, creates backup)
 manage_editor(action="deploy_package")
 
-# 3. Wait for recompilation to finish
-refresh_unity(mode="force", compile="request", wait_for_ready=True)
+# 3. Wait for recompilation to finish; the result carries data.compile
+result = refresh_unity(mode="force", compile="request", wait_for_ready=True)
 
-# 4. Check for compilation errors
-read_console(types=["error"], count=10, include_stacktrace=True)
+# 4. Check the compile verdict ("errors" lists CS code/file/line)
+result["data"]["compile"]["verdict"]
 
 # 5. Test the changes
 run_tests(mode="EditMode")
@@ -2101,11 +2093,10 @@ errors = read_console(types=["error"], count=20)
 # ... edit scripts ...
 
 # 3. Force refresh
-refresh_unity(mode="force", scope="scripts", compile="request", wait_for_ready=True)
+result = refresh_unity(mode="force", scope="scripts", compile="request", wait_for_ready=True)
 
-# 4. Verify clean console
-errors = read_console(types=["error"], count=5)
-if not errors["messages"]:
+# 4. Verify the compile verdict (an empty console is not a clean compile)
+if result["data"]["compile"]["verdict"] == "clean":
     # Safe to proceed with tools
     pass
 ```

@@ -125,7 +125,9 @@ geçiyor. Neyin onaylandığı ve neyin **bilerek** onaylanmadığı yazılı:
 GameObject, prefab, materyal, fizik, build ayarları. Ayrıca
 [oyunu oynayabiliyor](docs/unity-mcp.md#-the-ai-can-now-play-the-game-manage_input):
 play moduna giriyor, girdi gönderiyor, ekran görüntüsü alıp yaptığı işi
-değerlendiriyor. `uv` araç zinciri uygulamanın içinde geliyor.
+değerlendiriyor. Script yazımları Unity'nin derlemesini bekleyip bir sonuç döndürüyor;
+"clean" ancak kod derlendiğinde ve domain reload bittiğinde geliyor, çünkü boş konsol
+temiz derleme demek değil. `uv` araç zinciri uygulamanın içinde geliyor.
 
 **Proje farkındalığı** — workspace'teki bütün `.cs` dosyaları taranıp parçalanıyor;
 "Projeyi Öğren" sınıfları, kalıtım ilişkilerini ve kilit metotları bir mimari

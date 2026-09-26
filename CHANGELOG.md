@@ -9,6 +9,17 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 
 ## Unreleased
 
+### "Compiled clean" now means it compiled
+
+An empty Unity console used to pass for a clean compile, but the console reads
+0 errors before and while Unity compiles. The Editor plugin now tracks every
+script compile, and a new read-only `compile_status` tool reports one verdict:
+errors, clean, compiling, pending, stale, timeout or unknown. "Clean" means the
+code as it is now compiles and the domain reload after it has finished. The
+script tools wait for the compile by default and return the verdict with the
+write, `refresh_unity` returns it too, and `read_console` says when its list is
+not final yet.
+
 ## v3.2.0 — 6 September 2026
 
 ### New models: Gemini 3.8 Flash, Gemini 3.7 Flash and GPT-6 Astra

@@ -123,8 +123,10 @@ go through the same UI. Exactly what is and isn't gated is written down in
 **Live Unity Editor control, zero install** — 51 Editor tools over MCP: scenes,
 GameObjects, prefabs, materials, physics, build settings. It can also
 [play the game](docs/unity-mcp.md#-the-ai-can-now-play-the-game-manage_input): enter
-play mode, send input, screenshot the result and judge what it built. The `uv`
-toolchain ships inside the app.
+play mode, send input, screenshot the result and judge what it built. Script writes
+wait for Unity to compile and return a verdict; "clean" only comes once the code
+compiles and the domain reload is done, because an empty console is not a clean
+compile. The `uv` toolchain ships inside the app.
 
 **Project awareness** — every `.cs` file in the workspace is scanned and chunked;
 "Learn Project" extracts classes, inheritance and key methods into an architecture

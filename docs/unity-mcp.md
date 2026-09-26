@@ -29,7 +29,7 @@ Unifies the [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp) projec
 | UI/Camera | `manage_ui`, `manage_camera` (incl. screenshots) |
 | Prefab/Asset | `manage_prefabs`, `manage_scriptable_object`, `manage_asset`, `manage_fbx` |
 | Visual | `manage_material`, `manage_shader`, `manage_texture`, `manage_graphics`, `manage_sprite`, `manage_vfx` |
-| Script | `manage_script`, `script_apply_edits`, `apply_text_edits`, `create_script`, `delete_script`, `validate_script`, `get_sha`, `manage_script_capabilities`, `find_in_file`, `read_console` |
+| Script | `manage_script`, `script_apply_edits`, `apply_text_edits`, `create_script`, `delete_script`, `validate_script`, `get_sha`, `manage_script_capabilities`, `find_in_file`, `read_console`, `compile_status` |
 | Test & Profiling | `run_tests`, `get_test_job`, `manage_profiler` |
 | **Playtest** | `play_session`, `play_step`, `play_capture`, `game_hooks`, `run_playtest` — deterministic play sessions: frame stepping with input, captures, game-exposed hooks, scenario files |
 | Build | `manage_build`, `manage_packages`, `manage_editor`, `refresh_unity`, `manage_probuilder` |
@@ -53,6 +53,38 @@ change nothing and return an error naming these URLs. To reach an opt-in group
 (docs, vfx, profiling, ...), enable it in the Tools tab (affects `/mcp`) or
 connect to `/mcp/full`.
 
+### Compile verdicts: an empty console is not a clean compile
+
+Unity's console reads 0 errors before and while a compile runs, so "no errors in
+`read_console`" proved nothing. The Editor plugin now numbers every script compile
+(`CompileTracker`, kept in `SessionState` so it survives the domain reload) and the
+server turns that into one verdict:
+
+| Verdict | Meaning |
+|---|---|
+| `clean` | The code as it is now compiles and the domain reload after it has finished |
+| `errors` | The last compile failed; the compiler errors come with CS code, file and line |
+| `compiling` | A compile is running; the error list is not final |
+| `pending` | An asset import or the domain reload after a compile is still running |
+| `stale` | Script files changed on disk since the last compile started; call `refresh_unity` |
+| `timeout` | A waiting call gave up after 90 s without a final state |
+| `unknown` | The status could not be read or trusted (plugin too old, malformed status, Editor restarted during a wait); not the same as clean |
+
+Where it shows up:
+
+- **`compile_status`** — read-only, never refreshes or compiles; returns the live verdict.
+- **Script tools wait by default.** `create_script`, `script_apply_edits`,
+  `apply_text_edits` and `manage_script action=create` wait for the compile their
+  write causes and return the verdict in `data.compile`. `wait_for_compile=false`
+  returns right after the write.
+- **`refresh_unity`** returns `data.compile` with `compile="request"`, or whenever the
+  refresh picked up changed scripts. After writing `.cs` files with any other tool,
+  call it: Unity does not import them on its own while it is unfocused.
+- **`read_console`** (`action=get`) adds a top-level `compile_state` whenever the
+  verdict is not `clean`; an empty list next to it is not a pass.
+
+Only `clean` means new types can be used.
+
 ### 🎮 The AI can now play the game (`manage_input`)
 
 Entering play mode and taking screenshots already worked — what was missing was **acting**. The AI could start the game and watch it, but not play it; that was the open link in the loop.
@@ -73,7 +105,7 @@ The tools in this fork are continuously improved based on feedback from real ove
 
 - **Token economy** — `get_hierarchy` returns a lightweight summary by default (`detail:"full"` for everything); `find_gameobjects` results ship with a `name+path` summary (no N+1 follow-up calls)
 - **Smart search** — `match_mode: exact|contains|prefix` on `find_gameobjects` ("Prop_" finds every prop)
-- **Write-compile-verify in one turn** — `wait_for_compile: true` makes script writes return the compile result and console errors in the same response
+- **Write-compile-verify in one turn** — script writes wait for the compile by default and return its verdict (`data.compile`, see [Compile verdicts](#compile-verdicts-an-empty-console-is-not-a-clean-compile)) in the same response
 - **Batch chaining** — `"$[0].data.instanceID"` references enable create→configure→parent in a single `batch_execute`
 - **Honest feedback** — script changes during play mode carry a warning; a modify call that changes nothing is reported as `no_op`
 

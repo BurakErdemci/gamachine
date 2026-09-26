@@ -98,7 +98,26 @@ refresh_unity(
     compile="none",              # "none" | "request"
     wait_for_ready=True          # bool - wait until editor ready
 )
+# With compile="request", or when the refresh picked up changed scripts,
+# the result carries data.compile (see compile_status for the verdicts).
 ```
+
+Call it after writing `.cs` files with your own file tools: Unity does not import them on its own while unfocused.
+
+### compile_status
+
+Live script-compile verdict. Read-only: never refreshes or compiles.
+
+```python
+compile_status()
+# data.verdict: "errors" | "clean" | "compiling" | "pending" | "stale" | "unknown"
+# "clean"   = the code as it is now compiles and the domain reload finished
+# "errors"  = data.errors lists CS code, file, line
+# "stale"   = scripts changed on disk since the last compile; call refresh_unity
+# "unknown" = status unreadable; NOT the same as clean
+```
+
+Waiting calls (script tools, `refresh_unity`) can also return `"timeout"` (no final state within 90 s).
 
 ---
 
@@ -357,9 +376,12 @@ public class MyScript : MonoBehaviour
     void Update() { }
 }''',
     script_type="MonoBehaviour",  # optional hint
-    namespace="MyGame"            # optional namespace
+    namespace="MyGame",           # optional namespace
+    wait_for_compile=True         # default: wait for the compile, verdict in data.compile
 )
 ```
+
+`create_script`, `script_apply_edits`, `apply_text_edits` and `manage_script(action="create")` all take `wait_for_compile` (default true). Pass `False` to return right after the write; then check `compile_status` yourself before using new types.
 
 ### script_apply_edits
 
@@ -773,6 +795,8 @@ read_console(
 # Clear console
 read_console(action="clear")
 ```
+
+An empty error list is not proof of a clean compile. When compilation is running, pending, stale or unknown (or the last compile failed), `action="get"` adds a top-level `compile_state` (`verdict`, `note`, and for errors up to five of them). Its absence means the last compile is final and clean.
 
 ---
 
