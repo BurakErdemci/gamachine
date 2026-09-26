@@ -252,6 +252,7 @@ export const tr = {
   'activity.working': 'Çalışıyor…',
   'activity.thinking': '🧠 Düşünüyor…',
   'activity.writing': '✍️ Yazıyor…',
+  'activity.agyQueued': 'Sırada — başka bir agy sohbetinin turu bitince başlayacak',
   // Hafıza / özetleme
   'memory.learned': '🧠 Proje hafızaya alındı! ({sayi} dosya)',
   'memory.analysisReport': '🧠 **Analiz Raporu**',
@@ -785,6 +786,7 @@ export const en: Record<keyof typeof tr, string> = {
   'activity.working': 'Working…',
   'activity.thinking': '🧠 Thinking…',
   'activity.writing': '✍️ Writing…',
+  'activity.agyQueued': "Queued — starts when another agy chat's turn finishes",
   // Memory / compaction
   'memory.learned': '🧠 Project learned! ({sayi} files)',
   'memory.analysisReport': '🧠 **Analysis Report**',

@@ -867,8 +867,14 @@ export const useChat = (
               const setActivity = (fn: (prev: ChatActivity | null) => ChatActivity | null) =>
                 patchConv(targetConvId, r => ({ activity: fn(r.activity) }));
               if (data.type === 'status') {
+                // agy turns are serialized machine-wide: `agy_queued` means this
+                // chat waits for another chat's turn; `agy_started` replaces
+                // that line (the backend's `detail` is Turkish-only).
+                const coded = data.code === 'agy_queued' ? cevir('activity.agyQueued')
+                  : data.code === 'agy_started' ? cevir('activity.working')
+                  : undefined;
                 setActivity(prev => ({
-                  detail: data.detail || prev?.detail || cevir('activity.working'),
+                  detail: coded || data.detail || prev?.detail || cevir('activity.working'),
                   tokens: (typeof data.tokens === 'number' && data.tokens > 0) ? data.tokens : prev?.tokens,
                 }));
               } else if (data.type === 'thinking') {
