@@ -224,6 +224,21 @@ def test_chat_stop_on_a_side_chat_does_not_deny_an_unowned_card(env):
     assert "unowned" not in client.get("/mcp-pending", headers=H).json()["pending"]
 
 
+def test_chat_stop_keeps_denying_when_the_chat_lookup_fails(env, monkeypatch):
+    """Codex sideverify: skipping the denial on a lookup error left an
+    ordinary chat's pending card open after its Stop."""
+    db, client, _, _, _ = env
+    main = _seed(db)
+    assert _request_card(client, "unowned")["status"] == "ok"
+
+    def boom(_cid):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(db, "get_conversation_owner", boom)
+    assert client.post(f"/chat-stop/{main}", headers=H).status_code == 200
+    assert "unowned" not in client.get("/mcp-pending", headers=H).json()["pending"]
+
+
 def test_close_side_deletes_the_row_and_closes_its_sessions_only(env):
     db, client, _, _, closed = env
     main = _seed(db)
