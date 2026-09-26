@@ -129,6 +129,24 @@ def _read_shared_secret():
         return ""
 
 
+# Must match GAMACHINE_CONVERSATION_HEADER in unity-mcp/Server/src/core/constants.py.
+CONVERSATION_HEADER = "X-Gamachine-Conversation"
+
+
+def _conversation_from_env():
+    """The chat this bridge was spawned for (GAMACHINE_CONVERSATION_ID), or None.
+
+    Same parser as the unityai approval bridge, so both servers of one CLI
+    process name the same chat or none. A card owned by the wrong chat is worse
+    than an unowned one, so anything but a plain positive int sends no header.
+    """
+    try:
+        from unity_ai_mcp.approval_bridge import _conversation_id_from_env
+    except ImportError:
+        return None
+    return _conversation_id_from_env()
+
+
 class _Unreachable(Exception):
     """The POST never reached the server (connection refused / connect timeout)."""
 
@@ -171,12 +189,15 @@ def _answers(out, req_id):
 
 
 class Bridge:
-    def __init__(self, url, secret_reader=_read_shared_secret, timeout=HTTP_TIMEOUT_S):
+    def __init__(self, url, secret_reader=_read_shared_secret, timeout=HTTP_TIMEOUT_S,
+                 conversation_reader=_conversation_from_env):
         self.url = url
         self.session_id = None
         self.protocol_version = None
         self._secret_reader = secret_reader
         self.api_key = secret_reader()
+        # Read once: the process belongs to one chat for its whole life.
+        self.conversation_id = conversation_reader()
         self.timeout = timeout
         self._init_request = None
         self._initialized_note = None
@@ -207,6 +228,8 @@ class Bridge:
             }
             if self.api_key:
                 headers["X-API-Key"] = self.api_key
+            if self.conversation_id is not None:
+                headers[CONVERSATION_HEADER] = str(self.conversation_id)
             if session_id:
                 headers["Mcp-Session-Id"] = session_id
             if self.protocol_version and not is_init:

@@ -587,3 +587,66 @@ def test_a_late_answer_on_the_old_session_does_not_bring_it_back():
         srv.close()
     assert bridge.session_id == "s2"
     assert state["runs"] == [2, 3] and state["inits"] == 2
+
+
+# ── the chat an approval card belongs to (X-Gamachine-Conversation) ─────────
+
+def _lose_session_once_script():
+    """s1 is lost on the first tools/call; the replay gets s2 and the retry runs."""
+    state = {"lost": False}
+
+    def respond(message, headers):
+        if message.get("method") == "initialize":
+            return _init_result(message, session="s2" if state["lost"] else "s1")
+        if "id" not in message:
+            return (202, {}, b"")
+        if headers.get("Mcp-Session-Id") == "s1":
+            state["lost"] = True
+            return SESSION_NOT_FOUND
+        return (200, {"Content-Type": "application/json"},
+                {"jsonrpc": "2.0", "id": message["id"], "result": {"content": []}})
+    return respond
+
+
+def test_every_post_names_the_chat_including_the_replayed_handshake(monkeypatch):
+    monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", "7")
+    srv = ScriptedHTTPServer(_lose_session_once_script())
+    bridge = _bridge(srv.url)
+    # Read once at start: the process belongs to one chat for its whole life.
+    monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", "8")
+    try:
+        _handshake(bridge)
+        [reply] = bridge.handle(_call(1))
+    finally:
+        srv.close()
+    assert reply == {"jsonrpc": "2.0", "id": 1, "result": {"content": []}}
+    methods = [m.get("method") for m, _ in srv.requests]
+    # client handshake, the 404'd call, replayed handshake, the retry
+    assert methods == ["initialize", "notifications/initialized", "tools/call",
+                       "initialize", "notifications/initialized", "tools/call"]
+    assert [h.get_all(cb.CONVERSATION_HEADER) for _, h in srv.requests] == [["7"]] * 6
+
+
+@pytest.mark.parametrize("env", [None, "", "0", "-7", "7x", " 7", "٧", "9223372036854775808"])
+def test_no_usable_chat_id_sends_no_header(monkeypatch, env):
+    if env is None:
+        monkeypatch.delenv("GAMACHINE_CONVERSATION_ID", raising=False)
+    else:
+        monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", env)
+    srv = ScriptedHTTPServer(_lose_session_once_script())
+    bridge = _bridge(srv.url)
+    try:
+        _handshake(bridge)
+        bridge.handle(_call(1))
+    finally:
+        srv.close()
+    assert len(srv.requests) == 6
+    assert all(cb.CONVERSATION_HEADER not in h for _, h in srv.requests)
+
+
+def test_the_bridge_and_the_unityai_server_parse_the_id_the_same_way(monkeypatch):
+    from unity_ai_mcp import approval_bridge
+
+    for raw in ("7", "0", "-7", "7x", "", "9223372036854775807", "9223372036854775808"):
+        monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", raw)
+        assert cb._conversation_from_env() == approval_bridge._conversation_id_from_env()
