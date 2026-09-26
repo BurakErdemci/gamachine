@@ -182,12 +182,15 @@ def set_mode(mode: str, source: str = "ui") -> str:
         with _LOCK:
             previous = _effective_mode_locked()
             store = _store
-        if store is not None:
-            # Persist first: a mode that is live but not saved would silently
-            # revert on the next launch.
-            store.set_setting(_SETTING_KEY, mode)
         if mode == "step":
-            _tighten_agy_gates()  # before step is published, never after
+            # Before step is published, never after; and before it is saved, so
+            # a refused flip leaves nothing behind (a tightened gate under auto
+            # only over-restricts until the next sync).
+            _tighten_agy_gates()
+        if store is not None:
+            # Persist before publishing: a mode that is live but not saved would
+            # silently revert on the next launch.
+            store.set_setting(_SETTING_KEY, mode)
         with _LOCK:
             _mode, _stored, _fresh_install, _from_row = mode, True, False, False
         _propagate_to_live_sessions(mode == "auto")

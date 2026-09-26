@@ -132,6 +132,21 @@ class TestFlipOrdering(GateStateCase, unittest.TestCase):
     def tearDown(self):
         self.tear_down_home()
 
+    def test_step_is_refused_when_the_gate_can_be_neither_tightened_nor_the_child_stopped(self):
+        """Verification round 3: with the step write, the removal and the kill
+        all failing, step was published over a child whose hook still allowed."""
+        approval_mode.set_mode("auto")
+        self.live_session(unkillable=True)
+        agy_provider.write_gate_state(auto=True)
+        seen, observe = self.record_publishes()
+        with observe, \
+                patch.object(agy_provider, "write_gate_state", side_effect=PermissionError("locked")), \
+                patch.object(agy_session, "_remove_gate_state", return_value=False):
+            with self.assertRaises(agy_provider.AgyStepGateError):
+                approval_mode.set_mode("step")
+        self.assertEqual(seen, [])
+        self.assertEqual(approval_mode.current_mode(), "auto")
+
     def test_step_is_never_published_while_an_auto_write_holds_the_gate(self):
         """The round-2 probe's interleaving: flip A (auto) is inside its state
         write when flip B (step) starts. B must not publish step until it has

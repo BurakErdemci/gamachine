@@ -107,15 +107,21 @@ def _may_have_child(session) -> bool:
     return getattr(session, "_active_process", _UNKNOWN) is not None
 
 
-def _kill_gated_children() -> None:
+def _kill_gated_children() -> list:
+    """Kill every child that may read the state file; returns the ones whose
+    kill failed while they still run."""
     processes = [p for p in _GATED_CHILDREN.values() if p is not None]
     processes += [s._active_process for s in _SESSIONS.values()
                   if getattr(s, "_active_process", None) is not None]
+    survivors = []
     for process in processes:
         try:
             process.kill()
         except Exception:
             logger.exception("[agy] could not stop pid=%s", getattr(process, "pid", None))
+            if getattr(process, "returncode", None) is None:
+                survivors.append(process)
+    return survivors
 
 
 def tighten_gate_state() -> None:
@@ -124,7 +130,10 @@ def tighten_gate_state() -> None:
     Nothing reads the file when no agy child exists, and a spawn writes it
     under the same lock, so then there is nothing to do. Otherwise the file
     must deny per the step grammar before step is published: write step,
-    else remove it, else stop every child that could read it.
+    else remove it, else stop every child that could read it. If a child
+    survives all three, this raises and step is not published (verification
+    round 3, 26 Sep 2026: step was published over a live child whose hook
+    still allowed).
     """
     from . import agy_provider
     with _gate_lock():
@@ -138,7 +147,14 @@ def tighten_gate_state() -> None:
         if _remove_gate_state():
             return
         logger.error("[agy] gate state still allows; stopping every agy child before step")
-        _kill_gated_children()
+        survivors = _kill_gated_children()
+        if survivors:
+            raise AgyStepGateError(
+                "Adım adım onay moduna geçilemedi: agy'nin onay kapısı "
+                f"({agy_provider.gate_state_path()}) güncellenemedi ve çalışan agy "
+                f"süreci durdurulamadı (pid {', '.join(str(getattr(p, 'pid', '?')) for p in survivors)}).\n"
+                "Mod değişmedi. agy sürecini kapatın ya da uygulamayı yeniden başlatın, "
+                "sonra yeniden deneyin.")
 
 
 # Observed agy tool payloads nest three or four levels; 40 is far above that and
