@@ -171,8 +171,13 @@ cd Server && uv run pytest tests/ -k "test_create_material" -v
 1. Add Python MCP tool in `Server/src/services/tools/manage_<domain>.py` using `@mcp_for_unity_tool`
 2. Add Python CLI commands in `Server/src/cli/commands/<domain>.py` using Click
 3. Add C# implementation in `MCPForUnity/Editor/Tools/Manage<Domain>.cs` with `[McpForUnityTool]`
-4. Add Python tests in `Server/tests/test_manage_<domain>.py`
-5. Add Unity tests in `TestProjects/UnityMCPTests/Assets/Tests/`
+4. Classify every action as read or write in `Server/src/services/registry/tool_actions.json` (`tests/test_tool_actions_ledger.py` fails on an unclassified tool; an unknown tool or action counts as a write). The approval gate and the `.meta` rule both read this ledger
+5. If a parameter whose name looks like a path (`target`, `path`, `file`, `destination` ...) actually names a GameObject, add it to `_OBJECT_KEYS` in `Server/src/services/protection_rules.py`; otherwise a scene object called `x.meta` is refused as a `.meta` file write
+6. Add Python tests in `Server/tests/test_manage_<domain>.py`
+7. Add Unity tests in `TestProjects/UnityMCPTests/Assets/Tests/`
+
+### Fixed `.meta` Rule
+`UnityInstanceMiddleware.on_call_tool` and `/api/command` refuse any write-classified call whose path-like parameters name a `.meta` file (or its NTFS 8.3 alias `~<n>.MET`), including inside `batch_execute`. It runs before the approval gate, so it holds in auto mode and shows no card. The Gamachine backend keeps a broader copy (`Backend/app/unity_file_guard.py`, also Unity YAML assets) for agents' own file tools; this server cannot import it, so the two are kept in step by hand.
 
 ## What Not To Do
 

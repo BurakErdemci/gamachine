@@ -120,6 +120,10 @@ birden iptal ediyor: akışı kesiyor *ve* backend'de bekleyen onay kapıların�
 önizlemesi, terminalde komutun kendisi. CLI ajanları ve bulut API'leri aynı arayüzden
 geçiyor. Neyin onaylandığı ve neyin **bilerek** onaylanmadığı yazılı:
 [Approval scope](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
+Hiçbir modun kapatamadığı tek kural: bir Unity projesinin içinde ajan `.meta`
+dosyalarını yazamaz, silemez, taşıyamaz; sahne, prefab ve diğer Unity YAML
+varlıklarını ham metin olarak yazamaz. Varlık GUID'lerini koruyan Unity araçlarına
+yönlendirilir.
 
 **Canlı Unity Editor kontrolü, kurulum yok** — MCP üzerinden 51 Editor aracı: sahne,
 GameObject, prefab, materyal, fizik, build ayarları. Ayrıca

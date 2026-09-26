@@ -19,6 +19,8 @@ Unifies the [CoplayDev/unity-mcp](https://github.com/CoplayDev/unity-mcp) projec
 
 > **Approval behavior:** On the Claude path, unityMCP calls that **mutate** the scene open an approval card; calls that only **read** (hierarchy, console, search) do not. On the Codex and agy paths unityMCP still runs unapproved. See [Approval scope](security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
 
+> **Fixed rule, every mode:** no Unity MCP call may write, delete, move or rename a `.meta` file; the server refuses it before any approval card. Target the asset's own path with `manage_asset` instead, so the GUID stays intact. Agents' own file tools are also refused raw writes to Unity YAML assets (scenes, prefabs, materials ...): these tools are the route for those. See [Fixed Unity file rule](security.md#5-fixed-unity-file-rule-every-approval-mode).
+
 ### Tools
 
 | Category | Tools |

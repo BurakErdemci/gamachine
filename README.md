@@ -119,6 +119,9 @@ it cuts the stream *and* rejects the pending approval gates on the backend.
 show a content preview, terminal commands show the command. CLI agents and cloud APIs
 go through the same UI. Exactly what is and isn't gated is written down in
 [Approval scope](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
+One rule no mode switches off: inside a Unity project an agent cannot write, delete
+or move `.meta` files, or write scenes, prefabs and other Unity YAML assets as raw
+text; it is sent to the Unity tools, which keep the asset GUIDs intact.
 
 **Live Unity Editor control, zero install** — 51 Editor tools over MCP: scenes,
 GameObjects, prefabs, materials, physics, build settings. It can also

@@ -45,6 +45,9 @@ The gate does not cover everything. The remaining deliberate trade-offs are **fi
 | unityMCP call that **reads** the scene | `manage_scene action=get_hierarchy`, `read_console`… | ➖ No card (read) |
 | unityMCP call that **mutates** the scene — **Claude path** | `manage_gameobject`, `manage_input`… | ✅ **Card appears** (v2.3.0) |
 | unityMCP call that **mutates** the scene — **Codex / agy** | same tools | ❌ **No approval, runs directly** |
+| Write/delete/move a `.meta` file, or write a Unity YAML asset as raw text, inside a Unity project | any file tool or shell, every provider | 🚫 **Refused in every mode** — a fixed rule, not a card ([§5](#5-fixed-unity-file-rule-every-approval-mode)) |
+| Same, through a shell command | `Bash`, `run_command`… | ⚠️ Heuristic: direct forms refused, indirect ones (variables, scripts) not caught |
+| Same, through `execute_code` / `execute_menu_item` | Unity MCP | ❌ **Not checked** — their effect is not visible in the arguments |
 
 **Why is `write_file` unapproved on the cloud API path?** Writing code into the workspace is what this product is for. Asking on every write trains reflex-approval, which does not strengthen the gate — it destroys it, and then the delete card that actually matters gets approved by the same reflex. Writes are instead **confined to the workspace** by `_validate_path` (`Path.resolve()` + prefix check). Deletes are rare and irreversible, so they always show a card.
 
@@ -78,6 +81,48 @@ Every HTTP request carries an X-Session-Token header
 
 - **API key encryption**: keys are encrypted with Fernet; the key lives deterministically at `~/.unity_architect_ai/api_key_fernet.key` (file-based because an unsigned packaged binary can't reliably read the Keychain). The `api_keys` table holds only encrypted data.
   > **Why the old name in that path?** `~/.unity_architect_ai/` and the keyring service name are **legacy paths, deliberately kept for backward compatibility**. They are the address of your existing encryption key and database — renaming them during the move to Gamachine would have made every already-installed user's saved keys undecryptable. The rename stops at the user's data directory on purpose.
+
+### 5. Fixed Unity file rule (every approval mode)
+
+Inside a Unity project (a folder holding both `Assets/` and `ProjectSettings/`, for
+files under either of them) an agent may not:
+
+- write, create, delete, move or rename a **`.meta` file** — Unity owns them, and a
+  lost or duplicated `.meta` breaks the asset's GUID and every reference to it;
+- write a **Unity YAML asset** (`.unity`, `.prefab`, `.asset`, `.mat`, `.controller`,
+  `.anim`, `.physicMaterial`, ...) as raw text, or delete/move one as a raw file,
+  which orphans its `.meta`.
+
+This is a rule, not an approval card: it is checked before the approval mode, so it
+holds in **step and auto mode alike** and no card is shown for a call that would be
+refused anyway. The refusal goes back to the model with what to use instead: the
+Unity MCP tools (`manage_asset` move/rename/delete, `manage_scene`, `manage_prefabs`,
+`manage_material`, ...), which make Unity write the file and move the `.meta` with
+it. Outside a Unity project nothing is refused.
+
+| Path | What is checked |
+|---|---|
+| Claude Code | `Write`, `Edit`, `MultiEdit`, `NotebookEdit`; `Bash` and `PowerShell` commands |
+| Codex | file changes and commands in its approval requests |
+| agy | `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `sed_file` and `run_command` (the agy hook), plus the `unityai` bridge |
+| unityai MCP (CLI agents) | `save_file`, `delete_file`, `bash` |
+| Cloud API / Ollama | `write_file`, `delete_file`, `run_command` |
+| Unity MCP server | every tool call (including `batch_execute` sub-calls) and `/api/command` — the `.meta` half only, because these tools are the route that makes Unity write YAML assets |
+
+The backend copy is `Backend/app/unity_file_guard.py`; the server keeps its own
+(`unity-mcp/Server/src/services/protection_rules.py`) because it cannot import the
+backend. NTFS 8.3 short names (`LONGAS~1.PRE`, `XPNG~1.MET`) are judged by the long
+name of the file they open, not by their own extension.
+
+Known gaps, stated rather than hidden:
+
+- **Shell commands are checked by a heuristic.** It catches direct deletes/moves,
+  redirects, write cmdlets, in-place `sed`/`perl` and copies onto a protected file.
+  A variable, a script file or `python -c` can still reach one.
+- **`execute_code` and `execute_menu_item` cannot be checked.** What arbitrary C# or
+  a menu item touches is not visible in their arguments.
+- **A Codex refusal carries no reason text.** Codex's decline has no reason field, so
+  the model only sees that the call was declined; the chat shows the reason.
 
 ---
 

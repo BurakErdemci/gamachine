@@ -50,7 +50,13 @@ compile_status()
 
 **Why:** An empty `read_console` list is not a clean compile: the console reads 0 errors before and while Unity compiles. When the verdict is not `clean`, `read_console` adds a top-level `compile_state` field saying so. Only `clean` means new components/types can be used.
 
-### 2. Use `batch_execute` for Multiple Operations
+### 2. Never Touch `.meta` Files or Write Unity YAML Assets as Text
+
+Unity owns `.meta` files: a lost or duplicated one breaks the asset's GUID and every reference to it. Any MCP call that would write, delete, move or rename a `.meta` file is refused, in every approval mode. Move, rename or delete the asset itself with `manage_asset`, and Unity moves its `.meta` with it.
+
+Scenes, prefabs, materials and other Unity YAML assets (`.unity`, `.prefab`, `.asset`, `.mat`, ...) are changed through the tools (`manage_scene`, `manage_prefabs`, `manage_gameobject`, `manage_components`, `manage_material`, `manage_asset`), not by editing the file as text. Gamachine refuses raw text writes to them from its own file tools and shells.
+
+### 3. Use `batch_execute` for Multiple Operations
 
 ```python
 # 10-100x faster than sequential calls
@@ -75,7 +81,7 @@ batch_execute(commands=[
 ])
 ```
 
-### 3. Use Screenshots to Verify Visual Results
+### 4. Use Screenshots to Verify Visual Results
 
 ```python
 # Basic screenshot (saves to Assets/, returns file path only)
@@ -123,7 +129,7 @@ manage_camera(action="screenshot_multiview", max_resolution=480)
 manage_camera(action="screenshot", capture_source="scene_view", view_target="Player", include_image=True)
 ```
 
-### 4. Check Console After Major Changes
+### 5. Check Console After Major Changes
 
 ```python
 read_console(
@@ -134,7 +140,7 @@ read_console(
 )
 ```
 
-### 5. Always Check `editor_state` Before Complex Operations
+### 6. Always Check `editor_state` Before Complex Operations
 
 ```python
 # Read mcpforunity://editor/state to check:

@@ -20,6 +20,16 @@ script tools wait for the compile by default and return the verdict with the
 write, `refresh_unity` returns it too, and `read_console` says when its list is
 not final yet.
 
+### Agents can no longer break asset GUIDs
+
+Inside a Unity project, writing, deleting or moving a `.meta` file, and writing a
+scene, prefab, material or other Unity YAML asset as raw text, is now refused on
+every path and in both step and auto mode. It is a fixed rule rather than an
+approval card: the agent is told to use the Unity MCP tools, which make Unity
+write the file and keep its `.meta` with it. Shell commands are checked by a
+heuristic, and `execute_code` / `execute_menu_item` cannot be checked; see
+docs/security.md.
+
 ## v3.2.0 — 6 September 2026
 
 ### New models: Gemini 3.8 Flash, Gemini 3.7 Flash and GPT-6 Astra
