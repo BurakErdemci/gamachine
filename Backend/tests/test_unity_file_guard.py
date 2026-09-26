@@ -183,6 +183,125 @@ def test_module_is_stdlib_only():
     assert len(offenders) == 1 and "'unity_file_guard'" in offenders[0]
 
 
+# ── NTFS 8.3 aliases: judged by the long name of the file they open ──────────
+
+
+def _short(path):
+    import ctypes
+    buf = ctypes.create_unicode_buffer(1024)
+    n = ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf))
+    return buf.value if n else ""
+
+
+@pytest.fixture
+def aliases(project):
+    """Real files under tmp_path and the 8.3 names Windows gives them."""
+    if sys.platform != "win32":
+        pytest.skip("NTFS 8.3 aliases exist only on Windows")
+    files = {
+        "prefab": os.path.join(project, "Assets", "Prefabs", "LongAssetName.prefab"),
+        "meta": os.path.join(project, "Assets", "Prefabs", "LongAssetName.prefab.meta"),
+        "scene": os.path.join(project, "Assets", "LongMainScene.unity"),
+        "config": os.path.join(project, "Assets", "LongScriptName.config"),
+        "settings": os.path.join(project, "ProjectSettings", "TagManager.asset"),
+    }
+    for path in files.values():
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("fixture")
+    short = {key: _short(path) for key, path in files.items()}
+    short["root"] = _short(project)
+    if any(os.path.basename(short[k]).lower() == os.path.basename(files[k]).lower()
+           for k in ("prefab", "meta", "scene", "config")):
+        pytest.skip("8.3 name generation is disabled on this volume (fsutil 8dot3name)")
+    for key in ("prefab", "meta", "scene", "config"):
+        assert os.path.samefile(files[key], short[key])
+    return short
+
+
+def test_alias_names_hide_the_protected_extension(aliases):
+    assert aliases["prefab"].upper().endswith(".PRE")
+    assert aliases["meta"].upper().endswith(".MET")
+    assert guard.file_kind(aliases["prefab"]) is None  # the name alone does not tell
+
+
+def test_write_to_alias_of_prefab_scene_or_meta_is_refused(aliases):
+    assert "YAML asset" in _msg(guard.check_write(aliases["prefab"]))
+    assert "YAML asset" in _msg(guard.check_write(aliases["scene"]))
+    assert ".meta file" in _msg(guard.check_write(aliases["meta"]))
+
+
+def test_delete_and_move_of_aliases_are_refused(aliases, project):
+    assert ".meta file" in _msg(guard.check_delete(aliases["meta"]))
+    assert "orphans its .meta" in _msg(guard.check_delete(aliases["prefab"]))
+    assert guard.check_move(aliases["prefab"], os.path.join(project, "Assets", "b.txt")) is not None
+    assert guard.check_move(os.path.join(project, "Assets", "a.txt"), aliases["meta"]) is not None
+
+
+def test_relative_alias_resolves_against_base(aliases, project):
+    rel = os.path.join("Assets", "Prefabs", os.path.basename(aliases["prefab"]))
+    assert guard.check_write(rel, project) is not None
+    assert guard.check_delete(os.path.basename(aliases["meta"]),
+                              os.path.join(project, "Assets", "Prefabs")) is not None
+
+
+def test_project_found_through_aliased_ancestors(aliases):
+    settings_dir = _short(os.path.dirname(aliases["settings"]))
+    assert os.path.basename(settings_dir).lower() != "projectsettings", settings_dir
+    path = os.path.join(settings_dir, "TagManager.asset")
+    assert guard.in_unity_project(path)
+    assert guard.check_write(path) is not None
+    assert guard.check_write(os.path.join(aliases["root"], "Assets", "Prefabs",
+                                          os.path.basename(aliases["prefab"]))) is not None
+
+
+def test_alias_of_an_unprotected_file_is_judged_by_its_long_name(aliases):
+    # LongScriptName.config -> LONGSC~1.CON: .CON is also how a .controller shortens
+    assert os.path.basename(aliases["config"]).upper().endswith(".CON")
+    assert guard.check_write(aliases["config"]) is None
+
+
+def test_shell_commands_on_aliases_are_refused(aliases, project):
+    assert guard.check_shell(f'del "{aliases["prefab"]}"', project) is not None
+    assert guard.check_shell(f'echo x > "{aliases["meta"]}"', project) is not None
+    prefabs = os.path.join(project, "Assets", "Prefabs")
+    assert guard.check_shell(f"rm {os.path.basename(aliases['prefab'])}", prefabs) is not None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="8.3 aliases exist only on Windows")
+@pytest.mark.parametrize("command", [
+    "cd Assets/Prefabs && rm LONGAS~1.PRE",
+    "cd Assets && del ABCDEF~1.MET",
+    "cd Assets && Set-Content FOOBAR~12.UNI x",
+])
+def test_shell_alias_shaped_name_after_cd_is_refused(project, command):
+    """After a `cd` the name cannot be resolved against the working directory,
+    so its alias shape decides (volume 8.3 support not needed)."""
+    assert guard.check_shell(command, project) is not None, command
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="8.3 aliases exist only on Windows")
+@pytest.mark.parametrize("command", ["cd Assets && rm FOOBAR~1.CS", "cd Assets && rm backup~1"])
+def test_shell_names_that_are_not_protected_aliases_pass(project, command):
+    assert guard.check_shell(command, project) is None, command
+
+
+def test_alias_rule_is_off_outside_windows(aliases, monkeypatch):
+    monkeypatch.setattr(guard.os, "name", "posix")
+    assert guard.check_write(aliases["prefab"]) is None
+    assert guard.check_shell("cd Assets && rm LONGAS~1.PRE", guard.os.path.dirname(aliases["prefab"])) is None
+
+
+async def test_claude_sdk_refuses_an_alias_write_in_auto(aliases, project):
+    from providers.claude_sdk_session import ClaudeSDKSession
+    from claude_agent_sdk import PermissionResultDeny
+    s = ClaudeSDKSession(conversation_id=1, cwd=project, auto_approve=True)
+    s._out_q = asyncio.Queue()
+    res = await s._can_use_tool("Write", {"file_path": aliases["prefab"], "content": "x"}, None)
+    assert isinstance(res, PermissionResultDeny)
+    assert s._out_q.get_nowait()["success"] is False
+    assert s._out_q.empty()
+
+
 # ── Call sites, auto mode ────────────────────────────────────────────────────
 
 

@@ -96,6 +96,41 @@ def file_kind(path: str) -> Optional[str]:
     return None
 
 
+# A generated NTFS 8.3 name keeps the first three letters of the extension after
+# a "~<n>" tail: LongAssetName.prefab -> LONGAS~1.PRE, x.png.meta -> XPNG~1.MET.
+_SHORT_NAME = re.compile(r"~\d+\.([a-z0-9]{1,3})$")
+_SHORT_EXTENSIONS = {META_EXTENSION[1:4]: "meta"}
+for _ext in YAML_ASSET_EXTENSIONS:
+    _SHORT_EXTENSIONS.setdefault(_ext[1:4], "yaml")
+
+
+def _alias_kind(path: str, base: str) -> Optional[str]:
+    """The kind of the file Windows opens for `path` when its own name hides it.
+
+    realpath resolves an existing file (or the existing part of the path) by
+    handle and returns long names (measured, Python 3.13: LONGAS~1.PRE ->
+    LongAssetName.prefab, PROJEC~1 -> ProjectSettings). A name that does not
+    resolve but has the shape of an alias counts as the file it would alias:
+    after a `cd` in a shell command it may name a file `base` cannot reach."""
+    if os.name != "nt":
+        return None
+    try:
+        real = os.path.realpath(_absolute(path, base))
+        if os.path.lexists(real):
+            return file_kind(real)
+    except (OSError, ValueError):
+        pass
+    match = _SHORT_NAME.search(_leaf(path))
+    return _SHORT_EXTENSIONS.get(match.group(1)) if match else None
+
+
+def _kind(path, base: str) -> Optional[str]:
+    kind = file_kind(path)
+    if kind is None and isinstance(path, str) and path.strip():
+        kind = _alias_kind(path, base)
+    return kind
+
+
 def _is_project_root(directory: str) -> bool:
     return (os.path.isdir(os.path.join(directory, "Assets"))
             and os.path.isdir(os.path.join(directory, "ProjectSettings")))
@@ -149,7 +184,7 @@ def _base_in_project(base: str) -> bool:
 
 def check_write(path, base: str = "") -> Optional[Refusal]:
     """Refusal for writing, creating or overwriting `path` as raw text."""
-    kind = file_kind(path)
+    kind = _kind(path, base)
     if kind is None or not in_unity_project(path, base):
         return None
     return _meta(path) if kind == "meta" else _yaml_write(path)
@@ -157,7 +192,7 @@ def check_write(path, base: str = "") -> Optional[Refusal]:
 
 def check_delete(path, base: str = "") -> Optional[Refusal]:
     """Refusal for deleting `path` as a raw file (not through Unity)."""
-    kind = file_kind(path)
+    kind = _kind(path, base)
     if kind is None or not in_unity_project(path, base):
         return None
     return _meta(path) if kind == "meta" else _yaml_remove(path)
@@ -240,7 +275,7 @@ def _candidates(word: str) -> List[str]:
 
 
 def _protected_kind(token: str, base: str, base_in_project: bool) -> Optional[str]:
-    kind = file_kind(token)
+    kind = _kind(token, base)
     if kind is None:
         return None
     if in_unity_project(token, base):
