@@ -39,6 +39,7 @@ from tools.tool_registry import (
     get_gemini_tool_declarations, _all_tool_definitions,
 )
 from prompts import SYSTEM_PROMPT
+from providers.unity_script_tools import DISALLOWED_UNITY_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -2527,10 +2528,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             # unityMCP artık workspace dosyası üzerinden değil buradan giriyor.
             mcp_servers=mcp_servers_cfg,
             effort=desired_effort,                 # Claude-only; None ise CLI varsayılanı
-            # Savunma: eski unityai araçları bir şekilde yüklenirse bile kapalı kalsın;
-            # .cs yazan onaysız unityMCP aracı da kapalı (built-in Write native onaydan geçer).
+            # Old unityai tools stay off even if something loads them, and so does
+            # every unityMCP tool that can write a .cs file (see unity_script_tools):
+            # C# goes through the built-in Write, which passes the card and the file guard.
             disallowed_tools=[
-                "mcp__unityMCP__manage_script",
+                *DISALLOWED_UNITY_TOOLS,
                 "mcp__unityai__bash",
                 "mcp__unityai__save_file",
             ],
