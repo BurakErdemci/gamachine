@@ -142,6 +142,12 @@ def install_bash_shadow(root: Optional[str] = None) -> Optional[str]:
 _SHADOW_TOLERATED = {".gitignore"}
 
 
+def _raise_walk_error(err: OSError) -> None:
+    # os.walk skips an unreadable dir silently; an incomplete scan would
+    # pass a foreign tool as intact (Codex ocverify2).
+    raise err
+
+
 def _is_link(path: str) -> bool:
     isjunction = getattr(os.path, "isjunction", None)
     return os.path.islink(path) or bool(isjunction and isjunction(path))
@@ -171,7 +177,7 @@ def shadow_intact(root: str) -> bool:
         if _read_text(os.path.join(root, *rel.split("/"))) != body:
             return False
     try:
-        for dirpath, dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root, onerror=_raise_walk_error):
             for name in dirnames:
                 if os.path.normcase(os.path.join(dirpath, name)) not in keep_dirs:
                     return False
@@ -199,7 +205,7 @@ def _prune_foreign(root: str) -> bool:
         logger.warning("[OpenCodeProvider] bash shadow dir is a link; bash stays denied.")
         return False
     try:
-        for dirpath, dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in os.walk(root, onerror=_raise_walk_error):
             for name in list(dirnames):
                 path = os.path.join(dirpath, name)
                 if _is_link(path):

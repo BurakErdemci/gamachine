@@ -414,3 +414,21 @@ def test_non_utf8_shadow_file_denies_bash_instead_of_raising(tmp_path, shadow_ro
     assert "OPENCODE_CONFIG_DIR" not in p._turn_spawn_env()
     from providers.opencode_provider import install_bash_shadow
     assert install_bash_shadow() == str(shadow_root)
+
+
+def test_an_unreadable_dir_during_the_scan_keeps_bash_denied(tmp_path, shadow_root, monkeypatch):
+    """Codex ocverify2: os.walk skipped a failing scandir silently, so a
+    foreign tool passed both the prune and the spawn recheck."""
+    p, _ = _register(tmp_path / "ws")
+    (shadow_root / "tool" / "foreign.ts").write_text("export default {}", encoding="utf-8")
+    real_scandir = os.scandir
+
+    def failing_scandir(path=".", *a, **kw):
+        if os.path.normcase(os.fspath(path)) == os.path.normcase(str(shadow_root / "tool")):
+            raise PermissionError("denied")
+        return real_scandir(path, *a, **kw)
+
+    monkeypatch.setattr(os, "scandir", failing_scandir)
+    assert "OPENCODE_CONFIG_DIR" not in p._turn_spawn_env()
+    from providers.opencode_provider import install_bash_shadow
+    assert install_bash_shadow() is None
