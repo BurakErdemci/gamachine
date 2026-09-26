@@ -129,7 +129,9 @@ GameObjects, prefabs, materials, physics, build settings. It can also
 play mode, send input, screenshot the result and judge what it built. Script writes
 wait for Unity to compile and return a verdict; "clean" only comes once the code
 compiles and the domain reload is done, because an empty console is not a clean
-compile. The `uv` toolchain ships inside the app.
+compile. Each agent action is one named Unity undo step, and the agent can revert
+exactly its last one without touching edits you made after it. The `uv` toolchain
+ships inside the app.
 
 **Project awareness** — every `.cs` file in the workspace is scanned and chunked;
 "Learn Project" extracts classes, inheritance and key methods into an architecture

@@ -56,7 +56,11 @@ Unity owns `.meta` files: a lost or duplicated one breaks the asset's GUID and e
 
 Scenes, prefabs, materials and other Unity YAML assets (`.unity`, `.prefab`, `.asset`, `.mat`, ...) are changed through the tools (`manage_scene`, `manage_prefabs`, `manage_gameobject`, `manage_components`, `manage_material`, `manage_asset`), not by editing the file as text. Gamachine refuses raw text writes to them from its own file tools and shells.
 
-### 3. Use `batch_execute` for Multiple Operations
+### 3. Undo One Action
+
+Each mutating response carries `undo: {action_id, group, name, undoable}`. To revert your own last action, call `manage_editor(action="undo_action", action_id=...)`. It is refused if anything was done after it (so the user's later edits are never lost) and for `undoable: false` (file changes, GameObject delete). A `batch_execute` call is one undo step. `warnings: ["prefab_link: ..."]` in a response means the change breaks or restructures a prefab link; it was still applied.
+
+### 4. Use `batch_execute` for Multiple Operations
 
 ```python
 # 10-100x faster than sequential calls
@@ -81,7 +85,7 @@ batch_execute(commands=[
 ])
 ```
 
-### 4. Use Screenshots to Verify Visual Results
+### 5. Use Screenshots to Verify Visual Results
 
 ```python
 # Basic screenshot (saves to Assets/, returns file path only)
@@ -129,7 +133,7 @@ manage_camera(action="screenshot_multiview", max_resolution=480)
 manage_camera(action="screenshot", capture_source="scene_view", view_target="Player", include_image=True)
 ```
 
-### 5. Check Console After Major Changes
+### 6. Check Console After Major Changes
 
 ```python
 read_console(
@@ -140,7 +144,7 @@ read_console(
 )
 ```
 
-### 6. Always Check `editor_state` Before Complex Operations
+### 7. Always Check `editor_state` Before Complex Operations
 
 ```python
 # Read mcpforunity://editor/state to check:

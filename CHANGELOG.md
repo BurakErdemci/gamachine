@@ -30,6 +30,18 @@ write the file and keep its `.meta` with it. Shell commands are checked by a
 heuristic, and `execute_code` / `execute_menu_item` cannot be checked; see
 docs/security.md.
 
+### One agent action, one undo step
+
+Every mutating Unity MCP call is now a single named Unity undo step
+(`MCP: <tool> <action> #<id>`), and a `batch_execute` call is one step as a whole.
+Responses say which step it was and whether Undo can fully revert it. The new
+`manage_editor action=undo_action` reverts exactly one agent action, and refuses
+unless that action is still the latest step, so edits you made afterwards are
+never lost. GameObject deletes and file operations are reported as not fully
+undoable. Every action is logged to `Library/GamachineActions/actions.jsonl` in
+the project, and edits that break or restructure a prefab link come back with a
+`prefab_link` warning.
+
 ## v3.2.0 — 6 September 2026
 
 ### New models: Gemini 3.8 Flash, Gemini 3.7 Flash and GPT-6 Astra

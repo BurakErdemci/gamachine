@@ -754,6 +754,10 @@ manage_editor(action="remove_tag", tag_name="OldTag")
 manage_editor(action="add_layer", layer_name="Projectiles")
 manage_editor(action="remove_layer", layer_name="OldLayer")
 
+manage_editor(action="undo")               # Step back one undo group
+manage_editor(action="redo")
+manage_editor(action="undo_action", action_id="3f9a1c2e")  # Revert exactly one agent action
+
 manage_prefabs(action="open_prefab_stage", prefab_path="Assets/Prefabs/Enemy.prefab")
 manage_prefabs(action="save_prefab_stage")   # Save changes in the open prefab stage
 manage_prefabs(action="close_prefab_stage")  # Exit prefab editing mode back to main scene
@@ -762,6 +766,8 @@ manage_prefabs(action="close_prefab_stage")  # Exit prefab editing mode back to 
 manage_editor(action="deploy_package")     # Copy configured MCPForUnity source into installed package
 manage_editor(action="restore_package")    # Revert to pre-deployment backup
 ```
+
+**Per-action undo:** every mutating tool response carries `undo: {action_id, group, name, undoable: true|false|"partial", note?}`; a `batch_execute` call is one undo step. `undo_action` with that `action_id` (or `undo_group`) reverts only that action, and is refused unless it is still the most recent undo step (so later user edits are never reverted), when `undoable` is false (file changes, GameObject delete), or in play mode. Deleting, reparenting or removing components inside a prefab instance, unpacking one, or deleting a prefab asset adds `warnings: ["prefab_link: ..."]`; warnings never refuse the call.
 
 **Deploy workflow:** Set the source path in MCP for Unity Advanced Settings first. `deploy_package` copies the source into the project's package location, creates a backup, and triggers `AssetDatabase.Refresh`. Follow with `refresh_unity(wait_for_ready=True)` to wait for recompilation.
 

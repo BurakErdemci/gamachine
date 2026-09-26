@@ -176,6 +176,9 @@ cd Server && uv run pytest tests/ -k "test_create_material" -v
 6. Add Python tests in `Server/tests/test_manage_<domain>.py`
 7. Add Unity tests in `TestProjects/UnityMCPTests/Assets/Tests/`
 
+### Per-Action Undo Journal
+`CommandRegistry` wraps every top-level command in `McpActionJournal` (`MCPForUnity/Editor/Helpers/McpActionJournal.cs`): one named Undo group per tracked call, collapsed when it finishes, reported as `undo` in the response and logged to `Library/GamachineActions/actions.jsonl`. Sub-calls of `batch_execute` get no group of their own. Record changes with `Undo.*` APIs so they land in that group. For a new tool, list its read actions in `UntrackedActions` (or the whole tool in `UntrackedTools`), and mark file-writing tools/actions in `FileTools`/`FileActions` so `undoable` is not over-claimed. Prefab-link side effects go through `PrefabLinkGuard.Warn*`, which adds to the response `warnings`; it never refuses. The Python side re-attaches `undo`/`warnings` for every tool (`carry_action_meta` in `transport/unity_transport.py`), so tool wrappers that rebuild the result dict do not drop them.
+
 ### Fixed `.meta` Rule
 `UnityInstanceMiddleware.on_call_tool` and `/api/command` refuse any write-classified call whose path-like parameters name a `.meta` file (or its NTFS 8.3 alias `~<n>.MET`), including inside `batch_execute`. It runs before the approval gate, so it holds in auto mode and shows no card. The Gamachine backend keeps a broader copy (`Backend/app/unity_file_guard.py`, also Unity YAML assets) for agents' own file tools; this server cannot import it, so the two are kept in step by hand.
 

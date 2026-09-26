@@ -131,7 +131,9 @@ GameObject, prefab, materyal, fizik, build ayarları. Ayrıca
 play moduna giriyor, girdi gönderiyor, ekran görüntüsü alıp yaptığı işi
 değerlendiriyor. Script yazımları Unity'nin derlemesini bekleyip bir sonuç döndürüyor;
 "clean" ancak kod derlendiğinde ve domain reload bittiğinde geliyor, çünkü boş konsol
-temiz derleme demek değil. `uv` araç zinciri uygulamanın içinde geliyor.
+temiz derleme demek değil. Ajanın her eylemi Unity'de adı konmuş tek bir geri alma
+adımı; ajan yalnızca son eylemini, senin sonradan yaptığın düzenlemelere dokunmadan
+geri alabiliyor. `uv` araç zinciri uygulamanın içinde geliyor.
 
 **Proje farkındalığı** — workspace'teki bütün `.cs` dosyaları taranıp parçalanıyor;
 "Projeyi Öğren" sınıfları, kalıtım ilişkilerini ve kilit metotları bir mimari

@@ -87,6 +87,39 @@ Where it shows up:
 
 Only `clean` means new types can be used.
 
+### Undoing one agent action
+
+Every mutating MCP call is one named Unity undo step, `MCP: <tool> <action> #<id>`;
+a `batch_execute` call is one step for all its sub-calls. (Reads are not tracked, and
+neither are the play-session, input, test, profiler and refresh tools, which have
+nothing Undo could revert.) The response carries it:
+
+```json
+"undo": {"action_id": "3f9a1c2e", "group": 812, "name": "MCP: manage_gameobject create #3f9a1c2e", "undoable": true}
+```
+
+`undoable` is `true`, `false` or `"partial"` (scene/object changes revert, file or
+project-settings changes stay), with a `note` when it is not `true`.
+
+`manage_editor action=undo_action action_id=<id>` reverts exactly that action, but
+only while it is still the most recent undo step. Anything later (another agent
+call, or the user's own edit) makes it refuse, so a later edit is never lost; step
+back with `manage_editor action=undo` or Edit > Undo instead. It also refuses in play
+mode and for `undoable: false` actions.
+
+Not fully undoable, and reported as such: deleting a GameObject (it uses
+`DestroyImmediate`) and file operations (`manage_asset`, `manage_script`, scene
+save/load, prefab creation ...). Calls made in play mode get no undo group.
+
+Each action is also logged, one JSON line per call, to
+`<project>/Library/GamachineActions/actions.jsonl` (rotated at 5 MB; under `Library/`
+so writing it never triggers an import).
+
+**Prefab-link warnings.** Deleting or reparenting an object inside a prefab
+instance, removing one of its components, unpacking an instance or deleting a
+prefab asset adds `warnings: ["prefab_link: ..."]` to the response, naming the
+instance and asset affected. Warnings never refuse the call.
+
 ### 🎮 The AI can now play the game (`manage_input`)
 
 Entering play mode and taking screenshots already worked — what was missing was **acting**. The AI could start the game and watch it, but not play it; that was the open link in the loop.
