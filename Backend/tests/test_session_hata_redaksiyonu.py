@@ -55,6 +55,11 @@ async def test_codex_session_hatasi_SIRRI_SIZDIRMIYOR(monkeypatch):
 
     monkeypatch.setattr(codex_session, "get_session", lambda *a, **k: _PatlayanSession())
     monkeypatch.setattr(codex_session, "close_session", lambda *a, **k: None, raising=False)
+    # Without this the run spawned real `codex mcp remove/add` against the
+    # owner's ~/.codex/config.toml (measured 26 Sep 2026: unityMCP removed,
+    # unityai re-pointed at Backend/).
+    from providers.codex_provider import CodexProvider
+    monkeypatch.setattr(CodexProvider, "_write_mcp_config", lambda self, *a, **k: "")
 
     hatalar = []
     async for ev in _runner()._run_codex_session("merhaba"):
