@@ -10,6 +10,8 @@ async def test_run_tests_async_forwards_params(monkeypatch):
     captured = {}
 
     async def fake_send_with_unity_instance(send_fn, unity_instance, command_type, params, **kwargs):
+        if command_type == "get_compile_status":
+            return {"success": True, "data": _compile_status()}
         captured["command_type"] = command_type
         captured["params"] = params
         return {"success": True, "data": {"job_id": "abc123", "status": "running", "mode": "EditMode"}}
@@ -40,6 +42,8 @@ async def test_run_tests_forwards_init_timeout(monkeypatch):
     captured = {}
 
     async def fake_send_with_unity_instance(send_fn, unity_instance, command_type, params, **kwargs):
+        if command_type == "get_compile_status":
+            return {"success": True, "data": _compile_status()}
         captured["params"] = params
         return {"success": True, "data": {"job_id": "abc123", "status": "running", "mode": "PlayMode"}}
 
@@ -63,6 +67,8 @@ async def test_run_tests_omits_init_timeout_when_none(monkeypatch):
     captured = {}
 
     async def fake_send_with_unity_instance(send_fn, unity_instance, command_type, params, **kwargs):
+        if command_type == "get_compile_status":
+            return {"success": True, "data": _compile_status()}
         captured["params"] = params
         return {"success": True, "data": {"job_id": "abc123", "status": "running", "mode": "EditMode"}}
 
@@ -160,6 +166,8 @@ async def test_run_tests_without_clear_stuck_still_preflights(monkeypatch):
     calls = []
 
     async def fake_send_with_unity_instance(send_fn, unity_instance, command_type, params, **kwargs):
+        if command_type == "get_compile_status":
+            return {"success": True, "data": _compile_status()}
         return {"success": True, "data": {"job_id": "abc123", "status": "running", "mode": "EditMode"}}
 
     async def recording_preflight(*args, **kwargs):
@@ -279,13 +287,12 @@ async def test_run_tests_busy_while_compiling(monkeypatch):
     assert "run_tests" not in sent
 
 
-# An older package answers get_compile_status as an unknown command, or with no epoch.
+# An older package answers get_compile_status as an unknown command.
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status,compile_reply,verdict", [
     (_compile_status(), None, "clean"),
     (None, None, "unknown"),
-    (None, {"success": True, "data": {"message": "ok"}}, "unknown"),
-], ids=["clean", "unsupported-command", "unsupported-no-epoch"])
+], ids=["clean", "unsupported-command"])
 async def test_run_tests_starts_when_compile_is_clean_or_unsupported(monkeypatch, status, compile_reply, verdict):
     from services.tools.run_tests import run_tests
 
@@ -307,7 +314,13 @@ _MALFORMED = {**_compile_status(), "is_compiling": None}
     TimeoutError("timed out"),
     "not a dict",
     {"success": True, "data": _MALFORMED},
-], ids=["failed-read", "transport-timeout", "non-dict", "malformed"])
+    # Success-shaped but unusable: not an older package (that answers "unknown command").
+    {"success": True, "data": {"message": "ok"}},
+    {"success": True, "data": {**_compile_status(), "epoch": "3"}},
+    {"success": True, "data": None},
+    {"success": True},
+], ids=["failed-read", "transport-timeout", "non-dict", "malformed",
+        "success-no-epoch", "success-string-epoch", "success-null-data", "success-no-data"])
 async def test_run_tests_refuses_when_compile_status_is_unreadable(monkeypatch, compile_reply):
     from services.tools.run_tests import run_tests
 
@@ -393,6 +406,34 @@ async def test_get_test_job_passed_tests_with_untrusted_compile_is_a_failure(
     assert resp.data.compile["verdict"] == verdict
     assert resp.data.result.summary.total == total
     assert resp.data.result.summary.passed == total
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait_timeout", [None, 5])
+@pytest.mark.parametrize("compile_reply,verdict", [
+    ({"success": True, "data": _compile_status(compiling=True)}, "compiling"),
+    ({"success": True, "data": {**_compile_status(), "is_updating": True}}, "pending"),
+    ({"success": True, "data": {**_compile_status(), "reload_done_after_finish": False}}, "pending"),
+    ({"success": False, "error": "status read failed"}, "unknown"),
+    (TimeoutError("timed out"), "unknown"),
+    ({"success": True, "data": _MALFORMED}, "unknown"),
+    ({"success": True, "data": {"message": "ok"}}, "unknown"),
+], ids=["compiling", "importing", "reload-pending", "failed-read", "transport-timeout", "malformed",
+        "success-no-epoch"])
+async def test_get_test_job_passed_tests_with_unsettled_compile_are_not_green(
+        monkeypatch, compile_reply, verdict, wait_timeout):
+    """A pass read while the compile verdict is not final, or not readable, proves nothing."""
+    from services.tools.run_tests import get_test_job
+
+    _fake_editor(monkeypatch, None, _finished(4), compile_reply=compile_reply)
+    resp = await get_test_job(DummyContext(), job_id="abc123", wait_timeout=wait_timeout)
+
+    assert resp.success is False
+    assert resp.error == "compile"
+    assert resp.data.status == "failed"
+    assert resp.data.compile["verdict"] == verdict
+    assert resp.data.result.summary.passed == 4
+    assert "does not count" in resp.message
 
 
 @pytest.mark.asyncio

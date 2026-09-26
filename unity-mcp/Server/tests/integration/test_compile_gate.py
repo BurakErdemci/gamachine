@@ -607,6 +607,59 @@ async def test_skipped_failed_epoch_masked_by_a_later_partial_compile_is_errors(
 
 
 @pytest.mark.asyncio
+async def test_skipped_epoch_with_a_clean_later_compile_is_clean(editor_factory):
+    """Not the masked case above: epoch 7 started after the write, so it compiled the
+    written file, and Unity reports no failing assembly. The verdict is about the
+    scripts on disk now, which include the write."""
+    editor_factory([step(status(5)), step(status(7, reloaded=True, failed_now=False))])
+    result = await _create(wait_for_compile=True)
+    assert result["verdict"] == "clean", result
+    assert result["epoch"] == 7 and result["epoch_before"] == 5
+    assert result["compilation_observed"] is True
+
+
+# ── a success-shaped reply without a usable status is not an older package ────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [{"message": "ok"}, {**status(5), "epoch": "5"}, None, "status"],
+                         ids=["no-epoch", "string-epoch", "null", "string"])
+async def test_success_reply_without_a_status_is_malformed_not_unsupported(data):
+    sent = []
+
+    async def route(send_fn, unity_instance, command, params, **kwargs):
+        sent.append(command)
+        return {"success": True, "data": data}
+
+    read = await cs.read_compile_status(None, attempts=3, send_fn=object(), route_fn=route)
+    assert read.status is None
+    assert not read.unsupported
+    assert read.problem.startswith("malformed")
+    assert len(sent) == 1
+    verdict = cs.live_verdict(read.status, read.problem)
+    assert verdict["verdict"] == "unknown"
+    assert "malformed" in verdict["note"]
+
+
+@pytest.mark.asyncio
+async def test_wait_on_a_success_reply_without_a_status_ends_unknown_at_once(editor_factory):
+    editor_factory([step({"message": "ok"})])
+    result = await cs.await_compile_verdict(None, cs.CompileBaseline(5), max_wait_s=1.0, start_window_s=0.5)
+    assert result["verdict"] == "unknown", result
+    assert "malformed" in result["note"]
+    assert result["waited_s"] < 0.5
+
+
+@pytest.mark.asyncio
+async def test_script_write_after_a_success_reply_without_a_status_is_unknown(editor_factory):
+    editor = editor_factory([step({"message": "ok"})])
+    result = await _create(wait_for_compile=True)
+    assert result["verdict"] == "unknown", result
+    assert "malformed" in result["note"]
+    assert len(editor.commands("get_compile_status")) == 1
+    assert len(editor.commands("manage_script")) == 1
+
+
+@pytest.mark.asyncio
 async def test_no_compile_needed_is_not_clean_while_unity_reports_failure(editor_factory):
     editor_factory([step(status(5, reloaded=True, failed_now=True))])
     result = await _create(wait_for_compile=True)

@@ -201,13 +201,22 @@ def _compile_refusal(verdict: dict[str, Any]) -> MCPResponse:
 def _untrusted_pass(data: dict[str, Any], verdict: dict[str, Any]) -> GetTestJobResponse:
     total = ((data.get("result") or {}).get("summary") or {}).get("total")
     prefix = "The run found 0 tests. " if total == 0 else f"The run reported a pass ({total} tests), but it does not count. "
-    if verdict["verdict"] == "errors":
+    kind = verdict["verdict"]
+    if kind == "errors":
         body = ("Scripts do not compile now (data.compile lists the errors), so the run may have tested the "
                 "last good assemblies, and a test assembly that failed to compile reports no tests. "
                 "Fix the errors, then run the tests again.")
-    else:
+    elif kind == "stale":
         body = ("Script files changed on disk since the last compile, so the run tested the old code. "
                 "Call refresh_unity(compile='request') and run the tests again once its verdict is clean.")
+    elif kind in ("compiling", "pending"):
+        body = ("A compile, asset import or domain reload is in progress now, so the scripts may differ from "
+                "the ones the run tested and their compile result is not final. Wait until compile_status "
+                "says clean, then run the tests again.")
+    else:
+        body = ("The compile status could not be read or trusted (data.compile.note says why), so it is not "
+                "known whether the run tested compiling, current scripts. Call compile_status and run the "
+                "tests again once it is clean.")
     return GetTestJobResponse(success=False, error="compile", message=prefix + body + " data.result keeps the run's summary.",
                               data={**data, "status": "failed", "compile": verdict})
 
@@ -217,8 +226,10 @@ async def _judge_finished_job(response: dict[str, Any], unity_instance: str | No
     if data.get("status") not in _FINISHED:
         return GetTestJobResponse(**response)
     # Read after the job finished: scripts can stop compiling while a run is in progress.
-    verdict, _ = await _compile_verdict(unity_instance)
-    if data.get("status") == "succeeded" and verdict["verdict"] in _UNTRUSTED_COMPILE:
+    # Only a clean verdict lets a pass stand; an older package without the handler
+    # keeps its pass, as run_tests lets it start.
+    verdict, unsupported = await _compile_verdict(unity_instance)
+    if data.get("status") == "succeeded" and verdict["verdict"] != "clean" and not unsupported:
         return _untrusted_pass(data, verdict)
     return GetTestJobResponse(**{**response, "data": {**data, "compile": verdict}})
 
@@ -338,8 +349,9 @@ async def run_tests(
     description=(
         "Polls an async Unity test job by job_id. Status is running, succeeded or failed; the summary "
         "is in data.result. A finished job carries data.compile (the live compile_status verdict); a succeeded "
-        "run while scripts do not compile or are stale is reported as a failure (error='compile', data.status "
-        "failed, data.result kept), not a green result."
+        "run counts only when that verdict is clean. Otherwise (errors, stale, compiling, pending, or a status "
+        "that cannot be read) it is reported as a failure (error='compile', data.status failed, data.result "
+        "kept), not a green result."
     ),
     annotations=ToolAnnotations(
         title="Get Test Job",

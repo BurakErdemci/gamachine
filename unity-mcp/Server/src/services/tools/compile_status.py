@@ -40,12 +40,17 @@ RETRY_DELAY_S = 0.25
 class StatusRead:
     status: dict[str, Any] | None
     # None when readable; otherwise "unsupported" (the Editor plugin has no
-    # get_compile_status handler) or "unreadable: <reason>".
+    # get_compile_status handler), "malformed: <reason>" (a success reply with
+    # no usable status) or "unreadable: <reason>".
     problem: str | None = None
 
     @property
     def unsupported(self) -> bool:
         return self.problem == "unsupported"
+
+    @property
+    def malformed(self) -> bool:
+        return bool(self.problem and self.problem.startswith("malformed"))
 
 
 def _is_unsupported(resp: dict[str, Any]) -> bool:
@@ -93,8 +98,12 @@ async def read_compile_status(
             problem = "unreadable: " + str(resp.get("error") or resp.get("message") or "request failed")
             continue
         data = resp.get("data")
-        if not isinstance(data, dict) or not isinstance(data.get("epoch"), int):
-            return StatusRead(None, "unsupported")
+        # An older package answers "unknown command" (above); a success reply
+        # without an int epoch proves nothing and must not unlock run_tests.
+        if not isinstance(data, dict):
+            return StatusRead(None, f"malformed: reply data is {type(data).__name__}, not a status")
+        if not _is_int(data.get("epoch")):
+            return StatusRead(None, f"malformed: epoch={data.get('epoch')!r}")
         return StatusRead(data)
     return StatusRead(None, problem)
 
@@ -150,6 +159,8 @@ def unknown_verdict(problem: str | None) -> dict[str, Any]:
     if problem == "unsupported":
         note = ("compile status unavailable: the Unity plugin does not answer get_compile_status "
                 "(update the MCP for Unity package); compile result unknown")
+    elif problem and problem.startswith("malformed"):
+        note = f"compile status reply is {problem}; compile result unknown - call compile_status"
     else:
         note = f"compile status could not be read ({problem or 'no response'}); compile result unknown"
     return _base("unknown", note, None)
@@ -262,8 +273,9 @@ async def await_compile_verdict(
     verdict decides: nothing changed on disk -> clean ("no compile needed"),
     files changed -> stale.
     """
-    if baseline.problem == "unsupported":
-        return unknown_verdict("unsupported")
+    # Both are final answers from the snapshot read; polling again would not change them.
+    if baseline.problem == "unsupported" or (baseline.problem or "").startswith("malformed"):
+        return unknown_verdict(baseline.problem)
 
     max_wait = MAX_WAIT_S if max_wait_s is None else max_wait_s
     start_window = START_WINDOW_S if start_window_s is None else start_window_s
@@ -294,8 +306,8 @@ async def await_compile_verdict(
         status = read.status
         if status is None:
             last_problem = read.problem
-            if read.unsupported:
-                return _finish(unknown_verdict("unsupported"))
+            if read.unsupported or read.malformed:
+                return _finish(unknown_verdict(read.problem))
         else:
             bad = malformed_field(status, scan=False)
             if bad:

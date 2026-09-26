@@ -843,14 +843,16 @@ result = get_test_job(
     include_details=False
 )
 # data.status: "running" | "succeeded" | "failed" (wait_timeout ran out -> still "running")
-# data.result (succeeded jobs only): {mode, summary: {total, passed, failed, skipped,
-#   durationSeconds, resultState}}, plus per-test entries in result.results with
-#   include_details / include_failed_tests
+# data.result: {mode, summary: {total, passed, failed, skipped, durationSeconds, resultState}},
+#   plus per-test entries in result.results with include_details / include_failed_tests.
+#   Unity sends it for succeeded runs only; a failed job with error "compile" (below) also has
+#   it, since that is a succeeded run the server turned into a failure.
 # data.progress: completed, total, current test, failures_so_far (the failures of a failed run)
 # data.error: why a job failed without a result (e.g. tests did not start within init_timeout)
-# data.compile (finished jobs): the live compile_status verdict. A succeeded run while scripts do
-#   not compile or are stale comes back success=False, error "compile", data.status "failed",
-#   with data.result kept.
+# data.compile (finished jobs): the live compile_status verdict. A succeeded run counts only when
+#   it is clean; on errors, stale, compiling, pending or unknown (status unreadable) it comes back
+#   success=False, error "compile", data.status "failed", with data.result kept. An old package
+#   without get_compile_status keeps its pass (verdict unknown).
 ```
 
 ---
