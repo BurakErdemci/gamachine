@@ -104,7 +104,7 @@ class SideTurn:
         }
         if context_cap is not None:
             if not self.fits(context_cap):
-                raise SideTurnTooLong(side_too_long_message(context_cap))
+                raise SideTurnTooLong(side_too_long_message())
             room = context_cap - utf16_units(SIDE_INSTRUCTION + _SEP + question)
             blocks["request"], room = _fit(IN_FLIGHT_HEADER, request, room, False, _TRIM_TAIL)
             blocks["live"], room = _fit(*_split_label(self.live_answer or ""), room, True, _TRIM_LIVE)
@@ -131,10 +131,10 @@ class SideTurnTooLong(ValueError):
     be trimmed is left, so the turn is refused instead of spawned."""
 
 
-def side_too_long_message(context_cap: int) -> str:
-    return (f"Yan soru gönderilemedi: soru, yan soru talimatıyla birlikte bu "
-            f"sağlayıcının komut satırı sınırına ({context_cap} karakter) sığmıyor. "
-            f"Soruyu kısaltıp tekrar sor.")
+def side_too_long_message() -> str:
+    # The cap is counted in UTF-16 units, not characters, so no number is shown.
+    return ("Yan soru gönderilemedi: soru, yan soru talimatıyla birlikte bu "
+            "sağlayıcının komut satırı sınırını aşıyor. Soruyu kısaltıp tekrar sor.")
 
 
 def _split_label(block: str) -> "tuple[str, str]":

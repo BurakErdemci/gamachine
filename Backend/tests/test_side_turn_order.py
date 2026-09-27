@@ -317,6 +317,11 @@ def test_oneshot_side_turn_is_capped_and_a_too_long_question_never_spawns():
     assert prompts == []
     assert [e.type for e in events[0]] == ["error"]
     assert "Yan soru gönderilemedi" in events[0][0].data["message"]
+    # The cap is UTF-16 units, so the message must not claim a character count.
+    assert "karakter" not in events[0][0].data["message"]
+    with pytest.raises(sp.SideTurnTooLong) as refused:
+        _big_turn(question="Q" * 24000).text(full=True, context_cap=24000)
+    assert "karakter" not in str(refused.value)
 
 
 def test_kimi_side_turn_is_full_on_every_turn():

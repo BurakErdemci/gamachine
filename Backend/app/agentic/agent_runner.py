@@ -2410,7 +2410,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         _prompt_cap = 24000
         if getattr(self, "side_turn", None) is not None and not self.side_turn.fits(_prompt_cap):
             from agentic.side_prompt import side_too_long_message
-            yield AgentEvent("error", {"message": side_too_long_message(_prompt_cap)})
+            yield AgentEvent("error", {"message": side_too_long_message()})
             return
 
         provider = _make_provider(self.model_name)
