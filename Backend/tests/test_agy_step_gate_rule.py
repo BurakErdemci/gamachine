@@ -232,6 +232,11 @@ class TestDecide(unittest.TestCase):
         self.assertEqual(self.decide(b"not json"), "deny")
         self.assertEqual(self.decide({"toolCall": {"name": "run_command"}}), "deny")
         self.assertEqual(self.decide({"toolCall": {"name": "run_command", "args": {"CommandLine": 7}}}), "deny")
+        self.assertEqual(self.decide({"toolCall": {"name": 7}}), "deny")
+        # Since side questions (Burak, 27 Sep 2026) a side child's hooks.json
+        # names more tools; outside "side" they keep the no-hook verdict.
+        self.assertEqual(self.decide({"toolCall": {"name": "some_new_tool"}}), "allow")
+        gate.write_state(self.state, gate.SIDE_MODE, WIN_L)
         self.assertEqual(self.decide({"toolCall": {"name": "some_new_tool"}}), "deny")
 
     def test_deny_reasons_reach_the_model(self):

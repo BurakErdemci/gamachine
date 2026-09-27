@@ -1,8 +1,10 @@
 """PreToolUse hook for agy (`backend agy-hook --state <file>`).
 
 agy runs this for its built-in file writers, run_command and
-send_command_input (see providers/agy_provider.py, _write_step_gate). It
+send_command_input (see providers/agy_provider.py, _write_step_gate), and a
+side question's process also for every tool in SIDE_HOOK_MATCHERS. It
 reads the hook payload on stdin and prints {"decision": "allow"|"deny"}.
+A fifth state, "side", holds only while a read-only side question runs.
 
 It is installed in every approval mode: the state file's "mode" decides.
 "auto" allows every call, "step" applies the rules below, and "balanced"
@@ -19,7 +21,9 @@ Why a top-level module and not providers/: importing anything under
 (openai, anthropic, google.genai, ollama): 3.3 s measured, paid on every
 gated tool call. This file imports only the standard library.
 
-Fail closed: an unreadable state file, payload or unknown tool is a deny.
+Fail closed: an unreadable state file or payload is a deny, and so is any
+tool in "side" that is not a proven read. A tool outside the step set in
+auto/step/balanced is allowed: before side questions no hook ran for it.
 
 The run_command allow rule (measured 25 Sep 2026, agy 1.2.8): agy runs
 commands in Windows PowerShell 5.1 on Windows, and the unityai launcher there
@@ -92,6 +96,57 @@ STEP_GATE_HOOKS_FILE = ".agents/hooks.json"
 # every call in either approval mode.
 CLOSED_MODE = "closed"
 CLOSED_REASON = "Gamachine closed this agy session; no tool may run in it."
+
+# Written while a read-only side question runs on agy (Burak, 27 Sep 2026).
+# agy runs one turn machine-wide and the side turn holds that lock, so the one
+# shared state file can say "side" for exactly that turn. Only the tools
+# below, and Unity MCP calls the ledger proves to be reads, are allowed; any
+# other call the hook sees is denied, so a tool nobody listed stays closed.
+SIDE_MODE = "side"
+SIDE_READ_TOOLS = frozenset({
+    "view_file", "view_file_outline", "view_code_item", "view_content_chunk",
+    "list_dir", "list_directory", "grep_search", "find_by_name", "codebase_search",
+    "list_resources", "read_resource",
+    # agy's own progress/UI steps; they touch nothing outside the turn.
+    "task_boundary", "notify_user", "suggested_responses",
+})
+MCP_CALL_TOOL = "call_mcp_tool"
+SIDE_MCP_SERVER = "unityMCP"
+# Every name a side process's hooks.json matches besides the step tools. The
+# hook only sees a call its matcher names (measured for exact names), so the
+# list is what agy 1.2.x ships, read from the binary on 27 Sep 2026 (tool
+# handlers and CORTEX_STEP_TYPE_* names), plus ".*": agy's own hooks
+# documentation calls the matcher a regex and ".*" compiles in any engine;
+# whether this agy build honours it is unmeasured, so the names stay.
+SIDE_HOOK_MATCHERS = (
+    MCP_CALL_TOOL, "mcp_tool", "invoke_subagent", "define_subagent", "manage_subagents",
+    "browser_subagent", "schedule", "send_message", "manage_inbox", "manage_task",
+    "generate_image", "run_script", "shell_exec", "delete_file", "delete_directory", "move",
+    "git_commit", "write_file", "edit_file", "edit_notebook", "execute_notebook",
+    "write_blob", "file_change", "code_action", "clipboard", "run_extension_code",
+    "restart_dev_server", "deploy_firebase", "set_up_firebase", "cloud_sql_execute_sql",
+    "cloud_sql_update_schema", "set_up_cloud_sql", "install_applet_package",
+    "install_applet_dependencies", "compile", "compile_applet", "lint_applet",
+    "blaze_build_targets", "blaze_test_targets", "post_pr_review", "start_code_review",
+    "propose_code", "agency_tool_call", "workspace_api", "rpc_action", "memory",
+    "brain_update", "knowledge_generation", "ki_insertion", "ask_question",
+    "command_status", "read_terminal", "search_web", "read_url_content",
+    "open_browser_url", "read_browser_page", "list_browser_pages",
+    "capture_browser_screenshot", "capture_browser_console_logs", "click_browser_pixel",
+    "execute_browser_javascript", "browser_click_element", "browser_drag_pixel_to_pixel",
+    "browser_get_dom", "browser_get_network_request", "browser_input",
+    "browser_list_network_requests", "browser_mouse_down", "browser_mouse_up",
+    "browser_mouse_wheel", "browser_move_mouse", "browser_press_key",
+    "browser_refresh_page", "browser_resize_window", "browser_scroll",
+    "browser_scroll_down", "browser_scroll_up", "browser_select_option", ".*",
+)
+SIDE_REASON = (
+    "Gamachine: this is a read-only side question, so {what} is refused. Only reading "
+    "tools may run here (view, list or search files, Unity MCP read actions). Answer from "
+    "the conversation and what you can read; do not try another way to run it.")
+SIDE_MESHY_REASON = (
+    "Gamachine: this is a read-only side question; meshy calls cost credits and are "
+    "refused here. Answer from the conversation.")
 
 _SUBCOMMANDS = {
     # flag -> takes a value
@@ -332,6 +387,76 @@ def _balanced_deny(what: str, risk) -> dict:
     return _deny(BALANCED_REASON.format(what=what, reason=risk.reason, detail=detail))
 
 
+def _one_arg(args: dict, names):
+    """The single value under any spelling of `names` (case and "_" folded);
+    None when absent, _AMBIGUOUS when two spellings disagree."""
+    found = [value for key, value in args.items()
+             if isinstance(key, str) and key.replace("_", "").lower() in names]
+    if not found:
+        return None
+    first = found[0]
+    return first if all(value == first for value in found[1:]) else _AMBIGUOUS
+
+
+_AMBIGUOUS = object()
+_MCP_SERVER_KEYS = frozenset({"servername", "server", "mcpserver", "mcpservername"})
+_MCP_TOOL_KEYS = frozenset({"toolname", "tool", "name", "mcptoolname"})
+_MCP_ARGS_KEYS = frozenset({"arguments", "args", "toolargs", "toolarguments", "input",
+                            "toolinput", "parameters", "params"})
+
+
+def _side_mcp_decision(args) -> dict:
+    """call_mcp_tool in a side turn: only a unityMCP call the ledger proves to
+    be a read. The payload's field names are not measured, so every usual
+    spelling is read and anything unclear is denied."""
+    refused = _deny(SIDE_REASON.format(what="this MCP call"))
+    if not isinstance(args, dict):
+        return refused
+    server = _one_arg(args, _MCP_SERVER_KEYS)
+    tool = _one_arg(args, _MCP_TOOL_KEYS)
+    if not isinstance(server, str) or not isinstance(tool, str) or not tool:
+        return refused
+    if "meshy" in server.lower():
+        return _deny(SIDE_MESHY_REASON)
+    if server != SIDE_MCP_SERVER:
+        return _deny(SIDE_REASON.format(what=f"a call to the MCP server {server!r}"))
+    params = _one_arg(args, _MCP_ARGS_KEYS)
+    if params is None:
+        params = {}
+    if isinstance(params, str):
+        try:
+            params = json.loads(params) if params.strip() else {}
+        except ValueError:
+            return refused
+    if not isinstance(params, dict):
+        return refused
+    import unity_tool_policy  # stdlib-only; imported only in a side turn
+    try:
+        read = (unity_tool_policy.ledger_available() and unity_tool_policy.is_unity_mcp_read_only(
+            unity_tool_policy.UNITY_MCP_PREFIX + tool, params))
+    except Exception:
+        read = False
+    if read:
+        return {"decision": "allow"}
+    return _deny(SIDE_REASON.format(what=f"the Unity action {tool!r} (it is not a proven read)"))
+
+
+def _side_decision(raw: bytes) -> dict:
+    try:
+        call = json.loads(raw.decode("utf-8"))["toolCall"]
+        name = call["name"]
+        args = call.get("args") or {}
+    except Exception:
+        return _deny(FAIL_REASON)
+    if not isinstance(name, str):
+        return _deny(FAIL_REASON)
+    if name in SIDE_READ_TOOLS:
+        return {"decision": "allow"}
+    if name == MCP_CALL_TOOL:
+        return _side_mcp_decision(args)
+    return _deny(SIDE_REASON.format(what=f"the tool {name!r}"))
+
+
 def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -> dict:
     windows = (sys.platform == "win32") if windows is None else windows
     cwd = os.getcwd() if cwd is None else cwd
@@ -342,6 +467,8 @@ def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -
         launcher = state["launcher"]
     except Exception:
         return _deny(FAIL_REASON)
+    if mode == SIDE_MODE:
+        return _side_decision(raw)
     if mode in ("auto", "step", BALANCED_MODE):
         refusal = _unity_file_refusal(raw)
         if refusal is not None:
@@ -357,6 +484,13 @@ def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -
         name = call["name"]
     except Exception:
         return _deny(FAIL_REASON)
+    if not isinstance(name, str):
+        return _deny(FAIL_REASON)
+    if name != RUN_TOOL and name not in GATED_TOOLS:
+        # Only a side process's hooks.json names more tools than these
+        # (SIDE_HOOK_MATCHERS). Outside a side turn such a call keeps the
+        # verdict it had when no hook ran for it: allowed.
+        return {"decision": "allow"}
     if name == RUN_TOOL:
         try:
             command = call["args"]["CommandLine"]
@@ -370,14 +504,12 @@ def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -
                 return {"decision": "allow"}
             return _balanced_deny("command", risk)
         return _deny(RUN_REASON)
-    if name in GATED_TOOLS:
-        if mode == BALANCED_MODE:
-            risk = _balanced_risk(name, call.get("args"), cwd)
-            if not risk.critical:
-                return {"decision": "allow"}
-            return _balanced_deny("file write" if name in _FILE_WRITERS else "call", risk)
-        return _deny(WRITE_REASON)
-    return _deny(FAIL_REASON)
+    if mode == BALANCED_MODE:
+        risk = _balanced_risk(name, call.get("args"), cwd)
+        if not risk.critical:
+            return {"decision": "allow"}
+        return _balanced_deny("file write" if name in _FILE_WRITERS else "call", risk)
+    return _deny(WRITE_REASON)
 
 
 def write_state(path: str, mode: str, launcher: str) -> None:

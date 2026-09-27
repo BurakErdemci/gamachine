@@ -1347,12 +1347,6 @@ class AgentRunner:
             else:
                 _cur = "claude"
 
-            if _cur == "agy" and getattr(self, "read_only", False):
-                # agy holds a machine-wide turn lock: a side question would
-                # queue behind the main chat's turn. The route refuses first.
-                yield AgentEvent("error", {"message": "Yan soru agy ile kullanılamıyor."})
-                return
-
             # CLI'lar arası "kaldığı yerden devam": provider değiştiyse hedef CLI'ın
             # (varsa) bayat session'ını kapat → ilk-tur enjeksiyonu tetiklenir, tam
             # transcript (self.context) yeniden verilir → aradaki turları da görür.
@@ -2329,11 +2323,22 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             self.conversation_id, resume_id=self.resume_id,
             cwd=self.workspace_path or ".",
         )
-        session.auto_approve = (self.generation_mode == "auto")
+        side_turn = getattr(self, "side_turn", None)
+        if side_turn is None:
+            session.auto_approve = (self.generation_mode == "auto")
         image_paths, attachment_dir = materialize_images(
             self.images, self.workspace_path, f"agy_conv{self.conversation_id}")
         message = user_message
-        if self.context:
+        if side_turn is not None:
+            # A side question runs in the side chat's own agy session (keyed
+            # by the side id), never the main chat's, whose agy history it
+            # would enter (Burak, 27 Sep 2026). A resumed side conversation
+            # already holds the history and the earlier side Q/A.
+            cwd = os.path.abspath(self.workspace_path or ".")
+            resume_uuid = (session.session_id if session.cwd == cwd
+                           else _RESUME_IDS.get((self.conversation_id, cwd)))
+            message = side_turn.text(full=not resume_uuid)
+        elif self.context:
             # Fresh agy conversation = no id for _start to resume: the id comes
             # from resume_id/_RESUME_IDS (get_session) or the first turn's init
             # event, and _start re-reads the store when the workspace changed.
@@ -2350,6 +2355,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         try:
             async with contextlib.aclosing(session.stream(
                 message, model=self.model_name, cwd=self.workspace_path or ".",
+                side=side_turn is not None, language=self.language,
             )) as events:
                 async for event in events:
                     payload = dict(event)

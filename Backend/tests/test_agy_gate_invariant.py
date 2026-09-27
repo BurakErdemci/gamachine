@@ -614,6 +614,77 @@ class TestBalancedOrdering(GateStateCase, unittest.TestCase):
         self.assertFalse(session.auto_approve)
 
 
+class TestSideOrdering(GateStateCase, unittest.TestCase):
+    """A read-only side question (Burak, 27 Sep 2026) puts the file on "side",
+    which is tighter than step for every call. While it runs, no flip may
+    write anything looser; after it the file follows the published mode; a
+    "side" left by a crash never blocks set_mode or a main turn."""
+
+    def setUp(self):
+        self.set_up_home()
+        agy_session._SIDE_TURN = None
+
+    def tearDown(self):
+        agy_session._SIDE_TURN = None
+        agy_session._SIDE_DONE = None
+        self.tear_down_home()
+
+    def start_side(self):
+        side = self.live_session(conversation_id=77)
+        agy_session._begin_side_turn(side)
+        agy_provider.write_gate_state(mode=agy_session.SIDE_MODE)
+        return side
+
+    def test_side_is_never_looser_than_step(self):
+        self.start_side()
+        launcher = agy_provider.AgyProvider()._launcher_path("unityai")
+        bridge = json.dumps({"toolCall": {"name": "run_command", "args": {
+            "CommandLine": f'& "{launcher}" delete-file --path "a.txt"'}}}).encode()
+        mcp = json.dumps({"toolCall": {"name": "call_mcp_tool", "args": {
+            "ServerName": "unityMCP", "ToolName": "manage_gameobject",
+            "Arguments": {"action": "create"}}}}).encode()
+        for payload in (WRITE, SHELL, bridge, mcp):
+            self.assertEqual(decide(payload, self.state, windows=True)["decision"], "deny")
+
+    def test_every_flip_during_a_side_turn_keeps_the_file_on_side(self):
+        approval_mode.set_mode("step")
+        side = self.start_side()
+        seen, observe = self.record_publishes()
+        with observe:
+            for mode in ("auto", "balanced", "step", "auto"):
+                approval_mode.set_mode(mode)
+                self.assertEqual(self.file_mode(), "side")
+        self.assertEqual([file for _, file in seen], ["side"] * 4)
+        agy_session._end_side_turn(side)
+        self.assertEqual(self.file_mode(), "auto")
+
+    def test_the_end_of_a_side_turn_restores_the_mode_published_now(self):
+        approval_mode.set_mode("auto")
+        side = self.start_side()
+        approval_mode.set_mode("step")
+        agy_session._end_side_turn(side)
+        self.assertEqual(self.file_mode(), "step")
+        self.assertEqual(decide(SHELL, self.state)["decision"], "deny")
+
+    def test_a_side_child_that_survived_its_kill_keeps_the_file_denying(self):
+        approval_mode.set_mode("auto")
+        side = self.start_side()
+        side._gate_token = object()
+        agy_session._RETIRED.add(side._gate_token)
+        agy_session._end_side_turn(side)
+        self.assertIsNone(agy_session._SIDE_TURN)
+        self.assertEqual(self.file_mode(), "side")
+
+    def test_a_stale_side_left_by_a_crash_does_not_block_set_mode(self):
+        self.live_session()
+        agy_provider.write_gate_state(mode=agy_session.SIDE_MODE)  # no side turn runs
+        approval_mode.set_mode("step")
+        self.assertEqual(self.file_mode(), "step")
+        approval_mode.set_mode("auto")
+        self.assertEqual(self.file_mode(), "auto")
+        self.assertEqual(decide(WRITE, self.state)["decision"], "allow")
+
+
 class TestClosedState(unittest.TestCase):
     def test_closed_state_denies_every_call_even_the_bridge(self):
         with tempfile.TemporaryDirectory() as tmp:

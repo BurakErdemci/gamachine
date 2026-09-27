@@ -7,7 +7,8 @@ import logging
 from typing import Optional
 from .cli_base import BaseCLIProvider
 from agy_step_gate import (BALANCED_MODE, CLOSED_MODE, GATED_TOOLS, PS_UTF8_PREFIX, RUN_TOOL,
-                           STEP_GATE_HOOKS_FILE, STEP_GATE_KEY, write_state)
+                           SIDE_HOOK_MATCHERS, SIDE_MODE, STEP_GATE_HOOKS_FILE, STEP_GATE_KEY,
+                           write_state)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,15 @@ logger = logging.getLogger(__name__)
 STEP_GATE_TOOLS = GATED_TOOLS + (RUN_TOOL,)
 
 
+def step_gate_matchers(mode: Optional[str] = None) -> tuple:
+    """The hooks.json matchers of a child spawned in `mode`. Only a side
+    question's child gets the wide list (Burak, 27 Sep 2026): every other
+    child keeps exactly the step tools, so its behaviour and hook cost stay
+    as they were. agy reads hooks.json only at start, and spawns are
+    serialized by the agy turn lock, so each child gets the file written
+    just before it."""
+    return STEP_GATE_TOOLS + SIDE_HOOK_MATCHERS if mode == SIDE_MODE else STEP_GATE_TOOLS
+
 # An agy branch whose unityai server had not started called send_chat_message
 # through call_mcp_tool on unityMCP, which raised a Unity approval card for an
 # unknown tool (27 Sep 2026). Say which server holds the mail tools, and what
@@ -44,6 +54,7 @@ AGY_UNITYAI_MCP_HINT = (
     "  has no mail tools). If the unityai server is not available, tell the user\n"
     "  the Gamachine tool server could not connect — never say a policy disabled it.\n"
 )
+
 # agy hands its whole environment, Gemini/Google keys included, to every stdio
 # MCP server it starts (measured: the child saw both 39-character keys). An
 # entry's own env wins over the inherited one (measured: set to "", the child
@@ -109,10 +120,11 @@ def gate_state_path() -> str:
 
 
 def gate_mode_name(auto: bool = False, mode: Optional[str] = None) -> str:
-    """The state-file mode for a published approval mode; anything but auto
-    and balanced is step (fail closed)."""
+    """The state-file mode for a published approval mode, or "side" during a
+    read-only side question (tighter than step); anything else is step
+    (fail closed)."""
     if mode is not None:
-        return mode if mode in ("auto", BALANCED_MODE) else "step"
+        return mode if mode in ("auto", BALANCED_MODE, SIDE_MODE) else "step"
     return "auto" if auto else "step"
 
 
@@ -455,7 +467,7 @@ class AgyProvider(BaseCLIProvider):
             raise AgyStepGateError(_gate_write_failed(_gate_dir(), e, step_mode)) from e
         hooks[STEP_GATE_KEY] = {"PreToolUse": [
             {"matcher": tool, "hooks": [{"type": "command", "command": command, "timeout": 10}]}
-            for tool in STEP_GATE_TOOLS
+            for tool in step_gate_matchers(mode)
         ]}
         if not guvenli_config_yaz(workspace, STEP_GATE_HOOKS_FILE, json.dumps(hooks, indent=2)):
             logger.error("[agy] %s could not be written; gate not installed", path)
@@ -481,7 +493,7 @@ class AgyProvider(BaseCLIProvider):
             with open(path, encoding="utf-8-sig") as f:
                 entries = json.load(f)[STEP_GATE_KEY]["PreToolUse"]
             want = [{"matcher": tool, "hooks": [{"type": "command", "command": command, "timeout": 10}]}
-                    for tool in STEP_GATE_TOOLS]
+                    for tool in step_gate_matchers(mode)]
             if entries != want:
                 return f"{path} içindeki {STEP_GATE_KEY} kaydı beklenenden farklı"
             if not os.path.isfile(command):

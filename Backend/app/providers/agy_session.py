@@ -7,6 +7,7 @@ import sys
 from collections.abc import Hashable, Mapping
 from typing import AsyncGenerator, Dict, Optional
 
+from agy_step_gate import SIDE_MODE
 from .agy_provider import AgyProvider, AgyStepGateError, _gate_write_failed, gate_state_path
 from .cli_base import BaseCLIProvider, _CREATE_NO_WINDOW, build_spawn_env
 from .saglayici_sahipligi import SaglayiciSahipligi, oturumu_kapat
@@ -27,6 +28,31 @@ _QUEUED_EVENT = {"type": "status", "code": "agy_queued",
                  "detail": "Sırada — başka bir agy sohbetinin turu bitince başlayacak"}
 _STARTED_EVENT = {"type": "status", "code": "agy_started", "detail": "Çalışıyor…"}
 logger = logging.getLogger(__name__)
+
+# A read-only side question on agy (Burak, 27 Sep 2026) runs only while the
+# turn lock is free, never queues, and gives way to any other agy turn.
+SIDE_TURN_TIMEOUT_S = 120
+SIDE_BUSY_MESSAGE = (
+    "Yan soru Antigravity (agy) ile kullanılamıyor: agy aynı anda tek bir tur "
+    "çalıştırıyor, yani yan soru ana sohbetin turunun bitmesini beklerdi. "
+    "Yan soru için başka bir model seç."
+)
+_SIDE_STOP_MESSAGES = {
+    "agy_side_preempted": {"tr": "Ana sohbet başladı, yan soru durduruldu.",
+                           "en": "The main chat started, so the side question was stopped."},
+    "agy_side_timeout": {"tr": "Yan soru 2 dakikada bitmedi, durduruldu.",
+                         "en": "The side question did not finish within 2 minutes and was stopped."},
+}
+
+
+def side_stop_message(code: str, language: str = "tr") -> str:
+    texts = _SIDE_STOP_MESSAGES[code]
+    return texts["en"] if language == "en" else texts["tr"]
+
+
+def agy_turn_busy() -> bool:
+    """Is an agy turn running or waiting right now? (The side route's gate.)"""
+    return _turn_lock_busy(BaseCLIProvider._AGY_LOCK)
 
 
 def _updater_env(platform: Optional[str] = None) -> Dict[str, str]:
@@ -126,6 +152,64 @@ _GATED_CHILDREN: Dict[object, object] = {}
 # no new child (whose spawn writes that file) starts while one still runs; see
 # _stop_retired_children. Guarded by _gate_lock().
 _RETIRED: set = set()
+# The session whose side question holds the agy turn lock, else None. While
+# it is set every write of the state file writes SIDE_MODE, whatever the
+# approval mode: a flip during the side turn must not loosen it. Guarded by
+# _gate_lock(). _SIDE_DONE is set once that turn has released the lock.
+_SIDE_TURN = None
+_SIDE_DONE: Optional[asyncio.Event] = None
+
+
+def _effective_gate_mode() -> str:
+    """What the state file must say now: SIDE_MODE during a side turn, else
+    the published approval mode (_global_gate_mode)."""
+    if _SIDE_TURN is not None:
+        return SIDE_MODE
+    return _global_gate_mode()
+
+
+def _begin_side_turn(session) -> None:
+    """Called with the turn lock just taken; the side child's _start then
+    writes SIDE_MODE (spawn or resync) before its first stdin line."""
+    global _SIDE_TURN, _SIDE_DONE
+    with _gate_lock():
+        _SIDE_TURN = session
+        _SIDE_DONE = asyncio.Event()
+
+
+def _end_side_turn(session) -> None:
+    """Called before the turn lock is released: puts the state file back to
+    the mode published NOW (not the one before the turn: a flip to step
+    during the turn must not be undone by a stale auto)."""
+    global _SIDE_TURN
+    with _gate_lock():
+        if _SIDE_TURN is not session:
+            return
+        _SIDE_TURN = None
+        if session._gate_token in _RETIRED:
+            # Its child survived a kill: the file keeps denying ("side" or
+            # "closed"), and _start refuses new children until it is stopped.
+            logger.error("[agy] side child still alive after close; gate state left closed")
+            return
+        _sync_gate_state()
+
+
+async def _preempt_side_turn(requester) -> None:
+    """Any other agy turn wins over a running side question (Burak, 27 Sep
+    2026): the side child is closed, and the caller then waits until that
+    turn has restored the state file and released the lock."""
+    side, done = _SIDE_TURN, _SIDE_DONE
+    if side is None or side is requester:
+        return
+    logger.info("[agy] side question conv=%s stopped for conv=%s",
+                side.conversation_id, getattr(requester, "conversation_id", None))
+    side._side_preempted = True
+    await side._close_safely(preserve_resume=True)
+    if done is not None:
+        try:
+            await asyncio.wait_for(done.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            logger.warning("[agy] preempted side question has not released the turn lock yet")
 
 
 def _stop_retired_children() -> list:
@@ -184,9 +268,9 @@ def _sync_gate_state() -> bool:
     """
     from . import agy_provider
     with _gate_lock():
-        mode = _global_gate_mode()
+        mode = _effective_gate_mode()
         try:
-            if mode == "balanced":
+            if mode in ("balanced", SIDE_MODE):
                 agy_provider.write_gate_state(mode=mode)
             else:
                 agy_provider.write_gate_state(auto=(mode == "auto"))
@@ -247,7 +331,12 @@ def tighten_gate_state() -> None:
         if not _GATED_CHILDREN and not any(_may_have_child(s) for s in _SESSIONS.values()):
             return
         try:
-            agy_provider.write_gate_state(auto=False)
+            if _SIDE_TURN is not None:
+                # Side is tighter than step; replacing it with step would
+                # loosen a running side question.
+                agy_provider.write_gate_state(mode=SIDE_MODE)
+            else:
+                agy_provider.write_gate_state(auto=False)
             return
         except Exception:
             logger.warning("[agy] gate state not tightened to step", exc_info=True)
@@ -314,6 +403,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self._num_turns = 0
         self._stop_lock = asyncio.Lock()
         self._closed_event = asyncio.Event()
+        self._side_preempted = False  # set by _preempt_side_turn
         self._sahiplik_kur()
 
     def kapandi_isaretle(self) -> None:
@@ -545,7 +635,9 @@ class AgyStreamSession(SaglayiciSahipligi):
         # hooks for its life. A model change requires closing and respawning,
         # while retaining the UUID. An approval-mode change does not: every
         # process has the hook, and the mode is only in the hook's state file.
-        mode = _global_gate_mode()
+        # Every turn start writes the file below (spawn or resync), which is
+        # what clears a "side" a crashed side turn may have left behind.
+        mode = _effective_gate_mode()
         self._auto_approve = mode == "auto"
         if self._active_process is not None and (
             not self.is_live or self.model != model or self.cwd != cwd
@@ -554,6 +646,19 @@ class AgyStreamSession(SaglayiciSahipligi):
         if self._kapandi:
             raise RuntimeError("agy session was stopped.")
         if self.is_live:
+            if mode == SIDE_MODE:
+                # A main child spawned since this one narrowed hooks.json.
+                # That agy reads it only at start is not measured here, so
+                # the side matchers go back before a kept side child's turn;
+                # this also writes "side" and verifies both, or raises.
+                try:
+                    with _gate_lock():
+                        AgyProvider(binary_name=model)._write_step_gate(
+                            cwd, step_mode=True, mode=SIDE_MODE)
+                except AgyStepGateError:
+                    await self._stop_process(force=True)
+                    raise
+                return ""
             # Self-healing before each turn on a kept process: a flip whose
             # rewrite failed must not carry into this turn.
             if not _sync_gate_state():
@@ -587,13 +692,13 @@ class AgyStreamSession(SaglayiciSahipligi):
                         "paylaşıyor. O süreci kapatın ya da uygulamayı yeniden başlatın, "
                         "sonra mesajınızı yeniden gönderin.",
                         code="agy_closed_child_alive", pids=pids)
-                mode = _global_gate_mode()
+                mode = _effective_gate_mode()
                 self._auto_approve = mode == "auto"
                 _GATED_CHILDREN[token] = None
                 # In every mode this raises AgyStepGateError unless the gate
                 # is verifiably installed, so agy is never spawned ungated;
                 # stream() turns the raise into the user's error message.
-                if mode == "balanced":
+                if mode in ("balanced", SIDE_MODE):
                     provider._write_step_gate(cwd, step_mode=True, mode=mode)
                 else:
                     provider._write_step_gate(cwd, step_mode=(mode != "auto"))
@@ -639,7 +744,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         # A flip while the state was written or the process was created found
         # no live process to update. agy makes no tool call before its first
         # stdin line, which stream() writes only after this returns.
-        if _global_gate_mode() != mode and not _sync_gate_state():
+        if _effective_gate_mode() != mode and not _sync_gate_state():
             await self._stop_process(force=True)
             raise AgyStepGateError(_gate_write_failed(gate_state_path(), "yazılamadı"))
         return instructions
@@ -702,24 +807,46 @@ class AgyStreamSession(SaglayiciSahipligi):
                 "duration_ms": int(elapsed * 1000)}
 
     async def stream(self, message: str, *, model: str = "gemini-3.6-flash",
-                     cwd: Optional[str] = None) -> AsyncGenerator[dict, None]:
+                     cwd: Optional[str] = None, side: bool = False,
+                     language: str = "tr") -> AsyncGenerator[dict, None]:
+        """One turn. `side`: a read-only side question (Burak, 27 Sep 2026):
+        refused unless the turn lock is free, run with the state file on
+        SIDE_MODE, stopped after SIDE_TURN_TIMEOUT_S or when another agy turn
+        starts; `language` picks the text of those stop messages."""
         # Global serialization covers the complete turn, not the process life.
         # A queued turn rechecks the closed flag before spawning or writing.
         completed = False
         preserve_live_process = False
         lock_acquired = False
+        side_started = False
+        self._side_preempted = False
         # Released as the object it was acquired as, even if the class
         # attribute is rebound meanwhile (tests patch it).
         turn_lock = BaseCLIProvider._AGY_LOCK
         loop = asyncio.get_running_loop()
         tool_calls = set()
         tool_results = set()
+        if not side:
+            await _preempt_side_turn(self)
         try:
-            async with asyncio.timeout(BaseCLIProvider._AGY_MAX_TOTAL):
-                queued = _turn_lock_busy(turn_lock)
-                if queued:
-                    yield _redact_event(_QUEUED_EVENT)
-                lock_acquired = await self._acquire_turn_lock(turn_lock)
+            async with asyncio.timeout(SIDE_TURN_TIMEOUT_S if side else BaseCLIProvider._AGY_MAX_TOTAL):
+                if side:
+                    if _turn_lock_busy(turn_lock):
+                        preserve_live_process = True
+                        yield _redact_event({"type": "error", "code": "agy_side_busy",
+                                             "message": SIDE_BUSY_MESSAGE})
+                        return
+                    # The lock is free, so this acquire takes Lock.acquire's
+                    # fast path and never suspends: a side turn never queues.
+                    lock_acquired = await turn_lock.acquire()
+                    _begin_side_turn(self)
+                    side_started = True
+                    queued = False
+                else:
+                    queued = _turn_lock_busy(turn_lock)
+                    if queued:
+                        yield _redact_event(_QUEUED_EVENT)
+                    lock_acquired = await self._acquire_turn_lock(turn_lock)
                 if not lock_acquired or self._kapandi:
                     yield _redact_event({"type": "error", "message": "agy session was stopped."})
                     return
@@ -852,6 +979,16 @@ class AgyStreamSession(SaglayiciSahipligi):
                 preserve_live_process = True
             else:
                 await self._close_safely(preserve_resume=True)
+            side_code = None
+            if side and self._side_preempted:
+                side_code = "agy_side_preempted"
+            elif side and isinstance(exc, asyncio.TimeoutError):
+                side_code = "agy_side_timeout"
+            if side_code:
+                # The stderr tail of a child killed on purpose says nothing useful.
+                yield _redact_event({"type": "error", "code": side_code,
+                                     "message": side_stop_message(side_code, language)})
+                return
             message = (f"agy turn timed out after {BaseCLIProvider._AGY_MAX_TOTAL} seconds."
                        if isinstance(exc, asyncio.TimeoutError) else str(exc))
             tail = self._stderr_tail.decode("utf-8", errors="replace").strip()
@@ -865,8 +1002,19 @@ class AgyStreamSession(SaglayiciSahipligi):
                 if not preserve_live_process and not completed and not self._kapandi:
                     await self._close_safely(preserve_resume=True)
             finally:
-                if lock_acquired:
-                    turn_lock.release()
+                done = _SIDE_DONE if side_started else None
+                try:
+                    if side_started:
+                        # Before the release: the next turn must find the
+                        # file back on the published mode, not on "side".
+                        _end_side_turn(self)
+                except Exception:
+                    logger.exception("[agy] side turn end failed; gate state left on side")
+                finally:
+                    if lock_acquired:
+                        turn_lock.release()
+                    if done is not None:
+                        done.set()
 
 
 # Keep the public ownership type used by existing stop/lifecycle callers.

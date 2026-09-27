@@ -342,17 +342,36 @@ def test_side_stream_caps_the_live_context_and_labels_a_running_turn(env, monkey
     assert "SON" in msg
 
 
-def test_side_stream_refuses_agy_with_a_clear_message(env, monkeypatch):
+def test_side_stream_refuses_agy_while_an_agy_turn_runs(env, monkeypatch):
+    from providers import agy_session
     db, client, _, _, _ = env
     side = _open_side(client, _seed(db))
     db.save_ai_config(1, "subscription", "gemini-3-pro", "")
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    monkeypatch.setattr(agy_session, "agy_turn_busy", lambda: True)
     _FakeRunner.last = None
     r = _stream(client, side)
     assert r.status_code == 409
-    assert "agy" in r.json()["detail"]
+    assert r.json()["detail"] == cr._SIDE_AGY_REFUSED
+    assert "agy aynı anda tek bir tur" in r.json()["detail"]
     assert _FakeRunner.last is None
     assert db.get_conversation_messages(side) == []
+
+
+def test_side_stream_runs_agy_when_no_agy_turn_runs(env, monkeypatch):
+    """Burak, 27 Sep 2026: the side panel refused agy even when agy was idle."""
+    from providers import agy_session
+    db, client, _, _, _ = env
+    side = _open_side(client, _seed(db))
+    db.save_ai_config(1, "subscription", "gemini-3-pro", "")
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    monkeypatch.setattr(agy_session, "agy_turn_busy", lambda: False)
+    r = _stream(client, side)
+    assert r.status_code == 200
+    assert "yan cevap" in r.text
+    kw = _FakeRunner.last.kw
+    assert kw["conversation_id"] == side and kw["read_only"] is True
+    assert kw["side_turn"] is not None
 
 
 def test_side_stream_refuses_a_main_chat_id(env, monkeypatch):

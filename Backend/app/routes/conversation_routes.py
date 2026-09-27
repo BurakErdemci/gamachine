@@ -409,11 +409,8 @@ SIDE_IDLE_TTL_S = 30 * 60
 SIDE_SWEEP_INTERVAL_S = 5 * 60
 
 _SIDE_REFUSED = "Bu bir yan sohbet; bu işlem yan sohbete uygulanamaz."
-_SIDE_AGY_REFUSED = (
-    "Yan soru Antigravity (agy) ile kullanılamıyor: agy aynı anda tek bir tur "
-    "çalıştırıyor, yani yan soru ana sohbetin turunun bitmesini beklerdi. "
-    "Yan soru için başka bir model seç."
-)
+# Only while an agy turn runs; one text for this refusal and agy_session's.
+from providers.agy_session import SIDE_BUSY_MESSAGE as _SIDE_AGY_REFUSED  # noqa: E402
 
 
 def _is_agy_model(provider_type: str, model_name: str) -> bool:
@@ -1168,7 +1165,12 @@ def create_conversation_router(db, progress_store):
 
         provider_type, model_name, _, _ = db.get_ai_config(user_id)
         if _is_agy_model(provider_type, model_name):
-            raise HTTPException(status_code=409, detail=_SIDE_AGY_REFUSED)
+            # agy runs one turn machine-wide: a side question runs only while
+            # no agy turn does (Burak, 27 Sep 2026); agy_session refuses the
+            # same way if one starts before the side turn takes the lock.
+            from providers import agy_session
+            if agy_session.agy_turn_busy():
+                raise HTTPException(status_code=409, detail=_SIDE_AGY_REFUSED)
         api_key = (db.get_api_key(user_id, provider_type) or "")
         workspace_path = db.get_last_workspace(user_id) or ""
 
