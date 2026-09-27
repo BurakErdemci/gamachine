@@ -1017,6 +1017,18 @@ def test_rename_route_marks_the_title_as_the_users(db, app):
     assert db.get_title_state(cid)["title_source"] == "user"
 
 
+def test_conversation_list_carries_the_title_source(db, app):
+    # The renderer drops an in-flight AI title frame for a user-titled chat
+    # (Codex eveaudit, 27 Sep 2026), so the list must say which chats those are.
+    client, _ = app
+    auto = db.create_conversation(1, "Yeni Sohbet")
+    mine = db.create_conversation(1, "Yeni Sohbet")
+    client.put(f"/conversations/{mine}", json={"title": "Elle"}, headers=H)
+    listed = {c["id"]: c for c in client.get("/conversations/1", headers=H).json()}
+    assert listed[auto]["title_source"] == "auto"
+    assert listed[mine]["title_source"] == "user"
+
+
 def test_setting_routes_round_trip(db, app):
     client, _ = app
     assert client.get("/chat-title-setting", headers=H).json() == {"enabled": True}

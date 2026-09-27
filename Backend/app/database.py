@@ -376,12 +376,15 @@ class DatabaseManager:
     def get_user_conversations(self, user_id: int) -> List[Dict[str, Any]]:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
-                'SELECT id, title, created_at, updated_at, parent_id, hidden FROM conversations '
-                'WHERE user_id = ? AND side_of IS NULL ORDER BY updated_at DESC',
+                'SELECT id, title, created_at, updated_at, parent_id, hidden, title_source '
+                'FROM conversations WHERE user_id = ? AND side_of IS NULL ORDER BY updated_at DESC',
                 (user_id,)
             ).fetchall()
+            # title_source lets the renderer drop an in-flight AI title frame
+            # for a chat the user renamed (Codex eveaudit, 27 Sep 2026).
             return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3],
-                     "parent_id": r[4], "hidden": bool(r[5])} for r in rows]
+                     "parent_id": r[4], "hidden": bool(r[5]), "title_source": r[6] or "auto"}
+                    for r in rows]
 
     def get_conversation_owner(self, conv_id: int) -> Optional[int]:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:

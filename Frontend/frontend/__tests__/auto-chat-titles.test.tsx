@@ -220,6 +220,83 @@ describe('useChat · AI title frames', () => {
     expect(result.current.conversations.find(c => c.id === 5)?.title).toBe('Benim adım')
   })
 
+  // Codex eveaudit, 27 Sep 2026: a frame the server sent before a rename but
+  // delivered after it put the old AI title back until the next list read.
+  const titleOf = (r: { current: ReturnType<typeof useChat> }, id: number) =>
+    r.current.conversations.find(c => c.id === id)?.title
+  const storeRename = (title: string) => { Object.assign(serverList[0], { title, title_source: 'user' }) }
+
+  it('a title frame delivered after a hand rename does not undo it', async () => {
+    const ch = wakeChannel()
+    vi.stubGlobal('fetch', ch.fetchMock)
+    // The list read after the rename carries no title_source, as from an older
+    // backend (the Codex probe's server): the renderer's own mark must hold.
+    mocked.put.mockImplementation(async () => { serverList[0].title = 'Benim adım'; return { data: { status: 'success' } } })
+    const { result } = hook()
+    await act(async () => { await result.current.fetchConversations(1) })
+    await act(async () => { await result.current.renameConversation(5, 'Benim adım') })
+    expect(titleOf(result, 5)).toBe('Benim adım')
+    ch.push({ type: 'title', conversation_id: 5, title: 'Eski Otomatik Başlık' })
+    await tick()
+    expect(titleOf(result, 5)).toBe('Benim adım')
+    await act(async () => { await result.current.fetchConversations(1) })
+    expect(titleOf(result, 5)).toBe('Benim adım')
+  })
+
+  it('a title frame delivered while the rename is in flight does not replace the title', async () => {
+    const ch = wakeChannel()
+    vi.stubGlobal('fetch', ch.fetchMock)
+    let finish: (v: any) => void = () => {}
+    mocked.put.mockImplementation(() => new Promise(r => { finish = r }))
+    const { result } = hook()
+    await act(async () => { await result.current.fetchConversations(1) })
+    const original = serverList[0].title
+    let renaming: Promise<boolean> = Promise.resolve(false)
+    act(() => { renaming = result.current.renameConversation(5, 'Benim adım') })
+    ch.push({ type: 'title', conversation_id: 5, title: 'Eski Otomatik Başlık' })
+    await tick()
+    expect(titleOf(result, 5)).toBe(original)
+    storeRename('Benim adım')
+    await act(async () => { finish({ data: { status: 'success' } }); await renaming })
+    await tick()
+    expect(titleOf(result, 5)).toBe('Benim adım')
+  })
+
+  it('after a failed rename the chat takes AI titles again', async () => {
+    const ch = wakeChannel()
+    vi.stubGlobal('fetch', ch.fetchMock)
+    let refuse: (e: unknown) => void = () => {}
+    mocked.put.mockImplementation(() => new Promise((_, reject) => { refuse = reject }))
+    const { result } = hook()
+    await act(async () => { await result.current.fetchConversations(1) })
+    let renaming: Promise<boolean> = Promise.resolve(true)
+    act(() => { renaming = result.current.renameConversation(5, 'Benim adım') })
+    // Stored while the rename was in flight; the rename then fails.
+    serverList[0].title = 'Yapay Zeka Adı'
+    ch.push({ type: 'title', conversation_id: 5, title: 'Yapay Zeka Adı' })
+    await tick()
+    let ok = true
+    await act(async () => { refuse(new Error('offline')); ok = await renaming })
+    await tick()
+    expect(ok).toBe(false)
+    expect(titleOf(result, 5)).toBe('Yapay Zeka Adı')
+    expect(result.current.conversations.find(c => c.id === 5)?.title_source).not.toBe('user')
+    ch.push({ type: 'title', conversation_id: 5, title: 'Üçüncü Cevaptan Sonra' })
+    await tick()
+    expect(titleOf(result, 5)).toBe('Üçüncü Cevaptan Sonra')
+  })
+
+  it('a replayed frame for a chat the list marks as user-titled is ignored', async () => {
+    const ch = wakeChannel()
+    vi.stubGlobal('fetch', ch.fetchMock)
+    storeRename('Benim adım')
+    const { result } = hook()
+    await act(async () => { await result.current.fetchConversations(1) })
+    ch.push({ type: 'title', conversation_id: 5, title: 'Eski Otomatik Başlık' })
+    await tick()
+    expect(titleOf(result, 5)).toBe('Benim adım')
+  })
+
   it('ignores malformed title frames and still starts no wake turn for them', async () => {
     const ch = wakeChannel()
     vi.stubGlobal('fetch', ch.fetchMock)
