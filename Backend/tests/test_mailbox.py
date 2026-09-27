@@ -926,3 +926,33 @@ def test_the_frozen_build_can_start_the_mail_server():
         main = f.read()
     assert "'unity_ai_mcp.mail_server'" in spec and "'unity_ai_mcp.tools.mailbox_tools'" in spec
     assert '"mail-mcp-server"' in main and "unity_ai_mcp.mail_server" in main
+
+
+# ── the wake turn's framing (27 Sep 2026) ────────────────────────────────────
+
+def test_a_mail_wake_names_the_receivers_tool_and_does_not_say_continue(env, auto, monkeypatch):
+    # An agy branch woken by a note spent 23 steps re-checking old work, and
+    # called send_chat_message on unityMCP.
+    _FakeRunner.messages = []
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    env.db.save_ai_config(1, "subscription", "gemini-3-pro", "")
+    a, b = _chat(env.db, "Gönderen"), _chat(env.db, "B")
+    env.db.add_message(b, "user", "önceki soru")
+    env.db.add_message(b, "assistant", "önceki cevap")
+    assert _send(env.client, a, b, body="build geçti mi?").status_code == 200
+    wake_queue.issue_ticket(b, wake_queue.drain(b))
+
+    assert _wake_turn(env.client, b).status_code == 200
+    turn = _FakeRunner.messages[-1]
+    assert f"#{a} sohbetinden gelen bir not" in turn
+    assert "`call_mcp_tool` ile (sunucu `unityai`" in turn
+    context = _FakeRunner.last_kw["context"]
+    assert mailbox.MAIL_WAKE_HISTORY_HEADER in context
+    assert "kaldığın yerden devam et" not in context
+
+    # A user turn keeps the usual header.
+    r = env.client.post("/chat-stream", headers=H, json={
+        "conversation_id": b, "message": "şimdi ne durumda?", "user_id": 1})
+    assert r.status_code == 200
+    assert "kaldığın yerden devam et" in _FakeRunner.last_kw["context"]
+    assert mailbox.MAIL_WAKE_HISTORY_HEADER not in _FakeRunner.last_kw["context"]

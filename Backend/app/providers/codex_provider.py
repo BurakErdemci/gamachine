@@ -3,6 +3,7 @@ import os
 import sys
 import logging
 from .cli_base import BaseCLIProvider
+from .unityai_tool_text import mail_and_fallback, mcp_double_underscore
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class CodexProvider(BaseCLIProvider):
             "- Delete files:                           mcp__unityai__delete_file\n"
             "- Read .cs source files:                  mcp__unityai__read_file\n"
             "- List directories:                       mcp__unityai__list_directory\n"
+            + mail_and_fallback(mcp_double_underscore) +
             "\nRESPOND IN TURKISH. Be concise. Never say you cannot do something — use the tools.\n"
         )
 

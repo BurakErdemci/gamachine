@@ -4,6 +4,7 @@ import json
 import logging
 from .cli_base import BaseCLIProvider
 from .oneshot_cli import resolve_cursor_cmd, split_model_id
+from .unityai_tool_text import mail_and_fallback, on_unityai_server
 from .workspace_config import ensure_gitignored, guvenli_config_yaz
 
 logger = logging.getLogger(__name__)
@@ -51,12 +52,13 @@ class CursorProvider(BaseCLIProvider):
             "IMPORTANT — follow exactly:\n"
             "- Respond in Turkish (Türkçe).\n"
             + unity_section +
-            "\nFILE & TERMINAL operations — use ONLY the unityai MCP tools (your own\n"
-            "write/shell tools are sandboxed and will be denied):\n"
-            "- Create/edit files:  unityai save_file\n"
-            "- Delete files:       unityai delete_file\n"
-            "- Shell commands:     unityai run_terminal_command\n"
-            "- Read file:          unityai read_file  |  List dir: unityai list_directory\n"
+            "\nFILE & TERMINAL operations — use ONLY the tools of the unityai MCP server\n"
+            "(your own write/shell tools are sandboxed and will be denied):\n"
+            "- Create/edit files:  save_file (unityai MCP server)\n"
+            "- Delete files:       delete_file (unityai MCP server)\n"
+            "- Shell commands:     run_terminal_command (unityai MCP server)\n"
+            "- Read file:          read_file  |  List dir: list_directory (unityai MCP server)\n"
+            + mail_and_fallback(on_unityai_server) +
             "Be concise. Never claim you cannot do something — use the tools.\n\n"
         )
 

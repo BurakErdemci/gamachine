@@ -31,6 +31,19 @@ logger = logging.getLogger(__name__)
 # flip reaches a running agy on its next tool call. See _write_step_gate.
 STEP_GATE_TOOLS = GATED_TOOLS + (RUN_TOOL,)
 
+
+# An agy branch whose unityai server had not started called send_chat_message
+# through call_mcp_tool on unityMCP, which raised a Unity approval card for an
+# unknown tool (27 Sep 2026). Say which server holds the mail tools, and what
+# to tell the user when it is missing instead of blaming a policy.
+AGY_UNITYAI_MCP_HINT = (
+    "- unityai: Gamachine's own MCP server. Chat mail lives ONLY here:\n"
+    "  list_chats, send_chat_message (it also carries the file/terminal tools;\n"
+    "  for those keep using the unityai CLI below). Call them with call_mcp_tool,\n"
+    "  server \"unityai\" — NEVER server \"unityMCP\" (that is the Unity editor, it\n"
+    "  has no mail tools). If the unityai server is not available, tell the user\n"
+    "  the Gamachine tool server could not connect — never say a policy disabled it.\n"
+)
 # agy hands its whole environment, Gemini/Google keys included, to every stdio
 # MCP server it starts (measured: the child saw both 39-character keys). An
 # entry's own env wins over the inherited one (measured: set to "", the child
@@ -307,6 +320,7 @@ class AgyProvider(BaseCLIProvider):
             "- meshy: 3D asset generation (meshy_text_to_3d, meshy_image_to_3d, meshy_rig,\n"
             "  meshy_animate, meshy_retexture, meshy_check_balance, etc.). Use directly.\n"
             "  Meshy calls cost credits — state the cost and get user confirmation first.\n"
+            + AGY_UNITYAI_MCP_HINT +
             "Do NOT route unityMCP/meshy through the unityai CLI — call them as MCP tools.\n\n"
             "RESUMING A LONG TASK: You remember previous turns. If earlier you started a\n"
             "long async job (e.g. meshy_text_to_3d returns a task id and generation takes\n"

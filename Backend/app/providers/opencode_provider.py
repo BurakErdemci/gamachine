@@ -7,6 +7,7 @@ import subprocess
 from typing import Optional, Tuple
 from .cli_base import BaseCLIProvider, build_spawn_env, env_family
 from .oneshot_cli import resolve_opencode_cmd, split_model_id
+from .unityai_tool_text import mail_and_fallback
 from .workspace_config import ensure_gitignored, guvenli_config_yaz
 
 logger = logging.getLogger(__name__)
@@ -41,12 +42,13 @@ _BASH_SHADOW_TS = """\
 export default {
   description:
     "Terminal is disabled in Gamachine. Calling this tool runs nothing. " +
-    "Use the unityai MCP tools (run_terminal_command, save_file, read_file) instead.",
+    "Use the unityai MCP tools (unityai_run_terminal_command, unityai_save_file, " +
+    "unityai_read_file) instead.",
   args: {
     command: { type: "string", description: "Ignored; nothing is executed." },
   },
   async execute() {
-    return "Terminal is disabled in Gamachine; nothing was run. Use the unityai MCP tools (run_terminal_command) instead."
+    return "Terminal is disabled in Gamachine; nothing was run. Use the unityai MCP tool unityai_run_terminal_command instead."
   },
 }
 """
@@ -281,6 +283,12 @@ def _without_grants(perm) -> dict:
             if k not in ("edit", "bash") and not _grants_all(k, v)}
 
 
+def _opencode_tool(tool: str) -> str:
+    # OpenCode names MCP tools `<server>_<tool>` (unityMCP_manage_camera in
+    # its events).
+    return f"unityai_{tool}"
+
+
 class OpenCodeProvider(BaseCLIProvider):
     """OpenCode — `opencode run` + resmi -s/--session resume.
 
@@ -315,11 +323,11 @@ class OpenCodeProvider(BaseCLIProvider):
         if unity_running:
             unity_section = (
                 "\nUNITY EDITOR — unityMCP tools (use for ALL Unity scene/UI operations):\n"
-                "- Scene hierarchy:            unityMCP manage_scene action=get_hierarchy\n"
-                "- Create/modify GameObjects:  unityMCP manage_gameobject\n"
-                "- Components:                 unityMCP manage_components\n"
-                "- UI (Canvas/Button/Text):    unityMCP manage_ui\n"
-                "- Console logs:               unityMCP read_console\n"
+                "- Scene hierarchy:            unityMCP_manage_scene action=get_hierarchy\n"
+                "- Create/modify GameObjects:  unityMCP_manage_gameobject\n"
+                "- Components:                 unityMCP_manage_components\n"
+                "- UI (Canvas/Button/Text):    unityMCP_manage_ui\n"
+                "- Console logs:               unityMCP_read_console\n"
                 "RULE: NEVER read .unity/.prefab/.asset files to answer Unity questions —\n"
                 "      always query the live editor via unityMCP.\n"
             )
@@ -330,10 +338,11 @@ class OpenCodeProvider(BaseCLIProvider):
             + unity_section +
             "\nFILE & TERMINAL operations — your built-in edit and bash tools are\n"
             "DENIED by workspace policy. Use ONLY the unityai MCP tools:\n"
-            "- Create/edit files:  unityai save_file\n"
-            "- Delete files:       unityai delete_file\n"
-            "- Shell commands:     unityai run_terminal_command\n"
-            "- Read file:          unityai read_file  |  List dir: unityai list_directory\n"
+            "- Create/edit files:  unityai_save_file\n"
+            "- Delete files:       unityai_delete_file\n"
+            "- Shell commands:     unityai_run_terminal_command\n"
+            "- Read file:          unityai_read_file  |  List dir: unityai_list_directory\n"
+            + mail_and_fallback(_opencode_tool) +
             "Be concise. Never claim you cannot do something — use the tools.\n\n"
         )
 

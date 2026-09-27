@@ -1,6 +1,7 @@
 import os
 import logging
 from .cli_base import BaseCLIProvider
+from .unityai_tool_text import mail_and_fallback, mcp_double_underscore
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ class KimiProvider(BaseCLIProvider):
             "- Shell (git, npm, mkdir, …):     mcp__unityai__run_terminal_command\n"
             "- Read a file:                    mcp__unityai__read_file\n"
             "- List a directory:               mcp__unityai__list_directory\n"
+            + mail_and_fallback(mcp_double_underscore) +
             "Do NOT route unityMCP/meshy through unityai — call those as their own MCP tools.\n"
             "SCOPE: only the current workspace. Be concise; never say you cannot do something —\n"
             "use the tools. For file writes reply with ONE short Turkish sentence (the approval\n"

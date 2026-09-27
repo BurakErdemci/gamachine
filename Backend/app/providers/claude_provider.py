@@ -5,6 +5,7 @@ import sys
 import logging
 from .cli_base import BaseCLIProvider
 from .unity_script_tools import DISALLOWED_UNITY_TOOLS
+from .unityai_tool_text import mail_and_fallback, mcp_double_underscore
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,12 @@ class ClaudeCodeProvider(BaseCLIProvider):
             "Do NOT invoke any skills, do NOT brainstorm, do NOT offer visual companions or mockups, "
             "do NOT ask clarifying questions. Execute the task IMMEDIATELY using available MCP tools. "
             "Respond in Turkish (Türkçe).\n"
-            + unity_section + "\n"
+            + unity_section +
+            "\nFILE & TERMINAL operations — Bash/Write/Edit are disabled; use the unityai tools:\n"
+            "- Create/edit files: mcp__unityai__save_file  |  Delete: mcp__unityai__delete_file\n"
+            "- Shell commands:    mcp__unityai__run_terminal_command\n"
+            "- Read file:         mcp__unityai__read_file  |  List dir: mcp__unityai__list_directory\n"
+            + mail_and_fallback(mcp_double_underscore) + "\n"
         )
         cmd = [
             "claude", "--model", full_id,

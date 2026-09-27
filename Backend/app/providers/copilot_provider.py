@@ -4,6 +4,7 @@ import logging
 import tempfile
 from .cli_base import BaseCLIProvider, conversation_env
 from .oneshot_cli import resolve_copilot_cmd, split_model_id
+from .unityai_tool_text import mail_and_fallback, on_unityai_server
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +75,12 @@ class CopilotProvider(BaseCLIProvider):
             "- Respond in Turkish (Türkçe).\n"
             + unity_section +
             "\nFILE & TERMINAL operations — your built-in write and shell tools are\n"
-            "DENIED by policy. Use ONLY the unityai MCP tools:\n"
-            "- Create/edit files:  unityai save_file\n"
-            "- Delete files:       unityai delete_file\n"
-            "- Shell commands:     unityai run_terminal_command\n"
-            "- Read file:          unityai read_file  |  List dir: unityai list_directory\n"
+            "DENIED by policy. Use ONLY the tools of the unityai MCP server:\n"
+            "- Create/edit files:  save_file (unityai MCP server)\n"
+            "- Delete files:       delete_file (unityai MCP server)\n"
+            "- Shell commands:     run_terminal_command (unityai MCP server)\n"
+            "- Read file:          read_file  |  List dir: list_directory (unityai MCP server)\n"
+            + mail_and_fallback(on_unityai_server) +
             "Be concise. Never claim you cannot do something — use the tools.\n\n"
         )
 
@@ -112,14 +114,17 @@ class CopilotProvider(BaseCLIProvider):
                 cmd += _flags
         except Exception:
             pass
+        # The hint above was built but never sent from the first version on
+        # (4b74745), so Copilot never saw the tool list (found 27 Sep 2026).
+        yuk = mcp_hint + prompt
         if self.prompt_via_stdin:
             # ⚠️ `-p` BAYRAĞI DA DÜŞÜYOR — diğer üçünden farkı bu. Ölçüldü
             # 2026-08-01: `-p -` stdin anlamına GELMİYOR, copilot "-" dizesini
             # düz metin prompt sanıp ona cevap verdi (kredi de harcadı).
             # Bayraksız + borulanmış stdin ise tek seferlik koşup cevabı bastı.
-            self._stdin_payload = prompt
+            self._stdin_payload = yuk
         else:
-            cmd += ["-p", prompt]
+            cmd += ["-p", yuk]
         return cmd
 
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
