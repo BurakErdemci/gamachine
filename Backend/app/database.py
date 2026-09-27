@@ -624,7 +624,7 @@ class DatabaseManager:
                 'WHERE user_id = ? AND side_of IS NULL ORDER BY updated_at DESC, id DESC',
                 (user_id,)).fetchall()
             return [{"id": r[0], "title": r[1] or "", "is_branch": r[2] is not None,
-                     "hidden": bool(r[3])} for r in rows]
+                     "parent_id": r[2], "hidden": bool(r[3])} for r in rows]
 
     def add_mail(self, from_conv: int, to_conv: int, body: str, status: str,
                  gate_id: Optional[str] = None, depth: int = 0) -> Optional[int]:

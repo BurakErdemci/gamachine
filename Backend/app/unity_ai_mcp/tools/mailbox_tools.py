@@ -102,13 +102,17 @@ async def send_chat_message(to_chat_id: int, message: str) -> str:
 def register_mailbox_tools(mcp: MCPServer) -> None:
     @mcp.tool(name="list_chats")
     async def list_chats_tool() -> str:
-        """Kullanıcının bu uygulamadaki diğer sohbetlerini listeler (numara, başlık, çalışıyor mu).
-        send_chat_message ile not göndermeden önce hedefi bulmak için kullan."""
+        """Kullanıcının bu uygulamadaki diğer sohbetlerini listeler (numara, başlık, dal mı, çalışıyor mu).
+        Dallar da geçerli hedeftir. Kullanıcı hedefi `@<numara>` ile andıysa o numarayı kullan.
+        Aynı ya da benzer başlıklı sohbetler arasında tahmin etme; kullanıcıdan hedefi `@` ile
+        seçmesini iste."""
         return await list_chats()
 
     @mcp.tool(name="send_chat_message")
     async def send_chat_message_tool(to_chat_id: int, message: str) -> str:
-        """Kullanıcının başka bir sohbetine (başka bir AI oturumuna) not bırakır. O sohbet boştaysa
-        notla hemen uyanır, çalışıyorsa turu bitince okur. Adım modunda kullanıcı önce onaylar.
+        """Kullanıcının başka bir sohbetine ya da dalına (başka bir AI oturumuna) not bırakır. O sohbet
+        boştaysa notla hemen uyanır, çalışıyorsa turu bitince okur. Adım modunda kullanıcı önce onaylar.
+        to_chat_id: kullanıcı `@<numara>` ile andıysa o numara; yoksa list_chats'te tek bir sohbet
+        açıkça uyuyorsa onun numarası. Emin değilsen gönderme, kullanıcıdan hedefi `@` ile seçmesini iste.
         Yalnız gerçekten o sohbetin bilmesi gereken bir şey için kullan (en fazla 4000 karakter)."""
         return await send_chat_message(to_chat_id, message)

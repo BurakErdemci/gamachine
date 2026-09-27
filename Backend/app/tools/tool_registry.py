@@ -172,8 +172,10 @@ TOOL_DEFINITIONS = [
     {
         "name": "list_chats",
         "description": (
-            "Kullanıcının bu uygulamadaki diğer sohbetlerini listeler (numara, başlık, "
-            "şu an çalışıyor mu). send_chat_message ile not göndermeden önce hedefi bulmak için."
+            "Kullanıcının bu uygulamadaki diğer sohbetlerini listeler (numara, başlık, dal mı, "
+            "şu an çalışıyor mu). Dallar da geçerli hedeftir. Kullanıcı hedefi `@<numara>` ile "
+            "andıysa o numarayı kullan. Aynı ya da benzer başlıklı sohbetler arasında tahmin "
+            "etme; kullanıcıdan hedefi `@` ile seçmesini iste."
         ),
         "parameters": {
             "type": "object",
@@ -184,16 +186,19 @@ TOOL_DEFINITIONS = [
     {
         "name": "send_chat_message",
         "description": (
-            "Kullanıcının başka bir sohbetine (başka bir AI oturumuna) not bırakır. O sohbet "
-            "boştaysa notla hemen uyanır, çalışıyorsa turu bitince okur. Adım modunda kullanıcı "
-            "önce onaylar. Yalnız gerçekten o sohbetin bilmesi gereken bir şey için kullan."
+            "Kullanıcının başka bir sohbetine ya da dalına (başka bir AI oturumuna) not bırakır. "
+            "O sohbet boştaysa notla hemen uyanır, çalışıyorsa turu bitince okur. Adım modunda "
+            "kullanıcı önce onaylar. Emin değilsen gönderme, kullanıcıdan hedefi `@` ile "
+            "seçmesini iste. Yalnız gerçekten o sohbetin bilmesi gereken bir şey için kullan."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "to_chat_id": {
                     "type": "integer",
-                    "description": "Hedef sohbetin numarası (list_chats'ten)"
+                    "description": (
+                        "Hedef sohbetin numarası: kullanıcı `@<numara>` ile andıysa o numara, "
+                        "yoksa list_chats'te açıkça uyan tek sohbetin numarası")
                 },
                 "message": {
                     "type": "string",

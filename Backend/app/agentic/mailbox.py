@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -163,14 +164,67 @@ def format_chat_list(chats: List[dict]) -> str:
     for c in chats:
         flags = []
         if c.get("is_branch"):
-            flags.append("dal")
+            flags.append(f"dal, ana sohbeti #{c['parent_id']}" if c.get("parent_id") else "dal")
         if c.get("hidden"):
             flags.append("kapalı sekme")
         if c.get("busy"):
             flags.append("şu an çalışıyor")
         suffix = f" ({', '.join(flags)})" if flags else ""
         lines.append(f'#{c.get("id")} "{clean_title(c.get("title"))}"{suffix}')
+    titles = [clean_title(c.get("title")).casefold() for c in chats]
+    if len(set(titles)) < len(titles):
+        lines.append(_SAME_TITLE_HINT)
     return "\n".join(lines)
+
+
+# Titles come from a chat's first message, so several chats can share one;
+# the model must not pick between them on its own (Burak, 27 Sep 2026).
+_SAME_TITLE_HINT = (
+    "Dikkat: birden çok sohbet aynı başlığı taşıyor. Kullanıcı hedefi `@numara` ile "
+    "belirtmediyse aralarından tahmin etme; kullanıcıdan `@` ile seçmesini iste.")
+
+# ── @<id> mentions in a user message ─────────────────────────────────────────
+MAX_MENTIONS = 10
+# Not glued to a word or another `@` on the left (an e-mail, `x@12`, `@@12`),
+# and not continued by a word character (`@12abc` is a handle, not a number).
+_MENTION_RE = re.compile(r"(?<![\w@])@([0-9]{1,9})(?![\w@])")
+
+
+def parse_mentions(text: Any) -> List[int]:
+    """Chat ids the text mentions as `@<id>`, first appearance order, no repeats."""
+    ids: List[int] = []
+    for m in _MENTION_RE.finditer(text if isinstance(text, str) else ""):
+        cid = int(m.group(1))
+        if cid > 0 and cid not in ids:
+            ids.append(cid)
+    return ids
+
+
+def mention_block(text: Any, current_id: Any, chats: Iterable[dict]) -> str:
+    """The framing a user turn gets for its `@<id>` mentions; "" without any.
+
+    `chats` are the user's own non-side chats (`list_mail_chats` rows). Any
+    other id - another user's chat, a side row, a deleted one - reads the same
+    "bulunamadı", so the block never tells whether it exists.
+    """
+    ids = parse_mentions(text)
+    if not ids:
+        return ""
+    by_id = {c.get("id"): c for c in chats or ()}
+    lines = []
+    for cid in ids[:MAX_MENTIONS]:
+        chat = by_id.get(cid)
+        if cid == current_id:
+            lines.append(f"@{cid} = bu sohbetin kendisi")
+        elif chat is None:
+            lines.append(f"@{cid} = bulunamadı")
+        else:
+            kind = (f"dal, ana sohbeti #{chat['parent_id']}" if chat.get("parent_id")
+                    else "ana sohbet")
+            lines.append(f'@{cid} = sohbet #{cid} "{clean_title(chat.get("title"))}" ({kind})')
+    if len(ids) > MAX_MENTIONS:
+        lines.append(f"(+{len(ids) - MAX_MENTIONS} anma daha, çözülmedi)")
+    return "[Gamachine: kullanıcının `@` ile andığı sohbetler]\n" + "\n".join(lines)
 
 
 def describe_send_result(result: dict) -> str:
