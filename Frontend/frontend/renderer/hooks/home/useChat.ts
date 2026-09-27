@@ -370,6 +370,15 @@ export const useChat = (
   // list read: one answered before the rename was stored, or from a backend
   // that sends no title_source, must not unmark the chat.
   const userTitledRef = useRef(new Set<number>());
+  // Overlapping renames of one chat share one window: the state before the
+  // first began, how many are in flight, whether any succeeded. Per-call
+  // rollback let an older failed rename unmark a newer successful one, so a
+  // late AI title frame replaced it (Codex eveverify, 27 Sep 2026); a per-call
+  // "latest token" rule is not enough either, as the second rename's saved
+  // state is the first one's mark and two failures would leave the chat marked.
+  const renameWindowsRef = useRef(new Map<number, {
+    pending: number; succeeded: boolean; before: Conversation['title_source']; wasMarked: boolean;
+  }>());
 
   const fetchConversations = useCallback(async (userId: number) => {
     if (!API) return;
@@ -586,28 +595,41 @@ export const useChat = (
     if (!API || !title.trim()) return false;
     // Marked before the PUT, so a title frame arriving while it is in flight
     // is dropped too.
-    const before = conversationsRef.current.find(c => c.id === convId)?.title_source;
-    const wasMarked = userTitledRef.current.has(convId);
+    const windows = renameWindowsRef.current;
+    let win = windows.get(convId);
+    if (!win) {
+      win = {
+        pending: 0, succeeded: false,
+        before: conversationsRef.current.find(c => c.id === convId)?.title_source,
+        wasMarked: userTitledRef.current.has(convId),
+      };
+      windows.set(convId, win);
+    }
+    const w = win;
+    w.pending += 1;
     const markSource = (source: Conversation['title_source']) =>
       setConversations(prev => prev.map(c => (c.id === convId ? { ...c, title_source: source } : c)));
     userTitledRef.current.add(convId);
     markSource('user');
     try {
       await axios.put(`${API}/conversations/${convId}`, { title });
-      // Again: a concurrent failed rename of this chat may have unmarked it.
-      userTitledRef.current.add(convId);
+      w.succeeded = true;
       liveTitlesRef.current.delete(convId);
       setConversations(prev => prev.map(c => (c.id === convId ? { ...c, title, title_source: 'user' } : c)));
       if (user) void fetchConversations(user.id);
       return true;
     } catch (err) {
-      if (!wasMarked) userTitledRef.current.delete(convId);
-      markSource(before);
-      // A frame dropped during the failed attempt was a real title; re-read it.
-      if (user) void fetchConversations(user.id);
+      if (w.pending === 1 && !w.succeeded) {
+        if (!w.wasMarked) userTitledRef.current.delete(convId);
+        markSource(w.before);
+        // A frame dropped during the failed attempt was a real title; re-read it.
+        if (user) void fetchConversations(user.id);
+      }
       console.error("Yeniden adlandırma hatası:", err);
       showToast(apiHataMesaji(err, cevir('chat.renameFailed')), 'error');
       return false;
+    } finally {
+      if (--w.pending === 0) windows.delete(convId);
     }
   }, [API, fetchConversations, showToast, user]);
 

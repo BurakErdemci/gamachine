@@ -286,6 +286,87 @@ describe('useChat · AI title frames', () => {
     expect(titleOf(result, 5)).toBe('Üçüncü Cevaptan Sonra')
   })
 
+  // Codex eveverify, 27 Sep 2026: an older failed rename cleared the guard of a
+  // newer successful one, so a delayed AI title frame replaced it.
+  it('an older failed rename cannot clear the guard of a newer successful rename', async () => {
+    const ch = wakeChannel()
+    vi.stubGlobal('fetch', ch.fetchMock)
+    serverList[0].title_source = 'auto'
+    let listReads = 0
+    mocked.get.mockImplementation((url: string) => {
+      if (!String(url).endsWith('/conversations/1')) return Promise.resolve({ data: [] })
+      listReads += 1
+      // The re-read after the failure never lands: only the renderer's own mark counts.
+      if (listReads >= 3) return new Promise(() => {})
+      return Promise.resolve({ data: serverList.map(c => ({ ...c })) })
+    })
+    let rejectOlder: (error: Error) => void = () => {}
+    mocked.put
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectOlder = reject }))
+      .mockImplementationOnce(async () => { storeRename('Newer rename'); return { data: { status: 'success' } } })
+    const { result } = hook()
+    await act(async () => { await result.current.fetchConversations(1) })
+    let older: Promise<boolean> = Promise.resolve(false)
+    act(() => { older = result.current.renameConversation(5, 'Older rename') })
+    await act(async () => { await result.current.renameConversation(5, 'Newer rename') })
+    expect(titleOf(result, 5)).toBe('Newer rename')
+    await act(async () => { rejectOlder(new Error('offline')); await older })
+    expect(result.current.conversations.find(c => c.id === 5)?.title_source).toBe('user')
+    ch.push({ type: 'title', conversation_id: 5, title: 'Stale automatic title' })
+    await tick()
+    expect(titleOf(result, 5)).toBe('Newer rename')
+  })
+
+  describe('two overlapping renames of one chat', () => {
+    type Step = ['first' | 'second', 'ok' | 'fail']
+    const cases: Array<[string, Step[], boolean]> = [
+      ['newer succeeds, then older fails', [['second', 'ok'], ['first', 'fail']], true],
+      ['older succeeds, then newer fails', [['first', 'ok'], ['second', 'fail']], true],
+      ['older fails, then newer succeeds', [['first', 'fail'], ['second', 'ok']], true],
+      ['older fails, then newer fails', [['first', 'fail'], ['second', 'fail']], false],
+      ['newer fails, then older fails', [['second', 'fail'], ['first', 'fail']], false],
+    ]
+    it.each(cases)('%s', async (_name, steps, userTitled) => {
+      const ch = wakeChannel()
+      vi.stubGlobal('fetch', ch.fetchMock)
+      const names = { first: 'Birinci ad', second: 'İkinci ad' }
+      const settle: Record<string, { ok: () => void; fail: () => void }> = {}
+      // The server sends no title_source, as an older backend: the renderer's own mark must decide.
+      mocked.put.mockImplementation((_url: string, body: { title: string }) => new Promise((resolve, reject) => {
+        settle[body.title === names.first ? 'first' : 'second'] = {
+          ok: () => { serverList[0].title = body.title; resolve({ data: { status: 'success' } }) },
+          fail: () => reject(new Error('offline')),
+        }
+      }))
+      const { result } = hook()
+      await act(async () => { await result.current.fetchConversations(1) })
+      const running: Record<string, Promise<boolean>> = {}
+      act(() => { running.first = result.current.renameConversation(5, names.first) })
+      act(() => { running.second = result.current.renameConversation(5, names.second) })
+      for (const [i, [which, outcome]] of steps.entries()) {
+        await act(async () => { settle[which][outcome](); await running[which] })
+        await tick()
+        if (i === 0) {
+          // The other rename is still in flight, so the chat stays guarded.
+          ch.push({ type: 'title', conversation_id: 5, title: 'Arada gelen başlık' })
+          await tick()
+          expect(titleOf(result, 5)).not.toBe('Arada gelen başlık')
+        }
+      }
+      ch.push({ type: 'title', conversation_id: 5, title: 'Geç otomatik başlık' })
+      await tick()
+      const source = result.current.conversations.find(c => c.id === 5)?.title_source
+      if (userTitled) {
+        const stored = steps.filter(([, o]) => o === 'ok').map(([w]) => names[w]).pop()
+        expect(source).toBe('user')
+        expect(titleOf(result, 5)).toBe(stored)
+      } else {
+        expect(source).not.toBe('user')
+        expect(titleOf(result, 5)).toBe('Geç otomatik başlık')
+      }
+    })
+  })
+
   it('a replayed frame for a chat the list marks as user-titled is ignored', async () => {
     const ch = wakeChannel()
     vi.stubGlobal('fetch', ch.fetchMock)
