@@ -172,13 +172,14 @@ def test_write_through_the_ipc_path_is_accepted(monkeypatch):
 
 # ── persistence ──────────────────────────────────────────────────────────────
 
-def test_fresh_install_starts_in_auto_without_storing_it(tmp_path):
+def test_fresh_install_starts_in_balanced_without_storing_it(tmp_path):
+    """Owner decision (Burak, 27 Sep 2026): balanced replaced auto as the default."""
     from database import DatabaseManager
 
     db = DatabaseManager(db_path=str(tmp_path / "t.db"))
     approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(db)
-    assert approval_mode.current_mode() == "auto"
+    assert approval_mode.current_mode() == "balanced"
     # Not written: the renderer's one-time legacy migration keys off this.
     assert approval_mode.is_stored() is False
     assert db.get_setting("approval_mode") is None
@@ -198,12 +199,12 @@ def test_mode_is_persisted_across_restarts(tmp_path):
     assert approval_mode.is_stored() is True
 
 
-def test_explicit_step_survives_a_restart_despite_the_auto_default(tmp_path):
+def test_explicit_step_survives_a_restart_despite_the_balanced_default(tmp_path):
     from database import DatabaseManager
 
     approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
-    assert approval_mode.current_mode() == "auto"
+    assert approval_mode.current_mode() == "balanced"
     approval_mode.set_mode("step", source="test")
     approval_mode._reset_for_tests()
     approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
@@ -238,11 +239,11 @@ def test_fresh_install_default_follows_a_secret_read_after_bind():
     approval_mode.bind_store(_FreshStore())
     assert approval_mode.current_mode() == "step"
     approval_mode.set_ui_secret(UI_SECRET)
-    assert approval_mode.current_mode() == "auto"
+    assert approval_mode.current_mode() == "balanced"
     with _client() as client:
         resp = _flip(client, "step")
         assert resp.status_code == 200
-        assert resp.json()["previous"] == "auto"
+        assert resp.json()["previous"] == "balanced"
     assert approval_mode.current_mode() == "step"
 
 
@@ -305,7 +306,7 @@ def test_real_main_picks_the_fresh_default_after_the_stdin_secret(tmp_path):
     assert done.returncode == 0, done.stderr
     lines = done.stdout.strip().splitlines()
     assert "after-import step" in lines
-    assert "after-stdin auto False" in lines
+    assert "after-stdin balanced False" in lines
 
 
 def test_tampered_stored_value_falls_to_step(tmp_path):
@@ -345,7 +346,8 @@ def _chat_db():
     return db
 
 
-@pytest.mark.parametrize("global_mode,requested", [("step", "auto"), ("auto", "step")])
+@pytest.mark.parametrize("global_mode,requested", [("step", "auto"), ("auto", "step"),
+                                                    ("balanced", "auto"), ("step", "balanced")])
 def test_chat_stream_uses_the_global_mode_not_the_request_field(global_mode, requested):
     approval_mode.set_mode(global_mode, source="test")
     seen = {}
@@ -390,6 +392,8 @@ def test_flip_updates_live_cli_sessions():
         assert claude.auto_approve is False and codex.auto_approve is False
         approval_mode.set_mode("auto", source="test")
         assert claude.auto_approve is True and codex.auto_approve is True
+        approval_mode.set_mode("balanced", source="test")
+        assert claude.auto_approve is False and codex.auto_approve is False
     finally:
         claude_sdk_session._SESSIONS.pop(91, None)
         codex_session._SESSIONS.pop(92, None)

@@ -229,6 +229,8 @@ async def test_pathless_reads_stay_cardless(tool, inp, symlink_escape):
 async def test_auto_mode_outside_read_is_free(tool, inp, symlink_escape):
     """Kabul edilmiş taviz (kullanıcı kararı): oto modda workspace dışı serbest."""
     ws, _outside, _link = symlink_escape
+    from agentic import approval_mode
+    approval_mode.set_mode("auto", source="test")
     s = _mk_session(cwd=ws, auto_approve=True, approval_timeout=2.0)
     res, ev = await _drive_gate(s, tool, inp)
     assert ev is None

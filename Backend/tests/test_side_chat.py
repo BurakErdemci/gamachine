@@ -162,7 +162,7 @@ def _request_card(client, gate_id, conversation_id=None):
     return client.post("/mcp-approval-request", json=body, headers=H).json()
 
 
-@pytest.mark.parametrize("mode", ["step", "auto"])
+@pytest.mark.parametrize("mode", ["step", "auto", "balanced"])
 def test_mcp_approval_request_refuses_a_side_chat_in_both_modes(env, mode):
     db, client, _, _, _ = env
     main = _seed(db)
@@ -417,6 +417,7 @@ def test_claude_read_only_session_denies_writes_in_auto_and_allows_reads(tmp_pat
     from providers.claude_sdk_session import ClaudeSDKSession
 
     ws = str(tmp_path)
+    approval_mode.set_mode("auto", source="test")
     sess = ClaudeSDKSession(77, cwd=ws, auto_approve=True, read_only=True)
     for tool, inp in (("Write", {"file_path": os.path.join(ws, "a.cs"), "content": "x"}),
                       ("Edit", {"file_path": os.path.join(ws, "a.cs")}),
@@ -446,6 +447,7 @@ def test_claude_read_only_is_connect_time_identity_and_main_sessions_are_unaffec
 def test_codex_read_only_session_declines_in_auto_mode():
     from providers.codex_session import CodexSession
 
+    approval_mode.set_mode("auto", source="test")
     sess = CodexSession(79, auto_approve=True, read_only=True)
     sess._out_q = asyncio.Queue()
     for method, params in (("item/commandExecution/requestApproval", {"command": "touch x"}),

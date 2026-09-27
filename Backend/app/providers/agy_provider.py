@@ -6,7 +6,8 @@ import shutil
 import logging
 from typing import Optional
 from .cli_base import BaseCLIProvider
-from agy_step_gate import CLOSED_MODE, GATED_TOOLS, PS_UTF8_PREFIX, RUN_TOOL, write_state
+from agy_step_gate import (BALANCED_MODE, CLOSED_MODE, GATED_TOOLS, PS_UTF8_PREFIX, RUN_TOOL,
+                           STEP_GATE_HOOKS_FILE, STEP_GATE_KEY, write_state)
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +26,10 @@ logger = logging.getLogger(__name__)
 # allows only the exact unityai bridge call shapes and denies every other
 # command line. The rule and why it is strict are in agy_step_gate.py.
 #
-# The hook is installed in both approval modes; its state file says which one
-# is on (auto allows every call), so a flip reaches a running agy on its next
-# tool call. See _write_step_gate.
+# The hook is installed in every approval mode; its state file says which one
+# is on (auto allows every call, balanced lets routine calls through), so a
+# flip reaches a running agy on its next tool call. See _write_step_gate.
 STEP_GATE_TOOLS = GATED_TOOLS + (RUN_TOOL,)
-STEP_GATE_KEY = "gamachine-step-gate"
 
 # agy hands its whole environment, Gemini/Google keys included, to every stdio
 # MCP server it starts (measured: the child saw both 39-character keys). An
@@ -40,7 +40,6 @@ STEP_GATE_KEY = "gamachine-step-gate"
 AGY_CHILD_SECRET_BLANKS = {
     "GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "GOOGLE_APPLICATION_CREDENTIALS": "",
 }
-STEP_GATE_HOOKS_FILE = ".agents/hooks.json"
 
 
 def _gate_dir() -> str:
@@ -96,17 +95,27 @@ def gate_state_path() -> str:
     return os.path.join(_gate_dir(), "step-gate.json")
 
 
-def write_gate_state(auto: bool, closed: bool = False) -> None:
+def gate_mode_name(auto: bool = False, mode: Optional[str] = None) -> str:
+    """The state-file mode for a published approval mode; anything but auto
+    and balanced is step (fail closed)."""
+    if mode is not None:
+        return mode if mode in ("auto", BALANCED_MODE) else "step"
+    return "auto" if auto else "step"
+
+
+def write_gate_state(auto: bool = False, closed: bool = False, mode: Optional[str] = None) -> None:
     """Mode and launcher the hook reads on every call ("auto" allows every
-    call, "step" applies agy_step_gate's grammar). Written at spawn and on
-    every mode flip, so a flip in either direction bites on a running agy's
-    next tool call. `closed` writes CLOSED_MODE, which denies every call: a
-    closing session's child never needs a tool again (agy_session.close)."""
+    call, "step" applies agy_step_gate's grammar, "balanced" also lets the
+    calls action_risk calls routine through). `mode` wins over `auto`.
+    Written at spawn and on every mode flip, so a flip in either direction
+    bites on a running agy's next tool call. `closed` writes CLOSED_MODE,
+    which denies every call: a closing session's child never needs a tool
+    again (agy_session.close)."""
     if closed:
         write_state(gate_state_path(), CLOSED_MODE, "")
         return
     launcher = AgyProvider()._launcher_path("unityai")
-    write_state(gate_state_path(), "auto" if auto else "step", launcher)
+    write_state(gate_state_path(), gate_mode_name(auto, mode), launcher)
 
 
 def _read_json_config(path: str, default: dict = None) -> Optional[dict]:
@@ -378,7 +387,7 @@ class AgyProvider(BaseCLIProvider):
                            "closed and the model sees a shell error, not the reason", command)
         return command
 
-    def _write_step_gate(self, workspace: str, step_mode: bool) -> bool:
+    def _write_step_gate(self, workspace: str, step_mode: bool, mode: Optional[str] = None) -> bool:
         """Installs Gamachine's hook entry in the workspace `.agents/hooks.json`
         in EVERY mode, keeping every other hook the user has there, and writes
         the state file the hook reads on every call. Returns True; anything
@@ -410,7 +419,7 @@ class AgyProvider(BaseCLIProvider):
         path = os.path.join(os.path.realpath(workspace), *STEP_GATE_HOOKS_FILE.split("/"))
         state_path = gate_state_path()
         try:
-            write_gate_state(auto=not step_mode)
+            write_gate_state(auto=not step_mode, mode=mode)
         except OSError as e:
             # A stale "auto" state file would make an installed hook allow everything.
             logger.error("[agy] gate state not written (%s)", e)
@@ -440,16 +449,16 @@ class AgyProvider(BaseCLIProvider):
         if not existed:
             # Only a file we created: it holds an absolute path of this machine.
             ensure_gitignored(workspace, [STEP_GATE_HOOKS_FILE])
-        problem = self._step_gate_problem(path, state_path, command, step_mode)
+        problem = self._step_gate_problem(path, state_path, command, step_mode, mode)
         if problem:
             logger.error("[agy] gate not verified: %s", problem)
             raise AgyStepGateError(_gate_not_verified(path, problem, step_mode))
         return True
 
     def _step_gate_problem(self, path: str, state_path: str, command: str,
-                           step_mode: bool = True) -> Optional[str]:
+                           step_mode: bool = True, mode: Optional[str] = None) -> Optional[str]:
         """What agy and the hook will read, re-read from disk; None when it is our gate."""
-        want_mode = "step" if step_mode else "auto"
+        want_mode = gate_mode_name(not step_mode, mode)
         try:
             with open(state_path, encoding="utf-8") as f:
                 state = json.load(f)

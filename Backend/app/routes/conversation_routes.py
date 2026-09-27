@@ -1955,6 +1955,25 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             return "Yan sohbet salt okunur; yazma reddedildi."
         return None
 
+    def _mcp_action(tool: Any, params: Any, workspace_path: Any) -> dict:
+        """The action_risk view of a bridge request (tool + params).
+
+        The unityai bridges send write_file / delete_file / bash; everything
+        else comes from the Unity MCP server under its bare tool name, and an
+        unknown name is critical there (unity_unknown_tool).
+        """
+        params = params if isinstance(params, dict) else {}
+        workspace = workspace_path if isinstance(workspace_path, str) else ""
+        if tool == "write_file":
+            return {"kind": "file_write", "paths": [params.get("path")], "workspace": workspace}
+        if tool == "delete_file":
+            return {"kind": "file_delete", "paths": [params.get("path")], "workspace": workspace}
+        if tool == "bash":
+            # The bridge runs the command with cwd = its workspace.
+            return {"kind": "shell", "command": params.get("command"),
+                    "cwd": workspace, "workspace": workspace}
+        return {"kind": "unity", "tool": tool, "args": params}
+
     @router.post("/mcp-approval-request")
     async def mcp_approval_request(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
         """MCP server'dan gelen onay isteğini saklar. Frontend /mcp-pending ile yoklar."""
@@ -1974,8 +1993,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                 "gate_id": gate_id,
                 "error": "Bu sohbet silindi; isteği reddedildi.",
             }
-        # A side chat is read-only in step AND auto mode, so this comes before
-        # the auto approval below. Refused on the raw claim: refusing is the
+        # A side chat is read-only in every mode, so this comes before the
+        # automatic approvals below. Refused on the raw claim: refusing is the
         # safe direction, and a false claim can only cost its sender a write.
         side_refusal = _side_chat_claim_refusal(body.get("conversation_id"))
         if side_refusal is not None:
@@ -1994,7 +2013,13 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         # takes its mode from this same global value, so in steady state they
         # were equal to it, and after a flip to step they would have kept
         # approving the rest of a turn that started in auto.
-        if approval_mode.is_auto():
+        #
+        # Balanced mode (Burak, 27 Sep 2026): the same, for the calls
+        # action_risk calls routine; a critical one gets the card below,
+        # which carries the reason.
+        decision = approval_mode.needs_card(
+            _mcp_action(body.get("tool"), body.get("params"), body.get("workspace_path")))
+        if not decision.card:
             return {
                 "status": "resolved",
                 "approved": True,
@@ -2010,6 +2035,9 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             "workspace_path": body.get("workspace_path", ""),
             "conversation_id": None if mcp_owner is _UNKNOWN_OWNER else mcp_owner,
         }
+        if decision.reason:
+            _mcp_pending[gate_id]["risk_reason"] = decision.reason
+            _mcp_pending[gate_id]["risk_detail"] = decision.detail
         _mcp_results[gate_id] = {"status": "pending"}
         _mcp_result_ts[gate_id] = time()
         if mcp_owner is _UNKNOWN_OWNER:
@@ -2100,6 +2128,33 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             approved += 1
         return approved
 
+    def _approve_routine_pending() -> int:
+        """Switching to balanced re-classifies the MCP cards the frontend polls
+        (they keep tool + params): routine ones are approved as a switch to
+        auto would, critical ones stay and gain their reason. In-process gates
+        (Claude/Codex/API loop cards) hold only display text, so they cannot
+        be re-classified and stay pending.
+        """
+        approved = 0
+        for gate_id, entry in list(_mcp_pending.items()):
+            if entry.get("kind") == "mail":
+                action = {"kind": "mail"}
+            else:
+                action = _mcp_action(entry.get("tool"), entry.get("params"),
+                                     entry.get("workspace_path"))
+            decision = approval_mode.needs_card(action, mode="balanced")
+            if decision.card:
+                entry["risk_reason"] = decision.reason
+                entry["risk_detail"] = decision.detail
+                continue
+            _mcp_results[gate_id] = {"status": "resolved", "approved": True, "automatic": True}
+            _mcp_result_ts[gate_id] = time()
+            _mcp_pending.pop(gate_id, None)
+            _release_gate(gate_id)
+            _settle_mail(gate_id, True)
+            approved += 1
+        return approved
+
     @router.get("/approval-mode")
     async def get_approval_mode(x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
@@ -2131,7 +2186,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             )
         mode = body.get("mode")
         if mode not in approval_mode.MODES:
-            raise HTTPException(status_code=400, detail="mode 'auto' ya da 'step' olmalı.")
+            raise HTTPException(status_code=400,
+                                detail="mode 'auto', 'balanced' ya da 'step' olmalı.")
         source = body.get("source") if body.get("source") in ("settings", "chat", "migrate") else "ui"
         try:
             previous = approval_mode.set_mode(mode, source=source)
@@ -2140,9 +2196,15 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             # write; the message says why and what to do (Turkish, user-facing).
             raise HTTPException(status_code=409, detail={
                 "code": exc.code, "message": str(exc), **exc.params})
-        drained = _approve_all_pending() if mode == "auto" else 0
+        if mode == "auto":
+            drained = _approve_all_pending()
+        elif mode == "balanced":
+            drained = _approve_routine_pending()
+        else:
+            drained = 0
         if drained:
-            logger.warning("[approval-mode] %d pending card(s) approved by the switch to auto", drained)
+            logger.warning("[approval-mode] %d pending card(s) approved by the switch to %s",
+                           drained, mode)
         return {"mode": mode, "previous": previous, "approved_pending": drained}
 
     @router.get("/mcp-pending")
@@ -2212,7 +2274,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         if db.count_mail_since(from_conv, to_conv, since) >= mailbox.PAIR_LIMIT:
             raise _MailRefused(429, f"Bu sohbete son {mailbox.PAIR_WINDOW_S // 60} dakikada "
                                     f"{mailbox.PAIR_LIMIT} not gönderildi; biraz bekle.")
-        if approval_mode.is_auto():
+        # A note between chats is routine in balanced mode (Burak, 27 Sep 2026).
+        if not approval_mode.needs_card({"kind": "mail"}).card:
             mail_id = db.add_mail(from_conv, to_conv, body, mailbox.STATUS_QUEUED, None, depth)
             if mail_id is None:
                 raise _MailRefused(404, f"#{to_conv} numaralı sohbet bulunamadı.")

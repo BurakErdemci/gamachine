@@ -235,6 +235,8 @@ class TestCodexApprovalResponses(unittest.IsolatedAsyncioTestCase):
         })
 
     async def test_auto_mode_approval_never_creates_a_ui_gate(self):
+        from agentic import approval_mode
+        approval_mode.set_mode("auto", source="test")
         session = CodexSession(4, auto_approve=True)
         session._out_q = __import__("asyncio").Queue()
 
@@ -247,6 +249,8 @@ class TestCodexApprovalResponses(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session._out_q.empty())
 
     async def test_auto_mode_structured_question_continues_without_prompting_user(self):
+        from agentic import approval_mode
+        approval_mode.set_mode("auto", source="test")
         session = CodexSession(5, auto_approve=True)
         session._send = AsyncMock()
 

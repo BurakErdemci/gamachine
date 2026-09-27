@@ -1,8 +1,15 @@
-"""The one global approval mode: "auto" (no approval cards anywhere) or "step".
+"""The one global approval mode: "auto" (no approval cards anywhere),
+"balanced" (cards only for critical actions) or "step" (every write asks).
 
 Owner decision, 25 Sep 2026: in auto mode no card appears for Gamachine's own
 agents nor for external MCP clients (Claude Code connected straight to the
 Unity MCP server). Step mode is never removed or weakened.
+
+Owner decision, 27 Sep 2026 (Burak): "balanced" sits between them. The AI
+works on its own and only an action the rule-based classifier (action_risk)
+cannot prove routine raises the card; `needs_card` is the one place every
+approval point asks. It is recommended and the fresh-install default, and a
+saved mode is never migrated to it.
 
 The mode used to live in renderer localStorage and travel per request as
 `generation_mode`; external MCP clients carry no request, so their calls could
@@ -15,15 +22,16 @@ LOCAL_APP_TOKEN is not enough on its own: it sits in the Unity MCP server's
 environment and in a 0600 file that every model-run child can read, so any of
 them could otherwise flip itself into auto mode.
 
-Default (owner decision, 25 Sep 2026): a fresh install, where nothing was ever
-saved, starts in auto. A saved choice always wins and survives restarts.
+Default: a fresh install, where nothing was ever saved, starts in balanced
+(owner decision, Burak, 27 Sep 2026; it was auto from 25 Sep). A saved choice
+always wins and survives restarts.
 Exception: a process that holds no UI secret (Docker backend, which Electron
 never spawns; the uvicorn reload worker, where main's __main__ block never
-ran) could never be switched out of auto, so its fresh-install mode is step.
+ran) could never be switched to another mode, so its fresh-install mode is step.
 That is decided on every read, not in bind_store(): main binds the store at
 import time and only reads the secret later, in __main__.
-The same holds for a SAVED auto (external audit 2026-09-25): such a process
-reads it as step. The row itself is left alone, so the real app, which has a
+The same holds for a SAVED auto (external audit 2026-09-25) or balanced: such
+a process reads it as step. The row itself is left alone, so the real app, which has a
 secret, still sees the user's choice.
 
 Known limit: the persisted value is only as trustworthy as the user's data
@@ -38,12 +46,14 @@ import hmac
 import logging
 import sys
 import threading
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
+
+import action_risk
 
 logger = logging.getLogger(__name__)
 
-MODES = ("auto", "step")
-FRESH_INSTALL_MODE = "auto"
+MODES = ("auto", "balanced", "step")
+FRESH_INSTALL_MODE = "balanced"
 # Before the store is read, and whenever it cannot be trusted.
 FALLBACK_MODE = "step"
 _SETTING_KEY = "approval_mode"
@@ -51,21 +61,26 @@ _SETTING_KEY = "approval_mode"
 _LOCK = threading.Lock()
 
 # The owner's red line: whenever the mode is step, no agy built-in write or
-# shell command runs without a card. agy's hook reads one state file on every
+# shell command runs without a card; whenever it is balanced, none the
+# classifier calls critical does. agy's hook reads one state file on every
 # gated tool call, so the invariant enforced here is:
 #
 #   At every instant at which current_mode() returns "step", every live or
 #   closing agy child's hook state file denies per the step grammar: it says
 #   "step" (or "closed"), or it is absent or unreadable, which the hook
-#   treats as deny.
+#   treats as deny. At every instant at which it returns "balanced", the
+#   file says "balanced", "step" or "closed", or is absent or unreadable:
+#   never "auto".
 #
 # It holds by construction, through one ordering rule under this one lock,
 # which covers both the publish of the mode and every write of that file:
-#   - a change whose effective mode is step first tightens the agy state
+#   - a change whose effective mode is not auto first tightens the agy state
 #     (_tighten_agy_gates: write step, else remove the file, else kill the
-#     children), and only then publishes;
-#   - a change to auto publishes first, then loosens (the file follows the
-#     published mode, rewritten by the live sessions' setters);
+#     children), and only then publishes; step is at least as strict as
+#     balanced, so this one tightening serves both;
+#   - a change to auto, or from step to balanced, publishes first, then
+#     loosens (the file follows the published mode, rewritten by the live
+#     sessions' setters);
 #   - every other writer (agy_session: the flag setter, turn start, spawn,
 #     post-spawn resync, close) reads the published mode under this lock and
 #     writes in the same critical section, so none can write auto after step
@@ -117,7 +132,7 @@ def bind_store(store: Any) -> None:
     with GATE_LOCK:
         with _LOCK:
             after = _effective(new[0], new[2], from_row, _ui_secret)
-        if after == "step":
+        if after != "auto":
             _tighten_agy_gates()
         with _LOCK:
             _store = store
@@ -132,13 +147,17 @@ def bind_store(store: Any) -> None:
 
 
 def _row_auto_without_secret_locked() -> bool:
-    return _from_row and _mode == "auto" and not _ui_secret
+    return _from_row and _mode != FALLBACK_MODE and not _ui_secret
 
 
 def _effective(mode: str, fresh_install: bool, from_row: bool, ui_secret: bytes) -> str:
     if fresh_install:
         return FRESH_INSTALL_MODE if ui_secret else FALLBACK_MODE
-    if from_row and mode == "auto" and not ui_secret:
+    if from_row and mode != FALLBACK_MODE and not ui_secret:
+        # Nothing could switch it without the UI secret; balanced as well,
+        # since it still lets routine writes through with no card.
+        return FALLBACK_MODE
+    if mode not in MODES:
         return FALLBACK_MODE
     return mode
 
@@ -155,13 +174,52 @@ def current_mode() -> str:
         if warn:
             _warned_row_auto_without_secret = True
     if warn:
-        logger.warning("[approval-mode] saved mode is auto but no UI secret is configured, "
-                       "so nothing could switch it off; running as %s", FALLBACK_MODE)
+        logger.warning("[approval-mode] saved mode is not step but no UI secret is configured, "
+                       "so nothing could switch it; running as %s", FALLBACK_MODE)
     return mode
 
 
 def is_auto() -> bool:
     return current_mode() == "auto"
+
+
+class CardDecision(NamedTuple):
+    card: bool
+    mode: str
+    reason: str = ""
+    detail: str = ""
+
+
+def needs_card(action: Any, mode: Optional[str] = None) -> CardDecision:
+    """The one question every approval point asks: does this action need
+    the user's card now?
+
+    auto -> no card; balanced -> action_risk.classify decides (critical asks);
+    step, and any mode this module does not know -> card (fail closed). The
+    mode is read live on every call unless the caller passes the one it has
+    just read, so a flip bites on the next action of a running turn.
+
+    Callers keep their own refusals (side chat, deleted chat, the fixed Unity
+    file rules) BEFORE this: no mode may lift those.
+    """
+    mode = current_mode() if mode is None else mode
+    if mode == "auto":
+        return CardDecision(False, mode)
+    if mode == "balanced":
+        risk = action_risk.classify(action)
+        return CardDecision(risk.critical, mode, risk.reason, risk.detail)
+    return CardDecision(True, mode if mode in MODES else FALLBACK_MODE)
+
+
+def needs_card_many(actions: Any, mode: Optional[str] = None) -> CardDecision:
+    """needs_card for one request that carries several actions (a Codex
+    patch touching many files): a card when any of them needs one. An empty
+    or unreadable list is critical in balanced mode."""
+    mode = current_mode() if mode is None else mode
+    if mode != "balanced":
+        return needs_card(None, mode=mode)
+    risk = action_risk.classify_many(actions if isinstance(actions, (list, tuple)) else ())
+    return CardDecision(risk.critical, mode, risk.reason, risk.detail)
 
 
 def is_stored() -> bool:
@@ -182,10 +240,10 @@ def set_mode(mode: str, source: str = "ui") -> str:
         with _LOCK:
             previous = _effective_mode_locked()
             store = _store
-        if mode == "step":
-            # Before step is published, never after; and before it is saved, so
-            # a refused flip leaves nothing behind (a tightened gate under auto
-            # only over-restricts until the next sync).
+        if mode != "auto":
+            # Before step or balanced is published, never after; and before it
+            # is saved, so a refused flip leaves nothing behind (a tightened
+            # gate under auto only over-restricts until the next sync).
             _tighten_agy_gates()
         if store is not None:
             # Persist before publishing: a mode that is live but not saved would
@@ -193,7 +251,7 @@ def set_mode(mode: str, source: str = "ui") -> str:
             try:
                 store.set_setting(_SETTING_KEY, mode)
             except Exception:
-                if mode == "step":
+                if mode != "auto":
                     # The flip failed, so the gates follow the published mode
                     # again; else an auto-mode agy child stays denied
                     # (verification round 4).
@@ -201,7 +259,7 @@ def set_mode(mode: str, source: str = "ui") -> str:
                 raise
         with _LOCK:
             _mode, _stored, _fresh_install, _from_row = mode, True, False, False
-        _propagate_to_live_sessions(mode == "auto")
+        _propagate_to_live_sessions(mode)
     logger.warning("[approval-mode] %s -> %s (source=%s)", previous, mode, source)
     return previous
 
@@ -232,11 +290,12 @@ def _resync_agy_gates() -> None:
         logger.warning("[approval-mode] agy gate state not restored", exc_info=True)
 
 
-def _propagate_to_live_sessions(auto: bool) -> None:
-    """Update the auto_approve flag of registered CLI sessions in place.
+def _propagate_to_live_sessions(mode: str) -> None:
+    """Tell registered CLI sessions the published mode, in place.
 
-    What this reaches: Claude SDK and Codex sessions read auto_approve on every
-    approval request of their running process, so for them a flip bites within
+    Each session's `auto_approve` flag is set to (mode == "auto"). Claude SDK
+    and Codex sessions no longer decide on that flag: they ask `needs_card` on
+    every approval request, which reads the mode live, so a flip bites within
     the current turn.
 
     agy: its built-in tools are gated by a workspace hook that every agy
@@ -244,9 +303,10 @@ def _propagate_to_live_sessions(auto: bool) -> None:
     The hook reads a state file on every tool call. A flip to step has
     already written that file before the mode was published
     (_tighten_agy_gates); setting the flag here rewrites it from the
-    published mode, which is how a flip to auto loosens it. Either way the
+    published mode, which is how a flip to auto loosens it.     Either way the
     flip bites on the process's next tool call, one-shot agy sessions
-    included. The caller holds GATE_LOCK.
+    included; the file is rewritten from the published mode, balanced
+    included, whatever the flag's value. The caller holds GATE_LOCK.
 
     What it cannot reach: the one-shot CLIs (cursor, copilot, opencode, kimi)
     carry the attribute, but nothing in their running process reads it; their
@@ -264,6 +324,7 @@ def _propagate_to_live_sessions(auto: bool) -> None:
         ("providers.agy_session", "_SESSIONS"),
         ("providers.oneshot_cli", "_SESSIONS"),
     )
+    auto = mode == "auto"
     for module_name, attr in targets:
         module = sys.modules.get(module_name)
         if module is None:
@@ -289,7 +350,7 @@ def set_ui_secret(secret: str) -> None:
         with _LOCK:
             before = _effective_mode_locked()
             after = _effective(_mode, _fresh_install, _from_row, new)
-        if after == "step":
+        if after != "auto":
             _tighten_agy_gates()
         with _LOCK:
             _ui_secret = new
@@ -297,7 +358,7 @@ def set_ui_secret(secret: str) -> None:
             # As set_mode: live sessions follow, which is how a flip to auto
             # loosens agy's hook. main.py calls this before uvicorn starts,
             # when no session exists and this touches nothing.
-            _propagate_to_live_sessions(after == "auto")
+            _propagate_to_live_sessions(after)
 
 
 def ui_secret_configured() -> bool:

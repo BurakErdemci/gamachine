@@ -2,7 +2,8 @@
 
 At every instant at which current_mode() returns "step", every live or
 closing agy child's hook state file denies per the step grammar (or is
-absent). Verification round 2 (26 Sep 2026) broke it twice: overlapping flips
+absent). Since the balanced mode (Burak, 27 Sep 2026): at every instant at
+which it returns "balanced", the file never says "auto". Verification round 2 (26 Sep 2026) broke it twice: overlapping flips
 published step while an auto write still held the gate lock, and close()
 deregistered a session before its child stopped. These tests force those
 interleavings with events and an instrumented lock, never with sleeps.
@@ -280,14 +281,16 @@ class TestFlipOrdering(GateStateCase, unittest.TestCase):
         self.assertEqual(self.file_mode(), "step")
 
     def test_a_secret_change_that_makes_step_effective_tightens_first(self):
-        class FreshStore:
+        # The fresh-install default is balanced since 27 Sep 2026, so a saved
+        # auto is what makes auto effective here.
+        class AutoStore:
             def get_setting(self, key):
-                return None
+                return "auto"
 
             def set_setting(self, key, value):  # pragma: no cover
                 raise AssertionError("not saved")
-        approval_mode.bind_store(FreshStore())
-        self.assertEqual(approval_mode.current_mode(), "auto")  # fresh install + secret
+        approval_mode.bind_store(AutoStore())
+        self.assertEqual(approval_mode.current_mode(), "auto")  # saved auto + secret
         self.live_session()
         agy_provider.write_gate_state(auto=True)
         observed = []
@@ -305,12 +308,12 @@ class TestFlipOrdering(GateStateCase, unittest.TestCase):
     def test_a_secret_change_that_makes_auto_effective_loosens_the_gate(self):
         """set_ui_secret published auto but left a live child's hook on its
         earlier step state, denying tools the published mode allows."""
-        class FreshStore:
+        class AutoStore:
             def get_setting(self, key):
-                return None
+                return "auto"
         approval_mode.set_ui_secret("")
-        approval_mode.bind_store(FreshStore())
-        self.assertEqual(approval_mode.current_mode(), "step")  # fresh install, no secret
+        approval_mode.bind_store(AutoStore())
+        self.assertEqual(approval_mode.current_mode(), "step")  # saved auto, no secret
         session = self.live_session()
         agy_provider.write_gate_state(auto=False)
         approval_mode.set_ui_secret("ui-secret")
@@ -329,7 +332,7 @@ class TestFlipOrdering(GateStateCase, unittest.TestCase):
         with patch.object(agy_provider, "write_gate_state") as write:
             approval_mode.set_ui_secret("ui-secret")
         write.assert_not_called()
-        self.assertEqual(approval_mode.current_mode(), "auto")
+        self.assertEqual(approval_mode.current_mode(), "balanced")  # fresh default
 
     def test_no_agy_child_means_no_write(self):
         agy_session._SESSIONS[5] = agy_session.AgyStreamSession(5, cwd=self.tmp.name)
@@ -514,6 +517,101 @@ class TestSpawnAndClose(GateStateCase, unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session._active_process.killed)
         session._stop_lock.release()
         await close
+
+
+class TestBalancedOrdering(GateStateCase, unittest.TestCase):
+    """The same ordering rule for balanced: never "auto" in the file while
+    balanced is published, and balanced never looser than step for a call it
+    calls critical (Burak, 27 Sep 2026)."""
+
+    def setUp(self):
+        self.set_up_home()
+
+    def tearDown(self):
+        self.tear_down_home()
+
+    def test_auto_to_balanced_tightens_before_it_publishes_then_follows(self):
+        session = self.live_session()
+        approval_mode.set_mode("auto")
+        self.assertEqual(self.file_mode(), "auto")
+        seen, observe = self.record_publishes()
+        with observe:
+            approval_mode.set_mode("balanced")
+        self.assertEqual(seen, [("balanced", "step")])
+        self.assertEqual(self.file_mode(), "balanced")
+        self.assertFalse(session.auto_approve)
+        self.assertEqual(decide(SHELL, self.state)["decision"], "deny")
+
+    def test_balanced_to_step_tightens_before_it_publishes(self):
+        self.live_session()
+        approval_mode.set_mode("balanced")
+        self.assertEqual(self.file_mode(), "balanced")
+        seen, observe = self.record_publishes()
+        with observe:
+            approval_mode.set_mode("step")
+        self.assertEqual(seen, [("step", "step")])
+
+    def test_step_to_balanced_publishes_then_loosens(self):
+        self.live_session()
+        approval_mode.set_mode("step")
+        seen, observe = self.record_publishes()
+        with observe:
+            approval_mode.set_mode("balanced")
+        self.assertEqual(seen, [("balanced", "step")])
+        self.assertEqual(self.file_mode(), "balanced")
+
+    def test_failed_write_on_a_flip_to_balanced_removes_the_file_before_publishing(self):
+        self.live_session()
+        approval_mode.set_mode("auto")
+        seen, observe = self.record_publishes()
+        with observe, patch.object(agy_provider, "write_gate_state", side_effect=OSError("locked")):
+            approval_mode.set_mode("balanced")
+        self.assertEqual(seen, [("balanced", None)])
+        self.assertEqual(decide(WRITE, self.state)["decision"], "deny")
+
+    def test_balanced_is_refused_when_the_gate_cannot_be_tightened_nor_the_child_stopped(self):
+        approval_mode.set_mode("auto")
+        self.live_session(unkillable=True)
+        agy_provider.write_gate_state(auto=True)
+        seen, observe = self.record_publishes()
+        with observe, \
+                patch.object(agy_provider, "write_gate_state", side_effect=PermissionError("locked")), \
+                patch.object(agy_session, "_remove_gate_state", return_value=False):
+            with self.assertRaises(agy_provider.AgyStepGateError):
+                approval_mode.set_mode("balanced")
+        self.assertEqual(seen, [])
+        self.assertEqual(approval_mode.current_mode(), "auto")
+
+    def test_a_setter_cannot_write_auto_after_balanced_is_published(self):
+        session = self.live_session()
+        approval_mode.set_mode("balanced")
+        session.auto_approve = True
+        self.assertEqual(self.file_mode(), "balanced")
+
+    def test_a_failed_rewrite_in_balanced_does_not_leave_auto(self):
+        self.live_session()
+        approval_mode.set_mode("auto")
+        with patch.object(approval_mode, "_tighten_agy_gates"):
+            # Publish balanced over a file that still says auto, then resync
+            # with a failing write: the stale auto must go.
+            approval_mode.set_mode("balanced")
+        agy_provider.write_gate_state(auto=True)
+        with patch.object(agy_provider, "write_gate_state", side_effect=OSError("locked")):
+            self.assertTrue(agy_session._sync_gate_state())
+        self.assertIsNone(self.file_mode())
+
+    def test_a_fresh_install_secret_publishes_balanced_and_writes_it(self):
+        class FreshStore:
+            def get_setting(self, key):
+                return None
+        approval_mode.set_ui_secret("")
+        approval_mode.bind_store(FreshStore())
+        session = self.live_session()
+        agy_provider.write_gate_state(auto=False)
+        approval_mode.set_ui_secret("ui-secret")
+        self.assertEqual(approval_mode.current_mode(), "balanced")
+        self.assertEqual(self.file_mode(), "balanced")
+        self.assertFalse(session.auto_approve)
 
 
 class TestClosedState(unittest.TestCase):

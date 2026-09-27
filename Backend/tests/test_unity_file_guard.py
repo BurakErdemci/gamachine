@@ -183,7 +183,13 @@ def test_module_is_stdlib_only():
         assert find_non_stdlib_imports(f.read()) == []
     with open(os.path.join(app, "agy_step_gate.py"), encoding="utf-8") as f:
         offenders = find_non_stdlib_imports(f.read())
-    assert len(offenders) == 1 and "'unity_file_guard'" in offenders[0]
+    # action_risk (balanced mode) is imported lazily; its own imports are
+    # held to stdlib plus two stdlib-only local modules in test_action_risk.
+    assert len(offenders) == 2
+    assert "'unity_file_guard'" in offenders[0] and "'action_risk'" in offenders[1]
+    for module in ("agentic/command_safety.py", "unity_tool_policy.py"):
+        with open(os.path.join(app, *module.split("/")), encoding="utf-8") as f:
+            assert find_non_stdlib_imports(f.read()) == [], module
 
 
 # ── NTFS 8.3 aliases: judged by the long name of the file they open ──────────
@@ -297,6 +303,8 @@ def test_alias_rule_is_off_outside_windows(aliases, monkeypatch):
 async def test_claude_sdk_refuses_an_alias_write_in_auto(aliases, project):
     from providers.claude_sdk_session import ClaudeSDKSession
     from claude_agent_sdk import PermissionResultDeny
+    from agentic import approval_mode
+    approval_mode.set_mode("auto", source="test")
     s = ClaudeSDKSession(conversation_id=1, cwd=project, auto_approve=True)
     s._out_q = asyncio.Queue()
     res = await s._can_use_tool("Write", {"file_path": aliases["prefab"], "content": "x"}, None)
@@ -311,6 +319,8 @@ async def test_claude_sdk_refuses_an_alias_write_in_auto(aliases, project):
 async def test_claude_sdk_refuses_in_auto_without_card(project):
     from providers.claude_sdk_session import ClaudeSDKSession
     from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+    from agentic import approval_mode
+    approval_mode.set_mode("auto", source="test")
     s = ClaudeSDKSession(conversation_id=1, cwd=project, auto_approve=True)
     s._out_q = asyncio.Queue()
 
@@ -487,6 +497,8 @@ def test_agy_hook_closed_mode_is_unchanged(tmp_path):
 
 def _codex(project):
     from providers.codex_session import CodexSession
+    from agentic import approval_mode
+    approval_mode.set_mode("auto", source="test")
     s = CodexSession(conversation_id=1, cwd=project, auto_approve=True)
     s._out_q = asyncio.Queue()
     return s

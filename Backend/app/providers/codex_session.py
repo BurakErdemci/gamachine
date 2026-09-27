@@ -251,6 +251,46 @@ def _file_change_refusal(changes, base: str):
     return None
 
 
+def _change_actions(path, kind, move_path, workspace: str) -> list:
+    if kind == "delete":
+        return [{"kind": "file_delete", "paths": [path]}]
+    if move_path:
+        return [{"kind": "file_move", "paths": [path, move_path]}]
+    return [{"kind": "file_write", "paths": [path], "workspace": workspace}]
+
+
+def _risk_actions(method: str, params: dict, file_changes, workspace: str) -> list:
+    """The action_risk view of a Codex approval request (balanced mode).
+
+    An empty list means nothing could be read, which action_risk.classify_many
+    answers as critical.
+    """
+    if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
+        cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else ""
+        return [{"kind": "shell", "command": _command_text(params.get("command")),
+                 "cwd": cwd or workspace, "workspace": workspace}]
+    if method == "item/fileChange/requestApproval":
+        actions = []
+        for change in file_changes or ():
+            if not isinstance(change, dict):
+                return []
+            kind = change.get("kind") if isinstance(change.get("kind"), dict) else {}
+            actions += _change_actions(change.get("path"), kind.get("type"),
+                                       kind.get("move_path"), workspace)
+        return actions
+    if method == "applyPatchApproval":
+        changes = params.get("fileChanges")
+        if not isinstance(changes, dict):
+            return []
+        actions = []
+        for path, change in changes.items():
+            change = change if isinstance(change, dict) else {}
+            actions += _change_actions(path, change.get("type"), change.get("move_path"), workspace)
+        return actions
+    # item/permissions/requestApproval asks for a wider sandbox profile.
+    return [{"kind": "permission", "tool": method}]
+
+
 def _command_text(command) -> str:
     # v1 execCommandApproval sends argv; v2 sends one string.
     if isinstance(command, list):
@@ -809,9 +849,10 @@ class CodexSession:
                 # Auto turunda modelin yapılandırılmış soru aracıyla "devam edeyim
                 # mi?" diye beklemesini de engelle. Gerçek onaylar yukarıdaki
                 # requestApproval yollarından zaten otomatik kabul edilir.
+                from agentic import approval_mode
                 value = (
                     "Proceed using your best judgment without asking for confirmation."
-                    if self.auto_approve else ""
+                    if approval_mode.current_mode() in ("auto", "balanced") else ""
                 )
                 await self._send({"id": rid, "result": {"value": value}})
             else:
@@ -835,8 +876,14 @@ class CodexSession:
         if self.read_only:
             logger.warning(f"[CodexSession:{self.conversation_id}] read-only session declined {method}")
             return "decline"
-        # Oto mod: kart gösterme, otomatik onayla
-        if self.auto_approve:
+        # Oto mod: kart gösterme, otomatik onayla. Balanced: only a request
+        # action_risk calls critical gets the card. The mode is read live, not
+        # from the session flag, so a flip bites on the next request.
+        from agentic import approval_mode
+        decision = approval_mode.needs_card_many(
+            _risk_actions(method, params, self._file_changes.get(params.get("itemId")),
+                          self.cwd or ""))
+        if not decision.card:
             return "accept"
 
         out_q = self._out_q
@@ -850,6 +897,8 @@ class CodexSession:
                 "gate_id": gate_id,
                 "tool": method,
                 "command": _describe_approval(method, params),
+                **({"risk_reason": decision.reason, "risk_detail": decision.detail}
+                   if decision.reason else {}),
             })
         res = await self._wait_gate(ev, APPROVAL_GATES, APPROVAL_RESULTS, gate_id)
         return "accept" if bool(res) else "decline"

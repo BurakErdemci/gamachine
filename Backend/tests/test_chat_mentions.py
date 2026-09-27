@@ -156,7 +156,7 @@ def test_the_first_message_title_is_the_typed_text_not_the_framing(env, monkeypa
 def test_a_mail_wake_turn_gets_no_mention_block(env, monkeypatch):
     from agentic import approval_mode, wake_queue
     from tests.test_mailbox import _send, _wake_turn
-    monkeypatch.setattr(approval_mode, "is_auto", lambda: True)
+    approval_mode.set_mode("auto", source="test")
     _FakeRunner.messages = []
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
     a, b = _chat(env.db, "A"), _chat(env.db, "B")

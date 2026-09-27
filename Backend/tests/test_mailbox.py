@@ -90,7 +90,8 @@ def _pending(client):
 
 @pytest.fixture
 def auto(monkeypatch):
-    monkeypatch.setattr(approval_mode, "is_auto", lambda: True)
+    # conftest resets the mode after every test.
+    approval_mode.set_mode("auto", source="test")
 
 
 # ── who may send, to whom ────────────────────────────────────────────────────
@@ -246,6 +247,37 @@ def test_auto_mode_queues_at_once_without_a_card(env, auto):
     assert _pending(env.client) == {}
     assert _rows(env.db, "SELECT from_conv, to_conv, status, gate_id, depth FROM mailbox") == [
         (a, b, "queued", None, 1)]
+    assert wake_queue.pending(b) == 1
+
+
+def test_balanced_mode_queues_a_note_without_a_card(env):
+    """Owner decision (Burak, 27 Sep 2026): a note between chats is not critical."""
+    approval_mode.set_mode("balanced", source="test")
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    r = _send(env.client, a, b)
+    assert r.status_code == 200 and r.json()["status"] == "queued"
+    assert _pending(env.client) == {}
+    assert wake_queue.pending(b) == 1
+
+
+def test_balanced_mode_still_refuses_a_side_sender(env):
+    approval_mode.set_mode("balanced", source="test")
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    side = env.db.create_side_chat(a, 1)
+    assert _send(env.client, side, b).status_code == 403
+    assert _rows(env.db, "SELECT COUNT(*) FROM mailbox") == [(0,)]
+
+
+def test_switching_to_balanced_approves_a_waiting_mail_card(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b)
+    route = next(c for c in env.router.routes
+                 if getattr(c, "path", "") == "/approval-mode" and "POST" in c.methods).endpoint
+    approval_mode.set_ui_secret("s")
+    out = asyncio.run(route(body={"mode": "balanced"}, x_session_token="", x_ui_secret="s",
+                            x_maintenance=""))
+    assert out["approved_pending"] == 1
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
     assert wake_queue.pending(b) == 1
 
 

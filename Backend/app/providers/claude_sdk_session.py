@@ -202,6 +202,21 @@ _FILE_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 _SHELL_TOOLS = ("Bash", "PowerShell")
 
 
+def _risk_action(tool_name: str, inp: dict, workspace: str) -> dict:
+    """The action_risk view of a Claude tool call (balanced mode)."""
+    inp = inp if isinstance(inp, dict) else {}
+    if tool_name in _FILE_WRITE_TOOLS:
+        paths = [inp.get(key) for key in ("file_path", "path", "notebook_path") if inp.get(key)]
+        return {"kind": "file_write", "paths": paths, "workspace": workspace}
+    if tool_name in _SHELL_TOOLS:
+        return {"kind": "shell", "command": inp.get("command"), "cwd": workspace,
+                "workspace": workspace}
+    if tool_name.startswith("mcp__unityMCP__"):
+        return {"kind": "unity", "tool": tool_name, "args": inp}
+    # Task, Skill and every other tool: the rules cannot tell what it will do.
+    return {"kind": "other", "tool": tool_name}
+
+
 def _unity_file_refusal(tool_name: str, inp: dict, workspace: str):
     inp = inp if isinstance(inp, dict) else {}
     if tool_name in _FILE_WRITE_TOOLS:
@@ -1021,8 +1036,13 @@ class ClaudeSDKSession:
     async def _can_use_tool(self, tool_name: str, input_data: dict, context):
         from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
+        from agentic import approval_mode
+
         out_q = self._out_q
         gate_id = uuid.uuid4().hex
+        # Read live on every call (not the session flag): a flip bites on the
+        # next tool call of a running turn.
+        mode = approval_mode.current_mode()
 
         # Yol tabanlı okuma araçları workspace DIŞINI hedefliyorsa auto-allow'dan
         # DÜŞÜRÜLÜR ve aşağıdaki normal onay kartı akışına girer.
@@ -1034,8 +1054,9 @@ class ClaudeSDKSession:
         # kullanıcıya bırakılıyor.
         # Neden yalnız adım modunda: oto modda workspace dışına çıkabilmek kullanıcının
         # açıkça kabul ettiği bir taviz (28 Tem 2026 kararı) — orada kart çıkmaz.
+        # Balanced mode counts it as critical too (read_outside_workspace).
         _outside_read = (
-            not self.auto_approve
+            mode != "auto"
             and _read_target_outside_workspace(tool_name, input_data, self.cwd or "")
         )
 
@@ -1102,8 +1123,15 @@ class ClaudeSDKSession:
                                  "summary": refusal.summary})
             return PermissionResultDeny(message=refusal.message)
 
-        # Oto mod: onay kartı gösterme, otomatik izin ver (path güvenliği yukarıda uygulandı)
-        if self.auto_approve:
+        # Oto mod: onay kartı gösterme, otomatik izin ver (path güvenliği yukarıda uygulandı).
+        # Balanced: only what action_risk calls critical gets the card below.
+        if _outside_read:
+            action = {"kind": "read_outside", "tool": tool_name,
+                      "paths": [_read_tool_target(tool_name, input_data or {}) or ""]}
+        else:
+            action = _risk_action(tool_name, input_data, self.cwd or "")
+        decision = approval_mode.needs_card(action, mode=mode)
+        if not decision.card:
             return PermissionResultAllow(updated_input=input_data)
 
         # Normal araç → onay kartı (adım modu)
@@ -1118,6 +1146,8 @@ class ClaudeSDKSession:
                 "title": getattr(context, "title", None) or getattr(context, "display_name", None),
                 # Kart = kullanıcının karar verdiği yer → gövde TAM gider.
                 "command": _describe_tool(tool_name, input_data, tam_govde=True),
+                **({"risk_reason": decision.reason, "risk_detail": decision.detail}
+                   if decision.reason else {}),
             })
         res = await self._wait_gate(ev, APPROVAL_GATES, APPROVAL_RESULTS, gate_id, "onay")
         if bool(res):

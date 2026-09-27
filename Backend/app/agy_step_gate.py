@@ -4,12 +4,15 @@ agy runs this for its built-in file writers, run_command and
 send_command_input (see providers/agy_provider.py, _write_step_gate). It
 reads the hook payload on stdin and prints {"decision": "allow"|"deny"}.
 
-It is installed in both approval modes: the state file's "mode" decides.
-"auto" allows every call, "step" applies the rules below. In both, the fixed
-Unity file rule (unity_file_guard: no .meta writes/deletes/moves, no raw
-writes to Unity YAML assets) is checked first and can only deny. A process spawned
-in auto must still be gated after a flip to step, and agy reads its hooks
-only at start, so the mode cannot live in hooks.json.
+It is installed in every approval mode: the state file's "mode" decides.
+"auto" allows every call, "step" applies the rules below, and "balanced"
+(Burak, 27 Sep 2026) allows what step allows plus the built-in writes and
+commands action_risk calls routine; a critical one is denied with a pointer
+to the unityai bridge, which raises the card. In all three, the fixed Unity
+file rule (unity_file_guard: no .meta writes/deletes/moves, no raw writes to
+Unity YAML assets) is checked first and can only deny. A process spawned in
+auto must still be gated after a flip, and agy reads its hooks only at
+start, so the mode cannot live in hooks.json.
 
 Why a top-level module and not providers/: importing anything under
 `providers` runs the package __init__, which imports every provider SDK
@@ -73,6 +76,18 @@ RUN_REASON = (
     "; $ ` & | < > ^ % ! ( ), no typographic quotes or dashes), and nothing may come "
     "before or after the unityai call.")
 FAIL_REASON = "Gamachine step gate could not verify this call, so it is blocked."
+BALANCED_MODE = "balanced"
+BALANCED_REASON = (
+    "Gamachine Safe Auto mode: this {what} is critical ({reason}{detail}), so it needs the "
+    "user's approval. Do it through the unityai bridge in exactly the form given in your "
+    "instructions (save-file, delete-file or bash) so an approval card is shown; argument "
+    "values follow the same character rules as in step mode.")
+# The workspace hook entry (written by agy_provider._write_step_gate). The
+# state file is shared by every agy child, so balanced mode finds the
+# workspace a call confines to by walking up from the hook's working
+# directory to the directory whose .agents/hooks.json holds this entry.
+STEP_GATE_KEY = "gamachine-step-gate"
+STEP_GATE_HOOKS_FILE = ".agents/hooks.json"
 # Written for a child whose session is closing (agy_session.close): it denies
 # every call in either approval mode.
 CLOSED_MODE = "closed"
@@ -275,8 +290,51 @@ def _unity_file_refusal(raw: bytes):
     return None
 
 
-def decide(raw: bytes, state_path: str, windows: bool = None) -> dict:
+def _hook_workspace(start: str):
+    """The nearest directory at or above `start` whose hooks file holds
+    Gamachine's entry; None when there is none (balanced then allows
+    nothing it would have to confine)."""
+    directory = os.path.abspath(start)
+    while True:
+        try:
+            with open(os.path.join(directory, *STEP_GATE_HOOKS_FILE.split("/")),
+                      encoding="utf-8-sig") as f:
+                if STEP_GATE_KEY in json.load(f):
+                    return directory
+        except (OSError, ValueError, TypeError):
+            pass
+        parent = os.path.dirname(directory)
+        if not parent or parent == directory:
+            return None
+        directory = parent
+
+
+def _balanced_risk(name: str, args, cwd: str):
+    """action_risk's verdict for a built-in agy call in balanced mode."""
+    import action_risk  # stdlib-only; imported only in balanced mode
+    workspace = _hook_workspace(cwd)
+    if not workspace or not isinstance(args, dict):
+        return action_risk.Risk(action_risk.CRITICAL, "unknown_action", name)
+    if name == RUN_TOOL:
+        run_cwd = args.get("Cwd") if isinstance(args.get("Cwd"), str) and args.get("Cwd") else cwd
+        return action_risk.classify({"kind": "shell", "command": args.get("CommandLine"),
+                                     "cwd": run_cwd, "workspace": workspace})
+    if name in _FILE_WRITERS:
+        targets = [value for key, value in args.items()
+                   if isinstance(key, str) and key.replace("_", "").lower() == "targetfile"]
+        return action_risk.classify({"kind": "file_write", "paths": targets,
+                                     "cwd": cwd, "workspace": workspace})
+    return action_risk.Risk(action_risk.CRITICAL, "unknown_action", name)
+
+
+def _balanced_deny(what: str, risk) -> dict:
+    detail = f": {risk.detail}" if risk.detail else ""
+    return _deny(BALANCED_REASON.format(what=what, reason=risk.reason, detail=detail))
+
+
+def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -> dict:
     windows = (sys.platform == "win32") if windows is None else windows
+    cwd = os.getcwd() if cwd is None else cwd
     try:
         with open(state_path, encoding="utf-8") as f:
             state = json.load(f)
@@ -284,7 +342,7 @@ def decide(raw: bytes, state_path: str, windows: bool = None) -> dict:
         launcher = state["launcher"]
     except Exception:
         return _deny(FAIL_REASON)
-    if mode in ("auto", "step"):
+    if mode in ("auto", "step", BALANCED_MODE):
         refusal = _unity_file_refusal(raw)
         if refusal is not None:
             return _deny(refusal.message)
@@ -292,7 +350,7 @@ def decide(raw: bytes, state_path: str, windows: bool = None) -> dict:
         return {"decision": "allow"}
     if mode == CLOSED_MODE:
         return _deny(CLOSED_REASON)
-    if mode != "step":
+    if mode not in ("step", BALANCED_MODE):
         return _deny(FAIL_REASON)
     try:
         call = json.loads(raw.decode("utf-8"))["toolCall"]
@@ -306,8 +364,18 @@ def decide(raw: bytes, state_path: str, windows: bool = None) -> dict:
             return _deny(FAIL_REASON)
         if unityai_command_allowed(command, launcher, windows):
             return {"decision": "allow"}
+        if mode == BALANCED_MODE:
+            risk = _balanced_risk(name, call.get("args"), cwd)
+            if not risk.critical:
+                return {"decision": "allow"}
+            return _balanced_deny("command", risk)
         return _deny(RUN_REASON)
     if name in GATED_TOOLS:
+        if mode == BALANCED_MODE:
+            risk = _balanced_risk(name, call.get("args"), cwd)
+            if not risk.critical:
+                return {"decision": "allow"}
+            return _balanced_deny("file write" if name in _FILE_WRITERS else "call", risk)
         return _deny(WRITE_REASON)
     return _deny(FAIL_REASON)
 

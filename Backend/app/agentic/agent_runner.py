@@ -978,19 +978,53 @@ class AgentRunner:
         Yazma zaten `_validate_path` ile workspace'e hapsedilmiş durumda.
 
         Global auto mode shows no card on any path (owner decision, 25 Sep 2026).
-        Read live rather than from `self.generation_mode` so a flip to step
-        bites on the very next call of a running turn.
+        Balanced mode (Burak, 27 Sep 2026) asks action_risk instead: a critical
+        command, any delete, and a write to a protected path (.git,
+        ProjectSettings, Packages/manifest.json, agent config ...) get a card,
+        so balanced cards a protected write_file that step lets through.
+        Read live rather than from `self.generation_mode` so a flip bites on
+        the very next call of a running turn.
         """
         from agentic import approval_mode
+        self._approval_risk = None
         # Read-only: no card, `_execute_tool_with_approval` refuses the write.
-        if getattr(self, "read_only", False) or approval_mode.is_auto():
+        if getattr(self, "read_only", False):
             return None
+        mode = approval_mode.current_mode()
+        if mode == "auto":
+            return None
+        if mode == "balanced":
+            return self._balanced_approval_prompt(tool_name, tool_args, mode)
         if tool_name == "run_command":
             command = tool_args.get("command", "")
             return command if _is_dangerous_command(command, self.workspace_path) else None
         if tool_name == "delete_file":
             return f"delete_file {tool_args.get('file_path', '?')}"
         return None
+
+    def _balanced_approval_prompt(self, tool_name: str, tool_args: dict, mode: str) -> str | None:
+        from agentic import approval_mode
+        workspace = self.workspace_path or ""
+        if tool_name == "run_command":
+            command = tool_args.get("command", "")
+            action = {"kind": "shell", "command": command, "cwd": workspace, "workspace": workspace}
+            text = command
+        elif tool_name == "delete_file":
+            action = {"kind": "file_delete", "paths": [tool_args.get("file_path")]}
+            text = f"delete_file {tool_args.get('file_path', '?')}"
+        elif tool_name == "write_file":
+            action = {"kind": "file_write", "paths": [tool_args.get("file_path")],
+                      "workspace": workspace}
+            text = f"write_file {tool_args.get('file_path', '?')}"
+        else:
+            # The tools step mode never asks about (reads, memory, screenshot,
+            # mail) stay free here too.
+            return None
+        decision = approval_mode.needs_card(action, mode=mode)
+        if not decision.card:
+            return None
+        self._approval_risk = (decision.reason, decision.detail)
+        return text
 
     @contextlib.contextmanager
     def _approval_gate(self, command_text: str):
@@ -1026,9 +1060,13 @@ class AgentRunner:
                     gate_id = _candidate
                     break
         _register_gate(gate_id, self.conversation_id)
+        payload = {"command": command_text, "gate_id": gate_id}
+        risk = getattr(self, "_approval_risk", None)
+        self._approval_risk = None
+        if risk:
+            payload["risk_reason"], payload["risk_detail"] = risk
         try:
-            yield (AgentEvent("command_approval_needed",
-                              {"command": command_text, "gate_id": gate_id}), gate_id)
+            yield (AgentEvent("command_approval_needed", payload), gate_id)
         finally:
             # RESULTS'ı da düşür: yazan taraf conversation_routes, temizleyen
             # yoktu → gate_id başına kalıcı girdi birikiyordu.
@@ -2240,8 +2278,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             prompt = f"{SYSTEM_PROMPT}\n\n[BAĞLAM]\n{self.context}\n\n[KULLANICI]\n{user_message}"
 
             if self.provider_type == "subscription":
-                # Subscription ajanları için mod bilgisini ilet
-                is_step_mode = (getattr(self, 'generation_mode', 'plan') == 'step')
+                # Subscription ajanları için mod bilgisini ilet. Fail closed:
+                # every mode but auto (balanced, and any unknown value) is
+                # interactive; this used to test == 'step', so anything else
+                # ran like auto.
+                is_step_mode = (getattr(self, 'generation_mode', 'step') != 'auto')
                 full_text = ""
                 async for event in provider.analyze_code_with_thinking(prompt, thinking_level=self.thinking_level, cwd=self.workspace_path, interactive=is_step_mode):
                     if event["type"] == "tool_call":
@@ -2849,8 +2890,9 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         elif self.context and not session._ctx_injected:
             message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
             session._ctx_injected = True
-        if self.generation_mode == "auto" and not getattr(self, "read_only", False):
-            # Native requestApproval zaten otomatik kabul ediliyor. Bu kısa talimat
+        if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False):
+            # Native requestApproval zaten otomatik kabul ediliyor (balanced'da
+            # rutin olanlar; kritik olan kartla sorulur). Bu kısa talimat
             # modelin ayrıca metin içinde "yapayım mı?" diye durmasını engeller.
             message = f"{message}\n\n{_CODEX_AUTO_MODE_INSTRUCTION}"
 

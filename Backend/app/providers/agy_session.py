@@ -82,6 +82,24 @@ def _global_auto_mode() -> bool:
         return False
 
 
+def _global_gate_mode() -> str:
+    """The hook state for the published mode: "auto", "balanced" or "step".
+
+    Asks _global_auto_mode first, so auto has one source; anything that is
+    not auto and not balanced, unreadable included, is step. Callers that
+    write the file hold _gate_lock(), under which the mode cannot change
+    between the two reads (set_mode publishes under the same lock).
+    """
+    if _global_auto_mode():
+        return "auto"
+    try:
+        from agentic import approval_mode
+        return "balanced" if approval_mode.current_mode() == "balanced" else "step"
+    except Exception:
+        logger.warning("[agy] approval mode unreadable; treating it as step", exc_info=True)
+        return "step"
+
+
 def _gate_lock():
     """approval_mode.GATE_LOCK, the one lock over the mode's publish and every
     write of the hook's state file. The invariant it enforces, and the
@@ -159,20 +177,25 @@ def _sync_gate_state() -> bool:
     call. The mode is read and the file written under _gate_lock(), so this
     can never write auto after step was published.
 
-    False only when step mode is on and the file may still say auto; the
-    caller must then stop the process. A failed write in step mode first tries
-    to delete the file, since a hook with no state file denies everything.
+    False only when step or balanced mode is on and the file may still say
+    auto; the caller must then stop the process. A failed write then first
+    tries to delete the file, since a hook with no state file denies
+    everything.
     """
     from . import agy_provider
     with _gate_lock():
-        auto = _global_auto_mode()
+        mode = _global_gate_mode()
         try:
-            agy_provider.write_gate_state(auto=auto)
+            if mode == "balanced":
+                agy_provider.write_gate_state(mode=mode)
+            else:
+                agy_provider.write_gate_state(auto=(mode == "auto"))
             return True
         except Exception:
-            logger.warning("[agy] gate state not rewritten (auto=%s)", auto, exc_info=True)
-            if auto:
+            logger.warning("[agy] gate state not rewritten (mode=%s)", mode, exc_info=True)
+            if mode == "auto":
                 return True  # a stale "step" only over-restricts
+            # A stale "auto" must not outlive balanced either.
             return _remove_gate_state()
 
 
@@ -522,8 +545,8 @@ class AgyStreamSession(SaglayiciSahipligi):
         # hooks for its life. A model change requires closing and respawning,
         # while retaining the UUID. An approval-mode change does not: every
         # process has the hook, and the mode is only in the hook's state file.
-        auto = _global_auto_mode()
-        self._auto_approve = auto
+        mode = _global_gate_mode()
+        self._auto_approve = mode == "auto"
         if self._active_process is not None and (
             not self.is_live or self.model != model or self.cwd != cwd
         ):
@@ -564,13 +587,16 @@ class AgyStreamSession(SaglayiciSahipligi):
                         "paylaşıyor. O süreci kapatın ya da uygulamayı yeniden başlatın, "
                         "sonra mesajınızı yeniden gönderin.",
                         code="agy_closed_child_alive", pids=pids)
-                auto = _global_auto_mode()
-                self._auto_approve = auto
+                mode = _global_gate_mode()
+                self._auto_approve = mode == "auto"
                 _GATED_CHILDREN[token] = None
-                # In either mode this raises AgyStepGateError unless the gate
+                # In every mode this raises AgyStepGateError unless the gate
                 # is verifiably installed, so agy is never spawned ungated;
                 # stream() turns the raise into the user's error message.
-                provider._write_step_gate(cwd, step_mode=not auto)
+                if mode == "balanced":
+                    provider._write_step_gate(cwd, step_mode=True, mode=mode)
+                else:
+                    provider._write_step_gate(cwd, step_mode=(mode != "auto"))
             instructions = provider._stream_instructions()
             self._stderr_tail = b""
             self._usage_totals = {}
@@ -613,7 +639,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         # A flip while the state was written or the process was created found
         # no live process to update. agy makes no tool call before its first
         # stdin line, which stream() writes only after this returns.
-        if _global_auto_mode() != auto and not _sync_gate_state():
+        if _global_gate_mode() != mode and not _sync_gate_state():
             await self._stop_process(force=True)
             raise AgyStepGateError(_gate_write_failed(gate_state_path(), "yazılamadı"))
         return instructions
