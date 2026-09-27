@@ -174,6 +174,20 @@ def _is_emoji(ch: str) -> bool:
             or 0x1F000 <= cp <= 0x1FAFF or 0x2600 <= cp <= 0x27BF)
 
 
+# Control, format (bidi overrides and isolates, zero-width, BOM, soft hyphen),
+# private-use, surrogate and line/paragraph separator characters. A model can
+# return them and they would reorder or hide the title's text on screen
+# (Codex eveaudit, 27 Sep 2026: U+202E and U+0007 survived).
+_INVISIBLE_CATEGORIES = frozenset(("Cc", "Cf", "Co", "Cs", "Zl", "Zp"))
+
+
+def _drop_invisible(line: str) -> str:
+    # Whitespace controls (tab) stay so the collapse below turns them into a
+    # space instead of gluing two words together.
+    return "".join(ch for ch in line
+                   if ch.isspace() or unicodedata.category(ch) not in _INVISIBLE_CATEGORIES)
+
+
 def sanitize_title(raw: Any) -> Optional[str]:
     """A clean one-line title from a model answer, or None to keep the current one."""
     if not isinstance(raw, str):
@@ -181,7 +195,7 @@ def sanitize_title(raw: Any) -> Optional[str]:
     text = raw.strip()
     if not text or any(marker in text[:80] for marker in _ERROR_MARKERS):
         return None
-    lines = [ln.strip() for ln in text.splitlines()]
+    lines = [_drop_invisible(ln).strip() for ln in text.splitlines()]
     lines = [ln for ln in lines if ln and not ln.startswith("```")]
     if not lines:
         return None

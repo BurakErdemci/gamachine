@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import sys
+import unicodedata
 from collections import defaultdict
 
 import pytest
@@ -325,7 +326,8 @@ def test_timeout_keeps_the_title(db, monkeypatch):
     assert cid not in ct._RUNNING
 
 
-@pytest.mark.parametrize("answer", ["", "   ", "❌ Anthropic API Hatası: model hatası", "\"\"", "🎮🎮"])
+@pytest.mark.parametrize("answer", ["", "   ", "❌ Anthropic API Hatası: model hatası", "\"\"", "🎮🎮",
+                                    "‮​﻿\x07"])
 def test_unusable_answer_keeps_the_title(db, monkeypatch, answer):
     _use(monkeypatch, _Recorder(answer))
     cid = _chat(db, replies=1, title="eski başlık")
@@ -368,6 +370,24 @@ def test_sanitizer(raw, expected):
     assert ct.sanitize_title(raw) == expected
 
 
+# Codex eveaudit, 27 Sep 2026: control and bidi characters reached the saved title.
+@pytest.mark.parametrize("raw,expected", [
+    ("Alpha‮Beta\x07 Gamma", "AlphaBeta Gamma"),
+    ("⁦Sahne­ Yükleme⁩", "Sahne Yükleme"),
+    ("﻿​Kamera‌ Takibi‍", "Kamera Takibi"),
+    ("‭‪Çağrı‬ Şeması‎‏", "Çağrı Şeması"),
+    ("Envanter\U000f0000 Arayüzü", "Envanter Arayüzü"),
+    ("Oyun\tDöngüsü", "Oyun Döngüsü"),
+    ("Envanter Arayüzü ikinci satır", "Envanter Arayüzü"),
+    ("‮​\nIşık Ayarı", "Işık Ayarı"),
+    ("Düşman: Yapay Zekâ (v2), İlk Adım", "Düşman: Yapay Zekâ (v2), İlk Adım"),
+])
+def test_sanitizer_drops_invisible_characters(raw, expected):
+    out = ct.sanitize_title(raw)
+    assert out == expected
+    assert not any(unicodedata.category(ch) in ("Cc", "Cf", "Co", "Cs", "Zl", "Zp") for ch in out)
+
+
 def test_sanitizer_caps_long_titles_on_a_word_boundary():
     raw = "Bu çok uzun bir başlık ve altmış karakteri kesinlikle aşan bir cümle olarak yazıldı"
     out = ct.sanitize_title(raw)
@@ -375,7 +395,8 @@ def test_sanitizer_caps_long_titles_on_a_word_boundary():
     assert raw.startswith(out) and not out.endswith(" ")
 
 
-@pytest.mark.parametrize("raw", [None, "", "\n\n", '""', "...", "🎮", "❌ hata", "SİSTEM MESAJI: model yok"])
+@pytest.mark.parametrize("raw", [None, "", "\n\n", '""', "...", "🎮", "❌ hata", "SİSTEM MESAJI: model yok",
+                                 "‮​﻿\x07", "⁦­⁩"])
 def test_sanitizer_rejects_garbage(raw):
     assert ct.sanitize_title(raw) is None
 
