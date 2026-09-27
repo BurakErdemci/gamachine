@@ -95,9 +95,16 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
           </div>
         ) : (
           <div key={m.id} data-testid="side-answer" className="px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.06] text-[12px] text-slate-300 break-words">
-            {m.content
-              ? <MarkdownRenderer content={m.content} />
-              : <span className="text-slate-500 animate-pulse">{t('side.thinking')}</span>}
+            {m.content && <MarkdownRenderer content={m.content} />}
+            {!m.content && !(m.activity && !m.finished && !m.failed) && (
+              <span className="text-slate-500 animate-pulse">{t('side.thinking')}</span>
+            )}
+            {m.activity && !m.finished && !m.failed && (
+              <div data-testid="side-activity" className={`text-[11px] text-slate-500 animate-pulse truncate ${m.content ? 'mt-1.5' : ''}`}>
+                {m.activity.kind === 'reading' ? t('side.activityReading') : t('side.activityThinking')}
+                {m.activity.detail ? ` — ${m.activity.detail.slice(0, 60)}` : ''}
+              </div>
+            )}
             {m.finished && !m.failed && m.content.trim() && (
               <button
                 type="button"

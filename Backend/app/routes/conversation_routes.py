@@ -81,7 +81,8 @@ CHAT_RATE_LIMIT_WINDOW = 60        # saniye
 
 
 def _build_handoff_context(memory: str, history_messages: list,
-                           budget_chars: int = 20000, per_msg_cap: int = 4000) -> str:
+                           budget_chars: int = 20000, per_msg_cap: int = 4000,
+                           history_header: Optional[str] = None) -> str:
     """CLI'lar arası 'kaldığı yerden devam' için TAM sohbet transcript'i kurar (her iki rol).
 
     Bu text, yeni provider'ın session'ının ilk turunda enjekte edilir; CLI değişince
@@ -135,9 +136,10 @@ def _build_handoff_context(memory: str, history_messages: list,
         if dusen > 0:
             bas = (f"…[bu sohbetin daha ESKİ {dusen} mesajı bağlam sınırına sığmadı ve "
                    "aşağıda YOK. Gerekirse kullanıcıya sor, hatırlıyormuş gibi yapma.]\n")
+        # `history_header`: a side question must not be told to continue.
         parts.append(
-            "[SOHBET GEÇMİŞİ — bu konuşma başka bir AI CLI ile sürdürülmüş olabilir; "
-            "aşağıdaki geçmişi dikkate alıp kaldığın yerden devam et]\n" + bas + "\n".join(lines)
+            (history_header or "[SOHBET GEÇMİŞİ — bu konuşma başka bir AI CLI ile sürdürülmüş olabilir; "
+             "aşağıdaki geçmişi dikkate alıp kaldığın yerden devam et]") + "\n" + bas + "\n".join(lines)
         )
     return "\n\n".join(parts)
 
@@ -412,14 +414,6 @@ _SIDE_AGY_REFUSED = (
     "çalıştırıyor, yani yan soru ana sohbetin turunun bitmesini beklerdi. "
     "Yan soru için başka bir model seç."
 )
-_SIDE_INSTRUCTION = (
-    "[YAN SORU — SALT OKUNUR] Kullanıcı bunu ana sohbet sürerken yan panelden "
-    "soruyor. Yalnız okuyabilirsin: dosya yazma/düzenleme/silme, komut çalıştırma, "
-    "Unity'de değişiklik ve hafızaya kaydetme YASAK ve reddedilir; deneme. "
-    "Ana sohbetin bağlamına dayanarak kısa ve doğrudan cevap ver.\n"
-    "[SIDE QUESTION — READ-ONLY] Never write or edit files, run commands, change "
-    "Unity or save memory; answer briefly from the main chat's context."
-)
 
 
 def _is_agy_model(provider_type: str, model_name: str) -> bool:
@@ -452,6 +446,27 @@ def _side_live_block(live_context: str, in_flight: bool) -> str:
     label = ("[ANA SOHBETİN ŞU AN YAZILMAKTA OLAN (YARIM) CEVABI]" if in_flight
              else "[ANA SOHBETİN EKRANDAKİ SON CEVABI]")
     return f"{label}\n{live}"
+
+
+def _build_side_turn(question: str, memory: str, main_messages: list, in_flight: bool,
+                     live_context: str, side_messages: list):
+    """The parts of one side turn; `agentic.side_prompt` fixes their order."""
+    from agentic.side_prompt import SideTurn, MAIN_TRANSCRIPT_LABEL
+    msgs = list(main_messages)
+    request = ""
+    if in_flight and msgs and msgs[-1].get("role") == "user":
+        # The main chat stores its request before the turn starts, so while it
+        # runs the request is the last row. Left in the history it was the last
+        # line the model saw and got answered instead of the side question
+        # (live test 27 Sep 2026); it goes out labelled instead.
+        request = (msgs[-1].get("content") or "").strip()
+        history_src = msgs  # the builder drops the last element
+    else:
+        history_src = msgs + [{"role": "user", "content": ""}]
+    history = _build_handoff_context(memory, history_src, history_header=MAIN_TRANSCRIPT_LABEL)
+    return SideTurn(question=question, main_history=history, in_flight_request=request,
+                    live_answer=_side_live_block(live_context, in_flight),
+                    side_history=_side_history_block(side_messages))
 
 
 def _tag_sse_frame(frame: str, conversation_id: int) -> str:
@@ -1141,17 +1156,12 @@ def create_conversation_router(db, progress_store):
         workspace_path = db.get_last_workspace(user_id) or ""
 
         from agentic.approval_policy import conversation_turn_in_flight
-        # `_build_handoff_context` drops the last element (the current user
-        # input on the normal path); every main-chat message is history here.
-        main_history = db.get_conversation_messages(main_id) + [{"role": "user", "content": ""}]
-        parts = [_build_handoff_context(db.get_memory(main_id), main_history)]
-        parts.append(_side_history_block(db.get_conversation_messages(side_id)))
-        context_summary = "\n\n".join(p for p in parts if p)
-
-        # The live answer rides in the message, not the context: session
-        # providers take the context on their first turn only.
-        live = _side_live_block(req.live_context, conversation_turn_in_flight(main_id))
-        combined_msg = "\n\n".join(p for p in (_SIDE_INSTRUCTION, live, f"[YAN SORU]\n{req.message}") if p)
+        # The runner assembles the turn text from these parts on every
+        # provider path; it decides which parts a resumed side session needs.
+        side_turn = _build_side_turn(
+            req.message, db.get_memory(main_id), db.get_conversation_messages(main_id),
+            conversation_turn_in_flight(main_id), req.live_context,
+            db.get_conversation_messages(side_id))
 
         db.add_message(side_id, "user", req.message)
 
@@ -1164,7 +1174,7 @@ def create_conversation_router(db, progress_store):
             model_name=model_name,
             workspace_path=workspace_path,
             language=req.language,
-            context=context_summary,
+            context="",
             thinking_level=req.thinking_level,
             conversation_id=side_id,
             images=None,
@@ -1175,13 +1185,14 @@ def create_conversation_router(db, progress_store):
             resume_id=_resume_id,
             # From the DB row, never from the request.
             read_only=main_id is not None,
+            side_turn=side_turn,
         )
 
         async def event_generator():
             entry = _TurnRecord()
             terminal_gitti = False
             try:
-                async for event in runner.run(combined_msg):
+                async for event in runner.run(req.message):
                     entry.add(event)
                     if event.type == "done":
                         _sid = (event.data or {}).get("session_id")

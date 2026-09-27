@@ -61,6 +61,9 @@ class SaglayiciSahipligi:
         # sağlayıcı hiçbir Durdur yoluna görünmüyordu — çünkü artık kayıtta
         # olmayan bir nesneye asılıydı. Burada iptali kendimiz üstleniyoruz.
         if self._kapandi:
+            # Warned here only: `oturumu_kapat` stamps every provider of a
+            # normally closing session too, and warned on each side-chat close.
+            logger.warning("[oturum] kapanmış oturuma sağlayıcı atandı — spawn engellendi")
             self._kapaninca_isaretle(saglayici)
 
     @staticmethod
@@ -79,7 +82,6 @@ class SaglayiciSahipligi:
         kapanmış bir oturum için çocuk süreci HİÇ başlatmıyor. Zaten başlamış
         bir süreç varsa `oturumu_kapat` onu ayrıca iptal ediyor.
         """
-        logger.warning("[oturum] kapanmış oturuma sağlayıcı atandı — spawn engellendi")
         try:
             saglayici._oturum_kapandi = True
         except AttributeError:

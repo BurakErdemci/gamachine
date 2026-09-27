@@ -11,7 +11,38 @@ export interface SideMessage {
   /** Assistant only: the stream reached `done`/`response`. */
   finished?: boolean;
   failed?: boolean;
+  /** Assistant only, while running: what the model does before/between text. */
+  activity?: SideActivity;
 }
+
+export interface SideActivity {
+  kind: 'thinking' | 'reading';
+  /** The tool and its target, when the event names them. */
+  detail?: string;
+}
+
+/**
+ * Activity from one side-stream event; `undefined` leaves it unchanged, `null`
+ * clears it. The one-shot CLIs report tools as `thinking` text: `🔧 \`name\``
+ * when a tool runs and `↩ output` for its result (cli_base).
+ */
+export const sideActivityFrom = (data: any): SideActivity | null | undefined => {
+  if (data?.type === 'thinking') {
+    const text = String(data.text || '').trim();
+    if (text.startsWith('↩')) return undefined;
+    if (text.startsWith('🔧')) {
+      return { kind: 'reading', detail: text.replace(/^🔧\s*/, '').replace(/`/g, '').trim() || undefined };
+    }
+    return { kind: 'thinking' };
+  }
+  if (data?.type === 'tool_call' && data.tool !== 'TodoWrite') {
+    const detail = [data.tool, data.summary].filter(Boolean).join(' → ');
+    return { kind: 'reading', detail: detail || undefined };
+  }
+  if (data?.type === 'tool_result') return { kind: 'thinking' };
+  if (data?.type === 'text' && data.content) return null;
+  return undefined;
+};
 
 export interface SideAskOptions {
   /** The main chat's answer as it stands on screen, sent only while it streams. */
@@ -189,15 +220,17 @@ export const useSideChat = (API: string, user: UserData | null) => {
           let data: any;
           try { data = JSON.parse(frame.slice(6)); } catch { continue; }
           if (data.conversation_id != null && Number(data.conversation_id) !== target) continue;
+          const activity = sideActivityFrom(data);
+          if (activity !== undefined) patch(m => ({ ...m, activity: activity ?? undefined }));
           if (data.type === 'text' && data.content) {
             patch(m => ({ ...m, content: m.content + data.content }));
           } else if (data.type === 'response') {
             finished = true;
-            patch(m => ({ ...m, content: data.content || m.content, finished: true }));
+            patch(m => ({ ...m, content: data.content || m.content, finished: true, activity: undefined }));
           } else if (data.type === 'done') {
             finished = true;
             const note = data.stop_message ? String(data.stop_message) : '';
-            patch(m => ({ ...m, finished: true, content: note && !m.content ? note : m.content }));
+            patch(m => ({ ...m, finished: true, activity: undefined, content: note && !m.content ? note : m.content }));
           } else if (data.type === 'error' && data.message) {
             fail(String(data.message));
           }
@@ -209,7 +242,7 @@ export const useSideChat = (API: string, user: UserData | null) => {
       if (controllerRef.current === controller) controllerRef.current = null;
       if (epochRef.current === epoch) {
         setLoading(false);
-        patch(m => ({ ...m, finished: true }));
+        patch(m => ({ ...m, finished: true, activity: undefined }));
       }
     }
   }, [headers, createSide, discard]);

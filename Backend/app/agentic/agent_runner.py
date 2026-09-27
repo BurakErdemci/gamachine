@@ -27,6 +27,7 @@ from agentic.command_gates import GATE_OWNERS as _GATE_OWNERS
 from agentic.command_gates import register_gate as _register_gate, release_gate as _release_gate
 
 from agentic.command_safety import requires_approval as _is_dangerous_command
+from agentic.side_prompt import SideTurn, API_SYSTEM_CONTEXT as _SIDE_API_CONTEXT
 
 
 from google import genai
@@ -890,10 +891,14 @@ class AgentRunner:
         resume_id: Optional[str] = None,
         read_only: bool = False,
         mail_depth: int = 0,
+        side_turn: Optional[SideTurn] = None,
     ):
         # Side chat: no write of any kind on any path, whatever the approval
         # mode. The route derives it from the DB (`side_of`), never the client.
         self.read_only = bool(read_only)
+        # Side question: the turn text is built from these parts on every
+        # provider path instead of `user_message` + `_HANDOFF_HEADER` + context.
+        self.side_turn = side_turn
         # Depth of the mail this turn runs on (0 for any other turn), fixed by
         # the route from the claimed DB rows and registered with the turn in
         # `run`, so a mail send reads the depth of the turn it comes from.
@@ -1270,6 +1275,11 @@ class AgentRunner:
         # putting it inside the branches would again close only one.
         for _w in _video_warnings:
             yield AgentEvent("warning", _w)
+        _side = getattr(self, "side_turn", None)
+        if _side is not None and self.provider_type != "subscription":
+            # API loops keep no session: every side turn carries all its parts.
+            user_message = _side.text(full=True)
+            self.context = _SIDE_API_CONTEXT
         if self.provider_type == "google":
             async for event in self._run_gemini(user_message):
                 yield event
@@ -2379,7 +2389,12 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         enriched_prompt = user_message
         # Kimi CLI'nın doğrulanmış resume mekanizması yok; her turda kırpılmış
         # transcript verilir. Diğer one-shot CLI'lar resmi session resume kullanır.
-        if self.context and (cli_key == "kimi" or not sess.ctx_injected):
+        if getattr(self, "side_turn", None) is not None:
+            # Same injection rule; a resumed side session only gets the parts
+            # that change per turn. Cap as below (command-line length).
+            enriched_prompt = self.side_turn.text(
+                full=(cli_key == "kimi" or not sess.ctx_injected), context_cap=24000)
+        elif self.context and (cli_key == "kimi" or not sess.ctx_injected):
             _CTX_CAP = 24000  # Windows argv sınırı (~32K) + mcp_hint payı
             _ctx = self.context
             if len(_ctx) > _CTX_CAP:
@@ -2677,7 +2692,9 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             # geçmişini zaten geri yüklüyor, üstüne bir de bizim özetimizi koymak
             # modele aynı konuşmayı İKİ KEZ gösterirdi (ve 20.000 karakteri boşa
             # harcardı). Kimlik yoksa eski yol aynen sürüyor.
-            if self.context and not session.session_id and not self.resume_id:
+            if getattr(self, "side_turn", None) is not None:
+                message = self.side_turn.text(full=not session.session_id and not self.resume_id)
+            elif self.context and not session.session_id and not self.resume_id:
                 message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
             # Ultracode (Claude-only): SDK'da option YOK → tek yol mesaja keyword enjeksiyonu.
             # CLI bu kelimeyi görünce çok-ajanlı ultracode akışını tetikler (belgesiz; sürüme bağlı).
@@ -2798,7 +2815,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 
         # /usage → canlı app-server'dan kullanım kartı metni (model turu YOK → sıfır token).
         # Ham user_message'a bakılır (bağlam wrapping'inden ÖNCE).
-        if user_message.strip().lower() == "/usage":
+        if getattr(self, "side_turn", None) is None and user_message.strip().lower() == "/usage":
             try:
                 text = await session.usage_card_text()
             except Exception as e:
@@ -2810,7 +2827,10 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 
         # İlk turda proje bağlamını ekle; sonraki turlarda thread zaten hatırlıyor.
         message = user_message
-        if self.context and not session._ctx_injected:
+        if getattr(self, "side_turn", None) is not None:
+            message = self.side_turn.text(full=not session._ctx_injected)
+            session._ctx_injected = True
+        elif self.context and not session._ctx_injected:
             message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
             session._ctx_injected = True
         if self.generation_mode == "auto" and not getattr(self, "read_only", False):

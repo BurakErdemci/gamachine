@@ -305,12 +305,16 @@ def test_side_stream_writes_nothing_about_the_main_chat(env, monkeypatch):
     assert kw["conversation_id"] == side
     assert kw["read_only"] is True
     assert kw["resume_id"] is None
-    # Every main-chat message reaches the context (the handoff helper drops
-    # the last element; the route pads for it), plus the main chat's memory.
+    # Every main-chat message reaches the side turn's history (the handoff
+    # helper drops the last element; the route pads for it), plus the main
+    # chat's memory. The runner gets the raw question and builds the text.
+    side_turn = kw["side_turn"]
     for i in range(4):
-        assert f"m{i}" in kw["context"]
-    assert "ana özet" in kw["context"]
-    assert "SALT OKUNUR" in _FakeRunner.last.message
+        assert f"m{i}" in side_turn.main_history
+    assert "ana özet" in side_turn.main_history
+    assert kw["context"] == ""
+    assert "SALT OKUNUR" in side_turn.text(full=False)
+    assert _FakeRunner.last.message == "Bu neden böyle?"
 
 
 def test_side_follow_up_resumes_the_side_session_and_sees_earlier_answers(env, monkeypatch):
@@ -321,7 +325,7 @@ def test_side_follow_up_resumes_the_side_session_and_sees_earlier_answers(env, m
     _stream(client, side, message="peki ya bu?")
     kw = _FakeRunner.last.kw
     assert kw["resume_id"] == "side-sess"
-    assert "yan cevap" in kw["context"]
+    assert "yan cevap" in kw["side_turn"].side_history
 
 
 def test_side_stream_caps_the_live_context_and_labels_a_running_turn(env, monkeypatch):
@@ -332,7 +336,7 @@ def test_side_stream_caps_the_live_context_and_labels_a_running_turn(env, monkey
     live = "A" * 20000 + "SON"
     with ambient_turn(".", "step", main):
         _stream(client, side, live_context=live)
-    msg = _FakeRunner.last.message
+    msg = _FakeRunner.last.kw["side_turn"].text(full=False)
     assert "YARIM" in msg
     assert msg.count("A") <= cr.SIDE_LIVE_CONTEXT_CAP + 50
     assert "SON" in msg
