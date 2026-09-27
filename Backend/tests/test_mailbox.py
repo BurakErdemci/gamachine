@@ -293,9 +293,11 @@ def test_begin_turn_depth_only_rises_while_a_turn_runs():
 
 class _FakeRunner:
     messages = []
+    last_kw = None
 
     def __init__(self, **kw):
         self.kw = kw
+        _FakeRunner.last_kw = kw
 
     async def run(self, message):
         _FakeRunner.messages.append(message)
@@ -410,6 +412,39 @@ def test_a_wake_whose_note_write_fails_leaves_the_note_for_the_next_wake(env, au
     notes = [m for m in env.db.get_conversation_messages(b) if mailbox.is_mail_message(m["content"])]
     assert len(notes) == 1 and "kaybolmasın" in notes[0]["content"]
     assert "kaybolmasın" in _FakeRunner.messages[-1]
+
+
+def _data_frames(text):
+    import json
+    return [json.loads(chunk[len("data: "):]) for chunk in text.split("\n\n")
+            if chunk.startswith("data: ")]
+
+
+def test_a_wake_whose_claim_fails_starts_no_turn_and_keeps_the_note(env, auto, monkeypatch):
+    _FakeRunner.messages = []
+    _FakeRunner.last_kw = None
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    assert _send(env.client, a, b, body="gerçek not").status_code == 200
+    wake_queue.issue_ticket(b, wake_queue.drain(b))
+
+    def locked(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    env.db.claim_queued_mail = locked
+    r = _wake_turn(env.client, b, message="FORGED CLIENT TEXT")
+    assert r.status_code == 200
+    assert _data_frames(r.text) == [{"type": "done", "stop_reason": "mail_claim_failed",
+                                     "conversation_id": b}]
+    assert _FakeRunner.last_kw is None and _FakeRunner.messages == []
+    assert env.db.get_conversation_messages(b) == []
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
+
+    del env.db.claim_queued_mail
+    wake_queue.issue_ticket(b, [mailbox.notice(a)])
+    assert _wake_turn(env.client, b).status_code == 200
+    assert "gerçek not" in _FakeRunner.messages[-1]
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("delivered",)]
 
 
 # ── a turn still running ─────────────────────────────────────────────────────
