@@ -128,6 +128,9 @@ export const tr = {
   // SettingsModal
   'settings.title': 'AI Yapılandırması',
   'settings.language': 'Dil',
+  'settings.autoTitles': 'Otomatik sohbet adı',
+  'settings.autoTitlesHint': 'İlk ve üçüncü yanıttan sonra sohbete içeriğinden kısa bir ad verilir. Claude Code, Codex, Antigravity, OpenCode ve API modellerinde çalışır; diğer CLI\'larda ad ilk mesajdan kalır. Elle verdiğin ada dokunulmaz.',
+  'settings.autoTitlesFailed': 'Otomatik sohbet adı ayarı kaydedilemedi.',
   'settings.provider': 'Provider',
   'settings.apiKey': 'API Key',
   'settings.savedKey': '✓ Kayıtlı key mevcut',
@@ -738,6 +741,9 @@ export const en: Record<keyof typeof tr, string> = {
   // SettingsModal
   'settings.title': 'AI Configuration',
   'settings.language': 'Language',
+  'settings.autoTitles': 'Auto chat titles',
+  'settings.autoTitlesHint': 'After the first and third reply the chat gets a short name from its content. Available for Claude Code, Codex, Antigravity, OpenCode and API models; other CLIs keep the first-message title. A name you gave by hand is never changed.',
+  'settings.autoTitlesFailed': 'The auto chat titles setting could not be saved.',
   'settings.provider': 'Provider',
   'settings.apiKey': 'API Key',
   'settings.savedKey': '✓ Saved key exists',

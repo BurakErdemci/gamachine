@@ -32,6 +32,7 @@ import { useAppInitialization } from '../hooks/home/useAppInitialization';
 import { useAuth } from '../hooks/home/useAuth';
 import { useFileSystem } from '../hooks/home/useFileSystem';
 import { useChat } from '../hooks/home/useChat';
+import { useAutoChatTitles } from '../hooks/home/useAutoChatTitles';
 import { useSideChat, sideQuote } from '../hooks/home/useSideChat';
 import { useAIConfig } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
@@ -110,6 +111,7 @@ export default function Home() {
     fs.refreshFileTree, 
     fs.suggestFilePath
   );
+  const autoTitles = useAutoChatTitles(API, auth.user?.id, showToast as any);
 
   // Read-only side question over the chat on screen; its own state, never
   // useChat's runtimes (see useSideChat).
@@ -620,6 +622,8 @@ export default function Home() {
         unityMcpStatus={ai.unityMcpStatus} unityMcpToggling={ai.unityMcpToggling} onToggleUnityMcp={ai.toggleUnityMcp}
         lang={lang} onLangChange={setLang}
         approvalMode={chat.generationMode} onApprovalModeChange={(m) => chat.setGenerationMode(m, 'settings')}
+        autoTitles={autoTitles.autoTitles} autoTitlesSaving={autoTitles.autoTitlesSaving}
+        onToggleAutoTitles={autoTitles.toggleAutoTitles}
       />
 
       <ExportModal

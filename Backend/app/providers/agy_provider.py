@@ -555,14 +555,16 @@ class AgyProvider(BaseCLIProvider):
             logger.warning(f"[CLIProvider] unityai CLI env yazılamadı: {e}")
 
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
-        """agy config dosyalarını günceller.
+        """Updates agy's config files.
 
-        ÖNEMLİ: agy --print modu HİÇBİR MCP server'ını yüklemez (stdio da HTTP da)
-        — doğrudan test edildi. Bu yüzden agy mcp__unityai__* araçlarını GÖREMEZ.
-        Bunun yerine agy, run_command built-in aracıyla 'unityai' CLI'ını çağırır
-        (bkz. cli_base mcp_hint). Buradaki MCP kaydı sadece agy interaktif modda
-        kullanılırsa diye tutulur; --print akışında etkisizdir. Asıl iş .unityai_cli.env
-        + disabledTools (agy'nin gerçek write araçlarını kapatma) ile yapılır.
+        agy --print mode DOES start the MCP servers of its config: measured
+        14 Jul 2026 (agy 1.1.2, see the migrated-path note below) and again on
+        27 Sep 2026 (agy 1.2.11: the global servers started even for a custom
+        agent with `tools: []`; vault note
+        Teknik/Arastirmalar/Gamachine_Baslik_Modelleri_2026-09-27). The older
+        claim here, that --print loads no MCP server, is superseded. The
+        unityai CLI path (cli_base mcp_hint, .unityai_cli.env) and
+        disabledTools (agy's real write tools off) stay in place as well.
         """
         # Bu env sözlüğü ~/.gemini/settings.json'a yazılıyor — token oraya
         # girmiyor: dosya paylaşımlı (Jarvan da aynı dosyayı kullanıyor) ve

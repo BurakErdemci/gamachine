@@ -361,6 +361,11 @@ export const useChat = (
   // One chat's hide/unhide PUTs go out one after another: sent in parallel, an
   // older hide could be stored after a newer reopen (Codex verifyf).
   const hiddenWritesRef = useRef(new Map<number, Promise<unknown>>());
+  // AI titles pushed by the server, with the newest list request started when
+  // each arrived: a read started before a title was written carries the old
+  // one and must not put it back. Bumping listSeqRef instead would also drop
+  // that read's other news, e.g. a chat just created.
+  const liveTitlesRef = useRef(new Map<number, { title: string; seq: number }>());
 
   const fetchConversations = useCallback(async (userId: number) => {
     if (!API) return;
@@ -369,10 +374,27 @@ export const useChat = (
       const res = await axios.get(`${API}/conversations/${userId}`);
       if (seq !== listSeqRef.current) return;
       const pending = pendingHiddenRef.current;
-      setConversations(!Array.isArray(res.data) || pending.size === 0 ? res.data
-        : res.data.map((c: Conversation) => (pending.has(c.id) ? { ...c, hidden: pending.get(c.id)!.hidden } : c)));
+      const titles = liveTitlesRef.current;
+      let list = !Array.isArray(res.data) || pending.size === 0 ? res.data
+        : res.data.map((c: Conversation) => (pending.has(c.id) ? { ...c, hidden: pending.get(c.id)!.hidden } : c));
+      if (Array.isArray(list) && titles.size > 0) {
+        list = list.map((c: Conversation) => {
+          const live = titles.get(c.id);
+          return live && live.seq >= seq ? { ...c, title: live.title } : c;
+        });
+        for (const [id, live] of titles) if (live.seq < seq) titles.delete(id);
+      }
+      setConversations(list);
     } catch (err) { console.error("Sohbet listesi hatası:", err); }
   }, [API]);
+
+  const applyServerTitle = useCallback((convId: number, title: unknown) => {
+    if (!Number.isSafeInteger(convId) || convId <= 0 || typeof title !== 'string' || !title.trim()) return;
+    liveTitlesRef.current.set(convId, { title, seq: listSeqRef.current });
+    setConversations(prev => (prev.some(c => c.id === convId && c.title !== title)
+      ? prev.map(c => (c.id === convId ? { ...c, title } : c))
+      : prev));
+  }, []);
 
   // Göstergeyi backend'den TAZELE. Burada bir kopya formül vardı (chars/200k) ve
   // backend'deki asıl formülle sessizce ayrışabiliyordu — aynı kuralın iki
@@ -551,6 +573,7 @@ export const useChat = (
     if (!API || !title.trim()) return false;
     try {
       await axios.put(`${API}/conversations/${convId}`, { title });
+      liveTitlesRef.current.delete(convId);
       setConversations(prev => prev.map(c => (c.id === convId ? { ...c, title } : c)));
       if (user) void fetchConversations(user.id);
       return true;
@@ -1142,6 +1165,10 @@ export const useChat = (
                   console.warn('[AUTO-WAKE] malformed wake frame:', payload.slice(0, 500), err);
                   continue;
                 }
+                if (data?.type === 'title' && !iptal) {
+                  applyServerTitle(Number(data.conversation_id), data.title);
+                  continue;
+                }
                 if (data?.type !== 'wake' || iptal) continue;
                 const convId = Number(data.conversation_id);
                 if (!Number.isSafeInteger(convId) || convId <= 0) continue;
@@ -1157,7 +1184,7 @@ export const useChat = (
       }
     })();
     return () => { iptal = true; ac.abort(); };
-  }, [API, userId, sessionToken, rt]);
+  }, [API, userId, sessionToken, rt, applyServerTitle]);
 
   const clearHistory = useCallback(async () => {
     if (!activeConvId) return;

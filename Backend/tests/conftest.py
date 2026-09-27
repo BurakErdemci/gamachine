@@ -51,6 +51,22 @@ def _opencode_shadow_off(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _chat_title_runners_never_spawn(monkeypatch):
+    # Every chat-stream test that stores a first reply would otherwise start a
+    # real title call (Claude CLI, codex, a vendor API). Tests that need a
+    # runner put a fake one in RUNNERS themselves.
+    from agentic import chat_titles
+
+    async def _refuse(choice, prompt, ctx):
+        raise chat_titles.TitleRunError("real title runner disabled in tests")
+
+    monkeypatch.setattr(chat_titles, "RUNNERS", {k: _refuse for k in chat_titles.RUNNERS})
+    chat_titles._RUNNING.clear()
+    yield
+    chat_titles._RUNNING.clear()
+
+
+@pytest.fixture(autouse=True)
 def _approval_mode_starts_in_step():
     # Module-level state: a test that switches to auto must not leak it.
     from agentic import approval_mode

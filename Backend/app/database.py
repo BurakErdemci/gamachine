@@ -162,8 +162,17 @@ class DatabaseManager:
             # fork_at the id of the last message copied from the source.
             # side_of: a read-only side chat's main chat. parent_id stays NULL on
             # a side row so `_touch` never bumps the main chat's family.
+            # title_source: 'auto' (first-message cut, branch default, AI title)
+            # or 'user' (renamed by hand, never retitled); existing rows count
+            # as 'auto'. auto_title_runs caps AI title generations per chat
+            # (Burak, 27 Sep 2026: at most two). copied_until: the last message
+            # id a branch got as a copy; fork_at names the SOURCE's last id and
+            # the copies get new, larger ids, so it cannot tell them apart.
             for col_def in ("parent_id INTEGER", "fork_at INTEGER",
-                            "hidden INTEGER NOT NULL DEFAULT 0", "side_of INTEGER"):
+                            "hidden INTEGER NOT NULL DEFAULT 0", "side_of INTEGER",
+                            "title_source TEXT NOT NULL DEFAULT 'auto'",
+                            "auto_title_runs INTEGER NOT NULL DEFAULT 0",
+                            "copied_until INTEGER"):
                 try:
                     cursor.execute(f"ALTER TABLE conversations ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
@@ -446,6 +455,10 @@ class DatabaseManager:
                     'WHERE conversation_id = ? AND id <= ? ORDER BY id',
                     (new_id, source_id, fork_at)
                 )
+                conn.execute(
+                    'UPDATE conversations SET copied_until = '
+                    '(SELECT MAX(id) FROM messages WHERE conversation_id = ?) WHERE id = ?',
+                    (new_id, new_id))
             conn.execute('UPDATE conversations SET updated_at = ? WHERE id = ?', (now, root_id))
             conn.commit()
         return {"id": new_id, "title": new_title, "parent_id": root_id, "hidden": False,
@@ -457,11 +470,60 @@ class DatabaseManager:
             conn.commit()
 
     def rename_conversation(self, conv_id: int, new_title: str) -> None:
+        """A rename by the user: the title is theirs from now on."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute('UPDATE conversations SET title = ? WHERE id = ?', (new_title, conv_id))
+            conn.execute("UPDATE conversations SET title = ?, title_source = 'user' WHERE id = ?",
+                         (new_title, conv_id))
             self._touch(conn, conv_id, now)
             conn.commit()
+
+    def set_auto_title(self, conv_id: int, title: str) -> bool:
+        """Write a generated title unless the user renamed the chat; True if written.
+
+        The check and the write are one statement, so a rename that lands
+        while a title job runs always wins.
+        """
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cur = conn.execute(
+                "UPDATE conversations SET title = ? WHERE id = ? AND title_source = 'auto'",
+                (title, conv_id))
+            conn.commit()
+            return cur.rowcount == 1
+
+    def get_title_state(self, conv_id: int) -> Optional[Dict[str, Any]]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute(
+                'SELECT user_id, title, title_source, auto_title_runs, parent_id, copied_until, side_of '
+                'FROM conversations WHERE id = ?', (conv_id,)).fetchone()
+        if not row:
+            return None
+        return {"user_id": row[0], "title": row[1] or "", "title_source": row[2] or "auto",
+                "auto_title_runs": int(row[3] or 0), "parent_id": row[4], "copied_until": row[5],
+                "side_of": row[6]}
+
+    def count_own_assistant_replies(self, conv_id: int) -> int:
+        """Assistant messages of the chat; a branch counts only those after its copy."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id = m.conversation_id "
+                "WHERE m.conversation_id = ? AND m.role = 'assistant' "
+                "AND (c.copied_until IS NULL OR m.id > c.copied_until)", (conv_id,)).fetchone()
+        return int(row[0] or 0)
+
+    def claim_auto_title_run(self, conv_id: int, max_runs_before: int) -> bool:
+        """Count one title generation if fewer than `max_runs_before` ran; True if claimed.
+
+        Claimed before the model is called, so a failed or timed-out call
+        still spends one of the chat's generations.
+        """
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cur = conn.execute(
+                "UPDATE conversations SET auto_title_runs = auto_title_runs + 1 "
+                "WHERE id = ? AND title_source = 'auto' AND side_of IS NULL "
+                "AND auto_title_runs < ?", (conv_id, max_runs_before))
+            conn.commit()
+            return cur.rowcount == 1
 
     def delete_conversation(self, conv_id: int) -> None:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
