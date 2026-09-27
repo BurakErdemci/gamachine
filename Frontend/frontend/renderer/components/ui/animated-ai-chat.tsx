@@ -21,7 +21,7 @@ import { SkillsGallery, CommandMeta } from "../home/SkillsGallery";
 import { useLang } from "../../lib/i18n";
 import { useVoiceInput, formatElapsed } from "../../hooks/home/useVoiceInput";
 import type { Conversation } from "../home/types";
-import { mentionQueryAt, mentionTargets } from "../../lib/chatMentions";
+import { mentionQueryAt, mentionTargets, findMentions, mentionLabel } from "../../lib/chatMentions";
 
 interface UseAutoResizeTextareaProps {
     minHeight: number;
@@ -576,6 +576,19 @@ export function AnimatedChatInput({
         && mentionOptions.length > 0 && !showCommandPalette && !dictating;
     const mentionRef = useRef(mention);
     mentionRef.current = mention;
+    // The textarea keeps `@<id>` (that is what is sent); this line names them.
+    const resolvedMentions = useMemo(() => {
+        if (!chats?.length || !internalValue.includes('@')) return [];
+        const seen = new Set<number>();
+        const out: { id: number; label: string }[] = [];
+        for (const m of findMentions(internalValue)) {
+            if (seen.has(m.id)) continue;
+            seen.add(m.id);
+            const chat = chats.find(c => c.id === m.id);
+            if (chat) out.push({ id: m.id, label: mentionLabel(m.id, chat.title) });
+        }
+        return out;
+    }, [internalValue, chats]);
 
     useEffect(() => { setActiveMention(0); }, [mention?.start, mention?.query]);
     useEffect(() => { if (!mention) setMentionDismissedAt(null); }, [mention]);
@@ -858,6 +871,20 @@ export function AnimatedChatInput({
                     style={{ overflowY: "auto" }}
                     showRing={false}
                 />
+                {resolvedMentions.length > 0 && (
+                    <div
+                        data-testid="mention-resolved"
+                        aria-label={t('mention.resolved')}
+                        title={t('mention.resolved')}
+                        className="px-3 flex flex-wrap gap-x-3 gap-y-0.5 text-[10.5px] text-slate-500"
+                    >
+                        {resolvedMentions.map(m => (
+                            <span key={m.id} className="whitespace-nowrap">
+                                <span className="font-mono">@{m.id}</span> → <span className="text-blue-300/80">{m.label}</span>
+                            </span>
+                        ))}
+                    </div>
+                )}
             </div>
 
             <AnimatePresence>

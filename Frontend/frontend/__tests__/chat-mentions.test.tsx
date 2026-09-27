@@ -23,7 +23,9 @@ import { AnimatedChatInput } from '../renderer/components/ui/animated-ai-chat'
 import { Sidebar } from '../renderer/components/home/Sidebar'
 import { ChatTabs } from '../renderer/components/home/ChatTabs'
 import { MarkdownRenderer } from '../renderer/components/home/MarkdownRenderer'
-import { mentionQueryAt, mentionTargets, foldForSearch, findMentions } from '../renderer/lib/chatMentions'
+import {
+  mentionQueryAt, mentionTargets, foldForSearch, findMentions, mentionLabel, MENTION_LABEL_MAX,
+} from '../renderer/lib/chatMentions'
 import { cevir } from '../renderer/lib/i18n'
 
 const conv = (id: number, title: string, extra: object = {}) => ({
@@ -304,14 +306,47 @@ describe('#<id> on screen', () => {
 
 describe('mention chip in a user bubble', () => {
   const titles = new Map([[12, 'Selam']])
+  const chipTexts = () => Array.from(document.querySelectorAll('[data-mention]')).map(c => c.textContent)
 
-  it('marks @<id> with the chat title on hover, leaving the text as typed', () => {
+  it('shows a known chat by its title, the number on hover; an unknown one stays @<id>', () => {
     render(<MarkdownRenderer content="bak @12 ve @99, mail a@12.com @12abc" mentionTitles={titles} />)
     const chips = Array.from(document.querySelectorAll('[data-mention]'))
-    expect(chips.map(c => c.textContent)).toEqual(['@12', '@99'])
+    expect(chips.map(c => c.textContent)).toEqual(['@Selam', '@99'])
+    expect(chips.map(c => c.getAttribute('data-mention'))).toEqual(['12', '99'])
+    expect(chips[0].hasAttribute('data-mention-known')).toBe(true)
     expect(chips[0].getAttribute('title')).toBe('#12 · Selam')
+    expect(chips[1].hasAttribute('data-mention-known')).toBe(false)
     expect(chips[1].getAttribute('title')).toBe(cevir('mention.unknown'))
-    expect(document.body.textContent).toContain('bak @12 ve @99, mail a@12.com @12abc')
+    expect(document.body.textContent).toContain('bak @Selam ve @99, mail a@12.com @12abc')
+  })
+
+  it('a branch shows its own title', () => {
+    const fam = new Map([[12, 'Selam'], [15, 'UI dalı']])
+    render(<MarkdownRenderer content="@15 ile @12" mentionTitles={fam} />)
+    expect(chipTexts()).toEqual(['@UI dalı', '@Selam'])
+  })
+
+  it('cuts a long title with an ellipsis, the full title on hover', () => {
+    const long = 'Oyuncu hareketi ve kamera takibi için ayrıntılı plan'
+    render(<MarkdownRenderer content="@31" mentionTitles={new Map([[31, long]])} />)
+    const chip = document.querySelector('[data-mention="31"]')!
+    expect(chip.textContent).toBe(`@${mentionLabel(31, long)}`)
+    expect(mentionLabel(31, long)).toMatch(/…$/)
+    expect(Array.from(mentionLabel(31, long)).length).toBeLessThanOrEqual(MENTION_LABEL_MAX)
+    expect(chip.getAttribute('title')).toBe(`#31 · ${long}`)
+  })
+
+  it('a chat with a blank title keeps @<id>, never an empty chip', () => {
+    render(<MarkdownRenderer content="@40" mentionTitles={new Map([[40, '  ']])} />)
+    expect(chipTexts()).toEqual(['@40'])
+    expect(document.querySelector('[data-mention="40"]')!.getAttribute('title')).toBe('#40')
+  })
+
+  it('follows a rename', () => {
+    const { rerender } = render(<MarkdownRenderer content="@12" mentionTitles={titles} />)
+    expect(chipTexts()).toEqual(['@Selam'])
+    rerender(<MarkdownRenderer content="@12" mentionTitles={new Map([[12, 'Yeni ad']])} />)
+    expect(chipTexts()).toEqual(['@Yeni ad'])
   })
 
   it('draws no chip without titles (assistant text, other renderers)', () => {
@@ -321,12 +356,46 @@ describe('mention chip in a user bubble', () => {
 
   it('leaves code alone', () => {
     render(<MarkdownRenderer content={'`@12` ve @12'} mentionTitles={titles} />)
-    expect(Array.from(document.querySelectorAll('[data-mention]')).map(c => c.textContent)).toEqual(['@12'])
+    expect(chipTexts()).toEqual(['@Selam'])
     expect(document.querySelector('code')!.textContent).toBe('@12')
   })
 
   it('leaves URLs and paths alone', () => {
     render(<MarkdownRenderer content={'bak https://example.invalid/docs/@12, docs/@12 ve @12'} mentionTitles={titles} />)
-    expect(Array.from(document.querySelectorAll('[data-mention]')).map(c => c.textContent)).toEqual(['@12'])
+    expect(chipTexts()).toEqual(['@Selam'])
+  })
+})
+
+describe('mention label', () => {
+  it('keeps a short title, cuts a long one, falls back to @<id> when blank', () => {
+    expect(mentionLabel(12, 'Selam')).toBe('Selam')
+    expect(mentionLabel(12, '  Selam  ')).toBe('Selam')
+    expect(mentionLabel(12, 'x'.repeat(MENTION_LABEL_MAX))).toBe('x'.repeat(MENTION_LABEL_MAX))
+    expect(mentionLabel(12, 'x'.repeat(MENTION_LABEL_MAX + 1))).toBe(`${'x'.repeat(MENTION_LABEL_MAX - 1)}…`)
+    expect(mentionLabel(12, '')).toBe('@12')
+    expect(mentionLabel(12, null)).toBe('@12')
+  })
+
+  it('never splits an emoji', () => {
+    const label = mentionLabel(1, '🎮'.repeat(40))
+    expect(label).toBe(`${'🎮'.repeat(MENTION_LABEL_MAX - 1)}…`)
+  })
+})
+
+describe('composer mention hint', () => {
+  it('names each known @<id> once under the textarea; unknown ids are left out', () => {
+    const { type, textarea } = mount()
+    expect(screen.queryByTestId('mention-resolved')).toBeNull()
+    type('@15 ve @12, tekrar @15, yok @999 ')
+    const hint = screen.getByTestId('mention-resolved')
+    expect(hint.textContent).toBe('@15 → UI dalı@12 → Selam')
+    expect(hint.getAttribute('aria-label')).toBe(cevir('mention.resolved'))
+    expect(textarea.value).toBe('@15 ve @12, tekrar @15, yok @999 ')
+  })
+
+  it('ignores @<id> inside code, like the chips', () => {
+    const { type } = mount()
+    type('`@12` ')
+    expect(screen.queryByTestId('mention-resolved')).toBeNull()
   })
 })

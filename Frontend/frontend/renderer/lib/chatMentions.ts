@@ -107,6 +107,19 @@ export const maskLiterals = (text: string): string => {
   return masked.replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/\S*/g, blank).replace(OPAQUE_URI, blank);
 };
 
+export const MENTION_LABEL_MAX = 28;
+
+/**
+ * What a mention chip shows: the chat's title, cut to `max` characters. A
+ * blank title falls back to `@<id>` so a chip is never empty. Code points,
+ * not UTF-16 units, so an emoji is never split in half.
+ */
+export const mentionLabel = (id: number, title: string | null | undefined, max = MENTION_LABEL_MAX): string => {
+  const chars = Array.from((title ?? '').trim());
+  if (chars.length === 0) return `@${id}`;
+  return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : chars.join('');
+};
+
 /** The `@<id>` mentions of `text` the backend resolves, with their offsets. */
 export const findMentions = (text: string): { index: number; text: string; id: number }[] =>
   [...maskLiterals(text).matchAll(MENTION_PATTERN)].map(m => ({

@@ -7,10 +7,19 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 
 import { linkTuru, chatUrlTransform, yerelYolaCevir } from "../../lib/chatLink";
 import { useLang } from "../../lib/i18n";
-import { findMentions } from "../../lib/chatMentions";
+import { findMentions, mentionLabel } from "../../lib/chatMentions";
 
-/** `@<id>` in plain text as a chip whose tooltip names the chat; the text itself stays as typed. */
-const withMentionChips = (children: React.ReactNode, titleOf: (id: number) => string) =>
+/**
+ * `@<id>` in plain text as a chip. A known chat shows its title, the number
+ * on hover; an unknown or deleted one keeps `@<id>`. Only the rendering
+ * changes: the stored message still says `@<id>`, which is what the backend
+ * resolves.
+ */
+const withMentionChips = (
+  children: React.ReactNode,
+  titles: ReadonlyMap<number, string>,
+  unknownTip: string,
+) =>
   Children.map(children, (child) => {
     if (typeof child !== "string") return child;
     const parts: React.ReactNode[] = [];
@@ -18,9 +27,17 @@ const withMentionChips = (children: React.ReactNode, titleOf: (id: number) => st
     for (const m of findMentions(child)) {
       const at = m.index;
       if (at > last) parts.push(child.slice(last, at));
-      parts.push(
-        <span key={at} data-mention={m.id} title={titleOf(m.id)}
-          className="px-1 rounded bg-blue-400/15 text-blue-300 font-medium">{m.text}</span>);
+      const title = titles.get(m.id);
+      const named = !!title?.trim();
+      parts.push(title != null ? (
+        <span key={at} data-mention={m.id} data-mention-known="" title={named ? `#${m.id} · ${title.trim()}` : `#${m.id}`}
+          className="inline-block max-w-full align-baseline whitespace-nowrap px-1.5 rounded-md bg-blue-400/20 text-blue-200 ring-1 ring-inset ring-blue-400/30 font-medium">
+          {named && <span aria-hidden="true" className="text-blue-300/70 mr-px">@</span>}{mentionLabel(m.id, title)}
+        </span>
+      ) : (
+        <span key={at} data-mention={m.id} title={unknownTip}
+          className="px-1 rounded bg-blue-400/15 text-blue-300 font-medium">{m.text}</span>
+      ));
       last = at + m.text.length;
     }
     if (last === 0) return child;
@@ -137,10 +154,6 @@ const MarkdownRendererInner = ({
 }) => {
   const { t } = useLang();
   const [copiedBlock, setCopiedBlock] = useState<string | null>(null);
-  const mentionTitle = (id: number) => {
-    const title = mentionTitles?.get(id);
-    return title != null ? `#${id} · ${title}` : t("mention.unknown");
-  };
 
   const handleCopy = (code: string) => {
     navigator.clipboard.writeText(code);
@@ -211,10 +224,10 @@ const MarkdownRendererInner = ({
         },
         ...(mentionTitles ? {
           p({ children, node: _node, ...props }: any) {
-            return <p {...props}>{withMentionChips(children, mentionTitle)}</p>;
+            return <p {...props}>{withMentionChips(children, mentionTitles, t("mention.unknown"))}</p>;
           },
           li({ children, node: _node, ...props }: any) {
-            return <li {...props}>{withMentionChips(children, mentionTitle)}</li>;
+            return <li {...props}>{withMentionChips(children, mentionTitles, t("mention.unknown"))}</li>;
           },
         } : {}),
         code({ inline, className, children, ...props }: any) {

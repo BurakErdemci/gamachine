@@ -289,6 +289,7 @@ export const tr = {
   'mention.branchOf': '#{no} {ad} sohbetinin dalı',
   'mention.chatNumber': 'Sohbet numarası: mesajda @{no} yazarak bu sohbeti anabilirsin',
   'mention.unknown': 'Bu numarada sohbet yok',
+  'mention.resolved': 'Bu mesajda anılan sohbetler',
   // Side question (read-only side chat over the chat on screen)
   'side.open': 'Yan soru',
   'side.openTitle': 'Yan soru sor — ana sohbeti görür ama hiçbir şeyi değiştiremez; cevabı ana sohbetin geçmişine girmez',
@@ -886,6 +887,7 @@ export const en: Record<keyof typeof tr, string> = {
   'mention.branchOf': 'branch of #{no} {ad}',
   'mention.chatNumber': 'Chat number: type @{no} in a message to mention this chat',
   'mention.unknown': 'No chat with this number',
+  'mention.resolved': 'Chats mentioned in this message',
   // Side question (read-only side chat over the chat on screen)
   'side.open': 'Side question',
   'side.openTitle': 'Ask a side question — it sees the main chat but cannot change anything; its answers stay out of the main chat history',
