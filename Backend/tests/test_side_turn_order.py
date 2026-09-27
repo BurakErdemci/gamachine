@@ -9,6 +9,8 @@ import asyncio
 import os
 from unittest.mock import patch
 
+import pytest
+
 import agentic.agent_runner as ar
 import routes.conversation_routes as cr
 from agentic import side_prompt as sp
@@ -111,6 +113,61 @@ def test_side_turn_caps_history_and_keeps_the_question():
     _assert_side_order(text)
 
 
+# Codex mentionaudit, 27 Sep 2026: only the history was budgeted, so the
+# running request, live answer and side Q/A pushed a capped one-shot message
+# to 37,593 characters (Windows command lines stop near 32K).
+def _big_turn(question="What does the earlier answer mean?"):
+    return sp.SideTurn(
+        question=question,
+        main_history="H" * 20000,
+        in_flight_request="R" * 4000,
+        live_answer="[ANA SOHBETİN ŞU AN YAZILMAKTA OLAN (YARIM) CEVABI]\n" + "L" * 7990 + "LIVE_END",
+        side_history="[BU YAN SOHBETTEKİ ÖNCEKİ SORU-CEVAPLAR]\n" + "S" * 7990 + "SIDE_END",
+    )
+
+
+def test_side_turn_cap_covers_the_whole_message():
+    st = _big_turn()
+    text = st.text(full=True, context_cap=24000)
+    assert len(text) <= 24000
+    _assert_side_order(text, question=st.question)
+    # Higher-priority parts are whole; the main history absorbed the cut,
+    # keeping its newest part.
+    assert "R" * 4000 in text and "LIVE_END" in text and "SIDE_END" in text
+    assert "ana sohbetin eski kısmı kırpıldı" in text
+    assert "H" * 100 in text and text.count("H") < 20000
+
+
+def test_side_turn_cap_trims_in_priority_order():
+    st = _big_turn()
+    fixed = len(sp.SIDE_INSTRUCTION) + 2 + len(
+        f"{sp.QUESTION_HEADER}\n{st.question}\n\n{sp.FINAL_REMINDER}")
+    # Room for the request and part of the live answer only: the live answer
+    # keeps its tail, side Q/A and history are dropped whole.
+    text = st.text(full=True, context_cap=fixed + 4000 + 300 + 3000)
+    assert len(text) <= fixed + 7300
+    _assert_side_order(text, full=False, question=st.question)
+    assert sp.IN_FLIGHT_HEADER in text and "LIVE_END" in text and "başı kısaltıldı" in text
+    assert "SIDE_END" not in text and "H" * 100 not in text
+    # Barely more than the fixed parts: the request is cut at its tail.
+    text = st.text(full=True, context_cap=fixed + 1000)
+    assert len(text) <= fixed + 1000
+    assert sp.IN_FLIGHT_HEADER in text and "kısaltıldı]" in text and "LIVE_END" not in text
+    _assert_side_order(text, full=False, question=st.question)
+
+
+def test_side_turn_without_a_cap_is_unchanged():
+    text = _big_turn().text(full=True)
+    assert "H" * 20000 in text and "R" * 4000 in text and "SIDE_END" in text
+
+
+def test_side_question_too_long_for_the_cap_is_refused():
+    st = _big_turn(question="Q" * 24000)
+    assert not st.fits(24000)
+    with pytest.raises(sp.SideTurnTooLong):
+        st.text(full=True, context_cap=24000)
+
+
 def test_handoff_history_header_default_is_unchanged():
     msgs = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
             {"role": "user", "content": "şimdiki"}]
@@ -132,7 +189,8 @@ def _runner(model_name, cid, side_turn=None, context="", **kw):
                           read_only=side_turn is not None, **extra, **kw)
 
 
-def _oneshot_prompts(model_name, cli_key, turns, side_turn=None, context=""):
+def _oneshot_prompts(model_name, cli_key, turns, side_turn=None, context="",
+                     session_id="ses_side", events=None):
     from providers.oneshot_cli import _SESSIONS
 
     prompts = []
@@ -142,7 +200,8 @@ def _oneshot_prompts(model_name, cli_key, turns, side_turn=None, context=""):
 
         async def analyze_code(self, prompt, **kwargs):
             prompts.append(prompt)
-            yield {"type": "session_meta", "session_id": "ses_side"}
+            if session_id:
+                yield {"type": "session_meta", "session_id": session_id}
             yield {"type": "final", "text": "tamam"}
 
     _SESSIONS.clear()
@@ -154,7 +213,9 @@ def _oneshot_prompts(model_name, cli_key, turns, side_turn=None, context=""):
     try:
         with patch("ai_providers.AIProviderManager.get_provider", return_value=_Provider()):
             for msg in turns:
-                asyncio.run(turn(msg))
+                got = asyncio.run(turn(msg))
+                if events is not None:
+                    events.append(got)
     finally:
         _SESSIONS.clear()
     return prompts
@@ -166,6 +227,31 @@ def test_oneshot_side_turn_order_first_and_resumed():
     _assert_side_order(prompts[0], request=_MAIN_REQUEST)
     assert "USER: eski istek" in prompts[0]
     _assert_side_order(prompts[1], full=False, request=_MAIN_REQUEST)
+
+
+def test_oneshot_side_turn_without_a_resume_key_stays_full():
+    # Codex mentionaudit, 27 Sep 2026: the first turn marked the history as
+    # injected though the CLI returned no session id to resume, so the second
+    # side question reached a fresh CLI session without the history.
+    prompts = _oneshot_prompts("cursor-auto", "cursor", [_SIDE_Q, _SIDE_Q],
+                               side_turn=_side_turn(), session_id=None)
+    assert len(prompts) == 2
+    for p in prompts:
+        _assert_side_order(p, request=_MAIN_REQUEST)
+        assert "USER: eski istek" in p
+
+
+def test_oneshot_side_turn_is_capped_and_a_too_long_question_never_spawns():
+    prompts = _oneshot_prompts("opencode:opencode/ling-free", "opencode", [_SIDE_Q],
+                               side_turn=_big_turn(question=_SIDE_Q))
+    assert len(prompts[0]) <= 24000
+    _assert_side_order(prompts[0], request="R" * 4000)
+    events = []
+    prompts = _oneshot_prompts("opencode:opencode/ling-free", "opencode", ["x"],
+                               side_turn=_big_turn(question="Q" * 24000), events=events)
+    assert prompts == []
+    assert [e.type for e in events[0]] == ["error"]
+    assert "Yan soru gönderilemedi" in events[0][0].data["message"]
 
 
 def test_kimi_side_turn_is_full_on_every_turn():
@@ -223,7 +309,7 @@ def test_claude_normal_turn_text_is_unchanged(monkeypatch, tmp_path):
         f"merhaba\n\n{_GENERIC_HANDOFF_HEADER}\nUSER: önceki"]
 
 
-def _codex_messages(monkeypatch, turns, side_turn=None, context=""):
+def _codex_messages(monkeypatch, turns, side_turn=None, context="", die_after_turn=False):
     from providers import codex_session
     from providers.codex_provider import CodexProvider
     sent = []
@@ -233,10 +319,14 @@ def _codex_messages(monkeypatch, turns, side_turn=None, context=""):
         session_id = "t-side"
         _ctx_injected = False
         auto_approve = False
+        is_live = True
 
         async def stream(self, message, image_paths=None, **kw):
             sent.append(message)
             yield {"type": "done", "session_id": "t-side"}
+            if die_after_turn:
+                # The app-server died: the next stream starts a new thread.
+                self.is_live = False
 
     sess = _Sess()
     monkeypatch.setattr(codex_session, "get_session", lambda *a, **k: sess)
@@ -259,6 +349,16 @@ def test_codex_side_turn_order_first_and_resumed(monkeypatch):
     sent = _codex_messages(monkeypatch, [_SIDE_Q, _SIDE_Q], side_turn=_side_turn())
     _assert_side_order(sent[0], request=_MAIN_REQUEST)
     _assert_side_order(sent[1], full=False, request=_MAIN_REQUEST)
+
+
+def test_codex_side_turn_on_a_restarted_app_server_is_full_again(monkeypatch):
+    # Codex mentionaudit, 27 Sep 2026: a dead app-server restarts with a new
+    # thread (start() only does thread/start), which holds none of the history.
+    sent = _codex_messages(monkeypatch, [_SIDE_Q, _SIDE_Q], side_turn=_side_turn(),
+                           die_after_turn=True)
+    for message in sent:
+        _assert_side_order(message, request=_MAIN_REQUEST)
+        assert "USER: eski istek" in message
 
 
 def test_codex_normal_turn_text_is_unchanged(monkeypatch):

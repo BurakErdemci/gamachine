@@ -69,30 +69,92 @@ class SideTurn:
     live_answer: str = ""
     side_history: str = ""
 
+    def _question_block(self) -> str:
+        return f"{QUESTION_HEADER}\n{self.question}\n\n{FINAL_REMINDER}"
+
+    def fits(self, context_cap: int) -> bool:
+        """Whether the parts that are never trimmed fit `context_cap`."""
+        return len(SIDE_INSTRUCTION) + len(_SEP) + len(self._question_block()) <= context_cap
+
     def text(self, full: bool, context_cap: "int | None" = None) -> str:
         """`full` for a turn whose provider holds none of this side chat yet;
         otherwise the provider's own session already has the history and the
         earlier side Q/A, and only what changes per turn is sent again.
 
-        `context_cap` bounds history plus side Q/A (the one-shot CLIs pass the
-        prompt on the command line); the oldest part of the history goes first.
+        `context_cap` bounds the WHOLE message (the one-shot CLIs pass it on
+        the command line; Codex mentionaudit, 27 Sep 2026 measured 37,593
+        characters when only the history was budgeted). The instruction and
+        the question are never trimmed; the rest is fitted in the order the
+        question needs it: running request, live answer, earlier side Q/A,
+        main history. Raises SideTurnTooLong when the fixed parts alone do
+        not fit.
         """
-        history = self.main_history
-        if full and context_cap is not None and history:
-            room = max(0, context_cap - len(self.side_history))
-            if len(history) > room:
-                history = "…[ana sohbetin eski kısmı kırpıldı]\n" + history[-room:] if room else ""
-        parts = [SIDE_INSTRUCTION]
-        if full and history:
-            parts.append(f"{MAIN_HISTORY_HEADER}\n{history}")
         request = (self.in_flight_request or "").strip()
-        if request:
-            if len(request) > IN_FLIGHT_CAP:
-                request = request[:IN_FLIGHT_CAP] + " …[kısaltıldı]"
-            parts.append(f"{IN_FLIGHT_HEADER}\n{request}")
-        if self.live_answer:
-            parts.append(self.live_answer)
-        if full and self.side_history:
-            parts.append(self.side_history)
-        parts.append(f"{QUESTION_HEADER}\n{self.question}\n\n{FINAL_REMINDER}")
-        return "\n\n".join(parts)
+        if len(request) > IN_FLIGHT_CAP:
+            request = request[:IN_FLIGHT_CAP] + _TRIM_TAIL
+        history = self.main_history if full else ""
+        side = self.side_history if full else ""
+        question = self._question_block()
+        blocks = {
+            "history": f"{MAIN_HISTORY_HEADER}\n{history}" if history else "",
+            "request": f"{IN_FLIGHT_HEADER}\n{request}" if request else "",
+            "live": self.live_answer or "",
+            "side": side or "",
+        }
+        if context_cap is not None:
+            if not self.fits(context_cap):
+                raise SideTurnTooLong(side_too_long_message(context_cap))
+            room = context_cap - len(SIDE_INSTRUCTION) - len(_SEP) - len(question)
+            blocks["request"], room = _fit(IN_FLIGHT_HEADER, request, room, False, _TRIM_TAIL)
+            blocks["live"], room = _fit(*_split_label(self.live_answer or ""), room, True, _TRIM_LIVE)
+            blocks["side"], room = _fit(*_split_label(side or ""), room, True, _TRIM_SIDE)
+            blocks["history"], room = _fit(MAIN_HISTORY_HEADER, history, room, True, _TRIM_HISTORY)
+        parts = [SIDE_INSTRUCTION]
+        parts += [blocks[k] for k in ("history", "request", "live", "side") if blocks[k]]
+        parts.append(question)
+        return _SEP.join(parts)
+
+
+_SEP = "\n\n"
+_TRIM_TAIL = " …[kısaltıldı]"
+_TRIM_LIVE = "…[başı kısaltıldı]\n"
+_TRIM_SIDE = "…[daha eski yan sorular kısaltıldı]\n"
+_TRIM_HISTORY = "…[ana sohbetin eski kısmı kırpıldı]\n"
+# A block cut below this many characters no longer tells the model anything;
+# it is dropped instead of sent as a fragment.
+_MIN_FRAGMENT = 200
+
+
+class SideTurnTooLong(ValueError):
+    """The instruction and the question alone exceed the cap: nothing that may
+    be trimmed is left, so the turn is refused instead of spawned."""
+
+
+def side_too_long_message(context_cap: int) -> str:
+    return (f"Yan soru gönderilemedi: soru, yan soru talimatıyla birlikte bu "
+            f"sağlayıcının komut satırı sınırına ({context_cap} karakter) sığmıyor. "
+            f"Soruyu kısaltıp tekrar sor.")
+
+
+def _split_label(block: str) -> "tuple[str, str]":
+    """A pre-labelled block is `label\\nbody`; one without a newline is all body."""
+    if "\n" not in block:
+        return "", block
+    label, _, body = block.partition("\n")
+    return label, body
+
+
+def _fit(label: str, body: str, room: int, keep_tail: bool, mark: str) -> "tuple[str, int]":
+    """(`label\\nbody` cut to `room` incl. its separator, room left). The cut
+    keeps the body's tail or head; a block too small to be useful is dropped."""
+    if not body:
+        return "", room
+    prefix = f"{label}\n" if label else ""
+    whole = prefix + body
+    if len(_SEP) + len(whole) <= room:
+        return whole, room - len(_SEP) - len(whole)
+    avail = room - len(_SEP) - len(prefix) - len(mark)
+    if avail < _MIN_FRAGMENT:
+        return "", room
+    block = prefix + (mark + body[-avail:] if keep_tail else body[:avail] + mark)
+    return block, room - len(_SEP) - len(block)

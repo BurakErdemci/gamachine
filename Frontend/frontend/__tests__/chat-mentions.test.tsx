@@ -23,7 +23,7 @@ import { AnimatedChatInput } from '../renderer/components/ui/animated-ai-chat'
 import { Sidebar } from '../renderer/components/home/Sidebar'
 import { ChatTabs } from '../renderer/components/home/ChatTabs'
 import { MarkdownRenderer } from '../renderer/components/home/MarkdownRenderer'
-import { mentionQueryAt, mentionTargets, foldForSearch } from '../renderer/lib/chatMentions'
+import { mentionQueryAt, mentionTargets, foldForSearch, findMentions } from '../renderer/lib/chatMentions'
 import { cevir } from '../renderer/lib/i18n'
 
 const conv = (id: number, title: string, extra: object = {}) => ({
@@ -179,6 +179,43 @@ describe('composer @ menu', () => {
     expect(screen.queryByTestId('mention-menu')).toBeNull()
     expect(screen.getByText('/compact')).toBeTruthy()
   })
+
+  // Codex mentionaudit, 27 Sep 2026: Enter that confirms an IME candidate
+  // picked the highlighted chat mid-word.
+  const composing = { isComposing: true, keyCode: 229 }
+
+  it('keys an IME is composing with leave the @ menu alone', async () => {
+    const { type, textarea, onSendMessage } = mount()
+    type('@Se')
+    expect(screen.getByTestId('mention-menu')).toBeTruthy()
+    fireEvent.compositionStart(textarea)
+    for (const key of ['ArrowDown', 'Tab', 'Enter', 'Escape']) {
+      fireEvent.keyDown(textarea, { key, ...composing })
+    }
+    expect(textarea.value).toBe('@Se')
+    expect(screen.getByTestId('mention-menu')).toBeTruthy()
+    expect(onSendMessage).not.toHaveBeenCalled()
+    // keyCode 229 alone (no isComposing) is composition too.
+    fireEvent.keyDown(textarea, { key: 'Enter', keyCode: 229 })
+    expect(textarea.value).toBe('@Se')
+    fireEvent.compositionEnd(textarea)
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(textarea.value).toBe('@12 ')
+    await menuGone()
+  })
+
+  it('keys an IME is composing with neither pick a / command nor send', () => {
+    const { type, textarea, onSendMessage } = mount()
+    type('/comp')
+    fireEvent.keyDown(textarea, { key: 'Enter', ...composing })
+    expect(textarea.value).toBe('/comp')
+    expect(screen.getByText('/compact')).toBeTruthy()
+    type('selam')
+    fireEvent.keyDown(textarea, { key: 'Enter', ...composing })
+    expect(onSendMessage).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSendMessage).toHaveBeenCalledWith('selam', [], [])
+  })
 })
 
 describe('mention helpers', () => {
@@ -199,6 +236,32 @@ describe('mention helpers', () => {
 
   it('without a current chat every non-side chat is a target', () => {
     expect(mentionTargets(CHATS as any, null, '').map(m => m.id)).toEqual([12, 15, 7, 31, 120])
+  })
+
+  // Twin of LITERAL_CASES in Backend/tests/test_chat_mentions.py: a chip must
+  // appear exactly where the server resolves a mention (Codex mentionaudit,
+  // 27 Sep 2026). Keep the two tables identical.
+  const LITERAL_CASES: [string, number[]][] = [
+    ['Use the literal code `@12` in the example.', []],
+    ['See https://example.invalid/docs/@12 for syntax.', []],
+    ['https://a.b/@12 ve @13', [13]],
+    ['ftp://h/x,@12', []],
+    ['docs/@12', []],
+    ['path/to/@12 ve @13', [13]],
+    ['`x`@12', [12]],
+    ['``a `@12` b`` @13', [13]],
+    ['a `b @12', [12]],
+    ['```\n@12\n```\n@13', [13]],
+    ['~~~py\n@12\n~~~~\n@13', [13]],
+    ['   ```\n@12\n``` \n@13', [13]],
+    ['```\n@12 unclosed fence', []],
+    ['```js `x`\n@12', [12]],
+    ['```\n@12\n~~~\n@13', []],
+  ]
+
+  it.each(LITERAL_CASES)('skips code and URLs like the backend: %j', (text, ids) => {
+    expect(findMentions(text).map(m => m.id)).toEqual(ids)
+    for (const m of findMentions(text)) expect(text.slice(m.index, m.index + m.text.length)).toBe(m.text)
   })
 })
 
@@ -256,5 +319,10 @@ describe('mention chip in a user bubble', () => {
     render(<MarkdownRenderer content={'`@12` ve @12'} mentionTitles={titles} />)
     expect(Array.from(document.querySelectorAll('[data-mention]')).map(c => c.textContent)).toEqual(['@12'])
     expect(document.querySelector('code')!.textContent).toBe('@12')
+  })
+
+  it('leaves URLs and paths alone', () => {
+    render(<MarkdownRenderer content={'bak https://example.invalid/docs/@12, docs/@12 ve @12'} mentionTitles={titles} />)
+    expect(Array.from(document.querySelectorAll('[data-mention]')).map(c => c.textContent)).toEqual(['@12'])
   })
 })

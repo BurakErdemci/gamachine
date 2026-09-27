@@ -40,6 +40,41 @@ def test_parse_mentions(text, ids):
     assert mailbox.parse_mentions(text) == ids
 
 
+# Codex mentionaudit, 27 Sep 2026: `@12` quoted in code or a URL resolved to a
+# chat title. The renderer's chips follow the same table
+# (`__tests__/chat-mentions.test.tsx`, LITERAL_CASES); keep the two identical.
+LITERAL_CASES = [
+    ("Use the literal code `@12` in the example.", []),
+    ("See https://example.invalid/docs/@12 for syntax.", []),
+    ("https://a.b/@12 ve @13", [13]),
+    ("ftp://h/x,@12", []),
+    ("docs/@12", []),
+    ("path/to/@12 ve @13", [13]),
+    ("`x`@12", [12]),
+    ("``a `@12` b`` @13", [13]),
+    ("a `b @12", [12]),
+    ("```\n@12\n```\n@13", [13]),
+    ("~~~py\n@12\n~~~~\n@13", [13]),
+    ("   ```\n@12\n``` \n@13", [13]),
+    ("```\n@12 unclosed fence", []),
+    ("```js `x`\n@12", [12]),
+    ("```\n@12\n~~~\n@13", []),
+]
+
+
+@pytest.mark.parametrize("text, ids", LITERAL_CASES)
+def test_mentions_in_code_and_urls_are_not_resolved(text, ids):
+    assert mailbox.parse_mentions(text) == ids
+
+
+def test_mention_block_ignores_literal_contexts():
+    chats = [{"id": 12, "title": "Private planning chat", "parent_id": None}]
+    for text in ("Use the literal code `@12` in the example.",
+                 "See https://example.invalid/docs/@12 for syntax."):
+        assert mailbox.mention_block(text, 7, chats) == ""
+    assert "Private planning chat" in mailbox.mention_block("`@12` yerine @12", 7, chats)
+
+
 def test_mention_block_is_empty_without_a_mention():
     assert mailbox.mention_block("selam @ herkese a@1", 5, [{"id": 1, "title": "x"}]) == ""
 

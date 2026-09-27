@@ -185,15 +185,64 @@ _SAME_TITLE_HINT = (
 
 # ── @<id> mentions in a user message ─────────────────────────────────────────
 MAX_MENTIONS = 10
-# Not glued to a word or another `@` on the left (an e-mail, `x@12`, `@@12`),
-# and not continued by a word character (`@12abc` is a handle, not a number).
-_MENTION_RE = re.compile(r"(?<![\w@])@([0-9]{1,9})(?![\w@])")
+# Not glued to a word, another `@` or a `/` on the left (an e-mail, `x@12`,
+# `@@12`, a path `docs/@12`), and not continued by a word character (`@12abc`
+# is a handle, not a number). The renderer's chip parser
+# (`renderer/lib/chatMentions.ts`) mirrors this rule and `mask_literals`.
+_MENTION_RE = re.compile(r"(?<![\w@/])@([0-9]{1,9})(?![\w@])")
+_FENCE_OPEN_RE = re.compile(r"[ ]{0,3}(`{3,}|~{3,})")
+_TICKS_RE = re.compile(r"`+")
+_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://\S*")
+
+
+def _blank(s: str) -> str:
+    return re.sub(r"[^\n]", " ", s)
+
+
+def mask_literals(text: str) -> str:
+    """`text` with fenced code, inline code and `scheme://` runs blanked out
+    (same length, newlines kept). `@12` there is quoted text, not a chat the
+    user addresses (Codex mentionaudit, 27 Sep 2026). Code spans follow
+    CommonMark: a backtick run closes only on a run of the same length."""
+    out: List[str] = []
+    fence = None
+    # Split on "\n" only (not splitlines' wider set), as the renderer does.
+    for line in re.findall(r"[^\n]*\n|[^\n]+\Z", text):
+        if fence is not None:
+            m = _FENCE_OPEN_RE.match(line)
+            if (m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence)
+                    and not line[m.end():].strip()):
+                fence = None
+            out.append(_blank(line))
+            continue
+        m = _FENCE_OPEN_RE.match(line)
+        if m and not (m.group(1)[0] == "`" and "`" in line[m.end():]):
+            fence = m.group(1)
+            out.append(_blank(line))
+            continue
+        out.append(line)
+    masked = "".join(out)
+    pos = 0
+    while True:
+        opening = _TICKS_RE.search(masked, pos)
+        if not opening:
+            break
+        closing = _TICKS_RE.search(masked, opening.end())
+        while closing and len(closing.group()) != len(opening.group()):
+            closing = _TICKS_RE.search(masked, closing.end())
+        if not closing:
+            pos = opening.end()
+            continue
+        start, end = opening.start(), closing.end()
+        masked = masked[:start] + _blank(masked[start:end]) + masked[end:]
+        pos = end
+    return _URL_RE.sub(lambda m: _blank(m.group()), masked)
 
 
 def parse_mentions(text: Any) -> List[int]:
     """Chat ids the text mentions as `@<id>`, first appearance order, no repeats."""
     ids: List[int] = []
-    for m in _MENTION_RE.finditer(text if isinstance(text, str) else ""):
+    for m in _MENTION_RE.finditer(mask_literals(text) if isinstance(text, str) else ""):
         cid = int(m.group(1))
         if cid > 0 and cid not in ids:
             ids.append(cid)

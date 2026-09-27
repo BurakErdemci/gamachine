@@ -616,6 +616,12 @@ export function AnimatedChatInput({
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        // While an IME composes (Turkish/Japanese/Chinese input), Enter, Tab
+        // and arrows confirm or move its candidate; acting on them here picked
+        // a mention, a command or sent the message mid-word (Codex
+        // mentionaudit, 27 Sep 2026). keyCode 229 is what some browsers report
+        // instead of isComposing.
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
         if (showMentionMenu) {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();

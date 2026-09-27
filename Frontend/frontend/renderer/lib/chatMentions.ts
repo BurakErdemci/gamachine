@@ -53,5 +53,52 @@ export const mentionTargets = (
 };
 
 // Same boundaries as the backend's `_MENTION_RE`: not glued to a word or
-// another `@` on either side, so an e-mail or `@12abc` is not a mention.
-export const MENTION_PATTERN = /(?<![\p{L}\p{N}_@])@([0-9]{1,9})(?![\p{L}\p{N}_@])/gu;
+// another `@` on either side, nor to a `/` on the left, so an e-mail, a path
+// (`docs/@12`) or `@12abc` is not a mention.
+export const MENTION_PATTERN = /(?<![\p{L}\p{N}_@/])@([0-9]{1,9})(?![\p{L}\p{N}_@])/gu;
+
+const blank = (s: string) => s.replace(/[^\n]/g, ' ');
+
+/**
+ * Twin of the backend's `mailbox.mask_literals`: fenced code, inline code and
+ * `scheme://` runs blanked out, same length. `@12` there is quoted text, and a
+ * chip must appear exactly where the server resolves a mention (Codex
+ * mentionaudit, 27 Sep 2026).
+ */
+export const maskLiterals = (text: string): string => {
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const line of text.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence !== null) {
+      if (m && m[1][0] === fence[0] && m[1].length >= fence.length && !line.slice(m[0].length).trim()) fence = null;
+      out.push(blank(line));
+    } else if (m && !(m[1][0] === '`' && line.slice(m[0].length).includes('`'))) {
+      fence = m[1];
+      out.push(blank(line));
+    } else {
+      out.push(line);
+    }
+  }
+  let masked = out.join('');
+  const ticks = /`+/g;
+  let opening: RegExpExecArray | null;
+  while ((opening = ticks.exec(masked))) {
+    const after = /`+/g;
+    after.lastIndex = ticks.lastIndex;
+    let closing = after.exec(masked);
+    while (closing && closing[0].length !== opening[0].length) closing = after.exec(masked);
+    if (!closing) continue;
+    const start = opening.index;
+    const end = closing.index + closing[0].length;
+    masked = masked.slice(0, start) + blank(masked.slice(start, end)) + masked.slice(end);
+    ticks.lastIndex = end;
+  }
+  return masked.replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/\S*/g, blank);
+};
+
+/** The `@<id>` mentions of `text` the backend resolves, with their offsets. */
+export const findMentions = (text: string): { index: number; text: string; id: number }[] =>
+  [...maskLiterals(text).matchAll(MENTION_PATTERN)].map(m => ({
+    index: m.index ?? 0, text: m[0], id: Number(m[1]),
+  }));

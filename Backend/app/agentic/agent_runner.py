@@ -2364,6 +2364,13 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             p._conversation_id = self.conversation_id
             return p
 
+        # Windows command-line limit (~32K) minus room for the mcp hint.
+        _prompt_cap = 24000
+        if getattr(self, "side_turn", None) is not None and not self.side_turn.fits(_prompt_cap):
+            from agentic.side_prompt import side_too_long_message
+            yield AgentEvent("error", {"message": side_too_long_message(_prompt_cap)})
+            return
+
         provider = _make_provider(self.model_name)
 
         sess = get_session(cli_key, self.conversation_id)
@@ -2391,9 +2398,9 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         # transcript verilir. Diğer one-shot CLI'lar resmi session resume kullanır.
         if getattr(self, "side_turn", None) is not None:
             # Same injection rule; a resumed side session only gets the parts
-            # that change per turn. Cap as below (command-line length).
+            # that change per turn. The cap covers the whole message.
             enriched_prompt = self.side_turn.text(
-                full=(cli_key == "kimi" or not sess.ctx_injected), context_cap=24000)
+                full=(cli_key == "kimi" or not sess.ctx_injected), context_cap=_prompt_cap)
         elif self.context and (cli_key == "kimi" or not sess.ctx_injected):
             _CTX_CAP = 24000  # Windows argv sınırı (~32K) + mcp_hint payı
             _ctx = self.context
@@ -2526,6 +2533,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             logger.warning(
                 f"[{cli_key}Session] conv={self.conversation_id} yarım/fatal tur "
                 "sonrası resume anahtarı sıfırlandı")
+        elif getattr(self, "side_turn", None) is not None and not sess.session_id:
+            # No resume key came back, so the next side turn opens a fresh CLI
+            # session: it must carry the history again (Codex mentionaudit,
+            # 27 Sep 2026).
+            sess.ctx_injected = False
 
         if got_error:
             return
@@ -2828,7 +2840,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         # İlk turda proje bağlamını ekle; sonraki turlarda thread zaten hatırlıyor.
         message = user_message
         if getattr(self, "side_turn", None) is not None:
-            message = self.side_turn.text(full=not session._ctx_injected)
+            # A dead or never-started app-server gets a brand-new thread on
+            # this stream (start() only does thread/start), so the flag from
+            # an earlier thread says nothing about it (Codex mentionaudit,
+            # 27 Sep 2026).
+            message = self.side_turn.text(full=not (session._ctx_injected and session.is_live))
             session._ctx_injected = True
         elif self.context and not session._ctx_injected:
             message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"

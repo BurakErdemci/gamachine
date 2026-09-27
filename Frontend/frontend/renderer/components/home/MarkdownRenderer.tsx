@@ -7,7 +7,7 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 
 import { linkTuru, chatUrlTransform, yerelYolaCevir } from "../../lib/chatLink";
 import { useLang } from "../../lib/i18n";
-import { MENTION_PATTERN } from "../../lib/chatMentions";
+import { findMentions } from "../../lib/chatMentions";
 
 /** `@<id>` in plain text as a chip whose tooltip names the chat; the text itself stays as typed. */
 const withMentionChips = (children: React.ReactNode, titleOf: (id: number) => string) =>
@@ -15,13 +15,13 @@ const withMentionChips = (children: React.ReactNode, titleOf: (id: number) => st
     if (typeof child !== "string") return child;
     const parts: React.ReactNode[] = [];
     let last = 0;
-    for (const m of child.matchAll(MENTION_PATTERN)) {
-      const at = m.index ?? 0;
+    for (const m of findMentions(child)) {
+      const at = m.index;
       if (at > last) parts.push(child.slice(last, at));
       parts.push(
-        <span key={at} data-mention={m[1]} title={titleOf(Number(m[1]))}
-          className="px-1 rounded bg-blue-400/15 text-blue-300 font-medium">{m[0]}</span>);
-      last = at + m[0].length;
+        <span key={at} data-mention={m.id} title={titleOf(m.id)}
+          className="px-1 rounded bg-blue-400/15 text-blue-300 font-medium">{m.text}</span>);
+      last = at + m.text.length;
     }
     if (last === 0) return child;
     parts.push(child.slice(last));

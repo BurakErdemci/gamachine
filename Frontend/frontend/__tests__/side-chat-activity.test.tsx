@@ -111,4 +111,22 @@ describe('side question activity line', () => {
     expect(side.messages.find(m => m.role === 'assistant')?.activity).toBeUndefined()
     expect(side.loading).toBe(false)
   })
+
+  // Intended (architect, 27 Sep 2026; Codex mentionaudit flagged it): a tool
+  // that starts after some answer text brings the line back so the panel does
+  // not look frozen during a later read; the next text removes it again.
+  it('shows the line beside answer text while a later tool runs, and drops it on the next text', async () => {
+    await ask()
+    stream.push({ type: 'text', content: 'Önce şuna bakalım. ' })
+    await flush()
+    expect(activity()).toBeNull()
+    stream.push({ type: 'tool_call', tool: 'read_file', summary: 'Assets/C.cs' })
+    await flush()
+    expect(activity()).toContain('read_file → Assets/C.cs')
+    expect(screen.getByTestId('side-answer').textContent).toContain('Önce şuna bakalım.')
+    stream.push({ type: 'text', content: 'Tamam.' })
+    await flush()
+    expect(activity()).toBeNull()
+    expect(screen.getByTestId('side-answer').textContent).toContain('Tamam.')
+  })
 })
