@@ -303,6 +303,47 @@ def test_unity_actions(tool, args, verdict, reason):
     assert (risk.verdict, risk.reason) == (verdict, reason), (tool, args, risk)
 
 
+# Codex safeauto, 27 Sep 2026: each pair is the routine form next to the form
+# that destroys or overwrites, read through the backend's ledger reader.
+@pytest.mark.parametrize("tool,args,verdict", [
+    ("manage_graphics", {"action": "bake_clear"}, CRITICAL),
+    ("manage_graphics", {"action": "bake_start"}, ROUTINE),
+    ("manage_prefabs", {"action": "modify_contents", "prefab_path": "Assets/P.prefab",
+                        "delete_child": "ImportantChild"}, CRITICAL),
+    ("manage_prefabs", {"action": "modify_contents", "prefab_path": "Assets/P.prefab",
+                        "deleteChild": ["A", "B"]}, CRITICAL),
+    ("manage_prefabs", {"action": "modify_contents", "prefab_path": "Assets/P.prefab",
+                        "position": [0, 1, 0]}, ROUTINE),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "Replacement",
+                        "prefab_path": "Assets/Prefabs/Existing.prefab",
+                        "allow_overwrite": True}, CRITICAL),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "Replacement",
+                        "prefab_path": "Assets/Prefabs/Existing.prefab",
+                        "allowOverwrite": "true"}, CRITICAL),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "Replacement",
+                        "prefab_path": "Assets/Prefabs/Existing.prefab",
+                        "allow_overwrite": False}, ROUTINE),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "Replacement",
+                        "prefab_path": "Assets/Prefabs/New.prefab"}, ROUTINE),
+    ("manage_scene", {"action": "save", "name": "Existing", "path": "Assets/Scenes"}, CRITICAL),
+    ("manage_scene", {"action": "save", "path": "Assets/Scenes"}, ROUTINE),
+    ("manage_scene", {"action": "create", "name": "NewScene", "path": "Assets/Scenes"}, CRITICAL),
+    ("manage_scene", {"action": "create", "name": "N", "template": "3d_basic"}, CRITICAL),
+])
+def test_unity_destroying_or_overwriting_forms_are_critical(tool, args, verdict):
+    risk = classify({"kind": "unity", "tool": tool, "args": args})
+    assert risk.verdict == verdict, (tool, args, risk)
+
+
+def test_a_batch_carries_the_parameter_rule_into_its_sub_calls():
+    save_as = {"tool": "manage_scene", "params": {"action": "save", "name": "Existing"}}
+    save = {"tool": "manage_scene", "params": {"action": "save"}}
+    batch = lambda *cmds: classify({"kind": "unity", "tool": "batch_execute",
+                                    "args": {"commands": list(cmds)}})
+    assert batch(save, save).verdict == ROUTINE
+    assert batch(save, save_as).verdict == CRITICAL
+
+
 def test_a_batch_with_one_critical_sub_call_is_critical():
     routine = {"tool": "manage_components", "params": {"action": "add"}}
     critical = {"tool": "manage_gameobject", "params": {"action": "delete"}}

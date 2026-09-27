@@ -365,6 +365,27 @@ def test_param_dependent_rules_name_a_real_parameter(tool_name):
         )
 
 
+@pytest.mark.parametrize("tool_name", sorted(ledger_tool_names()))
+def test_critical_when_rules_name_a_real_parameter(tool_name):
+    """
+    A `critical_when` rule on a parameter the tool does not declare never
+    matches, so the destroying form runs with no card in the balanced mode:
+    the same fail-open typo as for param_dependent above (Codex safeauto,
+    27 Sep 2026).
+    """
+    rules = (tool_entry(tool_name) or {}).get("critical_when") or []
+    if not rules:
+        pytest.skip("no critical_when rules")
+    tool_info = _registered().get(tool_name)
+    if tool_info is None:
+        pytest.skip("covered by test_no_dead_ledger_entries")
+    declared = _source_parameter_names(tool_info)
+    assert declared is not None, f"{tool_name}: signature unreadable"
+    for rule in rules:
+        assert rule["param"] in declared, (tool_name, rule, sorted(declared))
+        assert rule["param"] == rule["param"].lower(), (tool_name, rule)
+
+
 def _exempted_read_surface() -> set[str]:
     """Every call the ledger currently exempts, in PINNED_READ_SURFACE's notation."""
     surface: set[str] = set()

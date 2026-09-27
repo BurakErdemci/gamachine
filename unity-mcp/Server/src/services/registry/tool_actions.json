@@ -10,7 +10,7 @@
   "_classification_rule": "'read' means the call leaves no persistent trace: no asset, no file on disk, no scene/component state, no Editor state a later call could observe. Anything else is 'write', including calls that only touch ephemeral Editor state -- the gate can relax those later, but it cannot un-write a file.",
   "_shared_wrapper_note": "Do not reclassify every tool as write because of the telemetry wrapper. register_all_tools (services/tools/__init__.py:63) wraps ALL 45 tools with log_execution and telemetry_tool, and the lazy TelemetryCollector creates the UnityMCP data directory and writes customer_uuid.txt on the first tool call -- even with telemetry disabled. Found and reproduced by an audit red team 2026-07-29 via manage_script_capabilities. It is deliberately NOT a classification finding: the wrapper runs identically on every call, so the first APPROVED call writes the same file, and moving reads to write buys nothing while emptying this ledger of its purpose. The classification rule above scopes to a tool's own semantics, not to infrastructure shared by all of them. The underlying defect -- an identity file created while telemetry is off -- is real, belongs to the vendored fork (untouched by us since the import commit), and is recorded as a backlog item, not fixed here.",
   "_preflight_refresh_note": "Eight tools call preflight(refresh_if_dirty=True), which -- when the Editor reports assets.external_changes_dirty -- runs refresh_unity(mode=if_dirty, scope=all, compile=request): asset import, script compilation and possibly a domain reload. That happens BEFORE the tool's own work, so it applies to the tool's read actions too. Found by an audit red team 2026-07-29 and reproduced. Every action on those eight tools is therefore classified write, marked with \"preflight_refresh\": true, even where the action's own semantics are a pure read. Do not 'correct' those rows back to read without first removing the refresh. The tools: find_gameobjects, manage_asset, manage_prefabs, manage_scene, manage_components, manage_gameobject, manage_texture, run_tests. Known cost, accepted by the user 2026-07-29: discovery calls such as manage_scene get_hierarchy now raise an approval card in step mode. The user's words were that the read must keep working correctly but must come with a card. A smarter future option, not built: the refresh only fires when the project is externally dirty, which is runtime state a static classifier cannot see -- a gate that could ask the server for that state could card only when the refresh would actually happen.",
-  "_critical_actions_note": "critical_actions marks the writes that raise an approval card in the 'balanced' approval mode (owner decision, Burak, 27 Sep 2026); every other write runs without one there. A list names actions, \"*\" means every write of the tool. Each listed action must be a write_actions or param_dependent action (checked by _self_check); a param_dependent action is critical only in its write form. batch_execute carries none: it is critical when any sub-call is. Fail-closed like the rest of the ledger: an unknown tool or action, or a malformed field, is critical. Picked for irreversible or project-wide effects: deletes/moves/renames, packages, builds and platform switches, project settings, scene load/close and closing a prefab stage (unsaved changes), code execution (execute_code, menu items, custom tools, game hooks) and GameObject delete (owner). Component remove stays routine: Unity undo covers it.",
+  "_critical_actions_note": "critical_actions marks the writes that raise an approval card in the 'balanced' approval mode (owner decision, Burak, 27 Sep 2026); every other write runs without one there. A list names actions, \"*\" means every write of the tool. Each listed action must be a write_actions or param_dependent action (checked by _self_check); a param_dependent action is critical only in its write form. batch_execute carries none: it is critical when any sub-call is. Fail-closed like the rest of the ledger: an unknown tool or action, or a malformed field, is critical. Picked for irreversible or project-wide effects: deletes/moves/renames, packages, builds and platform switches, project settings, scene load/close and closing a prefab stage (unsaved changes), code execution (execute_code, menu items, custom tools, game hooks) and GameObject delete (owner). Component remove stays routine: Unity undo covers it. critical_when makes a write action critical only in one parameter form: {action, param, when}, where when is 'present' (any spelling of param carries a non-null value) or 'not_false' (any spelling carries a value that does not read as false); every spelling the key fold matches counts, and a malformed rule is critical (Codex safeauto, 27 Sep 2026).",
   "tools": {
     "batch_execute": {
       "action_param": null,
@@ -364,11 +364,12 @@
       ],
       "param_dependent": [],
       "critical_actions": [
+        "bake_clear",
         "pipeline_set_quality",
         "pipeline_set_settings"
       ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_graphics.py:83",
-      "note": "bake_cancel leaves partial lightmap data and bake_clear deletes baked lightmaps -- both writes despite reading like control verbs."
+      "note": "bake_cancel leaves partial lightmap data and bake_clear deletes baked lightmaps -- both writes despite reading like control verbs. bake_clear is also critical: Lightmapping.Clear() and ClearLightingDataAsset() drop the baked lighting data project-wide (LightBakingOps.cs:81-82; Codex safeauto, 27 Sep 2026)."
     },
     "manage_input": {
       "action_param": "action",
@@ -486,6 +487,20 @@
       "critical_actions": [
         "close_prefab_stage"
       ],
+      "critical_when": [
+        {
+          "action": "create_from_gameobject",
+          "param": "allow_overwrite",
+          "when": "not_false",
+          "note": "allowOverwrite=true saves over an existing prefab asset at prefab_path (ManagePrefabs.cs:117-120,223,270); without it the handler picks a unique path. Whether the asset exists is unknowable from the call, so the overwrite-capable form is critical. Codex safeauto, 27 Sep 2026."
+        },
+        {
+          "action": "modify_contents",
+          "param": "delete_child",
+          "when": "present",
+          "note": "deleteChild destroys child GameObjects of the prefab and saves the asset (ManagePrefabs.cs:926-929,1200,656); GameObject delete is critical (owner). Codex safeauto, 27 Sep 2026."
+        }
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_prefabs.py:102",
       "note": "close_prefab_stage takes save_before_close but is a write either way -- false discards in-stage edits. open/close change which object the rest of the toolchain operates on, so they are not neutral."
     },
@@ -582,11 +597,20 @@
       ],
       "param_dependent": [],
       "critical_actions": [
+        "create",
         "load",
         "close_scene"
       ],
+      "critical_when": [
+        {
+          "action": "save",
+          "param": "name",
+          "when": "present",
+          "note": "With a name the handler saves the active scene to Assets/<path>/<name>.unity whenever that differs from its own path, with no existence check (ManageScene.cs:206-217,475-484): Save As can overwrite another scene. Without a name it re-saves the active scene in place and stays routine. Codex safeauto, 27 Sep 2026."
+        }
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_scene.py:90",
-      "note": "'load' is a write because it can replace or discard current scene contents. The get_* actions and scene_view_frame are semantically reads, and validate is a pure report unless auto_repair is set (ManageScene.cs:298) -- all of them are classified write anyway because manage_scene.py:90 calls preflight(refresh_if_dirty=True); see _preflight_refresh_note. That also retires the auto_repair param_dependent rule: the action is a write either way now. NOTE for anyone reading the old Backend exemption list: manage_scene has no 'get_info' action -- that entry never matched anything, confirmed against the live server on 2026-07-29."
+      "note": "'load' is a write because it can replace or discard current scene contents. 'create' is critical for the same reason: it opens the new scene with NewSceneMode.Single (ManageScene.cs:345-351, template path :1745) and has no additive form (Codex safeauto, 27 Sep 2026).The get_* actions and scene_view_frame are semantically reads, and validate is a pure report unless auto_repair is set (ManageScene.cs:298) -- all of them are classified write anyway because manage_scene.py:90 calls preflight(refresh_if_dirty=True); see _preflight_refresh_note. That also retires the auto_repair param_dependent rule: the action is a write either way now. NOTE for anyone reading the old Backend exemption list: manage_scene has no 'get_info' action -- that entry never matched anything, confirmed against the live server on 2026-07-29."
     },
     "manage_scriptable_object": {
       "action_param": "action",

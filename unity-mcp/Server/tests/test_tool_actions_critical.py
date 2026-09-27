@@ -154,3 +154,83 @@ def test_a_malformed_critical_field_fails_closed_at_runtime(monkeypatch):
     _patched_ledger(monkeypatch, "manage_components", critical_actions="remove")
     assert tool_entry("manage_components")["critical_actions"] == "remove"
     assert is_critical("manage_components", {"action": "add"}) is True
+
+
+# Codex safeauto, 27 Sep 2026: writes that were routine by name but destroy or
+# overwrite in one form. Each routine form sits next to its critical twin.
+@pytest.mark.parametrize("tool,params,critical", [
+    ("manage_graphics", {"action": "bake_clear"}, True),
+    ("manage_graphics", {"action": "bake_start"}, False),
+    ("manage_prefabs", {"action": "modify_contents", "prefab_path": "Assets/P.prefab",
+                        "delete_child": "ImportantChild"}, True),
+    ("manage_prefabs", {"action": "modify_contents", "prefab_path": "Assets/P.prefab",
+                        "deleteChild": [{"name": "A"}]}, True),
+    ("manage_prefabs", {"action": "modify_contents", "prefab_path": "Assets/P.prefab",
+                        "properties": {"delete_child": "A"}}, True),
+    ("manage_prefabs", {"action": "modify_contents", "prefab_path": "Assets/P.prefab",
+                        "delete_child": None, "position": [0, 1, 0]}, False),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "R",
+                        "prefab_path": "Assets/Prefabs/Existing.prefab", "allow_overwrite": True}, True),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "R",
+                        "prefab_path": "Assets/Prefabs/Existing.prefab", "AllowOverwrite": "TRUE"}, True),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "R",
+                        "prefab_path": "Assets/Prefabs/Existing.prefab", "allow_overwrite": 1}, True),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "R",
+                        "prefab_path": "Assets/Prefabs/Existing.prefab",
+                        "allow_overwrite": False, "allowOverwrite": True}, True),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "R",
+                        "prefab_path": "Assets/Prefabs/Existing.prefab", "allow_overwrite": False}, False),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "R",
+                        "prefab_path": "Assets/Prefabs/Existing.prefab", "allow_overwrite": "false"}, False),
+    ("manage_prefabs", {"action": "create_from_gameobject", "target": "R",
+                        "prefab_path": "Assets/Prefabs/New.prefab"}, False),
+    ("manage_scene", {"action": "save", "name": "Existing", "path": "Assets/Scenes"}, True),
+    ("manage_scene", {"action": "SAVE", "Name": "Existing"}, True),
+    ("manage_scene", {"action": "save", "path": "Assets/Scenes"}, False),
+    ("manage_scene", {"action": "save"}, False),
+    ("manage_scene", {"action": "create", "name": "NewScene", "path": "Assets/Scenes"}, True),
+    ("manage_scene", {"action": "create", "name": "N", "template": "2d_basic"}, True),
+])
+def test_parameter_forms_that_destroy_or_overwrite(tool, params, critical):
+    assert is_critical(tool, params) is critical
+
+
+def test_batch_applies_the_parameter_rule_to_sub_calls():
+    save = {"tool": "manage_scene", "params": {"action": "save"}}
+    save_as = {"tool": "manage_scene", "params": {"action": "save", "name": "Existing"}}
+    delete_child = {"tool": "manage_prefabs",
+                    "params": {"action": "modify_contents", "delete_child": "A"}}
+    assert is_critical("batch_execute", {"commands": [save, save]}) is False
+    assert is_critical("batch_execute", {"commands": [save, save_as]}) is True
+    assert is_critical("batch_execute", {"commands": [save, {"tool": "batch_execute",
+                                                             "params": {"commands": [delete_child]}}]}) is True
+
+
+@pytest.mark.parametrize("rules,problem", [
+    ([{"action": "no_such_action", "param": "x", "when": "present"}], "is not a write action"),
+    ([{"action": "close_prefab_stage", "param": "x", "when": "present"}], "already critical"),
+    ([{"action": "modify_contents", "param": "", "when": "present"}], "no usable 'param'"),
+    ([{"action": "modify_contents", "param": "x", "when": "equals"}], "unsupported when"),
+    ([7], "not an object"),
+    ({"action": "modify_contents"}, "must be a list"),
+])
+def test_self_check_rejects_a_malformed_critical_when(monkeypatch, rules, problem):
+    _patched_ledger(monkeypatch, "manage_prefabs", critical_when=rules)
+    assert any(problem in p for p in _self_check()), _self_check()
+
+
+def test_self_check_rejects_critical_when_on_the_batch_tool(monkeypatch):
+    _patched_ledger(monkeypatch, "batch_execute",
+                    critical_when=[{"action": "x", "param": "y", "when": "present"}])
+    assert any("batch_execute" in p and "nested-call" in p for p in _self_check())
+
+
+@pytest.mark.parametrize("rules", [
+    "modify_contents",
+    [7],
+    [{"action": "modify_contents", "param": "", "when": "present"}],
+    [{"action": "modify_contents", "param": "delete_child", "when": "equals"}],
+])
+def test_a_malformed_critical_when_fails_closed_at_runtime(monkeypatch, rules):
+    _patched_ledger(monkeypatch, "manage_prefabs", critical_when=rules)
+    assert is_critical("manage_prefabs", {"action": "modify_contents", "position": [0, 0, 0]}) is True

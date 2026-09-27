@@ -371,6 +371,8 @@ def is_critical(tool_name: str, params: Mapping[str, Any] | None = None, *, _dep
             if not isinstance(action, str) or action.lower() not in known:
                 return True
             actions.append(action.lower())
+    if _critical_by_param(entry, actions, params):
+        return True
     marks = entry.get("critical_actions")
     if marks is None:
         return False
@@ -387,6 +389,56 @@ def is_critical(tool_name: str, params: Mapping[str, Any] | None = None, *, _dep
         if action in marks:
             if action in dependent and _classify_action(entry, action, params) == READ:
                 continue
+            return True
+    return False
+
+
+CRITICAL_WHEN_KINDS = ("present", "not_false")
+
+_FALSE_STRINGS = frozenset({"", "false", "0", "no", "off"})
+
+
+def _reads_false(value: Any) -> bool:
+    if value is None or value is False:
+        return True
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value == 0
+    return isinstance(value, str) and value.strip().lower() in _FALSE_STRINGS
+
+
+def _critical_by_param(entry: Mapping[str, Any], actions: list[str],
+                       params: Mapping[str, Any]) -> bool:
+    """
+    ``critical_when``: a write that is routine by name but destroys or
+    overwrites when a sibling parameter carries a value (Codex safeauto,
+    27 Sep 2026: ``manage_prefabs modify_contents delete_child`` and
+    ``create_from_gameobject allow_overwrite`` ran with no card).
+
+    Every spelling any layer could read as the parameter counts, and one of
+    them meeting the condition is enough: here a missed spelling fails open.
+    """
+    rules = entry.get("critical_when")
+    if rules is None:
+        return False
+    if not isinstance(rules, (list, tuple)) or not entry.get("action_param"):
+        return True
+    for rule in rules:
+        if not isinstance(rule, Mapping):
+            return True
+        if rule.get("action") not in actions:
+            continue
+        param = rule.get("param")
+        if not isinstance(param, str) or not param:
+            return True
+        values = [value for _, value in _spellings(params, param)]
+        when = rule.get("when")
+        if when == "present":
+            if any(value is not None for value in values):
+                return True
+        elif when == "not_false":
+            if any(not _reads_false(value) for value in values):
+                return True
+        else:
             return True
     return False
 
@@ -497,4 +549,33 @@ def _self_check() -> list[str]:
                     if action not in writes and action not in dependent:
                         problems.append(
                             f"{name}: critical action '{action}' is not a write action")
+
+        rules = entry.get("critical_when")
+        if rules is not None:
+            dependent = {rule.get("action") for rule in entry.get("param_dependent", [])}
+            if entry.get("recursive_field"):
+                problems.append(f"{name}: critical_when on a nested-call tool -- "
+                                "it is critical through its sub-calls")
+            elif not entry.get("action_param"):
+                problems.append(f"{name}: critical_when names actions but the tool has none")
+            elif not isinstance(rules, (list, tuple)):
+                problems.append(f"{name}: critical_when must be a list of rules")
+            else:
+                for rule in rules:
+                    if not isinstance(rule, Mapping):
+                        problems.append(f"{name}: a critical_when rule is not an object")
+                        continue
+                    action = rule.get("action")
+                    if action not in writes and action not in dependent:
+                        problems.append(
+                            f"{name}: critical_when action {action!r} is not a write action")
+                    elif marks == "*" or (isinstance(marks, (list, tuple)) and action in marks):
+                        problems.append(
+                            f"{name}: critical_when action {action!r} is already critical")
+                    if not isinstance(rule.get("param"), str) or not rule.get("param"):
+                        problems.append(f"{name}: critical_when rule for {action!r} has no usable 'param'")
+                    if rule.get("when") not in CRITICAL_WHEN_KINDS:
+                        problems.append(
+                            f"{name}: critical_when rule for {action!r} has unsupported "
+                            f"when {rule.get('when')!r}")
     return problems
