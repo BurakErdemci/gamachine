@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Terminal, X, Check, AlertTriangle, Box, Mail } from 'lucide-react';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
+import { RiskReasonLine } from './RiskReasonLine';
 
 interface CommandApprovalProps {
   command: string;
@@ -16,6 +17,9 @@ interface CommandApprovalProps {
    * değiştiren bir araç çağrısı. Kablolama (onay/ret, gate kimliği) ortak
    * kalıyor — ayrışan yalnız kullanıcının okuduğu şey. */
   kind?: 'shell' | 'unity' | 'mail';
+  /** Why balanced mode stopped here; absent for auto/step cards. */
+  riskReason?: string;
+  riskDetail?: string;
 }
 
 /** Metin anahtarları BİRLİK tipinde tutuluyor: `t` yalnız bilinen anahtarları
@@ -44,7 +48,7 @@ const METIN = {
   },
 } as const;
 
-export const CommandApproval: React.FC<CommandApprovalProps> = ({ command, onConfirm, onCancel, kind = 'shell' }) => {
+export const CommandApproval: React.FC<CommandApprovalProps> = ({ command, onConfirm, onCancel, kind = 'shell', riskReason, riskDetail }) => {
   const { t } = useLang();
   const unity = kind === 'unity';
   const mail = kind === 'mail';
@@ -78,6 +82,7 @@ export const CommandApproval: React.FC<CommandApprovalProps> = ({ command, onCon
             <p className="text-[13px] text-white font-medium leading-tight mb-2">
               {t(m.confirm)}
             </p>
+            <RiskReasonLine reason={riskReason} detail={riskDetail} className="mb-2" />
             {/* Gövde KENDİ İÇİNDE kaydırılıyor ve satır sonları korunuyor.
               *
               * İkisi de K9'un gereği: kart artık yalnız bir yol değil, yazılacak

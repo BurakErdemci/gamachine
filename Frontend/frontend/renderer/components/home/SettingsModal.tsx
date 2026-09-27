@@ -1,4 +1,4 @@
-import { LogOut, Settings, Trash2, X, Gamepad2, Loader2, Globe, Key, Check, Cpu, Hand } from "lucide-react";
+import { LogOut, Settings, Trash2, X, Gamepad2, Loader2, Globe, Key, Check, Cpu, Hand, ShieldCheck } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 
@@ -314,8 +314,9 @@ export const SettingsModal = ({
               <div className="space-y-2">
                 <label className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-1">{t('settings.tabMode')}</label>
                 {([
-                  { id: 'auto' as GenerationMode, icon: <Cpu size={14} />, label: t('settings.modeAutoTitle'), explain: t('settings.modeAutoExplain'), warn: true },
-                  { id: 'step' as GenerationMode, icon: <Hand size={14} />, label: t('settings.modeStepTitle'), explain: t('settings.modeStepExplain'), warn: false },
+                  { id: 'auto' as GenerationMode, icon: <Cpu size={14} />, label: t('settings.modeAutoTitle'), explain: t('settings.modeAutoExplain'), warn: true, recommended: false },
+                  { id: 'balanced' as GenerationMode, icon: <ShieldCheck size={14} />, label: t('settings.modeBalancedTitle'), explain: t('settings.modeBalancedExplain'), warn: false, recommended: true },
+                  { id: 'step' as GenerationMode, icon: <Hand size={14} />, label: t('settings.modeStepTitle'), explain: t('settings.modeStepExplain'), warn: false, recommended: false },
                 ]).map(option => {
                   const selected = approvalMode === option.id;
                   // The auto card stays red whether or not it is selected: the
@@ -335,7 +336,14 @@ export const SettingsModal = ({
                     >
                       <span className={`mt-0.5 shrink-0 ${option.warn ? 'text-red-400' : selected ? 'text-blue-400' : 'text-slate-500'}`}>{option.icon}</span>
                       <span className="flex-1 min-w-0">
-                        <span className={`block text-xs ${option.warn ? 'font-bold tracking-wide text-red-400' : selected ? 'font-semibold text-blue-300' : 'font-semibold text-slate-200'}`}>{option.label}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className={`block text-xs ${option.warn ? 'font-bold tracking-wide text-red-400' : selected ? 'font-semibold text-blue-300' : 'font-semibold text-slate-200'}`}>{option.label}</span>
+                          {option.recommended && (
+                            <span data-testid="mode-recommended-badge" className="px-1.5 py-px rounded-full border border-emerald-500/40 bg-emerald-500/10 text-[9.5px] font-semibold text-emerald-300">
+                              {t('mode.recommended')}
+                            </span>
+                          )}
+                        </span>
                         <span className="block text-[10.5px] text-slate-400 mt-0.5 leading-relaxed">{option.explain}</span>
                       </span>
                       {selected && <Check size={12} className="text-blue-400 shrink-0 mt-0.5" />}

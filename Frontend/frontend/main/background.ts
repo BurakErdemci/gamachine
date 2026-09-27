@@ -700,7 +700,7 @@ handleSecure('path-exists', async (_event, targetPath: string) => {
 handleSecure('app-token-get', () => localAppToken)
 
 handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown) => {
-  if (mode !== 'auto' && mode !== 'step') {
+  if (mode !== 'auto' && mode !== 'balanced' && mode !== 'step') {
     throw new Error('Geçersiz çalışma modu.')
   }
   const src = source === 'settings' || source === 'chat' || source === 'migrate' ? source : 'ui'

@@ -14,6 +14,7 @@ import { McpTrayGate, unityOzeti } from '../../hooks/home/useMCPApproval';
 import { postMcpDecision, decisionToast } from '../../hooks/home/gateResponse';
 import { stripBidi } from '../../lib/modelText';
 import { useLang } from '../../lib/i18n';
+import { RiskReasonLine } from './RiskReasonLine';
 
 interface McpUnknownTrayProps {
   gates: McpTrayGate[];
@@ -108,6 +109,7 @@ export const McpUnknownTray: React.FC<McpUnknownTrayProps> = ({ gates, apiBase, 
                 {g.workspacePath ? stripBidi(g.workspacePath) : t('mcp.sourceUnknown')}
               </dd>
             </dl>
+            <RiskReasonLine reason={g.riskReason} detail={g.riskDetail} className="mb-2" />
             {/* The full parameters, as the in-chat card shows them: the tool
                 name and target alone do not say what is being approved. */}
             <pre className="max-h-32 overflow-y-auto custom-scrollbar whitespace-pre-wrap break-all rounded bg-black/50 border border-white/5 px-2 py-1.5 text-[10.5px] text-emerald-400 font-mono">

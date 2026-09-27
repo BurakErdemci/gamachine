@@ -23,6 +23,7 @@ import { DiffViewer } from './DiffViewer';
 import { FileCreationApproval, PendingFile } from './FileCreationApproval';
 import { FileDeleteApproval } from './FileDeleteApproval';
 import { CommandApproval } from './CommandApproval';
+import { RiskReasonLine } from './RiskReasonLine';
 import { GateFailure, postMcpDecision, decisionToast } from '../../hooks/home/gateResponse';
 import { MCP_MSG_ID, McpActiveGate } from '../../hooks/home/useMCPApproval';
 import { useLang, type TKey } from '../../lib/i18n';
@@ -313,13 +314,22 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
     <fieldset disabled={busy} aria-busy={busy} className="contents">{node}</fieldset>
   );
 
+  // The risk line rides under the banner so all four card kinds get it from
+  // one place; it renders nothing for cards that auto/step raised.
   const banner = (
-    <WorkspaceBanner
-      gate={gate}
-      mismatch={workspaceMismatch}
-      checking={workspaceCheckPending && !workspaceMismatch}
-      openWorkspacePath={openWorkspacePath}
-    />
+    <>
+      <WorkspaceBanner
+        gate={gate}
+        mismatch={workspaceMismatch}
+        checking={workspaceCheckPending && !workspaceMismatch}
+        openWorkspacePath={openWorkspacePath}
+      />
+      <RiskReasonLine
+        reason={gate.riskReason}
+        detail={gate.riskDetail}
+        className="border-x border-amber-500/30 bg-amber-500/10 px-3 py-1.5"
+      />
+    </>
   );
 
   return (

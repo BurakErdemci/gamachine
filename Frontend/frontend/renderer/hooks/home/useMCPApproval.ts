@@ -50,6 +50,9 @@ export interface McpActiveGate {
    * not know; such a request never gets here, it goes to the tray.
    */
   conversationId?: number | null;
+  /** Why balanced mode raised this card (`risk_reason`); absent otherwise. */
+  riskReason?: string;
+  riskDetail?: string;
 }
 
 /** A request whose source chat the backend could not name (tray entry). */
@@ -58,7 +61,19 @@ export interface McpTrayGate {
   tool: string;
   params: any;
   workspacePath: string;
+  riskReason?: string;
+  riskDetail?: string;
 }
+
+/**
+ * The optional top-level `risk_reason`/`risk_detail` of a `/mcp-pending`
+ * entry. Only a non-empty string reason counts; the detail may be empty.
+ */
+export const gateRisk = (req: any): { riskReason?: string; riskDetail?: string } => {
+  const reason = req && typeof req === 'object' ? req.risk_reason : undefined;
+  if (typeof reason !== 'string' || !reason) return {};
+  return { riskReason: reason, riskDetail: typeof req.risk_detail === 'string' ? req.risk_detail : '' };
+};
 
 /**
  * Who owns a `/mcp-pending` entry: a chat id, `null` (unknown), or
@@ -385,7 +400,7 @@ export const useMCPApproval = ({
       if (typeof owner === 'number') (gatesByConv[owner] ||= []).push(gateId);
       else if (owner === null) {
         const r = req as { tool?: string; params?: any; workspace_path?: string };
-        unknown.push({ gateId, tool: String(r.tool ?? ''), params: r.params, workspacePath: r.workspace_path || '' });
+        unknown.push({ gateId, tool: String(r.tool ?? ''), params: r.params, workspacePath: r.workspace_path || '', ...gateRisk(req) });
       }
     }
     onOwnersChangeRef.current?.(gatesByConv);
@@ -404,7 +419,17 @@ export const useMCPApproval = ({
       // whose chat is no longer on screen: it leaves the slot undecided and is
       // drawn again when its chat is opened, since it is still pending.
       const open = activeGateRef.current;
-      if (open.gateId in pending && belongsOnScreen(open.conversationId, screenConvRef.current)) return;
+      if (open.gateId in pending && belongsOnScreen(open.conversationId, screenConvRef.current)) {
+        // A card opened before a switch to balanced may gain its risk reason
+        // while it stays open (the backend keeps the critical ones pending).
+        const risk = gateRisk(pending[open.gateId]);
+        if (risk.riskReason !== open.riskReason || risk.riskDetail !== open.riskDetail) {
+          const refreshed: McpActiveGate = { ...open, riskReason: risk.riskReason, riskDetail: risk.riskDetail };
+          activeGateRef.current = refreshed;
+          setActiveGate(refreshed);
+        }
+        return;
+      }
       dismissActive();
     }
 
@@ -421,7 +446,7 @@ export const useMCPApproval = ({
       // ÖTEKİ isteğin gate'ini onaylıyordu (dış denetim: `approval-gate-
       // misbinding`, HIGH). Kimliği kartın kendi kaydında taşımak o sınıfı
       // bir örnek yamayarak değil kökten kapatıyor.
-      const gate: McpActiveGate = { gateId, tool, workspacePath: gateWorkspace || '', conversationId: owner };
+      const gate: McpActiveGate = { gateId, tool, workspacePath: gateWorkspace || '', conversationId: owner, ...gateRisk(req) };
       activeGateRef.current = gate;
       setActiveGate(gate);
 

@@ -1,15 +1,17 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, Cpu, Hand } from 'lucide-react';
+import { ChevronDown, Cpu, Hand, ShieldCheck } from 'lucide-react';
 import { useRef, useState, useEffect } from 'react';
 import { useLang } from '../../lib/i18n';
+import type { GenerationMode } from './types';
 
-export type GenerationMode = 'auto' | 'step';
+export type { GenerationMode };
 
 interface Mode {
   id: GenerationMode;
   icon: React.ReactNode;
   label: string;
   description: string;
+  recommended?: boolean;
 }
 
 interface GenerationModeSelectorProps {
@@ -21,6 +23,7 @@ export const GenerationModeSelector = ({ value, onChange }: GenerationModeSelect
   const { t } = useLang();
   const MODES: Mode[] = [
     { id: 'auto', icon: <Cpu size={14} />, label: t('mode.auto'), description: t('mode.autoDesc') },
+    { id: 'balanced', icon: <ShieldCheck size={14} />, label: t('mode.balanced'), description: t('mode.balancedDesc'), recommended: true },
     { id: 'step', icon: <Hand size={14} />, label: t('mode.step'), description: t('mode.stepDesc') },
   ];
   const [open, setOpen] = useState(false);
@@ -67,6 +70,7 @@ export const GenerationModeSelector = ({ value, onChange }: GenerationModeSelect
             {MODES.map(mode => (
               <button
                 key={mode.id}
+                data-mode={mode.id}
                 onClick={() => { onChange(mode.id); setOpen(false); }}
                 className={`w-full flex items-start gap-3 px-3 py-2.5 transition-colors text-left ${
                   value === mode.id
@@ -78,8 +82,13 @@ export const GenerationModeSelector = ({ value, onChange }: GenerationModeSelect
                   {mode.icon}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className={`text-[12px] font-semibold ${value === mode.id ? 'text-blue-300' : 'text-slate-300'}`}>
+                  <p className={`flex items-center gap-1.5 text-[12px] font-semibold ${value === mode.id ? 'text-blue-300' : 'text-slate-300'}`}>
                     {mode.label}
+                    {mode.recommended && (
+                      <span data-testid="mode-recommended-badge" className="px-1.5 py-px rounded-full border border-emerald-500/40 bg-emerald-500/10 text-[9.5px] font-semibold text-emerald-300">
+                        {t('mode.recommended')}
+                      </span>
+                    )}
                   </p>
                   <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
                     {mode.description}

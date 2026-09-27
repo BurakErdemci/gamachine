@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { flushSync } from 'react-dom';
 import axios from 'axios';
-import { Message, Conversation, UserData, AIConfig, GenerationMode, ChatActivity, ContextUsage } from '../../components/home/types';
+import { Message, Conversation, UserData, AIConfig, GenerationMode, toGenerationMode, ChatActivity, ContextUsage } from '../../components/home/types';
 import { PendingFile } from '../../components/home/FileCreationApproval';
 import { confirmDialog } from '../../components/ui/ConfirmDialog';
 import { deliveryFromFetch, gateFailure } from './gateResponse';
@@ -14,7 +14,11 @@ import { isBranchIn, leftTabOf } from '../../lib/convFamily';
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
 
-type PendingCommand = { command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' | 'mail' };
+type PendingCommand = {
+  command: string; gateId: string; messageId: number; kind?: 'shell' | 'unity' | 'mail';
+  /** Set only when balanced mode raised the card: why this action counts as critical. */
+  riskReason?: string; riskDetail?: string;
+};
 type PendingQuestion = { questions: any[]; gateId: string; messageId: number };
 type SetArg<T> = T | ((prev: T) => T);
 const resolveArg = <T,>(arg: SetArg<T>, prev: T): T =>
@@ -248,7 +252,7 @@ export const useChat = (
   // The approval mode is global and lives in the backend (closed-loop.md §5):
   // external MCP clients carry no request, so a per-request field could never
   // make them auto. Until the backend answers, the UI shows step - the safe side
-  // (a fresh install then reads auto from the backend; nothing is written here).
+  // (a fresh install then reads the backend's default; nothing is written here).
   const [generationMode, setGenerationModeState] = useState<GenerationMode>('step');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [tempTitle, setTempTitle] = useState('');
@@ -267,7 +271,7 @@ export const useChat = (
         const res = await axios.get(`${API}/approval-mode`, {
           headers: { 'X-Session-Token': user.sessionToken },
         });
-        let mode: GenerationMode = res.data?.mode === 'auto' ? 'auto' : 'step';
+        let mode: GenerationMode = toGenerationMode(res.data?.mode);
         let legacy: string | null = null;
         try { legacy = window.localStorage.getItem(LEGACY_MODE_KEY); } catch { /* storage blocked */ }
         // One-time migration: the backend has never stored a mode, so the
@@ -276,7 +280,7 @@ export const useChat = (
         // default stays unsaved and a later explicit choice is the first write.
         if (!res.data?.stored && (legacy === 'auto' || legacy === 'step') && ipc?.invoke) {
           const out = await ipc.invoke('approval-mode-set', legacy, 'migrate');
-          mode = out?.mode === 'auto' ? 'auto' : 'step';
+          mode = toGenerationMode(out?.mode);
           legacy = null;
         }
         if (res.data?.stored || legacy === null) {
@@ -304,12 +308,15 @@ export const useChat = (
         // The mode did not change; say why in the UI's language when the code is known.
         const refused = out.refused as { code?: string; message?: string; pids?: string };
         showToast(refused.code === 'agy_step_refused'
-          ? cevir('mode.agyStepRefused', { pids: refused.pids || '?' })
+          ? cevir(mode === 'balanced' ? 'mode.agyBalancedRefused' : 'mode.agyStepRefused', { pids: refused.pids || '?' })
           : cevir('mode.writeFailed', { hata: refused.message || String(refused.code) }), 'error');
         return;
       }
-      const applied: GenerationMode = out?.mode === 'auto' ? 'auto' : 'step';
+      const applied: GenerationMode = toGenerationMode(out?.mode);
       setGenerationModeState(applied);
+      // Only auto clears cards. A switch to balanced keeps them: the backend
+      // approves only the MCP cards it can re-classify as routine, and an
+      // in-chat card cannot be re-classified, so it stays pending (Burak, 27 Sep 2026).
       if (applied === 'auto') {
         // The backend approved every open card on the switch; drop the in-chat
         // ones - in every chat, since the mode is global.
@@ -982,7 +989,11 @@ export const useChat = (
                 last_turn: data.last_turn,
               } }));
               if (data.type === 'command_approval_needed') {
-                const item = { command: data.command, gateId: data.gate_id, messageId: aiMsgId };
+                const item: PendingCommand = { command: data.command, gateId: data.gate_id, messageId: aiMsgId };
+                if (typeof data.risk_reason === 'string' && data.risk_reason) {
+                  item.riskReason = data.risk_reason;
+                  item.riskDetail = typeof data.risk_detail === 'string' ? data.risk_detail : '';
+                }
                 // Zaten gösterilen bir onay varsa sıraya al (paralel araçlarda ezilmesin)
                 patchConv(targetConvId, r => r.pendingCommand
                   ? { commandQueue: [...r.commandQueue, item] }
