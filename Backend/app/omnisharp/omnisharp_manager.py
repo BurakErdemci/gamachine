@@ -2,6 +2,7 @@
 açılınca spawn, workspace değişince restart, kapanışta kill. Tüm satır/kolon
 çevirileri BURADA yapılır: LSP 0 tabanlı ↔ bizim format 1 tabanlı."""
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -25,6 +26,55 @@ _SEVERITY = {1: "error", 2: "warning", 3: "info", 4: "hint"}
 _INIT_TIMEOUT = 60
 # Başarısız başlatmadan sonra yeniden denemeden önceki bekleme.
 _RETRY_COOLDOWN = 30.0
+
+# OmniSharp reports a failed `initialize` ONLY through window/logMessage: the
+# error response is held by its output filter until initialization completes,
+# which never happens, so the request would sit out the whole _INIT_TIMEOUT.
+# Measured 28 Sep 2026, Windows: both lines arrive ~0.7 s after spawn, stderr
+# stays empty. "OmniSharp requires the .NET 6 SDK" is logged 30 ms earlier but
+# is not a marker: it comes from one discovery provider, and another may still
+# register an MSBuild instance.
+_FATAL_INIT_MARKERS = ("Failed to handle request initialize", "Could not locate MSBuild")
+_LOG_KEEP = 5
+
+
+class _StartupLog:
+    """Server log lines seen during one start attempt, and a future that
+    resolves with the first line that means `initialize` has already failed."""
+
+    def __init__(self):
+        self.errors: collections.deque[str] = collections.deque(maxlen=_LOG_KEEP)
+        self.recent: collections.deque[str] = collections.deque(maxlen=_LOG_KEEP)
+        self.fatal: asyncio.Future = asyncio.get_running_loop().create_future()
+
+    def feed(self, params: dict) -> None:
+        msg = str(params.get("message", "")).strip()
+        if not msg:
+            return
+        # The failure line carries a full .NET stack trace after the first line.
+        line = msg.splitlines()[0].rstrip(" |")[:300]
+        self.recent.append(line)
+        try:
+            is_error = int(params.get("type", 4)) == 1
+        except (TypeError, ValueError):
+            is_error = False
+        if is_error:
+            self.errors.append(line)
+            if not self.fatal.done() and any(m in msg for m in _FATAL_INIT_MARKERS):
+                self.fatal.set_result(line)
+
+    def tail(self, limit: int = 400) -> str:
+        """Newest lines that fit in `limit`, cut at line boundaries; the fatal
+        line is left out because it already is the failure reason."""
+        fatal = self.fatal.result() if self.fatal.done() else None
+        kept: list[str] = []
+        size = 0
+        for line in reversed([x for x in (self.errors or self.recent) if x != fatal]):
+            if kept and size + len(line) > limit:
+                break
+            kept.insert(0, line)
+            size += len(line) + 3
+        return " / ".join(kept)
 
 
 def _norm_key(path: str) -> str:
@@ -214,7 +264,7 @@ _ENV_ALLOWLIST = (
 def _spawn_env() -> dict:
     """OmniSharp spawn ortamı: İZİN LİSTESİYLE kurulmuş minimal ortam, üstüne
     (varsa) GÖMÜLÜ .NET SDK yönlendirmesi (0-kurulum — kullanıcının makinesinde
-    .NET olmasa da çalışır). OmniSharp net6.0 hedefli → DOTNET_ROLL_FORWARD=Major
+    .NET olmasa da çalışır). OmniSharp net6.0 hedefli → DOTNET_ROLL_FORWARD=LatestMajor
     ile gömülü .NET 10 LTS'te koşar.
 
     HER İKİ dal da minimal ortam döndürüyor. Eskiden gömülü SDK yokken `None`
@@ -233,7 +283,13 @@ def _spawn_env() -> dict:
     root = _embedded_dotnet_root()
     if root is not None:
         env["DOTNET_ROOT"] = root
-        env["DOTNET_ROLL_FORWARD"] = "Major"
+        # LatestMajor, not Major: Major picks the LOWEST installed major >= 6, which
+        # on a machine with a system .NET 8 runtime is 8 — and Microsoft.Build.Locator
+        # under .NET 8 rejects the bundled SDK 10, so `initialize` never completes.
+        # Measured 28 Sep 2026, Windows: Major -> "Could not locate MSBuild";
+        # LatestMajor -> initialize answered in 1.4 s with SDK 10.0.100. It also
+        # matches OmniSharp's own runtimeconfig (`rollForward: LatestMajor`).
+        env["DOTNET_ROLL_FORWARD"] = "LatestMajor"
         # PATH'e de ekleniyor: OmniSharp MSBuild'i Microsoft.Build.Locator ile
         # çözerken `dotnet` komutunu çalıştırıyor ve DOTNET_ROOT tek başına onu
         # PATH'e koymuyor.
@@ -396,13 +452,17 @@ class OmniSharpManager:
             # C# değil, backend'e giden HER istek bekliyordu.
             sync_hint = await asyncio.to_thread(self._maybe_sync_csproj, workspace)
             client = LspClient()
+            startup = _StartupLog()
+            # Registered before start so no line from the first read can be missed.
+            client.on_notification("window/logMessage", startup.feed)
+            client.on_notification("window/showMessage", startup.feed)
             # Bayrak adları Task 1 Step 3'te doğrulandı (--help çıktısına göre güncel)
             cmd = [binary, "-z", "-s", workspace, "--languageserver", "--encoding", "utf-8"]
             try:
                 await client.start(cmd, cwd=workspace, env=_spawn_env())
                 client.on_notification("textDocument/publishDiagnostics", self._on_diags)
                 client.on_notification("window/logMessage", self._on_log_message)
-                await client.request("initialize", {
+                init = asyncio.ensure_future(client.request("initialize", {
                     "processId": os.getpid(),
                     "rootUri": _path_to_uri(workspace),
                     "capabilities": {"textDocument": {
@@ -411,7 +471,20 @@ class OmniSharpManager:
                         "completion": {"completionItem": {"snippetSupport": False}},
                         "hover": {"contentFormat": ["markdown", "plaintext"]},
                     }},
-                }, timeout=_INIT_TIMEOUT)
+                }, timeout=_INIT_TIMEOUT))
+                # _INIT_TIMEOUT stays the outer bound (inside the request); a
+                # fatal log line only ends the wait early.
+                try:
+                    await asyncio.wait({init, startup.fatal},
+                                       return_when=asyncio.FIRST_COMPLETED)
+                except asyncio.CancelledError:
+                    init.cancel()
+                    raise
+                if not init.done():
+                    init.cancel()
+                    await asyncio.gather(init, return_exceptions=True)
+                    raise LspError(f"OmniSharp initialize'ı reddetti: {startup.fatal.result()}")
+                await init
                 client.notify("initialized", {})
                 self._client = client
                 # `ready` ama detail dolu olabilir: sunucu ayakta VE proje dosyaları
@@ -424,8 +497,19 @@ class OmniSharpManager:
                 # stderr kuyruğu iliştiriliyor: OmniSharp asıl sebebi (örn.
                 # "No .NET SDKs were found.") LSP kanalına değil stderr'e yazıyor,
                 # o yüzden çıplak timeout mesajı tek başına hiçbir şey anlatmıyor.
+                # A TimeoutError stringifies to "" — that empty text is exactly what
+                # made the 28 Sep 2026 failure log read "OmniSharp: " with nothing
+                # after it. And OmniSharp wrote the real cause to logMessage, not
+                # stderr, so the log tail is attached too.
+                reason = str(e).strip()
+                if not reason:
+                    reason = (f"initialize {_INIT_TIMEOUT} sn içinde yanıtlanmadı"
+                              if isinstance(e, TimeoutError) else type(e).__name__)
+                logs = startup.tail()
                 tail = client.stderr_tail
-                detail = f"{e}"[:200] + (f" | OmniSharp: {tail[-300:]}" if tail else "")
+                detail = (reason[:300]
+                          + (f" | OmniSharp log: {logs}" if logs else "")
+                          + (f" | OmniSharp: {tail[-300:]}" if tail else ""))
                 logger.exception("OmniSharp başlatılamadı")
                 await client.stop()
                 self._fail(workspace, detail)

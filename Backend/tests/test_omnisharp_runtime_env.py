@@ -18,7 +18,9 @@ Bu projede kapıların yalnız "çok dar değil" yönü sınandığı için üç
 import asyncio
 import os
 import pathlib
+import sys
 import tempfile
+import time
 
 import pytest
 
@@ -98,7 +100,10 @@ class TestSpawnOrtami:
         env = om._spawn_env()
         assert env is not None
         assert env["DOTNET_ROOT"] == root
-        assert env["DOTNET_ROLL_FORWARD"] == "Major"
+        # Not "Major": that picks the lowest major >= 6, i.e. a system .NET 8 when
+        # one exists, and MSBuild then rejects the bundled SDK 10 (measured
+        # 28 Sep 2026, Windows).
+        assert env["DOTNET_ROLL_FORWARD"] == "LatestMajor"
         assert env["PATH"].split(os.pathsep)[0] == root
 
     def test_without_an_embedded_sdk_no_dotnet_root_is_imposed_on_the_child(
@@ -405,3 +410,127 @@ class TestBagKapisiYaprakDegilYolBoyunca:
         plat = om._platform_key()
         dest = _make_dotnet_tree(fake_root, plat, with_sdk=True)
         assert om._embedded_dotnet_root() == dest
+
+
+# A stand-in for OmniSharp that never answers `initialize`. In "msbuild" mode it
+# first logs what the real server logged on 28 Sep 2026 (Windows) when it ran on
+# .NET 8 and rejected the bundled SDK; in "silent" mode it logs one info line only.
+_FAKE_OMNISHARP = r'''
+import json, sys
+def read_msg():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        line = line.decode()
+        if line in ("\r\n", "\n"):
+            break
+        k, v = line.split(":", 1); headers[k.strip().lower()] = v.strip()
+    return json.loads(sys.stdin.buffer.read(int(headers["content-length"])))
+def write_msg(obj):
+    body = json.dumps(obj).encode()
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+    sys.stdout.buffer.flush()
+def log(kind, text):
+    write_msg({"jsonrpc": "2.0", "method": "window/logMessage",
+               "params": {"type": kind, "message": text}})
+mode = sys.argv[1]
+while True:
+    msg = read_msg()
+    if msg is None or msg.get("method") == "exit":
+        break
+    if msg.get("method") != "initialize":
+        continue
+    log(3, "OmniSharp.Services.DotNetCliService: DotNetPath set to dotnet | ")
+    if mode == "msbuild":
+        log(1, "OmniSharp.MSBuild.Discovery.Providers.SdkInstanceProvider: OmniSharp "
+               "requires the .NET 6 SDK or higher be installed. | ")
+        log(1, "OmniSharp.Extensions.JsonRpc.DefaultRequestInvoker: Failed to handle "
+               "request initialize 1 - OmniSharp.MSBuild.Discovery.MSBuildNotFoundException: "
+               "Could not locate MSBuild instance to register with OmniSharp.\r\n"
+               "   at OmniSharp.MSBuild.Discovery.Extensions.RegisterDefaultInstance()")
+        log(2, "OmniSharp.Extensions.LanguageServer.Server.LspServerOutputFilter: Tried "
+               "to send request or notification before initialization was completed")
+'''
+
+
+@pytest.fixture
+def fake_omnisharp(tmp_path, monkeypatch):
+    """Routes ensure_started to the fake server; returns (set_mode, started clients).
+
+    `_maybe_sync_csproj` is stubbed: an empty workspace counts as stale and the
+    real method would POST to the live Unity MCP port."""
+    server = tmp_path / "fake_omnisharp.py"
+    server.write_text(_FAKE_OMNISHARP, encoding="utf-8")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    state = {"mode": "msbuild"}
+    started = []
+
+    class _FakeServerClient(om.LspClient):
+        async def start(self, cmd, cwd, env=None):
+            started.append(self)
+            await super().start([sys.executable, str(server), state["mode"]], cwd=cwd)
+
+    monkeypatch.setattr(om, "LspClient", _FakeServerClient)
+    monkeypatch.setattr(om, "_resolve_binary", lambda: "fake-omnisharp")
+    monkeypatch.setattr(om, "_dotnet_missing_reason", lambda: None)
+    monkeypatch.setattr(om.OmniSharpManager, "_maybe_sync_csproj", lambda self, _ws: None)
+    return str(ws), state, started
+
+
+class TestInitializeReddiBeklemeden:
+    def test_a_logged_msbuild_failure_ends_the_start_without_waiting_for_the_timeout(
+        self, fake_omnisharp
+    ):
+        """Before: the server logged the failure within 0.7 s and the manager
+        still waited the full 60 s. The timeout stays 60 s here on purpose."""
+        ws, _state, started = fake_omnisharp
+        mgr = om.OmniSharpManager()
+        t0 = time.monotonic()
+        asyncio.run(mgr.ensure_started(ws))
+        elapsed = time.monotonic() - t0
+        assert om._INIT_TIMEOUT == 60
+        assert elapsed < 15, f"waited {elapsed:.1f} s for a start that had already failed"
+        assert mgr.status["state"] == "error"
+        assert mgr.status["detail"].count("Could not locate MSBuild") == 1
+        # The SDK line precedes the failure and must reach the user too.
+        assert "requires the .NET 6 SDK" in mgr.status["detail"]
+        # Only the first line of the .NET stack trace is kept.
+        assert "RegisterDefaultInstance" not in mgr.status["detail"]
+        assert len(started) == 1 and not started[0].alive
+        assert mgr._client is None
+
+    def test_the_failure_keeps_the_cooldown_and_a_later_retry_still_starts(
+        self, fake_omnisharp
+    ):
+        ws, _state, started = fake_omnisharp
+        mgr = om.OmniSharpManager()
+
+        async def scenario():
+            await mgr.ensure_started(ws)
+            await mgr.ensure_started(ws)        # inside the 30 s cooldown
+            assert len(started) == 1
+            assert not mgr._lock.locked()
+            assert mgr._retry_after - time.monotonic() > om._RETRY_COOLDOWN - 5
+            mgr._retry_after = time.monotonic() - 1     # cooldown elapsed
+            await mgr.ensure_started(ws)
+
+        asyncio.run(scenario())
+        assert len(started) == 2
+        assert mgr.status["state"] == "error"
+
+    def test_a_timeout_still_produces_a_non_empty_reason(self, fake_omnisharp, monkeypatch):
+        """TimeoutError stringifies to "" — the 28 Sep 2026 log line was literally
+        `ERROR:OmniSharp:OmniSharp:` with nothing after it."""
+        ws, state, _started = fake_omnisharp
+        state["mode"] = "silent"
+        monkeypatch.setattr(om, "_INIT_TIMEOUT", 1.5)
+        mgr = om.OmniSharpManager()
+        asyncio.run(mgr.ensure_started(ws))
+        detail = mgr.status["detail"]
+        assert mgr.status["state"] == "error"
+        assert "yanıtlanmadı" in detail
+        # No error line was logged, so the latest info lines are attached instead.
+        assert "DotNetPath set to dotnet" in detail
