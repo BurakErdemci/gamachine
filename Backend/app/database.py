@@ -177,6 +177,17 @@ class DatabaseManager:
                     cursor.execute(f"ALTER TABLE conversations ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
                     pass
+            # Which agent wrote an assistant message (Burak, 27 Sep 2026): the
+            # header used to show the chat's CURRENT model on every answer, so a
+            # chat moved from OpenCode to Codex relabelled OpenCode's answers.
+            # `provider` is the agent family (claude/codex/agy/opencode/...,
+            # `api-<name>` for API loops), `model` the id the turn ran with.
+            # Rows written before this stay NULL and show no model at all.
+            for col_def in ("provider TEXT", "model TEXT"):
+                try:
+                    cursor.execute(f"ALTER TABLE messages ADD COLUMN {col_def}")
+                except sqlite3.OperationalError:
+                    pass
             # Chat mailbox (agentic/mailbox.py). No FOREIGN KEY: connections
             # here do not enable FKs, so `_delete_rows` removes the rows itself.
             cursor.execute('''CREATE TABLE IF NOT EXISTS mailbox (
@@ -453,8 +464,9 @@ class DatabaseManager:
             new_id = cur.lastrowid
             if fork_at is not None:
                 conn.execute(
-                    'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp) '
-                    'SELECT ?, role, content, smells_json, timestamp FROM messages '
+                    'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp, '
+                    'provider, model) '
+                    'SELECT ?, role, content, smells_json, timestamp, provider, model FROM messages '
                     'WHERE conversation_id = ? AND id <= ? ORDER BY id',
                     (new_id, source_id, fork_at)
                 )
@@ -786,13 +798,15 @@ class DatabaseManager:
             return cur.rowcount
 
     # ===================== YENİ: MESAJLAR =====================
-    def add_message(self, conversation_id: int, role: str, content: str, smells: list = None) -> int:
+    def add_message(self, conversation_id: int, role: str, content: str, smells: list = None,
+                    provider: Optional[str] = None, model: Optional[str] = None) -> int:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         smells_json = json.dumps(smells) if smells else "[]"
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             cursor = conn.execute(
-                'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp) VALUES (?, ?, ?, ?, ?)',
-                (conversation_id, role, content, smells_json, now)
+                'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp, provider, model) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (conversation_id, role, content, smells_json, now, provider or None, model or None)
             )
             # Sohbetin updated_at'ini güncelle
             self._touch(conn, conversation_id, now)
@@ -802,11 +816,13 @@ class DatabaseManager:
     def get_conversation_messages(self, conversation_id: int) -> List[Dict[str, Any]]:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
-                'SELECT id, role, content, smells_json, timestamp FROM messages WHERE conversation_id = ? ORDER BY id ASC',
+                'SELECT id, role, content, smells_json, timestamp, provider, model FROM messages '
+                'WHERE conversation_id = ? ORDER BY id ASC',
                 (conversation_id,)
             ).fetchall()
             return [
-                {"id": r[0], "role": r[1], "content": r[2], "smells": json.loads(r[3]), "timestamp": r[4]}
+                {"id": r[0], "role": r[1], "content": r[2], "smells": json.loads(r[3]), "timestamp": r[4],
+                 "provider": r[5], "model": r[6]}
                 for r in rows
             ]
 

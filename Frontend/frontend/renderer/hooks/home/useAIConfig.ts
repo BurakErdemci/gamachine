@@ -4,6 +4,7 @@ import { AIConfig, AvailableModels, ProviderReady, UserData } from '../../compon
 import { apiHataMesaji } from '../../lib/apiError';
 import { cevir } from '../../lib/i18n';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
+import { shortModelId } from '../../lib/modelText';
 
 /**
  * Backend'in `GET /mcp/unity/status` sözleşmesi (`unity_mcp_manager.get_status`).
@@ -409,16 +410,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       m.id === aiConfig.model_name || (m as any).openrouter_id === aiConfig.model_name
     );
     if (found) return found.name;
-    const name = aiConfig.model_name;
     // Dinamik CLI modelleri (cursor/opencode) statik listede yok → prefix'i soy.
-    if (name.startsWith('cursor-')) return name.slice(7);
-    if (name.startsWith('copilot-')) return name.slice(8);
-    if (name.startsWith('opencode:')) {
-      const m = name.slice(9);
-      return m.includes('/') ? m.split('/').slice(1).join('/') : m;
-    }
-    if (name.includes('/')) return name.split('/').slice(1).join('/');
-    return name;
+    return shortModelId(aiConfig.model_name);
   }, [aiConfig, availableModels]);
 
   return {

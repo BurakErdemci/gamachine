@@ -171,7 +171,8 @@ def test_every_event_of_a_turn_carries_its_conversation_id(isolated, monkeypatch
     monkeypatch.setattr(cr, "AgentRunner", _RaisingRunner)
     (resp,) = asyncio.run(_run_parallel(db, [cid], _RaisingRunner))
     events = _events(resp.text)
-    assert [e["type"] for e in events] == ["text", "error", "context_usage"], events
+    # `turn_meta` labels the answer with its agent (Burak, 27 Sep 2026).
+    assert [e["type"] for e in events] == ["turn_meta", "text", "error", "context_usage"], events
     assert all(e.get("conversation_id") == cid for e in events), events
 
 

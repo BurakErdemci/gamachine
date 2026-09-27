@@ -27,3 +27,19 @@
  */
 export const stripBidi = (s: string): string =>
   s.replace(/[\u061C\u202A-\u202E\u2066-\u2069\u200B\u200E\u200F\u2060\uFEFF]/g, '');
+
+/**
+ * A model id as the UI names it: the CLI routing prefix (`cursor-`,
+ * `copilot-`, `opencode:`) and a vendor path segment are dropped, so
+ * "opencode:opencode/big-pickle" reads "big-pickle".
+ */
+export const shortModelId = (id: string): string => {
+  if (id.startsWith('cursor-')) return id.slice(7);
+  if (id.startsWith('copilot-')) return id.slice(8);
+  if (id.startsWith('opencode:')) {
+    const m = id.slice(9);
+    return m.includes('/') ? m.split('/').slice(1).join('/') : m;
+  }
+  if (id.includes('/')) return id.split('/').slice(1).join('/');
+  return id;
+};

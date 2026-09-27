@@ -53,7 +53,7 @@ interface CliGroupDef {
   badge?: string;              // grup başlığı yanındaki küçük rozet
 }
 
-const CLI_GROUPS: CliGroupDef[] = [
+export const CLI_GROUPS: CliGroupDef[] = [
   {
     key: 'claude', label: 'Claude Code', brand: 'claude', availKey: 'claude', cliLabel: 'Claude Code',
     matches: id => id.startsWith('claude-'),
@@ -100,7 +100,7 @@ type ModelItem = { id: string; name: string; provider?: string; openrouter_id?: 
 type CliDoctor = Record<string, { installed: boolean; loggedIn: boolean | null }>;
 
 // Bulut API sağlayıcı grupları (abonelik CLI grupları gibi kategorize görünüm)
-const CLOUD_PROVIDER_META: Record<string, { label: string; badge?: string }> = {
+export const CLOUD_PROVIDER_META: Record<string, { label: string; badge?: string }> = {
   anthropic:  { label: 'Anthropic' },
   openai:     { label: 'OpenAI' },
   google:     { label: 'Google' },

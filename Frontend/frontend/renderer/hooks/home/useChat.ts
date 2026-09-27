@@ -900,7 +900,12 @@ export const useChat = (
               updateMessages(prev => prev.map(msg => {
                 if (msg.id === aiMsgId) {
                   const updated = { ...msg };
-                  if (data.type === 'thinking') updated.thinking = (updated.thinking || '') + (data.text || '');
+                  if (data.type === 'turn_meta') {
+                    // The agent this turn runs on, labelling the live answer.
+                    updated.provider = typeof data.provider === 'string' ? data.provider : null;
+                    updated.model = typeof data.model === 'string' ? data.model : null;
+                  }
+                  else if (data.type === 'thinking') updated.thinking = (updated.thinking || '') + (data.text || '');
                   else if (data.type === 'text') updated.content += data.content;
                   else if (data.type === 'response') updated.content = data.content || updated.content;
                   else if (data.type === 'error' && data.message) {

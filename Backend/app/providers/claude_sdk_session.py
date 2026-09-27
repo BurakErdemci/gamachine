@@ -72,12 +72,13 @@ _COMMANDS_META: List[Dict] = []
 _WARMUP_LOCK = asyncio.Lock()
 
 # SSE koptuktan sonra biten turların asistan metnini DB'ye yazan callback
-# (conversation_routes kayıt eder: lambda cid, text: db.add_message(cid, "assistant", text)).
+# (conversation_routes registers it). Called as (conv_id, text, model): the
+# session's own model labels the stored answer (Burak, 27 Sep 2026).
 # Provider katmanından DB'ye doğrudan import etmemek için köprü.
-_DB_SAVE_CB: Optional[Callable[[int, str], None]] = None
+_DB_SAVE_CB: Optional[Callable[..., None]] = None
 
 
-def set_db_saver(cb: Callable[[int, str], None]) -> None:
+def set_db_saver(cb: Callable[..., None]) -> None:
     global _DB_SAVE_CB
     _DB_SAVE_CB = cb
 
@@ -1307,7 +1308,7 @@ class ClaudeSDKSession:
             # SSE kapalıyken biten tur (Durdur/kopma sonrası otonom devam) → kaybolmasın.
             if _DB_SAVE_CB is not None:
                 try:
-                    _DB_SAVE_CB(self.conversation_id, final)
+                    _DB_SAVE_CB(self.conversation_id, final, self.model)
                     logger.info(f"[ClaudeSDKSession:{self.conversation_id}] otonom tur yanıtı DB'ye kaydedildi ({len(final)} kr)")
                 except Exception:
                     logger.exception("[ClaudeSDKSession] otonom yanıt DB kaydı başarısız")

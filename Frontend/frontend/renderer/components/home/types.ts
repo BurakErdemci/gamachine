@@ -95,7 +95,12 @@ export interface Message {
   content: string;
   smells: any[];
   timestamp: string;
-  provider?: string;
+  /** Agent that wrote an assistant message (backend `_message_agent`):
+   *  claude/codex/agy/opencode/copilot/cursor/kimi or `api-<provider>`.
+   *  Null on rows stored before it was recorded. */
+  provider?: string | null;
+  /** Model id that turn ran with; null alongside a null `provider`. */
+  model?: string | null;
   is_refined?: boolean;
   thinking?: string | null;
   thinking_duration_ms?: number | null;

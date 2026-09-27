@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Message, UserData, FileEntry, GenerationMode, ChatActivity, Conversation } from './types';
 import { ModelAvatar } from './ModelAvatar';
+import { messageAgent } from './messageAgent';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { stripBidi } from '../../lib/modelText';
 import { SlashCommandCard } from './SlashCommandCard';
@@ -41,8 +42,6 @@ interface ChatPanelProps {
   loading: boolean;
   clearHistory: () => void;
   lang: string;
-  effectiveProvider: string;
-  modelName?: string;
   thinkingLevel: 'auto' | 'off' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   workspacePath: string | null;
   handleExportToUnity: (code: string) => void;
@@ -96,8 +95,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   user,
   loading,
   clearHistory,
-  effectiveProvider,
-  modelName,
   thinkingLevel,
   workspacePath,
   handleExportToUnity,
@@ -156,27 +153,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   // 12400 → "12.4k" (aktivite satırı + usage özeti için)
   const fmtTok = (n?: number | null) =>
     typeof n === 'number' && n > 0 ? (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`) : null;
-
-  // Mesaj meta satırı için insan-okur model/sağlayıcı adı.
-  // Mesaj aktif sağlayıcıdan geldiyse tam model adını göster; geçmiş
-  // mesajlarda (farklı sağlayıcı) marka adına düş.
-  const PROVIDER_LABELS: Record<string, string> = {
-    claude: 'Claude', anthropic: 'Claude', openai: 'GPT', codex: 'Codex',
-    gemini: 'Gemini', agy: 'Antigravity', copilot: 'Copilot', cursor: 'Cursor',
-    opencode: 'OpenCode', nvidia: 'NVIDIA', groq: 'Groq', ollama: 'Ollama',
-  };
-  // Sanitised because this is a LABEL, not the value anything acts on: the
-  // model id it returns comes from a provider's catalogue, and a directional
-  // override in it would reorder the name the user reads while the stored id
-  // stays what it is. The settings field that lets the user EDIT that id is
-  // deliberately left raw — showing a cleaned string in an editable box would
-  // save a different value than the one displayed. The id itself is refused
-  // upstream instead (`model_catalog.usable_model_id`).
-  const metaName = (msgProvider?: string) => {
-    const p = (msgProvider || effectiveProvider || '').toLowerCase();
-    if ((!msgProvider || msgProvider === effectiveProvider) && modelName) return stripBidi(modelName);
-    return PROVIDER_LABELS[p] || (p ? p.charAt(0).toUpperCase() + p.slice(1) : 'AI');
-  };
 
   // Backend'den BAĞIMSIZ, saniyede tikleyen sayaç: token/aktivite metni uzunca
   // değişmese bile (örn. büyük bir dosya okunurken) kullanıcı "hala çalışıyor mu
@@ -322,6 +298,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               return wakeKey ? `${t(wakeKey)} — ${detail}` : part;
             }).join(' · ');
           }
+          // The message's own agent, never the current selection (Burak,
+          // 27 Sep 2026): an answer from before a switch keeps its writer.
+          const agent = msg.role === 'assistant' ? messageAgent(msg.provider, msg.model) : null;
           return (
           <div key={msg.id} className={`chat-message-enter ${msg.role === 'user' ? 'flex justify-end' : ''}`}>
             {isMailNote(msg) ? (
@@ -355,8 +334,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               // içerik tam genişlik akar, model/süre/token bilgisi tek bakışta.
               <div className="max-w-full group">
                 <div className="flex items-center gap-2 mb-2 select-none">
-                  <ModelAvatar provider={msg.provider || effectiveProvider} size={14} />
-                  <span className="text-[11px] font-medium text-slate-400 truncate">{metaName(msg.provider)}</span>
+                  <ModelAvatar provider={agent?.brand} size={14} />
+                  <span data-testid="message-agent" className="text-[11px] font-medium text-slate-400 truncate">
+                    {agent ? (agent.model ? `${agent.name} · ${agent.model}` : agent.name) : 'AI'}
+                  </span>
                   {msg.usage && (msg.usage.duration_ms || msg.usage.output_tokens) ? (
                     <span className="text-[10.5px] text-slate-600 tabular-nums shrink-0">
                       {msg.usage.duration_ms ? `· ${Math.max(1, Math.round(msg.usage.duration_ms / 1000))}sn` : null}

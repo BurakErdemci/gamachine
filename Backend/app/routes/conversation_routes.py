@@ -381,6 +381,19 @@ def _oturum_saglayici_anahtari(provider_type: str, model_name: str) -> str:
     return env_family(model_name or "claude")
 
 
+def _message_agent(provider_type: str, model_name: str) -> str:
+    """The agent a stored assistant message is labelled with (Burak, 27 Sep 2026).
+
+    Subscription turns name the CLI family the runner dispatches to; API loops
+    are `api-<provider>`. No turn reports a resolved model, so the model stored
+    beside this is the configured one the turn ran with.
+    """
+    if provider_type != "subscription":
+        return f"api-{provider_type or 'unknown'}"
+    from spawn_env import env_family
+    return env_family((model_name or "claude").lower()) or "claude"
+
+
 def _check_chat_rate_limit(user_id: int):
     """Kullanıcı başına /chat ve /analyze rate limit kontrolü."""
     now = time()
@@ -723,9 +736,11 @@ def create_conversation_router(db, progress_store):
 
     # Claude session'ı: SSE koptuktan sonra (Durdur / pencere kapatma) biten turun
     # asistan metnini kaybetmemek için DB'ye yazma köprüsü (provider→DB tek yönlü).
+    def _save_detached_claude_turn(cid, text, model=None):
+        db.add_message(cid, "assistant", text, provider="claude", model=model)
     try:
         from providers.claude_sdk_session import set_db_saver
-        set_db_saver(lambda cid, text: db.add_message(cid, "assistant", text))
+        set_db_saver(_save_detached_claude_turn)
     except Exception as e:
         logger.warning(f"[conversation_routes] db saver kaydedilemedi: {e}")
 
@@ -1237,7 +1252,9 @@ def create_conversation_router(db, progress_store):
                 full_response = entry.value()
                 if full_response and _side_main_of(side_id) is not None:
                     try:
-                        db.add_message(side_id, "assistant", full_response)
+                        db.add_message(side_id, "assistant", full_response,
+                                       provider=_message_agent(provider_type, model_name),
+                                       model=model_name)
                     except Exception:
                         logger.exception("[side] answer not stored on the side row")
             except Exception:
@@ -1487,7 +1504,8 @@ Yanıtını mutlaka [USER_SUMMARY] ve [TECHNICAL_WISDOM] başlıklarıyla ayır.
             # 4. Kullanıcıya görünen özeti sohbet geçmişine asistan mesajı olarak ekle
             # (sonraki açılışta normal bir AI mesajı gibi görünsün — ayrı wisdom paneline gerek kalmasın)
             chat_summary = f"🧠 **Analiz Raporu**\n\n{user_summary}"
-            db.add_message(conv_id, "assistant", chat_summary)
+            db.add_message(conv_id, "assistant", chat_summary,
+                           provider=_message_agent(provider_type, model_name), model=model_name)
 
             return {
                 "status": "success",
@@ -1669,6 +1687,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         # projenin geçmişini açmamak için) → eski transcript enjeksiyonuna düşülür.
         _oturum_anahtari = _oturum_saglayici_anahtari(provider_type, model_name)
         _resume_id = db.get_cli_session(request.conversation_id, _oturum_anahtari, workspace_path)
+        _turn_agent = _message_agent(provider_type, model_name)
 
         runner = AgentRunner(
             provider_type=provider_type,
@@ -1702,6 +1721,9 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             # (audit, 30 Aug 2026).
             terminal_gitti = False
             try:
+                # Labels the answer being streamed with the agent that runs it,
+                # not with whatever the selector shows later.
+                yield f"data: {json.dumps({'type': 'turn_meta', 'provider': _turn_agent, 'model': model_name})}\n\n"
                 if mail_note:
                     # The client drew its own text for this row; this is the
                     # stored one, so the screen shows what the chat really got.
@@ -1734,7 +1756,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                 full_response = entry.value()
                 if full_response:
                     try:
-                        db.add_message(request.conversation_id, "assistant", full_response)
+                        db.add_message(request.conversation_id, "assistant", full_response,
+                                       provider=_turn_agent, model=model_name)
 
                         # İlk mesajsa başlığı otomatik değiştir
                         # Not from a note: its framed text is no title. Not
@@ -2534,7 +2557,9 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                                             _sid, workspace_path)
             
             if full_response:
-                db.add_message(request.conversation_id, "assistant", full_response)
+                db.add_message(request.conversation_id, "assistant", full_response,
+                               provider=_message_agent(provider_type, model_name),
+                               model=model_name)
                 chat_titles.after_reply(db, request.conversation_id,
                                         provider_type, model_name, api_key)
 
