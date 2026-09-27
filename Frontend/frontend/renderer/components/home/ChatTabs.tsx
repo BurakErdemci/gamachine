@@ -201,6 +201,11 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
                 >
                   <StatusDot status={convStatus?.[conv.id]} testId={`tab-status-${conv.id}`} />
                   <span className="text-[11px] font-medium truncate">{conv.title}</span>
+                  <span
+                    data-testid={`tab-number-${conv.id}`}
+                    title={t('mention.chatNumber', { no: conv.id })}
+                    className="text-[9px] font-mono text-slate-600 shrink-0"
+                  >#{conv.id}</span>
                 </button>
               )}
               {isBranch && (
@@ -254,6 +259,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
                 >
                   <StatusDot status={convStatus?.[conv.id]} testId={`closed-status-${conv.id}`} />
                   <span className="truncate">{conv.title}</span>
+                  <span className="ml-auto text-[10px] font-mono text-slate-600 shrink-0">#{conv.id}</span>
                 </button>
               ))}
             </div>

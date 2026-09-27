@@ -852,7 +852,7 @@ export default function Home() {
           <div className="flex-1 relative flex flex-col min-h-0">
           <div className="flex-1 overflow-y-auto custom-scrollbar relative" onScroll={chatScroll.onScroll}>
             <ChatPanel
-              messages={chat.messages} activeConvId={chat.activeConvId} user={auth.user} loading={chat.loading} clearHistory={chat.clearHistory} lang={lang}
+              messages={chat.messages} activeConvId={chat.activeConvId} conversations={chat.conversations} user={auth.user} loading={chat.loading} clearHistory={chat.clearHistory} lang={lang}
               effectiveProvider={ai.effectiveProvider}
               modelName={ai.aiConfig?.model_name}
               thinkingLevel={thinkingLevel} workspacePath={fs.workspacePath} handleExportToUnity={fs.handleExportToUnity}
@@ -918,6 +918,8 @@ export default function Home() {
                 skills={skills}
                 commandMeta={commandMeta}
                 galleryProvider={slashProvider}
+                chats={chat.conversations}
+                currentChatId={chat.activeConvId}
                 onStop={chat.stopMessage}
                 onFileDrop={(entry) => chat.setChatInput(prev => prev + ` [File Attached: ${entry.path}]`)}
                 onCommand={(cmd) => {

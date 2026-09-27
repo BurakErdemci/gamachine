@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { Children, memo, useState } from "react";
 import { Check, Copy, FileDown, Eye, EyeOff, FileCode } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,6 +7,26 @@ import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 
 import { linkTuru, chatUrlTransform, yerelYolaCevir } from "../../lib/chatLink";
 import { useLang } from "../../lib/i18n";
+import { MENTION_PATTERN } from "../../lib/chatMentions";
+
+/** `@<id>` in plain text as a chip whose tooltip names the chat; the text itself stays as typed. */
+const withMentionChips = (children: React.ReactNode, titleOf: (id: number) => string) =>
+  Children.map(children, (child) => {
+    if (typeof child !== "string") return child;
+    const parts: React.ReactNode[] = [];
+    let last = 0;
+    for (const m of child.matchAll(MENTION_PATTERN)) {
+      const at = m.index ?? 0;
+      if (at > last) parts.push(child.slice(last, at));
+      parts.push(
+        <span key={at} data-mention={m[1]} title={titleOf(Number(m[1]))}
+          className="px-1 rounded bg-blue-400/15 text-blue-300 font-medium">{m[0]}</span>);
+      last = at + m[0].length;
+    }
+    if (last === 0) return child;
+    parts.push(child.slice(last));
+    return parts;
+  });
 
 const CodeBlock = ({ match, codeString, workspacePath, onExportToUnity, handleCopy, copiedBlock }: any) => {
   const { t } = useLang();
@@ -103,6 +123,7 @@ const MarkdownRendererInner = ({
   workspacePath,
   onExportToUnity,
   onOpenFile,
+  mentionTitles,
 }: {
   content: string;
   workspacePath?: string | null;
@@ -111,8 +132,15 @@ const MarkdownRendererInner = ({
       (yönlendirme yapmaz). Opsiyonel, çünkü `SlashCommandCard` gibi editörü
       olmayan bağlamlar da bu bileşeni kullanıyor. */
   onOpenFile?: (path: string) => void;
+  /** Given only for the user's own bubbles: their `@<id>` mentions become chips. */
+  mentionTitles?: ReadonlyMap<number, string>;
 }) => {
+  const { t } = useLang();
   const [copiedBlock, setCopiedBlock] = useState<string | null>(null);
+  const mentionTitle = (id: number) => {
+    const title = mentionTitles?.get(id);
+    return title != null ? `#${id} · ${title}` : t("mention.unknown");
+  };
 
   const handleCopy = (code: string) => {
     navigator.clipboard.writeText(code);
@@ -181,6 +209,14 @@ const MarkdownRendererInner = ({
             </div>
           );
         },
+        ...(mentionTitles ? {
+          p({ children, node: _node, ...props }: any) {
+            return <p {...props}>{withMentionChips(children, mentionTitle)}</p>;
+          },
+          li({ children, node: _node, ...props }: any) {
+            return <li {...props}>{withMentionChips(children, mentionTitle)}</li>;
+          },
+        } : {}),
         code({ inline, className, children, ...props }: any) {
           const match = /language-(\w+)/.exec(className || "");
           const codeString = String(children).replace(/\n$/, "");

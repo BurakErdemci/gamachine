@@ -158,6 +158,11 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
                     ) : (
                       <div className="flex items-center gap-1.5 min-w-0">
                         <div className="text-[13px] font-medium truncate">{conv.title}</div>
+                        <span
+                          data-testid={`conv-number-${conv.id}`}
+                          title={t('mention.chatNumber', { no: conv.id })}
+                          className="text-[10px] font-mono text-slate-600 shrink-0"
+                        >#{conv.id}</span>
                         {status && (
                           <span
                             data-testid={`conv-status-${conv.id}`}

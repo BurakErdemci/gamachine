@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
 import {
@@ -12,7 +12,7 @@ import {
   RefreshCw,
   Mail
 } from 'lucide-react';
-import { Message, UserData, FileEntry, GenerationMode, ChatActivity } from './types';
+import { Message, UserData, FileEntry, GenerationMode, ChatActivity, Conversation } from './types';
 import { ModelAvatar } from './ModelAvatar';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { stripBidi } from '../../lib/modelText';
@@ -86,6 +86,8 @@ interface ChatPanelProps {
   onMcpResolved: () => void;
   // Canlı aktivite (status event'leri): "🤖 Subagent çalışıyor · 45.2k token" gibi.
   activity?: ChatActivity | null;
+  /** Titles for the `@<id>` chips in the user's bubbles. */
+  conversations?: Conversation[];
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -130,8 +132,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   mcpWorkspaceCheckPending,
   mcpOpenWorkspacePath,
   onMcpResolved,
+  conversations,
 }) => {
   const { t } = useLang();
+  // Stable across stream tokens, so the memoised bubbles do not re-parse.
+  const mentionTitles = useMemo(
+    () => new Map((conversations || []).map(c => [c.id, c.title] as [number, string])),
+    [conversations]);
 
   /**
    * IPC yazma reddinin kullanıcıya gösterilecek metni.
@@ -547,7 +554,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                         burada da geçiliyor: aksi halde link ölü kalırdı ve
                         "bazı linkler açılıyor, bazıları hiçbir şey yapmıyor"
                         diye açıklaması olmayan bir davranış doğardı. */}
-                    <MarkdownRenderer content={msg.content} onOpenFile={openFile} />
+                    <MarkdownRenderer content={msg.content} onOpenFile={openFile} mentionTitles={mentionTitles} />
                   </div>
                 </div>
               </div>

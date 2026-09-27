@@ -20,6 +20,8 @@ import * as React from "react"
 import { SkillsGallery, CommandMeta } from "../home/SkillsGallery";
 import { useLang } from "../../lib/i18n";
 import { useVoiceInput, formatElapsed } from "../../hooks/home/useVoiceInput";
+import type { Conversation } from "../home/types";
+import { mentionQueryAt, mentionTargets } from "../../lib/chatMentions";
 
 interface UseAutoResizeTextareaProps {
     minHeight: number;
@@ -156,7 +158,9 @@ export function AnimatedChatInput({
     galleryProvider = 'claude',
     // Backend base URL. Empty until `useAppInitialization` resolves it; the mic
     // button stays disabled while it is.
-    api = ''
+    api = '',
+    chats = [],
+    currentChatId = null,
 }: {
     value: string;
     setValue: (val: string) => void;
@@ -174,6 +178,8 @@ export function AnimatedChatInput({
     commandMeta?: CommandMeta[];  // {name, description, argumentHint, insert?} — Skills galerisi için
     galleryProvider?: string;     // 'claude' | 'codex' | 'agy' — galeri gösterim/insert davranışı
     api?: string;
+    chats?: Conversation[];       // the `@` menu's targets (the user's chats and branches)
+    currentChatId?: number | null;
 }) {
     // Typing state is INTERNAL — does not propagate to parent on every keystroke.
     const [internalValue, setInternalValue] = useState(value);
@@ -545,12 +551,94 @@ export function AnimatedChatInput({
             if (galleryRef.current && !galleryRef.current.contains(target) && !galleryButton?.contains(target)) {
                 setShowSkillsGallery(false);
             }
+            if (mentionMenuRef.current && !mentionMenuRef.current.contains(target) && target !== textareaRef.current) {
+                setMentionDismissedAt(mentionRef.current?.start ?? null);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
+    // ——— `@` chat mentions ———
+    //
+    // The caret decides which `@query` is being typed, so it is tracked on
+    // every change and selection move. Esc closes the menu for THAT `@` only
+    // (keyed by its position); typing a new `@` opens it again.
+    const [caret, setCaret] = useState(0);
+    const [mentionDismissedAt, setMentionDismissedAt] = useState<number | null>(null);
+    const [activeMention, setActiveMention] = useState(0);
+    const mentionMenuRef = useRef<HTMLDivElement>(null);
+    const mention = useMemo(() => mentionQueryAt(internalValue, caret), [internalValue, caret]);
+    const mentionOptions = useMemo(
+        () => (mention ? mentionTargets(chats || [], currentChatId ?? null, mention.query) : []),
+        [mention, chats, currentChatId]);
+    const showMentionMenu = !!mention && mention.start !== mentionDismissedAt
+        && mentionOptions.length > 0 && !showCommandPalette && !dictating;
+    const mentionRef = useRef(mention);
+    mentionRef.current = mention;
+
+    useEffect(() => { setActiveMention(0); }, [mention?.start, mention?.query]);
+    useEffect(() => { if (!mention) setMentionDismissedAt(null); }, [mention]);
+    // Keeps the keyboard's option visible. Scrolls the list box only: the chat
+    // view's scrolling belongs to `useAutoScroll` (auto-scroll.test.tsx).
+    useEffect(() => {
+        if (!showMentionMenu) return;
+        const list = mentionMenuRef.current?.querySelector<HTMLElement>('[role="listbox"]');
+        const item = list?.querySelector<HTMLElement>('[aria-selected="true"]');
+        if (!list || !item) return;
+        if (item.offsetTop < list.scrollTop) list.scrollTop = item.offsetTop;
+        else if (item.offsetTop + item.offsetHeight > list.scrollTop + list.clientHeight) {
+            list.scrollTop = item.offsetTop + item.offsetHeight - list.clientHeight;
+        }
+    }, [showMentionMenu, activeMention]);
+
+    const syncCaret = (el: HTMLTextAreaElement) => setCaret(el.selectionStart ?? el.value.length);
+
+    const pickMention = (id: number) => {
+        const m = mentionRef.current;
+        if (!m) return;
+        const ta = textareaRef.current;
+        const base = ta ? ta.value : internalValue;
+        const end = m.start + 1 + m.query.length;
+        const rest = base.slice(end);
+        // Picked mid-text before a space: reuse it rather than doubling it.
+        const inserted = /^\s/.test(rest) ? `@${id}` : `@${id} `;
+        const next = base.slice(0, m.start) + inserted + rest;
+        const at = m.start + `@${id} `.length;
+        setInternalValue(next);
+        setValue(next);
+        setCaret(at);
+        scheduleDeferred(() => {
+            const el = textareaRef.current;
+            if (el) { el.focus(); el.setSelectionRange(at, at); }
+            adjustHeight();
+        });
+    };
+
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (showMentionMenu) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setActiveMention(prev => (prev + 1) % mentionOptions.length);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActiveMention(prev => (prev - 1 + mentionOptions.length) % mentionOptions.length);
+                return;
+            }
+            if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+                e.preventDefault();
+                const target = mentionOptions[activeMention] ?? mentionOptions[0];
+                if (target) pickMention(target.id);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                setMentionDismissedAt(mention!.start);
+                return;
+            }
+        }
         if (dictating) {
             // The box belongs to dictation while it runs. Escape drops the
             // recording; everything else is ignored — Enter especially, which
@@ -668,6 +756,54 @@ export function AnimatedChatInput({
                 )}
             </AnimatePresence>
 
+            <AnimatePresence>
+                {showMentionMenu && (
+                    <motion.div
+                        ref={mentionMenuRef}
+                        data-testid="mention-menu"
+                        className="absolute left-4 right-4 bottom-full mb-2 backdrop-blur-xl bg-black rounded-lg z-50 shadow-lg border border-white/10 overflow-hidden"
+                        initial={{ opacity: 0, y: 5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 5 }}
+                    >
+                        <div className="px-3 pt-2 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/30">
+                            {t('mention.menuTitle')}
+                        </div>
+                        <div role="listbox" aria-label={t('mention.menuTitle')} className="relative pb-1 bg-black max-h-[280px] overflow-y-auto">
+                            {mentionOptions.map((target, index) => (
+                                <div
+                                    key={target.id}
+                                    role="option"
+                                    aria-selected={activeMention === index}
+                                    data-testid={`mention-option-${target.id}`}
+                                    // Keep the textarea focused, or the caret the pick needs is lost.
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onMouseEnter={() => setActiveMention(index)}
+                                    onClick={() => pickMention(target.id)}
+                                    className={cn(
+                                        "flex items-center gap-2 px-3 py-1.5 text-xs transition-colors cursor-pointer min-w-0",
+                                        activeMention === index ? "bg-white/10 text-white" : "text-white/70 hover:bg-white/5"
+                                    )}
+                                >
+                                    <span className="font-mono text-[10px] text-white/40 shrink-0 w-10">#{target.id}</span>
+                                    <span className="font-medium text-[11px] truncate">{target.title}</span>
+                                    {target.parentId != null && (
+                                        <>
+                                            <span className="text-[8px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/[0.06] text-white/50 border border-white/10 shrink-0">
+                                                {t('mention.branch')}
+                                            </span>
+                                            <span className="text-white/30 text-[10px] truncate ml-auto">
+                                                {t('mention.branchOf', { no: target.parentId, ad: target.parentTitle ?? '' })}
+                                            </span>
+                                        </>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             {/* Skills & Komutlar galerisi (açıklamalı, aranabilir katalog) */}
             {showSkillsGallery && (
                 <div ref={galleryRef}>
@@ -687,8 +823,10 @@ export function AnimatedChatInput({
                     value={internalValue}
                     onChange={(e) => {
                         setInternalValue(e.target.value);
+                        syncCaret(e.target);
                         adjustHeight();
                     }}
+                    onSelect={(e) => syncCaret(e.currentTarget)}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}
                     onDrop={handleDrop}

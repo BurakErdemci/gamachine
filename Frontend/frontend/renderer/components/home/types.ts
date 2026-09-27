@@ -41,6 +41,8 @@ export interface Conversation {
   // roots carry null. Absent on an older backend: every chat is then a root.
   parent_id?: number | null;
   hidden?: boolean;
+  // `/conversations` leaves side rows out today; a side row is never a mention target.
+  side_of?: number | null;
 }
 
 // Chat'teki araç chip'i: args = araç girdisi (PARAMETRELER), output = araç sonucu (ÇIKTI),
