@@ -270,6 +270,25 @@ def test_pair_rate_limit(env, auto):
     assert _send(env.client, a, c).status_code == 200
 
 
+def test_begin_turn_depth_only_rises_while_a_turn_runs():
+    mailbox._TURN_DEPTH.clear()
+    try:
+        mailbox.set_turn_depth(7, 2)
+        mailbox.begin_turn_depth(7, 0, turn_running=True)
+        assert mailbox.turn_depth(7) == 2
+        mailbox.begin_turn_depth(7, 1, turn_running=True)
+        assert mailbox.turn_depth(7) == 2
+        mailbox.set_turn_depth(8, 1)
+        mailbox.begin_turn_depth(8, 2, turn_running=True)
+        assert mailbox.turn_depth(8) == 2
+        mailbox.begin_turn_depth(7, 0, turn_running=False)
+        assert mailbox.turn_depth(7) == 0
+        mailbox.begin_turn_depth(8, 1, turn_running=False)
+        assert mailbox.turn_depth(8) == 1
+    finally:
+        mailbox._TURN_DEPTH.clear()
+
+
 # ── delivery ─────────────────────────────────────────────────────────────────
 
 class _FakeRunner:
@@ -391,6 +410,47 @@ def test_a_wake_whose_note_write_fails_leaves_the_note_for_the_next_wake(env, au
     notes = [m for m in env.db.get_conversation_messages(b) if mailbox.is_mail_message(m["content"])]
     assert len(notes) == 1 and "kaybolmasın" in notes[0]["content"]
     assert "kaybolmasın" in _FakeRunner.messages[-1]
+
+
+# ── a turn still running ─────────────────────────────────────────────────────
+
+def _wake_b_at_depth_2(env):
+    """B's turn is woken by a reply to a reply, so B may not send again."""
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    mailbox.set_turn_depth(a, 1)
+    assert _send(env.client, a, b, body="cevabın cevabı").status_code == 200
+    mailbox.set_turn_depth(a, 0)
+    wake_queue.issue_ticket(b, wake_queue.drain(b))
+    assert _wake_turn(env.client, b).status_code == 200
+    assert mailbox.turn_depth(b) == 2
+    return a, b
+
+
+def _user_turn(client, path, conv_id):
+    body = {"conversation_id": conv_id, "message": "başka pencereden", "user_id": 1}
+    return client.post(path, json=body, headers=H)
+
+
+@pytest.mark.parametrize("path", ["/chat-stream", "/chat"])
+def test_a_user_message_does_not_lower_the_depth_of_a_running_mail_turn(env, auto, monkeypatch, path):
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _wake_b_at_depth_2(env)
+    # The stub runner returned at once; the real mail turn is still running.
+    with ambient_turn(".", "auto", b):
+        assert _send(env.client, b, a).status_code == 409
+        assert _user_turn(env.client, path, b).status_code == 200
+        assert _send(env.client, b, a).status_code == 409
+    assert _rows(env.db, "SELECT COUNT(*) FROM mailbox WHERE from_conv = ?", (b,)) == [(0,)]
+
+
+@pytest.mark.parametrize("path", ["/chat-stream", "/chat"])
+def test_a_user_message_with_no_turn_running_resets_the_depth(env, auto, monkeypatch, path):
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _wake_b_at_depth_2(env)
+    assert _user_turn(env.client, path, b).status_code == 200
+    assert mailbox.turn_depth(b) == 0
+    assert _send(env.client, b, a).status_code == 200
+    assert _rows(env.db, "SELECT depth FROM mailbox WHERE from_conv = ?", (b,)) == [(1,)]
 
 
 def test_handoff_context_keeps_mail_rows_but_not_wake_rows():
