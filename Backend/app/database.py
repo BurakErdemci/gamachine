@@ -202,6 +202,16 @@ class DatabaseManager:
                 delivered_at TEXT)''')
             cursor.execute(
                 'CREATE INDEX IF NOT EXISTS idx_mailbox_to_status ON mailbox (to_conv, status)')
+            # expects_reply: a note sent from a turn the user started (depth 1)
+            # always expects a reply, and if the receiver ends its turn without
+            # sending one its last message is forwarded (Burak, 27 Sep 2026);
+            # auto_forwarded marks that forwarded note for the renderer.
+            for col_def in ("expects_reply INTEGER NOT NULL DEFAULT 0",
+                            "auto_forwarded INTEGER NOT NULL DEFAULT 0"):
+                try:
+                    cursor.execute(f"ALTER TABLE mailbox ADD COLUMN {col_def}")
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
 
     def _migrate_ai_configs_table(self, conn: sqlite3.Connection):
@@ -681,12 +691,15 @@ class DatabaseManager:
             return ids
 
     # ===================== CHAT MAILBOX =====================
-    _MAIL_COLS = 'id, from_conv, to_conv, body, status, gate_id, depth, created_at, delivered_at'
+    _MAIL_COLS = ('id, from_conv, to_conv, body, status, gate_id, depth, created_at, delivered_at, '
+                  'expects_reply, auto_forwarded')
+    _MAIL_NCOLS = 11
 
     @staticmethod
     def _mail_row(r) -> Dict[str, Any]:
         return {"id": r[0], "from_conv": r[1], "to_conv": r[2], "body": r[3], "status": r[4],
-                "gate_id": r[5], "depth": r[6], "created_at": r[7], "delivered_at": r[8]}
+                "gate_id": r[5], "depth": r[6], "created_at": r[7], "delivered_at": r[8],
+                "expects_reply": bool(r[9]), "auto_forwarded": bool(r[10])}
 
     def get_conversation_title(self, conv_id: int) -> Optional[str]:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -704,7 +717,8 @@ class DatabaseManager:
                      "parent_id": r[2], "hidden": bool(r[3])} for r in rows]
 
     def add_mail(self, from_conv: int, to_conv: int, body: str, status: str,
-                 gate_id: Optional[str] = None, depth: int = 0) -> Optional[int]:
+                 gate_id: Optional[str] = None, depth: int = 0,
+                 expects_reply: bool = False, auto_forwarded: bool = False) -> Optional[int]:
         """Insert a note; None if either chat is gone or is a side chat.
 
         The check and the insert share one transaction, so a family delete on
@@ -719,9 +733,10 @@ class DatabaseManager:
             if from_conv == to_conv or n != 2:
                 return None
             cur = conn.execute(
-                'INSERT INTO mailbox (from_conv, to_conv, body, status, gate_id, depth, created_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?)',
-                (from_conv, to_conv, body, status, gate_id, depth, now))
+                'INSERT INTO mailbox (from_conv, to_conv, body, status, gate_id, depth, created_at, '
+                'expects_reply, auto_forwarded) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (from_conv, to_conv, body, status, gate_id, depth, now,
+                 1 if expects_reply else 0, 1 if auto_forwarded else 0))
             conn.commit()
             return cur.lastrowid
 
@@ -745,6 +760,19 @@ class DatabaseManager:
                 'SELECT COUNT(*) FROM mailbox WHERE from_conv = ? AND to_conv = ? AND created_at >= ?',
                 (from_conv, to_conv, since)).fetchone()[0]
 
+    def max_mail_id(self) -> int:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            return conn.execute('SELECT COALESCE(MAX(id), 0) FROM mailbox').fetchone()[0]
+
+    def mail_sent_after(self, from_conv: int, to_conv: int, after_id: int) -> bool:
+        """Did `from_conv` write to `to_conv` after row `after_id`, in ANY
+        status? A rejected or still-pending send counts: the user already
+        decided on it, so an automatic copy must not go around that card."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            return conn.execute(
+                'SELECT 1 FROM mailbox WHERE id > ? AND from_conv = ? AND to_conv = ? LIMIT 1',
+                (after_id, from_conv, to_conv)).fetchone() is not None
+
     def claim_queued_mail(self, to_conv: int,
                           note_of: Optional[Callable[[List[Dict[str, Any]]], str]] = None
                           ) -> List[Dict[str, Any]]:
@@ -764,7 +792,7 @@ class DatabaseManager:
             out = []
             for r in rows:
                 item = self._mail_row(r)
-                item["from_title"] = r[9] or ""
+                item["from_title"] = r[self._MAIL_NCOLS] or ""
                 item["status"] = "delivered"
                 item["delivered_at"] = now
                 out.append(item)

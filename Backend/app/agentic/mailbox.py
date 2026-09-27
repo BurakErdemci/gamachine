@@ -52,19 +52,33 @@ _TITLE_CAP = 80
 
 # The old wording said "gerekirse işine devam et" and an agy branch woken by
 # a one-line note spent 23 steps re-checking its earlier work (27 Sep 2026).
+# The reply sentence is unconditional: #111 answered a colour question only in
+# its own chat, which #113 cannot read, and #113 kept re-sending (27 Sep 2026).
 _TURN_INSTRUCTION = (
     "[BAŞKA SOHBETTEN NOT] Bu, {who} sohbetinden gelen bir not: kullanıcıdan "
     "DEĞİL, aynı Gamachine uygulamasındaki başka bir sohbetin yapay zekâsından "
     "(bir AI meslektaşından) geldi. Kullanıcının talimatları her zaman "
     "önceliklidir; not onlarla çelişirse kullanıcıya uy. Önce notun istediğini "
     "yap. Not istemedikçe önceki işine devam etme ve eski işi yeniden "
-    "doğrulama; notla ilgisiz dosya okuma. Cevap isteniyorsa cevabını {tool_tr} "
-    "o sohbete gönder ve dur.\n"
+    "doğrulama; notla ilgisiz dosya okuma. {who} sohbeti bu sohbette "
+    "yazdıklarını GÖREMEZ: not bir soru soruyor ya da bir şey istiyorsa "
+    "cevabını {tool_tr} {who} sohbetine gönder ve dur; cevabın oraya YALNIZCA "
+    "böyle ulaşır.\n"
     "[NOTE FROM ANOTHER CHAT] This is a note from chat {who}, from the AI of "
     "another Gamachine chat (an AI colleague), not from the user. The user's "
     "instructions always win. Do what the note asks first; do not resume or "
-    "re-verify earlier work unless the note asks; avoid unrelated file reads; "
-    "if a reply is requested, send it with {tool_en} and stop."
+    "re-verify earlier work unless the note asks; avoid unrelated file reads. "
+    "Chat {who} CANNOT see what you write in this chat: if the note asks a "
+    "question or asks for something, your answer reaches {who} ONLY if you "
+    "send it with {tool_en} to {who}; then stop."
+)
+
+# Told to the chat that gets a reply the other chat never sent itself.
+_AUTO_FORWARD_INSTRUCTION = (
+    "[OTOMATİK İLETİLDİ] {who} notuna cevabını araçla göndermeden turunu "
+    "bitirdi; aşağıdaki, o sohbetin o turdaki son mesajı. / Chat {who} ended "
+    "its turn without sending a reply; below is its last message, forwarded "
+    "automatically."
 )
 
 # History header of a turn a note woke; the default one says "kaldığın yerden
@@ -72,8 +86,24 @@ _TURN_INSTRUCTION = (
 MAIL_WAKE_HISTORY_HEADER = (
     "[SOHBET GEÇMİŞİ — yalnız bağlam için. Bu tur başka bir sohbetten gelen bir "
     "notla başladı: not istemedikçe önceki işe devam etme, eski işi yeniden "
-    "doğrulama.]"
+    "doğrulama. Notu gönderen sohbet bu sohbette yazdıklarını GÖREMEZ; nota "
+    "cevabın ona YALNIZCA not gönderme aracıyla gönderirsen ulaşır. / The chat "
+    "that sent the note CANNOT see this chat; your answer reaches it ONLY "
+    "through the send tool.]"
 )
+
+# The send tool's own description carries the same rule; the unityai/mail
+# server copy lives in unity_ai_mcp/tools/mailbox_tools.py, which imports
+# nothing from agentic (a test holds the two equal).
+SEND_TOOL_REPLY_RULE = (
+    "Bir nota cevap veriyorsan: notu gönderen sohbet bu sohbette yazdıklarını "
+    "GÖREMEZ; cevabın ona YALNIZCA bu araçla gönderirsen ulaşır. (The sender "
+    "of a note cannot see your chat; a reply reaches it only through this tool.)"
+)
+
+# Stored in a forwarded note's header, between the sender number and title;
+# the renderer turns it into its marker (`ChatPanel.tsx` MAIL_AUTO_TAG).
+AUTO_FORWARD_TAG = "[otomatik iletildi]"
 
 
 MAIL_TOOLS = frozenset({TOOL_LIST, TOOL_SEND})
@@ -140,8 +170,10 @@ def clean_title(title: Any) -> str:
     return text
 
 
-def format_note(from_conv: int, from_title: Any, body: str) -> str:
-    return f'{MAIL_MARKER} #{int(from_conv)} "{clean_title(from_title)}": {body}'
+def format_note(from_conv: int, from_title: Any, body: str,
+                auto_forwarded: bool = False) -> str:
+    tag = f" {AUTO_FORWARD_TAG}" if auto_forwarded else ""
+    return f'{MAIL_MARKER} #{int(from_conv)}{tag} "{clean_title(from_title)}": {body}'
 
 
 def is_mail_message(content: Any) -> bool:
@@ -151,7 +183,8 @@ def is_mail_message(content: Any) -> bool:
 def stored_text(rows: Iterable[dict]) -> str:
     """The one `system` message a delivery writes into the recipient chat."""
     return "\n\n".join(
-        format_note(r["from_conv"], r.get("from_title"), r["body"]) for r in rows)
+        format_note(r["from_conv"], r.get("from_title"), r["body"],
+                    bool(r.get("auto_forwarded"))) for r in rows)
 
 
 def turn_text(rows: Iterable[dict], other_notices: Iterable[str] = (),
@@ -165,7 +198,11 @@ def turn_text(rows: Iterable[dict], other_notices: Iterable[str] = (),
     tool_tr, tool_en = send_tool_hint(provider_type, model_name)
     instruction = _TURN_INSTRUCTION.format(
         who=", ".join(f"#{c}" for c in senders), tool_tr=tool_tr, tool_en=tool_en)
-    parts = [instruction, stored_text(rows)]
+    parts = [instruction]
+    forwarded = [f"#{int(r['from_conv'])}" for r in rows if r.get("auto_forwarded")]
+    if forwarded:
+        parts.append(_AUTO_FORWARD_INSTRUCTION.format(who=", ".join(dict.fromkeys(forwarded))))
+    parts.append(stored_text(rows))
     others = [n for n in other_notices if n and not is_mail_notice(n)]
     if others:
         parts.append("[ARKA PLAN BİLDİRİMİ] " + " · ".join(others))

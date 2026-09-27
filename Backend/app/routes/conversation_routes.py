@@ -211,6 +211,34 @@ class _TurnRecord:
         return _append_turn_text(self._streamed.strip(), self.saved)
 
 
+class _TurnReply:
+    """The turn's last assistant message: the text after its last tool call.
+
+    A reply forwarded to another chat carries this, not the interim narration
+    (`response` holds every text block of the turn, run together). A provider
+    that streams no `text` falls back to its last non-empty `response`.
+    """
+
+    _RESETS = ("tool_call", "tool_result", "command_approval_needed")
+
+    def __init__(self):
+        self._streamed = ""
+        self._response = ""
+
+    def add(self, event) -> None:
+        if event.type == "text":
+            self._streamed += (event.data or {}).get("content") or ""
+        elif event.type in self._RESETS:
+            self._streamed = ""
+        elif event.type == "response":
+            content = (event.data or {}).get("content") or ""
+            if content.strip():
+                self._response = content
+
+    def value(self) -> str:
+        return self._streamed.strip() or self._response.strip()
+
+
 # Kaba tahminin paydası. Bu sayı bir ÖLÇÜM DEĞİL, 4 May 2026'dan beri kodda
 # duran bir sabit; yüzdeyi üreten formülün kalibrasyonu hiç doğrulanmadı.
 # 30 Ağu 2026'da tek kaynağa indirilirken bilerek DEĞİŞTİRİLMEDİ: kalibrasyonu
@@ -734,10 +762,84 @@ def create_conversation_router(db, progress_store):
             armed.append(conv_id)
         return armed
 
+    # ── Owed replies: a woken chat that answered only in its own chat ───────
+    # receiver chat -> the mail wake turn running in it that claimed notes
+    # expecting a reply. #111 answered #113's question only in its own chat,
+    # which #113 cannot see (27 Sep 2026); so when such a turn ends normally
+    # without writing to its sender, its last message goes there instead
+    # (Burak, 27 Sep 2026).
+    _reply_owed: Dict[int, dict] = {}
+
+    def _owe_reply(conv_id: int, rows: List[dict], user_id: int, agent: str) -> Optional[dict]:
+        senders = list(dict.fromkeys(int(r["from_conv"]) for r in rows if r.get("expects_reply")))
+        if not senders:
+            return None
+        entry = {"senders": senders, "start_id": db.max_mail_id(), "user_id": user_id,
+                 "agent": agent, "stopped": False}
+        _reply_owed[conv_id] = entry
+        return entry
+
+    def _drop_owed_reply(conv_id: int, entry: Optional[dict]) -> bool:
+        """Remove `entry` if it is still this chat's; a newer turn's stays."""
+        if entry is None or _reply_owed.get(conv_id) is not entry:
+            return False
+        _reply_owed.pop(conv_id, None)
+        return True
+
+    def _settle_owed_reply(conv_id: int, entry: Optional[dict], text: str,
+                           ended_normally: bool) -> Optional[int]:
+        """Forward the turn's last message to the one sender it owes a reply;
+        the new note's id, or None when nothing was forwarded."""
+        if not _drop_owed_reply(conv_id, entry):
+            return None
+        body = (text or "").strip()
+        if not ended_normally or entry["stopped"] or not body:
+            return None
+        if approval_mode.needs_card({"kind": "mail"}).card:
+            # Step mode: a send would need a card with no turn to own it; the
+            # wake framing has to do the work there.
+            logger.info("[mailbox] conv=%s reply not forwarded: step mode", conv_id)
+            return None
+        # Any row to the sender counts, rejected or pending included: an
+        # automatic copy must never go around a card the user refused.
+        owed = [s for s in entry["senders"]
+                if not db.mail_sent_after(conv_id, s, entry["start_id"])]
+        if len(owed) != 1:
+            if len(owed) > 1:
+                # One final text may answer several notes; it cannot be split.
+                logger.info("[mailbox] conv=%s reply not forwarded: %d senders owed %s",
+                            conv_id, len(owed), owed)
+            return None
+        if len(body) > mailbox.MAX_BODY_CHARS:
+            body = body[:mailbox.MAX_BODY_CHARS - 1] + "…"
+        try:
+            # Depth 2: a reply, which never expects one back.
+            res = _record_mail(conv_id, owed[0], body, 2, entry["user_id"], auto_forwarded=True)
+        except _MailRefused as exc:
+            logger.info("[mailbox] conv=%s reply to #%s not forwarded: %s",
+                        conv_id, owed[0], exc.message)
+            return None
+        logger.info("[mailbox] conv=%s last message forwarded to #%s (note %s)",
+                    conv_id, owed[0], res.get("mail_id"))
+        return res.get("mail_id")
+
     # Claude session'ı: SSE koptuktan sonra (Durdur / pencere kapatma) biten turun
     # asistan metnini kaybetmemek için DB'ye yazma köprüsü (provider→DB tek yönlü).
     def _save_detached_claude_turn(cid, text, model=None):
         db.add_message(cid, "assistant", text, provider="claude", model=model)
+        # A mail wake turn whose stream closed ends here, not in chat-stream.
+        entry = _reply_owed.get(cid)
+        if entry is None or entry.get("agent") != "claude":
+            return
+        try:
+            from providers.claude_sdk_session import _SESSIONS as _claude_sessions
+            sess = _claude_sessions.get(cid)
+            stopped = bool(getattr(sess, "_cancel_requested", False))
+            last = getattr(sess, "last_reply_text", "") or text
+            _settle_owed_reply(cid, entry, last, not stopped)
+        except Exception:
+            logger.exception("[mailbox] conv=%s detached reply not forwarded", cid)
+
     try:
         from providers.claude_sdk_session import set_db_saver
         set_db_saver(_save_detached_claude_turn)
@@ -1104,6 +1206,7 @@ def create_conversation_router(db, progress_store):
                 logger.warning(f"[delete] {name} session kapatma hatası: {e}")
         from agentic import wake_queue
         wake_queue.reset(conv_id)
+        _reply_owed.pop(conv_id, None)
 
     @router.delete("/conversations/{conv_id}")
     async def delete_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
@@ -1594,6 +1697,10 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
 
         from agentic import wake_queue
 
+        # A reply still owed by an earlier turn of this chat (its stream went
+        # away and it never stored) is not this turn's to settle.
+        _reply_owed.pop(request.conversation_id, None)
+
         ticketed_wake = request.origin == "wake" and wake_queue.consume_ticket(
             request.conversation_id)
         wake_notices = (wake_queue.take_ticket_notices(request.conversation_id)
@@ -1606,6 +1713,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         turn_message = request.message
         mail_note = ""
         mail_depth = 0
+        mail_rows: Optional[List[dict]] = None
 
         if ticketed_wake:
             # Consecutive-wake safety valve: a wake starts a turn, a turn can
@@ -1623,11 +1731,21 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                 return StreamingResponse(
                     _tag_sse_stream(_exhausted(), request.conversation_id),
                     media_type="text/event-stream")
-            # Bumped before the claim, so a failed claim counts too: a failure
-            # that repeats (a note whose write always fails) is otherwise
-            # re-armed and refused every few seconds for as long as it lasts.
-            wake_queue.bump_chain(request.conversation_id)
             mail_rows = _claim_mail(request.conversation_id)
+            # A wake that only carries notes from turns the user started
+            # (depth 1) has a human active in the sender chat, so it is not
+            # counted; replies (depth 2), task notices and a failed claim are.
+            # A failed claim must count: a failure that repeats (a note whose
+            # write always fails) is otherwise re-armed and refused every few
+            # seconds for as long as it lasts. The per-pair rate still bounds
+            # depth-1 notes. #111's counter was full of #113's reminders, so
+            # the next one never ran (27 Sep 2026).
+            _human_driven = (bool(mail_rows)
+                             and all(int(r.get("depth") or 0) <= 1 for r in mail_rows)
+                             and not any(n and not mailbox.is_mail_notice(n)
+                                         for n in wake_notices))
+            if not _human_driven:
+                wake_queue.bump_chain(request.conversation_id)
             if mail_rows is None:
                 # No turn and no row: this wake may be carrying mail that is
                 # still queued, and the client's text is not what it says
@@ -1688,6 +1806,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         _oturum_anahtari = _oturum_saglayici_anahtari(provider_type, model_name)
         _resume_id = db.get_cli_session(request.conversation_id, _oturum_anahtari, workspace_path)
         _turn_agent = _message_agent(provider_type, model_name)
+        reply_entry = (_owe_reply(request.conversation_id, mail_rows, user_id, _turn_agent)
+                       if mail_note and mail_rows else None)
 
         runner = AgentRunner(
             provider_type=provider_type,
@@ -1711,6 +1831,11 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
 
         async def event_generator():
             entry = _TurnRecord()
+            turn_reply = _TurnReply()
+            # Only a `done` that says `complete`, with no `error`, forwards an
+            # owed reply: a stopped or failed turn's text is not an answer.
+            ended_normally = False
+            reply_settled = False
             last_usage: dict | None = None
             # Was a terminal event (`done`/`error`) already sent to the client?
             # The turn contract is exactly one, and everything after the stream
@@ -1730,6 +1855,12 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                     yield f"data: {json.dumps({'type': 'wake_message', 'content': mail_note})}\n\n"
                 async for event in runner.run(combined_msg):
                     entry.add(event)
+                    turn_reply.add(event)
+                    if event.type == "done":
+                        ended_normally = ((event.data or {}).get("stop_reason")
+                                          or "complete") == "complete"
+                    elif event.type == "error":
+                        ended_normally = False
                     # Turun gerçek token'ları yalnız akışta geçiyor, DB'ye
                     # yazılmıyor: sondaki context_usage'a iliştirmezsek gösterge
                     # elimizdeki tek ÖLÇÜLMÜŞ sayıyı hiç görmüyor.
@@ -1777,6 +1908,16 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                               "detail": "aşama: kayıt"}
                         yield f"data: {json.dumps(_w)}\n\n"
 
+                if reply_entry is not None:
+                    reply_settled = True
+                    try:
+                        _settle_owed_reply(request.conversation_id, reply_entry,
+                                           turn_reply.value() if full_response else "",
+                                           ended_normally)
+                    except Exception:
+                        logger.exception("[mailbox] conv=%s reply not forwarded",
+                                         request.conversation_id)
+
                 # Context usage hesapla ve frontend'e ilet
                 _usage = _context_usage_payload(db, request.conversation_id, last_usage)
                 yield f"data: {json.dumps(_usage)}\n\n"
@@ -1809,6 +1950,14 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                     yield f"data: {json.dumps(_usage)}\n\n"
                 except Exception:
                     logger.exception("Context usage hesaplanamadı (hata yolu)")
+            finally:
+                # A failed turn owes nothing. A Claude turn whose stream went
+                # away keeps running in its session and stores (and forwards)
+                # through `_save_detached_claude_turn`; any other provider's
+                # turn ends with its stream, so its entry goes now.
+                if reply_entry is not None and not reply_settled and (
+                        terminal_gitti or _turn_agent != "claude"):
+                    _drop_owed_reply(request.conversation_id, reply_entry)
 
         return StreamingResponse(
             _tag_sse_stream(event_generator(), request.conversation_id),
@@ -1858,6 +2007,10 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         resume durumunu temizler; sonraki mesaj temiz bağlamla devam eder.
         """
         _check_token(x_session_token)
+        # A stopped mail wake turn's text is not its answer: nothing is forwarded.
+        _owed = _reply_owed.get(conversation_id)
+        if _owed is not None:
+            _owed["stopped"] = True
         try:
             from providers.claude_sdk_session import _SESSIONS as _CLAUDE_SESSIONS
             from providers.codex_session import _SESSIONS as _CODEX_SESSIONS
@@ -2329,6 +2482,13 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         if to_conv == from_conv:
             raise _MailRefused(400, "Bir sohbet kendine not gönderemez.")
         user_id, _ = get_current_user(db, token)
+        return _record_mail(from_conv, to_conv, body, mailbox.turn_depth(from_conv) + 1, user_id)
+
+    def _record_mail(from_conv: int, to_conv: int, body: str, depth: int, user_id: Any,
+                     auto_forwarded: bool = False) -> dict:
+        """The recipient, depth and pair checks and the write, shared by a
+        tool's send and the automatic reply forward (which has no running
+        turn to prove its sender, but is held to the same limits)."""
         if db.get_conversation_owner(to_conv) != user_id:
             raise _MailRefused(404, f"#{to_conv} numaralı sohbet bulunamadı.")
         try:
@@ -2337,7 +2497,6 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             to_is_side = True
         if to_is_side:
             raise _MailRefused(403, "Yan sohbete not gönderilemez.")
-        depth = mailbox.turn_depth(from_conv) + 1
         if depth > mailbox.MAX_DEPTH:
             raise _MailRefused(409, "Bu tur zaten başka bir sohbetin notuna verilen cevabın "
                                     "cevabı; zincir burada durur. Kullanıcıya bırak.")
@@ -2345,16 +2504,25 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         if db.count_mail_since(from_conv, to_conv, since) >= mailbox.PAIR_LIMIT:
             raise _MailRefused(429, f"Bu sohbete son {mailbox.PAIR_WINDOW_S // 60} dakikada "
                                     f"{mailbox.PAIR_LIMIT} not gönderildi; biraz bekle.")
+        # A note from a turn the user started always expects a reply; replies
+        # never do (Burak, 27 Sep 2026).
+        expects_reply = depth == 1 and not auto_forwarded
         # A note between chats is routine in balanced mode (Burak, 27 Sep 2026).
         if not approval_mode.needs_card({"kind": "mail"}).card:
-            mail_id = db.add_mail(from_conv, to_conv, body, mailbox.STATUS_QUEUED, None, depth)
+            mail_id = db.add_mail(from_conv, to_conv, body, mailbox.STATUS_QUEUED, None, depth,
+                                  expects_reply=expects_reply, auto_forwarded=auto_forwarded)
             if mail_id is None:
                 raise _MailRefused(404, f"#{to_conv} numaralı sohbet bulunamadı.")
             from agentic import wake_queue
             wake_queue.enqueue(to_conv, mailbox.notice(from_conv))
             return {"status": mailbox.STATUS_QUEUED, "mail_id": mail_id, "to": to_conv}
+        if auto_forwarded:
+            # A card needs a running turn in the sender to own it; the
+            # forward runs after that turn ended.
+            raise _MailRefused(409, "Adım modunda otomatik iletim yok.")
         gate_id = uuid.uuid4().hex
-        mail_id = db.add_mail(from_conv, to_conv, body, mailbox.STATUS_PENDING, gate_id, depth)
+        mail_id = db.add_mail(from_conv, to_conv, body, mailbox.STATUS_PENDING, gate_id, depth,
+                              expects_reply=expects_reply)
         if mail_id is None:
             raise _MailRefused(404, f"#{to_conv} numaralı sohbet bulunamadı.")
         # The same card store as the MCP bridges: `/mcp-pending` shows it in

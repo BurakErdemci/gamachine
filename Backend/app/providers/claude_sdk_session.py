@@ -897,6 +897,9 @@ class ClaudeSDKSession:
         self._turn_active = False
         self._final_text = ""          # tur boyunca biriken asistan metni (TextBlock'lardan)
         self._last_result_text = ""    # son ResultMessage.result (slash komut çıktıları için)
+        # Text after the turn's last tool call: what a mail reply forwards,
+        # since `_final_text` also holds the interim narration.
+        self.last_reply_text = ""
         self._saw_text_delta = False   # partial delta geldiyse blok metnini tekrar basma
         self._saw_thinking_delta = False
         self._txt_buf = ""             # delta birleştirme tamponları (SSE spam azaltma)
@@ -1239,6 +1242,7 @@ class ClaudeSDKSession:
         self._turn_active = True
         self._final_text = ""
         self._last_result_text = ""
+        self.last_reply_text = ""
         self._saw_text_delta = False
         self._saw_thinking_delta = False
         self._txt_buf = ""
@@ -1512,12 +1516,14 @@ class ClaudeSDKSession:
             for b in msg.content:
                 if isinstance(b, TextBlock):
                     self._final_text += b.text
+                    self.last_reply_text += b.text
                     if not self._saw_text_delta:
                         await self._emit({"type": "text", "content": b.text})
                 elif isinstance(b, ThinkingBlock):
                     if not self._saw_thinking_delta and b.thinking:
                         await self._emit({"type": "thinking", "text": b.thinking})
                 elif isinstance(b, ToolUseBlock):
+                    self.last_reply_text = ""
                     await self._flush_deltas()  # sıra korunumu: metin → araç
                     inp = b.input or {}
                     tool_id = getattr(b, "id", None)

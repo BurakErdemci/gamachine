@@ -212,6 +212,7 @@ export const tr = {
   'mailApproval.run': 'Notu Gönder',
   'mailApproval.warning': 'Hedef sohbet boştaysa bu notla hemen çalışmaya başlar.',
   'chat.mailNote': 'Başka sohbetten not',
+  'chat.mailNoteAuto': 'otomatik iletildi',
   'chat.wakeRow.mail': 'Başka sohbetten not geldi',
   // WorkspaceScreen
   'workspace.welcome': 'Hoş geldin,',
@@ -820,6 +821,7 @@ export const en: Record<keyof typeof tr, string> = {
   'mailApproval.run': 'Send Note',
   'mailApproval.warning': 'If the target chat is idle, it starts working on this note right away.',
   'chat.mailNote': 'Note from another chat',
+  'chat.mailNoteAuto': 'auto-forwarded',
   'chat.wakeRow.mail': 'a note arrived from another chat',
   // WorkspaceScreen
   'workspace.welcome': 'Welcome,',

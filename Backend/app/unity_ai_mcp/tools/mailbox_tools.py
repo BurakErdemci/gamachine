@@ -114,5 +114,6 @@ def register_mailbox_tools(mcp: MCPServer) -> None:
         boştaysa notla hemen uyanır, çalışıyorsa turu bitince okur. Adım modunda kullanıcı önce onaylar.
         to_chat_id: kullanıcı `@<numara>` ile andıysa o numara; yoksa list_chats'te tek bir sohbet
         açıkça uyuyorsa onun numarası. Emin değilsen gönderme, kullanıcıdan hedefi `@` ile seçmesini iste.
-        Yalnız gerçekten o sohbetin bilmesi gereken bir şey için kullan (en fazla 4000 karakter)."""
+        Yalnız gerçekten o sohbetin bilmesi gereken bir şey için kullan (en fazla 4000 karakter).
+        Bir nota cevap veriyorsan: notu gönderen sohbet bu sohbette yazdıklarını GÖREMEZ; cevabın ona YALNIZCA bu araçla gönderirsen ulaşır. (The sender of a note cannot see your chat; a reply reaches it only through this tool.)"""
         return await send_chat_message(to_chat_id, message)

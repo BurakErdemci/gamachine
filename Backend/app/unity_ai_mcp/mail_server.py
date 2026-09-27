@@ -17,7 +17,9 @@ def create_server() -> MCPServer:
             "Gamachine sohbet posta kutusu: kullanıcının diğer sohbetlerini listele "
             "ve gerekirse birine kısa bir not bırak. Not kullanıcıdan değil senden gider. "
             "Hedefi kullanıcı `@<numara>` ile verdiyse onu kullan; aynı başlıklı sohbetler "
-            "arasında tahmin etme, kullanıcıdan `@` ile seçmesini iste."
+            "arasında tahmin etme, kullanıcıdan `@` ile seçmesini iste. "
+            "Bir nota cevap veriyorsan: notu gönderen sohbet bu sohbette yazdıklarını "
+            "GÖREMEZ; cevabın ona YALNIZCA send_chat_message ile gönderirsen ulaşır."
         ),
     )
     register_mailbox_tools(mcp)

@@ -189,7 +189,11 @@ TOOL_DEFINITIONS = [
             "Kullanıcının başka bir sohbetine ya da dalına (başka bir AI oturumuna) not bırakır. "
             "O sohbet boştaysa notla hemen uyanır, çalışıyorsa turu bitince okur. Adım modunda "
             "kullanıcı önce onaylar. Emin değilsen gönderme, kullanıcıdan hedefi `@` ile "
-            "seçmesini iste. Yalnız gerçekten o sohbetin bilmesi gereken bir şey için kullan."
+            "seçmesini iste. Yalnız gerçekten o sohbetin bilmesi gereken bir şey için kullan. "
+            # Same text as agentic.mailbox.SEND_TOOL_REPLY_RULE (a test holds them equal).
+            "Bir nota cevap veriyorsan: notu gönderen sohbet bu sohbette yazdıklarını "
+            "GÖREMEZ; cevabın ona YALNIZCA bu araçla gönderirsen ulaşır. (The sender "
+            "of a note cannot see your chat; a reply reaches it only through this tool.)"
         ),
         "parameters": {
             "type": "object",

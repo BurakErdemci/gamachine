@@ -31,7 +31,7 @@ import axios from 'axios'
 import { useChat } from '../renderer/hooks/home/useChat'
 import { useMCPApproval, mailOzeti, MCP_MSG_ID } from '../renderer/hooks/home/useMCPApproval'
 import { CommandApproval } from '../renderer/components/home/CommandApproval'
-import { ChatPanel } from '../renderer/components/home/ChatPanel'
+import { ChatPanel, MAIL_AUTO_TAG } from '../renderer/components/home/ChatPanel'
 import { cevir } from '../renderer/lib/i18n'
 
 const mockedAxios = axios as unknown as { post: ReturnType<typeof vi.fn>; get: ReturnType<typeof vi.fn> }
@@ -217,6 +217,24 @@ describe('the note bubble', () => {
     expect(note.textContent).toContain('#3 "Derleme": build temiz')
     expect(container.querySelector('.bg-blue-500\\/10')).toBeNull()
     expect(screen.queryByText(cevir('chat.wakeRow'))).toBeNull()
+    expect(screen.queryByTestId('mail-note-auto')).toBeNull()
+  })
+
+  it('marks a reply the other chat never sent itself (Burak, 27 Sep 2026)', () => {
+    // Backend mailbox.format_note: the tag sits between the number and the title.
+    panel([{ id: 3, role: 'system', content: `📨 #3 ${MAIL_AUTO_TAG} "Derleme": Turkuaz`,
+      smells: [], timestamp: 't' }])
+    expect(screen.getByTestId('mail-note-auto').textContent).toBe(cevir('chat.mailNoteAuto'))
+    const note = screen.getByTestId('mail-note')
+    expect(note.textContent).toContain('#3 "Derleme": Turkuaz')
+    expect(note.textContent).not.toContain(MAIL_AUTO_TAG)
+  })
+
+  it('a tag inside a note body is not a marker', () => {
+    panel([{ id: 4, role: 'system', content: `📨 #3 "Derleme": metinde ${MAIL_AUTO_TAG} geçiyor`,
+      smells: [], timestamp: 't' }])
+    expect(screen.queryByTestId('mail-note-auto')).toBeNull()
+    expect(screen.getByTestId('mail-note').textContent).toContain(MAIL_AUTO_TAG)
   })
 
   it('a mail notice not yet replaced reads as a localized wake row', () => {

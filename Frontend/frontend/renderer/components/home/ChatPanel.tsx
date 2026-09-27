@@ -34,6 +34,15 @@ import { MessageNotices } from './MessageNotices';
 export const MAIL_MARKER = '📨';
 export const isMailNote = (msg: Pick<Message, 'role' | 'content'>) =>
   msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(MAIL_MARKER);
+/** A forwarded reply's header tag (backend `mailbox.AUTO_FORWARD_TAG`): the
+ *  other chat ended its turn without sending, so its last message came here. */
+export const MAIL_AUTO_TAG = '[otomatik iletildi]';
+const MAIL_AUTO_HEADER = /^(📨 #\d+) \[otomatik iletildi\] /gmu;
+/** The note text without the tag, and whether any note in it carried one. */
+export const mailNoteParts = (content: string) => {
+  const text = content.replace(MAIL_AUTO_HEADER, '$1 ');
+  return { text, autoForwarded: text !== content };
+};
 
 interface ChatPanelProps {
   messages: Message[];
@@ -303,21 +312,30 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           const agent = msg.role === 'assistant' ? messageAgent(msg.provider, msg.model) : null;
           return (
           <div key={msg.id} className={`chat-message-enter ${msg.role === 'user' ? 'flex justify-end' : ''}`}>
-            {isMailNote(msg) ? (
+            {isMailNote(msg) ? (() => {
               /* A note another chat's AI left here (backend agentic/mailbox.py).
                  Its own bubble: not the user's words (no blue bubble), and not
                  the muted wake row either, since the note is content the user
                  should read. */
+              const note = mailNoteParts(msg.content);
+              return (
               <div data-testid="mail-note" className="rounded-xl border border-amber-500/25 bg-amber-950/10 px-4 py-3">
                 <div className="flex items-center gap-2 mb-1.5 text-[11px] font-semibold text-amber-400 select-none">
                   <Mail size={12} className="shrink-0" />
                   {t('chat.mailNote')}
+                  {note.autoForwarded && (
+                    <span data-testid="mail-note-auto"
+                      className="rounded px-1.5 py-px text-[10px] font-medium bg-amber-500/15 text-amber-300">
+                      {t('chat.mailNoteAuto')}
+                    </span>
+                  )}
                 </div>
                 <p className="text-[13px] text-slate-200 whitespace-pre-wrap break-words leading-relaxed">
-                  {stripBidi(msg.content.slice(MAIL_MARKER.length).trimStart())}
+                  {stripBidi(note.text.slice(MAIL_MARKER.length).trimStart())}
                 </p>
               </div>
-            ) : msg.role === 'system' ? (
+              );
+            })() : msg.role === 'system' ? (
               /* AUTO-WAKE row. This branch is MANDATORY: the ternary below only
                  distinguished assistant/other, so a `system` role would render
                  as a BLUE USER BUBBLE — a sentence the user never wrote would

@@ -410,8 +410,10 @@ def test_delivery_builds_the_turn_from_db_rows_and_ignores_the_request_text(env,
     assert len(stored) == 1
     assert stored[0]["content"] == f'{mailbox.MAIL_MARKER} #{a} "Gönderen": derleme temiz geçti'
     assert '"type": "wake_message"' in r.text
-    assert _rows(env.db, "SELECT status FROM mailbox") == [("delivered",)]
-    assert _rows(env.db, "SELECT delivered_at IS NOT NULL FROM mailbox") == [(1,)]
+    # B's answer going back to A is a second row (the owed-reply forward).
+    assert _rows(env.db, "SELECT status FROM mailbox WHERE from_conv = ?", (a,)) == [("delivered",)]
+    assert _rows(env.db, "SELECT delivered_at IS NOT NULL FROM mailbox WHERE from_conv = ?",
+                 (a,)) == [(1,)]
     # The turn a note woke carries its depth: a reply from B is depth 2.
     assert _FakeRunner.last_kw["mail_depth"] == 1
 
@@ -489,7 +491,7 @@ def test_a_wake_whose_note_write_fails_leaves_the_note_for_the_next_wake(env, au
     _heal_message_writes(env.db)
     wake_queue.issue_ticket(b, [mailbox.notice(a)])
     assert _wake_turn(env.client, b).status_code == 200
-    assert _rows(env.db, "SELECT status FROM mailbox") == [("delivered",)]
+    assert _rows(env.db, "SELECT status FROM mailbox WHERE from_conv = ?", (a,)) == [("delivered",)]
     notes = [m for m in env.db.get_conversation_messages(b) if mailbox.is_mail_message(m["content"])]
     assert len(notes) == 1 and "kaybolmasın" in notes[0]["content"]
     assert "kaybolmasın" in _FakeRunner.messages[-1]
@@ -525,7 +527,7 @@ def test_a_wake_whose_claim_fails_starts_no_turn_and_keeps_the_note(env, auto, m
     wake_queue.issue_ticket(b, [mailbox.notice(a)])
     assert _wake_turn(env.client, b).status_code == 200
     assert "gerçek not" in _FakeRunner.messages[-1]
-    assert _rows(env.db, "SELECT status FROM mailbox") == [("delivered",)]
+    assert _rows(env.db, "SELECT status FROM mailbox WHERE from_conv = ?", (a,)) == [("delivered",)]
 
 
 # ── a turn still running ─────────────────────────────────────────────────────
