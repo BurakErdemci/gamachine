@@ -59,9 +59,19 @@ export const MENTION_PATTERN = /(?<![\p{L}\p{N}_@/])@([0-9]{1,9})(?![\p{L}\p{N}_
 
 const blank = (s: string) => s.replace(/[^\n]/g, ' ');
 
+// Twin of the backend's `_OPAQUE_URI_RE` (Codex mentionverify, 27 Sep 2026):
+// these schemes carry `@` and queries without `//`. ASCII letter classes, not
+// the `i` flag, so both sides blank exactly the same runs.
+const OPAQUE_SCHEMES = ['mailto', 'tel', 'sms'];
+const OPAQUE_URI = new RegExp(
+  `(?<![A-Za-z0-9+.-])(?:${OPAQUE_SCHEMES.map(s => [...s].map(c => `[${c.toUpperCase()}${c}]`).join('')).join('|')}):\\S*`,
+  'g',
+);
+
 /**
- * Twin of the backend's `mailbox.mask_literals`: fenced code, inline code and
- * `scheme://` runs blanked out, same length. `@12` there is quoted text, and a
+ * Twin of the backend's `mailbox.mask_literals`: fenced code, inline code,
+ * `scheme://` runs and `mailto:`/`tel:`/`sms:` runs blanked out, same length.
+ * `@12` there is quoted text, and a
  * chip must appear exactly where the server resolves a mention (Codex
  * mentionaudit, 27 Sep 2026).
  */
@@ -94,7 +104,7 @@ export const maskLiterals = (text: string): string => {
     masked = masked.slice(0, start) + blank(masked.slice(start, end)) + masked.slice(end);
     ticks.lastIndex = end;
   }
-  return masked.replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/\S*/g, blank);
+  return masked.replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/\S*/g, blank).replace(OPAQUE_URI, blank);
 };
 
 /** The `@<id>` mentions of `text` the backend resolves, with their offsets. */

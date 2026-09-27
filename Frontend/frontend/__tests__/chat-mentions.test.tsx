@@ -257,6 +257,10 @@ describe('mention helpers', () => {
     ['```\n@12 unclosed fence', []],
     ['```js `x`\n@12', [12]],
     ['```\n@12\n~~~\n@13', []],
+    // Codex mentionverify, 27 Sep 2026: URIs without `//` carry `@` and queries.
+    ['Open mailto:someone@example.com?subject=@12 to draft a message.', []],
+    ['<MailTo:a@b.c?cc=@12> tel:+90@12 SMS:5?body=@12 ve @13', [13]],
+    ['hotel:@12 sms: @13', [12, 13]],
   ]
 
   it.each(LITERAL_CASES)('skips code and URLs like the backend: %j', (text, ids) => {

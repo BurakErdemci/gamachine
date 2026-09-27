@@ -193,6 +193,15 @@ _MENTION_RE = re.compile(r"(?<![\w@/])@([0-9]{1,9})(?![\w@])")
 _FENCE_OPEN_RE = re.compile(r"[ ]{0,3}(`{3,}|~{3,})")
 _TICKS_RE = re.compile(r"`+")
 _URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://\S*")
+# Codex mentionverify, 27 Sep 2026: `mailto:a@b.c?subject=@12` resolved chat
+# 12. These schemes carry `@` and queries without `//`. Letters are spelled as
+# ASCII classes, not IGNORECASE: Python folds `ı`/`ſ` into `i`/`s` and JS does
+# not, and the renderer's twin must blank the same runs.
+_OPAQUE_SCHEMES = ("mailto", "tel", "sms")
+_OPAQUE_URI_RE = re.compile(
+    r"(?<![A-Za-z0-9+.\-])(?:"
+    + "|".join("".join(f"[{c.upper()}{c}]" for c in s) for s in _OPAQUE_SCHEMES)
+    + r"):\S*")
 
 
 def _blank(s: str) -> str:
@@ -200,8 +209,8 @@ def _blank(s: str) -> str:
 
 
 def mask_literals(text: str) -> str:
-    """`text` with fenced code, inline code and `scheme://` runs blanked out
-    (same length, newlines kept). `@12` there is quoted text, not a chat the
+    """`text` with fenced code, inline code, `scheme://` runs and
+    `mailto:`/`tel:`/`sms:` runs blanked out (same length, newlines kept). `@12` there is quoted text, not a chat the
     user addresses (Codex mentionaudit, 27 Sep 2026). Code spans follow
     CommonMark: a backtick run closes only on a run of the same length."""
     out: List[str] = []
@@ -236,7 +245,8 @@ def mask_literals(text: str) -> str:
         start, end = opening.start(), closing.end()
         masked = masked[:start] + _blank(masked[start:end]) + masked[end:]
         pos = end
-    return _URL_RE.sub(lambda m: _blank(m.group()), masked)
+    masked = _URL_RE.sub(lambda m: _blank(m.group()), masked)
+    return _OPAQUE_URI_RE.sub(lambda m: _blank(m.group()), masked)
 
 
 def parse_mentions(text: Any) -> List[int]:
