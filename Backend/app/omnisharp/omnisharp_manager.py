@@ -540,7 +540,12 @@ class OmniSharpManager:
         try:
             # /api/command paylaşımlı sır ister (sırsız çağrı 401). Sır sunucuyu
             # başlatan manager'da tutuluyor; import döngüsüne girmemek için yerel import.
-            from ..unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+            # Absolute, like every other app module: the app loads this file as
+            # top-level `omnisharp.omnisharp_manager` (main.py, lsp_routes.py), where
+            # `..unity_ai_mcp` raised "attempted relative import beyond top-level
+            # package" and the refresh never ran (since e988258). It is also the
+            # same module object whose singleton holds the secret.
+            from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
             req = urllib.request.Request(
                 "http://localhost:8080/api/command", method="POST",
                 data=b'{"type": "manage_editor", "params": {"action": "sync_csproj"}}',

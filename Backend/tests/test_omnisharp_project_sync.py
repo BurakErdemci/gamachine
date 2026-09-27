@@ -316,3 +316,36 @@ class TestSessizNoOpBasariSayilmiyor:
                 b'"data": {"csproj_count": "bilinmiyor"}}}',
                 refreshes=unity_ws))
         assert om.OmniSharpManager()._maybe_sync_csproj(unity_ws) is None
+
+
+class TestUnitySirriImportu:
+    """The app loads this module as top-level `omnisharp.omnisharp_manager`
+    (main.py, lsp_routes.py). A relative `..unity_ai_mcp` import raised
+    "attempted relative import beyond top-level package" there, the broad except
+    turned it into the stale-projects hint, and the refresh never ran (since
+    e988258, measured 28 Sep 2026, Windows). The other tests in this file load
+    the module as `app.omnisharp...`, where the relative form happened to work."""
+
+    def test_the_refresh_request_is_sent_under_the_module_name_the_app_uses(
+        self, unity_ws, monkeypatch
+    ):
+        import importlib
+        live = importlib.import_module("omnisharp.omnisharp_manager")
+        mcp = importlib.import_module("unity_ai_mcp.unity_mcp_manager")
+        # The secret must come from the SAME singleton the app starts the server
+        # with, not from a second copy of the module.
+        monkeypatch.setattr(mcp.unity_mcp_manager, "local_api_token", "sir-123")
+        _stale_ws(unity_ws)
+        sent = []
+
+        def _fake(req, *_a, **_k):
+            sent.append(req)
+            _touch(os.path.join(unity_ws, "P.sln"), _NEW + 1)
+            return _FakeHttpResponse(
+                b'{"status": "success", "result": {"success": true, '
+                b'"data": {"csproj_count": 2}}}')
+
+        monkeypatch.setattr(live.urllib.request, "urlopen", _fake)
+        assert live.OmniSharpManager()._maybe_sync_csproj(unity_ws) is None
+        assert len(sent) == 1, "the import failed before the request was built"
+        assert sent[0].get_header("X-api-key") == "sir-123"
