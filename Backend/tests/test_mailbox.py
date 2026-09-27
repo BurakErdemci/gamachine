@@ -12,6 +12,7 @@ import asyncio
 import sqlite3
 import types
 from collections import defaultdict
+from contextlib import closing
 
 import pytest
 from cryptography.fernet import Fernet
@@ -336,6 +337,60 @@ def test_an_unticketed_wake_delivers_nothing(env, auto, monkeypatch):
     _wake_turn(env.client, b, message="kendi metnim")
     assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
     assert "bekle" not in _FakeRunner.messages[-1]
+
+
+# A real failure inside SQLite, not a patched `add_message`: the mail path no
+# longer calls it, so patching it would pass without testing anything.
+def _break_message_writes_to(db, conv_id):
+    with closing(sqlite3.connect(db.db_path)) as conn:
+        conn.execute("CREATE TRIGGER fail_note_write BEFORE INSERT ON messages "
+                     f"WHEN NEW.conversation_id = {int(conv_id)} "
+                     "BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END")
+        conn.commit()
+
+
+def _heal_message_writes(db):
+    with closing(sqlite3.connect(db.db_path)) as conn:
+        conn.execute("DROP TRIGGER fail_note_write")
+        conn.commit()
+
+
+def test_a_failed_note_write_rolls_the_claim_back(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    env.db.add_mail(a, b, "geri alınsın", mailbox.STATUS_QUEUED, None, 1)
+    _break_message_writes_to(env.db, b)
+    with pytest.raises(sqlite3.DatabaseError):
+        env.db.claim_queued_mail(b, note_of=mailbox.stored_text)
+    assert _rows(env.db, "SELECT status, delivered_at FROM mailbox") == [("queued", None)]
+    assert env.db.get_conversation_messages(b) == []
+
+    _heal_message_writes(env.db)
+    rows = env.db.claim_queued_mail(b, note_of=mailbox.stored_text)
+    assert [r["body"] for r in rows] == ["geri alınsın"]
+    assert [(m["role"], m["content"]) for m in env.db.get_conversation_messages(b)] == [
+        ("system", mailbox.stored_text(rows))]
+
+
+def test_a_wake_whose_note_write_fails_leaves_the_note_for_the_next_wake(env, auto, monkeypatch):
+    _FakeRunner.messages = []
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    assert _send(env.client, a, b, body="kaybolmasın").status_code == 200
+    wake_queue.issue_ticket(b, wake_queue.drain(b))
+    _break_message_writes_to(env.db, b)
+    # The request may fail; only what it leaves in the DB is under test.
+    lenient = TestClient(env.client.app, raise_server_exceptions=False)
+    _wake_turn(lenient, b)
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
+    assert env.db.get_conversation_messages(b) == []
+
+    _heal_message_writes(env.db)
+    wake_queue.issue_ticket(b, [mailbox.notice(a)])
+    assert _wake_turn(env.client, b).status_code == 200
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("delivered",)]
+    notes = [m for m in env.db.get_conversation_messages(b) if mailbox.is_mail_message(m["content"])]
+    assert len(notes) == 1 and "kaybolmasın" in notes[0]["content"]
+    assert "kaybolmasın" in _FakeRunner.messages[-1]
 
 
 def test_handoff_context_keeps_mail_rows_but_not_wake_rows():

@@ -5,7 +5,7 @@ import os
 from contextlib import closing
 from datetime import datetime, timedelta
 import bcrypt
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Callable, List, Dict, Any, Optional, Tuple
 from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
@@ -668,10 +668,14 @@ class DatabaseManager:
                 'SELECT COUNT(*) FROM mailbox WHERE from_conv = ? AND to_conv = ? AND created_at >= ?',
                 (from_conv, to_conv, since)).fetchone()[0]
 
-    def claim_queued_mail(self, to_conv: int) -> List[Dict[str, Any]]:
+    def claim_queued_mail(self, to_conv: int,
+                          note_of: Optional[Callable[[List[Dict[str, Any]]], str]] = None
+                          ) -> List[Dict[str, Any]]:
         """Mark every queued note of `to_conv` delivered and return them, oldest
         first, with the sender's title; one transaction, so a note is handed
-        out once."""
+        out once. With `note_of`, the recipient's message is written in the
+        same transaction: a failed write leaves the notes queued instead of
+        delivered to nobody (Codex mailaudit, 27 Sep 2026)."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('BEGIN IMMEDIATE')
@@ -692,6 +696,12 @@ class DatabaseManager:
                 conn.execute(
                     f'UPDATE mailbox SET status = ?, delivered_at = ? WHERE id IN ({marks})',
                     ["delivered", now] + [m["id"] for m in out])
+                if note_of is not None:
+                    conn.execute(
+                        'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp) '
+                        'VALUES (?, ?, ?, ?, ?)',
+                        (to_conv, "system", note_of(out), "[]", now))
+                    self._touch(conn, to_conv, now)
             conn.commit()
             return out
 
