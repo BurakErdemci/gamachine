@@ -386,7 +386,10 @@ def classify_shell(command: Any, *, cwd: str = "", workspace: str = "") -> Risk:
         tokens = command_safety._tokenize(raw)
         if tokens:
             form = _build_form(tokens)
-            if form and command_safety._stays_in_workspace(tokens, root):
+            # Build/test programs are native executables that take their
+            # arguments literally (`-p no:cacheprovider`, `test_x.py::name`);
+            # only PowerShell's own cmdlets read `Name:` as a provider.
+            if form and command_safety._stays_in_workspace(tokens, root, native=True):
                 return _routine("shell_build_allowlist", form)
     return _shell_reason(raw, cwd_ok)
 

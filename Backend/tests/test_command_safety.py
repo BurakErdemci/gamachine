@@ -362,13 +362,27 @@ def test_posix_kipinde_ters_bolu_KACIS_karakteri(command, beklenen, posix_kipi):
     assert command_safety._tokenize(command) == beklenen
 
 
-def test_ayni_surucude_goreli_yol_workspace_icinde_kaliyor(workspace):
-    """Ters yön: `C:dosya.txt` workspace'e çözülüyor, yani reddedilmemeli.
-
-    Bu iddia olmadan yukarıdaki test "her sürücü-göreli biçimi reddet" ile de
-    geçerdi ve meşru bir kullanım sessizce onaya düşerdi.
+def test_drive_relative_path_needs_a_card_even_on_the_workspace_drive(workspace):
+    """`C:notes.txt` is relative to drive C:'s own current directory, which
+    PowerShell tracks per drive and need not be the workspace; `ntpath.join`
+    reads it against the workspace instead. Architect decision after Codex
+    safeauto, 27 Sep 2026: a drive-relative form is not proven to stay inside,
+    so it gets a card (this test asserted the opposite before).
     """
-    assert is_auto_safe("cat C:notlar.txt", workspace)
+    assert not is_auto_safe("cat C:notlar.txt", workspace)
+    assert is_auto_safe("cat notlar.txt", workspace)
+
+
+@pytest.mark.parametrize("command", [
+    "cat Env:LOCAL_APP_TOKEN", "ls HKCU:", "cat Cert:\\CurrentUser\\My",
+    "cat notlar.txt:gizli", "cat \\\\?\\C:\\x",
+])
+def test_step_mode_cards_powershell_provider_paths_too(command, workspace):
+    """Step mode shares this gate (auto-safe commands skip its card), so the
+    Codex safeauto provider fix (27 Sep 2026) closes it there as well."""
+    assert not is_auto_safe(command, workspace)
+    assert not is_auto_safe(command, None)
+    assert auto_safe_argv(command, workspace) is None
 
 
 def test_denetlenen_tokenlar_calistirilan_argv_ile_AYNI(workspace, windows_kipi):

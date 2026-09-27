@@ -125,6 +125,73 @@ def test_known_program_reaching_outside_the_workspace_is_critical(ws):
     assert shell("dotnet build ../Other/Other.csproj", ws).verdict == CRITICAL
 
 
+# Codex safeauto, 27 Sep 2026: PowerShell's `cat`/`ls` read these from a
+# provider (environment, registry, certificate store ...) or from outside the
+# workspace; the safe list resolved every one of them as a workspace file.
+@pytest.mark.parametrize("command", [
+    "cat Env:LOCAL_APP_TOKEN",
+    "cat env:\\LOCAL_APP_TOKEN",
+    "ls Env:",
+    "cat HKLM:\\SOFTWARE\\Secret",
+    "ls HKCU:",
+    "ls Cert:\\CurrentUser\\My",
+    "cat Variable:x",
+    "cat Function:prompt",
+    "ls Alias:",
+    "ls WSMan:\\localhost",
+    "cat Microsoft.PowerShell.Core\\FileSystem::C:\\x",
+    "cat $env:LOCAL_APP_TOKEN",
+    "cat ${env:LOCAL_APP_TOKEN}",
+    "cat -Path Env:LOCAL_APP_TOKEN",
+    "cat C:notes.txt",
+    "cat Assets/x.cs:hidden",
+    "cat \\\\server\\share\\x",
+    "cat //server/share/x",
+    "cat \\\\?\\C:\\Windows\\win.ini",
+    "cat \\\\.\\C:\\Windows\\win.ini",
+    "ls HKLM:\\",
+    "diff Env:A b",
+    # Native programs: only drive-relative and UNC/device forms are refused.
+    "grep x D:foo",
+    "git show D:foo",
+    "head \\\\server\\share\\x",
+    "tail //server/x",
+    "grep x C:/Windows/win.ini",
+    # Build/test list: same native rule.
+    "pytest D:foo",
+    "pytest \\\\server\\share\\tests",
+    "dotnet build //server/x.csproj",
+])
+def test_powershell_provider_paths_are_critical(command, ws):
+    assert shell(command, ws).verdict == CRITICAL, command
+
+
+@pytest.mark.parametrize("command", [
+    "git show HEAD:README.md",
+    "git log --pretty=format:%h",
+    'grep -n "TODO:" file.py',
+    'find . -name "*.cs"',
+    # grep is find/grep.exe in PowerShell too, so Env:X is a workspace file name
+    # for it, not the environment provider.
+    "grep --file=Env:X Assets",
+])
+def test_native_programs_keep_their_colon_arguments(command, ws):
+    assert shell(command, ws).verdict == ROUTINE, (command, shell(command, ws))
+
+
+def test_plain_workspace_reads_stay_routine_next_to_provider_paths(ws):
+    """The routine half of each pair above: same program, a real workspace file."""
+    for command in ("cat Assets/x.cs", "ls Assets", "cat notes.txt",
+                    "cat " + os.path.join(ws, "Assets", "x.cs")):
+        assert shell(command, ws) == (ROUTINE, "shell_safe_list", command.split()[0]), command
+
+
+def test_build_forms_keep_their_colons(ws):
+    """Native build/test programs take `no:plugin` and `file::test` literally."""
+    assert shell("pytest -q -p no:cacheprovider", ws).verdict == ROUTINE
+    assert shell("pytest tests/test_x.py::test_one", ws).verdict == ROUTINE
+
+
 def test_cwd_outside_the_workspace_is_critical(ws, tmp_path_factory):
     elsewhere = str(tmp_path_factory.mktemp("elsewhere"))
     assert shell("npm test", ws, cwd=elsewhere) == (CRITICAL, "shell_outside_workspace", "npm")

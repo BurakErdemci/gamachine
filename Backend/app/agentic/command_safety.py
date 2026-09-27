@@ -186,7 +186,44 @@ def _attached_flag_value(token: str) -> str:
     return token[2:] if len(token) > 2 else ""
 
 
-def _stays_in_workspace(tokens: list[str], workspace: str | None) -> bool:
+# Codex safeauto, 27 Sep 2026: `cat Env:LOCAL_APP_TOKEN` resolved as a workspace
+# file here, while PowerShell's `cat` (Get-Content) read it from the environment
+# provider. A colon anywhere except a plain `X:\` / `X:/` drive prefix names a
+# provider (Env:, HKLM:, Cert:, Function:, `...::`), a drive-relative path
+# (`C:foo`, relative to that drive's own current directory) or an NTFS stream
+# (`file:stream`); a leading double separator is UNC or a `\\?\` / `\\.\`
+# device path. None of them is proven to be a file under the workspace.
+#
+# The provider rule applies only where PowerShell resolves the name to a cmdlet
+# alias (ls/cat/echo/pwd/diff -> Get-ChildItem, Get-Content, Write-Output,
+# Get-Location, Compare-Object; ll/la are unknown, so strict too). The native
+# programs below receive the argument as a plain string and cannot read a
+# provider, so for them only drive-relative and UNC/device forms are refused
+# and `HEAD:path`, `format:%h` or `"TODO:"` go to the normal confinement
+# (Codex safeauto, 27 Sep 2026).
+_PLAIN_DRIVE = re.compile(r"[A-Za-z]:[\\/]")
+_DRIVE_RELATIVE = re.compile(r"[A-Za-z]:(?![\\/])")
+_NATIVE_PROGRAMS = frozenset({"git", "grep", "find", "head", "tail", "wc", "tree"})
+
+
+def _double_separator(candidate: str) -> bool:
+    return candidate[:2] in ("\\\\", "//", "\\/", "/\\")
+
+
+def _names_a_provider(candidate: str) -> bool:
+    if _double_separator(candidate):
+        return True
+    if ":" not in candidate:
+        return False
+    return not (_PLAIN_DRIVE.match(candidate) and ":" not in candidate[2:])
+
+
+def _leaves_the_drive(candidate: str) -> bool:
+    return _double_separator(candidate) or bool(_DRIVE_RELATIVE.match(candidate))
+
+
+def _stays_in_workspace(tokens: list[str], workspace: str | None,
+                        *, native: bool = False) -> bool:
     """Argümanlardaki yol benzeri token'lar workspace içinde mi kalıyor?
 
     Salt-okunur komutlar da bir sızıntı yolu: ``cat ~/.ssh/id_rsa`` hiçbir kabuk
@@ -198,6 +235,8 @@ def _stays_in_workspace(tokens: list[str], workspace: str | None) -> bool:
     nereye çıktığını bilemediğimiz bir yolu onaysız okumayız.
     """
     root = os.path.realpath(workspace) if workspace else None
+    native = native or bool(tokens) and tokens[0].lower() in _NATIVE_PROGRAMS
+    refused = _leaves_the_drive if native else _names_a_provider
 
     for token in tokens[1:]:
         if token.startswith("-"):
@@ -208,6 +247,8 @@ def _stays_in_workspace(tokens: list[str], workspace: str | None) -> bool:
                 continue
         else:
             candidate = token
+        if refused(candidate):
+            return False
         # Yalnızca "/" içeren token'lara bakmak YETMİYOR: workspace içindeki
         # `link.txt` adlı bir sembolik bağ dışarıyı gösterebilir ve adında hiç
         # eğik çizgi olmaz. (Kendi regresyon testim bu açığı yakaladı.) Bu yüzden
