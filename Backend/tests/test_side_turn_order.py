@@ -168,6 +168,71 @@ def test_side_question_too_long_for_the_cap_is_refused():
         st.text(full=True, context_cap=24000)
 
 
+# Codex mentionverify, 27 Sep 2026: Windows limits a command line in UTF-16
+# units, where an emoji counts 2; a 20,000-emoji question passed a 24,000
+# code-point check and built a 41,564-unit Cursor command (limit 32,767).
+_EMOJI = "\U0001f600"
+
+
+def _units(s):
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _no_lone_surrogate(s):
+    return not any("\ud800" <= c <= "\udfff" for c in s)
+
+
+def test_side_cap_counts_utf16_units_for_the_fixed_parts():
+    fixed = _units(sp.SIDE_INSTRUCTION) + 2 + _units(
+        f"{sp.QUESTION_HEADER}\n\n\n{sp.FINAL_REMINDER}")
+    # Exactly at the cap fits; one more astral character (2 units) does not,
+    # though it adds a single code point.
+    n = (24000 - fixed) // 2
+    assert sp.SideTurn(question=_EMOJI * n + "x" * ((24000 - fixed) % 2)).fits(24000)
+    assert not sp.SideTurn(question=_EMOJI * (n + 1)).fits(24000)
+    st = sp.SideTurn(question=_EMOJI * 20000)
+    assert len(st.question) < 24000 and not st.fits(24000)
+    with pytest.raises(sp.SideTurnTooLong):
+        st.text(full=True, context_cap=24000)
+
+
+def test_side_cap_trims_astral_text_in_utf16_units_without_splitting_a_pair():
+    st = sp.SideTurn(
+        question=f"{_EMOJI} ne demek?",
+        main_history="H" + _EMOJI * 30000,
+        in_flight_request=_EMOJI * 5000 + "REQ_END",
+        live_answer="[ANA SOHBETİN ŞU AN YAZILMAKTA OLAN (YARIM) CEVABI]\n" + _EMOJI * 8000 + "LIVE_END",
+        side_history="[BU YAN SOHBETTEKİ ÖNCEKİ SORU-CEVAPLAR]\n" + _EMOJI * 8000 + "SIDE_END",
+    )
+    history_only = sp.SideTurn(question=st.question, main_history=st.main_history)
+    # Odd caps leave one unit of slack next to a 2-unit character.
+    for turn, full in ((st, False), (history_only, True)):
+        for cap in (24000, 24001, 9001, 6000):
+            text = turn.text(full=True, context_cap=cap)
+            assert _units(text) <= cap, (cap, _units(text))
+            assert _no_lone_surrogate(text)
+            _assert_side_order(text, question=st.question, full=full)
+    assert "LIVE_END" in st.text(full=True, context_cap=6001)
+    # The running request is pre-cut to IN_FLIGHT_CAP units, not code points.
+    whole = st.text(full=True)
+    head = whole.index(sp.IN_FLIGHT_HEADER) + len(sp.IN_FLIGHT_HEADER) + 1
+    request = whole[head:whole.index("[ANA SOHBETİN ŞU AN YAZILMAKTA")].rstrip("\n")
+    assert _units(request) <= sp.IN_FLIGHT_CAP + _units(sp._TRIM_TAIL)
+    assert _units(request) >= sp.IN_FLIGHT_CAP - 1 and "REQ_END" not in request
+
+
+def test_oneshot_side_turn_refuses_an_astral_question_over_the_unit_cap():
+    events = []
+    prompts = _oneshot_prompts("cursor-auto", "cursor", ["x"],
+                               side_turn=sp.SideTurn(question=_EMOJI * 20000), events=events)
+    assert prompts == []
+    assert [e.type for e in events[0]] == ["error"]
+    prompts = _oneshot_prompts("cursor-auto", "cursor", [_SIDE_Q], side_turn=sp.SideTurn(
+        question=_SIDE_Q, main_history=_EMOJI * 30000, in_flight_request=_MAIN_REQUEST))
+    assert _units(prompts[0]) <= 24000 and _no_lone_surrogate(prompts[0])
+    _assert_side_order(prompts[0], request=_MAIN_REQUEST)
+
+
 def test_handoff_history_header_default_is_unchanged():
     msgs = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"},
             {"role": "user", "content": "şimdiki"}]

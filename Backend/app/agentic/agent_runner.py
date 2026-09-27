@@ -2405,7 +2405,8 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             p._conversation_id = self.conversation_id
             return p
 
-        # Windows command-line limit (~32K) minus room for the mcp hint.
+        # Windows command-line limit (32,767 UTF-16 units) minus room for the
+        # mcp hint; a side turn is fitted and refused in those units (fits/text).
         _prompt_cap = 24000
         if getattr(self, "side_turn", None) is not None and not self.side_turn.fits(_prompt_cap):
             from agentic.side_prompt import side_too_long_message

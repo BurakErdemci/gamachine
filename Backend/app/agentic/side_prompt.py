@@ -73,25 +73,26 @@ class SideTurn:
         return f"{QUESTION_HEADER}\n{self.question}\n\n{FINAL_REMINDER}"
 
     def fits(self, context_cap: int) -> bool:
-        """Whether the parts that are never trimmed fit `context_cap`."""
-        return len(SIDE_INSTRUCTION) + len(_SEP) + len(self._question_block()) <= context_cap
+        """Whether the parts that are never trimmed fit `context_cap` UTF-16 units."""
+        return utf16_units(SIDE_INSTRUCTION + _SEP + self._question_block()) <= context_cap
 
     def text(self, full: bool, context_cap: "int | None" = None) -> str:
         """`full` for a turn whose provider holds none of this side chat yet;
         otherwise the provider's own session already has the history and the
         earlier side Q/A, and only what changes per turn is sent again.
 
-        `context_cap` bounds the WHOLE message (the one-shot CLIs pass it on
-        the command line; Codex mentionaudit, 27 Sep 2026 measured 37,593
-        characters when only the history was budgeted). The instruction and
+        `context_cap` bounds the WHOLE message in UTF-16 units (the one-shot
+        CLIs pass it on the command line; Codex mentionaudit, 27 Sep 2026
+        measured 37,593 characters when only the history was budgeted). The
+        instruction and
         the question are never trimmed; the rest is fitted in the order the
         question needs it: running request, live answer, earlier side Q/A,
         main history. Raises SideTurnTooLong when the fixed parts alone do
         not fit.
         """
         request = (self.in_flight_request or "").strip()
-        if len(request) > IN_FLIGHT_CAP:
-            request = request[:IN_FLIGHT_CAP] + _TRIM_TAIL
+        if utf16_units(request) > IN_FLIGHT_CAP:
+            request = _head(request, IN_FLIGHT_CAP) + _TRIM_TAIL
         history = self.main_history if full else ""
         side = self.side_history if full else ""
         question = self._question_block()
@@ -104,7 +105,7 @@ class SideTurn:
         if context_cap is not None:
             if not self.fits(context_cap):
                 raise SideTurnTooLong(side_too_long_message(context_cap))
-            room = context_cap - len(SIDE_INSTRUCTION) - len(_SEP) - len(question)
+            room = context_cap - utf16_units(SIDE_INSTRUCTION + _SEP + question)
             blocks["request"], room = _fit(IN_FLIGHT_HEADER, request, room, False, _TRIM_TAIL)
             blocks["live"], room = _fit(*_split_label(self.live_answer or ""), room, True, _TRIM_LIVE)
             blocks["side"], room = _fit(*_split_label(side or ""), room, True, _TRIM_SIDE)
@@ -120,7 +121,7 @@ _TRIM_TAIL = " …[kısaltıldı]"
 _TRIM_LIVE = "…[başı kısaltıldı]\n"
 _TRIM_SIDE = "…[daha eski yan sorular kısaltıldı]\n"
 _TRIM_HISTORY = "…[ana sohbetin eski kısmı kırpıldı]\n"
-# A block cut below this many characters no longer tells the model anything;
+# A block cut below this many units no longer tells the model anything;
 # it is dropped instead of sent as a fragment.
 _MIN_FRAGMENT = 200
 
@@ -151,10 +152,37 @@ def _fit(label: str, body: str, room: int, keep_tail: bool, mark: str) -> "tuple
         return "", room
     prefix = f"{label}\n" if label else ""
     whole = prefix + body
-    if len(_SEP) + len(whole) <= room:
-        return whole, room - len(_SEP) - len(whole)
-    avail = room - len(_SEP) - len(prefix) - len(mark)
+    if utf16_units(_SEP + whole) <= room:
+        return whole, room - utf16_units(_SEP + whole)
+    avail = room - utf16_units(_SEP + prefix + mark)
     if avail < _MIN_FRAGMENT:
         return "", room
-    block = prefix + (mark + body[-avail:] if keep_tail else body[:avail] + mark)
-    return block, room - len(_SEP) - len(block)
+    block = prefix + (mark + _tail(body, avail) if keep_tail else _head(body, avail) + mark)
+    return block, room - utf16_units(_SEP + block)
+
+
+# Codex mentionverify, 27 Sep 2026: Windows limits a command line in UTF-16
+# units, where a character outside the BMP (an emoji) counts 2; a 20,000-emoji
+# question passed a 24,000 code-point check and built a 41,564-unit command
+# (limit 32,767). Every side budget is counted in these units, and cuts are
+# made on whole code points so a surrogate pair is never split.
+def utf16_units(s: str) -> int:
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def _head(s: str, units: int) -> str:
+    """The longest prefix of `s` within `units`."""
+    cut = s[:max(units, 0)]
+    while (excess := utf16_units(cut) - units) > 0:
+        # Each code point is 1 or 2 units, so dropping ceil(excess/2) of them
+        # never drops one more than needed.
+        cut = cut[:-((excess + 1) // 2)]
+    return cut
+
+
+def _tail(s: str, units: int) -> str:
+    """The longest suffix of `s` within `units`."""
+    cut = s[-units:] if units > 0 else ""
+    while (excess := utf16_units(cut) - units) > 0:
+        cut = cut[(excess + 1) // 2:]
+    return cut
