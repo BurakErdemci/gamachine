@@ -900,6 +900,9 @@ class ClaudeSDKSession:
         # Text after the turn's last tool call: what a mail reply forwards,
         # since `_final_text` also holds the interim narration.
         self.last_reply_text = ""
+        # Whether `last_reply_text` was reset by a tool call this turn: then an
+        # empty one means no answer, not "fall back to the whole text".
+        self.turn_had_tool_call = False
         self._saw_text_delta = False   # partial delta geldiyse blok metnini tekrar basma
         self._saw_thinking_delta = False
         self._txt_buf = ""             # delta birleştirme tamponları (SSE spam azaltma)
@@ -1243,6 +1246,7 @@ class ClaudeSDKSession:
         self._final_text = ""
         self._last_result_text = ""
         self.last_reply_text = ""
+        self.turn_had_tool_call = False
         self._saw_text_delta = False
         self._saw_thinking_delta = False
         self._txt_buf = ""
@@ -1524,6 +1528,7 @@ class ClaudeSDKSession:
                         await self._emit({"type": "thinking", "text": b.thinking})
                 elif isinstance(b, ToolUseBlock):
                     self.last_reply_text = ""
+                    self.turn_had_tool_call = True
                     await self._flush_deltas()  # sıra korunumu: metin → araç
                     inp = b.input or {}
                     tool_id = getattr(b, "id", None)

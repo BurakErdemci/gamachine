@@ -249,6 +249,31 @@ def test_only_the_last_assistant_message_is_forwarded(env, auto, runner):
     assert _rows(env.db, "SELECT body FROM mailbox WHERE from_conv = ?", (b,)) == [("Turkuaz",)]
 
 
+_NARRATION = "I will inspect the file."
+_TOOL = [_ev("tool_call", tool="read_file", arguments={}),
+         _ev("tool_result", tool="read_file", success=True)]
+
+
+# Codex nightaudit, 28 Sep 2026: a woken chat that narrated, called a tool and
+# ended got its narration forwarded as the answer (from the `response` event).
+@pytest.mark.parametrize("script,forwarded", [
+    ([_ev("text", content=_NARRATION), *_TOOL, _ev("response", content=_NARRATION), DONE], []),
+    ([_ev("text", content=_NARRATION), *_TOOL, DONE], []),
+    ([*_TOOL, _ev("response", content=_NARRATION), DONE], []),
+    ([_ev("text", content=_NARRATION), *_TOOL, _ev("text", content="Turkuaz"),
+      _ev("response", content=_NARRATION + "Turkuaz"), DONE], [("Turkuaz",)]),
+    ([_ev("text", content="Turkuaz"), _ev("response", content="Turkuaz"), DONE], [("Turkuaz",)]),
+], ids=["narration-tool-end", "narration-tool-end-no-response", "unstreamed-tool-end",
+        "narration-tool-answer", "no-tools"])
+def test_only_text_after_the_last_tool_call_is_forwarded(env, auto, runner, script, forwarded):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _asked(env, a, b)
+    runner.scripts[b] = script
+    _wake(env, b)
+    assert _rows(env.db, "SELECT body FROM mailbox WHERE from_conv = ?", (b,)) == forwarded
+    assert wake_queue.pending(a) == len(forwarded)
+
+
 def test_a_provider_without_streamed_text_forwards_its_response(env, auto, runner):
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
     _asked(env, a, b)
@@ -340,9 +365,10 @@ def test_the_forwarded_note_is_marked_and_wakes_the_sender(env, auto, runner):
 # ── a Claude turn whose stream went away ─────────────────────────────────────
 
 class _FakeClaudeSession:
-    def __init__(self, last, cancelled=False):
+    def __init__(self, last, cancelled=False, tool_called=False):
         self.last_reply_text = last
         self._cancel_requested = cancelled
+        self.turn_had_tool_call = tool_called
 
 
 def _hanging(kw, message):
@@ -385,6 +411,30 @@ def test_a_detached_claude_turn_forwards_through_the_db_saver(env, auto, runner,
             if m["role"] == "assistant"] == ["çalışıyorumTurkuaz"]
     expected = [(b, a, "Turkuaz", "queued", 2, 0, 1)] if forwarded else []
     assert _mail(env, "from_conv = ?", (b,)) == expected
+
+
+# Codex nightaudit, 28 Sep 2026: an empty post-tool reply fell back to the
+# whole final text, narration included.
+@pytest.mark.parametrize("tool_called,forwarded", [(True, []), (False, [("/cost: 3$",)])],
+                         ids=["ended-on-a-tool-call", "tool-free-slash-command"])
+def test_a_detached_claude_turn_with_no_reply_text(env, auto, runner, monkeypatch,
+                                                   tool_called, forwarded):
+    from providers import claude_sdk_session
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _asked(env, a, b)
+    runner.scripts[b] = _hanging
+    _start_and_drop_stream(env, b)
+
+    final = _NARRATION if tool_called else "/cost: 3$"
+    monkeypatch.setitem(claude_sdk_session._SESSIONS, b,
+                        _FakeClaudeSession("", tool_called=tool_called))
+    claude_sdk_session._DB_SAVE_CB(b, final, "claude-opus-5")
+    assert _rows(env.db, "SELECT body FROM mailbox WHERE from_conv = ?", (b,)) == forwarded
+    # Settled either way: a later save of the same chat forwards nothing more.
+    monkeypatch.setitem(claude_sdk_session._SESSIONS, b, _FakeClaudeSession("Turkuaz"))
+    claude_sdk_session._DB_SAVE_CB(b, "Turkuaz", "claude-opus-5")
+    assert _rows(env.db, "SELECT body FROM mailbox WHERE from_conv = ?", (b,)) == forwarded
 
 
 def test_a_detached_non_claude_turn_owes_nothing_later(env, auto, runner, monkeypatch):

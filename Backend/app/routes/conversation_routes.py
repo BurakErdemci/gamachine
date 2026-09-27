@@ -215,8 +215,10 @@ class _TurnReply:
     """The turn's last assistant message: the text after its last tool call.
 
     A reply forwarded to another chat carries this, not the interim narration
-    (`response` holds every text block of the turn, run together). A provider
-    that streams no `text` falls back to its last non-empty `response`.
+    (`response` holds every text block of the turn, run together). A turn with
+    no tool call that streams no `text` falls back to its last non-empty
+    `response`; a turn that called a tool never does, so a turn ending right
+    after a tool call forwards nothing.
     """
 
     _RESETS = ("tool_call", "tool_result", "command_approval_needed")
@@ -224,18 +226,25 @@ class _TurnReply:
     def __init__(self):
         self._streamed = ""
         self._response = ""
+        self._after_tool = False
 
     def add(self, event) -> None:
         if event.type == "text":
             self._streamed += (event.data or {}).get("content") or ""
         elif event.type in self._RESETS:
             self._streamed = ""
+            self._after_tool = True
         elif event.type == "response":
             content = (event.data or {}).get("content") or ""
             if content.strip():
                 self._response = content
 
     def value(self) -> str:
+        if self._after_tool:
+            # Codex nightaudit, 28 Sep 2026: after a tool call `response`
+            # still holds the pre-tool narration ("I will inspect the
+            # file."), which was forwarded as the answer.
+            return self._streamed.strip()
         return self._streamed.strip() or self._response.strip()
 
 
@@ -793,7 +802,11 @@ def create_conversation_router(db, progress_store):
         if not _drop_owed_reply(conv_id, entry):
             return None
         body = (text or "").strip()
-        if not ended_normally or entry["stopped"] or not body:
+        if not ended_normally or entry["stopped"]:
+            return None
+        if not body:
+            logger.info("[mailbox] conv=%s reply not forwarded: no final message "
+                        "(nothing after the last tool call)", conv_id)
             return None
         if approval_mode.needs_card({"kind": "mail"}).card:
             # Step mode: a send would need a card with no turn to own it; the
@@ -835,7 +848,12 @@ def create_conversation_router(db, progress_store):
             from providers.claude_sdk_session import _SESSIONS as _claude_sessions
             sess = _claude_sessions.get(cid)
             stopped = bool(getattr(sess, "_cancel_requested", False))
-            last = getattr(sess, "last_reply_text", "") or text
+            last = getattr(sess, "last_reply_text", "")
+            # Codex nightaudit, 28 Sep 2026: after a tool call `text` still
+            # holds the pre-tool narration; only a tool-free turn (a slash
+            # command's result text) may fall back to it.
+            if not getattr(sess, "turn_had_tool_call", False):
+                last = last or text
             _settle_owed_reply(cid, entry, last, not stopped)
         except Exception:
             logger.exception("[mailbox] conv=%s detached reply not forwarded", cid)
