@@ -324,6 +324,102 @@ def is_read_only(tool_name: str, params: Mapping[str, Any] | None = None) -> boo
     return classify(tool_name, params) == READ
 
 
+def _known_actions(entry: Mapping[str, Any]) -> set[str]:
+    return (set(_action_list(entry, "read_actions")) | set(_action_list(entry, "write_actions"))
+            | {rule.get("action") for rule in entry.get("param_dependent", [])
+               if isinstance(rule, Mapping)})
+
+
+def is_critical(tool_name: str, params: Mapping[str, Any] | None = None, *, _depth: int = 0) -> bool:
+    """
+    Does this call need a card in the "balanced" approval mode?
+
+    Unlike ``classify``, a False here lets a WRITE run without a card, so every
+    doubt is critical: unknown tool or action, a malformed ``critical_actions``
+    field, several spellings of the action, and for ``batch_execute`` several
+    spellings of the command list or of a command's tool/params keys (matched
+    with the collision fold, as ``nested_tool_names`` does, because a literal
+    read here would fail open).
+    """
+    if params is None:
+        params = {}
+    if not isinstance(params, Mapping):
+        return True
+    entry = tool_entry(tool_name)
+    if entry is None:
+        return True
+    if entry.get("recursive_field"):
+        return _batch_is_critical(entry, params, _depth)
+    if classify(tool_name, params, _depth=_depth) == READ:
+        return False
+    action_param = entry.get("action_param")
+    actions: list[str] = []
+    if action_param:
+        spellings = _spellings(params, action_param)
+        if len(spellings) > 1:
+            return True
+        if not spellings:
+            candidates: list[Any] = [None]
+        elif spellings[0][0]:
+            candidates = [spellings[0][1]]
+        else:
+            candidates = [spellings[0][1], None]
+        known = _known_actions(entry)
+        for action in candidates:
+            if action is None:
+                action = entry.get("default_action")
+            if not isinstance(action, str) or action.lower() not in known:
+                return True
+            actions.append(action.lower())
+    marks = entry.get("critical_actions")
+    if marks is None:
+        return False
+    if marks == "*":
+        return True
+    if not isinstance(marks, (list, tuple)) or any(not isinstance(m, str) for m in marks):
+        return True
+    if not action_param:
+        # A per-action list on a tool without actions cannot be matched.
+        return True
+    dependent = {rule.get("action") for rule in entry.get("param_dependent", [])
+                 if isinstance(rule, Mapping)}
+    for action in actions:
+        if action in marks:
+            if action in dependent and _classify_action(entry, action, params) == READ:
+                continue
+            return True
+    return False
+
+
+def _batch_is_critical(entry: Mapping[str, Any], params: Mapping[str, Any], depth: int) -> bool:
+    if depth >= _MAX_DEPTH:
+        return True
+    commands_key = _key_folded(entry.get("recursive_field") or "")
+    tool_key = _key_folded(entry.get("recursive_tool_key", "tool"))
+    params_key = _key_folded(entry.get("recursive_params_key", "params"))
+    lists = [v for k, v in params.items() if isinstance(k, str) and _key_folded(k) == commands_key]
+    if len(lists) != 1:
+        return True
+    commands = lists[0]
+    if not isinstance(commands, (list, tuple)) or not commands:
+        return True
+    for command in commands:
+        if not isinstance(command, Mapping):
+            return True
+        names = [v for k, v in command.items() if isinstance(k, str) and _key_folded(k) == tool_key]
+        inner = [v for k, v in command.items() if isinstance(k, str) and _key_folded(k) == params_key]
+        if len(names) != 1 or not isinstance(names[0], str) or len(inner) > 1:
+            return True
+        inner_params = inner[0] if inner else {}
+        if inner_params is None:
+            inner_params = {}
+        if not isinstance(inner_params, Mapping):
+            return True
+        if is_critical(names[0], inner_params, _depth=depth + 1):
+            return True
+    return False
+
+
 def _self_check() -> list[str]:
     """
     Internal consistency of the ledger itself, independent of the live registry.
@@ -380,4 +476,25 @@ def _self_check() -> list[str]:
 
         if not entry.get("evidence"):
             problems.append(f"{name}: no evidence reference")
+
+        # critical_actions (balanced approval mode): a critical action must be
+        # a write, or it would mark something the gate never even asks about.
+        marks = entry.get("critical_actions")
+        if marks is not None:
+            dependent = {rule.get("action") for rule in entry.get("param_dependent", [])}
+            if entry.get("recursive_field"):
+                problems.append(f"{name}: critical_actions on a nested-call tool -- "
+                                "it is critical through its sub-calls")
+            elif marks == "*":
+                if not (writes or dependent or entry.get("tool_level") == WRITE):
+                    problems.append(f"{name}: critical_actions '*' on a tool with no write")
+            elif not isinstance(marks, (list, tuple)) or any(not isinstance(m, str) for m in marks):
+                problems.append(f"{name}: critical_actions must be '*' or a list of action names")
+            elif not entry.get("action_param"):
+                problems.append(f"{name}: critical_actions lists actions but the tool has none")
+            else:
+                for action in marks:
+                    if action not in writes and action not in dependent:
+                        problems.append(
+                            f"{name}: critical action '{action}' is not a write action")
     return problems

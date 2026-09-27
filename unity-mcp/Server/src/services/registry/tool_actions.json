@@ -10,6 +10,7 @@
   "_classification_rule": "'read' means the call leaves no persistent trace: no asset, no file on disk, no scene/component state, no Editor state a later call could observe. Anything else is 'write', including calls that only touch ephemeral Editor state -- the gate can relax those later, but it cannot un-write a file.",
   "_shared_wrapper_note": "Do not reclassify every tool as write because of the telemetry wrapper. register_all_tools (services/tools/__init__.py:63) wraps ALL 45 tools with log_execution and telemetry_tool, and the lazy TelemetryCollector creates the UnityMCP data directory and writes customer_uuid.txt on the first tool call -- even with telemetry disabled. Found and reproduced by an audit red team 2026-07-29 via manage_script_capabilities. It is deliberately NOT a classification finding: the wrapper runs identically on every call, so the first APPROVED call writes the same file, and moving reads to write buys nothing while emptying this ledger of its purpose. The classification rule above scopes to a tool's own semantics, not to infrastructure shared by all of them. The underlying defect -- an identity file created while telemetry is off -- is real, belongs to the vendored fork (untouched by us since the import commit), and is recorded as a backlog item, not fixed here.",
   "_preflight_refresh_note": "Eight tools call preflight(refresh_if_dirty=True), which -- when the Editor reports assets.external_changes_dirty -- runs refresh_unity(mode=if_dirty, scope=all, compile=request): asset import, script compilation and possibly a domain reload. That happens BEFORE the tool's own work, so it applies to the tool's read actions too. Found by an audit red team 2026-07-29 and reproduced. Every action on those eight tools is therefore classified write, marked with \"preflight_refresh\": true, even where the action's own semantics are a pure read. Do not 'correct' those rows back to read without first removing the refresh. The tools: find_gameobjects, manage_asset, manage_prefabs, manage_scene, manage_components, manage_gameobject, manage_texture, run_tests. Known cost, accepted by the user 2026-07-29: discovery calls such as manage_scene get_hierarchy now raise an approval card in step mode. The user's words were that the read must keep working correctly but must come with a card. A smarter future option, not built: the refresh only fires when the project is externally dirty, which is runtime state a static classifier cannot see -- a gate that could ask the server for that state could card only when the refresh would actually happen.",
+  "_critical_actions_note": "critical_actions marks the writes that raise an approval card in the 'balanced' approval mode (owner decision, Burak, 27 Sep 2026); every other write runs without one there. A list names actions, \"*\" means every write of the tool. Each listed action must be a write_actions or param_dependent action (checked by _self_check); a param_dependent action is critical only in its write form. batch_execute carries none: it is critical when any sub-call is. Fail-closed like the rest of the ledger: an unknown tool or action, or a malformed field, is critical. Picked for irreversible or project-wide effects: deletes/moves/renames, packages, builds and platform switches, project settings, scene load/close and closing a prefab stage (unsaved changes), code execution (execute_code, menu items, custom tools, game hooks) and GameObject delete (owner). Component remove stays routine: Unity undo covers it.",
   "tools": {
     "batch_execute": {
       "action_param": null,
@@ -44,6 +45,7 @@
         "clear_history"
       ],
       "param_dependent": [],
+      "critical_actions": "*",
       "evidence": "unity-mcp/Server/src/services/tools/execute_code.py:22",
       "note": "execute/replay compile and run arbitrary C# inside the Editor -- unbounded write. clear_history destroys a persisted record. The safety_checks parameter is NOT a gate: the model can set it false, and replay inherits the historical value without re-sending it."
     },
@@ -53,6 +55,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
+      "critical_actions": "*",
       "evidence": "unity-mcp/Server/src/services/tools/execute_custom_tool.py:14",
       "note": "Runs a user-defined, project-scoped tool. Behaviour is not knowable statically, so it can never be classified read."
     },
@@ -62,6 +65,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
+      "critical_actions": "*",
       "evidence": "unity-mcp/Server/src/services/tools/execute_menu_item.py:16",
       "note": "Calls EditorApplication.ExecuteMenuItem with any path. Only 'File/Quit' is blacklisted; Save, Build and Delete are all reachable."
     },
@@ -144,6 +148,11 @@
         "create_folder"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "delete",
+        "move",
+        "rename"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_asset.py:58",
       "note": "'import' is a write because it (re)imports into the AssetDatabase. search/get_info/get_components are semantically reads but are classified write because manage_asset.py:58 calls preflight(refresh_if_dirty=True); see _preflight_refresh_note."
     },
@@ -183,6 +192,15 @@
           "read_when": "falsy",
           "note": "Listing profiles or reading one is a read; activate=true calls SetActiveBuildProfile."
         }
+      ],
+      "critical_actions": [
+        "build",
+        "batch",
+        "cancel",
+        "platform",
+        "profiles",
+        "settings",
+        "scenes"
       ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_build.py:37",
       "note": "The worst case for an action-only gate: four actions flip between read and write on a SIBLING parameter, not on the action name. Any gate that stops at action granularity misclassifies all four."
@@ -253,6 +271,12 @@
         "redo"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "deploy_package",
+        "restore_package",
+        "remove_tag",
+        "remove_layer"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_editor.py:12",
       "note": "telemetry_* short-circuit in Python and never reach Unity, and were classified read for that reason. An audit red team disproved it on 2026-07-29: manage_editor.py:33 reaches is_telemetry_enabled(), which lazily constructs TelemetryCollector, which creates the per-user UnityMCP app-data directory and writes customer_uuid.txt on a fresh profile - even with telemetry disabled. That is a persistent file on disk, so the classification rule at the top of this ledger makes it a write. Carding a status query costs almost nothing; bending the rule for one convenient case costs the rule. sync_csproj writes .sln/.csproj to disk; deploy_package/restore_package copy a package folder and trigger a recompile. undo_action performs an editor undo of one recorded agent action and appends a line to Library/GamachineActions/actions.jsonl."
     },
@@ -285,6 +309,9 @@
         "look_at"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "delete"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_gameobject.py:41",
       "note": "look_at writes rotation and move_relative writes position -- both are mutations despite the passive-sounding names. Also calls preflight(refresh_if_dirty=True); already all-write, but the marker records that a future read action here would still be a write. See _preflight_refresh_note."
     },
@@ -336,6 +363,10 @@
         "skybox_set_sun"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "pipeline_set_quality",
+        "pipeline_set_settings"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_graphics.py:83",
       "note": "bake_cancel leaves partial lightmap data and bake_clear deletes baked lightmaps -- both writes despite reading like control verbs."
     },
@@ -397,6 +428,7 @@
         "remove_registry"
       ],
       "param_dependent": [],
+      "critical_actions": "*",
       "evidence": "unity-mcp/Server/src/services/tools/manage_packages.py:58",
       "note": "'status' only polls an async job."
     },
@@ -429,6 +461,10 @@
         "configure_rigidbody"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "set_settings",
+        "set_collision_matrix"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_physics.py:56",
       "note": "'validate' was first classified write out of caution, then measured directly: PhysicsValidationOps.cs (308 lines) contains no SetDirty, ApplyModifiedProperties, SerializedObject or assignment-based mutation -- it is a pure report. simulate_step IS a write: Physics.Simulate moves scene transforms."
     },
@@ -447,6 +483,9 @@
         "close_prefab_stage"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "close_prefab_stage"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_prefabs.py:102",
       "note": "close_prefab_stage takes save_before_close but is a write either way -- false discards in-stage edits. open/close change which object the rest of the toolchain operates on, so they are not neutral."
     },
@@ -542,6 +581,10 @@
         "move_to_scene"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "load",
+        "close_scene"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_scene.py:90",
       "note": "'load' is a write because it can replace or discard current scene contents. The get_* actions and scene_view_frame are semantically reads, and validate is a pure report unless auto_repair is set (ManageScene.cs:298) -- all of them are classified write anyway because manage_scene.py:90 calls preflight(refresh_if_dirty=True); see _preflight_refresh_note. That also retires the auto_repair param_dependent rule: the action is a write either way now. NOTE for anyone reading the old Backend exemption list: manage_scene has no 'get_info' action -- that entry never matched anything, confirmed against the live server on 2026-07-29."
     },
@@ -569,6 +612,9 @@
         "delete"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "delete"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_shader.py:24",
       "note": ""
     },
@@ -605,6 +651,9 @@
         "set_import_settings"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "delete"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_texture.py:391",
       "note": "No read action exists on this tool. Also calls preflight(refresh_if_dirty=True); already all-write, but the marker records that a future read action here would still be a write. See _preflight_refresh_note."
     },
@@ -645,6 +694,9 @@
         "modify_visual_element"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "delete"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_ui.py:56",
       "note": "render_ui is a write on two counts: File.WriteAllBytes of a PNG (ManageUI.cs:914, :1154) and assigning a RenderTexture to the PanelSettings asset (:1170). link_stylesheet edits the UXML file."
     },
@@ -746,6 +798,7 @@
       "read_actions": [],
       "write_actions": [],
       "param_dependent": [],
+      "critical_actions": "*",
       "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:461",
       "note": "Hardcodes action='delete' internally."
     },
@@ -769,6 +822,9 @@
         "delete"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "delete"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/manage_script.py:544",
       "note": "Tool-level annotation is destructiveHint=True with no readOnlyHint, so the read action is under-declared at tool level -- per-action gating is required to avoid carding every script read."
     },
@@ -897,6 +953,9 @@
         "call"
       ],
       "param_dependent": [],
+      "critical_actions": [
+        "call"
+      ],
       "evidence": "unity-mcp/Server/src/services/tools/game_hooks.py:13",
       "note": "Playtest group (P4 contract). list enumerates hooks the game opted into; get evaluates state hooks (static properties/fields or GameHooks.State getters) and serialises their values -- no asset, file or scene write. call invokes an action hook, which is arbitrary game code (level.restart, input.jump), so it is a write. Caveat accepted by the contract: a state getter is game code too, and a getter with side effects would run uncarded; the game owns its hooks."
     },

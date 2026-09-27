@@ -144,3 +144,21 @@ def is_unity_mcp_read_only(tool_name: str, params: Mapping[str, Any] | None = No
     except Exception as e:
         logger.warning(f"[unityMCP politika] '{bare}' sınıflandırılamadı: {e}")
         return False
+
+
+def unity_action_risk(bare_name: str, params: Mapping[str, Any] | None = None) -> str:
+    """"read", "routine" (a write the balanced mode runs without a card),
+    "critical", or "unknown" (a tool the ledger does not know). A missing
+    ledger, or one without `is_critical`, answers "critical": fail closed."""
+    module = _load()
+    if module is None or not hasattr(module, "is_critical"):
+        return "critical"
+    try:
+        if module.tool_entry(bare_name) is None:
+            return "unknown"
+        if module.is_read_only(bare_name, params or {}):
+            return "read"
+        return "critical" if module.is_critical(bare_name, params or {}) else "routine"
+    except Exception as e:
+        logger.warning(f"[unityMCP politika] '{bare_name}' risk sınıflandırılamadı: {e}")
+        return "critical"

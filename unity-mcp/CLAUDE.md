@@ -171,7 +171,7 @@ cd Server && uv run pytest tests/ -k "test_create_material" -v
 1. Add Python MCP tool in `Server/src/services/tools/manage_<domain>.py` using `@mcp_for_unity_tool`
 2. Add Python CLI commands in `Server/src/cli/commands/<domain>.py` using Click
 3. Add C# implementation in `MCPForUnity/Editor/Tools/Manage<Domain>.cs` with `[McpForUnityTool]`
-4. Classify every action as read or write in `Server/src/services/registry/tool_actions.json` (`tests/test_tool_actions_ledger.py` fails on an unclassified tool; an unknown tool or action counts as a write). The approval gate and the `.meta` rule both read this ledger
+4. Classify every action as read or write in `Server/src/services/registry/tool_actions.json` (`tests/test_tool_actions_ledger.py` fails on an unclassified tool; an unknown tool or action counts as a write). The approval gate and the `.meta` rule both read this ledger. List the irreversible or project-wide writes in `critical_actions` too: in the backend's balanced approval mode only those raise a card (an unknown tool or action counts as critical there)
 5. If a parameter whose name looks like a path (`target`, `path`, `file`, `destination` ...) actually names a GameObject, add it to `_OBJECT_KEYS` in `Server/src/services/protection_rules.py`; otherwise a scene object called `x.meta` is refused as a `.meta` file write
 6. Add Python tests in `Server/tests/test_manage_<domain>.py`
 7. Add Unity tests in `TestProjects/UnityMCPTests/Assets/Tests/`
