@@ -134,33 +134,13 @@ def claude_server_entry(conversation_id: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-# ── depth of the mail that woke a chat's current turn ────────────────────────
-_TURN_DEPTH: Dict[int, int] = {}
-
-
-def set_turn_depth(conv_id: int, depth: int) -> None:
-    if depth > 0:
-        _TURN_DEPTH[conv_id] = int(depth)
-    else:
-        _TURN_DEPTH.pop(conv_id, None)
-
-
+# ── depth of the mail that woke a chat's running turn ────────────────────────
 def turn_depth(conv_id: int) -> int:
-    return _TURN_DEPTH.get(conv_id, 0)
-
-
-def begin_turn_depth(conv_id: int, depth: int, turn_running: bool) -> None:
-    """Depth for a turn about to start. The value is per chat, not per turn,
-    so while an earlier turn of the chat still runs it may only rise: that
-    turn's sends read this same value, and a second window's user message
-    lowering it restarted the reply chain (Codex mailaudit, 27 Sep 2026)."""
-    if turn_running:
-        depth = max(depth, turn_depth(conv_id))
-    set_turn_depth(conv_id, depth)
-
-
-def clear_turn_depth(conv_id: int) -> None:
-    _TURN_DEPTH.pop(conv_id, None)
+    """Depth of the mail behind `conv_id`'s running turns (the highest), 0 if
+    none. Read from the turn registry, never stored per chat: nothing a later
+    request does can lower the depth of a turn already started."""
+    from agentic.approval_policy import running_mail_depth
+    return running_mail_depth(conv_id)
 
 
 # ── the router's service, for the in-process API loop ────────────────────────

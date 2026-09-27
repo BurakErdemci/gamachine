@@ -640,10 +640,6 @@ def create_conversation_router(db, progress_store):
             return None
         return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
-    def _begin_turn_depth(conv_id: int, depth: int) -> None:
-        from agentic.approval_policy import conversation_turn_in_flight
-        mailbox.begin_turn_depth(conv_id, depth, conversation_turn_in_flight(conv_id))
-
     def _deny_mail_card(gate_id: str, error: str) -> None:
         if gate_id in _mcp_pending:
             _mcp_results[gate_id] = {"status": "resolved", "approved": False, "error": error}
@@ -1027,7 +1023,6 @@ def create_conversation_router(db, progress_store):
         # A note card is owned by its sender; one addressed to this chat is
         # another chat's card and is denied here, since its target is gone.
         _deny_mail_cards_of(conv_id)
-        mailbox.clear_turn_depth(conv_id)
         for gate_id in [g for g in (*_APPROVAL_GATES, *_QUESTION_GATES)
                         if _GATE_OWNERS.get(g) == conv_id]:
             _release_gate(gate_id, wake=True)
@@ -1550,6 +1545,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         # from the DB: the client's text is never what gets delivered.
         turn_message = request.message
         mail_note = ""
+        mail_depth = 0
 
         if ticketed_wake:
             # Consecutive-wake safety valve: a wake starts a turn, a turn can
@@ -1588,8 +1584,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             if mail_rows:
                 mail_note = mailbox.stored_text(mail_rows)
                 turn_message = mailbox.turn_text(mail_rows, wake_notices)
-                _begin_turn_depth(request.conversation_id,
-                                  max(int(r.get("depth") or 0) for r in mail_rows))
+                mail_depth = max(int(r.get("depth") or 0) for r in mail_rows)
             else:
                 # Role `system`: the user did not write this sentence. Writing
                 # `user` would both draw a bubble attributed to them in the UI
@@ -1603,7 +1598,6 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             # DB and are re-armed once this turn is over.
             wake_queue.drain(request.conversation_id)
             wake_queue.reset_chain(request.conversation_id)
-            _begin_turn_depth(request.conversation_id, 0)
             db.add_message(request.conversation_id, "user", request.message)
 
         # Eğer varsa kod düzenleyicisinden gelen kodu ekle
@@ -1645,6 +1639,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             effort_level=request.effort_level,
             ultracode=request.ultracode,
             resume_id=_resume_id,
+            mail_depth=mail_depth,
         )
 
         async def event_generator():
@@ -2347,7 +2342,6 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         _check_chat_rate_limit(user_id)
 
         # 1. Save user message
-        _begin_turn_depth(request.conversation_id, 0)
         db.add_message(request.conversation_id, "user", request.message)
         
         # 2. Setup context & provider

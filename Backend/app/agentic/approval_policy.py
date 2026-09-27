@@ -81,9 +81,13 @@ def should_auto_approve(token: str | None, workspace_path: str) -> bool:
 
 _AMBIENT_AUTO = 0
 _AMBIENT_TOPLAM = 0
-# conversation_id -> turns of that chat running now. Lets /mcp-approval-request
-# accept a card's claimed owner only while that chat has a turn in flight.
-_TURNS_BY_CONVERSATION: dict[int, int] = {}
+# conversation_id -> the mail depth of each turn of that chat running now, one
+# entry per turn. Lets /mcp-approval-request accept a card's claimed owner only
+# while that chat has a turn in flight, and gives a mail send the depth of the
+# turn it comes from. The depth lives with the running turn, not with the chat:
+# a per-chat value was reset by a user request arriving between a mail turn's
+# route and its stream start (Codex mailverify, 27 Sep 2026).
+_TURNS_BY_CONVERSATION: dict[int, list[int]] = {}
 
 
 class ambient_turn:
@@ -97,11 +101,12 @@ class ambient_turn:
     """
 
     def __init__(self, workspace_path: str, generation_mode: str,
-                 conversation_id: int | None = None) -> None:
+                 conversation_id: int | None = None, mail_depth: int = 0) -> None:
         self._auto = generation_mode == "auto"
         self._conversation = (
             conversation_id if type(conversation_id) is int and conversation_id > 0 else None
         )
+        self._mail_depth = max(0, int(mail_depth or 0))
 
     def __enter__(self) -> "ambient_turn":
         global _AMBIENT_AUTO, _AMBIENT_TOPLAM
@@ -110,9 +115,8 @@ class ambient_turn:
             if self._auto:
                 _AMBIENT_AUTO += 1
             if self._conversation is not None:
-                _TURNS_BY_CONVERSATION[self._conversation] = (
-                    _TURNS_BY_CONVERSATION.get(self._conversation, 0) + 1
-                )
+                _TURNS_BY_CONVERSATION.setdefault(self._conversation, []).append(
+                    self._mail_depth)
         return self
 
     def __exit__(self, *_exc) -> None:
@@ -122,10 +126,10 @@ class ambient_turn:
             if self._auto:
                 _AMBIENT_AUTO = max(0, _AMBIENT_AUTO - 1)
             if self._conversation is not None:
-                left = _TURNS_BY_CONVERSATION.get(self._conversation, 0) - 1
-                if left > 0:
-                    _TURNS_BY_CONVERSATION[self._conversation] = left
-                else:
+                depths = _TURNS_BY_CONVERSATION.get(self._conversation, [])
+                if self._mail_depth in depths:
+                    depths.remove(self._mail_depth)
+                if not depths:
                     _TURNS_BY_CONVERSATION.pop(self._conversation, None)
         return None
 
@@ -133,13 +137,24 @@ class ambient_turn:
 def conversation_turn_in_flight(conversation_id: int) -> bool:
     """Is a turn of this conversation running in AgentRunner.run right now?"""
     with _LOCK:
-        return _TURNS_BY_CONVERSATION.get(conversation_id, 0) > 0
+        return bool(_TURNS_BY_CONVERSATION.get(conversation_id))
 
 
 def conversations_with_turn_in_flight() -> set[int]:
     """Snapshot of every conversation with a turn in AgentRunner.run now."""
     with _LOCK:
-        return {cid for cid, n in _TURNS_BY_CONVERSATION.items() if n > 0}
+        return {cid for cid, depths in _TURNS_BY_CONVERSATION.items() if depths}
+
+
+def running_mail_depth(conversation_id: int) -> int:
+    """Highest mail depth among this conversation's running turns, 0 if none.
+
+    The highest, because a send cannot tell which of two parallel turns of a
+    chat it comes from; a user turn beside a depth-2 mail turn therefore
+    cannot send either until the mail turn ends.
+    """
+    with _LOCK:
+        return max(_TURNS_BY_CONVERSATION.get(conversation_id) or [0])
 
 
 def ambient_auto_approve() -> bool:

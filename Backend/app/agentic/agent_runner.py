@@ -889,10 +889,15 @@ class AgentRunner:
         videos: Optional[List[dict]] = None,
         resume_id: Optional[str] = None,
         read_only: bool = False,
+        mail_depth: int = 0,
     ):
         # Side chat: no write of any kind on any path, whatever the approval
         # mode. The route derives it from the DB (`side_of`), never the client.
         self.read_only = bool(read_only)
+        # Depth of the mail this turn runs on (0 for any other turn), fixed by
+        # the route from the claimed DB rows and registered with the turn in
+        # `run`, so a mail send reads the depth of the turn it comes from.
+        self.mail_depth = mail_depth
         # CLI'ın kendi diskindeki oturumu geri çağıran kimlik. Route yükleyip
         # veriyor (DB orada); burada yalnız taşınıyor. None ise davranış eski:
         # DB transcript'i enjekte edilir.
@@ -1246,7 +1251,8 @@ class AgentRunner:
         from agentic.approval_policy import ambient_turn
         with ambient_turn(self.workspace_path or ".",
                           getattr(self, "generation_mode", "auto"),
-                          getattr(self, "conversation_id", None)):
+                          getattr(self, "conversation_id", None),
+                          getattr(self, "mail_depth", 0)):
             async for _event in self._run_inner(user_message):
                 yield _event
 

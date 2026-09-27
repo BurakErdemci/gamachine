@@ -16,7 +16,7 @@ from contextlib import closing
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import agentic.agent_runner as ar
@@ -26,6 +26,7 @@ from agentic.approval_policy import ambient_turn
 from agentic.command_gates import GATE_OWNERS
 from database import DatabaseManager
 from rag.memory_manager import memory_manager
+from schemas import ChatRequest
 
 H = {"X-Session-Token": ""}
 
@@ -45,7 +46,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     wake_queue.reset_all()
     approval_policy._TURNS_BY_CONVERSATION.clear()
-    mailbox._TURN_DEPTH.clear()
     db = DatabaseManager(str(tmp_path / "mail.db"))
     db.save_ai_config(1, "subscription", "gpt-5.4", "")
 
@@ -64,7 +64,6 @@ def env(tmp_path, monkeypatch):
         yield types.SimpleNamespace(db=db, client=client, router=router)
     wake_queue.reset_all()
     approval_policy._TURNS_BY_CONVERSATION.clear()
-    mailbox._TURN_DEPTH.clear()
 
 
 def _chat(db, title, user_id=1):
@@ -76,10 +75,11 @@ def _rows(db, sql, args=()):
         return conn.execute(sql, args).fetchall()
 
 
-def _send(client, a, b, body="merhaba", in_flight=True):
+def _send(client, a, b, body="merhaba", in_flight=True, depth=0):
+    """Send from a turn of `a` woken by mail of `depth` (0: not woken by mail)."""
     payload = {"conversation_id": a, "to": b, "body": body}
     if in_flight:
-        with ambient_turn(".", "step", a):
+        with ambient_turn(".", "step", a, depth):
             return client.post("/mailbox/send", json=payload, headers=H)
     return client.post("/mailbox/send", json=payload, headers=H)
 
@@ -253,11 +253,9 @@ def test_auto_mode_queues_at_once_without_a_card(env, auto):
 
 def test_a_reply_to_a_reply_is_depth_2_and_a_third_hop_is_refused(env, auto):
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
-    mailbox.set_turn_depth(a, 1)
-    assert _send(env.client, a, b).status_code == 200
+    assert _send(env.client, a, b, depth=1).status_code == 200
     assert _rows(env.db, "SELECT depth FROM mailbox") == [(2,)]
-    mailbox.set_turn_depth(a, 2)
-    assert _send(env.client, a, b).status_code == 409
+    assert _send(env.client, a, b, depth=2).status_code == 409
     assert len(_rows(env.db, "SELECT * FROM mailbox")) == 1
 
 
@@ -270,23 +268,74 @@ def test_pair_rate_limit(env, auto):
     assert _send(env.client, a, c).status_code == 200
 
 
-def test_begin_turn_depth_only_rises_while_a_turn_runs():
-    mailbox._TURN_DEPTH.clear()
+def test_turn_depth_is_the_highest_among_the_chats_running_turns():
+    approval_policy._TURNS_BY_CONVERSATION.clear()
     try:
-        mailbox.set_turn_depth(7, 2)
-        mailbox.begin_turn_depth(7, 0, turn_running=True)
-        assert mailbox.turn_depth(7) == 2
-        mailbox.begin_turn_depth(7, 1, turn_running=True)
-        assert mailbox.turn_depth(7) == 2
-        mailbox.set_turn_depth(8, 1)
-        mailbox.begin_turn_depth(8, 2, turn_running=True)
-        assert mailbox.turn_depth(8) == 2
-        mailbox.begin_turn_depth(7, 0, turn_running=False)
         assert mailbox.turn_depth(7) == 0
-        mailbox.begin_turn_depth(8, 1, turn_running=False)
-        assert mailbox.turn_depth(8) == 1
+        with ambient_turn(".", "auto", 7, 2):
+            assert mailbox.turn_depth(7) == 2
+            with ambient_turn(".", "auto", 7, 0):
+                assert mailbox.turn_depth(7) == 2
+                with ambient_turn(".", "auto", 8, 1):
+                    assert mailbox.turn_depth(8) == 1
+                    assert mailbox.turn_depth(7) == 2
+                assert mailbox.turn_depth(8) == 0
+            assert mailbox.turn_depth(7) == 2
+        assert mailbox.turn_depth(7) == 0
+        # The depth-2 turn ending first leaves the parallel user turn at 0.
+        mail_turn, user_turn = ambient_turn(".", "auto", 7, 2), ambient_turn(".", "auto", 7, 0)
+        mail_turn.__enter__()
+        user_turn.__enter__()
+        mail_turn.__exit__(None, None, None)
+        assert mailbox.turn_depth(7) == 0
+        assert approval_policy.conversation_turn_in_flight(7)
+        user_turn.__exit__(None, None, None)
+        assert not approval_policy.conversation_turn_in_flight(7)
     finally:
-        mailbox._TURN_DEPTH.clear()
+        approval_policy._TURNS_BY_CONVERSATION.clear()
+
+
+def test_a_turn_that_raises_leaves_the_registry_with_its_depth():
+    approval_policy._TURNS_BY_CONVERSATION.clear()
+    try:
+        with pytest.raises(RuntimeError):
+            with ambient_turn(".", "auto", 7, 2):
+                raise RuntimeError("provider died")
+        assert mailbox.turn_depth(7) == 0
+        assert not approval_policy.conversation_turn_in_flight(7)
+        assert approval_policy._TURNS_BY_CONVERSATION == {}
+    finally:
+        approval_policy._TURNS_BY_CONVERSATION.clear()
+
+
+def test_the_runner_registers_its_mail_depth_until_its_stream_closes(monkeypatch):
+    seen = []
+
+    async def inner(self, _message):
+        seen.append(mailbox.turn_depth(7))
+        yield ar.AgentEvent("response", {"content": "x"})
+        raise AssertionError("not reached: the consumer closes the stream first")
+
+    monkeypatch.setattr(ar.AgentRunner, "_run_inner", inner)
+    runner = ar.AgentRunner(provider_type="subscription", api_key="", model_name="gpt-x",
+                            workspace_path=".", conversation_id=7, mail_depth=2)
+
+    async def run():
+        stream = runner.run("note")
+        await stream.__anext__()
+        in_turn = mailbox.turn_depth(7)
+        # A consumer that stops reading (Stop, closed window) closes the stream.
+        await stream.aclose()
+        return in_turn
+
+    approval_policy._TURNS_BY_CONVERSATION.clear()
+    try:
+        assert asyncio.run(run()) == 2
+        assert seen == [2]
+        assert mailbox.turn_depth(7) == 0
+        assert not approval_policy.conversation_turn_in_flight(7)
+    finally:
+        approval_policy._TURNS_BY_CONVERSATION.clear()
 
 
 # ── delivery ─────────────────────────────────────────────────────────────────
@@ -332,7 +381,7 @@ def test_delivery_builds_the_turn_from_db_rows_and_ignores_the_request_text(env,
     assert _rows(env.db, "SELECT status FROM mailbox") == [("delivered",)]
     assert _rows(env.db, "SELECT delivered_at IS NOT NULL FROM mailbox") == [(1,)]
     # The turn a note woke carries its depth: a reply from B is depth 2.
-    assert mailbox.turn_depth(b) == 1
+    assert _FakeRunner.last_kw["mail_depth"] == 1
 
 
 def test_delivered_rows_are_not_delivered_again(env, auto, monkeypatch):
@@ -452,12 +501,10 @@ def test_a_wake_whose_claim_fails_starts_no_turn_and_keeps_the_note(env, auto, m
 def _wake_b_at_depth_2(env):
     """B's turn is woken by a reply to a reply, so B may not send again."""
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
-    mailbox.set_turn_depth(a, 1)
-    assert _send(env.client, a, b, body="cevabın cevabı").status_code == 200
-    mailbox.set_turn_depth(a, 0)
+    assert _send(env.client, a, b, body="cevabın cevabı", depth=1).status_code == 200
     wake_queue.issue_ticket(b, wake_queue.drain(b))
     assert _wake_turn(env.client, b).status_code == 200
-    assert mailbox.turn_depth(b) == 2
+    assert _FakeRunner.last_kw["mail_depth"] == 2
     return a, b
 
 
@@ -471,7 +518,7 @@ def test_a_user_message_does_not_lower_the_depth_of_a_running_mail_turn(env, aut
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
     a, b = _wake_b_at_depth_2(env)
     # The stub runner returned at once; the real mail turn is still running.
-    with ambient_turn(".", "auto", b):
+    with ambient_turn(".", "auto", b, 2):
         assert _send(env.client, b, a).status_code == 409
         assert _user_turn(env.client, path, b).status_code == 200
         assert _send(env.client, b, a).status_code == 409
@@ -483,9 +530,49 @@ def test_a_user_message_with_no_turn_running_resets_the_depth(env, auto, monkeyp
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
     a, b = _wake_b_at_depth_2(env)
     assert _user_turn(env.client, path, b).status_code == 200
+    assert _FakeRunner.last_kw.get("mail_depth", 0) == 0
     assert mailbox.turn_depth(b) == 0
     assert _send(env.client, b, a).status_code == 200
     assert _rows(env.db, "SELECT depth FROM mailbox WHERE from_conv = ?", (b,)) == [(1,)]
+
+
+def test_a_user_request_before_a_mail_turn_starts_does_not_lower_its_depth(env, auto, monkeypatch):
+    """The mail route returns before its stream starts; a second window's
+    message in that gap used to reset the chat's depth to 0 (Codex mailverify,
+    27 Sep 2026). The real runner registers the turn, only the provider is
+    stubbed."""
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    env.db.add_mail(a, b, "cevabın cevabı", mailbox.STATUS_QUEUED, None, 2)
+    wake_queue.issue_ticket(b, [mailbox.notice(a)])
+    replies = []
+    send = _route(env.router, "/mailbox/send").endpoint
+
+    async def inner(self, message):
+        if "cevabın cevabı" in message:
+            try:
+                await send(body={"conversation_id": b, "to": a, "body": "üçüncü adım"},
+                           x_session_token="")
+                replies.append(200)
+            except HTTPException as exc:
+                replies.append(exc.status_code)
+        yield ar.AgentEvent("done", {"iterations": 1, "stop_reason": "complete"})
+
+    monkeypatch.setattr(ar.AgentRunner, "_run_inner", inner)
+    chat_stream = _route(env.router, "/chat-stream").endpoint
+
+    async def run():
+        mail_turn = await chat_stream(
+            ChatRequest(conversation_id=b, message="x", user_id=1, origin="wake"), "")
+        user_turn = await chat_stream(
+            ChatRequest(conversation_id=b, message="başka pencereden", user_id=1), "")
+        async for _ in user_turn.body_iterator:
+            pass
+        async for _ in mail_turn.body_iterator:
+            pass
+
+    asyncio.run(run())
+    assert replies == [409]
+    assert _rows(env.db, "SELECT COUNT(*) FROM mailbox WHERE from_conv = ?", (b,)) == [(0,)]
 
 
 def test_handoff_context_keeps_mail_rows_but_not_wake_rows():
