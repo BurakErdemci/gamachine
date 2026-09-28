@@ -133,6 +133,13 @@ const EMPTY_RUNTIME: ConvRuntime = {
 const NO_CONV = 0;
 const keyOf = (id: number | null | undefined) => id ?? NO_CONV;
 
+// Ids for messages drawn before the server stores them. `Date.now()` alone
+// repeats within a millisecond: two turns started in one shared the assistant
+// id and the new turn's text landed in the old bubble too (Codex queueaudit,
+// 28 Sep 2026). Server ids are small row numbers, so these never meet them.
+let lastClientMsgId = 0;
+const nextClientMsgId = () => (lastClientMsgId = Math.max(Date.now(), lastClientMsgId + 1));
+
 const hasClientState = (r: ConvRuntime) =>
   r.loading || !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0
   || r.unsynced || r.clientOnly;
@@ -357,9 +364,10 @@ export const useChat = (
   // One controller per conversation: Stop in one chat must abort that chat's
   // stream only.
   const controllersRef = useRef<Map<number, AbortController>>(new Map());
-  // The turn currently owning each conversation (its assistant message id). A
-  // stopped or superseded stream loop checks it and stops writing, so a late
-  // chunk of an old turn cannot touch the next turn's cards or loading flag.
+  // The turn currently owning each conversation (a per-turn token from
+  // `eventSeqRef`). A stopped or superseded stream loop checks it and stops
+  // writing, so a late chunk of an old turn cannot touch the next turn's cards
+  // or loading flag.
   const turnRef = useRef<Map<number, number>>(new Map());
   const eventSeqRef = useRef(0);
   // AUTO-WAKE: arguments needed to start a turn that this hook does NOT own
@@ -829,7 +837,7 @@ export const useChat = (
     let errored = false;
 
     const userMsg: Message = { 
-      id: Date.now(), 
+      id: nextClientMsgId(),
       role: origin === 'wake' ? 'system' : 'user', 
       content: messageContent, 
       smells: [], 
@@ -854,12 +862,16 @@ export const useChat = (
     if (_trimmed === '/usage' && (_isClaude || _isCodex)) slashCard = 'usage';
     else if (_trimmed === '/context' && _isClaude) slashCard = 'context';
 
-    const aiMsgId = Date.now() + 1;
+    const aiMsgId = nextClientMsgId();
     let currentAiMsg: Message = { id: aiMsgId, role: 'assistant', content: '', smells: [], timestamp: new Date().toISOString(), thinking: null, tool_calls: [], slashCommand: slashCard };
     updateMessages(prev => [...prev, currentAiMsg]);
     if (slashCard) lossy = true;
-    turnRef.current.set(targetConvId, aiMsgId);
-    const ownsTurn = () => turnRef.current.get(targetConvId) === aiMsgId;
+    // Not `aiMsgId`: two turns started in one millisecond share it, and the
+    // stopped turn's cleanup then cleared the replacement's controller and
+    // loading flag (Codex queueaudit, 28 Sep 2026).
+    const turnToken = ++eventSeqRef.current;
+    turnRef.current.set(targetConvId, turnToken);
+    const ownsTurn = () => turnRef.current.get(targetConvId) === turnToken;
     const controller = new AbortController();
     controllersRef.current.set(targetConvId, controller);
 
@@ -1170,7 +1182,7 @@ export const useChat = (
       // a later failure is not the user's to see, and must not block the refetch.
       if (err?.name !== 'AbortError' && ownsTurn() && !finishedCleanly) {
         lossy = true;
-        updateMessages(prev => [...prev, { id: Date.now() + 2, role: 'assistant', content: cevir('chat.errorOccurred'), smells: [], timestamp: new Date().toISOString() }]);
+        updateMessages(prev => [...prev, { id: nextClientMsgId(), role: 'assistant', content: cevir('chat.errorOccurred'), smells: [], timestamp: new Date().toISOString() }]);
       }
     } finally {
       // A stopped or deleted turn was already cleaned up by whoever ended it.
@@ -1342,7 +1354,7 @@ export const useChat = (
         if (!silent) {
           showToast(cevir('memory.learned', { sayi: res.data.file_count }), 'success');
           const convId = targetConvId;
-          patchConv(convId, r => ({ messages: [...r.messages, { id: Date.now(), role: 'assistant', content: `${cevir('memory.analysisReport')}\n\n${res.data.summary}`, timestamp: new Date().toISOString(), smells: [] }] }));
+          patchConv(convId, r => ({ messages: [...r.messages, { id: nextClientMsgId(), role: 'assistant', content: `${cevir('memory.analysisReport')}\n\n${res.data.summary}`, timestamp: new Date().toISOString(), smells: [] }] }));
         }
       }
     } catch (err: any) { if (!silent) showToast(cevir('memory.analysisError'), 'error'); }
@@ -1369,7 +1381,7 @@ export const useChat = (
       if (res?.content) {
         await axios.post(`${API}/conversations/${activeConvId}/import-memory`, { content: res.content }, { headers: { 'X-Session-Token': user.sessionToken } });
         showToast(cevir('memory.imported'), 'success');
-        patchConv(activeConvId, r => ({ messages: [...r.messages, { id: Date.now(), role: 'assistant', content: cevir('memory.importedHeading'), timestamp: new Date().toISOString(), smells: [] }] }));
+        patchConv(activeConvId, r => ({ messages: [...r.messages, { id: nextClientMsgId(), role: 'assistant', content: cevir('memory.importedHeading'), timestamp: new Date().toISOString(), smells: [] }] }));
       }
     } catch { showToast(cevir('memory.importError'), 'error'); }
   }, [API, activeConvId, patchConv, showToast, user]);
@@ -1462,14 +1474,27 @@ export const useChat = (
   // "Send now": the message moves to the head, the running turn is stopped
   // through the ordinary Stop, and the message goes out once the backend has
   // cancelled that turn.
+  const sendingNowRef = useRef<Set<number>>(new Set());
   const sendQueuedNow = useCallback(async (itemId: number) => {
     const key = keyOf(activeConvIdRef.current);
     const item = rt(key).queue.find(q => q.id === itemId);
-    if (!item) return false;
-    patchConv(key, r => ({ queue: [item, ...r.queue.filter(q => q.id !== itemId)] }));
-    if (rt(key).loading) await stopMessage();
-    patchConv(key, () => ({ queuePaused: false }));
-    return drainQueue(key);
+    if (!item || sendingNowRef.current.has(itemId)) return false;
+    sendingNowRef.current.add(itemId);
+    try {
+      patchConv(key, r => ({ queue: [item, ...r.queue.filter(q => q.id !== itemId)] }));
+      if (rt(key).loading) await stopMessage();
+      // The user may have deleted or edited this message while Stop was
+      // pending; draining then sent a different one they never asked for, so
+      // the queue stays as Stop left it (Codex queueaudit, 28 Sep 2026).
+      const still = rt(key).queue.find(q => q.id === itemId);
+      if (!still) return false;
+      patchConv(key, r => ({
+        queue: [still, ...r.queue.filter(q => q.id !== itemId)], queuePaused: false,
+      }));
+      return drainQueue(key);
+    } finally {
+      sendingNowRef.current.delete(itemId);
+    }
   }, [drainQueue, patchConv, rt, stopMessage]);
 
   // The chat holding a gate; the screen's chat when none does (a card set

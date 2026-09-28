@@ -338,6 +338,154 @@ describe('message queue · edit, delete, send now', () => {
     await finish(1)
     expect(userTurns()).toEqual(['first', 'third', 'second'])
   })
+
+  /** Holds every `/chat-stop` answer until the returned release is called. */
+  const holdStops = () => {
+    const original = fetchMock.getMockImplementation()!
+    const releases: Array<(value: any) => void> = []
+    fetchMock.mockImplementation((url: string, init?: any) =>
+      String(url).includes('/chat-stop/')
+        ? (stops.push(Number(String(url).split('/').pop())),
+          new Promise(resolve => { releases.push(resolve) }))
+        : original(url, init))
+    return () => releases.splice(0).forEach(release => release({ ok: true }))
+  }
+
+  // Codex queueaudit, 28 Sep 2026: the next queued message went out unasked.
+  it('"send now" whose message is deleted while Stop is pending sends nothing', async () => {
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    send(result, 'remove me')
+    send(result, 'keep queued')
+    await flush()
+    const selected = result.current.queue[0]
+    const releaseStops = holdStops()
+
+    let sending: Promise<boolean>
+    act(() => { sending = result.current.sendQueuedNow(selected.id) })
+    act(() => { result.current.deleteQueued(selected.id) })
+    let sent: boolean | undefined
+    await act(async () => { releaseStops(); sent = await sending! })
+    await flush()
+
+    expect(sent).toBe(false)
+    expect(userTurns()).toEqual(['first'])
+    expect(result.current.queue.map((q: any) => q.draft)).toEqual(['keep queued'])
+    expect(result.current.queuePaused).toBe(true)
+  })
+
+  it('"send now" whose message is taken back for editing while Stop is pending sends nothing', async () => {
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    send(result, 'keep queued')
+    send(result, 'edit me')
+    await flush()
+    const selected = result.current.queue[1]
+    const releaseStops = holdStops()
+
+    let sending: Promise<boolean>
+    act(() => { sending = result.current.sendQueuedNow(selected.id) })
+    act(() => { result.current.editQueued(selected.id) })
+    await act(async () => { releaseStops(); await sending! })
+    await flush()
+
+    expect(userTurns()).toEqual(['first'])
+    expect(result.current.queue.map((q: any) => q.draft)).toEqual(['keep queued'])
+    expect(result.current.queuePaused).toBe(true)
+  })
+
+  it('a second "send now" click on the same message does not send it before Stop is answered', async () => {
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    send(result, 'second')
+    send(result, 'third')
+    await flush()
+    const third = result.current.queue[1]
+    const releaseStops = holdStops()
+
+    let first: Promise<boolean>
+    let second: Promise<boolean>
+    act(() => { first = result.current.sendQueuedNow(third.id) })
+    act(() => { second = result.current.sendQueuedNow(third.id) })
+    await flush()
+    expect(userTurns()).toEqual(['first'])
+
+    let sent: boolean[] = []
+    await act(async () => { releaseStops(); sent = await Promise.all([first!, second!]) })
+    await flush()
+
+    expect(sent).toEqual([true, false])
+    expect(stops).toEqual([1])
+    expect(userTurns()).toEqual(['first', 'third'])
+    expect(result.current.queue.map((q: any) => q.draft)).toEqual(['second'])
+  })
+})
+
+describe('message queue · turn ownership', () => {
+  // Codex queueaudit, 28 Sep 2026: the ownership token was the assistant
+  // message id (`Date.now() + 1`), so the stopped turn's cleanup cleared the
+  // replacement turn started in the same millisecond.
+  it('a stopped turn cannot clear a replacement turn created in the same millisecond', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(123456)
+    try {
+      const { result } = hook()
+      await open(result, 1)
+      send(result, 'first')
+      await flush()
+      send(result, 'queued')
+      await flush()
+
+      act(() => {
+        void result.current.stopMessage()
+        result.current.resumeQueue()
+      })
+      expect(userTurns()).toEqual(['first', 'queued'])
+      await flush()
+      expect(result.current.loading).toBe(true)
+
+      await finish(1)
+      expect(result.current.loading).toBe(false)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  // Codex queueaudit, 28 Sep 2026: both turns got id `Date.now() + 1`, so the
+  // replacement's text was written into the stopped turn's bubble as well.
+  it('two turns started in one millisecond get distinct ids and keep their own text', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(654321)
+    try {
+      const { result } = hook()
+      await open(result, 1)
+      send(result, 'first')
+      await flush()
+      turns[0].stream.push({ type: 'text', content: 'old answer' })
+      await flush()
+      send(result, 'queued')
+      await flush()
+
+      act(() => {
+        void result.current.stopMessage()
+        result.current.resumeQueue()
+      })
+      await flush()
+      turns[1].stream.push({ type: 'text', content: 'new answer' })
+      await flush()
+
+      const ids = result.current.messages.map((m: any) => m.id)
+      expect(new Set(ids).size).toBe(ids.length)
+      expect(result.current.messages.filter((m: any) => m.role === 'assistant')
+        .map((m: any) => m.content)).toEqual(['old answer', 'new answer'])
+    } finally {
+      clock.mockRestore()
+    }
+  })
 })
 
 describe('message queue · wake turns and busy chats', () => {
