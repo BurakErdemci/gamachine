@@ -2112,6 +2112,17 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         return res.get("status") == "already_answered" and not (
             res.get("by") == "desktop" and res.get("decision") == decision)
 
+    def _won_elsewhere(gate_id: str) -> Optional[dict]:
+        """`already_answered` when another device closed this card. Needed
+        where the live gate dicts no longer know it: once the winner's waiter
+        releases its gate, a late desktop answer would read the phone's
+        decision as a missing or expired gate. A close by the desktop itself
+        or by the system (timeout, Stop) keeps the reply the renderer knows."""
+        card = _cards.get(gate_id)
+        if card is not None and not card.open and card.by not in ("desktop", _cards.SYSTEM):
+            return _cards.already_answered(card)
+        return None
+
     @router.get("/conversations/{conv_id}/turn-events")
     async def get_turn_events(conv_id: int, since: int = Query(0, ge=0),
                               x_session_token: str = Header(alias="X-Session-Token")):
@@ -2141,7 +2152,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             elif _answered_elsewhere(res, decision):
                 return res
             return {"status": "ok", "approved": approved}
-        return {"status": "gate_not_found"}
+        return _won_elsewhere(gate_id) or {"status": "gate_not_found"}
 
     @router.post("/question-answer/{gate_id}")
     async def question_answer(gate_id: str, body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
@@ -2162,7 +2173,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             elif _answered_elsewhere(res, "answer"):
                 return res
             return {"status": "ok"}
-        return {"status": "gate_not_found"}
+        return _won_elsewhere(gate_id) or {"status": "gate_not_found"}
 
     @router.post("/chat-stop/{conversation_id}")
     async def chat_stop(conversation_id: int, x_session_token: str = Header(alias="X-Session-Token", default="")):
@@ -2471,11 +2482,11 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         approved = body.get("approved") is True
         decision = "approve" if approved else "reject"
         _sweep_mcp_gates()
-        card = _cards.get(gate_id)
-        if card is not None and not card.open and card.by not in ("desktop", _cards.SYSTEM):
-            # Another device answered first; the checks below would call that
-            # expired and hide who decided.
-            return _cards.already_answered(card)
+        # Another device answered first; the checks below would call that
+        # expired and hide who decided.
+        won = _won_elsewhere(gate_id)
+        if won is not None:
+            return won
         # Süpürme bu gate'i çoktan REDDETMİŞ olabilir (200 sn: bekleyen kalmadı).
         # Kararı yine de yazmak o reddi eziyordu ve kullanıcıya "komut
         # başlatılıyor" deniyordu — oysa toplayacak istemci yok, hiçbir şey

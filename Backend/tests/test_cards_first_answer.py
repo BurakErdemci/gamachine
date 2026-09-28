@@ -183,6 +183,45 @@ def test_phone_first_then_desktop_gets_already_answered_for_every_kind(env):
     assert QUESTION_RESULTS["q-3"] == {"Hangisi?": "A"}
 
 
+def test_a_late_desktop_answer_after_release_still_learns_the_phone_won(env):
+    db, client, _ = env
+    a = db.create_conversation(1, "A")
+    register_gate("cmd-late", a)
+    register_gate("q-late", a, kind="question")
+    _mcp_card(client, "mcp-late", a)
+    cards.answer_card("cmd-late", "reject", device="iPhone")
+    cards.answer_card("q-late", "answer", {"S": "A"}, device="iPhone")
+    cards.answer_card("mcp-late", "reject", device="iPhone")
+    # The waiters woke and cleaned up; the MCP bridge collected its result.
+    release_gate("cmd-late")
+    release_gate("q-late")
+    assert client.get("/mcp-approval-result/mcp-late", headers=H).json()["approved"] is False
+
+    cmd = client.post("/command-approval/cmd-late", headers=H, json={"approved": True}).json()
+    q = client.post("/question-answer/q-late", headers=H,
+                    json={"answers": {"S": "B"}}).json()
+    mcp = client.post("/mcp-approval-respond/mcp-late", headers=H,
+                      json={"approved": True}).json()
+    assert (cmd["status"], cmd["by"], cmd["decision"]) == ("already_answered", "iPhone", "reject")
+    assert (q["status"], q["by"], q["decision"]) == ("already_answered", "iPhone", "answer")
+    assert (mcp["status"], mcp["by"], mcp["decision"]) == ("already_answered", "iPhone", "reject")
+    assert cmd["at"] and q["at"] and mcp["at"]
+
+
+def test_a_released_gate_closed_by_the_system_or_desktop_keeps_gate_not_found(env):
+    db, client, _ = env
+    a = db.create_conversation(1, "A")
+    register_gate("cmd-sys", a)
+    cancel_gate("cmd-sys")
+    release_gate("cmd-sys")
+    register_gate("cmd-own", a)
+    client.post("/command-approval/cmd-own", headers=H, json={"approved": True})
+    release_gate("cmd-own")
+    for gid in ("cmd-sys", "cmd-own"):
+        assert client.post(f"/command-approval/{gid}", headers=H,
+                           json={"approved": True}).json() == {"status": "gate_not_found"}
+
+
 def test_a_late_answer_learns_that_stop_closed_the_card(env):
     db, _, _ = env
     a = db.create_conversation(1, "A")
