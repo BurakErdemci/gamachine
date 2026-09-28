@@ -135,6 +135,58 @@ describe('remote-control · keep awake', () => {
     expect(blocker.live.size).toBe(0)
   })
 
+  // Answers held until released, keyed by route, to reorder them at will.
+  const deferred = () => {
+    const held: Array<{ url: string; resolve: (v: any) => void }> = []
+    const { rc, blocker, request } = setup(config => new Promise(resolve => held.push({ url: config.url, resolve })))
+    const release = (route: string, data: any, newest = false) => {
+      const match = held.map((h, i) => h.url.endsWith(route) ? i : -1).filter(i => i >= 0)
+      const i = newest ? match[match.length - 1] : match[0]
+      held.splice(i, 1)[0].resolve({ data })
+    }
+    return { rc, blocker, request, release }
+  }
+  const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+
+  it.each(['disable', 'forget'])('%s releases it at once, and an older poll cannot restart it', async action => {
+    const { rc, blocker, release } = deferred()
+    const on = rc.invoke('status'); await flush(); release('/remote/status', { keep_awake_active: true }); await on
+    const olderPoll = rc.poll(); await flush()
+    const change = rc.invoke(action); await flush()
+    expect(blocker.live.size, 'released before the backend answers').toBe(0)
+    release(`/remote/${action}`, { keep_awake_active: false }); await change
+    release('/remote/status', { keep_awake_active: true }); await olderPoll
+    expect(blocker.live.size).toBe(0)
+    expect(blocker.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('a poll answered while a state change is in flight, or before it settled, is ignored', async () => {
+    const { rc, blocker, release } = deferred()
+    const change = rc.invoke('set-keep-awake', false); await flush()
+    const during = rc.poll(); await flush()
+    release('/remote/status', { keep_awake_active: true }); await during
+    expect(blocker.live.size).toBe(0)
+    release('/remote/keep-awake', { keep_awake_active: false }); await change
+    const after = rc.poll(); await flush()
+    release('/remote/status', { keep_awake_active: true }); await after
+    expect(blocker.live.size, 'a poll started after the change settled counts').toBe(1)
+  })
+
+  it('only the newest of overlapping state changes decides; an older poll answer never overrides a newer one', async () => {
+    const { rc, blocker, release } = deferred()
+    const enable = rc.invoke('enable'); await flush()
+    const disable = rc.invoke('disable'); await flush()
+    release('/remote/disable', { keep_awake_active: false }); await disable
+    release('/remote/enable', { keep_awake_active: true }); await enable
+    expect(blocker.live.size, 'the enable answer is older than the disable').toBe(0)
+    const first = rc.poll(); await flush()
+    const second = rc.poll(); await flush()
+    release('/remote/status', { keep_awake_active: true }, true); await second
+    expect(blocker.live.size).toBe(1)
+    release('/remote/status', { keep_awake_active: false }); await first
+    expect(blocker.live.size, 'the first poll answered last but is older').toBe(1)
+  })
+
   it('shutdown (app quit) releases it and stops polling', async () => {
     vi.useFakeTimers()
     try {

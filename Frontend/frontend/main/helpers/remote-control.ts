@@ -13,6 +13,12 @@
  * remote control already on and changes made by another window. Three failed
  * polls in a row (backend gone for ~90 s) release the blocker: without the
  * backend there is no remote control to stay awake for.
+ *
+ * Answers can arrive out of order (a poll may wait up to 20 s), so each
+ * request is numbered. A state-changing action's answer counts only if no
+ * newer state change started; any other answer counts only if it started
+ * after the last state change settled and is newer than the last one that
+ * counted. Disable and forget release the blocker before their request.
  */
 
 export type RemoteAction =
@@ -96,6 +102,8 @@ export interface RemoteControlDeps {
   log?: (...args: unknown[]) => void
 }
 
+const STATE_CHANGES: ReadonlySet<RemoteAction> = new Set(['enable', 'disable', 'forget', 'set-keep-awake'])
+
 export const POLL_MS = 30_000
 const FAILS_BEFORE_RELEASE = 3
 // pair/start waits for the relay socket (bridge.connect_wait_s); forget may
@@ -106,6 +114,11 @@ export function createRemoteControl(deps: RemoteControlDeps) {
   let blockId: number | null = null
   let timer: ReturnType<typeof setInterval> | null = null
   let failedPolls = 0
+  let seq = 0
+  let latestChange = 0
+  let changeBarrier = 0
+  let changesInFlight = 0
+  let lastObserved = 0
   const log = deps.log ?? (() => {})
 
   const setKeepAwake = (on: boolean) => {
@@ -119,10 +132,14 @@ export function createRemoteControl(deps: RemoteControlDeps) {
     }
   }
 
-  const observe = (data: unknown) => {
-    if (data && typeof data === 'object' && typeof (data as any).keep_awake_active === 'boolean') {
-      setKeepAwake((data as any).keep_awake_active)
-    }
+  const observe = (data: unknown, mySeq: number, isChange: boolean) => {
+    if (!data || typeof data !== 'object' || typeof (data as any).keep_awake_active !== 'boolean') return
+    const current = isChange
+      ? mySeq === latestChange
+      : changesInFlight === 0 && mySeq > changeBarrier && mySeq > lastObserved
+    if (!current) return
+    lastObserved = mySeq
+    setKeepAwake((data as any).keep_awake_active)
   }
 
   const invoke = async (action: unknown, arg?: unknown): Promise<RemoteResult> => {
@@ -131,6 +148,7 @@ export function createRemoteControl(deps: RemoteControlDeps) {
     }
     const route = REMOTE_ROUTES[action as RemoteAction]
     route.check?.(arg)
+    const isChange = STATE_CHANGES.has(action as RemoteAction)
     const headers: Record<string, string> = { 'X-Session-Token': deps.appToken }
     if (route.uiSecret) headers['X-Gamachine-UI-Secret'] = deps.uiSecret
     let base: string
@@ -139,12 +157,19 @@ export function createRemoteControl(deps: RemoteControlDeps) {
     } catch {
       return { ok: false, code: 'backend_not_ready' }
     }
+    const mySeq = ++seq
+    if (isChange) {
+      latestChange = mySeq
+      changeBarrier = mySeq
+      changesInFlight += 1
+      if (action === 'disable' || action === 'forget') setKeepAwake(false)
+    }
     try {
       const res = await deps.http.request({
         method: route.method, url: `${base}${route.path(arg)}`,
         data: route.body?.(arg), timeout: TIMEOUT_MS, headers,
       })
-      observe(res.data)
+      observe(res.data, mySeq, isChange)
       return { ok: true, data: res.data }
     } catch (error) {
       const response = (error as { response?: { status?: number; data?: { detail?: unknown } } })?.response
@@ -158,6 +183,11 @@ export function createRemoteControl(deps: RemoteControlDeps) {
           message: typeof detail === 'string' ? detail : undefined }
       }
       return { ok: false, code: 'unreachable' }
+    } finally {
+      if (isChange) {
+        changesInFlight -= 1
+        changeBarrier = seq
+      }
     }
   }
 
