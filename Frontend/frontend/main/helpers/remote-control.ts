@@ -21,6 +21,8 @@
  * counted. Disable and forget release the blocker before their request.
  */
 
+import { isIPv6 } from 'net'
+
 export type RemoteAction =
   | 'status' | 'enable' | 'disable' | 'forget'
   | 'pair-start' | 'pair-pending' | 'pair-approve' | 'pair-reject'
@@ -37,7 +39,27 @@ interface Route {
 }
 
 const DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/
-const RELAY_URL_MAX = 2048
+
+// Same rule as normalize_relay_url in Backend/app/remote/store.py: an origin
+// only, https or plain http for a relay on this machine.
+const RELAY_URL_MAX = 512
+const RELAY_ORIGIN = /^(https?):\/\/(\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::([0-9]{1,5}))?\/?$/i
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
+
+export function isRelayOrigin(url: string): boolean {
+  if (url.length > RELAY_URL_MAX) return false
+  const m = RELAY_ORIGIN.exec(url.trim())
+  if (!m) return false
+  const [, scheme, host, port] = m
+  if (host.startsWith('[') && !isIPv6(host.slice(1, -1))) return false
+  if (port !== undefined && (Number(port) < 1 || Number(port) > 65535)) return false
+  return scheme.toLowerCase() === 'https' || LOOPBACK.has(host.toLowerCase())
+}
+
+/** A refusal decided in main: returned as a coded result, nothing is sent. */
+class Refusal extends Error {
+  constructor(readonly code: string) { super(code) }
+}
 
 const fixed = (p: string) => () => p
 
@@ -64,7 +86,9 @@ export const REMOTE_ROUTES: Record<RemoteAction, Route> = {
     method: 'put', path: fixed('/remote/relay-url'), uiSecret: true,
     body: arg => ({ url: arg }),
     check: arg => {
-      if (arg !== null && (typeof arg !== 'string' || arg.length > RELAY_URL_MAX)) throw new Error('bad relay url')
+      if (arg === null || arg === '') return
+      if (typeof arg !== 'string') throw new Error('bad relay url')
+      if (!isRelayOrigin(arg)) throw new Refusal('bad_relay_url')
     },
   },
   'set-keep-awake': {
@@ -147,7 +171,12 @@ export function createRemoteControl(deps: RemoteControlDeps) {
       throw new Error('Unknown remote-control action.')
     }
     const route = REMOTE_ROUTES[action as RemoteAction]
-    route.check?.(arg)
+    try {
+      route.check?.(arg)
+    } catch (error) {
+      if (error instanceof Refusal) return { ok: false, code: error.code }
+      throw error
+    }
     const isChange = STATE_CHANGES.has(action as RemoteAction)
     const headers: Record<string, string> = { 'X-Session-Token': deps.appToken }
     if (route.uiSecret) headers['X-Gamachine-UI-Secret'] = deps.uiSecret

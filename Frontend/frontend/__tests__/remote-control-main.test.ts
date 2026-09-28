@@ -1,8 +1,9 @@
 import fs from 'fs'
 import os from 'os'
+import path from 'path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ALLOWED_INVOKE_CHANNELS } from '../main/helpers/ipc-whitelist'
-import { REMOTE_ROUTES, createRemoteControl } from '../main/helpers/remote-control'
+import { REMOTE_ROUTES, createRemoteControl, isRelayOrigin } from '../main/helpers/remote-control'
 
 /**
  * Main-process half of remote control: the `remote-control` channel (UI secret
@@ -67,6 +68,28 @@ describe('remote-control · routes', () => {
     await expect(rc.invoke('set-keep-awake', 'yes')).rejects.toThrow()
     await expect(rc.invoke('set-relay-url', 42)).rejects.toThrow()
     expect(request).not.toHaveBeenCalled()
+  })
+
+  // One table with the backend (Backend/tests/test_remote_routes.py) so both rules stay the same.
+  const RELAY_CASES = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '../../../Backend/tests/relay_origin_cases.json'), 'utf8')) as { accept: string[]; reject: string[] }
+  const TOO_LONG = `https://${'a'.repeat(505)}.org`
+
+  it('accepts only relay origins, by the table shared with the backend', () => {
+    for (const url of RELAY_CASES.accept) expect(isRelayOrigin(url), url).toBe(true)
+    for (const url of [...RELAY_CASES.reject, TOO_LONG]) expect(isRelayOrigin(url), url).toBe(false)
+  })
+
+  it('refuses a bad relay URL with bad_relay_url before any request; null or empty resets', async () => {
+    const { rc, request } = setup()
+    for (const url of [...RELAY_CASES.reject, TOO_LONG]) {
+      expect(await rc.invoke('set-relay-url', url), url).toEqual({ ok: false, code: 'bad_relay_url' })
+    }
+    expect(request).not.toHaveBeenCalled()
+    await rc.invoke('set-relay-url', null)
+    await rc.invoke('set-relay-url', '')
+    await rc.invoke('set-relay-url', 'http://127.0.0.1:8799')
+    expect(request.mock.calls.map(c => c[0].data)).toEqual([{ url: null }, { url: '' }, { url: 'http://127.0.0.1:8799' }])
   })
 
   it('returns coded refusals, not exceptions, and never echoes the secret', async () => {

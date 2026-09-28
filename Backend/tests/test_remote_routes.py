@@ -1,5 +1,7 @@
 """Desktop routes of remote control and the renderer hand-off of phone messages."""
 import asyncio
+import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -8,6 +10,7 @@ from fastapi import FastAPI
 import routes.conversation_routes as cr
 from agentic import approval_mode
 from remote.desktop_channel import CHANNEL
+from remote.store import normalize_relay_url
 from routes.remote_routes import create_remote_router
 from tests.remote_fakes import FakePhone
 from tests.test_remote_bridge import env, make_chat, until  # noqa: F401  (fixture)
@@ -74,6 +77,21 @@ async def test_full_flow_over_the_routes(api, env):
     assert (await api.post("/remote/disable", headers=H)).json()["keep_awake_active"] is False
     forgot = (await api.post("/remote/forget", headers=H)).json()
     assert forgot["enabled"] is False and forgot["pair_id"] is None
+
+
+# Shared with Frontend/frontend/__tests__/remote-control-main.test.ts so both rules stay the same.
+RELAY_CASES = json.loads((Path(__file__).parent / "relay_origin_cases.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("url", RELAY_CASES["accept"])
+def test_relay_origin_table_accepts(url):
+    normalize_relay_url(url)
+
+
+@pytest.mark.parametrize("url", RELAY_CASES["reject"] + ["https://" + "a" * 505 + ".org"])
+def test_relay_origin_table_rejects(url):
+    with pytest.raises(ValueError):
+        normalize_relay_url(url)
 
 
 async def test_relay_url_setting(api, env):

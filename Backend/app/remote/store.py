@@ -7,7 +7,9 @@ a phone's relay token is never stored, only its hash (the relay's hash).
 """
 from __future__ import annotations
 
+import ipaddress
 import json
+import re
 import sqlite3
 import time
 from contextlib import closing
@@ -27,6 +29,9 @@ SETTING_KEYS = "remote.keys"
 # The relay keeps at most 50 token hashes per room.
 MAX_DEVICES = 50
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+# Same rule as isRelayOrigin in Frontend/frontend/main/helpers/remote-control.ts.
+_RELAY_ORIGIN = re.compile(r"^(https?)://(\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::([0-9]{1,5}))?/?$",
+                           re.IGNORECASE | re.ASCII)
 
 
 @dataclass
@@ -62,6 +67,16 @@ def normalize_relay_url(url: Any) -> str:
     loopback relay (`wrangler dev --local`, tests). Raises ValueError."""
     if not isinstance(url, str) or len(url) > 512:
         raise ValueError("relay URL must be a string")
+    m = _RELAY_ORIGIN.fullmatch(url.strip())
+    if not m:
+        raise ValueError("relay URL must be an origin: https://host[:port]")
+    if m.group(3) is not None and not 1 <= int(m.group(3)) <= 65535:
+        raise ValueError("relay URL port is out of range")
+    if m.group(2).startswith("["):
+        try:
+            ipaddress.IPv6Address(m.group(2)[1:-1])
+        except ValueError:
+            raise ValueError("relay URL has a malformed IPv6 host") from None
     parts = urlsplit(url.strip())
     host = (parts.hostname or "").lower()
     if parts.scheme not in ("https", "http") or not host:
