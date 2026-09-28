@@ -9,8 +9,9 @@ import * as C from '../public/crypto.js';
 import {
   pair, Link, ReplyParts, mergeParts, PHONE_FRAME_MAX, ChatView, cardActions, answerFailure, turnEndLine, eventLine,
   isCommand, sendFailureNote, COMMANDS_NOTE,
-  messageText, mergeChat, stopLine, ASK_ON_PC,
+  messageText, mergeChat, stopLine, ASK_ON_PC, cardsMissing,
 } from '../public/net.js';
+import { readFileSync } from 'node:fs';
 
 class FakeWS {
   static last = null;
@@ -292,6 +293,58 @@ test('already_answered from the PC reaches the page with by/at intact', async ()
   pcSend({ id: lastRequest().id, ok: false, error: 'already_answered', by: 'desktop', at: '2026-09-28T10:00:00Z' });
   const r = await reply;
   assert.equal(answerFailure(r.error, r).note, 'Başka cihaz (bilgisayar) cevapladı.');
+});
+
+// ---------------------------------------------------------------- cards the log announces
+
+// Real iPhone, 28 Sep 2026: the chat log said "Onay kartı açıldı" (Codex
+// command gate) and "Soru kartı açıldı" (AskUserQuestion) but no card with
+// buttons was in sight. The shapes below are what chats.phone_card sends for
+// those two gates.
+const codexCard = {
+  card_id: 'gate-codex', chat_id: '5', kind: 'command', tool: 'item/commandExecution/requestApproval',
+  risk: 'shell', created_at: '2026-09-28 23:34:10', title: 'item/commandExecution/requestApproval',
+  detail: 'powershell -Command Get-ChildItem',
+};
+const askCard = {
+  card_id: 'gate-ask', chat_id: '5', kind: 'question', tool: 'AskUserQuestion', risk: null,
+  created_at: '2026-09-28 23:35:40', title: 'Soru', detail: 'Hangi motoru kullanalım?',
+  choices: [{ id: 'Unity', label: 'Unity' }, { id: 'Godot', label: 'Godot' }],
+};
+
+test('the chat view shows its cards under the log, next to the line that announced them', () => {
+  // The body scrolls and a loaded chat is scrolled to the bottom, so cards
+  // placed above up to 50 messages were off screen while the log below said
+  // a card had opened.
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const chat = html.slice(html.indexOf('<section id="screen-chat"'));
+  const at = (id) => chat.indexOf('id="' + id + '"');
+  assert.ok(at('log') > 0 && at('chat-cards') > 0 && at('composer') > 0);
+  assert.ok(at('log') < at('chat-cards'), '#chat-cards must come after #log');
+  assert.ok(at('chat-cards') < at('composer'), '#chat-cards must stay above the composer');
+});
+
+test('both gate kinds pushed to the page give answerable buttons', async () => {
+  const { pcSend, pushes } = await connected();
+  pcSend({ type: 'card_opened', card: codexCard });
+  pcSend({ type: 'card_opened', card: askCard });
+  await until(() => pushes.length === 2);
+  const [cmd, ask] = pushes.map((p) => cardActions(p.card));
+  assert.deepEqual(cmd.buttons.map((b) => b.payload), [
+    { card_id: 'gate-codex', decision: 'approve' }, { card_id: 'gate-codex', decision: 'reject' }]);
+  assert.deepEqual(ask.buttons.map((b) => b.payload.choice ?? b.payload.decision), ['Unity', 'Godot', 'reject']);
+});
+
+test('a card the log announces but the page does not hold is fetched again', () => {
+  const opened = (id) => ({ type: 'event', chat_id: '5', kind: 'card_opened', card_id: id, card_kind: 'command' });
+  const closed = (id) => ({ type: 'event', chat_id: '5', kind: 'card_closed', card_id: id });
+  // The card_opened push was lost (socket replaced, page asleep): only the log has it.
+  assert.equal(cardsMissing([], [opened('gate-codex')]), true);
+  assert.equal(cardsMissing([codexCard], [opened('gate-codex')]), false);
+  // Closed later in the same log: nothing to fetch.
+  assert.equal(cardsMissing([], [opened('gate-codex'), closed('gate-codex')]), false);
+  assert.equal(cardsMissing([codexCard], [opened('gate-codex'), opened('gate-ask')]), true);
+  assert.equal(cardsMissing([], [{ kind: 'tool_call', tool: 'x' }, { kind: 'card_opened' }]), false);
 });
 
 // ---------------------------------------------------------------- turn status and log lines

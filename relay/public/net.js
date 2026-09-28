@@ -422,6 +422,20 @@ export function cardActions(card) {
   return { buttons, note };
 }
 
+// True when turn events name a card still open that `cards` does not hold:
+// its card_opened push never arrived (socket replaced, page asleep), so the
+// caller asks pending_cards again rather than leave the turn with no buttons.
+export function cardsMissing(cards, events) {
+  const held = new Set(cards.map((c) => c.card_id));
+  const open = new Set();
+  for (const ev of events) {
+    if (ev?.kind === 'card_opened' && typeof ev.card_id === 'string') open.add(ev.card_id);
+    else if (ev?.kind === 'card_closed') open.delete(ev.card_id);
+  }
+  for (const id of open) if (!held.has(id)) return true;
+  return false;
+}
+
 // `by` of a card answer: desktop | phone:<device name> | system (timeout, Stop).
 export function answeredBy(by) {
   if (by === 'desktop') return 'bilgisayar';

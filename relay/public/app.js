@@ -5,11 +5,12 @@ import * as C from './crypto.js';
 import * as store from './store.js';
 import {
   pair, Link, wsOrigin, ChatView, cardActions, answerFailure, eventLine, messageText, mergeChat, stopLine, SEND_TEXT_MAX,
-  COMMANDS_NOTE, isCommand, sendFailureNote,
+  COMMANDS_NOTE, isCommand, sendFailureNote, cardsMissing,
 } from './net.js';
 
 const $ = (id) => document.getElementById(id);
 const SCREENS = ['loading', 'install', 'welcome', 'pairing', 'main', 'chat'];
+const CARD_PUSH_GRACE_MS = 1500;
 
 let device = null;
 let link = null;
@@ -166,11 +167,24 @@ async function call(type, params) {
   return reply.result || {};
 }
 
+// Applied when its own reply arrives: the PC sends replies and card pushes in
+// one ordered stream, so a push that lands after this reply is newer. Held
+// back until list_chats also answered, it would overwrite such a push.
+function refreshCards() {
+  return call('pending_cards').then((p) => {
+    cards = Array.isArray(p.cards) ? p.cards : [];
+    renderCards();
+  });
+}
+
+function refreshCardsIfMissing(events) {
+  if (cardsMissing(cards, events)) refreshCards().catch(() => {});
+}
+
 async function refreshAll() {
   try {
-    const [c, p] = await Promise.all([call('list_chats'), call('pending_cards')]);
+    const [c] = await Promise.all([call('list_chats'), refreshCards()]);
     chats = Array.isArray(c.chats) ? c.chats : [];
-    cards = Array.isArray(p.cards) ? p.cards : [];
     renderChats();
     renderCards();
     renderChatHeader();
@@ -240,6 +254,7 @@ function cardNode(card) {
     row.append(node);
   }
   box.append(row, note);
+  box.dataset.cardId = card.card_id;
   return box;
 }
 
@@ -248,6 +263,11 @@ function renderCards() {
   all.replaceChildren(...cards.map(cardNode));
   $('cards-box').hidden = cards.length === 0;
   if (view.shown) $('chat-cards').replaceChildren(...cards.filter((c) => c.chat_id === view.shown).map(cardNode));
+}
+
+function revealCard(cardId) {
+  const node = [...$('chat-cards').children].find((n) => n.dataset.cardId === cardId);
+  node?.scrollIntoView({ block: 'nearest' });
 }
 
 function removeCard(cardId) {
@@ -314,8 +334,10 @@ async function loadChat() {
   $('log').replaceChildren();
   liveText = null;
   for (const m of Array.isArray(r.messages) ? r.messages : []) logMessage(m);
-  for (const ev of Array.isArray(r.events) ? r.events : []) logEvent(ev);
+  const events = Array.isArray(r.events) ? r.events : [];
+  for (const ev of events) logEvent(ev);
   window.scrollTo(0, document.body.scrollHeight);
+  refreshCardsIfMissing(events);
   if (view.takeReload()) loadChat();
   else reloadLater();
 }
@@ -354,6 +376,9 @@ function onPush(msg) {
     if (chat && msg.kind === 'turn_end') chat.status = 'idle';
     if (msg.chat_id === view.shown) logEvent(msg);
     else if (view.stray(msg.chat_id)) closeOnPc(msg.chat_id);
+    // The card's own push is sent right behind this event; only a card still
+    // missing after that is fetched.
+    if (msg.kind === 'card_opened') setTimeout(() => refreshCardsIfMissing([msg]), CARD_PUSH_GRACE_MS);
     renderChats();
     renderChatHeader();
   } else if (msg.type === 'chat_changed') {
@@ -367,6 +392,7 @@ function onPush(msg) {
   } else if (msg.type === 'card_opened' && msg.card?.card_id) {
     cards = cards.filter((c) => c.card_id !== msg.card.card_id).concat(msg.card);
     renderCards();
+    if (msg.card.chat_id === view.shown) revealCard(msg.card.card_id);
   } else if (msg.type === 'card_closed') {
     removeCard(msg.card_id);
   } else if (msg.type === 'gap') {
