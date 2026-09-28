@@ -620,6 +620,72 @@ async def test_card_and_chat_pushes_reach_the_phone(env):
     assert closed == {"type": "card_closed", "card_id": "gate-p"}
 
 
+# Real iPhone, 28 Sep 2026: a Codex command gate and a Claude AskUserQuestion
+# gate showed their turn events on the phone but never a card to answer.
+CODEX_METHOD = "item/commandExecution/requestApproval"
+ASK_QUESTIONS = [{"question": "Hangi motoru kullanalım?", "header": "Motor",
+                  "options": [{"label": "Unity", "description": "C#"},
+                              {"label": "Godot", "description": "GDScript"}],
+                  "multiSelect": False}]
+
+
+def _open_gates(conv):
+    cmd = register_gate("gate-codex", conv, tool=CODEX_METHOD,
+                        summary="powershell -Command Get-ChildItem", risk="shell",
+                        params={"command": "powershell -Command Get-ChildItem", "itemId": "i1"})
+    ask = register_gate("gate-ask", conv, kind="question", tool="AskUserQuestion",
+                        params={"questions": ASK_QUESTIONS}, questions=ASK_QUESTIONS,
+                        summary=ASK_QUESTIONS[0]["question"])
+    return cmd, ask
+
+
+def _check_phone_cards(found, conv):
+    by_id = {c["card_id"]: c for c in found}
+    assert set(by_id) == {"gate-codex", "gate-ask"}
+    for c in by_id.values():
+        assert c["chat_id"] == str(conv)
+    assert by_id["gate-codex"]["kind"] == "command" and by_id["gate-codex"]["detail"]
+    assert by_id["gate-ask"]["kind"] == "question"
+    assert by_id["gate-ask"]["choices"] == [{"id": "Unity", "label": "Unity"},
+                                            {"id": "Godot", "label": "Godot"}]
+
+
+async def test_live_gates_reach_a_phone_that_opened_the_chat_first(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db)
+    chat_id = next(c["chat_id"] for c in (await phone.request("list_chats"))["result"]["chats"])
+    assert chat_id == str(conv)
+    await phone.request("open_chat", chat_id=chat_id)
+    turn_events.append(conv, "turn_start", provider="codex", model="m", origin="user")
+    cmd, ask = _open_gates(conv)
+    pushed = [await phone.next_push(lambda m: m.get("type") == "card_opened") for _ in range(2)]
+    _check_phone_cards([p["card"] for p in pushed], conv)
+    _check_phone_cards((await phone.request("pending_cards"))["result"]["cards"], conv)
+    r = await phone.request("answer_card", card_id="gate-codex", decision="approve")
+    assert r["ok"] is True and cmd.is_set() and APPROVAL_RESULTS["gate-codex"] is True
+    closed = await phone.next_push(lambda m: m.get("type") == "card_closed")
+    assert closed["card_id"] == "gate-codex"
+    r = await phone.request("answer_card", card_id="gate-ask", decision="choice", choice="Godot")
+    assert r["ok"] is True and ask.is_set()
+    assert QUESTION_RESULTS["gate-ask"] == {"Hangi motoru kullanalım?": "Godot"}
+    closed = await phone.next_push(lambda m: m.get("type") == "card_closed")
+    assert closed["card_id"] == "gate-ask"
+    assert (await phone.request("pending_cards"))["result"]["cards"] == []
+
+
+async def test_gates_opened_before_the_phone_connected_are_pending(env):
+    conv = make_chat(env.db)
+    await enable(env)
+    turn_events.append(conv, "turn_start", provider="claude", model="m", origin="user")
+    _open_gates(conv)
+    phone = await pair_phone(env)
+    _check_phone_cards((await phone.request("pending_cards"))["result"]["cards"], conv)
+    r = await phone.request("open_chat", chat_id=str(conv))
+    kinds = [e["kind"] for e in r["result"]["events"]]
+    assert kinds.count("card_opened") == 2
+
+
+
 async def test_busy_replies_stay_bounded_behind_a_slow_phone(env, monkeypatch):
     release = asyncio.Event()
     sent = []
