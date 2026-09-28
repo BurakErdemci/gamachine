@@ -12,6 +12,18 @@ def test_uri_roundtrip_windows():
     assert _uri_to_path(uri).replace("/", "\\") == p
 
 
+def test_uri_roundtrip_posix_keeps_the_root():
+    # Pure string work, so this runs the POSIX case on every OS.
+    p = "/tmp/pytest-of-runner/pytest-0/ws/Assets/Scripts/New.cs"
+    assert _uri_to_path(_path_to_uri(p)) == p
+    assert _uri_to_path("file:///Users/u/My%20Game/A.cs") == "/Users/u/My Game/A.cs"
+
+
+def test_uri_to_path_windows_forms():
+    assert _uri_to_path("file:///c%3A/Users/A.cs") == "c:/Users/A.cs"
+    assert _uri_to_path("file://server/share/A.cs") == "//server/share/A.cs"
+
+
 def test_diag_conversion_one_based():
     d = {"range": {"start": {"line": 4, "character": 2}, "end": {"line": 4, "character": 9}},
          "message": "x", "severity": 1}

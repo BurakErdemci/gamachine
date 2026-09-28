@@ -92,8 +92,16 @@ def _path_to_uri(path: str) -> str:
 
 
 def _uri_to_path(uri: str) -> str:
-    p = urllib.parse.unquote(uri)
-    p = p[len("file:///"):] if p.startswith("file:///") else p[len("file://"):]
+    """`file:///home/u/A.cs` -> `/home/u/A.cs`, `file:///c%3A/u/A.cs` -> `c:/u/A.cs`.
+    The third slash belongs to the path: cutting it (as this once did) gave POSIX
+    a relative `home/u/A.cs`, so diagnostics were stored under a key no lookup
+    could build and go-to-definition returned a path relative to the cwd."""
+    parts = urllib.parse.urlsplit(uri)
+    p = urllib.parse.unquote(parts.path)
+    if parts.netloc and parts.netloc.lower() != "localhost":
+        return "//" + parts.netloc + p
+    if len(p) >= 3 and p[0] == "/" and p[1].isalpha() and p[2] == ":":
+        p = p[1:]
     return p
 
 
