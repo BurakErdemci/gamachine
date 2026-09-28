@@ -539,6 +539,7 @@ export const tr = {
   'home.signIn': 'Giriş',
   'home.terminalCleared': 'Terminal temizlendi',
   'home.csharpAnalyzing': 'C# analizi hazırlanıyor…',
+  'editor.csharpNotInProject': 'Bu dosya henüz Unity projesine eklenmedi: yalnız yazım hataları denetleniyor. Unity\'ye geçince (veya Unity bağlantısı açıkken) tam denetim başlar.',
   'home.tokenErrorSuffix': '— backend istekleri reddedilecek.',
   'home.fileReadFailed': '(Dosya okunamadı: {yol})',
   // --- Kalan bilesenler (4. oncelik) ---
@@ -1149,6 +1150,7 @@ export const en: Record<keyof typeof tr, string> = {
   'home.signIn': 'Sign In',
   'home.terminalCleared': 'Terminal cleared',
   'home.csharpAnalyzing': 'Preparing C# analysis…',
+  'editor.csharpNotInProject': 'This file is not in the Unity project yet: only syntax errors are checked. Full checking starts once you switch to Unity (or while the Unity connection is on).',
   'home.tokenErrorSuffix': '— backend requests will be rejected.',
   'home.fileReadFailed': '(Could not read file: {yol})',
   // --- Remaining components (priority 4) ---

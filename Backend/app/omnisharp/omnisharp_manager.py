@@ -3,15 +3,18 @@ açılınca spawn, workspace değişince restart, kapanışta kill. Tüm satır/
 çevirileri BURADA yapılır: LSP 0 tabanlı ↔ bizim format 1 tabanlı."""
 import asyncio
 import collections
+import fnmatch
 import json
 import logging
 import os
 import platform
 import shutil
+import socket
 import sys
 import time
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
 from .lsp_client import LspClient, LspError
 
@@ -367,6 +370,82 @@ def _csproj_sync_reason(workspace: str) -> str | None:
     return None
 
 
+_PROJECT_EXTS = (".csproj", ".sln")
+# A file outside every csproj gets syntax errors only; the retry asks Unity to
+# regenerate the projects, and a regeneration is seconds of editor work, so it
+# is not repeated on every keystroke.
+_SYNC_RETRY_INTERVAL = 30.0
+# LSP FileChangeType
+_FILE_CREATED, _FILE_CHANGED, _FILE_DELETED = 1, 2, 3
+
+
+def _project_files(workspace: str) -> dict[str, float]:
+    """The workspace's root .csproj/.sln files with their mtimes. Root only:
+    that is where Unity writes them and where `_csproj_sync_reason` looks."""
+    out: dict[str, float] = {}
+    try:
+        names = os.listdir(workspace)
+    except OSError:
+        return out
+    for name in names:
+        if name.lower().endswith(_PROJECT_EXTS):
+            full = os.path.join(workspace, name)
+            try:
+                out[full] = os.path.getmtime(full)
+            except OSError:
+                continue
+    return out
+
+
+def _source_key(path: str) -> str:
+    # Lower-cased on every platform: Unity projects live on case-insensitive
+    # file systems (NTFS, default APFS), and a false "not in the project" would
+    # show the hint and fire a Unity sync for nothing.
+    return os.path.normcase(os.path.normpath(path)).lower()
+
+
+def _csproj_sources(csproj: str) -> tuple[set[str], list[str], str | None]:
+    """(explicit Compile items, wildcard Compile items, glob root of an SDK-style
+    project). Unity writes legacy projects with one explicit `<Compile Include>`
+    per file; the other two shapes are here so a hand-made project does not
+    read as "file missing"."""
+    base = os.path.dirname(csproj)
+    try:
+        root = ET.parse(csproj).getroot()
+    except (OSError, ET.ParseError):
+        return set(), [], None
+    keys: set[str] = set()
+    patterns: list[str] = []
+    for el in root.iter():
+        if not isinstance(el.tag, str) or el.tag.rsplit("}", 1)[-1] != "Compile":
+            continue
+        for part in (el.get("Include") or "").split(";"):
+            # MSBuild escapes special characters as %XX.
+            part = urllib.parse.unquote(part.strip())
+            if not part:
+                continue
+            key = _source_key(os.path.join(base, part))
+            if "*" in part or "?" in part:
+                patterns.append(key)
+            else:
+                keys.add(key)
+    sdk_root = _source_key(base) if root.get("Sdk") else None
+    return keys, patterns, sdk_root
+
+
+def _unity_api_up() -> bool:
+    """Is anything listening where `_maybe_sync_csproj` posts? The unity-mcp
+    server is started only by the user's MCP toggle; after an app restart
+    nobody had toggled it and every sync attempt ended in WinError 10061
+    (measured 28 Sep 2026). A refused connect is cheap; a sync that cannot
+    connect is still a thread and a log line per attempt."""
+    try:
+        with socket.create_connection(("localhost", 8080), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def _unwrap_unity_result(body: dict) -> dict:
     """Unity MCP `/api/command` yanıtının gerçek gövdesini çıkarır.
 
@@ -413,6 +492,11 @@ class OmniSharpManager:
         self.status = {"state": "off", "detail": ""}
         self._lock = asyncio.Lock()
         self._retry_after: float = 0.0            # başarısız başlatma sonrası bekleme
+        self._proj_mtimes: dict[str, float] | None = None  # what OmniSharp last loaded
+        self._sources_stamp: dict[str, float] | None = None
+        self._sources: tuple[set[str], list[str], list[str]] = (set(), [], [])
+        self._sync_retry_after: float = 0.0
+        self._sync_task: asyncio.Future | None = None
 
     # ── yaşam döngüsü ────────────────────────────────────────────────
     async def ensure_started(self, workspace: str) -> None:
@@ -487,6 +571,7 @@ class OmniSharpManager:
                 await init
                 client.notify("initialized", {})
                 self._client = client
+                self._proj_mtimes = _project_files(workspace)
                 # `ready` ama detail dolu olabilir: sunucu ayakta VE proje dosyaları
                 # bayat. Bu tam olarak sahada görülen hal — durum "hazır" görünüyor,
                 # hover sessizce boş dönüyordu. Sebep artık yüzeye çıkıyor.
@@ -531,10 +616,12 @@ class OmniSharpManager:
         if int(params.get("type", 4)) == 1:
             logger.warning("OmniSharp: %s", str(params.get("message", ""))[:500])
 
-    def _maybe_sync_csproj(self, workspace: str) -> str | None:
+    def _maybe_sync_csproj(self, workspace: str, reason: str | None = None) -> str | None:
         """Proje dosyaları bayatsa Unity'den tazelemeyi dene (MCP REST, best-effort).
-        Tazelenemezse kullanıcıya gösterilecek ipucunu döndürür."""
-        reason = _csproj_sync_reason(workspace)
+        Tazelenemezse kullanıcıya gösterilecek ipucunu döndürür. A given `reason`
+        forces the attempt: an open file missing from every csproj is stale
+        projects even when no mtime says so."""
+        reason = reason or _csproj_sync_reason(workspace)
         if reason is None:
             return None
         try:
@@ -604,6 +691,11 @@ class OmniSharpManager:
         if self._client:
             await self._client.stop()
         self._client = None
+        if self._sync_task and not self._sync_task.done():
+            self._sync_task.cancel()
+        self._sync_task = None
+        self._sync_retry_after = 0.0
+        self._proj_mtimes = None
         self._opened.clear()
         # Sürüm sayaçları `_opened` ile BİRLİKTE sıfırlanmalı: yeni sunucuya
         # yeniden didOpen (sürüm 1) gidecek, sayaç eski değerde kalırsa didChange
@@ -623,11 +715,92 @@ class OmniSharpManager:
     def diagnostics_for(self, path: str) -> list[dict]:
         return self._diags.get(_norm_key(os.path.abspath(path)), [])
 
+    def latest_diagnostics(self, path: str) -> list[dict]:
+        """The last set OmniSharp published for `path`, without sending the text.
+        `sync_document` waits ~1.2 s; a cold start measured 28 Sep 2026 answered
+        empty at 1.34 s and the two errors came 60 ms later, so the editor asks
+        again through this."""
+        self._check_project_files()
+        return self.diagnostics_for(path)
+
+    # ── project files ────────────────────────────────────────────────
+    def _check_project_files(self) -> None:
+        """Tell OmniSharp about .csproj/.sln files changed since it last loaded
+        them. It does not watch them itself: a csproj rewritten on disk while it
+        ran had no effect in 30 s, the same rewrite followed by
+        `workspace/didChangeWatchedFiles` gave the semantic errors in 2.5 s
+        (measured 28 Sep 2026). Unity regenerates the csproj minutes after a
+        new script is written (00:44:55 file, 00:56:31 csproj)."""
+        if not (self._workspace and self._client and self._client.alive):
+            return
+        current = _project_files(self._workspace)
+        previous, self._proj_mtimes = self._proj_mtimes, current
+        if previous is None:
+            return
+        changes = [{"uri": _path_to_uri(p),
+                    "type": _FILE_CREATED if p not in previous else _FILE_CHANGED}
+                   for p, mtime in current.items() if previous.get(p) != mtime]
+        changes += [{"uri": _path_to_uri(p), "type": _FILE_DELETED}
+                    for p in previous if p not in current]
+        if changes:
+            logger.info("proje dosyaları değişti, OmniSharp'a bildiriliyor: %d", len(changes))
+            self._client.notify("workspace/didChangeWatchedFiles", {"changes": changes})
+
+    def in_project(self, path: str) -> bool | None:
+        """Is this .cs file compiled by a csproj in the workspace? None when the
+        question does not apply. A file outside every csproj gets syntax errors
+        only (CS1002); CS0029/CS0103 never come (measured 28 Sep 2026)."""
+        if not self._workspace or not path.lower().endswith(".cs"):
+            return None
+        stamp = _project_files(self._workspace)
+        if stamp != self._sources_stamp:
+            keys: set[str] = set()
+            patterns: list[str] = []
+            roots: list[str] = []
+            for proj in stamp:
+                if not proj.lower().endswith(".csproj"):
+                    continue
+                k, p, r = _csproj_sources(proj)
+                keys |= k
+                patterns += p
+                if r:
+                    roots.append(r)
+            self._sources, self._sources_stamp = (keys, patterns, roots), stamp
+        keys, patterns, roots = self._sources
+        key = _source_key(os.path.abspath(path))
+        return (key in keys
+                or any(fnmatch.fnmatchcase(key, p) for p in patterns)
+                or any(key.startswith(r + os.sep) for r in roots))
+
+    def _maybe_retry_project_sync(self) -> None:
+        """Ask Unity for fresh projects again, at most once per
+        _SYNC_RETRY_INTERVAL. At start this ran once; a script written later
+        stayed outside the csproj until Unity happened to regenerate it."""
+        now = time.monotonic()
+        if not self._workspace or now < self._sync_retry_after:
+            return
+        self._sync_retry_after = now + _SYNC_RETRY_INTERVAL
+        self._sync_task = asyncio.ensure_future(self._retry_project_sync(self._workspace))
+
+    async def _retry_project_sync(self, workspace: str) -> None:
+        # The unity-mcp server is NOT started here: starting it is the owner's
+        # MCP toggle (decision pending, 28 Sep 2026).
+        if not await asyncio.to_thread(_unity_api_up):
+            return
+        hint = await asyncio.to_thread(self._maybe_sync_csproj, workspace,
+                                       "açık dosya proje dosyalarında yok")
+        if self._workspace != workspace or not self._ready():
+            return
+        if self.status.get("state") == "ready":
+            self.status = {"state": "ready", "detail": hint or ""}
+        self._check_project_files()
+
     async def sync_document(self, path: str, text: str) -> list[dict]:
         if not (self._client and self._client.alive):
             return []
         apath = os.path.abspath(path)
         uri = _path_to_uri(apath)
+        self._check_project_files()
         if apath not in self._opened:
             self._opened.add(apath)
             self._doc_versions[apath] = 1
@@ -659,6 +832,8 @@ class OmniSharpManager:
         self._client.notify("textDocument/didChange", {
             "textDocument": {"uri": uri, "version": version},
             "contentChanges": [{"text": text}]})
+        if self.in_project(apath) is False:
+            self._maybe_retry_project_sync()
         # publishDiagnostics async gelir → kısa pencere bekle (yeni yayın ya da timeout)
         sent = time.monotonic()
         key = _norm_key(apath)

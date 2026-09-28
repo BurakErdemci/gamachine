@@ -15,7 +15,8 @@ import { contentPane } from '../lib/contentPane';
 import { routeForFile } from '../components/model-viewer/extensions';
 
 import { Sidebar } from '../components/home/Sidebar';
-import { EditorPanel, hostOpenTarget, workspaceRelativePath } from '../components/home/EditorPanel';
+import { EditorPanel, hostOpenTarget } from '../components/home/EditorPanel';
+import { CsharpProjectHint } from '../components/home/CsharpProjectHint';
 import { TerminalPanel } from '../components/home/TerminalPanel';
 import { ChatPanel } from '../components/home/ChatPanel';
 import { SettingsModal } from '../components/home/SettingsModal';
@@ -38,6 +39,7 @@ import { useAIConfig } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
 import { useChatNotifications } from '../hooks/home/useChatNotifications';
 import { useAutoScroll } from '../hooks/home/useAutoScroll';
+import { useLiveDiagnostics } from '../hooks/home/useLiveDiagnostics';
 import { McpApprovalCards } from '../components/home/McpApprovalCards';
 import { McpUnknownTray } from '../components/home/McpUnknownTray';
 import { ChatTabs, BranchButton, hasBranches } from '../components/home/ChatTabs';
@@ -83,12 +85,6 @@ const getBrandRgb = (modelName?: string, provider?: string): string => {
   if (m.startsWith('opencode:')) return BRAND_RGB.opencode;
   return BRAND_RGB[(provider || '').toLowerCase()] || '96, 165, 250';
 };
-
-// One definition, four call sites: `/lsp/change` here and the three
-// IntelliSense siblings in EditorPanel. It lives there because that is where
-// three of the four are; a second copy here is how the siblings drifted apart
-// in the first place.
-const getRelativePath = workspaceRelativePath;
 
 export default function Home() {
   // `toasts` ve `dismissToast` bilerek alınıyor: hook ikisini de döndürüyordu,
@@ -293,8 +289,6 @@ export default function Home() {
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [projectProblems, setProjectProblems] = useState<Record<string, any[]>>({});
-  // OmniSharp sidecar durumu (starting → üst barda "C# analizi hazırlanıyor…" rozeti)
-  const [lspStatus, setLspStatus] = useState<{ state: string; detail: string } | null>(null);
   // Chat'te '/' autocomplete için Claude Code slash komutları + skill'ler (backend'den)
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
@@ -321,7 +315,6 @@ export default function Home() {
   // is only worth showing when content actually arrived while the user was up
   // there — scrolling up in an idle chat should not pop a call to action.
   const [hasUnreadBelow, setHasUnreadBelow] = useState(false);
-  const lintTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const openedFileRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -329,28 +322,11 @@ export default function Home() {
   }, [fs.openedFilePath]);
 
   // --- Canlı diagnostics (OmniSharp sidecar) ---
-  useEffect(() => {
-    if (!API || !auth.user || !fs.openedFilePath) return;
-    // C# analizi yalnızca .cs için — md/json/shader gibi dosyalar da açılabiliyor.
-    if (!fs.openedFilePath.toLowerCase().endsWith('.cs')) return;
-
-    if (lintTimeoutRef.current) clearTimeout(lintTimeoutRef.current);
-
-    lintTimeoutRef.current = setTimeout(async () => {
-      try {
-        const relativeFile = getRelativePath(fs.openedFilePath!, fs.workspacePath);
-        const res = await axios.post(`${API}/lsp/change`,
-          { path: relativeFile, text: fs.code },
-          { headers: { 'X-Session-Token': auth.user?.sessionToken } });
-        setLspStatus(res.data?.status || null);
-        if (res.data?.problems) {
-          setProjectProblems(prev => ({ ...prev, [relativeFile]: res.data.problems }));
-        }
-      } catch { /* sidecar kapalıysa sessiz */ }
-    }, 700);
-
-    return () => { if (lintTimeoutRef.current) clearTimeout(lintTimeoutRef.current); };
-  }, [fs.code, fs.openedFilePath, API, auth.user]);
+  // OmniSharp sidecar durumu (starting → üst barda "C# analizi hazırlanıyor…" rozeti)
+  const { lspStatus, inProject: csInProject } = useLiveDiagnostics({
+    API, sessionToken: auth.user?.sessionToken, openedFilePath: fs.openedFilePath,
+    workspacePath: fs.workspacePath, code: fs.code, setProjectProblems,
+  });
 
   const flattenedProblems = useMemo(() => {
     return Object.values(projectProblems)
@@ -740,11 +716,14 @@ export default function Home() {
               <ModelPreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />
             )
           ) : pane === 'editor' ? (
+            <>
+            <CsharpProjectHint inProject={diffFile ? null : csInProject} />
             <EditorPanel
               code={fs.code} setCode={fs.setCode} openedFilePath={fs.openedFilePath} isEditorFocused={isEditorFocused} setIsEditorFocused={setIsEditorFocused}
               workspacePath={fs.workspacePath} problems={flattenedProblems} diffFile={diffFile}
               apiUrl={API} sessionToken={auth.user?.sessionToken} openFile={fs.openFile}
             />
+            </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-8 relative overflow-hidden">
               {/* Marka renkli ambient zemin — hangi zekayla çalışıldığını hissettirir */}
