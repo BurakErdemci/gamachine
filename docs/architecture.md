@@ -6,6 +6,17 @@ layer, and the SSE event stream. For the reasoning behind these choices see
 
 ---
 
+## Product rule: nothing is downloaded at runtime
+
+The installer carries everything a feature needs: models, binaries, packages
+and plugins. No feature may say "please wait, downloading" on first use, and
+none may fetch code or data files in the background (owner, 26 Sep 2026; the
+purpose was written down on 28 Sep 2026). Normal network traffic of a feature
+the user turned on is not a download: provider API calls, web push, and the
+encrypted messages of remote control (`docs/remote-control.md`). Examples: the
+dictation model ships inside the installer; OpenCode's background npm install
+for a project `.opencode` folder is prevented.
+
 ## 🏗 System Architecture
 
 ```
