@@ -29,6 +29,7 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'terminal-write',
   'terminal-resize',
   'notify',
+  'remote-control',
 ])
 
 export function assertAllowedInvokeChannel(channel: string): void {

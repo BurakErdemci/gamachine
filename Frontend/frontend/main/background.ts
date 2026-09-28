@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import net from 'net'
 import { randomUUID, createHash } from 'crypto'
-import { app, ipcMain, dialog, shell, BrowserWindow, Notification } from 'electron'
+import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker } from 'electron'
 import serve from 'electron-serve'
 import { createWindow } from './helpers'
 import { spawn, ChildProcess } from 'child_process'
@@ -39,6 +39,7 @@ import {
   hostWorkspaceFingerprint,
 } from './helpers/workspace-fingerprint'
 import { createNotifier } from './helpers/notify'
+import { createRemoteControl } from './helpers/remote-control'
 
 const useDockerBackend = process.env.USE_DOCKER_BACKEND === 'true'
 
@@ -730,6 +731,23 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
   }
 })
 
+// Remote control: every /remote/* call, so the UI secret stays here and the
+// keep-awake blocker sees every answer (helpers/remote-control.ts).
+const remoteControl = createRemoteControl({
+  baseUrl: getBackendBaseUrl,
+  appToken: localAppToken,
+  uiSecret,
+  http: axios,
+  // Read on use: tests load this module with electron mocks that lack it.
+  blocker: {
+    start: type => powerSaveBlocker.start(type),
+    stop: id => powerSaveBlocker.stop(id),
+    isStarted: id => powerSaveBlocker.isStarted(id),
+  },
+  log: (...args) => console.log(...args),
+})
+handleSecure('remote-control', (_event, action: unknown, arg: unknown) => remoteControl.invoke(action, arg))
+
 // The renderer picks a folder with a HOST path, but in Docker mode the backend
 // is a different filesystem namespace where that path does not exist — only the
 // mount does. Sending the host path unchanged is what an audit caught on
@@ -1135,6 +1153,7 @@ if (!gotTheLock) {
 
       try {
         await startPythonBackend()
+        remoteControl.start()
       } catch (err) {
         console.error('--- BACKEND BAŞLATILAMADI ---', err)
         backendPort = null
@@ -1337,11 +1356,13 @@ if (!gotTheLock) {
   }
 
   app.on('window-all-closed', () => {
+    remoteControl.shutdown()
     killBackend()
     app.quit()
   })
 
   app.on('before-quit', () => {
+    remoteControl.shutdown()
     killBackend()
   })
 

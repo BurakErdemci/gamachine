@@ -81,8 +81,18 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // chats). It touches no file and returns no data: the main process shows a
   // title and a body after checking the payload's shape, and on click sends
   // back only the conversation id it was given (see helpers/notify.ts).
-  it('tam olarak 30 kanal içerir', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(30)
+  //
+  // 30 -> 31, 28 Sep 2026: 'remote-control' (phone remote control settings).
+  // Every /remote/* call goes through it so the UI secret needed by enable,
+  // pair/start, pair/approve and the relay URL stays in the main process; the
+  // action is one of a fixed table (helpers/remote-control.ts) and the path is
+  // never taken from the renderer.
+  it('tam olarak 31 kanal içerir', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(31)
+  })
+
+  it("remote-control kanalı whitelist'te", () => {
+    expect(ALLOWED_INVOKE_CHANNELS.has('remote-control')).toBe(true)
   })
 
   it("notify kanalı whitelist'te", () => {
