@@ -341,7 +341,7 @@ describe('message queue · edit, delete, send now', () => {
 
   /** Holds every `/chat-stop` answer until the returned release is called. */
   const holdStops = () => {
-    const original = fetchMock.getMockImplementation()!
+    const original = fetchMock.getMockImplementation() as (url: string, init?: any) => unknown
     const releases: Array<(value: any) => void> = []
     fetchMock.mockImplementation((url: string, init?: any) =>
       String(url).includes('/chat-stop/')
