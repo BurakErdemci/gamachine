@@ -774,21 +774,23 @@ class DatabaseManager:
                 (after_id, from_conv, to_conv)).fetchone() is not None
 
     def claim_queued_mail(self, to_conv: int,
-                          note_of: Optional[Callable[[List[Dict[str, Any]]], str]] = None
-                          ) -> List[Dict[str, Any]]:
+                          note_of: Optional[Callable[[List[Dict[str, Any]]], str]] = None,
+                          after_id: int = 0) -> List[Dict[str, Any]]:
         """Mark every queued note of `to_conv` delivered and return them, oldest
         first, with the sender's title; one transaction, so a note is handed
         out once. With `note_of`, the recipient's message is written in the
         same transaction: a failed write leaves the notes queued instead of
-        delivered to nobody (Codex mailaudit, 27 Sep 2026)."""
+        delivered to nobody (Codex mailaudit, 27 Sep 2026). Only ids above
+        `after_id` are claimed: while the startup sweep has not succeeded, the
+        previous run's notes are held (Codex queueaudit, 28 Sep 2026)."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('BEGIN IMMEDIATE')
             rows = conn.execute(
                 f'SELECT {", ".join("m." + c.strip() for c in self._MAIL_COLS.split(","))}, c.title '
                 'FROM mailbox m LEFT JOIN conversations c ON c.id = m.from_conv '
-                'WHERE m.to_conv = ? AND m.status = ? ORDER BY m.id ASC',
-                (to_conv, "queued")).fetchall()
+                'WHERE m.to_conv = ? AND m.status = ? AND m.id > ? ORDER BY m.id ASC',
+                (to_conv, "queued", after_id)).fetchall()
             out = []
             for r in rows:
                 item = self._mail_row(r)
@@ -810,11 +812,12 @@ class DatabaseManager:
             conn.commit()
             return out
 
-    def queued_mail_targets(self) -> List[int]:
+    def queued_mail_targets(self, after_id: int = 0) -> List[int]:
+        """Chats holding queued notes with an id above `after_id`."""
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             return [r[0] for r in conn.execute(
-                'SELECT DISTINCT to_conv FROM mailbox WHERE status = ? ORDER BY to_conv',
-                ("queued",))]
+                'SELECT DISTINCT to_conv FROM mailbox WHERE status = ? AND id > ? ORDER BY to_conv',
+                ("queued", after_id))]
 
     def reject_pending_mail(self) -> int:
         """Startup: a card that waited in the previous process can no longer be
@@ -826,7 +829,8 @@ class DatabaseManager:
             return cur.rowcount
 
     def sweep_undelivered_mail(self, recipient_note: Callable[[List[Dict[str, Any]]], str],
-                               sender_note: Callable[[List[Dict[str, Any]]], str]) -> int:
+                               sender_note: Callable[[List[Dict[str, Any]]], str],
+                               up_to_id: Optional[int] = None) -> int:
         """Startup: a note still `queued` from the previous run cannot self-
         deliver (owner decision, 28 Sep 2026 - a restart used to re-arm its own
         wake and two old chats replied to each other until the depth limit
@@ -834,8 +838,10 @@ class DatabaseManager:
         `undelivered`, one system message is written into each affected
         recipient chat and one into each affected sender chat (`_touch`ed like
         `claim_queued_mail` touches a delivery), so a failed write leaves the
-        rows `queued` for the next attempt instead of half-swept. Returns the
-        number of notes moved.
+        rows `queued` for the next attempt instead of half-swept. With
+        `up_to_id`, only ids at or below it are swept: a retry after a failed
+        startup sweep must leave the notes this process queued since alone
+        (Codex queueaudit, 28 Sep 2026). Returns the number of notes moved.
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -845,7 +851,8 @@ class DatabaseManager:
                 'fc.title, tc.title '
                 'FROM mailbox m LEFT JOIN conversations fc ON fc.id = m.from_conv '
                 'LEFT JOIN conversations tc ON tc.id = m.to_conv '
-                "WHERE m.status = 'queued' ORDER BY m.id ASC").fetchall()
+                "WHERE m.status = 'queued' AND (? IS NULL OR m.id <= ?) ORDER BY m.id ASC",
+                (up_to_id, up_to_id)).fetchall()
             if not rows:
                 conn.commit()
                 return 0

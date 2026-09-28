@@ -715,6 +715,7 @@ def test_queued_notes_are_marked_undelivered_after_a_restart_and_wake_nobody(env
     # A note still waiting on its card cannot be answered after a restart.
     env.db.add_mail(a, b, "kartta kaldı", "pending_approval", "old-gate", 1)
     wake_queue.reset_all()                       # the process died
+    cr._MAIL_SWEEPS.clear()
     router = cr.create_conversation_router(env.db, {})   # and came back
     assert _rows(env.db, "SELECT body, status FROM mailbox ORDER BY id") == [
         ("restart öncesi", "undelivered"), ("kartta kaldı", "rejected")]
@@ -816,6 +817,7 @@ def test_requeue_arms_nothing_once_swept(env, auto):
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
     _send(env.client, a, b, body="restart sonrası uyanmasın")
     wake_queue.reset_all()
+    cr._MAIL_SWEEPS.clear()                      # a new process
     router = cr.create_conversation_router(env.db, {})   # runs the sweep
     assert env.db.queued_mail_targets() == []
     route = _route(router, "/wake-stream-all")
@@ -841,6 +843,7 @@ def test_a_later_real_send_still_queues_and_delivers_normally_after_a_sweep(
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
     env.db.add_mail(a, b, "eski, taşınacak", "queued", None, 1)
     wake_queue.reset_all()
+    cr._MAIL_SWEEPS.clear()
     cr.create_conversation_router(env.db, {})   # simulates the restart; runs the sweep
     assert _rows(env.db, "SELECT status FROM mailbox") == [("undelivered",)]
 
@@ -860,6 +863,132 @@ def test_a_later_real_send_still_queues_and_delivers_normally_after_a_sweep(
     assert sorted(row[0] for row in _rows(
         env.db, "SELECT status FROM mailbox WHERE from_conv = ?", (a,))) == [
         "delivered", "undelivered"]
+
+
+# Codex queueaudit, 28 Sep 2026: the sweep ran on every router construction,
+# and a failed sweep left the previous run's notes free to wake chats.
+
+def _restarted(db):
+    """A router as a new process builds it: no sweep recorded for this DB."""
+    wake_queue.reset_all()
+    cr._MAIL_SWEEPS.clear()
+    router = cr.create_conversation_router(db, {})
+    app = FastAPI()
+    app.include_router(router)
+    return router, TestClient(app)
+
+
+def _wake_frames(router, timeout=0.3):
+    route = _route(router, "/wake-stream-all")
+
+    async def run():
+        resp = await route.endpoint(x_session_token="")
+        frames = []
+        try:
+            while True:
+                try:
+                    frames.append(await _next_frame(resp, timeout))
+                except asyncio.TimeoutError:
+                    return frames
+        finally:
+            await resp.body_iterator.aclose()
+
+    return asyncio.run(run())
+
+
+def _woken(frames):
+    import json as _json
+    return sorted(f["conversation_id"] for f in (_json.loads(x[len("data: "):]) for x in frames)
+                  if f.get("type") == "wake")
+
+
+def test_a_router_rebuild_in_the_same_process_does_not_resweep_live_notes(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    live = env.db.add_mail(a, b, "canlı not", "queued", None, 1)
+    cr.create_conversation_router(env.db, {})
+    assert env.db.get_mail(live)["status"] == "queued"
+    assert env.db.get_conversation_messages(a) == []
+    assert env.db.get_conversation_messages(b) == []
+
+
+def test_a_router_rebuild_in_the_same_process_keeps_a_live_card_s_note_pending(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    live = env.db.add_mail(a, b, "kartta bekliyor", "pending_approval", "live-gate", 1)
+    cr.create_conversation_router(env.db, {})
+    assert env.db.get_mail(live)["status"] == "pending_approval"
+
+
+def test_a_router_over_another_database_still_gets_its_own_sweep(env, tmp_path):
+    other = DatabaseManager(str(tmp_path / "other.db"))
+    a, b = _chat(other, "A"), _chat(other, "B")
+    stale = other.add_mail(a, b, "eski", "queued", None, 1)
+    cr.create_conversation_router(other, {})
+    assert other.get_mail(stale)["status"] == "undelivered"
+
+
+def test_a_failed_startup_sweep_is_retried_before_any_wake_is_armed(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    stale = env.db.add_mail(a, b, "eski not", "queued", None, 1)
+    _break_message_writes_to(env.db, b)
+    router, _client = _restarted(env.db)
+    assert env.db.get_mail(stale)["status"] == "queued"
+    _heal_message_writes(env.db)
+
+    assert _woken(_wake_frames(router)) == []
+    assert env.db.get_mail(stale)["status"] == "undelivered"
+    assert wake_queue.pending(b) == 0
+
+
+def test_while_the_sweep_keeps_failing_old_notes_are_held_and_new_ones_work(
+        env, auto, monkeypatch):
+    _FakeRunner.messages = []
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b, c = _chat(env.db, "A"), _chat(env.db, "B"), _chat(env.db, "C")
+    stale = env.db.add_mail(a, b, "eski not", "queued", None, 1)
+    stale_to_c = env.db.add_mail(a, c, "c'ye eski not", "queued", None, 1)
+
+    def broken(*_a, **_kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(env.db, "sweep_undelivered_mail", broken)
+    router, client = _restarted(env.db)
+    fresh = env.db.add_mail(a, c, "yeni not", "queued", None, 1)
+
+    assert _woken(_wake_frames(router)) == [c]
+    assert wake_queue.pending(b) == 0
+
+    wake_queue.issue_ticket(c, [mailbox.notice(a)])
+    assert _wake_turn(client, c).status_code == 200
+    assert "yeni not" in _FakeRunner.messages[-1]
+    assert "c'ye eski not" not in _FakeRunner.messages[-1]
+    assert env.db.get_mail(fresh)["status"] == "delivered"
+    assert env.db.get_mail(stale)["status"] == "queued"
+    assert env.db.get_mail(stale_to_c)["status"] == "queued"
+
+    # Once the sweep succeeds it takes the old notes only.
+    monkeypatch.delattr(env.db, "sweep_undelivered_mail")
+    later = env.db.add_mail(a, b, "sonraki not", "queued", None, 1)
+    _wake_frames(router)
+    assert env.db.get_mail(stale)["status"] == "undelivered"
+    assert env.db.get_mail(stale_to_c)["status"] == "undelivered"
+    assert env.db.get_mail(later)["status"] == "queued"
+
+
+def test_with_the_startup_note_id_unknown_nothing_is_woken_or_claimed(env, auto, monkeypatch):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    stale = env.db.add_mail(a, b, "eski not", "queued", None, 1)
+
+    def broken(*_a, **_kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(env.db, "max_mail_id", broken)
+    monkeypatch.setattr(env.db, "sweep_undelivered_mail", broken)
+    router, client = _restarted(env.db)
+
+    assert _woken(_wake_frames(router)) == []
+    wake_queue.issue_ticket(b, [mailbox.notice(a)])
+    assert _data_frames(_wake_turn(client, b).text)[-1]["stop_reason"] == "mail_claim_failed"
+    assert env.db.get_mail(stale)["status"] == "queued"
 
 
 def test_undelivered_mail_survives_family_delete_like_other_statuses(env, auto):

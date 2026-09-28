@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import json
 import os
+import threading
 import types
 import uuid
 from datetime import datetime, timedelta
@@ -447,6 +448,22 @@ def _check_chat_rate_limit(user_id: int):
 WAKE_ALL_POLL_S = 1.0
 WAKE_ALL_REQUEUE_S = 5.0
 
+# The startup sweep of notes left `queued` by a previous run, once per process
+# per database: re-running it on a router rebuild marked this process's live
+# notes undelivered (Codex queueaudit, 28 Sep 2026); the refusal of notes left
+# on a card is gated the same way. Resolved DB path -> {"done", "cutoff":
+# highest mail id when the process first built a router over it, None if
+# unreadable, "failures", "cards_cleared"}.
+_MAIL_SWEEPS: Dict[str, dict] = {}
+_MAIL_SWEEPS_LOCK = threading.Lock()
+
+
+def _mail_sweep_key(db) -> Optional[str]:
+    path = getattr(db, "db_path", None)
+    if not isinstance(path, (str, os.PathLike)):
+        return None
+    return os.path.normcase(os.path.realpath(path))
+
 
 # ── Side chat (read-only side question over a main chat) ─────────────────────
 # The renderer's copy of the main chat's latest answer is capped to this many
@@ -707,14 +724,75 @@ def create_conversation_router(db, progress_store):
         except Exception:
             logger.exception("[mailbox] note %s not settled", mail_id)
 
+    _sweep_key = _mail_sweep_key(db)
+    with _MAIL_SWEEPS_LOCK:
+        _sweep = _MAIL_SWEEPS.get(_sweep_key) if _sweep_key else None
+        if _sweep is None:
+            _sweep = {"done": False, "cutoff": None, "failures": 0, "cards_cleared": False}
+            try:
+                cutoff = db.max_mail_id()
+                _sweep["cutoff"] = cutoff if type(cutoff) is int else None
+            except Exception:
+                logger.exception("[mailbox] highest note id not read at startup")
+            if _sweep_key:
+                _MAIL_SWEEPS[_sweep_key] = _sweep
+
+    def _startup_sweep_done() -> bool:
+        """True once the startup sweep has succeeded; retried on every call
+        until then. A failed sweep leaves the previous run's notes `queued`,
+        and treating them as live re-armed their wakes (Codex queueaudit,
+        28 Sep 2026), so callers hold every note up to the startup cutoff."""
+        if _sweep["done"]:
+            return True
+        with _MAIL_SWEEPS_LOCK:
+            if _sweep["done"]:
+                return True
+            # Bounded by the cutoff: a retry must not sweep notes this
+            # process queued after startup.
+            bound = {} if _sweep["cutoff"] is None else {"up_to_id": _sweep["cutoff"]}
+            try:
+                moved = db.sweep_undelivered_mail(
+                    mailbox.format_undelivered_recipient_note,
+                    mailbox.format_undelivered_sender_note, **bound)
+            except Exception:
+                _sweep["failures"] += 1
+                if _sweep["failures"] == 1:
+                    logger.exception("[mailbox] notes left queued by the previous run not swept; "
+                                     "they are held (not woken, not claimed) until a retry succeeds")
+                else:
+                    logger.warning("[mailbox] startup note sweep failed again (attempt %d); "
+                                   "the previous run's notes stay held", _sweep["failures"])
+                return False
+            _sweep["done"] = True
+        if type(moved) is int and moved:
+            logger.info("[mailbox] %d note(s) left queued from the previous run were "
+                        "marked undelivered", moved)
+        return True
+
+    def _held_mail_cutoff() -> Optional[int]:
+        """0 when every queued note is live; else the id up to which notes are
+        held, or None when that id is unknown and nothing may be touched."""
+        if _startup_sweep_done():
+            return 0
+        if _sweep["cutoff"] is None:
+            logger.warning("[mailbox] startup note sweep pending and the startup note id "
+                           "unknown; no queued note is woken or claimed")
+        return _sweep["cutoff"]
+
     def _claim_mail(conv_id: int) -> Optional[List[dict]]:
         """The queued notes of `conv_id`, now marked delivered and stored as one
         system message in it; [] when there are none, None when the claim
         failed (the notes then stay queued). Callers must tell the two apart:
         read as "no mail", a failed claim ran the wake turn on the client's
         text (Codex mailverify, 27 Sep 2026)."""
+        held = _held_mail_cutoff()
+        if held is None:
+            return None
         try:
-            rows = db.claim_queued_mail(conv_id, note_of=mailbox.stored_text)
+            if held:
+                rows = db.claim_queued_mail(conv_id, note_of=mailbox.stored_text, after_id=held)
+            else:
+                rows = db.claim_queued_mail(conv_id, note_of=mailbox.stored_text)
         except Exception:
             logger.exception("[mailbox] notes of %s not claimed", conv_id)
             return None
@@ -753,8 +831,11 @@ def create_conversation_router(db, progress_store):
         or this would spin wake -> refused -> wake.
         """
         from agentic import wake_queue
+        held = _held_mail_cutoff()
+        if held is None:
+            return []
         try:
-            targets = db.queued_mail_targets()
+            targets = db.queued_mail_targets(after_id=held) if held else db.queued_mail_targets()
         except Exception:
             logger.exception("[mailbox] queued notes not read")
             return []
@@ -2671,24 +2752,24 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         _require_own_mail(x_session_token, mail_id, conversation_id)
         return _worded(_mail_cancel(mail_id, conversation_id, "Onay süresi doldu."))
 
-    try:
-        rejected = db.reject_pending_mail()
-        if type(rejected) is int and rejected:
-            logger.info("[mailbox] %d note(s) left waiting on a card were refused at startup", rejected)
-    except Exception:
-        logger.exception("[mailbox] stale note cards not cleared")
-    try:
-        # Owner decision, 28 Sep 2026: a note still `queued` from the previous
-        # run must not self-deliver (see mailbox.STATUS_UNDELIVERED). Runs here,
-        # before any wake stream can connect, so `_requeue_queued_mail` never
-        # sees these rows as `queued` and arms nothing for them.
-        undelivered = db.sweep_undelivered_mail(
-            mailbox.format_undelivered_recipient_note, mailbox.format_undelivered_sender_note)
-        if undelivered:
-            logger.info("[mailbox] %d note(s) left queued from the previous run were "
-                        "marked undelivered", undelivered)
-    except Exception:
-        logger.exception("[mailbox] stale queued notes not swept")
+    # Once per process per DB: on a router rebuild the pending rows are this
+    # process's live cards, not the previous run's.
+    with _MAIL_SWEEPS_LOCK:
+        _clear_cards = not _sweep["cards_cleared"]
+        _sweep["cards_cleared"] = True
+    if _clear_cards:
+        try:
+            rejected = db.reject_pending_mail()
+            if type(rejected) is int and rejected:
+                logger.info("[mailbox] %d note(s) left waiting on a card were refused at startup",
+                            rejected)
+        except Exception:
+            logger.exception("[mailbox] stale note cards not cleared")
+    # Owner decision, 28 Sep 2026: a note still `queued` from the previous run
+    # must not self-deliver (see mailbox.STATUS_UNDELIVERED). Runs here, before
+    # any wake stream can connect; if it fails, `_held_mail_cutoff` keeps those
+    # rows out of `_requeue_queued_mail` and `_claim_mail` and retries it.
+    _startup_sweep_done()
     mailbox.set_service(types.SimpleNamespace(
         list_chats=_service_list_chats, send_and_wait=_service_send_and_wait))
 
