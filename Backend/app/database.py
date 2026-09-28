@@ -819,12 +819,17 @@ class DatabaseManager:
                 'SELECT DISTINCT to_conv FROM mailbox WHERE status = ? AND id > ? ORDER BY to_conv',
                 ("queued", after_id))]
 
-    def reject_pending_mail(self) -> int:
+    def reject_pending_mail(self, up_to_id: Optional[int] = None) -> int:
         """Startup: a card that waited in the previous process can no longer be
-        answered, so its note is refused rather than left pending forever."""
+        answered, so its note is refused rather than left pending forever. With
+        `up_to_id`, only ids at or below it are rejected: a retry after a
+        failed startup rejection must leave a card this process itself raised
+        since alone (Codex verify round, 28 Sep 2026)."""
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            cur = conn.execute('UPDATE mailbox SET status = ? WHERE status = ?',
-                               ("rejected", "pending_approval"))
+            cur = conn.execute(
+                "UPDATE mailbox SET status = 'rejected' "
+                "WHERE status = 'pending_approval' AND (? IS NULL OR id <= ?)",
+                (up_to_id, up_to_id))
             conn.commit()
             return cur.rowcount
 

@@ -462,6 +462,23 @@ def _heal_message_writes(db):
         conn.commit()
 
 
+# A real failure inside SQLite for the startup card rejection (Codex verify
+# round, 28 Sep 2026), not a patched `reject_pending_mail`: patching it would
+# pass without exercising the flag/cutoff logic under test.
+def _break_card_rejection(db):
+    with closing(sqlite3.connect(db.db_path)) as conn:
+        conn.execute("CREATE TRIGGER fail_reject BEFORE UPDATE OF status ON mailbox "
+                     "WHEN NEW.status = 'rejected' "
+                     "BEGIN SELECT RAISE(ABORT, 'transient write failure'); END")
+        conn.commit()
+
+
+def _heal_card_rejection(db):
+    with closing(sqlite3.connect(db.db_path)) as conn:
+        conn.execute("DROP TRIGGER fail_reject")
+        conn.commit()
+
+
 def test_a_failed_note_write_rolls_the_claim_back(env):
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
     env.db.add_mail(a, b, "geri alınsın", mailbox.STATUS_QUEUED, None, 1)
@@ -989,6 +1006,56 @@ def test_with_the_startup_note_id_unknown_nothing_is_woken_or_claimed(env, auto,
     wake_queue.issue_ticket(b, [mailbox.notice(a)])
     assert _data_frames(_wake_turn(client, b).text)[-1]["stop_reason"] == "mail_claim_failed"
     assert env.db.get_mail(stale)["status"] == "queued"
+
+
+# ── the startup card rejection retries after a failure (Codex verify round,
+# 28 Sep 2026): `cards_cleared` used to be set before `reject_pending_mail`
+# succeeded, so a transient write error on the first router construction left
+# a stale `pending_approval` card pending for the rest of the process's life,
+# with no later construction ever retrying it ─────────────────────────────────
+
+def test_a_failed_startup_card_rejection_is_retried_on_the_next_construction(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    stale = env.db.add_mail(a, b, "kartta kaldı", "pending_approval", "old-gate", 1)
+    _break_card_rejection(env.db)
+    _restarted(env.db)                            # first construction; the rejection fails
+    assert env.db.get_mail(stale)["status"] == "pending_approval"
+    _heal_card_rejection(env.db)
+
+    cr.create_conversation_router(env.db, {})      # retried on the next construction
+    assert env.db.get_mail(stale)["status"] == "rejected"
+
+
+def test_the_retry_never_rejects_a_card_created_after_startup(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    stale = env.db.add_mail(a, b, "eski kart", "pending_approval", "old-gate", 1)
+    _break_card_rejection(env.db)
+    _restarted(env.db)                            # first construction; the rejection fails
+    assert env.db.get_mail(stale)["status"] == "pending_approval"
+    _heal_card_rejection(env.db)
+    # A card this process itself raised while the retry was still pending.
+    live = env.db.add_mail(a, b, "canlı kart", "pending_approval", "live-gate", 1)
+
+    cr.create_conversation_router(env.db, {})      # retry, bounded by the startup cutoff
+    assert env.db.get_mail(stale)["status"] == "rejected"
+    assert env.db.get_mail(live)["status"] == "pending_approval"
+
+
+def test_the_startup_sweep_flag_stays_unset_on_a_failed_first_construction_like_the_card_flag(env):
+    """`cards_cleared` and the undelivered sweep's `done` are each set only
+    once their own DB write succeeds; a failed first attempt must not leave
+    either marked done."""
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    env.db.add_mail(a, b, "kartta kaldı", "pending_approval", "old-gate", 1)
+    env.db.add_mail(a, b, "kuyrukta kaldı", "queued", None, 1)
+    _break_card_rejection(env.db)
+    _break_message_writes_to(env.db, b)
+    _restarted(env.db)
+    sweep = cr._MAIL_SWEEPS[cr._mail_sweep_key(env.db)]
+    assert sweep["cards_cleared"] is False
+    assert sweep["done"] is False
+    _heal_card_rejection(env.db)
+    _heal_message_writes(env.db)
 
 
 def test_undelivered_mail_survives_family_delete_like_other_statuses(env, auto):

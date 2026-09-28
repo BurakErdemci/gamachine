@@ -2753,16 +2753,25 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         return _worded(_mail_cancel(mail_id, conversation_id, "Onay süresi doldu."))
 
     # Once per process per DB: on a router rebuild the pending rows are this
-    # process's live cards, not the previous run's.
+    # process's live cards, not the previous run's. The flag is set only after
+    # the rejection succeeds - a failed first call used to mark it done anyway,
+    # so a transient write error left a stale card `pending_approval` for the
+    # rest of the process's life with no later construction ever retrying it
+    # (Codex verify round, 28 Sep 2026). Bounded by the same startup cutoff the
+    # undelivered sweep uses, so a retry only reaches rows that existed before
+    # this process started and never rejects a card this process itself raised
+    # meanwhile.
     with _MAIL_SWEEPS_LOCK:
         _clear_cards = not _sweep["cards_cleared"]
-        _sweep["cards_cleared"] = True
     if _clear_cards:
+        bound = {} if _sweep["cutoff"] is None else {"up_to_id": _sweep["cutoff"]}
         try:
-            rejected = db.reject_pending_mail()
+            rejected = db.reject_pending_mail(**bound)
             if type(rejected) is int and rejected:
                 logger.info("[mailbox] %d note(s) left waiting on a card were refused at startup",
                             rejected)
+            with _MAIL_SWEEPS_LOCK:
+                _sweep["cards_cleared"] = True
         except Exception:
             logger.exception("[mailbox] stale note cards not cleared")
     # Owner decision, 28 Sep 2026: a note still `queued` from the previous run
