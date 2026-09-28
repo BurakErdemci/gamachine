@@ -98,6 +98,10 @@ LEDGER_WRITER = _LedgerWriter()
 LEDGER_READ_WAIT_S = 2.0
 
 
+class LedgerNotCaughtUp(sqlite3.OperationalError):
+    """Queued ledger rows were not written within the read deadline."""
+
+
 def flush_ledger(timeout: float = 5.0) -> bool:
     return LEDGER_WRITER.flush(timeout)
 
@@ -831,9 +835,14 @@ class DatabaseManager:
     def _ledger_read_connection(self) -> sqlite3.Connection:
         """The queue wait and SQLite's own lock wait share one deadline; stacked,
         a held lock kept a read ~9.4 s (Codex verification, 28 Sep 2026). A lock
-        still held at the deadline raises, so it never reads as "no cards"."""
+        still held at the deadline raises, so it never reads as "no cards".
+
+        A RESERVED lock blocks the queued insert but lets SELECT through, so a
+        read after a timed-out flush returned 0 rows (Codex, 28 Sep 2026); it
+        raises instead."""
         started = time.monotonic()
-        LEDGER_WRITER.flush(LEDGER_READ_WAIT_S)
+        if not LEDGER_WRITER.flush(LEDGER_READ_WAIT_S):
+            raise LedgerNotCaughtUp("approval ledger is not caught up (writer busy)")
         spent = time.monotonic() - started
         return sqlite3.connect(self.db_path, timeout=max(0.1, LEDGER_READ_WAIT_S - spent))
 

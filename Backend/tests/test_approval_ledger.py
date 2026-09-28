@@ -417,7 +417,7 @@ def test_a_ledger_read_under_a_held_lock_has_one_deadline(tmp_path, monkeypatch,
         assert db.record_card_resolution({"card_id": "queued", "outcome": "approved"})
         started = time.monotonic()
         # A held lock surfaces as an error, not as an empty ledger.
-        with pytest.raises(sqlite3.OperationalError, match="locked"):
+        with pytest.raises(sqlite3.OperationalError, match="locked|not caught up"):
             getattr(db, read)()
         assert time.monotonic() - started < 0.5 + 1.0
     finally:
@@ -425,4 +425,28 @@ def test_a_ledger_read_under_a_held_lock_has_one_deadline(tmp_path, monkeypatch,
         lock.close()
     assert writer.flush(10)
     assert [r["card_id"] for r in db.get_approval_ledger()] == ["queued"]
+    writer.shutdown(5)
+
+
+def test_a_ledger_read_the_writer_has_not_caught_up_with_raises(tmp_path, monkeypatch):
+    # A RESERVED lock blocks the queued insert but not SELECT; the read used to
+    # return 0 rows and total 0, as if no card had closed (Codex, 28 Sep 2026).
+    monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    db = DatabaseManager(str(tmp_path / "reserved.db"))
+    writer = database._LedgerWriter()
+    monkeypatch.setattr(database, "LEDGER_WRITER", writer)
+    monkeypatch.setattr(database, "LEDGER_READ_WAIT_S", 0.3)
+    lock = sqlite3.connect(db.db_path)
+    try:
+        lock.execute("BEGIN IMMEDIATE")
+        assert db.record_card_resolution({"card_id": "queued", "outcome": "approved"})
+        for read in (db.get_approval_ledger, db.approval_ledger_stats):
+            with pytest.raises(sqlite3.OperationalError, match="not caught up"):
+                read()
+    finally:
+        lock.rollback()
+        lock.close()
+    assert writer.flush(10)
+    assert [r["card_id"] for r in db.get_approval_ledger()] == ["queued"]
+    assert db.approval_ledger_stats()["total"] == 1
     writer.shutdown(5)
