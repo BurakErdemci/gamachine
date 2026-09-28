@@ -331,3 +331,175 @@ export class Link {
     return reply;
   }
 }
+
+// ---------------------------------------------------------------- page logic
+// DOM-free so node can test it; app.js only renders what these return.
+
+// Backend/app/remote/rpc.py TEXT_MAX: longer send_message texts are refused.
+export const SEND_TEXT_MAX = 20_000;
+export const ASK_ON_PC = 'Bu soruyu bilgisayardan cevaplayın';
+
+// turn_end.status comes from the PC's turn-event ring: done | error | stopped.
+export function turnEndLine(status) {
+  if (!status || status === 'done') return { text: 'Tur bitti', error: false };
+  if (status === 'error') return { text: 'Tur hatayla bitti', error: true };
+  if (status === 'stopped') return { text: 'Tur durduruldu', error: false };
+  return { text: 'Tur bitti (' + status + ')', error: false };
+}
+
+// One log line for a non-text event.
+export function eventLine(ev) {
+  switch (ev.kind) {
+    case 'tool_call': return { text: 'Araç: ' + (ev.tool || '?') + (ev.summary ? ' - ' + ev.summary : ''), error: false };
+    case 'turn_start': return { text: 'Tur başladı', error: false };
+    case 'turn_end': return turnEndLine(ev.status);
+    case 'card_opened': return { text: (ev.card_kind === 'question' ? 'Soru kartı açıldı' : 'Onay kartı açıldı') + (ev.tool ? ': ' + ev.tool : ''), error: false };
+    case 'card_closed': return { text: 'Kart kapandı', error: false };
+    case undefined:
+      // split_reply puts {truncated:true} where one item alone would not fit a frame.
+      if (ev.truncated) return { text: 'Çok büyük bir olay gösterilemedi', error: false };
+  }
+  return { text: String(ev.kind || 'olay'), error: false };
+}
+
+export function messageText(m) {
+  if (typeof m.text !== 'string') return m.truncated ? '(Mesaj telefonda gösterilemeyecek kadar uzun.)' : '';
+  return m.truncated ? m.text + ' … (kısaltıldı)' : m.text;
+}
+
+// The buttons a card gets, each with the exact answer_card payload the bridge
+// accepts (Backend/app/remote/rpc.py answer_card): question cards take
+// decision "choice" with the choice id (the option label) or "reject"; a
+// question the phone cannot answer (several questions, multi-select) comes
+// without `choices` and keeps only Reject. Other cards take approve / reject.
+export function cardActions(card) {
+  const buttons = [];
+  let note = null;
+  const pay = (decision, choice) => (choice === undefined ? { card_id: card.card_id, decision } : { card_id: card.card_id, decision, choice });
+  if (card.kind === 'question') {
+    const choices = Array.isArray(card.choices) ? card.choices : [];
+    for (const ch of choices) {
+      const id = typeof ch === 'string' ? ch : ch?.id;
+      if (typeof id !== 'string') continue;
+      const label = typeof ch === 'string' ? ch : ch.label || ch.id;
+      buttons.push({ label, payload: pay('choice', id) });
+    }
+    if (!buttons.length) note = ASK_ON_PC;
+  } else {
+    buttons.push({ label: 'Onayla', payload: pay('approve') });
+  }
+  buttons.push({ label: 'Reddet', secondary: true, payload: pay('reject') });
+  return { buttons, note };
+}
+
+// `by` of a card answer: desktop | phone:<device name> | system (timeout, Stop).
+export function answeredBy(by) {
+  if (by === 'desktop') return 'bilgisayar';
+  if (typeof by === 'string' && by.startsWith('phone:')) return by.slice(6) || 'telefon';
+  return typeof by === 'string' && by ? by : 'bilinmiyor';
+}
+
+// What the card shows after a failed answer_card; `close` removes the card.
+export function answerFailure(error, reply = {}) {
+  if (error === 'already_answered') {
+    if (reply.by === 'system') return { close: true, note: 'Bu kart zaten kapanmış (süre doldu ya da tur durduruldu).' };
+    return { close: true, note: 'Başka cihaz (' + answeredBy(reply.by) + ') cevapladı.' };
+  }
+  if (error === 'not_found') return { close: true, note: 'Bu kart artık açık değil.' };
+  if (error === 'unsupported_on_phone') return { close: false, onlyReject: true, note: ASK_ON_PC };
+  return { close: false, note: 'Gönderilemedi: ' + error };
+}
+
+// stop replies {status: ok | no_session | error}.
+export function stopLine(status) {
+  if (status === 'no_session') return 'Çalışan bir tur bulunamadı.';
+  if (status === 'error') return 'Durdurulamadı.';
+  return 'Durdurma isteği gönderildi.';
+}
+
+// chat_changed carries a summary; list_chats leaves out hidden idle chats, so this does too.
+export function mergeChat(chats, chat) {
+  const rest = chats.filter((c) => c.chat_id !== chat.chat_id);
+  return chat.hidden && chat.status === 'idle' ? rest : rest.concat(chat);
+}
+
+// Which chat the page shows, and what to do with open_chat replies and
+// pushes for it. The bridge registers an open_chat listener only after an
+// await, so a close_chat sent while that open is pending can arrive first
+// and leave a listener pushing a chat the page no longer shows: such a late
+// reply (verdict 'orphan') and pushes for chats not shown ask for close_chat
+// again. Every show/hide/load bumps `gen`, so only the newest load renders.
+export class ChatView {
+  constructor({ now = Date.now, strayEveryMs = 10_000 } = {}) {
+    this.shown = null;
+    this.gen = 0;
+    this.loading = null;
+    this.now = now;
+    this.strayEveryMs = strayEveryMs;
+    this.strayAt = new Map();
+    this.reloadAfter = false;
+  }
+
+  // Returns the chat that was shown before, if it differs (the caller closes it).
+  show(id) {
+    const prev = this.shown;
+    this.shown = id;
+    this.gen += 1;
+    this.loading = null;
+    this.reloadAfter = false;
+    this.strayAt.delete(id);
+    return prev !== null && prev !== id ? prev : null;
+  }
+
+  hide() {
+    const prev = this.shown;
+    this.shown = null;
+    this.gen += 1;
+    this.loading = null;
+    this.reloadAfter = false;
+    return prev;
+  }
+
+  beginLoad() {
+    if (this.shown === null) return null;
+    this.gen += 1;
+    this.loading = { chatId: this.shown, gen: this.gen };
+    return this.loading;
+  }
+
+  // 'apply' (render it), 'stale' (a newer load of the same chat is coming)
+  // or 'orphan' (the chat is no longer shown: send close_chat for it).
+  endLoad(token) {
+    if (this.loading === token) this.loading = null;
+    if (token.gen === this.gen) return 'apply';
+    return this.shown === token.chatId ? 'stale' : 'orphan';
+  }
+
+  // A push for a chat that is not shown: true when close_chat should be sent
+  // (at most once per chat per strayEveryMs).
+  stray(chatId) {
+    if (chatId === this.shown || typeof chatId !== 'string') return false;
+    const t = this.now();
+    const last = this.strayAt.get(chatId);
+    if (last !== undefined && t - last < this.strayEveryMs) return false;
+    if (this.strayAt.size > 200) this.strayAt.clear();
+    this.strayAt.set(chatId, t);
+    return true;
+  }
+
+  // {type:"gap", chat_id}: live events were lost; 'reload' re-opens the chat.
+  // During a load the gap may come from the listener that load replaces or
+  // from the new one, so the chat is reloaded once more after it (takeReload).
+  onGap(chatId) {
+    if (chatId !== this.shown) return this.stray(chatId) ? 'close' : 'ignore';
+    if (!this.loading) return 'reload';
+    this.reloadAfter = true;
+    return 'ignore';
+  }
+
+  takeReload() {
+    const again = !!this.reloadAfter;
+    this.reloadAfter = false;
+    return again;
+  }
+}

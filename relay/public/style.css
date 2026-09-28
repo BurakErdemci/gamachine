@@ -73,4 +73,5 @@ input, textarea {
 .log .msg { padding: 8px 0; border-bottom: 1px solid var(--line); white-space: pre-wrap; }
 .log .who { display: block; color: var(--muted); font-size: 13px; }
 .log .ev { color: var(--muted); font-size: 14px; padding: 4px 0; }
+.log .ev.error { color: var(--danger); }
 .footer { margin-top: 28px; }

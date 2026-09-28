@@ -3,7 +3,9 @@
 
 import * as C from './crypto.js';
 import * as store from './store.js';
-import { pair, Link, wsOrigin } from './net.js';
+import {
+  pair, Link, wsOrigin, ChatView, cardActions, answerFailure, eventLine, messageText, mergeChat, stopLine, SEND_TEXT_MAX,
+} from './net.js';
 
 const $ = (id) => document.getElementById(id);
 const SCREENS = ['loading', 'install', 'welcome', 'pairing', 'main', 'chat'];
@@ -12,7 +14,7 @@ let device = null;
 let link = null;
 let chats = [];
 let cards = [];
-let openChatId = null;
+const view = new ChatView();
 let wantedChatId = null;
 let liveText = null;
 let pendingFragment = null;
@@ -175,8 +177,8 @@ async function refreshAll() {
       const id = wantedChatId;
       wantedChatId = null;
       openChat(id);
-    } else if (openChatId) {
-      loadChat(openChatId);
+    } else if (view.shown) {
+      loadChat();
     }
   } catch (err) {
     $('main-note').textContent = 'Liste alınamadı: ' + err.message;
@@ -204,37 +206,38 @@ function chatTitle(id) {
 
 function cardNode(card) {
   const box = el('div', { class: 'card' });
-  const note = el('p', { class: 'note' });
+  const { buttons, note: hint } = cardActions(card);
+  const note = el('p', { class: 'note', textContent: hint || '' });
   const title = card.title || 'Onay bekliyor';
   box.append(el('b', { textContent: title }));
-  if (card.chat_id && openChatId !== card.chat_id) box.append(el('span', { class: 'meta', textContent: chatTitle(card.chat_id) }));
+  if (card.chat_id && view.shown !== card.chat_id) box.append(el('span', { class: 'meta', textContent: chatTitle(card.chat_id) }));
   if (card.detail) box.append(el('pre', { class: 'detail', textContent: String(card.detail) }));
   const row = el('div', { class: 'row' });
-  const answer = async (decision, choice) => {
+  const answer = async (payload) => {
     for (const b of row.querySelectorAll('button')) b.disabled = true;
     note.textContent = 'Gönderiliyor…';
     try {
-      await call('answer_card', choice === undefined ? { card_id: card.card_id, decision } : { card_id: card.card_id, decision, choice });
+      await call('answer_card', payload);
       removeCard(card.card_id);
     } catch (err) {
-      if (err.message === 'already_answered') {
-        const by = err.reply?.by ? ' (' + err.reply.by + ')' : '';
-        note.textContent = 'Bu kart zaten yanıtlanmış' + by + '.';
+      const f = answerFailure(err.message, err.reply);
+      note.textContent = f.note;
+      if (f.close) {
         setTimeout(() => removeCard(card.card_id), 3000);
-      } else {
-        note.textContent = 'Gönderilemedi: ' + err.message;
-        for (const b of row.querySelectorAll('button')) b.disabled = false;
+        return;
+      }
+      for (const b of row.querySelectorAll('button')) {
+        if (f.onlyReject && b.dataset.decision !== 'reject') b.remove();
+        else b.disabled = false;
       }
     }
   };
-  const choices = Array.isArray(card.choices) ? card.choices : [];
-  for (const ch of choices) {
-    const id = typeof ch === 'string' ? ch : ch.id;
-    const label = typeof ch === 'string' ? ch : ch.label || ch.id;
-    row.append(el('button', { type: 'button', textContent: label, onclick: () => answer('choice', id) }));
+  for (const btn of buttons) {
+    const node = el('button', { type: 'button', textContent: btn.label, onclick: () => answer(btn.payload) });
+    if (btn.secondary) node.className = 'secondary';
+    node.dataset.decision = btn.payload.decision;
+    row.append(node);
   }
-  if (!choices.length) row.append(el('button', { type: 'button', textContent: 'Onayla', onclick: () => answer('approve') }));
-  row.append(el('button', { type: 'button', class: 'secondary', textContent: 'Reddet', onclick: () => answer('reject') }));
   box.append(row, note);
   return box;
 }
@@ -243,7 +246,7 @@ function renderCards() {
   const all = $('cards');
   all.replaceChildren(...cards.map(cardNode));
   $('cards-box').hidden = cards.length === 0;
-  if (openChatId) $('chat-cards').replaceChildren(...cards.filter((c) => c.chat_id === openChatId).map(cardNode));
+  if (view.shown) $('chat-cards').replaceChildren(...cards.filter((c) => c.chat_id === view.shown).map(cardNode));
 }
 
 function removeCard(cardId) {
@@ -254,18 +257,19 @@ function removeCard(cardId) {
 // ---------------------------------------------------------------- chat view
 
 function renderChatHeader() {
-  if (!openChatId) return;
-  const chat = chats.find((c) => c.chat_id === openChatId);
+  if (!view.shown) return;
+  const chat = chats.find((c) => c.chat_id === view.shown);
   $('chat-title').textContent = chat?.title || 'Sohbet';
   const status = chat ? STATUS_WORDS[chat.status] || chat.status || '' : '';
   $('chat-status').textContent = link?.ready ? status : $('status-text').textContent;
-  $('btn-stop').hidden = !(chat && chat.status === 'running');
+  // A turn waiting on a card is still running and can be stopped.
+  $('btn-stop').hidden = !(chat && (chat.status === 'running' || chat.status === 'awaiting_card'));
   $('btn-send').disabled = !link?.ready;
 }
 
 function logMessage(m) {
   const who = m.role === 'user' ? (m.source === 'phone' ? 'Sen (telefon)' : 'Sen') : m.role === 'assistant' ? 'Asistan' : m.role || '';
-  $('log').append(el('div', { class: 'msg' }, el('span', { class: 'who', textContent: who }), String(m.text ?? '')));
+  $('log').append(el('div', { class: 'msg' }, el('span', { class: 'who', textContent: who }), messageText(m)));
 }
 
 function logEvent(ev) {
@@ -279,28 +283,39 @@ function logEvent(ev) {
     return;
   }
   liveText = null;
-  let line;
-  if (ev.kind === 'tool_call') line = 'Araç: ' + (ev.tool || '?') + (ev.summary ? ' - ' + ev.summary : '');
-  else if (ev.kind === 'turn_start') line = 'Tur başladı';
-  else if (ev.kind === 'turn_end') line = 'Tur bitti' + (ev.status && ev.status !== 'ok' ? ' (' + ev.status + ')' : '');
-  else if (ev.kind === 'card_opened') line = 'Onay kartı açıldı';
-  else if (ev.kind === 'card_closed') line = 'Onay kartı kapandı';
-  else line = String(ev.kind || 'olay');
-  log.append(el('div', { class: 'ev', textContent: line }));
+  const line = eventLine(ev);
+  log.append(el('div', { class: line.error ? 'ev error' : 'ev', textContent: line.text }));
 }
 
-async function loadChat(id) {
+function closeOnPc(id) {
+  call('close_chat', { chat_id: id }).catch(() => {});
+}
+
+async function loadChat() {
+  const token = view.beginLoad();
+  if (!token) return;
+  let r;
   try {
-    const r = await call('open_chat', { chat_id: id });
-    if (openChatId !== id) return;
-    $('log').replaceChildren();
-    liveText = null;
-    for (const m of Array.isArray(r.messages) ? r.messages : []) logMessage(m);
-    for (const ev of Array.isArray(r.events) ? r.events : []) logEvent(ev);
-    window.scrollTo(0, document.body.scrollHeight);
+    r = await call('open_chat', { chat_id: token.chatId });
   } catch (err) {
-    $('chat-status').textContent = 'Sohbet açılamadı: ' + err.message;
+    if (view.endLoad(token) !== 'apply') return;
+    if (err.message === 'unknown_chat') {
+      closeChat();
+      $('main-note').textContent = 'Bu sohbet artık yok.';
+    } else {
+      $('chat-status').textContent = 'Sohbet açılamadı: ' + err.message;
+    }
+    return;
   }
+  const verdict = view.endLoad(token);
+  if (verdict === 'orphan') closeOnPc(token.chatId);
+  if (verdict !== 'apply') return;
+  $('log').replaceChildren();
+  liveText = null;
+  for (const m of Array.isArray(r.messages) ? r.messages : []) logMessage(m);
+  for (const ev of Array.isArray(r.events) ? r.events : []) logEvent(ev);
+  window.scrollTo(0, document.body.scrollHeight);
+  if (view.takeReload()) loadChat();
 }
 
 function openChat(id) {
@@ -308,19 +323,20 @@ function openChat(id) {
     wantedChatId = id;
     return;
   }
-  if (openChatId && openChatId !== id) call('close_chat', { chat_id: openChatId }).catch(() => {});
-  openChatId = id;
+  const prev = view.show(id);
+  if (prev) closeOnPc(prev);
   $('log').replaceChildren();
+  liveText = null;
   $('composer-note').textContent = '';
   show('chat');
   renderChatHeader();
   renderCards();
-  loadChat(id);
+  loadChat();
 }
 
 function closeChat() {
-  if (openChatId) call('close_chat', { chat_id: openChatId }).catch(() => {});
-  openChatId = null;
+  const id = view.hide();
+  if (id) closeOnPc(id);
   show('main');
 }
 
@@ -329,12 +345,13 @@ function onPush(msg) {
     const chat = chats.find((c) => c.chat_id === msg.chat_id);
     if (chat && msg.kind === 'turn_start') chat.status = 'running';
     if (chat && msg.kind === 'turn_end') chat.status = 'idle';
-    if (msg.chat_id === openChatId) logEvent(msg);
+    if (msg.chat_id === view.shown) logEvent(msg);
+    else if (view.stray(msg.chat_id)) closeOnPc(msg.chat_id);
     renderChats();
     renderChatHeader();
   } else if (msg.type === 'chat_changed') {
     if (msg.chat?.chat_id) {
-      chats = chats.filter((c) => c.chat_id !== msg.chat.chat_id).concat(msg.chat);
+      chats = mergeChat(chats, msg.chat);
       renderChats();
       renderChatHeader();
     } else {
@@ -345,6 +362,10 @@ function onPush(msg) {
     renderCards();
   } else if (msg.type === 'card_closed') {
     removeCard(msg.card_id);
+  } else if (msg.type === 'gap') {
+    const what = view.onGap(msg.chat_id);
+    if (what === 'reload') loadChat();
+    else if (what === 'close') closeOnPc(msg.chat_id);
   }
 }
 
@@ -459,8 +480,8 @@ function wire() {
     stopArmed = null;
     btn.textContent = 'Durdur';
     try {
-      await call('stop', { chat_id: openChatId });
-      $('chat-status').textContent = 'Durdurma isteği gönderildi.';
+      const r = await call('stop', { chat_id: view.shown });
+      $('chat-status').textContent = stopLine(r.status);
     } catch (err) {
       $('chat-status').textContent = 'Durdurulamadı: ' + err.message;
     }
@@ -469,12 +490,16 @@ function wire() {
   $('composer').addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = $('composer-text').value.trim();
-    if (!text || !openChatId) return;
+    if (!text || !view.shown) return;
     const note = $('composer-note');
+    if (text.length > SEND_TEXT_MAX) {
+      note.textContent = 'Mesaj çok uzun (en fazla ' + SEND_TEXT_MAX + ' karakter).';
+      return;
+    }
     $('btn-send').disabled = true;
     note.textContent = 'Gönderiliyor…';
     try {
-      const r = await call('send_message', { chat_id: openChatId, text });
+      const r = await call('send_message', { chat_id: view.shown, text });
       if (r.status === 'desktop_not_ready') {
         note.textContent = 'Bilgisayardaki uygulama hazır değil; mesaj gönderilmedi.';
       } else {
@@ -482,7 +507,7 @@ function wire() {
         note.textContent = r.status === 'accepted' ? 'Gönderildi.' : 'Yanıt: ' + (r.status || 'bilinmiyor');
       }
     } catch (err) {
-      note.textContent = 'Gönderilemedi: ' + err.message;
+      note.textContent = err.message === 'too_large' ? 'Mesaj tek seferde gönderilemeyecek kadar uzun; kısaltıp tekrar dene.' : 'Gönderilemedi: ' + err.message;
     } finally {
       $('btn-send').disabled = !link?.ready;
     }
