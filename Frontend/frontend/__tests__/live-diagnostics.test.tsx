@@ -133,6 +133,32 @@ describe('late diagnostics re-ask', () => {
   })
 })
 
+describe('focus burst coalescing', () => {
+  it('coalesces a burst of focus events into at most one bounded refresh cycle', async () => {
+    mount({ openedFilePath: FILE, code: 'x' })
+    // Let the mount's own change-then-late-diagnostics cycle finish first, so
+    // only the focus burst's own requests are being counted below.
+    await flush(CHANGE_DEBOUNCE_MS + LATE_DIAGNOSTICS_MS[1] + 100)
+    get.mockClear()
+
+    await act(async () => {
+      for (let i = 0; i < 10; i++) window.dispatchEvent(new Event('focus'))
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(get.mock.calls.length).toBeLessThanOrEqual(3)
+  })
+
+  it('cancels the pending focus cycle on unmount', async () => {
+    const h = mount({ openedFilePath: FILE, code: 'x' })
+    await flush(CHANGE_DEBOUNCE_MS)
+    get.mockClear()
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
+    h.unmount()
+    await flush(10_000)
+    expect(get).not.toHaveBeenCalled()
+  })
+})
+
 describe('not-in-project verdict', () => {
   it('follows the backend and resets when another file opens', async () => {
     const h = mount({ openedFilePath: FILE, code: 'x' })

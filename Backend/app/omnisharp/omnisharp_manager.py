@@ -379,14 +379,22 @@ _SYNC_RETRY_INTERVAL = 30.0
 _FILE_CREATED, _FILE_CHANGED, _FILE_DELETED = 1, 2, 3
 
 
-def _project_files(workspace: str) -> dict[str, float]:
-    """The workspace's root .csproj/.sln files with their mtimes. Root only:
-    that is where Unity writes them and where `_csproj_sync_reason` looks."""
-    out: dict[str, float] = {}
+def _project_files(workspace: str) -> dict[str, float] | None:
+    """The workspace's root .csproj/.sln files with their mtimes, or `None`
+    when the directory could not be listed. Root only: that is where Unity
+    writes them and where `_csproj_sync_reason` looks.
+
+    `None` is NOT the same as `{}`: a transient `os.listdir` failure used to
+    come back as an empty dict, indistinguishable from "read fine, nothing
+    there". `_check_project_files` then treated that as a real reading and
+    announced every previously-known csproj/sln as deleted, then announced them
+    as created again on the next successful read (Codex omniaudit, 28 Sep 2026,
+    probes/watch-read-error.py)."""
     try:
         names = os.listdir(workspace)
     except OSError:
-        return out
+        return None
+    out: dict[str, float] = {}
     for name in names:
         if name.lower().endswith(_PROJECT_EXTS):
             full = os.path.join(workspace, name)
@@ -404,16 +412,24 @@ def _source_key(path: str) -> str:
     return os.path.normcase(os.path.normpath(path)).lower()
 
 
-def _csproj_sources(csproj: str) -> tuple[set[str], list[str], str | None]:
+def _csproj_sources(csproj: str) -> tuple[set[str], list[str], str | None, bool]:
     """(explicit Compile items, wildcard Compile items, glob root of an SDK-style
-    project). Unity writes legacy projects with one explicit `<Compile Include>`
-    per file; the other two shapes are here so a hand-made project does not
-    read as "file missing"."""
+    project, parse failed). Unity writes legacy projects with one explicit
+    `<Compile Include>` per file; the other two shapes are here so a hand-made
+    project does not read as "file missing".
+
+    The last element is True when the csproj could not be parsed (Unity was
+    mid-write, or the file is otherwise unreadable/corrupt). The caller must
+    NOT read that the same as "this csproj lists nothing": a truncated csproj
+    might have listed exactly the file being asked about, and `in_project()`
+    used to answer `False` for it — a definite exclusion hint shown and a Unity
+    sync retried every 30 s for a membership that was never actually determined
+    (Codex omniaudit, 28 Sep 2026, probes/corrupt-csproj.py)."""
     base = os.path.dirname(csproj)
     try:
         root = ET.parse(csproj).getroot()
     except (OSError, ET.ParseError):
-        return set(), [], None
+        return set(), [], None, True
     keys: set[str] = set()
     patterns: list[str] = []
     for el in root.iter():
@@ -430,7 +446,7 @@ def _csproj_sources(csproj: str) -> tuple[set[str], list[str], str | None]:
             else:
                 keys.add(key)
     sdk_root = _source_key(base) if root.get("Sdk") else None
-    return keys, patterns, sdk_root
+    return keys, patterns, sdk_root, False
 
 
 def _unity_api_up() -> bool:
@@ -494,7 +510,7 @@ class OmniSharpManager:
         self._retry_after: float = 0.0            # başarısız başlatma sonrası bekleme
         self._proj_mtimes: dict[str, float] | None = None  # what OmniSharp last loaded
         self._sources_stamp: dict[str, float] | None = None
-        self._sources: tuple[set[str], list[str], list[str]] = (set(), [], [])
+        self._sources: tuple[set[str], list[str], list[str], bool] = (set(), [], [], False)
         self._sync_retry_after: float = 0.0
         self._sync_task: asyncio.Future | None = None
 
@@ -734,6 +750,13 @@ class OmniSharpManager:
         if not (self._workspace and self._client and self._client.alive):
             return
         current = _project_files(self._workspace)
+        if current is None:
+            # Directory unreadable this call: keep the previous snapshot and
+            # announce nothing. Reading this the same as "successfully read,
+            # empty" used to announce every csproj/sln as deleted, then as
+            # created again on the next successful read (Codex omniaudit,
+            # 28 Sep 2026, probes/watch-read-error.py).
+            return
         previous, self._proj_mtimes = self._proj_mtimes, current
         if previous is None:
             return
@@ -747,30 +770,47 @@ class OmniSharpManager:
             self._client.notify("workspace/didChangeWatchedFiles", {"changes": changes})
 
     def in_project(self, path: str) -> bool | None:
-        """Is this .cs file compiled by a csproj in the workspace? None when the
-        question does not apply. A file outside every csproj gets syntax errors
-        only (CS1002); CS0029/CS0103 never come (measured 28 Sep 2026)."""
+        """Is this .cs file compiled by a csproj in the workspace?
+
+        Three answers, not two: `None` both when the question does not apply
+        (non-.cs, no workspace) AND when it could not be answered — a csproj
+        failed to parse and no OTHER csproj proved the file included. A file
+        actually excluded from every csproj gets `False` and syntax errors only
+        (CS1002); CS0029/CS0103 never come (measured 28 Sep 2026). Conflating
+        "excluded" with "unknown" used to show a definite exclusion hint and
+        retry Unity sync for a file whose real membership was never determined
+        (Codex omniaudit, 28 Sep 2026, probes/corrupt-csproj.py) — if several
+        csproj files exist and even one parses and lists the file, that is
+        `True` regardless of any other csproj being unparseable."""
         if not self._workspace or not path.lower().endswith(".cs"):
             return None
         stamp = _project_files(self._workspace)
-        if stamp != self._sources_stamp:
+        # A transient directory-read failure (stamp is None) keeps the last
+        # known sources instead of wiping them out on one bad read.
+        if stamp is not None and stamp != self._sources_stamp:
             keys: set[str] = set()
             patterns: list[str] = []
             roots: list[str] = []
+            unknown = False
             for proj in stamp:
                 if not proj.lower().endswith(".csproj"):
                     continue
-                k, p, r = _csproj_sources(proj)
+                k, p, r, bad = _csproj_sources(proj)
                 keys |= k
                 patterns += p
                 if r:
                     roots.append(r)
-            self._sources, self._sources_stamp = (keys, patterns, roots), stamp
-        keys, patterns, roots = self._sources
+                unknown = unknown or bad
+            self._sources, self._sources_stamp = (keys, patterns, roots, unknown), stamp
+        if self._sources_stamp is None:
+            return None
+        keys, patterns, roots, unknown = self._sources
         key = _source_key(os.path.abspath(path))
-        return (key in keys
+        if (key in keys
                 or any(fnmatch.fnmatchcase(key, p) for p in patterns)
-                or any(key.startswith(r + os.sep) for r in roots))
+                or any(key.startswith(r + os.sep) for r in roots)):
+            return True
+        return None if unknown else False
 
     def _maybe_retry_project_sync(self) -> None:
         """Ask Unity for fresh projects again, at most once per

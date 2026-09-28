@@ -144,6 +144,24 @@ class TestProjectFileChangesReachOmniSharp:
         mgr.latest_diagnostics(player)
         assert len(fake.of("workspace/didChangeWatchedFiles")) == 1
 
+    def test_one_unreadable_directory_read_sends_no_notification(self, running, monkeypatch):
+        """A transient `os.listdir` failure must not read as "every csproj/sln
+        just got deleted" followed by "and now they're all back": the csproj on
+        disk never changed, so nothing should ever be announced for it."""
+        mgr, fake, player = running
+        real_listdir = om.os.listdir
+
+        def unreadable(path):
+            if os.path.normcase(str(path)) == os.path.normcase(str(mgr._workspace)):
+                raise PermissionError("temporary directory read failure")
+            return real_listdir(path)
+
+        monkeypatch.setattr(om.os, "listdir", unreadable)
+        mgr._check_project_files()
+        monkeypatch.setattr(om.os, "listdir", real_listdir)
+        mgr._check_project_files()
+        assert fake.of("workspace/didChangeWatchedFiles") == []
+
 
 class TestInProject:
     def test_a_listed_file_is_in_the_project(self, running):
@@ -188,6 +206,29 @@ class TestInProject:
         mgr = om.OmniSharpManager()
         mgr._workspace = str(tmp_path)
         assert mgr.in_project(str(tmp_path / "Assets" / "A.cs")) is False
+
+    def test_a_corrupt_csproj_makes_membership_unknown_not_false(self, tmp_path):
+        """A csproj Unity is mid-write on (or otherwise corrupt) cannot say the
+        file is excluded — only that its own listing could not be read."""
+        ws = str(tmp_path / "corrupt-project")
+        os.makedirs(os.path.join(ws, "Assets"))
+        _write(os.path.join(ws, "Assembly-CSharp.csproj"), "<Project><ItemGroup><Compile")
+        target = _write(os.path.join(ws, "Assets", "Script.cs"), "class Script {}")
+        mgr = om.OmniSharpManager()
+        mgr._workspace = ws
+        assert mgr.in_project(target) is None
+
+    def test_a_corrupt_csproj_does_not_hide_a_match_from_a_readable_one(self, tmp_path):
+        """Several csproj files exist; one is unparseable but another one
+        actually lists the file — that is `True` regardless of the corrupt one."""
+        ws = str(tmp_path / "mixed-project")
+        os.makedirs(os.path.join(ws, "Assets"))
+        _write(os.path.join(ws, "Broken.csproj"), "<Project><ItemGroup><Compile")
+        _csproj(ws, r"Assets\Script.cs", name="Good.csproj")
+        target = _write(os.path.join(ws, "Assets", "Script.cs"), "class Script {}")
+        mgr = om.OmniSharpManager()
+        mgr._workspace = ws
+        assert mgr.in_project(target) is True
 
 
 class TestUnitySyncRetry:
@@ -280,4 +321,19 @@ class TestLateDiagnosticsRoute:
         client, mgr, fake = api
         fake.alive = False
         body = client.get("/lsp/diagnostics", params={"path": "Assets/Scripts/New.cs"}).json()
+        assert body["inProject"] is None
+
+    def test_a_path_escaping_the_workspace_is_refused(self, api):
+        """A relative path that walks out of the workspace must not reach a
+        sibling folder's already-cached diagnostics — same as `_check_token`,
+        this is a same-session isolation guarantee, not a content check."""
+        client, mgr, _ = api
+        outside_dir = os.path.join(os.path.dirname(mgr._workspace), "route-other")
+        os.makedirs(outside_dir, exist_ok=True)
+        outside = _write(os.path.join(outside_dir, "Secret.cs"), "class Secret {}")
+        mgr._on_diags({"uri": om._path_to_uri(outside), "diagnostics": [
+            {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+             "message": "outside diagnostic", "severity": 1}]})
+        body = client.get("/lsp/diagnostics", params={"path": "../route-other/Secret.cs"}).json()
+        assert body["problems"] == []
         assert body["inProject"] is None

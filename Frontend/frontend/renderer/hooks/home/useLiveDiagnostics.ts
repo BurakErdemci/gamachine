@@ -41,6 +41,13 @@ export function useLiveDiagnostics({
     const headers = { 'X-Session-Token': sessionToken };
     const relativeFile = workspaceRelativePath(openedFilePath!, workspacePath);
     const timers: ReturnType<typeof setTimeout>[] = [];
+    // A burst of focus events (alt-tabbing back and forth) must not stack
+    // refresh cycles on top of each other: each focus replaces whatever is
+    // still pending from the last one instead of appending to it. Ten focus
+    // events used to schedule ten three-request cycles (30 GETs) because
+    // nothing ever cancelled the earlier timers (Codex omniaudit, 28 Sep 2026,
+    // unbounded-focus-refresh, probes/codex-probe-focus-storm.test.tsx).
+    let focusTimers: ReturnType<typeof setTimeout>[] = [];
     let cancelled = false;
 
     const apply = (data: any, current: boolean) => {
@@ -54,8 +61,8 @@ export function useLiveDiagnostics({
         if (!cancelled) apply(res.data, true);
       } catch { /* sidecar kapalıysa sessiz */ }
     };
-    const askAfter = (delays: number[]) => {
-      for (const ms of delays) timers.push(setTimeout(ask, ms));
+    const askAfter = (delays: number[], bucket: ReturnType<typeof setTimeout>[]) => {
+      for (const ms of delays) bucket.push(setTimeout(ask, ms));
     };
 
     timers.push(setTimeout(async () => {
@@ -64,18 +71,25 @@ export function useLiveDiagnostics({
         // Problems are applied even when a newer keystroke is pending, as
         // before this hook existed: a fast typist would otherwise see none.
         apply(res.data, !cancelled);
-        if (!cancelled) askAfter(LATE_DIAGNOSTICS_MS);
+        if (!cancelled) askAfter(LATE_DIAGNOSTICS_MS, timers);
       } catch { /* sidecar kapalıysa sessiz */ }
     }, CHANGE_DEBOUNCE_MS));
 
     // Coming back from Unity is when it has usually regenerated the csproj;
-    // each ask lets the backend notice and OmniSharp reload.
-    const onFocus = () => askAfter([0, ...LATE_DIAGNOSTICS_MS]);
+    // each ask lets the backend notice and OmniSharp reload. At most one
+    // three-request cycle is ever in flight: a new focus cancels whatever the
+    // previous one had not yet fired.
+    const onFocus = () => {
+      focusTimers.forEach(clearTimeout);
+      focusTimers = [];
+      askAfter([0, ...LATE_DIAGNOSTICS_MS], focusTimers);
+    };
     window.addEventListener('focus', onFocus);
 
     return () => {
       cancelled = true;
       timers.forEach(clearTimeout);
+      focusTimers.forEach(clearTimeout);
       window.removeEventListener('focus', onFocus);
     };
   }, [code, openedFilePath, workspacePath, API, sessionToken]);

@@ -21,11 +21,30 @@ class DocReq(BaseModel):
 
 
 def create_lsp_router(db: DatabaseManager):
-    def _abs(path: str) -> str:
-        if os.path.isabs(path):
-            return path
+    def _abs(path: str) -> str | None:
+        """Resolve `path` against the active workspace; `None` when it would
+        land outside it (`..`, an absolute path elsewhere, another drive, UNC).
+
+        Used to return an absolute path unchecked or a naive `os.path.join` for
+        a relative one, with no containment check either way. A GET with
+        `path=../route-other/Secret.cs` resolved outside the workspace and
+        `/lsp/diagnostics` served that file's already-cached diagnostics to any
+        session-token holder (Codex omniaudit, 28 Sep 2026, diagnostics-path-escape,
+        probes/diagnostics-path.py). `realpath` on both sides: a contained
+        symlink still passes, an escaping one still fails.
+        """
         ws = db.get_last_workspace(1) or ""
-        return os.path.join(ws, path)
+        if not ws:
+            return None
+        try:
+            ws_real = os.path.realpath(ws)
+            candidate = path if os.path.isabs(path) else os.path.join(ws, path)
+            real = os.path.realpath(candidate)
+        except OSError:
+            return None
+        if real != ws_real and not real.startswith(ws_real + os.sep):
+            return None
+        return real
 
     async def _mgr():
         m = get_omnisharp_manager()
@@ -49,6 +68,8 @@ def create_lsp_router(db: DatabaseManager):
         _check_token(x_session_token)
         m = await _mgr()
         path = _abs(req.path)
+        if path is None:
+            return {"problems": [], "status": m.status, "inProject": None}
         problems = await m.sync_document(path, req.text)
         return {"problems": problems, "status": m.status, "inProject": _in_project(m, path)}
 
@@ -62,6 +83,8 @@ def create_lsp_router(db: DatabaseManager):
         if not path:
             return {"problems": [], "status": m.status, "inProject": None}
         apath = _abs(path)
+        if apath is None:
+            return {"problems": [], "status": m.status, "inProject": None}
         return {"problems": m.latest_diagnostics(apath), "status": m.status,
                 "inProject": _in_project(m, apath)}
 
@@ -69,18 +92,27 @@ def create_lsp_router(db: DatabaseManager):
     async def lsp_completion(req: DocReq, x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
         m = await _mgr()
-        return {"items": await m.completion(_abs(req.path), req.text, req.line or 1, req.column or 1)}
+        path = _abs(req.path)
+        if path is None:
+            return {"items": []}
+        return {"items": await m.completion(path, req.text, req.line or 1, req.column or 1)}
 
     @router.post("/lsp/hover")
     async def lsp_hover(req: DocReq, x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
         m = await _mgr()
-        return {"contents": await m.hover(_abs(req.path), req.text, req.line or 1, req.column or 1)}
+        path = _abs(req.path)
+        if path is None:
+            return {"contents": None}
+        return {"contents": await m.hover(path, req.text, req.line or 1, req.column or 1)}
 
     @router.post("/lsp/definition")
     async def lsp_definition(req: DocReq, x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
         m = await _mgr()
-        return {"location": await m.definition(_abs(req.path), req.text, req.line or 1, req.column or 1)}
+        path = _abs(req.path)
+        if path is None:
+            return {"location": None}
+        return {"location": await m.definition(path, req.text, req.line or 1, req.column or 1)}
 
     return router
