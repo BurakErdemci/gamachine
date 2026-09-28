@@ -354,6 +354,7 @@ class WhisperServer:
         self._failure = None
         self._log = collections.deque(maxlen=200)
         self._started_at = 0.0
+        self._watch_gen = 0
         # No proxy, ever: this is loopback, and an HTTP(S)_PROXY in the user's
         # environment must not route dictation audio through anything.
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -399,9 +400,20 @@ class WhisperServer:
     # -- lifecycle -----------------------------------------------------------
 
     def ensure_started(self) -> None:
-        """Starts the server if it is not running. Never waits for it."""
+        """Starts the server if it is not running. Never waits for it.
+
+        A server still loading when its startup window ran out gets a fresh
+        window instead of a kill: a cold disk or a slow CPU is not a crash, and
+        without this every later wait_ready() would fail on the stale timeout.
+        """
         with self._lock:
             if self.is_running():
+                if self._done.is_set() and not self._ready.is_set():
+                    logger.info("[stt] whisper-server (pid %s) still loading; waiting again.", self._proc.pid)
+                    self._failure = None
+                    self._done.clear()
+                    self._started_at = time.monotonic()
+                    self._start_watch(self._proc)
                 return
             if self._proc is not None:
                 logger.warning("[stt] whisper-server exited (rc=%s); starting a new one.\n%s",
@@ -482,8 +494,18 @@ class WhisperServer:
                 self._done.set()
                 raise SttEngineFailed(self._failure) from exc
         threading.Thread(target=self._read_output, args=(proc,), name="whisper-log", daemon=True).start()
-        threading.Thread(target=self._watch_ready, args=(proc,), name="whisper-ready", daemon=True).start()
+        self._start_watch(proc)
         logger.info("[stt] whisper-server starting (pid %s, port %s, %s threads).", proc.pid, self._port, threads)
+
+    def _start_watch(self, proc) -> None:
+        """Called with ``self._lock`` held. The generation retires any earlier
+        watcher, so only the newest one may report on the current window."""
+        self._watch_gen += 1
+        threading.Thread(target=self._watch_ready, args=(proc, self._watch_gen),
+                         name="whisper-ready", daemon=True).start()
+
+    def _is_current_watch(self, proc, gen) -> bool:
+        return self._proc is proc and self._watch_gen == gen
 
     def _read_output(self, proc) -> None:
         stream = proc.stdout
@@ -501,16 +523,18 @@ class WhisperServer:
         except (OSError, ValueError):
             pass
 
-    def _watch_ready(self, proc) -> None:
+    def _watch_ready(self, proc, gen) -> None:
         deadline = self._started_at + self._startup_timeout_s
         url = f"http://127.0.0.1:{self._port}{self._prefix}/health"
         while time.monotonic() < deadline:
-            if self._proc is not proc:
+            if not self._is_current_watch(proc, gen):
                 return
             if proc.poll() is not None:
-                self._failure = f"whisper-server exited during startup (rc={proc.returncode})"
-                logger.warning("[stt] %s\n%s", self._failure, self.log_tail())
-                self._done.set()
+                with self._lock:
+                    if self._is_current_watch(proc, gen):
+                        self._failure = f"whisper-server exited during startup (rc={proc.returncode})"
+                        logger.warning("[stt] %s\n%s", self._failure, self.log_tail())
+                        self._done.set()
                 return
             try:
                 with self._opener.open(url, timeout=1.0) as res:
@@ -528,10 +552,11 @@ class WhisperServer:
             except (urllib.error.URLError, OSError, ValueError):
                 pass
             time.sleep(0.1)
-        if self._proc is proc:
-            self._failure = f"whisper-server did not become ready in {self._startup_timeout_s:.0f} s"
-            logger.warning("[stt] %s\n%s", self._failure, self.log_tail())
-            self._done.set()
+        with self._lock:
+            if self._is_current_watch(proc, gen) and not self._ready.is_set():
+                self._failure = f"whisper-server did not become ready in {self._startup_timeout_s:.0f} s"
+                logger.warning("[stt] %s\n%s", self._failure, self.log_tail())
+                self._done.set()
 
     def wait_ready(self, timeout: "float | None" = None) -> None:
         if timeout is None:

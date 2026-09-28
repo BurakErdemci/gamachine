@@ -323,6 +323,42 @@ def test_exit_at_start_makes_wait_ready_report_the_return_code(server_factory):
         server.wait_ready()
 
 
+def test_a_startup_timeout_does_not_poison_later_dictations(server_factory):
+    """A server that outlives its startup window is slow, not dead: once it
+    turns healthy the next ensure_started() must re-arm the watch on the SAME
+    process instead of leaving wait_ready() failing for the rest of the run."""
+    server = server_factory(fake_flags=["--fake-startup-delay", "2.0"], startup_timeout_s=0.5)
+    try:
+        server.ensure_started()
+        pid = server.pid
+        gen = server._watch_gen
+        server.ensure_started()
+        assert server._watch_gen == gen, "a still-running watcher got a second one"
+
+        # Longer than the startup window, so this sees the watcher's verdict.
+        with pytest.raises(stt_whisper.SttEngineFailed, match="did not become ready"):
+            server.wait_ready(timeout=5)
+        assert server.is_running()
+
+        health = f"http://127.0.0.1:{server._port}{server._prefix}/health"
+
+        def healthy():
+            try:
+                with urllib.request.urlopen(health, timeout=1) as res:
+                    return res.status == 200
+            except (urllib.error.URLError, OSError):
+                return False
+
+        assert _wait_until(healthy, timeout=10, interval=0.1)
+
+        server.ensure_started()
+        server.wait_ready()
+        assert server.is_ready()
+        assert server.pid == pid
+    finally:
+        server.stop()
+
+
 class _FakeJob:
     closed = 0
 
