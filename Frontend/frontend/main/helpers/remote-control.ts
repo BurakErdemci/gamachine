@@ -18,7 +18,8 @@
  * request is numbered. A state-changing action's answer counts only if no
  * newer state change started; any other answer counts only if it started
  * after the last state change settled and is newer than the last one that
- * counted. Disable and forget release the blocker before their request.
+ * counted. Disable and forget release the blocker before their request, even
+ * when there is no backend to send it to.
  */
 
 import { isIPv6 } from 'net'
@@ -180,18 +181,29 @@ export function createRemoteControl(deps: RemoteControlDeps) {
     const isChange = STATE_CHANGES.has(action as RemoteAction)
     const headers: Record<string, string> = { 'X-Session-Token': deps.appToken }
     if (route.uiSecret) headers['X-Gamachine-UI-Secret'] = deps.uiSecret
+    // Disable and forget release the blocker even when the backend URL is gone:
+    // stopping is the user's intent, and without a backend there is no remote
+    // session to stay awake for. Numbered first, so a poll already in flight
+    // cannot restart it.
+    const releases = action === 'disable' || action === 'forget'
+    let mySeq = 0
+    if (releases) {
+      mySeq = ++seq
+      latestChange = mySeq
+      changeBarrier = mySeq
+      setKeepAwake(false)
+    }
     let base: string
     try {
       base = deps.baseUrl()
     } catch {
       return { ok: false, code: 'backend_not_ready' }
     }
-    const mySeq = ++seq
+    if (!releases) mySeq = ++seq
     if (isChange) {
       latestChange = mySeq
       changeBarrier = mySeq
       changesInFlight += 1
-      if (action === 'disable' || action === 'forget') setKeepAwake(false)
     }
     try {
       const res = await deps.http.request({

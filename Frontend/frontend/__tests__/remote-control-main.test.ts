@@ -183,6 +183,43 @@ describe('remote-control · keep awake', () => {
     expect(blocker.start).toHaveBeenCalledTimes(1)
   })
 
+  it.each(['disable', 'forget'])('releases the blocker when %s is requested after the backend URL disappears', async action => {
+    let ready = true
+    const live = new Set<number>()
+    const start = vi.fn(() => { live.add(1); return 1 })
+    const stop = vi.fn((id: number) => { live.delete(id) })
+    const rc = createRemoteControl({
+      baseUrl: () => { if (!ready) throw new Error('backend port unavailable'); return 'http://127.0.0.1:9' },
+      appToken: 'fake-token', uiSecret: 'fake-secret',
+      http: { request: vi.fn(async () => ({ data: { enabled: true, keep_awake: true, keep_awake_active: true } })) },
+      blocker: { start, stop, isStarted: (id: number) => live.has(id) },
+    })
+    await rc.invoke('status')
+    expect(live.size).toBe(1)
+    ready = false
+    expect(await rc.invoke(action)).toEqual({ ok: false, code: 'backend_not_ready' })
+    expect(live.size).toBe(0)
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['disable', 'forget'])('%s with no backend: a poll already in flight cannot restart it', async action => {
+    const blocker = makeBlocker()
+    const held: Array<(v: any) => void> = []
+    let ready = true
+    const rc = createRemoteControl({
+      baseUrl: () => { if (!ready) throw new Error('backend port unavailable'); return 'http://127.0.0.1:9' },
+      appToken: TOKEN, uiSecret: SECRET, blocker,
+      http: { request: vi.fn(() => new Promise<any>(resolve => held.push(resolve))) },
+    })
+    const on = rc.invoke('status'); await flush(); held.shift()!({ data: { keep_awake_active: true } }); await on
+    const olderPoll = rc.poll(); await flush()
+    ready = false
+    expect(await rc.invoke(action)).toEqual({ ok: false, code: 'backend_not_ready' })
+    held.shift()!({ data: { keep_awake_active: true } }); await olderPoll
+    expect(blocker.live.size).toBe(0)
+    expect(blocker.start).toHaveBeenCalledTimes(1)
+  })
+
   it('a poll answered while a state change is in flight, or before it settled, is ignored', async () => {
     const { rc, blocker, release } = deferred()
     const change = rc.invoke('set-keep-awake', false); await flush()
