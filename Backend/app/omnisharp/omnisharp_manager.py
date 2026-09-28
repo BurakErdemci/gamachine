@@ -87,20 +87,35 @@ def _norm_key(path: str) -> str:
     return os.path.normcase(os.path.normpath(path))
 
 
+# Read at call time so tests can exercise both platforms on any OS.
+_WINDOWS_PATHS = os.name == "nt"
+
+
 def _path_to_uri(path: str) -> str:
-    return "file:///" + urllib.parse.quote(path.replace("\\", "/").lstrip("/"))
+    p = path.replace("\\", "/")
+    if p.startswith("//") and not p.startswith("///"):
+        # UNC: the server is the URI authority (RFC 8089). Folding it into the
+        # path gave `file:///server/share/...`, which decodes as a local path.
+        # `localhost` as authority means "this machine", so that one server
+        # keeps the four-slash form instead.
+        server, _, rest = p[2:].partition("/")
+        if server.lower() == "localhost":
+            return "file:////" + urllib.parse.quote(p[2:])
+        return "file://" + urllib.parse.quote(server, safe="") + "/" + urllib.parse.quote(rest)
+    return "file:///" + urllib.parse.quote(p.lstrip("/"))
 
 
 def _uri_to_path(uri: str) -> str:
     """`file:///home/u/A.cs` -> `/home/u/A.cs`, `file:///c%3A/u/A.cs` -> `c:/u/A.cs`.
     The third slash belongs to the path: cutting it (as this once did) gave POSIX
     a relative `home/u/A.cs`, so diagnostics were stored under a key no lookup
-    could build and go-to-definition returned a path relative to the cwd."""
+    could build and go-to-definition returned a path relative to the cwd.
+    The drive-letter slash is cut only on Windows: `/a:/x` is a valid POSIX path."""
     parts = urllib.parse.urlsplit(uri)
     p = urllib.parse.unquote(parts.path)
     if parts.netloc and parts.netloc.lower() != "localhost":
-        return "//" + parts.netloc + p
-    if len(p) >= 3 and p[0] == "/" and p[1].isalpha() and p[2] == ":":
+        return "//" + urllib.parse.unquote(parts.netloc) + p
+    if _WINDOWS_PATHS and len(p) >= 3 and p[0] == "/" and p[1].isalpha() and p[2] == ":":
         p = p[1:]
     return p
 
