@@ -440,6 +440,9 @@ def _csproj_sources(csproj: str) -> tuple[set[str], list[str], str | None, bool]
             part = urllib.parse.unquote(part.strip())
             if not part:
                 continue
+            # MSBuild treats `\` as a separator on every OS; POSIX paths do not,
+            # so Unity's `Assets\Scripts\X.cs` never matched there (CI, 28 Sep 2026).
+            part = part.replace("\\", "/")
             key = _source_key(os.path.join(base, part))
             if "*" in part or "?" in part:
                 patterns.append(key)
