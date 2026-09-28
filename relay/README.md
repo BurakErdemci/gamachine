@@ -146,23 +146,39 @@ shows the PC's checks (`pcHandlePairRequest`, `pcHandleHello`).
 
 ## What the page expects inside the channel
 
-The doc fixes the request names; these reply shapes are what `app.js` reads.
-The bridge may add fields.
+The doc fixes the request names; these reply shapes are what `app.js` reads
+(Backend/app/remote/rpc.py and chats.py send them). The bridge may add fields.
+The DOM-free logic is in `net.js` and tested in `test/page.test.mjs`.
 
 - reply: `{id, ok:true, result}` or `{id, ok:false, error, ...}`;
   `answer_card` conflict: `{id, ok:false, error:"already_answered", by, at}`
-- `list_chats` -> `{chats:[{chat_id, title, provider, model, status: "running"|"idle"|"awaiting_card", last_activity (ms)}]}`
-- `pending_cards` -> `{cards:[{card_id, chat_id, title, detail, choices?}]}`;
-  `choices` is a list of strings or `{id, label}`. With choices the page sends
-  `answer_card {card_id, decision:"choice", choice:id}`, otherwise
-  `decision:"approve"`; "Reddet" always sends `decision:"reject"`.
-- `open_chat {chat_id}` -> `{messages:[{role:"user"|"assistant", text, source?}], events:[event...]}`
-- `send_message` -> `{status:"accepted"|"desktop_not_ready"}`
-- `stop`, `close_chat`, `push_subscribe {subscription}` -> `{}`
+  where `by` is `desktop`, `phone:<name>` or `system` (timeout, Stop). A reply
+  over ~700 KB comes as several frames with the same `id`, `part` (1-based) and
+  `parts`; every list in `result` is cut in order. The page joins them before
+  the request resolves (at most 64 parts / 32 MiB, and it fails when no part
+  arrives for 20 s). Replies nobody waits for are dropped.
+- `list_chats` -> `{chats:[{chat_id (string), title, provider, model, status: "running"|"idle"|"awaiting_card", last_activity (ms), hidden}]}`
+- `pending_cards` -> `{cards:[{card_id, chat_id, kind, title, detail, choices?}]}`.
+  Question cards (`kind:"question"`) with `choices` (`{id, label}`, id = the
+  option label) send `answer_card {card_id, decision:"choice", choice:id}`;
+  a question without `choices` (several questions or multi-select) cannot be
+  answered from the phone and shows "Bu soruyu bilgisayardan cevaplayın".
+  Other cards send `decision:"approve"`; "Reddet" always sends `decision:"reject"`.
+- `open_chat {chat_id}` -> `{chat_id, messages:[{role, text, at, truncated?}], events:[event...], epoch, last_seq}`;
+  a list item too big for one frame arrives as `{truncated:true}`.
+  An open reply for a chat the page no longer shows is not rendered, and the
+  page sends `close_chat` for it again (the bridge may have registered its
+  listener after the first `close_chat`); an `event` for a chat not shown does
+  the same, at most once per 10 s per chat.
+- `send_message {chat_id, text}` (at most 20 000 characters and one 64 KiB frame) -> `{status:"accepted"|"desktop_not_ready"}`
+- `stop` -> `{status:"ok"|"no_session"|"error"}`; `close_chat`, `push_subscribe {subscription}` -> `{}`
 - pushes: `{type:"event", chat_id, seq, kind, ...}` with kinds `text {text}`,
-  `tool_call {tool, summary}`, `turn_start`, `turn_end {status}`,
-  `card_opened`, `card_closed`; `{type:"chat_changed", chat}`;
-  `{type:"card_opened", card}`; `{type:"card_closed", card_id}`.
+  `tool_call {tool, summary}`, `turn_start`, `turn_end {status: "done"|"error"|"stopped"}`,
+  `card_opened {card_kind, tool}`, `card_closed`; `{type:"chat_changed", chat?}`
+  (without `chat` the list is reloaded; a hidden idle chat leaves the list);
+  `{type:"card_opened", card}`; `{type:"card_closed", card_id}`;
+  `{type:"gap", chat_id, epoch, last_seq}` when live events were lost: the page
+  opens the shown chat again.
 
 Web push payload (sent by the PC, shown by `sw.js`): JSON
 `{title, body, url, tag?}`. `url` must be `/p#chat=<chat_id>` to open that
