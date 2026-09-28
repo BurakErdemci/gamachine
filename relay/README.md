@@ -2,9 +2,9 @@
 
 Cloudflare Worker + Durable Objects that connect the Gamachine desktop app
 (the PC) with the phone page, plus the phone page itself. Protocol:
-[`docs/remote-control.md`](../docs/remote-control.md). This file pins the
-details that document leaves open: the relay control frames and the exact byte
-layouts. No npm dependencies; `wrangler` is only used to run and deploy.
+[`docs/remote-control.md`](../docs/remote-control.md), which is binding and
+also holds the byte layouts. This file adds what only the relay needs: control
+frames, storage and close codes. No npm dependencies; `wrangler` is only used to run and deploy.
 
 ```
 relay/
@@ -36,33 +36,55 @@ wrangler deploy                    # deploys the worker named gamachine-relay
 | `WSS /ws/phone/<pair_id>` | a paired phone. Subprotocols: `gamachine.v1`, `tok.<token>` |
 | `WSS /ws/pair/<pair_id>` | a phone that is pairing (no token yet). Subprotocol: `gamachine.v1` |
 
-`pair_id` is 16 random bytes as unpadded base64url (22 characters).
+`pair_id` is derived from the PC's room key (see "Byte layouts"):
+`base64url(SHA-256("gamachine-remote-v1 room" || room_key)[0..16])`, 22
+characters. The relay recomputes it on every PC connect and refuses a key that
+does not produce the `pair_id` in the path, so knowing a `pair_id` gives no way
+to open or claim its room. Nothing is registered on first use. The room key is
+32 random bytes (43 characters) that the PC creates once and keeps while
+remote control stays paired; a new key means a new `pair_id` and a new QR.
+
+`Origin`: `/ws/phone` and `/ws/pair` accept only the relay's own origin (the
+page). `/ws/pc` refuses any request that carries an `Origin` header, so no web
+page can use it; the bridge must not send one. This is checked before any
+limit is counted, so another site cannot spend a visitor's pairing budget.
 
 Credentials travel in `Sec-WebSocket-Protocol` because a browser cannot set
 any other header on a WebSocket; this also keeps them out of URLs and logs. The
-relay answers with `Sec-WebSocket-Protocol: gamachine.v1`. Every refusal
-happens before the upgrade, as a plain HTTP status:
+relay answers with `Sec-WebSocket-Protocol: gamachine.v1`. Refusals happen
+before the upgrade, as a plain HTTP status:
 
 | Status | When |
 |---|---|
 | 400 | `gamachine.v1` not offered |
 | 401 | PC without a well-formed key (43-128 base64url chars); phone without a registered token |
-| 403 | PC key whose SHA-256 differs from the stored room-key hash |
-| 404 | unknown path, bad `pair_id`, or phone/pair socket for a room no PC has registered |
+| 403 | wrong `Origin` (see above); PC key that does not derive the `pair_id` |
+| 404 | unknown path, bad `pair_id`, or phone socket for a room that does not exist |
 | 426 | not a WebSocket upgrade |
-| 429 | pairing limit: 5 per minute per `pair_id`, 20 per hour per client IP |
+| 429 | pairing: 5 per minute per `pair_id`, 20 per hour per client IP; new rooms: 10 per hour per client IP (reconnecting to an existing room is not counted) |
 
-The first PC that connects to a `pair_id` registers `SHA-256(room_key)` (trust
-on first use). The PC should therefore connect before it shows the QR code.
-A new PC connection with the right key replaces the old one (close 4000).
+One exception: a pairing socket for a room that does not exist is accepted,
+gets `{type:"no_room"}` and is closed with 4008, because a browser cannot read
+the status of a refused upgrade and the page must tell "no PC is waiting for
+this code" apart from "too many attempts". It counts against no limit.
+
+The PC connects before it shows the QR code, so the room exists when the phone
+scans it. A new PC connection with the right key replaces the old one (close 4000).
 
 ## Stored data
 
-Room object: `room_hash`, `tokens` (SHA-256 hashes of phone tokens, max 50),
-`last_seen` (ms, set when the PC socket closes), `pair_hits` (timestamps of the
-last minute). IP object: `hits` timestamps, deleted by an alarm one hour after
-the last attempt. No frame content is ever stored; frames are forwarded from
-memory. Hashes are unpadded base64url of SHA-256 over the UTF-8 token string.
+Room object: `last_pc` (ms of the last PC connect; the room exists while it
+is set), `tokens` (SHA-256 hashes of phone tokens, max 50), `last_seen` (ms,
+set when the PC socket closes), `pair_hits` (timestamps of the last minute).
+An alarm deletes all of it 30 days after the PC was last connected; every PC
+connect moves that date forward, and a PC that stays connected keeps it alive.
+After a deletion (or `reset_room`) the next PC connect creates the room again
+and its `welcome` says `tokens: 0`; the bridge then sends its devices' token
+hashes again with `register_tokens` and `replace:true`.
+IP object: `hits` (pairing attempts) and `rooms` (new rooms) timestamps,
+deleted by an alarm one hour after the last one. No frame content is ever
+stored; frames are forwarded from memory. Hashes are unpadded base64url of
+SHA-256 over the UTF-8 token string.
 
 ## Control frames (relay <-> PC)
 
@@ -81,7 +103,7 @@ Relay -> PC:
 | `{type:"from", conn, data}` | a text frame from that socket; `data` is the exact string the phone sent |
 | `{type:"tokens_ok", count}` | reply to `register_tokens` / `drop_token` |
 | `{type:"gone", conn}` | a `to` targeted a socket that no longer exists |
-| `{type:"error", error}` | `bad_json`, `unknown_type`, `bad_hashes`, `bad_hash`, `too_many_tokens` |
+| `{type:"error", error}` | `bad_json`, `unknown_type`, `bad_hashes`, `bad_hash`, `too_many_tokens`, `too_large` (frame over 1 MiB, dropped) |
 
 PC -> relay:
 
@@ -92,7 +114,8 @@ PC -> relay:
 | `{type:"drop_token", hash}` | forget one hash and close its phones (4001) |
 | `{type:"reset_room"}` | delete everything stored for this `pair_id` and close all sockets (4006); for "turn remote control off and forget" |
 
-Relay -> phone (not from the PC): `{type:"pc_offline", last_seen}` (on connect
+Relay -> phone (not from the PC): `{type:"no_room"}` on a pairing socket (see
+above), `{type:"pc_offline", last_seen}` (on connect
 while the PC is away, on every frame sent while it is away, and when it
 leaves) and `{type:"pc_online"}` (the PC reconnected; the phone starts a new
 session). `{"type":"ping"}` from any socket is answered with `{"type":"pong"}`
@@ -101,47 +124,22 @@ by the runtime without waking the object.
 Close codes: 4000 replaced PC, 4001 token dropped, 4002 pairing reply
 delivered, 4003 pairing socket older than 6 minutes, 4004 bad frame (binary,
 over 64 KiB from a phone, second pairing request), 4005 PC offline during
-pairing, 4006 room reset. Frames from the PC are limited only by the platform
-(1 MiB per WebSocket message), so the bridge must keep single replies below that.
+pairing, 4006 room reset, 4007 room deleted after 30 days without the PC
+(phones keep retrying), 4008 no such room (pairing socket).
+
+Frame limits count UTF-8 bytes, not characters: 64 KiB for a phone or pairing
+frame (the socket is closed with 4004), 1 MiB for a PC frame (answered with
+`error: too_large` and dropped; the PC stays connected). The bridge must split
+anything larger, such as a long chat history, across several replies.
 
 ## Byte layouts
 
-All byte strings in JSON are unpadded base64url. Keys are P-256; public keys
-are 65-byte uncompressed points; `K_static` and ECDH outputs are the 32-byte
-x coordinate. HKDF and HMAC use SHA-256. `||` is plain concatenation; every
-variable-length field is last or has a fixed length.
-
-| Value | Definition |
-|---|---|
-| QR | `https://<relay>/p#<pair_id>.<pc_pub>.<pair_secret>` (22 + 87 + 22 characters) |
-| `mac` | `HMAC(key = pair_secret (16 bytes), phone_pub (65) \|\| UTF-8 device_name)` |
-| `K_static` | `ECDH(own_static_priv, peer_static_pub)` |
-| SAS | `HKDF(K_static, salt = pair_secret, info = "gamachine-remote-v1 sas", 4 bytes)` read as big-endian uint32, mod 10000, zero-padded to 4 digits |
-| `K_pair` | `HKDF(K_static, salt = pair_secret, info = "gamachine-remote-v1 pair", 32 bytes)` |
-| hello `tag` | `HMAC(K_static, "hello" \|\| device_id (UTF-8, 22 chars) \|\| eph_phone_pub (65) \|\| t (8-byte big-endian Unix seconds))` |
-| hello_ack `tag` | `HMAC(K_static, "hello_ack" \|\| eph_phone_pub (65) \|\| eph_pc_pub (65))` |
-| `K_session` | `HKDF(ECDH(eph, eph) \|\| K_static, salt = empty, info = "gamachine-remote-v1 session", 64 bytes)`; bytes 0-31 phone->PC key, 32-63 PC->phone key (AES-256-GCM) |
-| nonce | direction as 4-byte big-endian (1 = phone->PC, 2 = PC->phone) \|\| counter as 8-byte big-endian |
-| frame | `{c: counter, d: base64url(ciphertext \|\| 16-byte tag)}`, no AAD, plaintext is UTF-8 JSON. Counters start at 1 per direction per connection; the receiver drops any `c` not greater than the last accepted one, and a failed decrypt does not advance it |
-
-Messages outside the encrypted channel (all carry `type`):
-
-- phone -> PC on `/ws/pair`: `{type:"pair_request", phone_pub, device_name, mac}`
-- PC -> phone: `{type:"pair_ok", c:1, d}` - the "first encrypted frame" of the
-  doc's pairing step 4, sealed with `K_pair`, direction 2, counter 1.
-  Plaintext `{device_id, token, vapid_pub}`: `device_id` 16 random bytes
-  (22 chars), `token` 32 random bytes (43 chars), `vapid_pub` the PC's VAPID
-  public key (65-byte point) that the phone needs for `pushManager.subscribe`.
-- PC -> phone: `{type:"pair_reject", reason}`; the page knows `expired`,
-  `rate_limited`, `rejected`.
-- phone -> PC: `{type:"hello", device_id, eph_phone_pub, t, tag}`; the PC
-  rejects `|t - now| > 300` and unknown devices.
-- PC -> phone: `{type:"hello_ack", eph_pc_pub, tag}` or
-  `{type:"hello_reject", reason}` (`clock`, `unknown_device`).
-
-`test/vectors.json` holds fixed keys and every intermediate value above
-(mac input, K_static, SAS, K_pair, pair_ok, hello and hello_ack with their tag
-inputs, session keys, five frames). Plaintexts there are compact JSON
+Binding definitions, including the messages outside the encrypted channel:
+[`docs/remote-control.md`](../docs/remote-control.md), "Byte layouts".
+`test/vectors.json` holds fixed keys and every intermediate value there
+(`pair_id` with its hash input, mac input, K_static, SAS, K_pair, pair_ok,
+hello and hello_ack with their tag inputs, session keys, five frames).
+Plaintexts there are compact JSON
 (Python: `json.dumps(obj, separators=(",", ":"), ensure_ascii=False)`).
 `test/nodeimpl.mjs` is a second implementation with `node:crypto` that also
 shows the PC's checks (`pcHandlePairRequest`, `pcHandleHello`).

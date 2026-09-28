@@ -1,7 +1,10 @@
 # Remote control (phone) - protocol v1
 
-Status: design, 28 Sep 2026. Nothing here is implemented yet. Research and
-measurements behind it: owner's vault, `Teknik/Arastirmalar/Gamachine_Uzaktan_Kontrol_2026-09-27`.
+Status: design, 28 Sep 2026. Build step 1 (relay + phone page, `relay/`) is
+built; everything else is not implemented yet. Research and measurements behind
+it: owner's vault, `Teknik/Arastirmalar/Gamachine_Uzaktan_Kontrol_2026-09-27`.
+This document is binding for both ends; `relay/README.md` adds only the
+relay's own control frames, storage and close codes.
 
 ## Goal and metric
 
@@ -47,10 +50,10 @@ counts it.
 1. **Relay** (`relay/` in this repo, MIT, deployed with wrangler - a dev tool,
    never bundled). Serves the phone page and forwards opaque frames between
    the one PC socket and the phone sockets of a pairing. It stores no message
-   content, only: pairing id, the PC's room-key hash, and the phone tokens'
-   hashes (so random clients cannot join or flood a room). If the PC is not
-   connected it answers `pc_offline {last_seen}` and drops the frame (no
-   offline queue in v1).
+   content, only: when the PC last connected, the phone tokens' hashes (so
+   random clients cannot join a room) and recent pairing-attempt times. If the
+   PC is not connected it answers `pc_offline {last_seen}` and drops the frame
+   (no offline queue in v1). Rules: "Relay connection" below.
 2. **Phone page** (`relay/public/`): one screen - chat list with status, a
    chat view with live progress, pending cards, a composer, a Stop button.
    Strict CSP, no third-party scripts. Keys live in IndexedDB as
@@ -65,31 +68,68 @@ counts it.
    last seen and Remove / Remove all, keep-awake checkbox), a phone badge on
    messages and card answers that came from a phone.
 
+## Relay connection
+
+- The PC creates a room key once (32 random bytes, base64url) and keeps it
+  while remote control stays paired. The pairing id is derived from it:
+  `pair_id = base64url(SHA-256("gamachine-remote-v1 room" || room_key)[0..16])`
+  (layout below). The relay recomputes it on every PC connect and refuses a
+  key that does not produce the id in the path, so a stranger who learns a
+  `pair_id` cannot claim or open its room. Nothing is registered on first use.
+  (Changed from "first PC to connect owns the id" after Codex relayaudit,
+  28 Sep 2026: a stranger could connect first and lock the owner out.)
+- Sockets: PC `/ws/pc/<pair_id>`, paired phone `/ws/phone/<pair_id>`, pairing
+  phone `/ws/pair/<pair_id>`. Credentials travel in `Sec-WebSocket-Protocol`,
+  the only header a browser can set on a WebSocket, which also keeps them out
+  of URLs and logs: `gamachine.v1` always, plus `key.<room_key>` for the PC
+  and `tok.<token>` for a paired phone.
+- Origin: phone and pairing sockets are accepted only from the relay's own
+  page; the PC socket is refused if it carries any `Origin`, so no web page can
+  use it (the bridge sends none). Checked before any limit is counted, so
+  another site cannot use a visitor's browser to spend their pairing budget.
+- The PC connects before it shows the QR, so the room exists when the phone
+  scans it. A pairing socket for a room that does not exist gets `no_room`
+  and the page says no PC is waiting for this code; this costs no attempt.
+- Limits: new rooms 10 per hour per IP (reconnecting to an existing room is
+  free). A room whose PC has not been connected for 30 days is deleted; every
+  PC connect moves that date. When the PC comes back to a deleted room it
+  registers its devices' token hashes again. Frame limits count UTF-8 bytes:
+  64 KiB from a phone, 1 MiB from the PC, so the bridge splits anything larger
+  (a long chat history) across several replies.
+
 ## Pairing
 
 QR content: `https://<relay>/p#<pair_id>.<pc_pub>.<pair_secret>`
-- `pair_id`: 128-bit random, base64url. `pc_pub`: the PC's long-term P-256
-  public key (raw, base64url). `pair_secret`: 128-bit random, single use,
-  valid 5 minutes.
+- `pair_id`: 128 bits derived from the room key (above), base64url.
+  `pc_pub`: the PC's long-term P-256 public key (raw, base64url).
+  `pair_secret`: 128-bit random, single use, valid 5 minutes.
 - Everything after `#` never reaches the relay (RFC 3986 section 3.5).
 
 Steps:
 1. Phone creates its long-term P-256 key pair (non-extractable private key).
 2. Phone -> relay -> PC: `pair_request {phone_pub, device_name, mac}` where
-   `mac = HMAC-SHA256(pair_secret, phone_pub || device_name)`.
+   `mac = HMAC-SHA256(pair_secret, phone_pub || device_name)`, one request per
+   pairing socket.
 3. Both sides compute `K_static = ECDH(own_priv, peer_pub)` and a 4-digit code
    `SAS = HKDF(K_static, salt=pair_secret, info="gamachine-remote-v1 sas")`.
    The PC shows "iPhone wants to pair - code 7314 - Approve / Reject"; the phone
    shows the same code. A photo of the QR alone is not enough.
 4. On Approve the PC stores the device (id, name, phone_pub, created, last
    seen), creates a random relay token for it, registers the token's hash with
-   the relay, and sends it to the phone inside the first encrypted frame.
+   the relay, and then sends it to the phone inside the first encrypted frame:
+   `pair_ok {c: 1, d}`, sealed with `K_pair` (layout below), direction PC ->
+   phone, counter 1. Its plaintext is `{device_id, token, vapid_pub}`; the PC's
+   VAPID public key is there because the phone needs it for
+   `pushManager.subscribe`. On Reject, expiry or a limit the PC answers
+   `pair_reject {reason}` with `rejected`, `expired` or `rate_limited`.
    `pair_secret` is deleted on first use or after 5 minutes.
 5. Limits: 5 pairing attempts per minute per pairing id, 20 per hour per IP
    (relay and PC both enforce).
 
 Remove device: the PC deletes the key and tells the relay to drop the token
-hash; the relay closes that phone's sockets.
+hash; the relay closes that phone's sockets. Turning remote control off and
+forgetting everything: the PC sends `reset_room`, the relay deletes all it
+holds for the pairing id and closes every socket.
 
 ## Session crypto (per connection)
 
@@ -100,12 +140,45 @@ connection gives forward secrecy (the Noise KK idea, built from WebCrypto /
 1. Phone -> PC: `hello {device_id, eph_phone_pub, t}` with
    `tag = HMAC(K_static, "hello" || device_id || eph_phone_pub || t)`; the PC
    rejects `t` outside +/- 5 minutes and unknown or removed devices.
-2. PC -> phone: `hello_ack {eph_pc_pub}` with its own tag over both ephemerals.
+2. PC -> phone: `hello_ack {eph_pc_pub}` with its own tag over both
+   ephemerals, or `hello_reject {reason}` (`clock`, `unknown_device`).
 3. `K_session = HKDF(ECDH(eph, eph) || K_static, info="gamachine-remote-v1 session")`,
    split into two AES-256-GCM keys, one per direction.
 4. Every frame: `{c: counter, d: ciphertext}`; the 96-bit nonce is
    direction (32 bits) + counter (64 bits). A receiver drops any counter that
    is not greater than the last one it accepted (replay protection).
+
+### Byte layouts
+
+All byte strings in JSON are unpadded base64url. Keys are P-256; public keys
+are 65-byte uncompressed points; `K_static` and ECDH outputs are the 32-byte
+x coordinate. HKDF and HMAC use SHA-256. `||` is plain concatenation; every
+variable-length field is last or has a fixed length. `relay/test/vectors.json`
+has every value below for fixed keys; the bridge must reproduce them.
+
+| Value | Definition |
+|---|---|
+| `pair_id` | first 16 bytes of `SHA-256("gamachine-remote-v1 room" \|\| room_key)`, `room_key` being the base64url text exactly as sent in `key.<room_key>` (its ASCII bytes, not decoded) |
+| QR | `https://<relay>/p#<pair_id>.<pc_pub>.<pair_secret>` (22 + 87 + 22 characters) |
+| `mac` | `HMAC(key = pair_secret (16 bytes), phone_pub (65) \|\| UTF-8 device_name)` |
+| `K_static` | `ECDH(own_static_priv, peer_static_pub)` |
+| SAS | `HKDF(K_static, salt = pair_secret, info = "gamachine-remote-v1 sas", 4 bytes)` read as big-endian uint32, mod 10000, zero-padded to 4 digits |
+| `K_pair` | `HKDF(K_static, salt = pair_secret, info = "gamachine-remote-v1 pair", 32 bytes)` |
+| hello `tag` | `HMAC(K_static, "hello" \|\| device_id (UTF-8, 22 chars) \|\| eph_phone_pub (65) \|\| t (8-byte big-endian Unix seconds))` |
+| hello_ack `tag` | `HMAC(K_static, "hello_ack" \|\| eph_phone_pub (65) \|\| eph_pc_pub (65))` |
+| `K_session` | `HKDF(ECDH(eph, eph) \|\| K_static, salt = empty, info = "gamachine-remote-v1 session", 64 bytes)`; bytes 0-31 phone->PC key, 32-63 PC->phone key (AES-256-GCM) |
+| nonce | direction as 4-byte big-endian (1 = phone->PC, 2 = PC->phone) \|\| counter as 8-byte big-endian |
+| frame | `{c: counter, d: base64url(ciphertext \|\| 16-byte tag)}`, no AAD, plaintext is UTF-8 JSON. Counters start at 1 per direction per connection; the receiver drops any `c` not greater than the last accepted one, and a failed decrypt does not advance it |
+
+Messages outside the encrypted channel (all carry `type`):
+
+- phone -> PC on `/ws/pair`: `{type:"pair_request", phone_pub, device_name, mac}`
+- PC -> phone: `{type:"pair_ok", c:1, d}` (pairing step 4). `device_id` is 16
+  random bytes (22 chars), `token` 32 random bytes (43 chars), `vapid_pub` the
+  65-byte VAPID public key.
+- PC -> phone: `{type:"pair_reject", reason}`
+- phone -> PC: `{type:"hello", device_id, eph_phone_pub, t, tag}`
+- PC -> phone: `{type:"hello_ack", eph_pc_pub, tag}` or `{type:"hello_reject", reason}`
 
 ## Messages (inside the encrypted channel)
 
@@ -133,7 +206,8 @@ existing app-wide event channel and reports `accepted` or `desktop_not_ready`.
 ## Web push
 
 - The PC owns a VAPID key pair (generated when remote control is first turned
-  on, stored in the app data folder). It sends pushes itself to the push
+  on, stored in the app data folder); the public key reaches the phone inside
+  `pair_ok`. It sends pushes itself to the push
   service in the subscription (RFC 8291 aes128gcm + RFC 8292 VAPID, with the
   `cryptography` package already bundled); the relay is not involved.
 - Content is detailed per the owner's decision: title "<what> - <agent> (<chat>)",
@@ -167,7 +241,8 @@ existing app-wide event channel and reports `accepted` or `desktop_not_ready`.
 | Stolen phone | Remove device on the PC; scope excludes settings, modes, keys, files |
 | Replay of an approval | per-direction counters; card ids are single use |
 | Phone approves while desktop also answers | first answer wins, both sides see who answered |
-| Relay flooding | room-key hash for the PC, token hashes for phones, rate limits |
+| Relay flooding | `pair_id` derived from the PC's room key, token hashes for phones, rate limits (pairing per id and per IP, new rooms per IP), rooms deleted after 30 days without the PC, byte caps on frames |
+| Another website drives the visitor's browser at the relay | phone sockets only from the relay's own page, PC socket from no browser; checked before any limit counts |
 | Remote control silently on | off by default; a visible indicator while on; zero traffic while off |
 
 ## Build order
