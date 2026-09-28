@@ -828,11 +828,19 @@ class DatabaseManager:
             conn.commit()
             return cur.lastrowid
 
+    def _ledger_read_connection(self) -> sqlite3.Connection:
+        """The queue wait and SQLite's own lock wait share one deadline; stacked,
+        a held lock kept a read ~9.4 s (Codex verification, 28 Sep 2026). A lock
+        still held at the deadline raises, so it never reads as "no cards"."""
+        started = time.monotonic()
+        LEDGER_WRITER.flush(LEDGER_READ_WAIT_S)
+        spent = time.monotonic() - started
+        return sqlite3.connect(self.db_path, timeout=max(0.1, LEDGER_READ_WAIT_S - spent))
+
     def get_approval_ledger(self, since: Optional[str] = None,
                             until: Optional[str] = None) -> List[Dict[str, Any]]:
-        LEDGER_WRITER.flush(LEDGER_READ_WAIT_S)
         where, args = self._ledger_window(since, until)
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+        with closing(self._ledger_read_connection()) as conn, conn:
             rows = conn.execute(
                 f'SELECT {", ".join(self._LEDGER_COLS)} FROM approval_ledger{where} ORDER BY id',
                 args).fetchall()
@@ -856,9 +864,8 @@ class DatabaseManager:
         `timed_out_share` is the remote-control metric: timed-out cards over
         all closed cards in the window (None when there were none).
         """
-        LEDGER_WRITER.flush(LEDGER_READ_WAIT_S)
         where, args = self._ledger_window(since, until)
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+        with closing(self._ledger_read_connection()) as conn, conn:
             rows = conn.execute(
                 f"SELECT outcome, COALESCE(device, 'unknown') AS dev, COUNT(*) "
                 f"FROM approval_ledger{where} GROUP BY outcome, dev", args

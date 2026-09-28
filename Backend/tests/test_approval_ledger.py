@@ -401,3 +401,28 @@ def test_a_writer_that_stopped_is_restarted_by_the_next_row():
     assert writer.submit(second.set)
     assert second.wait(5)
     assert writer.shutdown(5)
+
+
+@pytest.mark.parametrize("read", ["get_approval_ledger", "approval_ledger_stats"])
+def test_a_ledger_read_under_a_held_lock_has_one_deadline(tmp_path, monkeypatch, read):
+    # The queue wait and SQLite's lock wait used to stack (~9.4 s measured).
+    monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    db = DatabaseManager(str(tmp_path / "deadline.db"))
+    writer = database._LedgerWriter()
+    monkeypatch.setattr(database, "LEDGER_WRITER", writer)
+    monkeypatch.setattr(database, "LEDGER_READ_WAIT_S", 0.5)
+    lock = sqlite3.connect(db.db_path)
+    try:
+        lock.execute("BEGIN EXCLUSIVE")
+        assert db.record_card_resolution({"card_id": "queued", "outcome": "approved"})
+        started = time.monotonic()
+        # A held lock surfaces as an error, not as an empty ledger.
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            getattr(db, read)()
+        assert time.monotonic() - started < 0.5 + 1.0
+    finally:
+        lock.rollback()
+        lock.close()
+    assert writer.flush(10)
+    assert [r["card_id"] for r in db.get_approval_ledger()] == ["queued"]
+    writer.shutdown(5)
