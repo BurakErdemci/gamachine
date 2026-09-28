@@ -5,6 +5,7 @@ import * as C from './crypto.js';
 
 export const PROTOCOL = 'gamachine.v1';
 export const CLOSE_TOKEN_DROPPED = 4001;
+export const CLOSE_PAIR_DONE = 4002;
 export const CLOSE_ROOM_RESET = 4006;
 export const CLOSE_NO_ROOM = 4008;
 const PAIR_TIMEOUT_MS = 330_000; // pair_secret lives 5 min on the PC
@@ -36,6 +37,7 @@ export async function pair({ origin, parsed, deviceName, onSas, WS = globalThis.
   return new Promise((resolve, reject) => {
     let settled = false;
     let opened = false;
+    let replied = false;
     const ws = new WS(`${origin}/ws/pair/${parsed.pairId}`, [PROTOCOL]);
     const timer = setTimeout(() => finish(new Error('timeout')), PAIR_TIMEOUT_MS);
     function finish(err, value) {
@@ -51,12 +53,17 @@ export async function pair({ origin, parsed, deviceName, onSas, WS = globalThis.
       ws.send(JSON.stringify(request));
     };
     ws.onmessage = async (ev) => {
+      if (replied) return;
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
       if (m.type === 'no_room') return finish(new Error('no_room'));
       if (m.type === 'pc_offline') return finish(new Error('pc_offline'));
       if (m.type === 'pair_reject') return finish(new Error(typeof m.reason === 'string' ? m.reason : 'rejected'));
       if (m.type !== 'pair_ok') return;
+      // The relay closes the socket (pair_done) right behind the PC's reply,
+      // so the close arrives while pair_ok is still being decrypted: from here
+      // the reply decides the outcome, not the close.
+      replied = true;
       try {
         const payload = await C.openPairOk(kPair, m);
         finish(null, {
@@ -70,7 +77,12 @@ export async function pair({ origin, parsed, deviceName, onSas, WS = globalThis.
         finish(new Error('bad_reply'));
       }
     };
-    ws.onclose = (ev) => finish(new Error(ev.code === CLOSE_NO_ROOM ? 'no_room' : opened ? 'rejected' : 'refused'));
+    ws.onclose = (ev) => {
+      if (replied) return;
+      // pair_done with no reply handled: the PC answered with nothing readable.
+      const code = ev.code === CLOSE_NO_ROOM ? 'no_room' : ev.code === CLOSE_PAIR_DONE ? 'bad_reply' : opened ? 'rejected' : 'refused';
+      finish(new Error(code));
+    };
   });
 }
 
@@ -261,7 +273,8 @@ export class Link {
     }
     if (m.type === 'hello_ack') {
       const eph = this.eph;
-      if (!eph) return;
+      const ws = this.ws;
+      if (!eph || !ws) return;
       let ephPc;
       try {
         ephPc = await C.verifyHelloAck({ kStatic: this.kStatic, ephPhonePubRaw: eph.publicRaw, msg: m });
@@ -269,7 +282,10 @@ export class Link {
         return; // forged or stale; the real ack may still come
       }
       const keys = await C.deriveSessionKeys(await C.ecdh(eph.privateKey, ephPc), this.kStatic);
-      this.channel = await C.Channel.forPhone(keys);
+      const channel = await C.Channel.forPhone(keys);
+      // A close during the awaits dropped this session; it must not come back as ready.
+      if (this.ws !== ws || this.eph !== eph) return;
+      this.channel = channel;
       this.eph = null;
       this.onStatus('ready');
       return;

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import * as N from './nodeimpl.mjs';
 import * as C from '../public/crypto.js';
 import {
-  Link, ReplyParts, mergeParts, PHONE_FRAME_MAX, ChatView, cardActions, answerFailure, turnEndLine, eventLine,
+  pair, Link, ReplyParts, mergeParts, PHONE_FRAME_MAX, ChatView, cardActions, answerFailure, turnEndLine, eventLine,
   isCommand, sendFailureNote, COMMANDS_NOTE,
   messageText, mergeChat, stopLine, ASK_ON_PC,
 } from '../public/net.js';
@@ -471,4 +471,94 @@ test('slash commands are refused on the phone before sending, by the backend rul
   assert.equal(sendFailureNote('commands_not_allowed'), COMMANDS_NOTE);
   assert.match(sendFailureNote('too_large'), /uzun/);
   assert.equal(sendFailureNote('unknown_chat'), 'Gönderilemedi: unknown_chat');
+});
+
+// ---------------------------------------------------------------- close races
+
+// The relay forwards the PC's reply to the pairing socket and closes it with
+// pair_done (worker/room.js CLOSE.pairDone) in the same step, so the page sees
+// the close while it is still decrypting pair_ok. Measured on an iPhone: the
+// PC had the device, the phone said "Bilgisayar eşleştirmeyi reddetti".
+const PAIR_DONE = 4002;
+
+async function pairAgainst(answer) {
+  const pc = N.keyPair();
+  const pairSecret = crypto.getRandomValues(new Uint8Array(16));
+  const parsed = C.parsePairFragment(`${N.enc(crypto.getRandomValues(new Uint8Array(16)))}.${N.enc(pc.pub)}.${N.enc(pairSecret)}`);
+  const WS = class {
+    constructor() { queueMicrotask(() => this.onopen()); }
+    send(text) {
+      const side = N.pcHandlePairRequest(JSON.parse(text), { pcD: pc.d, pairSecret: Buffer.from(pairSecret) });
+      setTimeout(() => answer(this, side.kPair), 0);
+    }
+    close() {}
+  };
+  return pair({ origin: 'wss://relay.test', parsed, deviceName: 'iPhone', onSas: () => {}, WS });
+}
+
+const frame = (obj) => ({ data: JSON.stringify(obj) });
+
+test('pairing: pair_ok with the pair_done close right behind it resolves with the device', async () => {
+  const device = await pairAgainst((ws, kPair) => {
+    ws.onmessage(frame(N.pcPairOk(kPair, { device_id: 'dev1', token: 'tok1', vapid_pub: 'vp' })));
+    ws.onclose({ code: PAIR_DONE });
+  });
+  assert.equal(device.deviceId, 'dev1');
+  assert.equal(device.token, 'tok1');
+  assert.equal(device.vapidPub, 'vp');
+  assert.ok(device.privateKey && device.publicRaw);
+});
+
+test('pairing: the reply decides, not the pair_done close after it', async () => {
+  await assert.rejects(pairAgainst((ws) => {
+    ws.onmessage(frame({ type: 'pair_reject', reason: 'sas_mismatch' }));
+    ws.onclose({ code: PAIR_DONE });
+  }), { message: 'sas_mismatch' });
+  await assert.rejects(pairAgainst((ws) => {
+    ws.onmessage(frame(N.pcPairOk(Buffer.alloc(32, 7), { device_id: 'dev1', token: 'tok1' })));
+    ws.onclose({ code: PAIR_DONE });
+  }), { message: 'bad_reply' }, 'a pair_ok that does not open is bad_reply');
+  await assert.rejects(pairAgainst((ws) => {
+    ws.onmessage({ data: 'not json' });
+    ws.onclose({ code: PAIR_DONE });
+  }), { message: 'bad_reply' }, 'the PC answered but nothing readable arrived');
+  await assert.rejects(pairAgainst((ws) => ws.onclose({ code: 1006 })), { message: 'rejected' });
+});
+
+test('hello_ack still being processed when the socket closes does not report ready', async () => {
+  const pc = N.keyPair();
+  const phone = await C.generateKeyPair();
+  const kStatic = N.ecdh(pc.d, Buffer.from(phone.publicRaw));
+  const deviceId = N.enc(crypto.getRandomValues(new Uint8Array(16)));
+  const statuses = [];
+  const link = new Link({
+    origin: 'wss://relay.test',
+    device: { pairId: 'p', pcPub: new Uint8Array(pc.pub), deviceId, token: 't', privateKey: phone.privateKey },
+    onStatus: (s) => statuses.push(s),
+    onPush: () => {},
+    WS: FakeWS,
+  });
+  links.push(link);
+  await link.start();
+  const ws = FakeWS.last;
+  await until(() => ws.sent.length === 1);
+  const { ack } = N.pcHandleHello(JSON.parse(ws.sent[0]), { kStatic, knownDeviceId: deviceId, nowSeconds: Math.floor(Date.now() / 1000) });
+  // The ack verifies, then the session key agreement starts: drop the token
+  // right there, while handle() is between its awaits.
+  const subtle = crypto.subtle;
+  const deriveBits = subtle.deriveBits;
+  subtle.deriveBits = function (...args) {
+    subtle.deriveBits = deriveBits;
+    ws.onclose({ code: 4001 });
+    return deriveBits.apply(this, args);
+  };
+  try {
+    ws.deliver(ack);
+    await link.inbox;
+  } finally {
+    subtle.deriveBits = deriveBits;
+  }
+  assert.ok(statuses.includes('removed'), 'the close landed mid-handshake');
+  assert.equal(statuses.at(-1), 'removed');
+  assert.equal(link.ready, false);
 });
