@@ -211,6 +211,9 @@ class TurnEventRing:
         # write arriving after its id aged out is not expected, and if one
         # does, it only recreates one small ring.
         self._dropped: "OrderedDict[int, float]" = OrderedDict()
+        # Called with (conv_id, event) for every event of every chat, under the
+        # ring's lock and on the writer's thread: a listener only hands off.
+        self._listeners: list = []
 
     def _is_dropped(self, conv_id: int) -> bool:
         at = self._dropped.get(conv_id)
@@ -252,6 +255,11 @@ class TurnEventRing:
             ring.bytes -= _event_bytes(ring.events.popleft())
         for sub in list(ring.subs):
             sub._deliver(dict(event))
+        for listener in list(self._listeners):
+            try:
+                listener(conv_id, dict(event))
+            except Exception:
+                logger.debug("[turn-events] listener failed", exc_info=True)
         return seq
 
     def _flush_locked(self, conv_id: int, ring: _ConvRing) -> Optional[int]:
@@ -400,6 +408,29 @@ class TurnEventRing:
             if ring is not None and sub in ring.subs:
                 ring.subs.remove(sub)
 
+    def turn_open(self, conv_id: int) -> bool:
+        """True while the chat's last turn marker in the ring is a turn_start."""
+        with self._lock:
+            ring = self._rings.get(conv_id)
+            if ring is None:
+                return False
+            for event in reversed(ring.events):
+                if event["kind"] == "turn_end":
+                    return False
+                if event["kind"] == "turn_start":
+                    return True
+            return False
+
+    def add_listener(self, listener) -> None:
+        with self._lock:
+            if listener not in self._listeners:
+                self._listeners.append(listener)
+
+    def remove_listener(self, listener) -> None:
+        with self._lock:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
+
     def conversations(self) -> List[int]:
         with self._lock:
             return list(self._rings)
@@ -424,6 +455,9 @@ since = RING.since
 subscribe = RING.subscribe
 join = RING.join
 note_stop = RING.note_stop
+turn_open = RING.turn_open
+add_listener = RING.add_listener
+remove_listener = RING.remove_listener
 
 
 class TurnTap:

@@ -61,6 +61,7 @@ def _in_process_resolver(gate_id: str, kind: str):
 def register_gate(
     gate_id: str, owner: Optional[int], kind: str = "approval", *,
     tool: Optional[str] = None, summary=None, params=None, risk: Optional[str] = None,
+    questions=None,
 ) -> Optional[asyncio.Event]:
     """Create a gate and record its owner together; returns the event to wait on.
 
@@ -90,7 +91,7 @@ def register_gate(
         cards.open_card(gate_id, conversation_id=owner,
                         kind="question" if kind == "question" else "command",
                         tool=tool, summary=summary, params=params, risk=risk,
-                        resolver=_in_process_resolver(gate_id, kind))
+                        resolver=_in_process_resolver(gate_id, kind), questions=questions)
     return event
 
 

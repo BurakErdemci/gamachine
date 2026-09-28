@@ -1105,7 +1105,7 @@ class ClaudeSDKSession:
             _questions = input_data.get("questions", [])
             _first = _questions[0] if isinstance(_questions, list) and _questions else {}
             ev = register_gate(gate_id, self.conversation_id, kind="question",
-                               tool=tool_name, params=input_data,
+                               tool=tool_name, params=input_data, questions=_questions,
                                summary=_first.get("question") if isinstance(_first, dict) else None)
             self._active_gate_ids.add(gate_id)
             if out_q is not None:

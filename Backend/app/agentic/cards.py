@@ -89,11 +89,17 @@ class Card:
     by: Optional[str] = None
     at: Optional[float] = None
     outcome: Optional[str] = None
+    # Question cards only: [{question, options: [label], multi}], so a phone
+    # can offer the choices. Question text and labels, never other params.
+    questions: Optional[List[dict]] = None
 
     def public(self) -> dict:
-        return {"card_id": self.card_id, "conversation_id": self.conversation_id,
-                "kind": self.kind, "tool": self.tool, "summary": self.summary,
-                "risk": self.risk, "created_at": _iso(self.created_at)}
+        out = {"card_id": self.card_id, "conversation_id": self.conversation_id,
+               "kind": self.kind, "tool": self.tool, "summary": self.summary,
+               "risk": self.risk, "created_at": _iso(self.created_at)}
+        if self.questions:
+            out["questions"] = self.questions
+        return out
 
 
 _LOCK = threading.Lock()
@@ -108,9 +114,54 @@ def set_ledger(writer: Optional[Callable[[dict], Any]]) -> None:
     _ledger_writer = writer
 
 
+# Called with ("opened" | "closed", card) after the change, on the caller's
+# thread; a listener only hands off (the remote bridge queues to its loop).
+_listeners: List[Callable[[str, "Card"], None]] = []
+QUESTIONS_MAX = 4
+OPTIONS_MAX = 12
+LABEL_MAX = 200
+
+
+def add_listener(listener: Callable[[str, "Card"], None]) -> None:
+    if listener not in _listeners:
+        _listeners.append(listener)
+
+
+def remove_listener(listener: Callable[[str, "Card"], None]) -> None:
+    if listener in _listeners:
+        _listeners.remove(listener)
+
+
+def _notify(what: str, card: "Card") -> None:
+    for listener in list(_listeners):
+        try:
+            listener(what, card)
+        except Exception:
+            logger.debug("[cards] listener failed", exc_info=True)
+
+
+def _question_list(questions: Any) -> Optional[List[dict]]:
+    """AskUserQuestion's `questions`, reduced to what a phone shows."""
+    if not isinstance(questions, list):
+        return None
+    out = []
+    for q in questions[:QUESTIONS_MAX]:
+        if not isinstance(q, dict) or not isinstance(q.get("question"), str):
+            continue
+        labels = []
+        for opt in q.get("options") or []:
+            label = opt.get("label") if isinstance(opt, dict) else opt
+            if isinstance(label, str) and label:
+                labels.append(label[:LABEL_MAX])
+        out.append({"question": q["question"], "options": labels[:OPTIONS_MAX],
+                    "multi": bool(q.get("multiSelect"))})
+    return out or None
+
+
 def open_card(card_id: str, *, conversation_id: Optional[int], kind: str,
               tool: Optional[str] = None, summary: Any = None, risk: Optional[str] = None,
-              params: Any = None, resolver: Optional[Callable[[Any], None]] = None) -> Optional[Card]:
+              params: Any = None, resolver: Optional[Callable[[Any], None]] = None,
+              questions: Any = None) -> Optional[Card]:
     """Register an open card. Never raises: a card that cannot be registered
     still works the old way, it only misses the list and the ledger."""
     if not _valid_id(card_id):
@@ -123,7 +174,8 @@ def open_card(card_id: str, *, conversation_id: Optional[int], kind: str,
                     summary=turn_events.summarize(summary),
                     risk=risk or None, created_at=time.time(),
                     params_hash=params_hash(params), approval_mode=_current_mode(),
-                    resolver=resolver)
+                    resolver=resolver,
+                    questions=_question_list(questions) if kind == "question" else None)
         with _LOCK:
             _CLOSED.pop(card_id, None)
             _OPEN[card_id] = card
@@ -133,6 +185,7 @@ def open_card(card_id: str, *, conversation_id: Optional[int], kind: str,
     if conversation_id is not None:
         turn_events.append(conversation_id, "card_opened", card_id=card_id, card_kind=card.kind,
                            tool=card.tool, summary=card.summary)
+    _notify("opened", card)
     return card
 
 
@@ -206,6 +259,7 @@ def _after_close(card: Card) -> None:
         turn_events.append(card.conversation_id, "card_closed", card_id=card.card_id,
                            decision=card.decision or card.outcome, by=card.by,
                            outcome=card.outcome)
+    _notify("closed", card)
 
 
 def already_answered(card: Card) -> dict:
