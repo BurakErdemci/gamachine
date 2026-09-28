@@ -226,10 +226,15 @@ class Dispatcher:
         status = res.get("status")
         if status == "ok":
             # Only the winning answer closes the desktop's copy of the card.
-            CHANNEL.publish({"type": CARD_CLOSED_TYPE, "card_id": card_id,
-                             "conversation_id": card.conversation_id, "by": res.get("by"),
-                             "decision": target, "outcome": res.get("outcome"),
-                             "at": int(time.time() * 1000)})
+            # The decision is already committed: a failed notification must not
+            # turn it into an error the phone would retry into already_answered.
+            try:
+                CHANNEL.publish({"type": CARD_CLOSED_TYPE, "card_id": card_id,
+                                 "conversation_id": card.conversation_id, "by": res.get("by"),
+                                 "decision": target, "outcome": res.get("outcome"),
+                                 "at": int(time.time() * 1000)})
+            except Exception:
+                logger.exception("[remote] card_closed publish failed for %s", card_id)
             return {"outcome": res.get("outcome"), "by": res.get("by"), "at": res.get("at")}
         if status == "already_answered":
             raise RpcError("already_answered", by=res.get("by"), at=res.get("at"))

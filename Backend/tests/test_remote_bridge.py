@@ -443,6 +443,22 @@ async def test_phone_answer_closes_the_desktop_card(env):
         CHANNEL.unlisten(q)
 
 
+async def test_failed_card_closed_publish_keeps_the_winning_answer(env, monkeypatch):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db)
+    register_gate("gate-p", conv, tool="git")
+
+    def boom(frame):
+        raise RuntimeError("renderer channel failed")
+
+    monkeypatch.setattr(CHANNEL, "publish", boom)
+    r = await phone.request("answer_card", card_id="gate-p", decision="approve")
+    assert r["ok"] is True and r["result"]["outcome"] == "approved" and r["result"]["by"] == "phone:iPhone"
+    assert APPROVAL_RESULTS["gate-p"] is True
+    late = cards.answer_card("gate-p", "reject", device="desktop")
+    assert late["status"] == "already_answered" and late["by"] == "phone:iPhone"
+
+
 async def test_question_card_choice(env):
     phone = await pair_phone(env)
     conv = make_chat(env.db)
