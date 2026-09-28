@@ -638,6 +638,19 @@ export const tr = {
   'preview.fitToView': 'Ekrana sığdır',
   'preview.actualSize': 'Gerçek boyut',
   'preview.imageDimensions': '{width} x {height} piksel',
+  // Remote control (phone)
+  'remote.err.noDesktop': 'Uzaktan kontrol yalnız masaüstü uygulamasından yönetilebilir.',
+  'remote.err.unreachable': 'Uygulamanın arka plan servisine ulaşılamadı. Biraz sonra tekrar dene.',
+  'remote.err.remoteOff': 'Önce uzaktan kontrolü aç.',
+  'remote.err.tooManyDevices': 'Eşleşebilecek telefon sayısı doldu. Önce birini kaldır.',
+  'remote.err.relayUnreachable': 'Relay\'e ulaşılamadı. İnternet bağlantını ve relay adresini kontrol et.',
+  'remote.err.noPending': 'Bekleyen eşleşme isteği kalmadı (süresi dolmuş olabilir).',
+  'remote.err.phoneLeft': 'Telefonun bağlantısı koptu, eşleşme tamamlanmadı. Yeniden dene.',
+  'remote.err.badRelayUrl': 'Relay adresi geçersiz. Yolu olmayan bir https:// adresi yaz.',
+  'remote.err.unknownDevice': 'Bu telefon zaten kaldırılmış.',
+  'remote.err.generic': 'İşlem yapılamadı ({kod}).',
+  'chat.fromPhoneTitle': 'Telefondan gönderildi: {cihaz}',
+  'chat.phoneUnnamed': 'Telefon',
 } as const;
 
 /** Exported for the same reason `tr` is. */
@@ -1249,6 +1262,19 @@ export const en: Record<keyof typeof tr, string> = {
   'preview.fitToView': 'Fit to view',
   'preview.actualSize': 'Actual size',
   'preview.imageDimensions': '{width} x {height} pixels',
+  // Remote control (phone)
+  'remote.err.noDesktop': 'Remote control can only be managed from the desktop app.',
+  'remote.err.unreachable': 'The app\'s background service could not be reached. Try again in a moment.',
+  'remote.err.remoteOff': 'Turn remote control on first.',
+  'remote.err.tooManyDevices': 'The maximum number of phones is paired. Remove one first.',
+  'remote.err.relayUnreachable': 'The relay could not be reached. Check your internet connection and the relay address.',
+  'remote.err.noPending': 'There is no pairing request any more (it may have expired).',
+  'remote.err.phoneLeft': 'The phone disconnected before pairing finished. Try again.',
+  'remote.err.badRelayUrl': 'The relay address is not valid. Enter an https:// address without a path.',
+  'remote.err.unknownDevice': 'This phone was already removed.',
+  'remote.err.generic': 'That did not work ({kod}).',
+  'chat.fromPhoneTitle': 'Sent from the phone: {cihaz}',
+  'chat.phoneUnnamed': 'Phone',
 };
 
 export const translations: Record<Lang, Record<string, string>> = { tr, en };

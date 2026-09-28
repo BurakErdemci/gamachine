@@ -10,6 +10,7 @@ import { parseContextReport } from '../../lib/contextReport';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { apiHataMesaji } from '../../lib/apiError';
 import { isBranchIn, leftTabOf } from '../../lib/convFamily';
+import { claimRemoteMessage, parseRemoteMessage, type RemoteMessage } from '../../lib/remoteControl';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -36,7 +37,12 @@ export type QueuedMessage = {
   code: string; lang: string; genMode: GenerationMode; thinkingLevel: ThinkingLevel;
   setPendingGenFiles: (val: any) => void; setPendingDelete: (val: any) => void;
   images?: string[]; videos?: any[]; ultracode: boolean;
+  /** Written on a phone (remote control); the bubble shows its device. */
+  remote?: RemoteOrigin;
 };
+
+/** A message that came from a paired phone (`remote_message` frame). */
+export type RemoteOrigin = { device: string };
 type SetArg<T> = T | ((prev: T) => T);
 const resolveArg = <T,>(arg: SetArg<T>, prev: T): T =>
   typeof arg === 'function' ? (arg as (p: T) => T)(prev) : arg;
@@ -380,7 +386,13 @@ export const useChat = (
   // The same arguments as the page currently shows them (`setWakeDefaults`),
   // so a note can wake a chat before the user has sent anything this session.
   const wakeDefaultsRef = useRef<WakeArgs | null>(null);
-  const setWakeDefaults = useCallback((args: WakeArgs | null) => { wakeDefaultsRef.current = args; }, []);
+  // Phone messages that arrived before the page handed over its choices; sent
+  // as soon as it does (`deliverRemote`).
+  const flushRemoteRef = useRef<() => void>(() => {});
+  const setWakeDefaults = useCallback((args: WakeArgs | null) => {
+    wakeDefaultsRef.current = args;
+    if (args) flushRemoteRef.current();
+  }, []);
 
   // Only the newest list request may write the list: an older answer was read
   // before a later hide, unhide or branch and would undo it. A local change
@@ -771,6 +783,8 @@ export const useChat = (
     // The composer's text before the page inlined attached files; kept only
     // if this send has to wait in the queue.
     draft?: string,
+    // Set for a message written on a paired phone (remote control).
+    remote?: RemoteOrigin,
   ) => {
     if (!user || !API) return;
     const requested = targetOverride ?? activeConvIdRef.current;
@@ -783,7 +797,7 @@ export const useChat = (
         const item: QueuedMessage = {
           id: ++eventSeqRef.current, text: messageContent, draft: draft ?? messageContent,
           code, lang, genMode, thinkingLevel, setPendingGenFiles, setPendingDelete,
-          images, videos, ultracode,
+          images, videos, ultracode, remote,
         };
         patchConv(keyOf(requested), r => ({ queue: [...r.queue, item] }));
         if (targetOverride == null) setChatInput('');
@@ -832,7 +846,7 @@ export const useChat = (
     };
     // Anything the server copy will not carry (notice, error text, slash card)
     // makes an off-screen refresh lossy; then the live copy is kept instead.
-    let lossy = false;
+    let lossy = !!remote;
     let finishedCleanly = false;
     let errored = false;
 
@@ -842,7 +856,8 @@ export const useChat = (
       content: messageContent, 
       smells: [], 
       timestamp: new Date().toISOString(),
-      images: images 
+      images: images,
+      ...(remote ? { source: 'phone' as const, sourceDevice: remote.device } : {}),
     };
     updateMessages(prev => [...prev, userMsg]);
     // The message box holds the user's draft for the chat on screen; a wake
@@ -1239,7 +1254,7 @@ export const useChat = (
     void sendMessageRef.current(
       next.text, next.code, next.lang, next.genMode, next.thinkingLevel,
       next.setPendingGenFiles, next.setPendingDelete,
-      next.images, next.ultracode, next.videos, 'user', convId,
+      next.images, next.ultracode, next.videos, 'user', convId, undefined, next.remote,
     );
     return true;
   }, [patchConv, rt]);
@@ -1247,6 +1262,38 @@ export const useChat = (
 
   const fetchMessagesRef = useRef(fetchMessages);
   fetchMessagesRef.current = fetchMessages;
+
+  // A message written on a phone, handed over by the backend as a
+  // `remote_message` frame. It goes the way a typed message goes: into that
+  // chat's queue while a turn runs, else out as a user turn addressed by id,
+  // so the chat on screen and its composer are never touched.
+  const pendingRemoteRef = useRef<RemoteMessage[]>([]);
+  const sendRemote = useCallback(async (m: RemoteMessage, args: WakeArgs) => {
+    if (!rt(m.conversationId).loading && rt(m.conversationId).messages.length === 0) {
+      await fetchMessagesRef.current(m.conversationId);
+    }
+    void sendMessageRef.current(
+      m.text, '', args.lang, args.genMode, args.thinkingLevel,
+      args.setPendingGenFiles, args.setPendingDelete,
+      undefined, false, undefined, 'user', m.conversationId, undefined, { device: m.deviceName },
+    );
+  }, [rt]);
+  const deliverRemote = useCallback(async (m: RemoteMessage) => {
+    // Every open renderer stream receives the frame; only one window sends it.
+    if (!(await claimRemoteMessage(m.requestId))) return;
+    const args = wakeDefaultsRef.current ?? lastSendArgsRef.current;
+    if (!args) { pendingRemoteRef.current.push(m); return; }
+    await sendRemote(m, args);
+  }, [sendRemote]);
+  flushRemoteRef.current = () => {
+    const args = wakeDefaultsRef.current ?? lastSendArgsRef.current;
+    if (!args) return;
+    const waiting = pendingRemoteRef.current;
+    pendingRemoteRef.current = [];
+    for (const m of waiting) void sendRemote(m, args);
+  };
+  const deliverRemoteRef = useRef(deliverRemote);
+  deliverRemoteRef.current = deliverRemote;
   const userId = user?.id;
   const sessionToken = user?.sessionToken;
   useEffect(() => {
@@ -1307,6 +1354,11 @@ export const useChat = (
                 }
                 if (data?.type === 'title' && !iptal) {
                   applyServerTitle(Number(data.conversation_id), data.title);
+                  continue;
+                }
+                if (data?.type === 'remote_message') {
+                  const remoteMsg = parseRemoteMessage(data);
+                  if (remoteMsg && !iptal) void deliverRemoteRef.current(remoteMsg);
                   continue;
                 }
                 if (data?.type !== 'wake' || iptal) continue;

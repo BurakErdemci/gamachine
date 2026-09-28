@@ -111,6 +111,10 @@ export interface Message {
   // Tur sonu istatistiği (backend turn_usage event'i) — mesaj altında küçük özet satırı
   usage?: { output_tokens?: number; duration_ms?: number | null };
   notices?: MessageNotice[];
+  /** Written on a paired phone (remote control). Renderer-only: the backend
+   *  stores no message source, so a reload drops the marker. */
+  source?: 'phone';
+  sourceDevice?: string;
 }
 
 // Kalıcı bağlam göstergesinin verisi. `percent` bir ÖLÇÜM DEĞİL: yalnız DB'ye
