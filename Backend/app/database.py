@@ -48,7 +48,15 @@ class _LedgerWriter:
             item = self._queue.get()
             try:
                 if item is None:
-                    return
+                    # submit() enqueues under the same lock, so a row lands either
+                    # before this check (and is drained) or after _thread is
+                    # cleared (and starts a new writer); never stranded behind us.
+                    with self._lock:
+                        if self._queue.empty():
+                            if self._thread is threading.current_thread():
+                                self._thread = None
+                            return
+                    continue
                 fn, args = item
                 try:
                     fn(*args)
@@ -70,6 +78,7 @@ class _LedgerWriter:
         return True
 
     def shutdown(self, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
         flushed = self.flush(timeout)
         with self._lock:
             thread = self._thread
@@ -79,9 +88,8 @@ class _LedgerWriter:
                 self._queue.put_nowait(None)
             except queue.Full:
                 return False
-            thread.join(timeout)
-            if not thread.is_alive():
-                self._thread = None
+        # Joined outside the lock: the writer takes it to decide whether to exit.
+        thread.join(max(0.0, deadline - time.monotonic()))
         return flushed
 
 

@@ -369,3 +369,35 @@ def test_shutdown_writes_the_queued_rows(tmp_path, monkeypatch):
     # A write after shutdown starts the writer again.
     db.record_card_resolution({"card_id": "after", "outcome": "approved"})
     assert [r["card_id"] for r in db.get_approval_ledger()][-1] == "after"
+
+
+def test_a_row_accepted_during_a_slow_shutdown_is_still_written():
+    # shutdown() timed out behind a slow insert and queued its stop marker; a row
+    # accepted after that used to sit behind the marker and never be written.
+    writer = database._LedgerWriter()
+    busy, release, written = threading.Event(), threading.Event(), threading.Event()
+    try:
+        assert writer.submit(lambda: (busy.set(), release.wait(5)))
+        assert busy.wait(5)
+        started = time.monotonic()
+        assert writer.shutdown(0.05) is False
+        assert time.monotonic() - started < 1.0  # one deadline for flush and join
+        assert writer.submit(written.set)
+        release.set()
+        assert written.wait(5)
+        assert writer.flush(5)
+    finally:
+        release.set()
+        writer.shutdown(5)
+
+
+def test_a_writer_that_stopped_is_restarted_by_the_next_row():
+    writer = database._LedgerWriter()
+    first, second = threading.Event(), threading.Event()
+    assert writer.submit(first.set)
+    assert writer.shutdown(5)
+    assert first.is_set()
+    assert writer._thread is None
+    assert writer.submit(second.set)
+    assert second.wait(5)
+    assert writer.shutdown(5)
