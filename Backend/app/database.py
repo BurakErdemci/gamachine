@@ -825,6 +825,58 @@ class DatabaseManager:
             conn.commit()
             return cur.rowcount
 
+    def sweep_undelivered_mail(self, recipient_note: Callable[[List[Dict[str, Any]]], str],
+                               sender_note: Callable[[List[Dict[str, Any]]], str]) -> int:
+        """Startup: a note still `queued` from the previous run cannot self-
+        deliver (owner decision, 28 Sep 2026 - a restart used to re-arm its own
+        wake and two old chats replied to each other until the depth limit
+        stopped the chain). One transaction: every `queued` row becomes
+        `undelivered`, one system message is written into each affected
+        recipient chat and one into each affected sender chat (`_touch`ed like
+        `claim_queued_mail` touches a delivery), so a failed write leaves the
+        rows `queued` for the next attempt instead of half-swept. Returns the
+        number of notes moved.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            rows = conn.execute(
+                f'SELECT {", ".join("m." + c.strip() for c in self._MAIL_COLS.split(","))}, '
+                'fc.title, tc.title '
+                'FROM mailbox m LEFT JOIN conversations fc ON fc.id = m.from_conv '
+                'LEFT JOIN conversations tc ON tc.id = m.to_conv '
+                "WHERE m.status = 'queued' ORDER BY m.id ASC").fetchall()
+            if not rows:
+                conn.commit()
+                return 0
+            items: List[Dict[str, Any]] = []
+            by_recipient: Dict[int, List[Dict[str, Any]]] = {}
+            by_sender: Dict[int, List[Dict[str, Any]]] = {}
+            for r in rows:
+                item = self._mail_row(r)
+                item["from_title"] = r[self._MAIL_NCOLS] or ""
+                item["to_title"] = r[self._MAIL_NCOLS + 1] or ""
+                items.append(item)
+                by_recipient.setdefault(item["to_conv"], []).append(item)
+                by_sender.setdefault(item["from_conv"], []).append(item)
+            marks = ','.join('?' * len(items))
+            conn.execute(f"UPDATE mailbox SET status = 'undelivered' WHERE id IN ({marks})",
+                        [it["id"] for it in items])
+            for to_conv, notes in by_recipient.items():
+                conn.execute(
+                    'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp) '
+                    'VALUES (?, ?, ?, ?, ?)',
+                    (to_conv, "system", recipient_note(notes), "[]", now))
+                self._touch(conn, to_conv, now)
+            for from_conv, notes in by_sender.items():
+                conn.execute(
+                    'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp) '
+                    'VALUES (?, ?, ?, ?, ?)',
+                    (from_conv, "system", sender_note(notes), "[]", now))
+                self._touch(conn, from_conv, now)
+            conn.commit()
+            return len(items)
+
     # ===================== YENİ: MESAJLAR =====================
     def add_message(self, conversation_id: int, role: str, content: str, smells: list = None,
                     provider: Optional[str] = None, model: Optional[str] = None) -> int:

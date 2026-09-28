@@ -31,7 +31,7 @@ import axios from 'axios'
 import { useChat } from '../renderer/hooks/home/useChat'
 import { useMCPApproval, mailOzeti, MCP_MSG_ID } from '../renderer/hooks/home/useMCPApproval'
 import { CommandApproval } from '../renderer/components/home/CommandApproval'
-import { ChatPanel, MAIL_AUTO_TAG } from '../renderer/components/home/ChatPanel'
+import { ChatPanel, MAIL_AUTO_TAG, UNDELIVERED_MARKER } from '../renderer/components/home/ChatPanel'
 import { cevir } from '../renderer/lib/i18n'
 
 const mockedAxios = axios as unknown as { post: ReturnType<typeof vi.fn>; get: ReturnType<typeof vi.fn> }
@@ -242,5 +242,24 @@ describe('the note bubble', () => {
     expect(screen.queryByTestId('mail-note')).toBeNull()
     expect(container.textContent).toContain(cevir('chat.wakeRow.mail'))
     expect(container.textContent).not.toContain('mail|')
+  })
+
+  // Owner decision, 28 Sep 2026: a note the startup sweep could not deliver
+  // (backend agentic/mailbox.py `format_undelivered_recipient_note`) renders
+  // grey, distinct from a live note, and not as the wake row or a user bubble.
+  it('an undelivered note renders grey, not as a live mail note or a wake row', () => {
+    const { container } = panel([{
+      id: 5, role: 'system',
+      content: `${UNDELIVERED_MARKER} Uygulama yeniden başladığı için bu not teslim edilmedi:\n`
+        + '- #3 "Derleme": build temiz\n'
+        + 'İstersen bu sohbete kendin yazarak devam edebilirsin.',
+      smells: [], timestamp: 't',
+    }])
+    const note = screen.getByTestId('mail-note-undelivered')
+    expect(note.textContent).toContain(cevir('chat.mailUndelivered'))
+    expect(note.textContent).toContain('#3 "Derleme": build temiz')
+    expect(screen.queryByTestId('mail-note')).toBeNull()
+    expect(screen.queryByText(cevir('chat.wakeRow'))).toBeNull()
+    expect(container.querySelector('.bg-blue-500\\/10')).toBeNull()
   })
 })

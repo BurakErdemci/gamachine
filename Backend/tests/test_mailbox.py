@@ -5,8 +5,11 @@ a turn in flight, never from or to a side chat, never to itself or to another
 user's chat; step mode raises a card owned by A whose answer queues or refuses
 it, auto mode queues at once; loops are bounded by depth and by a per-pair
 rate; B's wake turn runs on the note read from the DB (never on the client's
-text) and a delivered note is not delivered again; a busy B waits; queued
-notes survive a restart; deleting a chat takes its notes and denies its cards.
+text) and a delivered note is not delivered again; a busy B waits; a note
+still `queued` from a run that ended is marked `undelivered` at the next
+startup and does NOT wake anyone by itself (owner decision, 28 Sep 2026 - see
+`test_startup_sweep_marks_stale_queued_mail_undelivered`); deleting a chat
+takes its notes and denies its cards.
 """
 import asyncio
 import sqlite3
@@ -622,6 +625,26 @@ def test_handoff_context_keeps_mail_rows_but_not_wake_rows():
     assert "tasks_done" not in text
 
 
+def test_handoff_context_drops_an_undelivered_note_like_any_other_system_row():
+    """The grey note must not act as a delivered note for the model (owner
+    decision, 28 Sep 2026): it uses a different marker than a real note, so it
+    fails `is_mail_message` and the handoff builder drops it exactly like a
+    wake row - the model is never handed something to reply to through it."""
+    undelivered = mailbox.format_undelivered_recipient_note(
+        [{"from_conv": 3, "from_title": "A", "body": "şema değişti"}])
+    assert mailbox.is_undelivered_message(undelivered)
+    assert not mailbox.is_mail_message(undelivered)
+    rows = [
+        {"role": "user", "content": "gerçek istek"},
+        {"role": "system", "content": undelivered},
+        {"role": "system", "content": f'{mailbox.MAIL_MARKER} #3 "A": şema değişti 2'},
+        {"role": "user", "content": "son (hariç)"},
+    ]
+    text = cr._build_handoff_context("", rows)
+    assert "şema değişti 2" in text          # a real note is still kept
+    assert "teslim edilmedi" not in text     # the undelivered one is not
+
+
 # ── waking ───────────────────────────────────────────────────────────────────
 
 def _route(router, path):
@@ -681,7 +704,12 @@ def test_the_all_chats_stream_skips_side_rows_and_other_users(env):
     assert wake_queue.pending(side) == 1 and wake_queue.pending(foreign) == 1
 
 
-def test_queued_notes_are_re_armed_after_a_restart(env, auto, tmp_path):
+def test_queued_notes_are_marked_undelivered_after_a_restart_and_wake_nobody(env, auto, tmp_path):
+    """The bug this replaces (owner's live test, 28 Sep ~01:00): a restart used
+    to re-arm B's wake for a note still `queued` from the dead process, so B
+    woke on its own and answered a note nobody was there to have sent it a
+    fresh copy of. Option A: the note is marked `undelivered` instead and
+    nothing wakes."""
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
     _send(env.client, a, b, body="restart öncesi")
     # A note still waiting on its card cannot be answered after a restart.
@@ -689,16 +717,159 @@ def test_queued_notes_are_re_armed_after_a_restart(env, auto, tmp_path):
     wake_queue.reset_all()                       # the process died
     router = cr.create_conversation_router(env.db, {})   # and came back
     assert _rows(env.db, "SELECT body, status FROM mailbox ORDER BY id") == [
-        ("restart öncesi", "queued"), ("kartta kaldı", "rejected")]
+        ("restart öncesi", "undelivered"), ("kartta kaldı", "rejected")]
     assert wake_queue.pending(b) == 0
     route = _route(router, "/conversations/{conv_id}/wake-stream")
 
     async def run():
         resp = await route.endpoint(conv_id=b, x_session_token="")
-        return await _next_frame(resp, 2.0)
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await _next_frame(resp, 0.3)
+        finally:
+            await resp.body_iterator.aclose()
 
-    frame = asyncio.run(run())
-    assert '"type": "wake"' in frame and "mail|" in frame
+    asyncio.run(run())
+    assert wake_queue.pending(b) == 0
+
+
+# ── the startup sweep of notes stale from a previous run (owner decision,
+# 28 Sep 2026) ────────────────────────────────────────────────────────────────
+
+def test_startup_sweep_marks_stale_queued_mail_undelivered(env, auto):
+    a, b, c = _chat(env.db, "Gönderen A"), _chat(env.db, "Alıcı B"), _chat(env.db, "Gönderen C")
+    _send(env.client, a, b, body="ilk not")
+    _send(env.client, a, b, body="ikinci not")
+    _send(env.client, c, b, body="başka gönderenden")
+    _send(env.client, a, c, body="A'dan C'ye de gitti")
+    before_a = _rows(env.db, "SELECT updated_at FROM conversations WHERE id = ?", (a,))[0][0]
+    wake_queue.reset_all()
+
+    n = env.db.sweep_undelivered_mail(
+        mailbox.format_undelivered_recipient_note, mailbox.format_undelivered_sender_note)
+
+    assert n == 4
+    assert {r[0] for r in _rows(env.db, "SELECT DISTINCT status FROM mailbox")} == {"undelivered"}
+    # One system message per affected recipient chat (b, c), not one per note.
+    b_sys = [m for m in env.db.get_conversation_messages(b) if m["role"] == "system"]
+    c_sys = [m for m in env.db.get_conversation_messages(c) if m["role"] == "system"]
+    assert len(b_sys) == 1
+    assert mailbox.is_undelivered_message(b_sys[0]["content"])
+    assert not mailbox.is_mail_message(b_sys[0]["content"])
+    assert "ilk not" in b_sys[0]["content"] and "ikinci not" in b_sys[0]["content"]
+    assert "başka gönderenden" in b_sys[0]["content"]
+    assert f'#{a}' in b_sys[0]["content"] and f'#{c}' in b_sys[0]["content"]
+    # c is both a recipient (of a's note) and a sender (to b), so it gets one
+    # message of each kind, not one merged into the other.
+    assert len(c_sys) == 2
+    assert all(mailbox.is_undelivered_message(m["content"]) for m in c_sys)
+    c_recipient = [m for m in c_sys
+                   if "İstersen bu sohbete kendin yazarak devam edebilirsin." in m["content"]]
+    c_sender = [m for m in c_sys if "gönderdiğin not" in m["content"]]
+    assert len(c_recipient) == 1 and "A'dan C'ye de gitti" in c_recipient[0]["content"]
+    assert len(c_sender) == 1 and f'#{b}' in c_sender[0]["content"]
+    # One system message per affected SENDER chat too (a sent to both b and c).
+    a_sys = [m for m in env.db.get_conversation_messages(a) if m["role"] == "system"]
+    assert len(a_sys) == 1
+    assert mailbox.is_undelivered_message(a_sys[0]["content"])
+    assert f'#{b}' in a_sys[0]["content"] and f'#{c}' in a_sys[0]["content"]
+    after_a = _rows(env.db, "SELECT updated_at FROM conversations WHERE id = ?", (a,))[0][0]
+    assert after_a >= before_a
+
+
+def test_startup_sweep_leaves_other_statuses_alone(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    env.db.add_mail(a, b, "beklemede", "pending_approval", "gate-1", 1)
+    env.db.add_mail(a, b, "teslim edildi", "delivered", None, 1)
+    env.db.add_mail(a, b, "reddedildi", "rejected", None, 1)
+
+    n = env.db.sweep_undelivered_mail(
+        mailbox.format_undelivered_recipient_note, mailbox.format_undelivered_sender_note)
+
+    assert n == 0
+    assert sorted(r[0] for r in _rows(env.db, "SELECT status FROM mailbox")) == [
+        "delivered", "pending_approval", "rejected"]
+    assert env.db.get_conversation_messages(b) == []
+
+
+def test_startup_sweep_rolls_back_on_a_failed_message_write(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b, body="geri alınsın")
+    _break_message_writes_to(env.db, b)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        env.db.sweep_undelivered_mail(
+            mailbox.format_undelivered_recipient_note, mailbox.format_undelivered_sender_note)
+
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
+    assert env.db.get_conversation_messages(b) == []
+    assert env.db.get_conversation_messages(a) == []
+
+    _heal_message_writes(env.db)
+    n = env.db.sweep_undelivered_mail(
+        mailbox.format_undelivered_recipient_note, mailbox.format_undelivered_sender_note)
+    assert n == 1
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("undelivered",)]
+
+
+def test_requeue_arms_nothing_once_swept(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b, body="restart sonrası uyanmasın")
+    wake_queue.reset_all()
+    router = cr.create_conversation_router(env.db, {})   # runs the sweep
+    assert env.db.queued_mail_targets() == []
+    route = _route(router, "/wake-stream-all")
+
+    async def run():
+        resp = await route.endpoint(x_session_token="")
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await _next_frame(resp, 0.3)
+        finally:
+            await resp.body_iterator.aclose()
+
+    asyncio.run(run())
+    assert wake_queue.pending(b) == 0
+
+
+def test_a_later_real_send_still_queues_and_delivers_normally_after_a_sweep(
+        env, auto, monkeypatch):
+    """The sweep runs once at router construction; mail sent DURING the run
+    that follows must be unaffected (owner decision, 28 Sep 2026)."""
+    _FakeRunner.messages = []
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    env.db.add_mail(a, b, "eski, taşınacak", "queued", None, 1)
+    wake_queue.reset_all()
+    cr.create_conversation_router(env.db, {})   # simulates the restart; runs the sweep
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("undelivered",)]
+
+    result = _send(env.client, a, b, body="restart sonrası taze not")
+    assert result.status_code == 200
+    assert result.json()["status"] == "queued"
+    # Scoped to a's own two rows: the fake runner's reply also owes b a note
+    # back to a (the auto-forward mechanism), a third row this test is not about.
+    assert sorted(r[0] for r in _rows(
+        env.db, "SELECT status FROM mailbox WHERE from_conv = ?", (a,))) == [
+        "queued", "undelivered"]
+
+    wake_queue.issue_ticket(b, wake_queue.drain(b))
+    resp = _wake_turn(env.client, b)
+    assert resp.status_code == 200
+    assert "restart sonrası taze not" in _FakeRunner.messages[-1]
+    assert sorted(row[0] for row in _rows(
+        env.db, "SELECT status FROM mailbox WHERE from_conv = ?", (a,))) == [
+        "delivered", "undelivered"]
+
+
+def test_undelivered_mail_survives_family_delete_like_other_statuses(env, auto):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    _send(env.client, a, b, body="silinecek aile")
+    env.db.sweep_undelivered_mail(
+        mailbox.format_undelivered_recipient_note, mailbox.format_undelivered_sender_note)
+    assert _rows(env.db, "SELECT status FROM mailbox") == [("undelivered",)]
+    env.client.delete(f"/conversations/{b}", headers=H)
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
 
 
 def test_a_note_dropped_by_a_user_message_is_re_armed(env, auto, monkeypatch):

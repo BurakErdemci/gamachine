@@ -38,6 +38,12 @@ STATUS_PENDING = "pending_approval"
 STATUS_QUEUED = "queued"
 STATUS_DELIVERED = "delivered"
 STATUS_REJECTED = "rejected"
+# A note still `queued` from a previous run of the app (owner decision, 28 Sep
+# 2026): a restart used to re-arm a wake for its recipient on its own, and two
+# old chats replied to each other until the depth limit stopped the chain
+# (owner's live test, 28 Sep ~01:00). Such rows are swept to this status at
+# startup and never claimed or re-armed again.
+STATUS_UNDELIVERED = "undelivered"
 
 TOOL_LIST = "list_chats"
 TOOL_SEND = "send_chat_message"
@@ -185,6 +191,56 @@ def stored_text(rows: Iterable[dict]) -> str:
     return "\n\n".join(
         format_note(r["from_conv"], r.get("from_title"), r["body"],
                     bool(r.get("auto_forwarded"))) for r in rows)
+
+
+# ── the startup sweep of notes stale from a previous run ─────────────────────
+# A different glyph from MAIL_MARKER on purpose (owner decision, 28 Sep 2026):
+# `_build_handoff_context` (conversation_routes.py) already drops every
+# `system` row from a CLI handoff transcript unless `is_mail_message` says it
+# is a real note, so keeping this text off that check is what keeps a grey
+# "not delivered" line from being replayed into a new session as something to
+# act on. Reusing MAIL_MARKER would have made it pass that check by accident.
+UNDELIVERED_MARKER = "📭"
+_UNDELIVERED_PREVIEW_CHARS = 80
+
+
+def is_undelivered_message(content: Any) -> bool:
+    return isinstance(content, str) and content.startswith(UNDELIVERED_MARKER)
+
+
+def _preview(body: Any) -> str:
+    text = " ".join(str(body or "").split())
+    if len(text) > _UNDELIVERED_PREVIEW_CHARS:
+        text = text[:_UNDELIVERED_PREVIEW_CHARS] + "…"
+    return text
+
+
+def format_undelivered_recipient_note(rows: Iterable[dict]) -> str:
+    """The one `system` message the startup sweep writes into a chat whose
+    queued notes could not be delivered because the app restarted."""
+    rows = list(rows)
+    lines = [f'- #{int(r["from_conv"])} "{clean_title(r.get("from_title"))}": {_preview(r["body"])}'
+              for r in rows]
+    intro = ("Uygulama yeniden başladığı için bu not teslim edilmedi:" if len(lines) == 1
+              else f"Uygulama yeniden başladığı için bu {len(lines)} not teslim edilmedi:")
+    return (f"{UNDELIVERED_MARKER} {intro}\n" + "\n".join(lines)
+            + "\nİstersen bu sohbete kendin yazarak devam edebilirsin.")
+
+
+def format_undelivered_sender_note(rows: Iterable[dict]) -> str:
+    """The one `system` message the startup sweep writes into the SENDER chat
+    of one or more notes that could not be delivered; its AI was told the note
+    would reach the other chat, so this corrects that."""
+    rows = list(rows)
+    if len(rows) == 1:
+        r = rows[0]
+        return (f'{UNDELIVERED_MARKER} #{int(r["to_conv"])} "{clean_title(r.get("to_title"))}" '
+                "sohbetine gönderdiğin not, uygulama yeniden başladığı için teslim edilmedi; "
+                "o sohbetin yapay zekâsına ulaşmadı.")
+    lines = [f'- #{int(r["to_conv"])} "{clean_title(r.get("to_title"))}"' for r in rows]
+    return (f"{UNDELIVERED_MARKER} Şu sohbetlere gönderdiğin notlar, uygulama yeniden başladığı "
+            "için teslim edilmedi; karşı taraftaki sohbetlerin yapay zekâsına ulaşmadı:\n"
+            + "\n".join(lines))
 
 
 def turn_text(rows: Iterable[dict], other_notices: Iterable[str] = (),

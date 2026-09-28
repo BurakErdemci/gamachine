@@ -2677,6 +2677,18 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             logger.info("[mailbox] %d note(s) left waiting on a card were refused at startup", rejected)
     except Exception:
         logger.exception("[mailbox] stale note cards not cleared")
+    try:
+        # Owner decision, 28 Sep 2026: a note still `queued` from the previous
+        # run must not self-deliver (see mailbox.STATUS_UNDELIVERED). Runs here,
+        # before any wake stream can connect, so `_requeue_queued_mail` never
+        # sees these rows as `queued` and arms nothing for them.
+        undelivered = db.sweep_undelivered_mail(
+            mailbox.format_undelivered_recipient_note, mailbox.format_undelivered_sender_note)
+        if undelivered:
+            logger.info("[mailbox] %d note(s) left queued from the previous run were "
+                        "marked undelivered", undelivered)
+    except Exception:
+        logger.exception("[mailbox] stale queued notes not swept")
     mailbox.set_service(types.SimpleNamespace(
         list_chats=_service_list_chats, send_and_wait=_service_send_and_wait))
 

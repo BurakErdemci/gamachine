@@ -34,6 +34,15 @@ import { MessageNotices } from './MessageNotices';
 export const MAIL_MARKER = '📨';
 export const isMailNote = (msg: Pick<Message, 'role' | 'content'>) =>
   msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(MAIL_MARKER);
+/** A note the startup sweep could not deliver because the app restarted
+ *  (backend `mailbox.UNDELIVERED_MARKER`, owner decision, 28 Sep 2026). A
+ *  distinct marker from MAIL_MARKER on both sides of this line, on purpose:
+ *  it renders grey here instead of the amber mail-note style, and it stays
+ *  off `is_mail_message` on the backend so a CLI handoff never replays it as
+ *  a note the model could act on. */
+export const UNDELIVERED_MARKER = '📭';
+export const isUndeliveredNote = (msg: Pick<Message, 'role' | 'content'>) =>
+  msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(UNDELIVERED_MARKER);
 /** A forwarded reply's header tag (backend `mailbox.AUTO_FORWARD_TAG`): the
  *  other chat ended its turn without sending, so its last message came here. */
 export const MAIL_AUTO_TAG = '[otomatik iletildi]';
@@ -335,7 +344,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 </p>
               </div>
               );
-            })() : msg.role === 'system' ? (
+            })() : isUndeliveredNote(msg) ? (
+              /* A note the startup sweep could not deliver (backend
+                 agentic/mailbox.py, owner decision, 28 Sep 2026): its own
+                 grey bubble, visually distinct from the amber mail-note above
+                 so it reads as inactive rather than something this chat can
+                 still act on. */
+              <div data-testid="mail-note-undelivered" className="rounded-xl border border-slate-600/30 bg-slate-800/20 px-4 py-3">
+                <div className="flex items-center gap-2 mb-1.5 text-[11px] font-semibold text-slate-500 select-none">
+                  <Mail size={12} className="shrink-0" />
+                  {t('chat.mailUndelivered')}
+                </div>
+                <p className="text-[13px] text-slate-400 whitespace-pre-wrap break-words leading-relaxed">
+                  {stripBidi(msg.content.slice(UNDELIVERED_MARKER.length).trimStart())}
+                </p>
+              </div>
+            ) : msg.role === 'system' ? (
               /* AUTO-WAKE row. This branch is MANDATORY: the ternary below only
                  distinguished assistant/other, so a `system` role would render
                  as a BLUE USER BUBBLE — a sentence the user never wrote would

@@ -214,6 +214,7 @@ export const tr = {
   'chat.mailNote': 'Başka sohbetten not',
   'chat.mailNoteAuto': 'otomatik iletildi',
   'chat.wakeRow.mail': 'Başka sohbetten not geldi',
+  'chat.mailUndelivered': 'Teslim edilemeyen not',
   // WorkspaceScreen
   'workspace.welcome': 'Hoş geldin,',
   'workspace.subtitle': 'Başlamak için çalışma alanını seç',
@@ -833,6 +834,7 @@ export const en: Record<keyof typeof tr, string> = {
   'chat.mailNote': 'Note from another chat',
   'chat.mailNoteAuto': 'auto-forwarded',
   'chat.wakeRow.mail': 'a note arrived from another chat',
+  'chat.mailUndelivered': 'Undelivered note',
   // WorkspaceScreen
   'workspace.welcome': 'Welcome,',
   'workspace.subtitle': 'Select a workspace to get started',
