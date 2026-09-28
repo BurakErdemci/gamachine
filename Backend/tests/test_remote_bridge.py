@@ -561,3 +561,44 @@ async def test_card_and_chat_pushes_reach_the_phone(env):
     cards.answer_card("gate-p", "approve", device="desktop")
     closed = await phone.next_push(lambda m: m.get("type") == "card_closed")
     assert closed == {"type": "card_closed", "card_id": "gate-p"}
+
+
+async def test_busy_replies_stay_bounded_behind_a_slow_phone(env, monkeypatch):
+    release = asyncio.Event()
+    sent = []
+
+    async def slow_send(conn, obj):
+        await release.wait()
+        sent.append(obj)
+        return True
+
+    class PlainChannel:
+        def open(self, frame):
+            return {"id": frame["c"], "type": "list_chats"}
+
+        def seal(self, obj):
+            return obj
+
+    device = session_mod.Device("dev", "phone", b"", "hash", 0, None, None)
+    session = session_mod.PhoneSession("conn", device, PlainChannel(), slow_send)
+    for _ in range(session.MAX_TASKS):
+        assert session.spawn(release.wait())
+    monkeypatch.setitem(env.bridge.sessions, "conn", session)
+    monkeypatch.setattr(env.bridge, "_touch", lambda device_id: None)
+    before = len(asyncio.all_tasks())
+    for counter in range(1, 257):
+        await env.bridge._on_phone_data("conn", json.dumps({"c": counter, "d": "x"}))
+    await asyncio.sleep(0)
+    assert len(asyncio.all_tasks()) - before <= 1
+    release.set()
+    await until(lambda: sent and not session.tasks)
+    assert sent == [{"id": 1, "ok": False, "error": "busy"}]
+    # Once that reply is out, the next refused request is answered again.
+    release.clear()
+    for _ in range(session.MAX_TASKS):
+        assert session.spawn(release.wait())
+    await env.bridge._on_phone_data("conn", json.dumps({"c": 300, "d": "x"}))
+    release.set()
+    await until(lambda: len(sent) == 2)
+    assert sent[1] == {"id": 300, "ok": False, "error": "busy"}
+    session.close()

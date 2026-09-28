@@ -113,6 +113,7 @@ class PhoneSession:
         self._lock = asyncio.Lock()
         self.chats: Dict[int, asyncio.Task] = {}
         self.tasks: Set[asyncio.Task] = set()
+        self._busy: Optional[asyncio.Task] = None
         self.closed = False
 
     @property
@@ -142,6 +143,16 @@ class PhoneSession:
         task.add_done_callback(self.tasks.discard)
         return True
 
+    def reply_busy(self, rid: Any) -> None:
+        """Answer a request `spawn` refused. At most one such reply is in
+        flight: behind a slow link each one waits on the send lock, so one per
+        refused frame would grow without bound. Requests refused meanwhile get
+        no answer and time out on the phone."""
+        if self._busy is not None and not self._busy.done():
+            return
+        self._busy = asyncio.get_running_loop().create_task(
+            self.send({"id": rid, "ok": False, "error": "busy"}))
+
     def close_chat(self, conv_id: int) -> None:
         task = self.chats.pop(conv_id, None)
         if task is not None:
@@ -153,3 +164,5 @@ class PhoneSession:
             self.close_chat(conv_id)
         for task in list(self.tasks):
             task.cancel()
+        if self._busy is not None:
+            self._busy.cancel()

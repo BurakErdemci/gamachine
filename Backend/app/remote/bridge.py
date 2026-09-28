@@ -345,8 +345,7 @@ class RemoteBridge:
             return
         self._touch(session.device.device_id)
         if not session.spawn(self.rpc.handle(session, obj)):
-            rid = request_id(obj.get("id")) if isinstance(obj, dict) else None
-            self._spawn(session.send({"id": rid, "ok": False, "error": "busy"}))
+            session.reply_busy(request_id(obj.get("id")) if isinstance(obj, dict) else None)
 
     def _touch(self, device_id: str, force: bool = False) -> None:
         now = time.monotonic()
