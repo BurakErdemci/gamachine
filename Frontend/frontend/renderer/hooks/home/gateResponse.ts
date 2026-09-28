@@ -22,6 +22,7 @@
  */
 
 import { cevir, type TKey } from '../../lib/i18n';
+import { phoneDeviceName } from '../../lib/remoteControl';
 
 export type GateAction = 'command' | 'question' | 'mcp';
 
@@ -50,7 +51,7 @@ export interface GateDelivery {
 
 export interface GateFailure {
   message: string;
-  type: 'warning' | 'error';
+  type: 'info' | 'warning' | 'error';
   /**
    * Teslimatın GERÇEKLEŞİP gerçekleşmediği bilinmiyor mu?
    *
@@ -64,6 +65,32 @@ export interface GateFailure {
    * bir yer üretirdi.
    */
   uncertain?: boolean;
+  /** Set when another device (a phone, another window) or a timeout closed
+   *  the card first: the backend's `already_answered {by, at, decision}`. */
+  answeredElsewhere?: { by: string; at?: string; decision?: string };
+}
+
+/** The note for a card someone else closed first: a known outcome, not a
+ *  delivery problem, so the card closes with this instead of a warning. */
+function answeredElsewhere(body: Record<string, unknown>): GateFailure {
+  const by = typeof body.by === 'string' ? body.by : '';
+  const decision = typeof body.decision === 'string' ? body.decision : undefined;
+  const at = typeof body.at === 'string' ? body.at : undefined;
+  const phone = phoneDeviceName(by);
+  let key: TKey;
+  if (phone !== null) {
+    key = decision === 'approve' ? 'gate.answered.phoneApproved'
+      : decision === 'answer' ? 'gate.answered.phoneAnswered' : 'gate.answered.phoneRejected';
+  } else if (by === 'desktop') {
+    key = decision === 'approve' ? 'gate.answered.elsewhereApproved' : 'gate.answered.elsewhereRejected';
+  } else {
+    key = 'gate.answered.closed';
+  }
+  return {
+    message: cevir(key, { cihaz: phone || cevir('chat.phoneUnnamed') }),
+    type: phone !== null || by === 'desktop' ? 'info' : 'warning',
+    answeredElsewhere: { by, at, decision },
+  };
 }
 
 const readStatus = (body: unknown): string | null => {
@@ -158,6 +185,12 @@ export function gateFailure(action: GateAction, delivery: GateDelivery): GateFai
       message: cevir('gate.deliver.expired', { etiket: label }),
       type: 'error',
     };
+  }
+
+  // First answer wins (agentic/cards.py): a phone, another window or a
+  // timeout closed the card before this answer arrived. Known, not uncertain.
+  if (status === 'already_answered') {
+    return answeredElsewhere(delivery.body as Record<string, unknown>);
   }
 
   // 2xx alındı ama sonuç OKUNAMADI — bu da BELİRSİZ, kesin başarısızlık değil.

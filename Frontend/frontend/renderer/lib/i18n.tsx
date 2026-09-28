@@ -651,6 +651,12 @@ export const tr = {
   'remote.err.generic': 'İşlem yapılamadı ({kod}).',
   'chat.fromPhoneTitle': 'Telefondan gönderildi: {cihaz}',
   'chat.phoneUnnamed': 'Telefon',
+  'gate.answered.phoneApproved': 'Telefondan ({cihaz}) onaylandı.',
+  'gate.answered.phoneRejected': 'Telefondan ({cihaz}) reddedildi.',
+  'gate.answered.phoneAnswered': 'Telefondan ({cihaz}) cevaplandı.',
+  'gate.answered.elsewhereApproved': 'Bu kart başka bir pencereden zaten onaylanmıştı.',
+  'gate.answered.elsewhereRejected': 'Bu kart başka bir pencereden zaten reddedilmişti.',
+  'gate.answered.closed': 'Bu kart zaten kapanmıştı (süresi doldu ya da tur durduruldu). İşlem yapılmadı.',
 } as const;
 
 /** Exported for the same reason `tr` is. */
@@ -1275,6 +1281,12 @@ export const en: Record<keyof typeof tr, string> = {
   'remote.err.generic': 'That did not work ({kod}).',
   'chat.fromPhoneTitle': 'Sent from the phone: {cihaz}',
   'chat.phoneUnnamed': 'Phone',
+  'gate.answered.phoneApproved': 'Approved from the phone ({cihaz}).',
+  'gate.answered.phoneRejected': 'Rejected from the phone ({cihaz}).',
+  'gate.answered.phoneAnswered': 'Answered from the phone ({cihaz}).',
+  'gate.answered.elsewhereApproved': 'This card was already approved from another window.',
+  'gate.answered.elsewhereRejected': 'This card was already rejected from another window.',
+  'gate.answered.closed': 'This card had already closed (it timed out or the turn was stopped). Nothing was done.',
 };
 
 export const translations: Record<Lang, Record<string, string>> = { tr, en };
