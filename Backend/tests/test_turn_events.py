@@ -401,3 +401,11 @@ def test_turn_events_route_auth(env, monkeypatch):
     assert missing.status_code in (401, 422)
     assert "events" not in missing.text
 
+
+@pytest.mark.parametrize("since", ["-1", "abc", "1.5"])
+def test_turn_events_route_rejects_a_bad_cursor(env, since):
+    db, client, _ = env
+    cid = db.create_conversation(1, "t")
+    turn_events.append(cid, "turn_start", provider="claude", model="m", origin="user")
+    res = client.get(f"/conversations/{cid}/turn-events?since={since}", headers=H)
+    assert res.status_code == 422 and "events" not in res.json()

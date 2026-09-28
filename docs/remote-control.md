@@ -225,7 +225,7 @@ existing app-wide event channel and reports `accepted` or `desktop_not_ready`.
    `since_seq`. Today only the client that opened the stream sees a turn.
    Bounded by bytes too: a text event holds at most 8 KiB (a larger delta is
    split into consecutive events) and a chat's ring at most 1 MiB; whatever
-   falls out reaches a reader as a gap.
+   falls out reaches a reader as a gap. A negative `since` is refused (422).
 2. **All pending cards**: one internal call listing every open card across
    chats and providers, and one answer path with first-answer-wins.
 3. **Approval ledger** (new table): time, card id, chat, tool, parameter hash,

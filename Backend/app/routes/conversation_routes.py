@@ -11,7 +11,7 @@ import logging
 from collections import defaultdict
 from time import time
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from ai_providers import AIProviderManager
@@ -2113,11 +2113,11 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             res.get("by") == "desktop" and res.get("decision") == decision)
 
     @router.get("/conversations/{conv_id}/turn-events")
-    async def get_turn_events(conv_id: int, since: int = 0,
+    async def get_turn_events(conv_id: int, since: int = Query(0, ge=0),
                               x_session_token: str = Header(alias="X-Session-Token")):
         """The chat's turn events after `since` (docs/remote-control.md)."""
         require_conversation_owner(db, x_session_token, conv_id)
-        return turn_events.since(conv_id, max(0, since))
+        return turn_events.since(conv_id, since)
 
     @router.post("/command-approval/{gate_id}")
     async def command_approval(gate_id: str, body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):

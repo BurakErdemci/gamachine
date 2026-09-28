@@ -36,6 +36,13 @@ OUTCOMES = ("approved", "rejected", "answered", "timed_out", "cancelled")
 SYSTEM = "system"
 # Closed cards stay findable this long so a late answer learns who won.
 CLOSED_KEEP = 500
+# Card ids are gate ids (uuid hex, or what the MCP bridge sends); a phone
+# bridge hands them over from JSON, so anything else is refused up front.
+CARD_ID_MAX = 1024
+
+
+def _valid_id(card_id: Any) -> bool:
+    return isinstance(card_id, str) and 0 < len(card_id) <= CARD_ID_MAX
 
 
 def params_hash(params: Any) -> Optional[str]:
@@ -104,6 +111,9 @@ def open_card(card_id: str, *, conversation_id: Optional[int], kind: str,
               params: Any = None, resolver: Optional[Callable[[Any], None]] = None) -> Optional[Card]:
     """Register an open card. Never raises: a card that cannot be registered
     still works the old way, it only misses the list and the ledger."""
+    if not _valid_id(card_id):
+        logger.warning("[cards] card with a malformed id not registered")
+        return None
     try:
         card = Card(card_id=card_id, conversation_id=conversation_id,
                     kind=kind if kind in KINDS else "command",
@@ -132,11 +142,15 @@ def set_resolver(card_id: str, resolver: Callable[[Any], None]) -> None:
 
 
 def get(card_id: str) -> Optional[Card]:
+    if not _valid_id(card_id):
+        return None
     with _LOCK:
         return _OPEN.get(card_id) or _CLOSED.get(card_id)
 
 
 def is_open(card_id: str) -> bool:
+    if not _valid_id(card_id):
+        return False
     with _LOCK:
         return card_id in _OPEN
 
@@ -208,6 +222,12 @@ def answer_card(card_id: str, decision: str, choice: Any = None,
 
     Call it on the event loop thread: resolvers set asyncio events.
     """
+    if not _valid_id(card_id):
+        return {"status": "invalid", "error": "card_id must be a non-empty string"}
+    if not isinstance(decision, str):
+        return {"status": "invalid", "error": "decision must be a string"}
+    if device is not None and not isinstance(device, str):
+        return {"status": "invalid", "error": "device must be a string"}
     with _LOCK:
         card = _OPEN.get(card_id)
         closed = _CLOSED.get(card_id)
@@ -247,6 +267,8 @@ def close_card(card_id: str, outcome: str, *, decision: Optional[str] = None,
     then the caller must not overwrite the winner's result. The resolver runs
     only when `resolve` is passed (the value the waiter should read).
     """
+    if not _valid_id(card_id):
+        return False
     if outcome not in OUTCOMES:
         outcome = "cancelled"
     card = _claim(card_id, outcome, decision, device)

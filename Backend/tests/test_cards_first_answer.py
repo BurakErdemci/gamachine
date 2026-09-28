@@ -217,6 +217,25 @@ def test_invalid_decisions_are_refused_without_closing(env):
     assert cards.answer_card("nope", "approve")["status"] == "not_found"
 
 
+@pytest.mark.parametrize("card_id", [[], {}, None, 7, "", "x" * (cards.CARD_ID_MAX + 1)],
+                         ids=["list", "dict", "none", "int", "empty", "too_long"])
+def test_a_malformed_card_id_is_refused_without_raising(env, card_id):
+    db, _, _ = env
+    register_gate("cmd-m", db.create_conversation(1, "A"))
+    assert cards.answer_card(card_id, "approve")["status"] == "invalid"
+    assert cards.close_card(card_id, "cancelled") is False
+    assert cards.get(card_id) is None and cards.is_open(card_id) is False
+    assert [c["card_id"] for c in cards.list_pending()] == ["cmd-m"]
+
+
+def test_malformed_decision_and_device_are_refused_without_closing(env):
+    db, _, _ = env
+    register_gate("cmd-d", db.create_conversation(1, "A"))
+    assert cards.answer_card("cmd-d", ["approve"])["status"] == "invalid"
+    assert cards.answer_card("cmd-d", "approve", device=["phone"])["status"] == "invalid"
+    assert cards.is_open("cmd-d")
+
+
 # ── The desktop sees what it always saw ─────────────────────────────────────
 
 def test_desktop_command_answer_is_unchanged(env):
