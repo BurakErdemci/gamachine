@@ -46,6 +46,7 @@ import { McpUnknownTray } from '../components/home/McpUnknownTray';
 import { ChatTabs, BranchButton, hasBranches } from '../components/home/ChatTabs';
 import { SideChatPanel, SideQuestionButton } from '../components/home/SideChatPanel';
 import { SidebarToggle } from '../components/home/AwaitingBadge';
+import { RemoteBadge, useRemoteStatus } from '../components/home/RemoteBadge';
 import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
@@ -110,6 +111,7 @@ export default function Home() {
   );
   const autoTitles = useAutoChatTitles(API, auth.user?.id, showToast as any);
   const dictation = useDictationSettings(API, auth.user?.id, showToast as any);
+  const remote = useRemoteStatus(backendReady && !!auth.user);
 
   // Read-only side question over the chat on screen; its own state, never
   // useChat's runtimes (see useSideChat).
@@ -605,6 +607,7 @@ export default function Home() {
         onToggleAutoTitles={autoTitles.toggleAutoTitles}
         dictationAutoLang={dictation.autoLanguageCpu} dictationAutoLangSaving={dictation.autoLanguageCpuSaving}
         onToggleDictationAutoLang={dictation.toggleAutoLanguageCpu}
+        onRemoteStatus={remote.setStatus}
       />
 
       <ExportModal
@@ -673,6 +676,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2 relative shrink-0">
             {/* C# analizi (OmniSharp) hazırlanıyor rozeti */}
+            <RemoteBadge status={remote.status} onClick={() => ai.setShowSettings(true)} />
             {lspStatus?.state === 'starting' && (
               <span className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] text-[10px] font-semibold text-slate-400 whitespace-nowrap">
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />

@@ -7,6 +7,8 @@ import { ModelAvatar } from "./ModelAvatar";
 import { UnityMCPStatus } from "../../hooks/home/useAIConfig";
 import { useLang, type Lang } from "../../lib/i18n";
 import { stripBidi } from "../../lib/modelText";
+import { RemoteControlSection } from "./RemoteControlSection";
+import type { RemoteStatus } from "../../lib/remoteControl";
 
 
 
@@ -56,9 +58,10 @@ interface SettingsModalProps {
   dictationAutoLang?: boolean;
   dictationAutoLangSaving?: boolean;
   onToggleDictationAutoLang?: () => void;
+  onRemoteStatus?: (status: RemoteStatus) => void;
 }
 
-type SettingsTab = 'general' | 'mode';
+type SettingsTab = 'general' | 'mode' | 'remote';
 
 
 export const SettingsModal = ({
@@ -84,12 +87,14 @@ export const SettingsModal = ({
   dictationAutoLang = false,
   dictationAutoLangSaving = false,
   onToggleDictationAutoLang,
+  onRemoteStatus,
 }: SettingsModalProps) => {
   const { t } = useLang();
   const [tab, setTab] = useState<SettingsTab>('general');
   const TABS: { id: SettingsTab; label: string }[] = [
     { id: 'general', label: t('settings.tabGeneral') },
     { id: 'mode', label: t('settings.tabMode') },
+    { id: 'remote', label: t('settings.tabRemote') },
   ];
   const UNITY_STATUS_CONFIG: Record<UnityMCPStatus, { label: string; dot: string; bg: string; border: string }> = {
     off:       { label: t('unity.off'),       dot: "bg-slate-600",                bg: "bg-slate-900/50",   border: "border-slate-700/50" },
@@ -422,6 +427,8 @@ export const SettingsModal = ({
                 })}
               </div>
             )}
+
+            {tab === 'remote' && <RemoteControlSection onStatus={onRemoteStatus} />}
 
             <div className="flex gap-3 pt-2 mt-2 border-t border-white/[0.06]">
               <button
