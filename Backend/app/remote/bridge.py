@@ -411,6 +411,10 @@ class RemoteBridge:
     def _push_chat(self, conv_id: Optional[int], what: str, body: str, urgency: str = "normal") -> None:
         # Synchronous on purpose: notify() calls must keep the order of the
         # events, or coalescing would keep an older card as "the last one".
+        if not self._listening:
+            # A ring/card callback queued before disable can still run here;
+            # it would schedule a push under the new generation.
+            return
         if conv_id is None:
             self.push.notify("global", f"{what} - Gamachine", body, "/p", "gamachine", urgency)
             return

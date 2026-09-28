@@ -5,7 +5,9 @@ The decrypt and the JWT check below are written from the RFCs with
 """
 import asyncio
 import json
+import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 from cryptography.exceptions import InvalidSignature
@@ -224,4 +226,63 @@ async def test_no_push_while_remote_control_is_off(env, push_service):
     register_gate("gate-off", conv, tool="git", summary="x")
     turn_events.append(conv, "turn_end", status="done")
     await asyncio.sleep(0.4)
+    assert push_service.requests == []
+
+
+def _blocking_lookup(targets):
+    started, release = threading.Event(), threading.Event()
+
+    def push_targets():
+        started.set()
+        assert release.wait(5)
+        return targets()
+    return push_targets, started, release
+
+
+async def test_disable_stops_a_push_waiting_on_its_target_lookup(env, push_service, monkeypatch):
+    phone = await pair_phone(env)
+    await subscribe(phone, push_service)
+    lookup, started, release = _blocking_lookup(env.bridge.store.push_targets)
+    monkeypatch.setattr(env.bridge.store, "push_targets", lookup)
+    conv = make_chat(env.db)
+    register_gate("gate-inflight", conv, tool="git", summary="x")
+    assert await asyncio.to_thread(started.wait, 5)
+    await env.bridge.disable()
+    release.set()
+    await asyncio.wait_for(env.bridge.push.drain(), 5)
+    await asyncio.sleep(0.2)
+    assert push_service.requests == []
+
+
+async def test_a_delivery_from_before_cancel_never_posts():
+    # Called directly, so cancel() cannot cancel it: only the generation check stops it.
+    posts = []
+
+    class Client:
+        async def post(self, *args, **kwargs):
+            posts.append(args)
+            return SimpleNamespace(status_code=201)
+
+    sub = {"endpoint": "https://push.apple.com/x",
+           "keys": {"p256dh": C.b64u(C.KeyPair.generate().public_raw), "auth": C.random_b64u(16)}}
+    lookup, started, release = _blocking_lookup(
+        lambda: [SimpleNamespace(name="phone", push_subscription=sub)])
+    sender = webpush.PushSender(SimpleNamespace(push_targets=lookup), C.KeyPair.generate)
+    sender._client = Client()
+    delivery = asyncio.create_task(sender._deliver({"title": "t", "body": "b", "url": "/p"}, "normal",
+                                                   sender._generation))
+    assert await asyncio.to_thread(started.wait, 5)
+    sender.cancel()
+    release.set()
+    await asyncio.wait_for(delivery, 5)
+    assert posts == [] and sender.sent == 0
+
+
+async def test_an_event_queued_before_disable_does_not_push(env, push_service):
+    phone = await pair_phone(env)
+    await subscribe(phone, push_service)
+    conv = make_chat(env.db)
+    await env.bridge.disable()
+    env.bridge._on_turn_event(conv, {"kind": "turn_end", "status": "error"})
+    await asyncio.sleep(0.3)
     assert push_service.requests == []

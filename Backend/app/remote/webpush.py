@@ -135,6 +135,9 @@ class PushSender:
         self._pending: Dict[Any, Tuple[dict, str]] = {}
         self._timers: Dict[Any, asyncio.TimerHandle] = {}
         self._tasks: set = set()
+        # Bumped by cancel(): a delivery scheduled under an older generation
+        # must not POST, even one already past its target lookup.
+        self._generation = 0
         self._client: Optional[httpx.AsyncClient] = None
         self.sent = 0
 
@@ -162,16 +165,16 @@ class PushSender:
             self._spawn(*item)
 
     def _spawn(self, payload: dict, urgency: str) -> None:
-        task = asyncio.get_running_loop().create_task(self._deliver(payload, urgency))
+        task = asyncio.get_running_loop().create_task(self._deliver(payload, urgency, self._generation))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _deliver(self, payload: dict, urgency: str) -> None:
+    async def _deliver(self, payload: dict, urgency: str, generation: int) -> None:
         key = self._vapid_key()
         if key is None:
             return
         targets = await asyncio.to_thread(self._store.push_targets)
-        if not targets:
+        if not targets or generation != self._generation:
             return
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=False,
@@ -179,6 +182,8 @@ class PushSender:
         data = C.compact_json(payload).encode("utf-8")
         for device in targets:
             sub = device.push_subscription
+            if generation != self._generation:
+                return
             try:
                 sub = validate_subscription(sub)
                 body = encrypt(data, C.from_b64u(sub["keys"]["p256dh"]), C.from_b64u(sub["keys"]["auth"]))
@@ -199,15 +204,17 @@ class PushSender:
                 self.sent += 1
 
     def cancel(self) -> None:
+        """Remote control went off: nothing queued or in flight may reach the network."""
+        self._generation += 1
         for timer in self._timers.values():
             timer.cancel()
         self._timers.clear()
         self._pending.clear()
+        for task in list(self._tasks):
+            task.cancel()
 
     async def aclose(self) -> None:
         self.cancel()
-        for task in list(self._tasks):
-            task.cancel()
         if self._client is not None:
             await self._client.aclose()
             self._client = None
