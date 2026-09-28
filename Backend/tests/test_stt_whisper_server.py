@@ -365,6 +365,58 @@ def test_a_startup_timeout_does_not_poison_later_dictations(server_factory):
         server.stop()
 
 
+def test_a_health_reply_reaching_a_retired_watcher_does_not_mark_the_new_child_ready(server_factory):
+    """Codex verification, 28 Sep 2026: the generation was checked only before
+    the health request, so a 200 already in flight from a re-armed watcher
+    marked a restarted, still-loading child ready."""
+
+    class _Ok:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    class _HeldOpener:
+        def __init__(self):
+            self.entered = threading.Event()
+            self.release = threading.Event()
+            self.first = True
+
+        def open(self, *_args, **_kwargs):
+            if self.first:
+                self.first = False
+                self.entered.set()
+                self.release.wait(5)
+                return _Ok()
+            raise urllib.error.URLError("still loading")
+
+    server = server_factory(fake_flags=["--fake-startup-delay", "10"], startup_timeout_s=0.3)
+    opener = _HeldOpener()
+    try:
+        server.ensure_started()
+        with pytest.raises(stt_whisper.SttEngineFailed):
+            server.wait_ready(2)
+        server._opener = opener
+        server.ensure_started()                  # re-arms a watcher on the same child
+        assert opener.entered.wait(2)
+        old_pid = server.pid
+
+        server.stop()
+        server.ensure_started()
+        assert server.pid != old_pid
+        opener.release.set()
+
+        assert not _wait_until(server.is_ready, timeout=0.5)
+        with pytest.raises(stt_whisper.SttEngineFailed):
+            server.wait_ready(0.2)
+    finally:
+        opener.release.set()
+        server.stop()
+
+
 class _FakeJob:
     closed = 0
 

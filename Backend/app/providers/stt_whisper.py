@@ -525,9 +525,13 @@ class WhisperServer:
 
     def _start_watch(self, proc) -> None:
         """Called with ``self._lock`` held. The generation retires any earlier
-        watcher, so only the newest one may report on the current window."""
+        watcher, so only the newest one may report on the current window.
+        URL and deadline are fixed here: a thread that starts late must not
+        read the port or clock of a child spawned after it."""
         self._watch_gen += 1
-        threading.Thread(target=self._watch_ready, args=(proc, self._watch_gen),
+        url = f"http://127.0.0.1:{self._port}{self._prefix}/health"
+        deadline = self._started_at + self._startup_timeout_s
+        threading.Thread(target=self._watch_ready, args=(proc, self._watch_gen, url, deadline),
                          name="whisper-ready", daemon=True).start()
 
     def _start_idle_timer(self) -> None:
@@ -597,9 +601,7 @@ class WhisperServer:
         except (OSError, ValueError):
             pass
 
-    def _watch_ready(self, proc, gen) -> None:
-        deadline = self._started_at + self._startup_timeout_s
-        url = f"http://127.0.0.1:{self._port}{self._prefix}/health"
+    def _watch_ready(self, proc, gen, url, deadline) -> None:
         while time.monotonic() < deadline:
             if not self._is_current_watch(proc, gen):
                 return
@@ -612,19 +614,26 @@ class WhisperServer:
                 return
             try:
                 with self._opener.open(url, timeout=1.0) as res:
-                    if res.status == 200:
-                        # The GPU line is printed while the model loads, i.e.
-                        # before health turns 200; a server that never printed
-                        # it is treated as CPU (see choose_language).
-                        if self._gpu is None:
-                            self._gpu = False
-                        self._ready.set()
-                        self._done.set()
-                        logger.info("[stt] whisper-server ready in %.2f s (%s).",
-                                    time.monotonic() - self._started_at, "GPU" if self._gpu else "CPU")
-                        return
+                    healthy = res.status == 200
             except (urllib.error.URLError, OSError, ValueError):
-                pass
+                healthy = False
+            if healthy:
+                # Re-checked here, not only at the loop top: a reply already in
+                # flight when this watcher was retired (stop + restart) would
+                # otherwise mark the NEW child ready while it is still loading.
+                with self._lock:
+                    if not self._is_current_watch(proc, gen):
+                        return
+                    # The GPU line is printed while the model loads, i.e.
+                    # before health turns 200; a server that never printed
+                    # it is treated as CPU (see choose_language).
+                    if self._gpu is None:
+                        self._gpu = False
+                    self._ready.set()
+                    self._done.set()
+                    logger.info("[stt] whisper-server ready in %.2f s (%s).",
+                                time.monotonic() - self._started_at, "GPU" if self._gpu else "CPU")
+                return
             time.sleep(0.1)
         with self._lock:
             if self._is_current_watch(proc, gen) and not self._ready.is_set():
