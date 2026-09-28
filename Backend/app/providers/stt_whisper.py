@@ -4,7 +4,8 @@ The backend owns ONE ``whisper-server`` child. It is started lazily when the
 first dictation session opens and the user's speech hides the ~1.1 s model
 load: the audio is buffered in the session while the server comes up, and only
 ``finish`` waits for it. Starting it with the app instead would hold ~1.2 GB of
-VRAM (or ~1.1 GB of RAM on a CPU-only machine) for users who never dictate.
+VRAM (or ~1.1 GB of RAM on a CPU-only machine) for users who never dictate; for
+the same reason it is stopped again after ``IDLE_UNLOAD_S`` without dictation.
 
 Engine choices below are measurements, not defaults — see
 ``~/.claude/deneyler/dikte/SONUC.md`` (28 Sep 2026, 12 clips of the owner's
@@ -20,6 +21,7 @@ frozen: ``<app>/resources/whisper`` — the frozen backend is
 """
 import atexit
 import collections
+import contextlib
 import io
 import json
 import logging
@@ -56,6 +58,10 @@ STARTUP_TIMEOUT_S = 90.0
 # decoded in two 30 s windows, so minutes are possible on a slow machine.
 FINAL_TIMEOUT_S = 300.0
 PARTIAL_TIMEOUT_S = 15.0
+# Owner decision, 28 Sep 2026: the loaded model holds ~1.2 GB of VRAM (~1.1 GB
+# RAM on CPU) next to Unity, so an idle server is stopped. The next dictation
+# pays a cold start of a few seconds, hidden by the user's speech.
+IDLE_UNLOAD_S = 300.0
 
 # Live text (GPU only). Whisper invents words for the first second of silence
 # ("Evet." in 10 of 12 clips), so nothing is decoded before 1.5 s of audio.
@@ -332,17 +338,35 @@ def _terminate(proc: subprocess.Popen) -> None:
 
 class WhisperServer:
     """One whisper-server child: started on demand, restarted on demand after
-    it dies, stopped with the backend.
+    it dies or after an idle unload, stopped with the backend.
 
     ``command`` returns the argv prefix that launches the server; tests swap in
     ``[python, fake_server.py]`` so the lifecycle runs against a real process.
+    ``has_sessions`` says whether a live dictation holds the server (default:
+    this module's session registry).
+
+    Idle unload: every use marks itself under ``self._lock`` (``lease`` for a
+    request, ``touch`` for session traffic, ``ensure_started`` for a start),
+    and the idle timer decides and kills under that same lock. A request
+    therefore either leased first (no unload) or comes after the unload and
+    spawns a fresh child in ``ensure_started``, which the lock serialises too.
     """
 
-    def __init__(self, command=None, model=None, threads=None, startup_timeout_s=STARTUP_TIMEOUT_S):
+    def __init__(self, command=None, model=None, threads=None, startup_timeout_s=STARTUP_TIMEOUT_S,
+                 idle_unload_s=IDLE_UNLOAD_S, has_sessions=None):
         self._command = command or (lambda: [server_path()])
         self._model = model or model_path
         self._threads = threads
         self._startup_timeout_s = startup_timeout_s
+        self._idle_unload_s = idle_unload_s
+        # 15 s for the 5-minute limit: late by at most 5 %, and no busy loop
+        # for the sub-second limits tests use.
+        self._idle_check_s = max(0.05, min(15.0, idle_unload_s / 20))
+        self._has_sessions = has_sessions or _has_open_sessions
+        self._busy = 0
+        self._last_used = time.monotonic()
+        self._idle_thread = None
+        self._idle_wake = None
         self._lock = threading.RLock()
         self._proc = None
         self._job = None
@@ -407,6 +431,7 @@ class WhisperServer:
         without this every later wait_ready() would fail on the stale timeout.
         """
         with self._lock:
+            self._last_used = time.monotonic()
             if self.is_running():
                 if self._done.is_set() and not self._ready.is_set():
                     logger.info("[stt] whisper-server (pid %s) still loading; waiting again.", self._proc.pid)
@@ -495,6 +520,7 @@ class WhisperServer:
                 raise SttEngineFailed(self._failure) from exc
         threading.Thread(target=self._read_output, args=(proc,), name="whisper-log", daemon=True).start()
         self._start_watch(proc)
+        self._start_idle_timer()
         logger.info("[stt] whisper-server starting (pid %s, port %s, %s threads).", proc.pid, self._port, threads)
 
     def _start_watch(self, proc) -> None:
@@ -503,6 +529,54 @@ class WhisperServer:
         self._watch_gen += 1
         threading.Thread(target=self._watch_ready, args=(proc, self._watch_gen),
                          name="whisper-ready", daemon=True).start()
+
+    def _start_idle_timer(self) -> None:
+        """Called with ``self._lock`` held. At most one timer per manager; it
+        ends itself once no child is left, and the next ``_spawn`` starts one."""
+        if self._idle_thread is not None:
+            return
+        wake = threading.Event()
+        self._idle_wake = wake
+        self._idle_thread = threading.Thread(target=self._idle_loop, args=(wake,),
+                                             name="whisper-idle", daemon=True)
+        self._idle_thread.start()
+
+    def _idle_loop(self, wake) -> None:
+        me = threading.current_thread()
+        while not wake.wait(self._idle_check_s):
+            with self._lock:
+                if self._idle_thread is not me:
+                    return
+                if self._unload_if_idle():
+                    self._idle_thread = self._idle_wake = None
+                    return
+
+    def _unload_if_idle(self) -> bool:
+        """Called with ``self._lock`` held. True once no child is left.
+
+        A child whose startup window is still open is in use by whoever waits
+        on it; one that timed out loading has nobody waiting and goes like an
+        idle one.
+        """
+        if self._proc is None:
+            return True
+        if self._busy or not self._done.is_set():
+            return False
+        idle = time.monotonic() - self._last_used
+        # Sessions last: the check purges expired ones, which is a write.
+        if idle < self._idle_unload_s or self._has_sessions():
+            return False
+        proc = self._proc
+        was_running = proc.poll() is None
+        _terminate(proc)
+        self._reap()
+        self._failure = "whisper-server was stopped while idle"
+        if was_running:
+            logger.info("[stt] whisper-server idle for %.1f min; stopped to free memory (pid %s).",
+                        idle / 60, proc.pid)
+        else:
+            logger.warning("[stt] whisper-server exited (rc=%s) while idle.\n%s", proc.returncode, self.log_tail(8))
+        return True
 
     def _is_current_watch(self, proc, gen) -> bool:
         return self._proc is proc and self._watch_gen == gen
@@ -584,11 +658,37 @@ class WhisperServer:
                 _terminate(self._proc)
             self._reap()
             self._done.set()
+            wake, self._idle_wake, self._idle_thread = self._idle_wake, None, None
+        if wake is not None:
+            wake.set()
+
+    # -- use -----------------------------------------------------------------
+
+    @contextlib.contextmanager
+    def lease(self):
+        """Marks a request in flight; the idle timer never unloads under one.
+        Idle time counts from the moment the last lease ends."""
+        with self._lock:
+            self._busy += 1
+        try:
+            yield self
+        finally:
+            with self._lock:
+                self._busy -= 1
+                self._last_used = time.monotonic()
+
+    def touch(self) -> None:
+        with self._lock:
+            self._last_used = time.monotonic()
 
     # -- requests ------------------------------------------------------------
 
     def transcribe(self, pcm: bytes, language: str, timeout: float = FINAL_TIMEOUT_S) -> dict:
         """POSTs the audio to /inference. Returns ``{"text", "language"}``."""
+        with self.lease():
+            return self._post_inference(pcm, language, timeout)
+
+    def _post_inference(self, pcm: bytes, language: str, timeout: float) -> dict:
         proc = self._proc
         if proc is None or proc.poll() is not None or not self._ready.is_set():
             raise SttEngineFailed("whisper-server is not running")
@@ -655,24 +755,27 @@ def transcribe_final(pcm: bytes, ui_lang: str, auto_on_cpu: bool) -> dict:
     """The whole recording, with the owner's language rule. One restart and
     retry if the server died under the request: the user cannot re-speak."""
     server = get_server()
-    attempts = 2
-    for attempt in range(attempts):
-        server.ensure_started()
-        server.wait_ready()
-        gpu = server.gpu
-        language = choose_language(gpu, ui_lang, auto_on_cpu)
-        try:
-            result = server.transcribe(pcm, language) if pcm else {"text": "", "language": None}
-        except SttEngineFailed:
-            if attempt + 1 < attempts and server.died():
-                continue
-            raise
-        return {
-            "text": result["text"],
-            "language": language_code(result["language"]) if language == "auto" else language,
-            "language_mode": "auto" if language == "auto" else "fixed",
-            "gpu": gpu is True,
-        }
+    # One lease over start, wait and request, so an idle unload cannot land
+    # between wait_ready() and the POST.
+    with server.lease():
+        attempts = 2
+        for attempt in range(attempts):
+            server.ensure_started()
+            server.wait_ready()
+            gpu = server.gpu
+            language = choose_language(gpu, ui_lang, auto_on_cpu)
+            try:
+                result = server.transcribe(pcm, language) if pcm else {"text": "", "language": None}
+            except SttEngineFailed:
+                if attempt + 1 < attempts and server.died():
+                    continue
+                raise
+            return {
+                "text": result["text"],
+                "language": language_code(result["language"]) if language == "auto" else language,
+                "language_mode": "auto" if language == "auto" else "fixed",
+                "gpu": gpu is True,
+            }
     raise SttEngineFailed("unreachable")
 
 
@@ -732,6 +835,14 @@ def reset_sessions() -> None:
         _sessions.clear()
 
 
+def _has_open_sessions() -> bool:
+    """An open dictation holds the server even while the user is silent; an
+    abandoned one stops counting once it expires."""
+    purge_expired()
+    with _sessions_lock:
+        return bool(_sessions)
+
+
 def purge_expired(now=None) -> "list[str]":
     if now is None:
         now = _now()
@@ -789,6 +900,7 @@ def feed(session_id: str, pcm: bytes, cap: "int | None" = None) -> str:
         session.pcm.extend(pcm)
         session.last_seen = _now()
         snapshot = _live_snapshot(session)
+    get_server().touch()
     if snapshot is not None:
         _decode_partial(session, snapshot)
     return session.partial
@@ -843,6 +955,7 @@ def finish(session_id: str, auto_on_cpu: bool = False, discard: bool = False) ->
     if session is None:
         raise SttNoSession(session_id)
     if discard:
+        get_server().touch()
         return {"text": "", "duration_ms": 0}
     with session.lock:
         pcm = bytes(session.pcm)

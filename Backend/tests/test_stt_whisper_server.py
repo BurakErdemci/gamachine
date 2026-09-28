@@ -6,7 +6,10 @@ WHAT IS PINNED HERE
     against a REAL child process: start, health-poll to ready, GPU detection
     from the startup log, request/response wiring, a crash recovering into a
     fresh process, startup failure reporting the exit code, missing-file
-    detection, and that `stop()` leaves nothing running.
+    detection, that `stop()` leaves nothing running, and the idle unload
+    (owner decision, 28 Sep 2026): stopped after the limit, never under a
+    request, an open session or a load in progress, restarted exactly once
+    by the next use, and its timer ended by `stop()`/`shutdown()`.
 
 WHY A REAL CHILD PROCESS
     The manager's job IS process lifecycle (Popen, a background health poll,
@@ -17,9 +20,11 @@ WHY A REAL CHILD PROCESS
 """
 
 import json
+import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -60,7 +65,7 @@ def server_factory(tmp_path):
     `stop()` runs even if the test raises."""
     created = []
 
-    def make(fake_flags=(), model_path=None, command=None, threads=2, startup_timeout_s=10):
+    def make(fake_flags=(), model_path=None, command=None, threads=2, startup_timeout_s=10, **extra):
         resolved_model = model_path or _model_file(tmp_path)
         if command is None:
             argv_prefix = [sys.executable, FAKE, *fake_flags]
@@ -73,6 +78,7 @@ def server_factory(tmp_path):
             model=lambda: resolved_model,
             threads=threads,
             startup_timeout_s=startup_timeout_s,
+            **extra,
         )
         created.append(server)
         return server
@@ -454,3 +460,242 @@ def test_child_env_excludes_backend_secrets(server_factory, monkeypatch):
         data = json.loads(res.read())
 
     assert "LOCAL_APP_TOKEN" not in data["keys"]
+
+
+# ── Idle unload (real child process) ─────────────────────────────────────────
+
+IDLE = 0.5
+
+
+def _gone(proc, timeout=5.0):
+    return _wait_until(lambda: proc.poll() is not None, timeout=timeout, interval=0.02)
+
+
+@pytest.fixture
+def module_state():
+    """For tests that go through the module helpers and the session registry."""
+    stt_whisper.reset_sessions()
+    yield
+    stt_whisper.set_server(None)
+    stt_whisper.reset_sessions()
+
+
+@pytest.fixture
+def spawned(monkeypatch):
+    procs = []
+    real_popen = subprocess.Popen
+
+    def recording_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        procs.append(proc)
+        return proc
+
+    monkeypatch.setattr(stt_whisper.subprocess, "Popen", recording_popen)
+    return procs
+
+
+def test_an_idle_server_is_stopped_after_the_limit_and_its_timer_ends(server_factory, caplog):
+    caplog.set_level(logging.INFO, logger=stt_whisper.logger.name)
+    server = server_factory(fake_flags=["--fake-startup-delay", "0.1"], idle_unload_s=IDLE)
+    server.ensure_started()
+    server.wait_ready()
+    proc, timer = server._proc, server._idle_thread
+    assert timer is not None and timer.daemon
+    used_at = time.monotonic()
+    server.touch()
+
+    assert _gone(proc)
+    assert time.monotonic() - used_at >= IDLE
+    assert server.pid is None and not server.is_ready()
+    timer.join(2)
+    assert not timer.is_alive()
+    assert server._idle_thread is None
+    assert any("stopped to free memory" in r.getMessage() for r in caplog.records)
+
+
+def test_a_request_in_flight_is_never_unloaded(server_factory):
+    """The request outlasts the idle limit three times over, and idle time
+    counts from its end, not its start."""
+    server = server_factory(fake_flags=["--fake-startup-delay", "0.1", "--fake-inference-delay", "1.5"],
+                            idle_unload_s=IDLE)
+    server.ensure_started()
+    server.wait_ready()
+    proc = server._proc
+
+    result = server.transcribe(b"\x01\x02" * 100, "tr", timeout=10)
+
+    assert "hello" in result["text"]
+    assert proc.poll() is None, "unloaded under the request or right after it"
+    assert _gone(proc)
+
+
+def test_the_unload_decision_respects_a_lease_however_long_past_the_limit(server_factory):
+    """Drives the decision by hand, so the check does not depend on when the
+    timer thread happens to tick."""
+    server = server_factory(fake_flags=["--fake-startup-delay", "0.1"], idle_unload_s=60,
+                            has_sessions=lambda: False)
+    server.ensure_started()
+    server.wait_ready()
+
+    with server.lease():
+        server._last_used -= 3600
+        with server._lock:
+            assert server._unload_if_idle() is False
+        assert server.is_running()
+    with server._lock:
+        assert server._unload_if_idle() is False, "idle time must count from the end of the lease"
+
+    server._last_used -= 3600
+    with server._lock:
+        assert server._unload_if_idle() is True
+    assert server.pid is None
+
+
+def test_a_server_still_loading_is_not_unloaded(server_factory):
+    server = server_factory(fake_flags=["--fake-startup-delay", "1.5"], idle_unload_s=0.3)
+    server.ensure_started()
+    pid = server.pid
+
+    server.wait_ready(timeout=10)
+
+    assert server.pid == pid and server.is_ready()
+
+
+def test_an_open_session_holds_the_server_until_it_expires(server_factory, module_state, monkeypatch):
+    """An open dictation is use even while the user is silent; an abandoned
+    one stops counting once purge_expired drops it."""
+    server = server_factory(fake_flags=["--fake-startup-delay", "0.1"], idle_unload_s=IDLE)
+    stt_whisper.set_server(server)
+    stt_whisper.open_session("tr")
+    server.wait_ready()
+    proc = server._proc
+
+    assert not _wait_until(lambda: proc.poll() is not None, timeout=IDLE * 3)
+
+    monkeypatch.setattr(stt_whisper, "_now", lambda: time.monotonic() + stt_whisper.SESSION_TTL_S + 1)
+    assert _gone(proc)
+    assert stt_whisper._sessions == {}
+
+
+def test_finishing_a_session_starts_the_idle_count(server_factory, module_state):
+    server = server_factory(fake_flags=["--fake-startup-delay", "0.1"], idle_unload_s=IDLE)
+    stt_whisper.set_server(server)
+    session_id = stt_whisper.open_session("tr")
+    server.wait_ready()
+    proc = server._proc
+    stt_whisper.feed(session_id, b"\x01\x02" * 100)
+    time.sleep(IDLE * 2)
+    assert proc.poll() is None
+
+    result = stt_whisper.finish(session_id)
+
+    assert "hello" in result["text"]
+    assert proc.poll() is None
+    assert _gone(proc)
+
+
+def test_the_next_dictation_after_an_unload_restarts_with_live_text(server_factory, module_state, monkeypatch):
+    """After an unload the GPU flag and readiness must come back with the new
+    child, or every later session would silently lose its live text."""
+    server = server_factory(fake_flags=["--fake-gpu", "on", "--fake-startup-delay", "0.2"], idle_unload_s=IDLE)
+    stt_whisper.set_server(server)
+    assert stt_whisper.transcribe_final(b"\x01\x02" * 100, "tr", False)["gpu"] is True
+    old, old_timer = server._proc, server._idle_thread
+    assert _gone(old)
+
+    session_id = stt_whisper.open_session("tr")
+    assert server.pid not in (None, old.pid)
+    assert server._idle_thread is not None and server._idle_thread is not old_timer
+    server.wait_ready()
+    assert server.gpu is True and server.is_ready()
+
+    languages = []
+    real_transcribe = server.transcribe
+
+    def spy(pcm, language, timeout=stt_whisper.FINAL_TIMEOUT_S):
+        languages.append(language)
+        return real_transcribe(pcm, language, timeout=timeout)
+
+    monkeypatch.setattr(server, "transcribe", spy)
+    stt_whisper.feed(session_id, b"\x00\x00" * (stt_whisper.LIVE_MIN_AUDIO_BYTES // 2 + 10))
+    assert languages == ["auto"], "no live decode on the restarted server"
+
+    result = stt_whisper.finish(session_id)
+    assert result["gpu"] is True and "hello" in result["text"]
+
+
+def _dictate_in_parallel(n, rounds=1, pause=0.0):
+    barrier = threading.Barrier(n)
+    results, errors = [], []
+
+    def dictate():
+        barrier.wait()
+        for _ in range(rounds):
+            try:
+                results.append(stt_whisper.transcribe_final(b"\x01\x02" * 100, "tr", False))
+            except Exception as exc:                 # noqa: BLE001 — collected for the assert
+                errors.append(exc)
+            time.sleep(pause)
+
+    threads = [threading.Thread(target=dictate) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    return results, errors
+
+
+def test_concurrent_first_use_after_an_unload_starts_exactly_one_child(server_factory, module_state, spawned):
+    server = server_factory(fake_flags=["--fake-startup-delay", "0.3"], idle_unload_s=IDLE)
+    stt_whisper.set_server(server)
+    server.ensure_started()
+    server.wait_ready()
+    assert _gone(spawned[0])
+
+    results, errors = _dictate_in_parallel(8)
+
+    assert errors == []
+    assert len(results) == 8
+    assert len(spawned) == 2
+
+
+def test_use_racing_the_unload_moment_never_fails_or_leaves_a_second_child(server_factory, module_state, spawned):
+    """A burst aimed at the tick that would unload: whichever side wins the
+    lock, no request fails and only the current child survives."""
+    server = server_factory(fake_flags=["--fake-startup-delay", "0.1"], idle_unload_s=IDLE)
+    stt_whisper.set_server(server)
+    server.ensure_started()
+    server.wait_ready()
+
+    for _ in range(3):
+        time.sleep(max(0.0, server._last_used + IDLE - time.monotonic() - 0.03))
+        results, errors = _dictate_in_parallel(6, rounds=3, pause=0.02)
+        assert errors == []
+        assert len(results) == 18
+
+    live = [p for p in spawned if p.poll() is None]
+    assert len(live) <= 1
+    assert all(p is server._proc for p in live)
+
+
+def test_stop_and_shutdown_end_the_idle_timer(server_factory, module_state):
+    server = server_factory(fake_flags=["--fake-startup-delay", "0.1"], idle_unload_s=60)
+    server.ensure_started()
+    server.wait_ready()
+    first = server._idle_thread
+    server.stop()
+    first.join(2)
+    assert not first.is_alive()
+
+    stt_whisper.set_server(server)
+    server.ensure_started()
+    server.wait_ready()
+    second = server._idle_thread
+    assert second is not first
+    server.ensure_started()
+    assert server._idle_thread is second, "a running child got a second timer"
+
+    stt_whisper.shutdown()
+    second.join(2)
+    assert not second.is_alive()
+    assert server.pid is None

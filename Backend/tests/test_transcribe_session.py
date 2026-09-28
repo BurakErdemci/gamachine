@@ -19,6 +19,7 @@ WHY THERE IS A FAKE SERVER
 """
 
 import base64
+import contextlib
 
 import pytest
 from fastapi import FastAPI
@@ -79,6 +80,12 @@ class FakeServer:
 
     def stop(self):
         self.stopped = True
+
+    def lease(self):
+        return contextlib.nullcontext(self)
+
+    def touch(self):
+        pass
 
 
 class FakeDB:

@@ -16,6 +16,7 @@ WHY THERE IS A FAKE SERVER
 """
 
 import base64
+import contextlib
 import io
 import wave
 
@@ -74,6 +75,12 @@ class FakeServer:
 
     def stop(self):
         self.stopped = True
+
+    def lease(self):
+        return contextlib.nullcontext(self)
+
+    def touch(self):
+        pass
 
 
 class FakeDB:

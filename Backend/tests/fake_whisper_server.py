@@ -30,6 +30,7 @@ def _parse_args(argv):
     parser.add_argument("--fake-gpu", choices=("on", "off", "silent"), default="off")
     parser.add_argument("--fake-startup-delay", type=float, default=0.0)
     parser.add_argument("--fake-crash-on-inference", action="store_true")
+    parser.add_argument("--fake-inference-delay", type=float, default=0.0)
     parser.add_argument("--fake-exit-at-start", type=int, default=None)
     # The manager's own flags. Values are accepted and otherwise unused; this
     # script only needs --port and --request-path to serve anything.
@@ -97,6 +98,7 @@ def main():
     started_at = time.monotonic()
     startup_delay = args.fake_startup_delay
     crash_on_inference = args.fake_crash_on_inference
+    inference_delay = args.fake_inference_delay
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *a):
@@ -137,6 +139,8 @@ def main():
                 # Die before answering: the client sees a dropped connection,
                 # exactly like a real whisper-server crash mid-request.
                 os._exit(1)
+            if inference_delay:
+                time.sleep(inference_delay)   # a request still in flight
             ctype = self.headers.get("Content-Type", "")
             boundary_match = re.search(r"boundary=([^;]+)", ctype)
             boundary = boundary_match.group(1).strip() if boundary_match else ""
