@@ -157,6 +157,59 @@ def test_delete_drops_the_ring_closes_readers_and_ignores_late_writes():
     assert ring.since(7, 0)["events"] == []
 
 
+def test_a_huge_delta_is_split_on_character_boundaries_and_replays_exactly():
+    ring = TurnEventRing()
+    # 1-, 2-, 3- and 4-byte characters, so byte cuts land mid-character.
+    text = ("aç€😀" * 40000)[:130001]
+    ring.text(1, text)
+    ring.flush(1)
+    events = ring.since(1)["events"]
+    assert len(events) > 1 and all(e["kind"] == "text" for e in events)
+    assert all(len(e["content"].encode("utf-8")) <= turn_events.TEXT_EVENT_MAX_BYTES
+               for e in events)
+    assert "".join(e["content"] for e in events) == text
+    assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
+
+
+def test_split_text_keeps_a_lone_surrogate():
+    text = "x" * 8191 + chr(0xD800) + "y" * 10
+    pieces = turn_events.split_text(text)
+    assert "".join(pieces) == text and len(pieces) == 2
+
+
+def test_ring_bytes_are_bounded_and_eviction_reports_a_gap():
+    ring = TurnEventRing()
+    ring.append(1, "turn_start", provider="p", model="m", origin="user")
+    ring.text(1, "x" * (4 * 1024 * 1024))
+    ring.append(1, "turn_end", status="done")
+    full = ring.since(1, 0)
+    held = sum(len(e.get("content", "")) for e in full["events"])
+    assert held <= turn_events.RING_MAX_BYTES
+    assert full["gap"] is True and full["events"][-1]["kind"] == "turn_end"
+    assert full["events"][0]["seq"] > 2
+    # A reader that kept up still gets everything after its seq, no gap.
+    last = full["last_seq"]
+    assert ring.since(1, last - 1)["gap"] is False
+
+
+def test_deleted_chat_ids_are_bounded_by_count_and_age(monkeypatch):
+    ring = TurnEventRing()
+    for cid in range(1, turn_events.DROPPED_KEEP + 501):
+        ring.append(cid, "turn_start", provider="p", model="m", origin="user")
+        ring.drop(cid)
+    assert ring.conversations() == []
+    assert len(ring._dropped) == turn_events.DROPPED_KEEP
+    newest = turn_events.DROPPED_KEEP + 500
+    ring.append(newest, "card_closed", card_id="g", decision="reject", by="system")
+    assert newest not in ring.conversations()
+
+    now = turn_events.time.monotonic()
+    monkeypatch.setattr(turn_events.time, "monotonic",
+                        lambda: now + turn_events.DROPPED_TTL_S + 1)
+    ring.drop(10 ** 6)
+    assert list(ring._dropped) == [10 ** 6]
+
+
 def test_ring_failures_never_reach_the_caller_and_log_once(monkeypatch, caplog):
     ring = TurnEventRing()
     monkeypatch.setattr(turn_events, "_failure_logged", False)
@@ -347,3 +400,4 @@ def test_turn_events_route_auth(env, monkeypatch):
     missing = client.get(f"/conversations/{mine}/turn-events")
     assert missing.status_code in (401, 422)
     assert "events" not in missing.text
+

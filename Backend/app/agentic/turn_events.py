@@ -18,7 +18,7 @@ import logging
 import secrets
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,15 @@ RING_SIZE = 500
 # token-by-token stream does not push the rest of the turn out of 500 slots.
 TEXT_FLUSH_S = 0.25
 TEXT_FLUSH_BYTES = 2048
+# One text event never holds more than this (UTF-8 bytes); a larger provider
+# delta becomes several consecutive events that concatenate back to it.
+TEXT_EVENT_MAX_BYTES = 8192
+# Per chat, on top of RING_SIZE: 500 slots alone do not bound memory.
+RING_MAX_BYTES = 1024 * 1024
 SUBSCRIBER_QUEUE = 1000
+# Deleted-chat ids kept to refuse late writes (see `drop`).
+DROPPED_KEEP = 1000
+DROPPED_TTL_S = 600.0
 # Enough for a tool call line on a phone; a write_file body is not a summary.
 SUMMARY_CHARS = 200
 
@@ -55,6 +63,31 @@ def _swallow(default=None):
                 return default
         return inner
     return wrap
+
+
+def _utf8(value: str) -> bytes:
+    # surrogatepass: a lone surrogate from a provider must survive split + join.
+    return value.encode("utf-8", "surrogatepass")
+
+
+def _event_bytes(event: dict) -> int:
+    return sum(len(_utf8(v)) for v in event.values() if isinstance(v, str))
+
+
+def split_text(content: str, max_bytes: int = TEXT_EVENT_MAX_BYTES) -> List[str]:
+    """`content` in pieces of at most `max_bytes` UTF-8 bytes, never cutting a
+    character; joined in order they give `content` back."""
+    raw = _utf8(content)
+    if len(raw) <= max_bytes:
+        return [content]
+    pieces, start = [], 0
+    while start < len(raw):
+        end = min(start + max_bytes, len(raw))
+        while end < len(raw) and (raw[end] & 0xC0) == 0x80:
+            end -= 1
+        pieces.append(raw[start:end].decode("utf-8", "surrogatepass"))
+        start = end
+    return pieces
 
 
 def summarize(value: Any, limit: int = SUMMARY_CHARS) -> str:
@@ -150,11 +183,12 @@ class _Dropped(Exception):
 
 
 class _ConvRing:
-    __slots__ = ("events", "next_seq", "text_parts", "text_bytes", "text_gen",
+    __slots__ = ("events", "bytes", "next_seq", "text_parts", "text_bytes", "text_gen",
                  "flush_handle", "subs")
 
-    def __init__(self):
-        self.events: deque = deque(maxlen=RING_SIZE)
+    def __init__(self, size: int = RING_SIZE):
+        self.events: deque = deque(maxlen=size)
+        self.bytes = 0
         self.next_seq = 1
         self.text_parts: List[str] = []
         self.text_bytes = 0
@@ -164,24 +198,43 @@ class _ConvRing:
 
 
 class TurnEventRing:
-    def __init__(self, size: int = RING_SIZE):
+    def __init__(self, size: int = RING_SIZE, max_bytes: int = RING_MAX_BYTES):
         self.size = size
+        self.max_bytes = max_bytes
         self._rings: Dict[int, _ConvRing] = {}
         self._lock = threading.RLock()
         self._stops: set = set()
-        # Deleted chats. Conversation ids are never reused, and a session
-        # closing after the delete still closes cards and ends its turn; those
-        # writes must not bring the ring back.
-        self._dropped: set = set()
+        # Deleted chats -> time of delete. Conversation ids are never reused,
+        # and a session closing after the delete still closes cards and ends
+        # its turn; those writes must not bring the ring back. Bounded by age
+        # and count: that session closes within seconds of the delete, so a
+        # write arriving after its id aged out is not expected, and if one
+        # does, it only recreates one small ring.
+        self._dropped: "OrderedDict[int, float]" = OrderedDict()
+
+    def _is_dropped(self, conv_id: int) -> bool:
+        at = self._dropped.get(conv_id)
+        if at is None:
+            return False
+        if time.monotonic() - at > DROPPED_TTL_S:
+            del self._dropped[conv_id]
+            return False
+        return True
+
+    def _prune_dropped(self) -> None:
+        cutoff = time.monotonic() - DROPPED_TTL_S
+        while self._dropped:
+            oldest_id, at = next(iter(self._dropped.items()))
+            if at >= cutoff and len(self._dropped) <= DROPPED_KEEP:
+                break
+            del self._dropped[oldest_id]
 
     def _ring(self, conv_id: int) -> _ConvRing:
-        if conv_id in self._dropped:
+        if self._is_dropped(conv_id):
             raise _Dropped()
         ring = self._rings.get(conv_id)
         if ring is None:
-            ring = _ConvRing()
-            if self.size != RING_SIZE:
-                ring.events = deque(maxlen=self.size)
+            ring = _ConvRing(self.size)
             self._rings[conv_id] = ring
         return ring
 
@@ -189,7 +242,14 @@ class TurnEventRing:
         seq = ring.next_seq
         ring.next_seq += 1
         event = {**data, "seq": seq, "kind": kind, "ts": time.time()}
+        if len(ring.events) == ring.events.maxlen:
+            ring.bytes -= _event_bytes(ring.events[0])
         ring.events.append(event)
+        ring.bytes += _event_bytes(event)
+        # Oldest events go first, as with the slot limit, so `since` reports
+        # the hole as a gap the same way; the newest event always stays.
+        while ring.bytes > self.max_bytes and len(ring.events) > 1:
+            ring.bytes -= _event_bytes(ring.events.popleft())
         for sub in list(ring.subs):
             sub._deliver(dict(event))
         return seq
@@ -204,7 +264,10 @@ class TurnEventRing:
         ring.text_parts = []
         ring.text_bytes = 0
         ring.text_gen += 1
-        return self._push(conv_id, ring, "text", {"content": content})
+        seq = None
+        for piece in split_text(content):
+            seq = self._push(conv_id, ring, "text", {"content": piece})
+        return seq
 
     def _timed_flush(self, conv_id: int, gen: int) -> None:
         try:
@@ -250,7 +313,7 @@ class TurnEventRing:
                     ring.flush_handle = loop.call_later(
                         TEXT_FLUSH_S, self._timed_flush, conv_id, gen)
             ring.text_parts.append(delta)
-            ring.text_bytes += len(delta.encode("utf-8", "replace"))
+            ring.text_bytes += len(_utf8(delta))
             if ring.text_bytes >= TEXT_FLUSH_BYTES:
                 self._flush_locked(conv_id, ring)
 
@@ -267,7 +330,9 @@ class TurnEventRing:
         with self._lock:
             ring = self._rings.pop(conv_id, None)
             self._stops.discard(conv_id)
-            self._dropped.add(conv_id)
+            self._dropped.pop(conv_id, None)
+            self._dropped[conv_id] = time.monotonic()
+            self._prune_dropped()
         if ring is None:
             return
         if ring.flush_handle is not None:
