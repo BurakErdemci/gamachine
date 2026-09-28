@@ -59,19 +59,11 @@ websockets==15.0.1
 # tedarik zinciri yüzeyi). numpy'ı zorunlu gereksinen tek paketler bunlardı; kalan
 # bağımlılıklarda numpy yalnızca opsiyonel extra olarak geçiyor (openai[datalib] vb.).
 # Yeniden gerekirse (vektör arama / embedding) birlikte geri eklenmeli.
-# Offline speech-to-text for the dictation button (Burak, 2 Sep 2026).
-# The wheel carries libvosk.dll plus three MinGW runtime DLLs; `collect_all('vosk')`
-# in backend.spec is REQUIRED, see the note there.
-# srt and tqdm are vosk's own runtime dependencies and are pinned here so the frozen
-# build cannot drift; its other three (cffi, requests, websockets) are already pinned
-# above and are deliberately NOT repeated.
-# 0.3.45 published no macOS wheel (PyPI, 3 Sep 2026: linux + win_amd64 only), so the
-# macOS build pins the last release that did (0.3.44, universal2). Same runtime
-# dependencies on both. Measured by the v3.1.0 release run: the macOS job failed
-# at pip with "No matching distribution found for vosk==0.3.45".
-vosk==0.3.45; sys_platform != "darwin"
-vosk==0.3.44; sys_platform == "darwin"
-srt==3.5.3
+# Dictation no longer has a Python dependency: it runs the bundled whisper.cpp
+# server (Backend/vendor/build_whisper.ps1), which replaced vosk on 28 Sep 2026.
+# tqdm stays pinned because openai and google-generativeai require it (measured
+# 28 Sep 2026 from the venv's distribution metadata); an unpinned tqdm could
+# enter the frozen installer with no diff here.
 tqdm==4.70.0
 # tqdm's own Windows-only runtime dependency (platform_system == "Windows"); without
 # an exact pin a later colorama could enter the frozen installer with no diff here

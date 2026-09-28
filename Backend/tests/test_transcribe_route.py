@@ -1,111 +1,118 @@
-"""`POST /transcribe` — the dictation endpoint, its validation order and its gate.
+"""`POST /transcribe` and `/transcribe/settings` — the one-shot dictation route.
 
 WHAT IS PINNED HERE
-    That the route rejects in the order the shared contract fixes (token → lang
-    → size → base64 → RIFF → format → frames → recognition), with the exact
-    `stt_*` detail strings the renderer switches on; that the 2 MiB cap is
-    enforced on the base64 STRING, before any decoding happens; that the model
-    resolver honours the env override, the frozen layout and the dev tree; and
-    that a model is loaded once per language, not once per request.
+    The validation order and detail strings the renderer switches on (token,
+    lang, base64 size before decoding, RIFF shape, sample format, truncation,
+    frame count); the language-selection contract that turns the engine's GPU
+    state and the auto_language_cpu setting into "auto" vs. a fixed UI
+    language; and the settings GET/POST round trip.
 
-WHY THERE IS A FAKE VOSK
-    vosk is NOT installed in this venv and the model directories are NOT in the
-    tree (they are ~176 MB, fetched by the packaging step). A test suite that
-    needed either would be red on every developer machine and green only on the
-    build agent — so the recogniser is injected into `sys.modules` and the model
-    directory is built out of empty files in tmp. What is being measured is this
-    repo's code: the resolver, the validation order and the chunking, none of
-    which are vosk's behaviour.
+WHY THERE IS A FAKE SERVER
+    whisper-server.exe and its ~874 MB model are packaging output (fetched by
+    Backend/vendor/build_whisper.ps1), not part of a developer checkout.
+    `stt_whisper.set_server` swaps the process-wide manager for an in-process
+    fake that records what it was asked to transcribe. A REAL whisper-server
+    child is exercised separately, in test_stt_whisper_server.py.
 """
 
 import base64
 import io
-import json
-import os
-import sys
 import wave
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from providers import stt_vosk
-from routes.transcribe_routes import create_transcribe_router, MAX_B64_CHARS
+from providers import stt_whisper
+from routes import transcribe_routes
+from routes.transcribe_routes import MAX_B64_CHARS, create_transcribe_router
 
 
-# ── Fake vosk ───────────────────────────────────────────────────────────────
+# ── Fake engine ─────────────────────────────────────────────────────────────
 
-class _FakeRecognizer:
-    def __init__(self, model, rate, log):
-        self.model = model
-        self.rate = rate
-        self._log = log
-        self.chunks = []
+class FakeServer:
+    """Stands in for `stt_whisper.WhisperServer`. Records every `transcribe`
+    call so a test can assert the language it was asked to use."""
 
-    def AcceptWaveform(self, data):
-        self.chunks.append(data)
-        return False
+    def __init__(self, gpu=False, ready=True, running=True):
+        self.gpu = gpu
+        self._ready = ready
+        self._running = running
+        self.text = "merhaba dunya"
+        self.response_language = "turkish"
+        self.calls = []
+        self.ensure_started_error = None
+        self.wait_ready_error = None
+        self.transcribe_error = None   # exception, or callable(call_no) -> exception | None
+        self.stopped = False
 
-    def FinalResult(self):
-        return json.dumps({"text": self._log["text"]})
+    def ensure_started(self):
+        if self.ensure_started_error is not None:
+            raise self.ensure_started_error
+
+    def wait_ready(self, timeout=None):
+        if self.wait_ready_error is not None:
+            raise self.wait_ready_error
+
+    def is_ready(self):
+        return self._ready
+
+    def is_running(self):
+        return self._running
+
+    def died(self, grace_s=0.5):
+        return not self._running
+
+    def transcribe(self, pcm, language, timeout=None):
+        self.calls.append({"pcm": pcm, "language": language, "timeout": timeout})
+        error = self.transcribe_error
+        if callable(error):
+            error = error(len(self.calls))
+        if error is not None:
+            raise error
+        return {"text": self.text, "language": self.response_language}
+
+    def stop(self):
+        self.stopped = True
 
 
-class _FakeVosk:
-    """Records what the route asked of it; returns a canned recognition."""
+class FakeDB:
+    """Dict-backed stand-in for the real sqlite `get_setting`/`set_setting`."""
 
-    def __init__(self, text="merhaba dunya", model_error=None):
-        self.log = {"text": text}
-        self.log_levels = []
-        self.model_paths = []
-        self.recognizers = []
-        self._model_error = model_error
+    def __init__(self):
+        self._data = {}
 
-    def SetLogLevel(self, level):
-        self.log_levels.append(level)
+    def get_setting(self, key):
+        return self._data.get(key)
 
-    def Model(self, path):
-        self.model_paths.append(path)
-        if self._model_error is not None:
-            raise self._model_error
-        return f"model@{path}"
-
-    def KaldiRecognizer(self, model, rate):
-        rec = _FakeRecognizer(model, rate, self.log)
-        self.recognizers.append(rec)
-        return rec
-
-
-def _install_models(tmp_path, monkeypatch):
-    """Both shipped layouts: TR keeps `final.mdl` at the root, EN under `am/`."""
-    root = tmp_path / "vosk"
-    tr = root / stt_vosk.MODEL_NAMES["tr"]
-    tr.mkdir(parents=True)
-    (tr / "final.mdl").write_bytes(b"")
-    en_am = root / stt_vosk.MODEL_NAMES["en"] / "am"
-    en_am.mkdir(parents=True)
-    (en_am / "final.mdl").write_bytes(b"")
-    monkeypatch.setenv("GAMACHINE_VOSK_MODELS_DIR", str(root))
-    return root
+    def set_setting(self, key, value):
+        self._data[key] = value
 
 
 @pytest.fixture(autouse=True)
-def _clean_model_cache():
-    stt_vosk.reset_cache()
+def _clean_engine_state():
+    stt_whisper.reset_sessions()
     yield
-    stt_vosk.reset_cache()
+    stt_whisper.set_server(None)
+    stt_whisper.reset_sessions()
 
 
 @pytest.fixture
-def fake_vosk(monkeypatch):
-    fake = _FakeVosk()
-    monkeypatch.setitem(sys.modules, "vosk", fake)
-    return fake
+def fake_server():
+    server = FakeServer()
+    stt_whisper.set_server(server)
+    return server
 
 
 @pytest.fixture
-def client():
+def db():
+    return FakeDB()
+
+
+@pytest.fixture
+def client(db):
     app = FastAPI()
-    app.include_router(create_transcribe_router())
+    app.include_router(create_transcribe_router(db))
     return TestClient(app)
 
 
@@ -132,68 +139,78 @@ def _post(client, **body):
 
 # ── Happy path ──────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("lang", ["tr", "en"])
-def test_a_valid_wav_is_transcribed_for_each_supported_language(client, fake_vosk, tmp_path, monkeypatch, lang):
-    _install_models(tmp_path, monkeypatch)
-    response = _post(client, lang=lang, wav_base64=_b64(_wav(frames=16000)))
+def test_a_valid_wav_goes_through_transcribe_final(client, fake_server):
+    response = _post(client, lang="tr", wav_base64=_b64(_wav(frames=16000)))
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["text"] == "merhaba dunya"
-    assert body["lang"] == lang
-    # 16000 frames at 16 kHz is exactly one second; the number is computed from
-    # the audio, not from how long recognition took.
+    assert body["text"] == fake_server.text
+    assert body["lang"] == "tr"
+    # 16000 frames at 16 kHz is exactly one second; the number is computed
+    # from the audio, not from how long the fake "recognition" took.
     assert body["duration_ms"] == 1000
-    assert fake_vosk.model_paths == [os.path.join(str(tmp_path / "vosk"), stt_vosk.MODEL_NAMES[lang])]
+    assert body["language"] == "tr"
+    assert body["language_mode"] == "fixed"
+    assert len(fake_server.calls) == 1
+    assert fake_server.calls[0]["pcm"] == b"\x01\x02" * 16000
 
 
-def test_the_recogniser_receives_the_exact_pcm_in_8000_byte_chunks(client, fake_vosk, tmp_path, monkeypatch):
-    _install_models(tmp_path, monkeypatch)
-    pcm = bytes((i * 7) % 256 for i in range(20000))     # 10000 frames, not a chunk multiple
-    response = _post(client, lang="tr", wav_base64=_b64(_wav(pcm=pcm)))
-    assert response.status_code == 200, response.text
-
-    rec = fake_vosk.recognizers[0]
-    assert rec.rate == 16000
-    assert b"".join(rec.chunks) == pcm, "the audio reaching vosk is not the audio that was posted"
-    assert [len(c) for c in rec.chunks] == [8000, 8000, 4000]
-
-
-def test_the_vosk_stderr_logger_is_silenced_once(client, fake_vosk, tmp_path, monkeypatch):
-    """Level 0 (the default) floods the console the desktop app tails."""
-    _install_models(tmp_path, monkeypatch)
-    assert _post(client, lang="tr", wav_base64=_b64(_wav())).status_code == 200
-    assert fake_vosk.log_levels == [-1]
-
-
-def test_an_empty_recognition_is_a_200_not_an_error(client, fake_vosk, tmp_path, monkeypatch):
-    """Silence is a normal outcome of dictation; the renderer has a named state
-    for it. Turning it into a 4xx would make "you said nothing" indistinguishable
-    from "the request was malformed"."""
-    _install_models(tmp_path, monkeypatch)
-    fake_vosk.log["text"] = ""
+def test_an_empty_recognition_is_a_200_not_an_error(client, fake_server):
+    """Silence is a normal dictation outcome; the renderer has a named state
+    for it, so it must not read as a malformed request."""
+    fake_server.text = ""
     response = _post(client, lang="tr", wav_base64=_b64(_wav()))
     assert response.status_code == 200
     assert response.json()["text"] == ""
 
 
-# ── Rejections ──────────────────────────────────────────────────────────────
+# ── Language choice ──────────────────────────────────────────────────────────
 
-def test_an_unsupported_language_is_rejected(client, fake_vosk, tmp_path, monkeypatch):
-    _install_models(tmp_path, monkeypatch)
+@pytest.mark.parametrize(
+    "gpu, auto_cpu_setting, ui_lang, server_reports, expected_call_lang, expected_mode, expected_lang_code",
+    [
+        (True, None, "tr", "turkish", "auto", "auto", "tr"),
+        (True, None, "en", "english", "auto", "auto", "en"),
+        (False, None, "tr", "turkish", "tr", "fixed", "tr"),
+        (False, None, "en", "english", "en", "fixed", "en"),
+        (False, "1", "tr", "turkish", "auto", "auto", "tr"),
+        (None, None, "tr", "turkish", "tr", "fixed", "tr"),
+    ],
+    ids=["gpu-auto-tr", "gpu-auto-en", "cpu-fixed-tr", "cpu-fixed-en", "cpu-setting-auto", "gpu-unknown-is-cpu"],
+)
+def test_language_choice_end_to_end(
+    client, fake_server, db, gpu, auto_cpu_setting, ui_lang, server_reports,
+    expected_call_lang, expected_mode, expected_lang_code,
+):
+    fake_server.gpu = gpu
+    fake_server.response_language = server_reports
+    if auto_cpu_setting is not None:
+        db.set_setting(transcribe_routes.AUTO_LANGUAGE_CPU_KEY, auto_cpu_setting)
+    response = _post(client, lang=ui_lang, wav_base64=_b64(_wav()))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert fake_server.calls[0]["language"] == expected_call_lang
+    assert body["language_mode"] == expected_mode
+    assert body["language"] == expected_lang_code
+    # The one-shot route's response contract has no "gpu" key (unlike session
+    # finish); the fields above already cover what the engine's GPU state
+    # decided.
+
+
+# ── Rejections ────────────────────────────────────────────────────────────────
+
+def test_an_unsupported_language_is_rejected(client, fake_server):
     response = _post(client, lang="de", wav_base64=_b64(_wav()))
     assert response.status_code == 400
     assert response.json()["detail"] == "stt_bad_lang"
 
 
-def test_a_body_that_is_not_base64_is_rejected(client, fake_vosk, tmp_path, monkeypatch):
-    _install_models(tmp_path, monkeypatch)
+def test_a_body_that_is_not_base64_is_rejected(client, fake_server):
     response = _post(client, lang="tr", wav_base64="not base64 !!!")
     assert response.status_code == 400
     assert response.json()["detail"] == "stt_bad_base64"
 
 
-def test_bytes_that_are_not_a_riff_file_are_rejected(client, fake_vosk, tmp_path, monkeypatch):
-    _install_models(tmp_path, monkeypatch)
+def test_bytes_that_are_not_a_riff_file_are_rejected(client, fake_server):
     response = _post(client, lang="tr", wav_base64=_b64(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64))
     assert response.status_code == 400
     assert response.json()["detail"] == "stt_not_wav"
@@ -207,10 +224,7 @@ def test_bytes_that_are_not_a_riff_file_are_rejected(client, fake_vosk, tmp_path
         ("8-bit", {"width": 1}),
     ],
 )
-def test_a_wav_that_is_not_16k_mono_16bit_is_rejected(client, fake_vosk, tmp_path, monkeypatch, name, kwargs):
-    """Vosk is created for one sample rate and silently mis-recognises anything
-    else; resampling server-side would hide a renderer bug rather than report it."""
-    _install_models(tmp_path, monkeypatch)
+def test_a_wav_that_is_not_16k_mono_16bit_is_rejected(client, fake_server, name, kwargs):
     response = _post(client, lang="tr", wav_base64=_b64(_wav(frames=1600, **kwargs)))
     assert response.status_code == 400, name
     assert response.json()["detail"] == "stt_wrong_format", name
@@ -221,32 +235,28 @@ def test_a_wav_that_is_not_16k_mono_16bit_is_rejected(client, fake_vosk, tmp_pat
     [46, 44 + 8000],
     ids=["two bytes of a declared second", "a quarter of a declared second"],
 )
-def test_a_wav_whose_data_chunk_is_shorter_than_declared_is_rejected(client, fake_vosk, tmp_path, monkeypatch, keep_bytes):
-    """Class: declared-length-not-enforced. `wave` reports the declared frame
-    count; `readframes` silently returns fewer bytes. The audit probe posted a
-    file declaring 32,000 PCM bytes with two present and got a 200 whose
-    recognition ran on two bytes."""
-    _install_models(tmp_path, monkeypatch)
+def test_a_wav_whose_data_chunk_is_shorter_than_declared_is_rejected(client, fake_server, keep_bytes):
+    """`wave` reports the declared frame count; `readframes` silently returns
+    fewer bytes than declared. The audit probe posted a file declaring 32,000
+    PCM bytes with two present and got a 200 whose recognition ran on two
+    bytes; this pins the fix."""
     truncated = _wav(frames=16000)[:keep_bytes]
     response = _post(client, lang="tr", wav_base64=_b64(truncated))
     assert response.status_code == 400
     assert response.json()["detail"] == "stt_not_wav"
-    assert fake_vosk.recognizers == []
+    assert fake_server.calls == []
 
 
-def test_a_wav_with_zero_frames_is_rejected(client, fake_vosk, tmp_path, monkeypatch):
-    _install_models(tmp_path, monkeypatch)
+def test_a_wav_with_zero_frames_is_rejected(client, fake_server):
     response = _post(client, lang="tr", wav_base64=_b64(_wav(pcm=b"")))
     assert response.status_code == 400
     assert response.json()["detail"] == "stt_empty_audio"
 
 
-def test_an_oversize_body_is_refused_before_it_is_decoded(client, fake_vosk, tmp_path, monkeypatch):
-    """The cap is on the base64 STRING, and this is the point of it: a hostile
-    50 MB string must cost the backend a `len()`, not a 37 MB allocation. So the
-    test both stays cheap (no real 2 MiB WAV is built) and proves the ordering
-    by making any decode attempt an error."""
-    _install_models(tmp_path, monkeypatch)
+def test_an_oversize_body_is_refused_before_it_is_decoded(client, fake_server, monkeypatch):
+    """The cap is on the base64 STRING, and this is the point of it: a
+    hostile 50 MB string must cost the backend a `len()`, not a 37 MB
+    allocation. Patching `b64decode` to explode proves the ordering."""
 
     def _explode(*args, **kwargs):
         raise AssertionError("base64 was decoded despite the string exceeding the cap")
@@ -257,42 +267,28 @@ def test_an_oversize_body_is_refused_before_it_is_decoded(client, fake_vosk, tmp
     assert response.json()["detail"] == "stt_too_large"
 
 
-# ── Model unavailability ────────────────────────────────────────────────────
+# ── Engine errors ─────────────────────────────────────────────────────────────
 
-def test_a_missing_model_directory_is_a_503(client, fake_vosk, tmp_path, monkeypatch):
-    monkeypatch.setenv("GAMACHINE_VOSK_MODELS_DIR", str(tmp_path / "nowhere"))
+def test_a_missing_engine_is_a_503(client, fake_server):
+    fake_server.ensure_started_error = stt_whisper.SttEngineMissing(["whisper-server.exe"])
     response = _post(client, lang="tr", wav_base64=_b64(_wav()))
     assert response.status_code == 503
     assert response.json()["detail"] == "stt_model_missing"
-    assert fake_vosk.model_paths == [], "vosk was asked to load a directory that does not exist"
 
 
-def test_a_model_that_refuses_to_load_is_a_503(client, tmp_path, monkeypatch):
-    _install_models(tmp_path, monkeypatch)
-    monkeypatch.setitem(sys.modules, "vosk", _FakeVosk(model_error=RuntimeError("bad graph")))
+def test_an_engine_failure_is_a_503(client, fake_server):
+    fake_server.wait_ready_error = stt_whisper.SttEngineFailed("did not become ready")
     response = _post(client, lang="tr", wav_base64=_b64(_wav()))
     assert response.status_code == 503
-    assert response.json()["detail"] == "stt_model_load_failed"
+    assert response.json()["detail"] == "stt_engine_failed"
 
 
-def test_a_backend_without_vosk_installed_is_a_503_not_a_crash(client, tmp_path, monkeypatch):
-    """`sys.modules["vosk"] = None` is what an absent package looks like to
-    `import`: the whole feature is unavailable, but every other route — and the
-    process itself — must keep working, which is why the import is inside the
-    loader."""
-    _install_models(tmp_path, monkeypatch)
-    monkeypatch.setitem(sys.modules, "vosk", None)
-    response = _post(client, lang="tr", wav_base64=_b64(_wav()))
-    assert response.status_code == 503
-    assert response.json()["detail"] == "stt_model_load_failed"
-
-
-# ── The token gate ──────────────────────────────────────────────────────────
+# ── The token gate ────────────────────────────────────────────────────────────
 
 class TestTheTokenGate:
-    """The suite-wide conftest runs token-less on purpose; this class opts back
-    IN to a configured token, otherwise `_check_token` returns early and the
-    rejection tests would pass with no gate present at all."""
+    """The suite-wide conftest runs token-less on purpose; this class opts
+    back IN to a configured token, otherwise `_check_token` returns early and
+    the rejection tests would pass with no gate present at all."""
 
     TOKEN = "transcribe-token-4f21"
 
@@ -304,79 +300,42 @@ class TestTheTokenGate:
     def _body(self):
         return {"lang": "tr", "wav_base64": _b64(_wav())}
 
-    def test_a_request_without_the_header_never_reaches_the_handler(self, client, fake_vosk, tmp_path, monkeypatch):
-        # The header is declared required, so FastAPI validation rejects with 422
-        # before the body runs — measured, not assumed.
-        _install_models(tmp_path, monkeypatch)
+    def test_a_request_without_the_header_never_reaches_the_handler(self, client, fake_server):
+        # The header is declared required, so FastAPI validation rejects with
+        # 422 before the body runs — measured, not assumed.
         response = client.post("/transcribe", json=self._body())
         assert response.status_code == 422
-        assert fake_vosk.model_paths == []
+        assert fake_server.calls == []
 
-    def test_a_wrong_token_is_rejected(self, client, fake_vosk, tmp_path, monkeypatch):
-        _install_models(tmp_path, monkeypatch)
+    def test_a_wrong_token_is_rejected(self, client, fake_server):
         response = client.post("/transcribe", json=self._body(), headers={"X-Session-Token": "WRONG"})
         assert response.status_code == 401
-        assert fake_vosk.model_paths == []
+        assert fake_server.calls == []
 
-    def test_the_configured_token_is_accepted(self, client, fake_vosk, tmp_path, monkeypatch):
-        _install_models(tmp_path, monkeypatch)
+    def test_the_configured_token_is_accepted(self, client, fake_server):
         response = client.post("/transcribe", json=self._body(), headers={"X-Session-Token": self.TOKEN})
         assert response.status_code == 200
 
 
-# ── The resolver ────────────────────────────────────────────────────────────
+# ── Settings ──────────────────────────────────────────────────────────────────
 
-def test_the_env_override_wins_over_everything_else(tmp_path, monkeypatch):
-    """It is an override, not a fallback: a Docker mount or a test must not be
-    silently overtaken by a tree next to the executable."""
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setenv("GAMACHINE_VOSK_MODELS_DIR", str(tmp_path / "chosen"))
-    assert stt_vosk.models_root() == str(tmp_path / "chosen")
+def test_settings_round_trip(client, db):
+    initial = client.get("/transcribe/settings", headers=HEADERS)
+    assert initial.status_code == 200
+    assert initial.json() == {"auto_language_cpu": False}
 
+    updated = client.post("/transcribe/settings", json={"auto_language_cpu": True}, headers=HEADERS)
+    assert updated.status_code == 200
+    assert updated.json() == {"auto_language_cpu": True}
 
-def test_the_frozen_layout_resolves_next_to_the_resources_directory(tmp_path, monkeypatch):
-    """backend.exe sits at <app>/resources/Backend/, electron-builder puts the
-    models at <app>/resources/vosk/ — hence the `..` hop."""
-    monkeypatch.delenv("GAMACHINE_VOSK_MODELS_DIR", raising=False)
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    exe = tmp_path / "resources" / "Backend" / "backend.exe"
-    monkeypatch.setattr(sys, "executable", str(exe))
-    assert os.path.normpath(stt_vosk.models_root()) == os.path.normpath(str(tmp_path / "resources" / "vosk"))
+    confirmed = client.get("/transcribe/settings", headers=HEADERS)
+    assert confirmed.status_code == 200
+    assert confirmed.json() == {"auto_language_cpu": True}
+    assert db.get_setting(transcribe_routes.AUTO_LANGUAGE_CPU_KEY) == "1"
 
 
-def test_the_dev_layout_resolves_into_the_repo_vendor_tree(monkeypatch):
-    monkeypatch.delenv("GAMACHINE_VOSK_MODELS_DIR", raising=False)
-    monkeypatch.setattr(sys, "frozen", False, raising=False)
-    root = stt_vosk.models_root()
-    assert root.replace("\\", "/").endswith("Backend/vendor/models/vosk")
-    assert os.path.isabs(root)
-
-
-def test_missing_models_finds_final_mdl_in_both_shipped_layouts(tmp_path, monkeypatch):
-    """TR 0.3 is flat (final.mdl at the root), EN 0.15 keeps it under am/. A probe
-    for one fixed path would have declared one of the two missing."""
-    _install_models(tmp_path, monkeypatch)
-    assert stt_vosk.missing_models() == []
-
-    os.remove(tmp_path / "vosk" / stt_vosk.MODEL_NAMES["en"] / "am" / "final.mdl")
-    assert stt_vosk.missing_models() == ["en"]
-
-    monkeypatch.setenv("GAMACHINE_VOSK_MODELS_DIR", str(tmp_path / "empty"))
-    assert stt_vosk.missing_models() == ["tr", "en"]
-
-
-# ── The model cache ─────────────────────────────────────────────────────────
-
-def test_a_model_is_loaded_once_per_language_not_once_per_request(client, fake_vosk, tmp_path, monkeypatch):
-    """Loading the TR model took 237 ms in the frozen probe (3 Sep 2026); paying
-    that on every dictation would double the perceived latency of short clips."""
-    _install_models(tmp_path, monkeypatch)
-    body = _b64(_wav())
-
-    assert _post(client, lang="tr", wav_base64=body).status_code == 200
-    assert _post(client, lang="tr", wav_base64=body).status_code == 200
-    assert len(fake_vosk.model_paths) == 1
-    assert len(fake_vosk.recognizers) == 2, "the recogniser is per request, only the model is shared"
-
-    assert _post(client, lang="en", wav_base64=body).status_code == 200
-    assert len(fake_vosk.model_paths) == 2
+@pytest.mark.parametrize("value", [1, "yes"])
+def test_settings_post_rejects_a_non_bool_value(client, value):
+    """StrictBool: `1`/`"yes"` must not silently coerce to True."""
+    response = client.post("/transcribe/settings", json={"auto_language_cpu": value}, headers=HEADERS)
+    assert response.status_code == 422

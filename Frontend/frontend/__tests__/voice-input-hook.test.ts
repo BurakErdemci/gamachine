@@ -18,7 +18,7 @@ vi.mock('axios', () => {
 })
 
 import axios from 'axios'
-import { useVoiceInput } from '../renderer/hooks/home/useVoiceInput'
+import { useVoiceInput, LIVE_TEXT_DELAY_MS } from '../renderer/hooks/home/useVoiceInput'
 import { WAV_MAX_BYTES } from '../renderer/lib/wav'
 
 const mockedAxios = axios as unknown as {
@@ -259,6 +259,13 @@ describe('useVoiceInput answers from the backend', () => {
     expect(result.current.error?.kind).toBe('model')
   })
 
+  it('503 stt_engine_failed on finish is `engine` — the whisper.cpp server crashed, not a missing install', async () => {
+    const { result } = await run(() => {
+      throw { response: { status: 503, data: { detail: 'stt_engine_failed' } } }
+    })
+    expect(result.current.error?.kind).toBe('engine')
+  })
+
   it('no response at all is `server`', async () => {
     const { result } = await run(() => { throw new Error('Network Error') })
     expect(result.current.error?.kind).toBe('server')
@@ -321,16 +328,43 @@ describe('useVoiceInput chunk scheduler', () => {
     expect(chunkCalls()).toHaveLength(2)
   })
 
-  it('the partial from each answer is what the composer reads', async () => {
+  it('the partial from each answer is what the composer reads, once the live-text delay has passed', async () => {
     vi.useFakeTimers()
     chunkRespond = () => ({ data: { partial: 'merhaba d', bytes: 16000 } })
     const { result } = setup()
     await act(async () => { await result.current.start() })
     expect(result.current.partialText).toBe('')
 
+    // Each tick needs its own fresh audio, or the scheduler finds an empty
+    // queue and skips the request entirely (no chunk, no new answer).
     speak(8000)
     await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+    speak(8000)
+    await act(async () => { await vi.advanceTimersByTimeAsync(500) })   // 1000 ms — still gated
+    expect(result.current.partialText).toBe('')
+
+    speak(8000)
+    await act(async () => { await vi.advanceTimersByTimeAsync(500) })   // 1500 ms
     expect(result.current.partialText).toBe('merhaba d')
+  })
+
+  it('no live text appears before LIVE_TEXT_DELAY_MS, however many answers arrive', async () => {
+    vi.useFakeTimers()
+    chunkRespond = () => ({ data: { partial: 'gecikmeli metin', bytes: 16000 } })
+    const { result } = setup()
+    await act(async () => { await result.current.start() })
+
+    speak(8000)
+    await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+    expect(result.current.partialText).toBe('')
+
+    speak(8000)
+    await act(async () => { await vi.advanceTimersByTimeAsync(500) })   // 1000 ms
+    expect(result.current.partialText).toBe('')
+
+    speak(8000)
+    await act(async () => { await vi.advanceTimersByTimeAsync(LIVE_TEXT_DELAY_MS - 1000) })  // 1500 ms
+    expect(result.current.partialText).toBe('gecikmeli metin')
   })
 
   it('a failed chunk is retried with the next one, so no spoken audio is dropped', async () => {
@@ -352,6 +386,13 @@ describe('useVoiceInput chunk scheduler', () => {
     speak(4000)
     await act(async () => { await vi.advanceTimersByTimeAsync(500) })
     expect(chunkBytes(chunkCalls()[1])).toBe(16000)  // the failed 8000 plus the new 8000
+    // Still inside the 1.5 s live-text delay (1000 ms elapsed): the successful
+    // answer above is not shown yet.
+    expect(result.current.partialText).toBe('')
+
+    // Past the delay: the next answer (same text) is what the composer sees.
+    speak(4000)
+    await act(async () => { await vi.advanceTimersByTimeAsync(500) })
     expect(result.current.partialText).toBe('tamam')
   })
 
@@ -395,6 +436,16 @@ describe('useVoiceInput opening the session', () => {
     const { result } = setup()
     await act(async () => { await result.current.start() })
     expect(result.current.error?.kind).toBe('model')
+    expect(result.current.state).toBe('idle')
+    // The microphone was already live when the open failed.
+    expect(track.stop).toHaveBeenCalled()
+  })
+
+  it('503 stt_engine_failed while opening is `engine`, not `model`', async () => {
+    sessionRespond = () => { throw { response: { status: 503, data: { detail: 'stt_engine_failed' } } } }
+    const { result } = setup()
+    await act(async () => { await result.current.start() })
+    expect(result.current.error?.kind).toBe('engine')
     expect(result.current.state).toBe('idle')
     // The microphone was already live when the open failed.
     expect(track.stop).toHaveBeenCalled()

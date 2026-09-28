@@ -83,17 +83,18 @@ extraResources:
     to: omnisharp
     filter:
       - "**/*"
-  # Vosk speech models (TR + EN, ~130MB unpacked). Deliberately NOT in backend.spec:
-  # PyInstaller would put them under _internal/, but the frozen backend resolves
-  # `<exe dir>/../vosk` — backend.exe lives in <app>/resources/Backend/, so that path
-  # is exactly this target, <app>/resources/vosk/.
-  # Git-ignored; the prebuild hook scripts/fetch-vosk-models.js fetches them.
-  # Without a model the package still builds and /transcribe answers 503 stt_model_missing.
-  - from: ../../Backend/vendor/models/vosk
-    to: vosk
+  # Dictation engine: whisper.cpp server + DLLs (bin/) and the large-v3-turbo q8_0
+  # model (models/, 874 MB). Deliberately NOT in backend.spec: PyInstaller would put
+  # them under _internal/, but the frozen backend resolves `<exe dir>/../whisper` —
+  # backend.exe lives in <app>/resources/Backend/, so that path is this target.
+  # Git-ignored; the prebuild hook scripts/fetch-whisper.js builds and places them
+  # (Backend/vendor/build_whisper.ps1). On Windows a missing engine fails the build:
+  # the product rule is that the installer carries everything a feature needs.
+  - from: ../../Backend/vendor/whisper
+    to: whisper
     filter:
-      - "**/*"
-      - "!.fetched"   # the wrapper's stamp is build bookkeeping, not a model file
+      - "bin/**/*"
+      - "models/**/*"
 mac:
   category: public.app-category.developer-tools
   # Measured 3 Sep 2026: `grep -rn NSMicrophone Frontend/frontend` → 0 hits, the key

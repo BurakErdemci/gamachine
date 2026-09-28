@@ -63,62 +63,32 @@ this project's own code under the FFmpeg build's license.
 ### yt-dlp — **[bundled] [fetched]**
 **The Unlicense** (public domain dedication) — https://github.com/yt-dlp/yt-dlp
 
-### Vosk (vosk-api) — **[bundled] [fetched]**
-Windows/Linux ship vosk 0.3.45; macOS ships 0.3.44 (universal2), the last version with a macOS wheel on PyPI (3 Sep 2026). Same licence, same runtime dependencies.
+### whisper.cpp + ggml — **[bundled] [built from source]**
+Copyright (c) 2023-2026 The ggml authors — **MIT License** — https://github.com/ggml-org/whisper.cpp
 
-Copyright (c) Alpha Cephei Inc — **Apache-2.0** — https://github.com/alphacep/vosk-api
+Built from commit `d09f61a708f3487afa956ff578e60eae5e7a233c`, unmodified, by
+`Backend/vendor/build_whisper.ps1` (Vulkan backend as a separate module). What ships
+in `resources/whisper/bin/`: `whisper-server.exe`, `whisper.dll`, `ggml.dll`,
+`ggml-base.dll`, `ggml-vulkan.dll` and the `ggml-cpu-*.dll` variants. The upstream
+license text is copied next to them as `LICENSE-whisper.cpp.txt`; ggml is part of
+the same tree and the same copyright line. It runs as a separate process on a
+loopback port; no audio leaves the machine.
 
-Where that license line comes from: the installed wheel's
-`vosk-0.3.45.dist-info/METADATA` carries
-`Classifier: License :: OSI Approved :: Apache Software License` and
-`Home-page: https://github.com/alphacep/vosk-api`. ⚠️ The same METADATA also says
-`License: UNKNOWN`, and the wheel ships **no LICENSE file at all** (measured
-2026-09-03: `grep -i "licen|copying|notice" vosk-0.3.45.dist-info/RECORD` → no rows).
-The Apache-2.0 claim therefore rests on the classifier plus the upstream repository,
-not on a license text inside the distributed artifact.
+### Whisper large-v3-turbo model (ggml q8_0) — **[bundled] [fetched]**
+Copyright (c) 2022 OpenAI — **MIT License** — https://github.com/openai/whisper
 
-The `vosk` package is embedded into the frozen backend via `collect_all('vosk')`
-(`Backend/backend.spec`), so these four DLLs ship inside the installer:
+The weights are OpenAI's Whisper large-v3-turbo, converted and quantised to
+`ggml-large-v3-turbo-q8_0.bin` by the whisper.cpp project and published at
+https://huggingface.co/ggerganov/whisper.cpp (model card license: MIT). The file is
+pinned by repository revision and SHA-256 in `scripts/pinned_assets.json` and ships
+in `resources/whisper/models/`.
 
-| File | Size (bytes) | License |
-|---|---|---|
-| `libvosk.dll` | 26,447,872 | **Apache-2.0** (the vosk-api build itself) |
-| `libstdc++-6.dll` | 26,619,146 | ⚠️ **unverified** — see below |
-| `libgcc_s_seh-1.dll` | 606,425 | ⚠️ **unverified** — see below |
-| `libwinpthread-1.dll` | 366,907 | ⚠️ **unverified** — see below |
-
-⚠️ **Unverified rows.** No license statement for the three runtime DLLs was found in
-the wheel; the file listing above is the only evidence the wheel provides (measured
-2026-09-03 from `Backend/venv/Lib/site-packages/vosk/`). By their names they are the
-**MinGW-w64 runtime (GPL with runtime exception)** — GCC's libstdc++/libgcc under
-GPL-3.0 with the GCC Runtime Library Exception, and libwinpthread under MinGW-w64's
-own permissive terms — but that identification is **inferred from the filenames, not
-read from any license text shipped with them**, and it is recorded here as unverified
-rather than asserted. Resolving it means obtaining the statements from the MinGW-w64
-build these were produced by; the alphacephei model/download pages do not carry them
-either (checked 2026-09-03).
-
-### Vosk speech models — **[bundled] [fetched]**
-Copyright 2020 Alpha Cephei Inc — **Apache 2.0**
-
-| Model | Pinned archive | License |
-|---|---|---|
-| Turkish | `vosk-model-small-tr-0.3.zip` | **Apache 2.0** |
-| US English | `vosk-model-small-en-us-0.15.zip` | **Apache 2.0** |
-
-Where those license lines come from: the model index at
-https://alphacephei.com/vosk/models has a **License** column, and it reads
-`Apache 2.0` on both rows (fetched 2026-09-03). That page publishes **no checksum**
-for any model, which is why `scripts/pinned_assets.json` records these two digests as
-`kaynak: yerel:2026-09-03` — hand-computed, with this project as the root of trust
-rather than the publisher. The copyright line is quoted from the `README` inside
-`vosk-model-small-en-us-0.15` ("Copyright 2020 Alpha Cephei Inc"); the Turkish
-model's `README` carries only the line "Turkish model" and no copyright or license
-text of its own, so its row rests on the models page alone.
-
-The models are **not** embedded in the frozen backend; `electron-builder.yml` copies
-them to `resources/vosk/` in the installed application. They are data used only for
-on-device speech recognition — no audio leaves the machine.
+### Microsoft Visual C++ runtime — **[bundled]** — ⚠️ Microsoft terms, not MIT
+`msvcp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll` and `vcomp140.dll` (OpenMP)
+are copied app-locally next to `whisper-server.exe` from the Visual Studio
+`VC\Redist\MSVC\<version>\x64\Microsoft.VC*.CRT` and `...OpenMP` folders. They are
+"Distributable Code" under the Visual Studio license terms, which permit
+redistributing these files unmodified with an application.
 
 ### OmniSharp-Roslyn — **[bundled] [fetched]**
 Copyright (c) OmniSharp — **MIT License** — https://github.com/OmniSharp/omnisharp-roslyn

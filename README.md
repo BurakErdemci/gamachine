@@ -94,7 +94,7 @@ AI tools in the Unity ecosystem usually land at one of two extremes: they either
 | Can't run terminal | Secure terminal layer; dangerous commands require approval |
 | Every chat starts from zero | Persistent memory + project analysis keep the context |
 | Walks away when a background job finishes | The conversation wakes itself up and reports what completed |
-| Setup hassle | `uv`, OmniSharp + .NET SDK, ffmpeg/yt-dlp, offline speech models — all **bundled into the app**, zero extra install |
+| Setup hassle | `uv`, OmniSharp + .NET SDK, ffmpeg/yt-dlp, an offline speech recogniser — all **bundled into the app**, zero extra install |
 
 ---
 
@@ -151,10 +151,12 @@ animation-only file gets a mannequin built from its own bones so there is someth
 to watch. Textures and sprites open in the same slot, with an actual-size mode that
 keeps pixel art sharp.
 
-**Dictation that never leaves the machine** — a microphone button in the chat box
-writes what you say into the box while you are still speaking; you read it, fix it,
-press Enter. Turkish and English recognition models ship inside the installer, so it
-works offline and no audio is uploaded anywhere.
+**Dictation that never leaves the machine** — click the microphone in the chat box,
+speak, click again: what you said lands in the box, and you read it, fix it, press
+Enter. With a graphics card the words appear while you are still speaking and the
+language is detected by itself. The recogniser (whisper.cpp with Whisper
+large-v3-turbo) ships inside the installer, so it works offline and no audio is
+uploaded anywhere. Windows only for now.
 
 **C# intelligence, zero install** — an OmniSharp LSP sidecar gives real Roslyn
 analysis in the Monaco editor, with the .NET SDK it needs bundled on all three

@@ -16,7 +16,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act, waitFor, cleanup } from '@testing-library/react'
 
 const voice = vi.hoisted(() => ({
-  captured: null as null | { onText: (text: string) => void },
+  captured: null as null | { api?: string; lang?: string; onText: (text: string) => void },
   state: 'idle' as 'idle' | 'recording' | 'transcribing',
   elapsedMs: 0,
   error: null as null | { kind: string; detail?: string },
@@ -192,12 +192,34 @@ describe('the mic button', () => {
     expect(btn.getAttribute('title')).toBe(tr['mic.err.server'])
   })
 
-  it('carries a speaking-language toggle that starts at the app language', () => {
+  it('has no separate speaking-language control — the hook opens with the app language', () => {
     mount()
-    const toggle = document.querySelector('[data-mic-lang]') as HTMLButtonElement
-    expect(toggle.textContent).toBe('tr')
-    fireEvent.click(toggle)
-    expect(toggle.textContent).toBe('en')
+    // The old per-recording toggle is gone: whisper.cpp detects the spoken
+    // language itself (GPU), or the app language / auto-detect setting decides
+    // it (CPU) — see useDictationSettings. Nothing in the composer picks it.
+    expect(document.querySelector('[data-mic-lang]')).toBeNull()
+    expect(voice.captured?.lang).toBe('tr')  // LangContext's default, unwrapped here
+  })
+
+  it('a first click starts a recording, a second click on the same button stops it', () => {
+    const ctx = mount()
+    fireEvent.click(micButton())
+    expect(voice.start).toHaveBeenCalledTimes(1)
+    expect(voice.stop).not.toHaveBeenCalled()
+
+    voice.state = 'recording'
+    ctx.bump()
+    fireEvent.click(micButton())
+    expect(voice.stop).toHaveBeenCalledTimes(1)
+    expect(voice.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('mousedown/mouseup alone do nothing — no push-to-talk, only a click toggles', () => {
+    mount()
+    fireEvent.mouseDown(micButton())
+    fireEvent.mouseUp(micButton())
+    expect(voice.start).not.toHaveBeenCalled()
+    expect(voice.stop).not.toHaveBeenCalled()
   })
 })
 
@@ -222,7 +244,7 @@ describe('the inline error', () => {
  *
  * The composer owns a RANGE of the text between pressing the mic and the final
  * result, and rewrites it on every partial. What is measured here is that the
- * range is rewritten rather than appended to (vosk revises its own guesses), and
+ * range is rewritten rather than appended to (the recogniser revises its own guesses), and
  * that the box is handed back to the keyboard in every exit — final, error and
  * cancel — because a textarea left read-only is a chat the user cannot type in.
  */
@@ -467,5 +489,57 @@ describe('live dictation in the box', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+/**
+ * CPU-only machines (no GPU): the backend answers every chunk with an empty
+ * `partial` (useVoiceInput's own contract — see its header comment), so no
+ * interim text is ever spliced in. The only visible sign the recording is
+ * still being handled is the `transcribing` indicator; the words appear only
+ * once the whole recording is decoded, at `stop()`.
+ */
+describe('CPU-only dictation: no live text, then the transcribing indicator', () => {
+  it('shows nothing while recording, the indicator once stopped, and the final text once finish resolves', async () => {
+    const ctx = mount()
+    startRecording(ctx)
+    // No `say()` here — voice.partialText stays '' for the whole recording,
+    // exactly as a CPU-only backend's empty-partial chunks would leave it.
+    expect(ctx.textarea.value).toBe('')
+    expect(document.querySelector('[data-mic-transcribing]')).toBeNull()
+
+    voice.state = 'transcribing'
+    ctx.bump()
+    const indicator = document.querySelector('[data-mic-transcribing]') as HTMLElement
+    expect(indicator).toBeTruthy()
+    expect(indicator.textContent).toBe(tr['mic.transcribing'])
+    expect(ctx.textarea.value).toBe('')  // still nothing — the finish request is pending
+
+    act(() => { voice.captured!.onText('tam cümle') })
+    await waitFor(() => expect(ctx.textarea.value).toBe('tam cümle'))
+  })
+})
+
+describe('dictated text is never sent on its own', () => {
+  it('the final text lands in the textarea but the send callback is not called', async () => {
+    const ctx = mount()
+    fireEvent.change(ctx.textarea, { target: { value: 'hello' } })
+    ctx.textarea.setSelectionRange(5, 5)
+    act(() => { voice.captured!.onText('world') })
+    await waitFor(() => expect(ctx.textarea.value).toBe('hello world'))
+    expect(ctx.onSendMessage).not.toHaveBeenCalled()
+  })
+
+  it('the same holds for a button-armed dictation (not just a one-shot final)', async () => {
+    const ctx = mount()
+    startRecording(ctx)
+    say('there', ctx)
+    await waitFor(() => expect(ctx.textarea.value).toBe('there'))
+
+    voice.state = 'transcribing'
+    ctx.bump()
+    act(() => { voice.captured!.onText('there') })
+    await waitFor(() => expect(ctx.textarea.value).toBe('there'))
+    expect(ctx.onSendMessage).not.toHaveBeenCalled()
   })
 })

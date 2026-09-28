@@ -28,13 +28,6 @@ _cas_datas, _cas_binaries, _cas_hidden = collect_all('claude_agent_sdk')
 _cas_datas = [_t for _t in _cas_datas
               if "_bundled" not in str(_t[0]).replace("\\", "/")]
 
-# vosk (offline speech-to-text). collect_all is REQUIRED, not a precaution: vosk's
-# __init__.py calls os.add_dll_directory on its OWN package directory at import time,
-# so without the package data the exe compiles and then crashes with FileNotFoundError.
-# Measured 3 Sep 2026: with collect_all the frozen probe loads the TR model in 237 ms.
-# The MODELS are not here — they are data, shipped by electron-builder (extraResources).
-_vosk_datas, _vosk_binaries, _vosk_hidden = collect_all('vosk')
-
 # Video: ffmpeg + yt-dlp binary'lerini bundle'a ekle (VARSA). Yoksa build KIRILMAZ —
 # binary'ler Backend/vendor/bin/win/ altına konunca otomatik dahil olur.
 # Frozen'da _internal/bin/ altına düşer → providers/video_bin.py resolver oradan bulur.
@@ -55,12 +48,12 @@ for _exe in _video_exes:
 a = Analysis(
     ['app/main.py'],
     pathex=['app'],
-    binaries=_cas_binaries + _video_bins + _vosk_binaries,
+    binaries=_cas_binaries + _video_bins,
     # NOT: Launcher scriptleri (run_mcp_server.sh, unityai) PyInstaller datas'ı ile
     # GÖMÜLMEZ — PyInstaller 6.x datas'ı _internal/ altına koyuyor, oysa scriptlerin
     # frozen 'backend' binary'sinin YANINDA (Backend kökünde) olması gerekiyor.
     # Bu yüzden electron-builder.yml extraResources ile doğrudan Backend köküne kopyalanır.
-    datas=_cas_datas + _vosk_datas,
+    datas=_cas_datas,
     hiddenimports=[
         # Claude Agent SDK (kalıcı interaktif session)
         'claude_agent_sdk',
@@ -131,7 +124,7 @@ a = Analysis(
         'mcp.server',
         'mcp.server.mcpserver',
         'mcp_types',
-    ] + _cas_hidden + _vosk_hidden,
+    ] + _cas_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

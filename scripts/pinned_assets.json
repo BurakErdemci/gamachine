@@ -116,19 +116,19 @@
       "$not": "⏳ BU PİN SÜRESİ DOLACAK. BtbN her build'den sonra util/prunetags.sh koşuyor: KEEP_LATEST=14 (son 14 build) + KEEP_MONTHLY=24 (son 24 ayın ay-sonu tag'i), gerisi 'gh release delete --cleanup-tag' ile SİLİNİYOR — release de git tag'i de. Yani kalıcı sabitlenebilir adres YOK. Bu bilerek bir AY-SONU tag'i (~24 ay ömür); günlük bir tag seçilseydi ~2 haftada 404 olurdu. Dosya adı da tag'e gömülü git-describe taşıyor (n8.1.2-21-gce3c09c101), yani yenilerken URL'in tamamı değişir — ad sabit kabul edilemez. Kalıcı tekrarlanabilirlik isteniyorsa tek çözüm zip'i kendimizin aynalaması; bu ayrı bir karar. Sürüm mac'teki ffmpeg 8.1.2 ile bilerek hizalı."
     },
 
-    "vosk-model/small-tr": {
-      "url": "https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip",
-      "digest": "sha256:8c8d07cec1bce31add14967c16891c84152cdf76d391e33c08278119b9ea96e5",
-      "size": 36855784,
-      "kaynak": "yerel:2026-09-03",
-      "$not": "alphacephei HİÇBİR checksum yayınlamıyor — https://alphacephei.com/vosk/models sayfasında model başına yalnız boyut, WER ve lisans sütunu var, sha256/md5 sütunu YOK (3 Eyl 2026'da sayfa çekilerek doğrulandı). Özet 3 Eyl 2026'da indirilen baytlardan ELLE hesaplandı; güven kökü yayıncı değil, hesaplayan kişi. Arşiv açılmadan ÖNCE doğrulanır (fetch_vosk_models.*)."
+    "whisper-model/large-v3-turbo-q8_0": {
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q8_0.bin",
+      "digest": "sha256:317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1",
+      "size": 874188075,
+      "kaynak": "yayinci",
+      "$not": "Dictation model (owner decision 28 Sep 2026: q8_0). The URL pins the repo revision, not 'main'. Digest = the LFS oid Hugging Face publishes (api/models/ggerganov/whisper.cpp/tree/main, 28 Sep 2026), and it matched a local download byte for byte (certutil SHA256). Placed by Backend/vendor/build_whisper.ps1."
     },
-    "vosk-model/small-en-us": {
-      "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
-      "digest": "sha256:30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
-      "size": 41205931,
-      "kaynak": "yerel:2026-09-03",
-      "$not": "Aynı gerekçe: alphacephei checksum yayınlamıyor (sayfada lisans 'Apache 2.0' yazılı, özet sütunu yok). Elle hesaplandı 3 Eyl 2026."
+    "vulkan-sdk/windows": {
+      "url": "https://sdk.lunarg.com/sdk/download/1.4.357.0/windows/vulkansdk-windows-X64-1.4.357.0.exe",
+      "digest": "sha256:81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d",
+      "size": 287971024,
+      "kaynak": "yayinci",
+      "$not": "Build-time only (glslc compiles the shaders baked into ggml-vulkan.dll); nothing from the SDK itself ships. Same version the dictation measurements were built with. Digest from sdk.lunarg.com/sdk/sha/1.4.357.0/windows/vulkansdk-windows-X64-1.4.357.0.exe.txt, 28 Sep 2026. Installed in CI by Backend/vendor/build_whisper.ps1 -InstallVulkanSdk."
     },
 
     "roslyn/microsoft.codeanalysis.common": {

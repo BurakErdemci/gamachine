@@ -5,15 +5,17 @@
  * `onText` and the caller drops it at the caret. Nothing is sent on the user's
  * behalf; they press Enter themselves.
  *
- * LIVE: the words appear in the box while the user speaks. That is why the
- * audio goes up as a chunk session (open → 500 ms chunks → finish) rather than
- * one WAV at the end: a partial transcript needs a recogniser that is already
- * fed. Transport is plain HTTP — the production CSP has no `ws:` entry and it
- * stays that way, so a WebSocket was never an option here.
+ * LIVE (GPU only): the audio goes up as a chunk session (open → 500 ms chunks
+ * → finish) so the backend can re-decode what it has so far about once a
+ * second and answer with live text. Whether it does is the backend's call: it
+ * only has a GPU fast enough for that (~0.5 s per update, measured 28 Sep
+ * 2026); on a CPU-only machine every chunk answers with an empty partial and
+ * the text appears at stop, after the `transcribing` state. Transport is plain
+ * HTTP — the production CSP has no `ws:` entry and it stays that way.
  *
  * Why the renderer downsamples instead of shipping the browser's own
- * MediaRecorder output: the backend feeds vosk, which takes 16 kHz mono
- * signed-16-bit PCM. MediaRecorder produces WebM/Opus on Chromium with no way
+ * MediaRecorder output: the whisper.cpp server is fed 16 kHz mono
+ * signed-16-bit PCM wrapped in a WAV by the backend. MediaRecorder produces WebM/Opus on Chromium with no way
  * to ask for raw PCM, so the backend would have to carry a decoder. An
  * AudioWorklet tap plus `renderer/lib/wav.ts` keeps the format contract on one
  * side of the wire.
@@ -40,7 +42,7 @@ import {
 
 export type VoiceState = 'idle' | 'recording' | 'transcribing';
 
-export type VoiceErrorKind = 'permission' | 'noDevice' | 'model' | 'empty' | 'server';
+export type VoiceErrorKind = 'permission' | 'noDevice' | 'model' | 'engine' | 'empty' | 'server';
 
 export interface VoiceError {
   kind: VoiceErrorKind;
@@ -92,12 +94,32 @@ const PROCESSOR_NAME = 'pcm-capture';
 const TICK_MS = 200;
 
 /**
- * How often the accumulated audio is shipped.
- *
- * 500 ms is the latency the user feels between speaking and seeing the word.
- * Shorter would mean more round trips than vosk's partial result changes at.
+ * How often the accumulated audio is shipped. The backend decodes at most once
+ * a second, so a shorter interval would only add round trips.
  */
 const CHUNK_MS = 500;
+
+/**
+ * No live text before this much recording. Whisper invents words for the
+ * first second of near-silence ("Evet." in 10 of 12 measured clips, 28 Sep
+ * 2026). The backend does not decode that early either; this is the second
+ * lock, on the side that paints the box.
+ */
+export const LIVE_TEXT_DELAY_MS = 1500;
+
+/**
+ * The final decode. A CPU-only machine with auto language takes ~11.6 s for a
+ * 5 s clip, a 60 s recording is two 30 s windows, and the first dictation
+ * may also wait for the engine to load — minutes are possible.
+ */
+const FINISH_TIMEOUT_MS = 360_000;
+
+/** A chunk may carry a live decode (~0.5-1 s on a GPU). */
+const CHUNK_TIMEOUT_MS = 20_000;
+
+/** 503 details that mean something other than "the files are missing". */
+const engineErrorKind = (detail: unknown): VoiceErrorKind =>
+  detail === 'stt_engine_failed' ? 'engine' : 'model';
 
 /**
  * Backend per-chunk ceiling: 65_536 decoded bytes = 32_768 samples.
@@ -159,10 +181,9 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
   /**
    * One chunk POST in flight at a time.
    *
-   * vosk feeds a single recogniser per session, so two overlapping requests
-   * would interleave audio at the backend's per-session lock in whatever order
-   * the network delivered them — i.e. the words would come back scrambled on a
-   * slow link. A tick that finds this set simply waits for the next one.
+   * The backend appends each chunk to one buffer per session, so two
+   * overlapping requests would interleave audio in whatever order the network
+   * delivered them — i.e. the words would come back scrambled on a slow link. A tick that finds this set simply waits for the next one.
    */
   const sendingRef = useRef(false);
   const inFlightRef = useRef<Promise<void> | null>(null);
@@ -376,12 +397,12 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
         const res = await axios.post(
           `${apiRef.current}/transcribe/session/${id}`,
           { pcm_base64: pcm },
-          { headers: authHeaders(), timeout: 15000 },
+          { headers: authHeaders(), timeout: CHUNK_TIMEOUT_MS },
         );
         if (run.cancelled) return;
         chunkFailuresRef.current = 0;
         const partial = typeof res?.data?.partial === 'string' ? res.data.partial : '';
-        setPartialText(partial);
+        if (Date.now() - startedAtRef.current >= LIVE_TEXT_DELAY_MS) setPartialText(partial);
       } catch (err: any) {
         if (run.cancelled) return;
         // The route's OWN contract for this status: the session survives the
@@ -558,9 +579,10 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
       };
 
       // The session is opened with the microphone already live but BEFORE the
-      // recording state is announced: the backend loads the vosk model here, so
-      // a missing model is reported as a failure to start rather than as a
-      // recording that silently produces nothing.
+      // recording state is announced: the backend checks the engine files here
+      // (and starts the engine without waiting for it), so a missing install is
+      // reported as a failure to start rather than as a recording that
+      // silently produces nothing.
       let sessionId: string;
       try {
         const res = await axios.post(
@@ -586,7 +608,7 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
         // condition with a different fix, so it must not read as a broken
         // install.
         if (status === 503 && detail !== 'stt_busy') {
-          setError({ kind: 'model', detail: apiHataMesaji(err, '') || undefined });
+          setError({ kind: engineErrorKind(detail), detail: apiHataMesaji(err, '') || undefined });
         } else if (!err?.response) {
           setError({ kind: 'server', detail: err?.message ?? String(err) });
         } else {
@@ -744,7 +766,7 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
       const res = await axios.post(
         `${apiRef.current}/transcribe/session/${id}/finish`,
         {},
-        { headers: authHeaders(), timeout: 30000 },
+        { headers: authHeaders(), timeout: FINISH_TIMEOUT_MS },
       );
       if (run.cancelled) return;
       const text = typeof res?.data?.text === 'string' ? res.data.text : '';
@@ -764,7 +786,7 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
       discardSessionId(id);
       const status = err?.response?.status;
       if (status === 503) {
-        setError({ kind: 'model', detail: apiHataMesaji(err, '') || undefined });
+        setError({ kind: engineErrorKind(err?.response?.data?.detail), detail: apiHataMesaji(err, '') || undefined });
       } else if (!err?.response) {
         // No response at all: the backend is down, or the request never left.
         setError({ kind: 'server', detail: err?.message ?? String(err) });

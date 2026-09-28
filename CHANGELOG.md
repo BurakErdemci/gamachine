@@ -9,6 +9,23 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 
 ## Unreleased
 
+### Dictation understands you much better
+The microphone now uses Whisper (large-v3-turbo, running on your computer through
+whisper.cpp) instead of the small Vosk models. On the owner's own recordings it made
+about half as many mistakes as the best alternative tested, and it gets words like
+"commit" and "GameManager" right far more often. Click the microphone to start and
+click it again to stop; the text goes into the box and is never sent for you.
+
+- **With a graphics card:** the words appear while you speak (from 1.5 seconds on),
+  the language is detected by itself, and the final text is ready about a second
+  after you stop.
+- **Without one:** the text appears when you stop, after a short "turning speech into
+  text" wait (about 6 seconds for a short sentence). The app's language is used; the
+  new Settings switch "Detect language automatically" detects it instead, at about
+  twice the wait.
+- The installer is larger (about 1.3 GB) because the recogniser ships inside it, so
+  nothing is downloaded when you first use it. macOS does not have dictation yet.
+
 ### "Compiled clean" now means it compiled
 
 An empty Unity console used to pass for a clean compile, but the console reads

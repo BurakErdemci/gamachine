@@ -133,8 +133,8 @@ export function bytesToBase64(bytes: Uint8Array): string {
 /**
  * Raw PCM samples → base64, with no RIFF header.
  *
- * The chunk-session route feeds vosk directly, so a header in the middle of a
- * stream would be recognised as audio: the backend contract is "raw 16 kHz mono
+ * The chunk-session route appends every chunk to one buffer that becomes a
+ * single WAV, so a header in the middle of it would be decoded as audio: the backend contract is "raw 16 kHz mono
  * signed-16-bit little-endian PCM, NO WAV header". `Int16Array`'s own buffer is
  * host-endian, which is little-endian on every platform this ships to but is
  * not guaranteed by the spec — the DataView writes make the wire order the

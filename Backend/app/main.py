@@ -248,6 +248,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[Shutdown] session'lar kapatılamadı: {e}")
 
+    # Dictation server (whisper.cpp child) — same leak rule as the sidecars.
+    try:
+        from providers import stt_whisper
+        stt_whisper.shutdown()
+    except Exception as e:
+        logger.warning(f"[Shutdown] dictation server could not be stopped: {e}")
+
     # OmniSharp sidecar'ı durdur (subprocess sızdırma önlemi)
     try:
         from omnisharp.omnisharp_manager import get_omnisharp_manager
@@ -315,7 +322,7 @@ app.include_router(create_lsp_router(db))
 _conversation_router = create_conversation_router(db, PROGRESS_STORE)
 app.include_router(_conversation_router)
 app.include_router(create_mcp_router())
-app.include_router(create_transcribe_router())
+app.include_router(create_transcribe_router(db))
 
 
 @app.get("/health")

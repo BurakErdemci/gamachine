@@ -78,19 +78,16 @@ jobs:
         continue-on-error: true
         run: bash Backend/vendor/fetch_video_bins.sh
 
-      # The models do not go through PyInstaller (see the note in backend.spec);
-      # electron-builder ships them via extraResources. They are still fetched
-      # BEFORE the PyInstaller step: otherwise the download is deferred to the
-      # frontend build, and a failure there ships a package silently without models.
-      - name: Vosk modelleri — TR + EN (Windows, best-effort)
+      # Dictation engine: whisper.cpp built from source at the pinned commit with
+      # Vulkan, plus the pinned model; electron-builder ships it via extraResources.
+      # NOT best-effort: the installer must carry everything a feature needs
+      # (docs/architecture.md), so a failure here fails the build. The Vulkan SDK
+      # is build-time only (shader compiler) and pinned in scripts/pinned_assets.json.
+      # macOS: the Metal build is not implemented (docs/building.md); the dmg ships
+      # without dictation and the prebuild hook says so in the log.
+      - name: Dikte motoru — whisper.cpp + model (Windows)
         if: runner.os == 'Windows'
-        continue-on-error: true
-        run: pwsh -File Backend/vendor/fetch_vosk_models.ps1
-
-      - name: Vosk modelleri — TR + EN (macOS, best-effort)
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        run: bash Backend/vendor/fetch_vosk_models.sh
+        run: pwsh -File Backend/vendor/build_whisper.ps1 -InstallVulkanSdk
 
       - name: Backend'i dondur (PyInstaller → Backend/dist/backend)
         working-directory: Backend

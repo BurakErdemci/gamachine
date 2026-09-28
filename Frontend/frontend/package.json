@@ -12,7 +12,7 @@
     "predev:docker": "node scripts/copy-monaco.js",
     "dev:docker": "cross-env USE_DOCKER_BACKEND=true nextron",
     "lint:unity-hub": "python3 scripts/discover_unity_hubs.py",
-    "prebuild": "node scripts/copy-monaco.js && node scripts/fetch-video-bins.js && node scripts/fetch-vosk-models.js && (python ../../scripts/fetch_omnisharp.py || python3 ../../scripts/fetch_omnisharp.py)",
+    "prebuild": "node scripts/copy-monaco.js && node scripts/fetch-video-bins.js && node scripts/fetch-whisper.js && (python ../../scripts/fetch_omnisharp.py || python3 ../../scripts/fetch_omnisharp.py)",
     "build": "nextron build",
     "postinstall": "electron-builder install-app-deps && (chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper node_modules/node-pty/prebuilds/darwin-x64/spawn-helper 2>/dev/null || true)",
     "test": "vitest run",

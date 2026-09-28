@@ -1,12 +1,11 @@
-"""`POST /transcribe` — offline dictation. Audio in, text out; nothing is sent.
+"""`POST /transcribe*` — offline dictation. Audio in, text out; nothing is sent.
 
-The renderer records 16 kHz mono 16-bit PCM, wraps it in a RIFF WAV, base64s it
-and posts it here; the recognised text is inserted at the caret of the chat box
-and the user presses Enter themselves.
+The renderer records 16 kHz mono 16-bit PCM and posts it here; the recognised
+text is inserted into the chat box and the user presses Enter themselves.
 
-The handler is a plain `def` on purpose: recognition is CPU-bound and blocking
-(hundreds of ms), so FastAPI runs it in the threadpool instead of stalling the
-event loop the way an `async def` body would.
+The handlers are plain `def` on purpose: recognition blocks (a second on a GPU,
+several on a CPU), so FastAPI runs them in the threadpool instead of stalling
+the event loop the way an `async def` body would.
 """
 import base64
 import binascii
@@ -19,7 +18,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, StrictBool
 
 from auth_utils import _check_token
-from providers import stt_vosk
+from providers import stt_whisper
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,6 @@ MAX_WAV_BYTES = 2_097_152                 # 2 MiB decoded ≈ 65 s of 16 kHz mon
 # the cap. Checked BEFORE decoding so a hostile 50 MB string is refused without
 # ever being materialised in memory.
 MAX_B64_CHARS = 2_796_204
-
 
 # Live dictation chunks. ~2 s of 16 kHz mono PCM per chunk; the base64 bound is
 # ceil(65536 / 3) * 4, checked before decoding for the same reason as above.
@@ -40,6 +38,9 @@ MAX_SESSION_BYTES = 2_097_152             # same 2 MiB budget as the one-shot ro
 # that alphabet cannot name a live session, so it is answered like any other
 # unknown id instead of reaching the registry.
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# app_settings key. "1" = detect the language on a CPU-only machine too.
+AUTO_LANGUAGE_CPU_KEY = "stt_auto_language_cpu"
 
 
 class TranscribeRequest(BaseModel):
@@ -62,14 +63,36 @@ class SessionFinishRequest(BaseModel):
     discard: StrictBool = False
 
 
-def create_transcribe_router():
+class DictationSettingsRequest(BaseModel):
+    auto_language_cpu: StrictBool
+
+
+def _engine_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, stt_whisper.SttEngineMissing):
+        return HTTPException(503, detail="stt_model_missing")
+    logger.warning(f"[transcribe] dictation engine failed: {exc}")
+    return HTTPException(503, detail="stt_engine_failed")
+
+
+def create_transcribe_router(db=None):
     router = APIRouter()
+
+    def auto_language_cpu() -> bool:
+        if db is None:
+            return False
+        try:
+            return db.get_setting(AUTO_LANGUAGE_CPU_KEY) == "1"
+        except Exception as exc:                     # noqa: BLE001
+            # A settings read must not cost the user their dictation; the
+            # default (UI language) is the fast one.
+            logger.warning(f"[transcribe] could not read {AUTO_LANGUAGE_CPU_KEY}: {exc}")
+            return False
 
     @router.post("/transcribe")
     def transcribe(request: TranscribeRequest, x_session_token: str = Header(alias="X-Session-Token")):
         _check_token(x_session_token)
 
-        if request.lang not in stt_vosk.SUPPORTED_LANGS:
+        if request.lang not in stt_whisper.SUPPORTED_LANGS:
             raise HTTPException(400, detail="stt_bad_lang")
 
         if len(request.wav_base64) > MAX_B64_CHARS:
@@ -96,7 +119,7 @@ def create_transcribe_router():
             # thing to the caller.
             raise HTTPException(400, detail="stt_not_wav")
 
-        if channels != 1 or width != 2 or rate != stt_vosk.SAMPLE_RATE:
+        if channels != 1 or width != 2 or rate != stt_whisper.SAMPLE_RATE:
             raise HTTPException(400, detail="stt_wrong_format")
 
         if frames <= 0:
@@ -109,32 +132,32 @@ def create_transcribe_router():
             raise HTTPException(400, detail="stt_not_wav")
 
         try:
-            text, duration_ms = stt_vosk.transcribe_pcm(pcm, request.lang)
-        except stt_vosk.SttModelMissing:
-            raise HTTPException(503, detail="stt_model_missing")
-        except stt_vosk.SttModelLoadFailed as exc:
-            logger.warning(f"[transcribe] vosk model '{request.lang}' unavailable: {exc}")
-            raise HTTPException(503, detail="stt_model_load_failed")
+            result = stt_whisper.transcribe_final(pcm, request.lang, auto_language_cpu())
+        except (stt_whisper.SttEngineMissing, stt_whisper.SttEngineFailed) as exc:
+            raise _engine_error(exc)
 
-        return {"text": text, "lang": request.lang, "duration_ms": duration_ms}
+        return {
+            "text": result["text"],
+            "lang": request.lang,
+            "duration_ms": len(pcm) // 2 * 1000 // stt_whisper.SAMPLE_RATE,
+            "language": result["language"],
+            "language_mode": result["language_mode"],
+        }
 
     @router.post("/transcribe/session")
     def open_session(request: SessionCreateRequest, x_session_token: str = Header(alias="X-Session-Token")):
         _check_token(x_session_token)
-        stt_vosk.purge_expired()
+        stt_whisper.purge_expired()
 
-        if request.lang not in stt_vosk.SUPPORTED_LANGS:
+        if request.lang not in stt_whisper.SUPPORTED_LANGS:
             raise HTTPException(400, detail="stt_bad_lang")
 
         try:
-            session_id = stt_vosk.open_session(request.lang)
-        except stt_vosk.SttBusy:
+            session_id = stt_whisper.open_session(request.lang)
+        except stt_whisper.SttBusy:
             raise HTTPException(503, detail="stt_busy")
-        except stt_vosk.SttModelMissing:
-            raise HTTPException(503, detail="stt_model_missing")
-        except stt_vosk.SttModelLoadFailed as exc:
-            logger.warning(f"[transcribe] vosk model '{request.lang}' unavailable: {exc}")
-            raise HTTPException(503, detail="stt_model_load_failed")
+        except (stt_whisper.SttEngineMissing, stt_whisper.SttEngineFailed) as exc:
+            raise _engine_error(exc)
 
         return {"session_id": session_id, "lang": request.lang}
 
@@ -147,7 +170,7 @@ def create_transcribe_router():
         # Deliberately silent: this runs twice a second while the user speaks,
         # and a log line per chunk would flood the console the desktop app tails.
         _check_token(x_session_token)
-        stt_vosk.purge_expired()
+        stt_whisper.purge_expired()
 
         if not _SESSION_ID_RE.fullmatch(session_id):
             raise HTTPException(404, detail="stt_no_session")
@@ -164,21 +187,16 @@ def create_transcribe_router():
             raise HTTPException(413, detail="stt_too_large")
 
         if len(pcm) % 2:
-            # Half a sample: the caller sliced its Int16 buffer wrong, and vosk
-            # would silently reinterpret every following byte.
+            # Half a sample: the caller sliced its Int16 buffer wrong, and every
+            # following byte would be read shifted by one.
             raise HTTPException(400, detail="stt_wrong_format")
 
         try:
-            # The cap check and the increment happen inside `feed`, in the same
-            # per-session lock: two chunks admitted from a stale total pushed a
-            # session two bytes past the cap when the check ran here, before the
-            # lock (audit finding, 3 Sep 2026). The session survives a refusal
-            # either way — the caller can still finish what it has already said.
-            partial = stt_vosk.feed(session_id, pcm, cap=MAX_SESSION_BYTES)
-            total = stt_vosk.session_bytes(session_id)
-        except stt_vosk.SttTooLarge:
+            partial = stt_whisper.feed(session_id, pcm, cap=MAX_SESSION_BYTES)
+            total = stt_whisper.session_bytes(session_id)
+        except stt_whisper.SttTooLarge:
             raise HTTPException(413, detail="stt_too_large")
-        except stt_vosk.SttNoSession:
+        except stt_whisper.SttNoSession:
             raise HTTPException(404, detail="stt_no_session")
 
         return {"partial": partial, "bytes": total}
@@ -190,16 +208,32 @@ def create_transcribe_router():
         x_session_token: str = Header(alias="X-Session-Token"),
     ):
         _check_token(x_session_token)
-        stt_vosk.purge_expired()
+        stt_whisper.purge_expired()
 
         if not _SESSION_ID_RE.fullmatch(session_id):
             raise HTTPException(404, detail="stt_no_session")
 
         try:
-            text, duration_ms = stt_vosk.finish(session_id, discard=request.discard)
-        except stt_vosk.SttNoSession:
+            result = stt_whisper.finish(session_id, auto_on_cpu=auto_language_cpu(), discard=request.discard)
+        except stt_whisper.SttNoSession:
             raise HTTPException(404, detail="stt_no_session")
+        except (stt_whisper.SttEngineMissing, stt_whisper.SttEngineFailed) as exc:
+            raise _engine_error(exc)
 
-        return {"text": text, "duration_ms": duration_ms}
+        return result
+
+    @router.get("/transcribe/settings")
+    def get_settings(x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return {"auto_language_cpu": auto_language_cpu()}
+
+    @router.post("/transcribe/settings")
+    def set_settings(request: DictationSettingsRequest,
+                     x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        if db is None:
+            raise HTTPException(503, detail="settings_unavailable")
+        db.set_setting(AUTO_LANGUAGE_CPU_KEY, "1" if request.auto_language_cpu else "0")
+        return {"auto_language_cpu": request.auto_language_cpu}
 
     return router

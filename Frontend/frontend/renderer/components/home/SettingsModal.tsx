@@ -1,4 +1,4 @@
-import { LogOut, Settings, Trash2, X, Gamepad2, Loader2, Globe, Key, Check, Cpu, Hand, ShieldCheck, Type } from "lucide-react";
+import { LogOut, Settings, Trash2, X, Gamepad2, Loader2, Globe, Key, Check, Cpu, Hand, ShieldCheck, Type, Mic } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 
@@ -53,6 +53,9 @@ interface SettingsModalProps {
   autoTitles?: boolean;
   autoTitlesSaving?: boolean;
   onToggleAutoTitles?: () => void;
+  dictationAutoLang?: boolean;
+  dictationAutoLangSaving?: boolean;
+  onToggleDictationAutoLang?: () => void;
 }
 
 type SettingsTab = 'general' | 'mode';
@@ -78,6 +81,9 @@ export const SettingsModal = ({
   autoTitles = true,
   autoTitlesSaving = false,
   onToggleAutoTitles,
+  dictationAutoLang = false,
+  dictationAutoLangSaving = false,
+  onToggleDictationAutoLang,
 }: SettingsModalProps) => {
   const { t } = useLang();
   const [tab, setTab] = useState<SettingsTab>('general');
@@ -339,6 +345,35 @@ export const SettingsModal = ({
                 >
                   <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
                     autoTitles ? 'translate-x-5' : 'translate-x-0'
+                  }`} />
+                </button>
+              </div>
+            )}
+
+            {/* Dictation: detect the spoken language on a CPU-only machine too */}
+            {onToggleDictationAutoLang && (
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Mic size={15} className="text-slate-400 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-200">{t('settings.dictationAutoLang')}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">{t('settings.dictationAutoLangHint')}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={dictationAutoLang}
+                  aria-label={t('settings.dictationAutoLang')}
+                  data-testid="dictation-auto-lang-toggle"
+                  onClick={onToggleDictationAutoLang}
+                  disabled={dictationAutoLangSaving}
+                  className={`relative w-10 h-5 shrink-0 rounded-full transition-colors duration-200 focus:outline-none disabled:opacity-50 ${
+                    dictationAutoLang ? 'bg-purple-600' : 'bg-slate-700'
+                  }`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
+                    dictationAutoLang ? 'translate-x-5' : 'translate-x-0'
                   }`} />
                 </button>
               </div>

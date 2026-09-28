@@ -34,6 +34,7 @@ import { useAuth } from '../hooks/home/useAuth';
 import { useFileSystem } from '../hooks/home/useFileSystem';
 import { useChat } from '../hooks/home/useChat';
 import { useAutoChatTitles } from '../hooks/home/useAutoChatTitles';
+import { useDictationSettings } from '../hooks/home/useDictationSettings';
 import { useSideChat, sideQuote } from '../hooks/home/useSideChat';
 import { useAIConfig } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
@@ -108,6 +109,7 @@ export default function Home() {
     fs.suggestFilePath
   );
   const autoTitles = useAutoChatTitles(API, auth.user?.id, showToast as any);
+  const dictation = useDictationSettings(API, auth.user?.id, showToast as any);
 
   // Read-only side question over the chat on screen; its own state, never
   // useChat's runtimes (see useSideChat).
@@ -601,6 +603,8 @@ export default function Home() {
         approvalMode={chat.generationMode} onApprovalModeChange={(m) => chat.setGenerationMode(m, 'settings')}
         autoTitles={autoTitles.autoTitles} autoTitlesSaving={autoTitles.autoTitlesSaving}
         onToggleAutoTitles={autoTitles.toggleAutoTitles}
+        dictationAutoLang={dictation.autoLanguageCpu} dictationAutoLangSaving={dictation.autoLanguageCpuSaving}
+        onToggleDictationAutoLang={dictation.toggleAutoLanguageCpu}
       />
 
       <ExportModal

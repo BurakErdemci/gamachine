@@ -283,8 +283,11 @@ export function AnimatedChatInput({
     // While the microphone is on, the composer owns a RANGE of the text — the
     // interim range — that is rewritten from scratch on every partial result.
     // Rewriting a range rather than appending is what makes the recogniser's
-    // corrections visible: vosk revises the words it already emitted, so text
-    // that was merely appended would keep the wrong guess on screen forever.
+    // corrections visible: every live update re-decodes the whole recording
+    // and may change words it already showed, so text that was merely
+    // appended would keep the wrong guess on screen forever.
+    // The final text replaces the range too, and nothing is sent: the user
+    // presses Enter themselves.
     //
     // `base` is the text WITHOUT anything dictated, i.e. the string the interim
     // is spliced into; `original` is what the box held before recording, kept
@@ -352,13 +355,10 @@ export function AnimatedChatInput({
         });
     }, [insertAtCaret, applyInterim, adjustHeight, scheduleDeferred]);
 
-    // The speaking language defaults to the interface language and can be
-    // changed BEFORE recording (dictating English into a Turkish interface is
-    // an ordinary request).
-    const [micLang, setMicLang] = useState<'tr' | 'en'>(lang);
-    useEffect(() => { setMicLang(lang); }, [lang]);
-
-    const voice = useVoiceInput({ api, lang: micLang, onText: handleFinalText });
+    // The interface language is only a hint: the backend detects the spoken
+    // language itself on a GPU, and on a CPU-only machine when the user turned
+    // "detect language" on in Settings (owner decision, 28 Sep 2026).
+    const voice = useVoiceInput({ api, lang, onText: handleFinalText });
 
     /** Dictation owns the textarea while it runs — see `readOnly` below. */
     const dictating = voice.state === 'recording' || voice.state === 'transcribing';
@@ -1002,14 +1002,12 @@ export function AnimatedChatInput({
                             </>
                         )}
                     </button>
-                    <button
-                        type="button"
-                        data-mic-lang
-                        onClick={() => setMicLang(p => (p === 'tr' ? 'en' : 'tr'))}
-                        disabled={voice.state !== 'idle'}
-                        title={t('mic.lang.toggle', { lang: micLang })}
-                        className="text-[10px] px-1 rounded text-white/40 hover:text-white/90 hover:bg-white/5 transition-colors uppercase"
-                    >{micLang}</button>
+                    {voice.state === 'transcribing' && (
+                        // Visible text, not only the button title: on a
+                        // CPU-only machine this state lasts several seconds
+                        // and is the only sign the recording was kept.
+                        <span data-mic-transcribing className="text-[10px] text-violet-300">{t('mic.transcribing')}</span>
+                    )}
                     {voice.error && (
                         // Inline text, NOT a toast: the error has to stay next
                         // to the button so it is still visible while the user
