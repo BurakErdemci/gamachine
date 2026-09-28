@@ -521,6 +521,23 @@ async def test_send_message_goes_to_the_renderer(env):
     assert (await phone.request("send_message", chat_id=str(conv), text="  "))["error"] == "bad_text"
 
 
+async def test_send_message_refuses_slash_commands(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db)
+    q = CHANNEL.listen()
+    try:
+        for text in ("/usage", "  /compact", "\n\t/model x", "\u200b/mode plan", "\ufeff/skill", "\u00a0/x"):
+            r = await phone.request("send_message", chat_id=str(conv), text=text)
+            assert r["ok"] is False and r["error"] == "commands_not_allowed", repr(text)
+        assert q.empty(), "a refused command never reaches the renderer"
+        for text in ("a /usage", "yol: /tmp/x", "\\/usage", "\uff0fusage"):
+            r = await phone.request("send_message", chat_id=str(conv), text=text)
+            assert r["result"] == {"status": "accepted"}, repr(text)
+        assert q.qsize() == 4
+    finally:
+        CHANNEL.unlisten(q)
+
+
 async def test_push_subscribe_stores_the_subscription(env, monkeypatch):
     from remote import webpush
     monkeypatch.setattr(webpush, "ALLOW_LOOPBACK_FOR_TESTS", False)

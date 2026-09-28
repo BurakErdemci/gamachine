@@ -244,6 +244,11 @@ describe('phone message · exactly once', () => {
     expect(parseRemoteMessage({ ...frame(1, '   ') })).toBeNull()
     expect(parseRemoteMessage({ ...frame(1, 'x'), request_id: '../x' })).toBeNull()
     expect(parseRemoteMessage(frame(2, 'ok'))).toMatchObject({ conversationId: 2, text: 'ok', deviceName: 'iPhone' })
+    // Phone scope excludes commands; the backend refuses them first.
+    for (const text of ['/usage', '  /compact', '\u200b/model x', '\ufeff/skill']) {
+      expect(parseRemoteMessage(frame(1, text)), text).toBeNull()
+    }
+    expect(parseRemoteMessage(frame(1, 'yol: /tmp/x'))).not.toBeNull()
   })
 })
 

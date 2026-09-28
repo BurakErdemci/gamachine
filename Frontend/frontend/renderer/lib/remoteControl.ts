@@ -80,12 +80,19 @@ export interface RemoteMessage {
 
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
+/** Same rule as _is_command in Backend/app/remote/rpc.py. */
+export function isPhoneCommand(text: string): boolean {
+  return /^[\s\p{Cf}\p{Zs}\p{Zl}\p{Zp}\p{Cc}]*\//u.test(text);
+}
+
 export function parseRemoteMessage(data: any): RemoteMessage | null {
   if (!data || data.type !== 'remote_message' || data.source !== 'phone') return null;
   const conversationId = Number(data.conversation_id);
   if (!Number.isSafeInteger(conversationId) || conversationId <= 0) return null;
   if (typeof data.request_id !== 'string' || !REQUEST_ID.test(data.request_id)) return null;
   if (typeof data.text !== 'string' || !data.text.trim()) return null;
+  // The backend refuses these (commands_not_allowed); never act on one here.
+  if (isPhoneCommand(data.text)) return null;
   const deviceName = typeof data.device_name === 'string' ? data.device_name.slice(0, 64) : '';
   return { requestId: data.request_id, conversationId, text: data.text, deviceName };
 }

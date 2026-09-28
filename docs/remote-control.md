@@ -192,7 +192,7 @@ Requests carry `id`; replies echo it. Everything not listed is refused.
 | `pending_cards` | every open card in every chat (MCP gates, command gates, Claude/Codex in-stream cards, question cards) |
 | `answer_card {card_id, decision, choice?}` | first answer wins; a later answer gets `already_answered {by, at}`; ledger row with the device |
 | `stop {chat_id}` | same effect as the desktop Stop |
-| `send_message {chat_id, text}` | delivered to the renderer, which sends it like a typed message (queued if a turn runs); stored with source `phone` |
+| `send_message {chat_id, text}` | delivered to the renderer, which sends it like a typed message (queued if a turn runs); stored with source `phone`. Text whose first non-blank, visible character is `/` is refused with `commands_not_allowed`: phone scope excludes commands |
 | `push_subscribe {subscription}` | stores the web push subscription for this device |
 
 PC -> phone pushes: `event {chat_id, seq, kind, ...}` (turn start/end, text,

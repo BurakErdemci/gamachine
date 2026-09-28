@@ -874,8 +874,11 @@ export const useChat = (
     const _isCodex = _isSub && _m.startsWith('gpt-');
     const _isClaude = _isSub && !_m.startsWith('gpt-') && !(_m.startsWith('gemini') || _m.startsWith('agy-'));
     let slashCard: string | undefined;
-    if (_trimmed === '/usage' && (_isClaude || _isCodex)) slashCard = 'usage';
-    else if (_trimmed === '/context' && _isClaude) slashCard = 'context';
+    // A phone message is plain text: phone scope excludes commands.
+    if (!remote) {
+      if (_trimmed === '/usage' && (_isClaude || _isCodex)) slashCard = 'usage';
+      else if (_trimmed === '/context' && _isClaude) slashCard = 'context';
+    }
 
     const aiMsgId = nextClientMsgId();
     let currentAiMsg: Message = { id: aiMsgId, role: 'assistant', content: '', smells: [], timestamp: new Date().toISOString(), thinking: null, tool_calls: [], slashCommand: slashCard };

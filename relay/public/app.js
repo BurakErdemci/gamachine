@@ -5,6 +5,7 @@ import * as C from './crypto.js';
 import * as store from './store.js';
 import {
   pair, Link, wsOrigin, ChatView, cardActions, answerFailure, eventLine, messageText, mergeChat, stopLine, SEND_TEXT_MAX,
+  COMMANDS_NOTE, isCommand, sendFailureNote,
 } from './net.js';
 
 const $ = (id) => document.getElementById(id);
@@ -503,6 +504,10 @@ function wire() {
       note.textContent = 'Mesaj çok uzun (en fazla ' + SEND_TEXT_MAX + ' karakter).';
       return;
     }
+    if (isCommand(text)) {
+      note.textContent = COMMANDS_NOTE;
+      return;
+    }
     $('btn-send').disabled = true;
     note.textContent = 'Gönderiliyor…';
     try {
@@ -514,7 +519,7 @@ function wire() {
         note.textContent = r.status === 'accepted' ? 'Gönderildi.' : 'Yanıt: ' + (r.status || 'bilinmiyor');
       }
     } catch (err) {
-      note.textContent = err.message === 'too_large' ? 'Mesaj tek seferde gönderilemeyecek kadar uzun; kısaltıp tekrar dene.' : 'Gönderilemedi: ' + err.message;
+      note.textContent = sendFailureNote(err.message);
     } finally {
       $('btn-send').disabled = !link?.ready;
     }
