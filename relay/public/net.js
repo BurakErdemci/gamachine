@@ -423,6 +423,10 @@ export function mergeChat(chats, chat) {
   return chat.hidden && chat.status === 'idle' ? rest : rest.concat(chat);
 }
 
+export const GAP_RELOADS_NOW = 3;
+export const GAP_DELAY_BASE_MS = 1000;
+export const GAP_DELAY_MAX_MS = 30_000;
+
 // Which chat the page shows, and what to do with open_chat replies and
 // pushes for it. The bridge registers an open_chat listener only after an
 // await, so a close_chat sent while that open is pending can arrive first
@@ -430,7 +434,7 @@ export function mergeChat(chats, chat) {
 // reply (verdict 'orphan') and pushes for chats not shown ask for close_chat
 // again. Every show/hide/load bumps `gen`, so only the newest load renders.
 export class ChatView {
-  constructor({ now = Date.now, strayEveryMs = 10_000 } = {}) {
+  constructor({ now = Date.now, strayEveryMs = 10_000, gapQuietMs = 60_000 } = {}) {
     this.shown = null;
     this.gen = 0;
     this.loading = null;
@@ -438,6 +442,19 @@ export class ChatView {
     this.strayEveryMs = strayEveryMs;
     this.strayAt = new Map();
     this.reloadAfter = false;
+    // Gap reloads are bounded: GAP_RELOADS_NOW immediate ones, then a doubling
+    // delay up to GAP_DELAY_MAX_MS; a gap-free gapQuietMs resets the streak.
+    this.gapQuietMs = gapQuietMs;
+    this.gapStreak = 0;
+    this.lastGapAt = -Infinity;
+    this.scheduled = null;
+  }
+
+  resetGaps() {
+    this.reloadAfter = false;
+    this.gapStreak = 0;
+    this.lastGapAt = -Infinity;
+    this.scheduled = null;
   }
 
   // Returns the chat that was shown before, if it differs (the caller closes it).
@@ -446,7 +463,7 @@ export class ChatView {
     this.shown = id;
     this.gen += 1;
     this.loading = null;
-    this.reloadAfter = false;
+    this.resetGaps();
     this.strayAt.delete(id);
     return prev !== null && prev !== id ? prev : null;
   }
@@ -456,13 +473,14 @@ export class ChatView {
     this.shown = null;
     this.gen += 1;
     this.loading = null;
-    this.reloadAfter = false;
+    this.resetGaps();
     return prev;
   }
 
   beginLoad() {
     if (this.shown === null) return null;
     this.gen += 1;
+    this.scheduled = null; // this load supersedes a delayed reload
     this.loading = { chatId: this.shown, gen: this.gen };
     return this.loading;
   }
@@ -487,19 +505,52 @@ export class ChatView {
     return true;
   }
 
-  // {type:"gap", chat_id}: live events were lost; 'reload' re-opens the chat.
-  // During a load the gap may come from the listener that load replaces or
-  // from the new one, so the chat is reloaded once more after it (takeReload).
+  // {type:"gap", chat_id}: live events were lost. 'reload' re-opens the chat
+  // now, 'later' means a delayed reload was planned (takeSchedule), 'ignore'
+  // means a load or a planned reload already covers it. During a load the gap
+  // may come from the listener that load replaces or from the new one, so the
+  // chat is reloaded once more after it (takeReload).
   onGap(chatId) {
     if (chatId !== this.shown) return this.stray(chatId) ? 'close' : 'ignore';
-    if (!this.loading) return 'reload';
-    this.reloadAfter = true;
-    return 'ignore';
+    const t = this.now();
+    if (t - this.lastGapAt > this.gapQuietMs) this.gapStreak = 0;
+    this.lastGapAt = t;
+    if (this.loading) {
+      this.reloadAfter = true;
+      return 'ignore';
+    }
+    if (this.scheduled) return 'ignore';
+    return this.planReload() ? 'reload' : 'later';
   }
 
+  // True: reload now. False with a gap pending: a delayed reload was planned.
   takeReload() {
     const again = !!this.reloadAfter;
     this.reloadAfter = false;
-    return again;
+    return again && this.planReload();
+  }
+
+  // True when the next gap reload may run now; otherwise records a delayed one.
+  planReload() {
+    this.gapStreak += 1;
+    if (this.gapStreak <= GAP_RELOADS_NOW) return true;
+    const delayMs = Math.min(GAP_DELAY_MAX_MS, GAP_DELAY_BASE_MS * 2 ** (this.gapStreak - GAP_RELOADS_NOW - 1));
+    this.scheduled = { chatId: this.shown, delayMs, armed: false };
+    return false;
+  }
+
+  // The planned delayed reload, once: the caller arms a timer and later calls
+  // runScheduled(s), which is true only if nothing superseded it.
+  takeSchedule() {
+    const s = this.scheduled;
+    if (!s || s.armed) return null;
+    s.armed = true;
+    return s;
+  }
+
+  runScheduled(s) {
+    if (this.scheduled !== s || this.shown !== s.chatId) return false;
+    this.scheduled = null;
+    return true;
   }
 }

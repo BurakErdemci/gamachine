@@ -378,6 +378,58 @@ test('gap on the shown chat re-opens it; during a load it re-opens once more aft
   assert.equal(view.onGap('9'), 'close', 'a gap for a chat not shown closes its listener');
 });
 
+test('sustained gaps: at most three immediate reloads, then growing delays, one reload at a time', () => {
+  let now = 0;
+  const view = new ChatView({ now: () => now });
+  view.show('7');
+  let immediate = 0;
+  const delays = [];
+  let decision = view.onGap('7');
+  for (let i = 0; i < 20; i += 1) {
+    if (decision === 'reload') immediate += 1;
+    else {
+      assert.equal(decision, 'later');
+      const s = view.takeSchedule();
+      assert.ok(s, 'a delayed reload is planned');
+      assert.equal(view.takeSchedule(), null, 'the plan is handed out once');
+      assert.equal(view.onGap('7'), 'ignore', 'no second reload while one is planned');
+      delays.push(s.delayMs);
+      now += s.delayMs;
+      assert.equal(view.runScheduled(s), true);
+    }
+    const t = view.beginLoad();
+    assert.equal(view.onGap('7'), 'ignore', 'a gap during a load does not start another load');
+    assert.equal(view.endLoad(t), 'apply');
+    decision = view.takeReload() ? 'reload' : 'later';
+  }
+  assert.equal(immediate, 3);
+  assert.deepEqual(delays.slice(0, 6), [1000, 2000, 4000, 8000, 16000, 30000]);
+  assert.ok(delays.every((d, i) => i === 0 || d >= delays[i - 1]), 'delays never shrink');
+  assert.ok(Math.max(...delays) <= 30000);
+});
+
+test('a quiet period resets the gap streak; a new load or chat cancels a planned reload', () => {
+  let now = 0;
+  const view = new ChatView({ now: () => now, gapQuietMs: 60_000 });
+  view.show('7');
+  for (let i = 0; i < 3; i += 1) assert.equal(view.onGap('7'), 'reload');
+  assert.equal(view.onGap('7'), 'later');
+  const planned = view.takeSchedule();
+  const t = view.beginLoad(); // e.g. refreshAll after a reconnect
+  assert.equal(view.runScheduled(planned), false, 'the newer load supersedes the planned one');
+  assert.equal(view.endLoad(t), 'apply');
+  assert.equal(view.takeReload(), false);
+  now += 61_000;
+  assert.equal(view.onGap('7'), 'reload', 'after a quiet minute gaps reload at once again');
+  view.show('7');
+  for (let i = 0; i < 3; i += 1) assert.equal(view.onGap('7'), 'reload');
+  assert.equal(view.onGap('7'), 'later');
+  const s = view.takeSchedule();
+  view.show('8');
+  assert.equal(view.runScheduled(s), false, 'a chat switch cancels it');
+  assert.equal(view.onGap('8'), 'reload', 'and starts a fresh streak');
+});
+
 test('gap push from the PC reaches the page and a fresh open_chat recovers the view', async () => {
   const { link, pcSend, lastRequest, pushes } = await connected();
   const view = new ChatView();

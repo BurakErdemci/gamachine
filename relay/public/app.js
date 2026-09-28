@@ -316,6 +316,12 @@ async function loadChat() {
   for (const ev of Array.isArray(r.events) ? r.events : []) logEvent(ev);
   window.scrollTo(0, document.body.scrollHeight);
   if (view.takeReload()) loadChat();
+  else reloadLater();
+}
+
+function reloadLater() {
+  const s = view.takeSchedule();
+  if (s) setTimeout(() => { if (view.runScheduled(s)) loadChat(); }, s.delayMs);
 }
 
 function openChat(id) {
@@ -365,6 +371,7 @@ function onPush(msg) {
   } else if (msg.type === 'gap') {
     const what = view.onGap(msg.chat_id);
     if (what === 'reload') loadChat();
+    else if (what === 'later') reloadLater();
     else if (what === 'close') closeOnPc(msg.chat_id);
   }
 }
