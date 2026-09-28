@@ -602,3 +602,32 @@ async def test_busy_replies_stay_bounded_behind_a_slow_phone(env, monkeypatch):
     await until(lambda: len(sent) == 2)
     assert sent[1] == {"id": 300, "ok": False, "error": "busy"}
     session.close()
+
+
+def ring_listeners(conv):
+    ring = turn_events.RING._rings.get(conv)
+    return len(ring.subs) if ring is not None else 0
+
+
+async def test_concurrent_opens_of_one_chat_leave_no_listener_after_close(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db)
+    turn_events.append(conv, "turn_start", provider="codex", model="m", origin="user")
+    replies = await asyncio.gather(*(phone.request("open_chat", chat_id=str(conv)) for _ in range(6)))
+    assert all(r["ok"] for r in replies)
+    await until(lambda: ring_listeners(conv) == 1)
+    assert (await phone.request("close_chat", chat_id=str(conv)))["ok"] is True
+    await until(lambda: ring_listeners(conv) == 0)
+    turn_events.append(conv, "turn_end", status="done")
+    with pytest.raises(asyncio.TimeoutError):
+        await phone.next_push(lambda m: m.get("type") == "event", timeout=0.4)
+
+
+async def test_session_close_drops_every_listener_it_opened(env):
+    phone = await pair_phone(env)
+    convs = [make_chat(env.db, f"c{i}") for i in range(3)]
+    await asyncio.gather(*(phone.request("open_chat", chat_id=str(c)) for c in convs for _ in range(3)))
+    await until(lambda: all(ring_listeners(c) == 1 for c in convs))
+    for session in list(env.bridge.sessions.values()):
+        session.close()
+    await until(lambda: all(ring_listeners(c) == 0 for c in convs))

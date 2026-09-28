@@ -113,6 +113,9 @@ class Dispatcher:
                                   or not 0 <= since < 2 ** 53):
             raise RpcError("bad_since_seq")
         messages = await asyncio.to_thread(chats.recent_messages, self.db, conv)
+        # No await from here until the listener is in `session.chats`: two
+        # concurrent opens of one chat could otherwise both close "the old
+        # one" and the loser's listener would survive close_chat and close().
         session.close_chat(conv)
         backlog, sub = turn_events.join(conv, since or 0)
         events = backlog["events"] if since is not None else chats.current_turn_events(backlog["events"])
@@ -120,22 +123,34 @@ class Dispatcher:
                   "events": [chats.phone_event(conv, e) for e in events],
                   "gap": bool(backlog["gap"]) if since is not None else False,
                   "epoch": backlog["epoch"], "last_seq": backlog["last_seq"]}
+        while len(session.chats) >= session.MAX_OPEN_CHATS:
+            session.close_chat(next(iter(session.chats)))
+        replied = asyncio.Event()
+        task = asyncio.get_running_loop().create_task(
+            self._forward(session, conv, sub, backlog["last_seq"], replied))
+
+        def _closed(done: asyncio.Task) -> None:
+            # A callback, not a finally: a task cancelled before its first
+            # step never runs its body.
+            sub.close()
+            if session.chats.get(conv) is done:
+                session.chats.pop(conv, None)
+        task.add_done_callback(_closed)
+        session.chats[conv] = task
         # The reply goes first: the page clears the chat log when it arrives,
         # so a live event sent before it would be wiped.
         try:
             await session.reply({"id": rid, "ok": True, "result": result})
         except BaseException:
-            sub.close()
+            task.cancel()
             raise
-        while len(session.chats) >= session.MAX_OPEN_CHATS:
-            session.close_chat(next(iter(session.chats)))
-        task = asyncio.get_running_loop().create_task(
-            self._forward(session, conv, sub, backlog["last_seq"]))
-        session.chats[conv] = task
+        replied.set()
         return _REPLIED
 
-    async def _forward(self, session: PhoneSession, conv: int, sub, last_seq: int) -> None:
+    async def _forward(self, session: PhoneSession, conv: int, sub, last_seq: int,
+                       replied: asyncio.Event) -> None:
         try:
+            await replied.wait()
             while True:
                 event = await sub.get()
                 if event is None:
@@ -159,10 +174,6 @@ class Dispatcher:
                 last_seq = event["seq"]
         except asyncio.CancelledError:
             pass
-        finally:
-            sub.close()
-            if session.chats.get(conv) is asyncio.current_task():
-                session.chats.pop(conv, None)
 
     async def close_chat(self, session, req, rid):
         session.close_chat(_conv_id(req.get("chat_id")))
