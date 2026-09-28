@@ -43,7 +43,7 @@ from agentic.command_gates import (
     APPROVAL_GATES, APPROVAL_RESULTS,
     GATE_OWNERS,
     QUESTION_GATES, QUESTION_RESULTS,
-    register_gate, release_gate,
+    cancel_gate, mark_timed_out, register_gate, release_gate,
 )
 # Onay bekleme süresi tek kaynaktan. `agentic` paketi zaten yukarıdaki satırla
 # yükleniyor (yeni bağımlılık değil); ters yön (agent_runner → providers) ise
@@ -1102,7 +1102,11 @@ class ClaudeSDKSession:
         # AskUserQuestion → A/B/C seçim kartı
         if tool_name == "AskUserQuestion":
             # gate'i emit'ten ÖNCE kaydet (yarış önleme)
-            ev = register_gate(gate_id, self.conversation_id, kind="question")
+            _questions = input_data.get("questions", [])
+            _first = _questions[0] if isinstance(_questions, list) and _questions else {}
+            ev = register_gate(gate_id, self.conversation_id, kind="question",
+                               tool=tool_name, params=input_data,
+                               summary=_first.get("question") if isinstance(_first, dict) else None)
             self._active_gate_ids.add(gate_id)
             if out_q is not None:
                 await out_q.put({"type": "question_needed", "gate_id": gate_id,
@@ -1143,7 +1147,9 @@ class ClaudeSDKSession:
 
         # Normal araç → onay kartı (adım modu)
         # gate'i emit'ten ÖNCE kaydet
-        ev = register_gate(gate_id, self.conversation_id)
+        ev = register_gate(gate_id, self.conversation_id, tool=tool_name,
+                           summary=_describe_tool(tool_name, input_data),
+                           params=input_data, risk=decision.reason)
         self._active_gate_ids.add(gate_id)
         if out_q is not None:
             await out_q.put({
@@ -1169,6 +1175,7 @@ class ClaudeSDKSession:
             return results.pop(gate_id, None)
         except asyncio.TimeoutError:
             logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] {label} zaman aşımı gate={gate_id}")
+            mark_timed_out(gate_id)
             return None
         finally:
             release_gate(gate_id)
@@ -1183,12 +1190,7 @@ class ClaudeSDKSession:
         self._cancel_requested = True
         self._cancel_grace()
         for gid in list(self._active_gate_ids):
-            if gid in APPROVAL_GATES:
-                APPROVAL_RESULTS[gid] = False
-                APPROVAL_GATES[gid].set()
-            if gid in QUESTION_GATES:
-                QUESTION_RESULTS[gid] = None
-                QUESTION_GATES[gid].set()
+            cancel_gate(gid)
         if self._cancel_event is not None:
             self._cancel_event.set()
 

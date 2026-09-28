@@ -212,6 +212,26 @@ class DatabaseManager:
                     cursor.execute(f"ALTER TABLE mailbox ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
                     pass
+            # Approval ledger (agentic/cards.py, docs/remote-control.md): one
+            # row per closed card. An audit log, so deleting a chat keeps its
+            # rows untouched: they hold no message text (params only as a
+            # sha256), and conversation ids are AUTOINCREMENT, never reused, so
+            # a kept id cannot point at a different chat later. No FOREIGN KEY
+            # for the same reason.
+            cursor.execute('''CREATE TABLE IF NOT EXISTS approval_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                at TEXT NOT NULL,
+                card_id TEXT NOT NULL,
+                conversation_id INTEGER,
+                kind TEXT,
+                tool TEXT,
+                params_hash TEXT,
+                approval_mode TEXT,
+                decision TEXT,
+                device TEXT,
+                outcome TEXT NOT NULL)''')
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS idx_approval_ledger_at ON approval_ledger (at)')
             conn.commit()
 
     def _migrate_ai_configs_table(self, conn: sqlite3.Connection):
@@ -689,6 +709,69 @@ class DatabaseManager:
             self._delete_rows(conn, ids)
             conn.commit()
             return ids
+
+    # ===================== APPROVAL LEDGER =====================
+    _LEDGER_COLS = ("at", "card_id", "conversation_id", "kind", "tool", "params_hash",
+                    "approval_mode", "decision", "device", "outcome")
+
+    def record_card_resolution(self, row: Dict[str, Any]) -> int:
+        values = [row.get(c) for c in self._LEDGER_COLS]
+        if not values[0]:
+            values[0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cur = conn.execute(
+                f'INSERT INTO approval_ledger ({", ".join(self._LEDGER_COLS)}) '
+                f'VALUES ({", ".join("?" * len(self._LEDGER_COLS))})', values)
+            conn.commit()
+            return cur.lastrowid
+
+    def get_approval_ledger(self, since: Optional[str] = None,
+                            until: Optional[str] = None) -> List[Dict[str, Any]]:
+        where, args = self._ledger_window(since, until)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            rows = conn.execute(
+                f'SELECT {", ".join(self._LEDGER_COLS)} FROM approval_ledger{where} ORDER BY id',
+                args).fetchall()
+        return [dict(zip(self._LEDGER_COLS, r)) for r in rows]
+
+    @staticmethod
+    def _ledger_window(since: Optional[str], until: Optional[str]) -> Tuple[str, list]:
+        clauses, args = [], []
+        if since:
+            clauses.append("at >= ?")
+            args.append(since)
+        if until:
+            clauses.append("at < ?")
+            args.append(until)
+        return (" WHERE " + " AND ".join(clauses) if clauses else ""), args
+
+    def approval_ledger_stats(self, since: Optional[str] = None,
+                              until: Optional[str] = None) -> Dict[str, Any]:
+        """Counts per outcome and per device in [since, until) ("YYYY-MM-DD HH:MM:SS").
+
+        `timed_out_share` is the remote-control metric: timed-out cards over
+        all closed cards in the window (None when there were none).
+        """
+        where, args = self._ledger_window(since, until)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            rows = conn.execute(
+                f"SELECT outcome, COALESCE(device, 'unknown') AS dev, COUNT(*) "
+                f"FROM approval_ledger{where} GROUP BY outcome, dev", args
+            ).fetchall()
+        by_outcome: Dict[str, int] = {}
+        by_device: Dict[str, int] = {}
+        by_device_outcome: Dict[str, Dict[str, int]] = {}
+        total = 0
+        for outcome, device, n in rows:
+            total += n
+            by_outcome[outcome] = by_outcome.get(outcome, 0) + n
+            by_device[device] = by_device.get(device, 0) + n
+            by_device_outcome.setdefault(device, {})[outcome] = n
+        timed_out = by_outcome.get("timed_out", 0)
+        return {"since": since, "until": until, "total": total,
+                "by_outcome": by_outcome, "by_device": by_device,
+                "by_device_outcome": by_device_outcome,
+                "timed_out_share": (timed_out / total) if total else None}
 
     # ===================== CHAT MAILBOX =====================
     _MAIL_COLS = ('id, from_conv, to_conv, body, status, gate_id, depth, created_at, delivered_at, '

@@ -33,7 +33,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Set
 
 import unity_file_guard
 from agentic.command_gates import APPROVAL_GATES, APPROVAL_RESULTS, APPROVAL_TIMEOUT_S
-from agentic.command_gates import register_gate, release_gate
+from agentic.command_gates import cancel_gate, mark_timed_out, register_gate, release_gate
 
 logger = logging.getLogger(__name__)
 
@@ -889,7 +889,9 @@ class CodexSession:
         out_q = self._out_q
         gate_id = uuid.uuid4().hex
         # gate'i emit'ten ÖNCE kaydet
-        ev = register_gate(gate_id, self.conversation_id)
+        ev = register_gate(gate_id, self.conversation_id, tool=method,
+                           summary=_describe_approval(method, params), params=params,
+                           risk=decision.reason)
         self._active_gate_ids.add(gate_id)
         if out_q is not None:
             await out_q.put({
@@ -909,6 +911,7 @@ class CodexSession:
             return results.pop(gate_id, None)
         except asyncio.TimeoutError:
             logger.warning(f"[CodexSession:{self.conversation_id}] onay zaman aşımı gate={gate_id}")
+            mark_timed_out(gate_id)
             return None
         finally:
             release_gate(gate_id)
@@ -1114,9 +1117,7 @@ class CodexSession:
     async def cancel_turn(self):
         """Bekleyen onayları reddet + turn/interrupt. _turn_lock ALMAZ (deadlock önlemi)."""
         for gid in list(self._active_gate_ids):
-            if gid in APPROVAL_GATES:
-                APPROVAL_RESULTS[gid] = False
-                APPROVAL_GATES[gid].set()
+            cancel_gate(gid)
         try:
             if self._started and self.thread_id and self._current_turn_id:
                 await self._request("turn/interrupt", {

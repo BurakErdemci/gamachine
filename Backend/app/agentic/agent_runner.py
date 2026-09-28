@@ -25,6 +25,7 @@ from agentic.command_gates import APPROVAL_GATES as _APPROVAL_GATES, APPROVAL_RE
 from agentic.command_gates import APPROVAL_TIMEOUT_S
 from agentic.command_gates import GATE_OWNERS as _GATE_OWNERS
 from agentic.command_gates import register_gate as _register_gate, release_gate as _release_gate
+from agentic.command_gates import mark_timed_out as _mark_timed_out
 
 from agentic.command_safety import requires_approval as _is_dangerous_command
 from agentic.side_prompt import SideTurn, API_SYSTEM_CONTEXT as _SIDE_API_CONTEXT
@@ -987,6 +988,8 @@ class AgentRunner:
         """
         from agentic import approval_mode
         self._approval_risk = None
+        # Handed to `_approval_gate` the way `_approval_risk` is, for the card list.
+        self._approval_subject = (tool_name, tool_args)
         # Read-only: no card, `_execute_tool_with_approval` refuses the write.
         if getattr(self, "read_only", False):
             return None
@@ -1059,10 +1062,13 @@ class AgentRunner:
                 if _candidate not in _APPROVAL_GATES:
                     gate_id = _candidate
                     break
-        _register_gate(gate_id, self.conversation_id)
-        payload = {"command": command_text, "gate_id": gate_id}
         risk = getattr(self, "_approval_risk", None)
         self._approval_risk = None
+        subject_tool, subject_args = getattr(self, "_approval_subject", None) or (None, None)
+        self._approval_subject = None
+        _register_gate(gate_id, self.conversation_id, tool=subject_tool, summary=command_text,
+                       params=subject_args, risk=risk[0] if risk else None)
+        payload = {"command": command_text, "gate_id": gate_id}
         if risk:
             payload["risk_reason"], payload["risk_detail"] = risk
         try:
@@ -1092,6 +1098,7 @@ class AgentRunner:
         try:
             await asyncio.wait_for(event.wait(), timeout=APPROVAL_TIMEOUT_S)
         except asyncio.TimeoutError:
+            _mark_timed_out(gate_id)
             return _ApprovalDecision(False, "❌ Onay süresi doldu, araç çalıştırılmadı.")
         except Exception:
             logger.exception("Onay beklenirken hata")
