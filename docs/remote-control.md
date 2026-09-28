@@ -290,3 +290,33 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
   each part carries `part` (1-based) and `parts`, all with the request's `id`.
 - Extra PC -> phone push: `{type:"gap", chat_id, epoch, last_seq}` when live
   events of an open chat were lost.
+
+## Desktop implementation notes (step 4)
+
+Facts about the Electron and renderer side; plain look, visual design later.
+
+- Every `/remote/*` call goes through the main process: invoke channel
+  `remote-control` with `(action, arg)`, a fixed table in
+  `Frontend/frontend/main/helpers/remote-control.ts` (`status`, `enable`,
+  `disable`, `forget`, `pair-start`, `pair-pending`, `pair-approve`,
+  `pair-reject`, `devices`, `remove-device`, `remove-all-devices`,
+  `relay-url`, `set-relay-url`, `set-keep-awake`). The UI secret is added
+  there, only for enable, pair/start, pair/approve and PUT relay-url; page JS
+  never holds it. Answers are `{ok:true, data}` or `{ok:false, code}`.
+- Keep awake: `powerSaveBlocker.start('prevent-app-suspension')` follows the
+  backend's `keep_awake_active`, read from every answer that carries it and
+  from a status poll every 30 s (app start with remote control already on,
+  other windows). Three failed polls in a row release it; quitting stops it.
+- Phone messages: each `remote_message` frame is claimed once per
+  `request_id` (in-window set, plus a localStorage record written under a Web
+  Lock so a second window cannot claim it too), then sent through the typed
+  message path with the conversation id as `targetOverride`: queued while that
+  chat runs, a user turn otherwise; the composer is never touched. A frame
+  that arrives before the page has chosen its send options waits for them.
+- The phone marker (`📱 <device name>` over the user bubble) is renderer-only:
+  `/chat-stream` has no field for a message source and the `messages` table no
+  column for it, so a phone turn is kept as a client-only copy and the marker
+  is lost when the app restarts or the chat is re-read from the server.
+- A desktop answer that gets `already_answered {by, at, decision}` closes the
+  card with a note ("Telefondan (<name>) onaylandi / reddedildi"), not the
+  "outcome unknown" warning.
