@@ -203,6 +203,12 @@ the message queue, cards and wake rules all live there, and a second path
 would drift from them. The backend hands the request to the renderer over the
 existing app-wide event channel and reports `accepted` or `desktop_not_ready`.
 
+A card the phone answers first closes on the desktop too. Only for an answer
+that won (not `already_answered`, not a refusal), the backend puts
+`{type: "card_closed", card_id, conversation_id, by: "phone:<device name>",
+decision, outcome, at}` on the same channel (`/wake-stream-all`), so the
+desktop copy does not wait for a click that could only get `already_answered`.
+
 ## Web push
 
 - The PC owns a VAPID key pair (generated when remote control is first turned
@@ -320,3 +326,9 @@ Facts about the Electron and renderer side; plain look, visual design later.
 - A desktop answer that gets `already_answered {by, at, decision}` closes the
   card with a note ("Telefondan (<name>) onaylandi / reddedildi"), not the
   "outcome unknown" warning.
+- A `card_closed` frame closes the card without a click: a turn's command or
+  question card (the next queued card of that chat takes its place), the
+  Unity bridge / note card on screen, or a tray entry, with the same note as
+  above. Every window that holds the card closes it; an unknown card id or a
+  malformed frame is ignored. A click already in flight for that card when it
+  closes leaves the card that replaced it alone.

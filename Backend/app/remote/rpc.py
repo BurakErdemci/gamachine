@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from agentic import cards, turn_events
 from remote import chats, webpush
-from remote.desktop_channel import CHANNEL, FRAME_TYPE
+from remote.desktop_channel import CARD_CLOSED_TYPE, CHANNEL, FRAME_TYPE
 from remote.session import PhoneSession
 
 if TYPE_CHECKING:
@@ -225,6 +225,11 @@ class Dispatcher:
         res = cards.answer_card(card_id, target, choice, device=session.device_label)
         status = res.get("status")
         if status == "ok":
+            # Only the winning answer closes the desktop's copy of the card.
+            CHANNEL.publish({"type": CARD_CLOSED_TYPE, "card_id": card_id,
+                             "conversation_id": card.conversation_id, "by": res.get("by"),
+                             "decision": target, "outcome": res.get("outcome"),
+                             "at": int(time.time() * 1000)})
             return {"outcome": res.get("outcome"), "by": res.get("by"), "at": res.get("at")}
         if status == "already_answered":
             raise RpcError("already_answered", by=res.get("by"), at=res.get("at"))

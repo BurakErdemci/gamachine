@@ -9,6 +9,13 @@ for every chat. Frame shape (step 4 acts on it):
     {"type": "remote_message", "request_id": str, "conversation_id": int,
      "text": str, "source": "phone", "device_id": str, "device_name": str,
      "at": <ms>}
+
+A card a phone answered first is closed on the desktop too, so the card
+left open there does not wait for a click that can only get
+`already_answered`:
+
+    {"type": "card_closed", "card_id": str, "conversation_id": int | None,
+     "by": "phone:<device name>", "decision": str, "outcome": str, "at": <ms>}
 """
 from __future__ import annotations
 
@@ -19,6 +26,7 @@ from typing import Optional, Set
 logger = logging.getLogger(__name__)
 
 FRAME_TYPE = "remote_message"
+CARD_CLOSED_TYPE = "card_closed"
 QUEUE_SIZE = 100
 
 

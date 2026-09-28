@@ -4,13 +4,13 @@ import axios from 'axios';
 import { Message, Conversation, UserData, AIConfig, GenerationMode, toGenerationMode, ChatActivity, ContextUsage } from '../../components/home/types';
 import { PendingFile } from '../../components/home/FileCreationApproval';
 import { confirmDialog } from '../../components/ui/ConfirmDialog';
-import { deliveryFromFetch, gateFailure } from './gateResponse';
+import { applyCardClosed, deliveryFromFetch, gateFailure } from './gateResponse';
 import { cevir, type TKey } from '../../lib/i18n';
 import { parseContextReport } from '../../lib/contextReport';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { apiHataMesaji } from '../../lib/apiError';
 import { isBranchIn, leftTabOf } from '../../lib/convFamily';
-import { claimRemoteMessage, parseRemoteMessage, type RemoteMessage } from '../../lib/remoteControl';
+import { claimRemoteMessage, onCardClosed, parseRemoteMessage, type RemoteMessage } from '../../lib/remoteControl';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -1297,6 +1297,30 @@ export const useChat = (
   };
   const deliverRemoteRef = useRef(deliverRemote);
   deliverRemoteRef.current = deliverRemote;
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+
+  // A card a phone answered first (`card_closed`): the next queued card of
+  // that chat takes its place, as after a click. Bridge cards (the global
+  // command slot) belong to useMCPApproval, which closes them itself.
+  useEffect(() => onCardClosed(gateId => {
+    const has = (c: { gateId: string } | null) => c?.gateId === gateId;
+    let held = false;
+    for (const [key, r] of Object.entries(runtimesRef.current)) {
+      if (!has(r.pendingCommand) && !r.commandQueue.some(has)
+        && !has(r.pendingQuestion) && !r.questionQueue.some(has)) continue;
+      held = true;
+      patchConv(Number(key), cur => ({
+        ...(has(cur.pendingCommand)
+          ? { pendingCommand: cur.commandQueue[0] ?? null, commandQueue: cur.commandQueue.slice(1) }
+          : { commandQueue: cur.commandQueue.filter(c => !has(c)) }),
+        ...(has(cur.pendingQuestion)
+          ? { pendingQuestion: cur.questionQueue[0] ?? null, questionQueue: cur.questionQueue.slice(1) }
+          : { questionQueue: cur.questionQueue.filter(q => !has(q)) }),
+      }));
+    }
+    return held;
+  }), [patchConv]);
   const userId = user?.id;
   const sessionToken = user?.sessionToken;
   useEffect(() => {
@@ -1362,6 +1386,10 @@ export const useChat = (
                 if (data?.type === 'remote_message') {
                   const remoteMsg = parseRemoteMessage(data);
                   if (remoteMsg && !iptal) void deliverRemoteRef.current(remoteMsg);
+                  continue;
+                }
+                if (data?.type === 'card_closed') {
+                  if (!iptal) applyCardClosed(data, showToastRef.current);
                   continue;
                 }
                 if (data?.type !== 'wake' || iptal) continue;
@@ -1632,12 +1660,15 @@ export const useChat = (
       }
       if (failure) showToast(failure.message, failure.type);
       // Çözüldü → kuyrukta sıradaki onayı göster (yoksa kapat)
+      // Only while the card is still the one shown: a phone may have closed
+      // it during the request (`card_closed`), and promoting then would drop
+      // the card that replaced it.
       if (globalCommandRef.current?.gateId === gateId) {
         setPendingCommand(null);
       } else {
-        patchConv(ownerOf(r => r.pendingCommand?.gateId === gateId), r => ({
+        patchConv(ownerOf(r => r.pendingCommand?.gateId === gateId), r => r.pendingCommand?.gateId === gateId ? {
           pendingCommand: r.commandQueue[0] ?? null, commandQueue: r.commandQueue.slice(1),
-        }));
+        } : {});
       }
       // Sonucu ÇAĞIRANA da ver: kart, "Komut onaylandı — çalışıyor..." yeşil
       // toast'ını koşulsuz basıyordu; kullanıcı sarı "iletilemedi" ile yeşili
@@ -1662,9 +1693,10 @@ export const useChat = (
       }
       if (failure) showToast(failure.message, failure.type);
       // Çözüldü → kuyrukta sıradaki soruyu göster (yoksa kapat)
-      patchConv(ownerOf(r => r.pendingQuestion?.gateId === gateId), r => ({
+      // Same guard as approveCommand: the card may already be gone.
+      patchConv(ownerOf(r => r.pendingQuestion?.gateId === gateId), r => r.pendingQuestion?.gateId === gateId ? {
         pendingQuestion: r.questionQueue[0] ?? null, questionQueue: r.questionQueue.slice(1),
-      }));
+      } : {});
     },
   };
 };

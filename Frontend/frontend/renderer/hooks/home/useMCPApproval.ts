@@ -29,6 +29,7 @@ import axios from 'axios';
 import { PendingFile } from '../../components/home/FileCreationApproval';
 import { cevir } from '../../lib/i18n';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
+import { onCardClosed } from '../../lib/remoteControl';
 
 /**
  * Ekranda karar bekleyen MCP isteği. Kartı çizen taraf gate kimliğini ve
@@ -326,6 +327,8 @@ export const useMCPApproval = ({
   // Unknown-owner requests are not queued behind the single card slot: each
   // one is drawn in the tray with its own buttons, so several can wait at once.
   const [unknownGates, setUnknownGates] = useState<McpTrayGate[]>([]);
+  const unknownGatesRef = useRef(unknownGates);
+  unknownGatesRef.current = unknownGates;
   // At least one poll has been answered. Requests in that first answer were
   // already waiting before this renderer existed (a reload, a restart), so the
   // desktop notifications treat them as known rather than as new.
@@ -363,6 +366,22 @@ export const useMCPApproval = ({
     activeGateRef.current = null;
     setActiveGate(null);
   }, []);
+
+  // A card a phone answered first (`card_closed`). The poll would drop it
+  // within a second too (the answer takes it out of `/mcp-pending`), but
+  // silently; this closes it at once and lets the caller say who answered.
+  useEffect(() => onCardClosed(gateId => {
+    let held = false;
+    if (activeGateRef.current?.gateId === gateId) {
+      dismissActive();
+      held = true;
+    }
+    if (unknownGatesRef.current.some(g => g.gateId === gateId)) {
+      setUnknownGates(prev => prev.filter(g => g.gateId !== gateId));
+      held = true;
+    }
+    return held;
+  }), [dismissActive]);
 
   const poll = useCallback(async () => {
     if (!API) return;

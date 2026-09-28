@@ -265,3 +265,49 @@ export function resetRemoteClaimsForTests(closeAll = false): void {
 export function phoneDeviceName(by: unknown): string | null {
   return typeof by === 'string' && by.startsWith('phone:') ? by.slice('phone:'.length) : null;
 }
+
+// ── cards a phone answered first (`card_closed` frames on /wake-stream-all) ──
+
+export interface CardClosed {
+  cardId: string;
+  /** `phone:<name>`, the same label `already_answered.by` carries. */
+  by: string;
+  decision?: string;
+}
+
+/** Same bound as CARD_ID_MAX in Backend/app/agentic/cards.py. */
+const CARD_ID_MAX = 1024;
+
+export function parseCardClosed(data: unknown): CardClosed | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.type !== 'card_closed') return null;
+  if (typeof d.card_id !== 'string' || !d.card_id || d.card_id.length > CARD_ID_MAX) return null;
+  if (typeof d.by !== 'string') return null;
+  return { cardId: d.card_id, by: d.by, decision: typeof d.decision === 'string' ? d.decision : undefined };
+}
+
+// Open cards live in two hooks (useChat: a turn's command and question cards;
+// useMCPApproval: bridge, note and tray cards) but only useChat reads the
+// stream, so each store registers a closer here. A closer drops the card if it
+// holds it and says whether it did.
+type CardCloser = (cardId: string) => boolean;
+const cardClosers = new Set<CardCloser>();
+
+export function onCardClosed(closer: CardCloser): () => void {
+  cardClosers.add(closer);
+  return () => { cardClosers.delete(closer); };
+}
+
+/** True when some store held the card. One failing store does not stop the others. */
+export function closeAnsweredCard(cardId: string): boolean {
+  let held = false;
+  for (const closer of [...cardClosers]) {
+    try {
+      if (closer(cardId)) held = true;
+    } catch (err) {
+      console.warn('[remote] closing an answered card failed', err);
+    }
+  }
+  return held;
+}

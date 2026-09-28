@@ -22,7 +22,7 @@
  */
 
 import { cevir, type TKey } from '../../lib/i18n';
-import { phoneDeviceName } from '../../lib/remoteControl';
+import { closeAnsweredCard, parseCardClosed, phoneDeviceName } from '../../lib/remoteControl';
 
 export type GateAction = 'command' | 'question' | 'mcp';
 
@@ -70,12 +70,10 @@ export interface GateFailure {
   answeredElsewhere?: { by: string; at?: string; decision?: string };
 }
 
-/** The note for a card someone else closed first: a known outcome, not a
- *  delivery problem, so the card closes with this instead of a warning. */
-function answeredElsewhere(body: Record<string, unknown>): GateFailure {
-  const by = typeof body.by === 'string' ? body.by : '';
-  const decision = typeof body.decision === 'string' ? body.decision : undefined;
-  const at = typeof body.at === 'string' ? body.at : undefined;
+/** Who closed a card first, as a note: a known outcome, not a delivery
+ *  problem. One text for both routes that learn it (a late click's
+ *  `already_answered` and the `card_closed` frame). */
+function answeredNote(by: string, decision: string | undefined): { message: string; type: 'info' | 'warning' } {
   const phone = phoneDeviceName(by);
   let key: TKey;
   if (phone !== null) {
@@ -89,8 +87,38 @@ function answeredElsewhere(body: Record<string, unknown>): GateFailure {
   return {
     message: cevir(key, { cihaz: phone || cevir('chat.phoneUnnamed') }),
     type: phone !== null || by === 'desktop' ? 'info' : 'warning',
-    answeredElsewhere: { by, at, decision },
   };
+}
+
+/** The note for a card someone else closed first, so the card closes with
+ *  this instead of a warning. */
+function answeredElsewhere(body: Record<string, unknown>): GateFailure {
+  const by = typeof body.by === 'string' ? body.by : '';
+  const decision = typeof body.decision === 'string' ? body.decision : undefined;
+  const at = typeof body.at === 'string' ? body.at : undefined;
+  return { ...answeredNote(by, decision), answeredElsewhere: { by, at, decision } };
+}
+
+/**
+ * A `card_closed` frame: a phone answered this card first. Every store that
+ * holds it drops it, and the note shows only when this window had the card
+ * (an unknown id is someone else's card, or one already gone). Returns
+ * whether a card here was closed. Never throws: it runs inside the stream loop.
+ */
+export function applyCardClosed(
+  data: unknown,
+  showToast?: (message: string, type: 'info' | 'warning' | 'error') => void,
+): boolean {
+  try {
+    const closed = parseCardClosed(data);
+    if (!closed || !closeAnsweredCard(closed.cardId)) return false;
+    const note = answeredNote(closed.by, closed.decision);
+    showToast?.(note.message, note.type);
+    return true;
+  } catch (err) {
+    console.warn('[remote] card_closed frame ignored', err);
+    return false;
+  }
 }
 
 const readStatus = (body: unknown): string | null => {

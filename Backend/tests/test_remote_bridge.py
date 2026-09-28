@@ -419,6 +419,30 @@ async def test_first_answer_wins_against_the_desktop(env):
     assert late["status"] == "already_answered" and late["by"] == "phone:iPhone"
 
 
+async def test_phone_answer_closes_the_desktop_card(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db)
+    q = CHANNEL.listen()
+    try:
+        register_gate("gate-c", conv, tool="git")
+        r = await phone.request("answer_card", card_id="gate-c", decision="reject")
+        assert r["ok"] is True
+        frame = q.get_nowait()
+        assert frame["type"] == "card_closed" and frame["card_id"] == "gate-c"
+        assert frame["conversation_id"] == conv and frame["by"] == "phone:iPhone"
+        assert frame["decision"] == "reject" and frame["outcome"] == "rejected"
+        assert q.empty()
+        # A refused or late answer closed nothing, so it says nothing.
+        assert (await phone.request("answer_card", card_id="gate-c", decision="approve"))["error"] == "already_answered"
+        register_gate("gate-d", conv, tool="git")
+        assert cards.answer_card("gate-d", "approve", device="desktop")["status"] == "ok"
+        assert (await phone.request("answer_card", card_id="gate-d", decision="reject"))["error"] == "already_answered"
+        assert (await phone.request("answer_card", card_id="nope", decision="approve"))["error"] == "not_found"
+        assert q.empty()
+    finally:
+        CHANNEL.unlisten(q)
+
+
 async def test_question_card_choice(env):
     phone = await pair_phone(env)
     conv = make_chat(env.db)
