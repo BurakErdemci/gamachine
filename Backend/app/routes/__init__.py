@@ -6,6 +6,7 @@ from .workspace_routes import create_workspace_router
 from .lsp_routes import create_lsp_router
 from .mcp_routes import create_mcp_router
 from .transcribe_routes import create_transcribe_router
+from .remote_routes import create_remote_router
 
 __all__ = [
     "create_analysis_router",
@@ -16,4 +17,5 @@ __all__ = [
     "create_lsp_router",
     "create_mcp_router",
     "create_transcribe_router",
+    "create_remote_router",
 ]

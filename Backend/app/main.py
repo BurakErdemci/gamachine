@@ -134,6 +134,7 @@ from routes import (
     create_lsp_router,
     create_mcp_router,
     create_transcribe_router,
+    create_remote_router,
 )
 
 
@@ -218,7 +219,18 @@ async def lifespan(app: FastAPI):
         logger.warning(f"[Startup] Yan sohbet temizliği atlandı: {e}")
     side_sweeper = asyncio.create_task(_side_sweep_loop())
 
+    # Remote control reconnects on its own if it was on; off means no traffic.
+    try:
+        await remote_bridge.startup()
+    except Exception as e:
+        logger.warning(f"[Startup] remote control not started: {e}")
+
     yield
+
+    try:
+        await remote_bridge.shutdown()
+    except Exception as e:
+        logger.warning(f"[Shutdown] remote control not stopped: {e}")
 
     side_sweeper.cancel()
     try:
@@ -331,6 +343,11 @@ _conversation_router = create_conversation_router(db, PROGRESS_STORE)
 app.include_router(_conversation_router)
 app.include_router(create_mcp_router())
 app.include_router(create_transcribe_router(db))
+
+from remote.bridge import RemoteBridge  # noqa: E402
+
+remote_bridge = RemoteBridge(db, stop_chat=_conversation_router.stop_chat)
+app.include_router(create_remote_router(remote_bridge))
 
 
 @app.get("/health")
