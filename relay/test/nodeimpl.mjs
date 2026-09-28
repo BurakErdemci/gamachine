@@ -12,8 +12,13 @@ const utf8 = (s) => Buffer.from(s, 'utf8');
 export const INFO_SAS = 'gamachine-remote-v1 sas';
 export const INFO_SESSION = 'gamachine-remote-v1 session';
 export const INFO_PAIR = 'gamachine-remote-v1 pair';
+export const ROOM_LABEL = 'gamachine-remote-v1 room';
 export const PHONE_TO_PC = 1;
 export const PC_TO_PHONE = 2;
+
+// pair_id = first 16 bytes of SHA-256(label || room_key), room_key as its ASCII text.
+export const pairIdInput = (roomKey) => Buffer.concat([utf8(ROOM_LABEL), utf8(roomKey)]);
+export const pairIdFor = (roomKey) => enc(sha256(pairIdInput(roomKey)).subarray(0, 16));
 
 export function keyPair(dBuf) {
   const e = createECDH('prime256v1');

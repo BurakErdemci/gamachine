@@ -2,14 +2,16 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { installRuntimeGlobals, FakeNamespace } from './fake-do.mjs';
+import { pairIdFor } from './nodeimpl.mjs';
 
 installRuntimeGlobals();
 const { default: worker, Room, IpLimiter } = await import('../worker/index.js');
 const { CLOSE, LIMITS } = await import('../worker/room.js');
 
-const PAIR = 'AAAAAAAAAAAAAAAAAAAAAA';
-const PAIR2 = 'BBBBBBBBBBBBBBBBBBBBBB';
 const KEY = 'K'.repeat(43);
+const PAIR = pairIdFor(KEY);
+const PAIR2 = pairIdFor('L'.repeat(43));
+const PAGE = 'https://relay.test';
 const TOKEN = 'T'.repeat(43);
 const TOKEN2 = 'U'.repeat(43);
 const hash = (s) => createHash('sha256').update(s).digest('base64url');
@@ -44,9 +46,11 @@ function makeEnv() {
   return env;
 }
 
-async function open(env, role, protocols, { pairId = PAIR, ip = '198.51.100.7', upgrade = true } = {}) {
+// Phone sockets come from the relay's own page; the PC sends no Origin.
+async function open(env, role, protocols, { pairId = PAIR, ip = '198.51.100.7', upgrade = true, origin = role === 'pc' ? null : PAGE } = {}) {
   const headers = { 'CF-Connecting-IP': ip, 'Sec-WebSocket-Protocol': protocols.join(', ') };
   if (upgrade) headers.Upgrade = 'websocket';
+  if (origin !== null) headers.Origin = origin;
   const res = await worker.fetch(new Request(`https://relay.test/ws/${role}/${pairId}`, { headers }), env);
   return { status: res.status, sock: res.status === 101 ? res.webSocket.peer : null, res };
 }
@@ -67,13 +71,13 @@ async function pcWithToken(env, tokens = [TOKEN]) {
   return pc.sock;
 }
 
-test('PC room key is trusted on first use and enforced afterwards', async () => {
+test('PC room key must be the one the pairing id is derived from', async () => {
   const env = makeEnv();
   const first = await pcOpen(env);
   assert.equal(first.status, 101);
   assert.equal(first.res.headers.get('Sec-WebSocket-Protocol'), 'gamachine.v1');
   assert.deepEqual(first.sock.json()[0], { type: 'welcome', phones: [], pairs: [], tokens: 0 });
-  assert.equal(await room(env).ctx.storage.get('room_hash'), hash(KEY));
+  assert.equal(await room(env).ctx.storage.get('last_pc'), now);
 
   assert.equal((await pcOpen(env, 'Z'.repeat(43))).status, 403);
   assert.equal((await open(env, 'pc', ['gamachine.v1'])).status, 401);
@@ -217,7 +221,6 @@ test('pairing without the PC online answers pc_offline and closes', async () => 
   const pair = (await pairOpen(env)).sock;
   assert.deepEqual(pair.last(), { type: 'pc_offline', last_seen: now });
   assert.equal(pair.closed.code, CLOSE.pcOffline);
-  assert.equal((await pairOpen(env, { pairId: PAIR2 })).status, 404, 'unknown room');
 });
 
 test('rate limit: 5 pairing attempts per minute per pairing id', async () => {
@@ -233,8 +236,9 @@ test('rate limit: 5 pairing attempts per minute per pairing id', async () => {
 
 test('rate limit: 20 pairing attempts per hour per IP, across pairing ids', async () => {
   const env = makeEnv();
-  const ids = Array.from({ length: 5 }, (_, i) => String.fromCharCode(65 + i).repeat(22));
-  for (const id of ids) await pcOpen(env, KEY, { pairId: id });
+  const keys = Array.from({ length: 5 }, (_, i) => String.fromCharCode(65 + i).repeat(43));
+  const ids = keys.map(pairIdFor);
+  for (let i = 0; i < 5; i++) assert.equal((await pcOpen(env, keys[i], { pairId: ids[i] })).status, 101);
   let ok = 0;
   for (let i = 0; i < 20; i++) {
     const r = await pairOpen(env, { pairId: ids[i % 5], ip: '192.0.2.1' });
@@ -290,7 +294,7 @@ test('storage never holds frame content', async () => {
   await msg(env, pair, secretish);
   await hangup(env, pc);
   const map = room(env).ctx.storage.map;
-  assert.deepEqual([...map.keys()].sort(), ['last_seen', 'pair_hits', 'room_hash', 'tokens']);
+  assert.deepEqual([...map.keys()].sort(), ['last_pc', 'last_seen', 'pair_hits', 'tokens']);
   assert.ok(!JSON.stringify([...map.values()]).includes('CONTENT-MARKER'));
 });
 

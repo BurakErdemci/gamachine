@@ -65,14 +65,19 @@ async function serveStatic(request, env, url) {
   return new Response(request.method === 'HEAD' ? null : upstream.body, { status: 200, headers });
 }
 
-async function routeSocket(request, env, role, pairId) {
+// Browsers always send Origin on a WebSocket upgrade and a page cannot change it.
+// Phone routes accept only the relay's own page; the PC route accepts no
+// browser at all (the bridge sends no Origin). Checked before any quota is
+// touched, so another site cannot spend a visitor's pairing budget
+// (Codex relayaudit, 28 Sep 2026).
+function originAllowed(request, url, role) {
+  const origin = request.headers.get('Origin');
+  return role === 'pc' ? origin === null : origin === url.origin;
+}
+
+async function routeSocket(request, env, url, role, pairId) {
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return plain(426, 'websocket required');
-  if (role === 'pair') {
-    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-    const limiter = env.IP_LIMITER.get(env.IP_LIMITER.idFromName(ip));
-    const verdict = await limiter.fetch('https://limiter/hit', { method: 'POST' });
-    if (verdict.status === 429) return plain(429, 'too many pairing attempts', { 'Retry-After': '3600' });
-  }
+  if (!originAllowed(request, url, role)) return plain(403, 'origin not allowed');
   const room = env.ROOM.get(env.ROOM.idFromName(pairId));
   return room.fetch(request);
 }
@@ -83,7 +88,7 @@ export default {
     const ws = url.pathname.match(/^\/ws\/(pc|phone|pair)\/([^/]+)$/);
     if (ws) {
       if (!PAIR_ID_RE.test(ws[2])) return plain(404, 'not found');
-      return routeSocket(request, env, ws[1], ws[2]);
+      return routeSocket(request, env, url, ws[1], ws[2]);
     }
     if (request.method !== 'GET' && request.method !== 'HEAD') return plain(405, 'method not allowed');
     if (url.pathname === '/') return Response.redirect(url.origin + '/p', 302);

@@ -23,6 +23,15 @@ test('vectors.json is exactly what the node:crypto builder produces', () => {
   assert.deepEqual(V, JSON.parse(JSON.stringify(buildVectors())));
 });
 
+test('pair_id is derived from the room key (relay WebCrypto, node:crypto and the vector agree)', async () => {
+  const { pairIdFor, ROOM_LABEL } = await import('../worker/util.js');
+  assert.equal(P.b64u(new TextEncoder().encode(ROOM_LABEL + V.relay.room_key)), V.relay.pair_id_input);
+  assert.equal(await pairIdFor(V.relay.room_key), V.relay.pair_id);
+  assert.equal(N.pairIdFor(V.relay.room_key), V.relay.pair_id);
+  assert.equal(V.pairing.pair_id, V.relay.pair_id, 'the QR carries the derived id');
+  assert.match(V.relay.pair_id, /^[A-Za-z0-9_-]{22}$/);
+});
+
 test('QR fragment parses; malformed fragments are refused', () => {
   const p = P.parsePairFragment('#' + V.pairing.qr_fragment);
   assert.equal(p.pairId, V.pairing.pair_id);

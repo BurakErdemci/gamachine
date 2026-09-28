@@ -1,12 +1,12 @@
 // One Durable Object per pairing id. Forwards opaque text frames between the
-// single PC socket and the phone sockets. Durable storage holds only the room
-// key hash, the phone token hashes, the PC's last-seen time and the pairing
-// attempt timestamps - never frame content (docs/remote-control.md, "Parts").
+// single PC socket and the phone sockets. Durable storage holds only the time
+// of the last PC connect, the phone token hashes, the PC's last-seen time and
+// the pairing attempt timestamps - never frame content (docs/remote-control.md, "Parts").
 //
 // Uses the WebSocket Hibernation API: in-memory fields are lost whenever the
 // object sleeps, so every per-socket fact lives in the socket attachment.
 
-import { PROTOCOL, HASH_RE, SECRET_RE, sha256b64u, randomId, equalStrings, parseProtocols, plain } from './util.js';
+import { PROTOCOL, HASH_RE, SECRET_RE, sha256b64u, pairIdFor, frameBytes, randomId, equalStrings, parseProtocols, plain } from './util.js';
 
 export const LIMITS = {
   pairPerMinute: 5,
@@ -14,7 +14,12 @@ export const LIMITS = {
   // Doc: pair_secret lives 5 minutes; one extra minute covers clock skew.
   pairSocketTtlMs: 6 * 60_000,
   phoneFrameMax: 64 * 1024,
+  // docs/remote-control.md "Relay limits": the bridge chunks anything larger.
+  pcFrameMax: 1024 * 1024,
   maxTokens: 50,
+  // Rooms are persistent; one whose PC stays away this long is deleted
+  // (Codex relayaudit, 28 Sep 2026: rooms were unbounded).
+  roomIdleMs: 30 * 24 * 3_600_000,
 };
 
 export const CLOSE = {
@@ -25,6 +30,8 @@ export const CLOSE = {
   badFrame: 4004,
   pcOffline: 4005,
   roomReset: 4006,
+  roomExpired: 4007,
+  noRoom: 4008,
 };
 
 const PING = '{"type":"ping"}';
@@ -44,9 +51,10 @@ export class Room {
 
   async load() {
     if (!this.meta) {
-      const m = await this.ctx.storage.get(['room_hash', 'tokens', 'last_seen', 'pair_hits']);
+      const m = await this.ctx.storage.get(['last_pc', 'tokens', 'last_seen', 'pair_hits']);
       this.meta = {
-        roomHash: m.get('room_hash') ?? null,
+        // Also the "room exists" marker: set by every PC connect, gone after reset or expiry.
+        lastPc: m.get('last_pc') ?? null,
         tokens: m.get('tokens') ?? [],
         lastSeen: m.get('last_seen') ?? null,
         pairHits: m.get('pair_hits') ?? [],
@@ -96,24 +104,30 @@ export class Room {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return plain(426, 'websocket required');
     const protocols = parseProtocols(request.headers.get('Sec-WebSocket-Protocol'));
     if (!protocols.includes(PROTOCOL)) return plain(400, 'missing subprotocol');
-    if (role === 'pc') return this.connectPc(request, protocols);
+    if (role === 'pc') return this.connectPc(request, protocols, parts[3]);
     if (role === 'phone') return this.connectPhone(request, protocols);
     if (role === 'pair') return this.connectPair(request);
     return plain(404, 'not found');
   }
 
-  async connectPc(request, protocols) {
+  async ipAllows(request, bucket) {
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const limiter = this.env.IP_LIMITER.get(this.env.IP_LIMITER.idFromName(ip));
+    const verdict = await limiter.fetch('https://limiter/' + bucket, { method: 'POST' });
+    return verdict.status !== 429;
+  }
+
+  async connectPc(request, protocols, pairId) {
     const key = protocols.find((p) => p.startsWith('key.'))?.slice(4);
     if (!key || !SECRET_RE.test(key)) return plain(401, 'unauthorized');
-    const hash = await sha256b64u(key);
+    if (!equalStrings(await pairIdFor(key), pairId)) return plain(403, 'forbidden');
     const meta = await this.load();
-    if (!meta.roomHash) {
-      // Trust on first use: the first PC to connect owns this pairing id.
-      meta.roomHash = hash;
-      await this.ctx.storage.put('room_hash', hash);
-    } else if (!equalStrings(meta.roomHash, hash)) {
-      return plain(403, 'forbidden');
+    const now = Date.now();
+    if (meta.lastPc === null && !(await this.ipAllows(request, 'room'))) {
+      return plain(429, 'too many new rooms', { 'Retry-After': '3600' });
     }
+    meta.lastPc = now;
+    await this.ctx.storage.put('last_pc', now);
     for (const old of this.sockets('pc')) {
       try { old.close(CLOSE.replaced, 'replaced'); } catch {}
     }
@@ -131,6 +145,7 @@ export class Room {
     for (const s of this.sockets('phone')) {
       try { s.send(online); } catch {}
     }
+    await this.schedule(now);
     return response;
   }
 
@@ -138,7 +153,7 @@ export class Room {
     const token = protocols.find((p) => p.startsWith('tok.'))?.slice(4);
     const hash = token && SECRET_RE.test(token) ? await sha256b64u(token) : null;
     const meta = await this.load();
-    if (!meta.roomHash) return plain(404, 'not found');
+    if (meta.lastPc === null) return plain(404, 'not found');
     if (!hash || !meta.tokens.some((t) => equalStrings(t, hash))) return plain(401, 'unauthorized');
     const conn = randomId();
     const { server, response } = this.accept(['phone', 'tok:' + hash], { role: 'phone', conn, tokenHash: hash }, request);
@@ -150,7 +165,9 @@ export class Room {
 
   async connectPair(request) {
     const meta = await this.load();
-    if (!meta.roomHash) return plain(404, 'not found');
+    if (meta.lastPc === null) return this.refuseNoRoom(request);
+    // After the existence check: a stale or mistyped code costs no quota.
+    if (!(await this.ipAllows(request, 'pair'))) return plain(429, 'too many pairing attempts', { 'Retry-After': '3600' });
     const now = Date.now();
     const hits = meta.pairHits.filter((t) => now - t < LIMITS.pairWindowMs);
     if (hits.length >= LIMITS.pairPerMinute) return plain(429, 'too many pairing attempts', { 'Retry-After': '60' });
@@ -164,11 +181,21 @@ export class Room {
     const pc = this.pcSocket();
     if (pc) {
       pc.send(JSON.stringify({ type: 'pair_open', conn, ip }));
-      if (!(await this.ctx.storage.getAlarm())) await this.ctx.storage.setAlarm(now + LIMITS.pairSocketTtlMs);
+      await this.schedule(now);
     } else {
       server.send(this.offlineFrame());
       server.close(CLOSE.pcOffline, 'pc_offline');
     }
+    return response;
+  }
+
+  // A browser cannot read the status of a refused upgrade, so the page could
+  // not tell "no such room" from "rate limited". This one is accepted, told,
+  // and closed; nothing is stored.
+  refuseNoRoom(request) {
+    const { server, response } = this.accept(['none'], { role: 'none' }, request);
+    server.send(JSON.stringify({ type: 'no_room' }));
+    server.close(CLOSE.noRoom, 'no_room');
     return response;
   }
 
@@ -184,8 +211,15 @@ export class Room {
       return;
     }
     await this.load();
-    if (a.role === 'pc') return this.onPcMessage(ws, message);
-    if (message.length > LIMITS.phoneFrameMax) {
+    if (a.role === 'pc') {
+      if (frameBytes(message) > LIMITS.pcFrameMax) {
+        ws.send(JSON.stringify({ type: 'error', error: 'too_large' }));
+        return;
+      }
+      return this.onPcMessage(ws, message);
+    }
+    if (a.role !== 'phone' && a.role !== 'pair') return;
+    if (frameBytes(message) > LIMITS.phoneFrameMax) {
       ws.close(CLOSE.badFrame, 'frame too large');
       return;
     }
@@ -262,11 +296,7 @@ export class Room {
       }
       case 'reset_room': {
         // Lets the PC erase everything the relay holds for this pairing id.
-        await this.ctx.storage.deleteAll();
-        this.meta = null;
-        for (const s of this.sockets()) {
-          try { s.close(CLOSE.roomReset, 'room_reset'); } catch {}
-        }
+        await this.wipe(CLOSE.roomReset, 'room_reset');
         return;
       }
       default:
@@ -285,13 +315,13 @@ export class Room {
 
   async onGone(ws) {
     const a = ws.deserializeAttachment();
-    if (!a) return;
+    if (!a || a.role === 'none') return;
     const meta = await this.load();
     if (a.role === 'pc') {
       // A replaced socket closing must not mark a live PC offline.
       const others = this.sockets('pc').filter((s) => s !== ws && s.deserializeAttachment()?.conn !== a.conn);
       if (others.length) return;
-      if (!meta.roomHash) return; // room was reset
+      if (meta.lastPc === null) return; // room was reset or expired
       meta.lastSeen = Date.now();
       await this.ctx.storage.put('last_seen', meta.lastSeen);
       const offline = this.offlineFrame();
@@ -307,18 +337,52 @@ export class Room {
     if (pc) pc.send(JSON.stringify({ type: a.role === 'pair' ? 'pair_close' : 'phone_close', conn: a.conn }));
   }
 
+  async wipe(code, reason) {
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.deleteAlarm();
+    this.meta = null;
+    for (const s of this.sockets()) {
+      try { s.close(code, reason); } catch {}
+    }
+  }
+
+  idleSince(meta) {
+    return Math.max(meta.lastPc, meta.lastSeen ?? 0);
+  }
+
+  // One alarm serves both jobs: closing stale pairing sockets and deleting a
+  // room whose PC has been away for LIMITS.roomIdleMs.
+  async schedule(now) {
+    const meta = await this.load();
+    let next = meta.lastPc === null ? null : this.idleSince(meta) + LIMITS.roomIdleMs;
+    for (const s of this.sockets('pair')) {
+      const due = s.deserializeAttachment().opened + LIMITS.pairSocketTtlMs;
+      if (due > now && (next === null || due < next)) next = due;
+    }
+    if (next === null) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(next);
+  }
+
   async alarm() {
     const now = Date.now();
-    let next = null;
-    for (const s of this.sockets('pair')) {
-      const a = s.deserializeAttachment();
-      const due = a.opened + LIMITS.pairSocketTtlMs;
-      if (due <= now) {
-        try { s.close(CLOSE.pairTimeout, 'pair_timeout'); } catch {}
-      } else if (next === null || due < next) {
-        next = due;
+    const meta = await this.load();
+    if (meta.lastPc !== null) {
+      if (this.pcSocket()) {
+        // A PC that stays connected keeps its room alive.
+        meta.lastPc = now;
+        await this.ctx.storage.put('last_pc', now);
+      } else if (this.idleSince(meta) + LIMITS.roomIdleMs <= now) {
+        // Phones get a non-final code: if the PC comes back and registers
+        // their tokens again, they reconnect on their own.
+        await this.wipe(CLOSE.roomExpired, 'room_expired');
+        return;
       }
     }
-    if (next !== null) await this.ctx.storage.setAlarm(next);
+    for (const s of this.sockets('pair')) {
+      if (s.deserializeAttachment().opened + LIMITS.pairSocketTtlMs <= now) {
+        try { s.close(CLOSE.pairTimeout, 'pair_timeout'); } catch {}
+      }
+    }
+    await this.schedule(now);
   }
 }

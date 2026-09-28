@@ -24,7 +24,8 @@ export function buildVectors() {
   const phoneEph = fixedKey('phone ephemeral');
   const pcEph = fixedKey('pc ephemeral');
 
-  const pairId = N.enc(fixed('pair id', 16));
+  const roomKey = N.enc(fixed('room key', 32));
+  const pairId = N.pairIdFor(roomKey);
   const pairSecret = fixed('pair secret', 16);
   const deviceName = 'iPhone (Burak)';
   const macInput = Buffer.concat([phone.pub, Buffer.from(deviceName, 'utf8')]);
@@ -37,7 +38,6 @@ export function buildVectors() {
   const sas = N.sas(kStatic, pairSecret);
   const kPair = N.pairKey(kStatic, pairSecret);
 
-  const roomKey = N.enc(fixed('room key', 32));
   const token = N.enc(fixed('phone token', 32));
   const deviceId = N.enc(fixed('device id', 16));
   const vapidPub = N.enc(fixedKey('vapid').pub);
@@ -77,7 +77,7 @@ export function buildVectors() {
 
   return {
     version: 1,
-    spec: 'docs/remote-control.md + relay/README.md (byte layouts)',
+    spec: 'docs/remote-control.md (Byte layouts)',
     encoding: 'byte strings are unpadded base64url; plaintexts are UTF-8 JSON exactly as written here',
     keys: {
       phone_static: { d: N.enc(phone.d), pub: N.enc(phone.pub) },
@@ -87,7 +87,8 @@ export function buildVectors() {
     },
     relay: {
       room_key: roomKey,
-      room_key_hash: N.enc(N.sha256(Buffer.from(roomKey, 'utf8'))),
+      pair_id_input: N.enc(N.pairIdInput(roomKey)),
+      pair_id: pairId,
       token,
       token_hash: N.enc(N.sha256(Buffer.from(token, 'utf8'))),
     },

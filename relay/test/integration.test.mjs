@@ -23,6 +23,13 @@ const REMOTE = process.env.RELAY_IT_URL || null;
 const HTTP = REMOTE || `http://127.0.0.1:${PORT}`;
 const WSO = HTTP.replace(/^http/, 'ws');
 const RELAY_DIR = fileURLToPath(new URL('..', import.meta.url));
+// The relay only accepts phone sockets from its own page, as a browser would
+// send them; Node's WebSocket sends no Origin unless told to.
+class PageWS extends WebSocket {
+  constructor(url, protocols) {
+    super(url, { protocols, headers: { Origin: HTTP } });
+  }
+}
 const enabled = !!REMOTE || (process.env.RELAY_IT !== '0' && spawnSync('wrangler --version', { shell: true }).status === 0);
 
 let proc = null;
@@ -70,17 +77,18 @@ after(async () => {
 });
 
 // Raw upgrade request so the refusal status is visible (a WebSocket client only sees "error").
-function upgradeStatus(path, protocols) {
+// Phone paths get the page's Origin unless `origin` says otherwise (null = none).
+function upgradeStatus(path, protocols, origin = path.startsWith('/ws/pc/') ? null : HTTP) {
   return new Promise((resolve, reject) => {
-    const req = (HTTP.startsWith('https') ? httpsRequest : httpRequest)(HTTP + path, {
-      headers: {
-        Connection: 'Upgrade',
-        Upgrade: 'websocket',
-        'Sec-WebSocket-Version': '13',
-        'Sec-WebSocket-Key': randomBytes(16).toString('base64'),
-        'Sec-WebSocket-Protocol': protocols.join(', '),
-      },
-    });
+    const headers = {
+      Connection: 'Upgrade',
+      Upgrade: 'websocket',
+      'Sec-WebSocket-Version': '13',
+      'Sec-WebSocket-Key': randomBytes(16).toString('base64'),
+      'Sec-WebSocket-Protocol': protocols.join(', '),
+    };
+    if (origin !== null) headers.Origin = origin;
+    const req = (HTTP.startsWith('https') ? httpsRequest : httpRequest)(HTTP + path, { headers });
     req.on('upgrade', (res, socket) => {
       socket.destroy();
       resolve(res.statusCode);
@@ -134,7 +142,10 @@ function waitFor(pred, ms = 10_000) {
   });
 }
 
-const newPairId = () => N.enc(randomBytes(16));
+function newRoom() {
+  const roomKey = N.enc(randomBytes(32));
+  return { roomKey, pairId: N.pairIdFor(roomKey) };
+}
 
 // Leaves nothing stored for the test's pairing id; the relay closes the socket itself.
 async function resetRoom(pc) {
@@ -156,23 +167,27 @@ test('static routes on the real runtime', { skip: !enabled }, async () => {
 });
 
 test('socket refusals happen before the upgrade', { skip: !enabled }, async () => {
-  const pairId = newPairId();
-  const roomKey = N.enc(randomBytes(32));
+  const { pairId, roomKey } = newRoom();
   assert.equal(await upgradeStatus(`/ws/phone/${pairId}`, ['gamachine.v1', 'tok.' + N.enc(randomBytes(32))]), 404);
   const pc = await connectPc(pairId, roomKey);
   await pc.next((m) => m.type === 'welcome');
   assert.equal(await upgradeStatus(`/ws/phone/${pairId}`, ['gamachine.v1', 'tok.' + N.enc(randomBytes(32))]), 401);
   assert.equal(await upgradeStatus(`/ws/phone/${pairId}`, ['gamachine.v1']), 401);
-  assert.equal(await upgradeStatus(`/ws/pc/${pairId}`, ['gamachine.v1', 'key.' + N.enc(randomBytes(32))]), 403);
+  assert.equal(await upgradeStatus(`/ws/pc/${pairId}`, ['gamachine.v1', 'key.' + N.enc(randomBytes(32))]), 403, 'key does not derive this id');
+  assert.equal(await upgradeStatus(`/ws/pc/${pairId}`, ['gamachine.v1', 'key.' + roomKey], HTTP), 403, 'browser origin on the PC route');
   assert.equal(await upgradeStatus(`/ws/pc/${pairId}`, ['key.' + roomKey]), 400);
+  assert.equal(await upgradeStatus(`/ws/pair/${pairId}`, ['gamachine.v1'], 'https://evil.example'), 403, 'other site');
+  assert.equal(await upgradeStatus(`/ws/pair/${pairId}`, ['gamachine.v1'], null), 403, 'no origin');
+  assert.equal(await upgradeStatus(`/ws/pair/${newRoom().pairId}`, ['gamachine.v1']), 101, 'no room: accepted, told, closed');
+  const ghost = C.parsePairFragment(`#${newRoom().pairId}.${N.enc(N.keyPair().pub)}.${N.enc(randomBytes(16))}`);
+  await assert.rejects(pair({ origin: WSO, parsed: ghost, deviceName: 'iPhone', onSas: () => {}, WS: PageWS }), { message: 'no_room' });
   for (let i = 0; i < 5; i++) assert.equal(await upgradeStatus(`/ws/pair/${pairId}`, ['gamachine.v1']), 101);
   assert.equal(await upgradeStatus(`/ws/pair/${pairId}`, ['gamachine.v1']), 429);
   await resetRoom(pc);
 });
 
 test('pairing, handshake, encrypted RPC and token drop through the real relay', { skip: !enabled }, async () => {
-  const pairId = newPairId();
-  const roomKey = N.enc(randomBytes(32));
+  const { pairId, roomKey } = newRoom();
   const pcStatic = N.keyPair();
   const pairSecret = randomBytes(16);
   const pc = await connectPc(pairId, roomKey);
@@ -181,7 +196,7 @@ test('pairing, handshake, encrypted RPC and token drop through the real relay', 
   // Phone: exactly what the page does after scanning the QR.
   const parsed = C.parsePairFragment(`#${pairId}.${N.enc(pcStatic.pub)}.${N.enc(pairSecret)}`);
   let phoneSas = null;
-  const pairing = pair({ origin: WSO, parsed, deviceName: 'iPhone', onSas: (s) => (phoneSas = s) });
+  const pairing = pair({ origin: WSO, parsed, deviceName: 'iPhone', onSas: (s) => (phoneSas = s), WS: PageWS });
 
   // PC: verify the request, compare the code, register the token, answer.
   const opened = await pc.next((m) => m.type === 'pair_open');
@@ -206,6 +221,7 @@ test('pairing, handshake, encrypted RPC and token drop through the real relay', 
     device: { pairId, pcPub: parsed.pcPub, deviceId, token, privateKey: paired.privateKey },
     onStatus: (s, info) => statuses.push([s, info]),
     onPush: (m) => pushes.push(m),
+    WS: PageWS,
   });
   await link.start();
   const phoneOpen = await pc.next((m) => m.type === 'phone_open');
@@ -243,8 +259,7 @@ test('pairing, handshake, encrypted RPC and token drop through the real relay', 
 });
 
 test('phone sees pc_offline with last_seen, then re-handshakes when the PC returns', { skip: !enabled }, async () => {
-  const pairId = newPairId();
-  const roomKey = N.enc(randomBytes(32));
+  const { pairId, roomKey } = newRoom();
   const pcStatic = N.keyPair();
   const phone = await C.generateKeyPair();
   const kStatic = await C.staticSecret(phone.privateKey, pcStatic.pub);
@@ -263,6 +278,7 @@ test('phone sees pc_offline with last_seen, then re-handshakes when the PC retur
     device: { pairId, pcPub: pcStatic.pub, deviceId, token, privateKey: phone.privateKey },
     onStatus: (s, info) => statuses.push([s, info]),
     onPush: () => {},
+    WS: PageWS,
   });
   await link.start();
   const offline = await waitFor(() => statuses.find(([s]) => s === 'pc_offline'));

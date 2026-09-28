@@ -7,6 +7,14 @@ export const HASH_RE = /^[A-Za-z0-9_-]{43}$/;
 // Room keys and phone tokens: at least 256 bits of base64url.
 export const SECRET_RE = /^[A-Za-z0-9_-]{43,128}$/;
 
+// pair_id = base64url(SHA-256(ROOM_LABEL || room_key)[0..16]), room_key as the
+// ASCII text sent in the subprotocol. A self-certifying id replaced trust on
+// first use, which let a stranger who learned the id lock the owner out
+// (Codex relayaudit, 28 Sep 2026).
+export const ROOM_LABEL = 'gamachine-remote-v1 room';
+
+const te = new TextEncoder();
+
 export function b64u(bytes) {
   let s = '';
   for (const b of bytes) s += String.fromCharCode(b);
@@ -14,8 +22,19 @@ export function b64u(bytes) {
 }
 
 export async function sha256b64u(text) {
-  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  const d = await crypto.subtle.digest('SHA-256', te.encode(text));
   return b64u(new Uint8Array(d));
+}
+
+export async function pairIdFor(roomKey) {
+  const d = await crypto.subtle.digest('SHA-256', te.encode(ROOM_LABEL + roomKey));
+  return b64u(new Uint8Array(d).subarray(0, 16));
+}
+
+// Caps are in bytes: string length counts UTF-16 units, so non-ASCII text got
+// through at up to three times the cap (Codex relayaudit, 28 Sep 2026).
+export function frameBytes(message) {
+  return typeof message === 'string' ? te.encode(message).byteLength : message.byteLength;
 }
 
 export function randomId(bytes = 8) {

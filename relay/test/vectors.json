@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "spec": "docs/remote-control.md + relay/README.md (byte layouts)",
+  "spec": "docs/remote-control.md (Byte layouts)",
   "encoding": "byte strings are unpadded base64url; plaintexts are UTF-8 JSON exactly as written here",
   "keys": {
     "phone_static": {
@@ -22,14 +22,15 @@
   },
   "relay": {
     "room_key": "YClfJSzo-v6fRWclV9g1KFFMcuhvj508Tm1wS9lR8xk",
-    "room_key_hash": "SEP9xIBl87rMEFpvYeAPcaADiwgwn3_BOzMdbZSjAvM",
+    "pair_id_input": "Z2FtYWNoaW5lLXJlbW90ZS12MSByb29tWUNsZkpTem8tdjZmUldjbFY5ZzFLRkZNY3Vodmo1MDhUbTF3UzlsUjh4aw",
+    "pair_id": "Lke4aHlYJtjSZInadHQcig",
     "token": "qNQUTFTcuc-i0m1rw-yHKNDJmibGjoSPu6pXfGJEn4g",
     "token_hash": "4H9zIQbSNwWO6CoFt4Vlu5PiqJ6cTs4FfOxHv7VmQzI"
   },
   "pairing": {
-    "pair_id": "j3Ix2vO9Ul8SQso4OhbruQ",
+    "pair_id": "Lke4aHlYJtjSZInadHQcig",
     "pair_secret": "2alvx5ax68NlFTKWX9uCZA",
-    "qr_fragment": "j3Ix2vO9Ul8SQso4OhbruQ.BE1i0Uu98NTkfJFrJcW3k4sEU7z09ydgETtZ_AMd3s7_9f2cEKssjmwILDPT-dOil9MQf0bR9whcF-U996Ra9Ig.2alvx5ax68NlFTKWX9uCZA",
+    "qr_fragment": "Lke4aHlYJtjSZInadHQcig.BE1i0Uu98NTkfJFrJcW3k4sEU7z09ydgETtZ_AMd3s7_9f2cEKssjmwILDPT-dOil9MQf0bR9whcF-U996Ra9Ig.2alvx5ax68NlFTKWX9uCZA",
     "device_name": "iPhone (Burak)",
     "mac_input": "BCVCO5ydNoEqWu8JmwJLtVGJkm__H0xhY-IR-GaJcAkkze23dzQyhznZBBfq0l7VSoYW9Fx6M3KGNQDv88niRjtpUGhvbmUgKEJ1cmFrKQ",
     "mac": "R82ZRFonK4tq2I3--bJG31tWeorZ_oJEXMu3B5NGDJw",

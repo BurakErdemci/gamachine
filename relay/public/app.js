@@ -57,8 +57,9 @@ const STATUS_WORDS = { running: 'çalışıyor', idle: 'boşta', awaiting_card: 
 // ---------------------------------------------------------------- pairing
 
 const PAIR_ERRORS = {
+  no_room: 'Bu eşleştirme kodu için bekleyen bir bilgisayar yok. Bilgisayarda uzaktan kontrolü açıp yeni QR oluştur.',
   pc_offline: 'Bilgisayar şu an bağlı değil. Gamachine açık mı, internet var mı?',
-  refused: 'Bağlantı kabul edilmedi. Kodun süresi dolmuş, çok fazla deneme yapılmış ya da uzaktan kontrol kapalı olabilir.',
+  refused: 'Bağlantı kabul edilmedi. Kısa sürede çok fazla deneme yapılmış olabilir; biraz bekle.',
   rejected: 'Bilgisayar eşleştirmeyi reddetti.',
   timeout: 'Bilgisayardan 5 dakika içinde yanıt gelmedi.',
   bad_reply: 'Bilgisayardan gelen yanıt doğrulanamadı. Eşleştirme yapılmadı.',
@@ -101,7 +102,8 @@ async function startPairing(parsed) {
   } catch (err) {
     $('pair-code-box').hidden = true;
     $('pair-status').textContent = 'Eşleştirme olmadı.';
-    $('pair-error').textContent = (PAIR_ERRORS[err.message] || 'Hata: ' + err.message) + ' Bilgisayarda yeni bir QR kodu oluşturup tekrar dene.';
+    const advice = err.message === 'no_room' ? '' : ' Bilgisayarda yeni bir QR kodu oluşturup tekrar dene.';
+    $('pair-error').textContent = (PAIR_ERRORS[err.message] || 'Hata: ' + err.message) + advice;
     $('btn-pair-back').hidden = false;
   }
 }

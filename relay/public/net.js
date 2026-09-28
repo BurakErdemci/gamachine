@@ -6,6 +6,7 @@ import * as C from './crypto.js';
 export const PROTOCOL = 'gamachine.v1';
 export const CLOSE_TOKEN_DROPPED = 4001;
 export const CLOSE_ROOM_RESET = 4006;
+export const CLOSE_NO_ROOM = 4008;
 const PAIR_TIMEOUT_MS = 330_000; // pair_secret lives 5 min on the PC
 const REQUEST_TIMEOUT_MS = 20_000;
 const PING_EVERY_MS = 25_000;
@@ -16,7 +17,7 @@ export function wsOrigin(loc) {
 }
 
 // Resolves {deviceId, token, vapidPub, privateKey, publicRaw}; rejects with
-// Error(code) where code is pc_offline | rejected | refused | timeout | bad_reply | <PC reason>.
+// Error(code) where code is no_room | pc_offline | rejected | refused | timeout | bad_reply | <PC reason>.
 export async function pair({ origin, parsed, deviceName, onSas, WS = globalThis.WebSocket }) {
   const phone = await C.generateKeyPair();
   const kStatic = await C.staticSecret(phone.privateKey, parsed.pcPub);
@@ -44,6 +45,7 @@ export async function pair({ origin, parsed, deviceName, onSas, WS = globalThis.
     ws.onmessage = async (ev) => {
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.type === 'no_room') return finish(new Error('no_room'));
       if (m.type === 'pc_offline') return finish(new Error('pc_offline'));
       if (m.type === 'pair_reject') return finish(new Error(typeof m.reason === 'string' ? m.reason : 'rejected'));
       if (m.type !== 'pair_ok') return;
@@ -60,7 +62,7 @@ export async function pair({ origin, parsed, deviceName, onSas, WS = globalThis.
         finish(new Error('bad_reply'));
       }
     };
-    ws.onclose = () => finish(new Error(opened ? 'rejected' : 'refused'));
+    ws.onclose = (ev) => finish(new Error(ev.code === CLOSE_NO_ROOM ? 'no_room' : opened ? 'rejected' : 'refused'));
   });
 }
 
