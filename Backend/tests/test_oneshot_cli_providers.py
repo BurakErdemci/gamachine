@@ -74,6 +74,9 @@ class TestManagerRouting(unittest.TestCase):
         opus_55 = self._get("claude-opus-5-5")
         self.assertIsInstance(opus_55, ClaudeCodeProvider)
         self.assertEqual(opus_55.binary_name, "claude-opus-5-5")
+        sonnet_55 = self._get("claude-sonnet-5-5")
+        self.assertIsInstance(sonnet_55, ClaudeCodeProvider)
+        self.assertEqual(sonnet_55.binary_name, "claude-sonnet-5-5")
         from providers.agy_provider import AgyProvider
         for mid, gorunen in (("gemini-3.8-flash", "Gemini 3.8 Flash (High)"),
                              ("gemini-3.7-flash", "Gemini 3.7 Flash (High)")):

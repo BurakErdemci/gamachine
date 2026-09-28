@@ -78,6 +78,7 @@ def _run(model_name, client, tool_fn=None):
     ("claude-mythos-5-1", 16000),
     ("claude-opus-5-5", 16000),
     ("claude-opus-5", 16000),
+    ("claude-sonnet-5-5", 16000),
     ("claude-sonnet-5", 16000),
     ("claude-some-future-model", 16000),
     # No thinking unless requested, and this loop does not request it.

@@ -498,6 +498,7 @@ def create_config_router(db):
             # hâlâ onu tek seçenek olarak sunuyordu.
             "cloud": [],
             "subscription": [
+                {"id": "claude-sonnet-5-5",    "name": "Claude Sonnet 5.5 (CLI)",       "provider": "subscription"},
                 {"id": "claude-sonnet-5",      "name": "Claude Sonnet 5 (CLI)",         "provider": "subscription"},
                 {"id": "claude-fable-5-1",     "name": "Claude Fable 5.1 (CLI)",        "provider": "subscription"},
                 {"id": "claude-fable-5",       "name": "Claude Fable 5 (CLI)",          "provider": "subscription"},

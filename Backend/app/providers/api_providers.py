@@ -325,6 +325,9 @@ class AnthropicProvider(AIProvider):
             # 2026). The substring chain below sent claude-opus-4-7 and 4-6 as
             # claude-opus-4-8, and the dotted 5.5 as claude-opus-5.
             self.model_name = raw_name
+        elif "sonnet-5-5" in raw_name:
+            # "sonnet-5-5" also contains "sonnet-5": this branch must come first.
+            self.model_name = "claude-sonnet-5-5"
         elif "sonnet-5" in raw_name:
             self.model_name = "claude-sonnet-5"
         elif "sonnet-4-6" in raw_name or "4-6-sonnet" in raw_name:

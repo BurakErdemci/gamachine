@@ -20,6 +20,9 @@ def test_opus_5_and_4_8_keep_distinct_api_model_ids(anthropic_client):
     assert AnthropicProvider("test-key", "claude-opus-5").model_name == "claude-opus-5"
     # "opus-5-5" also contains "opus-5": the 5.5 branch must win, not collapse to Opus 5.
     assert AnthropicProvider("test-key", "claude-opus-5-5").model_name == "claude-opus-5-5"
+    # Same trap for Sonnet: "sonnet-5-5" contains "sonnet-5".
+    assert AnthropicProvider("test-key", "claude-sonnet-5-5").model_name == "claude-sonnet-5-5"
+    assert AnthropicProvider("test-key", "claude-sonnet-5").model_name == "claude-sonnet-5"
     assert AnthropicProvider("test-key", "claude-opus-4-8").model_name == "claude-opus-4-8"
 
 
@@ -96,6 +99,7 @@ def test_opus_5_is_selectable_on_the_claude_code_side():
     assert "claude-opus-4-8" in subscription
     assert subscription["claude-opus-5"]["provider"] == "subscription"
     assert subscription["claude-opus-5-5"]["name"] == "Claude Opus 5.5 (CLI)"
+    assert subscription["claude-sonnet-5-5"]["name"] == "Claude Sonnet 5.5 (CLI)"
 
 
 def test_gpt_6_sol_and_luna_are_offered_on_the_codex_side():
@@ -137,13 +141,16 @@ def test_fable_5_1_is_selectable_on_the_claude_code_side():
 # call on a Sonnet 4.6 or Haiku choice 404'd.
 _VALID_ANTHROPIC_IDS = {
     "claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5",
-    "claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5",
+    "claude-opus-4-8", "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6",
+    "claude-haiku-4-5",
 }
 
 
 @pytest.mark.parametrize("choice, expected", [
     ("claude-sonnet-4-6", "claude-sonnet-4-6"),
     ("claude-sonnet-5", "claude-sonnet-5"),
+    ("claude-sonnet-5-5", "claude-sonnet-5-5"),
+    ("claude-sonnet-5.5", "claude-sonnet-5-5"),
     # A Sonnet without a version is the current generation (skill: "sonnet" -> claude-sonnet-5).
     ("sonnet", "claude-sonnet-5"),
     ("claude-sonnet-4-5-20250929", "claude-sonnet-5"),

@@ -14,7 +14,7 @@ The backend invokes the official CLI on your machine as a subprocess, using the 
 
 | CLI Tool | Models (example) | Config file | Tool mechanism |
 |---|---|---|---|
-| **Claude Code** | claude-sonnet-5, claude-fable-5, claude-opus-5-5, claude-opus-4-8, claude-haiku-4-5 | `~/.claude.json` (user scope) | MCP native (stdio + HTTP) |
+| **Claude Code** | claude-sonnet-5-5, claude-sonnet-5, claude-fable-5, claude-opus-5-5, claude-opus-4-8, claude-haiku-4-5 | `~/.claude.json` (user scope) | MCP native (stdio + HTTP) |
 | **Codex** | gpt-6-astra/sol/luna, gpt-5.6-sol/terra/luna, gpt-5.5, gpt-5.4 | `~/.codex/config.toml` | MCP native |
 | **Antigravity (agy)** | Gemini 3.5 Flash + Claude/GPT-OSS via agy | `~/.gemini/antigravity-cli/` | `run_command` → `unityai` bridge |
 | **GitHub Copilot** | copilot-auto + Claude/GPT/Gemini options | session-scoped `--additional-mcp-config` | MCP native (global config untouched) |
@@ -35,7 +35,7 @@ The backend calls the provider's official SDK or the OpenRouter gateway. Tool us
 
 | Provider | Models (example) | Notes |
 |---|---|---|
-| **Anthropic** | claude-sonnet-5, claude-fable-5, claude-opus-5-5, claude-opus-4-8, claude-haiku-4-5 | Extended Thinking, tool use |
+| **Anthropic** | claude-sonnet-5-5, claude-sonnet-5, claude-fable-5, claude-opus-5-5, claude-opus-4-8, claude-haiku-4-5 | Extended Thinking, tool use |
 | **Google** | gemini-3.8-flash, gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-flash (+lite), gemini-3.1-pro, gemini-3.1-flash-lite | Thinking stream, vision |
 | **OpenAI** | gpt-6-astra/sol/luna (araç çağrısı YOK — Responses API gerekiyor), gpt-5.6-sol/terra/luna, gpt-5.5-pro, gpt-5.5, gpt-5.4 | Function calling, vision |
 | **NVIDIA NIM** | GLM 5.2, Qwen3 Coder 480B, Nemotron 3 Ultra/Super, Mistral Large 3, Kimi K2.6… | **Free pool** with a single `nvapi-` key (40 RPM) |

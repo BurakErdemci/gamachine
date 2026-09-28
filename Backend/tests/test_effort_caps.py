@@ -81,6 +81,7 @@ def test_new_models_share_their_siblings_effort_levels():
         assert get_effort_caps(p, "gpt-6-luna")["levels"] == astra
     for p in ("subscription", "anthropic"):
         assert get_effort_caps(p, "claude-opus-5-5")["levels"] == get_effort_caps(p, "claude-opus-5")["levels"]
+        assert get_effort_caps(p, "claude-sonnet-5-5")["levels"] == get_effort_caps(p, "claude-sonnet-5")["levels"]
 
 
 def test_gemini_37_and_38_have_no_minimal_and_use_thinking_level():
@@ -109,6 +110,7 @@ _FULL = ["auto", "low", "medium", "high", "xhigh", "max"]
     ("claude-opus-5", _FULL),
     ("claude-opus-4-8", _FULL),
     ("claude-opus-4-7", _FULL),
+    ("claude-sonnet-5-5", _FULL),
     ("claude-sonnet-5", _FULL),
     ("claude-opus-4-6", ["auto", "low", "medium", "high", "max"]),
     ("claude-sonnet-4-6", ["auto", "low", "medium", "high", "max"]),
