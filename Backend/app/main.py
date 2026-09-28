@@ -226,6 +226,14 @@ async def lifespan(app: FastAPI):
     except BaseException:
         pass
 
+    # Approval-ledger rows still queued are written before the process ends.
+    try:
+        from database import shutdown_ledger_writer
+        if not await asyncio.to_thread(shutdown_ledger_writer, 2.0):
+            logger.warning("[Shutdown] approval ledger not fully flushed")
+    except Exception as e:
+        logger.warning(f"[Shutdown] approval ledger writer not stopped: {e}")
+
     # Backend kapanınca Unity MCP subprocess'i de durdur
     try:
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager

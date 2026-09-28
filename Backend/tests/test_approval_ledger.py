@@ -8,6 +8,8 @@ import asyncio
 import hashlib
 import json
 import sqlite3
+import threading
+import time
 from collections import defaultdict
 
 import pytest
@@ -20,8 +22,9 @@ import routes.conversation_routes as cr
 from agentic import approval_mode, cards, turn_events
 from agentic.approval_policy import ambient_turn
 from agentic.command_gates import (
-    APPROVAL_GATES, QUESTION_GATES, cancel_gate, register_gate, release_gate,
+    APPROVAL_GATES, APPROVAL_RESULTS, QUESTION_GATES, cancel_gate, register_gate, release_gate,
 )
+import database
 from database import DatabaseManager
 from rag.memory_manager import memory_manager
 
@@ -310,3 +313,59 @@ def test_a_failing_ledger_never_breaks_an_answer(env, monkeypatch):
     register_gate("cmd-x", a)
     assert client.post("/command-approval/cmd-x", headers=H,
                        json={"approved": True}).json() == {"status": "ok", "approved": True}
+
+
+# ── The ledger is off the answer path ───────────────────────────────────────
+
+def test_a_locked_database_does_not_hold_the_answer(env):
+    db, client, _ = env
+    a = db.create_conversation(1, "A")
+    register_gate("cmd-lock", a, tool="Bash", params={"command": "ls"})
+    lock = sqlite3.connect(db.db_path)
+    try:
+        lock.execute("BEGIN EXCLUSIVE")
+        started = time.monotonic()
+        res = client.post("/command-approval/cmd-lock", headers=H, json={"approved": True})
+        elapsed = time.monotonic() - started
+    finally:
+        lock.rollback()
+        lock.close()
+    assert res.json() == {"status": "ok", "approved": True}
+    assert APPROVAL_RESULTS["cmd-lock"] is True
+    assert elapsed < 1.0
+    # The row lands once the lock is gone; exactly one, as before.
+    assert db.flush_ledger(10)
+    assert [(r["card_id"], r["outcome"]) for r in _rows(db)] == [("cmd-lock", "approved")]
+
+
+def test_a_full_ledger_queue_drops_the_row_and_keeps_the_answer(env, monkeypatch, caplog):
+    db, client, _ = env
+    a = db.create_conversation(1, "A")
+    writer = database._LedgerWriter()
+    monkeypatch.setattr(writer, "_queue", database.queue.Queue(maxsize=1))
+    monkeypatch.setattr(database, "LEDGER_WRITER", writer)
+    busy, gate = threading.Event(), threading.Event()
+    writer.submit(lambda: (busy.set(), gate.wait(5)))
+    assert busy.wait(5)  # the thread is inside this row
+    assert writer.submit(lambda: None)  # and this one fills the queue
+    register_gate("cmd-full", a)
+    with caplog.at_level("WARNING", logger="database"):
+        res = client.post("/command-approval/cmd-full", headers=H, json={"approved": True})
+    assert res.json() == {"status": "ok", "approved": True}
+    assert "queue full" in caplog.text
+    gate.set()
+    assert writer.flush(5)
+    assert _rows(db) == []
+
+
+def test_shutdown_writes_the_queued_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    db = DatabaseManager(str(tmp_path / "shutdown.db"))
+    for i in range(20):
+        assert db.record_card_resolution({"card_id": f"s{i}", "outcome": "approved"})
+    assert database.shutdown_ledger_writer(5)
+    with sqlite3.connect(db.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM approval_ledger").fetchone() == (20,)
+    # A write after shutdown starts the writer again.
+    db.record_card_resolution({"card_id": "after", "outcome": "approved"})
+    assert [r["card_id"] for r in db.get_approval_ledger()][-1] == "after"

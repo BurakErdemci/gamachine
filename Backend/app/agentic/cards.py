@@ -13,7 +13,9 @@ check-and-set under a lock with no await inside; the kind-specific resolver
 A card closed without an answer (timeout, Stop, chat deleted, switch to auto)
 goes through `close_card`, which is first-wins too. Every close, answered or
 not, writes one ledger row; the ledger is where the remote-control metric
-(share of cards that time out while the owner is away) is counted.
+(share of cards that time out while the owner is away) is counted. The ledger
+writer is called on the answer path, so it must only queue the row
+(`DatabaseManager.record_card_resolution` does): a decision never waits on SQLite.
 """
 from __future__ import annotations
 

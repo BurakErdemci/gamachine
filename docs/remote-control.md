@@ -230,7 +230,9 @@ existing app-wide event channel and reports `accepted` or `desktop_not_ready`.
    chats and providers, and one answer path with first-answer-wins.
 3. **Approval ledger** (new table): time, card id, chat, tool, parameter hash,
    approval mode, decision, device (desktop / phone name), outcome (approved,
-   rejected, timed out). This is where the metric comes from.
+   rejected, timed out). This is where the metric comes from. Rows are
+   written by one background thread, so an answer never waits on SQLite; a
+   row that cannot be queued or written is logged and dropped.
 4. **Keep awake**: Electron `powerSaveBlocker.start('prevent-app-suspension')`
    while remote control is on and the checkbox is set.
 

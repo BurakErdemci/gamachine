@@ -2,6 +2,9 @@ import sqlite3
 import json
 import logging
 import os
+import queue
+import threading
+import time
 from contextlib import closing
 from datetime import datetime, timedelta
 import bcrypt
@@ -9,6 +12,90 @@ from typing import Callable, List, Dict, Any, Optional, Tuple
 from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
+
+
+class _LedgerWriter:
+    """The one thread that writes approval-ledger rows.
+
+    The ledger is written when a card closes, on the answer path; a SQLite
+    lock held elsewhere kept the answer waiting ~7 s (Codex remote audit,
+    28 Sep 2026). The ledger is a metric and the decision is what matters, so
+    a row that does not fit the queue or fails to write is logged and dropped.
+    """
+
+    QUEUE_SIZE = 1000
+
+    def __init__(self):
+        self._queue: "queue.Queue" = queue.Queue(maxsize=self.QUEUE_SIZE)
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+
+    def submit(self, fn: Callable[..., Any], *args: Any) -> bool:
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, name="approval-ledger",
+                                                daemon=True)
+                self._thread.start()
+            try:
+                self._queue.put_nowait((fn, args))
+            except queue.Full:
+                logger.warning("[ledger] queue full; row dropped")
+                return False
+        return True
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            try:
+                if item is None:
+                    return
+                fn, args = item
+                try:
+                    fn(*args)
+                except Exception as exc:
+                    logger.warning("[ledger] row not written: %s", exc)
+            finally:
+                self._queue.task_done()
+
+    def flush(self, timeout: float) -> bool:
+        """Wait until every queued row is written (or dropped); False on timeout."""
+        deadline = time.monotonic() + timeout
+        done = self._queue.all_tasks_done
+        with done:
+            while self._queue.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                done.wait(remaining)
+        return True
+
+    def shutdown(self, timeout: float) -> bool:
+        flushed = self.flush(timeout)
+        with self._lock:
+            thread = self._thread
+            if thread is None or not thread.is_alive():
+                return flushed
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                return False
+            thread.join(timeout)
+            if not thread.is_alive():
+                self._thread = None
+        return flushed
+
+
+LEDGER_WRITER = _LedgerWriter()
+# How long a ledger read waits for queued rows, so a reader sees its own writes.
+LEDGER_READ_WAIT_S = 2.0
+
+
+def flush_ledger(timeout: float = 5.0) -> bool:
+    return LEDGER_WRITER.flush(timeout)
+
+
+def shutdown_ledger_writer(timeout: float = 2.0) -> bool:
+    return LEDGER_WRITER.shutdown(timeout)
 
 
 class DatabaseManager:
@@ -714,10 +801,18 @@ class DatabaseManager:
     _LEDGER_COLS = ("at", "card_id", "conversation_id", "kind", "tool", "params_hash",
                     "approval_mode", "decision", "device", "outcome")
 
-    def record_card_resolution(self, row: Dict[str, Any]) -> int:
+    def record_card_resolution(self, row: Dict[str, Any]) -> bool:
+        """Queue one ledger row; False when it was dropped. Returns at once:
+        the insert runs on the ledger thread (see `_LedgerWriter`)."""
         values = [row.get(c) for c in self._LEDGER_COLS]
         if not values[0]:
             values[0] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return LEDGER_WRITER.submit(self._insert_card_resolution, values)
+
+    def flush_ledger(self, timeout: float = 5.0) -> bool:
+        return LEDGER_WRITER.flush(timeout)
+
+    def _insert_card_resolution(self, values: List[Any]) -> int:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             cur = conn.execute(
                 f'INSERT INTO approval_ledger ({", ".join(self._LEDGER_COLS)}) '
@@ -727,6 +822,7 @@ class DatabaseManager:
 
     def get_approval_ledger(self, since: Optional[str] = None,
                             until: Optional[str] = None) -> List[Dict[str, Any]]:
+        LEDGER_WRITER.flush(LEDGER_READ_WAIT_S)
         where, args = self._ledger_window(since, until)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
@@ -752,6 +848,7 @@ class DatabaseManager:
         `timed_out_share` is the remote-control metric: timed-out cards over
         all closed cards in the window (None when there were none).
         """
+        LEDGER_WRITER.flush(LEDGER_READ_WAIT_S)
         where, args = self._ledger_window(since, until)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
