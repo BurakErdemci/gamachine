@@ -260,3 +260,33 @@ existing app-wide event channel and reports `accepted` or `desktop_not_ready`.
 5. Measure card timeouts per provider, then lengthen what can be lengthened.
 
 Each step is audited by Codex before the next one builds on it.
+
+## Bridge implementation notes (step 3)
+
+Facts about `Backend/app/remote/`; the protocol above stays the contract.
+
+- Modules: `crypto.py` (byte layouts; `tests/test_remote_crypto.py` reproduces
+  every value of `relay/test/vectors.json`), `store.py` (keys encrypted with the
+  API key vault's Fernet key in `app_settings`, table `remote_devices` with the
+  token hash only), `relay_client.py` (the one PC socket), `pairing.py`,
+  `session.py`, `rpc.py` + `chats.py` (allow-list and phone shapes),
+  `webpush.py`, `desktop_channel.py`, `bridge.py` (ties them together).
+- Pairing offers are independent of how the phone learned them:
+  `PairingManager.create_offer(source)` is where a second presentation (a typed
+  code) plugs in; limits, mac, SAS, approval and expiry are shared, and the
+  pending approval always carries the SAS.
+- Local routes (app token; `*` also needs the UI secret):
+  `GET /remote/status`, `POST /remote/enable*`, `POST /remote/disable`,
+  `POST /remote/forget`, `POST /remote/pair/start*`, `GET /remote/pair/pending`,
+  `POST /remote/pair/approve*`, `POST /remote/pair/reject`,
+  `GET /remote/devices`, `DELETE /remote/devices/{device_id}`,
+  `DELETE /remote/devices`, `GET|PUT* /remote/relay-url`,
+  `GET|PUT /remote/keep-awake` (`keep_awake_active` = on and checked).
+- `send_message` reaches the renderer as a `/wake-stream-all` frame
+  `{type:"remote_message", request_id, conversation_id, text, source:"phone",
+  device_id, device_name, at}`; `desktop_not_ready` means no such stream is open.
+- A phone's card answers are ledgered with device `phone:<device name>`.
+- Replies over one frame are split: every list in `result` is cut in order,
+  each part carries `part` (1-based) and `parts`, all with the request's `id`.
+- Extra PC -> phone push: `{type:"gap", chat_id, epoch, last_seq}` when live
+  events of an open chat were lost.
