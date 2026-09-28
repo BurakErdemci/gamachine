@@ -245,6 +245,11 @@ def _free_port() -> int:
 
 # ── Windows: the child dies with the backend ─────────────────────────────────
 
+# A module flag rather than an inline platform check so the fail-closed path
+# is testable on every OS.
+_TIE_WITH_JOB = sys.platform == "win32"
+
+
 class _KillOnCloseJob:
     """A job object with KILL_ON_JOB_CLOSE. The OS closes our handle when the
     backend exits in ANY way (crash, TerminateProcess), and that kills the
@@ -310,6 +315,20 @@ class _KillOnCloseJob:
 
 
 # ── The server manager ───────────────────────────────────────────────────────
+
+def _terminate(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            logger.warning("[stt] whisper-server (pid %s) did not exit after kill.", proc.pid)
+
 
 class WhisperServer:
     """One whisper-server child: started on demand, restarted on demand after
@@ -445,13 +464,23 @@ class WhisperServer:
             self._done.set()
             raise SttEngineFailed(self._failure) from exc
         self._proc = proc
-        if sys.platform == "win32":
+        if _TIE_WITH_JOB:
+            job = None
             try:
                 job = _KillOnCloseJob()
                 job.assign(proc)
                 self._job = job
-            except OSError as exc:
-                logger.warning("[stt] could not tie whisper-server to the backend's lifetime: %s", exc)
+            except Exception as exc:                 # noqa: BLE001 — fail closed on any failure
+                # An untied child outlives a crashed backend with ~1.2 GB of
+                # model/VRAM, and every restart would add another one.
+                if job is not None:
+                    job.close()
+                _terminate(proc)
+                self._reap()
+                self._failure = f"could not tie whisper-server to the backend's lifetime ({exc}); not started"
+                logger.warning("[stt] %s", self._failure)
+                self._done.set()
+                raise SttEngineFailed(self._failure) from exc
         threading.Thread(target=self._read_output, args=(proc,), name="whisper-log", daemon=True).start()
         threading.Thread(target=self._watch_ready, args=(proc,), name="whisper-ready", daemon=True).start()
         logger.info("[stt] whisper-server starting (pid %s, port %s, %s threads).", proc.pid, self._port, threads)
@@ -526,17 +555,8 @@ class WhisperServer:
 
     def stop(self) -> None:
         with self._lock:
-            proc = self._proc
-            if proc is not None and proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    try:
-                        proc.wait(5)
-                    except subprocess.TimeoutExpired:
-                        logger.warning("[stt] whisper-server (pid %s) did not exit after kill.", proc.pid)
+            if self._proc is not None:
+                _terminate(self._proc)
             self._reap()
             self._done.set()
 

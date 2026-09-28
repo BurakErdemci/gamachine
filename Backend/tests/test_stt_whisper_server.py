@@ -323,6 +323,66 @@ def test_exit_at_start_makes_wait_ready_report_the_return_code(server_factory):
         server.wait_ready()
 
 
+class _FakeJob:
+    closed = 0
+
+    def __init__(self, fail_at=None):
+        self._fail_at = fail_at
+        if fail_at == "create":
+            raise OSError(5, "CreateJobObjectW failed")
+
+    def assign(self, proc):
+        if self._fail_at == "assign":
+            raise OSError(5, "AssignProcessToJobObject failed")
+
+    def close(self):
+        type(self).closed += 1
+
+
+@pytest.mark.parametrize("fail_at", ["create", "assign"])
+def test_a_failed_lifetime_job_kills_the_child_and_fails_closed(server_factory, monkeypatch, fail_at):
+    """An untied child would outlive a crashed backend holding the model, so a
+    job that cannot be created or assigned must not leave a server behind.
+    The job branch is forced on so this runs on every OS."""
+    spawned = []
+    real_popen = subprocess.Popen
+
+    def recording_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        spawned.append(proc)
+        return proc
+
+    class Job(_FakeJob):
+        closed = 0
+
+        def __init__(self):
+            super().__init__(fail_at)
+
+    monkeypatch.setattr(stt_whisper.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(stt_whisper, "_TIE_WITH_JOB", True)
+    monkeypatch.setattr(stt_whisper, "_KillOnCloseJob", Job)
+    server = server_factory(fake_flags=["--fake-startup-delay", "0.1"])
+    try:
+        with pytest.raises(stt_whisper.SttEngineFailed, match="lifetime"):
+            server.ensure_started()
+        with pytest.raises(stt_whisper.SttEngineFailed, match="lifetime"):
+            server.wait_ready(timeout=0.1)
+
+        assert len(spawned) == 1
+        orphan = spawned[0]
+        assert orphan.poll() is not None, "the untied child is still running"
+        assert server.pid is None
+        assert Job.closed == (1 if fail_at == "assign" else 0)
+
+        # The failure is not sticky: a job that works lets the next call start.
+        monkeypatch.setattr(stt_whisper, "_KillOnCloseJob", lambda: _FakeJob())
+        server.ensure_started()
+        server.wait_ready()
+        assert server.is_ready()
+    finally:
+        server.stop()
+
+
 def test_missing_model_file_raises_stt_engine_missing(server_factory, tmp_path):
     missing_model = str(tmp_path / "does-not-exist.bin")
     server = server_factory(model_path=missing_model)
