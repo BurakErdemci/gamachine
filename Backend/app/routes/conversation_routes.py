@@ -2761,19 +2761,34 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
     # undelivered sweep uses, so a retry only reaches rows that existed before
     # this process started and never rejects a card this process itself raised
     # meanwhile.
+    #
+    # That bound only means what it says when it was read at the very first
+    # construction. A cutoff obtained later is not a startup cutoff - by then
+    # this same process may already have opened cards of its own, and a fresh
+    # `max_mail_id()` could equal exactly one of them - so a failed first read
+    # is never retried here. Same call `_held_mail_cutoff` already makes for
+    # the undelivered sweep: an unknown cutoff means nothing is touched, not a
+    # guess. The cards stay `pending_approval` for the rest of this process's
+    # life; only the log line below records that they were left alone
+    # (Codex verify2, 28 Sep 2026).
     with _MAIL_SWEEPS_LOCK:
         _clear_cards = not _sweep["cards_cleared"]
     if _clear_cards:
-        bound = {} if _sweep["cutoff"] is None else {"up_to_id": _sweep["cutoff"]}
-        try:
-            rejected = db.reject_pending_mail(**bound)
-            if type(rejected) is int and rejected:
-                logger.info("[mailbox] %d note(s) left waiting on a card were refused at startup",
-                            rejected)
+        if _sweep["cutoff"] is None:
+            logger.warning("[mailbox] startup note id unknown; pending cards from a "
+                            "previous run are left untouched for this process")
             with _MAIL_SWEEPS_LOCK:
                 _sweep["cards_cleared"] = True
-        except Exception:
-            logger.exception("[mailbox] stale note cards not cleared")
+        else:
+            try:
+                rejected = db.reject_pending_mail(up_to_id=_sweep["cutoff"])
+                if type(rejected) is int and rejected:
+                    logger.info("[mailbox] %d note(s) left waiting on a card were refused at startup",
+                                rejected)
+                with _MAIL_SWEEPS_LOCK:
+                    _sweep["cards_cleared"] = True
+            except Exception:
+                logger.exception("[mailbox] stale note cards not cleared")
     # Owner decision, 28 Sep 2026: a note still `queued` from the previous run
     # must not self-deliver (see mailbox.STATUS_UNDELIVERED). Runs here, before
     # any wake stream can connect; if it fails, `_held_mail_cutoff` keeps those

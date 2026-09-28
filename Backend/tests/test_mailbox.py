@@ -1058,6 +1058,46 @@ def test_the_startup_sweep_flag_stays_unset_on_a_failed_first_construction_like_
     _heal_message_writes(env.db)
 
 
+# `max_mail_id()` itself failing at the first construction is a harder case
+# than a failed rejection write: there is no cutoff to bound a retry with, and
+# a cutoff read later is not a startup cutoff - it could equal a card this
+# very process just raised. So the rejection must never run in this process,
+# not the first time and not on any later rebuild, once the first read fails
+# (Codex verify2, 28 Sep 2026).
+
+def test_an_unknown_startup_cutoff_never_rejects_a_card_in_this_process(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    stale = env.db.add_mail(a, b, "kartta kaldı", "pending_approval", "old-gate", 1)
+    real_max_mail_id = env.db.max_mail_id
+    real_reject = env.db.reject_pending_mail
+    calls = []
+
+    def broken(*_a, **_kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    def counted(*a_, **kw):
+        calls.append((a_, kw))
+        return real_reject(*a_, **kw)
+
+    env.db.max_mail_id = broken
+    env.db.reject_pending_mail = counted
+    _restarted(env.db)                              # first construction; cutoff unreadable
+    assert env.db.get_mail(stale)["status"] == "pending_approval"
+    assert calls == []                               # never even attempted
+
+    env.db.max_mail_id = real_max_mail_id            # a later read would succeed now...
+    live = env.db.add_mail(a, b, "canlı kart", "pending_approval", "live-gate", 1)
+    cr.create_conversation_router(env.db, {})        # ...but this process never guesses
+    cr.create_conversation_router(env.db, {})        # nor does any further rebuild
+    assert env.db.get_mail(stale)["status"] == "pending_approval"
+    assert env.db.get_mail(live)["status"] == "pending_approval"
+    assert calls == []
+
+    sweep = cr._MAIL_SWEEPS[cr._mail_sweep_key(env.db)]
+    assert sweep["cards_cleared"] is True
+    assert sweep["cutoff"] is None
+
+
 def test_undelivered_mail_survives_family_delete_like_other_statuses(env, auto):
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
     _send(env.client, a, b, body="silinecek aile")
