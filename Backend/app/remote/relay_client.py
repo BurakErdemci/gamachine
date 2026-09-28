@@ -144,7 +144,8 @@ class RelayClient:
 
     # ── connection loop ────────────────────────────────────────────────
     def _backoff(self, attempt: int) -> float:
-        return min(self.backoff_cap_s, self.backoff_base_s * (2 ** attempt)) * random.uniform(0.5, 1.0)
+        # Capped exponent: 2 ** 1024 no longer fits a float (OverflowError).
+        return min(self.backoff_cap_s, self.backoff_base_s * (2 ** min(attempt, 16))) * random.uniform(0.5, 1.0)
 
     async def _run(self) -> None:
         attempt = 0
@@ -201,7 +202,13 @@ class RelayClient:
             if self._stopping:
                 break
             if delay is None:
-                delay = self._backoff(attempt)
+                # Outside the handler above: a raise here would end reconnecting
+                # for good while remote control stays on.
+                try:
+                    delay = self._backoff(attempt)
+                except Exception:
+                    logger.exception("[remote] backoff failed; retrying after %.0f s", self.backoff_cap_s)
+                    delay = self.backoff_cap_s
                 attempt += 1
             self.retry_at = time.time() + delay
             await asyncio.sleep(delay)

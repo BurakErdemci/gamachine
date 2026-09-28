@@ -631,3 +631,33 @@ async def test_session_close_drops_every_listener_it_opened(env):
     for session in list(env.bridge.sessions.values()):
         session.close()
     await until(lambda: all(ring_listeners(c) == 0 for c in convs))
+
+
+def test_backoff_stays_finite_after_a_long_outage():
+    client = RelayClient("ws://127.0.0.1:1", "id", "key", None)
+    for attempt in (0, 16, 1024, 10 ** 6):
+        assert 0 < client._backoff(attempt) <= client.backoff_cap_s
+
+
+async def test_reconnect_survives_a_failing_backoff(monkeypatch):
+    from remote import relay_client
+
+    def refused(*args, **kwargs):
+        raise OSError("refused")
+
+    calls = []
+
+    def broken_backoff(attempt):
+        calls.append(attempt)
+        raise OverflowError("boom")
+
+    monkeypatch.setattr(relay_client, "connect", refused)
+    client = RelayClient("ws://127.0.0.1:1", "id", "key", None)
+    client.backoff_cap_s = 0.01
+    monkeypatch.setattr(client, "_backoff", broken_backoff)
+    client.start()
+    try:
+        await until(lambda: len(calls) >= 3)
+        assert not client._task.done()
+    finally:
+        await client.stop()
