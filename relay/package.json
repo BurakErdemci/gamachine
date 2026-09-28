@@ -1,0 +1,13 @@
+{
+  "name": "gamachine-relay",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "vectors": "node test/make-vectors.mjs",
+    "icons": "node tools/gen-icons.mjs",
+    "dev": "wrangler dev --local --port 8799",
+    "deploy": "wrangler deploy"
+  }
+}

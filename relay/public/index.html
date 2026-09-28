@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gamachine Uzaktan</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gamachine">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#101214">
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+
+<section id="screen-loading">
+  <p>Yükleniyor…</p>
+</section>
+
+<section id="screen-install" hidden>
+  <h1>Önce ana ekrana ekle</h1>
+  <p>Bildirim alabilmek için bu sayfa iPhone'da ana ekrandan açılmalı.</p>
+  <ol>
+    <li>Bu sayfanın <b>Safari</b>'de açık olduğundan emin ol.</li>
+    <li><b>Paylaş</b> düğmesine dokun. Göremiyorsan adres çubuğundaki <b>•••</b> menüsüne dokun, Paylaş orada.
+      İstersen <b>Ayarlar &gt; Safari &gt; Sekmeler</b>'den <b>Alt</b> düzenini seç; Paylaş düğmesi alta gelir.</li>
+    <li><b>Ana Ekrana Ekle</b>'yi seç. "Web uygulaması olarak aç" açık kalsın.</li>
+    <li>Ana ekrandaki <b>Gamachine</b> simgesinden aç.</li>
+  </ol>
+  <div id="install-pair" hidden>
+    <p>Açılan uygulamada eşleştirme bağlantısı istenirse aşağıdaki düğmeyle kopyalayıp oraya yapıştır. Bağlantı 5 dakika geçerli.</p>
+    <button id="btn-copy-link" type="button">Eşleştirme bağlantısını kopyala</button>
+    <p id="copy-note" class="note"></p>
+    <button id="btn-pair-here" type="button" class="secondary">Yine de burada eşleştir (bildirim gelmez)</button>
+  </div>
+</section>
+
+<section id="screen-welcome" hidden>
+  <h1>Gamachine'i telefondan yönet</h1>
+  <p id="welcome-text">Bilgisayarda Gamachine'de <b>Uzaktan kontrol</b>'ü aç ve çıkan QR kodunu telefonun kamerasıyla tara.</p>
+  <label for="paste-link">Ya da eşleştirme bağlantısını buraya yapıştır:</label>
+  <input id="paste-link" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/p#…">
+  <button id="btn-paste-pair" type="button">Eşleştir</button>
+  <p id="welcome-error" class="error"></p>
+  <button id="btn-show-install" type="button" class="secondary" hidden>Ana ekrana nasıl eklenir?</button>
+</section>
+
+<section id="screen-pairing" hidden>
+  <h1>Eşleştiriliyor</h1>
+  <p id="pair-status">Bilgisayara bağlanılıyor…</p>
+  <div id="pair-code-box" hidden>
+    <p>Bilgisayarda görünen kod bununla aynı olmalı:</p>
+    <p id="pair-code" class="code"></p>
+    <p>Aynıysa bilgisayarda <b>Onayla</b>'ya bas. Farklıysa <b>Reddet</b>.</p>
+  </div>
+  <p id="pair-error" class="error"></p>
+  <button id="btn-pair-back" type="button" class="secondary" hidden>Geri</button>
+</section>
+
+<section id="screen-main" hidden>
+  <header class="bar">
+    <span id="status-text">Bağlanıyor…</span>
+  </header>
+  <p id="main-note" class="note"></p>
+  <div id="cards-box" hidden>
+    <h2>Onay bekleyenler</h2>
+    <div id="cards"></div>
+  </div>
+  <h2>Sohbetler</h2>
+  <ul id="chats" class="list"></ul>
+  <p id="chats-empty" class="note" hidden>Henüz sohbet yok.</p>
+  <div class="footer">
+    <button id="btn-notify" type="button" class="secondary" hidden>Bildirimlere izin ver</button>
+    <p id="notify-note" class="note"></p>
+    <button id="btn-unpair" type="button" class="secondary">Bu telefondaki eşleşmeyi sil</button>
+  </div>
+</section>
+
+<section id="screen-chat" hidden>
+  <header class="bar">
+    <button id="btn-back" type="button" class="secondary small">‹ Geri</button>
+    <span id="chat-title"></span>
+  </header>
+  <p id="chat-status" class="note"></p>
+  <button id="btn-stop" type="button" class="danger" hidden>Durdur</button>
+  <div id="chat-cards"></div>
+  <div id="log" class="log"></div>
+  <form id="composer">
+    <textarea id="composer-text" rows="3" placeholder="Mesaj yaz…"></textarea>
+    <button id="btn-send" type="submit">Gönder</button>
+    <p id="composer-note" class="note"></p>
+  </form>
+</section>
+
+</body>
+</html>

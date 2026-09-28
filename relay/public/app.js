@@ -1,0 +1,534 @@
+// Phone UI. Everything shown comes from the PC and is written with
+// textContent only: chat text is untrusted input on this page.
+
+import * as C from './crypto.js';
+import * as store from './store.js';
+import { pair, Link, wsOrigin } from './net.js';
+
+const $ = (id) => document.getElementById(id);
+const SCREENS = ['loading', 'install', 'welcome', 'pairing', 'main', 'chat'];
+
+let device = null;
+let link = null;
+let chats = [];
+let cards = [];
+let openChatId = null;
+let wantedChatId = null;
+let liveText = null;
+let pendingFragment = null;
+
+function show(name) {
+  for (const s of SCREENS) $('screen-' + s).hidden = s !== name;
+  window.scrollTo(0, 0);
+}
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') node.className = v;
+    else if (k === 'onclick') node.addEventListener('click', v);
+    else node[k] = v;
+  }
+  for (const c of children) if (c !== null && c !== undefined) node.append(c);
+  return node;
+}
+
+const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes('Macintosh') && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function deviceName() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/iPad/.test(ua) || (ua.includes('Macintosh') && navigator.maxTouchPoints > 1)) return 'iPad';
+  if (/Android/.test(ua)) return 'Android telefon';
+  return 'Tarayıcı';
+}
+
+function clock(ms) {
+  if (!ms) return '';
+  const d = new Date(ms);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const time = d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  return sameDay ? time : d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' }) + ' ' + time;
+}
+
+const STATUS_WORDS = { running: 'çalışıyor', idle: 'boşta', awaiting_card: 'onay bekliyor' };
+
+// ---------------------------------------------------------------- pairing
+
+const PAIR_ERRORS = {
+  pc_offline: 'Bilgisayar şu an bağlı değil. Gamachine açık mı, internet var mı?',
+  refused: 'Bağlantı kabul edilmedi. Kodun süresi dolmuş, çok fazla deneme yapılmış ya da uzaktan kontrol kapalı olabilir.',
+  rejected: 'Bilgisayar eşleştirmeyi reddetti.',
+  timeout: 'Bilgisayardan 5 dakika içinde yanıt gelmedi.',
+  bad_reply: 'Bilgisayardan gelen yanıt doğrulanamadı. Eşleştirme yapılmadı.',
+  expired: 'QR kodunun süresi dolmuş.',
+  rate_limited: 'Çok fazla deneme yapıldı. Biraz bekle.',
+};
+
+async function startPairing(parsed) {
+  history.replaceState(null, '', '/p');
+  show('pairing');
+  $('pair-status').textContent = 'Bilgisayara bağlanılıyor…';
+  $('pair-error').textContent = '';
+  $('pair-code-box').hidden = true;
+  $('btn-pair-back').hidden = true;
+  try {
+    const result = await pair({
+      origin: wsOrigin(location),
+      parsed,
+      deviceName: deviceName(),
+      onSas: (code) => {
+        $('pair-code').textContent = code;
+        $('pair-code-box').hidden = false;
+        $('pair-status').textContent = 'Bilgisayarın onayı bekleniyor…';
+      },
+    });
+    if (link) link.stop();
+    device = {
+      pairId: parsed.pairId,
+      pcPub: C.b64u(parsed.pcPub),
+      deviceId: result.deviceId,
+      token: result.token,
+      vapidPub: result.vapidPub,
+      privateKey: result.privateKey,
+      publicRaw: C.b64u(result.publicRaw),
+      pairedAt: Date.now(),
+      pushDone: false,
+    };
+    await store.put('device', device);
+    startMain();
+  } catch (err) {
+    $('pair-code-box').hidden = true;
+    $('pair-status').textContent = 'Eşleştirme olmadı.';
+    $('pair-error').textContent = (PAIR_ERRORS[err.message] || 'Hata: ' + err.message) + ' Bilgisayarda yeni bir QR kodu oluşturup tekrar dene.';
+    $('btn-pair-back').hidden = false;
+  }
+}
+
+function showWelcome(text) {
+  show('welcome');
+  if (text) $('welcome-text').textContent = text;
+  $('btn-show-install').hidden = !(isIos() && !isStandalone());
+}
+
+function pasteToFragment(value) {
+  const v = value.trim();
+  const hashAt = v.indexOf('#');
+  if (hashAt < 0) return { error: 'Bağlantıda # işaretinden sonraki kısım yok.' };
+  if (hashAt > 0) {
+    let url;
+    try { url = new URL(v); } catch { return { error: 'Bu bir bağlantı gibi görünmüyor.' }; }
+    if (url.origin !== location.origin) return { error: 'Bu bağlantı başka bir sunucuya ait (' + url.origin + '). O adresi Safari\'de aç.' };
+  }
+  const parsed = C.parsePairFragment(v.slice(hashAt));
+  return parsed ? { parsed } : { error: 'Bağlantı eksik ya da bozuk.' };
+}
+
+// ---------------------------------------------------------------- main screen
+
+function setStatus(status, info = {}) {
+  const t = $('status-text');
+  const note = $('main-note');
+  note.textContent = '';
+  if (status === 'ready') {
+    t.textContent = 'Bağlı';
+    refreshAll();
+    return;
+  }
+  if (status === 'connecting') t.textContent = 'Bağlanıyor…';
+  else if (status === 'pc_offline') t.textContent = 'Bilgisayar çevrimdışı' + (info.lastSeen ? ' (son görülme ' + clock(info.lastSeen) + ')' : '');
+  else if (status === 'removed') {
+    t.textContent = 'Bu telefon bilgisayardan kaldırıldı';
+    note.textContent = 'Yeniden kullanmak için eşleşmeyi silip bilgisayarda yeni bir QR kodu tara.';
+  } else if (status === 'hello_rejected') {
+    t.textContent = 'Bilgisayar bu telefonu kabul etmedi';
+    note.textContent = info.reason === 'clock'
+      ? 'Telefonun saati yanlış görünüyor. Ayarlar > Genel > Tarih ve Saat\'ten otomatik saati aç.'
+      : 'Telefon bilgisayarda kayıtlı değil. Eşleşmeyi silip yeniden eşleştir.';
+  }
+  renderChatHeader();
+}
+
+async function call(type, params) {
+  if (!link || !link.ready) throw new Error('not_ready');
+  const reply = await link.request(type, params);
+  if (!reply.ok) {
+    const err = new Error(reply.error || 'failed');
+    err.reply = reply;
+    throw err;
+  }
+  return reply.result || {};
+}
+
+async function refreshAll() {
+  try {
+    const [c, p] = await Promise.all([call('list_chats'), call('pending_cards')]);
+    chats = Array.isArray(c.chats) ? c.chats : [];
+    cards = Array.isArray(p.cards) ? p.cards : [];
+    renderChats();
+    renderCards();
+    renderChatHeader();
+    if (wantedChatId) {
+      const id = wantedChatId;
+      wantedChatId = null;
+      openChat(id);
+    } else if (openChatId) {
+      loadChat(openChatId);
+    }
+  } catch (err) {
+    $('main-note').textContent = 'Liste alınamadı: ' + err.message;
+  }
+}
+
+function renderChats() {
+  const list = $('chats');
+  list.replaceChildren();
+  const sorted = [...chats].sort((a, b) => (b.last_activity || 0) - (a.last_activity || 0));
+  for (const chat of sorted) {
+    const status = STATUS_WORDS[chat.status] || chat.status || '';
+    const who = [chat.provider, chat.model].filter(Boolean).join(' · ');
+    const meta = [status, who, clock(chat.last_activity)].filter(Boolean).join(' · ');
+    list.append(el('li', {}, el('button', { type: 'button', onclick: () => openChat(chat.chat_id) },
+      chat.title || 'Adsız sohbet',
+      el('span', { class: chat.status === 'awaiting_card' ? 'meta wait' : 'meta', textContent: meta }))));
+  }
+  $('chats-empty').hidden = chats.length > 0;
+}
+
+function chatTitle(id) {
+  return chats.find((c) => c.chat_id === id)?.title || 'Sohbet';
+}
+
+function cardNode(card) {
+  const box = el('div', { class: 'card' });
+  const note = el('p', { class: 'note' });
+  const title = card.title || 'Onay bekliyor';
+  box.append(el('b', { textContent: title }));
+  if (card.chat_id && openChatId !== card.chat_id) box.append(el('span', { class: 'meta', textContent: chatTitle(card.chat_id) }));
+  if (card.detail) box.append(el('pre', { class: 'detail', textContent: String(card.detail) }));
+  const row = el('div', { class: 'row' });
+  const answer = async (decision, choice) => {
+    for (const b of row.querySelectorAll('button')) b.disabled = true;
+    note.textContent = 'Gönderiliyor…';
+    try {
+      await call('answer_card', choice === undefined ? { card_id: card.card_id, decision } : { card_id: card.card_id, decision, choice });
+      removeCard(card.card_id);
+    } catch (err) {
+      if (err.message === 'already_answered') {
+        const by = err.reply?.by ? ' (' + err.reply.by + ')' : '';
+        note.textContent = 'Bu kart zaten yanıtlanmış' + by + '.';
+        setTimeout(() => removeCard(card.card_id), 3000);
+      } else {
+        note.textContent = 'Gönderilemedi: ' + err.message;
+        for (const b of row.querySelectorAll('button')) b.disabled = false;
+      }
+    }
+  };
+  const choices = Array.isArray(card.choices) ? card.choices : [];
+  for (const ch of choices) {
+    const id = typeof ch === 'string' ? ch : ch.id;
+    const label = typeof ch === 'string' ? ch : ch.label || ch.id;
+    row.append(el('button', { type: 'button', textContent: label, onclick: () => answer('choice', id) }));
+  }
+  if (!choices.length) row.append(el('button', { type: 'button', textContent: 'Onayla', onclick: () => answer('approve') }));
+  row.append(el('button', { type: 'button', class: 'secondary', textContent: 'Reddet', onclick: () => answer('reject') }));
+  box.append(row, note);
+  return box;
+}
+
+function renderCards() {
+  const all = $('cards');
+  all.replaceChildren(...cards.map(cardNode));
+  $('cards-box').hidden = cards.length === 0;
+  if (openChatId) $('chat-cards').replaceChildren(...cards.filter((c) => c.chat_id === openChatId).map(cardNode));
+}
+
+function removeCard(cardId) {
+  cards = cards.filter((c) => c.card_id !== cardId);
+  renderCards();
+}
+
+// ---------------------------------------------------------------- chat view
+
+function renderChatHeader() {
+  if (!openChatId) return;
+  const chat = chats.find((c) => c.chat_id === openChatId);
+  $('chat-title').textContent = chat?.title || 'Sohbet';
+  const status = chat ? STATUS_WORDS[chat.status] || chat.status || '' : '';
+  $('chat-status').textContent = link?.ready ? status : $('status-text').textContent;
+  $('btn-stop').hidden = !(chat && chat.status === 'running');
+  $('btn-send').disabled = !link?.ready;
+}
+
+function logMessage(m) {
+  const who = m.role === 'user' ? (m.source === 'phone' ? 'Sen (telefon)' : 'Sen') : m.role === 'assistant' ? 'Asistan' : m.role || '';
+  $('log').append(el('div', { class: 'msg' }, el('span', { class: 'who', textContent: who }), String(m.text ?? '')));
+}
+
+function logEvent(ev) {
+  const log = $('log');
+  if (ev.kind === 'text') {
+    if (!liveText) {
+      liveText = el('div', { class: 'msg' }, el('span', { class: 'who', textContent: 'Asistan' }));
+      log.append(liveText);
+    }
+    liveText.append(String(ev.text ?? ''));
+    return;
+  }
+  liveText = null;
+  let line;
+  if (ev.kind === 'tool_call') line = 'Araç: ' + (ev.tool || '?') + (ev.summary ? ' - ' + ev.summary : '');
+  else if (ev.kind === 'turn_start') line = 'Tur başladı';
+  else if (ev.kind === 'turn_end') line = 'Tur bitti' + (ev.status && ev.status !== 'ok' ? ' (' + ev.status + ')' : '');
+  else if (ev.kind === 'card_opened') line = 'Onay kartı açıldı';
+  else if (ev.kind === 'card_closed') line = 'Onay kartı kapandı';
+  else line = String(ev.kind || 'olay');
+  log.append(el('div', { class: 'ev', textContent: line }));
+}
+
+async function loadChat(id) {
+  try {
+    const r = await call('open_chat', { chat_id: id });
+    if (openChatId !== id) return;
+    $('log').replaceChildren();
+    liveText = null;
+    for (const m of Array.isArray(r.messages) ? r.messages : []) logMessage(m);
+    for (const ev of Array.isArray(r.events) ? r.events : []) logEvent(ev);
+    window.scrollTo(0, document.body.scrollHeight);
+  } catch (err) {
+    $('chat-status').textContent = 'Sohbet açılamadı: ' + err.message;
+  }
+}
+
+function openChat(id) {
+  if (!link?.ready) {
+    wantedChatId = id;
+    return;
+  }
+  if (openChatId && openChatId !== id) call('close_chat', { chat_id: openChatId }).catch(() => {});
+  openChatId = id;
+  $('log').replaceChildren();
+  $('composer-note').textContent = '';
+  show('chat');
+  renderChatHeader();
+  renderCards();
+  loadChat(id);
+}
+
+function closeChat() {
+  if (openChatId) call('close_chat', { chat_id: openChatId }).catch(() => {});
+  openChatId = null;
+  show('main');
+}
+
+function onPush(msg) {
+  if (msg.type === 'event') {
+    const chat = chats.find((c) => c.chat_id === msg.chat_id);
+    if (chat && msg.kind === 'turn_start') chat.status = 'running';
+    if (chat && msg.kind === 'turn_end') chat.status = 'idle';
+    if (msg.chat_id === openChatId) logEvent(msg);
+    renderChats();
+    renderChatHeader();
+  } else if (msg.type === 'chat_changed') {
+    if (msg.chat?.chat_id) {
+      chats = chats.filter((c) => c.chat_id !== msg.chat.chat_id).concat(msg.chat);
+      renderChats();
+      renderChatHeader();
+    } else {
+      refreshAll();
+    }
+  } else if (msg.type === 'card_opened' && msg.card?.card_id) {
+    cards = cards.filter((c) => c.card_id !== msg.card.card_id).concat(msg.card);
+    renderCards();
+  } else if (msg.type === 'card_closed') {
+    removeCard(msg.card_id);
+  }
+}
+
+// ---------------------------------------------------------------- notifications
+
+function renderNotifyButton() {
+  const supported = 'Notification' in window && 'serviceWorker' in navigator;
+  $('btn-notify').hidden = !!device?.pushDone && supported && Notification.permission === 'granted';
+}
+
+async function enableNotifications() {
+  const note = $('notify-note');
+  if (!('Notification' in window) || !('PushManager' in window) || !('serviceWorker' in navigator)) {
+    note.textContent = isIos() ? 'Bildirimler için sayfayı ana ekrana ekleyip oradan açman gerekiyor.' : 'Bu tarayıcı bildirim desteklemiyor.';
+    return;
+  }
+  // iOS only grants this from a direct tap, so it must be the first await.
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') {
+    note.textContent = 'İzin verilmedi. Ayarlar > Bildirimler > Gamachine\'den açabilirsin.';
+    return;
+  }
+  if (!device.vapidPub) {
+    note.textContent = 'Bilgisayar bildirim anahtarını göndermedi; bildirim ayarlanamadı.';
+    return;
+  }
+  try {
+    note.textContent = 'Ayarlanıyor…';
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: C.fromB64u(device.vapidPub) });
+    await call('push_subscribe', { subscription: sub.toJSON() });
+    device.pushDone = true;
+    await store.put('device', device);
+    note.textContent = 'Bildirimler açık.';
+    renderNotifyButton();
+  } catch (err) {
+    note.textContent = err.message === 'not_ready' ? 'Önce bilgisayara bağlanmalı.' : 'Bildirim ayarlanamadı: ' + err.message;
+  }
+}
+
+// ---------------------------------------------------------------- boot
+
+function startMain() {
+  show('main');
+  renderNotifyButton();
+  const d = device;
+  link = new Link({
+    origin: wsOrigin(location),
+    device: { pairId: d.pairId, pcPub: C.fromB64u(d.pcPub), deviceId: d.deviceId, token: d.token, privateKey: d.privateKey },
+    onStatus: setStatus,
+    onPush,
+  });
+  link.start();
+}
+
+function handleHash(hash) {
+  if (hash.startsWith('#chat=')) {
+    const id = decodeURIComponent(hash.slice(6));
+    history.replaceState(null, '', '/p');
+    if (device) openChat(id);
+    return true;
+  }
+  return false;
+}
+
+async function unpair() {
+  if (!confirm('Bu telefondaki eşleşme silinsin mi? Bilgisayardaki cihaz listesinden de kaldırmayı unutma.')) return;
+  if (link) link.stop();
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    const sub = await reg?.pushManager?.getSubscription();
+    await sub?.unsubscribe();
+  } catch {}
+  await store.del('device');
+  location.replace('/p');
+}
+
+function wire() {
+  $('btn-copy-link').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(location.origin + '/p#' + pendingFragment);
+      $('copy-note').textContent = 'Kopyalandı. Şimdi ana ekrandaki simgeden aç ve yapıştır.';
+    } catch {
+      $('copy-note').textContent = 'Kopyalanamadı.';
+    }
+  });
+  $('btn-pair-here').addEventListener('click', () => startPairing(C.parsePairFragment(pendingFragment)));
+  $('btn-paste-pair').addEventListener('click', () => {
+    const r = pasteToFragment($('paste-link').value);
+    if (r.error) $('welcome-error').textContent = r.error;
+    else startPairing(r.parsed);
+  });
+  $('btn-show-install').addEventListener('click', () => {
+    $('install-pair').hidden = true;
+    show('install');
+  });
+  $('btn-pair-back').addEventListener('click', () => (device ? startMain() : showWelcome()));
+  $('btn-back').addEventListener('click', closeChat);
+  $('btn-unpair').addEventListener('click', unpair);
+  $('btn-notify').addEventListener('click', enableNotifications);
+
+  let stopArmed = null;
+  $('btn-stop').addEventListener('click', async () => {
+    const btn = $('btn-stop');
+    if (!stopArmed) {
+      btn.textContent = 'Durdurmak için tekrar dokun';
+      stopArmed = setTimeout(() => { stopArmed = null; btn.textContent = 'Durdur'; }, 4000);
+      return;
+    }
+    clearTimeout(stopArmed);
+    stopArmed = null;
+    btn.textContent = 'Durdur';
+    try {
+      await call('stop', { chat_id: openChatId });
+      $('chat-status').textContent = 'Durdurma isteği gönderildi.';
+    } catch (err) {
+      $('chat-status').textContent = 'Durdurulamadı: ' + err.message;
+    }
+  });
+
+  $('composer').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = $('composer-text').value.trim();
+    if (!text || !openChatId) return;
+    const note = $('composer-note');
+    $('btn-send').disabled = true;
+    note.textContent = 'Gönderiliyor…';
+    try {
+      const r = await call('send_message', { chat_id: openChatId, text });
+      if (r.status === 'desktop_not_ready') {
+        note.textContent = 'Bilgisayardaki uygulama hazır değil; mesaj gönderilmedi.';
+      } else {
+        $('composer-text').value = '';
+        note.textContent = r.status === 'accepted' ? 'Gönderildi.' : 'Yanıt: ' + (r.status || 'bilinmiyor');
+      }
+    } catch (err) {
+      note.textContent = 'Gönderilemedi: ' + err.message;
+    } finally {
+      $('btn-send').disabled = !link?.ready;
+    }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && link) link.wake();
+  });
+  window.addEventListener('online', () => link?.wake());
+  window.addEventListener('hashchange', () => handleHash(location.hash));
+  navigator.serviceWorker?.addEventListener('message', (e) => {
+    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') handleHash(new URL(e.data.url, location.origin).hash);
+  });
+}
+
+async function boot() {
+  wire();
+  navigator.serviceWorker?.register('/sw.js', { scope: '/' }).catch(() => {});
+  try {
+    device = (await store.get('device')) || null;
+  } catch {
+    device = null;
+  }
+  const hash = location.hash;
+  if (handleHash(hash) || !hash) {
+    if (device) startMain();
+    else showWelcome();
+    return;
+  }
+  const parsed = C.parsePairFragment(hash);
+  if (!parsed) {
+    history.replaceState(null, '', '/p');
+    return device ? startMain() : showWelcome();
+  }
+  pendingFragment = hash.slice(1);
+  if (device) {
+    showWelcome('Bu telefon zaten bir bilgisayarla eşli. Yeni eşleştirme eskisinin yerine geçer.');
+    $('paste-link').value = location.href;
+    return;
+  }
+  if (isIos() && !isStandalone()) {
+    // The fragment stays in the address bar on purpose: if iOS keeps it when
+    // adding to the home screen, the installed app can pair straight away.
+    $('install-pair').hidden = false;
+    show('install');
+    return;
+  }
+  startPairing(parsed);
+}
+
+boot();

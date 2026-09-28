@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "spec": "docs/remote-control.md + relay/README.md (byte layouts)",
+  "encoding": "byte strings are unpadded base64url; plaintexts are UTF-8 JSON exactly as written here",
+  "keys": {
+    "phone_static": {
+      "d": "lOWRG_eEZKUPSO16RoISpbUTjpBCOvvfI371538Yj7k",
+      "pub": "BCVCO5ydNoEqWu8JmwJLtVGJkm__H0xhY-IR-GaJcAkkze23dzQyhznZBBfq0l7VSoYW9Fx6M3KGNQDv88niRjs"
+    },
+    "pc_static": {
+      "d": "nbhhy8FGHWF0eHFGNmKvKDeMs7gt7G7SqEc8nBBdMHY",
+      "pub": "BE1i0Uu98NTkfJFrJcW3k4sEU7z09ydgETtZ_AMd3s7_9f2cEKssjmwILDPT-dOil9MQf0bR9whcF-U996Ra9Ig"
+    },
+    "phone_ephemeral": {
+      "d": "A72t-Zps2TzzeC4w7mzPk55AQEPeujZ4z45vD79L6Lg",
+      "pub": "BHPUqpfUW2niS_NdkgLnd6kRB2_JJVPcD_8GSQtQs4jPWMjU-11iiOYkJYklBxGnF7ONs-oK1Mvr2Tpyk2LPry4"
+    },
+    "pc_ephemeral": {
+      "d": "dXFsbYEPLjPj4u5cwEwACKdJePOYTHeO68YFyC92OoU",
+      "pub": "BLHUraMStHO-Hx2FrJu3pFthoFg41gEtDQugqdJLJYLYVykYpO4NfsdFGTDM3xMUjJLE5VhU9fiQHyg-cetsX74"
+    }
+  },
+  "relay": {
+    "room_key": "YClfJSzo-v6fRWclV9g1KFFMcuhvj508Tm1wS9lR8xk",
+    "room_key_hash": "SEP9xIBl87rMEFpvYeAPcaADiwgwn3_BOzMdbZSjAvM",
+    "token": "qNQUTFTcuc-i0m1rw-yHKNDJmibGjoSPu6pXfGJEn4g",
+    "token_hash": "4H9zIQbSNwWO6CoFt4Vlu5PiqJ6cTs4FfOxHv7VmQzI"
+  },
+  "pairing": {
+    "pair_id": "j3Ix2vO9Ul8SQso4OhbruQ",
+    "pair_secret": "2alvx5ax68NlFTKWX9uCZA",
+    "qr_fragment": "j3Ix2vO9Ul8SQso4OhbruQ.BE1i0Uu98NTkfJFrJcW3k4sEU7z09ydgETtZ_AMd3s7_9f2cEKssjmwILDPT-dOil9MQf0bR9whcF-U996Ra9Ig.2alvx5ax68NlFTKWX9uCZA",
+    "device_name": "iPhone (Burak)",
+    "mac_input": "BCVCO5ydNoEqWu8JmwJLtVGJkm__H0xhY-IR-GaJcAkkze23dzQyhznZBBfq0l7VSoYW9Fx6M3KGNQDv88niRjtpUGhvbmUgKEJ1cmFrKQ",
+    "mac": "R82ZRFonK4tq2I3--bJG31tWeorZ_oJEXMu3B5NGDJw",
+    "pair_request": {
+      "type": "pair_request",
+      "phone_pub": "BCVCO5ydNoEqWu8JmwJLtVGJkm__H0xhY-IR-GaJcAkkze23dzQyhznZBBfq0l7VSoYW9Fx6M3KGNQDv88niRjs",
+      "device_name": "iPhone (Burak)",
+      "mac": "R82ZRFonK4tq2I3--bJG31tWeorZ_oJEXMu3B5NGDJw"
+    },
+    "k_static": "eKtibmOmSizRD98ZasYOhaxchZAbVV-5eb8uYvIFhpI",
+    "sas_okm": "dTEyAQ",
+    "sas": "8337",
+    "k_pair": "dUeaePk0JtDq_MwYxo-OgvP8xavoydKnNIzAZ04JAWc",
+    "pair_ok_plaintext": "{\"device_id\":\"H_boFxm0zwJ5GkGtelVsAA\",\"token\":\"qNQUTFTcuc-i0m1rw-yHKNDJmibGjoSPu6pXfGJEn4g\",\"vapid_pub\":\"BN503ptkrSTtQW_upUYsQ-b5UZlM5_m0Xfgv3DgsrlRCWJxI8-vfU68iJjvTdxVP86JcPG4xJV0MbozBFoWaWBI\"}",
+    "pair_ok": {
+      "type": "pair_ok",
+      "c": 1,
+      "d": "iZQk177pGM_b_UXXqXrswBSa_AhJW4OHKabW_uHANu_s0i__MReTQacYyWmDpZUKLGx_UmfhoMobmxZRiFZyR-hvlEzlGEvi5aqjwAYpQmmLKpBK1mYSS4a-aReq9Giqu05uO6ue4clGoTU1Of_pMRovpT07bGSc1kUhHzcThmZphDZKMqz70gzAO8AS3CzAOqZRyrjzW14T2-T56f6Rg8FUExf0XLf-tNQ7O4DwVfnUflQsyXVyjKIFQvmulUFOUNzUpywjPO0PQeJ8rrUjX-JK"
+    }
+  },
+  "session": {
+    "device_id": "H_boFxm0zwJ5GkGtelVsAA",
+    "t": 1790000000,
+    "hello_tag_input": "aGVsbG9IX2JvRnhtMHp3SjVHa0d0ZWxWc0FBBHPUqpfUW2niS_NdkgLnd6kRB2_JJVPcD_8GSQtQs4jPWMjU-11iiOYkJYklBxGnF7ONs-oK1Mvr2Tpyk2LPry4AAAAAarE7gA",
+    "hello": {
+      "type": "hello",
+      "device_id": "H_boFxm0zwJ5GkGtelVsAA",
+      "eph_phone_pub": "BHPUqpfUW2niS_NdkgLnd6kRB2_JJVPcD_8GSQtQs4jPWMjU-11iiOYkJYklBxGnF7ONs-oK1Mvr2Tpyk2LPry4",
+      "t": 1790000000,
+      "tag": "jrCBCgS00qhJ9FTZv3tx7XBL5MtW3qkBhciaMPqwNWo"
+    },
+    "hello_ack_tag_input": "aGVsbG9fYWNrBHPUqpfUW2niS_NdkgLnd6kRB2_JJVPcD_8GSQtQs4jPWMjU-11iiOYkJYklBxGnF7ONs-oK1Mvr2Tpyk2LPry4EsdStoxK0c74fHYWsm7ekW2GgWDjWAS0NC6Cp0kslgthXKRik7g1-x0UZMMzfExSMksTlWFT1-JAfKD5x62xfvg",
+    "hello_ack": {
+      "type": "hello_ack",
+      "eph_pc_pub": "BLHUraMStHO-Hx2FrJu3pFthoFg41gEtDQugqdJLJYLYVykYpO4NfsdFGTDM3xMUjJLE5VhU9fiQHyg-cetsX74",
+      "tag": "_u_IONvntiqqb67usXzYn1RtuMNVD7wVx2Hn6bDZ-Ww"
+    },
+    "eph_shared": "bX91Yd1R9MmLxuLma3SUqV3KD49ZNOZQlGZo4jfsrmI",
+    "session_ikm": "bX91Yd1R9MmLxuLma3SUqV3KD49ZNOZQlGZo4jfsrmJ4q2JuY6ZKLNEP3xlqxg6FrFyFkBtVX7l5vy5i8gWGkg",
+    "session_okm": "RTxCu-67y6CU71yWuQ6UbvA6ZFMZa38deHTgjv5aSV9MlIE6EAGMjUFcoF7B5Ia_HgHHTQ_SGHjnVT7O2UMb1Q",
+    "key_phone_to_pc": "RTxCu-67y6CU71yWuQ6UbvA6ZFMZa38deHTgjv5aSV8",
+    "key_pc_to_phone": "TJSBOhABjI1BXKBeweSGvx4Bx00P0hh451U-ztlDG9U"
+  },
+  "frames": [
+    {
+      "direction": 1,
+      "c": 1,
+      "nonce": "AAAAAQAAAAAAAAAB",
+      "plaintext": "{\"id\":1,\"type\":\"list_chats\"}",
+      "frame": {
+        "c": 1,
+        "d": "Pywxe3Hi-HDyFn_WKG24Rm50Q2xOlA51OvGuxiPdXT404Akl3EgknByJBx8"
+      }
+    },
+    {
+      "direction": 1,
+      "c": 2,
+      "nonce": "AAAAAQAAAAAAAAAC",
+      "plaintext": "{\"id\":2,\"type\":\"answer_card\",\"card_id\":\"card-7\",\"decision\":\"approve\"}",
+      "frame": {
+        "c": 2,
+        "d": "9tAZvGUyfv5x-MCylca7IGc94k4BbXI0CXkPsCrLVFsGIQi14q1h5UM9pJY4ERd1kascCRqpDScDmaWkfB2MbeQ19XtAPCcUIQOn2yxFyobKkGCU5Q"
+      }
+    },
+    {
+      "direction": 1,
+      "c": 3,
+      "nonce": "AAAAAQAAAAAAAAAD",
+      "plaintext": "{\"id\":3,\"type\":\"send_message\",\"chat_id\":\"c1\",\"text\":\"Şu testi çalıştır, sonra özetle 🙂\"}",
+      "frame": {
+        "c": 3,
+        "d": "KPo9gN4gk0qA69tyPQrLbS19g7mLITRCb50GmPrWbu639hZWFSqiz2LYwDTg9RaYl3LZNa1NPozUHxXFBlWXDqfN9NwhfDl406Us1p2I8lROB2d8urOjrUAdJ9MoTfFNusEMUOuzBknrCTNTbtMhORE"
+      }
+    },
+    {
+      "direction": 2,
+      "c": 1,
+      "nonce": "AAAAAgAAAAAAAAAB",
+      "plaintext": "{\"id\":1,\"ok\":true,\"result\":{\"chats\":[]}}",
+      "frame": {
+        "c": 1,
+        "d": "Y8UD_HP9UmEpkVTaOHwHtUNh79UkVpUm4WDEYKWOhvo9b-5ORKQphVV8P-651zjTWdL3Fza9SiA"
+      }
+    },
+    {
+      "direction": 2,
+      "c": 2,
+      "nonce": "AAAAAgAAAAAAAAAC",
+      "plaintext": "{\"type\":\"card_opened\",\"card\":{\"card_id\":\"card-7\",\"chat_id\":\"c1\",\"title\":\"Onay bekliyor - Codex (Arena): git commit -m \\\"düzeltme\\\"\"}}",
+      "frame": {
+        "c": 2,
+        "d": "uffLv_l5nE1rvblI1n_6MrvWL8xc534LeF8UcrwpAPa66neQ5IRiEkTA_0tQbSMv2CV3_XO-9AcCTPmA9w_qLx-Hd5vIsCYXpdsWAuQcOuAe9USbu-UtBV_bNRgUJ1EUifsX6Cu8QixGO2zMLWHBIzrysLgmh5x57Aj7mga-8fJZf4P20yH8sU6NC92VMBQoN9DvN4WO"
+      }
+    }
+  ]
+}
