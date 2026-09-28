@@ -13,6 +13,7 @@ import pytest
 
 import action_risk
 from action_risk import CRITICAL, ROUTINE, classify
+from agentic import command_safety
 
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 
@@ -145,7 +146,6 @@ def test_known_program_reaching_outside_the_workspace_is_critical(ws):
     "cat -Path Env:LOCAL_APP_TOKEN",
     "cat C:notes.txt",
     "cat Assets/x.cs:hidden",
-    "cat \\\\server\\share\\x",
     "cat //server/share/x",
     "cat \\\\?\\C:\\Windows\\win.ini",
     "cat \\\\.\\C:\\Windows\\win.ini",
@@ -154,16 +154,34 @@ def test_known_program_reaching_outside_the_workspace_is_critical(ws):
     # Native programs: only drive-relative and UNC/device forms are refused.
     "grep x D:foo",
     "git show D:foo",
-    "head \\\\server\\share\\x",
     "tail //server/x",
-    "grep x C:/Windows/win.ini",
     # Build/test list: same native rule.
     "pytest D:foo",
-    "pytest \\\\server\\share\\tests",
     "dotnet build //server/x.csproj",
 ])
 def test_powershell_provider_paths_are_critical(command, ws):
     assert shell(command, ws).verdict == CRITICAL, command
+
+
+# Windows-only syntax (CI runs on ubuntu and failed on these, 28 Sep 2026). A
+# POSIX shell reads the backslash as an escape, so `\\server\share\x` there is
+# a relative name inside the workspace and `routine` is the right verdict.
+# Tokenizing is plain string work, so the Windows half runs everywhere through
+# the module's own seam; a drive path is resolved by the real filesystem,
+# which cannot be simulated, so that case runs on Windows only.
+@pytest.mark.parametrize("command", [
+    "cat \\\\server\\share\\x",
+    "head \\\\server\\share\\x",
+    "pytest \\\\server\\share\\tests",
+])
+def test_windows_unc_paths_are_critical(command, ws, monkeypatch):
+    monkeypatch.setattr(command_safety, "_windows_kipi", lambda: True)
+    assert shell(command, ws).verdict == CRITICAL, command
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive paths resolve through the Windows filesystem")
+def test_windows_drive_path_is_critical(ws):
+    assert shell("grep x C:/Windows/win.ini", ws).verdict == CRITICAL
 
 
 @pytest.mark.parametrize("command", [
