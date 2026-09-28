@@ -731,7 +731,7 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
   }
 })
 
-// Remote control: every /remote/* call, so the UI secret stays here and the
+// Remote control: every call under /remote/, so the UI secret stays here and the
 // keep-awake blocker sees every answer (helpers/remote-control.ts).
 const remoteControl = createRemoteControl({
   baseUrl: getBackendBaseUrl,
