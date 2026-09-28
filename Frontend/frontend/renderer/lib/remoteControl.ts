@@ -94,18 +94,32 @@ export function parseRemoteMessage(data: any): RemoteMessage | null {
 // first to claim a request id sends it; the others drop it. Within a window a
 // Set is enough; across windows of the same origin the claim is written to
 // localStorage under a Web Lock, so two windows cannot both read "unclaimed".
+//
+// When the claim cannot be recorded that way (the write throws, or the lock
+// request fails), only the primary window claims, so a message is sent at
+// most once. The primary is the holder of a lifetime Web Lock; the next
+// waiting window takes it over when the holder closes. Without Web Locks
+// (never the case in Electron) windows elect one over a BroadcastChannel: an
+// existing primary wins, otherwise the lowest random id heard within
+// ELECT_MS. With neither API there is nothing to coordinate with and the
+// window treats itself as the only one.
 const SEEN_KEY = 'gamachine.remoteMessages.claimed';
 const SEEN_TTL_MS = 60 * 60 * 1000;
 const SEEN_MAX = 200;
-const claimedHere = new Set<string>();
+const CLAIM_LOCK = 'gamachine-remote-message-claim';
+const PRIMARY_LOCK = 'gamachine-remote-primary';
+const PRIMARY_CHANNEL = 'gamachine-remote-primary';
+const ELECT_MS = 150;
 
-function claimInStorage(requestId: string): boolean {
+type ClaimOutcome = 'claimed' | 'taken' | 'unrecorded';
+
+function claimInStorage(requestId: string): ClaimOutcome {
   let seen: Record<string, number> = {};
   try {
     const raw = localStorage.getItem(SEEN_KEY);
     if (raw) seen = JSON.parse(raw) || {};
   } catch { seen = {}; }
-  if (seen[requestId]) return false;
+  if (seen[requestId]) return 'taken';
   const now = Date.now();
   const kept = Object.entries(seen)
     .filter(([, at]) => typeof at === 'number' && now - at < SEEN_TTL_MS)
@@ -114,27 +128,130 @@ function claimInStorage(requestId: string): boolean {
   try {
     localStorage.setItem(SEEN_KEY, JSON.stringify(Object.fromEntries([...kept, [requestId, now]])));
   } catch {
-    // No storage: the in-window Set still holds.
+    return 'unrecorded';
   }
-  return true;
+  return 'claimed';
 }
+
+const locksApi = () => (typeof navigator !== 'undefined' ? (navigator as any).locks : undefined);
+
+/** Per renderer window: its claims and its part in the primary election. */
+class WindowContext {
+  readonly claimed = new Set<string>();
+  private primary = false;
+  private decided: Promise<void> | null = null;
+  private channel: BroadcastChannel | null = null;
+  private readonly id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+  async isPrimary(): Promise<boolean> {
+    if (!this.decided) this.decided = this.elect();
+    await this.decided;
+    return this.primary;
+  }
+
+  private elect(): Promise<void> {
+    const locks = locksApi();
+    if (!locks?.request) return this.electWithoutLocks();
+    return new Promise<void>(resolve => {
+      const holdForever = () => { this.primary = true; resolve(); return new Promise<void>(() => {}); };
+      locks.request(PRIMARY_LOCK, { ifAvailable: true }, (lock: unknown) => {
+        if (lock) return holdForever();
+        resolve();
+        // Queue up to take over when the current primary window closes.
+        locks.request(PRIMARY_LOCK, holdForever).catch(() => {});
+        return undefined;
+      }).catch(() => { void this.electWithoutLocks().then(resolve); });
+    });
+  }
+
+  private electWithoutLocks(): Promise<void> {
+    if (typeof BroadcastChannel === 'undefined') {
+      this.primary = true;
+      return Promise.resolve();
+    }
+    return this.electOverChannel();
+  }
+
+  private electOverChannel(): Promise<void> {
+    const channel = new BroadcastChannel(PRIMARY_CHANNEL);
+    (channel as any).unref?.(); // Node (tests): do not keep the process alive
+    this.channel = channel;
+    let deciding = true;
+    let primaryHeard: string | null = null;
+    const candidates = new Set([this.id]);
+    channel.onmessage = (event: MessageEvent) => {
+      const msg = event.data;
+      if (!msg || typeof msg.id !== 'string') return;
+      if (msg.type === 'primary') {
+        if (this.primary && msg.id < this.id) this.primary = false; // concurrent win: lower id keeps it
+        if (deciding) primaryHeard = msg.id;
+      } else if (msg.type === 'candidate') {
+        if (this.primary) channel.postMessage({ type: 'primary', id: this.id });
+        else if (deciding) {
+          candidates.add(msg.id);
+          if (msg.reply !== false) channel.postMessage({ type: 'candidate', id: this.id, reply: false });
+        }
+      } else if (msg.type === 'bye' && !this.primary) {
+        this.decided = null; // the primary may be gone: elect again on the next claim
+        this.close();
+      }
+    };
+    channel.postMessage({ type: 'candidate', id: this.id });
+    return new Promise<void>(resolve => {
+      setTimeout(() => {
+        deciding = false;
+        this.primary = primaryHeard === null && [...candidates].sort()[0] === this.id;
+        if (this.primary) {
+          channel.postMessage({ type: 'primary', id: this.id });
+          if (typeof window !== 'undefined') {
+            window.addEventListener('pagehide', () => channel.postMessage({ type: 'bye', id: this.id }));
+          }
+        }
+        resolve();
+      }, ELECT_MS);
+    });
+  }
+
+  close(): void {
+    this.channel?.close();
+    this.channel = null;
+  }
+}
+
+let here = new WindowContext();
 
 /** True exactly once per request id, across the windows of this app. */
 export async function claimRemoteMessage(requestId: string): Promise<boolean> {
-  if (claimedHere.has(requestId)) return false;
-  claimedHere.add(requestId);
-  const locks = typeof navigator !== 'undefined' ? (navigator as any).locks : undefined;
-  if (!locks?.request) return claimInStorage(requestId);
-  try {
-    return await locks.request('gamachine-remote-message-claim', () => claimInStorage(requestId));
-  } catch {
-    return claimInStorage(requestId);
+  const ctx = here;
+  if (ctx.claimed.has(requestId)) return false;
+  ctx.claimed.add(requestId);
+  const locks = locksApi();
+  let outcome: ClaimOutcome = 'unrecorded';
+  if (locks?.request) {
+    try {
+      outcome = await locks.request(CLAIM_LOCK, () => claimInStorage(requestId));
+    } catch {
+      if (claimInStorage(requestId) === 'taken') outcome = 'taken';
+    }
+  } else {
+    // No Web Locks: a synchronous read-then-write is the best storage can do.
+    outcome = claimInStorage(requestId);
   }
+  if (outcome === 'taken') return false;
+  if (outcome === 'claimed') return true;
+  return ctx.isPrimary();
 }
 
-/** Test hook: forget in-window claims. */
-export function resetRemoteClaimsForTests(): void {
-  claimedHere.clear();
+/**
+ * Test hook: start a fresh window context (in-window claims and election
+ * state), as a second renderer window would have. Earlier contexts keep
+ * answering on the channel like the windows they model, unless `closeAll`.
+ */
+const contexts: WindowContext[] = [];
+export function resetRemoteClaimsForTests(closeAll = false): void {
+  contexts.push(here);
+  if (closeAll) contexts.splice(0).forEach(c => c.close());
+  here = new WindowContext();
 }
 
 /** `phone:<name>` (bridge device label) -> `<name>`; null for anyone else. */
