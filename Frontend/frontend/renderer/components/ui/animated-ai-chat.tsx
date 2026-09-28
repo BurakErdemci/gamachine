@@ -22,6 +22,7 @@ import { useLang } from "../../lib/i18n";
 import { useVoiceInput, formatElapsed } from "../../hooks/home/useVoiceInput";
 import type { Conversation } from "../home/types";
 import { mentionQueryAt, mentionTargets, findMentions, mentionLabel } from "../../lib/chatMentions";
+import { MessageQueue, type MessageQueueProps, type QueueItemView } from "./message-queue";
 
 interface UseAutoResizeTextareaProps {
     minHeight: number;
@@ -161,6 +162,7 @@ export function AnimatedChatInput({
     api = '',
     chats = [],
     currentChatId = null,
+    queue,
 }: {
     value: string;
     setValue: (val: string) => void;
@@ -180,6 +182,8 @@ export function AnimatedChatInput({
     api?: string;
     chats?: Conversation[];       // the `@` menu's targets (the user's chats and branches)
     currentChatId?: number | null;
+    // Messages sent while this chat's turn runs; drawn above the text box.
+    queue?: MessageQueueProps;
 }) {
     // Typing state is INTERNAL — does not propagate to parent on every keystroke.
     const [internalValue, setInternalValue] = useState(value);
@@ -693,7 +697,8 @@ export function AnimatedChatInput({
     };
 
     const handleSendMessage = async () => {
-        if ((internalValue.trim() || attachments.length > 0) && !isLoading) {
+        // While a turn runs the page queues the message instead of sending it.
+        if (internalValue.trim() || attachments.length > 0) {
             const trimmed = internalValue.trim();
             if (trimmed.startsWith('/') && onCommand) {
                 const handled = onCommand(trimmed);
@@ -731,6 +736,23 @@ export function AnimatedChatInput({
             adjustHeight(true);
         }
     };
+
+    // A queued message taken back for editing. Text already in the box is
+    // kept: the message is added after it instead of replacing it.
+    const takeBackQueued = (item: QueueItemView) => {
+        const base = internalValue.trim() ? `${internalValue}\n\n${item.draft}` : item.draft;
+        setInternalValue(base);
+        setValue(base);
+        const restored = [
+            ...(item.images ?? []).map((data, i) => ({ name: `image-${i + 1}`, data, type: 'image' as const })),
+            ...(item.videos ?? []).map((v: any) => ({
+                name: v.name || v.url || v.path || 'video', data: '', type: 'video' as const, path: v.path, url: v.url,
+            })),
+        ];
+        if (restored.length > 0) setAttachments(prev => [...prev, ...restored]);
+        scheduleDeferred(() => { textareaRef.current?.focus(); adjustHeight(); });
+    };
+    const hasDraft = Boolean(internalValue.trim()) || attachments.length > 0;
 
     return (
         <motion.div 
@@ -835,6 +857,8 @@ export function AnimatedChatInput({
                     />
                 </div>
             )}
+
+            {queue && <MessageQueue {...queue} onEditTake={takeBackQueued} />}
 
             <div className="p-3">
                 <Textarea
@@ -1013,7 +1037,8 @@ export function AnimatedChatInput({
                     )}
                 </div>
                 
-                {isLoading ? (
+                <div className="flex items-center gap-2">
+                {isLoading && (
                     <button 
                         type="button" 
                         onClick={onStop} 
@@ -1022,7 +1047,9 @@ export function AnimatedChatInput({
                         <Square className="w-3 h-3 fill-current" />
                         <span>{t('composer.stop')}</span>
                     </button>
-                ) : (
+                )}
+                {/* While a turn runs, Send appears only with something to queue. */}
+                {(!isLoading || hasDraft) && (
                     <button 
                         type="button" 
                         onClick={handleSendMessage} 
@@ -1032,18 +1059,21 @@ export function AnimatedChatInput({
                         // back to `idle` but before the restore effect has run — Send
                         // used to stay enabled through both windows (audit findings,
                         // 3 Sep 2026).
-                        disabled={disabled || sendBlockedByDictation || (!internalValue.trim() && attachments.length === 0)}
+                        disabled={disabled || sendBlockedByDictation || !hasDraft}
+                        data-send-button
+                        title={isLoading ? t('queue.addHint') : undefined}
                         className={cn(
                             "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5",
-                            (internalValue.trim() || attachments.length > 0) && !disabled && !sendBlockedByDictation
+                            hasDraft && !disabled && !sendBlockedByDictation
                                 ? "bg-white text-black hover:bg-white/90 active:scale-95 shadow-lg shadow-white/5" 
                                 : "bg-white/[0.05] text-white/20"
                         )}
                     >
                         <SendIcon className="w-3 h-3" />
-                        <span>Send</span>
+                        <span>{isLoading ? t('queue.add') : 'Send'}</span>
                     </button>
                 )}
+                </div>
             </div>
         </motion.div>
     );

@@ -20,6 +20,23 @@ type PendingCommand = {
   riskReason?: string; riskDetail?: string;
 };
 type PendingQuestion = { questions: any[]; gateId: string; messageId: number };
+type ThinkingLevel = 'auto' | 'off' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/**
+ * A message the user sent while its chat's turn was running. It carries every
+ * argument of the send as it stood at that moment, so it goes out unchanged
+ * even when the chat is in the background by then.
+ */
+export type QueuedMessage = {
+  id: number;
+  /** What is sent: the page has already inlined attached files. */
+  text: string;
+  /** What the composer held: shown in the list and given back by edit. */
+  draft: string;
+  code: string; lang: string; genMode: GenerationMode; thinkingLevel: ThinkingLevel;
+  setPendingGenFiles: (val: any) => void; setPendingDelete: (val: any) => void;
+  images?: string[]; videos?: any[]; ultracode: boolean;
+};
 type SetArg<T> = T | ((prev: T) => T);
 const resolveArg = <T,>(arg: SetArg<T>, prev: T): T =>
   typeof arg === 'function' ? (arg as (p: T) => T)(prev) : arg;
@@ -96,13 +113,20 @@ interface ConvRuntime {
   // a slash card). Unlike `unsynced` this survives being opened and later
   // turns: only replacing the list from the server clears it.
   clientOnly: boolean;
+  // Messages sent while a turn ran, oldest first; one goes out per clean
+  // turn end. In memory only: an app restart loses them.
+  queue: QueuedMessage[];
+  // Set when a turn with a queue behind it was stopped or failed: the user
+  // stopped for a reason, and after an error every queued turn could fail the
+  // same way. Only "send next" / "send now" clear it.
+  queuePaused: boolean;
 }
 
 const EMPTY_RUNTIME: ConvRuntime = {
   messages: [], loading: false, activity: null, contextUsage: null,
   pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
   parkedCards: [], bridgeGates: [], lastCard: 0, turnEnd: null,
-  unread: false, unsynced: false, clientOnly: false,
+  unread: false, unsynced: false, clientOnly: false, queue: [], queuePaused: false,
 };
 
 // Runtime key while no conversation is selected. Database ids start at 1.
@@ -717,12 +741,15 @@ export const useChat = (
     }
   }, [API, patchConv, refreshContextUsage, rt]);
 
+  // Set once `drainQueue` exists; a finishing turn hands its chat on through it.
+  const drainQueueRef = useRef<(convId: number) => boolean>(() => false);
+
   const sendMessage = useCallback(async (
     messageContent: string, 
     code: string, 
     lang: string, 
     genMode: GenerationMode, 
-    thinkingLevel: 'auto' | 'off' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max',
+    thinkingLevel: ThinkingLevel,
     setPendingGenFiles: (val: any) => void,
     setPendingDelete: (val: any) => void,
     images?: string[],
@@ -732,12 +759,31 @@ export const useChat = (
     // The backend stores this with the `system` role and runs the consecutive-wake counter.
     origin: 'user' | 'wake' = 'user',
     // The wake channel names its own conversation; a user send goes to the chat on screen.
-    targetOverride?: number
+    targetOverride?: number,
+    // The composer's text before the page inlined attached files; kept only
+    // if this send has to wait in the queue.
+    draft?: string,
   ) => {
     if (!user || !API) return;
     const requested = targetOverride ?? activeConvIdRef.current;
+    const slot = rt(keyOf(requested));
     // Only THIS chat's running turn blocks a send; other chats run independently.
-    if (rt(keyOf(requested)).loading) return;
+    if (slot.loading) {
+      // Owner: a message typed while the agent runs must not stop the turn;
+      // it waits and goes out when the turn ends.
+      if (origin === 'user') {
+        const item: QueuedMessage = {
+          id: ++eventSeqRef.current, text: messageContent, draft: draft ?? messageContent,
+          code, lang, genMode, thinkingLevel, setPendingGenFiles, setPendingDelete,
+          images, videos, ultracode,
+        };
+        patchConv(keyOf(requested), r => ({ queue: [...r.queue, item] }));
+        if (targetOverride == null) setChatInput('');
+      }
+      return;
+    }
+    // A wake never jumps a queued user message (see `startWake`).
+    if (origin === 'wake' && slot.queue.length > 0) return;
     patchConv(keyOf(requested), () => ({ loading: true }));
     if (origin === 'user') {
       lastSendArgsRef.current = { lang, genMode, thinkingLevel, setPendingGenFiles, setPendingDelete };
@@ -746,11 +792,13 @@ export const useChat = (
     let created: number | null = null;
     if (!requested) {
       // The no-conversation slot held `loading` only to refuse a double send
-      // while the conversation is being created.
+      // while the conversation is being created; anything queued there in
+      // that window belongs to the new chat.
       created = await createNewConversation();
-      patchConv(NO_CONV, () => ({ loading: false }));
+      const waiting = rt(NO_CONV).queue;
+      patchConv(NO_CONV, () => ({ loading: false, ...(created ? { queue: [] } : { queuePaused: waiting.length > 0 }) }));
       if (!created) return;
-      patchConv(created, () => ({ loading: true }));
+      patchConv(created, r => ({ loading: true, queue: [...waiting, ...r.queue] }));
     }
     const targetConvId: number = requested || created!;
     // Yeni tur: bu sohbetin önceki turundan kalmış bekleyen onay/soru ve
@@ -1130,14 +1178,19 @@ export const useChat = (
         turnRef.current.delete(targetConvId);
         controllersRef.current.delete(targetConvId);
         const visible = onScreen();
+        const failed = errored || !finishedCleanly;
         patchConv(targetConvId, r => ({
           loading: false, activity: null, unread: !visible, unsynced: !visible,
           clientOnly: r.clientOnly || lossy,
           // Failed = the backend reported an error, or the stream ended without
           // `done`/`response`. A transport error AFTER `done` does not undo a
           // finished turn (Codex notifyaudit, done-then-read-error).
-          turnEnd: { seq: ++eventSeqRef.current, failed: errored || !finishedCleanly },
+          turnEnd: { seq: ++eventSeqRef.current, failed },
+          queuePaused: r.queuePaused || (failed && r.queue.length > 0),
         }));
+        // Synchronously, before this task yields: a wake frame handled after
+        // this point finds the chat busy with the queued message.
+        if (!failed) drainQueueRef.current(targetConvId);
         if (!visible && finishedCleanly && !lossy) void syncFinished(targetConvId);
       }
     }
@@ -1162,6 +1215,24 @@ export const useChat = (
   // a turn this renderer started a moment before.
   const sendMessageRef = useRef(sendMessage);
   sendMessageRef.current = sendMessage;
+
+  // Sends the chat's oldest queued message as an ordinary user turn. It goes
+  // to that chat by id, so a chat in the background never touches the
+  // composer. A busy chat keeps the message at the head for its next turn end.
+  const drainQueue = useCallback((convId: number) => {
+    const r = rt(convId);
+    if (r.loading || r.queuePaused || r.queue.length === 0) return false;
+    const [next, ...rest] = r.queue;
+    patchConv(convId, () => ({ queue: rest }));
+    void sendMessageRef.current(
+      next.text, next.code, next.lang, next.genMode, next.thinkingLevel,
+      next.setPendingGenFiles, next.setPendingDelete,
+      next.images, next.ultracode, next.videos, 'user', convId,
+    );
+    return true;
+  }, [patchConv, rt]);
+  drainQueueRef.current = drainQueue;
+
   const fetchMessagesRef = useRef(fetchMessages);
   fetchMessagesRef.current = fetchMessages;
   const userId = user?.id;
@@ -1179,7 +1250,10 @@ export const useChat = (
       // dropping the wake beats starting a turn in a mode nobody chose. A
       // dropped note stays queued on the server and is offered again.
       const args = wakeDefaultsRef.current ?? lastSendArgsRef.current;
-      if (!args || rt(convId).loading) return;
+      // A queued user message owns the chat's next turn, paused or not. The
+      // backend drops pending wake notices on a user message anyway, and
+      // queued mail is offered again once this frame's ticket expires.
+      if (!args || rt(convId).loading || rt(convId).queue.length > 0) return;
       // A chat never opened here has no history in its runtime; the wake
       // turn's live copy would otherwise be all the user sees on opening it.
       if (rt(convId).messages.length === 0) await fetchMessagesRef.current(convId);
@@ -1332,25 +1406,71 @@ export const useChat = (
   // backend turn, its own cards. Bridge cards (`globalCommand`, the tray) are
   // not cleared here: the backend denies the ones this Stop covers and they
   // leave with the next `/mcp-pending` poll; the rest stay decidable.
-  const stopMessage = useCallback(() => {
+  // Resolves once the backend has answered the stop request (it cancels the
+  // turn before answering), so a caller can start the next turn after it.
+  const stopMessage = useCallback((): Promise<void> => {
     const convId = activeConvIdRef.current;
     const key = keyOf(convId);
     turnRef.current.delete(key);
     controllersRef.current.get(key)?.abort();
     controllersRef.current.delete(key);
     // Claude SDK turunu gerçekten iptal et (bekleyen onay/soru gate'lerini çöz + interrupt)
+    let stopped: Promise<void> = Promise.resolve();
     if (convId && user) {
-      fetch(`${API}/chat-stop/${convId}`, {
+      stopped = fetch(`${API}/chat-stop/${convId}`, {
         method: 'POST',
         headers: { 'X-Session-Token': user.sessionToken },
-      }).catch(() => {});
+      }).then(() => undefined, () => undefined);
     }
     // Bekleyen onay/soru kartlarını ve kuyrukları temizle (backend gate'leri reddetti)
-    patchConv(key, () => ({
+    patchConv(key, r => ({
       pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
       activity: null, loading: false,
+      queuePaused: r.queue.length > 0,
     }));
+    return stopped;
   }, [API, patchConv, user]);
+
+  // ── Message queue actions (the chat on screen) ──────────────────────────
+  const removeQueued = useCallback((key: number, itemId: number) => {
+    const item = rt(key).queue.find(q => q.id === itemId) ?? null;
+    if (item) {
+      patchConv(key, r => {
+        const queue = r.queue.filter(q => q.id !== itemId);
+        return { queue, queuePaused: r.queuePaused && queue.length > 0 };
+      });
+    }
+    return item;
+  }, [patchConv, rt]);
+
+  const deleteQueued = useCallback((itemId: number) => {
+    removeQueued(keyOf(activeConvIdRef.current), itemId);
+  }, [removeQueued]);
+
+  // Takes the message out of the queue and hands it back for the composer.
+  const editQueued = useCallback((itemId: number) =>
+    removeQueued(keyOf(activeConvIdRef.current), itemId), [removeQueued]);
+
+  // "Send next" on a paused queue. While the chat is busy the message stays
+  // at the head and goes out at the next clean turn end.
+  const resumeQueue = useCallback(() => {
+    const key = keyOf(activeConvIdRef.current);
+    patchConv(key, () => ({ queuePaused: false }));
+    return drainQueue(key);
+  }, [drainQueue, patchConv]);
+
+  // "Send now": the message moves to the head, the running turn is stopped
+  // through the ordinary Stop, and the message goes out once the backend has
+  // cancelled that turn.
+  const sendQueuedNow = useCallback(async (itemId: number) => {
+    const key = keyOf(activeConvIdRef.current);
+    const item = rt(key).queue.find(q => q.id === itemId);
+    if (!item) return false;
+    patchConv(key, r => ({ queue: [item, ...r.queue.filter(q => q.id !== itemId)] }));
+    if (rt(key).loading) await stopMessage();
+    patchConv(key, () => ({ queuePaused: false }));
+    return drainQueue(key);
+  }, [drainQueue, patchConv, rt, stopMessage]);
 
   // The chat holding a gate; the screen's chat when none does (a card set
   // directly through `setPendingQuestion`).
@@ -1409,6 +1529,8 @@ export const useChat = (
     branchConversation, setBranchHidden, closeBranch, deleteBranch, renameConversation,
     convStatus, attention,
     sendMessage, stopMessage, setWakeDefaults,
+    queue: screen.queue, queuePaused: screen.queuePaused,
+    deleteQueued, editQueued, resumeQueue, sendQueuedNow,
     clearHistory, analyzeProject, exportMemory, importMemory, compactConversation,
     // Kararı backend'e iletir ve İLETİLDİĞİNİ DOĞRULAR. Yanıt gövdesi eskiden
     // hiç okunmuyordu: gate düşmüşse backend {"status":"gate_not_found"} dönüyor,

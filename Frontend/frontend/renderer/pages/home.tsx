@@ -458,7 +458,8 @@ export default function Home() {
   };
 
   const handleSendMessage = async (msg?: string, images?: string[], videos?: any[]) => {
-    let input = (msg || chat.chatInput).trim();
+    const draft = msg || chat.chatInput;
+    let input = draft.trim();
     if (!input && (!images || images.length === 0) && (!videos || videos.length === 0)) return;
 
     // Send-gate: aktif bulut sağlayıcının API key'i yoksa göndermeyi engelle (net uyarı +
@@ -497,7 +498,7 @@ export default function Home() {
     // Diskteki açık dosyayı her mesajda yeniden modele basma. Ajan gerektiğinde
     // dosyayı kendisi okuyabilir; yalnız kaydedilmemiş buffer ayrıca gönderilir.
     const unsavedEditorContext = getUnsavedEditorContext(fs.code, fs.isDirty);
-    chat.sendMessage(input, unsavedEditorContext, lang, chat.generationMode, thinkingLevel, fs.setPendingGenFiles, fs.setPendingDelete, images, ultracode, videos);
+    chat.sendMessage(input, unsavedEditorContext, lang, chat.generationMode, thinkingLevel, fs.setPendingGenFiles, fs.setPendingDelete, images, ultracode, videos, 'user', undefined, draft);
   };
 
   const toggleSideChat = async (convId: number) => {
@@ -923,6 +924,11 @@ export default function Home() {
                 chats={chat.conversations}
                 currentChatId={chat.activeConvId}
                 onStop={chat.stopMessage}
+                queue={{
+                  items: chat.queue, paused: chat.queuePaused,
+                  onEdit: chat.editQueued, onDelete: chat.deleteQueued,
+                  onSendNow: (id) => { void chat.sendQueuedNow(id); }, onResume: () => { chat.resumeQueue(); },
+                }}
                 onFileDrop={(entry) => chat.setChatInput(prev => prev + ` [File Attached: ${entry.path}]`)}
                 onCommand={(cmd) => {
                   if (cmd === '/compact') { chat.compactConversation(); return true; }
