@@ -70,7 +70,7 @@ class RemoteBridge:
         self._listening = False
         self._tasks: set = set()
         self.relay_error: Optional[str] = None
-        # The desktop renderer's effort as it last reported it: {level, levels}.
+        # The desktop renderer's effort as it last reported it: {level, levels, ultracode}.
         # The renderer owns the state (see set_desktop_effort); None until it reports.
         self.desktop_effort: Optional[dict] = None
 
@@ -395,22 +395,22 @@ class RemoteBridge:
         self._chat_changed(conv_id)
 
     # ── the desktop's effort ───────────────────────────────────────────
-    def set_desktop_effort(self, level: Any, levels: Any) -> dict:
-        """What the renderer reports: its current effort and the levels the active
-        provider and model offer. The renderer is the source of truth (effort is
-        its page state, not stored anywhere else); this only keeps the last
-        report for phones and tells them when it changed. A report it refuses
-        clears the snapshot: a phone should say "unknown", not show what another
-        model had."""
+    def set_desktop_effort(self, level: Any, levels: Any, ultracode: Any = False) -> dict:
+        """What the renderer reports: its current effort, the levels the active
+        provider and model offer, and whether Ultracode is on. The renderer is
+        the source of truth (effort is its page state, not stored anywhere
+        else); this only keeps the last report for phones and tells them when
+        it changed. A report it refuses clears the snapshot: a phone should say
+        "unknown", not show what another model had."""
         try:
-            snapshot = self._checked_effort(level, levels)
+            snapshot = self._checked_effort(level, levels, ultracode)
         except BridgeError:
             self._set_effort_snapshot(None)
             raise
         return {"changed": self._set_effort_snapshot(snapshot)}
 
     @staticmethod
-    def _checked_effort(level: Any, levels: Any) -> dict:
+    def _checked_effort(level: Any, levels: Any, ultracode: Any) -> dict:
         if not isinstance(level, str) or level not in EFFORT_LEVELS:
             raise BridgeError("bad_level", 400)
         if (not isinstance(levels, list) or not levels or len(levels) > len(EFFORT_LEVELS)
@@ -418,7 +418,9 @@ class RemoteBridge:
             raise BridgeError("bad_levels", 400)
         if level not in levels:
             raise BridgeError("level_not_offered", 400)
-        return {"level": level, "levels": [v for v in EFFORT_LEVELS if v in levels]}
+        if not isinstance(ultracode, bool):
+            raise BridgeError("bad_ultracode", 400)
+        return {"level": level, "levels": [v for v in EFFORT_LEVELS if v in levels], "ultracode": ultracode}
 
     def _set_effort_snapshot(self, snapshot: Optional[dict]) -> bool:
         changed = snapshot != self.desktop_effort
@@ -429,7 +431,9 @@ class RemoteBridge:
 
     def current_desktop_effort(self) -> Optional[dict]:
         snapshot = self.desktop_effort
-        return None if snapshot is None else {"level": snapshot["level"], "levels": list(snapshot["levels"])}
+        if snapshot is None:
+            return None
+        return {"level": snapshot["level"], "levels": list(snapshot["levels"]), "ultracode": snapshot["ultracode"]}
 
     def _broadcast(self, obj: dict) -> None:
         for session in list(self.sessions.values()):

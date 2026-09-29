@@ -33,9 +33,10 @@ async def api(env, monkeypatch):
         yield client
 
 
-async def report(api, level="auto", levels=None, headers=H):
+async def report(api, level="auto", levels=None, headers=H, ultracode=False):
     return await api.put("/remote/desktop-effort", headers=headers,
-                         json={"level": level, "levels": OPUS if levels is None else levels})
+                         json={"level": level, "levels": OPUS if levels is None else levels,
+                               "ultracode": ultracode})
 
 
 def frames_of(queue):
@@ -134,7 +135,7 @@ async def test_the_report_needs_no_ui_secret(api):
 async def test_the_report_is_kept_in_canonical_order(api, env):
     r = await report(api, "low", ["max", "low", "auto", "low"])
     assert r.status_code == 200
-    assert env.bridge.desktop_effort == {"level": "low", "levels": ["auto", "low", "max"]}
+    assert env.bridge.desktop_effort == {"level": "low", "levels": ["auto", "low", "max"], "ultracode": False}
 
 
 async def test_the_same_report_again_changes_nothing(api):
@@ -158,6 +159,9 @@ async def test_the_same_report_again_changes_nothing(api):
     ({"level": "high", "levels": [["high"]]}, "bad_levels"),
     ({"level": "high", "levels": EFFORT_LEVELS + ["auto"]}, "bad_levels"),
     ({"level": "max", "levels": ["auto", "low"]}, "level_not_offered"),
+    ({"level": "high", "levels": OPUS, "ultracode": "yes"}, "bad_ultracode"),
+    ({"level": "high", "levels": OPUS, "ultracode": 1}, "bad_ultracode"),
+    ({"level": "high", "levels": OPUS, "ultracode": None}, "bad_ultracode"),
     ({}, "bad_level"),
 ])
 async def test_a_bad_report_is_refused_and_clears_the_snapshot(api, env, body, code):
@@ -190,14 +194,16 @@ async def test_get_config_returns_what_the_renderer_reported(api, env):
     conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
     await report(api, "xhigh", OPUS)
     without_chat = (await phone.request("get_config"))["result"]
-    assert without_chat == {"approval_mode": "step", "desktop_effort": {"level": "xhigh", "levels": OPUS}}
+    assert without_chat == {"approval_mode": "step", "desktop_effort": {
+        "level": "xhigh", "levels": OPUS, "ultracode": False}}
     with_chat = (await phone.request("get_config", chat_id=str(conv)))["result"]
-    assert with_chat["desktop_effort"] == {"level": "xhigh", "levels": OPUS}
+    assert with_chat["desktop_effort"] == {"level": "xhigh", "levels": OPUS, "ultracode": False}
     # The chat's own model levels stay as they were, a different thing from the desktop's.
     assert with_chat["effort_levels"] == OPUS
 
     await report(api, "auto", ["auto"])
-    assert (await phone.request("get_config"))["result"]["desktop_effort"] == {"level": "auto", "levels": ["auto"]}
+    assert (await phone.request("get_config"))["result"]["desktop_effort"] == {
+        "level": "auto", "levels": ["auto"], "ultracode": False}
 
 
 async def test_the_snapshot_a_phone_gets_cannot_edit_the_backends_copy(api, env):
@@ -205,7 +211,7 @@ async def test_the_snapshot_a_phone_gets_cannot_edit_the_backends_copy(api, env)
     snapshot = env.bridge.current_desktop_effort()
     snapshot["levels"].append("junk")
     snapshot["level"] = "junk"
-    assert env.bridge.desktop_effort == {"level": "high", "levels": OPUS}
+    assert env.bridge.desktop_effort == {"level": "high", "levels": OPUS, "ultracode": False}
 
 
 # ── effort_changed ─────────────────────────────────────────────────────────
@@ -216,7 +222,8 @@ async def test_every_phone_hears_when_the_desktop_effort_changes(api, env):
     await report(api, "high")
     for phone in (first, second):
         heard = await phone.next_push(lambda m: m.get("type") == "effort_changed")
-        assert heard == {"type": "effort_changed", "desktop_effort": {"level": "high", "levels": OPUS}}
+        assert heard == {"type": "effort_changed", "desktop_effort": {
+            "level": "high", "levels": OPUS, "ultracode": False}}
 
     await report(api, "max")
     for phone in (first, second):
@@ -244,7 +251,8 @@ async def test_a_refused_report_tells_nobody(api, env):
 async def test_a_report_with_no_phone_online_is_still_kept(api, env):
     assert (await report(api, "low")).status_code == 200
     phone = await pair_phone(env)
-    assert (await phone.request("get_config"))["result"]["desktop_effort"] == {"level": "low", "levels": OPUS}
+    assert (await phone.request("get_config"))["result"]["desktop_effort"] == {
+        "level": "low", "levels": OPUS, "ultracode": False}
 
 
 async def test_a_request_and_its_confirmation_meet_at_the_phone(api, env):
@@ -262,7 +270,7 @@ async def test_a_request_and_its_confirmation_meet_at_the_phone(api, env):
     assert frame["level"] in OPUS
     await report(api, frame["level"])
     heard = await phone.next_push(lambda m: m.get("type") == "effort_changed")
-    assert heard["desktop_effort"] == {"level": "high", "levels": OPUS}
+    assert heard["desktop_effort"] == {"level": "high", "levels": OPUS, "ultracode": False}
     assert (await phone.request("get_config"))["result"]["desktop_effort"]["level"] == "high"
 
 
@@ -279,12 +287,31 @@ async def test_an_openai_api_report_with_none_is_accepted(api, env):
     r = await report(api, "none", openai)
     assert r.status_code == 200 and r.json() == {"changed": True}
     heard = await phone.next_push(lambda m: m.get("type") == "effort_changed")
-    assert heard["desktop_effort"] == {"level": "none", "levels": openai}
+    assert heard["desktop_effort"] == {"level": "none", "levels": openai, "ultracode": False}
 
 
 async def test_none_is_kept_in_scale_order(api, env):
     assert (await report(api, "auto", ["max", "none", "off", "auto"])).status_code == 200
     assert env.bridge.desktop_effort["levels"] == ["auto", "off", "none", "max"]
+
+
+# ── Ultracode ──────────────────────────────────────────────────────────────
+
+async def test_the_report_carries_whether_ultracode_is_on(api, env):
+    phone = await pair_phone(env)
+    await report(api, "high")
+    await phone.next_push(lambda m: m.get("type") == "effort_changed")
+    assert (await report(api, "high", ultracode=True)).json() == {"changed": True}
+    heard = await phone.next_push(lambda m: m.get("type") == "effort_changed")
+    assert heard["desktop_effort"] == {"level": "high", "levels": OPUS, "ultracode": True}
+    assert (await phone.request("get_config"))["result"]["desktop_effort"]["ultracode"] is True
+    assert (await report(api, "high", ultracode=True)).json() == {"changed": False}
+
+
+async def test_a_report_without_the_field_means_ultracode_off(api, env):
+    r = await api.put("/remote/desktop-effort", headers=H, json={"level": "high", "levels": OPUS})
+    assert r.status_code == 200
+    assert env.bridge.desktop_effort["ultracode"] is False
 
 
 # ── a refused report ───────────────────────────────────────────────────────
