@@ -75,9 +75,12 @@ code: `relay/`; PC side: `Backend/app/remote/`.
 - **What a paired phone can do:** list and watch chats, answer approval and
   question cards, stop a turn, send messages (a text starting with `/` is an
   ordinary message, so slash commands work) and pick the effort of one message
-  (checked against the levels of that chat's model), switch a chat's provider
-  and model (only to one that is ready on the PC; it changes that chat alone,
-  never the global default), read and change the global approval mode, and register its own web-push
+  (checked against the levels of that chat's model), switch a chat's provider and
+  model (exactly as the desktop's picker does, so it also becomes the default a
+  new chat opens on; only to a provider that is ready on the PC and a model the
+  plan allows), change the desktop's effort level (the desktop renderer applies
+  it, as a click in its effort panel would), read and change the global
+  approval mode, and register its own web-push
   subscription (validated on the PC and stored on that device's own row, so it
   changes only that phone's push endpoint, nothing else). It
   cannot change other settings, touch API keys, install

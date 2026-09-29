@@ -2,10 +2,10 @@
 
 Status, 29 Sep 2026: build steps 1 to 4 are built (relay and phone page, the
 backend pieces, the bridge, renderer and Electron); step 5 (measuring card
-timeouts per provider and lengthening them) is not. The phone page has no
-model or effort picker yet: `list_models`, `set_model` and the `effort` of
-`send_message` exist on the bridge for it and for a later native app.
-Research and measurements behind it: owner's vault,
+timeouts per provider and lengthening them) is not. The phone page has a
+model select (the open chat's) and an effort select (the desktop's), both
+driven by the bridge requests below; `send_message` also still takes a
+per-message `effort` for a later native app. Research and measurements behind it: owner's vault,
 `Teknik/Arastirmalar/Gamachine_Uzaktan_Kontrol_2026-09-27`.
 This document is binding for both ends; `relay/README.md` adds only the
 relay's own control frames, storage and close codes.
@@ -40,12 +40,18 @@ counts it.
   every card can also say "stop asking". This replaces "not from the phone:
   approval mode". The phone does **not** need the UI secret for it, by design
   (see "Threats and answers").
-  **A chat's provider and model can be switched from the phone, and the effort
-  of a message chosen** (owner decision, 29 Sep 2026): `get_config` with a
-  chat reads them, `list_models` gives the desktop picker's catalog,
-  `set_model` changes that one chat's model, `send_message` takes an `effort`.
-  The global default model is not touched: it stays the desktop's. Still not
-  from the phone: other settings, API keys, CLI install, file operations.
+  **A chat's provider and model, and the desktop's effort, can be changed from
+  the phone** (owner decisions, 29 Sep 2026). The phone keeps no settings of
+  its own: a change made on the phone has exactly the effect the same change
+  made on the desktop has, and the desktop screen updates live. So `set_model`
+  does what the desktop's picker does (the chat stores it and it becomes the
+  default a new chat opens on), and `set_effort` does what a click in the
+  desktop's effort panel does (including switching Ultracode off). `get_config`
+  reads them, `list_models` gives the desktop picker's catalog. The one
+  difference from the desktop: a provider that is not ready is refused (the
+  phone cannot open Settings for a key), and so is a model the desktop's picker
+  locks for the plan. Still not from the phone: setting Ultracode, other
+  settings, API keys, CLI install, file operations.
 - Notifications are detailed ("Onay bekliyor - Codex (Arena): git commit -m ...",
   "Is bitti - ..."), not a bare "something happened".
 - While remote control is on, the PC may be kept awake (checkbox).
@@ -81,7 +87,8 @@ counts it.
    (no offline queue in v1). Rules: "Relay connection" below.
 2. **Phone page** (`relay/public/`): one screen - chat list with status, a
    chat view with live progress, pending cards, a composer with a `/` command
-   picker, a Stop button, and an approval-mode selector on the main screen.
+   picker, a Stop button, model and effort selects in the chat view, and an
+   approval-mode selector on the main screen.
    Strict CSP, no third-party scripts. Keys live in IndexedDB as
    non-extractable WebCrypto keys.
 3. **Remote bridge** (`Backend/app/remote/`): zero network traffic while off.
@@ -223,14 +230,21 @@ Requests carry `id`; replies echo it. Everything not listed is refused.
 | `stop {chat_id}` | same effect as the desktop Stop |
 | `send_message {chat_id, text, effort?}` | delivered to the renderer, which sends it like a typed message (queued if a turn runs); stored as an ordinary `user` turn; the phone marker (device name) is a client-only field on the renderer's copy and is lost after a reload or a server re-read, since the `messages` table has no source column (see the desktop notes below). Slash commands are ordinary text: the backend does not look at a leading `/`. In the renderer a text that is exactly `/compact` (blanks around it ignored) compacts that chat, as the desktop composer does, and starts no turn; every other `/...` goes out like typed text (`/usage` gets its usage card, the CLI runs the rest). `effort` (optional; absent or `null` = the desktop's own level) must be one of the `effort_levels` `get_config` reports for that chat's current model, else `bad_effort`; it is carried in the `remote_message` frame and the renderer sends that one message with it. Other errors `bad_chat_id`, `unknown_chat`, `bad_text` |
 | `list_slash_commands {chat_id}` | `{commands: [str], skills: [str], meta: [{name, description?, argumentHint?, insert?, displayName?}]}`: the catalog the desktop's `/` menu shows (`GET /slash-commands`, one shared function), for the agent family of that chat. Names come without the `/`. Gamachine's own `compact` (run by the renderer) leads `commands` and `meta` for every chat, as in the desktop menu; the CLI's own `compact` is not listed twice. Chats of agents without a catalog (`api-*`, opencode, cursor, kimi, gemini) and agy get only that. Errors `bad_chat_id`, `unknown_chat`, `unavailable` |
-| `get_config {chat_id?}` | `{approval_mode: "auto" \| "balanced" \| "step"}`. With a `chat_id` it adds that chat's own model as the backend resolves it (`agentic.chat_model`: stored model, else its latest answer's, else the global default): `provider_type`, `model_name`, `family` (the CLI a subscription model runs on: `claude`, `codex`, `agy`, `opencode`, `cursor`, `copilot`, `kimi`; `null` for API providers and Ollama), and `effort_levels: [str]`, the levels that model accepts from the registry behind the desktop's `/effort-capabilities` (canonical order; `auto` is normally the first; empty when the registry names none). Errors `bad_chat_id`, `unknown_chat` |
-| `list_models` | the desktop picker's catalog, `{local: [...], cloud: [...], subscription: [...], cloud_sources: {...}}`, built by the one function behind `GET /available-models` (`build_available_models` in `config_routes.py`, injected into the bridge like `stop_chat`), so it has the same lists, caching and timeouts. The phone never asks for a forced refresh. Long lists are split like any reply. Error `unavailable` |
-| `set_model {chat_id, provider_type, model_name}` | stores that chat's model (`chat_model.set_chat_model` with `require_ready`, the check every writer shares) and replies `{provider_type, model_name}`. `model_name` may be a typed id not in the catalog, or `""` for the provider's default. Only that chat changes, never the global default; a turn already running finishes on the model it started with. Errors `bad_chat_id`, `unknown_chat`, `unknown_provider`, `bad_model`, `not_ready {needs}` (`needs`: `apikey`, `install`, `login` or `service`: what the provider lacks now; nothing changed). On success the desktop is told (`chat_model_changed`, below) |
+| `get_config {chat_id?}` | `{approval_mode: "auto" \| "balanced" \| "step", desktop_effort}`, where `desktop_effort` is what the desktop renderer last reported, `{level, levels: [str], ultracode: bool}` (`levels` are the ones its active provider and model offer, in scale order; `ultracode` = Ultracode is on, which overrides the level), or `null` while it has not reported or its last report was refused. With a `chat_id` it adds that chat's own model as the backend resolves it (`agentic.chat_model`: stored model, else its latest answer's, else the global default): `provider_type`, `model_name`, `family` (the CLI a subscription model runs on: `claude`, `codex`, `agy`, `opencode`, `cursor`, `copilot`, `kimi`; `null` for API providers and Ollama), and `effort_levels: [str]`, the levels that model accepts from the registry behind the desktop's `/effort-capabilities` (scale order; `auto` is normally the first; empty when the registry names none). Errors `bad_chat_id`, `unknown_chat` |
+| `list_models` | the desktop picker's catalog, `{local: [...], cloud: [...], subscription: [...], cloud_sources: {...}}`, built by the one function behind `GET /available-models` (`build_available_models` in `config_routes.py`, injected into the bridge like `stop_chat`), so it has the same lists, caching and timeouts. The phone never asks for a forced refresh. Long lists are split like any reply. A model the desktop's picker refuses for the plan carries the same `disabled: true, disabled_reason: "plan"` the desktop's `/cli-models/{cli}` gives it (the one function `_apply_plan_caps`; today Copilot's static list on an Auto-only plan). Error `unavailable` |
+| `set_model {chat_id, provider_type, model_name}` | picks that chat's model as the desktop's picker does (`chat_model.pick_chat_model`, the function `POST /save-ai-config` ends in): the chat stores it (`set_chat_model` with `require_ready`, the check every writer shares) and the global row follows, because a new chat opens on the last model picked. Replies `{provider_type, model_name}`. `model_name` may be a typed id not in the catalog, or `""` for the provider's default. A turn already running finishes on the model it started with. Errors `bad_chat_id`, `unknown_chat`, `unknown_provider`, `bad_model`, `not_ready {needs}` (`needs`: `apikey`, `install`, `login` or `service`: what the provider lacks now; nothing changed), `plan_locked` (the desktop's picker refuses this model for the plan; nothing changed). On success the desktop is told (`chat_model_changed`, below) and so is every phone (`chat_model_changed` and `chat_changed`) |
+| `set_effort {level}` | asks the desktop renderer to choose that effort level, as a click in its effort panel does. `level` must be one of the registry's levels (`effort_caps.EFFORT_LEVELS`: `auto off none minimal low medium high xhigh max`), else `bad_effort`. Effort is one state of the renderer (`thinkingLevel`), so nothing is stored on the backend and the renderer decides: it applies the level only if its active model offers it, and choosing a level also switches Ultracode off, as it does on the desktop. Replies `{status: "accepted" \| "desktop_not_ready"}`; `accepted` only says a renderer stream got the request. What the desktop really has comes back as `effort_changed` (below) |
 | `set_approval_mode {mode}` | sets the one global mode, exactly as the desktop does (saved, agy gates followed, open cards drained: `auto` approves every open card, `balanced` the MCP cards it can prove routine) and replies `{mode, previous, approved_pending}`. Errors `bad_mode` (not one of the three), `unavailable`, `agy_step_refused {message, params: {pids}}` (a running agy process could not be gated; the mode did not change; `message` is the desktop's Turkish text). On success the desktop is told (`approval_mode_changed`, below) |
 | `push_subscribe {subscription}` | stores the web push subscription for this device |
 
 PC -> phone pushes: `event {chat_id, seq, kind, ...}` (turn start/end, text,
-tool call, card opened/closed), `chat_changed`, `card_opened`, `card_closed`.
+tool call, card opened/closed), `chat_changed`, `card_opened`, `card_closed`,
+`chat_model_changed {chat_id, provider_type, model_name}` (a chat's model was
+picked, by a phone or on the desktop), `default_model_changed {provider_type,
+model_name}` (a pick on the desktop with no chat on screen: only the default a
+new chat opens on changed, so a chat with no model of its own now shows
+another one; the page re-reads), `effort_changed {desktop_effort}` (same shape
+as in `get_config`, `null` = unknown).
 
 `send_message` goes through the renderer on purpose: the provider arguments,
 the message queue, cards and wake rules all live there, and a second path
@@ -251,10 +265,26 @@ shows a short note naming the phone. A refused switch publishes nothing.
 
 A model the phone switched is announced the same way, after it is stored:
 `{type: "chat_model_changed", conversation_id, provider_type, model_name,
-by: "phone:<device name>", at}`. The renderer re-reads the model of that chat
-if it is on screen. A chat that is not on screen needs nothing, since the page
-reads a chat's model fresh whenever it comes on screen (no per-chat model is
-cached in the renderer). A refused switch publishes nothing.
+by: "phone:<device name>", at}`. The renderer re-reads what its picker shows:
+the model of the chat on screen, and also on the new-chat screen and for a chat
+with no model of its own, because the pick moved the default those show. A chat
+that is not on screen needs nothing, since the page reads a chat's model fresh
+whenever it comes on screen (no per-chat model is cached in the renderer). A
+refused switch publishes nothing.
+
+The effort works the other way round, because the desktop renderer owns it. A
+`set_effort` puts `{type: "remote_effort", level, by: "phone:<device name>",
+at}` on the same channel; the renderer chooses the level through the one
+function its own effort panel uses (`chooseEffort` in `home.tsx`) if its active
+model offers it, and reports what it has: `PUT /remote/desktop-effort` with
+`{level, levels, ultracode}` (app token, no UI secret), on every change and
+every 30 s. The bridge validates it against `effort_caps.EFFORT_LEVELS` (every
+level the registry can return, which is `CANON_ORDER` plus `none`), keeps the
+last report and broadcasts `effort_changed` when it differs. A report the
+bridge refuses (`bad_level`, `bad_levels`, `level_not_offered`,
+`bad_ultracode`) clears the snapshot, so phones say "unknown" instead of
+showing what another model had. The snapshot is in memory: a backend restart
+forgets it until the renderer's next report.
 
 ## Web push
 
@@ -301,7 +331,7 @@ cached in the renderer). A refused switch publishes nothing.
 | Someone photographs the QR | single-use secret + 5 min + SAS code confirmed on the PC |
 | Relay operator reads traffic | end-to-end encryption; relay sees opaque frames |
 | Relay operator serves a malicious page | accepted for v1 (page and relay ship from this repo); users can run their own relay; stated in SECURITY.md |
-| Stolen phone | Remove device on the PC; scope excludes other settings, keys, files. It can approve cards, run slash commands, change the approval mode and switch a chat's model or effort (only to a provider that is ready on the PC; API keys stay on the PC and the phone never sees them), all of which it could do to the same effect by approving cards one by one |
+| Stolen phone | Remove device on the PC; scope excludes other settings, keys, files. It can approve cards, run slash commands, change the approval mode, switch a chat's model (which also sets the default a new chat opens on; only to a provider that is ready on the PC and a model the plan allows; API keys stay on the PC and the phone never sees them) and change the desktop's effort level, all of which it could do to the same effect by approving cards one by one |
 | The phone changes the approval mode without the UI secret | Owner decision, 28 Sep 2026. The local `POST /approval-mode` demands a UI secret so that the Unity MCP server and model-run children, which can read the app token, cannot flip themselves into auto. The phone path never touches that route: `set_approval_mode` runs in-process, behind the paired device's end-to-end session keys (only a phone whose hello passed reaches it), calls the same function the route ends in (`apply_approval_mode`) and logs source `phone`. The route itself is unchanged and still refuses without the secret. Every change is announced on the desktop with the phone's name |
 | Replay of an approval | per-direction counters; card ids are single use |
 | Phone approves while desktop also answers | first answer wins, both sides see who answered |
@@ -352,10 +382,25 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
   awaits after its token check and refresh throttle (`user_id` None means no
   cloud merge, as before); effort levels come from
   `providers.effort_caps.get_effort_caps`. `set_model` runs
-  `chat_model.set_chat_model` off the event loop (its readiness probes read the
+  `chat_model.pick_chat_model` off the event loop (its readiness probes read the
   key vault and may ask Ollama; none spawns a CLI), maps `ChatModelError` to
   the RPC error of the same code, and publishes `chat_model_changed`
   (`MODEL_CHANGED_TYPE` in `desktop_channel.py`) only after the row is stored.
+  `pick_chat_model` is also what `POST /save-ai-config` ends in (with
+  `pick_default_model` when no chat is on screen); both tell the bridge through
+  `chat_model.add_pick_listener`, which is how every phone hears a pick whoever
+  made it. The pick is two writes (the chat row, then the default row): the
+  listeners are told even when the second one raises, so a phone re-reads what
+  the chat really has. `/save-ai-config` saves the API key before the pick, so a
+  failing key write leaves the model untouched.
+- The plan lock travels with the catalog function: `build_available_models`
+  marks Copilot's static list through `_apply_plan_caps` and carries
+  `plan_locked(provider_type, model_name)` as an attribute, which `set_model`
+  asks (`main.py` injects only `router.list_models`). It reads the plan-caps
+  file only, no CLI and no network. Not covered: Cursor's and OpenCode's lists
+  are dynamic (`/cli-models/{cli}` runs the CLI) and are not in the phone's
+  catalog at all, so the phone cannot offer them; `plan_locked` still refuses a
+  typed `cursor-*` id the plan cap locks.
 - `list_slash_commands` maps the chat to a family in one place,
   `chats.slash_family(row)`: the chat's own model (`agentic.chat_model`: the
   stored per-chat model, else the model of its latest answer when that maps
@@ -388,7 +433,7 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
 - Extra PC -> phone push: `{type:"gap", chat_id, epoch, last_seq}` when live
   events of an open chat were lost.
 
-## Phone page notes (commands and mode)
+## Phone page notes (commands, mode, model and effort)
 
 Plain look on purpose; a native app will reuse the same requests.
 
@@ -408,20 +453,44 @@ Plain look on purpose; a native app will reuse the same requests.
   puts the selector back on the real mode and says why in Turkish
   (`agy_step_refused` names the agy process id). The page does not learn of a
   change made on the desktop until the main screen shows again.
+- Chat view: a model select for the open chat and an effort select for the
+  desktop. The page keeps no setting of its own. It reads `get_config {chat_id}`
+  (and `list_models`, cached 5 minutes) when a chat opens, when the link comes
+  back, when the page becomes visible and when the PC says something changed
+  (`chat_model_changed` for the open chat, `default_model_changed`,
+  `effort_changed`, a `chat_changed` whose model differs). The model select
+  groups the catalog (subscription, cloud with a key, local), always shows the
+  chat's own model even when the catalog lacks it, and lists a plan-locked
+  model disabled ("planında kilitli"). A refused `set_model` puts the select
+  back and says why in Turkish (`not_ready` names what is missing, `plan_locked`
+  says the plan does not include the model; `unknown_type` says the desktop's
+  Gamachine does not know the request and must be updated; `bad_request`). The
+  effort select shows the desktop's level and its levels, with the desktop's
+  labels (`effort.label.*`, `none` included). A `set_effort` that comes back
+  `accepted` shows the level as asked, then re-reads after 1.5 s: the note says
+  whether the desktop applied it or refused it (its model does not offer the
+  level). While Ultracode is on at the desktop the select shows an "Ultracode"
+  entry with a short note, and choosing any level, even the one under it,
+  switches it off, as on the desktop; the phone cannot turn Ultracode on. Both
+  selects are disabled while the PC is not connected or a request is out, and
+  the effort select also while no desktop effort is known.
 - `page.test.mjs` checks the helpers in `net.js`, that every id `app.js` looks
   up exists in `index.html`, and that the desktop's mode labels in
   `Frontend/frontend/renderer/lib/i18n.tsx` are the ones the page uses.
 
-## Model and effort from the phone (bridge only)
+## Model and effort from the phone
 
-The phone page has no picker for these yet (the owner will see the page later;
-the native app reuses the same requests). The order a client follows:
-`get_config {chat_id}` for the chat's current model and `effort_levels`;
-`list_models` for what can be chosen; `set_model` to switch (a `not_ready`
-refusal names what the provider lacks); `send_message {effort}` for the level
-of one message. Effort is per message, not stored: the next message without one
-uses the desktop's level. After a model switch, read `get_config` again,
-because the levels belong to the model.
+The order a client follows: `get_config {chat_id}` for the chat's current model,
+its `effort_levels` and the desktop's `desktop_effort`; `list_models` for what
+can be chosen; `set_model` to switch (a `not_ready` refusal names what the
+provider lacks, `plan_locked` says the plan does not include the model);
+`set_effort` to change the desktop's level. The effort is the desktop's one
+level, not the chat's: a phone message runs with it unless `send_message` is
+given an `effort` for that one message (the phone page does not use that). After
+a model switch, read `get_config` again, because the levels belong to the
+model; the desktop's effort follows the model the desktop shows, which may
+differ from the phone's chat, so a level the desktop does not offer is not
+applied and the reconcile read says so.
 
 ## Desktop implementation notes (step 4)
 
@@ -445,7 +514,7 @@ Facts about the Electron and renderer side; plain look, visual design later.
   message path with the conversation id as `targetOverride`: queued while that
   chat runs, a user turn otherwise; the composer is never touched. A frame
   that arrives before the page has chosen its send options waits for them.
-  A frame's `effort` (one of `auto off minimal low medium high xhigh max`;
+  A frame's `effort` (one of `auto off none minimal low medium high xhigh max`;
   `parseRemoteMessage` returns null for any other string, so a broken frame is
   dropped, never sent with a guessed level) replaces the page's thinking level
   for that one message, including while it waits in the chat's queue.
@@ -474,7 +543,22 @@ Facts about the Electron and renderer side; plain look, visual design later.
   chat is the one on screen; `home.tsx` answers it with
   `ai.showChatModel(user.id, chatId)`, the read the page makes when a chat
   comes on screen, so the selector, effort caps, slash catalog and provider
-  gate follow. Nothing is written back and no note is shown.
+  gate follow. `useChat` calls it for every such frame, with the chat that is
+  on screen (`null` on the new-chat screen), not only when the frame's chat is
+  that one: the pick also moved the default a new chat opens on, so the
+  new-chat screen and a chat with no model of its own must re-read too (a chat
+  with its own model reads back the same one). Nothing is written back and no
+  note is shown.
+- A `remote_effort` frame (`parseEffortRequest`: a level of the registry's scale,
+  `by` `phone:...`; anything else is ignored) reaches `useRemoteEffort` in
+  `lib/remoteControl.ts`, which `home.tsx` calls with `chooseEffort`, the same
+  function the effort panel's buttons call: it sets the level and switches
+  Ultracode off. The hook applies a level only when the active model offers it,
+  also applies the level Ultracode sits over (choosing it switches Ultracode
+  off), shows a note "Telefondan (<name>) düşünme seviyesi değiştirildi", and
+  reports `{level, levels, ultracode}` to `PUT /remote/desktop-effort` on every
+  change and every 30 s. Every open window reports; the app runs a single
+  window, so two windows never disagree.
 - A `card_closed` frame closes the card without a click: a turn's command or
   question card (the next queued card of that chat takes its place), the
   Unity bridge / note card on screen, or a tray entry, with the same note as
