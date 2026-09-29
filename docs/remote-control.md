@@ -1,8 +1,12 @@
 # Remote control (phone) - protocol v1
 
-Status: design, 28 Sep 2026. Build step 1 (relay + phone page, `relay/`) is
-built; everything else is not implemented yet. Research and measurements behind
-it: owner's vault, `Teknik/Arastirmalar/Gamachine_Uzaktan_Kontrol_2026-09-27`.
+Status, 29 Sep 2026: build steps 1 to 4 are built (relay and phone page, the
+backend pieces, the bridge, renderer and Electron); step 5 (measuring card
+timeouts per provider and lengthening them) is not. The phone page has no
+model or effort picker yet: `list_models`, `set_model` and the `effort` of
+`send_message` exist on the bridge for it and for a later native app.
+Research and measurements behind it: owner's vault,
+`Teknik/Arastirmalar/Gamachine_Uzaktan_Kontrol_2026-09-27`.
 This document is binding for both ends; `relay/README.md` adds only the
 relay's own control frames, storage and close codes.
 
@@ -35,9 +39,13 @@ counts it.
   set with `set_approval_mode`), same reasoning: a phone that can approve
   every card can also say "stop asking". This replaces "not from the phone:
   approval mode". The phone does **not** need the UI secret for it, by design
-  (see "Threats and answers"). Model, provider and effort switching from the
-  phone is a later step. Still not from the phone: other settings, API keys,
-  CLI install, file operations.
+  (see "Threats and answers").
+  **A chat's provider and model can be switched from the phone, and the effort
+  of a message chosen** (owner decision, 29 Sep 2026): `get_config` with a
+  chat reads them, `list_models` gives the desktop picker's catalog,
+  `set_model` changes that one chat's model, `send_message` takes an `effort`.
+  The global default model is not touched: it stays the desktop's. Still not
+  from the phone: other settings, API keys, CLI install, file operations.
 - Notifications are detailed ("Onay bekliyor - Codex (Arena): git commit -m ...",
   "Is bitti - ..."), not a bare "something happened".
 - While remote control is on, the PC may be kept awake (checkbox).
@@ -46,7 +54,11 @@ counts it.
 - The Unity MCP server is never started by this feature (toggle only).
 - The "the app never downloads at runtime" rule is about the installed app
   being complete (no "please wait, downloading"). Relay traffic carries
-  encrypted messages, not code or files, and does not break it.
+  encrypted messages, never app code and never a file transfer (none exists),
+  and does not break it. It does carry chat text: the last 50 messages of an
+  opened chat (up to 100,000 characters each) and the live text events of its
+  turns, so code an agent printed into a chat reaches the phone, encrypted end
+  to end.
 
 ## Parts
 
@@ -153,7 +165,10 @@ connection gives forward secrecy (the Noise KK idea, built from WebCrypto /
 
 1. Phone -> PC: `hello {device_id, eph_phone_pub, t}` with
    `tag = HMAC(K_static, "hello" || device_id || eph_phone_pub || t)`; the PC
-   rejects `t` outside +/- 5 minutes and unknown or removed devices.
+   rejects `t` outside +/- 5 minutes and unknown or removed devices. The relay
+   admits a phone socket for one token, and the PC also requires the hello's
+   `device_id` to be the device that token's hash belongs to (an unknown
+   device, a removed one and a mismatch all answer `unknown_device`).
 2. PC -> phone: `hello_ack {eph_pc_pub}` with its own tag over both
    ephemerals, or `hello_reject {reason}` (`clock`, `unknown_device`).
 3. `K_session = HKDF(ECDH(eph, eph) || K_static, info="gamachine-remote-v1 session")`,
@@ -206,9 +221,11 @@ Requests carry `id`; replies echo it. Everything not listed is refused.
 | `pending_cards` | every open card in every chat (MCP gates, command gates, Claude/Codex in-stream cards, question cards) |
 | `answer_card {card_id, decision, choice?}` | first answer wins; a later answer gets `already_answered {by, at}`; ledger row with the device |
 | `stop {chat_id}` | same effect as the desktop Stop |
-| `send_message {chat_id, text}` | delivered to the renderer, which sends it like a typed message (queued if a turn runs); stored with source `phone`. Slash commands are ordinary text: the backend does not look at a leading `/`. In the renderer a text that is exactly `/compact` (blanks around it ignored) compacts that chat, as the desktop composer does, and starts no turn; every other `/...` goes out like typed text (`/usage` gets its usage card, the CLI runs the rest) |
+| `send_message {chat_id, text, effort?}` | delivered to the renderer, which sends it like a typed message (queued if a turn runs); stored with source `phone`. Slash commands are ordinary text: the backend does not look at a leading `/`. In the renderer a text that is exactly `/compact` (blanks around it ignored) compacts that chat, as the desktop composer does, and starts no turn; every other `/...` goes out like typed text (`/usage` gets its usage card, the CLI runs the rest). `effort` (optional; absent or `null` = the desktop's own level) must be one of the `effort_levels` `get_config` reports for that chat's current model, else `bad_effort`; it is carried in the `remote_message` frame and the renderer sends that one message with it. Other errors `bad_chat_id`, `unknown_chat`, `bad_text` |
 | `list_slash_commands {chat_id}` | `{commands: [str], skills: [str], meta: [{name, description?, argumentHint?, insert?, displayName?}]}`: the catalog the desktop's `/` menu shows (`GET /slash-commands`, one shared function), for the agent family of that chat. Names come without the `/`. Gamachine's own `compact` (run by the renderer) leads `commands` and `meta` for every chat, as in the desktop menu; the CLI's own `compact` is not listed twice. Chats of agents without a catalog (`api-*`, opencode, cursor, kimi, gemini) and agy get only that. Errors `bad_chat_id`, `unknown_chat`, `unavailable` |
-| `get_config` | `{approval_mode: "auto" \| "balanced" \| "step"}`; a dict so more keys (model, effort) can join later without a new request |
+| `get_config {chat_id?}` | `{approval_mode: "auto" \| "balanced" \| "step"}`. With a `chat_id` it adds that chat's own model as the backend resolves it (`agentic.chat_model`: stored model, else its latest answer's, else the global default): `provider_type`, `model_name`, `family` (the CLI a subscription model runs on: `claude`, `codex`, `agy`, `opencode`, `cursor`, `copilot`, `kimi`; `null` for API providers and Ollama), and `effort_levels: [str]`, the levels that model accepts from the registry behind the desktop's `/effort-capabilities` (canonical order; `auto` is normally the first; empty when the registry names none). Errors `bad_chat_id`, `unknown_chat` |
+| `list_models` | the desktop picker's catalog, `{local: [...], cloud: [...], subscription: [...], cloud_sources: {...}}`, built by the one function behind `GET /available-models` (`build_available_models` in `config_routes.py`, injected into the bridge like `stop_chat`), so it has the same lists, caching and timeouts. The phone never asks for a forced refresh. Long lists are split like any reply. Error `unavailable` |
+| `set_model {chat_id, provider_type, model_name}` | stores that chat's model (`chat_model.set_chat_model` with `require_ready`, the check every writer shares) and replies `{provider_type, model_name}`. `model_name` may be a typed id not in the catalog, or `""` for the provider's default. Only that chat changes, never the global default; a turn already running finishes on the model it started with. Errors `bad_chat_id`, `unknown_chat`, `unknown_provider`, `bad_model`, `not_ready {needs}` (`needs`: `apikey`, `install`, `login` or `service`: what the provider lacks now; nothing changed). On success the desktop is told (`chat_model_changed`, below) |
 | `set_approval_mode {mode}` | sets the one global mode, exactly as the desktop does (saved, agy gates followed, open cards drained: `auto` approves every open card, `balanced` the MCP cards it can prove routine) and replies `{mode, previous, approved_pending}`. Errors `bad_mode` (not one of the three), `unavailable`, `agy_step_refused {message, params: {pids}}` (a running agy process could not be gated; the mode did not change; `message` is the desktop's Turkish text). On success the desktop is told (`approval_mode_changed`, below) |
 | `push_subscribe {subscription}` | stores the web push subscription for this device |
 
@@ -232,6 +249,13 @@ by: "phone:<device name>", at}`. The renderer shows the new mode, clears the
 in-chat cards a switch to `auto` approved (the code its own switch uses) and
 shows a short note naming the phone. A refused switch publishes nothing.
 
+A model the phone switched is announced the same way, after it is stored:
+`{type: "chat_model_changed", conversation_id, provider_type, model_name,
+by: "phone:<device name>", at}`. The renderer re-reads the model of that chat
+if it is on screen. A chat that is not on screen needs nothing, since the page
+reads a chat's model fresh whenever it comes on screen (no per-chat model is
+cached in the renderer). A refused switch publishes nothing.
+
 ## Web push
 
 - The PC owns a VAPID key pair (generated when remote control is first turned
@@ -239,9 +263,14 @@ shows a short note naming the phone. A refused switch publishes nothing.
   `pair_ok`. It sends pushes itself to the push
   service in the subscription (RFC 8291 aes128gcm + RFC 8292 VAPID, with the
   `cryptography` package already bundled); the relay is not involved.
-- Content is detailed per the owner's decision: title "<what> - <agent> (<chat>)",
-  body with the tool and a short parameter summary, capped at ~180 characters.
-  The payload is end-to-end encrypted to the phone; the push service cannot
+- Content is detailed per the owner's decision: title "<what> - <agent> (<chat>)".
+  The body of a card push is `<tool>: <summary>` (the tool and a short
+  parameter summary, or the question text); of a finished-turn push, the
+  turn's last assistant text (collected back from the end of the turn up to
+  about 400 characters, whitespace collapsed); of an error or a woken chat, a
+  fixed sentence. Every body is cut to 180 characters (`BODY_MAX` in
+  `webpush.py`), so a finished-turn push shows the start of that last text,
+  which can be code or file content the agent printed. The payload is end-to-end encrypted to the phone; the push service cannot
   read it. It is still shown on the lock screen - that is the owner's choice.
 - Sent for: a card opened, a turn finished or failed, a chat woken by a note.
   Coalesced per chat (one push per chat per 10 s).
@@ -272,7 +301,7 @@ shows a short note naming the phone. A refused switch publishes nothing.
 | Someone photographs the QR | single-use secret + 5 min + SAS code confirmed on the PC |
 | Relay operator reads traffic | end-to-end encryption; relay sees opaque frames |
 | Relay operator serves a malicious page | accepted for v1 (page and relay ship from this repo); users can run their own relay; stated in SECURITY.md |
-| Stolen phone | Remove device on the PC; scope excludes other settings, keys, files. It can approve cards, run slash commands and change the approval mode, all of which it could do to the same effect by approving cards one by one |
+| Stolen phone | Remove device on the PC; scope excludes other settings, keys, files. It can approve cards, run slash commands, change the approval mode and switch a chat's model or effort (only to a provider that is ready on the PC; API keys stay on the PC and the phone never sees them), all of which it could do to the same effect by approving cards one by one |
 | The phone changes the approval mode without the UI secret | Owner decision, 28 Sep 2026. The local `POST /approval-mode` demands a UI secret so that the Unity MCP server and model-run children, which can read the app token, cannot flip themselves into auto. The phone path never touches that route: `set_approval_mode` runs in-process, behind the paired device's end-to-end session keys (only a phone whose hello passed reaches it), calls the same function the route ends in (`apply_approval_mode`) and logs source `phone`. The route itself is unchanged and still refuses without the secret. Every change is announced on the desktop with the phone's name |
 | Replay of an approval | per-direction counters; card ids are single use |
 | Phone approves while desktop also answers | first answer wins, both sides see who answered |
@@ -314,7 +343,19 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
   `GET|PUT /remote/keep-awake` (`keep_awake_active` = on and checked).
 - `send_message` reaches the renderer as a `/wake-stream-all` frame
   `{type:"remote_message", request_id, conversation_id, text, source:"phone",
-  device_id, device_name, at}`; `desktop_not_ready` means no such stream is open.
+  device_id, device_name, at, effort?}`; `desktop_not_ready` means no such
+  stream is open. `effort` is present only when the phone sent one that passed
+  `chats.effort_levels(provider_type, model_name)` for the chat's model at that
+  moment.
+- The catalog and effort registry are not copied: `list_models` is
+  `create_config_router(db).list_models`, the function `GET /available-models`
+  awaits after its token check and refresh throttle (`user_id` None means no
+  cloud merge, as before); effort levels come from
+  `providers.effort_caps.get_effort_caps`. `set_model` runs
+  `chat_model.set_chat_model` off the event loop (its readiness probes read the
+  key vault and may ask Ollama; none spawns a CLI), maps `ChatModelError` to
+  the RPC error of the same code, and publishes `chat_model_changed`
+  (`MODEL_CHANGED_TYPE` in `desktop_channel.py`) only after the row is stored.
 - `list_slash_commands` maps the chat to a family in one place,
   `chats.slash_family(row)`: the chat's own model (`agentic.chat_model`: the
   stored per-chat model, else the model of its latest answer when that maps
@@ -371,6 +412,17 @@ Plain look on purpose; a native app will reuse the same requests.
   up exists in `index.html`, and that the desktop's mode labels in
   `Frontend/frontend/renderer/lib/i18n.tsx` are the ones the page uses.
 
+## Model and effort from the phone (bridge only)
+
+The phone page has no picker for these yet (the owner will see the page later;
+the native app reuses the same requests). The order a client follows:
+`get_config {chat_id}` for the chat's current model and `effort_levels`;
+`list_models` for what can be chosen; `set_model` to switch (a `not_ready`
+refusal names what the provider lacks); `send_message {effort}` for the level
+of one message. Effort is per message, not stored: the next message without one
+uses the desktop's level. After a model switch, read `get_config` again,
+because the levels belong to the model.
+
 ## Desktop implementation notes (step 4)
 
 Facts about the Electron and renderer side; plain look, visual design later.
@@ -393,6 +445,10 @@ Facts about the Electron and renderer side; plain look, visual design later.
   message path with the conversation id as `targetOverride`: queued while that
   chat runs, a user turn otherwise; the composer is never touched. A frame
   that arrives before the page has chosen its send options waits for them.
+  A frame's `effort` (one of `auto off minimal low medium high xhigh max`;
+  `parseRemoteMessage` returns null for any other string, so a broken frame is
+  dropped, never sent with a guessed level) replaces the page's thinking level
+  for that one message, including while it waits in the chat's queue.
   A text that is exactly `/compact` is not sent: it compacts the addressed chat
   (`compactConversation(chatId)`; the desktop button's busy state is only set
   when that chat is on screen) and needs no send options. The phone gets no
@@ -412,6 +468,13 @@ Facts about the Electron and renderer side; plain look, visual design later.
   approved cards when there were any. Nothing is written back: the backend has
   applied the mode. A mode outside `auto | balanced | step`, or a `by` that is
   not `phone:...`, is ignored.
+- A `chat_model_changed` frame (`parseChatModelChanged`: chat id a positive
+  integer, non-empty `provider_type`, string `model_name`, `by` `phone:...`;
+  anything else is ignored) makes `useChat` call the page's callback when its
+  chat is the one on screen; `home.tsx` answers it with
+  `ai.showChatModel(user.id, chatId)`, the read the page makes when a chat
+  comes on screen, so the selector, effort caps, slash catalog and provider
+  gate follow. Nothing is written back and no note is shown.
 - A `card_closed` frame closes the card without a click: a turn's command or
   question card (the next queued card of that chat takes its place), the
   Unity bridge / note card on screen, or a tray entry, with the same note as
