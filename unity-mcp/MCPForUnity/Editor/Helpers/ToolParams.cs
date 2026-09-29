@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -67,10 +66,9 @@ namespace MCPForUnity.Editor.Helpers
         /// </summary>
         public float? GetFloat(string key, float? defaultValue = null)
         {
-            var str = GetString(key);
-            if (string.IsNullOrEmpty(str)) return defaultValue;
-            // Invariant on purpose: the current culture makes tr-TR read "2.5" as 25 ('.' is its group separator).
-            return float.TryParse(str, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) ? result : defaultValue;
+            // Not via GetString: JValue.ToString() formats numbers with the current culture ("2,5" on tr-TR),
+            // and parsing strings with the current culture reads "2.5" as 25 there.
+            return ParamCoercion.CoerceFloatNullable(GetToken(key)) ?? defaultValue;
         }
 
         /// <summary>

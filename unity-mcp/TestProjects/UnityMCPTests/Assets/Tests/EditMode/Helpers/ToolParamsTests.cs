@@ -221,6 +221,18 @@ namespace MCPForUnityTests.Editor.Helpers
         }
 
         [Test]
+        public void GetFloat_JsonNumber_ReturnsValue()
+        {
+            // A real JSON number, as the Python server sends it. JValue.ToString() formats with the current culture.
+            var json = new JObject { ["scale"] = 2.5 };
+            var p = new ToolParams(json);
+
+            var value = p.GetFloat("scale");
+
+            Assert.AreEqual(2.5f, value);
+        }
+
+        [Test]
         public void GetFloat_MissingParameter_ReturnsNull()
         {
             var json = new JObject();
