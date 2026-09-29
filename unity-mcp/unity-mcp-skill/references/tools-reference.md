@@ -835,7 +835,8 @@ result = run_tests(
 # run_tests(clear_stuck=True) releases only a stuck job; a progressing one stays (data.cleared false).
 #   Stuck means no progress for 60 s once Unity no longer shows the run as running (a job lost to a domain
 #   reload), or for 5 minutes while it does: a test can run past 60 s (Unity fails one at its 3 minute
-#   default timeout itself), and clearing a live run loses its result.```
+#   default timeout itself), and clearing a live run loses its result.
+```
 
 ### get_test_job
 
