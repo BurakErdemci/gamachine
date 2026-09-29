@@ -401,8 +401,11 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
   `list_models` (`main.py`); `set_model` refuses every pick while the bridge has
   none (`unavailable`). The CLI is decided with `subscription_family`, the
   runner's own rule, so `Copilot-...` is locked like `copilot-...`. It reads the
-  plan-caps file only, no CLI and no network. Not covered: Cursor's and OpenCode's lists
-  are dynamic (`/cli-models/{cli}` runs the CLI) and are not in the phone's
+  plan-caps file only, no CLI and no network, so a plan cap that is unknown or
+  older than 7 days (`get_named_models_cap` returns `None`) locks nothing on the
+  phone, where the desktop's `/cli-models/{cli}` would probe first and might
+  lock; the phone path stays free of CLI spawns on purpose. Not covered:
+  Cursor's and OpenCode's lists are dynamic (`/cli-models/{cli}` runs the CLI) and are not in the phone's
   catalog at all, so the phone cannot offer them; `plan_locked` still refuses a
   typed `cursor-*` id the plan cap locks.
 - `list_slash_commands` maps the chat to a family in one place,

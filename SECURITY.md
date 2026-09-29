@@ -78,7 +78,9 @@ code: `relay/`; PC side: `Backend/app/remote/`.
   (checked against the levels of that chat's model), switch a chat's provider and
   model (exactly as the desktop's picker does, so it also becomes the default a
   new chat opens on; only to a provider that is ready on the PC and a model the
-  plan allows), change the desktop's effort level (the desktop renderer applies
+  plan allows: the plan-lock check reads the stored plan cap only, so where that
+  cap is unknown or older than 7 days it locks nothing, whereas the desktop's
+  picker would probe the CLI first), change the desktop's effort level (the desktop renderer applies
   it, as a click in its effort panel would), read and change the global
   approval mode, and register its own web-push
   subscription (validated on the PC and stored on that device's own row, so it
