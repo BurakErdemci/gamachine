@@ -19,6 +19,15 @@ namespace MCPForUnityTests.Editor.Tools.Playtest
         }
 
         [Test]
+        public void Step_TimeoutSeconds_StringAndNumberParsedInvariant()
+        {
+            Assert.IsNull(PlaytestStepper.Parse(new JObject { ["frames"] = 1, ["timeout_seconds"] = "2.5" }, out var fromString));
+            Assert.AreEqual(2.5, fromString.TimeoutS, 1e-9);
+            Assert.IsNull(PlaytestStepper.Parse(new JObject { ["frames"] = 1, ["timeout_seconds"] = 2.5 }, out var fromNumber));
+            Assert.AreEqual(2.5, fromNumber.TimeoutS, 1e-9);
+        }
+
+        [Test]
         public void Step_InputUntilCaptureValidation()
         {
             StringAssert.Contains("outside", Parse(new JObject { ["frames"] = 5, ["input"] = new JArray(new JObject { ["frame"] = 5, ["key"] = "space" }) }));

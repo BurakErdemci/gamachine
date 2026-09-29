@@ -113,8 +113,21 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 else if (mode != "none") return "'capture' must be \"none\", \"end\" or a list of frames.";
             }
 
-            if (p["timeout_seconds"] != null && double.TryParse(p["timeout_seconds"].ToString(), out var to) && to > 0) spec.TimeoutS = to;
+            if (TryReadSeconds(p["timeout_seconds"], out var to) && to > 0) spec.TimeoutS = to;
             return null;
+        }
+
+        // Numbers are read from the token and strings parsed invariant: ToString()/TryParse are culture-bound ("2.5" is 25 on tr-TR).
+        private static bool TryReadSeconds(JToken token, out double seconds)
+        {
+            seconds = 0;
+            if (token == null) return false;
+            if (token.Type == JTokenType.Float || token.Type == JTokenType.Integer)
+            {
+                seconds = token.Value<double>();
+                return true;
+            }
+            return double.TryParse(token.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out seconds);
         }
 
         public static Task<JObject> Start(StepSpec spec)
