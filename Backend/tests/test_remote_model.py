@@ -535,3 +535,47 @@ async def test_a_failing_key_write_moves_neither_the_chat_nor_the_default(env, m
     assert env.db.get_ai_config(1)[:2] == ("subscription", "claude-opus-5")
     with pytest.raises(asyncio.TimeoutError):
         await phone.next_push(lambda m: m.get("type") == "chat_model_changed", timeout=0.4)
+
+
+async def test_the_chat_row_changed_then_the_default_write_failed_phones_are_still_told(env, monkeypatch):
+    keyed(env)
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "gpt-6-sol"))
+    monkeypatch.setattr(env.db, "save_ai_config", _fail)
+    r = await switch(phone, conv)
+    assert r["ok"] is False and r["error"] == "internal"
+    assert env.db.get_conversation_model(conv) == ("openai", "gpt-5.5")
+    heard = await phone.next_push(lambda m: m.get("type") == "chat_model_changed")
+    assert (heard["chat_id"], heard["model_name"]) == (str(conv), "gpt-5.5")
+    # What the phone re-reads is what the chat really has.
+    assert (await phone.request("get_config", chat_id=str(conv)))["result"]["model_name"] == "gpt-5.5"
+
+
+def test_pick_chat_model_tells_listeners_once_when_the_default_write_raises(env, monkeypatch):
+    keyed(env)
+    conv = make_chat(env.db)
+    calls = []
+    listener = lambda *a: calls.append(a)  # noqa: E731
+    chat_model.add_pick_listener(listener)
+    monkeypatch.setattr(env.db, "save_ai_config", _fail)
+    try:
+        with pytest.raises(RuntimeError, match="database is locked"):
+            chat_model.pick_chat_model(env.db, 1, conv, "openai", "gpt-5.5")
+    finally:
+        chat_model.remove_pick_listener(listener)
+    assert calls == [(conv, "openai", "gpt-5.5")]
+
+
+def test_a_refused_pick_tells_no_listener(env):
+    calls = []
+    listener = lambda *a: calls.append(a)  # noqa: E731
+    chat_model.add_pick_listener(listener)
+    conv = make_chat(env.db)
+    try:
+        with pytest.raises(chat_model.ChatModelError):
+            chat_model.pick_chat_model(env.db, 1, conv, "nope", "x")
+    finally:
+        chat_model.remove_pick_listener(listener)
+    assert calls == []
+
+

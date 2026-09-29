@@ -221,6 +221,14 @@ def remove_pick_listener(listener: Callable[[int, str, str], None]) -> None:
         _pick_listeners.remove(listener)
 
 
+def _tell_listeners(conversation_id: int, provider_type: str, model_name: str) -> None:
+    for listener in list(_pick_listeners):
+        try:
+            listener(conversation_id, provider_type, model_name)
+        except Exception:
+            logger.exception("[chat_model] a pick listener failed")
+
+
 def pick_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
                     model_name: str, *, require_ready: bool = True,
                     readiness: Optional[Callable[..., dict]] = None) -> Dict[str, str]:
@@ -230,13 +238,16 @@ def pick_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
     (`_resolve` falls back to it). /save-ai-config and the phone's `set_model`
     both end here, so they cannot drift apart. Listeners are told afterwards;
     a failing one never undoes the pick.
+
+    The two writes are not one transaction. Once the chat row has changed the
+    listeners are told even when the default write raises (which then
+    propagates), so a phone that gets an error re-reads the model the chat
+    really has instead of showing the one it left.
     """
     result = set_chat_model(db, user_id, conversation_id, provider_type, model_name,
                             require_ready=require_ready, readiness=readiness)
-    db.save_ai_config(user_id, result["provider_type"], result["model_name"], "")
-    for listener in list(_pick_listeners):
-        try:
-            listener(conversation_id, result["provider_type"], result["model_name"])
-        except Exception:
-            logger.exception("[chat_model] a pick listener failed")
+    try:
+        db.save_ai_config(user_id, result["provider_type"], result["model_name"], "")
+    finally:
+        _tell_listeners(conversation_id, result["provider_type"], result["model_name"])
     return result
