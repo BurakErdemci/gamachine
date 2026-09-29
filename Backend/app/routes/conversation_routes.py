@@ -51,22 +51,19 @@ _REPORT_FAMILIES_WITH_SESSIONS = {"claude", "codex"}
 def _report_family(model_name: str) -> Optional[str]:
     """Abonelik modeli → sağlayıcı ailesi; TANINMAYAN ad için None.
 
-    Aile çözümü `spawn_env.env_family`den geliyor, burada ikinci bir önek tablosu
-    YOK. Sebep ölçülü: bu depodaki arızaların ortak şekli "uyuşması gereken iki
-    tablo uyuşmuyor" ve o dosya zaten `AIProviderManager.get_provider` ile
-    hizada tutulan tablonun evi.
+    Aile çözümü `chat_model.subscription_family`den geliyor (koşucunun gerçekten
+    sevk ettiği CLI); burada ikinci bir önek tablosu YOK.
 
-    Tek fark bilerek: `env_family` bilinmeyen adı "claude"a DÜŞÜRÜYOR (alt süreç
-    ortamı için doğru — bilinmeyen ada en kısıtlı izin listesini verir). Rapor
-    ucunda aynı düşüş zararlı: denetim (30 Ağu 2026) `kimi-k3`, `copilot-auto`,
-    `cursor-auto`, `opencode:auto` seçiliyken ucun sohbette CACHE'TE KALMIŞ eski
-    Claude oturumunu sorguladığını ve başka sağlayıcının kullanım raporunu
-    `status: ok` ile döndürdüğünü ölçtü. Bu yüzden "claude" cevabı ancak ad
-    gerçekten `claude` ile başlıyorsa kabul ediliyor; gerisi tanınmamıştır.
+    Tek fark bilerek: o fonksiyon bilinmeyen adı "claude"a düşürüyor (koşucu da
+    öyle yapıyor). Rapor ucunda aynı düşüş zararlı: denetim (30 Ağu 2026)
+    `kimi-k3`, `copilot-auto`, `cursor-auto`, `opencode:auto` seçiliyken ucun
+    sohbette CACHE'TE KALMIŞ eski Claude oturumunu sorguladığını ve başka
+    sağlayıcının kullanım raporunu `status: ok` ile döndürdüğünü ölçtü. Bu yüzden
+    "claude" cevabı ancak ad gerçekten `claude` ile başlıyorsa kabul ediliyor;
+    gerisi tanınmamıştır.
     """
     m = (model_name or "").lower()
-    from spawn_env import env_family
-    family = env_family(m)
+    family = chat_model.subscription_family(m)
     if family == "claude" and not m.startswith("claude"):
         return None
     return family
@@ -413,8 +410,7 @@ def _oturum_saglayici_anahtari(provider_type: str, model_name: str) -> str:
     Abonelik yolunda anahtar SAĞLAYICI TİPİ değil CLI AİLESİ olmalı: aynı sohbette
     Claude'dan Codex'e geçildiğinde ikisinin oturum kimlikleri ayrı ayrı saklanmalı,
     yoksa biri diğerinin kimliğiyle resume edilmeye çalışılır. Aile eşlemesi
-    `env_family` ile yapılıyor — `manager.get_provider` de aynı önekleri kullanıyor
-    ve ikisinin ayrışmaması bir testle sabitli.
+    koşucunun sevk ettiği CLI ile aynı (`chat_model.subscription_family`).
     """
     if provider_type != "subscription":
         return provider_type

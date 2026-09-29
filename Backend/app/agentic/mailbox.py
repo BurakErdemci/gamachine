@@ -138,15 +138,15 @@ def send_tool_hint(provider_type: Optional[str], model_name: Optional[str]) -> t
     `gamachineMail` server, OpenCode shows `<server>_<tool>`, agy reaches MCP
     tools only through `call_mcp_tool`. An agy branch told just
     `send_chat_message` called it on unityMCP (27 Sep 2026). The family comes
-    from the same prefixes agent_runner dispatches on (spawn_env.env_family).
+    from the same rule agent_runner dispatches on (chat_model.subscription_family).
     """
     if provider_type and provider_type != "subscription":
         # API loops carry the tool themselves (tool_registry).
         return f"`{TOOL_SEND}` aracıyla", f"`{TOOL_SEND}`"
     family = None
     if provider_type == "subscription":
-        from spawn_env import env_family
-        family = env_family((model_name or "claude").lower())
+        from agentic.chat_model import subscription_family
+        family = subscription_family(model_name)
     if family == "claude":
         name = f"mcp__{CLAUDE_SERVER_NAME}__{TOOL_SEND}"
         return f"`{name}` aracıyla", f"`{name}`"

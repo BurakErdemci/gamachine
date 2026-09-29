@@ -410,3 +410,79 @@ def test_a_capitalised_subscription_id_has_one_cli_family():
         cli_state=lambda fam: seen.append(fam) or {"installed": True, "loggedIn": None})
     assert seen == ["codex"] and state["provider"] == "codex"
     assert cr._oturum_saglayici_anahtari("subscription", "GPT-6-LUNA") == "codex"
+
+
+FAMILY_IDS = [
+    "gpt-6-luna", "GPT-6-LUNA", "claude-opus-5", "CLAUDE-OPUS-5",
+    "gemini-3.8-flash", "GEMINI-3.8-FLASH", "agy-pro", "AGY-PRO",
+    "opencode:sample/model", "OPENCODE:sample/model", "cursor-gpt-5", "CURSOR-GPT-5",
+    "copilot-gpt-5", "COPILOT-GPT-5", "kimi-k3", "KIMI-K3", "some-unknown-id",
+    "codex", "CODEX", "agy", "AGY", "cursor", "CURSOR", "copilot", "COPILOT",
+    "opencode", "OPENCODE", "kimi", "KIMI", "", None,
+]
+
+
+def _runner_family(model):
+    """The CLI `_run_inner` really dispatches a subscription model id to."""
+    import asyncio
+    from types import MethodType
+    runner = ar.AgentRunner.__new__(ar.AgentRunner)
+    runner.provider_type = "subscription"
+    runner.model_name = model
+    runner.read_only = True
+    runner.conversation_id = None
+    seen = []
+
+    def stub(family):
+        async def run(self, message, *args):
+            seen.append(args[0] if args else family)
+            if False:
+                yield None
+        return MethodType(run, runner)
+
+    for method, family in (("_run_codex_session", "codex"), ("_run_agy_session", "agy"),
+                           ("_run_oneshot_cli_session", "oneshot"),
+                           ("_run_claude_session", "claude")):
+        setattr(runner, method, stub(family))
+
+    async def drain():
+        async for _ in runner._run_inner("probe"):
+            pass
+
+    asyncio.run(drain())
+    assert len(seen) == 1
+    return seen[0]
+
+
+@pytest.mark.parametrize("model", FAMILY_IDS, ids=repr)
+def test_every_place_names_the_cli_the_runner_dispatches(model):
+    runner = _runner_family(model)
+    seen = []
+    state = cm.provider_readiness(
+        None, 1, "subscription", model,
+        cli_state=lambda fam: seen.append(fam) or {"installed": True, "loggedIn": None})
+    assert seen == [runner] and state["provider"] == runner
+    assert cr._oturum_saglayici_anahtari("subscription", model) == runner
+    assert cm.agent_label("subscription", model) == runner
+    assert cm.cli_family("subscription", model) == runner
+    assert cm.subscription_family(model) == runner
+
+
+@pytest.mark.parametrize("model", FAMILY_IDS, ids=repr)
+def test_report_and_mail_hint_follow_the_runner_too(model):
+    from agentic import mailbox
+    runner = _runner_family(model)
+    named_claude = (model or "").lower().startswith("claude")
+    assert cr._report_family(model) == (None if runner == "claude" and not named_claude else runner)
+    stand_in = {"claude": CLAUDE, "codex": CODEX, "agy": "gemini-3.8-flash",
+                "opencode": OPENCODE}.get(runner, model)
+    assert mailbox.send_tool_hint("subscription", model) == mailbox.send_tool_hint(
+        "subscription", stand_in)
+
+
+def test_a_bare_cli_name_is_a_claude_model_id_and_checks_claude_readiness():
+    seen = []
+    state = cm.provider_readiness(
+        None, 1, "subscription", "CODEX",
+        cli_state=lambda fam: seen.append(fam) or {"installed": True, "loggedIn": None})
+    assert seen == ["claude"] and state["provider"] == "claude"

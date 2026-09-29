@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from providers import model_catalog
-from spawn_env import env_family
 
 LOCAL_PROVIDERS = ("subscription", "ollama")
 MODEL_NAME_MAX = 200
@@ -50,14 +49,35 @@ def check_model_choice(provider_type: Any, model_name: Any) -> Tuple[str, str]:
     return provider_type, model_name
 
 
-def cli_family(provider_type: str, model_name: str) -> Optional[str]:
-    """The CLI family a subscription model runs on (None for API/local providers).
+def subscription_family(model_name: Optional[str]) -> str:
+    """The CLI a subscription model id runs on: what `AgentRunner` dispatches.
 
-    The one place provider_type+model_name becomes a family; the same
-    decision `provider_readiness` and the runner make."""
+    The one place a model id becomes a family. `spawn_env.env_family` is a table
+    for binary names and also maps bare `codex`/`agy`/... to their CLIs, but
+    the runner sends such an id to claude; every reader of a model id follows
+    the runner, so readiness and the session key check the CLI that runs.
+    """
+    name = (model_name or "claude").lower()
+    if name.startswith("cursor-"):
+        return "cursor"
+    if name.startswith("copilot-"):
+        return "copilot"
+    if name.startswith("opencode:"):
+        return "opencode"
+    if name.startswith("kimi-"):
+        return "kimi"
+    if name.startswith("gpt-"):
+        return "codex"
+    if name.startswith(("gemini", "agy-")):
+        return "agy"
+    return "claude"
+
+
+def cli_family(provider_type: str, model_name: str) -> Optional[str]:
+    """The CLI family a subscription model runs on (None for API/local providers)."""
     if provider_type != "subscription":
         return None
-    return env_family((model_name or "claude").lower()) or "claude"
+    return subscription_family(model_name)
 
 
 def agent_label(provider_type: str, model_name: str) -> str:
@@ -89,7 +109,7 @@ def message_pair(agent: Any, model: Any) -> Optional[Tuple[str, str]]:
         if provider == "subscription" or not known_provider(provider):
             return None
         return provider, model
-    if env_family(model.lower()) != agent:
+    if subscription_family(model) != agent:
         return None
     return "subscription", model
 
@@ -155,7 +175,6 @@ def provider_readiness(db, user_id: int, provider_type: str, model_name: str, *,
         has_key = bool(db.get_api_key(user_id, provider_type))
         return {"ready": has_key, "kind": "api", "provider": provider_type,
                 "needs": None if has_key else "apikey"}
-    # Same family mapping as manager.get_provider (pinned by a test).
     family = cli_family(provider_type, model_name)
     state = (cli_state or _cli_state)(family) or {}
     if not state.get("installed"):

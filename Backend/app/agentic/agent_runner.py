@@ -27,6 +27,7 @@ from agentic.command_gates import GATE_OWNERS as _GATE_OWNERS
 from agentic.command_gates import register_gate as _register_gate, release_gate as _release_gate
 from agentic.command_gates import mark_timed_out as _mark_timed_out
 
+from agentic.chat_model import subscription_family
 from agentic.command_safety import requires_approval as _is_dangerous_command
 from agentic.side_prompt import SideTurn, API_SYSTEM_CONTEXT as _SIDE_API_CONTEXT
 
@@ -1338,21 +1339,7 @@ class AgentRunner:
             # claude-* → kalıcı interaktif SDK session (native onay + AskUserQuestion + skill/slash).
             # codex (gpt-*) → kalıcı app-server session (native onay). agy → disk-resume CLI.
             # cursor/copilot/opencode → one-shot + resmi resume; Kimi → transcript'li one-shot.
-            _name = (self.model_name or "claude").lower()
-            if _name.startswith("cursor-"):
-                _cur = "cursor"
-            elif _name.startswith("copilot-"):
-                _cur = "copilot"
-            elif _name.startswith("opencode:"):
-                _cur = "opencode"
-            elif _name.startswith("kimi-"):
-                _cur = "kimi"
-            elif _name.startswith("gpt-"):
-                _cur = "codex"
-            elif _name.startswith(("gemini", "agy-")):
-                _cur = "agy"
-            else:
-                _cur = "claude"
+            _cur = subscription_family(self.model_name)
 
             # CLI'lar arası "kaldığı yerden devam": provider değiştiyse hedef CLI'ın
             # (varsa) bayat session'ını kapat → ilk-tur enjeksiyonu tetiklenir, tam

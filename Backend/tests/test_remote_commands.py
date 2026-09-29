@@ -59,7 +59,7 @@ async def test_list_slash_commands_follows_the_chats_agent(env, provider, family
 
 
 @pytest.mark.parametrize("stored", [("anthropic", "claude-sonnet-4-6"), ("openai", "gpt-5.5"),
-                                    ("ollama", "llama3"), ("subscription", "opencode-x"),
+                                    ("ollama", "llama3"), ("subscription", "opencode:x"),
                                     ("subscription", "cursor-gpt"), ("subscription", "kimi-k2")])
 async def test_chats_without_a_catalog_get_only_compact_and_no_lookup(env, stored):
     asked = fake_catalog(env)
