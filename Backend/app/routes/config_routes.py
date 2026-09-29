@@ -264,14 +264,15 @@ def create_config_router(db):
             # taken, then Settings asks for the key), so readiness is not a
             # refusal here; the chat shows "provider not ready" instead.
             try:
-                chat_model.set_chat_model(db, user_id, req.conversation_id, req.provider_type,
-                                          req.model_name, require_ready=False)
+                chat_model.pick_chat_model(db, user_id, req.conversation_id, req.provider_type,
+                                           req.model_name, require_ready=False)
             except chat_model.ChatModelError as exc:
                 raise HTTPException(404 if exc.code == "unknown_chat" else 400, exc.code)
         if req.api_key and req.api_key != "CLI_SESSION" and req.provider_type not in ("ollama", "subscription"):
             db.save_api_key(user_id, req.provider_type, req.api_key)
-        # The global row stays "the default for new chats = the last pick".
-        db.save_ai_config(user_id, req.provider_type, req.model_name, "")
+        if req.conversation_id is None:
+            # No chat on screen: only the default for new chats changes.
+            db.save_ai_config(user_id, req.provider_type, req.model_name, "")
         return {"status": "success"}
 
     @router.get("/get-ai-config/{user_id}")

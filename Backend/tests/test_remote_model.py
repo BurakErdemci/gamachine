@@ -1,5 +1,6 @@
-"""A paired phone switches a chat's provider/model (owner decision, 28 Sep 2026):
-`get_config {chat_id}`, `list_models`, `set_model`.
+"""A paired phone switches a chat's provider/model (owner decisions, 28 and 29 Sep
+2026): `get_config {chat_id}`, `list_models`, `set_model`. The phone pick has the
+effects of the desktop picker's (`chat_model.pick_chat_model`).
 
 Same harness as test_remote_commands.py (loopback relay, fake phone, real
 database). Readiness is decided by an API key in the database, or by a patched
@@ -16,6 +17,7 @@ from providers import model_catalog
 from providers.effort_caps import get_effort_caps
 from remote.desktop_channel import CHANNEL
 from routes.config_routes import create_config_router
+from schemas import AIConfigRequest
 from tests.test_remote_bridge import env, make_chat, pair_phone  # noqa: F401  (env is a fixture)
 
 
@@ -155,10 +157,9 @@ async def switch(phone, conv, provider_type="openai", model_name="gpt-5.5", **ex
                                model_name=model_name, **extra)
 
 
-async def test_set_model_stores_the_chats_model_and_leaves_the_default_alone(env):
+async def test_set_model_stores_the_chats_model_and_moves_the_default_for_new_chats(env):
     keyed(env)
     env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
-    default_before = env.db.get_ai_config(1)
     phone = await pair_phone(env)
     conv = make_chat(env.db, stored=("subscription", "gpt-6-sol"))
     other = make_chat(env.db, title="Other", stored=("subscription", "gpt-6-luna"))
@@ -168,7 +169,7 @@ async def test_set_model_stores_the_chats_model_and_leaves_the_default_alone(env
 
     assert chat_model.chat_model(env.db, 1, conv) == {"provider_type": "openai", "model_name": "gpt-5.5"}
     assert chat_model.chat_model(env.db, 1, other) == {"provider_type": "subscription", "model_name": "gpt-6-luna"}
-    assert env.db.get_ai_config(1) == default_before
+    assert env.db.get_ai_config(1)[:2] == ("openai", "gpt-5.5")
     got = await phone.request("get_config", chat_id=str(conv))
     assert (got["result"]["provider_type"], got["result"]["model_name"]) == ("openai", "gpt-5.5")
     chat = next(c for c in (await phone.request("list_chats"))["result"]["chats"] if c["chat_id"] == str(conv))
@@ -402,3 +403,113 @@ async def test_a_bad_effort_does_not_hide_the_other_refusals(env):
     assert (await send(phone, 999999, effort="high"))["error"] == "unknown_chat"
     r = await phone.request("send_message", chat_id=str(conv), text="  ", effort="high")
     assert r["error"] == "bad_text"
+
+
+# ── the phone pick is the desktop pick ─────────────────────────────────────
+
+def _save_route(db):
+    router = create_config_router(db)
+    return next(r for r in router.routes if r.path == "/save-ai-config").endpoint
+
+
+async def test_a_new_chat_opens_on_the_model_a_phone_picked(env):
+    keyed(env)
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "gpt-6-sol"))
+    assert (await switch(phone, conv))["ok"] is True
+    fresh = env.db.create_conversation(1, "Fresh")
+    assert chat_model.chat_model(env.db, 1, fresh) == {"provider_type": "openai", "model_name": "gpt-5.5"}
+    got = (await phone.request("get_config", chat_id=str(fresh)))["result"]
+    assert (got["provider_type"], got["model_name"]) == ("openai", "gpt-5.5")
+
+
+async def test_the_phone_pick_and_the_desktop_pick_have_the_same_effects(env):
+    keyed(env)
+    phone = await pair_phone(env)
+    desktop_chat = make_chat(env.db, "Desktop", stored=("subscription", "gpt-6-sol"))
+    phone_chat = make_chat(env.db, "Phone", stored=("subscription", "gpt-6-sol"))
+    bystander = make_chat(env.db, "Bystander", stored=("subscription", "gpt-6-luna"))
+
+    def effects(conv):
+        fresh = env.db.create_conversation(1, "Fresh")
+        return {"chat": env.db.get_conversation_model(conv), "default": env.db.get_ai_config(1)[:2],
+                "new chat": chat_model.chat_model(env.db, 1, fresh),
+                "bystander": env.db.get_conversation_model(bystander)}
+
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    await _save_route(env.db)(AIConfigRequest(user_id=1, provider_type="openai", model_name="gpt-5.5",
+                                              api_key="", conversation_id=desktop_chat), x_session_token="")
+    via_desktop = effects(desktop_chat)
+
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    assert (await switch(phone, phone_chat))["ok"] is True
+    via_phone = effects(phone_chat)
+
+    assert via_phone == via_desktop
+    assert via_phone["default"] == ("openai", "gpt-5.5") and via_phone["bystander"] == ("subscription", "gpt-6-luna")
+
+
+async def test_a_refused_phone_pick_leaves_the_default_alone(env):
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "gpt-6-sol"))
+    assert (await switch(phone, conv, "anthropic", "claude-opus-5"))["error"] == "not_ready"
+    assert (await switch(phone, conv, "nope", "x"))["error"] == "unknown_provider"
+    assert (await switch(phone, conv, "openai", "gpt\n5"))["error"] == "bad_model"
+    assert env.db.get_ai_config(1)[:2] == ("subscription", "claude-opus-5")
+
+
+async def test_every_phone_hears_of_a_pick_whoever_made_it(env):
+    keyed(env)
+    picker = await pair_phone(env, "iPhone")
+    other = await pair_phone(env, "iPad")
+    conv = make_chat(env.db)
+
+    await switch(picker, conv)
+    for phone in (picker, other):
+        heard = await phone.next_push(lambda m: m.get("type") == "chat_model_changed")
+        assert heard == {"type": "chat_model_changed", "chat_id": str(conv), "provider_type": "openai",
+                         "model_name": "gpt-5.5"}
+        changed = await phone.next_push(lambda m: m.get("type") == "chat_changed")
+        assert changed["chat"]["chat_id"] == str(conv) and changed["chat"]["model"] == "gpt-5.5"
+
+    # The desktop's own pick reaches the phones the same way.
+    await _save_route(env.db)(AIConfigRequest(user_id=1, provider_type="subscription", model_name="gpt-6-sol",
+                                              api_key="", conversation_id=conv), x_session_token="")
+    for phone in (picker, other):
+        heard = await phone.next_push(lambda m: m.get("type") == "chat_model_changed")
+        assert (heard["provider_type"], heard["model_name"]) == ("subscription", "gpt-6-sol")
+
+
+async def test_nobody_is_told_of_a_refused_pick(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db)
+    await switch(phone, conv, "anthropic", "claude-opus-5")
+    with pytest.raises(asyncio.TimeoutError):
+        await phone.next_push(lambda m: m.get("type") == "chat_model_changed", timeout=0.4)
+
+
+async def test_the_bridge_listens_to_picks_only_while_it_is_on(env):
+    assert env.bridge._pick_listener not in chat_model._pick_listeners
+    await pair_phone(env)
+    assert env.bridge._pick_listener in chat_model._pick_listeners
+    await env.bridge.disable()
+    assert env.bridge._pick_listener not in chat_model._pick_listeners
+
+
+async def test_a_listener_that_fails_does_not_undo_the_pick(env):
+    keyed(env)
+    conv = make_chat(env.db)
+
+    def boom(*args):
+        raise RuntimeError("listener broke")
+
+    chat_model.add_pick_listener(boom)
+    try:
+        result = chat_model.pick_chat_model(env.db, 1, conv, "openai", "gpt-5.5")
+    finally:
+        chat_model.remove_pick_listener(boom)
+    assert result == {"provider_type": "openai", "model_name": "gpt-5.5"}
+    assert env.db.get_conversation_model(conv) == ("openai", "gpt-5.5")
+    assert env.db.get_ai_config(1)[:2] == ("openai", "gpt-5.5")

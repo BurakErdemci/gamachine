@@ -7,14 +7,18 @@ chat = the last model the user picked". API keys stay per provider.
 
 The backend decides: every turn of a chat (typed, queued, woken, or sent from
 the phone) resolves its model here, whatever a window shows. Writers (the
-desktop's /save-ai-config, the phone bridge) validate through `set_chat_model`.
+desktop's /save-ai-config, the phone bridge) go through `pick_chat_model`,
+which validates through `set_chat_model`.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from providers import model_catalog
 from providers.families import subscription_family  # noqa: F401  (re-exported)
+
+logger = logging.getLogger(__name__)
 
 LOCAL_PROVIDERS = ("subscription", "ollama")
 MODEL_NAME_MAX = 200
@@ -179,7 +183,7 @@ def set_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
                          `extra["needs"]` says what is missing
     The desktop passes require_ready=False: its picker is optimistic by design
     (a keyless cloud pick switches, then opens Settings for the key). Only
-    this chat changes; the global default is the caller's to set.
+    this chat changes; a pick as a user makes it goes through `pick_chat_model`.
     """
     if (isinstance(conversation_id, bool) or not isinstance(conversation_id, int)
             or db.get_conversation_owner(conversation_id) != user_id
@@ -193,3 +197,40 @@ def set_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
     if not db.set_conversation_model(conversation_id, provider_type, model_name):
         raise ChatModelError("unknown_chat")
     return {"provider_type": provider_type, "model_name": model_name}
+
+
+# Who wants to hear of a pick (the phone bridge, to tell paired phones).
+# Called as (conversation_id, provider_type, model_name) on the thread that
+# picked, after the pick is stored.
+_pick_listeners: list = []
+
+
+def add_pick_listener(listener: Callable[[int, str, str], None]) -> None:
+    if listener not in _pick_listeners:
+        _pick_listeners.append(listener)
+
+
+def remove_pick_listener(listener: Callable[[int, str, str], None]) -> None:
+    if listener in _pick_listeners:
+        _pick_listeners.remove(listener)
+
+
+def pick_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
+                    model_name: str, *, require_ready: bool = True,
+                    readiness: Optional[Callable[..., dict]] = None) -> Dict[str, str]:
+    """A user's model pick for one chat, with every effect the desktop's picker
+    has: the chat stores it (`set_chat_model`, same refusals) and the global
+    row follows, because "a new chat opens on the last model picked"
+    (`_resolve` falls back to it). /save-ai-config and the phone's `set_model`
+    both end here, so they cannot drift apart. Listeners are told afterwards;
+    a failing one never undoes the pick.
+    """
+    result = set_chat_model(db, user_id, conversation_id, provider_type, model_name,
+                            require_ready=require_ready, readiness=readiness)
+    db.save_ai_config(user_id, result["provider_type"], result["model_name"], "")
+    for listener in list(_pick_listeners):
+        try:
+            listener(conversation_id, result["provider_type"], result["model_name"])
+        except Exception:
+            logger.exception("[chat_model] a pick listener failed")
+    return result

@@ -17,7 +17,7 @@ import logging
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from agentic import cards, turn_events
+from agentic import cards, chat_model, turn_events
 from remote import chats
 from remote import crypto as C
 from remote.pairing import PairingManager, qr_url
@@ -91,12 +91,14 @@ class RemoteBridge:
         if not self._listening:
             turn_events.add_listener(self._ring_listener)
             cards.add_listener(self._card_listener)
+            chat_model.add_pick_listener(self._pick_listener)
             self._listening = True
 
     async def _stop_relay(self) -> None:
         if self._listening:
             turn_events.remove_listener(self._ring_listener)
             cards.remove_listener(self._card_listener)
+            chat_model.remove_pick_listener(self._pick_listener)
             self._listening = False
         self.push.cancel()
         self.pairing.cancel()
@@ -377,6 +379,16 @@ class RemoteBridge:
 
     def _card_listener(self, what: str, card) -> None:
         self._call_soon(self._on_card, what, card.public())
+
+    def _pick_listener(self, conv_id: int, provider_type: str, model_name: str) -> None:
+        self._call_soon(self._on_model_picked, conv_id, provider_type, model_name)
+
+    def _on_model_picked(self, conv_id: int, provider_type: str, model_name: str) -> None:
+        # Whoever picked (a phone or the desktop), every phone learns it: the
+        # open chat re-reads its model and the list shows the new one.
+        self._broadcast({"type": "chat_model_changed", "chat_id": str(conv_id),
+                         "provider_type": provider_type, "model_name": model_name})
+        self._chat_changed(conv_id)
 
     def _broadcast(self, obj: dict) -> None:
         for session in list(self.sessions.values()):

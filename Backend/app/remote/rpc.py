@@ -286,15 +286,17 @@ class Dispatcher:
         return await catalog(chats.LOCAL_USER_ID)
 
     async def set_model(self, session: PhoneSession, req, rid):
-        # Owner decision, 28 Sep 2026: the phone picks a chat's provider and
-        # model. Only that chat changes (the global default is the desktop's);
-        # a turn already running finishes on the model it started with.
+        # Owner decisions, 28 and 29 Sep 2026: the phone picks a chat's provider
+        # and model exactly as the desktop's picker does (`pick_chat_model`: the
+        # chat, and the default a new chat opens on); a turn already running
+        # finishes on the model it started with. Unlike the desktop, a provider
+        # that is not ready is refused: the phone cannot open Settings for a key.
         row = self._chat(req.get("chat_id"))
         conv = row["id"]
         try:
             # Off the loop: the readiness probes read the API key and may ask Ollama.
             result = await asyncio.to_thread(
-                chat_model.set_chat_model, self.db, chats.LOCAL_USER_ID, conv,
+                chat_model.pick_chat_model, self.db, chats.LOCAL_USER_ID, conv,
                 req.get("provider_type"), req.get("model_name"), require_ready=True)
         except chat_model.ChatModelError as exc:
             raise RpcError(exc.code, **exc.extra)
