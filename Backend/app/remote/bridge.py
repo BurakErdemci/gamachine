@@ -18,7 +18,7 @@ import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from agentic import cards, chat_model, turn_events
-from providers.effort_caps import CANON_ORDER
+from providers.effort_caps import EFFORT_LEVELS
 from remote import chats
 from remote import crypto as C
 from remote.pairing import PairingManager, qr_url
@@ -396,23 +396,36 @@ class RemoteBridge:
 
     # ── the desktop's effort ───────────────────────────────────────────
     def set_desktop_effort(self, level: Any, levels: Any) -> dict:
-        """What the renderer reports: its current effort and the levels the
-        active provider and model offer. The renderer is the source of truth
-        (effort is its page state, not stored anywhere else); this only keeps the
-        last report for phones and tells them when it changed."""
-        if not isinstance(level, str) or level not in CANON_ORDER:
+        """What the renderer reports: its current effort and the levels the active
+        provider and model offer. The renderer is the source of truth (effort is
+        its page state, not stored anywhere else); this only keeps the last
+        report for phones and tells them when it changed. A report it refuses
+        clears the snapshot: a phone should say "unknown", not show what another
+        model had."""
+        try:
+            snapshot = self._checked_effort(level, levels)
+        except BridgeError:
+            self._set_effort_snapshot(None)
+            raise
+        return {"changed": self._set_effort_snapshot(snapshot)}
+
+    @staticmethod
+    def _checked_effort(level: Any, levels: Any) -> dict:
+        if not isinstance(level, str) or level not in EFFORT_LEVELS:
             raise BridgeError("bad_level", 400)
-        if (not isinstance(levels, list) or not levels or len(levels) > len(CANON_ORDER)
-                or any(not isinstance(v, str) or v not in CANON_ORDER for v in levels)):
+        if (not isinstance(levels, list) or not levels or len(levels) > len(EFFORT_LEVELS)
+                or any(not isinstance(v, str) or v not in EFFORT_LEVELS for v in levels)):
             raise BridgeError("bad_levels", 400)
         if level not in levels:
             raise BridgeError("level_not_offered", 400)
-        snapshot = {"level": level, "levels": [v for v in CANON_ORDER if v in levels]}
+        return {"level": level, "levels": [v for v in EFFORT_LEVELS if v in levels]}
+
+    def _set_effort_snapshot(self, snapshot: Optional[dict]) -> bool:
         changed = snapshot != self.desktop_effort
         self.desktop_effort = snapshot
         if changed:
             self._broadcast({"type": "effort_changed", "desktop_effort": self.current_desktop_effort()})
-        return {"changed": changed}
+        return changed
 
     def current_desktop_effort(self) -> Optional[dict]:
         snapshot = self.desktop_effort

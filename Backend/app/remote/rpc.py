@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from agentic import approval_mode, cards, chat_model, turn_events
 from providers.agy_provider import AgyStepGateError
 from remote import chats, webpush
-from providers.effort_caps import CANON_ORDER
+from providers.effort_caps import EFFORT_LEVELS
 from remote.desktop_channel import (
     CARD_CLOSED_TYPE, CHANNEL, EFFORT_SET_TYPE, FRAME_TYPE, MODE_CHANGED_TYPE, MODEL_CHANGED_TYPE,
 )
@@ -324,7 +324,7 @@ class Dispatcher:
         # what it really has comes back through its own report
         # (`bridge.set_desktop_effort`). Nothing is stored here.
         level = req.get("level")
-        if not isinstance(level, str) or level not in CANON_ORDER:
+        if not isinstance(level, str) or level not in EFFORT_LEVELS:
             raise RpcError("bad_effort")
         logger.info("[remote] effort %s requested by %s", level, session.device_label)
         frame = {"type": EFFORT_SET_TYPE, "level": level, "by": session.device_label,

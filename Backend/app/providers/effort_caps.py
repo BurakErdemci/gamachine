@@ -24,6 +24,13 @@ from typing import Optional
 
 CANON_ORDER = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"]
 
+# Every level get_effort_caps can return, in UI order: CANON_ORDER plus `none`
+# (OpenAI API models: reasoning_effort=none, the model's own "no reasoning").
+# Anything that validates a level the registry offered checks against this, not
+# CANON_ORDER; tests/test_effort_caps.py sweeps the registry so a new level
+# cannot slip past it.
+EFFORT_LEVELS = ["auto", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
 # "claude-opus-4-8", "claude-sonnet-4-5-20250929", "claude-opus-4-20250514".
 # The minor must be a single digit so a date suffix is never read as one.
 _CLAUDE_FAMILY_FIRST_RE = re.compile(r"(?:opus|sonnet|haiku)-(\d{1,2})(?:-(\d)(?!\d))?(?!\d)")

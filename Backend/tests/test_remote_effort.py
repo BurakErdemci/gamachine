@@ -13,7 +13,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from providers.effort_caps import CANON_ORDER
+from providers.effort_caps import EFFORT_LEVELS, get_effort_caps
 from remote.desktop_channel import CHANNEL, EFFORT_SET_TYPE
 from routes.remote_routes import create_remote_router
 from tests.test_remote_bridge import env, make_chat, pair_phone  # noqa: F401  (env is a fixture)
@@ -51,8 +51,8 @@ async def test_set_effort_is_on_the_allow_list(env):
     assert "set_effort" in env.bridge.rpc.handlers
 
 
-@pytest.mark.parametrize("level", CANON_ORDER)
-async def test_every_level_on_the_canonical_scale_goes_to_the_renderer(env, level):
+@pytest.mark.parametrize("level", EFFORT_LEVELS)
+async def test_every_level_the_registry_can_return_goes_to_the_renderer(env, level):
     phone = await pair_phone(env, name="Burak'ın iPhone'u")
     q = CHANNEL.listen()
     try:
@@ -79,7 +79,7 @@ async def test_the_backend_keeps_nothing_of_a_request(env):
     assert (await phone.request("get_config"))["result"]["desktop_effort"] is None
 
 
-@pytest.mark.parametrize("level", ["turbo", "HIGH", " high", "high ", "", "none", 3, True, None, ["high"],
+@pytest.mark.parametrize("level", ["turbo", "HIGH", " high", "high ", "", "None", 3, True, None, ["high"],
                                    {"level": "high"}])
 async def test_a_level_off_the_scale_is_refused_and_sent_nowhere(env, level):
     phone = await pair_phone(env)
@@ -156,16 +156,16 @@ async def test_the_same_report_again_changes_nothing(api):
     ({"level": "high", "levels": ["high", "turbo"]}, "bad_levels"),
     ({"level": "high", "levels": ["high", 4]}, "bad_levels"),
     ({"level": "high", "levels": [["high"]]}, "bad_levels"),
-    ({"level": "high", "levels": CANON_ORDER + ["auto"]}, "bad_levels"),
+    ({"level": "high", "levels": EFFORT_LEVELS + ["auto"]}, "bad_levels"),
     ({"level": "max", "levels": ["auto", "low"]}, "level_not_offered"),
     ({}, "bad_level"),
 ])
-async def test_a_bad_report_is_refused_and_changes_nothing(api, env, body, code):
+async def test_a_bad_report_is_refused_and_clears_the_snapshot(api, env, body, code):
     assert (await report(api, "medium")).status_code == 200
-    before = env.bridge.desktop_effort
     r = await api.put("/remote/desktop-effort", headers=H, json=body)
     assert r.status_code == 400 and r.json()["detail"] == {"code": code}, body
-    assert env.bridge.desktop_effort == before
+    # Not kept stale: what the desktop shows is unknown now, and a phone says so.
+    assert env.bridge.desktop_effort is None
 
 
 async def test_a_body_that_is_not_an_object_is_refused(api, env):
@@ -264,3 +264,39 @@ async def test_a_request_and_its_confirmation_meet_at_the_phone(api, env):
     heard = await phone.next_push(lambda m: m.get("type") == "effort_changed")
     assert heard["desktop_effort"] == {"level": "high", "levels": OPUS}
     assert (await phone.request("get_config"))["result"]["desktop_effort"]["level"] == "high"
+
+
+# ── levels the registry offers beyond the canonical scale ──────────────────
+
+async def test_an_openai_api_report_with_none_is_accepted(api, env):
+    """`none` is what the registry returns for OpenAI API models; a report of it
+    used to be refused as bad_levels, leaving the phone on another model's levels."""
+    phone = await pair_phone(env)
+    await report(api, "high")
+    await phone.next_push(lambda m: m.get("type") == "effort_changed")
+    openai = get_effort_caps("openai", "gpt-5.5")["levels"]
+    assert "none" in openai
+    r = await report(api, "none", openai)
+    assert r.status_code == 200 and r.json() == {"changed": True}
+    heard = await phone.next_push(lambda m: m.get("type") == "effort_changed")
+    assert heard["desktop_effort"] == {"level": "none", "levels": openai}
+
+
+async def test_none_is_kept_in_scale_order(api, env):
+    assert (await report(api, "auto", ["max", "none", "off", "auto"])).status_code == 200
+    assert env.bridge.desktop_effort["levels"] == ["auto", "off", "none", "max"]
+
+
+# ── a refused report ───────────────────────────────────────────────────────
+
+async def test_a_refused_report_tells_phones_the_desktop_effort_is_unknown(api, env):
+    phone = await pair_phone(env)
+    await report(api, "high")
+    await phone.next_push(lambda m: m.get("type") == "effort_changed")
+    assert (await report(api, "turbo")).status_code == 400
+    heard = await phone.next_push(lambda m: m.get("type") == "effort_changed")
+    assert heard == {"type": "effort_changed", "desktop_effort": None}
+    assert (await phone.request("get_config"))["result"]["desktop_effort"] is None
+    # A good report brings it back.
+    assert (await report(api, "low")).status_code == 200
+    assert (await phone.request("get_config"))["result"]["desktop_effort"]["level"] == "low"

@@ -4,7 +4,8 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
-from providers.effort_caps import get_effort_caps, map_effort
+from providers import effort_caps, model_catalog
+from providers.effort_caps import CANON_ORDER, EFFORT_LEVELS, get_effort_caps, map_effort
 
 
 def test_auto_always_first_and_empty_mapping():
@@ -145,3 +146,56 @@ def test_effort_levels_beyond_a_family_are_not_sent():
     assert map_effort("anthropic", "claude-sonnet-4-6", "xhigh") == {}
     assert map_effort("anthropic", "claude-sonnet-4-6", "max") == {
         "anthropic_extra_body": {"output_config": {"effort": "max"}}}
+
+
+# One id per branch of get_effort_caps / _anthropic_api_effort_levels, tried with
+# every provider so a branch is reached whichever provider the table routes it to.
+_MODEL_TABLE = [
+    "", "unknown-model",
+    "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-opus-4-5",
+    "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-3-7-sonnet-20250219",
+    "claude-fable-5", "claude-mythos-5",
+    "gpt-5.5", "gpt-5.2", "gpt-5.1-codex-max", "gpt-5.6-sol", "gpt-6-sol", "gpt-oss-120b",
+    "copilot-auto", "copilot-gpt-5.5", "copilot-claude-sonnet-5", "opencode:model", "cursor-auto", "kimi-k3",
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.1-pro-preview", "gemini-3-pro", "gemini-2.5-flash",
+    "agy-claude-sonnet-4-6", "nvidia/nemotron-x", "z-ai/glm-5.2", "qwen-3", "kimi-k2", "deepseek-v4", "mistral-large",
+]
+
+
+def test_the_registry_only_returns_levels_the_bridge_and_the_phone_know():
+    """The bridge validates a renderer's report and a phone's set_effort against
+    EFFORT_LEVELS. A level the registry could return but that is not in it makes
+    the report refused (`bad_levels`) and the phone stale: this once happened with
+    `none` on OpenAI API models, which CANON_ORDER lacks."""
+    providers = [*model_catalog.supported_providers(), "subscription", "ollama", "", "unknown-provider"]
+    seen = set()
+    for provider in providers:
+        for model in _MODEL_TABLE:
+            caps = get_effort_caps(provider, model)
+            assert caps["levels"][0] == "auto", (provider, model)
+            assert len(set(caps["levels"])) == len(caps["levels"]), (provider, model)
+            unknown = [v for v in caps["levels"] if v not in EFFORT_LEVELS]
+            assert not unknown, f"{provider}/{model} offers {unknown}, not in EFFORT_LEVELS"
+            seen.update(caps["levels"])
+    assert seen == set(EFFORT_LEVELS), "a level nothing offers, or the sweep missed a branch"
+
+
+def test_every_literal_level_list_in_the_registry_is_in_effort_levels():
+    """Independent of the model table above: the level lists written into the source."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(effort_caps))
+    stray = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_caps" and node.args:
+            first = node.args[0]
+            if isinstance(first, ast.List):
+                stray += [e.value for e in first.elts
+                          if isinstance(e, ast.Constant) and e.value not in EFFORT_LEVELS]
+    assert not stray
+
+
+def test_effort_levels_extend_the_canonical_scale_without_reordering_it():
+    assert [v for v in EFFORT_LEVELS if v in CANON_ORDER] == CANON_ORDER
+    assert set(EFFORT_LEVELS) - set(CANON_ORDER) == {"none"}
