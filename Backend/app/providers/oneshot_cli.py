@@ -208,6 +208,39 @@ def cli_installed(cli: str) -> bool:
     return resolve_cli_cmd(cli) is not None
 
 
+def resolve_general_cli(name: str) -> Optional[str]:
+    """A general CLI binary from PATH, or from the macOS user install dirs."""
+    found = shutil.which(name)
+    if found:
+        return found
+    if sys.platform != "win32":
+        return resolve_posix_cli(name)
+    return None
+
+
+def installed_clis(resolve=None) -> Dict[str, bool]:
+    """Which subscription CLIs are installed, keyed by CLI family.
+
+    The one table behind /cli-availability, /cli-doctor and the per-chat
+    model readiness check. `resolve` finds claude/codex/agy/kimi; the route
+    passes its own name so tests that patch it keep working.
+    """
+    from .agy_provider import AgyProvider
+
+    resolve = resolve or resolve_general_cli
+    # _agy_binary() also looks at the usual install paths; "agy" back means PATH only.
+    agy_ok = AgyProvider._agy_binary() != "agy" or bool(resolve("agy"))
+    return {
+        "claude": bool(resolve("claude")),
+        "codex": bool(resolve("codex")),
+        "agy": agy_ok,
+        "kimi": bool(resolve("kimi")),
+        "cursor": cli_installed("cursor"),
+        "copilot": cli_installed("copilot"),
+        "opencode": cli_installed("opencode"),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────
 # Model kimliği eşlemesi
 #   Bizim ID                     → CLI --model değeri

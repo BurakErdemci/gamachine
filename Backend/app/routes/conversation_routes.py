@@ -23,6 +23,7 @@ from schemas import ChatRequest, HiddenRequest, NewConversationRequest, RenameRe
 from agentic.agent_runner import AgentRunner
 from agentic import approval_mode
 from agentic import cards as _cards
+from agentic import chat_model
 from agentic import chat_titles
 from agentic import mailbox
 from agentic import turn_events
@@ -1171,6 +1172,17 @@ def create_conversation_router(db, progress_store):
         require_conversation_owner(db, x_session_token, conv_id)
         return db.get_conversation_messages(conv_id)
 
+    @router.get("/conversations/{conv_id}/model")
+    async def get_conversation_model(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
+        """The chat's provider/model, read fresh each time a window opens the
+        chat: another window or the phone may have changed it meanwhile."""
+        user_id, _ = require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
+        chat = chat_model.chat_model(db, user_id, conv_id)
+        has_key = (chat["provider_type"] not in chat_model.LOCAL_PROVIDERS
+                   and bool(db.get_api_key(user_id, chat["provider_type"])))
+        return {**chat, "has_key": has_key}
+
     @router.get("/conversations/{conv_id}/context-usage")
     async def get_context_usage(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
         """Sohbet açılışında göstergenin doldurulduğu uç.
@@ -1221,7 +1233,8 @@ def create_conversation_router(db, progress_store):
             raise HTTPException(status_code=400, detail="kind: usage | context")
 
         user_id, _ = get_current_user(db, x_session_token)
-        provider_type, model_name, _, _ = db.get_ai_config(user_id)
+        _chat = chat_model.chat_model(db, user_id, conv_id)
+        provider_type, model_name = _chat["provider_type"], _chat["model_name"]
         family = _report_family(model_name) if provider_type == "subscription" else None
 
         def _fallback(status: str, reason: Optional[str] = None, **ek) -> dict:
@@ -1430,7 +1443,9 @@ def create_conversation_router(db, progress_store):
         user_id, _ = require_conversation_owner(db, x_session_token, main_id)
         _check_chat_rate_limit(user_id)
 
-        provider_type, model_name, _, _ = db.get_ai_config(user_id)
+        # A side question runs on the main chat's model.
+        _main = chat_model.chat_model(db, user_id, main_id)
+        provider_type, model_name = _main["provider_type"], _main["model_name"]
         if _is_agy_model(provider_type, model_name):
             # agy runs one turn machine-wide: a side question runs only while
             # no agy turn does (Burak, 27 Sep 2026); agy_session refuses the
@@ -1608,7 +1623,8 @@ def create_conversation_router(db, progress_store):
             return {"status": "success",
                     "message": "Sohbet zaten kısaydı; özet üretilmedi ama bağlam sıfırlandı."}
 
-        provider_type, model_name, _, _ = db.get_ai_config(user_id)
+        _chat = chat_model.chat_model(db, user_id, conv_id)
+        provider_type, model_name = _chat["provider_type"], _chat["model_name"]
         api_key = (db.get_api_key(user_id, provider_type) or "")
         workspace_path = db.get_last_workspace(user_id) or ""
         logger.info(f"[Compact] Provider: {provider_type}/{model_name}")
@@ -1688,7 +1704,8 @@ SOHBET:
             return {"status": "success", "message": "Projede analiz edilecek dosya bulunamadı."}
 
         # 2. AI Config'i al ve özetlet
-        provider_type, model_name, _, _ = db.get_ai_config(user_id)
+        _chat = chat_model.chat_model(db, user_id, conv_id)
+        provider_type, model_name = _chat["provider_type"], _chat["model_name"]
         api_key = (db.get_api_key(user_id, provider_type) or "")
         
         try:
@@ -1773,7 +1790,8 @@ Yanıtını mutlaka [USER_SUMMARY] ve [TECHNICAL_WISDOM] başlıklarıyla ayır.
             raise HTTPException(400, "İçerik boş olamaz.")
 
         # --- GÜVENLİK KONTROLÜ (AI Audit) ---
-        provider_type, model_name, _, _ = db.get_ai_config(user_id)
+        _chat = chat_model.chat_model(db, user_id, conv_id)
+        provider_type, model_name = _chat["provider_type"], _chat["model_name"]
         api_key = (db.get_api_key(user_id, provider_type) or "")
         
         try:
@@ -1899,9 +1917,9 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             if mail_rows:
                 mail_note = mailbox.stored_text(mail_rows)
                 # The note names the send tool as the receiving model sees it.
-                _mail_pt, _mail_mn, _, _ = db.get_ai_config(user_id)
+                _mail = chat_model.chat_model(db, user_id, request.conversation_id)
                 turn_message = mailbox.turn_text(mail_rows, wake_notices,
-                                                 _mail_pt, _mail_mn)
+                                                 _mail["provider_type"], _mail["model_name"])
                 mail_depth = max(int(r.get("depth") or 0) for r in mail_rows)
             else:
                 # Role `system`: the user did not write this sentence. Writing
@@ -1925,10 +1943,11 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         else:
             combined_msg = turn_message
 
-        provider_type, model_name, _, _ = db.get_ai_config(user_id)
+        # The chat's own model, whatever any window shows (per-chat model).
+        provider_type, model_name = chat_model.turn_model(db, user_id, request.conversation_id)
         api_key = (db.get_api_key(user_id, provider_type) or "")
         workspace_path = db.get_last_workspace(user_id) or ""
-        
+
         # CLI'lar arası "kaldığı yerden devam": tam transcript (her iki rol). Yeni
         # provider'ın ilk turunda enjekte edilir (agent_runner switch'te session'ı resetler).
         memory = db.get_memory(request.conversation_id)
@@ -2954,7 +2973,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         db.add_message(request.conversation_id, "user", request.message)
         
         # 2. Setup context & provider
-        provider_type, model_name, _, _ = db.get_ai_config(user_id)
+        provider_type, model_name = chat_model.turn_model(db, user_id, request.conversation_id)
         api_key = (db.get_api_key(user_id, provider_type) or "")
         workspace_path = db.get_last_workspace(user_id) or ""
         

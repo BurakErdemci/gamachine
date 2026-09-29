@@ -1,0 +1,180 @@
+"""The provider/model a chat runs with.
+
+Owner request: switching chats used to carry one global selection over, so a
+chat picked up whatever another chat last chose. Each chat now keeps its own
+provider/model; the global ai_configs row only means "the default for a new
+chat = the last model the user picked". API keys stay per provider.
+
+The backend decides: every turn of a chat (typed, queued, woken, or sent from
+the phone) resolves its model here, whatever a window shows. Writers (the
+desktop's /save-ai-config, the phone bridge) validate through `set_chat_model`.
+"""
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, Optional, Tuple
+
+from providers import model_catalog
+from spawn_env import env_family
+
+LOCAL_PROVIDERS = ("subscription", "ollama")
+MODEL_NAME_MAX = 200
+
+
+class ChatModelError(ValueError):
+    """A refused model choice. `code` is short and stable; the renderer and
+    the phone word it themselves (the backend has no translations)."""
+
+    def __init__(self, code: str, **extra: Any):
+        super().__init__(code)
+        self.code = code
+        self.extra = extra
+
+
+def known_provider(provider_type: Any) -> bool:
+    return isinstance(provider_type, str) and (
+        provider_type in LOCAL_PROVIDERS or provider_type in model_catalog.supported_providers())
+
+
+def check_model_choice(provider_type: Any, model_name: Any) -> Tuple[str, str]:
+    """The checks every model write goes through (/save-ai-config, phone).
+
+    No catalog membership: Settings takes a typed model id and the cloud
+    lists are live network reads, so membership would refuse ids the desktop
+    accepts. An empty model is what Settings saves for "provider default".
+    """
+    if not known_provider(provider_type):
+        raise ChatModelError("unknown_provider")
+    if not isinstance(model_name, str) or len(model_name) > MODEL_NAME_MAX or (
+            model_name and not model_catalog.usable_model_id(model_name)):
+        raise ChatModelError("bad_model")
+    return provider_type, model_name
+
+
+def _pair(value: Any) -> Optional[Tuple[str, str]]:
+    if (isinstance(value, (tuple, list)) and len(value) == 2 and isinstance(value[0], str)
+            and value[0] and isinstance(value[1], str)):
+        return value[0], value[1]
+    return None
+
+
+def message_pair(agent: Any, model: Any) -> Optional[Tuple[str, str]]:
+    """A stored message's (provider, model) as an ai_configs pair, or None.
+
+    Messages name the CLI family for subscription turns and `api-<provider>`
+    for API loops (conversation_routes._message_agent). A pair only counts
+    when it maps back without guessing: the family must be the one the model
+    id itself selects.
+    """
+    if not isinstance(agent, str) or not isinstance(model, str) or not model:
+        return None
+    if not model_catalog.usable_model_id(model):
+        return None
+    if agent.startswith("api-"):
+        provider = agent[4:]
+        if provider == "subscription" or not known_provider(provider):
+            return None
+        return provider, model
+    if env_family(model.lower()) != agent:
+        return None
+    return "subscription", model
+
+
+def _resolve(db, user_id: int, conversation_id: int) -> Tuple[Tuple[str, str], bool]:
+    stored = _pair(db.get_conversation_model(conversation_id))
+    if stored:
+        return stored, True
+    latest = _pair(db.get_latest_message_agent(conversation_id))
+    fallback = message_pair(*latest) if latest else None
+    if fallback:
+        return fallback, False
+    provider_type, model_name, _, _ = db.get_ai_config(user_id)
+    return (provider_type, model_name), False
+
+
+def chat_model(db, user_id: int, conversation_id: int) -> Dict[str, str]:
+    """The chat's model: stored, else its latest message's, else the global default."""
+    (provider_type, model_name), _ = _resolve(db, user_id, conversation_id)
+    return {"provider_type": provider_type, "model_name": model_name}
+
+
+def turn_model(db, user_id: int, conversation_id: int) -> Tuple[str, str]:
+    """`chat_model` for a turn that is starting. A chat with nothing stored is
+    stamped with what it resolved to, so its first turn fixes its model; the
+    stamp never overwrites a model set meanwhile."""
+    (provider_type, model_name), stored = _resolve(db, user_id, conversation_id)
+    if not stored:
+        db.set_conversation_model(conversation_id, provider_type, model_name, only_if_unset=True)
+    return provider_type, model_name
+
+
+def _ollama_up() -> bool:
+    import urllib.request
+    try:
+        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2.0) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _cli_state(family: str) -> dict:
+    # Spawns nothing: login stays unknown (None), which counts as ready below,
+    # as it does in /provider-ready for every CLI it cannot measure.
+    from providers.oneshot_cli import installed_clis
+    return {"installed": installed_clis().get(family, False), "loggedIn": None}
+
+
+def provider_readiness(db, user_id: int, provider_type: str, model_name: str, *,
+                       cli_state: Optional[Callable[[str], dict]] = None,
+                       ollama_up: Optional[Callable[[], bool]] = None) -> dict:
+    """Is what backs this provider/model there now? /provider-ready's answer.
+
+    Codes, not text: `needs` = None | "apikey" | "install" | "login" | "service",
+    `kind` = "api" | "cli" | "local". The route passes probes it measured
+    asynchronously; the defaults are synchronous and spawn nothing.
+    """
+    if provider_type == "ollama":
+        up = (ollama_up or _ollama_up)()
+        return {"ready": up, "kind": "local", "provider": "ollama",
+                "needs": None if up else "service"}
+    if provider_type != "subscription":
+        has_key = bool(db.get_api_key(user_id, provider_type))
+        return {"ready": has_key, "kind": "api", "provider": provider_type,
+                "needs": None if has_key else "apikey"}
+    # Same family mapping as manager.get_provider (pinned by a test).
+    family = env_family(model_name or "claude")
+    state = (cli_state or _cli_state)(family) or {}
+    if not state.get("installed"):
+        return {"ready": False, "kind": "cli", "provider": family, "needs": "install"}
+    # None = not measured, False = measured logged out; not knowing is not absence.
+    if state.get("loggedIn") is False:
+        return {"ready": False, "kind": "cli", "provider": family, "needs": "login"}
+    return {"ready": True, "kind": "cli", "provider": family, "needs": None}
+
+
+def set_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
+                   model_name: str, *, require_ready: bool = True,
+                   readiness: Optional[Callable[..., dict]] = None) -> Dict[str, str]:
+    """Store a chat's model after the checks every writer shares.
+
+    Raises ChatModelError (a ValueError) with `code`:
+      unknown_chat     - no such chat of this user, or a side chat
+      unknown_provider - provider type the app does not know
+      bad_model        - model id empty-invalid, too long or with control chars
+      not_ready        - `require_ready` and the provider is not usable now;
+                         `extra["needs"]` says what is missing
+    The desktop passes require_ready=False: its picker is optimistic by design
+    (a keyless cloud pick switches, then opens Settings for the key). Only
+    this chat changes; the global default is the caller's to set.
+    """
+    if (isinstance(conversation_id, bool) or not isinstance(conversation_id, int)
+            or db.get_conversation_owner(conversation_id) != user_id
+            or db.get_side_of(conversation_id) is not None):
+        raise ChatModelError("unknown_chat")
+    provider_type, model_name = check_model_choice(provider_type, model_name)
+    if require_ready:
+        state = (readiness or provider_readiness)(db, user_id, provider_type, model_name)
+        if not state.get("ready"):
+            raise ChatModelError("not_ready", needs=state.get("needs"))
+    if not db.set_conversation_model(conversation_id, provider_type, model_name):
+        raise ChatModelError("unknown_chat")
+    return {"provider_type": provider_type, "model_name": model_name}

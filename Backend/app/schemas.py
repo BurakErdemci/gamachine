@@ -18,6 +18,8 @@ class AIConfigRequest(BaseModel):
     provider_type: str
     model_name: str
     api_key: str
+    # The chat on screen when the model was picked: it gets the model too.
+    conversation_id: Optional[int] = None
 
 
 class UpdateFileRequest(BaseModel):

@@ -1365,3 +1365,19 @@ def test_a_mail_wake_names_the_receivers_tool_and_does_not_say_continue(env, aut
     assert r.status_code == 200
     assert "kaldığın yerden devam et" in _FakeRunner.last_kw["context"]
     assert mailbox.MAIL_WAKE_HISTORY_HEADER not in _FakeRunner.last_kw["context"]
+
+
+def test_a_mail_wake_runs_and_frames_on_the_woken_chats_own_model(env, auto, monkeypatch):
+    # Per-chat model: the global row (the last pick, here Claude) must not
+    # decide what the woken chat runs on or which tool its note names.
+    _FakeRunner.messages = []
+    monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
+    a, b = _chat(env.db, "Gönderen"), _chat(env.db, "B")
+    env.db.set_conversation_model(b, "subscription", "gemini-3-pro")
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    assert _send(env.client, a, b, body="build geçti mi?").status_code == 200
+    wake_queue.issue_ticket(b, wake_queue.drain(b))
+
+    assert _wake_turn(env.client, b).status_code == 200
+    assert _FakeRunner.last_kw["model_name"] == "gemini-3-pro"
+    assert "`call_mcp_tool` ile (sunucu `unityai`" in _FakeRunner.messages[-1]

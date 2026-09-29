@@ -10,8 +10,10 @@ import urllib.request
 
 from fastapi import APIRouter, Header, HTTPException
 
-from auth_utils import _check_token, get_current_user, require_user
+from agentic import chat_model
+from auth_utils import _check_token, get_current_user, require_conversation_owner, require_user
 from providers import model_catalog
+from providers.oneshot_cli import installed_clis, resolve_general_cli as _resolve_general_cli
 from schemas import AIConfigRequest, APIKeySaveRequest
 
 
@@ -128,19 +130,6 @@ async def _run_cli_capture(cmd: list, family: str | None, timeout: float = 20.0)
         proc.kill()
         return ""
     return out.decode("utf-8", errors="ignore")
-
-
-def _resolve_general_cli(name: str) -> str | None:
-    """PATH ve macOS kullanıcı kurulum dizinlerinden genel CLI binary'sini bul."""
-    import shutil
-
-    found = shutil.which(name)
-    if found:
-        return found
-    if sys.platform != "win32":
-        from providers.oneshot_cli import resolve_posix_cli
-        return resolve_posix_cli(name)
-    return None
 
 
 def _parse_opencode_models(raw: str) -> list:
@@ -265,8 +254,23 @@ def create_config_router(db):
         # Frontend state'inde bayat kalıp bulut modele geçişte buraya sızıyor ve
         # kullanıcının gerçek API key'inin ÜZERİNE yazıyordu (nvidia 401 bug'ı,
         # 2026-07-13 canlı yakalandı) → asla key olarak kaydetme.
+        try:
+            chat_model.check_model_choice(req.provider_type, req.model_name)
+        except chat_model.ChatModelError as exc:
+            raise HTTPException(400, exc.code)
+        if req.conversation_id is not None:
+            require_conversation_owner(db, x_session_token, req.conversation_id)
+            # A pick on the desktop is optimistic (a keyless cloud model is
+            # taken, then Settings asks for the key), so readiness is not a
+            # refusal here; the chat shows "provider not ready" instead.
+            try:
+                chat_model.set_chat_model(db, user_id, req.conversation_id, req.provider_type,
+                                          req.model_name, require_ready=False)
+            except chat_model.ChatModelError as exc:
+                raise HTTPException(404 if exc.code == "unknown_chat" else 400, exc.code)
         if req.api_key and req.api_key != "CLI_SESSION" and req.provider_type not in ("ollama", "subscription"):
             db.save_api_key(user_id, req.provider_type, req.api_key)
+        # The global row stays "the default for new chats = the last pick".
         db.save_ai_config(user_id, req.provider_type, req.model_name, "")
         return {"status": "success"}
 
@@ -283,6 +287,7 @@ def create_config_router(db):
 
     @router.get("/provider-ready/{user_id}")
     async def provider_ready(user_id: int, refresh: bool = False,
+                             provider_type: str | None = None, model_name: str | None = None,
                              x_session_token: str = Header(alias="X-Session-Token")):
         """Seçili sağlayıcı GERÇEKTEN kullanılabilir mi? Sohbet kapısının tek kaynağı.
 
@@ -299,43 +304,37 @@ def create_config_router(db):
 
         `needs` = None | "apikey" | "install" | "login" | "service"
         `kind`  = "api" | "cli" | "local"
+
+        With `provider_type` + `model_name` it answers for that pair (the
+        chat on screen, whose model is per chat); otherwise for the global
+        default. The decision itself is `chat_model.provider_readiness`.
         """
         require_user(db, x_session_token, user_id)
-        provider_type, model_name, _, _ = db.get_ai_config(user_id)
+        if provider_type is not None and model_name is not None:
+            try:
+                provider_type, model_name = chat_model.check_model_choice(provider_type, model_name)
+            except chat_model.ChatModelError as exc:
+                raise HTTPException(400, exc.code)
+        else:
+            provider_type, model_name, _, _ = db.get_ai_config(user_id)
 
         if provider_type == "ollama":
-            # Yerel servis: kurulu olması yetmez, AYAKTA olması gerekiyor.
-            import httpx  # modül düzeyinde import edilmiyor; yalnız bu dal kullanıyor
+            # The local service has to be UP, not just installed.
+            import httpx  # only this branch uses it
             ayakta = False
             try:
                 async with httpx.AsyncClient(timeout=2.0) as c:
                     ayakta = (await c.get("http://localhost:11434/api/tags")).status_code == 200
             except Exception:
                 ayakta = False
-            return {"ready": ayakta, "kind": "local", "provider": "ollama",
-                    "needs": None if ayakta else "service"}
+            return chat_model.provider_readiness(db, user_id, provider_type, model_name,
+                                                 ollama_up=lambda: ayakta)
 
-        if provider_type != "subscription":
-            # Bulut sağlayıcı → anahtar şart.
-            var = bool(db.get_api_key(user_id, provider_type))
-            return {"ready": var, "kind": "api", "provider": provider_type,
-                    "needs": None if var else "apikey"}
-
-        # CLI sağlayıcı. Aile eşlemesi `env_family` ile yapılıyor, ELDE yeniden
-        # yazılmıyor: aynı önekleri `manager.get_provider` de kullanıyor ve ikisinin
-        # ayrışmaması bir testle sabitlenmiş durumda.
-        from providers.cli_base import env_family
-        aile = env_family(model_name or "claude")
-        doctor = await cli_doctor(refresh=refresh, x_session_token=x_session_token)
-        durum = doctor.get(aile) or {}
-        if not durum.get("installed"):
-            return {"ready": False, "kind": "cli", "provider": aile, "needs": "install"}
-        # `loggedIn` None = ÖLÇÜLEMEDİ, False = ölçüldü ve giriş yok. None'ı
-        # "giriş yok" saymak, durumu hiç ölçülmeyen CLI'lerde (claude/codex/agy/kimi)
-        # çalışan bir kurulumu yanlışlıkla kilitlerdi — bilmemek, yokluk değildir.
-        if durum.get("loggedIn") is False:
-            return {"ready": False, "kind": "cli", "provider": aile, "needs": "login"}
-        return {"ready": True, "kind": "cli", "provider": aile, "needs": None}
+        if provider_type == "subscription":
+            doctor = await cli_doctor(refresh=refresh, x_session_token=x_session_token)
+            return chat_model.provider_readiness(db, user_id, provider_type, model_name,
+                                                 cli_state=lambda aile: doctor.get(aile) or {})
+        return chat_model.provider_readiness(db, user_id, provider_type, model_name)
 
     @router.get("/api-keys/{user_id}")
     async def get_api_keys(user_id: int, x_session_token: str = Header(alias="X-Session-Token")):
@@ -586,20 +585,7 @@ def create_config_router(db):
         Bunlar gömülü DEĞİL — kullanıcının kurmuş olması gerekir.
         Frontend, kurulu olmayan bir CLI modeli seçilince uyarı gösterir."""
         _check_token(x_session_token)
-        from providers.agy_provider import AgyProvider
-        from providers.oneshot_cli import cli_installed
-
-        # _agy_binary() yaygın kurulum yollarına da bakar; "agy" dönerse sadece PATH'e kalmış demektir.
-        agy_ok = AgyProvider._agy_binary() != "agy" or bool(_resolve_general_cli("agy"))
-        return {
-            "claude": bool(_resolve_general_cli("claude")),
-            "codex": bool(_resolve_general_cli("codex")),
-            "agy": agy_ok,
-            "kimi": bool(_resolve_general_cli("kimi")),
-            "cursor": cli_installed("cursor"),
-            "copilot": cli_installed("copilot"),
-            "opencode": cli_installed("opencode"),
-        }
+        return installed_clis(_resolve_general_cli)
 
     # ── Dinamik CLI model listeleri (cursor: hesaba göre; opencode: kuruluma göre) ──
     _cli_models_cache: dict = {}   # cli → (timestamp, models)
@@ -697,8 +683,7 @@ def create_config_router(db):
     async def cli_doctor(refresh: bool = False, x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
         import time
-        from providers.oneshot_cli import cli_installed, resolve_cli_cmd
-        from providers.agy_provider import AgyProvider
+        from providers.oneshot_cli import resolve_cli_cmd
 
         if not refresh and _doctor_cache.get("t", 0) > time.time() - 60:
             return _doctor_cache["data"]
@@ -735,16 +720,10 @@ def create_config_router(db):
             except Exception:
                 return None
 
-        agy_ok = AgyProvider._agy_binary() != "agy" or bool(_resolve_general_cli("agy"))
-        data = {
-            "claude":   {"installed": bool(_resolve_general_cli("claude")),  "loggedIn": None},
-            "codex":    {"installed": bool(_resolve_general_cli("codex")),   "loggedIn": None},
-            "agy":      {"installed": agy_ok,                        "loggedIn": None},
-            "kimi":     {"installed": bool(_resolve_general_cli("kimi")),    "loggedIn": None},
-            "cursor":   {"installed": cli_installed("cursor"),       "loggedIn": None},
-            "copilot":  {"installed": cli_installed("copilot"),      "loggedIn": None},
-            "opencode": {"installed": cli_installed("opencode"),     "loggedIn": True},  # auth opsiyonel (ücretsiz modeller)
-        }
+        data = {cli: {"installed": installed, "loggedIn": None}
+                for cli, installed in installed_clis(_resolve_general_cli).items()}
+        # OpenCode's auth is optional (free models).
+        data["opencode"]["loggedIn"] = True
         if data["cursor"]["installed"]:
             try:
                 data["cursor"]["loggedIn"] = await cursor_login()

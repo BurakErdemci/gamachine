@@ -276,6 +276,14 @@ class DatabaseManager:
                     cursor.execute(f"ALTER TABLE conversations ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
                     pass
+            # Per-chat model (owner request): the provider/model a chat runs
+            # with, named as in ai_configs. NULL = never stamped; resolution
+            # and fallbacks live in agentic/chat_model.py.
+            for col_def in ("provider_type TEXT", "model_name TEXT"):
+                try:
+                    cursor.execute(f"ALTER TABLE conversations ADD COLUMN {col_def}")
+                except sqlite3.OperationalError:
+                    pass
             # Which agent wrote an assistant message (Burak, 27 Sep 2026): the
             # header used to show the chat's CURRENT model on every answer, so a
             # chat moved from OpenCode to Codex relabelled OpenCode's answers.
@@ -531,6 +539,39 @@ class DatabaseManager:
             row = conn.execute('SELECT user_id FROM conversations WHERE id = ?', (conv_id,)).fetchone()
             return row[0] if row else None
 
+    def get_conversation_model(self, conv_id: int) -> Optional[Tuple[str, str]]:
+        """The chat's stored (provider_type, model_name); None if never stamped."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute(
+                'SELECT provider_type, model_name FROM conversations WHERE id = ?', (conv_id,)
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        return (row[0], row[1] or "")
+
+    def set_conversation_model(self, conv_id: int, provider_type: str, model_name: str,
+                               only_if_unset: bool = False) -> bool:
+        """Store the chat's model; False if the chat is gone (or, with
+        `only_if_unset`, already has one). updated_at is left alone: picking a
+        model is not chat activity and must not reorder the sidebar."""
+        sql = 'UPDATE conversations SET provider_type = ?, model_name = ? WHERE id = ?'
+        if only_if_unset:
+            sql += ' AND provider_type IS NULL'
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cur = conn.execute(sql, (provider_type, model_name, conv_id))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def get_latest_message_agent(self, conv_id: int) -> Optional[Tuple[str, str]]:
+        """(provider, model) of the chat's newest message that names both."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute(
+                'SELECT provider, model FROM messages WHERE conversation_id = ? '
+                'AND provider IS NOT NULL AND model IS NOT NULL ORDER BY id DESC LIMIT 1',
+                (conv_id,)
+            ).fetchone()
+        return (row[0], row[1]) if row else None
+
     @staticmethod
     def _touch(conn: sqlite3.Connection, conv_id: int, now: str) -> None:
         """Bump updated_at of the chat AND its root, so a branch's activity keeps
@@ -566,12 +607,13 @@ class DatabaseManager:
             # so a family delete on another connection cannot land in between.
             conn.execute('BEGIN IMMEDIATE')
             src = conn.execute(
-                'SELECT user_id, title, memory_summary, parent_id, side_of FROM conversations WHERE id = ?',
+                'SELECT user_id, title, memory_summary, parent_id, side_of, provider_type, model_name '
+                'FROM conversations WHERE id = ?',
                 (source_id,)
             ).fetchone()
             if not src or src[4] is not None:
                 return None
-            user_id, title, memory_summary, parent_id, _ = src
+            user_id, title, memory_summary, parent_id, _, provider_type, model_name = src
             root_id = parent_id or source_id
             if parent_id is not None and conn.execute(
                 'SELECT 1 FROM conversations WHERE id = ?', (root_id,)
@@ -587,8 +629,10 @@ class DatabaseManager:
             ).fetchone()[0]
             cur = conn.execute(
                 'INSERT INTO conversations (user_id, title, created_at, updated_at, memory_summary, '
-                'parent_id, fork_at, hidden) VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
-                (user_id, new_title, now, now, memory_summary or "", root_id, fork_at)
+                'parent_id, fork_at, hidden, provider_type, model_name) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
+                (user_id, new_title, now, now, memory_summary or "", root_id, fork_at,
+                 provider_type, model_name)
             )
             new_id = cur.lastrowid
             if fork_at is not None:

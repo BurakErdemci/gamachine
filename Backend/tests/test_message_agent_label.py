@@ -133,6 +133,9 @@ def test_chat_stream_labels_each_answer_with_its_own_agent(db, client):
     cid = db.create_conversation(1, "Yeni Sohbet")
     db.save_ai_config(1, "subscription", OPENCODE, "")
     r1 = client.post("/chat-stream", json={"conversation_id": cid, "message": "ilk", "user_id": 1}, headers=H)
+    # Moved as the desktop picker moves it: the chat's own model changes
+    # (per-chat model); the global row alone no longer moves a started chat.
+    db.set_conversation_model(cid, "subscription", CODEX)
     db.save_ai_config(1, "subscription", CODEX, "")
     r2 = client.post("/chat-stream", json={"conversation_id": cid, "message": "ikinci", "user_id": 1}, headers=H)
 
