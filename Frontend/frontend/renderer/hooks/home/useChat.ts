@@ -1190,7 +1190,13 @@ export const useChat = (
               // kod bloğunu da yazdığı için parseGeneratedFiles burada FAZLADAN diff
               // kartı üretir (agy kodu iki kez yazınca iki kart). O yüzden sadece
               // tool kullanmayan provider'larda (Gemini/OpenAI/Ollama API) metni ayrıştır.
-              if ((data.type === 'done' || data.type === 'response') && aiConfig.provider_type !== 'subscription') {
+              // The turn's own agent from `turn_meta` (`api-*` = an API loop):
+              // models are per chat, so a background chat's turn may run on
+              // another model than the one on screen.
+              const apiTurn = typeof currentAiMsg.provider === 'string'
+                ? currentAiMsg.provider.startsWith('api-')
+                : aiConfig.provider_type !== 'subscription';
+              if ((data.type === 'done' || data.type === 'response') && apiTurn) {
                 const { parseGeneratedFiles } = await import('../../components/home/export-utils');
                 // currentAiMsg o anki en güncel mesaj içeriğini tutmalı
                 const parsed = parseGeneratedFiles(currentAiMsg.content);
