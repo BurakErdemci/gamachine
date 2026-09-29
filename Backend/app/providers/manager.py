@@ -9,6 +9,20 @@ from .opencode_provider import OpenCodeProvider
 from .kimi_provider import KimiProvider
 from .cli_base import BaseCLIProvider as CLIProvider
 from .base import AIProvider
+from .families import subscription_family
+
+
+def subscription_provider_class(model_name: str):
+    """Looked up at call time so a patched provider name is honoured."""
+    return {
+        "cursor": CursorProvider,
+        "copilot": CopilotProvider,
+        "opencode": OpenCodeProvider,
+        "codex": CodexProvider,
+        "kimi": KimiProvider,
+        "agy": AgyProvider,
+        "claude": ClaudeCodeProvider,
+    }[subscription_family(model_name)]
 
 
 class AIProviderManager:
@@ -42,20 +56,7 @@ class AIProviderManager:
         elif p_type == "subscription":
             # m_name burada binary adıdır (claude, codex, agy, cursor-*, copilot-*, opencode:*)
             name = m_name or "claude"
-            if name.startswith("cursor-"):
-                return CursorProvider(binary_name=name)
-            elif name.startswith("copilot-"):
-                return CopilotProvider(binary_name=name)
-            elif name.startswith("opencode:"):
-                return OpenCodeProvider(binary_name=name)
-            elif name.startswith("gpt-"):
-                return CodexProvider(binary_name=name)
-            elif name.startswith("kimi-"):
-                return KimiProvider(binary_name=name)
-            elif name.startswith(("gemini", "agy-")):
-                return AgyProvider(binary_name=name)
-            else:  # claude-* ve diğerleri
-                return ClaudeCodeProvider(binary_name=name)
+            return subscription_provider_class(name)(binary_name=name)
         elif p_type == "ollama":
             return OllamaProvider(model_name=m_name)
 
