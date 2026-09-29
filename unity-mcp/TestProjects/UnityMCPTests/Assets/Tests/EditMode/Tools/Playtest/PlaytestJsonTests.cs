@@ -32,7 +32,8 @@ namespace MCPForUnityTests.Editor.Tools.Playtest
         {
             Assert.AreEqual("Running", PlaytestJson.ToJson(Mode.Running).ToString());
             var list = PlaytestJson.ToJson(new List<Vector2> { Vector2.one });
-            Assert.IsTrue(JToken.DeepEquals(new JArray(new JArray(1.0, 1.0)), list));
+            // The (object) cast avoids the JArray(JArray) copy constructor, which would build [1.0, 1.0] instead of [[1.0, 1.0]].
+            Assert.IsTrue(JToken.DeepEquals(new JArray((object)new JArray(1.0, 1.0)), list));
             var dict = (JObject)PlaytestJson.ToJson(new Dictionary<string, int> { ["a"] = 3 });
             Assert.AreEqual(3, dict["a"].Value<int>());
             Assert.AreEqual(JTokenType.Null, PlaytestJson.ToJson(null).Type);
