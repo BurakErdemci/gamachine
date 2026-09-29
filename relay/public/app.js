@@ -679,6 +679,10 @@ function onPush(msg) {
     takePcEffort(desktopEffort(msg.desktop_effort), 'told');
   } else if (msg.type === 'chat_model_changed') {
     if (msg.chat_id === view.shown) refreshChatSettings();
+  } else if (msg.type === 'default_model_changed') {
+    // Only the default a new chat opens on changed (a pick on the desktop with
+    // no chat open); any chat with no model of its own shows another model now.
+    refreshAll();
   } else if (msg.type === 'gap') {
     const what = view.onGap(msg.chat_id);
     if (what === 'reload') loadChat();

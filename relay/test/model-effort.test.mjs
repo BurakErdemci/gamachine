@@ -212,6 +212,8 @@ test('the page changes the PC\'s settings through set_model and set_effort and k
 test('the page follows the PC: effort_changed and chat_model_changed refresh what it shows', () => {
   assert.match(app, /msg\.type === 'effort_changed'[\s\S]{0,120}takePcEffort\(desktopEffort\(msg\.desktop_effort\)/);
   assert.match(app, /msg\.type === 'chat_model_changed'[\s\S]{0,120}refreshChatSettings\(\)/);
+  // A pick on the desktop with no chat open moves the default; the open chat re-reads its model.
+  assert.match(app, /msg\.type === 'default_model_changed'[\s\S]{0,260}refreshAll\(\)/);
   // When the link comes back and when the page becomes visible again.
   assert.match(app, /view\.shown\) \{\s*loadChat\(\);\s*refreshChatSettings\(\);/);
   assert.match(app, /visibilityState === 'visible' && link\) \{\s*link\.wake\(\);\s*refreshChatSettings\(\);/);
