@@ -134,6 +134,7 @@ namespace MCPForUnity.Editor.Tools
                 maxDepth = ParamCoercion.CoerceIntNullable(p["maxDepth"] ?? p["max_depth"]),
                 maxChildrenPerNode = ParamCoercion.CoerceIntNullable(p["maxChildrenPerNode"] ?? p["max_children_per_node"]),
                 includeTransform = ParamCoercion.CoerceBoolNullable(p["includeTransform"] ?? p["include_transform"]),
+                detail = p["detail"]?.ToString(),
 
                 // Multi-scene editing
                 sceneName = (p["sceneName"] ?? p["scene_name"])?.ToString(),
