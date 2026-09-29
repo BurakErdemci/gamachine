@@ -232,7 +232,8 @@ def _tell_listeners(conversation_id: Optional[int], provider_type: str, model_na
 
 def pick_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
                     model_name: str, *, require_ready: bool = True,
-                    readiness: Optional[Callable[..., dict]] = None) -> Dict[str, str]:
+                    readiness: Optional[Callable[..., dict]] = None,
+                    on_chat_stored: Optional[Callable[[Dict[str, str]], None]] = None) -> Dict[str, str]:
     """A user's model pick for one chat, with every effect the desktop's picker
     has: the chat stores it (`set_chat_model`, same refusals) and the global
     row follows, because "a new chat opens on the last model picked"
@@ -243,10 +244,14 @@ def pick_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
     The two writes are not one transaction. Once the chat row has changed the
     listeners are told even when the default write raises (which then
     propagates), so a phone that gets an error re-reads the model the chat
-    really has instead of showing the one it left.
+    really has instead of showing the one it left. `on_chat_stored(result)` is
+    called at that same point (on the calling thread), for a caller that has to
+    tell its own audience and must not depend on the second write succeeding.
     """
     result = set_chat_model(db, user_id, conversation_id, provider_type, model_name,
                             require_ready=require_ready, readiness=readiness)
+    if on_chat_stored is not None:
+        on_chat_stored(result)
     try:
         db.save_ai_config(user_id, result["provider_type"], result["model_name"], "")
     finally:

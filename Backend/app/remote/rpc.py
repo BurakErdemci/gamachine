@@ -303,24 +303,29 @@ class Dispatcher:
         plan_locked = getattr(self.bridge.list_models, "plan_locked", None)
         if plan_locked and plan_locked(req.get("provider_type"), req.get("model_name")):
             raise RpcError("plan_locked")
+        stored: list = []
         try:
             # Off the loop: the readiness probes read the API key and may ask Ollama.
             result = await asyncio.to_thread(
                 chat_model.pick_chat_model, self.db, chats.LOCAL_USER_ID, conv,
-                req.get("provider_type"), req.get("model_name"), require_ready=True)
+                req.get("provider_type"), req.get("model_name"), require_ready=True,
+                on_chat_stored=stored.append)
         except chat_model.ChatModelError as exc:
             raise RpcError(exc.code, **exc.extra)
+        finally:
+            # The chat row changed even when the default write after it raised, so
+            # the renderer hears of it either way. A stored pick that failed
+            # notification must not turn into an error the phone would retry.
+            if stored:
+                try:
+                    CHANNEL.publish({"type": MODEL_CHANGED_TYPE, "conversation_id": conv,
+                                     "provider_type": stored[0]["provider_type"],
+                                     "model_name": stored[0]["model_name"],
+                                     "by": session.device_label, "at": int(time.time() * 1000)})
+                except Exception:
+                    logger.exception("[remote] chat_model_changed publish failed")
         logger.info("[remote] chat %s model -> %s / %s by %s", conv, result["provider_type"],
                     result["model_name"], session.device_label)
-        # Stored already: a failed notification must not turn it into an error
-        # the phone would retry.
-        try:
-            CHANNEL.publish({"type": MODEL_CHANGED_TYPE, "conversation_id": conv,
-                             "provider_type": result["provider_type"],
-                             "model_name": result["model_name"],
-                             "by": session.device_label, "at": int(time.time() * 1000)})
-        except Exception:
-            logger.exception("[remote] chat_model_changed publish failed")
         return result
 
     async def set_effort(self, session: PhoneSession, req, rid):

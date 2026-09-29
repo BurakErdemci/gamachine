@@ -551,6 +551,37 @@ async def test_the_chat_row_changed_then_the_default_write_failed_phones_are_sti
     assert (await phone.request("get_config", chat_id=str(conv)))["result"]["model_name"] == "gpt-5.5"
 
 
+async def test_the_renderer_hears_of_a_changed_chat_once_when_the_default_write_fails(env, monkeypatch):
+    keyed(env)
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "gpt-6-sol"))
+    monkeypatch.setattr(env.db, "save_ai_config", _fail)
+    q = CHANNEL.listen()
+    try:
+        r = await switch(phone, conv)
+        assert r["ok"] is False and r["error"] == "internal"
+        frame = q.get_nowait()
+        assert q.empty()
+    finally:
+        CHANNEL.unlisten(q)
+    assert (frame["type"], frame["conversation_id"], frame["provider_type"], frame["model_name"]) == (
+        "chat_model_changed", conv, "openai", "gpt-5.5")
+
+
+def test_pick_chat_model_reports_the_stored_chat_before_the_default_write(env, monkeypatch):
+    keyed(env)
+    conv = make_chat(env.db)
+    stored = []
+    monkeypatch.setattr(env.db, "save_ai_config", _fail)
+    with pytest.raises(RuntimeError, match="database is locked"):
+        chat_model.pick_chat_model(env.db, 1, conv, "openai", "gpt-5.5", on_chat_stored=stored.append)
+    assert stored == [{"provider_type": "openai", "model_name": "gpt-5.5"}]
+    monkeypatch.undo()
+    with pytest.raises(chat_model.ChatModelError):
+        chat_model.pick_chat_model(env.db, 1, conv, "nope", "x", on_chat_stored=stored.append)
+    assert len(stored) == 1
+
+
 def test_pick_chat_model_tells_listeners_once_when_the_default_write_raises(env, monkeypatch):
     keyed(env)
     conv = make_chat(env.db)
