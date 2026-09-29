@@ -135,10 +135,14 @@ def chat_model(db, user_id: int, conversation_id: int) -> Dict[str, str]:
 def turn_model(db, user_id: int, conversation_id: int) -> Tuple[str, str]:
     """`chat_model` for a turn that is starting. A chat with nothing stored is
     stamped with what it resolved to, so its first turn fixes its model; the
-    stamp never overwrites a model set meanwhile."""
+    stamp never overwrites a model set meanwhile, and a lost stamp means the
+    turn runs the model that won."""
     (provider_type, model_name), stored = _resolve(db, user_id, conversation_id)
-    if not stored:
-        db.set_conversation_model(conversation_id, provider_type, model_name, only_if_unset=True)
+    if not stored and not db.set_conversation_model(
+            conversation_id, provider_type, model_name, only_if_unset=True):
+        winner = _pair(db.get_conversation_model(conversation_id))
+        if winner:
+            return winner
     return provider_type, model_name
 
 

@@ -179,6 +179,20 @@ def test_turn_model_stamps_once(db):
     assert db.get_conversation_model(cid) == ("subscription", CLAUDE)
 
 
+def test_turn_model_runs_the_pick_that_won_the_stamp(db, monkeypatch):
+    cid = db.create_conversation(1, "yeni")
+    real = db.set_conversation_model
+
+    def pick_lands_first(conv_id, provider, model, only_if_unset=False):
+        if only_if_unset:
+            real(conv_id, "subscription", CODEX)
+        return real(conv_id, provider, model, only_if_unset=only_if_unset)
+
+    monkeypatch.setattr(db, "set_conversation_model", pick_lands_first)
+    assert cm.turn_model(db, 1, cid) == ("subscription", CODEX)
+    assert db.get_conversation_model(cid) == ("subscription", CODEX)
+
+
 # ── /chat-stream runs the chat's own model ──────────────────────────────────
 
 def test_first_turn_runs_the_global_default_and_stamps_the_chat(db, client):
