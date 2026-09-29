@@ -721,6 +721,28 @@ async def test_a_model_the_plan_allows_is_still_picked(env, auto_only_copilot):
     assert (await switch(phone, conv, "subscription", "gpt-6-luna"))["ok"] is True
 
 
+@pytest.mark.parametrize("spelling", ["Copilot-claude-sonnet-5", "COPILOT-claude-sonnet-5"])
+async def test_a_differently_cased_locked_id_is_refused_like_the_lowercase_one(env, auto_only_copilot, spelling):
+    # The runner lower-cases the id to pick the CLI, so this id runs on copilot.
+    assert chat_model.subscription_family(spelling) == "copilot"
+    env.bridge.list_models = create_config_router(env.db).list_models
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
+    r = await switch(phone, conv, "subscription", spelling)
+    assert r["ok"] is False and r["error"] == "plan_locked", r
+    assert env.db.get_conversation_model(conv) == ("subscription", "claude-opus-5")
+
+
+def test_plan_locked_reads_the_family_the_runner_dispatches_on(env, monkeypatch):
+    import providers.oneshot_cli as oc
+    monkeypatch.setattr(oc, "get_named_models_cap", lambda cli: False if cli == "cursor" else None)
+    locked = create_config_router(env.db).list_models.plan_locked
+    assert locked("subscription", "Cursor-gpt-5") is True
+    assert locked("subscription", "cursor-gpt-5") is True
+    assert locked("subscription", "cursor-auto") is False
+    assert locked("subscription", "Copilot-gpt-5") is False  # copilot's cap is unknown here
+
+
 def test_plan_locked_follows_the_same_function_as_the_desktop_list(env, auto_only_copilot):
     locked = create_config_router(env.db).list_models.plan_locked
     assert locked("subscription", LOCKED_COPILOT) is True

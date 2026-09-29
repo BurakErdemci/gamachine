@@ -13,6 +13,7 @@ from fastapi import APIRouter, Header, HTTPException
 from agentic import chat_model
 from auth_utils import _check_token, get_current_user, require_conversation_owner, require_user
 from providers import model_catalog
+from providers.families import subscription_family
 from providers.oneshot_cli import installed_clis, resolve_general_cli as _resolve_general_cli
 from schemas import AIConfigRequest, APIKeySaveRequest
 
@@ -656,8 +657,9 @@ def create_config_router(db):
         the plan-caps file, no CLI or network."""
         if provider_type != "subscription" or not isinstance(model_name, str):
             return False
-        cli = next((c for c in ("cursor", "copilot") if model_name.startswith(f"{c}-")), None)
-        return cli is not None and bool(_apply_plan_caps(cli, [{"id": model_name}])[0].get("disabled"))
+        # The CLI the runner would start, so a differently cased id is locked too.
+        cli = subscription_family(model_name)
+        return cli in ("cursor", "copilot") and bool(_apply_plan_caps(cli, [{"id": model_name}])[0].get("disabled"))
 
     # Travels with the function the bridge is handed (main.py passes only
     # `router.list_models`).
