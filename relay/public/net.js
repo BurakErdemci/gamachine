@@ -469,7 +469,7 @@ export function modeFailureNote(error, reply = {}, wanted = '') {
 // Labels as the desktop shows them (effort.label.* in i18n.tsx), in the
 // registry's canonical order.
 export const EFFORT_LABELS = {
-  auto: 'Auto', off: 'Kapalı', minimal: 'Minimal', low: 'Düşük', medium: 'Orta', high: 'Yüksek', xhigh: 'XHigh', max: 'Max',
+  auto: 'Auto', off: 'Kapalı', none: 'None', minimal: 'Minimal', low: 'Düşük', medium: 'Orta', high: 'Yüksek', xhigh: 'XHigh', max: 'Max',
 };
 
 const knownEffort = (level) => Object.prototype.hasOwnProperty.call(EFFORT_LABELS, level);

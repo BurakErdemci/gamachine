@@ -12,12 +12,14 @@ import {
   configFailureNote,
 } from '../public/net.js';
 
-const CANON = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+// Every level the registry can return (Backend effort_caps.py EFFORT_LEVELS).
+const LEVELS = ['auto', 'off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 // ---------------------------------------------------------------- effort
 
-test('the effort labels are the desktop\'s words for every level on the canonical scale', () => {
-  assert.deepEqual(Object.keys(EFFORT_LABELS), CANON);
+test('the effort labels are the desktop\'s words for every level the registry can return', () => {
+  assert.deepEqual(Object.keys(EFFORT_LABELS), LEVELS);
+  assert.equal(effortLabel('none'), 'None');
   assert.equal(effortLabel('xhigh'), 'XHigh');
   assert.equal(effortLabel('turbo'), 'turbo');
   assert.equal(effortLabel('constructor'), 'constructor');
@@ -34,6 +36,9 @@ test('the desktop effort is shown only when it is whole and consistent', () => {
   assert.deepEqual(desktopEffort({ level: 'high', levels: ['auto', 'low', 'high'] }), { level: 'high', levels: ['auto', 'low', 'high'] });
   // A level the page has no word for is dropped from the list, not shown raw.
   assert.deepEqual(desktopEffort({ level: 'low', levels: ['auto', 'low', 'turbo'] }), { level: 'low', levels: ['auto', 'low'] });
+  // OpenAI API models offer `none`.
+  assert.deepEqual(desktopEffort({ level: 'none', levels: ['auto', 'none', 'low'] }),
+    { level: 'none', levels: ['auto', 'none', 'low'] });
   for (const bad of [null, undefined, 'high', 7, [], {}, { level: 'high' }, { levels: ['high'] },
     { level: 5, levels: ['high'] }, { level: 'high', levels: 'high' }, { level: 'high', levels: [] },
     { level: 'high', levels: ['low'] }, { level: 'turbo', levels: ['turbo'] }, { level: 'constructor', levels: ['constructor'] }]) {
