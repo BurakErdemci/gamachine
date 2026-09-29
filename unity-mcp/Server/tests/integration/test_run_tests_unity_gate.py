@@ -154,3 +154,28 @@ async def test_the_server_gate_still_stops_a_start_the_plugin_would_allow(monkey
     assert resp.success is False
     assert resp.error == "compile"
     assert "run_tests" not in sent
+
+
+@pytest.mark.asyncio
+async def test_run_tests_start_keeps_the_plugins_own_compile_snapshot(monkeypatch):
+    from services.tools.run_tests import run_tests
+
+    plugin_compile = {"verdict": "clean", "epoch": 2, "finished_epoch": 2}
+    started = {"success": True, "data": {**_STARTED["data"], "compile": plugin_compile}}
+    _fake_editor(monkeypatch, _compile_status(), started)
+    resp = await run_tests(DummyContext(), mode="EditMode")
+
+    assert resp.success is True
+    assert resp.data.compile == plugin_compile
+
+
+@pytest.mark.asyncio
+async def test_run_tests_start_falls_back_to_the_preflight_snapshot_for_an_old_plugin(monkeypatch):
+    from services.tools.run_tests import run_tests
+
+    _fake_editor(monkeypatch, _compile_status(), _STARTED)
+    resp = await run_tests(DummyContext(), mode="EditMode")
+
+    assert resp.success is True
+    assert resp.data.compile["verdict"] == "clean"
+    assert resp.data.compile["epoch"] == 3

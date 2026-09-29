@@ -360,7 +360,9 @@ async def run_tests(
         if not response.get("success", True):
             return _unity_error(response)
         if isinstance(response.get("data"), dict):
-            response = {**response, "data": {**response["data"], "compile": verdict}}
+            data = response["data"]
+            # The plugin read its snapshot at start time; the preflight one is older.
+            response = {**response, "data": {**data, "compile": data.get("compile") or verdict}}
         return RunTestsStartResponse(**response)
     return MCPResponse(success=False, error=str(response))
 
