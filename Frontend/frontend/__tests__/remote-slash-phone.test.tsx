@@ -2,8 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { act, cleanup, renderHook } from '@testing-library/react'
 
 /**
- * Phone scope excludes commands: a phone-marked `/usage` stays a plain user
- * message, while the same text typed on the desktop still gets its card.
+ * Slash commands work from the phone (owner decision, 28 Sep 2026): a
+ * phone-marked `/usage` gets its usage card, exactly as the same text typed on
+ * the desktop does. (Before that decision a phone `/usage` stayed plain text.)
  */
 
 vi.mock('axios', () => {
@@ -36,11 +37,11 @@ async function send(remote: { device: string } | undefined) {
   return { turns, messages: result.current.messages }
 }
 
-it('a phone /usage is sent as text without a slash card', async () => {
+it('a phone /usage is sent as text and its answer gets the usage card', async () => {
   const { turns, messages } = await send({ device: 'iPhone' })
   expect(turns).toMatchObject([{ conversation_id: 7, message: '/usage', origin: 'user' }])
   expect(messages.find((m: any) => m.role === 'user')).toMatchObject({ source: 'phone' })
-  expect(messages.find((m: any) => m.role === 'assistant')?.slashCommand).toBeUndefined()
+  expect(messages.find((m: any) => m.role === 'assistant')?.slashCommand).toBe('usage')
 })
 
 it('the same text typed on the desktop keeps its usage card', async () => {
