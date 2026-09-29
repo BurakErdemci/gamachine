@@ -77,7 +77,9 @@ code: `relay/`; PC side: `Backend/app/remote/`.
   ordinary message, so slash commands work) and pick the effort of one message
   (checked against the levels of that chat's model), switch a chat's provider
   and model (only to one that is ready on the PC; it changes that chat alone,
-  never the global default), and read and change the global approval mode. It
+  never the global default), read and change the global approval mode, and register its own web-push
+  subscription (validated on the PC and stored on that device's own row, so it
+  changes only that phone's push endpoint, nothing else). It
   cannot change other settings, touch API keys, install
   CLIs, or run file operations. By owner decision, changing the approval mode
   from the phone does **not** need the UI secret that the local
