@@ -63,6 +63,9 @@ test('every failure of set_effort says plainly that nothing changed', () => {
   assert.match(effortFailureNote('disconnected'), /Bağlantı koptu/);
   assert.match(effortFailureNote('internal'), /beklenmeyen bir hata/);
   assert.equal(effortFailureNote('boom'), 'Düşünme seviyesi değiştirilemedi: boom');
+  // An older desktop app that does not know the request, and a request it cannot read.
+  assert.match(effortFailureNote('unknown_type'), /^Düşünme seviyesi değişmedi\. Bilgisayardaki Gamachine bu isteği tanımıyor; .*güncelle\.$/);
+  assert.equal(effortFailureNote('bad_request'), 'Düşünme seviyesi değişmedi. İstek anlaşılamadı.');
   assert.match(EFFORT_UNKNOWN_NOTE, /bilinmiyor/);
 });
 
@@ -140,6 +143,14 @@ test('every refusal of set_model says why in plain Turkish and that the model di
   assert.match(modelFailureNote('disconnected'), /Bağlantı koptu/);
   assert.match(modelFailureNote('internal'), /beklenmeyen bir hata/);
   assert.equal(modelFailureNote('boom'), 'Model değiştirilemedi: boom');
+  assert.match(modelFailureNote('unknown_type'), /^Model değişmedi\. Bilgisayardaki Gamachine bu isteği tanımıyor; .*güncelle\.$/);
+  assert.equal(modelFailureNote('bad_request'), 'Model değişmedi. İstek anlaşılamadı.');
+});
+
+test('the list and the config notes word an old desktop and a bad request too', () => {
+  assert.match(modelListFailureNote('unknown_type'), /^Model listesi alınamadı: Bilgisayardaki Gamachine bu isteği tanımıyor/);
+  assert.match(configFailureNote('unknown_type'), /^Bilgisayardaki ayarlar okunamadı: Bilgisayardaki Gamachine bu isteği tanımıyor/);
+  assert.equal(modelListFailureNote('bad_request'), 'Model listesi alınamadı: İstek anlaşılamadı.');
 });
 
 test('the other notes: model list, chat config, a changed model', () => {

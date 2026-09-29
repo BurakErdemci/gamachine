@@ -542,6 +542,8 @@ function commonFailure(error) {
     case 'disconnected': return 'Bağlantı koptu; bağlanınca tekrar dene.';
     case 'internal': return 'Bilgisayarda beklenmeyen bir hata oldu.';
     case 'too_large': return 'İstek gönderilemedi.';
+    case 'unknown_type': return 'Bilgisayardaki Gamachine bu isteği tanımıyor; bilgisayardaki uygulamayı güncelle.';
+    case 'bad_request': return 'İstek anlaşılamadı.';
     default: return null;
   }
 }
