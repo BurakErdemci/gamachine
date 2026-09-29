@@ -765,6 +765,12 @@ def _extract_response_reason(resp: object) -> str | None:
             reason = data.get("reason")
             if isinstance(reason, str):
                 return reason.lower()
+        # A plugin reply that names its own error code is the plugin's answer, even when its
+        # sentence mentions a domain reload (get_test_job's rejected job). Only a code that
+        # itself says reload keeps the text check below.
+        code = resp.get("code")
+        if isinstance(code, str) and code and "reload" not in code.lower():
+            return None
         message_text = (resp.get("message") or resp.get("error") or "").lower()
         if "reload" in message_text:
             return "reloading"

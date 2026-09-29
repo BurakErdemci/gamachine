@@ -52,7 +52,7 @@ PLUGIN_REJECTED_JOB = {
     },
 }
 
-# The message says "domain reload"; data.reason must keep the transport from reading it as the editor reloading.
+# The message says "domain reload"; the error code and data.reason keep the transport from reading it as the editor reloading.
 PLUGIN_BUSY = {
     "success": False, "code": "busy", "error": "busy",
     "message": ("A compile, asset import or domain reload is in progress, so no test run was started. "
