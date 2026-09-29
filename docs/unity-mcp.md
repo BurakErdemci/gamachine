@@ -92,6 +92,15 @@ Where it shows up:
   call it: Unity does not import them on its own while it is unfocused.
 - **`read_console`** (`action=get`) adds a top-level `compile_state` whenever the
   verdict is not `clean`; an empty list next to it is not a pass.
+- **`run_tests` and `get_test_job`** enforce it in the Editor plugin itself
+  (`CompileGate`), because the CLI's `POST /api/command` sends the command straight to
+  Unity and skips the server's own gate. A start is refused while the verdict is not
+  `clean`: `errors` and `stale` answer `error: "compile"`, `compiling`, `pending` and
+  `unknown` answer `error: "busy"` (the plugin never waits; the server waits up to 30 s
+  for a running compile before it asks). A finished job is judged again each time it is
+  polled: a pass read while the verdict is not `clean` comes back `success: false`,
+  `error: "compile"`, `data.status: "failed"`, with `data.result` kept. The server keeps
+  its own copy of both rules for plugins that predate the gate.
 
 Only `clean` means new types can be used.
 

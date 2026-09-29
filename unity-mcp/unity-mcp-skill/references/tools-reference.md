@@ -827,9 +827,12 @@ result = run_tests(
 #   error "compile": scripts do not compile or changed on disk since the last compile (data.compile says which)
 #   error "busy", hint "retry": compiling (data.reason "compiling") or the compile status could not be
 #     read (data.reason "compile_status_unknown"); an old package without get_compile_status still runs
+#   error "tests_running": a job is already running (checked before the compile state)
 #   hint "retry", data.reason "reloading": Unity answered mid-reload; the command was not resent
-# run_tests(clear_stuck=True) releases only a stuck job; a progressing one stays (data.cleared false).
-```
+# The Unity package makes the same refusals itself (CompileGate), so `unity-mcp editor tests` and any
+# other start that goes straight to Unity through POST /api/command is gated too. The server only adds
+# a wait of up to 30 s for a running compile to finish before it asks.
+# run_tests(clear_stuck=True) releases only a stuck job; a progressing one stays (data.cleared false).```
 
 ### get_test_job
 
@@ -846,13 +849,16 @@ result = get_test_job(
 # data.result: {mode, summary: {total, passed, failed, skipped, durationSeconds, resultState}},
 #   plus per-test entries in result.results with include_details / include_failed_tests.
 #   Unity sends it for succeeded runs only; a failed job with error "compile" (below) also has
-#   it, since that is a succeeded run the server turned into a failure.
+#   it, since that is a succeeded run turned into a failure (by Unity itself, or by the server).
 # data.progress: completed, total, current test, failures_so_far (the failures of a failed run)
 # data.error: why a job failed without a result (e.g. tests did not start within init_timeout)
-# data.compile (finished jobs): the live compile_status verdict. A succeeded run counts only when
-#   it is clean; on errors, stale, compiling, pending or unknown (status unreadable) it comes back
-#   success=False, error "compile", data.status "failed", with data.result kept. An old package
-#   without get_compile_status keeps its pass (verdict unknown).
+# data.compile (finished jobs): the live compile_status verdict, read when the job is polled. A
+#   succeeded run counts only when it is clean; on errors, stale, compiling, pending or unknown
+#   (status unreadable) it comes back success=False, error "compile", data.status "failed", with
+#   data.result kept. Unity applies this itself, so the CLI's `editor poll-test` gets it too; the server
+#   applies it again to what Unity called clean. An old package without get_compile_status keeps its
+#   pass (verdict unknown). A job's result is not kept across a domain reload: a pass judged after
+#   one has no data.result.
 ```
 
 ---
