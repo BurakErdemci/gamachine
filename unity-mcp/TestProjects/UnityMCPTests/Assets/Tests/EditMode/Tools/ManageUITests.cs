@@ -806,8 +806,9 @@ namespace MCPForUnityTests.Editor.Tools
         public void Create_Uss_SkipsUxmlValidation()
         {
             string path = $"{TempRoot}/NoValidation_{Guid.NewGuid():N}.uss";
-            // USS is CSS-like, not XML — validation should be skipped
-            string content = "This is not valid XML <broken>";
+            // USS is CSS-like, not XML — validation should be skipped. The content must stay valid USS:
+            // the importer logs an error for invalid USS, which fails the test as an unhandled log message.
+            string content = ".root { color: red; } /* not valid XML <broken> */";
 
             var result = ToJObject(ManageUI.HandleCommand(new JObject
             {
