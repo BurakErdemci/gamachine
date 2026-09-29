@@ -320,3 +320,85 @@ async def test_a_running_turn_keeps_the_model_it_started_with(env):
     await switch(phone, conv)
     assert started == ("subscription", "gpt-6-sol")
     assert chat_model.turn_model(env.db, 1, conv) == ("openai", "gpt-5.5")
+
+
+# ── send_message {effort} ──────────────────────────────────────────────────
+
+async def send(phone, conv, **extra):
+    return await phone.request("send_message", chat_id=str(conv), text="hi", **extra)
+
+
+async def test_send_message_without_effort_is_what_it_was(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
+    q = CHANNEL.listen()
+    try:
+        assert (await send(phone, conv))["result"] == {"status": "accepted"}
+        assert (await send(phone, conv, effort=None))["result"] == {"status": "accepted"}
+        frames = [q.get_nowait(), q.get_nowait()]
+    finally:
+        CHANNEL.unlisten(q)
+    assert all("effort" not in f for f in frames)
+
+
+@pytest.mark.parametrize("stored", [("subscription", "claude-opus-5"), ("subscription", "gpt-6-luna"),
+                                    ("openai", "gpt-5.5"), ("subscription", "claude-haiku-4-5")])
+async def test_every_level_the_registry_lists_for_the_chat_is_carried(env, stored):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=stored)
+    q = CHANNEL.listen()
+    try:
+        for level in levels(*stored):
+            r = await send(phone, conv, effort=level)
+            assert r["result"] == {"status": "accepted"}, (stored, level)
+            assert q.get_nowait()["effort"] == level
+    finally:
+        CHANNEL.unlisten(q)
+
+
+@pytest.mark.parametrize("stored, effort", [
+    (("subscription", "claude-haiku-4-5"), "high"),
+    (("subscription", "claude-opus-4-6"), "xhigh"),
+    (("subscription", "gpt-6-luna"), "minimal"),
+    (("subscription", "kimi-k3"), "low"),
+    (("subscription", "claude-opus-5"), "turbo"),
+    (("subscription", "claude-opus-5"), "HIGH"),
+    (("subscription", "claude-opus-5"), " high"),
+    (("subscription", "claude-opus-5"), ""),
+    (("subscription", "claude-opus-5"), 3),
+    (("subscription", "claude-opus-5"), True),
+    (("subscription", "claude-opus-5"), ["high"]),
+    (("subscription", "claude-opus-5"), {"level": "high"}),
+])
+async def test_an_effort_the_chats_model_does_not_accept_is_refused(env, stored, effort):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=stored)
+    q = CHANNEL.listen()
+    try:
+        r = await send(phone, conv, effort=effort)
+        assert r["ok"] is False and r["error"] == "bad_effort", repr(effort)
+        assert q.empty()
+    finally:
+        CHANNEL.unlisten(q)
+
+
+async def test_effort_is_judged_against_the_model_the_chat_has_now(env):
+    keyed(env)
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
+    q = CHANNEL.listen()
+    try:
+        assert (await send(phone, conv, effort="max"))["result"] == {"status": "accepted"}
+        await switch(phone, conv, "openai", "gpt-5.5")
+        assert "max" not in levels("openai", "gpt-5.5")
+        assert (await send(phone, conv, effort="max"))["error"] == "bad_effort"
+    finally:
+        CHANNEL.unlisten(q)
+
+
+async def test_a_bad_effort_does_not_hide_the_other_refusals(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
+    assert (await send(phone, 999999, effort="high"))["error"] == "unknown_chat"
+    r = await phone.request("send_message", chat_id=str(conv), text="  ", effort="high")
+    assert r["error"] == "bad_text"

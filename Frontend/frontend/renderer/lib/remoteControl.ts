@@ -76,7 +76,13 @@ export interface RemoteMessage {
   conversationId: number;
   text: string;
   deviceName: string;
+  /** Chosen on the phone for this message; absent = the page's own level. */
+  effort?: RemoteEffort;
 }
+
+/** The registry's canonical scale (Backend/app/providers/effort_caps.py CANON_ORDER). */
+export const REMOTE_EFFORTS = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type RemoteEffort = typeof REMOTE_EFFORTS[number];
 
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -87,7 +93,14 @@ export function parseRemoteMessage(data: any): RemoteMessage | null {
   if (typeof data.request_id !== 'string' || !REQUEST_ID.test(data.request_id)) return null;
   if (typeof data.text !== 'string' || !data.text.trim()) return null;
   const deviceName = typeof data.device_name === 'string' ? data.device_name.slice(0, 64) : '';
-  return { requestId: data.request_id, conversationId, text: data.text, deviceName };
+  // Strict: a level the page does not know is no level. The backend has checked
+  // it against the chat's model, so a bad one is a broken frame, not a message.
+  let effort: RemoteEffort | undefined;
+  if (data.effort !== undefined && data.effort !== null) {
+    if (typeof data.effort !== 'string' || !(REMOTE_EFFORTS as readonly string[]).includes(data.effort)) return null;
+    effort = data.effort as RemoteEffort;
+  }
+  return { requestId: data.request_id, conversationId, text: data.text, deviceName, ...(effort ? { effort } : {}) };
 }
 
 // Every open renderer stream gets the frame, so each window may see it. The

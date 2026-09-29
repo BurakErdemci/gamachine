@@ -8,7 +8,10 @@ for every chat. Frame shape (step 4 acts on it):
 
     {"type": "remote_message", "request_id": str, "conversation_id": int,
      "text": str, "source": "phone", "device_id": str, "device_name": str,
-     "at": <ms>}
+     "at": <ms>, "effort"?: str}
+
+`effort` is present only when the phone chose one (already checked against the
+chat's model); the renderer sends that message with it instead of its default.
 
 A card a phone answered first is closed on the desktop too, so the card
 left open there does not wait for a click that can only get

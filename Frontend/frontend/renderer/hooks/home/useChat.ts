@@ -1306,7 +1306,7 @@ export const useChat = (
       await fetchMessagesRef.current(m.conversationId);
     }
     void sendMessageRef.current(
-      m.text, '', args.lang, args.genMode, args.thinkingLevel,
+      m.text, '', args.lang, args.genMode, m.effort ?? args.thinkingLevel,
       args.setPendingGenFiles, args.setPendingDelete,
       undefined, false, undefined, 'user', m.conversationId, undefined, { device: m.deviceName },
     );

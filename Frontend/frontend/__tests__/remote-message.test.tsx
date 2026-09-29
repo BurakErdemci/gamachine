@@ -61,7 +61,7 @@ const makeStream = () => {
   }
 }
 
-type Turn = { convId: number; message: string; origin: string; stream: ReturnType<typeof makeStream> }
+type Turn = { convId: number; message: string; origin: string; effort?: string; stream: ReturnType<typeof makeStream> }
 let turns: Turn[]
 let stops: number[]
 /** One wake stream per hook instance (= per window); each gets every frame. */
@@ -76,7 +76,7 @@ const installFetch = () => {
     if (u.endsWith('/chat-stream')) {
       const body = JSON.parse(init.body)
       const stream = makeStream()
-      turns.push({ convId: body.conversation_id, message: body.message, origin: body.origin, stream })
+      turns.push({ convId: body.conversation_id, message: body.message, origin: body.origin, effort: body.effort_level, stream })
       init.signal?.addEventListener('abort', () => {
         const e = new Error('aborted'); (e as any).name = 'AbortError'; stream.fail(e)
       })
@@ -248,6 +248,47 @@ describe('phone message · exactly once', () => {
     for (const text of ['/usage', '  /compact', '\u200b/model x', '/skill arg', 'yol: /tmp/x']) {
       expect(parseRemoteMessage(frame(1, text)), text).toMatchObject({ text })
     }
+  })
+})
+
+describe('phone message - effort', () => {
+  it('a level chosen on the phone replaces the page default for that message only', async () => {
+    const { result } = hook()
+    defaults(result)
+    await open(result, 1)
+    pushAll(frame(5, 'think hard', { effort: 'xhigh' }))
+    await flush()
+    await finish(0)
+    pushAll(frame(5, 'no choice'))
+    await flush()
+    expect(turns.map(t => [t.message, t.effort])).toEqual([['think hard', 'xhigh'], ['no choice', 'medium']])
+  })
+
+  it('a queued phone message keeps its level until its turn starts', async () => {
+    const { result } = hook()
+    defaults(result)
+    await open(result, 1)
+    send(result, 'typed first')
+    await flush()
+    pushAll(frame(1, 'phone second', { effort: 'max' }))
+    await flush()
+    expect(result.current.queue.map((q: any) => [q.text, q.thinkingLevel])).toEqual([['phone second', 'max']])
+    await finish(0)
+    expect(turns.map(t => [t.message, t.effort])).toEqual([['typed first', 'medium'], ['phone second', 'max']])
+  })
+
+  it('every level of the scale goes through, auto and off included', () => {
+    for (const level of ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(parseRemoteMessage(frame(1, 'x', { effort: level })), level).toMatchObject({ effort: level })
+    }
+  })
+
+  it('a level the page does not know makes the frame invalid; null or absent means none', () => {
+    for (const bad of ['turbo', 'HIGH', ' high', '', 'none', 3, true, ['high'], {}]) {
+      expect(parseRemoteMessage(frame(1, 'x', { effort: bad })), JSON.stringify(bad)).toBeNull()
+    }
+    expect(parseRemoteMessage(frame(1, 'x', { effort: null }))).not.toHaveProperty('effort')
+    expect(parseRemoteMessage(frame(1, 'x'))).not.toHaveProperty('effort')
   })
 })
 

@@ -253,6 +253,13 @@ class Dispatcher:
         frame = {"type": FRAME_TYPE, "request_id": secrets.token_hex(8), "conversation_id": row["id"],
                  "text": text, "source": "phone", "device_id": session.device.device_id,
                  "device_name": session.device.name, "at": int(time.time() * 1000)}
+        effort = req.get("effort")
+        if effort is not None:
+            # What this chat's model accepts, from the desktop's own registry.
+            if not isinstance(effort, str) or effort not in chats.effort_levels(
+                    row["provider_type"], row["model_name"]):
+                raise RpcError("bad_effort")
+            frame["effort"] = effort
         return {"status": "accepted" if CHANNEL.publish(frame) else "desktop_not_ready"}
 
     async def list_slash_commands(self, session, req, rid):
