@@ -363,10 +363,18 @@ async def test_forget_resets_the_room_and_deletes_keys(env):
 
 # ── RPC ────────────────────────────────────────────────────────────────────
 
-def make_chat(db, title="Arena", provider="codex", model="gpt-5.5"):
+AGENT_MODELS = {"claude": "claude-sonnet-4-6", "codex": "gpt-5.5", "agy": "gemini-3-pro"}
+
+
+def make_chat(db, title="Arena", provider="codex", model=None, stored=None):
+    """A chat whose latest answer names `provider`; `stored` = (provider_type,
+    model_name) is the chat's own model, which wins over that answer."""
+    model = model or AGENT_MODELS.get(provider, "some-model")
     conv = db.create_conversation(1, title)
     db.add_message(conv, "user", "merhaba")
     db.add_message(conv, "assistant", "selam", provider=provider, model=model)
+    if stored:
+        db.set_conversation_model(conv, *stored)
     return conv
 
 

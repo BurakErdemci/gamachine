@@ -429,10 +429,7 @@ def _message_agent(provider_type: str, model_name: str) -> str:
     are `api-<provider>`. No turn reports a resolved model, so the model stored
     beside this is the configured one the turn ran with.
     """
-    if provider_type != "subscription":
-        return f"api-{provider_type or 'unknown'}"
-    from spawn_env import env_family
-    return env_family((model_name or "claude").lower()) or "claude"
+    return chat_model.agent_label(provider_type, model_name)
 
 
 def _check_chat_rate_limit(user_id: int):

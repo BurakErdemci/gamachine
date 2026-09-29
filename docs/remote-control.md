@@ -316,15 +316,20 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
   `{type:"remote_message", request_id, conversation_id, text, source:"phone",
   device_id, device_name, at}`; `desktop_not_ready` means no such stream is open.
 - `list_slash_commands` maps the chat to a family in one place,
-  `chats.slash_family(row)`: today the provider of the chat's latest message
-  (`claude`, `codex`, `agy`; no message yet = `claude`, the app's default;
-  anything else, `api-*` included = no catalog). When chats store their own
-  model, only that function changes. The catalog function is injected like
+  `chats.slash_family(row)`: the chat's own model (`agentic.chat_model`: the
+  stored per-chat model, else the model of its latest answer when that maps
+  cleanly, else the global default) goes through `chat_model.cli_family`, which
+  is the decision the runner makes from a subscription model id (`claude`,
+  `codex`, `agy`; API providers, ollama and the other CLIs = no catalog). The
+  `provider`/`model` strings `list_chats` and the chat-changed frames report come
+  from the same resolution (`provider` is the family, or `api-<provider>`), so the
+  phone sees each chat's own model. The catalog function is injected like
   `stop_chat` (`RemoteBridge(..., list_slash_commands=router.list_slash_commands)`)
   and `chats.phone_catalog` adds the app's `compact` and cuts the catalog down
   to plain strings before it leaves.
-  Known gap: a message the phone sends runs with the model chosen on the
-  desktop, not necessarily the family listed here, until per-chat models exist.
+  A message the phone sends runs with that chat's own model: the renderer posts
+  it to `/chat-stream` with the chat id and the backend resolves it with
+  `chat_model.turn_model`, whatever the desktop has selected.
 - The mode change is one function, `apply_approval_mode(mode, source)` in
   `conversation_routes.py` (`set_mode`, then the drain), exposed as
   `router.apply_approval_mode` and injected into `RemoteBridge(...,

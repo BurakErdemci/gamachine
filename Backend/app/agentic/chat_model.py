@@ -50,6 +50,21 @@ def check_model_choice(provider_type: Any, model_name: Any) -> Tuple[str, str]:
     return provider_type, model_name
 
 
+def cli_family(provider_type: str, model_name: str) -> Optional[str]:
+    """The CLI family a subscription model runs on (None for API/local providers).
+
+    The one place provider_type+model_name becomes a family; the same
+    decision `provider_readiness` and the runner make."""
+    if provider_type != "subscription":
+        return None
+    return env_family((model_name or "claude").lower()) or "claude"
+
+
+def agent_label(provider_type: str, model_name: str) -> str:
+    """How a message names the agent: the CLI family, or `api-<provider>`."""
+    return cli_family(provider_type, model_name) or f"api-{provider_type or 'unknown'}"
+
+
 def _pair(value: Any) -> Optional[Tuple[str, str]]:
     if (isinstance(value, (tuple, list)) and len(value) == 2 and isinstance(value[0], str)
             and value[0] and isinstance(value[1], str)):

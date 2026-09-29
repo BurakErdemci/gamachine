@@ -8,7 +8,7 @@ from contextlib import closing
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
-from agentic import cards, turn_events
+from agentic import cards, chat_model, turn_events
 
 LOCAL_USER_ID = 1
 LIST_LIMIT = 200
@@ -20,11 +20,7 @@ AGENT_NAMES = {"claude": "Claude", "codex": "Codex", "agy": "Antigravity", "open
 KIND_TITLES = {"mcp": "Unity MCP", "mail": "Sohbetler arası not", "command": "Komut onayı",
                "question": "Soru"}
 
-_CHAT_COLS = ("SELECT c.id, c.title, c.updated_at, c.hidden, "
-              "(SELECT m.provider FROM messages m WHERE m.conversation_id = c.id "
-              " AND m.provider IS NOT NULL ORDER BY m.id DESC LIMIT 1), "
-              "(SELECT m.model FROM messages m WHERE m.conversation_id = c.id "
-              " AND m.model IS NOT NULL ORDER BY m.id DESC LIMIT 1) "
+_CHAT_COLS = ("SELECT c.id, c.title, c.updated_at, c.hidden "
               "FROM conversations c WHERE c.user_id = ? AND c.side_of IS NULL")
 
 
@@ -34,14 +30,10 @@ SLASH_FAMILIES = ("claude", "codex", "agy")
 def slash_family(row: dict) -> Optional[str]:
     """Which `/slash-commands` catalog serves a chat, None when it has none.
 
-    Today the chat's latest message names the agent that last answered in it
-    (`claude`, `codex`, `agy`, other CLIs, `api-<provider>`); when chats store
-    their own model this is the one place that changes. A chat nobody has
-    answered in reads as Claude, the app's default agent."""
-    provider = row.get("provider")
-    if provider is None:
-        return "claude"
-    return provider if provider in SLASH_FAMILIES else None
+    Follows the chat's own model (`chat_model`): a subscription model id
+    names its CLI family; API and local providers have no catalog."""
+    family = chat_model.cli_family(row["provider_type"], row["model_name"])
+    return family if family in SLASH_FAMILIES else None
 
 
 # The one command Gamachine itself runs (the renderer, on both desktop and
@@ -86,23 +78,27 @@ def _ms(stamp: Optional[str]) -> Optional[int]:
         return None
 
 
-def _row_dict(r) -> dict:
+def _row_dict(db, r) -> dict:
+    chosen = chat_model.chat_model(db, LOCAL_USER_ID, r[0])
+    provider_type, model_name = chosen["provider_type"], chosen["model_name"]
     return {"id": r[0], "title": r[1], "updated_at": r[2], "hidden": bool(r[3]),
-            "provider": r[4], "model": r[5]}
+            "provider_type": provider_type, "model_name": model_name,
+            "provider": chat_model.agent_label(provider_type, model_name),
+            "model": model_name or None}
 
 
 def chat_rows(db, limit: int = LIST_LIMIT) -> List[dict]:
     with closing(sqlite3.connect(db.db_path)) as conn:
         rows = conn.execute(_CHAT_COLS + " ORDER BY c.updated_at DESC LIMIT ?",
                             (LOCAL_USER_ID, limit)).fetchall()
-    return [_row_dict(r) for r in rows]
+    return [_row_dict(db, r) for r in rows]
 
 
 def chat_row(db, conv_id: int) -> Optional[dict]:
     """The chat if it is an ordinary chat of the local user (no side chats)."""
     with closing(sqlite3.connect(db.db_path)) as conn:
         r = conn.execute(_CHAT_COLS + " AND c.id = ?", (LOCAL_USER_ID, conv_id)).fetchone()
-    return _row_dict(r) if r else None
+    return _row_dict(db, r) if r else None
 
 
 def carded_chats() -> set:

@@ -58,22 +58,45 @@ async def test_list_slash_commands_follows_the_chats_agent(env, provider, family
     assert asked == [family]
 
 
-@pytest.mark.parametrize("provider", ["api-anthropic", "api-openai", "opencode", "cursor", "kimi", "gemini"])
-async def test_chats_without_a_catalog_get_only_compact_and_no_lookup(env, provider):
+@pytest.mark.parametrize("stored", [("anthropic", "claude-sonnet-4-6"), ("openai", "gpt-5.5"),
+                                    ("ollama", "llama3"), ("subscription", "opencode-x"),
+                                    ("subscription", "cursor-gpt"), ("subscription", "kimi-k2")])
+async def test_chats_without_a_catalog_get_only_compact_and_no_lookup(env, stored):
     asked = fake_catalog(env)
     phone = await pair_phone(env)
-    conv = make_chat(env.db, provider=provider)
+    conv = make_chat(env.db, stored=stored)
     r = await phone.request("list_slash_commands", chat_id=str(conv))
     assert r["result"] == ONLY_COMPACT
     assert asked == []
 
 
-async def test_a_chat_nobody_answered_in_reads_as_claude(env):
+async def test_a_chats_stored_model_wins_over_its_latest_answer(env):
     asked = fake_catalog(env)
     phone = await pair_phone(env)
-    conv = env.db.create_conversation(1, "Yeni")
+    conv = make_chat(env.db, provider="claude", stored=("subscription", "gpt-5.5"))
     r = await phone.request("list_slash_commands", chat_id=str(conv))
-    assert r["result"] == WITH_COMPACT and asked == ["claude"]
+    assert r["result"] == WITH_COMPACT and asked == ["codex"]
+    chat = next(c for c in (await phone.request("list_chats"))["result"]["chats"]
+                if c["chat_id"] == str(conv))
+    assert (chat["provider"], chat["model"]) == ("codex", "gpt-5.5")
+
+
+async def test_an_old_chat_falls_back_to_its_latest_answer_then_the_global_default(env):
+    phone = await pair_phone(env)
+    answered = make_chat(env.db, provider="codex")
+    fresh = env.db.create_conversation(1, "Yeni")
+    env.db.save_ai_config(1, "subscription", "claude-opus-4-1", "")
+    rows = {c["chat_id"]: c for c in (await phone.request("list_chats"))["result"]["chats"]}
+    assert (rows[str(answered)]["provider"], rows[str(answered)]["model"]) == ("codex", "gpt-5.5")
+    assert (rows[str(fresh)]["provider"], rows[str(fresh)]["model"]) == ("claude", "claude-opus-4-1")
+
+
+async def test_an_api_chat_keeps_the_api_provider_label_on_the_phone(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("anthropic", "claude-sonnet-4-6"))
+    chat = next(c for c in (await phone.request("list_chats"))["result"]["chats"]
+                if c["chat_id"] == str(conv))
+    assert (chat["provider"], chat["model"]) == ("api-anthropic", "claude-sonnet-4-6")
 
 
 async def test_list_slash_commands_validates_the_chat(env):
@@ -127,10 +150,16 @@ async def test_a_long_catalog_is_split_and_arrives_whole(env):
 
 
 def test_slash_family_is_the_one_place_that_maps_agents():
-    assert chats.slash_family({"provider": "claude"}) == "claude"
-    assert chats.slash_family({"provider": None}) == "claude"
-    assert chats.slash_family({"provider": "api-claude"}) is None
-    assert chats.slash_family({"provider": "codex", "model": "anything"}) == "codex"
+    def family(provider_type, model_name):
+        return chats.slash_family({"provider_type": provider_type, "model_name": model_name})
+
+    assert family("subscription", "claude-sonnet-4-6") == "claude"
+    assert family("subscription", "") == "claude"
+    assert family("subscription", "gpt-5.5") == "codex"
+    assert family("subscription", "gemini-3-pro") == "agy"
+    assert family("subscription", "kimi-k2") is None
+    assert family("anthropic", "claude-sonnet-4-6") is None
+    assert family("ollama", "llama3") is None
 
 
 # ── the route and the phone share one catalog function ─────────────────────
