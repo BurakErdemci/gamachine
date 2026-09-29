@@ -175,6 +175,11 @@ The DOM-free logic is in `net.js` and tested in `test/page.test.mjs`.
   (names without the `/`; Gamachine's own `compact` always leads, a chat whose
   agent has no catalog gets only that).
   A text starting with `/` is sent with `send_message` like any other.
+- `get_config` -> `{approval_mode:"auto"|"balanced"|"step"}` (more keys may join);
+  `set_approval_mode {mode}` -> `{mode, previous, approved_pending}`, or
+  `{ok:false, error:"bad_mode"|"unavailable"}`, or
+  `{ok:false, error:"agy_step_refused", message, params:{pids}}` when the mode
+  did not change because a running agy process could not be gated.
 - `stop` -> `{status:"ok"|"no_session"|"error"}`; `close_chat`, `push_subscribe {subscription}` -> `{}`
 - pushes: `{type:"event", chat_id, seq, kind, ...}` with kinds `text {text}`,
   `tool_call {tool, summary}`, `turn_start`, `turn_end {status: "done"|"error"|"stopped"}`,

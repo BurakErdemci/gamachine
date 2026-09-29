@@ -2589,6 +2589,29 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             approved += 1
         return approved
 
+    def apply_approval_mode(mode: str, source: str = "ui") -> dict:
+        """Set the global mode, then settle the cards the new mode makes moot.
+
+        The one place a flip and its drain happen together: `POST /approval-mode`
+        (after its token, maintenance and UI-secret checks) and the phone's
+        `set_approval_mode` (remote bridge, no UI secret by owner decision) both
+        end here. Raises AgyStepGateError when the flip is refused. Runs on the
+        event loop: the drains resolve gates that set asyncio events.
+        """
+        previous = approval_mode.set_mode(mode, source=source)
+        if mode == "auto":
+            drained = _approve_all_pending()
+        elif mode == "balanced":
+            drained = _approve_routine_pending()
+        else:
+            drained = 0
+        if drained:
+            logger.warning("[approval-mode] %d pending card(s) approved by the switch to %s",
+                           drained, mode)
+        return {"mode": mode, "previous": previous, "approved_pending": drained}
+
+    router.apply_approval_mode = apply_approval_mode
+
     @router.get("/chat-title-setting")
     async def get_chat_title_setting(x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
@@ -2639,22 +2662,12 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                                 detail="mode 'auto', 'balanced' ya da 'step' olmalı.")
         source = body.get("source") if body.get("source") in ("settings", "chat", "migrate") else "ui"
         try:
-            previous = approval_mode.set_mode(mode, source=source)
+            return apply_approval_mode(mode, source)
         except AgyStepGateError as exc:
             # The flip to step was refused because an agy child could still
             # write; the message says why and what to do (Turkish, user-facing).
             raise HTTPException(status_code=409, detail={
                 "code": exc.code, "message": str(exc), **exc.params})
-        if mode == "auto":
-            drained = _approve_all_pending()
-        elif mode == "balanced":
-            drained = _approve_routine_pending()
-        else:
-            drained = 0
-        if drained:
-            logger.warning("[approval-mode] %d pending card(s) approved by the switch to %s",
-                           drained, mode)
-        return {"mode": mode, "previous": previous, "approved_pending": drained}
 
     @router.get("/mcp-pending")
     async def mcp_pending_list(x_session_token: str = Header(alias="X-Session-Token", default="")):

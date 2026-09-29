@@ -44,11 +44,13 @@ class RemoteBridge:
 
     def __init__(self, db, stop_chat: Optional[Callable[[int], Awaitable[dict]]] = None,
                  clock: Callable[[], float] = time.time,
-                 list_slash_commands: Optional[Callable[[str], Awaitable[dict]]] = None):
+                 list_slash_commands: Optional[Callable[[str], Awaitable[dict]]] = None,
+                 apply_approval_mode: Optional[Callable[[str, str], dict]] = None):
         self.db = db
         self.store = RemoteStore(db)
         self.stop_chat = stop_chat
         self.list_slash_commands = list_slash_commands
+        self.apply_approval_mode = apply_approval_mode
         self.clock = clock
         self.keys: Optional[Keys] = None
         self.client: Optional[RelayClient] = None

@@ -16,6 +16,14 @@ left open there does not wait for a click that can only get
 
     {"type": "card_closed", "card_id": str, "conversation_id": int | None,
      "by": "phone:<device name>", "decision": str, "outcome": str, "at": <ms>}
+
+A phone that changed the approval mode tells the renderer, which shows the new
+mode and clears the in-chat cards a switch to auto approved, as its own switch
+would (the backend has already applied and drained; this is only the news):
+
+    {"type": "approval_mode_changed", "mode": "auto" | "balanced" | "step",
+     "previous": str, "approved_pending": int, "by": "phone:<device name>",
+     "at": <ms>}
 """
 from __future__ import annotations
 
@@ -27,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 FRAME_TYPE = "remote_message"
 CARD_CLOSED_TYPE = "card_closed"
+MODE_CHANGED_TYPE = "approval_mode_changed"
 QUEUE_SIZE = 100
 
 

@@ -11,9 +11,10 @@ import secrets
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
-from agentic import cards, turn_events
+from agentic import approval_mode, cards, turn_events
+from providers.agy_provider import AgyStepGateError
 from remote import chats, webpush
-from remote.desktop_channel import CARD_CLOSED_TYPE, CHANNEL, FRAME_TYPE
+from remote.desktop_channel import CARD_CLOSED_TYPE, CHANNEL, FRAME_TYPE, MODE_CHANGED_TYPE
 from remote.session import PhoneSession
 
 if TYPE_CHECKING:
@@ -68,6 +69,8 @@ class Dispatcher:
             "stop": self.stop,
             "send_message": self.send_message,
             "list_slash_commands": self.list_slash_commands,
+            "get_config": self.get_config,
+            "set_approval_mode": self.set_approval_mode,
             "push_subscribe": self.push_subscribe,
         }
 
@@ -257,6 +260,37 @@ class Dispatcher:
             raise RpcError("unavailable")
         family = chats.slash_family(row)
         return chats.phone_catalog(None if family is None else await catalog(family))
+
+    async def get_config(self, session, req, rid):
+        return {"approval_mode": approval_mode.current_mode()}
+
+    async def set_approval_mode(self, session: PhoneSession, req, rid):
+        # Owner decision, 28 Sep 2026: a paired phone may change the mode, and
+        # so skips the UI secret the local route demands. That secret guards
+        # against the Unity MCP server and model-run children, which can read
+        # the app token; this path is reachable only through the paired
+        # device's end-to-end session keys.
+        mode = req.get("mode")
+        if not isinstance(mode, str) or mode not in approval_mode.MODES:
+            raise RpcError("bad_mode")
+        apply = self.bridge.apply_approval_mode
+        if apply is None:
+            raise RpcError("unavailable")
+        try:
+            result = apply(mode, "phone")
+        except AgyStepGateError as exc:
+            raise RpcError("agy_step_refused", message=str(exc), params=dict(exc.params))
+        logger.warning("[remote] approval mode %s -> %s by %s", result["previous"], result["mode"],
+                       session.device_label)
+        # The change is applied and drained: a failed notification must not
+        # turn it into an error the phone would retry.
+        try:
+            CHANNEL.publish({"type": MODE_CHANGED_TYPE, "mode": result["mode"],
+                             "previous": result["previous"], "approved_pending": result["approved_pending"],
+                             "by": session.device_label, "at": int(time.time() * 1000)})
+        except Exception:
+            logger.exception("[remote] approval_mode_changed publish failed")
+        return result
 
     async def push_subscribe(self, session: PhoneSession, req, rid):
         try:

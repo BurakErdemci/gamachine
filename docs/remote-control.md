@@ -31,6 +31,13 @@ counts it.
   list the chat's commands). This replaces the first version's refusal of `/`
   texts (`commands_not_allowed`). A paired phone can already approve commands,
   so it has that trust level.
+  **The approval mode can be changed from the phone** (read with `get_config`,
+  set with `set_approval_mode`), same reasoning: a phone that can approve
+  every card can also say "stop asking". This replaces "not from the phone:
+  approval mode". The phone does **not** need the UI secret for it, by design
+  (see "Threats and answers"). Model, provider and effort switching from the
+  phone is a later step. Still not from the phone: other settings, API keys,
+  CLI install, file operations.
 - Notifications are detailed ("Onay bekliyor - Codex (Arena): git commit -m ...",
   "Is bitti - ..."), not a bare "something happened".
 - While remote control is on, the PC may be kept awake (checkbox).
@@ -200,6 +207,8 @@ Requests carry `id`; replies echo it. Everything not listed is refused.
 | `stop {chat_id}` | same effect as the desktop Stop |
 | `send_message {chat_id, text}` | delivered to the renderer, which sends it like a typed message (queued if a turn runs); stored with source `phone`. Slash commands are ordinary text: the backend does not look at a leading `/`. In the renderer a text that is exactly `/compact` (blanks around it ignored) compacts that chat, as the desktop composer does, and starts no turn; every other `/...` goes out like typed text (`/usage` gets its usage card, the CLI runs the rest) |
 | `list_slash_commands {chat_id}` | `{commands: [str], skills: [str], meta: [{name, description?, argumentHint?, insert?, displayName?}]}`: the catalog the desktop's `/` menu shows (`GET /slash-commands`, one shared function), for the agent family of that chat. Names come without the `/`. Gamachine's own `compact` (run by the renderer) leads `commands` and `meta` for every chat, as in the desktop menu; the CLI's own `compact` is not listed twice. Chats of agents without a catalog (`api-*`, opencode, cursor, kimi, gemini) and agy get only that. Errors `bad_chat_id`, `unknown_chat`, `unavailable` |
+| `get_config` | `{approval_mode: "auto" \| "balanced" \| "step"}`; a dict so more keys (model, effort) can join later without a new request |
+| `set_approval_mode {mode}` | sets the one global mode, exactly as the desktop does (saved, agy gates followed, open cards drained: `auto` approves every open card, `balanced` the MCP cards it can prove routine) and replies `{mode, previous, approved_pending}`. Errors `bad_mode` (not one of the three), `unavailable`, `agy_step_refused {message, params: {pids}}` (a running agy process could not be gated; the mode did not change; `message` is the desktop's Turkish text). On success the desktop is told (`approval_mode_changed`, below) |
 | `push_subscribe {subscription}` | stores the web push subscription for this device |
 
 PC -> phone pushes: `event {chat_id, seq, kind, ...}` (turn start/end, text,
@@ -215,6 +224,12 @@ that won (not `already_answered`, not a refusal), the backend puts
 `{type: "card_closed", card_id, conversation_id, by: "phone:<device name>",
 decision, outcome, at}` on the same channel (`/wake-stream-all`), so the
 desktop copy does not wait for a click that could only get `already_answered`.
+
+A mode the phone changed is announced the same way, after it is applied:
+`{type: "approval_mode_changed", mode, previous, approved_pending,
+by: "phone:<device name>", at}`. The renderer shows the new mode, clears the
+in-chat cards a switch to `auto` approved (the code its own switch uses) and
+shows a short note naming the phone. A refused switch publishes nothing.
 
 ## Web push
 
@@ -256,7 +271,8 @@ desktop copy does not wait for a click that could only get `already_answered`.
 | Someone photographs the QR | single-use secret + 5 min + SAS code confirmed on the PC |
 | Relay operator reads traffic | end-to-end encryption; relay sees opaque frames |
 | Relay operator serves a malicious page | accepted for v1 (page and relay ship from this repo); users can run their own relay; stated in SECURITY.md |
-| Stolen phone | Remove device on the PC; scope excludes settings, modes, keys, files |
+| Stolen phone | Remove device on the PC; scope excludes other settings, keys, files. It can approve cards, run slash commands and change the approval mode, all of which it could do to the same effect by approving cards one by one |
+| The phone changes the approval mode without the UI secret | Owner decision, 28 Sep 2026. The local `POST /approval-mode` demands a UI secret so that the Unity MCP server and model-run children, which can read the app token, cannot flip themselves into auto. The phone path never touches that route: `set_approval_mode` runs in-process, behind the paired device's end-to-end session keys (only a phone whose hello passed reaches it), calls the same function the route ends in (`apply_approval_mode`) and logs source `phone`. The route itself is unchanged and still refuses without the secret. Every change is announced on the desktop with the phone's name |
 | Replay of an approval | per-direction counters; card ids are single use |
 | Phone approves while desktop also answers | first answer wins, both sides see who answered |
 | Relay flooding | `pair_id` derived from the PC's room key, token hashes for phones, rate limits (pairing per id and per IP, new rooms per IP), rooms deleted after 30 days without the PC, byte caps on frames |
@@ -308,6 +324,17 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
   to plain strings before it leaves.
   Known gap: a message the phone sends runs with the model chosen on the
   desktop, not necessarily the family listed here, until per-chat models exist.
+- The mode change is one function, `apply_approval_mode(mode, source)` in
+  `conversation_routes.py` (`set_mode`, then the drain), exposed as
+  `router.apply_approval_mode` and injected into `RemoteBridge(...,
+  apply_approval_mode=...)` like `stop_chat`. `POST /approval-mode` calls it
+  after its token, maintenance-header and UI-secret checks (unchanged); the
+  bridge calls it with source `phone` and no secret. It runs on the event loop
+  because the drain sets asyncio events. `AgyStepGateError` propagates to both
+  callers (the route makes it a 409, the bridge an `agy_step_refused` reply).
+  A backend process without a UI secret (Docker, a reload worker) reads a saved
+  auto or balanced as step and refuses local flips; the phone path does flip it,
+  since it never asks for the secret.
 - A phone's card answers are ledgered with device `phone:<device name>`.
 - Replies over one frame are split: every list in `result` is cut in order,
   each part carries `part` (1-based) and `parts`, all with the request's `id`.
