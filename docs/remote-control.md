@@ -25,6 +25,12 @@ counts it.
 - Phone scope v1: **watch, approve / reject, answer question cards, stop a
   turn, and write a message into a chat.** Not from the phone: settings,
   approval mode, API keys, CLI install, file operations.
+- Phone scope, widened the same day (28 Sep 2026, owner: "claude remote
+  control'de bütün / komutlar çalışıyor"): **slash commands work from the
+  phone** (a text starting with `/` is an ordinary message; the phone page can
+  list the chat's commands). This replaces the first version's refusal of `/`
+  texts (`commands_not_allowed`). A paired phone can already approve commands,
+  so it has that trust level.
 - Notifications are detailed ("Onay bekliyor - Codex (Arena): git commit -m ...",
   "Is bitti - ..."), not a bare "something happened".
 - While remote control is on, the PC may be kept awake (checkbox).
@@ -192,7 +198,7 @@ Requests carry `id`; replies echo it. Everything not listed is refused.
 | `pending_cards` | every open card in every chat (MCP gates, command gates, Claude/Codex in-stream cards, question cards) |
 | `answer_card {card_id, decision, choice?}` | first answer wins; a later answer gets `already_answered {by, at}`; ledger row with the device |
 | `stop {chat_id}` | same effect as the desktop Stop |
-| `send_message {chat_id, text}` | delivered to the renderer, which sends it like a typed message (queued if a turn runs); stored with source `phone`. Text whose first non-blank, visible character is `/` is refused with `commands_not_allowed`: phone scope excludes commands |
+| `send_message {chat_id, text}` | delivered to the renderer, which sends it like a typed message (queued if a turn runs); stored with source `phone`. Slash commands are ordinary text: the backend does not look at a leading `/`. In the renderer a text that is exactly `/compact` (blanks around it ignored) compacts that chat, as the desktop composer does, and starts no turn; every other `/...` goes out like typed text (`/usage` gets its usage card, the CLI runs the rest) |
 | `push_subscribe {subscription}` | stores the web push subscription for this device |
 
 PC -> phone pushes: `event {chat_id, seq, kind, ...}` (turn start/end, text,
@@ -319,6 +325,10 @@ Facts about the Electron and renderer side; plain look, visual design later.
   message path with the conversation id as `targetOverride`: queued while that
   chat runs, a user turn otherwise; the composer is never touched. A frame
   that arrives before the page has chosen its send options waits for them.
+  A text that is exactly `/compact` is not sent: it compacts the addressed chat
+  (`compactConversation(chatId)`; the desktop button's busy state is only set
+  when that chat is on screen) and needs no send options. The phone gets no
+  answer for it beyond `accepted`; the desktop shows the usual compact toasts.
 - The phone marker (`📱 <device name>` over the user bubble) is renderer-only:
   `/chat-stream` has no field for a message source and the `messages` table no
   column for it, so a phone turn is kept as a client-only copy and the marker

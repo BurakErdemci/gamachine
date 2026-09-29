@@ -8,7 +8,7 @@ import * as N from './nodeimpl.mjs';
 import * as C from '../public/crypto.js';
 import {
   pair, Link, ReplyParts, mergeParts, PHONE_FRAME_MAX, ChatView, cardActions, answerFailure, turnEndLine, eventLine,
-  isCommand, sendFailureNote, COMMANDS_NOTE,
+  sendFailureNote,
   messageText, mergeChat, stopLine, ASK_ON_PC, cardsMissing,
 } from '../public/net.js';
 import { readFileSync } from 'node:fs';
@@ -511,17 +511,9 @@ test('gap push from the PC reaches the page and a fresh open_chat recovers the v
   assert.deepEqual(loads, [['apply', 0], ['apply', 1]]);
 });
 
-// ---------------------------------------------------------------- commands
+// ---------------------------------------------------------------- send failures
 
-test('slash commands are refused on the phone before sending, by the backend rule', () => {
-  for (const text of ['/usage', '  /compact', '\n\t/model x', '\u200b/mode plan', '\ufeff/skill', '\u00a0/x']) {
-    assert.equal(isCommand(text), true, JSON.stringify(text));
-  }
-  for (const text of ['a /usage', 'yol: /tmp/x', '\\/usage', '\uff0fusage', '', 'merhaba']) {
-    assert.equal(isCommand(text), false, JSON.stringify(text));
-  }
-  assert.equal(COMMANDS_NOTE, 'Komutlar telefondan çalıştırılamaz.');
-  assert.equal(sendFailureNote('commands_not_allowed'), COMMANDS_NOTE);
+test('a failed send says why; a slash text is a message like any other', () => {
   assert.match(sendFailureNote('too_large'), /uzun/);
   assert.equal(sendFailureNote('unknown_chat'), 'Gönderilemedi: unknown_chat');
 });

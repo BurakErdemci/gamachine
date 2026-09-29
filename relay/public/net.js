@@ -354,17 +354,9 @@ export class Link {
 // Backend/app/remote/rpc.py TEXT_MAX: longer send_message texts are refused.
 export const SEND_TEXT_MAX = 20_000;
 export const ASK_ON_PC = 'Bu soruyu bilgisayardan cevaplayın';
-export const COMMANDS_NOTE = 'Komutlar telefondan çalıştırılamaz.';
-
-// Same rule as _is_command in Backend/app/remote/rpc.py (which refuses these
-// with commands_not_allowed): a slash after only blank or invisible characters.
-export function isCommand(text) {
-  return /^[\s\p{Cf}\p{Zs}\p{Zl}\p{Zp}\p{Cc}]*\//u.test(String(text ?? ''));
-}
 
 // The composer note for a failed send_message.
 export function sendFailureNote(error) {
-  if (error === 'commands_not_allowed') return COMMANDS_NOTE;
   if (error === 'too_large') return 'Mesaj tek seferde gönderilemeyecek kadar uzun; kısaltıp tekrar dene.';
   return 'Gönderilemedi: ' + error;
 }

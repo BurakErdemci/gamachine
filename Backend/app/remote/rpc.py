@@ -9,7 +9,6 @@ import asyncio
 import logging
 import secrets
 import time
-import unicodedata
 from typing import TYPE_CHECKING, Any, Optional
 
 from agentic import cards, turn_events
@@ -24,16 +23,6 @@ logger = logging.getLogger(__name__)
 
 TEXT_MAX = 20_000
 _REPLIED = object()
-
-
-def _is_command(text: str) -> bool:
-    """Phone scope excludes slash commands: refused whatever invisible or
-    blank characters come before the slash."""
-    for ch in text:
-        if ch.isspace() or unicodedata.category(ch) in ("Cf", "Zs", "Zl", "Zp", "Cc"):
-            continue
-        return ch == "/"
-    return False
 
 
 class RpcError(Exception):
@@ -255,8 +244,6 @@ class Dispatcher:
         text = req.get("text")
         if not isinstance(text, str) or not text.strip() or len(text) > TEXT_MAX:
             raise RpcError("bad_text")
-        if _is_command(text):
-            raise RpcError("commands_not_allowed")
         frame = {"type": FRAME_TYPE, "request_id": secrets.token_hex(8), "conversation_id": row["id"],
                  "text": text, "source": "phone", "device_id": session.device.device_id,
                  "device_name": session.device.name, "at": int(time.time() * 1000)}

@@ -874,11 +874,8 @@ export const useChat = (
     const _isCodex = _isSub && _m.startsWith('gpt-');
     const _isClaude = _isSub && !_m.startsWith('gpt-') && !(_m.startsWith('gemini') || _m.startsWith('agy-'));
     let slashCard: string | undefined;
-    // A phone message is plain text: phone scope excludes commands.
-    if (!remote) {
-      if (_trimmed === '/usage' && (_isClaude || _isCodex)) slashCard = 'usage';
-      else if (_trimmed === '/context' && _isClaude) slashCard = 'context';
-    }
+    if (_trimmed === '/usage' && (_isClaude || _isCodex)) slashCard = 'usage';
+    else if (_trimmed === '/context' && _isClaude) slashCard = 'context';
 
     const aiMsgId = nextClientMsgId();
     let currentAiMsg: Message = { id: aiMsgId, role: 'assistant', content: '', smells: [], timestamp: new Date().toISOString(), thinking: null, tool_calls: [], slashCommand: slashCard };
@@ -1281,9 +1278,13 @@ export const useChat = (
       undefined, false, undefined, 'user', m.conversationId, undefined, { device: m.deviceName },
     );
   }, [rt]);
+  const compactRef = useRef<(convId?: number) => Promise<void>>(async () => {});
   const deliverRemote = useCallback(async (m: RemoteMessage) => {
     // Every open renderer stream receives the frame; only one window sends it.
     if (!(await claimRemoteMessage(m.requestId))) return;
+    // The one command the desktop composer handles itself (home.tsx onCommand):
+    // it compacts the addressed chat, needs no send options and is no message.
+    if (m.text.trim() === '/compact') { await compactRef.current(m.conversationId); return; }
     const args = wakeDefaultsRef.current ?? lastSendArgsRef.current;
     if (!args) { pendingRemoteRef.current.push(m); return; }
     await sendRemote(m, args);
@@ -1469,24 +1470,29 @@ export const useChat = (
     } catch { showToast(cevir('memory.importError'), 'error'); }
   }, [API, activeConvId, patchConv, showToast, user]);
 
-  const compactConversation = useCallback(async () => {
-    if (!activeConvId || !API || !user) return;
-    setIsCompacting(true);
+  // `convId` is a phone's `/compact` naming its chat; the desktop button and
+  // composer pass nothing and mean the chat on screen.
+  const compactConversation = useCallback(async (convId?: number) => {
+    const target = convId ?? activeConvId;
+    if (!target || !API || !user) return;
+    // The spinner belongs to the button of the chat on screen only.
+    const marksButton = convId === undefined || convId === activeConvIdRef.current;
+    if (marksButton) setIsCompacting(true);
     showToast(cevir('compact.running'), 'info');
     try {
       // Timeout ŞART: backend'de AI özetleme takılırsa buton sonsuza dek kilitli
       // kalıyordu ("basınca bir şey olmuyor" bug'ı). Backend 120s'de fallback'e düşer.
-      const res = await axios.post(`${API}/conversations/${activeConvId}/compact`, {}, {
+      const res = await axios.post(`${API}/conversations/${target}/compact`, {}, {
         headers: { 'X-Session-Token': user.sessionToken }, timeout: 150000,
       });
       if (res.data.status === 'success') {
         if (res.data.summary) {
-          const msgRes = await axios.get(`${API}/conversations/${activeConvId}/messages`);
-          patchConv(activeConvId, () => ({ messages: msgRes.data, unsynced: false, clientOnly: false }));
+          const msgRes = await axios.get(`${API}/conversations/${target}/messages`);
+          patchConv(target, () => ({ messages: msgRes.data, unsynced: false, clientOnly: false }));
           // Eskiden buraya sabit `percent: 5` yazılıyordu — sıkıştırmadan sonra
           // doluluğun ne olduğu ölçülmeden, makul görünen bir sayıyla. Gösterge
           // artık tek kaynaktan tazeleniyor.
-          await refreshContextUsage(activeConvId);
+          await refreshContextUsage(target);
           showToast(cevir('compact.done'), 'success');
         } else {
           // Backend'in `message`'ı sabit TÜRKÇE — İngilizce arayüzde Türkçe toast
@@ -1494,8 +1500,9 @@ export const useChat = (
           showToast(cevir('compact.tooShort'), 'info');
         }
       }
-    } catch { showToast(cevir('compact.error'), 'error'); } finally { setIsCompacting(false); }
+    } catch { showToast(cevir('compact.error'), 'error'); } finally { if (marksButton) setIsCompacting(false); }
   }, [API, activeConvId, patchConv, showToast, user, refreshContextUsage]);
+  compactRef.current = compactConversation;
 
   // Stop acts on the chat on screen and nothing else: its own stream, its own
   // backend turn, its own cards. Bridge cards (`globalCommand`, the tray) are

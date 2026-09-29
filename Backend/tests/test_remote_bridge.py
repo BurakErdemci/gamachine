@@ -561,19 +561,19 @@ async def test_send_message_goes_to_the_renderer(env):
     assert (await phone.request("send_message", chat_id=str(conv), text="  "))["error"] == "bad_text"
 
 
-async def test_send_message_refuses_slash_commands(env):
+async def test_send_message_passes_slash_commands_like_typed_text(env):
+    # Owner decision, 28 Sep 2026: commands work from the phone. The backend
+    # does not interpret them: the renderer handles /compact, the CLI the rest.
     phone = await pair_phone(env)
     conv = make_chat(env.db)
     q = CHANNEL.listen()
     try:
-        for text in ("/usage", "  /compact", "\n\t/model x", "\u200b/mode plan", "\ufeff/skill", "\u00a0/x"):
-            r = await phone.request("send_message", chat_id=str(conv), text=text)
-            assert r["ok"] is False and r["error"] == "commands_not_allowed", repr(text)
-        assert q.empty(), "a refused command never reaches the renderer"
-        for text in ("a /usage", "yol: /tmp/x", "\\/usage", "\uff0fusage"):
+        texts = ("/usage", "  /compact", "\n\t/model x", "\u200b/mode plan", "/skill arg", "a /usage")
+        for text in texts:
             r = await phone.request("send_message", chat_id=str(conv), text=text)
             assert r["result"] == {"status": "accepted"}, repr(text)
-        assert q.qsize() == 4
+        assert [q.get_nowait()["text"] for _ in texts] == list(texts)
+        assert q.empty()
     finally:
         CHANNEL.unlisten(q)
 

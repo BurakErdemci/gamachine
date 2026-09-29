@@ -5,7 +5,7 @@ import * as C from './crypto.js';
 import * as store from './store.js';
 import {
   pair, Link, wsOrigin, ChatView, cardActions, answerFailure, eventLine, messageText, mergeChat, stopLine, SEND_TEXT_MAX,
-  COMMANDS_NOTE, isCommand, sendFailureNote, cardsMissing,
+  sendFailureNote, cardsMissing,
 } from './net.js';
 
 const $ = (id) => document.getElementById(id);
@@ -528,10 +528,6 @@ function wire() {
     const note = $('composer-note');
     if (text.length > SEND_TEXT_MAX) {
       note.textContent = 'Mesaj çok uzun (en fazla ' + SEND_TEXT_MAX + ' karakter).';
-      return;
-    }
-    if (isCommand(text)) {
-      note.textContent = COMMANDS_NOTE;
       return;
     }
     $('btn-send').disabled = true;

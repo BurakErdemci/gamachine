@@ -244,11 +244,112 @@ describe('phone message · exactly once', () => {
     expect(parseRemoteMessage({ ...frame(1, '   ') })).toBeNull()
     expect(parseRemoteMessage({ ...frame(1, 'x'), request_id: '../x' })).toBeNull()
     expect(parseRemoteMessage(frame(2, 'ok'))).toMatchObject({ conversationId: 2, text: 'ok', deviceName: 'iPhone' })
-    // Phone scope excludes commands; the backend refuses them first.
-    for (const text of ['/usage', '  /compact', '\u200b/model x', '\ufeff/skill']) {
-      expect(parseRemoteMessage(frame(1, text)), text).toBeNull()
+    // Owner decision, 28 Sep 2026: commands are ordinary phone text now.
+    for (const text of ['/usage', '  /compact', '\u200b/model x', '/skill arg', 'yol: /tmp/x']) {
+      expect(parseRemoteMessage(frame(1, text)), text).toMatchObject({ text })
     }
-    expect(parseRemoteMessage(frame(1, 'yol: /tmp/x'))).not.toBeNull()
+  })
+})
+
+describe('phone message \u00b7 slash commands', () => {
+  const compactCalls = () => mockedAxios.post.mock.calls.map(c => String(c[0])).filter(u => u.endsWith('/compact'))
+
+  beforeEach(() => {
+    mockedAxios.post.mockImplementation(async (url: string) =>
+      String(url).endsWith('/compact') ? { data: { status: 'success', summary: 'short' } } : { data: {} })
+  })
+
+  it('/compact compacts the addressed chat, not the one on screen, and starts no turn', async () => {
+    const { result } = hook()
+    defaults(result)
+    await open(result, 1)
+    await flush()
+
+    pushAll(frame(5, '/compact'))
+    await flush()
+
+    expect(compactCalls()).toEqual([`${API}/conversations/5/compact`])
+    expect(mockedAxios.get.mock.calls.some(c => String(c[0]).endsWith('/conversations/5/messages'))).toBe(true)
+    expect(turns).toEqual([])
+    expect(result.current.activeConvId).toBe(1)
+    // Chat 5 is not on screen: the composer button of chat 1 must not spin.
+    expect(result.current.isCompacting).toBe(false)
+  })
+
+  it('surrounding blanks do not matter; "/compact now" is not the command', async () => {
+    const { result } = hook()
+    defaults(result)
+    await open(result, 1)
+    pushAll(frame(5, '  /compact \n'))
+    await flush()
+    expect(compactCalls()).toEqual([`${API}/conversations/5/compact`])
+    expect(turns).toEqual([])
+
+    pushAll(frame(6, '/compact now'))
+    await flush()
+    expect(compactCalls().length).toBe(1)
+    expect(turns.map(t => [t.convId, t.message])).toEqual([[6, '/compact now']])
+  })
+
+  it('a /compact for the chat on screen shows the button as busy until it ends', async () => {
+    const { result } = hook()
+    defaults(result)
+    await open(result, 1)
+    let finishCompact: (v: unknown) => void = () => {}
+    mockedAxios.post.mockImplementation((url: string) => String(url).endsWith('/compact')
+      ? new Promise(res => { finishCompact = res })
+      : Promise.resolve({ data: {} }))
+    pushAll(frame(1, '/compact'))
+    await flush()
+    expect(result.current.isCompacting).toBe(true)
+    await act(async () => { finishCompact({ data: { status: 'success', summary: '' } }) })
+    await flush()
+    expect(result.current.isCompacting).toBe(false)
+  })
+
+  it('/compact still waits for nothing: no send options are needed', async () => {
+    const { result } = hook()
+    await flush()
+    pushAll(frame(3, '/compact'))
+    await flush()
+    expect(compactCalls()).toEqual([`${API}/conversations/3/compact`])
+    void result
+  })
+
+  it('/compact delivered to two windows runs once', async () => {
+    const a = hook()
+    const b = hook()
+    defaults(a.result)
+    defaults(b.result)
+    await flush()
+    const f = frame(4, '/compact')
+    pushAll(f)
+    pushAll(f)
+    await flush()
+    expect(compactCalls()).toEqual([`${API}/conversations/4/compact`])
+  })
+
+  it('/usage from the phone goes out as a user turn and its answer is a usage card like a typed one', async () => {
+    const { result } = hook()
+    defaults(result)
+    await open(result, 5)
+    pushAll(frame(5, '/usage'))
+    await flush()
+
+    expect(turns.map(t => [t.convId, t.message, t.origin])).toEqual([[5, '/usage', 'user']])
+    const [bubble, answer] = result.current.messages
+    expect(bubble).toMatchObject({ role: 'user', content: '/usage', source: 'phone', sourceDevice: 'iPhone' })
+    expect(answer).toMatchObject({ role: 'assistant', slashCommand: 'usage' })
+  })
+
+  it('/model and other CLI commands go out as they are', async () => {
+    const { result } = hook()
+    defaults(result)
+    await open(result, 1)
+    pushAll(frame(1, '/model sonnet'))
+    await flush()
+    expect(turns.map(t => [t.convId, t.message])).toEqual([[1, '/model sonnet']])
+    expect(compactCalls()).toEqual([])
   })
 })
 
