@@ -361,6 +361,109 @@ export function sendFailureNote(error) {
   return 'Gönderilemedi: ' + error;
 }
 
+// A `/compact` sent from the phone runs on the PC and gets no reply beyond
+// "accepted" (docs/remote-control.md), so the note says where to look.
+export function sentNote(text, status) {
+  if (status !== 'accepted') return 'Yanıt: ' + (status || 'bilinmiyor');
+  return String(text ?? '').trim() === '/compact'
+    ? 'Sıkıştırma isteği bilgisayara iletildi; sonuç bilgisayarda görünür.'
+    : 'Gönderildi.';
+}
+
+// ---- slash commands (list_slash_commands)
+
+export const SLASH_SHOWN_MAX = 60;
+
+// One row per command or skill: the catalog's `commands` first, then `skills`
+// the command list lacks (Codex skills are not commands), each with what
+// `meta` says of it. `insert` is what a pick writes into the composer.
+export function slashItems(catalog) {
+  const meta = new Map();
+  for (const m of Array.isArray(catalog?.meta) ? catalog.meta : []) {
+    if (m && typeof m.name === 'string') meta.set(m.name, m);
+  }
+  const names = [];
+  const seen = new Set();
+  for (const list of [catalog?.commands, catalog?.skills]) {
+    for (const name of Array.isArray(list) ? list : []) {
+      if (typeof name === 'string' && name && !seen.has(name)) {
+        seen.add(name);
+        names.push(name);
+      }
+    }
+  }
+  return names.map((name) => {
+    const m = meta.get(name) || {};
+    return {
+      name,
+      insert: typeof m.insert === 'string' && m.insert ? m.insert : '/' + name + ' ',
+      description: typeof m.description === 'string' ? m.description : '',
+      hint: typeof m.argumentHint === 'string' ? m.argumentHint : '',
+    };
+  });
+}
+
+// Names starting with the query come first; `total` says how many matched
+// when more than SLASH_SHOWN_MAX did.
+export function filterSlash(items, query) {
+  const q = String(query ?? '').trim().replace(/^\//, '').toLowerCase();
+  if (!q) return { shown: items.slice(0, SLASH_SHOWN_MAX), total: items.length };
+  const hits = items.filter((i) => i.name.toLowerCase().includes(q) || i.description.toLowerCase().includes(q));
+  const first = hits.filter((i) => i.name.toLowerCase().startsWith(q));
+  const rest = hits.filter((i) => !i.name.toLowerCase().startsWith(q));
+  return { shown: [...first, ...rest].slice(0, SLASH_SHOWN_MAX), total: hits.length };
+}
+
+// Where a picked command goes: an empty composer, or a half-typed `/word`,
+// is replaced by it; any other text stays and the command follows it.
+export function withCommand(current, insert) {
+  const text = String(current ?? '');
+  if (!text.trim() || /^\s*\/\S*$/.test(text)) return insert;
+  return text.replace(/\s+$/, '') + ' ' + insert;
+}
+
+export function slashFailureNote(error) {
+  if (error === 'not_ready') return 'Önce bilgisayara bağlanmalı.';
+  if (error === 'unknown_chat') return 'Bu sohbet artık yok.';
+  if (error === 'unavailable') return 'Bilgisayardaki uygulama komut listesini veremedi.';
+  return 'Komutlar alınamadı: ' + error;
+}
+
+// ---- approval mode (get_config, set_approval_mode)
+
+// Labels and descriptions as the desktop shows them (mode.* in i18n.tsx).
+export const APPROVAL_MODES = [
+  { id: 'auto', label: 'Otomatik', desc: 'Onay kartı yok — dış AI istemcileri (Claude Code vb.) dahil.' },
+  { id: 'balanced', label: 'Güvenli Otomatik', desc: 'Kendi başına çalışır; yalnız kritik işlemlerde onay sorar (önerilen).' },
+  { id: 'step', label: 'Adım Adım', desc: 'Her değişiklik için onay kartı çıkar.' },
+];
+export const AUTO_MODE_WARNING = 'Otomatik modda yapay zekâ dosya yazma, silme, komut çalıştırma ve Unity\'deki her değişikliği sana sormadan yapar; onay kartı hiç çıkmaz. Otomatik moda geçilsin mi?';
+
+export function modeInfo(id) {
+  return APPROVAL_MODES.find((m) => m.id === id) || null;
+}
+
+export function modeChangedNote(result) {
+  const info = modeInfo(result?.mode);
+  const n = Number(result?.approved_pending) || 0;
+  return 'Mod değişti: ' + (info ? info.label : String(result?.mode)) + '.'
+    + (n > 0 ? ' Bekleyen ' + n + ' onay otomatik onaylandı.' : '');
+}
+
+// What the mode note says when set_approval_mode failed; the mode did not change.
+export function modeFailureNote(error, reply = {}, wanted = '') {
+  if (error === 'agy_step_refused') {
+    const target = wanted === 'balanced' ? 'Güvenli Otomatik moda' : 'Adım adım onay moduna';
+    const pids = reply?.params?.pids || '?';
+    return target + ' geçilemedi: agy\'nin onay kapısı güncellenemedi ve çalışan agy süreci durdurulamadı (pid ' + pids
+      + '). Mod değişmedi. Bilgisayarda o agy sürecini kapat ya da uygulamayı yeniden başlat, sonra yeniden dene.';
+  }
+  if (error === 'not_ready') return 'Önce bilgisayara bağlanmalı.';
+  if (error === 'bad_mode') return 'Bilinmeyen mod; hiçbir şey değişmedi.';
+  if (error === 'unavailable') return 'Bilgisayardaki uygulama modu değiştiremedi.';
+  return 'Mod değiştirilemedi: ' + error;
+}
+
 // turn_end.status comes from the PC's turn-event ring: done | error | stopped.
 export function turnEndLine(status) {
   if (!status || status === 'done') return { text: 'Tur bitti', error: false };

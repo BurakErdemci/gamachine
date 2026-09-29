@@ -8,10 +8,12 @@ import * as N from './nodeimpl.mjs';
 import * as C from '../public/crypto.js';
 import {
   pair, Link, ReplyParts, mergeParts, PHONE_FRAME_MAX, ChatView, cardActions, answerFailure, turnEndLine, eventLine,
-  sendFailureNote,
+  sendFailureNote, sentNote,
+  slashItems, filterSlash, withCommand, slashFailureNote, SLASH_SHOWN_MAX,
+  APPROVAL_MODES, AUTO_MODE_WARNING, modeInfo, modeChangedNote, modeFailureNote,
   messageText, mergeChat, stopLine, ASK_ON_PC, cardsMissing,
 } from '../public/net.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 
 class FakeWS {
   static last = null;
@@ -516,6 +518,150 @@ test('gap push from the PC reaches the page and a fresh open_chat recovers the v
 test('a failed send says why; a slash text is a message like any other', () => {
   assert.match(sendFailureNote('too_large'), /uzun/);
   assert.equal(sendFailureNote('unknown_chat'), 'Gönderilemedi: unknown_chat');
+});
+
+test('what the composer says after a send: /compact runs on the PC and says so', () => {
+  assert.equal(sentNote('merhaba', 'accepted'), 'Gönderildi.');
+  assert.equal(sentNote('/usage', 'accepted'), 'Gönderildi.');
+  assert.match(sentNote('  /compact ', 'accepted'), /Sıkıştırma isteği bilgisayara iletildi/);
+  assert.equal(sentNote('/compact now', 'accepted'), 'Gönderildi.');
+  assert.equal(sentNote('x', 'weird'), 'Yanıt: weird');
+  assert.equal(sentNote('x', undefined), 'Yanıt: bilinmiyor');
+});
+
+// ---------------------------------------------------------------- slash picker
+
+const CATALOG = {
+  commands: ['compact', 'usage', 'review', 'init'],
+  skills: ['review', 'deploy'],
+  meta: [
+    { name: 'compact', description: 'Summarise this chat to free up context' },
+    { name: 'review', description: 'Review a pull request', argumentHint: '[pr]' },
+    { name: 'deploy', description: 'Ship it', insert: 'Deploy the current build. ' },
+    { name: 'ghost', description: 'in meta only' },
+  ],
+};
+
+test('slash items: commands first, then skills the command list lacks, each with its meta', () => {
+  const items = slashItems(CATALOG);
+  assert.deepEqual(items.map((i) => i.name), ['compact', 'usage', 'review', 'init', 'deploy']);
+  const by = Object.fromEntries(items.map((i) => [i.name, i]));
+  assert.equal(by.compact.insert, '/compact ');
+  assert.equal(by.usage.description, '');
+  assert.equal(by.review.hint, '[pr]');
+  assert.equal(by.deploy.insert, 'Deploy the current build. ', 'a skill with its own insert text keeps it');
+  assert.deepEqual(slashItems(undefined), []);
+  assert.deepEqual(slashItems({ commands: ['a', 7, null, '', 'a'], skills: 'no', meta: [null, 'x', { name: 4 }] })
+    .map((i) => i.name), ['a']);
+});
+
+test('slash filter: prefix matches lead, descriptions match too, a leading slash is ignored', () => {
+  const items = slashItems(CATALOG);
+  assert.deepEqual(filterSlash(items, '').shown.map((i) => i.name), items.map((i) => i.name));
+  assert.deepEqual(filterSlash(items, '/RE').shown.map((i) => i.name), ['review', 'compact']);
+  assert.deepEqual(filterSlash(items, 'u').shown.map((i) => i.name), ['usage', 'compact', 'review']);
+  assert.deepEqual(filterSlash(items, 'pull').shown.map((i) => i.name), ['review']);
+  assert.deepEqual(filterSlash(items, 'zzz'), { shown: [], total: 0 });
+  const many = Array.from({ length: SLASH_SHOWN_MAX + 40 }, (_, i) => ({ name: 'c' + i, insert: '/c' + i + ' ', description: '', hint: '' }));
+  const r = filterSlash(many, 'c');
+  assert.equal(r.shown.length, SLASH_SHOWN_MAX);
+  assert.equal(r.total, many.length);
+});
+
+test('a picked command goes to the front of an empty or half-typed composer, else after the text', () => {
+  assert.equal(withCommand('', '/compact '), '/compact ');
+  assert.equal(withCommand('  \n', '/compact '), '/compact ');
+  assert.equal(withCommand('/re', '/review '), '/review ');
+  assert.equal(withCommand('/review pr', '/compact '), '/review pr /compact ');
+  assert.equal(withCommand('merhaba  ', '/usage '), 'merhaba /usage ');
+});
+
+test('the slash list says why it failed in plain Turkish', () => {
+  assert.equal(slashFailureNote('unknown_chat'), 'Bu sohbet artık yok.');
+  assert.match(slashFailureNote('unavailable'), /komut listesini veremedi/);
+  assert.match(slashFailureNote('not_ready'), /bilgisayara bağlanmalı/);
+  assert.equal(slashFailureNote('boom'), 'Komutlar alınamadı: boom');
+});
+
+test('list_slash_commands over the real Link: a split catalog arrives whole', async () => {
+  const { link, pcSend, lastRequest } = await connected();
+  const reply = link.request('list_slash_commands', { chat_id: '7' });
+  await until(() => lastRequest().type === 'list_slash_commands');
+  const req = lastRequest();
+  assert.equal(req.chat_id, '7');
+  const part = (i, result) => ({ id: req.id, ok: true, part: i, parts: 2, result });
+  pcSend(part(2, { commands: ['usage'], skills: [], meta: [{ name: 'usage', description: 'd' }] }));
+  pcSend(part(1, { commands: ['compact'], skills: ['review'], meta: [{ name: 'compact' }] }));
+  const r = await reply;
+  assert.deepEqual(slashItems(r.result).map((i) => i.name), ['compact', 'usage', 'review']);
+});
+
+// ---------------------------------------------------------------- approval mode
+
+test('the mode selector offers the desktop\'s three modes with the desktop\'s Turkish words', () => {
+  assert.deepEqual(APPROVAL_MODES.map((m) => m.id), ['auto', 'balanced', 'step']);
+  assert.deepEqual(APPROVAL_MODES.map((m) => m.label), ['Otomatik', 'Güvenli Otomatik', 'Adım Adım']);
+  assert.equal(modeInfo('step').label, 'Adım Adım');
+  assert.equal(modeInfo('plan'), null);
+  const i18n = new URL('../../Frontend/frontend/renderer/lib/i18n.tsx', import.meta.url);
+  if (existsSync(i18n)) {
+    const src = readFileSync(i18n, 'utf8');
+    for (const m of APPROVAL_MODES) {
+      assert.ok(src.includes(`'mode.${m.id}': '${m.label}'`), `desktop i18n has no "${m.label}" for mode.${m.id}`);
+    }
+  }
+  assert.match(AUTO_MODE_WARNING, /onay kartı hiç çıkmaz/);
+});
+
+test('a successful switch reads as a sentence, with the cards it approved', () => {
+  assert.equal(modeChangedNote({ mode: 'balanced', previous: 'step', approved_pending: 0 }), 'Mod değişti: Güvenli Otomatik.');
+  assert.equal(modeChangedNote({ mode: 'auto', previous: 'step', approved_pending: 2 }),
+    'Mod değişti: Otomatik. Bekleyen 2 onay otomatik onaylandı.');
+});
+
+test('a refused switch says why in plain Turkish; the agy refusal names the process and the mode', () => {
+  const reply = { ok: false, error: 'agy_step_refused', message: 'ham', params: { pids: '4242' } };
+  const step = modeFailureNote('agy_step_refused', reply, 'step');
+  assert.match(step, /^Adım adım onay moduna geçilemedi/);
+  assert.match(step, /pid 4242/);
+  assert.match(step, /Mod değişmedi/);
+  assert.match(modeFailureNote('agy_step_refused', reply, 'balanced'), /^Güvenli Otomatik moda geçilemedi/);
+  assert.match(modeFailureNote('agy_step_refused', {}, 'step'), /pid \?/);
+  assert.equal(modeFailureNote('bad_mode'), 'Bilinmeyen mod; hiçbir şey değişmedi.');
+  assert.match(modeFailureNote('unavailable'), /değiştiremedi/);
+  assert.match(modeFailureNote('not_ready'), /bağlanmalı/);
+  assert.equal(modeFailureNote('boom'), 'Mod değiştirilemedi: boom');
+});
+
+test('the Link keeps what a refused set_approval_mode reply carries', async () => {
+  const { link, pcSend, lastRequest } = await connected();
+  const reply = link.request('set_approval_mode', { mode: 'step' });
+  await until(() => lastRequest().type === 'set_approval_mode');
+  const req = lastRequest();
+  assert.equal(req.mode, 'step');
+  pcSend({ id: req.id, ok: false, error: 'agy_step_refused', message: 'ham', params: { pids: '9' } });
+  const r = await reply;
+  assert.equal(r.ok, false);
+  assert.match(modeFailureNote(r.error, r, 'step'), /pid 9/);
+});
+
+// ---------------------------------------------------------------- page markup
+
+const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+
+test('every element app.js looks up by id exists in index.html', () => {
+  const ids = new Set([...appSource.matchAll(/\$\('([a-z0-9-]+)'\)/g)].map((m) => m[1]));
+  assert.ok(ids.has('mode-select') && ids.has('btn-slash') && ids.has('slash-panel') && ids.has('slash-list'));
+  for (const id of ids) assert.ok(html.includes(`id="${id}"`), `index.html has no #${id}`);
+});
+
+test('the mode selector holds exactly the three modes, and Enter in the command search cannot send a message', () => {
+  const select = html.slice(html.indexOf('<select id="mode-select"'), html.indexOf('</select>'));
+  assert.deepEqual([...select.matchAll(/value="([a-z]+)"/g)].map((m) => m[1]), APPROVAL_MODES.map((m) => m.id));
+  const form = html.slice(html.indexOf('<form id="composer">'), html.indexOf('</form>'));
+  assert.ok(form.includes('id="btn-slash"') && form.includes('id="composer-text"'));
+  assert.ok(!form.includes('slash-filter'), 'the search box must stay outside the form');
 });
 
 // ---------------------------------------------------------------- close races

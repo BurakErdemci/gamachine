@@ -5,7 +5,8 @@ import * as C from './crypto.js';
 import * as store from './store.js';
 import {
   pair, Link, wsOrigin, ChatView, cardActions, answerFailure, eventLine, messageText, mergeChat, stopLine, SEND_TEXT_MAX,
-  sendFailureNote, cardsMissing,
+  sendFailureNote, sentNote, cardsMissing, slashItems, filterSlash, withCommand, slashFailureNote,
+  AUTO_MODE_WARNING, modeInfo, modeChangedNote, modeFailureNote,
 } from './net.js';
 
 const $ = (id) => document.getElementById(id);
@@ -24,6 +25,7 @@ let pendingFragment = null;
 function show(name) {
   for (const s of SCREENS) $('screen-' + s).hidden = s !== name;
   window.scrollTo(0, 0);
+  if (name === 'main') refreshConfig();
 }
 
 function el(tag, props = {}, ...children) {
@@ -142,6 +144,7 @@ function setStatus(status, info = {}) {
     refreshAll();
     return;
   }
+  $('mode-select').disabled = true;
   if (status === 'connecting') t.textContent = 'Bağlanıyor…';
   else if (status === 'pc_offline') t.textContent = 'Bilgisayar çevrimdışı' + (info.lastSeen ? ' (son görülme ' + clock(info.lastSeen) + ')' : '');
   else if (status === 'removed') {
@@ -182,6 +185,7 @@ function refreshCardsIfMissing(events) {
 }
 
 async function refreshAll() {
+  refreshConfig();
   try {
     const [c] = await Promise.all([call('list_chats'), refreshCards()]);
     chats = Array.isArray(c.chats) ? c.chats : [];
@@ -275,6 +279,61 @@ function removeCard(cardId) {
   renderCards();
 }
 
+// ---------------------------------------------------------------- approval mode
+
+let currentMode = null;
+
+function showMode(mode) {
+  currentMode = mode;
+  $('mode-select').value = mode;
+  $('mode-note').textContent = modeInfo(mode)?.desc || '';
+}
+
+// Read whenever the main screen shows, and again when the link comes back.
+async function refreshConfig() {
+  if (!link?.ready) return;
+  const select = $('mode-select');
+  try {
+    const cfg = await call('get_config');
+    if (modeInfo(cfg.approval_mode)) {
+      showMode(cfg.approval_mode);
+      select.disabled = false;
+    } else {
+      select.disabled = true;
+      $('mode-note').textContent = 'Bilgisayardaki onay modu tanınmadı: ' + cfg.approval_mode;
+    }
+  } catch (err) {
+    $('mode-note').textContent = 'Onay modu okunamadı: ' + err.message;
+  }
+}
+
+async function changeMode() {
+  const select = $('mode-select');
+  const mode = select.value;
+  if (mode === currentMode) return;
+  if (mode === 'auto' && !confirm(AUTO_MODE_WARNING)) {
+    select.value = currentMode;
+    return;
+  }
+  const note = $('mode-note');
+  select.disabled = true;
+  note.textContent = 'Değiştiriliyor…';
+  try {
+    const r = await call('set_approval_mode', { mode });
+    if (modeInfo(r.mode)) {
+      showMode(r.mode);
+      note.textContent = modeChangedNote(r) + ' ' + modeInfo(r.mode).desc;
+    } else {
+      await refreshConfig();
+    }
+  } catch (err) {
+    select.value = currentMode;
+    note.textContent = modeFailureNote(err.message, err.reply, mode);
+  } finally {
+    select.disabled = !link?.ready || !currentMode;
+  }
+}
+
 // ---------------------------------------------------------------- chat view
 
 function renderChatHeader() {
@@ -286,6 +345,63 @@ function renderChatHeader() {
   // A turn waiting on a card is still running and can be stopped.
   $('btn-stop').hidden = !(chat && (chat.status === 'running' || chat.status === 'awaiting_card'));
   $('btn-send').disabled = !link?.ready;
+  $('btn-slash').disabled = !link?.ready;
+}
+
+// ---------------------------------------------------------------- slash commands
+
+const SLASH_TTL_MS = 5 * 60 * 1000;
+const slashCache = new Map(); // chat id -> { at, items }
+
+function closeSlash() {
+  $('slash-panel').hidden = true;
+  $('btn-slash').setAttribute('aria-expanded', 'false');
+}
+
+function renderSlash() {
+  const list = $('slash-list');
+  list.replaceChildren();
+  const cached = slashCache.get(view.shown);
+  if (!cached) return;
+  const { shown, total } = filterSlash(cached.items, $('slash-filter').value);
+  for (const item of shown) {
+    list.append(el('li', {}, el('button', { type: 'button', onclick: () => pickSlash(item) },
+      '/' + item.name + (item.hint ? ' ' + item.hint : ''),
+      item.description ? el('span', { class: 'meta', textContent: item.description }) : null)));
+  }
+  $('slash-note').textContent = !total ? 'Eşleşen komut yok.'
+    : total > shown.length ? total + ' sonuçtan ilk ' + shown.length + ' tanesi; aramayı daraltabilirsin.' : '';
+}
+
+function pickSlash(item) {
+  const box = $('composer-text');
+  box.value = withCommand(box.value, item.insert);
+  closeSlash();
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+}
+
+async function toggleSlash() {
+  if (!$('slash-panel').hidden) {
+    closeSlash();
+    return;
+  }
+  const chatId = view.shown;
+  if (!chatId) return;
+  $('slash-panel').hidden = false;
+  $('btn-slash').setAttribute('aria-expanded', 'true');
+  $('slash-filter').value = '';
+  renderSlash();
+  const cached = slashCache.get(chatId);
+  if (cached && Date.now() - cached.at < SLASH_TTL_MS) return;
+  $('slash-note').textContent = 'Komutlar alınıyor…';
+  try {
+    slashCache.set(chatId, { at: Date.now(), items: slashItems(await call('list_slash_commands', { chat_id: chatId })) });
+  } catch (err) {
+    if (view.shown === chatId) $('slash-note').textContent = slashFailureNote(err.message);
+    return;
+  }
+  if (view.shown === chatId && !$('slash-panel').hidden) renderSlash();
 }
 
 function logMessage(m) {
@@ -357,6 +473,7 @@ function openChat(id) {
   $('log').replaceChildren();
   liveText = null;
   $('composer-note').textContent = '';
+  closeSlash();
   show('chat');
   renderChatHeader();
   renderCards();
@@ -366,6 +483,7 @@ function openChat(id) {
 function closeChat() {
   const id = view.hide();
   if (id) closeOnPc(id);
+  closeSlash();
   show('main');
 }
 
@@ -501,6 +619,9 @@ function wire() {
   $('btn-back').addEventListener('click', closeChat);
   $('btn-unpair').addEventListener('click', unpair);
   $('btn-notify').addEventListener('click', enableNotifications);
+  $('mode-select').addEventListener('change', changeMode);
+  $('btn-slash').addEventListener('click', toggleSlash);
+  $('slash-filter').addEventListener('input', renderSlash);
 
   let stopArmed = null;
   $('btn-stop').addEventListener('click', async () => {
@@ -538,7 +659,8 @@ function wire() {
         note.textContent = 'Bilgisayardaki uygulama hazır değil; mesaj gönderilmedi.';
       } else {
         $('composer-text').value = '';
-        note.textContent = r.status === 'accepted' ? 'Gönderildi.' : 'Yanıt: ' + (r.status || 'bilinmiyor');
+        closeSlash();
+        note.textContent = sentNote(text, r.status);
       }
     } catch (err) {
       note.textContent = sendFailureNote(err.message);

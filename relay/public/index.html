@@ -69,6 +69,13 @@
     <h2>Onay bekleyenler</h2>
     <div id="cards"></div>
   </div>
+  <h2>Onay modu</h2>
+  <select id="mode-select" aria-label="Onay modu" disabled>
+    <option value="auto">Otomatik</option>
+    <option value="balanced">Güvenli Otomatik</option>
+    <option value="step">Adım Adım</option>
+  </select>
+  <p id="mode-note" class="note"></p>
   <h2>Sohbetler</h2>
   <ul id="chats" class="list"></ul>
   <p id="chats-empty" class="note" hidden>Henüz sohbet yok.</p>
@@ -88,9 +95,18 @@
   <button id="btn-stop" type="button" class="danger" hidden>Durdur</button>
   <div id="log" class="log"></div>
   <div id="chat-cards"></div>
+  <!-- Outside the form: Enter in the search box must not send the message. -->
+  <div id="slash-panel" hidden>
+    <input id="slash-filter" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Komut ara…">
+    <p id="slash-note" class="note"></p>
+    <ul id="slash-list" class="list"></ul>
+  </div>
   <form id="composer">
     <textarea id="composer-text" rows="3" placeholder="Mesaj yaz…"></textarea>
-    <button id="btn-send" type="submit">Gönder</button>
+    <div class="composer-row">
+      <button id="btn-slash" type="button" class="secondary" aria-label="Komutlar" aria-expanded="false" aria-controls="slash-panel">/</button>
+      <button id="btn-send" type="submit">Gönder</button>
+    </div>
     <p id="composer-note" class="note"></p>
   </form>
 </section>

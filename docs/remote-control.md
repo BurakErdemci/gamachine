@@ -68,7 +68,8 @@ counts it.
    PC is not connected it answers `pc_offline {last_seen}` and drops the frame
    (no offline queue in v1). Rules: "Relay connection" below.
 2. **Phone page** (`relay/public/`): one screen - chat list with status, a
-   chat view with live progress, pending cards, a composer, a Stop button.
+   chat view with live progress, pending cards, a composer with a `/` command
+   picker, a Stop button, and an approval-mode selector on the main screen.
    Strict CSP, no third-party scripts. Keys live in IndexedDB as
    non-extractable WebCrypto keys.
 3. **Remote bridge** (`Backend/app/remote/`): zero network traffic while off.
@@ -340,6 +341,30 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
   each part carries `part` (1-based) and `parts`, all with the request's `id`.
 - Extra PC -> phone push: `{type:"gap", chat_id, epoch, last_seq}` when live
   events of an open chat were lost.
+
+## Phone page notes (commands and mode)
+
+Plain look on purpose; a native app will reuse the same requests.
+
+- Composer: a `/` button beside "Gönder" opens a panel (outside the `<form>`,
+  so Enter in its search box cannot send the message) with `list_slash_commands`
+  for the shown chat (cached 5 minutes per chat), a search box, and one row per
+  command or skill: `commands` first, then `skills` the list lacks. A pick
+  writes `meta.insert` (Codex skills carry their own text) or `/<name> ` into
+  the composer: an empty composer or a half-typed `/word` is replaced, any
+  other text stays and the command follows it. Sending is the ordinary
+  `send_message`; a sent `/compact` says it runs on the PC.
+- Main screen: a selector with the desktop's three modes and Turkish labels
+  (Otomatik, Güvenli Otomatik, Adım Adım). It reads `get_config` whenever the
+  main screen shows and when the link comes back, is disabled while the PC is
+  not connected, and calls `set_approval_mode` on change. Choosing Otomatik asks
+  for confirmation first (the desktop warns about it in red). A refused switch
+  puts the selector back on the real mode and says why in Turkish
+  (`agy_step_refused` names the agy process id). The page does not learn of a
+  change made on the desktop until the main screen shows again.
+- `page.test.mjs` checks the helpers in `net.js`, that every id `app.js` looks
+  up exists in `index.html`, and that the desktop's mode labels in
+  `Frontend/frontend/renderer/lib/i18n.tsx` are the ones the page uses.
 
 ## Desktop implementation notes (step 4)
 

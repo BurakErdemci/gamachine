@@ -22,7 +22,7 @@ h1 { font-size: 22px; margin: 8px 0 12px; }
 h2 { font-size: 15px; color: var(--muted); font-weight: 600; margin: 20px 0 8px; }
 ol { padding-left: 22px; }
 li { margin-bottom: 8px; }
-button, input, textarea { font: inherit; color: inherit; }
+button, input, textarea, select { font: inherit; color: inherit; }
 button {
   display: block;
   width: 100%;
@@ -39,7 +39,7 @@ button.secondary { background: var(--surface); color: var(--text); border: 1px s
 button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
 button.small { width: auto; min-height: 40px; margin: 0; padding: 6px 12px; display: inline-block; }
 button:disabled { opacity: 0.45; }
-input, textarea {
+input, textarea, select {
   display: block;
   width: 100%;
   margin: 8px 0;
@@ -75,3 +75,7 @@ input, textarea {
 .log .ev { color: var(--muted); font-size: 14px; padding: 4px 0; }
 .log .ev.error { color: var(--danger); }
 .footer { margin-top: 28px; }
+.composer-row { display: flex; gap: 8px; }
+.composer-row button { flex: 1 1 auto; }
+.composer-row #btn-slash { flex: 0 0 56px; width: 56px; font-size: 22px; }
+#slash-list { max-height: 45vh; overflow-y: auto; }
