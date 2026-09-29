@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, type SetStateAction } from 'react';
 import axios from 'axios';
 import { AIConfig, AvailableModels, ProviderReady, UserData } from '../../components/home/types';
 import { apiHataMesaji } from '../../lib/apiError';
@@ -91,9 +91,22 @@ export type AvailableModelsState = AvailableModels & {
 };
 
 export const useAIConfig = (API: string, user: UserData | null, showToast: (msg: string, type: any) => void, workspacePath?: string) => {
-  const [aiConfig, setAiConfig] = useState<AIConfig>({
+  const [aiConfig, setAiConfigState] = useState<AIConfig>({
     provider_type: 'subscription', api_key: '', model_name: 'claude-sonnet-4-6', thinking_level: 'medium'
   });
+  const aiConfigRef = useRef(aiConfig);
+  aiConfigRef.current = aiConfig;
+  // Per-chat model: `aiConfig` shows the model of the chat on screen (`chatIdRef`;
+  // null = no chat, i.e. the default for a new one). Every load and every local
+  // edit takes a number, and a load answers only if it is still the newest, so
+  // a slow read for the chat just left, or one that lands after a pick, cannot
+  // put another model on screen.
+  const chatIdRef = useRef<number | null>(null);
+  const modelSeqRef = useRef(0);
+  const setAiConfig = useCallback((cfg: SetStateAction<AIConfig>) => {
+    modelSeqRef.current += 1;
+    setAiConfigState(cfg);
+  }, []);
   const [availableModels, setAvailableModels] = useState<AvailableModelsState>({ local: [], cloud: [], subscription: [] });
   const [providersWithKeys, setProvidersWithKeys] = useState<string[]>([]);
   // Sohbet kapısı. Tek doğruluk kaynağı backend'de (`/provider-ready`): model →
@@ -281,27 +294,40 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     };
   }, [API]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fetchAIConfig = useCallback(async (userId: number) => {
+  // Puts on screen the model of chat `convId`, or with no chat the default for
+  // a new one. Read fresh on every activation: another window or the phone may
+  // have changed the chat's model since this window last showed it. Only a pick
+  // writes; showing a chat never changes any chat's model.
+  const showChatModel = useCallback(async (userId: number, convId: number | null) => {
     if (!API) return;
+    chatIdRef.current = convId;
+    const seq = ++modelSeqRef.current;
     try {
-      const res = await axios.get(`${API}/get-ai-config/${userId}`);
-      if (res.data) {
-        setAiConfig({ ...res.data, api_key: '' });
-        // Eğer backend'den bir api_key geldiyse (temizlenmeden önce), bu provider'ı listeye ekle
-        if (res.data.api_key && !providersWithKeys.includes(res.data.provider_type)) {
-          setProvidersWithKeys(prev => [...new Set([...prev, res.data.provider_type])]);
-        }
-      }
+      const res = convId == null
+        ? await axios.get(`${API}/get-ai-config/${userId}`)
+        : await axios.get(`${API}/conversations/${convId}/model`);
+      if (seq !== modelSeqRef.current || !res.data) return;
+      setAiConfigState({ ...res.data, api_key: '' });
     } catch (err) { console.error("Config hatası:", err); }
-  }, [API, providersWithKeys]);
+  }, [API]);
 
+  const fetchAIConfig = useCallback(
+    (userId: number) => showChatModel(userId, chatIdRef.current), [showChatModel]);
+
+  const readySeqRef = useRef(0);
   const fetchProviderReady = useCallback(async (userId: number, refresh = false) => {
     if (!API) return;
+    const seq = ++readySeqRef.current;
+    // The gate judges the pair on screen (the chat's model), not the default.
+    const { provider_type, model_name } = aiConfigRef.current;
     try {
-      const res = await axios.get(`${API}/provider-ready/${userId}`,
-        refresh ? { params: { refresh: true } } : undefined);
+      const res = await axios.get(`${API}/provider-ready/${userId}`, {
+        params: { provider_type, model_name: model_name ?? '', ...(refresh ? { refresh: true } : {}) },
+      });
+      if (seq !== readySeqRef.current) return;
       setProviderReady(res.data ?? null);
     } catch {
+      if (seq !== readySeqRef.current) return;
       // ⚠️ Ölçüm BAŞARISIZ olduğunda kapı AÇIK bırakılıyor (fail-open), ve bu
       // bilinçli: backend'e ulaşamamak "sağlayıcı yok" demek değil. Burada
       // fail-closed davranmak, çalışan bir kurulumu olan kullanıcıyı geçici bir
@@ -364,7 +390,12 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
   const saveAIConfig = useCallback(async () => {
     if (!user || !API) return;
     try {
-      const configToSave = { ...aiConfig, user_id: user.id };
+      // Saved from Settings is a pick like the dropdown's: the chat on screen
+      // takes it as well as the default for new chats.
+      const configToSave = {
+        ...aiConfig, user_id: user.id,
+        ...(chatIdRef.current != null ? { conversation_id: chatIdRef.current } : {}),
+      };
       const isCloud = !['ollama', 'kb'].includes(configToSave.provider_type);
 
       if (!isCloud) configToSave.api_key = '';
@@ -426,6 +457,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     isModelDropdownOpen,
     setIsModelDropdownOpen,
     fetchAIConfig,
+    showChatModel,
     fetchAvailableModels,
     fetchProvidersWithKeys,
     providerReady,

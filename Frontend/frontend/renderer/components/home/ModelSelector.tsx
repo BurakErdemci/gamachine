@@ -38,6 +38,8 @@ interface ModelSelectorProps {
   API: string;
   axios: any;
   showToast: (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+  // The chat on screen: a pick sets its model as well as the default for new chats.
+  conversationId?: number | null;
 }
 
 interface CliGroupDef {
@@ -127,7 +129,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   setShowSettings,
   API,
   axios,
-  showToast
+  showToast,
+  conversationId = null,
 }) => {
   const { t } = useLang();
   const activeGroupKey = CLI_GROUPS.find(g => g.matches(aiConfig.model_name || ''))?.key ?? null;
@@ -233,6 +236,22 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     }));
   }, [availableModels.cloud]);
 
+  // The chat is read at click time: a pick lands on the chat on screen even
+  // if its own model is still loading.
+  const savePick = async (newCfg: AIConfig): Promise<boolean> => {
+    if (!user) return true;
+    try {
+      await axios.post(`${API}/save-ai-config`, {
+        ...newCfg, user_id: user.id,
+        ...(conversationId != null ? { conversation_id: conversationId } : {}),
+      });
+      return true;
+    } catch (e: any) {
+      showToast(apiHataMesaji(e, t('settings.saveFailed')), 'error');
+      return false;
+    }
+  };
+
   const selectCliModel = async (g: CliGroupDef, m: ModelItem) => {
     if (m.disabled) {
       showToast(t('models.planLocked', { model: goster(m.name), cli: g.label }), 'warning');
@@ -241,7 +260,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const newCfg = { ...aiConfig, provider_type: 'subscription', model_name: m.id, api_key: 'CLI_SESSION' };
     setAiConfig(newCfg);
     setIsModelDropdownOpen(false);
-    if (user) await axios.post(`${API}/save-ai-config`, { ...newCfg, user_id: user.id });
+    if (!(await savePick(newCfg))) return;
     showToast(t('models.selected', { model: goster(m.name) }), 'info');
     if (doctor && doctor[g.availKey]?.installed === false) {
       showToast(t('models.cliNotFound', { cli: g.cliLabel }), 'warning');
@@ -259,7 +278,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const newCfg = { ...aiConfig, provider_type: cloudProvider, model_name: effectiveModelId, api_key: '' };
     setAiConfig(newCfg);
     setIsModelDropdownOpen(false);
-    if (user) await axios.post(`${API}/save-ai-config`, { ...newCfg, user_id: user.id });
+    if (!(await savePick(newCfg))) return;
     if (!hasKey) {
       setShowSettings(true);
       showToast(`${orToggle ? 'OpenRouter' : goster(m.provider)} ${t('models.apiKeyNeeded')}`, 'warning');
@@ -270,7 +289,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const newCfg = { ...aiConfig, provider_type: 'ollama', model_name: m.id, api_key: '' };
     setAiConfig(newCfg);
     setIsModelDropdownOpen(false);
-    if (user) await axios.post(`${API}/save-ai-config`, { ...newCfg, user_id: user.id });
+    await savePick(newCfg);
   };
 
   // ── Arama: tüm kaynaklarda düz filtre ──────────────────────────

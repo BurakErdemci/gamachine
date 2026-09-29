@@ -165,7 +165,6 @@ export default function Home() {
   useEffect(() => {
     if (auth.isLoading) return;
     if (auth.user && API) {
-      ai.fetchAIConfig(auth.user.id);
       ai.fetchAvailableModels();
       ai.fetchProvidersWithKeys(auth.user.id);
       fs.fetchLastWorkspace(auth.user.id);
@@ -179,6 +178,14 @@ export default function Home() {
   useEffect(() => {
     if (ai.showSettings) ai.fetchAvailableModels();
   }, [ai.showSettings]);
+
+  // Per-chat model: the selector, and everything derived from `ai.aiConfig`
+  // (effort caps, slash catalog, Codex/ultracode checks, the gate below), shows
+  // the chat on screen's own model; with no chat, the default for a new one.
+  useEffect(() => {
+    if (auth.isLoading || !auth.user || !API) return;
+    ai.showChatModel(auth.user.id, chat.activeConvId);
+  }, [auth.isLoading, auth.user, API, chat.activeConvId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Sohbet kapısı: seçili sağlayıcı gerçekten kullanılabilir mi? ---
   // Model/sağlayıcı DEĞİŞTİĞİNDE de yeniden ölçülüyor: kullanıcı anahtarı olmayan
@@ -700,7 +707,7 @@ export default function Home() {
               aiConfig={ai.aiConfig} setAiConfig={ai.setAiConfig} availableModels={ai.availableModels} providersWithKeys={ai.providersWithKeys}
               effectiveProvider={ai.effectiveProvider} displayModelName={ai.displayModelName} isModelDropdownOpen={ai.isModelDropdownOpen} setIsModelDropdownOpen={ai.setIsModelDropdownOpen}
               modelOrToggles={ai.modelOrToggles} setModelOrToggles={ai.setModelOrToggles} user={auth.user} fetchAvailableModels={ai.fetchAvailableModels} setShowSettings={ai.setShowSettings}
-              API={API} axios={axios} showToast={showToast as any}
+              API={API} axios={axios} showToast={showToast as any} conversationId={chat.activeConvId}
             />
             <Activity size={14} className="text-emerald-500 animate-pulse" />
             {!isChatOpen && (
