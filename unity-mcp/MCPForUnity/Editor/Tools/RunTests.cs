@@ -50,6 +50,18 @@ namespace MCPForUnity.Editor.Tools
                     return Task.FromResult<object>(new ErrorResponse(parseError));
                 }
 
+                // A running job is reported before the compile state, as the Python preflight does.
+                if (TestJobManager.HasRunningJob)
+                {
+                    return Task.FromResult<object>(TestsRunning());
+                }
+
+                var compileVerdict = CompileGate.Verdict();
+                if (!CompileGate.IsClean(compileVerdict))
+                {
+                    return Task.FromResult<object>(CompileGate.Refusal(compileVerdict));
+                }
+
                 var p = new ToolParams(@params);
                 bool includeDetails = p.GetBool("includeDetails");
                 bool includeFailedTests = p.GetBool("includeFailedTests");
@@ -64,7 +76,8 @@ namespace MCPForUnity.Editor.Tools
                     status = "running",
                     mode = parsedMode.Value.ToString(),
                     include_details = includeDetails,
-                    include_failed_tests = includeFailedTests
+                    include_failed_tests = includeFailedTests,
+                    compile = compileVerdict
                 }));
             }
             catch (Exception ex)
@@ -72,10 +85,15 @@ namespace MCPForUnity.Editor.Tools
                 // Normalize the already-running case to a stable error token.
                 if (ex.Message != null && ex.Message.IndexOf("already in progress", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    return Task.FromResult<object>(new ErrorResponse("tests_running", new { reason = "tests_running", retry_after_ms = 5000 }));
+                    return Task.FromResult<object>(TestsRunning());
                 }
                 return Task.FromResult<object>(new ErrorResponse($"Failed to start test job: {ex.Message}"));
             }
+        }
+
+        private static ErrorResponse TestsRunning()
+        {
+            return new ErrorResponse("tests_running", new { reason = "tests_running", retry_after_ms = 5000 });
         }
 
         private static TestFilterOptions GetFilterOptions(JObject @params)

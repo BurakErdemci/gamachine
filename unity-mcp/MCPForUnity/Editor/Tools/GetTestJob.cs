@@ -29,7 +29,12 @@ namespace MCPForUnity.Editor.Tools
                 return new ErrorResponse("Unknown job_id.");
             }
 
-            var payload = TestJobManager.ToSerializable(job, includeDetails, includeFailedTests);
+            var verdict = TestJobManager.JudgeCompile(job);
+            var payload = TestJobManager.ToSerializable(job, includeDetails, includeFailedTests, verdict);
+            if (TestJobManager.RejectedByCompile(job, verdict))
+            {
+                return new ErrorResponse("compile", CompileGate.RejectedRunMessage(job.Result?.Total, verdict), payload);
+            }
             return new SuccessResponse("Test job status retrieved.", payload);
         }
     }

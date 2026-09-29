@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using MCPForUnity.Editor.Helpers;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditorInternal;
 using UnityEditor.TestTools.TestRunner.Api;
@@ -558,13 +559,34 @@ namespace MCPForUnity.Editor.Services
             return jobToReturn;
         }
 
-        internal static object ToSerializable(TestJob job, bool includeDetails, bool includeFailedTests)
+        /// <summary>
+        /// The live compile verdict for a finished job, read when the job is polled: scripts can
+        /// stop compiling while a run is in progress, and a compile that is running, pending or
+        /// failed now means the run may have tested other scripts than the ones on disk.
+        /// Null while the job runs.
+        /// </summary>
+        internal static JObject JudgeCompile(TestJob job)
+        {
+            return job == null || job.Status == TestJobStatus.Running ? null : CompileGate.Verdict();
+        }
+
+        /// <summary>A pass only counts when the compile verdict read after it is clean.</summary>
+        internal static bool RejectedByCompile(TestJob job, JObject compileVerdict)
+        {
+            return job != null
+                && job.Status == TestJobStatus.Succeeded
+                && compileVerdict != null
+                && !CompileGate.IsClean(compileVerdict);
+        }
+
+        internal static object ToSerializable(TestJob job, bool includeDetails, bool includeFailedTests, JObject compileVerdict = null)
         {
             if (job == null)
             {
                 return null;
             }
 
+            bool rejected = RejectedByCompile(job, compileVerdict);
             object resultPayload = null;
             if (job.Status == TestJobStatus.Succeeded && job.Result != null)
             {
@@ -574,7 +596,7 @@ namespace MCPForUnity.Editor.Services
             return new
             {
                 job_id = job.JobId,
-                status = job.Status.ToString().ToLowerInvariant(),
+                status = rejected ? "failed" : job.Status.ToString().ToLowerInvariant(),
                 mode = job.Mode,
                 started_unix_ms = job.StartedUnixMs,
                 finished_unix_ms = job.FinishedUnixMs,
@@ -593,8 +615,9 @@ namespace MCPForUnity.Editor.Services
                     failures_so_far = BuildFailuresPayload(job.FailuresSoFar),
                     failures_capped = (job.FailuresSoFar != null && job.FailuresSoFar.Count >= FailureCap)
                 },
-                error = job.Error,
-                result = resultPayload
+                error = rejected ? "compile" : job.Error,
+                result = resultPayload,
+                compile = compileVerdict
             };
         }
 

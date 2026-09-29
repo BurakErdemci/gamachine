@@ -52,6 +52,12 @@ namespace MCPForUnity.Editor.Helpers
         [JsonIgnore]
         public string error => Error;
 
+        [JsonProperty("message", NullValueHandling = NullValueHandling.Ignore)]
+        public string Message { get; }
+
+        [JsonIgnore]
+        public string message => Message;
+
         [JsonProperty("data", NullValueHandling = NullValueHandling.Ignore)]
         public object Data { get; }
 
@@ -62,6 +68,15 @@ namespace MCPForUnity.Editor.Helpers
         {
             Code = messageOrCode;
             Error = messageOrCode;
+            Data = data;
+        }
+
+        /// <summary>A stable error token plus a human sentence, the shape the Python server's MCPResponse uses.</summary>
+        public ErrorResponse(string code, string message, object data)
+        {
+            Code = code;
+            Error = code;
+            Message = message;
             Data = data;
         }
     }
