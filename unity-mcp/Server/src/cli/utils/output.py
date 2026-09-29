@@ -43,6 +43,9 @@ def format_as_text(data: Any, indent: int = 0) -> str:
         # Check for error response
         if "success" in data and not data.get("success"):
             error = data.get("error") or data.get("message") or "Unknown error"
+            message = data.get("message")
+            if message and message != error:
+                return f"{prefix}❌ Error: {error} - {message}"
             return f"{prefix}❌ Error: {error}"
 
         # Check for success response with data
