@@ -522,7 +522,8 @@ def create_config_router(db):
                 {"id": "agy-gpt-oss-120b",             "name": "GPT-OSS 120B (Medium)",       "provider": "subscription"},
                 # GitHub Copilot CLI (statik — copilot'un programatik model listesi yok;
                 # ID'ler CLI'ın kendi model seçicisinden alındı, 2026-07-13)
-                *_COPILOT_MODELS,
+                # The desktop's plan lock (`disabled`), as /cli-models/copilot marks it.
+                *_apply_plan_caps("copilot", [dict(m) for m in _COPILOT_MODELS]),
                 # Cursor ve OpenCode modelleri DİNAMİK: /cli-models/{cli} endpoint'i
                 # kullanıcının hesabına/kurulumuna göre canlı liste döner.
             ]
@@ -648,6 +649,19 @@ def create_config_router(db):
                     m["disabled"] = True
                     m["disabled_reason"] = "plan"
         return models
+
+    def plan_locked(provider_type: object, model_name: object) -> bool:
+        """Would /cli-models mark this pick `disabled`? The phone's `set_model`
+        asks, so it cannot pick what the desktop's picker refuses. Reads only
+        the plan-caps file, no CLI or network."""
+        if provider_type != "subscription" or not isinstance(model_name, str):
+            return False
+        cli = next((c for c in ("cursor", "copilot") if model_name.startswith(f"{c}-")), None)
+        return cli is not None and bool(_apply_plan_caps(cli, [{"id": model_name}])[0].get("disabled"))
+
+    # Travels with the function the bridge is handed (main.py passes only
+    # `router.list_models`).
+    build_available_models.plan_locked = plan_locked
 
     @router.get("/cli-models/{cli}")
     async def cli_models(cli: str, x_session_token: str = Header(alias="X-Session-Token", default="")):

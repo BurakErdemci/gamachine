@@ -624,3 +624,76 @@ async def test_a_default_only_pick_is_not_a_chat_change(env):
     assert env.db.get_conversation_model(conv) == ("subscription", "gpt-6-sol")
 
 
+# ── the plan lock ──────────────────────────────────────────────────────────
+
+LOCKED_COPILOT = "copilot-claude-sonnet-5"
+
+
+@pytest.fixture
+def auto_only_copilot(monkeypatch):
+    import providers.oneshot_cli as oc
+    monkeypatch.setattr(oc, "resolve_cli_cmd", lambda cli: [cli])
+    monkeypatch.setattr(oc, "get_named_models_cap", lambda cli: False if cli == "copilot" else None)
+    monkeypatch.setattr(oc, "installed_clis", lambda *a, **k: {"copilot": True, "claude": True, "codex": True})
+
+
+def _desktop_locked(env, monkeypatch, cli):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv("UNITYAI_ALLOW_NO_TOKEN", "1")
+    app = FastAPI()
+    app.include_router(create_config_router(env.db))
+    with TestClient(app) as c:
+        return {m["id"] for m in c.get(f"/cli-models/{cli}", headers={"X-Session-Token": ""}).json()["models"]
+                if m.get("disabled")}
+
+
+async def test_the_phone_catalog_carries_the_desktops_plan_lock(env, auto_only_copilot, monkeypatch):
+    router = create_config_router(env.db)
+    env.bridge.list_models = router.list_models
+    phone = await pair_phone(env)
+    catalog = (await phone.request("list_models", timeout=20))["result"]
+    locked = {m["id"] for m in catalog["subscription"] if m.get("disabled")}
+    assert locked == _desktop_locked(env, monkeypatch, "copilot")
+    assert LOCKED_COPILOT in locked and "copilot-auto" not in locked
+    assert all(m.get("disabled_reason") == "plan" for m in catalog["subscription"] if m.get("disabled"))
+    # Codex and the other CLIs are never locked here.
+    assert not any(m.get("disabled") for m in catalog["subscription"] if not m["id"].startswith("copilot-"))
+
+
+async def test_the_catalog_has_no_lock_when_the_plan_is_unknown_or_open(env, monkeypatch):
+    import providers.oneshot_cli as oc
+    for cap in (None, True):
+        monkeypatch.setattr(oc, "get_named_models_cap", lambda cli, cap=cap: cap)
+        catalog = await create_config_router(env.db).list_models(None)
+        assert not any(m.get("disabled") for m in catalog["subscription"]), cap
+
+
+async def test_a_plan_locked_model_is_refused_and_moves_nothing(env, auto_only_copilot):
+    env.bridge.list_models = create_config_router(env.db).list_models
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
+    r = await switch(phone, conv, "subscription", LOCKED_COPILOT)
+    assert r["ok"] is False and r["error"] == "plan_locked"
+    assert env.db.get_conversation_model(conv) == ("subscription", "claude-opus-5")
+    assert env.db.get_ai_config(1)[:2] == ("subscription", "claude-opus-5")
+    with pytest.raises(asyncio.TimeoutError):
+        await phone.next_push(lambda m: m.get("type") == "chat_model_changed", timeout=0.4)
+
+
+async def test_a_model_the_plan_allows_is_still_picked(env, auto_only_copilot):
+    env.bridge.list_models = create_config_router(env.db).list_models
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
+    assert (await switch(phone, conv, "subscription", "copilot-auto"))["ok"] is True
+    assert (await switch(phone, conv, "subscription", "gpt-6-luna"))["ok"] is True
+
+
+def test_plan_locked_follows_the_same_function_as_the_desktop_list(env, auto_only_copilot):
+    locked = create_config_router(env.db).list_models.plan_locked
+    assert locked("subscription", LOCKED_COPILOT) is True
+    assert locked("subscription", "cursor-auto") is False  # cursor's cap is unknown here
+    assert locked("subscription", "copilot-auto") is False
+    assert locked("openai", LOCKED_COPILOT) is False
+    assert locked(None, None) is False and locked("subscription", 7) is False

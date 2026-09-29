@@ -298,6 +298,11 @@ class Dispatcher:
         # that is not ready is refused: the phone cannot open Settings for a key.
         row = self._chat(req.get("chat_id"))
         conv = row["id"]
+        # A model the desktop's picker refuses for the plan (`disabled` in
+        # /cli-models), refused the same way; the catalog function carries the check.
+        plan_locked = getattr(self.bridge.list_models, "plan_locked", None)
+        if plan_locked and plan_locked(req.get("provider_type"), req.get("model_name")):
+            raise RpcError("plan_locked")
         try:
             # Off the loop: the readiness probes read the API key and may ask Ollama.
             result = await asyncio.to_thread(
