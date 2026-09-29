@@ -27,8 +27,10 @@ namespace MCPForUnity.Editor.Tools
                     {
                         return Task.FromResult<object>(new SuccessResponse(
                             $"Test job {runningJobId} is still making progress (last update {quietMs / 1000}s ago); not cleared. "
-                            + "clear_stuck releases a job only after a test runs over 60 s or the job reports no progress "
-                            + "for 60 s (its init timeout while tests have not started). Poll it with get_test_job.",
+                            + "clear_stuck releases a job only after it reports no progress for 60 s, or for 5 minutes while "
+                            + "Unity still shows the run as running (a test may run that long; Unity fails a test at its 3 minute "
+                            + "default timeout itself). Before the run starts it waits out the job's init timeout instead. "
+                            + "Poll it with get_test_job.",
                             new { cleared = false, job_id = runningJobId, last_update_ms_ago = quietMs }
                         ));
                     }

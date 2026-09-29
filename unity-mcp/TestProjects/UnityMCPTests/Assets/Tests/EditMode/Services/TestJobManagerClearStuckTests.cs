@@ -19,6 +19,7 @@ namespace MCPForUnityTests.Editor.Services
         private FieldInfo _currentJobIdField;
         private MethodInfo _persistMethod;
         private string _originalJobId;
+        private Func<bool> _originalRunIsAlive;
 
         [SetUp]
         public void SetUp()
@@ -31,11 +32,15 @@ namespace MCPForUnityTests.Editor.Services
             Assert.NotNull(_currentJobIdField);
             Assert.NotNull(_persistMethod);
             _originalJobId = _currentJobIdField.GetValue(null) as string;
+            _originalRunIsAlive = TestJobManager.RunIsAlive;
+            // This fixture may itself run as an MCP test job, when the real Test Runner is running.
+            TestJobManager.RunIsAlive = () => false;
         }
 
         [TearDown]
         public void TearDown()
         {
+            TestJobManager.RunIsAlive = _originalRunIsAlive;
             _currentJobIdField.SetValue(null, _originalJobId);
             (_jobsField.GetValue(null) as IDictionary)?.Remove(JobId);
             _persistMethod.Invoke(null, new object[] { true });
@@ -113,14 +118,55 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
-        public void TestRunningPastTheStuckThreshold_IsCleared()
+        public void LongTest_WhileTheRunIsStillRunning_IsLeftRunning()
         {
-            var job = InsertRunningJob(quietMs: 1_000, totalTests: 3, currentTestAgeMs: 70_000);
+            // Measured: an 80 s UnityTest was released at 62 s while the Test Runner still ran it.
+            TestJobManager.RunIsAlive = () => true;
+            var job = InsertRunningJob(quietMs: 90_000, totalTests: 3, currentTestAgeMs: 90_000);
+
+            var outcome = TestJobManager.ClearStuckJob(out string jobId, out long quietMs);
+
+            Assert.AreEqual(TestJobManager.ClearStuckOutcome.StillProgressing, outcome);
+            Assert.AreEqual(JobId, jobId);
+            Assert.GreaterOrEqual(quietMs, 90_000);
+            Assert.AreEqual(TestJobStatus.Running, job.Status);
+            Assert.AreEqual(JobId, TestJobManager.CurrentJobId);
+        }
+
+        [Test]
+        public void SilentJob_WhileTheRunIsStillRunning_IsClearedAfterFiveMinutes()
+        {
+            TestJobManager.RunIsAlive = () => true;
+            var job = InsertRunningJob(quietMs: 6 * 60_000, totalTests: 3, currentTestAgeMs: 6 * 60_000);
 
             var outcome = TestJobManager.ClearStuckJob(out _, out _);
 
             Assert.AreEqual(TestJobManager.ClearStuckOutcome.Cleared, outcome);
             Assert.AreEqual(TestJobStatus.Failed, job.Status);
+        }
+
+        [Test]
+        public void JobTheTestRunnerNoLongerRuns_IsClearedAfterAMinuteOfSilence()
+        {
+            TestJobManager.RunIsAlive = () => false;
+            var job = InsertRunningJob(quietMs: 70_000, totalTests: 3, currentTestAgeMs: 70_000);
+
+            var outcome = TestJobManager.ClearStuckJob(out _, out _);
+
+            Assert.AreEqual(TestJobManager.ClearStuckOutcome.Cleared, outcome);
+            Assert.AreEqual(TestJobStatus.Failed, job.Status);
+        }
+
+        [Test]
+        public void FinishedLongTest_DoesNotMakeAProgressingJobStuck()
+        {
+            // A finished leaf keeps its start time as the "current" test until the next one starts.
+            var job = InsertRunningJob(quietMs: 1_000, totalTests: 3, currentTestAgeMs: 70_000);
+
+            var outcome = TestJobManager.ClearStuckJob(out _, out _);
+
+            Assert.AreEqual(TestJobManager.ClearStuckOutcome.StillProgressing, outcome);
+            Assert.AreEqual(TestJobStatus.Running, job.Status);
         }
 
         [Test]

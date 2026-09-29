@@ -52,6 +52,10 @@ namespace MCPForUnity.Editor.Services
         // Keep this small to avoid ballooning payloads during polling.
         private const int FailureCap = 25;
         private const long StuckThresholdMs = 60_000;
+        // A run the Test Runner still reports as running is released only after this much silence.
+        // Unity fails a test that passes its 3 minute default timeout by itself (measured on
+        // 6000.4.4f1), and this is the cutoff TryRestoreFromSessionState already uses for orphans.
+        private const long RunningQuietLimitMs = 5 * 60_000;
         private const long DefaultInitializationTimeoutMs = 15_000; // 15 seconds default; override per-job via run_tests init_timeout param
         private const long MaxInitializationTimeoutMs = 600_000; // 10 minutes hard cap
         private const int MaxJobsToKeep = 10;
@@ -60,6 +64,9 @@ namespace MCPForUnity.Editor.Services
         // SessionState survives domain reloads within the same Unity Editor session.
         private const string SessionKeyJobs = "MCPForUnity.TestJobsV1";
         private const string SessionKeyCurrentJobId = "MCPForUnity.CurrentTestJobIdV1";
+
+        /// <summary>Whether this domain's Test Runner reports a run in progress. Replaced by tests.</summary>
+        internal static Func<bool> RunIsAlive = () => TestRunStatus.IsRunning;
 
         private static readonly object LockObj = new();
         private static readonly Dictionary<string, TestJob> Jobs = new();
@@ -115,7 +122,7 @@ namespace MCPForUnity.Editor.Services
                 if (Jobs.TryGetValue(_currentJobId, out var job) && job.Status == TestJobStatus.Running)
                 {
                     quietMs = Math.Max(0, now - job.LastUpdateUnixMs);
-                    if (!IsStuck(job) && quietMs <= QuietLimitMs(job))
+                    if (quietMs <= QuietLimitMs(job))
                     {
                         return ClearStuckOutcome.StillProgressing;
                     }
@@ -136,12 +143,14 @@ namespace MCPForUnity.Editor.Services
 
         // How long a running job may go without a progress event before clear_stuck may release it.
         // Before RunStarted the job waits on initialization, which may legitimately take its whole
-        // init timeout (a PlayMode run's domain reload).
+        // init timeout (a PlayMode run's domain reload). After it, a test can run far past
+        // StuckThresholdMs (an 80 s test was released at 62 s), so only a job the Test Runner no longer
+        // reports as running, one lost to a domain reload, is released after that short silence.
         private static long QuietLimitMs(TestJob job)
         {
             if (job.TotalTests != null)
             {
-                return StuckThresholdMs;
+                return RunIsAlive() ? RunningQuietLimitMs : StuckThresholdMs;
             }
             long initTimeout = job.InitTimeoutMs > 0 ? job.InitTimeoutMs : DefaultInitializationTimeoutMs;
             return Math.Max(StuckThresholdMs, initTimeout);
