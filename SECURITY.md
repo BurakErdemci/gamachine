@@ -93,8 +93,8 @@ code: `relay/`; PC side: `Backend/app/remote/`.
   through the relay, encrypted to the phone (RFC 8291) and authenticated with
   the PC's own VAPID key. It is detailed on purpose and appears on the lock
   screen: chat title, agent, the tool and a short parameter summary for a
-  card, or the tail of the last reply for a finished turn, cut to about 180
-  characters.
+  card; for a finished turn, the turn's closing text (its last text events,
+  gathered back to about 400 characters) with the first 180 characters shown.
 - **What is sent.** Chat titles, recent messages and live turn events of the
   chats the phone opens, and card summaries. Because that is chat text, code
   the agent printed into a chat travels with it, encrypted. There is no file
