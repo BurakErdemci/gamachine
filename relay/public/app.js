@@ -345,6 +345,9 @@ async function changeMode() {
 // through set_model / set_effort, so the desktop's own controls move with them.
 const CATALOG_TTL_MS = 5 * 60 * 1000;
 const RECONCILE_MS = 1500;
+// One model pick reaches the page as two frames (chat_model_changed, chat_changed)
+// and, on the phone that made it, the reply as well: they share one read.
+const SETTINGS_COALESCE_MS = 100;
 let catalog = null; // { at, data } | { at, error }
 let chatConfig = null; // { chatId, provider_type, model_name } of the open chat
 let pcEffort = null; // { level, levels }, or null when the PC does not know
@@ -429,6 +432,15 @@ async function refreshChatSettings(source = 'told') {
   }
 }
 
+let settingsTimer = null;
+function scheduleSettingsRefresh() {
+  if (settingsTimer) return;
+  settingsTimer = setTimeout(() => {
+    settingsTimer = null;
+    refreshChatSettings();
+  }, SETTINGS_COALESCE_MS);
+}
+
 async function changeModel() {
   const select = $('model-select');
   const chatId = view.shown;
@@ -454,7 +466,7 @@ async function changeModel() {
     renderChatSettings();
   }
   // The desktop follows the change: its effort levels belong to the new model.
-  if (changed) refreshChatSettings();
+  if (changed) scheduleSettingsRefresh();
 }
 
 async function changeEffort() {
@@ -667,7 +679,7 @@ function onPush(msg) {
       renderChats();
       renderChatHeader();
       // The model may have been changed on the desktop while this chat is open.
-      if (msg.chat.chat_id === view.shown && chatConfig && msg.chat.model !== chatConfig.model_name) refreshChatSettings();
+      if (msg.chat.chat_id === view.shown && chatConfig && msg.chat.model !== chatConfig.model_name) scheduleSettingsRefresh();
     } else {
       refreshAll();
     }
@@ -680,7 +692,9 @@ function onPush(msg) {
   } else if (msg.type === 'effort_changed') {
     takePcEffort(desktopEffort(msg.desktop_effort), 'told');
   } else if (msg.type === 'chat_model_changed') {
-    if (msg.chat_id === view.shown) refreshChatSettings();
+    // A pick in any chat also moves the default a chat with no model of its own
+    // follows, so the open chat re-reads whichever chat was picked in.
+    scheduleSettingsRefresh();
   } else if (msg.type === 'default_model_changed') {
     // Only the default a new chat opens on changed (a pick on the desktop with
     // no chat open); any chat with no model of its own shows another model now.
