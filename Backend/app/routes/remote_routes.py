@@ -128,4 +128,19 @@ def create_remote_router(bridge: RemoteBridge) -> APIRouter:
             raise HTTPException(status_code=400, detail={"code": "enabled_must_be_bool"})
         return bridge.set_keep_awake(body["enabled"])
 
+    @router.put("/desktop-effort")
+    async def put_desktop_effort(body: dict,
+                                 x_session_token: str = Header(alias="X-Session-Token", default="")):
+        """The renderer's report of its effort: {"level": str, "levels": [str]}.
+
+        The app token is enough, like the other reads and settings here: this
+        opens nothing to a phone, it only says what the desktop shows. The
+        renderer calls it directly (page JS holds the token, not the UI secret).
+        """
+        _check_token(x_session_token)
+        try:
+            return bridge.set_desktop_effort(body.get("level"), body.get("levels"))
+        except BridgeError as exc:
+            fail(exc)
+
     return router

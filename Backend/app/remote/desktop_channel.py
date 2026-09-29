@@ -35,6 +35,14 @@ the desktop does:
 
     {"type": "chat_model_changed", "conversation_id": int, "provider_type": str,
      "model_name": str, "by": "phone:<device name>", "at": <ms>}
+
+A phone that asks for another effort sends the renderer the level. Effort is
+one state of the renderer (`thinkingLevel`), so the renderer decides: it applies
+the level only if the active model offers it, and reports what it has
+(`PUT /remote/desktop-effort`), which is how the phone learns the outcome:
+
+    {"type": "remote_effort", "level": <canonical level>,
+     "by": "phone:<device name>", "at": <ms>}
 """
 from __future__ import annotations
 
@@ -48,6 +56,7 @@ FRAME_TYPE = "remote_message"
 CARD_CLOSED_TYPE = "card_closed"
 MODE_CHANGED_TYPE = "approval_mode_changed"
 MODEL_CHANGED_TYPE = "chat_model_changed"
+EFFORT_SET_TYPE = "remote_effort"
 QUEUE_SIZE = 100
 
 

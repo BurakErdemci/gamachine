@@ -14,7 +14,10 @@ from typing import TYPE_CHECKING, Any, Optional
 from agentic import approval_mode, cards, chat_model, turn_events
 from providers.agy_provider import AgyStepGateError
 from remote import chats, webpush
-from remote.desktop_channel import CARD_CLOSED_TYPE, CHANNEL, FRAME_TYPE, MODE_CHANGED_TYPE, MODEL_CHANGED_TYPE
+from providers.effort_caps import CANON_ORDER
+from remote.desktop_channel import (
+    CARD_CLOSED_TYPE, CHANNEL, EFFORT_SET_TYPE, FRAME_TYPE, MODE_CHANGED_TYPE, MODEL_CHANGED_TYPE,
+)
 from remote.session import PhoneSession
 
 if TYPE_CHECKING:
@@ -73,6 +76,7 @@ class Dispatcher:
             "set_approval_mode": self.set_approval_mode,
             "list_models": self.list_models,
             "set_model": self.set_model,
+            "set_effort": self.set_effort,
             "push_subscribe": self.push_subscribe,
         }
 
@@ -271,7 +275,8 @@ class Dispatcher:
         return chats.phone_catalog(None if family is None else await catalog(family))
 
     async def get_config(self, session, req, rid):
-        out = {"approval_mode": approval_mode.current_mode()}
+        out = {"approval_mode": approval_mode.current_mode(),
+               "desktop_effort": self.bridge.current_desktop_effort()}
         if req.get("chat_id") is not None:
             row = self._chat(req.get("chat_id"))
             out.update(provider_type=row["provider_type"], model_name=row["model_name"],
@@ -312,6 +317,19 @@ class Dispatcher:
         except Exception:
             logger.exception("[remote] chat_model_changed publish failed")
         return result
+
+    async def set_effort(self, session: PhoneSession, req, rid):
+        # The desktop's effort is one state of its renderer (`thinkingLevel`),
+        # so the renderer applies it, only if the active model offers the level;
+        # what it really has comes back through its own report
+        # (`bridge.set_desktop_effort`). Nothing is stored here.
+        level = req.get("level")
+        if not isinstance(level, str) or level not in CANON_ORDER:
+            raise RpcError("bad_effort")
+        logger.info("[remote] effort %s requested by %s", level, session.device_label)
+        frame = {"type": EFFORT_SET_TYPE, "level": level, "by": session.device_label,
+                 "at": int(time.time() * 1000)}
+        return {"status": "accepted" if CHANNEL.publish(frame) else "desktop_not_ready"}
 
     async def set_approval_mode(self, session: PhoneSession, req, rid):
         # Owner decision, 28 Sep 2026: a paired phone may change the mode, and

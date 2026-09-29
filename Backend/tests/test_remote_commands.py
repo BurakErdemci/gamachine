@@ -228,9 +228,9 @@ async def test_config_requests_are_on_the_allow_list(env):
 
 async def test_get_config_reads_the_live_mode(env):
     phone = await pair_phone(env)
-    assert (await phone.request("get_config"))["result"] == {"approval_mode": "step"}
+    assert (await phone.request("get_config"))["result"]["approval_mode"] == "step"
     approval_mode.set_mode("balanced", source="test")
-    assert (await phone.request("get_config"))["result"] == {"approval_mode": "balanced"}
+    assert (await phone.request("get_config"))["result"]["approval_mode"] == "balanced"
 
 
 async def test_set_approval_mode_needs_the_desktop_function(env):
@@ -265,7 +265,7 @@ async def test_the_phone_sets_the_mode_through_the_shared_function(env, monkeypa
     assert approval_mode.current_mode() == "balanced"
     r = await phone.request("set_approval_mode", mode="step")
     assert r["result"] == {"mode": "step", "previous": "balanced", "approved_pending": 0}
-    assert (await phone.request("get_config"))["result"] == {"approval_mode": "step"}
+    assert (await phone.request("get_config"))["result"]["approval_mode"] == "step"
 
 
 async def test_the_phones_choice_is_saved_like_the_desktops(env):

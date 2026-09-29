@@ -33,8 +33,10 @@ async def test_the_new_requests_are_on_the_allow_list(env):
 
 async def test_get_config_without_a_chat_is_unchanged(env):
     phone = await pair_phone(env)
-    assert (await phone.request("get_config"))["result"] == {"approval_mode": "step"}
-    assert (await phone.request("get_config", chat_id=None))["result"] == {"approval_mode": "step"}
+    # The desktop's effort is null until its renderer reports (test_remote_effort.py).
+    unchanged = {"approval_mode": "step", "desktop_effort": None}
+    assert (await phone.request("get_config"))["result"] == unchanged
+    assert (await phone.request("get_config", chat_id=None))["result"] == unchanged
 
 
 @pytest.mark.parametrize("stored, family", [
@@ -50,8 +52,8 @@ async def test_get_config_with_a_chat_reports_its_model_and_effort_levels(env, s
     conv = make_chat(env.db, stored=stored)
     r = await phone.request("get_config", chat_id=str(conv))
     assert r["ok"] is True
-    assert r["result"] == {"approval_mode": "step", "provider_type": stored[0], "model_name": stored[1],
-                           "family": family, "effort_levels": levels(*stored)}
+    assert r["result"] == {"approval_mode": "step", "desktop_effort": None, "provider_type": stored[0],
+                           "model_name": stored[1], "family": family, "effort_levels": levels(*stored)}
 
 
 async def test_get_config_follows_the_chats_own_model_not_the_default(env):

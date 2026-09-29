@@ -18,6 +18,7 @@ import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from agentic import cards, chat_model, turn_events
+from providers.effort_caps import CANON_ORDER
 from remote import chats
 from remote import crypto as C
 from remote.pairing import PairingManager, qr_url
@@ -69,6 +70,9 @@ class RemoteBridge:
         self._listening = False
         self._tasks: set = set()
         self.relay_error: Optional[str] = None
+        # The desktop renderer's effort as it last reported it: {level, levels}.
+        # The renderer owns the state (see set_desktop_effort); None until it reports.
+        self.desktop_effort: Optional[dict] = None
 
     # ── lifecycle ──────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -389,6 +393,30 @@ class RemoteBridge:
         self._broadcast({"type": "chat_model_changed", "chat_id": str(conv_id),
                          "provider_type": provider_type, "model_name": model_name})
         self._chat_changed(conv_id)
+
+    # ── the desktop's effort ───────────────────────────────────────────
+    def set_desktop_effort(self, level: Any, levels: Any) -> dict:
+        """What the renderer reports: its current effort and the levels the
+        active provider and model offer. The renderer is the source of truth
+        (effort is its page state, not stored anywhere else); this only keeps the
+        last report for phones and tells them when it changed."""
+        if not isinstance(level, str) or level not in CANON_ORDER:
+            raise BridgeError("bad_level", 400)
+        if (not isinstance(levels, list) or not levels or len(levels) > len(CANON_ORDER)
+                or any(not isinstance(v, str) or v not in CANON_ORDER for v in levels)):
+            raise BridgeError("bad_levels", 400)
+        if level not in levels:
+            raise BridgeError("level_not_offered", 400)
+        snapshot = {"level": level, "levels": [v for v in CANON_ORDER if v in levels]}
+        changed = snapshot != self.desktop_effort
+        self.desktop_effort = snapshot
+        if changed:
+            self._broadcast({"type": "effort_changed", "desktop_effort": self.current_desktop_effort()})
+        return {"changed": changed}
+
+    def current_desktop_effort(self) -> Optional[dict]:
+        snapshot = self.desktop_effort
+        return None if snapshot is None else {"level": snapshot["level"], "levels": list(snapshot["levels"])}
 
     def _broadcast(self, obj: dict) -> None:
         for session in list(self.sessions.values()):
