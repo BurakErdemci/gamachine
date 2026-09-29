@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -68,7 +69,8 @@ namespace MCPForUnity.Editor.Helpers
         {
             var str = GetString(key);
             if (string.IsNullOrEmpty(str)) return defaultValue;
-            return float.TryParse(str, out var result) ? result : defaultValue;
+            // Invariant on purpose: the current culture makes tr-TR read "2.5" as 25 ('.' is its group separator).
+            return float.TryParse(str, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) ? result : defaultValue;
         }
 
         /// <summary>
