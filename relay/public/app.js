@@ -367,7 +367,9 @@ function renderChatSettings() {
     const { groups, currentValue } = modelGroups(catalog?.data, chatConfig);
     for (const g of groups) {
       const group = el('optgroup', { label: g.label });
-      for (const item of g.items) group.append(el('option', { value: item.value, textContent: item.label }));
+      for (const item of g.items) {
+        group.append(el('option', { value: item.value, textContent: item.label, disabled: item.disabled === true }));
+      }
       model.append(group);
     }
     model.value = currentValue;

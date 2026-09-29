@@ -522,7 +522,11 @@ export function modelGroups(catalog, current) {
       const value = modelValue(m.provider, m.id);
       if (seen.has(value)) continue;
       seen.add(value);
-      items.push({ value, label: typeof m.name === 'string' && m.name ? m.name : m.id });
+      const name = typeof m.name === 'string' && m.name ? m.name : m.id;
+      // The desktop's plan lock (`disabled`): shown, but not pickable.
+      items.push(m.disabled === true
+        ? { value, label: name + ' (planında kilitli)', disabled: true }
+        : { value, label: name });
     }
     if (items.length) groups.push({ label, items });
   }
@@ -567,6 +571,7 @@ export function modelFailureNote(error, reply = {}) {
       : error === 'bad_chat_id' ? 'Sohbet numarası geçersiz.'
       : error === 'unknown_provider' ? 'Bilinmeyen sağlayıcı.'
       : error === 'bad_model' ? 'Model adı geçersiz.'
+      : error === 'plan_locked' ? 'Aboneliğin bu modeli desteklemiyor; Auto modelini kullanabilirsin.'
       : null);
   return why ? 'Model değişmedi. ' + why : 'Model değiştirilemedi: ' + error;
 }

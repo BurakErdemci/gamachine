@@ -145,6 +145,23 @@ test('every refusal of set_model says why in plain Turkish and that the model di
   assert.equal(modelFailureNote('boom'), 'Model değiştirilemedi: boom');
   assert.match(modelFailureNote('unknown_type'), /^Model değişmedi\. Bilgisayardaki Gamachine bu isteği tanımıyor; .*güncelle\.$/);
   assert.equal(modelFailureNote('bad_request'), 'Model değişmedi. İstek anlaşılamadı.');
+  assert.equal(modelFailureNote('plan_locked'),
+    'Model değişmedi. Aboneliğin bu modeli desteklemiyor; Auto modelini kullanabilirsin.');
+});
+
+test('the desktop\'s plan lock: a locked model is listed, marked, and not offered as a choice', () => {
+  const { groups } = modelGroups({
+    subscription: [
+      { id: 'copilot-auto', name: 'Copilot Auto', provider: 'subscription' },
+      { id: 'copilot-gpt-5.5', name: 'GPT-5.5', provider: 'subscription', disabled: true, disabled_reason: 'plan' },
+      { id: 'x', name: 'Not locked', provider: 'subscription', disabled: 'yes' },
+    ],
+  }, null);
+  assert.deepEqual(groups[0].items, [
+    { value: 'subscription|copilot-auto', label: 'Copilot Auto' },
+    { value: 'subscription|copilot-gpt-5.5', label: 'GPT-5.5 (planında kilitli)', disabled: true },
+    { value: 'subscription|x', label: 'Not locked' },
+  ]);
 });
 
 test('the list and the config notes word an old desktop and a bad request too', () => {
