@@ -171,6 +171,10 @@ The DOM-free logic is in `net.js` and tested in `test/page.test.mjs`.
   listener after the first `close_chat`); an `event` for a chat not shown does
   the same, at most once per 10 s per chat.
 - `send_message {chat_id, text}` (at most 20 000 characters and one 64 KiB frame) -> `{status:"accepted"|"desktop_not_ready"}`
+- `list_slash_commands {chat_id}` -> `{commands:[name], skills:[name], meta:[{name, description?, argumentHint?, insert?, displayName?}]}`
+  (names without the `/`; Gamachine's own `compact` always leads, a chat whose
+  agent has no catalog gets only that).
+  A text starting with `/` is sent with `send_message` like any other.
 - `stop` -> `{status:"ok"|"no_session"|"error"}`; `close_chat`, `push_subscribe {subscription}` -> `{}`
 - pushes: `{type:"event", chat_id, seq, kind, ...}` with kinds `text {text}`,
   `tool_call {tool, summary}`, `turn_start`, `turn_end {status: "done"|"error"|"stopped"}`,

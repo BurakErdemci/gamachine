@@ -199,6 +199,7 @@ Requests carry `id`; replies echo it. Everything not listed is refused.
 | `answer_card {card_id, decision, choice?}` | first answer wins; a later answer gets `already_answered {by, at}`; ledger row with the device |
 | `stop {chat_id}` | same effect as the desktop Stop |
 | `send_message {chat_id, text}` | delivered to the renderer, which sends it like a typed message (queued if a turn runs); stored with source `phone`. Slash commands are ordinary text: the backend does not look at a leading `/`. In the renderer a text that is exactly `/compact` (blanks around it ignored) compacts that chat, as the desktop composer does, and starts no turn; every other `/...` goes out like typed text (`/usage` gets its usage card, the CLI runs the rest) |
+| `list_slash_commands {chat_id}` | `{commands: [str], skills: [str], meta: [{name, description?, argumentHint?, insert?, displayName?}]}`: the catalog the desktop's `/` menu shows (`GET /slash-commands`, one shared function), for the agent family of that chat. Names come without the `/`. Gamachine's own `compact` (run by the renderer) leads `commands` and `meta` for every chat, as in the desktop menu; the CLI's own `compact` is not listed twice. Chats of agents without a catalog (`api-*`, opencode, cursor, kimi, gemini) and agy get only that. Errors `bad_chat_id`, `unknown_chat`, `unavailable` |
 | `push_subscribe {subscription}` | stores the web push subscription for this device |
 
 PC -> phone pushes: `event {chat_id, seq, kind, ...}` (turn start/end, text,
@@ -297,6 +298,16 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
 - `send_message` reaches the renderer as a `/wake-stream-all` frame
   `{type:"remote_message", request_id, conversation_id, text, source:"phone",
   device_id, device_name, at}`; `desktop_not_ready` means no such stream is open.
+- `list_slash_commands` maps the chat to a family in one place,
+  `chats.slash_family(row)`: today the provider of the chat's latest message
+  (`claude`, `codex`, `agy`; no message yet = `claude`, the app's default;
+  anything else, `api-*` included = no catalog). When chats store their own
+  model, only that function changes. The catalog function is injected like
+  `stop_chat` (`RemoteBridge(..., list_slash_commands=router.list_slash_commands)`)
+  and `chats.phone_catalog` adds the app's `compact` and cuts the catalog down
+  to plain strings before it leaves.
+  Known gap: a message the phone sends runs with the model chosen on the
+  desktop, not necessarily the family listed here, until per-chat models exist.
 - A phone's card answers are ledgered with device `phone:<device name>`.
 - Replies over one frame are split: every list in `result` is cut in order,
   each part carries `part` (1-based) and `parts`, all with the request's `id`.

@@ -28,6 +28,49 @@ _CHAT_COLS = ("SELECT c.id, c.title, c.updated_at, c.hidden, "
               "FROM conversations c WHERE c.user_id = ? AND c.side_of IS NULL")
 
 
+SLASH_FAMILIES = ("claude", "codex", "agy")
+
+
+def slash_family(row: dict) -> Optional[str]:
+    """Which `/slash-commands` catalog serves a chat, None when it has none.
+
+    Today the chat's latest message names the agent that last answered in it
+    (`claude`, `codex`, `agy`, other CLIs, `api-<provider>`); when chats store
+    their own model this is the one place that changes. A chat nobody has
+    answered in reads as Claude, the app's default agent."""
+    provider = row.get("provider")
+    if provider is None:
+        return "claude"
+    return provider if provider in SLASH_FAMILIES else None
+
+
+# The one command Gamachine itself runs (the renderer, on both desktop and
+# phone): the desktop's `/` menu lists it ahead of the CLI's, for every chat.
+APP_COMMAND = {"name": "compact", "description": "Summarise this chat to free up context"}
+
+
+def phone_catalog(catalog: Any) -> Dict[str, list]:
+    """The slash catalog as the phone gets it: the app's own command first,
+    then the CLI's, plain strings only, meta items cut down to the fields the
+    picker shows."""
+    catalog = catalog if isinstance(catalog, dict) else {}
+
+    def names(value: Any) -> List[str]:
+        return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+    commands = names(catalog.get("commands"))
+    meta = []
+    for item in catalog.get("meta") if isinstance(catalog.get("meta"), list) else []:
+        if isinstance(item, dict) and isinstance(item.get("name"), str):
+            meta.append({k: item[k] for k in ("name", "description", "argumentHint", "insert", "displayName")
+                         if isinstance(item.get(k), str)})
+    if APP_COMMAND["name"] not in commands:
+        commands.insert(0, APP_COMMAND["name"])
+    if not any(m["name"] == APP_COMMAND["name"] for m in meta):
+        meta.insert(0, dict(APP_COMMAND))
+    return {"commands": commands, "skills": names(catalog.get("skills")), "meta": meta}
+
+
 def agent_name(provider: Optional[str]) -> str:
     if not provider:
         return "Gamachine"

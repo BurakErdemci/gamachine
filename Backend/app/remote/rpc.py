@@ -67,6 +67,7 @@ class Dispatcher:
             "answer_card": self.answer_card,
             "stop": self.stop,
             "send_message": self.send_message,
+            "list_slash_commands": self.list_slash_commands,
             "push_subscribe": self.push_subscribe,
         }
 
@@ -248,6 +249,14 @@ class Dispatcher:
                  "text": text, "source": "phone", "device_id": session.device.device_id,
                  "device_name": session.device.name, "at": int(time.time() * 1000)}
         return {"status": "accepted" if CHANNEL.publish(frame) else "desktop_not_ready"}
+
+    async def list_slash_commands(self, session, req, rid):
+        row = self._chat(req.get("chat_id"))
+        catalog = self.bridge.list_slash_commands
+        if catalog is None:
+            raise RpcError("unavailable")
+        family = chats.slash_family(row)
+        return chats.phone_catalog(None if family is None else await catalog(family))
 
     async def push_subscribe(self, session: PhoneSession, req, rid):
         try:

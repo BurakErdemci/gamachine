@@ -346,7 +346,8 @@ app.include_router(create_transcribe_router(db))
 
 from remote.bridge import RemoteBridge  # noqa: E402
 
-remote_bridge = RemoteBridge(db, stop_chat=_conversation_router.stop_chat)
+remote_bridge = RemoteBridge(db, stop_chat=_conversation_router.stop_chat,
+                             list_slash_commands=_conversation_router.list_slash_commands)
 app.include_router(create_remote_router(remote_bridge))
 
 
