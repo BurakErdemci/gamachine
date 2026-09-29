@@ -186,6 +186,25 @@ async def _send_run_command(unity_instance: str | None, params: dict[str, Any]) 
     return response
 
 
+def _unity_error(response: dict[str, Any]) -> MCPResponse:
+    """An error Unity answered. The plugin's own compile gate answers in the shape this server's
+    gate does (error "compile" or "busy", data.compile), so it passes through as is; only the
+    retry hint of a "busy" answer is added, since the plugin's error responses carry none."""
+    out = MCPResponse(**response)
+    if out.error == "busy" and out.hint is None:
+        out.hint = "retry"
+    return out
+
+
+def _poll_error(response: dict[str, Any]) -> GetTestJobResponse | MCPResponse:
+    """The plugin turns a finished job whose compile verdict is not clean into error "compile"
+    with the job as data (status failed, data.result kept); it is typed like the server's own."""
+    data = response.get("data")
+    if response.get("error") == "compile" and isinstance(data, dict) and data.get("job_id"):
+        return GetTestJobResponse(**response)
+    return _unity_error(response)
+
+
 def _compile_refusal(verdict: dict[str, Any]) -> MCPResponse:
     kind = verdict["verdict"]
     if kind == "errors":
@@ -240,7 +259,8 @@ async def _judge_finished_job(response: dict[str, Any], unity_instance: str | No
         "Starts a Unity test run asynchronously and returns a job_id immediately. Poll with get_test_job for progress. "
         "Refuses with error='compile' and data.compile (the compile_status verdict) when scripts do not compile or "
         "changed on disk since the last compile, since the run would test old assemblies. Answers error='busy' "
-        "(hint retry) while compiling or when the compile status cannot be read."
+        "(hint retry) while compiling or when the compile status cannot be read. The Unity package refuses the "
+        "same way itself, so a start that does not come through this tool (the CLI) is gated too."
     ),
     annotations=ToolAnnotations(
         title="Run Tests",
@@ -337,7 +357,7 @@ async def run_tests(
         return response
     if isinstance(response, dict):
         if not response.get("success", True):
-            return MCPResponse(**response)
+            return _unity_error(response)
         if isinstance(response.get("data"), dict):
             response = {**response, "data": {**response["data"], "compile": verdict}}
         return RunTestsStartResponse(**response)
@@ -351,7 +371,7 @@ async def run_tests(
         "is in data.result. A finished job carries data.compile (the live compile_status verdict); a succeeded "
         "run counts only when that verdict is clean. Otherwise (errors, stale, compiling, pending, or a status "
         "that cannot be read) it is reported as a failure (error='compile', data.status failed, data.result "
-        "kept), not a green result."
+        "kept), not a green result. The Unity package makes the same correction itself."
     ),
     annotations=ToolAnnotations(
         title="Get Test Job",
@@ -402,7 +422,7 @@ async def get_test_job(
                 return MCPResponse(success=False, error=str(response))
 
             if not response.get("success", True):
-                return MCPResponse(**response)
+                return _poll_error(response)
 
             # Check if tests are done
             data = response.get("data", {})
@@ -456,7 +476,7 @@ async def get_test_job(
     if not isinstance(response, dict):
         return MCPResponse(success=False, error=str(response))
     if not response.get("success", True):
-        return MCPResponse(**response)
+        return _poll_error(response)
 
     # Fire-and-forget nudge check: even without wait_timeout, clients may poll
     # externally. Check if Unity needs a nudge on every call so stalls get
