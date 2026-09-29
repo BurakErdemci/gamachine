@@ -56,6 +56,7 @@ const makeStream = () => {
 
 let wakes: Array<ReturnType<typeof makeStream>>
 let chatModels: Record<number, { provider_type: string; model_name: string }>
+let defaultModel: { provider_type: string; model_name: string }
 
 const installFetch = () => {
   wakes = []
@@ -98,6 +99,7 @@ beforeEach(() => {
   installFetch()
   showToast.mockReset()
   ipcInvoke.mockReset()
+  defaultModel = { provider_type: 'subscription', model_name: 'claude-opus-5' }
   chatModels = {
     7: { provider_type: 'subscription', model_name: 'gpt-6-luna' },
     8: { provider_type: 'subscription', model_name: 'claude-opus-5' },
@@ -106,7 +108,8 @@ beforeEach(() => {
   mockedAxios.get.mockReset().mockImplementation(async (url: string) => {
     const u = String(url)
     const m = u.match(/\/conversations\/(\d+)\/model$/)
-    if (m) return { data: { ...chatModels[Number(m[1])], has_key: false } }
+    if (m) return { data: { ...(chatModels[Number(m[1])] ?? defaultModel), has_key: false } }
+    if (u.includes('/get-ai-config/')) return { data: { ...defaultModel, has_key: false } }
     if (u.endsWith('/approval-mode')) return { data: { mode: 'step', stored: true } }
     if (u.includes('/context-usage')) return { data: { percent: 1, should_compact: false, message_count: 0 } }
     if (u.includes('/mcp/unity/status')) return { data: { status: 'off' } }
@@ -134,7 +137,7 @@ describe('chat_model_changed · the model on screen', () => {
     expect(mockedAxios.post).not.toHaveBeenCalled()
   })
 
-  it('leaves the screen alone for a chat that is not on screen, and shows it fresh later', async () => {
+  it('leaves the picker on the screen chat own model for a chat that is not on screen, and shows it fresh later', async () => {
     const { result } = hook()
     await flush()
     await open(result, 7)
@@ -143,7 +146,9 @@ describe('chat_model_changed · the model on screen', () => {
     await pushWake(changed(8))
 
     expect(modelReads(8)).toBe(0)
-    expect(modelReads(7)).toBe(1)
+    // The screen's own chat is re-read too (a pick also moves the default a
+    // chat with no model of its own shows) and reads back the same model.
+    expect(modelReads(7)).toBe(2)
     expect(result.current.ai.aiConfig.model_name).toBe('gpt-6-luna')
 
     await open(result, 8)
@@ -167,6 +172,44 @@ describe('chat_model_changed · the model on screen', () => {
       await pushWake(bad)
     }
     expect(modelReads(7)).toBe(1)
+  })
+})
+
+// A pick also moves the default a new chat opens on (`pick_chat_model`), so the
+// screens that show that default follow, not only the picked chat.
+describe('chat_model_changed · the default a new chat opens on', () => {
+  const phonePicksForChat7 = async () => {
+    chatModels[7] = { provider_type: 'openai', model_name: 'gpt-5.5' }
+    defaultModel = { provider_type: 'openai', model_name: 'gpt-5.5' }
+    await pushWake(changed(7))
+  }
+
+  it('the new-chat screen (no chat on screen) shows the new default', async () => {
+    const { result } = hook()
+    await flush()
+    await act(async () => { await result.current.ai.showChatModel(USER.id, null) })
+    expect(result.current.chat.activeConvId).toBeNull()
+    expect(result.current.ai.aiConfig.model_name).toBe('claude-opus-5')
+    await phonePicksForChat7()
+    expect(result.current.ai.aiConfig.model_name).toBe('gpt-5.5')
+  })
+
+  it('an on-screen chat with no model of its own shows the new default', async () => {
+    delete chatModels[9]
+    const { result } = hook()
+    await flush()
+    await open(result, 9)
+    expect(result.current.ai.aiConfig.model_name).toBe('claude-opus-5')
+    await phonePicksForChat7()
+    expect(result.current.ai.aiConfig.model_name).toBe('gpt-5.5')
+  })
+
+  it('an on-screen chat with its own model keeps it', async () => {
+    const { result } = hook()
+    await flush()
+    await open(result, 8)
+    await phonePicksForChat7()
+    expect(result.current.ai.aiConfig.model_name).toBe('claude-opus-5')
   })
 })
 

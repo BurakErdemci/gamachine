@@ -173,8 +173,9 @@ export const useChat = (
   showToast: (msg: string, type: any) => void,
   refreshFileTree: () => void,
   suggestFilePath: (name: string) => string,
-  // A phone switched the model of the chat on screen: the page re-reads it.
-  onActiveChatModelChanged?: (convId: number) => void,
+  // A phone switched a chat's model: the page re-reads what its picker shows,
+  // for the chat on screen (null on the new-chat screen).
+  onActiveChatModelChanged?: (convId: number | null) => void,
 ) => {
   const onActiveChatModelChangedRef = useRef(onActiveChatModelChanged);
   onActiveChatModelChangedRef.current = onActiveChatModelChanged;
@@ -1438,12 +1439,14 @@ export const useChat = (
                 }
                 if (data?.type === 'chat_model_changed') {
                   // Nothing is cached per chat: the page reads a chat's model
-                  // fresh whenever the chat comes on screen, so only the chat
-                  // on screen needs the news.
+                  // fresh whenever the chat comes on screen, so only what is on
+                  // screen needs the news. A pick also moves the default a new
+                  // chat opens on, so the new-chat screen and a chat with no
+                  // model of its own follow too: re-reading the screen's own
+                  // chat covers all of them (one with its own model reads back
+                  // the same one).
                   const change = parseChatModelChanged(data);
-                  if (change && !iptal && change.conversationId === activeConvIdRef.current) {
-                    onActiveChatModelChangedRef.current?.(change.conversationId);
-                  }
+                  if (change && !iptal) onActiveChatModelChangedRef.current?.(activeConvIdRef.current);
                   continue;
                 }
                 if (data?.type !== 'wake' || iptal) continue;
