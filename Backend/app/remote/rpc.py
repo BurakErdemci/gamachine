@@ -11,10 +11,10 @@ import secrets
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
-from agentic import approval_mode, cards, turn_events
+from agentic import approval_mode, cards, chat_model, turn_events
 from providers.agy_provider import AgyStepGateError
 from remote import chats, webpush
-from remote.desktop_channel import CARD_CLOSED_TYPE, CHANNEL, FRAME_TYPE, MODE_CHANGED_TYPE
+from remote.desktop_channel import CARD_CLOSED_TYPE, CHANNEL, FRAME_TYPE, MODE_CHANGED_TYPE, MODEL_CHANGED_TYPE
 from remote.session import PhoneSession
 
 if TYPE_CHECKING:
@@ -71,6 +71,8 @@ class Dispatcher:
             "list_slash_commands": self.list_slash_commands,
             "get_config": self.get_config,
             "set_approval_mode": self.set_approval_mode,
+            "list_models": self.list_models,
+            "set_model": self.set_model,
             "push_subscribe": self.push_subscribe,
         }
 
@@ -262,7 +264,45 @@ class Dispatcher:
         return chats.phone_catalog(None if family is None else await catalog(family))
 
     async def get_config(self, session, req, rid):
-        return {"approval_mode": approval_mode.current_mode()}
+        out = {"approval_mode": approval_mode.current_mode()}
+        if req.get("chat_id") is not None:
+            row = self._chat(req.get("chat_id"))
+            out.update(provider_type=row["provider_type"], model_name=row["model_name"],
+                       family=chat_model.cli_family(row["provider_type"], row["model_name"]),
+                       effort_levels=chats.effort_levels(row["provider_type"], row["model_name"]))
+        return out
+
+    async def list_models(self, session, req, rid):
+        catalog = self.bridge.list_models
+        if catalog is None:
+            raise RpcError("unavailable")
+        return await catalog(chats.LOCAL_USER_ID)
+
+    async def set_model(self, session: PhoneSession, req, rid):
+        # Owner decision, 28 Sep 2026: the phone picks a chat's provider and
+        # model. Only that chat changes (the global default is the desktop's);
+        # a turn already running finishes on the model it started with.
+        row = self._chat(req.get("chat_id"))
+        conv = row["id"]
+        try:
+            # Off the loop: the readiness probes read the API key and may ask Ollama.
+            result = await asyncio.to_thread(
+                chat_model.set_chat_model, self.db, chats.LOCAL_USER_ID, conv,
+                req.get("provider_type"), req.get("model_name"), require_ready=True)
+        except chat_model.ChatModelError as exc:
+            raise RpcError(exc.code, **exc.extra)
+        logger.info("[remote] chat %s model -> %s / %s by %s", conv, result["provider_type"],
+                    result["model_name"], session.device_label)
+        # Stored already: a failed notification must not turn it into an error
+        # the phone would retry.
+        try:
+            CHANNEL.publish({"type": MODEL_CHANGED_TYPE, "conversation_id": conv,
+                             "provider_type": result["provider_type"],
+                             "model_name": result["model_name"],
+                             "by": session.device_label, "at": int(time.time() * 1000)})
+        except Exception:
+            logger.exception("[remote] chat_model_changed publish failed")
+        return result
 
     async def set_approval_mode(self, session: PhoneSession, req, rid):
         # Owner decision, 28 Sep 2026: a paired phone may change the mode, and

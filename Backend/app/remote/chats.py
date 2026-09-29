@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from agentic import cards, chat_model, turn_events
+from providers.effort_caps import get_effort_caps
 
 LOCAL_USER_ID = 1
 LIST_LIMIT = 200
@@ -22,6 +23,13 @@ KIND_TITLES = {"mcp": "Unity MCP", "mail": "Sohbetler arası not", "command": "K
 
 _CHAT_COLS = ("SELECT c.id, c.title, c.updated_at, c.hidden "
               "FROM conversations c WHERE c.user_id = ? AND c.side_of IS NULL")
+
+
+def effort_levels(provider_type: str, model_name: str) -> List[str]:
+    """The effort levels this model accepts: the registry behind the desktop's
+    `/effort-capabilities`. Empty when it names none."""
+    levels = get_effort_caps(provider_type, model_name).get("levels")
+    return [v for v in levels if isinstance(v, str)] if isinstance(levels, list) else []
 
 
 SLASH_FAMILIES = ("claude", "codex", "agy")

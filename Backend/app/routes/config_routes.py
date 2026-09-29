@@ -471,22 +471,11 @@ def create_config_router(db):
         {"id": "gpt-5.4-mini",  "name": "GPT-5.4 Mini",   "provider": "subscription"},
     ]
 
-    @router.get("/available-models")
-    async def get_available_models(
-        refresh: bool = False,
-        x_session_token: str = Header(alias="X-Session-Token", default=""),
-    ):
-        # Kimliksizken de iş yapıyordu: yanıt üretmek için Ollama'yı
-        # (127.0.0.1:11434) yokluyor, yani makinede hangi yerel modellerin
-        # kurulu olduğunu doğrulanmamış bir çağırana söylüyordu. Küçük ama
-        # keşif adımı; kapı işten ÖNCE.
-        _check_token(x_session_token)
-        # A forced refresh that arrives too soon after the previous one is
-        # downgraded to a cached read; the endpoint still answers, just without
-        # eleven fresh outbound calls.
-        if refresh and not _forced_refresh_allowed():
-            logger.info("Yenile isteği kısıldı; önbellekten yanıtlanıyor")
-            refresh = False
+    async def build_available_models(user_id: int | None, refresh: bool = False) -> dict:
+        """The model picker's catalog: `GET /available-models` and the phone's
+        `list_models` both end here, so the phone sees what the desktop sees,
+        with the same caching and timeouts. `user_id` None = no cloud merge
+        (the caller could not be identified)."""
         models = {
             "local": [],
             # Bulut listesi artık ELLE YAZILMIYOR (Karar: Burak, 30 Ağu 2026).
@@ -555,15 +544,41 @@ def create_config_router(db):
         # de asla yükseltmiyor. Burada patlamak, elle yazılı katalogla gayet iyi
         # çalışan model seçicisini komple çökertirdi.
         try:
-            _user_id, _ = get_current_user(db, x_session_token)
+            if user_id is None:
+                raise ValueError("caller not identified")
             models["cloud_sources"] = await asyncio.to_thread(
-                _merge_live_cloud, models["cloud"], _user_id, refresh
+                _merge_live_cloud, models["cloud"], user_id, refresh
             )
         except Exception as exc:
             logger.warning(f"Canlı bulut model listesi birleştirilemedi: {exc}")
             models["cloud_sources"] = {}
 
         return models
+
+    router.list_models = build_available_models
+
+    @router.get("/available-models")
+    async def get_available_models(
+        refresh: bool = False,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+    ):
+        # Kimliksizken de iş yapıyordu: yanıt üretmek için Ollama'yı
+        # (127.0.0.1:11434) yokluyor, yani makinede hangi yerel modellerin
+        # kurulu olduğunu doğrulanmamış bir çağırana söylüyordu. Küçük ama
+        # keşif adımı; kapı işten ÖNCE.
+        _check_token(x_session_token)
+        # A forced refresh that arrives too soon after the previous one is
+        # downgraded to a cached read; the endpoint still answers, just without
+        # eleven fresh outbound calls.
+        if refresh and not _forced_refresh_allowed():
+            logger.info("Yenile isteği kısıldı; önbellekten yanıtlanıyor")
+            refresh = False
+        try:
+            user_id, _ = get_current_user(db, x_session_token)
+        except Exception as exc:
+            logger.warning(f"Canlı bulut model listesi birleştirilemedi: {exc}")
+            user_id = None
+        return await build_available_models(user_id, refresh)
 
     @router.get("/effort-capabilities")
     async def effort_capabilities(

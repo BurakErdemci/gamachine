@@ -335,7 +335,8 @@ app.add_middleware(
 )
 
 app.include_router(create_auth_router(db))
-app.include_router(create_config_router(db))
+_config_router = create_config_router(db)
+app.include_router(_config_router)
 app.include_router(create_analysis_router(db))
 app.include_router(create_workspace_router(db))
 app.include_router(create_lsp_router(db))
@@ -348,7 +349,8 @@ from remote.bridge import RemoteBridge  # noqa: E402
 
 remote_bridge = RemoteBridge(db, stop_chat=_conversation_router.stop_chat,
                              list_slash_commands=_conversation_router.list_slash_commands,
-                             apply_approval_mode=_conversation_router.apply_approval_mode)
+                             apply_approval_mode=_conversation_router.apply_approval_mode,
+                             list_models=_config_router.list_models)
 app.include_router(create_remote_router(remote_bridge))
 
 

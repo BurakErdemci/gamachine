@@ -24,6 +24,13 @@ would (the backend has already applied and drained; this is only the news):
     {"type": "approval_mode_changed", "mode": "auto" | "balanced" | "step",
      "previous": str, "approved_pending": int, "by": "phone:<device name>",
      "at": <ms>}
+
+A phone that switched a chat's model tells the renderer, which re-reads that
+chat's model if the chat is on screen (the backend has stored it; this is only
+the news). The model is that chat's own, never the global default:
+
+    {"type": "chat_model_changed", "conversation_id": int, "provider_type": str,
+     "model_name": str, "by": "phone:<device name>", "at": <ms>}
 """
 from __future__ import annotations
 
@@ -36,6 +43,7 @@ logger = logging.getLogger(__name__)
 FRAME_TYPE = "remote_message"
 CARD_CLOSED_TYPE = "card_closed"
 MODE_CHANGED_TYPE = "approval_mode_changed"
+MODEL_CHANGED_TYPE = "chat_model_changed"
 QUEUE_SIZE = 100
 
 
