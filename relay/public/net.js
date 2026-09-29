@@ -464,6 +464,153 @@ export function modeFailureNote(error, reply = {}, wanted = '') {
   return 'Mod değiştirilemedi: ' + error;
 }
 
+// ---- model and effort (get_config, list_models, set_model, set_effort)
+
+// Labels as the desktop shows them (effort.label.* in i18n.tsx), in the
+// registry's canonical order.
+export const EFFORT_LABELS = {
+  auto: 'Auto', off: 'Kapalı', minimal: 'Minimal', low: 'Düşük', medium: 'Orta', high: 'Yüksek', xhigh: 'XHigh', max: 'Max',
+};
+
+const knownEffort = (level) => Object.prototype.hasOwnProperty.call(EFFORT_LABELS, level);
+
+export function effortLabel(level) {
+  return knownEffort(level) ? EFFORT_LABELS[level] : String(level);
+}
+
+// The desktop's own effort as get_config / effort_changed carry it:
+// {level, levels}. Anything the page cannot show honestly is null, which the
+// page words as "unknown".
+export function desktopEffort(value) {
+  if (!value || typeof value !== 'object' || typeof value.level !== 'string' || !Array.isArray(value.levels)) return null;
+  const levels = value.levels.filter((l) => typeof l === 'string' && knownEffort(l));
+  if (!levels.length || !levels.includes(value.level)) return null;
+  return { level: value.level, levels };
+}
+
+// A model is one <option> value: provider and model id, split at the first `|`.
+export function modelValue(providerType, modelName) {
+  return String(providerType) + '|' + String(modelName ?? '');
+}
+
+export function parseModelValue(value) {
+  const at = typeof value === 'string' ? value.indexOf('|') : -1;
+  if (at < 1) return null;
+  return { provider_type: value.slice(0, at), model_name: value.slice(at + 1) };
+}
+
+const MODEL_GROUPS = [
+  { key: 'subscription', label: 'Abonelik (komut satırı)' },
+  { key: 'cloud', label: 'Bulut (API)' },
+  { key: 'local', label: 'Yerel' },
+];
+
+// The picker's catalog as option groups. The chat's current model is always
+// there, even when the catalog does not list it (a typed id, a model gone from
+// a live list): the select must show what the chat has. Cloud models the
+// account cannot call (`available` is not true) are left out; they could only
+// be refused with `not_ready`.
+export function modelGroups(catalog, current) {
+  const groups = [];
+  const seen = new Set();
+  const currentValue = current ? modelValue(current.provider_type, current.model_name) : null;
+  for (const { key, label } of MODEL_GROUPS) {
+    const items = [];
+    for (const m of Array.isArray(catalog?.[key]) ? catalog[key] : []) {
+      if (!m || typeof m.id !== 'string' || !m.id || typeof m.provider !== 'string' || !m.provider) continue;
+      if (key === 'cloud' && m.available !== true) continue;
+      const value = modelValue(m.provider, m.id);
+      if (seen.has(value)) continue;
+      seen.add(value);
+      items.push({ value, label: typeof m.name === 'string' && m.name ? m.name : m.id });
+    }
+    if (items.length) groups.push({ label, items });
+  }
+  if (currentValue && !seen.has(currentValue)) {
+    const name = current.model_name || 'sağlayıcının varsayılanı';
+    groups.unshift({ label: 'Bu sohbetteki', items: [{ value: currentValue, label: current.provider_type + ' · ' + name }] });
+  }
+  return { groups, currentValue };
+}
+
+// Refusals every request can meet, worded once.
+function commonFailure(error) {
+  switch (error) {
+    case 'not_ready': return 'Önce bilgisayara bağlanmalı.';
+    case 'busy': return 'Bilgisayar şu an meşgul; biraz sonra tekrar dene.';
+    case 'timeout': return 'Bilgisayardan yanıt gelmedi.';
+    case 'disconnected': return 'Bağlantı koptu; bağlanınca tekrar dene.';
+    case 'internal': return 'Bilgisayarda beklenmeyen bir hata oldu.';
+    case 'too_large': return 'İstek gönderilemedi.';
+    default: return null;
+  }
+}
+
+// What the provider lacks, from not_ready's `needs`.
+const MODEL_NEEDS = {
+  apikey: 'Bu sağlayıcı için bilgisayarda API anahtarı girilmemiş.',
+  install: 'Bu modelin komut satırı aracı bilgisayarda kurulu değil.',
+  login: 'Bu modelin komut satırı aracında bilgisayarda oturum açılmamış.',
+  service: 'Yerel model servisi (Ollama) bilgisayarda çalışmıyor.',
+};
+
+// The model note when set_model failed; the chat's model did not change.
+// `not_ready` is both the link's own error (no `needs`) and the PC's refusal.
+export function modelFailureNote(error, reply = {}) {
+  if (error === 'not_ready' && reply?.needs !== undefined) {
+    return 'Model değişmedi. ' + (MODEL_NEEDS[reply.needs] || 'Sağlayıcı şu an hazır değil.');
+  }
+  const why = commonFailure(error)
+    ?? (error === 'unknown_chat' ? 'Bu sohbet artık yok.'
+      : error === 'bad_chat_id' ? 'Sohbet numarası geçersiz.'
+      : error === 'unknown_provider' ? 'Bilinmeyen sağlayıcı.'
+      : error === 'bad_model' ? 'Model adı geçersiz.'
+      : null);
+  return why ? 'Model değişmedi. ' + why : 'Model değiştirilemedi: ' + error;
+}
+
+// list_models failing leaves the select with the chat's current model only.
+export function modelListFailureNote(error) {
+  if (error === 'unavailable') return 'Bilgisayardaki uygulama model listesini veremedi.';
+  return 'Model listesi alınamadı: ' + (commonFailure(error) ?? error);
+}
+
+export function modelChangedNote(result) {
+  const name = result?.model_name || 'sağlayıcının varsayılanı';
+  return 'Model değişti: ' + name + '. Çalışan bir tur başladığı modelle biter; yeni model sonraki mesajdan itibaren geçerli.';
+}
+
+// The effort note when set_effort failed or was not delivered; nothing changed.
+export function effortFailureNote(error) {
+  const why = commonFailure(error)
+    ?? (error === 'bad_effort' ? 'Bu düşünme seviyesi geçersiz.' : null);
+  return why ? 'Düşünme seviyesi değişmedi. ' + why : 'Düşünme seviyesi değiştirilemedi: ' + error;
+}
+
+// set_effort replies {status: accepted | desktop_not_ready}. `accepted` only
+// says the desktop app got the request: it applies the level when the active
+// model offers it, and the page learns the real value from the PC afterwards.
+export function effortSetNote(status, level) {
+  if (status === 'accepted') return 'Bilgisayara iletildi: ' + effortLabel(level) + '.';
+  if (status === 'desktop_not_ready') return 'Düşünme seviyesi değişmedi. Bilgisayardaki uygulama hazır değil.';
+  return 'Düşünme seviyesi değişmedi. Yanıt: ' + (status || 'bilinmiyor');
+}
+
+// What the PC really has after a request the desktop accepted; it may not
+// offer the level (the model the desktop shows differs from the chat's).
+export function effortOutcomeNote(requested, actual) {
+  if (requested === actual) return 'Bilgisayarda değişti: ' + effortLabel(actual) + '.';
+  return 'Bilgisayar ' + effortLabel(requested) + ' seviyesini uygulamadı (açık sohbetin modeli desteklemiyor olabilir); şu an: '
+    + effortLabel(actual) + '.';
+}
+
+export const EFFORT_UNKNOWN_NOTE = 'Bilgisayardaki düşünme seviyesi bilinmiyor: uygulama açık değil ya da henüz bildirmedi.';
+
+export function configFailureNote(error) {
+  if (error === 'unknown_chat') return 'Bu sohbet artık yok.';
+  return 'Bilgisayardaki ayarlar okunamadı: ' + (commonFailure(error) ?? error);
+}
+
 // turn_end.status comes from the PC's turn-event ring: done | error | stopped.
 export function turnEndLine(status) {
   if (!status || status === 'done') return { text: 'Tur bitti', error: false };

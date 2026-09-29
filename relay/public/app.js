@@ -7,6 +7,8 @@ import {
   pair, Link, wsOrigin, ChatView, cardActions, answerFailure, eventLine, messageText, mergeChat, stopLine, SEND_TEXT_MAX,
   sendFailureNote, sentNote, cardsMissing, slashItems, filterSlash, withCommand, slashFailureNote,
   AUTO_MODE_WARNING, modeInfo, modeChangedNote, modeFailureNote,
+  desktopEffort, effortLabel, effortOutcomeNote, effortSetNote, effortFailureNote, EFFORT_UNKNOWN_NOTE, configFailureNote,
+  modelGroups, parseModelValue, modelChangedNote, modelFailureNote, modelListFailureNote,
 } from './net.js';
 
 const $ = (id) => document.getElementById(id);
@@ -145,6 +147,7 @@ function setStatus(status, info = {}) {
     return;
   }
   $('mode-select').disabled = true;
+  renderChatSettings();
   if (status === 'connecting') t.textContent = 'Bağlanıyor…';
   else if (status === 'pc_offline') t.textContent = 'Bilgisayar çevrimdışı' + (info.lastSeen ? ' (son görülme ' + clock(info.lastSeen) + ')' : '');
   else if (status === 'removed') {
@@ -198,6 +201,7 @@ async function refreshAll() {
       openChat(id);
     } else if (view.shown) {
       loadChat();
+      refreshChatSettings();
     }
   } catch (err) {
     $('main-note').textContent = 'Liste alınamadı: ' + err.message;
@@ -332,6 +336,157 @@ async function changeMode() {
   } finally {
     select.disabled = !link?.ready || !currentMode;
   }
+}
+
+// ---------------------------------------------------------------- model and effort
+
+// The page keeps no settings of its own. The model is the open chat's on the
+// PC, the effort is the PC's one level; both are read from the PC and changed
+// through set_model / set_effort, so the desktop's own controls move with them.
+const CATALOG_TTL_MS = 5 * 60 * 1000;
+const RECONCILE_MS = 1500;
+let catalog = null; // { at, data } | { at, error }
+let chatConfig = null; // { chatId, provider_type, model_name } of the open chat
+let pcEffort = null; // { level, levels }, or null when the PC does not know
+let requestedEffort = null; // asked for, not yet confirmed by the PC
+let settingsBusy = false;
+let settingsSeq = 0;
+let reconcileTimer = null;
+
+function applySettingsEnabled() {
+  const ready = !!link?.ready && !settingsBusy;
+  $('model-select').disabled = !ready || !chatConfig || chatConfig.chatId !== view.shown;
+  $('effort-select').disabled = !ready || !pcEffort;
+}
+
+function renderChatSettings() {
+  const model = $('model-select');
+  const effort = $('effort-select');
+  model.replaceChildren();
+  if (chatConfig && chatConfig.chatId === view.shown) {
+    const { groups, currentValue } = modelGroups(catalog?.data, chatConfig);
+    for (const g of groups) {
+      const group = el('optgroup', { label: g.label });
+      for (const item of g.items) group.append(el('option', { value: item.value, textContent: item.label }));
+      model.append(group);
+    }
+    model.value = currentValue;
+  }
+  effort.replaceChildren();
+  const note = $('effort-note');
+  if (pcEffort) {
+    for (const level of pcEffort.levels) effort.append(el('option', { value: level, textContent: effortLabel(level) }));
+    effort.value = pcEffort.level;
+    if (note.textContent === EFFORT_UNKNOWN_NOTE) note.textContent = '';
+  } else {
+    effort.append(el('option', { value: '', textContent: 'Bilinmiyor' }));
+    note.textContent = EFFORT_UNKNOWN_NOTE;
+  }
+  applySettingsEnabled();
+}
+
+// `source` says whether this is what the PC itself told the page ('told') or
+// what the page read after its own request ('reconcile'); only a reconcile
+// that still disagrees means the desktop did not apply the level.
+function takePcEffort(next, source) {
+  pcEffort = next;
+  if (requestedEffort !== null && next && (next.level === requestedEffort || source === 'reconcile')) {
+    $('effort-note').textContent = effortOutcomeNote(requestedEffort, next.level);
+    requestedEffort = null;
+  }
+  renderChatSettings();
+}
+
+// Read when a chat opens, when the link comes back, and when the PC says
+// something changed. A slower read for a chat just left never lands.
+async function refreshChatSettings(source = 'told') {
+  const chatId = view.shown;
+  if (!chatId || !link?.ready) return;
+  const seq = ++settingsSeq;
+  const wantCatalog = !catalog || catalog.error || Date.now() - catalog.at > CATALOG_TTL_MS;
+  const [cfg, list] = await Promise.allSettled([
+    call('get_config', { chat_id: chatId }),
+    wantCatalog ? call('list_models') : Promise.resolve(null),
+  ]);
+  if (seq !== settingsSeq || view.shown !== chatId) return;
+  if (list.status === 'fulfilled') {
+    if (list.value) catalog = { at: Date.now(), data: list.value };
+  } else {
+    catalog = { at: Date.now(), error: list.reason?.message };
+    $('model-note').textContent = modelListFailureNote(list.reason?.message);
+  }
+  if (cfg.status === 'fulfilled' && typeof cfg.value.provider_type === 'string' && typeof cfg.value.model_name === 'string') {
+    chatConfig = { chatId, provider_type: cfg.value.provider_type, model_name: cfg.value.model_name };
+    takePcEffort(desktopEffort(cfg.value.desktop_effort), source);
+  } else {
+    chatConfig = null;
+    $('model-note').textContent = configFailureNote(cfg.status === 'rejected' ? cfg.reason?.message : 'bad_reply');
+    renderChatSettings();
+  }
+}
+
+async function changeModel() {
+  const select = $('model-select');
+  const chatId = view.shown;
+  const wanted = parseModelValue(select.value);
+  if (!wanted || !chatId || chatConfig?.chatId !== chatId) return;
+  if (wanted.provider_type === chatConfig.provider_type && wanted.model_name === chatConfig.model_name) return;
+  const note = $('model-note');
+  settingsBusy = true;
+  applySettingsEnabled();
+  note.textContent = 'Değiştiriliyor…';
+  let changed = false;
+  try {
+    const r = await call('set_model', { chat_id: chatId, ...wanted });
+    if (view.shown === chatId) {
+      chatConfig = { chatId, provider_type: r.provider_type, model_name: r.model_name };
+      note.textContent = modelChangedNote(r);
+    }
+    changed = true;
+  } catch (err) {
+    if (view.shown === chatId) note.textContent = modelFailureNote(err.message, err.reply);
+  } finally {
+    settingsBusy = false;
+    renderChatSettings();
+  }
+  // The desktop follows the change: its effort levels belong to the new model.
+  if (changed) refreshChatSettings();
+}
+
+async function changeEffort() {
+  const select = $('effort-select');
+  const level = select.value;
+  if (!pcEffort || level === pcEffort.level) return;
+  const note = $('effort-note');
+  settingsBusy = true;
+  applySettingsEnabled();
+  note.textContent = 'Değiştiriliyor…';
+  try {
+    const r = await call('set_effort', { level });
+    note.textContent = effortSetNote(r.status, level);
+    if (r.status === 'accepted') {
+      // Shown as asked until the PC says what it really has.
+      requestedEffort = level;
+      pcEffort = { ...pcEffort, level };
+      clearTimeout(reconcileTimer);
+      reconcileTimer = setTimeout(() => refreshChatSettings('reconcile'), RECONCILE_MS);
+    }
+  } catch (err) {
+    note.textContent = effortFailureNote(err.message);
+  } finally {
+    settingsBusy = false;
+    renderChatSettings();
+  }
+}
+
+function clearChatSettings() {
+  settingsSeq++;
+  chatConfig = null;
+  requestedEffort = null;
+  clearTimeout(reconcileTimer);
+  $('model-note').textContent = '';
+  $('effort-note').textContent = '';
+  renderChatSettings();
 }
 
 // ---------------------------------------------------------------- chat view
@@ -474,16 +629,19 @@ function openChat(id) {
   liveText = null;
   $('composer-note').textContent = '';
   closeSlash();
+  clearChatSettings();
   show('chat');
   renderChatHeader();
   renderCards();
   loadChat();
+  refreshChatSettings();
 }
 
 function closeChat() {
   const id = view.hide();
   if (id) closeOnPc(id);
   closeSlash();
+  clearChatSettings();
   show('main');
 }
 
@@ -504,6 +662,8 @@ function onPush(msg) {
       chats = mergeChat(chats, msg.chat);
       renderChats();
       renderChatHeader();
+      // The model may have been changed on the desktop while this chat is open.
+      if (msg.chat.chat_id === view.shown && chatConfig && msg.chat.model !== chatConfig.model_name) refreshChatSettings();
     } else {
       refreshAll();
     }
@@ -513,6 +673,10 @@ function onPush(msg) {
     if (msg.card.chat_id === view.shown) revealCard(msg.card.card_id);
   } else if (msg.type === 'card_closed') {
     removeCard(msg.card_id);
+  } else if (msg.type === 'effort_changed') {
+    takePcEffort(desktopEffort(msg.desktop_effort), 'told');
+  } else if (msg.type === 'chat_model_changed') {
+    if (msg.chat_id === view.shown) refreshChatSettings();
   } else if (msg.type === 'gap') {
     const what = view.onGap(msg.chat_id);
     if (what === 'reload') loadChat();
@@ -620,6 +784,8 @@ function wire() {
   $('btn-unpair').addEventListener('click', unpair);
   $('btn-notify').addEventListener('click', enableNotifications);
   $('mode-select').addEventListener('change', changeMode);
+  $('model-select').addEventListener('change', changeModel);
+  $('effort-select').addEventListener('change', changeEffort);
   $('btn-slash').addEventListener('click', toggleSlash);
   $('slash-filter').addEventListener('input', renderSlash);
 
@@ -670,7 +836,10 @@ function wire() {
   });
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && link) link.wake();
+    if (document.visibilityState === 'visible' && link) {
+      link.wake();
+      refreshChatSettings();
+    }
   });
   window.addEventListener('online', () => link?.wake());
   window.addEventListener('hashchange', () => handleHash(location.hash));
