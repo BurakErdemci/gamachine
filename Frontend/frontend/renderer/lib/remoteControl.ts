@@ -423,33 +423,39 @@ export interface RemoteEffortOptions {
   level: string;
   /** What the active provider and model accept; null until the registry answered. */
   levels: string[] | null;
+  /** Ultracode is on (Claude subscription only); the phone page says so. */
+  ultracode: boolean;
+  /** Chooses a level exactly as a click in the effort panel does (home.tsx
+   *  `chooseEffort`: choosing a level also switches Ultracode off). */
   setLevel: (level: any) => void;
   showToast: (message: string, type: any) => void;
 }
 
-export function useRemoteEffort({ api, token, level, levels, setLevel, showToast }: RemoteEffortOptions): void {
+export function useRemoteEffort({ api, token, level, levels, ultracode, setLevel, showToast }: RemoteEffortOptions): void {
   const levelsKey = levels ? levels.join(',') : '';
   const known = levels?.includes(level) ?? false;
   useEffect(() => {
     if (!api || !token || !known) return;
     const report = () => {
-      axios.put(`${api}/remote/desktop-effort`, { level, levels: levelsKey.split(',') },
+      axios.put(`${api}/remote/desktop-effort`, { level, levels: levelsKey.split(','), ultracode },
         { headers: { 'X-Session-Token': token } }).catch(() => {});
     };
     report();
     const timer = setInterval(report, EFFORT_REPORT_EVERY_MS);
     return () => clearInterval(timer);
-  }, [api, token, level, levelsKey, known]);
+  }, [api, token, level, levelsKey, known, ultracode]);
 
-  const live = useRef({ level, levels, setLevel, showToast });
-  live.current = { level, levels, setLevel, showToast };
+  const live = useRef({ level, levels, ultracode, setLevel, showToast });
+  live.current = { level, levels, ultracode, setLevel, showToast };
   useEffect(() => onEffortRequest(request => {
     const now = live.current;
     if (!now.levels?.includes(request.level)) {
       console.warn('[remote] a phone asked for an effort the active model does not offer:', request.level);
       return;
     }
-    if (request.level === now.level) return;
+    // The level Ultracode overrides is still "chosen" on the desktop: a click
+    // on it there switches Ultracode off, so this does too.
+    if (request.level === now.level && !now.ultracode) return;
     now.setLevel(request.level);
     const cihaz = stripBidi(phoneDeviceName(request.by) || '') || cevir('chat.phoneUnnamed');
     now.showToast(cevir('effort.changedByPhone', {

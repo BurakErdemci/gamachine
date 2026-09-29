@@ -26,6 +26,8 @@ export interface EffortCaps {
 
 interface ControlPanelProps {
   thinkingLevel: ThinkingLevel;
+  // Chooses a level: home.tsx `chooseEffort`, which also switches Ultracode off.
+  // The phone's effort request goes through the same function.
   setThinkingLevel: (val: ThinkingLevel) => void;
   // Backend kayıtçısından aktif provider+model'in gerçek seviye listesi.
   effortCaps?: EffortCaps | null;
@@ -150,10 +152,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     return (
                       <button
                         key={id}
-                        onClick={() => {
-                          setThinkingLevel(id as ThinkingLevel);
-                          if (isClaudeSubscription && ultracode) setUltracode?.(false);
-                        }}
+                        onClick={() => setThinkingLevel(id as ThinkingLevel)}
                         title={meta.desc}
                         className={`flex-1 min-w-0 px-1 py-1.5 rounded-md text-[9px] font-semibold truncate transition-all ${
                           active

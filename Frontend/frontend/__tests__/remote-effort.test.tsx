@@ -11,6 +11,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, renderHook, act } from '@testing-library/react'
 import { useState } from 'react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const ipcInvoke = vi.hoisted(() => {
   const invoke = vi.fn()
@@ -80,12 +82,16 @@ const requested = (level: string, extra: Record<string, unknown> = {}) => ({
 const reports = () => mockedAxios.put.mock.calls.map(c => ({ url: c[0], body: c[1], headers: c[2]?.headers }))
 
 // As home.tsx: the page state, its caps, the report/apply hook and the stream reader.
-const page = (initial = { level: 'auto', levels: OPUS as string[] | null }) => renderHook(
+// `chooseEffort` is home.tsx's: choosing a level also switches Ultracode off
+// (the __tests__ source check below pins that home.tsx wires it to both callers).
+const page = (initial: { level: string; levels: string[] | null; ultracode?: boolean } = { level: 'auto', levels: OPUS }) => renderHook(
   (props: { levels: string[] | null }) => {
     const [level, setLevel] = useState(initial.level)
-    useRemoteEffort({ api: API, token: 'tok', level, levels: props.levels, setLevel, showToast })
+    const [ultracode, setUltracode] = useState(initial.ultracode ?? false)
+    const chooseEffort = (next: string) => { setLevel(next); if (ultracode) setUltracode(false) }
+    useRemoteEffort({ api: API, token: 'tok', level, levels: props.levels, ultracode, setLevel: chooseEffort, showToast })
     const chat = useChat(API, USER, CONFIG, '/ws', showToast, vi.fn(), (n: string) => n)
-    return { level, chat }
+    return { level, ultracode, chat }
   },
   { initialProps: { levels: initial.levels } },
 )
@@ -110,7 +116,7 @@ describe('reporting the desktop effort', () => {
     page()
     await flush()
     expect(reports()).toEqual([{
-      url: `${API}/remote/desktop-effort`, body: { level: 'auto', levels: OPUS }, headers: { 'X-Session-Token': 'tok' },
+      url: `${API}/remote/desktop-effort`, body: { level: 'auto', levels: OPUS, ultracode: false }, headers: { 'X-Session-Token': 'tok' },
     }])
   })
 
@@ -120,14 +126,14 @@ describe('reporting the desktop effort', () => {
     await pushWake(requested('high'))
     expect(result.current.level).toBe('high')
     expect(reports().map(r => r.body)).toEqual([
-      { level: 'auto', levels: OPUS },
-      { level: 'high', levels: OPUS },
+      { level: 'auto', levels: OPUS, ultracode: false },
+      { level: 'high', levels: OPUS, ultracode: false },
     ])
 
     // Another model with other levels arrives (level still on the list).
     rerender({ levels: ['auto', 'low', 'high'] })
     await flush()
-    expect(reports().at(-1)!.body).toEqual({ level: 'high', levels: ['auto', 'low', 'high'] })
+    expect(reports().at(-1)!.body).toEqual({ level: 'high', levels: ['auto', 'low', 'high'], ultracode: false })
   })
 
   it('reports nothing before the registry answered or while the level is not on it', async () => {
@@ -139,7 +145,7 @@ describe('reporting the desktop effort', () => {
     expect(reports()).toEqual([])
     rerender({ levels: ['auto', 'low'] })
     await flush()
-    expect(reports().map(r => r.body)).toEqual([{ level: 'auto', levels: ['auto', 'low'] }])
+    expect(reports().map(r => r.body)).toEqual([{ level: 'auto', levels: ['auto', 'low'], ultracode: false }])
   })
 
   it('repeats the report on a timer, so a backend that restarted learns it again', async () => {
@@ -163,7 +169,7 @@ describe('reporting the desktop effort', () => {
 
   it('does not report without a token', async () => {
     renderHook(() => useRemoteEffort({
-      api: API, token: undefined, level: 'auto', levels: OPUS, setLevel: vi.fn(), showToast,
+      api: API, token: undefined, level: 'auto', levels: OPUS, ultracode: false, setLevel: vi.fn(), showToast,
     }))
     await flush()
     expect(reports()).toEqual([])
@@ -181,7 +187,7 @@ describe('a phone asking for an effort', () => {
     ])
     expect(showToast.mock.calls[0][1]).toBe('info')
     // The change reaches the backend through the normal report, which confirms the real value.
-    expect(reports().at(-1)!.body).toEqual({ level: 'xhigh', levels: OPUS })
+    expect(reports().at(-1)!.body).toEqual({ level: 'xhigh', levels: OPUS, ultracode: false })
   })
 
   it('ignores a level the active model does not offer', async () => {
@@ -279,5 +285,50 @@ describe('remote_effort · parsing', () => {
       requested('None'), requested('turbo'), requested('high', { by: 'desktop' }), requested('high', { by: undefined })]) {
       expect(parseEffortRequest(bad), JSON.stringify(bad)).toBeNull()
     }
+  })
+})
+
+describe('Ultracode and a level from a phone', () => {
+  it('a level a phone asks for switches Ultracode off, as a click in the panel does', async () => {
+    const { result } = page({ level: 'auto', levels: OPUS, ultracode: true })
+    await flush()
+    await pushWake(requested('high'))
+    expect(result.current.level).toBe('high')
+    expect(result.current.ultracode).toBe(false)
+  })
+
+  it('the level Ultracode sits over counts as chosen too: asking for it switches Ultracode off', async () => {
+    const { result } = page({ level: 'high', levels: OPUS, ultracode: true })
+    await flush()
+    await pushWake(requested('high'))
+    expect(result.current.level).toBe('high')
+    expect(result.current.ultracode).toBe(false)
+  })
+
+  it('with Ultracode off, asking for the current level still changes nothing', async () => {
+    const { result } = page({ level: 'high', levels: OPUS })
+    await flush()
+    await pushWake(requested('high'))
+    expect(showToast).not.toHaveBeenCalled()
+    expect(result.current.ultracode).toBe(false)
+  })
+
+  it('reports whether Ultracode is on, and again when it goes off', async () => {
+    const { result } = page({ level: 'high', levels: OPUS, ultracode: true })
+    await flush()
+    expect(reports().at(-1)!.body).toEqual({ level: 'high', levels: OPUS, ultracode: true })
+    await pushWake(requested('low'))
+    expect(result.current.ultracode).toBe(false)
+    expect(reports().at(-1)!.body).toEqual({ level: 'low', levels: OPUS, ultracode: false })
+  })
+
+  it('home.tsx gives the panel and the phone hook the same function, and the panel has no second copy', () => {
+    const home = readFileSync(resolve(__dirname, '../renderer/pages/home.tsx'), 'utf8')
+    expect(home).toMatch(/const chooseEffort = useCallback\(\(level: ThinkingLevel\) => \{\s*setThinkingLevel\(level\);\s*if \(isClaudeSub && ultracode\) setUltracode\(false\);/)
+    expect(home).toMatch(/setThinkingLevel=\{chooseEffort\}/)
+    expect(home).toMatch(/setLevel: chooseEffort/)
+    const panel = readFileSync(resolve(__dirname, '../renderer/components/home/ControlPanel.tsx'), 'utf8')
+    expect(panel).toMatch(/onClick=\{\(\) => setThinkingLevel\(id as ThinkingLevel\)\}/)
+    expect(panel).not.toMatch(/setUltracode\?\.\(false\)/)
   })
 })

@@ -295,10 +295,18 @@ export default function Home() {
       setThinkingLevel(prev => (caps?.levels || []).includes(prev) ? prev : 'auto');
     }).catch(() => setEffortCaps(null));
   }, [API, auth.user, ai.effectiveProvider, ai.aiConfig?.model_name]);
+  // The one way to choose an effort level: a click in the effort panel and a
+  // level asked for from a phone both come here, so they cannot drift apart.
+  // Ultracode overrides the level, so choosing one switches it off.
+  const chooseEffort = useCallback((level: ThinkingLevel) => {
+    setThinkingLevel(level);
+    if (isClaudeSub && ultracode) setUltracode(false);
+  }, [isClaudeSub, ultracode]);
   // The phone page shows and sets this page's effort; see lib/remoteControl.ts.
   useRemoteEffort({
     api: API, token: auth.user?.sessionToken, level: thinkingLevel,
-    levels: effortCaps?.levels ?? null, setLevel: setThinkingLevel, showToast,
+    levels: effortCaps?.levels ?? null, ultracode: isClaudeSub && ultracode,
+    setLevel: chooseEffort, showToast,
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(true);
@@ -905,7 +913,7 @@ export default function Home() {
               onContextText={chat.applyContextReport}
             />
             <ControlPanel
-              thinkingLevel={thinkingLevel} setThinkingLevel={setThinkingLevel} generationMode={chat.generationMode} setGenerationMode={chat.setGenerationMode}
+              thinkingLevel={thinkingLevel} setThinkingLevel={chooseEffort} generationMode={chat.generationMode} setGenerationMode={chat.setGenerationMode}
               isAnalyzingProject={chat.isAnalyzingProject} activeConvId={chat.activeConvId} analyzeProject={chat.analyzeProject}
               exportMemory={chat.exportMemory} importMemory={chat.importMemory} compactConversation={chat.compactConversation} isCompacting={chat.isCompacting} contextUsage={chat.contextUsage}
               reportsOpen={reportsOpen} onToggleReports={() => setReportsOpen(v => !v)}
