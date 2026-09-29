@@ -418,8 +418,7 @@ def _oturum_saglayici_anahtari(provider_type: str, model_name: str) -> str:
     """
     if provider_type != "subscription":
         return provider_type
-    from providers.cli_base import env_family
-    return env_family(model_name or "claude")
+    return chat_model.cli_family(provider_type, model_name)
 
 
 def _message_agent(provider_type: str, model_name: str) -> str:

@@ -401,3 +401,12 @@ def test_provider_ready_answers_for_an_explicit_pair(db, client):
     bad = client.get("/provider-ready/1", headers=H,
                      params={"provider_type": "claude", "model_name": CLAUDE})
     assert (bad.status_code, bad.json()["detail"]) == (400, "unknown_provider")
+
+
+def test_a_capitalised_subscription_id_has_one_cli_family():
+    seen = []
+    state = cm.provider_readiness(
+        None, 1, "subscription", "GPT-6-LUNA",
+        cli_state=lambda fam: seen.append(fam) or {"installed": True, "loggedIn": None})
+    assert seen == ["codex"] and state["provider"] == "codex"
+    assert cr._oturum_saglayici_anahtari("subscription", "GPT-6-LUNA") == "codex"

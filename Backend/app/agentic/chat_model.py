@@ -156,7 +156,7 @@ def provider_readiness(db, user_id: int, provider_type: str, model_name: str, *,
         return {"ready": has_key, "kind": "api", "provider": provider_type,
                 "needs": None if has_key else "apikey"}
     # Same family mapping as manager.get_provider (pinned by a test).
-    family = env_family(model_name or "claude")
+    family = cli_family(provider_type, model_name)
     state = (cli_state or _cli_state)(family) or {}
     if not state.get("installed"):
         return {"ready": False, "kind": "cli", "provider": family, "needs": "install"}
