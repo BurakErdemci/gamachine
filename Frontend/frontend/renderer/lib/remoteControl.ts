@@ -6,7 +6,10 @@
  * which page JS never holds, and the keep-awake blocker lives there.
  */
 
-import type { TKey } from './i18n';
+import { useEffect, useRef } from 'react';
+import axios from 'axios';
+import { cevir, type TKey } from './i18n';
+import { stripBidi } from './modelText';
 
 export interface RemoteStatus {
   enabled: boolean;
@@ -366,4 +369,90 @@ export function closeAnsweredCard(cardId: string): boolean {
     }
   }
   return held;
+}
+
+// ── the desktop's effort, shown and set from a phone ─────────────────────
+// Effort is one page-level state (`thinkingLevel` in pages/home.tsx), not per
+// chat. The renderer owns it: it tells the backend what it has (so a phone can
+// show it) and applies a level a phone asks for (`remote_effort` frames).
+
+export interface EffortRequest {
+  level: RemoteEffort;
+  /** `phone:<name>`. */
+  by: string;
+}
+
+/** Strict on purpose: a level off the canonical scale is no request. */
+export function parseEffortRequest(data: unknown): EffortRequest | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.type !== 'remote_effort') return null;
+  if (typeof d.level !== 'string' || !(REMOTE_EFFORTS as readonly string[]).includes(d.level)) return null;
+  if (typeof d.by !== 'string' || phoneDeviceName(d.by) === null) return null;
+  return { level: d.level as RemoteEffort, by: d.by };
+}
+
+// The stream that carries the frame lives in useChat, the page state in
+// home.tsx; like answered cards, the page registers and the stream delivers.
+type EffortListener = (request: EffortRequest) => void;
+const effortListeners = new Set<EffortListener>();
+
+export function onEffortRequest(listener: EffortListener): () => void {
+  effortListeners.add(listener);
+  return () => { effortListeners.delete(listener); };
+}
+
+export function deliverEffortRequest(request: EffortRequest): void {
+  for (const listener of [...effortListeners]) {
+    try {
+      listener(request);
+    } catch (err) {
+      console.warn('[remote] applying a phone effort request failed', err);
+    }
+  }
+}
+
+/** Also the retry after a backend that was not up yet or restarted, which
+ *  forgets the snapshot: the backend ignores a report that changes nothing. */
+export const EFFORT_REPORT_EVERY_MS = 30_000;
+
+export interface RemoteEffortOptions {
+  api: string | undefined;
+  token: string | undefined;
+  level: string;
+  /** What the active provider and model accept; null until the registry answered. */
+  levels: string[] | null;
+  setLevel: (level: any) => void;
+  showToast: (message: string, type: any) => void;
+}
+
+export function useRemoteEffort({ api, token, level, levels, setLevel, showToast }: RemoteEffortOptions): void {
+  const levelsKey = levels ? levels.join(',') : '';
+  const known = levels?.includes(level) ?? false;
+  useEffect(() => {
+    if (!api || !token || !known) return;
+    const report = () => {
+      axios.put(`${api}/remote/desktop-effort`, { level, levels: levelsKey.split(',') },
+        { headers: { 'X-Session-Token': token } }).catch(() => {});
+    };
+    report();
+    const timer = setInterval(report, EFFORT_REPORT_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [api, token, level, levelsKey, known]);
+
+  const live = useRef({ level, levels, setLevel, showToast });
+  live.current = { level, levels, setLevel, showToast };
+  useEffect(() => onEffortRequest(request => {
+    const now = live.current;
+    if (!now.levels?.includes(request.level)) {
+      console.warn('[remote] a phone asked for an effort the active model does not offer:', request.level);
+      return;
+    }
+    if (request.level === now.level) return;
+    now.setLevel(request.level);
+    const cihaz = stripBidi(phoneDeviceName(request.by) || '') || cevir('chat.phoneUnnamed');
+    now.showToast(cevir('effort.changedByPhone', {
+      cihaz, seviye: cevir(`effort.label.${request.level}` as TKey),
+    }), 'info');
+  }), []);
 }

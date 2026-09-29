@@ -12,7 +12,7 @@ import { apiHataMesaji } from '../../lib/apiError';
 import { stripBidi } from '../../lib/modelText';
 import { isBranchIn, leftTabOf } from '../../lib/convFamily';
 import {
-  claimRemoteMessage, onCardClosed, parseChatModelChanged, parseModeChanged, parseRemoteMessage, phoneDeviceName,
+  claimRemoteMessage, deliverEffortRequest, onCardClosed, parseEffortRequest, parseChatModelChanged, parseModeChanged, parseRemoteMessage, phoneDeviceName,
   type ModeChanged, type RemoteMessage,
 } from '../../lib/remoteControl';
 
@@ -1429,6 +1429,11 @@ export const useChat = (
                 if (data?.type === 'approval_mode_changed') {
                   const change = parseModeChanged(data);
                   if (change && !iptal) applyModeChangedRef.current(change);
+                  continue;
+                }
+                if (data?.type === 'remote_effort') {
+                  const request = parseEffortRequest(data);
+                  if (request && !iptal) deliverEffortRequest(request);
                   continue;
                 }
                 if (data?.type === 'chat_model_changed') {

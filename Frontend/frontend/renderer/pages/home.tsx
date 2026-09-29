@@ -47,6 +47,7 @@ import { ChatTabs, BranchButton, hasBranches } from '../components/home/ChatTabs
 import { SideChatPanel, SideQuestionButton } from '../components/home/SideChatPanel';
 import { SidebarToggle } from '../components/home/AwaitingBadge';
 import { RemoteBadge, useRemoteStatus } from '../components/home/RemoteBadge';
+import { useRemoteEffort } from '../lib/remoteControl';
 import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
@@ -294,6 +295,11 @@ export default function Home() {
       setThinkingLevel(prev => (caps?.levels || []).includes(prev) ? prev : 'auto');
     }).catch(() => setEffortCaps(null));
   }, [API, auth.user, ai.effectiveProvider, ai.aiConfig?.model_name]);
+  // The phone page shows and sets this page's effort; see lib/remoteControl.ts.
+  useRemoteEffort({
+    api: API, token: auth.user?.sessionToken, level: thinkingLevel,
+    levels: effortCaps?.levels ?? null, setLevel: setThinkingLevel, showToast,
+  });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [reportsOpen, setReportsOpen] = useState(false);
