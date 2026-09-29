@@ -307,6 +307,29 @@ export function parseModeChanged(data: unknown): ModeChanged | null {
   };
 }
 
+// ── a chat model a phone changed (`chat_model_changed` frames) ───────────
+
+export interface ChatModelChanged {
+  conversationId: number;
+  providerType: string;
+  modelName: string;
+  /** `phone:<name>`. */
+  by: string;
+}
+
+/** The backend has stored it already; the frame only says which chat to re-read. */
+export function parseChatModelChanged(data: unknown): ChatModelChanged | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.type !== 'chat_model_changed') return null;
+  const conversationId = d.conversation_id;
+  if (typeof conversationId !== 'number' || !Number.isSafeInteger(conversationId) || conversationId <= 0) return null;
+  if (typeof d.provider_type !== 'string' || !d.provider_type) return null;
+  if (typeof d.model_name !== 'string') return null;
+  if (typeof d.by !== 'string' || phoneDeviceName(d.by) === null) return null;
+  return { conversationId, providerType: d.provider_type, modelName: d.model_name, by: d.by };
+}
+
 // Open cards live in two hooks (useChat: a turn's command and question cards;
 // useMCPApproval: bridge, note and tray cards) but only useChat reads the
 // stream, so each store registers a closer here. A closer drops the card if it

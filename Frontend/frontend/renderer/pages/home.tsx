@@ -107,7 +107,8 @@ export default function Home() {
     fs.workspacePath, 
     showToast as any, 
     fs.refreshFileTree, 
-    fs.suggestFilePath
+    fs.suggestFilePath,
+    convId => { if (auth.user) ai.showChatModel(auth.user.id, convId); }
   );
   const autoTitles = useAutoChatTitles(API, auth.user?.id, showToast as any);
   const dictation = useDictationSettings(API, auth.user?.id, showToast as any);

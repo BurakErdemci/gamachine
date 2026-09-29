@@ -12,7 +12,7 @@ import { apiHataMesaji } from '../../lib/apiError';
 import { stripBidi } from '../../lib/modelText';
 import { isBranchIn, leftTabOf } from '../../lib/convFamily';
 import {
-  claimRemoteMessage, onCardClosed, parseModeChanged, parseRemoteMessage, phoneDeviceName,
+  claimRemoteMessage, onCardClosed, parseChatModelChanged, parseModeChanged, parseRemoteMessage, phoneDeviceName,
   type ModeChanged, type RemoteMessage,
 } from '../../lib/remoteControl';
 
@@ -172,8 +172,12 @@ export const useChat = (
   workspacePath: string | null,
   showToast: (msg: string, type: any) => void,
   refreshFileTree: () => void,
-  suggestFilePath: (name: string) => string
+  suggestFilePath: (name: string) => string,
+  // A phone switched the model of the chat on screen: the page re-reads it.
+  onActiveChatModelChanged?: (convId: number) => void,
 ) => {
+  const onActiveChatModelChangedRef = useRef(onActiveChatModelChanged);
+  onActiveChatModelChangedRef.current = onActiveChatModelChanged;
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const conversationsRef = useRef<Conversation[]>([]);
   conversationsRef.current = conversations;
@@ -1425,6 +1429,16 @@ export const useChat = (
                 if (data?.type === 'approval_mode_changed') {
                   const change = parseModeChanged(data);
                   if (change && !iptal) applyModeChangedRef.current(change);
+                  continue;
+                }
+                if (data?.type === 'chat_model_changed') {
+                  // Nothing is cached per chat: the page reads a chat's model
+                  // fresh whenever the chat comes on screen, so only the chat
+                  // on screen needs the news.
+                  const change = parseChatModelChanged(data);
+                  if (change && !iptal && change.conversationId === activeConvIdRef.current) {
+                    onActiveChatModelChangedRef.current?.(change.conversationId);
+                  }
                   continue;
                 }
                 if (data?.type !== 'wake' || iptal) continue;
