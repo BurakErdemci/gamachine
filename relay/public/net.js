@@ -479,13 +479,13 @@ export function effortLabel(level) {
 }
 
 // The desktop's own effort as get_config / effort_changed carry it:
-// {level, levels}. Anything the page cannot show honestly is null, which the
-// page words as "unknown".
+// {level, levels, ultracode}. Anything the page cannot show honestly is null,
+// which the page words as "unknown". `ultracode` is on only when the PC says so.
 export function desktopEffort(value) {
   if (!value || typeof value !== 'object' || typeof value.level !== 'string' || !Array.isArray(value.levels)) return null;
   const levels = value.levels.filter((l) => typeof l === 'string' && knownEffort(l));
   if (!levels.length || !levels.includes(value.level)) return null;
-  return { level: value.level, levels };
+  return { level: value.level, levels, ultracode: value.ultracode === true };
 }
 
 // A model is one <option> value: provider and model id, split at the first `|`.
@@ -605,11 +605,16 @@ export function effortSetNote(status, level) {
 
 // What the PC really has after a request the desktop accepted; it may not
 // offer the level (the model the desktop shows differs from the chat's).
-export function effortOutcomeNote(requested, actual) {
-  if (requested === actual) return 'Bilgisayarda değişti: ' + effortLabel(actual) + '.';
+export function effortOutcomeNote(requested, actual, ultracode = false) {
+  if (requested === actual && !ultracode) return 'Bilgisayarda değişti: ' + effortLabel(actual) + '.';
   return 'Bilgisayar ' + effortLabel(requested) + ' seviyesini uygulamadı (açık sohbetin modeli desteklemiyor olabilir); şu an: '
-    + effortLabel(actual) + '.';
+    + (ultracode ? 'Ultracode' : effortLabel(actual)) + '.';
 }
+
+// Ultracode is on at the PC: its panel then shows "Ultracode" and no level,
+// and choosing a level (even the one it sits over) switches it off. The select
+// shows the same, so that choosing that level is a change the page can send.
+export const ULTRACODE_OPTION = 'ultracode';
 
 export const EFFORT_UNKNOWN_NOTE = 'Bilgisayardaki düşünme seviyesi bilinmiyor: uygulama açık değil ya da henüz bildirmedi.';
 

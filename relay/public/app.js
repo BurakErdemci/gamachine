@@ -8,7 +8,7 @@ import {
   sendFailureNote, sentNote, cardsMissing, slashItems, filterSlash, withCommand, slashFailureNote,
   AUTO_MODE_WARNING, modeInfo, modeChangedNote, modeFailureNote,
   desktopEffort, effortLabel, effortOutcomeNote, effortSetNote, effortFailureNote, EFFORT_UNKNOWN_NOTE, configFailureNote,
-  modelGroups, parseModelValue, modelChangedNote, modelFailureNote, modelListFailureNote,
+  modelGroups, parseModelValue, modelChangedNote, modelFailureNote, modelListFailureNote, ULTRACODE_OPTION,
 } from './net.js';
 
 const $ = (id) => document.getElementById(id);
@@ -377,13 +377,15 @@ function renderChatSettings() {
   effort.replaceChildren();
   const note = $('effort-note');
   if (pcEffort) {
+    if (pcEffort.ultracode) effort.append(el('option', { value: ULTRACODE_OPTION, textContent: 'Ultracode' }));
     for (const level of pcEffort.levels) effort.append(el('option', { value: level, textContent: effortLabel(level) }));
-    effort.value = pcEffort.level;
+    effort.value = pcEffort.ultracode ? ULTRACODE_OPTION : pcEffort.level;
     if (note.textContent === EFFORT_UNKNOWN_NOTE) note.textContent = '';
   } else {
     effort.append(el('option', { value: '', textContent: 'Bilinmiyor' }));
     note.textContent = EFFORT_UNKNOWN_NOTE;
   }
+  $('effort-ultracode').hidden = !pcEffort?.ultracode;
   applySettingsEnabled();
 }
 
@@ -392,8 +394,8 @@ function renderChatSettings() {
 // that still disagrees means the desktop did not apply the level.
 function takePcEffort(next, source) {
   pcEffort = next;
-  if (requestedEffort !== null && next && (next.level === requestedEffort || source === 'reconcile')) {
-    $('effort-note').textContent = effortOutcomeNote(requestedEffort, next.level);
+  if (requestedEffort !== null && next && ((next.level === requestedEffort && !next.ultracode) || source === 'reconcile')) {
+    $('effort-note').textContent = effortOutcomeNote(requestedEffort, next.level, next.ultracode);
     requestedEffort = null;
   }
   renderChatSettings();
@@ -458,7 +460,7 @@ async function changeModel() {
 async function changeEffort() {
   const select = $('effort-select');
   const level = select.value;
-  if (!pcEffort || level === pcEffort.level) return;
+  if (!pcEffort || level === ULTRACODE_OPTION || (level === pcEffort.level && !pcEffort.ultracode)) return;
   const note = $('effort-note');
   settingsBusy = true;
   applySettingsEnabled();
@@ -469,7 +471,7 @@ async function changeEffort() {
     if (r.status === 'accepted') {
       // Shown as asked until the PC says what it really has.
       requestedEffort = level;
-      pcEffort = { ...pcEffort, level };
+      pcEffort = { ...pcEffort, level, ultracode: false };
       clearTimeout(reconcileTimer);
       reconcileTimer = setTimeout(() => refreshChatSettings('reconcile'), RECONCILE_MS);
     }

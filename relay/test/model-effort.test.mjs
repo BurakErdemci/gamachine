@@ -9,7 +9,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import {
   EFFORT_LABELS, EFFORT_UNKNOWN_NOTE, effortLabel, desktopEffort, modelValue, parseModelValue, modelGroups,
   modelFailureNote, modelListFailureNote, modelChangedNote, effortFailureNote, effortSetNote, effortOutcomeNote,
-  configFailureNote,
+  configFailureNote, ULTRACODE_OPTION,
 } from '../public/net.js';
 
 // Every level the registry can return (Backend effort_caps.py EFFORT_LEVELS).
@@ -33,12 +33,19 @@ test('the effort labels are the desktop\'s words for every level the registry ca
 });
 
 test('the desktop effort is shown only when it is whole and consistent', () => {
-  assert.deepEqual(desktopEffort({ level: 'high', levels: ['auto', 'low', 'high'] }), { level: 'high', levels: ['auto', 'low', 'high'] });
+  assert.deepEqual(desktopEffort({ level: 'high', levels: ['auto', 'low', 'high'] }),
+    { level: 'high', levels: ['auto', 'low', 'high'], ultracode: false });
   // A level the page has no word for is dropped from the list, not shown raw.
-  assert.deepEqual(desktopEffort({ level: 'low', levels: ['auto', 'low', 'turbo'] }), { level: 'low', levels: ['auto', 'low'] });
+  assert.deepEqual(desktopEffort({ level: 'low', levels: ['auto', 'low', 'turbo'] }),
+    { level: 'low', levels: ['auto', 'low'], ultracode: false });
   // OpenAI API models offer `none`.
   assert.deepEqual(desktopEffort({ level: 'none', levels: ['auto', 'none', 'low'] }),
-    { level: 'none', levels: ['auto', 'none', 'low'] });
+    { level: 'none', levels: ['auto', 'none', 'low'], ultracode: false });
+  // Ultracode is on only when the PC says exactly true.
+  assert.equal(desktopEffort({ level: 'high', levels: ['high'], ultracode: true }).ultracode, true);
+  for (const notTrue of ['true', 1, {}, null, undefined]) {
+    assert.equal(desktopEffort({ level: 'high', levels: ['high'], ultracode: notTrue }).ultracode, false, String(notTrue));
+  }
   for (const bad of [null, undefined, 'high', 7, [], {}, { level: 'high' }, { levels: ['high'] },
     { level: 5, levels: ['high'] }, { level: 'high', levels: 'high' }, { level: 'high', levels: [] },
     { level: 'high', levels: ['low'] }, { level: 'turbo', levels: ['turbo'] }, { level: 'constructor', levels: ['constructor'] }]) {
@@ -58,6 +65,8 @@ test('what the PC really has is reported after an accepted request', () => {
   const refused = effortOutcomeNote('max', 'high');
   assert.match(refused, /Max seviyesini uygulamadı/);
   assert.match(refused, /şu an: Yüksek\.$/);
+  // Ultracode still on: the level was not applied, whatever level it sits over.
+  assert.match(effortOutcomeNote('high', 'high', true), /Yüksek seviyesini uygulamadı[\s\S]*şu an: Ultracode\.$/);
 });
 
 test('every failure of set_effort says plainly that nothing changed', () => {
@@ -195,12 +204,21 @@ const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
 test('the open-chat screen holds the model and effort selects, and says a running turn keeps its model', () => {
   const chat = html.slice(html.indexOf('<section id="screen-chat"'));
-  for (const id of ['model-select', 'model-note', 'effort-select', 'effort-note']) {
+  for (const id of ['model-select', 'model-note', 'effort-select', 'effort-note', 'effort-ultracode']) {
     assert.ok(chat.includes(`id="${id}"`), `#${id} is not on the chat screen`);
   }
   assert.match(chat, /<select id="model-select"[^>]*disabled/);
   assert.match(chat, /<select id="effort-select"[^>]*disabled/);
   assert.match(chat, /Çalışan bir tur, başladığı modelle biter\./);
+  assert.match(chat, /<p id="effort-ultracode"[^>]*hidden>Bilgisayarda Ultracode açık\./);
+});
+
+test('Ultracode at the PC shows as the select\'s choice, and picking any level is a change to send', () => {
+  assert.equal(ULTRACODE_OPTION, 'ultracode');
+  assert.ok(!Object.prototype.hasOwnProperty.call(EFFORT_LABELS, ULTRACODE_OPTION), 'it must not collide with a level');
+  assert.match(app, /if \(pcEffort\.ultracode\) effort\.append\(el\('option', \{ value: ULTRACODE_OPTION/);
+  assert.match(app, /level === ULTRACODE_OPTION \|\| \(level === pcEffort\.level && !pcEffort\.ultracode\)/);
+  assert.match(app, /\$\('effort-ultracode'\)\.hidden = !pcEffort\?\.ultracode/);
 });
 
 test('the page changes the PC\'s settings through set_model and set_effort and keeps no effort of its own', () => {
