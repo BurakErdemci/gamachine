@@ -299,9 +299,12 @@ class Dispatcher:
         row = self._chat(req.get("chat_id"))
         conv = row["id"]
         # A model the desktop's picker refuses for the plan (`disabled` in
-        # /cli-models), refused the same way; the catalog function carries the check.
-        plan_locked = getattr(self.bridge.list_models, "plan_locked", None)
-        if plan_locked and plan_locked(req.get("provider_type"), req.get("model_name")):
+        # /cli-models) is refused the same way. Without the check the pick is
+        # refused too: an unwired lock must not let every model through.
+        plan_locked = self.bridge.plan_locked
+        if plan_locked is None:
+            raise RpcError("unavailable")
+        if plan_locked(req.get("provider_type"), req.get("model_name")):
             raise RpcError("plan_locked")
         stored: list = []
         try:

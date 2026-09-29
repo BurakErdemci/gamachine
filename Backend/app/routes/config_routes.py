@@ -661,9 +661,7 @@ def create_config_router(db):
         cli = subscription_family(model_name)
         return cli in ("cursor", "copilot") and bool(_apply_plan_caps(cli, [{"id": model_name}])[0].get("disabled"))
 
-    # Travels with the function the bridge is handed (main.py passes only
-    # `router.list_models`).
-    build_available_models.plan_locked = plan_locked
+    router.plan_locked = plan_locked
 
     @router.get("/cli-models/{cli}")
     async def cli_models(cli: str, x_session_token: str = Header(alias="X-Session-Token", default="")):

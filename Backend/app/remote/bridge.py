@@ -47,13 +47,17 @@ class RemoteBridge:
                  clock: Callable[[], float] = time.time,
                  list_slash_commands: Optional[Callable[[str], Awaitable[dict]]] = None,
                  apply_approval_mode: Optional[Callable[[str, str], dict]] = None,
-                 list_models: Optional[Callable[[Optional[int]], Awaitable[dict]]] = None):
+                 list_models: Optional[Callable[[Optional[int]], Awaitable[dict]]] = None,
+                 plan_locked: Optional[Callable[[object, object], bool]] = None):
         self.db = db
         self.store = RemoteStore(db)
         self.stop_chat = stop_chat
         self.list_slash_commands = list_slash_commands
         self.apply_approval_mode = apply_approval_mode
         self.list_models = list_models
+        # (provider_type, model_name) -> True when the desktop's picker would refuse
+        # the model for the plan. set_model refuses every pick while it is missing.
+        self.plan_locked = plan_locked
         self.clock = clock
         self.keys: Optional[Keys] = None
         self.client: Optional[RelayClient] = None

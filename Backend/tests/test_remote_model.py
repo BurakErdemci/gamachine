@@ -701,7 +701,7 @@ async def test_the_catalog_has_no_lock_when_the_plan_is_unknown_or_open(env, mon
 
 
 async def test_a_plan_locked_model_is_refused_and_moves_nothing(env, auto_only_copilot):
-    env.bridge.list_models = create_config_router(env.db).list_models
+    env.bridge.plan_locked = create_config_router(env.db).plan_locked
     env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
     phone = await pair_phone(env)
     conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
@@ -714,7 +714,7 @@ async def test_a_plan_locked_model_is_refused_and_moves_nothing(env, auto_only_c
 
 
 async def test_a_model_the_plan_allows_is_still_picked(env, auto_only_copilot):
-    env.bridge.list_models = create_config_router(env.db).list_models
+    env.bridge.plan_locked = create_config_router(env.db).plan_locked
     phone = await pair_phone(env)
     conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
     assert (await switch(phone, conv, "subscription", "copilot-auto"))["ok"] is True
@@ -725,7 +725,7 @@ async def test_a_model_the_plan_allows_is_still_picked(env, auto_only_copilot):
 async def test_a_differently_cased_locked_id_is_refused_like_the_lowercase_one(env, auto_only_copilot, spelling):
     # The runner lower-cases the id to pick the CLI, so this id runs on copilot.
     assert chat_model.subscription_family(spelling) == "copilot"
-    env.bridge.list_models = create_config_router(env.db).list_models
+    env.bridge.plan_locked = create_config_router(env.db).plan_locked
     phone = await pair_phone(env)
     conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
     r = await switch(phone, conv, "subscription", spelling)
@@ -736,7 +736,7 @@ async def test_a_differently_cased_locked_id_is_refused_like_the_lowercase_one(e
 def test_plan_locked_reads_the_family_the_runner_dispatches_on(env, monkeypatch):
     import providers.oneshot_cli as oc
     monkeypatch.setattr(oc, "get_named_models_cap", lambda cli: False if cli == "cursor" else None)
-    locked = create_config_router(env.db).list_models.plan_locked
+    locked = create_config_router(env.db).plan_locked
     assert locked("subscription", "Cursor-gpt-5") is True
     assert locked("subscription", "cursor-gpt-5") is True
     assert locked("subscription", "cursor-auto") is False
@@ -744,9 +744,54 @@ def test_plan_locked_reads_the_family_the_runner_dispatches_on(env, monkeypatch)
 
 
 def test_plan_locked_follows_the_same_function_as_the_desktop_list(env, auto_only_copilot):
-    locked = create_config_router(env.db).list_models.plan_locked
+    locked = create_config_router(env.db).plan_locked
     assert locked("subscription", LOCKED_COPILOT) is True
     assert locked("subscription", "cursor-auto") is False  # cursor's cap is unknown here
     assert locked("subscription", "copilot-auto") is False
     assert locked("openai", LOCKED_COPILOT) is False
     assert locked(None, None) is False and locked("subscription", 7) is False
+
+
+async def test_a_bridge_without_the_plan_lock_refuses_every_pick(env, auto_only_copilot):
+    env.bridge.plan_locked = None
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
+    q = CHANNEL.listen()
+    try:
+        for model in (LOCKED_COPILOT, "copilot-auto", "gpt-6-luna"):
+            r = await switch(phone, conv, "subscription", model)
+            assert r["ok"] is False and r["error"] == "unavailable", r
+        assert q.empty()
+    finally:
+        CHANNEL.unlisten(q)
+    assert env.db.get_conversation_model(conv) == ("subscription", "claude-opus-5")
+
+
+def _main_config_router_wiring():
+    """{RemoteBridge keyword: config-router attribute} as main.py builds the bridge."""
+    import ast
+    from pathlib import Path
+    tree = ast.parse((Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8"))
+    call = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "RemoteBridge")
+    return {kw.arg: kw.value.attr for kw in call.keywords
+            if isinstance(kw.value, ast.Attribute) and getattr(kw.value.value, "id", None) == "_config_router"}
+
+
+async def test_the_bridge_main_builds_refuses_a_plan_locked_model(env, auto_only_copilot):
+    from types import SimpleNamespace
+    from remote.bridge import RemoteBridge
+    from remote.rpc import RpcError
+    wiring = _main_config_router_wiring()
+    assert {"list_models", "plan_locked"} <= set(wiring), wiring
+    router = create_config_router(env.db)
+    bridge = RemoteBridge(env.db, **{kw: getattr(router, attr) for kw, attr in wiring.items()})
+    conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
+    session = SimpleNamespace(device_label="iPhone")
+    request = {"chat_id": conv, "provider_type": "subscription", "model_name": LOCKED_COPILOT}
+    with pytest.raises(RpcError) as refused:
+        await bridge.rpc.set_model(session, request, "r")
+    assert refused.value.error == "plan_locked"
+    assert env.db.get_conversation_model(conv) == ("subscription", "claude-opus-5")
+    picked = await bridge.rpc.set_model(session, {**request, "model_name": "copilot-auto"}, "r")
+    assert picked == {"provider_type": "subscription", "model_name": "copilot-auto"}

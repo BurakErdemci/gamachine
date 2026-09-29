@@ -59,7 +59,8 @@ async def env(tmp_path, monkeypatch):
         return {"status": "ok"}
 
     clock = Clock()
-    bridge = RemoteBridge(db, stop_chat=stop_chat, clock=clock)
+    # No plan lock unless a test wires one (set_model refuses everything without it).
+    bridge = RemoteBridge(db, stop_chat=stop_chat, clock=clock, plan_locked=lambda provider_type, model_name: False)
     bridge.store.set_relay_url(relay.url)
     await bridge.startup()
     phones = []
