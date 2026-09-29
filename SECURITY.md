@@ -74,8 +74,11 @@ code: `relay/`; PC side: `Backend/app/remote/`.
   can be pointed at a relay the user runs.
 - **What a paired phone can do:** list and watch chats, answer approval and
   question cards, stop a turn, send messages (a text starting with `/` is an
-  ordinary message, so slash commands work), and read and change the global
-  approval mode. It cannot change other settings, touch API keys, install
+  ordinary message, so slash commands work) and pick the effort of one message
+  (checked against the levels of that chat's model), switch a chat's provider
+  and model (only to one that is ready on the PC; it changes that chat alone,
+  never the global default), and read and change the global approval mode. It
+  cannot change other settings, touch API keys, install
   CLIs, or run file operations. By owner decision, changing the approval mode
   from the phone does **not** need the UI secret that the local
   `POST /approval-mode` route requires; that secret exists to stop the Unity
