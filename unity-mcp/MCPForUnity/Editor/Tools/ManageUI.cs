@@ -639,14 +639,10 @@ namespace MCPForUnity.Editor.Tools
 
         private static bool TryFloat(JToken token, out float result)
         {
-            result = 0f;
-            if (token == null) return false;
-            if (token.Type == JTokenType.Float || token.Type == JTokenType.Integer)
-            {
-                result = token.ToObject<float>();
-                return true;
-            }
-            return float.TryParse(token.ToString(), out result);
+            // Invariant parse: current-culture TryParse reads "2.5" as 25 on tr-TR.
+            float? parsed = ParamCoercion.CoerceFloatNullable(token);
+            result = parsed ?? 0f;
+            return parsed.HasValue;
         }
 
         private static bool TryInt(JToken token, out int result)

@@ -293,6 +293,24 @@ namespace MCPForUnityTests.Editor.Tools
         }
 
         [Test]
+        public void CreatePanelSettings_StringDpi_ParsedWithInvariantCulture()
+        {
+            string path = $"{TempRoot}/StringDpi_{Guid.NewGuid():N}.asset";
+
+            var result = ToJObject(ManageUI.HandleCommand(new JObject
+            {
+                ["action"] = "create_panel_settings",
+                ["path"] = path,
+                ["settings"] = new JObject { ["referenceDpi"] = "2.5" },
+            }));
+
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            var ps = AssetDatabase.LoadAssetAtPath<PanelSettings>(path);
+            Assert.IsNotNull(ps);
+            Assert.AreEqual(2.5f, ps.referenceDpi, 1e-4f);
+        }
+
+        [Test]
         public void CreatePanelSettings_AlreadyExists_ReturnsError()
         {
             string path = $"{TempRoot}/ExistingPanel_{Guid.NewGuid():N}.asset";
