@@ -9,8 +9,12 @@ import { cevir, type TKey } from '../../lib/i18n';
 import { parseContextReport } from '../../lib/contextReport';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { apiHataMesaji } from '../../lib/apiError';
+import { stripBidi } from '../../lib/modelText';
 import { isBranchIn, leftTabOf } from '../../lib/convFamily';
-import { claimRemoteMessage, onCardClosed, parseRemoteMessage, type RemoteMessage } from '../../lib/remoteControl';
+import {
+  claimRemoteMessage, onCardClosed, parseModeChanged, parseRemoteMessage, phoneDeviceName,
+  type ModeChanged, type RemoteMessage,
+} from '../../lib/remoteControl';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -332,6 +336,23 @@ export const useChat = (
     return () => { cancelled = true; };
   }, [API, user?.sessionToken]);
 
+  // A mode the backend now enforces, whoever set it (this window, or a phone):
+  // show it and drop the in-chat cards it approved.
+  const adoptGenerationMode = useCallback((applied: GenerationMode) => {
+    setGenerationModeState(applied);
+    // Only auto clears cards. A switch to balanced keeps them: the backend
+    // approves only the MCP cards it can re-classify as routine, and an
+    // in-chat card cannot be re-classified, so it stays pending (Burak, 27 Sep 2026).
+    if (applied === 'auto') {
+      // The backend approved every open card on the switch; drop the in-chat
+      // ones - in every chat, since the mode is global.
+      setPendingCommand(null);
+      for (const id of Object.keys(runtimesRef.current)) {
+        patchConv(Number(id), () => ({ pendingCommand: null, commandQueue: [] }));
+      }
+    }
+  }, [patchConv, setPendingCommand]);
+
   // Writes go renderer -> Electron main -> backend: only main holds the UI
   // secret the backend demands, so model-run processes cannot flip the mode.
   const setGenerationMode = useCallback(async (mode: GenerationMode, source: 'chat' | 'settings' = 'chat') => {
@@ -349,23 +370,25 @@ export const useChat = (
           : cevir('mode.writeFailed', { hata: refused.message || String(refused.code) }), 'error');
         return;
       }
-      const applied: GenerationMode = toGenerationMode(out?.mode);
-      setGenerationModeState(applied);
-      // Only auto clears cards. A switch to balanced keeps them: the backend
-      // approves only the MCP cards it can re-classify as routine, and an
-      // in-chat card cannot be re-classified, so it stays pending (Burak, 27 Sep 2026).
-      if (applied === 'auto') {
-        // The backend approved every open card on the switch; drop the in-chat
-        // ones - in every chat, since the mode is global.
-        setPendingCommand(null);
-        for (const id of Object.keys(runtimesRef.current)) {
-          patchConv(Number(id), () => ({ pendingCommand: null, commandQueue: [] }));
-        }
-      }
+      adoptGenerationMode(toGenerationMode(out?.mode));
     } catch (e) {
       showToast(cevir('mode.writeFailed', { hata: e instanceof Error ? e.message : String(e) }), 'error');
     }
-  }, [showToast, patchConv, setPendingCommand]);
+  }, [showToast, adoptGenerationMode]);
+
+  // A phone changed the mode (`approval_mode_changed`): the backend has applied
+  // it, so this window only shows it, as after its own switch.
+  const applyModeChanged = useCallback((change: ModeChanged) => {
+    adoptGenerationMode(change.mode);
+    if (change.previous === change.mode && change.approvedPending === 0) return;
+    const cihaz = stripBidi(phoneDeviceName(change.by) || '') || cevir('chat.phoneUnnamed');
+    const mod = cevir(`mode.${change.mode}` as TKey);
+    showToast(change.approvedPending > 0
+      ? cevir('mode.changedByPhoneApproved', { cihaz, mod, sayi: change.approvedPending })
+      : cevir('mode.changedByPhone', { cihaz, mod }), 'info');
+  }, [adoptGenerationMode, showToast]);
+  const applyModeChangedRef = useRef(applyModeChanged);
+  applyModeChangedRef.current = applyModeChanged;
 
   // One controller per conversation: Stop in one chat must abort that chat's
   // stream only.
@@ -1391,6 +1414,11 @@ export const useChat = (
                 }
                 if (data?.type === 'card_closed') {
                   if (!iptal) applyCardClosed(data, showToastRef.current);
+                  continue;
+                }
+                if (data?.type === 'approval_mode_changed') {
+                  const change = parseModeChanged(data);
+                  if (change && !iptal) applyModeChangedRef.current(change);
                   continue;
                 }
                 if (data?.type !== 'wake' || iptal) continue;

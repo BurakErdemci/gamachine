@@ -374,6 +374,14 @@ Facts about the Electron and renderer side; plain look, visual design later.
 - A desktop answer that gets `already_answered {by, at, decision}` closes the
   card with a note ("Telefondan (<name>) onaylandi / reddedildi"), not the
   "outcome unknown" warning.
+- An `approval_mode_changed` frame makes every window show the new mode
+  (`adoptGenerationMode` in `useChat`, the same code the window's own switch
+  ends in: the mode state, and after `auto` the in-chat command cards of every
+  chat cleared, since the backend already approved them) and show a note
+  "Telefondan (<name>) çalışma modu değiştirildi: <mode>", with the count of
+  approved cards when there were any. Nothing is written back: the backend has
+  applied the mode. A mode outside `auto | balanced | step`, or a `by` that is
+  not `phone:...`, is ignored.
 - A `card_closed` frame closes the card without a click: a turn's command or
   question card (the next queued card of that chat takes its place), the
   Unity bridge / note card on screen, or a tray entry, with the same note as

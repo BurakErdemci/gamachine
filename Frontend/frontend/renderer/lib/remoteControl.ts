@@ -280,6 +280,33 @@ export function parseCardClosed(data: unknown): CardClosed | null {
   return { cardId: d.card_id, by: d.by, decision: typeof d.decision === 'string' ? d.decision : undefined };
 }
 
+// ── an approval mode a phone changed (`approval_mode_changed` frames) ────
+
+export interface ModeChanged {
+  mode: 'auto' | 'balanced' | 'step';
+  previous: string;
+  /** Cards the backend approved on the switch (0 unless it was to auto or balanced). */
+  approvedPending: number;
+  /** `phone:<name>`. */
+  by: string;
+}
+
+/** Strict on purpose: an unknown mode is ignored, never read as step or auto. */
+export function parseModeChanged(data: unknown): ModeChanged | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.type !== 'approval_mode_changed') return null;
+  if (d.mode !== 'auto' && d.mode !== 'balanced' && d.mode !== 'step') return null;
+  if (typeof d.by !== 'string' || phoneDeviceName(d.by) === null) return null;
+  const pending = Number(d.approved_pending);
+  return {
+    mode: d.mode,
+    previous: typeof d.previous === 'string' ? d.previous : '',
+    approvedPending: Number.isSafeInteger(pending) && pending > 0 ? pending : 0,
+    by: d.by,
+  };
+}
+
 // Open cards live in two hooks (useChat: a turn's command and question cards;
 // useMCPApproval: bridge, note and tray cards) but only useChat reads the
 // stream, so each store registers a closer here. A closer drops the card if it
