@@ -389,7 +389,9 @@ namespace MCPForUnityTests.Editor.Tools
             {
                 ["action"] = "get_hierarchy",
                 ["pageSize"] = 20,
-                ["maxNodes"] = 100
+                ["maxNodes"] = 100,
+                // The default detail is "summary", which omits componentTypes.
+                ["detail"] = "full"
             }));
 
             Assert.IsTrue(result["success"]?.Value<bool>() ?? false);
