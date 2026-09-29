@@ -232,7 +232,7 @@ Requests carry `id`; replies echo it. Everything not listed is refused.
 | `list_slash_commands {chat_id}` | `{commands: [str], skills: [str], meta: [{name, description?, argumentHint?, insert?, displayName?}]}`: the catalog the desktop's `/` menu shows (`GET /slash-commands`, one shared function), for the agent family of that chat. Names come without the `/`. Gamachine's own `compact` (run by the renderer) leads `commands` and `meta` for every chat, as in the desktop menu; the CLI's own `compact` is not listed twice. Chats of agents without a catalog (`api-*`, opencode, cursor, kimi, gemini) and agy get only that. Errors `bad_chat_id`, `unknown_chat`, `unavailable` |
 | `get_config {chat_id?}` | `{approval_mode: "auto" \| "balanced" \| "step", desktop_effort}`, where `desktop_effort` is what the desktop renderer last reported, `{level, levels: [str], ultracode: bool}` (`levels` are the ones its active provider and model offer, in scale order; `ultracode` = Ultracode is on, which overrides the level), or `null` while it has not reported or its last report was refused. With a `chat_id` it adds that chat's own model as the backend resolves it (`agentic.chat_model`: stored model, else its latest answer's, else the global default): `provider_type`, `model_name`, `family` (the CLI a subscription model runs on: `claude`, `codex`, `agy`, `opencode`, `cursor`, `copilot`, `kimi`; `null` for API providers and Ollama), and `effort_levels: [str]`, the levels that model accepts from the registry behind the desktop's `/effort-capabilities` (scale order; `auto` is normally the first; empty when the registry names none). Errors `bad_chat_id`, `unknown_chat` |
 | `list_models` | the desktop picker's catalog, `{local: [...], cloud: [...], subscription: [...], cloud_sources: {...}}`, built by the one function behind `GET /available-models` (`build_available_models` in `config_routes.py`, injected into the bridge like `stop_chat`), so it has the same lists, caching and timeouts. The phone never asks for a forced refresh. Long lists are split like any reply. A model the desktop's picker refuses for the plan carries the same `disabled: true, disabled_reason: "plan"` the desktop's `/cli-models/{cli}` gives it (the one function `_apply_plan_caps`; today Copilot's static list on an Auto-only plan). Error `unavailable` |
-| `set_model {chat_id, provider_type, model_name}` | picks that chat's model as the desktop's picker does (`chat_model.pick_chat_model`, the function `POST /save-ai-config` ends in): the chat stores it (`set_chat_model` with `require_ready`, the check every writer shares) and the global row follows, because a new chat opens on the last model picked. Replies `{provider_type, model_name}`. `model_name` may be a typed id not in the catalog, or `""` for the provider's default. A turn already running finishes on the model it started with. Errors `bad_chat_id`, `unknown_chat`, `unknown_provider`, `bad_model`, `not_ready {needs}` (`needs`: `apikey`, `install`, `login` or `service`: what the provider lacks now; nothing changed), `plan_locked` (the desktop's picker refuses this model for the plan; nothing changed). On success the desktop is told (`chat_model_changed`, below) and so is every phone (`chat_model_changed` and `chat_changed`) |
+| `set_model {chat_id, provider_type, model_name}` | picks that chat's model as the desktop's picker does (`chat_model.pick_chat_model`, the function `POST /save-ai-config` ends in): the chat stores it (`set_chat_model` with `require_ready`, the check every writer shares) and the global row follows, because a new chat opens on the last model picked. Replies `{provider_type, model_name}`. `model_name` may be a typed id not in the catalog, or `""` for the provider's default. A turn already running finishes on the model it started with. Errors `bad_chat_id`, `unknown_chat`, `unknown_provider`, `bad_model`, `not_ready {needs}` (`needs`: `apikey`, `install`, `login` or `service`: what the provider lacks now; nothing changed), `plan_locked` (the desktop's picker refuses this model for the plan; nothing changed), `unavailable` (the bridge has no plan-lock check wired: every pick is refused rather than let through). Once the chat row is stored the desktop is told (`chat_model_changed`, below), also when the default write after it fails (the reply is then an error); every phone is told too (`chat_model_changed` and `chat_changed`) |
 | `set_effort {level}` | asks the desktop renderer to choose that effort level, as a click in its effort panel does. `level` must be one of the registry's levels (`effort_caps.EFFORT_LEVELS`: `auto off none minimal low medium high xhigh max`), else `bad_effort`. Effort is one state of the renderer (`thinkingLevel`), so nothing is stored on the backend and the renderer decides: it applies the level only if its active model offers it, and choosing a level also switches Ultracode off, as it does on the desktop. Replies `{status: "accepted" \| "desktop_not_ready"}`; `accepted` only says a renderer stream got the request. What the desktop really has comes back as `effort_changed` (below) |
 | `set_approval_mode {mode}` | sets the one global mode, exactly as the desktop does (saved, agy gates followed, open cards drained: `auto` approves every open card, `balanced` the MCP cards it can prove routine) and replies `{mode, previous, approved_pending}`. Errors `bad_mode` (not one of the three), `unavailable`, `agy_step_refused {message, params: {pids}}` (a running agy process could not be gated; the mode did not change; `message` is the desktop's Turkish text). On success the desktop is told (`approval_mode_changed`, below) |
 | `push_subscribe {subscription}` | stores the web push subscription for this device |
@@ -385,7 +385,9 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
   `chat_model.pick_chat_model` off the event loop (its readiness probes read the
   key vault and may ask Ollama; none spawns a CLI), maps `ChatModelError` to
   the RPC error of the same code, and publishes `chat_model_changed`
-  (`MODEL_CHANGED_TYPE` in `desktop_channel.py`) only after the row is stored.
+  (`MODEL_CHANGED_TYPE` in `desktop_channel.py`) once the chat row is stored
+  (`pick_chat_model`'s `on_chat_stored`), success or not; a pick refused before
+  any write publishes nothing.
   `pick_chat_model` is also what `POST /save-ai-config` ends in (with
   `pick_default_model` when no chat is on screen); both tell the bridge through
   `chat_model.add_pick_listener`, which is how every phone hears a pick whoever
@@ -393,11 +395,13 @@ Facts about `Backend/app/remote/`; the protocol above stays the contract.
   listeners are told even when the second one raises, so a phone re-reads what
   the chat really has. `/save-ai-config` saves the API key before the pick, so a
   failing key write leaves the model untouched.
-- The plan lock travels with the catalog function: `build_available_models`
-  marks Copilot's static list through `_apply_plan_caps` and carries
-  `plan_locked(provider_type, model_name)` as an attribute, which `set_model`
-  asks (`main.py` injects only `router.list_models`). It reads the plan-caps
-  file only, no CLI and no network. Not covered: Cursor's and OpenCode's lists
+- The plan lock is an explicit bridge dependency: `build_available_models`
+  marks Copilot's static list through `_apply_plan_caps`, and the config router's
+  `plan_locked(provider_type, model_name)` is passed to `RemoteBridge` next to
+  `list_models` (`main.py`); `set_model` refuses every pick while the bridge has
+  none (`unavailable`). The CLI is decided with `subscription_family`, the
+  runner's own rule, so `Copilot-...` is locked like `copilot-...`. It reads the
+  plan-caps file only, no CLI and no network. Not covered: Cursor's and OpenCode's lists
   are dynamic (`/cli-models/{cli}` runs the CLI) and are not in the phone's
   catalog at all, so the phone cannot offer them; `plan_locked` still refuses a
   typed `cursor-*` id the plan cap locks.
@@ -457,8 +461,10 @@ Plain look on purpose; a native app will reuse the same requests.
   desktop. The page keeps no setting of its own. It reads `get_config {chat_id}`
   (and `list_models`, cached 5 minutes) when a chat opens, when the link comes
   back, when the page becomes visible and when the PC says something changed
-  (`chat_model_changed` for the open chat, `default_model_changed`,
-  `effort_changed`, a `chat_changed` whose model differs). The model select
+  (`chat_model_changed` for any chat, since every pick also moves the default a
+  chat with no model of its own follows; `default_model_changed`,
+  `effort_changed`, a `chat_changed` whose model differs). The frames of one pick
+  share one `get_config` read (a 100 ms coalescing timer). The model select
   groups the catalog (subscription, cloud with a key, local), always shows the
   chat's own model even when the catalog lacks it, and lists a plan-locked
   model disabled ("planında kilitli"). A refused `set_model` puts the select
