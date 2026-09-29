@@ -51,6 +51,20 @@ The backend calls the provider's official SDK or the OpenRouter gateway. Tool us
 
 ---
 
+## Which model a chat runs on
+
+Each chat keeps its own provider and model (`conversations.provider_type` / `model_name`).
+
+- Picking a model while a chat is open sets **that chat's** model and the default for new chats. Opening another chat shows that chat's model; switching chats changes nothing.
+- A new chat runs on the default (the last model picked); its first turn stores it on the chat.
+- An older chat with nothing stored resumes on the model of its latest answer when that maps back to a provider/model pair, otherwise on the default.
+- Every turn of a chat (typed, queued, woken by a note, sent from the phone) runs on the chat's model, whatever a window shows. API keys stay per provider.
+- A chat whose provider is no longer usable (key removed, CLI missing) keeps it and shows "provider not ready" until another model is picked.
+
+Code: `Backend/app/agentic/chat_model.py` (`chat_model`, `set_chat_model`, `provider_readiness`).
+
+---
+
 ---
 
 [← Back to the README](../README.md)

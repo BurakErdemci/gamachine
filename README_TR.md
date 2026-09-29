@@ -207,7 +207,7 @@ entegrasyonunu istiyorsan Unity Editor de). Adımlar, ortam değişkenleri ve pa
 ## 💡 Kullanım
 
 1. **Workspace seç** — Unity projenin klasörünü seç; backend `.cs` dosyalarını tarar.
-2. **Model seç** — Ayarlar'dan sağlayıcı/model seç. Bulut API ise anahtarını gir (şifreli saklanır); CLI ise makinende kurulu olması yeter.
+2. **Model seç** — Ayarlar'dan sağlayıcı/model seç. Bulut API ise anahtarını gir (şifreli saklanır); CLI ise makinende kurulu olması yeter. Her sohbet kendi modelini hatırlar; yeni sohbet en son seçtiğin modelle başlar.
 3. **Konuş** —
 
 ```

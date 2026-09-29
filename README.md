@@ -203,7 +203,7 @@ in [Building from source](docs/building.md).
 ## 💡 Usage
 
 1. **Pick a workspace** — choose your Unity project folder; the backend scans the `.cs` files.
-2. **Pick a model** — choose a provider/model in Settings. For a cloud API, enter your key (stored encrypted); for a CLI, just having it installed is enough.
+2. **Pick a model** — choose a provider/model in Settings. For a cloud API, enter your key (stored encrypted); for a CLI, just having it installed is enough. Each chat remembers its own model; a new chat starts on the last one you picked.
 3. **Talk** —
 
 ```
