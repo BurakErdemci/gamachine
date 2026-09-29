@@ -170,6 +170,15 @@ def provider_readiness(db, user_id: int, provider_type: str, model_name: str, *,
     return {"ready": True, "kind": "cli", "provider": family, "needs": None}
 
 
+def check_chat(db, user_id: int, conversation_id: Any) -> None:
+    """Refuse (`unknown_chat`) a chat that is not this user's or is a side chat,
+    before anything is written."""
+    if (isinstance(conversation_id, bool) or not isinstance(conversation_id, int)
+            or db.get_conversation_owner(conversation_id) != user_id
+            or db.get_side_of(conversation_id) is not None):
+        raise ChatModelError("unknown_chat")
+
+
 def set_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
                    model_name: str, *, require_ready: bool = True,
                    readiness: Optional[Callable[..., dict]] = None) -> Dict[str, str]:
@@ -185,10 +194,7 @@ def set_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
     (a keyless cloud pick switches, then opens Settings for the key). Only
     this chat changes; a pick as a user makes it goes through `pick_chat_model`.
     """
-    if (isinstance(conversation_id, bool) or not isinstance(conversation_id, int)
-            or db.get_conversation_owner(conversation_id) != user_id
-            or db.get_side_of(conversation_id) is not None):
-        raise ChatModelError("unknown_chat")
+    check_chat(db, user_id, conversation_id)
     provider_type, model_name = check_model_choice(provider_type, model_name)
     if require_ready:
         state = (readiness or provider_readiness)(db, user_id, provider_type, model_name)

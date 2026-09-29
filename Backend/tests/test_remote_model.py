@@ -515,3 +515,23 @@ async def test_a_listener_that_fails_does_not_undo_the_pick(env):
     assert result == {"provider_type": "openai", "model_name": "gpt-5.5"}
     assert env.db.get_conversation_model(conv) == ("openai", "gpt-5.5")
     assert env.db.get_ai_config(1)[:2] == ("openai", "gpt-5.5")
+
+
+# ── a pick is two writes, and the key comes first ──────────────────────────
+
+def _fail(*args, **kwargs):
+    raise RuntimeError("database is locked")
+
+
+async def test_a_failing_key_write_moves_neither_the_chat_nor_the_default(env, monkeypatch):
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "gpt-6-sol"))
+    monkeypatch.setattr(env.db, "save_api_key", _fail)
+    with pytest.raises(RuntimeError):
+        await _save_route(env.db)(AIConfigRequest(user_id=1, provider_type="openai", model_name="gpt-5.5",
+                                                  api_key="sk-new", conversation_id=conv), x_session_token="")
+    assert env.db.get_conversation_model(conv) == ("subscription", "gpt-6-sol")
+    assert env.db.get_ai_config(1)[:2] == ("subscription", "claude-opus-5")
+    with pytest.raises(asyncio.TimeoutError):
+        await phone.next_push(lambda m: m.get("type") == "chat_model_changed", timeout=0.4)

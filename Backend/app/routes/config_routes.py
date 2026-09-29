@@ -260,19 +260,26 @@ def create_config_router(db):
             raise HTTPException(400, exc.code)
         if req.conversation_id is not None:
             require_conversation_owner(db, x_session_token, req.conversation_id)
-            # A pick on the desktop is optimistic (a keyless cloud model is
-            # taken, then Settings asks for the key), so readiness is not a
-            # refusal here; the chat shows "provider not ready" instead.
             try:
-                chat_model.pick_chat_model(db, user_id, req.conversation_id, req.provider_type,
-                                           req.model_name, require_ready=False)
+                chat_model.check_chat(db, user_id, req.conversation_id)
             except chat_model.ChatModelError as exc:
-                raise HTTPException(404 if exc.code == "unknown_chat" else 400, exc.code)
+                raise HTTPException(404, exc.code)
+        # The key goes first: a failing write must leave the pick untouched,
+        # and a refused pick (checked above) must leave the key untouched.
         if req.api_key and req.api_key != "CLI_SESSION" and req.provider_type not in ("ollama", "subscription"):
             db.save_api_key(user_id, req.provider_type, req.api_key)
-        if req.conversation_id is None:
-            # No chat on screen: only the default for new chats changes.
-            db.save_ai_config(user_id, req.provider_type, req.model_name, "")
+        try:
+            if req.conversation_id is not None:
+                # A pick on the desktop is optimistic (a keyless cloud model is
+                # taken, then Settings asks for the key), so readiness is not a
+                # refusal here; the chat shows "provider not ready" instead.
+                chat_model.pick_chat_model(db, user_id, req.conversation_id, req.provider_type,
+                                           req.model_name, require_ready=False)
+            else:
+                # No chat on screen: only the default for new chats changes.
+                db.save_ai_config(user_id, req.provider_type, req.model_name, "")
+        except chat_model.ChatModelError as exc:
+            raise HTTPException(404 if exc.code == "unknown_chat" else 400, exc.code)
         return {"status": "success"}
 
     @router.get("/get-ai-config/{user_id}")
