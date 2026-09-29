@@ -277,7 +277,7 @@ def create_config_router(db):
                                            req.model_name, require_ready=False)
             else:
                 # No chat on screen: only the default for new chats changes.
-                db.save_ai_config(user_id, req.provider_type, req.model_name, "")
+                chat_model.pick_default_model(db, user_id, req.provider_type, req.model_name)
         except chat_model.ChatModelError as exc:
             raise HTTPException(404 if exc.code == "unknown_chat" else 400, exc.code)
         return {"status": "success"}

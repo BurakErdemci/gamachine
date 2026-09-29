@@ -384,12 +384,18 @@ class RemoteBridge:
     def _card_listener(self, what: str, card) -> None:
         self._call_soon(self._on_card, what, card.public())
 
-    def _pick_listener(self, conv_id: int, provider_type: str, model_name: str) -> None:
+    def _pick_listener(self, conv_id: Optional[int], provider_type: str, model_name: str) -> None:
         self._call_soon(self._on_model_picked, conv_id, provider_type, model_name)
 
-    def _on_model_picked(self, conv_id: int, provider_type: str, model_name: str) -> None:
+    def _on_model_picked(self, conv_id: Optional[int], provider_type: str, model_name: str) -> None:
         # Whoever picked (a phone or the desktop), every phone learns it: the
         # open chat re-reads its model and the list shows the new one.
+        if conv_id is None:
+            # Only the default a new chat opens on changed; a chat with nothing
+            # stored resolves to it, so any open chat may show another model now.
+            self._broadcast({"type": "default_model_changed",
+                             "provider_type": provider_type, "model_name": model_name})
+            return
         self._broadcast({"type": "chat_model_changed", "chat_id": str(conv_id),
                          "provider_type": provider_type, "model_name": model_name})
         self._chat_changed(conv_id)

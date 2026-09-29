@@ -207,21 +207,22 @@ def set_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
 
 # Who wants to hear of a pick (the phone bridge, to tell paired phones).
 # Called as (conversation_id, provider_type, model_name) on the thread that
-# picked, after the pick is stored.
+# picked, after the pick is stored. conversation_id is None when only the
+# default a new chat opens on changed (a desktop pick with no chat on screen).
 _pick_listeners: list = []
 
 
-def add_pick_listener(listener: Callable[[int, str, str], None]) -> None:
+def add_pick_listener(listener: Callable[[Optional[int], str, str], None]) -> None:
     if listener not in _pick_listeners:
         _pick_listeners.append(listener)
 
 
-def remove_pick_listener(listener: Callable[[int, str, str], None]) -> None:
+def remove_pick_listener(listener: Callable[[Optional[int], str, str], None]) -> None:
     if listener in _pick_listeners:
         _pick_listeners.remove(listener)
 
 
-def _tell_listeners(conversation_id: int, provider_type: str, model_name: str) -> None:
+def _tell_listeners(conversation_id: Optional[int], provider_type: str, model_name: str) -> None:
     for listener in list(_pick_listeners):
         try:
             listener(conversation_id, provider_type, model_name)
@@ -251,3 +252,13 @@ def pick_chat_model(db, user_id: int, conversation_id: int, provider_type: str,
     finally:
         _tell_listeners(conversation_id, result["provider_type"], result["model_name"])
     return result
+
+
+def pick_default_model(db, user_id: int, provider_type: str, model_name: str) -> Dict[str, str]:
+    """A desktop pick with no chat on screen: only the default a new chat opens
+    on changes. Same refusals as the other writers (`check_model_choice`);
+    listeners are told with no chat."""
+    provider_type, model_name = check_model_choice(provider_type, model_name)
+    db.save_ai_config(user_id, provider_type, model_name, "")
+    _tell_listeners(None, provider_type, model_name)
+    return {"provider_type": provider_type, "model_name": model_name}

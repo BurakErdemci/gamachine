@@ -31,7 +31,7 @@ would (the backend has already applied and drained; this is only the news):
 A phone that switched a chat's model tells the renderer, which re-reads that
 chat's model if the chat is on screen (the backend has stored it; this is only
 the news). The pick also became the default a new chat opens on, as a pick on
-the desktop does:
+the desktop does, so a screen showing that default follows too:
 
     {"type": "chat_model_changed", "conversation_id": int, "provider_type": str,
      "model_name": str, "by": "phone:<device name>", "at": <ms>}

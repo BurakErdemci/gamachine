@@ -579,3 +579,48 @@ def test_a_refused_pick_tells_no_listener(env):
     assert calls == []
 
 
+# ── the default a new chat opens on ────────────────────────────────────────
+
+async def test_a_desktop_pick_with_no_chat_reaches_phones(env):
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    unstored = env.db.create_conversation(1, "nothing stored")
+    first = await pair_phone(env, "iPhone")
+    second = await pair_phone(env, "iPad")
+    assert (await first.request("get_config", chat_id=str(unstored)))["result"]["model_name"] == "claude-opus-5"
+
+    await _save_route(env.db)(AIConfigRequest(user_id=1, provider_type="subscription", model_name="gpt-6-luna",
+                                              api_key=""), x_session_token="")
+    for phone in (first, second):
+        heard = await phone.next_push(lambda m: m.get("type") == "default_model_changed")
+        assert heard == {"type": "default_model_changed", "provider_type": "subscription",
+                         "model_name": "gpt-6-luna"}
+    assert (await first.request("get_config", chat_id=str(unstored)))["result"]["model_name"] == "gpt-6-luna"
+
+
+def test_a_refused_default_pick_writes_nothing_and_tells_no_listener(env):
+    env.db.save_ai_config(1, "subscription", "claude-opus-5", "")
+    calls = []
+    listener = lambda *a: calls.append(a)  # noqa: E731
+    chat_model.add_pick_listener(listener)
+    try:
+        with pytest.raises(chat_model.ChatModelError):
+            chat_model.pick_default_model(env.db, 1, "nope", "x")
+        assert chat_model.pick_default_model(env.db, 1, "openai", "gpt-5.5") == {
+            "provider_type": "openai", "model_name": "gpt-5.5"}
+    finally:
+        chat_model.remove_pick_listener(listener)
+    assert calls == [(None, "openai", "gpt-5.5")]
+    assert env.db.get_ai_config(1)[:2] == ("openai", "gpt-5.5")
+
+
+async def test_a_default_only_pick_is_not_a_chat_change(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db, stored=("subscription", "gpt-6-sol"))
+    await _save_route(env.db)(AIConfigRequest(user_id=1, provider_type="subscription", model_name="gpt-6-luna",
+                                              api_key=""), x_session_token="")
+    await phone.next_push(lambda m: m.get("type") == "default_model_changed")
+    with pytest.raises(asyncio.TimeoutError):
+        await phone.next_push(lambda m: m.get("type") in ("chat_model_changed", "chat_changed"), timeout=0.4)
+    assert env.db.get_conversation_model(conv) == ("subscription", "gpt-6-sol")
+
+
