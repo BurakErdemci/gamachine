@@ -83,8 +83,9 @@ export interface RemoteMessage {
   effort?: RemoteEffort;
 }
 
-/** The registry's canonical scale (Backend/app/providers/effort_caps.py CANON_ORDER). */
-export const REMOTE_EFFORTS = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+/** Every level the registry can return (Backend/app/providers/effort_caps.py
+ *  EFFORT_LEVELS: the canonical scale plus `none`, OpenAI API models'). */
+export const REMOTE_EFFORTS = ['auto', 'off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type RemoteEffort = typeof REMOTE_EFFORTS[number];
 
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -382,7 +383,7 @@ export interface EffortRequest {
   by: string;
 }
 
-/** Strict on purpose: a level off the canonical scale is no request. */
+/** Strict on purpose: a level off the registry's scale is no request. */
 export function parseEffortRequest(data: unknown): EffortRequest | null {
   if (!data || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;

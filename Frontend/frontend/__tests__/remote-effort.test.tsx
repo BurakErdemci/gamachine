@@ -268,15 +268,15 @@ describe('remote_effort · parsing', () => {
     expect(parseEffortRequest(requested('max'))).toEqual({ level: 'max', by: 'phone:iPhone' })
   })
 
-  it('takes every level on the canonical scale', () => {
-    for (const level of ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+  it('takes every level the registry can return, `none` included', () => {
+    for (const level of ['auto', 'off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
       expect(parseEffortRequest(requested(level))?.level, level).toBe(level)
     }
   })
 
   it('refuses everything else', () => {
     for (const bad of [null, undefined, 'remote_effort', 7, [], { type: 'chat_model_changed' },
-      requested('none'), requested('turbo'), requested('high', { by: 'desktop' }), requested('high', { by: undefined })]) {
+      requested('None'), requested('turbo'), requested('high', { by: 'desktop' }), requested('high', { by: undefined })]) {
       expect(parseEffortRequest(bad), JSON.stringify(bad)).toBeNull()
     }
   })

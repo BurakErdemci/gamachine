@@ -277,14 +277,14 @@ describe('phone message - effort', () => {
     expect(turns.map(t => [t.message, t.effort])).toEqual([['typed first', 'medium'], ['phone second', 'max']])
   })
 
-  it('every level of the scale goes through, auto and off included', () => {
-    for (const level of ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+  it('every level the registry can return goes through, auto, off and none included', () => {
+    for (const level of ['auto', 'off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
       expect(parseRemoteMessage(frame(1, 'x', { effort: level })), level).toMatchObject({ effort: level })
     }
   })
 
   it('a level the page does not know makes the frame invalid; null or absent means none', () => {
-    for (const bad of ['turbo', 'HIGH', ' high', '', 'none', 3, true, ['high'], {}]) {
+    for (const bad of ['turbo', 'HIGH', ' high', '', 'None', 3, true, ['high'], {}]) {
       expect(parseRemoteMessage(frame(1, 'x', { effort: bad })), JSON.stringify(bad)).toBeNull()
     }
     expect(parseRemoteMessage(frame(1, 'x', { effort: null }))).not.toHaveProperty('effort')
