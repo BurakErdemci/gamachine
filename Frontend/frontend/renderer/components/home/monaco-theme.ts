@@ -9,9 +9,9 @@ import type * as Monaco from 'monaco-editor';
 
 export const THEME_NAME = 'gamachineDark';
 
-// JetBrains Mono webfont'u (globals.css @import) Monaco'nun font ölçümünden SONRA
-// yüklenebiliyor → ölçüm bayat kalınca tıklanan piksel yanlış kolona düşüyor
-// (satır sonuna tıkla, imleç ortaya gelir). Font(lar) hazır olunca yeniden ölçtür.
+// The bundled JetBrains Mono webfont (styles/gm/fonts.css) can finish loading
+// after Monaco measured its glyphs; a stale measurement puts clicks in the wrong
+// column (click at line end, caret lands mid-line). Remeasure once fonts are ready.
 let _fontRemeasureHooked = false;
 const hookFontRemeasure = (monaco: typeof Monaco) => {
   if (_fontRemeasureHooked || typeof document === 'undefined') return;
