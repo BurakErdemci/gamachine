@@ -9,12 +9,13 @@
  * same path the in-chat cards use; nothing here approves on its own.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, X } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { McpTrayGate, unityOzeti } from '../../hooks/home/useMCPApproval';
 import { postMcpDecision, decisionToast } from '../../hooks/home/gateResponse';
 import { stripBidi } from '../../lib/modelText';
 import { useLang } from '../../lib/i18n';
 import { RiskReasonLine } from './RiskReasonLine';
+import { ApprovalCard, CheckIcon } from './ApprovalCard';
 
 interface McpUnknownTrayProps {
   gates: McpTrayGate[];
@@ -76,66 +77,67 @@ export const McpUnknownTray: React.FC<McpUnknownTrayProps> = ({ gates, apiBase, 
     <section
       data-testid="mcp-unknown-tray"
       aria-label={t('mcp.trayTitle')}
-      className="shrink-0 max-h-[45vh] overflow-y-auto custom-scrollbar border-b border-amber-500/20 bg-amber-950/10 px-3 py-2 space-y-2"
+      className="tray custom-scrollbar"
     >
-      <div className="flex items-center gap-2 text-amber-400 text-[11px] font-bold uppercase tracking-wider">
-        <AlertTriangle size={13} className="shrink-0" />
-        <span className="truncate">{t('mcp.trayTitle')}</span>
-        {visible.length > 1 && (
-          <span className="ml-auto shrink-0 font-semibold normal-case tracking-normal text-amber-300/80">
-            {t('mcp.trayCount', { sayi: visible.length })}
-          </span>
-        )}
+      <div className="tray-col">
+        <div className="tray-head">
+          <AlertTriangle size={14} className="shrink-0" aria-hidden="true" />
+          <span className="tray-title">{t('mcp.trayTitle')}</span>
+          {visible.length > 1 && (
+            <span className="tray-count">{t('mcp.trayCount', { sayi: visible.length })}</span>
+          )}
+        </div>
+        <p className="tray-hint">{t('mcp.trayHint')}</p>
+        {visible.map(g => {
+          const target = targetOf(g.params);
+          const locked = busy.has(g.gateId);
+          return (
+            <ApprovalCard
+              key={g.gateId}
+              kind="tray"
+              testId={`mcp-tray-${g.gateId}`}
+              who={t('card.whoUnity')}
+              name={t('card.nameUnity')}
+              why={<RiskReasonLine reason={g.riskReason} detail={g.riskDetail} />}
+              body={(
+                <>
+                  <dl className="tray-facts">
+                    <dt>{t('mcp.trayTool')}</dt>
+                    <dd className="mono">{stripBidi(g.tool)}</dd>
+                    <dt>{t('mcp.trayTarget')}</dt>
+                    <dd className="mono">{target ? stripBidi(target) : t('mcp.trayTargetUnknown')}</dd>
+                    <dt>{t('mcp.trayProject')}</dt>
+                    <dd className="mono is-dim">{g.workspacePath ? stripBidi(g.workspacePath) : t('mcp.sourceUnknown')}</dd>
+                  </dl>
+                  {/* The full parameters, as the in-chat card shows them: the tool
+                      name and target alone do not say what is being approved. */}
+                  <pre className="approval-cmd custom-scrollbar"><code>{stripBidi(unityOzeti(g.tool, g.params))}</code></pre>
+                </>
+              )}
+              actions={(
+                <>
+                  <button
+                    type="button"
+                    disabled={locked}
+                    onClick={() => { void decide(g.gateId, true); }}
+                    className="btn btn-primary"
+                  >
+                    <CheckIcon /><span>{t('mcp.trayApprove')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={locked}
+                    onClick={() => { void decide(g.gateId, false); }}
+                    className="btn btn-ghost"
+                  >
+                    {t('mcp.trayDeny')}
+                  </button>
+                </>
+              )}
+            />
+          );
+        })}
       </div>
-      <p className="text-[10.5px] text-slate-500">{t('mcp.trayHint')}</p>
-      {visible.map(g => {
-        const target = targetOf(g.params);
-        const locked = busy.has(g.gateId);
-        return (
-          <div
-            key={g.gateId}
-            data-testid={`mcp-tray-${g.gateId}`}
-            className="rounded-lg border border-amber-500/30 bg-black/40 p-2.5 text-[11px]"
-          >
-            <dl className="grid grid-cols-[auto,1fr] gap-x-2 gap-y-0.5 mb-2">
-              <dt className="text-slate-500">{t('mcp.trayTool')}</dt>
-              <dd className="font-mono text-slate-200 truncate">{stripBidi(g.tool)}</dd>
-              <dt className="text-slate-500">{t('mcp.trayTarget')}</dt>
-              <dd className="font-mono text-slate-200 truncate">
-                {target ? stripBidi(target) : t('mcp.trayTargetUnknown')}
-              </dd>
-              <dt className="text-slate-500">{t('mcp.trayProject')}</dt>
-              <dd className="font-mono text-slate-400 truncate">
-                {g.workspacePath ? stripBidi(g.workspacePath) : t('mcp.sourceUnknown')}
-              </dd>
-            </dl>
-            <RiskReasonLine reason={g.riskReason} detail={g.riskDetail} className="mb-2" />
-            {/* The full parameters, as the in-chat card shows them: the tool
-                name and target alone do not say what is being approved. */}
-            <pre className="max-h-32 overflow-y-auto custom-scrollbar whitespace-pre-wrap break-all rounded bg-black/50 border border-white/5 px-2 py-1.5 text-[10.5px] text-emerald-400 font-mono">
-              {stripBidi(unityOzeti(g.tool, g.params))}
-            </pre>
-            <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                disabled={locked}
-                onClick={() => { void decide(g.gateId, true); }}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold transition-colors"
-              >
-                <Check size={12} className="stroke-[3px]" /> {t('mcp.trayApprove')}
-              </button>
-              <button
-                type="button"
-                disabled={locked}
-                onClick={() => { void decide(g.gateId, false); }}
-                className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 font-bold transition-colors"
-              >
-                <X size={12} /> {t('mcp.trayDeny')}
-              </button>
-            </div>
-          </div>
-        );
-      })}
     </section>
   );
 };
