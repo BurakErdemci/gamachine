@@ -1,9 +1,8 @@
 import { Children, memo, useState } from "react";
-import { Check, Copy, FileDown, Eye, EyeOff, FileCode } from "lucide-react";
+import { Check, Copy, FileDown, Eye, EyeOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
 
 import { linkTuru, chatUrlTransform, yerelYolaCevir } from "../../lib/chatLink";
 import { useLang } from "../../lib/i18n";
@@ -31,12 +30,12 @@ const withMentionChips = (
       const named = !!title?.trim();
       parts.push(title != null ? (
         <span key={at} data-mention={m.id} data-mention-known="" title={named ? `#${m.id} · ${title.trim()}` : `#${m.id}`}
-          className="inline-block max-w-full align-baseline whitespace-nowrap px-1.5 rounded-md bg-blue-400/20 text-blue-200 ring-1 ring-inset ring-blue-400/30 font-medium">
-          {named && <span aria-hidden="true" className="text-blue-300/70 mr-px">@</span>}{mentionLabel(m.id, title)}
+          className="mention">
+          {named && <span aria-hidden="true" className="mention-at">@</span>}{mentionLabel(m.id, title)}
         </span>
       ) : (
         <span key={at} data-mention={m.id} title={unknownTip}
-          className="px-1 rounded bg-blue-400/15 text-blue-300 font-medium">{m.text}</span>
+          className="mention is-unknown">{m.text}</span>
       ));
       last = at + m.text.length;
     }
@@ -45,10 +44,19 @@ const withMentionChips = (
     return parts;
   });
 
-const CodeBlock = ({ match, codeString, workspacePath, onExportToUnity, handleCopy, copiedBlock }: any) => {
+/**
+ * The code plate (mockup `figure.code`): a darker plate on the paper with a header carrying the
+ * path, the size, "Open in panel" and "Copy". Highlighting keeps react-syntax-highlighter's
+ * Prism tokenizer but drops its inline theme (`useInlineStyles={false}`): the token classes are
+ * coloured by the --code-* tokens in thread.css, so every theme paints its own syntax.
+ *
+ * A block whose first line is `// path: <file>` is a file the agent wrote; it starts folded as
+ * before (a long file must not push the conversation away) and can be opened in the workspace.
+ */
+const CodeBlock = ({ match, codeString, workspacePath, onExportToUnity, onOpenFile, handleCopy, copiedBlock }: any) => {
   const { t } = useLang();
   const isAgentFile = codeString.trim().startsWith("// path:");
-  const [isCollapsed, setIsCollapsed] = useState(isAgentFile); // Ajan dosyaları varsayılan kapalı
+  const [isCollapsed, setIsCollapsed] = useState(isAgentFile); // agent files start folded
 
   let fileName = "";
   let filePath = "";
@@ -57,81 +65,53 @@ const CodeBlock = ({ match, codeString, workspacePath, onExportToUnity, handleCo
     filePath = firstLine.replace("// path:", "").trim();
     fileName = filePath.split('/').pop() || "Script.cs";
   }
+  const dir = filePath ? filePath.slice(0, filePath.length - fileName.length) : "";
+  const lineCount = codeString.split('\n').length;
+  const copied = copiedBlock === codeString;
 
   return (
-    <div className="relative group my-4">
-      {isAgentFile ? (
-        <div className={`rounded-xl border transition-all ${isCollapsed ? 'border-slate-800 bg-[#0d1117] hover:border-blue-500/30' : 'border-slate-800 bg-transparent'}`}>
-          <div className="flex items-center justify-between px-4 py-2.5 bg-[#0a0c10] rounded-t-xl border-b border-slate-800/50">
-            <div className="flex items-center gap-2.5">
-              <FileCode size={14} className="text-blue-400" />
-              <div className="flex flex-col">
-                <span className="text-[11px] font-bold text-slate-200 leading-none">{fileName}</span>
-                <span className="text-[9px] text-slate-500 font-mono mt-1">{filePath}</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setIsCollapsed(!isCollapsed)}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-all text-[10px] font-semibold"
-              >
-                {isCollapsed ? <><Eye size={12} /> {t('md.showCode')}</> : <><EyeOff size={12} /> {t('md.hide')}</>}
-              </button>
-              {!isCollapsed && (
-                <button
-                  onClick={() => handleCopy(codeString)}
-                  className="p-1.5 rounded-md bg-slate-800/80 hover:bg-slate-700 border border-slate-700/50 text-slate-400 hover:text-slate-200 transition-all"
-                  title={t('md.copy')}
-                >
-                  {copiedBlock === codeString ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                </button>
-              )}
-            </div>
-          </div>
-          
-          {!isCollapsed && (
-            <SyntaxHighlighter
-              style={vscDarkPlus}
-              language={match[1]}
-              PreTag="div"
-              className="!bg-[#0a0c10] !m-0 !rounded-b-xl border-none max-h-[500px] overflow-y-auto custom-scrollbar text-[12px]"
-            >
-              {codeString}
-            </SyntaxHighlighter>
-          )}
-        </div>
-      ) : (
-        <>
-          <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
-            <span className="text-[10px] text-slate-500 font-mono uppercase">{match[1]}</span>
-            {match[1] === "csharp" && workspacePath && onExportToUnity && (
-              <button
-                onClick={() => onExportToUnity(codeString)}
-                className="p-1.5 rounded-md bg-emerald-900/80 hover:bg-emerald-700 border border-emerald-700/50 text-emerald-400 hover:text-emerald-200 transition-all opacity-0 group-hover:opacity-100"
-                title={t('md.exportUnity')}
-              >
-                <FileDown size={13} />
-              </button>
-            )}
-            <button
-              onClick={() => handleCopy(codeString)}
-              className="p-1.5 rounded-md bg-slate-800/80 hover:bg-slate-700 border border-slate-700/50 text-slate-400 hover:text-slate-200 transition-all opacity-0 group-hover:opacity-100"
-              title={t('md.copy')}
-            >
-              {copiedBlock === codeString ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
-            </button>
-          </div>
-          <SyntaxHighlighter
-            style={vscDarkPlus}
-            language={match[1]}
-            PreTag="div"
-            className="rounded-xl !bg-[#0a0c10] border border-slate-800 shadow-lg !pt-10 max-h-[500px] overflow-y-auto custom-scrollbar"
-          >
-            {codeString}
-          </SyntaxHighlighter>
-        </>
+    <figure className="code" data-agent-file={isAgentFile || undefined}>
+      <figcaption className="code-head">
+        <span className="code-path">
+          {isAgentFile ? <>{dir}<b>{fileName}</b></> : <b>{match[1]}</b>}
+        </span>
+        <span className="code-diff">{isAgentFile && <span className="add">+{lineCount}</span>}</span>
+        {isAgentFile && onOpenFile && (
+          <button type="button" className="code-copy code-open" onClick={() => onOpenFile(filePath)}>
+            <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M11 4h5v5M16 4l-7 7M14 12v4H4V6h4" /></svg>
+            {t('code.openInPanel')}
+          </button>
+        )}
+        {isAgentFile && (
+          <button type="button" className="code-copy" onClick={() => setIsCollapsed(!isCollapsed)} aria-expanded={!isCollapsed}>
+            {isCollapsed ? <Eye size={14} aria-hidden="true" /> : <EyeOff size={14} aria-hidden="true" />}
+            {isCollapsed ? t('md.showCode') : t('md.hide')}
+          </button>
+        )}
+        {match[1] === "csharp" && !isAgentFile && workspacePath && onExportToUnity && (
+          <button type="button" className="code-copy" onClick={() => onExportToUnity(codeString)} title={t('md.exportUnity')} aria-label={t('md.exportUnity')}>
+            <FileDown size={14} aria-hidden="true" />
+          </button>
+        )}
+        {!isCollapsed && (
+          <button type="button" className="code-copy" onClick={() => handleCopy(codeString)} aria-label={t('code.copyAria')} title={t('md.copy')}>
+            {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+            {copied ? t('md.copied') : t('md.copy')}
+          </button>
+        )}
+      </figcaption>
+      {!isCollapsed && (
+        <SyntaxHighlighter
+          language={match[1]}
+          useInlineStyles={false}
+          showLineNumbers
+          PreTag="pre"
+          className="code-body custom-scrollbar"
+        >
+          {codeString}
+        </SyntaxHighlighter>
       )}
-    </div>
+    </figure>
   );
 };
 
@@ -194,6 +174,7 @@ const MarkdownRendererInner = ({
           return (
             <a
               href={href}
+              className={tur === 'yerel-dosya' ? 'chip-file' : undefined}
               onClick={(e) => {
                 // `preventDefault` KOŞULSUZ — üç ayrı sebeple:
                 //   1. `onOpenFile` verilmemiş olabilir (editörsüz bağlamlar,
@@ -230,7 +211,12 @@ const MarkdownRendererInner = ({
             return <li {...props}>{withMentionChips(children, mentionTitles, t("mention.unknown"))}</li>;
           },
         } : {}),
-        code({ inline, className, children, ...props }: any) {
+        // A fenced block arrives as <pre><code>; the plate is drawn by CodeBlock, so the <pre>
+        // is only a wrapper (a block without a language still gets a plain plate: `.md-pre`).
+        pre({ children, node: _node, ...props }: any) {
+          return <div className="md-pre" {...props}>{children}</div>;
+        },
+        code({ inline, className, children, node: _node, ...props }: any) {
           const match = /language-(\w+)/.exec(className || "");
           const codeString = String(children).replace(/\n$/, "");
 
@@ -240,12 +226,13 @@ const MarkdownRendererInner = ({
               codeString={codeString} 
               workspacePath={workspacePath} 
               onExportToUnity={onExportToUnity}
+              onOpenFile={onOpenFile}
               handleCopy={handleCopy}
               copiedBlock={copiedBlock}
               {...props}
             />
           ) : (
-            <code className="bg-blue-500/10 px-1.5 py-0.5 rounded text-blue-400 font-mono text-xs font-semibold" {...props}>
+            <code {...props}>
               {children}
             </code>
           );

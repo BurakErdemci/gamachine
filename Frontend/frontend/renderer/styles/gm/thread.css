@@ -637,3 +637,49 @@
   text-transform: var(--label-case); letter-spacing: var(--label-track);
 }
 .stage .chat-table td { padding: 7px 12px; border-top: var(--line-w) solid var(--paper-line); color: var(--ink); vertical-align: top; }
+
+/* ---------- code plate: app glue ---------- */
+/* the plate sits inside the prose (markdown), so the prose's inline-code chip must not reach in */
+.msg-body .code { margin: 10px 0; }
+.msg-body .code code, .msg-body .md-pre > code { padding: 0; border-radius: 0; background: none; color: inherit; font-size: inherit; }
+.code-head { min-width: 0; }
+.code-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-body { max-height: 500px; overflow: auto; white-space: pre; tab-size: 4; }
+.code-body > code { display: block; padding-right: 14px; font-family: var(--font-mono); }
+.code[data-agent-file] .code-body { -webkit-mask-image: none; mask-image: none; }
+/* a block without a language: the same plate, no header */
+.md-pre > code {
+  display: block; margin: 10px 0; padding: 10px 14px; overflow-x: auto; white-space: pre;
+  border-radius: var(--radius-md); background: var(--code-bg); color: var(--code-text);
+  border: var(--line-w) solid var(--code-line); font-size: 13px; line-height: 1.58;
+}
+/* line numbers (react-syntax-highlighter) read like the mockup's `.ln` */
+.code-body .linenumber, .code-body .react-syntax-highlighter-line-number {
+  display: inline-block; min-width: 40px !important; padding-right: 14px !important; text-align: right;
+  color: var(--code-dim); user-select: none; opacity: .75;
+}
+/* Prism token classes on the --code-* tokens: each theme paints its own syntax */
+.code-body .token.keyword, .code-body .token.boolean, .code-body .token.important { color: var(--code-kw); }
+.code-body .token.class-name, .code-body .token.builtin, .code-body .token.namespace { color: var(--code-type); }
+.code-body .token.function { color: var(--code-fn); }
+.code-body .token.number, .code-body .token.constant { color: var(--code-num); }
+.code-body .token.attr-name, .code-body .token.property, .code-body .token.tag, .code-body .token.selector { color: var(--code-attr); }
+.code-body .token.string, .code-body .token.char, .code-body .token.attr-value, .code-body .token.regex { color: var(--code-str); }
+.code-body .token.comment, .code-body .token.prolog, .code-body .token.doctype { color: var(--code-com); font-style: italic; }
+.code-body .token.punctuation, .code-body .token.operator { color: var(--code-dim); }
+
+/* file chips: a local file link reads as a code chip (mockup `.chip-file`) */
+.msg-body a.chip-file {
+  font-family: var(--font-mono); font-size: .9em; padding: 1px 5px; border-radius: var(--radius-sm);
+  background: var(--paper-sunk); color: var(--ink); text-decoration: none;
+  box-shadow: inset 0 -1px 0 var(--paper-line-strong); transition: background var(--g-dur-tap) var(--ease);
+}
+.msg-body a.chip-file:hover { background: var(--paper-line); }
+/* @<id> chat mentions in the user's bubble */
+.mention {
+  display: inline-block; max-width: 100%; vertical-align: baseline; white-space: nowrap;
+  padding: 0 6px; border-radius: var(--radius-sm); font-weight: 600;
+  background: var(--paper-sunk); color: var(--ink); box-shadow: inset 0 0 0 var(--line-w) var(--paper-line-strong);
+}
+.mention-at { color: var(--ink-faint); margin-right: 1px; }
+.mention.is-unknown { box-shadow: none; color: var(--ink-dim); }
