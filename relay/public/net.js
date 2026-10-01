@@ -598,6 +598,7 @@ export function modelFailureNote(error, reply = {}) {
       : error === 'bad_chat_id' ? 'Sohbet numarası geçersiz.'
       : error === 'unknown_provider' ? 'Bilinmeyen sağlayıcı.'
       : error === 'bad_model' ? 'Model adı geçersiz.'
+      : error === 'unavailable' ? 'Bilgisayardaki uygulama şu an model değiştiremiyor; uygulamayı yeniden başlatmayı dene.'
       : error === 'plan_locked' ? 'Aboneliğin bu modeli desteklemiyor; Auto modelini kullanabilirsin.'
       : null);
   return why ? 'Model değişmedi. ' + why : 'Model değiştirilemedi: ' + error;

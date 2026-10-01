@@ -135,6 +135,18 @@ test('a malformed catalog entry is skipped, not shown', () => {
   assert.deepEqual(groups, [{ label: 'Abonelik (komut satırı)', items: [{ value: 'subscription|ok', label: 'ok' }] }]);
 });
 
+test('an unavailable model picker tells the user to restart the desktop app', () => {
+  assert.equal(modelFailureNote('unavailable'),
+    'Model değişmedi. Bilgisayardaki uygulama şu an model değiştiremiyor; uygulamayı yeniden başlatmayı dene.');
+});
+
+test('CI runs relay tests after installing the frontend dependencies', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/test.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  const frontend = workflow.split('\n  frontend:\n')[1]?.split('\n  powershell:\n')[0];
+  assert.ok(frontend, 'frontend job is missing');
+  assert.match(frontend, /run: npm ci --ignore-scripts[\s\S]*?- name: Relay tests\r?\n        working-directory: relay\r?\n        env:\r?\n          RELAY_IT: '0'\r?\n        run: node --test "test\/\*\.test\.mjs"/);
+});
+
 test('every refusal of set_model says why in plain Turkish and that the model did not change', () => {
   const needs = {
     apikey: /API anahtarı girilmemiş/, install: /kurulu değil/, login: /oturum açılmamış/, service: /Ollama/,
