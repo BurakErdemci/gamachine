@@ -22,6 +22,9 @@ interface McpUnknownTrayProps {
   apiBase: string;
   sessionToken: string;
   showToast: (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+  /** A paired phone can decide these: unowned gates are cards too, and the phone lists cards
+   *  that belong to no chat (relay/public/app.js renderCards). */
+  phonePaired?: boolean;
 }
 
 /** What the request acts on: the Unity project first, then a path or command. */
@@ -34,7 +37,7 @@ const targetOf = (params: any): string | null => {
   return null;
 };
 
-export const McpUnknownTray: React.FC<McpUnknownTrayProps> = ({ gates, apiBase, sessionToken, showToast }) => {
+export const McpUnknownTray: React.FC<McpUnknownTrayProps> = ({ gates, apiBase, sessionToken, showToast, phonePaired }) => {
   const { t } = useLang();
   // Written synchronously so a double click cannot send two decisions.
   const inFlightRef = useRef<Set<string>>(new Set());
@@ -99,6 +102,7 @@ export const McpUnknownTray: React.FC<McpUnknownTrayProps> = ({ gates, apiBase, 
               who={t('card.whoUnity')}
               name={t('card.nameUnity')}
               why={<RiskReasonLine reason={g.riskReason} detail={g.riskDetail} />}
+              phoneHint={phonePaired}
               body={(
                 <>
                   <dl className="tray-facts">

@@ -22,8 +22,8 @@ interface ApprovalCardProps {
   detail?: React.ReactNode;
   /** The decision buttons (`.btn-primary` first). Hidden by the CSS once decided. */
   actions?: React.ReactNode;
-  /** A paired phone can decide this card too. */
-  phoneHint?: boolean;
+  /** A paired phone can decide this card too; a string replaces the default words. */
+  phoneHint?: boolean | string;
   /** The decided record line. */
   result?: React.ReactNode;
   /** A control that stays usable after the decision (e.g. "Close" on the done card). */
@@ -103,7 +103,9 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
       {actions && (
         <div className="approval-actions">
           {actions}
-          {phoneHint && pending && <span className="approval-hint">{t('card.phoneHint')}</span>}
+          {phoneHint && pending && (
+            <span className="approval-hint">{typeof phoneHint === 'string' ? phoneHint : t('card.phoneHint')}</span>
+          )}
         </div>
       )}
       {result && <p className="approval-result" role="status">{result}</p>}

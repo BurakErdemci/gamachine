@@ -104,6 +104,8 @@ export default function Home() {
   const autoTitles = useAutoChatTitles(API, auth.user?.id, showToast as any);
   const dictation = useDictationSettings(API, auth.user?.id, showToast as any);
   const remote = useRemoteStatus(backendReady && !!auth.user);
+  // A phone is paired and can decide registry cards (gates, commands, questions).
+  const phonePaired = !!remote.status?.enabled && (remote.status?.devices ?? 0) > 0;
 
   // Read-only side question over the chat on screen; its own state, never
   // useChat's runtimes (see useSideChat).
@@ -591,6 +593,7 @@ export default function Home() {
                 apiBase={API}
                 sessionToken={auth.user?.sessionToken ?? ''}
                 showToast={showToast as any}
+                phonePaired={phonePaired}
               />
               <McpApprovalCards
                 gate={mcp.activeGate}
@@ -610,6 +613,7 @@ export default function Home() {
                 setPendingCommand={chat.setPendingCommand}
                 pendingFix={chat.pendingFix}
                 setPendingFix={chat.setPendingFix}
+                phonePaired={phonePaired}
               />
             </div>
           </div>
@@ -827,6 +831,7 @@ export default function Home() {
           apiBase={API}
           sessionToken={auth.user?.sessionToken ?? ''}
           showToast={showToast as any}
+          phonePaired={phonePaired}
         />
 
         {/* The scroll listener sits on `.thread`, the element that actually scrolls (measured
@@ -849,7 +854,7 @@ export default function Home() {
                 mcpGate={mcp.activeGate} mcpWorkspaceMismatch={mcp.gateWorkspaceMismatch}
                 mcpWorkspaceCheckPending={mcp.gateWorkspaceCheckPending}
                 mcpOpenWorkspacePath={mcp.openWorkspacePath} onMcpResolved={mcp.resolveActiveGate}
-                phonePaired={!!remote.status?.enabled && (remote.status?.devices ?? 0) > 0}
+                phonePaired={phonePaired}
               />
             </div>
           )}

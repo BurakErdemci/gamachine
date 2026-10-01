@@ -470,6 +470,7 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
               reportDecision(result, t('mcp.sentDiff'));
             }}
             onReject={() => { setPendingFix(null); void rejectByUser(); }}
+            phonePaired={phonePaired}
           />)}
         </div>
       )}

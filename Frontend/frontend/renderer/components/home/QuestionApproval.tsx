@@ -16,7 +16,14 @@ interface QuestionApprovalProps {
   questions: QuestionItem[];
   // answers: { "<question text>": "<answer string>" } — see WIRE SHAPE below.
   onSubmit: (answers: Record<string, string>) => void;
+  /** A phone is paired. It can answer only one single-select question (backend
+   *  `remote/chats.py` single_choice_options), so the hint shows only then. */
+  phonePaired?: boolean;
 }
+
+/** The questions a phone can answer with one tap: exactly one, single-select, with options. */
+export const phoneCanAnswer = (questions: { multiSelect?: boolean; options?: unknown[] }[]): boolean =>
+  questions.length === 1 && !questions[0].multiSelect && (questions[0].options?.length ?? 0) > 0;
 
 /**
  * The card behind the SDK's AskUserQuestion tool.
@@ -47,7 +54,7 @@ interface QuestionApprovalProps {
  * still had no selection on screen. Only the payload keys stay textual, because
  * the SDK matches them against the text it sent (see WIRE SHAPE above).
  */
-const QuestionGateCard: React.FC<QuestionApprovalProps> = ({ questions, onSubmit }) => {
+const QuestionGateCard: React.FC<QuestionApprovalProps> = ({ questions, onSubmit, phonePaired }) => {
   const { t } = useLang();
   const [picks, setPicks] = useState<Record<number, string[]>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
@@ -120,6 +127,7 @@ const QuestionGateCard: React.FC<QuestionApprovalProps> = ({ questions, onSubmit
       testId="question-approval"
       who={t('card.whoQuestion')}
       name={t('question.asking')}
+      phoneHint={phonePaired && phoneCanAnswer(questions) ? t('card.phoneHintAnswer') : undefined}
       body={(
         <div className="approval-questions">
           {questions.map((q, qi) => {
@@ -230,7 +238,7 @@ const QuestionGateCard: React.FC<QuestionApprovalProps> = ({ questions, onSubmit
  * change discards whatever state the card holds, including state that does not
  * exist yet.
  */
-export const QuestionApproval: React.FC<QuestionApprovalProps> = ({ questions, onSubmit }) => {
+export const QuestionApproval: React.FC<QuestionApprovalProps> = ({ questions, onSubmit, phonePaired }) => {
   // Array references cannot be React keys, so map each one to a number the
   // first time it is seen. Compared by reference, so a re-render with the same
   // gate keeps the same key and the user's half-filled answers survive.
@@ -239,5 +247,5 @@ export const QuestionApproval: React.FC<QuestionApprovalProps> = ({ questions, o
     gate.current = { questions, key: (gate.current?.key ?? 0) + 1 };
   }
 
-  return <QuestionGateCard key={gate.current.key} questions={questions} onSubmit={onSubmit} />;
+  return <QuestionGateCard key={gate.current.key} questions={questions} onSubmit={onSubmit} phonePaired={phonePaired} />;
 };

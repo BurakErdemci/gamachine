@@ -19,9 +19,12 @@ interface DiffViewerProps {
   applied?: boolean;
   onAccept: (fixedCode: string) => void;
   onReject: () => void;
+  /** The phone can decide this diff: true only for the unityMCP gate's diff (a registry card);
+   *  the chat flow's own diff writes through IPC here and no phone can answer it. */
+  phonePaired?: boolean;
 }
 
-export const DiffViewer = ({ diffData, filename, applied, onAccept, onReject }: DiffViewerProps) => {
+export const DiffViewer = ({ diffData, filename, applied, onAccept, onReject, phonePaired }: DiffViewerProps) => {
   const { t } = useLang();
   return (
   <AnimatePresence mode="wait">
@@ -139,6 +142,7 @@ export const DiffViewer = ({ diffData, filename, applied, onAccept, onReject }: 
           <span className="text-[10px] text-slate-700 ml-auto tracking-wide">
             {t('diff.acceptHint')}
           </span>
+          {phonePaired && <span className="approval-hint" data-testid="diff-phone-hint">{t('card.phoneHint')}</span>}
         </div>
       </motion.div>
     )}

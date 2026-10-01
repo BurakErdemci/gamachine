@@ -480,9 +480,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
                   {/* File Creation Approval */}
                   {pendingGenFiles && pendingGenFiles.messageId === msg.id && (
+                    // No phone hint: this flow writes through IPC on this machine; the card is
+                    // not in the backend's card registry, so no phone can decide it.
                     <FileCreationApproval
                       files={pendingGenFiles.files}
-                      phonePaired={phonePaired}
                       autoAccept={false}
                       onAcceptOne={async (file) => {
                         if (!ipc || !workspacePath) return false;
@@ -524,9 +525,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
                   {/* File Deletion Approval */}
                   {pendingDelete && pendingDelete.messageId === msg.id && (
+                    // No phone hint: a local delete, not a registry card (see the create card above).
                     <FileDeleteApproval
                       path={pendingDelete.path}
-                      phonePaired={phonePaired}
                       onConfirm={async () => {
                         await deleteFile(pendingDelete.path);
                         setPendingDelete(null);
@@ -570,6 +571,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   {pendingQuestion && pendingQuestion.messageId === msg.id && (
                     <QuestionApproval
                       questions={pendingQuestion.questions}
+                      phonePaired={phonePaired}
                       onSubmit={async (answers) => {
                         // onAnswerQuestion kuyruktaki sıradaki soruyu kendi gösterir
                         await onAnswerQuestion(pendingQuestion.gateId, answers);
