@@ -441,8 +441,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   )}
 
                   {/* Tool Blocks (3'ten fazlaysa collapse grubu) */}
-                  <ToolGroup tools={msg.tool_calls} />
-                  <ToolGroup tools={msg.tools} />
+                  <ToolGroup tools={msg.tool_calls} onOpenFile={openFile} />
+                  <ToolGroup tools={msg.tools} onOpenFile={openFile} />
 
                   {/* Content or Loading Typing */}
                   {(msg.content === "" || !msg.content) && loading && msgIdx === messages.length - 1 ? (
