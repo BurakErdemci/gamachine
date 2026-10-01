@@ -174,6 +174,12 @@ jobs:
         working-directory: Frontend/frontend
         run: npm ci --ignore-scripts
 
+      - name: Relay tests
+        working-directory: relay
+        env:
+          RELAY_IT: '0'
+        run: node --test "test/*.test.mjs"
+
       # `__tests__/workspace-fingerprint-parity.test.ts` is the ONLY thing that
       # runs both `gamachine-ws-fp-2` implementations, and it needs a Python to
       # run the backend one. Without this step it selected `describe.skip`, its
