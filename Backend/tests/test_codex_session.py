@@ -407,6 +407,21 @@ def test_an_attached_or_unknown_option_is_not_read_only(ws, command):
     assert _is_read_only_command(command, ws, ws) is False
 
 
+def test_an_unresolvable_path_is_not_read_only(ws):
+    # realpath raised WinError 267 out of the shortcut (1 Oct 2026).
+    open(os.path.join(os.path.dirname(ws), "top.txt"), "w").close()
+    assert _is_read_only_command(_PS + "'cat ..\\top.txt/....'", ws, ws) is False
+
+
+def test_an_os_error_in_the_check_is_not_read_only(ws, monkeypatch):
+    from agentic import command_safety
+
+    def boom(*a, **k):
+        raise OSError(267, "The directory name is invalid")
+    monkeypatch.setattr(command_safety, "is_auto_safe", boom)
+    assert _is_read_only_command(_PS + "'Get-ChildItem'", ws, ws) is False
+
+
 # The shortcut has no card behind it, so the inner script must be plain text
 # that command_safety reads the way the shell does.
 @pytest.mark.parametrize("command", [

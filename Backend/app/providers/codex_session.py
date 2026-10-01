@@ -526,6 +526,14 @@ def _is_read_only_command(command, cwd, workspace: str) -> bool:
     then still checks it: no chaining, redirection, pipes, variables or
     command substitution, and every path stays in the workspace.
     """
+    try:
+        return _read_only_verdict(command, cwd, workspace)
+    except (OSError, ValueError):
+        # Path resolution can raise on odd names (WinError 267 on `..\x/....`).
+        return False
+
+
+def _read_only_verdict(command, cwd, workspace: str) -> bool:
     from action_risk import _confinement_root
     from agentic import command_safety
 
