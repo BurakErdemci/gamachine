@@ -29,6 +29,32 @@ import { postMcpDecision, decisionToast, GateFailure } from '../../hooks/home/ga
 import { McpActiveGate } from '../../hooks/home/useMCPApproval';
 import { McpApprovalCards } from './McpApprovalCards';
 import { MessageNotices } from './MessageNotices';
+import { modelFamily } from '../../lib/modelFamily';
+
+/**
+ * hh:mm for a message's author line. The backend stores naive local "YYYY-MM-DD HH:MM:SS" (no
+ * zone), which `new Date` would read as local anyway but parses differently across engines, so
+ * that form is read literally; ISO stamps from the live stream go through Date. An unparsable
+ * stamp shows no time rather than a wrong one.
+ */
+export const clockOf = (stamp?: string | null): string => {
+  if (!stamp) return '';
+  const naive = /^\d{4}-\d{2}-\d{2}[ T](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(stamp);
+  if (naive) return `${naive[1]}:${naive[2]}`;
+  const d = new Date(stamp);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+/** The mockup's "working" line: three hopping dots, then what the agent is doing right now. */
+const Working: React.FC<{ text: string; tokens?: string | null; elapsed: string }> = ({ text, tokens, elapsed }) => (
+  <div className="working is-on" aria-live="polite">
+    <span className="dots" aria-hidden="true"><i /><i /><i /></span>
+    <span className="step"><span className="step-text">{text}</span></span>
+    {tokens && <span className="working-meta">· {tokens}</span>}
+    <span className="working-meta num">· {elapsed}</span>
+  </div>
+);
 
 /** Fixed start of a stored note between chats (backend `mailbox.MAIL_MARKER`). */
 export const MAIL_MARKER = '📨';
@@ -165,6 +191,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   mcpOpenWorkspacePath,
   onMcpResolved,
   conversations,
+  phonePaired,
 }) => {
   const { t } = useLang();
   // Stable across stream tokens, so the memoised bubbles do not re-parse.
@@ -284,8 +311,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   ) : null;
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6 custom-scrollbar scroll-smooth">
-      <div className="max-w-4xl mx-auto space-y-8">
+    <div className="thread-col" data-testid="thread-col">
         {messages.map((msg, msgIdx) => {
           // /usage, /context → özel kart. Canlı turda mesaj etiketli gelir (slashCommand);
           // geçmişten yüklenende etiket yok → bir önceki kullanıcı mesajından tespit et.
@@ -317,7 +343,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           // 27 Sep 2026): an answer from before a switch keeps its writer.
           const agent = msg.role === 'assistant' ? messageAgent(msg.provider, msg.model) : null;
           return (
-          <div key={msg.id} className={`chat-message-enter ${msg.role === 'user' ? 'flex justify-end' : ''}`}>
+          <React.Fragment key={msg.id}>
             {isMailNote(msg) ? (() => {
               /* A note another chat's AI left here (backend agentic/mailbox.py).
                  Its own bubble: not the user's words (no blue bubble), and not
@@ -325,18 +351,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                  should read. */
               const note = mailNoteParts(msg.content);
               return (
-              <div data-testid="mail-note" className="rounded-xl border border-amber-500/25 bg-amber-950/10 px-4 py-3">
-                <div className="flex items-center gap-2 mb-1.5 text-[11px] font-semibold text-amber-400 select-none">
-                  <Mail size={12} className="shrink-0" />
+              <div data-testid="mail-note" className="msg-note">
+                <div className="msg-note-head">
+                  <Mail size={13} className="shrink-0" aria-hidden="true" />
                   {t('chat.mailNote')}
                   {note.autoForwarded && (
-                    <span data-testid="mail-note-auto"
-                      className="rounded px-1.5 py-px text-[10px] font-medium bg-amber-500/15 text-amber-300">
+                    <span data-testid="mail-note-auto" className="msg-note-tag">
                       {t('chat.mailNoteAuto')}
                     </span>
                   )}
                 </div>
-                <p className="text-[13px] text-slate-200 whitespace-pre-wrap break-words leading-relaxed">
+                <p className="msg-note-body">
                   {stripBidi(note.text.slice(MAIL_MARKER.length).trimStart())}
                 </p>
               </div>
@@ -347,12 +372,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                  grey bubble, visually distinct from the amber mail-note above
                  so it reads as inactive rather than something this chat can
                  still act on. */
-              <div data-testid="mail-note-undelivered" className="rounded-xl border border-slate-600/30 bg-slate-800/20 px-4 py-3">
-                <div className="flex items-center gap-2 mb-1.5 text-[11px] font-semibold text-slate-500 select-none">
-                  <Mail size={12} className="shrink-0" />
+              <div data-testid="mail-note-undelivered" className="msg-note is-undelivered">
+                <div className="msg-note-head">
+                  <Mail size={13} className="shrink-0" aria-hidden="true" />
                   {t('chat.mailUndelivered')}
                 </div>
-                <p className="text-[13px] text-slate-400 whitespace-pre-wrap break-words leading-relaxed">
+                <p className="msg-note-body">
                   {stripBidi(msg.content.slice(UNDELIVERED_MARKER.length).trimStart())}
                 </p>
               </div>
@@ -363,39 +388,44 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                  look like theirs. The event row is deliberately muted: not a
                  message, but a system marker saying the chat continued on its
                  own. */
-              <div className="flex items-center gap-2 py-1 text-[11px] text-slate-500 select-none">
-                <RefreshCw size={11} className="text-violet-400/70 shrink-0" />
-                <span className="font-medium shrink-0">{t('chat.wakeRow')}</span>
-                <span className="truncate text-slate-600">· {wakeText}</span>
+              <div className="msg-event" data-role="system">
+                <RefreshCw size={13} className="shrink-0" aria-hidden="true" />
+                <span className="msg-event-k">{t('chat.wakeRow')}</span>
+                <span className="msg-event-v">· {wakeText}</span>
               </div>
             ) : msg.role === 'assistant' ? (
-              // Avatar yan sütun yerine ÜSTTE tek meta satırı — dar panelde
-              // içerik tam genişlik akar, model/süre/token bilgisi tek bakışta.
-              <div className="max-w-full group">
-                <div className="flex items-center gap-2 mb-2 select-none">
-                  <ModelAvatar provider={agent?.brand} size={14} />
-                  <span data-testid="message-agent" className="text-[11px] font-medium text-slate-400 truncate">
+              // The author line is the model's nameplate (mockup `.msg-who`): the dot keeps the
+              // colour of the model that WROTE the answer (m4), not the current pick.
+              <article
+                className="msg msg-ai"
+                data-role="assistant"
+                data-m={agent ? modelFamily(msg.model, agent.brand) : 'other'}
+              >
+                <div className="msg-who">
+                  <span className="model-dot" aria-hidden="true" />
+                  <span className="who-name" data-testid="message-agent">
                     {agent ? (agent.model ? `${agent.name} · ${agent.model}` : agent.name) : 'AI'}
                   </span>
+                  {clockOf(msg.timestamp) && <time>{clockOf(msg.timestamp)}</time>}
                   {msg.usage && (msg.usage.duration_ms || msg.usage.output_tokens) ? (
-                    <span className="text-[10.5px] text-slate-600 tabular-nums shrink-0">
+                    <span className="msg-meta num">
                       {msg.usage.duration_ms ? `· ${Math.max(1, Math.round(msg.usage.duration_ms / 1000))}sn` : null}
                       {fmtTok(msg.usage.output_tokens) ? ` · ↓${fmtTok(msg.usage.output_tokens)}` : null}
                     </span>
                   ) : null}
                 </div>
-                <div className="min-w-0">
+                <div className="msg-stack">
                   {/* Statik Bulgular */}
                   {msg.smells && msg.smells.length > 0 && (
-                    <div className="mb-3 bg-[#000000] rounded-lg border border-orange-500/20 p-3">
-                      <div className="flex items-center gap-1.5 mb-2">
-                        <AlertTriangle size={12} className="text-orange-400" />
-                        <span className="text-[10px] font-semibold text-orange-400 uppercase tracking-wider">Static Analysis</span>
+                    <div className="smells">
+                      <div className="smells-head">
+                        <AlertTriangle size={13} aria-hidden="true" />
+                        <span>Static Analysis</span>
                       </div>
-                      <div className="space-y-1.5">
+                      <div className="smells-list">
                         {msg.smells.map((s: any, i: number) => (
-                          <div key={i} className="text-[11px] text-slate-400 flex items-start gap-2">
-                            <span className="bg-orange-500/10 text-orange-500 px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0">
+                          <div key={i} className="smells-row">
+                            <span className="smells-line num">
                               L{s.line || "?"}
                             </span>
                             <span>{s.msg}</span>
@@ -416,22 +446,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
                   {/* Content or Loading Typing */}
                   {(msg.content === "" || !msg.content) && loading && msgIdx === messages.length - 1 ? (
-                    // Modern "düşünüyor": kutu yok — ışıltısı kayan metin + canlı sayaç.
-                    // (Sayaç ilerliyorsa süreç KESİN canlı; "dondu mu?" sorusunun cevabı.)
-                    <div className="inline-flex items-center gap-2 py-0.5 max-w-full">
-                      <Sparkles size={13} className="text-violet-400/80 animate-pulse shrink-0" />
-                      <span className="text-[12.5px] font-medium shimmer-text truncate">
-                        {activity?.detail || t('chat.thinking')}
-                      </span>
-                      {activity && fmtTok(activity.tokens) && (
-                        <span className="text-[11px] text-slate-600 shrink-0">· {fmtTok(activity.tokens)}</span>
-                      )}
-                      <span className="text-[11px] text-slate-600 tabular-nums shrink-0">· {fmtElapsed(elapsedSec)}</span>
-                    </div>
+                    // "Thinking": the mockup's working line (dots + the current step) plus the
+                    // live counter. A counter that moves proves the turn is alive ("is it stuck?").
+                    <Working
+                      text={activity?.detail || t('chat.thinking')}
+                      tokens={activity ? fmtTok(activity.tokens) : null}
+                      elapsed={fmtElapsed(elapsedSec)}
+                    />
                   ) : slashCmd ? (
                     <SlashCommandCard command={slashCmd} text={msg.content} workspacePath={workspacePath} onOpenFile={openFile} />
                   ) : (
-                    <div className="chat-prose max-w-none">
+                    <div className="msg-body">
                       <MarkdownRenderer
                         content={msg.content.replace('<!-- SCOPE_WARNING_ACTIVE -->', '')}
                         workspacePath={workspacePath}
@@ -447,9 +472,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
                   {/* Scope Warning Buttons */}
                   {msg.content.includes('SCOPE_WARNING_ACTIVE') && msgIdx === messages.length - 1 && !loading && (
-                    <div className="flex gap-2 mt-3">
-                      <button onClick={() => sendMessage(t('chat.generateFull'))} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600/20 border border-blue-500/30 text-blue-300 text-[12px] font-medium hover:bg-blue-600/35 transition-colors"> ✅ {t('chat.generateFull')} </button>
-                      <button onClick={() => sendMessage(t('chat.simpleVersion'))} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-700/40 border border-slate-600/30 text-slate-300 text-[12px] font-medium hover:bg-slate-700/60 transition-colors"> ⚡ {t('chat.simpleVersion')} </button>
+                    <div className="msg-actions">
+                      <button type="button" onClick={() => sendMessage(t('chat.generateFull'))} className="btn btn-primary"> ✅ {t('chat.generateFull')} </button>
+                      <button type="button" onClick={() => sendMessage(t('chat.simpleVersion'))} className="btn btn-ghost"> ⚡ {t('chat.simpleVersion')} </button>
                     </div>
                   )}
 
@@ -552,32 +577,35 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   {/* Diff Viewer */}
                   {pendingFix?.messageId === msg.id && pendingFixCard}
                 </div>
-              </div>
+              </article>
             ) : (
-              // Kullanıcı Mesajı
-              <div className="max-w-[85%]">
+              // The user's message: "YOU · time" over a raised bubble (mockup `.msg-user`).
+              <article className="msg msg-user" data-role="user">
+                <div className="msg-who">
+                  {t('msg.you')}
+                  {clockOf(msg.timestamp) && <time>{clockOf(msg.timestamp)}</time>}
+                </div>
                 {msg.source === 'phone' && (
                   <div data-testid="phone-marker"
                     title={t('chat.fromPhoneTitle', { cihaz: stripBidi(msg.sourceDevice || '') || t('chat.phoneUnnamed') })}
-                    className="flex justify-end mb-1 text-[10.5px] text-slate-500 select-none">
+                    className="msg-phone">
                     📱 {stripBidi(msg.sourceDevice || '') || t('chat.phoneUnnamed')}
                   </div>
                 )}
-                <div className="bg-blue-500/10 border border-blue-400/15 rounded-2xl rounded-tr-md px-4 py-2.5">
+                <div className="msg-body">
                   {msg.images && msg.images.length > 0 && (
-                    <div className="flex gap-2 mb-3 flex-wrap">
+                    <div className="msg-images">
                       {msg.images.map((img, i) => (
-                        <img 
-                          key={i} 
-                          src={img} 
-                          alt="user upload" 
-                          className="max-w-[200px] max-h-[200px] rounded-lg border border-white/10 shadow-lg cursor-zoom-in hover:scale-[1.02] transition-transform" 
+                        <img
+                          key={i}
+                          src={img}
+                          alt="user upload"
                           onClick={() => setLightboxSrc(img)}
                         />
                       ))}
                     </div>
                   )}
-                  <div className="text-[13px] text-slate-200 whitespace-pre-wrap break-words">
+                  <div className="msg-user-text">
                     {/* Kullanıcının KENDİ mesajı da markdown'dan geçiyor, yani
                         oraya yazdığı bir yol da link olabiliyor. `onOpenFile`
                         burada da geçiliyor: aksi halde link ölü kalırdı ve
@@ -586,21 +614,20 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     <MarkdownRenderer content={msg.content} onOpenFile={openFile} mentionTitles={mentionTitles} />
                   </div>
                 </div>
-              </div>
+              </article>
             )}
-          </div>
+          </React.Fragment>
           );
         })}
 
         {/* Canlı aktivite şeridi: metin akmaya başladıktan sonra da Claude'un çalıştığı
             görünür kalsın (typing bubble yalnızca içerik boşken görünüyor). */}
         {loading && activity && messages.length > 0 && !!messages[messages.length - 1]?.content && (
-          <div className="flex items-center gap-2 mb-6 text-[11.5px]">
-            <Sparkles size={12} className="text-violet-400/80 animate-pulse shrink-0" />
-            <span className="shimmer-text font-medium truncate">{activity.detail}</span>
-            {fmtTok(activity.tokens) && <span className="text-slate-600 shrink-0">· {fmtTok(activity.tokens)} token</span>}
-            <span className="text-slate-600 tabular-nums shrink-0">· {fmtElapsed(elapsedSec)}</span>
-          </div>
+          <Working
+            text={activity.detail}
+            tokens={fmtTok(activity.tokens) ? `${fmtTok(activity.tokens)} token` : null}
+            elapsed={fmtElapsed(elapsedSec)}
+          />
         )}
 
         {/* MCP onay kartları — mesaj listesinin DIŞINDA, tek bileşende.
@@ -631,8 +658,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           setCode={setCode}
         />
 
-        <div ref={messagesEndRef} className="h-4" />
-      </div>
+        <div ref={messagesEndRef} className="thread-end" aria-hidden="true" />
 
       {/* Resim lightbox (uygulama içi tam ekran önizleme) */}
       {lightboxSrc && (

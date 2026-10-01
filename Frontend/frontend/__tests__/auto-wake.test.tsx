@@ -112,11 +112,11 @@ describe('AUTO-WAKE row', () => {
   })
 
   it('system role does NOT render as a USER BUBBLE', () => {
-    // Not the rendering itself, its CLAIM is what's being measured: the blue
-    // bubble says "the user wrote this". The class name is the only
-    // distinguishing signal in production.
+    // Not the rendering itself, its CLAIM is what's being measured: the user's
+    // bubble says "the user wrote this". Since the v4 thread the bubble carries
+    // `data-role="user"` (the old signal was the blue Tailwind class).
     const { container } = renderPanel([SISTEM_MESAJI])
-    expect(container.querySelector('.bg-blue-500\\/10')).toBeNull()
+    expect(container.querySelector('[data-role="user"]')).toBeNull()
   })
 
   it('localizes every reason code in a joined system message', () => {
@@ -131,7 +131,7 @@ describe('AUTO-WAKE row', () => {
 
   it('a real user message is still in a bubble', () => {
     const { container } = renderPanel([{ ...SISTEM_MESAJI, id: 10, role: 'user', content: 'selam' }])
-    expect(container.querySelector('.bg-blue-500\\/10')).not.toBeNull()
+    expect(container.querySelector('[data-role="user"]')).not.toBeNull()
   })
 })
 
