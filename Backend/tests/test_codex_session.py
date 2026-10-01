@@ -305,14 +305,38 @@ def ws(tmp_path):
 
 
 @pytest.mark.parametrize("command", [
+    _PS + "'Get-ChildItem'",
+    _PS + "'Get-ChildItem -Name'",
     _PS + "'Get-ChildItem -File -Name'",
+    _PS + "'gci -Recurse -Force Assets'",
+    _PS + "'Get-ChildItem -Path Assets -Depth 2'",
+    _PS + "'Get-Content a.txt'",
     _PS + "'Get-Content Assets\\A.cs'",
-    _PS + "'gci -Recurse -Filter Assets'",
+    _PS + "'Get-Content -Path Assets/A.cs'",
+    _PS + "'Get-Content -LiteralPath Assets\\A.cs'",
+    _PS + "'Get-Content -Raw -Encoding UTF8 Assets\\A.cs'",
+    _PS + "'Get-Content -TotalCount 20 Assets\\A.cs'",
+    _PS + "'Select-String -Pattern x -Path a.txt'",
     _PS + "'Select-String -Pattern Player -Path Assets\\A.cs'",
+    _PS + "'rg pattern'",
+    _PS + "'rg -n pattern src'",
     _PS + "'rg -n Player Assets'",
     _PS + "'rg --files'",
+    _PS + "'ls'",
+    _PS + "'cat a.txt'",
+    _PS + "'Get-Location'",
+    _PS + "'pwd'",
+    "/bin/bash -lc 'ls'",
     "/bin/bash -lc 'ls -la Assets'",
+    "/bin/bash -lc 'cat a.txt'",
+    "/bin/bash -lc 'pwd'",
     "/bin/zsh -lc 'grep -rn Player Assets'",
+    "/bin/bash -lc 'rg -n pattern src'",
+    "/bin/bash -lc 'tree -L 2 -a Assets'",
+    "/bin/bash -lc 'tree -d Assets'",
+    "/bin/bash -lc 'find Assets -name A.cs -type f'",
+    "/bin/bash -lc 'head -n 5 Assets/A.cs'",
+    "/bin/bash -lc 'wc -l Assets/A.cs'",
     ["ls", "Assets"],
 ])
 def test_read_only_command_is_recognised(ws, command):
@@ -331,11 +355,13 @@ def test_read_only_command_is_recognised(ws, command):
     _PS + "\"Get-Content '..\\secret.txt'\"",
     _PS + "'Get-Content .*\\secret.txt'",
     _PS + "'Get-ChildItem C:\\'",
+    _PS + "'Get-ChildItem \\Windows'",
+    _PS + "'Get-ChildItem /etc'",
     _PS + "'cat ~\\.ssh\\id_rsa'",
-    _PS + "'rg --pre sh Player'",
-    _PS + "'rg -nz Player'",
     _PS + "'git status'",
     _PS + "'echo hi'",
+    _PS + "'Get-Location Assets'",
+    _PS + "'head -n 5 A.cs'",
     "/bin/bash -lc 'cat {..,x}/secret'",
     "/bin/bash -lc 'find . -delete'",
     "/bin/bash -lc 'Get-ChildItem'",
@@ -345,6 +371,39 @@ def test_read_only_command_is_recognised(ws, command):
     None,
 ])
 def test_anything_else_is_not_read_only(ws, command):
+    assert _is_read_only_command(command, ws, ws) is False
+
+
+# command_safety reads `-Path..\x` as one flag; PowerShell binds `..\x` to
+# -Path and reads outside the workspace (measured, finding #1).
+@pytest.mark.parametrize("command", [
+    _PS + "'Get-Content -Path..\\top.txt'",
+    _PS + "'cat -Path..\\top.txt'",
+    _PS + "'gc -LiteralPath..\\x'",
+    _PS + "'Get-ChildItem -Path..\\'",
+    _PS + "'Select-String -Pattern a -Path..\\top.txt'",
+    _PS + "'Get-Content -Path..\\/./top.txt'",
+    _PS + "'Get-Content -Path:..\\top.txt'",
+    _PS + "'Get-Content -Path=a.txt'",
+    _PS + "'Get-Content -Pa a.txt'",
+    _PS + "'Get-Content -Path'",
+    _PS + "'Get-Content -TotalCount x a.txt'",
+    _PS + "'Get-Content -TotalCount5 a.txt'",
+    _PS + "'Get-Content -Encoding x a.txt'",
+    _PS + "'Get-Content -Wait a.txt'",
+    _PS + "'Get-Content a..b'",
+    _PS + "'Get-Content Assets\\..\\..\\top.txt'",
+    _PS + "'Select-String -Pattern -x a.txt'",
+    _PS + "'rg -e -x'",
+    "/bin/bash -lc 'cat x/\\.\\./\\.\\./top.txt'",
+    "/bin/bash -lc 'cat \\x'",
+    "/bin/bash -lc 'head -n5 a.txt'",
+    "/bin/bash -lc 'head -n ../x'",
+    "/bin/bash -lc 'ls -lX'",
+    "/bin/bash -lc 'grep -R x Assets'",
+    "/bin/bash -lc 'find Assets -type l'",
+])
+def test_an_attached_or_unknown_option_is_not_read_only(ws, command):
     assert _is_read_only_command(command, ws, ws) is False
 
 
@@ -368,6 +427,7 @@ def test_anything_else_is_not_read_only(ws, command):
     _PS + "'Get-Content A.cs #x'",
     _PS + "'Get-Content +A.cs'",
     _PS + "'Get-Content A.cs ~'",
+    _PS + "'Get-Content \"A.cs\"'",
     _PS + "'Get-Content \N{LATIN SMALL LETTER E WITH ACUTE}.cs'",
 ])
 def test_a_script_with_anything_but_plain_characters_is_not_read_only(ws, command):
@@ -379,11 +439,12 @@ def test_a_script_with_anything_but_plain_characters_is_not_read_only(ws, comman
     "/bin/bash -lc 'tree -o .git/hooks/pre-commit'",
     "/bin/bash -lc 'tree -o=out.txt'",
     "/bin/bash -lc 'tree -ao out.txt'",
+    "/bin/bash -lc 'tree -oout.txt'",
     "/bin/bash -lc 'tree --output out.txt'",
     "/bin/bash -lc 'tree \"-o\" out.txt'",
     "/bin/bash -lc 'tree -R -L 1'",
     _PS + "'tree -o out.txt'",
-    # find predicates that write or run a program (refused by command_safety).
+    # find predicates that write or run a program.
     "/bin/bash -lc 'find . -fprint out.txt'",
     "/bin/bash -lc 'find . -fprint0 out.txt'",
     "/bin/bash -lc 'find . -fprintf out.txt x'",
@@ -394,6 +455,8 @@ def test_a_script_with_anything_but_plain_characters_is_not_read_only(ws, comman
     "/bin/bash -lc 'find . -execdir rm'",
     "/bin/bash -lc 'find . \"-delete\"'",
     # ripgrep flags that start a program, also when quoted.
+    _PS + "'rg --pre sh Player'",
+    _PS + "'rg -nz Player'",
     _PS + "'rg \"--pre\" sh Player'",
     "/bin/bash -lc 'rg \"--pre=sh\" Player'",
     "/bin/bash -lc 'rg -\"z\" Player'",
@@ -402,22 +465,6 @@ def test_a_script_with_anything_but_plain_characters_is_not_read_only(ws, comman
 ])
 def test_a_read_verb_with_a_write_or_exec_option_is_not_read_only(ws, command):
     assert _is_read_only_command(command, ws, ws) is False
-
-
-@pytest.mark.parametrize("command", [
-    # Options with no write or exec form stay on the shortcut: head/tail/wc/
-    # grep/cat/ls and the PowerShell read cmdlets have none.
-    "/bin/bash -lc 'tree -L 2 -a Assets'",
-    "/bin/bash -lc 'tree -d Assets'",
-    "/bin/bash -lc 'find Assets -name A.cs -type f'",
-    "/bin/bash -lc 'grep -o -n Player Assets'",
-    "/bin/bash -lc 'head -n 5 Assets/A.cs'",
-    "/bin/bash -lc 'wc -l Assets/A.cs'",
-    _PS + "'Get-Content -Raw -Encoding UTF8 Assets\\A.cs'",
-    _PS + "'Get-ChildItem -Recurse -Force Assets'",
-])
-def test_a_read_verb_with_a_plain_option_is_read_only(ws, command):
-    assert _is_read_only_command(command, ws, ws) is True
 
 
 @pytest.fixture

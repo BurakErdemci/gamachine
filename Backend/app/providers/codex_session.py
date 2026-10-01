@@ -337,13 +337,96 @@ _READ_VERBS = {
     "head": "head", "tail": "tail", "wc": "wc", "tree": "tree",
     "grep": "grep", "find": "find", "rg": "grep",
 }
-_POSIX_READ_VERBS = frozenset({"ls", "cat", "pwd", "head", "tail", "wc", "tree",
-                               "grep", "find", "rg"})
-# ripgrep flags that start another program (preprocessor, decompressor).
-_RG_EXEC_FLAG = re.compile(r"^(?:--pre|--hostname-bin|--search-zip|-[A-Za-y]*z)")
 # tree writes its listing to a file with -o, and -R reruns itself with
 # `-o 00Tree.html` in every directory.
 _TREE_WRITE_FLAG = re.compile(r"^(?:--o|-[A-Za-z]*[oR])")
+
+
+# The read shortcut is an allowlist grammar: `<verb> <tokens...>` where every
+# `-` token is one of the verb's flags below and every other token is a plain
+# in-workspace name. A blocklist missed `-Path..\x`: command_safety reads it as
+# one flag, PowerShell binds `..\x` to -Path (measured, finding #1).
+# Grammar keys: flags (no value), values (flag -> "int" | "arg" | literal
+# set, value in the next token), short (chars a POSIX short group may hold),
+# fold (PowerShell parameter names are case-insensitive), max_args.
+def _grammar(flags=(), values=None, short="", fold=False, max_args=None) -> dict:
+    return {"flags": frozenset(flags), "values": values or {}, "short": short,
+            "fold": fold, "max_args": max_args}
+
+
+_ENCODINGS = frozenset({"utf8", "unicode", "ascii", "default", "oem", "utf32",
+                        "bigendianunicode"})
+_GCI = _grammar(("-name", "-file", "-directory", "-recurse", "-force"),
+                {"-path": "arg", "-literalpath": "arg", "-depth": "int"}, fold=True)
+_GC = _grammar(("-raw",), {"-path": "arg", "-literalpath": "arg", "-totalcount": "int",
+                           "-head": "int", "-tail": "int", "-encoding": _ENCODINGS}, fold=True)
+_SLS = _grammar(("-simplematch", "-casesensitive", "-list"),
+                {"-pattern": "arg", "-path": "arg", "-literalpath": "arg"}, fold=True)
+_NO_ARGS = _grammar(max_args=0)
+# No -z/--pre/--search-zip: they start another program.
+_RG = _grammar(("--files",), {"-e": "arg"}, short="nilcwF")
+_PS_READS = {
+    "get-childitem": _GCI, "gci": _GCI, "dir": _GCI, "ls": _GCI,
+    "get-content": _GC, "gc": _GC, "type": _GC, "cat": _GC,
+    "select-string": _SLS, "sls": _SLS,
+    "get-location": _NO_ARGS, "gl": _NO_ARGS, "pwd": _NO_ARGS,
+    "rg": _RG,
+}
+_POSIX_READS = {
+    "ls": _grammar(short="laAR1h"),
+    "cat": _grammar(short="n"),
+    "pwd": _NO_ARGS,
+    "head": _grammar(values={"-n": "int"}),
+    "tail": _grammar(values={"-n": "int"}),
+    "wc": _grammar(short="lwc"),
+    # No -o/-R (_TREE_WRITE_FLAG).
+    "tree": _grammar(values={"-L": "int"}, short="ad"),
+    # No -R: it follows links out of the workspace.
+    "grep": _grammar(values={"-e": "arg"}, short="nilcwFr"),
+    "rg": _RG,
+    "find": _grammar(values={"-name": "arg", "-type": frozenset({"f", "d"}),
+                             "-maxdepth": "int"}),
+}
+# No quote, glob, colon, drive or leading separator. Bash reads `\.` as `.`,
+# so a POSIX name has no backslash (`x/\.\./y` is `x/../y`).
+_PS_ARG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./\\-]*")
+_POSIX_ARG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
+_INT_ARG = re.compile(r"[0-9]+")
+
+
+def _read_args_ok(tokens: "list[str]", grammar: dict, powershell: bool) -> bool:
+    arg_re = _PS_ARG if powershell else _POSIX_ARG
+
+    def arg_ok(tok: str) -> bool:
+        return bool(arg_re.fullmatch(tok)) and ".." not in tok
+
+    def value_ok(kind, tok: str) -> bool:
+        if kind == "int":
+            return bool(_INT_ARG.fullmatch(tok))
+        if kind == "arg":
+            return arg_ok(tok)
+        return (tok.lower() if grammar["fold"] else tok) in kind
+
+    args, i = 0, 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.startswith("-"):
+            key = tok.lower() if grammar["fold"] else tok
+            if key in grammar["values"]:
+                if i + 1 >= len(tokens) or not value_ok(grammar["values"][key], tokens[i + 1]):
+                    return False
+                i += 2
+                continue
+            short = grammar["short"]
+            if not (key in grammar["flags"]
+                    or (short and len(tok) > 1 and all(c in short for c in tok[1:]))):
+                return False
+        elif arg_ok(tok):
+            args += 1
+        else:
+            return False
+        i += 1
+    return grammar["max_args"] is None or args <= grammar["max_args"]
 
 
 _BARE_SHELLS = frozenset({"powershell", "powershell.exe", "pwsh", "pwsh.exe",
@@ -438,9 +521,10 @@ def _is_read_only_command(command, cwd, workspace: str) -> bool:
     """True when a Codex command only lists, reads or searches inside the
     workspace, so step mode treats it like Claude's Read/Glob/Grep/LS.
 
-    Anything unsure is False and goes to the mode as before. The verdict on
-    the rest is command_safety's: no chaining, redirection, pipes, variables
-    or command substitution, and every path stays in the workspace.
+    Anything unsure is False and goes to the mode as before. The script must
+    parse under the read grammar (`_PS_READS` / `_POSIX_READS`); command_safety
+    then still checks it: no chaining, redirection, pipes, variables or
+    command substitution, and every path stays in the workspace.
     """
     from action_risk import _confinement_root
     from agentic import command_safety
@@ -454,21 +538,12 @@ def _is_read_only_command(command, cwd, workspace: str) -> bool:
     script, powershell = _shell_script(command, cwd if isinstance(cwd, str) and cwd else root)
     if not script or not _PLAIN_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script):
         return False
-    head, _, rest = script.strip().partition(" ")
-    verb = head.lower()
-    if powershell:
-        mapped = _READ_VERBS.get(verb)
-    else:
-        mapped = _READ_VERBS.get(verb) if verb in _POSIX_READ_VERBS else None
-    if mapped is None:
+    tokens = script.split()
+    verb = tokens[0].lower() if tokens else ""
+    grammar = (_PS_READS if powershell else _POSIX_READS).get(verb)
+    if grammar is None or not _read_args_ok(tokens[1:], grammar, powershell):
         return False
-    # Both shells strip the quotes before the program sees the flag.
-    args = rest.replace('"', "").split()
-    if verb == "rg" and any(_RG_EXEC_FLAG.match(t) for t in args):
-        return False
-    if mapped == "tree" and any(_TREE_WRITE_FLAG.match(t) for t in args):
-        return False
-    return command_safety.is_auto_safe(f"{mapped} {rest}".strip(), root)
+    return command_safety.is_auto_safe(" ".join([_READ_VERBS[verb], *tokens[1:]]), root)
 
 
 def _notification_turn_id(params: dict) -> Optional[str]:
