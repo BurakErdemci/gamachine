@@ -280,6 +280,8 @@
 .approval-sentence { font-size: var(--fs-body); line-height: 1.45; color: var(--ink-dim); }
 .approval-why { display: flex; align-items: center; gap: 7px; font-size: var(--fs-small); color: var(--ink-dim); }
 .approval[data-state="pending"] .approval-why { color: var(--accent-text); }
+/* the card's own warning under a risk line: secondary, so it reads as detail, not a second alarm */
+.approval[data-state="pending"] .approval-why.is-note { color: var(--ink-dim); margin-top: -4px; }
 .risk { display: none; align-items: center; gap: 3px; margin-right: 4px; }
 .risk-k { margin-right: 4px; font-family: var(--font-label); font-weight: var(--label-weight); text-transform: var(--label-case); letter-spacing: var(--label-track); font-size: var(--fs-meta); }
 .risk i { width: 8px; height: 8px; background: var(--pip-off); }

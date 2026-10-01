@@ -67,8 +67,14 @@ export const CommandApproval: React.FC<CommandApprovalProps> = ({ command, onCon
       who={t(m.title)}
       name={t(m.name)}
       sentence={t(m.confirm)}
-      // The balanced-mode reason when there is one; otherwise the card's own warning.
-      why={riskReason ? <RiskReasonLine reason={riskReason} detail={riskDetail} /> : <ApprovalWhy>{t(m.warning)}</ApprovalWhy>}
+      // The balanced-mode reason first when there is one, the card's own warning always (P2
+      // dropped the warning whenever a reason was present; both were shown before).
+      why={riskReason ? (
+        <>
+          <RiskReasonLine reason={riskReason} detail={riskDetail} />
+          <ApprovalWhy secondary>{t(m.warning)}</ApprovalWhy>
+        </>
+      ) : <ApprovalWhy>{t(m.warning)}</ApprovalWhy>}
       // What is approved stays VISIBLE, not folded behind "Details" as in the mockup: a gate
       // that shows something other than what it approves is no gate (see the bidi note below).
       // The body scrolls inside itself and keeps line breaks (K9: the card also shows a file's

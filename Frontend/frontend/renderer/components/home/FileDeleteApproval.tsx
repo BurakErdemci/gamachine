@@ -33,7 +33,13 @@ export const FileDeleteApproval: React.FC<FileDeleteApprovalProps> = ({
       who={t('deleteApproval.title')}
       name={t('card.nameDelete', { ad: fileName })}
       sentence={<>"<code>{fileName}</code>" {t('deleteApproval.confirm')}</>}
-      why={riskReason ? <RiskReasonLine reason={riskReason} detail={riskDetail} /> : <ApprovalWhy>{t('deleteApproval.warning')}</ApprovalWhy>}
+      // Risk line first when balanced mode raised the card; the warning always (see CommandApproval).
+      why={riskReason ? (
+        <>
+          <RiskReasonLine reason={riskReason} detail={riskDetail} />
+          <ApprovalWhy secondary>{t('deleteApproval.warning')}</ApprovalWhy>
+        </>
+      ) : <ApprovalWhy>{t('deleteApproval.warning')}</ApprovalWhy>}
       body={<p className="approval-path">{path}</p>}
       phoneHint={phonePaired}
       actions={(

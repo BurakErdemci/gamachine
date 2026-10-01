@@ -125,9 +125,13 @@ export const CheckIcon = () => (
   <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8" /></svg>
 );
 
-/** A card's own warning line, drawn where the risk line goes (`.approval-why`). */
-export const ApprovalWhy: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <p className="approval-why">
+/**
+ * A card's own warning line, drawn where the risk line goes (`.approval-why`). `secondary` is the
+ * same warning drawn UNDER a balanced-mode risk line: the risk line says why the card stopped
+ * here, the warning still says what the action does, so a card with a reason shows both.
+ */
+export const ApprovalWhy: React.FC<{ children: React.ReactNode; secondary?: boolean }> = ({ children, secondary }) => (
+  <p className={secondary ? 'approval-why is-note' : 'approval-why'} data-testid="card-warning">
     <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l7.5 13h-15z" /><path d="M10 8v3.6M10 13.6v.2" /></svg>
     <span>{children}</span>
   </p>

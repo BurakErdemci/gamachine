@@ -29,6 +29,7 @@ import { GenerationModeSelector } from '../renderer/components/home/GenerationMo
 import { useChat } from '../renderer/hooks/home/useChat'
 import { useMCPApproval, gateRisk, MCP_MSG_ID } from '../renderer/hooks/home/useMCPApproval'
 import { CommandApproval } from '../renderer/components/home/CommandApproval'
+import { FileDeleteApproval } from '../renderer/components/home/FileDeleteApproval'
 import { McpApprovalCards } from '../renderer/components/home/McpApprovalCards'
 import { riskReasonLabel } from '../renderer/components/home/RiskReasonLine'
 import { cevir, aktifDilAyarla, translations } from '../renderer/lib/i18n'
@@ -436,6 +437,24 @@ describe('Risk reason line on approval cards', () => {
     expect(line.textContent).toContain(translations.tr['risk.label'])
     expect(line.textContent).toContain(translations.tr['risk.shell_installer'])
     expect(line.textContent).toContain('npm')
+  })
+
+  it('a card with a risk reason keeps its own warning under the risk line (P2 dropped it)', () => {
+    render(<CommandApproval command="npm install x" riskReason="shell_installer" riskDetail="npm" onConfirm={vi.fn()} onCancel={vi.fn()} />)
+    const warning = screen.getByTestId('card-warning')
+    expect(warning.textContent).toContain(translations.tr['cmdApproval.warning'])
+    // the reason comes first, the warning second
+    expect(screen.getByTestId('risk-reason').compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    cleanup()
+    render(<FileDeleteApproval path="Assets/a.cs" riskReason="file_delete" onConfirm={vi.fn(async () => {})} onCancel={vi.fn()} />)
+    expect(screen.getByTestId('risk-reason')).toBeTruthy()
+    expect(screen.getByTestId('card-warning').textContent).toContain(translations.tr['deleteApproval.warning'])
+  })
+
+  it('without a reason the warning is the only line', () => {
+    render(<FileDeleteApproval path="Assets/a.cs" onConfirm={vi.fn(async () => {})} onCancel={vi.fn()} />)
+    expect(screen.queryByTestId('risk-reason')).toBeNull()
+    expect(screen.getAllByTestId('card-warning')).toHaveLength(1)
   })
 
   it('no reason, no line: auto/step cards look as before', () => {
