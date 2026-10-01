@@ -1,80 +1,91 @@
-import React from 'react';
-import { ShieldAlert } from 'lucide-react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 
 import { useLang, type LangContextValue } from '../../lib/i18n';
 import type { UnityMCPStatus } from '../../hooks/home/useAIConfig';
 
 type Anahtar = Parameters<LangContextValue['t']>[0];
 
+/** The mockup's five looks (maket/base.css `.unity[data-unity]`). */
+export type UnityVisual = 'off' | 'connecting' | 'on' | 'closed' | 'blocked';
+
 /**
- * Durum → görünüm tablosu.
+ * Real status -> look, words and tooltip.
  *
- * `Record<UnityMCPStatus, …>` olması bilinçli: tip yeni bir durum kazandığı an
- * eksik satır DERLEME hatası veriyor. Ama bu korumanın ölçülmüş bir sınırı var
- * ve tam olarak bu özelliğin doğuş sebebi o: `SettingsModal` aynı deseni
- * kullanıyordu, yine de `blocked` geldiğinde çalışma anında çöküyordu — çünkü
- * hook `res.data.status as UnityMCPStatus` diye YALANCI bir cast yapıyordu ve
- * tipin dışındaki bir değeri içeri sokuyordu. `Record` ancak tip doğruysa
- * koruyor; cast'in altından geçen değer için hiçbir şey yapmıyor.
+ * `Record<UnityMCPStatus, …>` on purpose: a new status in the type is a COMPILE error here. The
+ * guard has a measured limit, and it is why this component exists: `SettingsModal` used the
+ * same pattern and still crashed on `blocked`, because the hook cast `res.data.status as
+ * UnityMCPStatus` and let a value outside the type in. `Record` only protects a truthful type.
+ *
+ * `unknown` takes the "closed" look (hollow knob, no light, no motion): the light means "we know
+ * it is live", and we do not. Leaving it green was finding I-2: a failed poll kept the switch on
+ * `connected` forever and the user could not see they were attached to a foreign server.
  */
-const TONE: Record<UnityMCPStatus, { btn: string; dot: string; title: Anahtar }> = {
-  off: {
-    btn: 'bg-white/[0.03] border-white/[0.08] text-slate-500 hover:bg-white/[0.06] hover:text-slate-300',
-    dot: 'bg-slate-600',
-    title: 'home.unityOpen',
-  },
-  blocked: {
-    // Kırmızı, ve nabız YOK: nabız bu üründe "çalışıyor, bekle" demek
-    // (starting/running). `blocked` beklenecek bir şey değil, kullanıcının
-    // müdahalesi gereken bir duruş.
-    btn: 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20',
-    dot: 'bg-red-500',
-    title: 'home.unityBlocked',
-  },
-  starting: {
-    btn: 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400',
-    dot: 'bg-yellow-400 animate-pulse',
-    title: 'home.unityStarting',
-  },
-  running: {
-    btn: 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20',
-    dot: 'bg-yellow-400 animate-pulse',
-    title: 'home.unityConnecting',
-  },
-  connected: {
-    btn: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20',
-    dot: 'bg-emerald-400',
-    title: 'home.unityConnected',
-  },
-  unknown: {
-    // Gri ve nabızsız. Nabız bu üründe "çalışıyor, bekle" demek; burada
-    // çalışan bir şey olduğunu bilmiyoruz. Yeşil bırakmak bulgu I-2'ydi:
-    // yoklama başarısızken gösterge süresiz `connected` kalıyordu ve
-    // kullanıcı yabancı bir sunucuya bağlı olduğunu göremiyordu.
-    btn: 'bg-white/[0.03] border-white/[0.08] text-slate-500 hover:bg-white/[0.06] hover:text-slate-300',
-    dot: 'bg-slate-500',
-    title: 'home.unityUnknown',
-  },
+const STATE: Record<UnityMCPStatus, { visual: UnityVisual; word: Anahtar; hint: Anahtar | null; title: Anahtar }> = {
+  off: { visual: 'off', word: 'unity.wordOff', hint: 'unity.hintOff', title: 'home.unityOpen' },
+  // `blocked` is a stop that needs the user, not a wait, so it never shows the connecting chase.
+  blocked: { visual: 'blocked', word: 'unity.wordBlocked', hint: null, title: 'home.unityBlocked' },
+  starting: { visual: 'connecting', word: 'unity.wordConnecting', hint: null, title: 'home.unityStarting' },
+  running: { visual: 'connecting', word: 'unity.wordConnecting', hint: null, title: 'home.unityConnecting' },
+  connected: { visual: 'on', word: 'unity.wordOn', hint: null, title: 'home.unityConnected' },
+  unknown: { visual: 'closed', word: 'unity.wordUnknown', hint: 'unity.hintUnknown', title: 'home.unityUnknown' },
 };
+
+export const unityVisual = (status: UnityMCPStatus): UnityVisual => STATE[status].visual;
+
+/** How long the "link landed" moment stays on (mockup: replay(..., 'is-linked', 700)). */
+export const LINK_PULSE_MS = 700;
+
+/**
+ * True for a moment when the status turns `connected` from another KNOWN status. The first
+ * status after mount is not a link landing (the app opened onto an existing connection), so it
+ * does not pulse. The sidebar's visor blink and the knob's pop both read this, each with its
+ * own instance: same input, same timing. Reduced motion is CSS's job (the animation is removed),
+ * the class itself is harmless.
+ */
+export function useUnityLinkPulse(status: UnityMCPStatus | undefined): boolean {
+  const [linked, setLinked] = useState(false);
+  const previous = useRef<UnityMCPStatus | undefined>(undefined);
+  useEffect(() => {
+    const before = previous.current;
+    previous.current = status;
+    if (status !== 'connected' || before === undefined || before === 'connected') return;
+    setLinked(true);
+    const id = setTimeout(() => setLinked(false), LINK_PULSE_MS);
+    return () => clearTimeout(id);
+  }, [status]);
+  return linked;
+}
 
 interface UnityMcpToggleProps {
   status: UnityMCPStatus;
   toggling: boolean;
-  /** `blocked` sebebi — backend'den gelir, durumla yaşar. */
+  /** Reason for `blocked`: comes from the backend and lives with the status. */
   reason: string | null;
-  /** Bir toggle denemesinin geçici hatası; 6 sn sonra çağıran tarafça silinir. */
+  /** A failed toggle attempt; the caller clears it after 6 s. */
   error: string | null;
   onToggle: () => void;
+  /** Shown after "Connected"; the backend reports no scene yet, so this is the project name. */
+  projectName?: string | null;
 }
 
+const PlugGlyph = () => (
+  <svg className="ic us-plug" viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M7.5 2.5v4M12.5 2.5v4M5 6.5h10v3.2a5 5 0 01-10 0zM10 14.7v2.8" />
+  </svg>
+);
+const LockGlyph = () => (
+  <svg className="ic us-lock" viewBox="0 0 20 20" aria-hidden="true">
+    <rect x="4.5" y="9" width="11" height="8" rx="1" />
+    <path d="M7 9V6.5a3 3 0 016 0V9" />
+  </svg>
+);
+
 /**
- * Unity MCP durum düğmesi ve durumun gerekçesini taşıyan şeritler.
+ * The Unity connection switch, the top bar's signature control (mockup round 7-8 `.unity` bay):
+ * the switch position is the user's intent, the light is the real state.
  *
- * `home.tsx` içinde satır içi 35 satırlık bir JSX bloğuydu ve bu yüzden DOM'da
- * SINANAMIYORDU: `home.tsx` jsdom'da render edilemiyor (Monaco + electron IPC +
- * altı hook). Ayrı bileşen olması bu depoda ölçülmüş bir kuralın gereği —
- * ölçülemeyen bir kontrol başlı başına bir bulgudur, çünkü "düzelttim" iddiası
- * kanıtsız kalır.
+ * Kept as its own component because `home.tsx` cannot be rendered in jsdom (Monaco, electron
+ * IPC, six hooks): inline, none of these states could be tested in the DOM.
  */
 export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   status,
@@ -82,61 +93,95 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   reason,
   error,
   onToggle,
+  projectName = null,
 }) => {
   const { t } = useLang();
-  const tone = TONE[status];
-  // Sebep yalnız `blocked`'a ait: başka bir durumda elde kalmış bir sebep
-  // varsa o bayattır, gösterilmez.
+  const state = STATE[status];
+  const ids = useId();
+  const stateId = `${ids}-state`;
+  const whyId = `${ids}-why`;
+  const bayRef = useRef<HTMLDivElement>(null);
+  const linked = useUnityLinkPulse(status);
+  // The reason belongs to `blocked` only: one left over from an earlier state is stale.
   const sebep = status === 'blocked' ? reason : null;
 
-  return (
-    <div className="relative shrink-0">
-      <button
-        onClick={onToggle}
-        // `blocked` BASILABİLİR kalıyor: kullanıcı çakışan sunucuyu kapattıktan
-        // sonra tekrar denemesinin tek yolu bu düğme.
-        disabled={toggling || status === 'starting'}
-        title={t(tone.title)}
-        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold uppercase tracking-wider transition-all disabled:opacity-50 whitespace-nowrap shrink-0 ${tone.btn}`}
-      >
-        <span
-          data-testid="unity-mcp-dot"
-          aria-hidden="true"
-          className={`w-1.5 h-1.5 rounded-full ${tone.dot}`}
-        />
-        Unity MCP
-      </button>
+  // The reason opens by itself when the block arrives (the old strip showed it without a click,
+  // and the user must act on it); "Why?" then closes and reopens it, as in the mockup.
+  const [whyOpen, setWhyOpen] = useState(status === 'blocked');
+  useEffect(() => { setWhyOpen(status === 'blocked'); }, [status]);
+  useEffect(() => {
+    if (!whyOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (bayRef.current && !bayRef.current.contains(e.target as Node)) setWhyOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setWhyOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [whyOpen]);
 
-      {(sebep || error) && (
-        // İkisi birden olabilir (blocked bir portta toggle denemesi 500 alır),
-        // o yüzden dikey yığın: eskiden ikisi de `absolute top-full` olduğu için
-        // üst üste binerlerdi.
-        <div className="absolute top-full right-0 mt-2 z-50 flex flex-col items-end gap-2">
-          {sebep && (
-            <div
-              role="alert"
-              className="flex items-start gap-2 max-w-[360px] px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 text-[11px] font-medium shadow-lg"
-            >
-              <ShieldAlert size={13} className="mt-px shrink-0" />
-              <div className="min-w-0">
-                <div className="font-bold">{t('unity.blocked')}</div>
-                {/* `whitespace-nowrap` BİLEREK yok: sebep süreç adı ve PID
-                    taşıyor, yani uzun; eski banner nowrap olduğu için dar
-                    pencerede üst bardaki yazılara giriyordu. */}
-                <div className="leading-relaxed">{sebep}</div>
-              </div>
-            </div>
+  const cls = ['unity', linked ? 'is-linked' : '', whyOpen && status === 'blocked' ? 'why-open' : '']
+    .filter(Boolean).join(' ');
+
+  return (
+    <div ref={bayRef} className={cls} data-unity={state.visual} data-status={status} data-testid="unity-bay">
+      <button
+        className="unity-switch"
+        type="button"
+        role="switch"
+        // Checked = clicking turns it off. `blocked` is not: a click there retries the start
+        // (useAIConfig treats off and blocked alike), so it reads as off to assistive tech.
+        aria-checked={status !== 'off' && status !== 'blocked'}
+        aria-describedby={sebep ? `${stateId} ${whyId}` : stateId}
+        title={t(state.title)}
+        onClick={onToggle}
+        // `blocked` stays PRESSABLE: after the user closes the conflicting server, this button
+        // is their only way to retry.
+        disabled={toggling || status === 'starting'}
+      >
+        <span className="sr-only">{t('unity.switchLabel')}</span>
+        <span className="us-track" aria-hidden="true">
+          <span className="us-knob"><PlugGlyph /><LockGlyph /></span>
+        </span>
+        <span className="us-leds" aria-hidden="true"><i /><i /><i /></span>
+      </button>
+      <span className="unity-read">
+        <span className="unity-text" id={stateId} aria-live="polite">
+          <span className="unity-k" lang="en">{t('unity.kicker')}</span>{' '}
+          <span className="unity-word">{t(state.word)}</span>
+        </span>
+        {state.visual === 'on' && projectName && <span className="unity-path">{projectName}</span>}
+        {state.hint && <span className="unity-hint">{t(state.hint)}</span>}
+        {status === 'blocked' && (
+          <button
+            className="unity-why-btn"
+            type="button"
+            aria-expanded={whyOpen}
+            aria-controls={whyId}
+            onClick={(e) => { e.stopPropagation(); setWhyOpen(o => !o); }}
+          >
+            {t('unity.why')}
+          </button>
+        )}
+      </span>
+      {(status === 'blocked' || error) && (
+        // Both can be up at once (a toggle on a blocked port gets a 500), so they stack in one
+        // column under the bay instead of covering each other.
+        <span className="unity-pops">
+          {status === 'blocked' && (
+            // In the DOM for the whole blocked state, shown by CSS when open / hovered / focused:
+            // it follows the status, not a timer.
+            <span className="unity-why" id={whyId} role="alert">
+              <b>{t('unity.whyTitle')}</b>{' '}
+              {/* No nowrap: the reason carries a process name and PID, so it is long. */}
+              {sebep || t('home.unityBlocked')}
+            </span>
           )}
-          {error && (
-            <div
-              role="alert"
-              className="flex items-center gap-2 max-w-[360px] px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 text-[11px] font-medium shadow-lg animate-in fade-in slide-in-from-top-1"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse shrink-0" />
-              <span className="min-w-0">{error}</span>
-            </div>
-          )}
-        </div>
+          {error && <span className="unity-err" role="alert">{error}</span>}
+        </span>
       )}
     </div>
   );
