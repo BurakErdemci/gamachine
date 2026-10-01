@@ -48,7 +48,7 @@ import { useRemoteEffort, useRemoteUi } from '../lib/remoteControl';
 import { useAppearance } from '../lib/appearance';
 import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
 import { useNewChatShortcut } from '../lib/newChatShortcut';
-import { useTurnDone } from '../lib/turnDone';
+import { useTurnDone, cardOnScreen } from '../lib/turnDone';
 import { ThreadHeader } from '../components/home/ThreadHeader';
 import { EmptyChat } from '../components/home/EmptyChat';
 import { AchievementToast } from '../components/home/AchievementToast';
@@ -445,7 +445,10 @@ export default function Home() {
     onOpenConversation: (conv) => { chat.selectConversation(conv); },
   });
   // The on-screen counterpart of the "finished" notification: the achievement band.
-  const turnDone = useTurnDone(chat.attention, chat.activeConvId, screenCardOpen);
+  const turnDone = useTurnDone(chat.attention, chat.activeConvId, cardOnScreen({
+    pendingDelete: fs.pendingDelete, pendingGenFiles: fs.pendingGenFiles,
+    pendingFix: chat.pendingFix, activeGate: mcp.activeGate,
+  }));
 
   // --- Save Shortcut (Ctrl+S / Cmd+S) ---
   useEffect(() => {

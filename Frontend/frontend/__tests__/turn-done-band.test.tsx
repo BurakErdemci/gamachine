@@ -6,7 +6,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import React from 'react'
 import { renderHook, render, screen, cleanup, act } from '@testing-library/react'
-import { useTurnDone } from '../renderer/lib/turnDone'
+import { useTurnDone, cardOnScreen } from '../renderer/lib/turnDone'
 import { AchievementToast, ACHV_LIFE_MS } from '../renderer/components/home/AchievementToast'
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
@@ -69,5 +69,15 @@ describe('AchievementToast', () => {
   it('draws nothing without an event', () => {
     render(<AchievementToast event={null} title="x" />)
     expect(screen.queryByTestId('achievement-toast')).toBeNull()
+  })
+})
+
+describe('cardOnScreen (what home.tsx hands useTurnDone)', () => {
+  it('counts the diff card and an unityMCP gate, not only delete / create cards', () => {
+    expect(cardOnScreen({})).toBe(false)
+    expect(cardOnScreen({ pendingFix: { data: {} } })).toBe(true)
+    expect(cardOnScreen({ activeGate: { gateId: 'g1' } })).toBe(true)
+    expect(cardOnScreen({ pendingDelete: { path: 'a' } })).toBe(true)
+    expect(cardOnScreen({ pendingGenFiles: { files: [] } })).toBe(true)
   })
 })

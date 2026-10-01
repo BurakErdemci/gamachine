@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChatAttention } from '../hooks/home/useChat';
 
+/**
+ * Whether a decision card is on screen, for the band's "a turn that ends on a card is announced
+ * by the card" rule. Every card kind counts: the file-change diff (`pendingFix`) and an unityMCP
+ * gate were missing, so the band could play next to an open diff card (P2 audit). Kept apart
+ * from the notification hook's own card check, which this does not change.
+ */
+export const cardOnScreen = (cards: {
+  pendingDelete?: unknown; pendingGenFiles?: unknown; pendingFix?: unknown; activeGate?: unknown;
+}): boolean => !!(cards.pendingDelete || cards.pendingGenFiles || cards.pendingFix || cards.activeGate);
+
 export interface TurnDoneEvent {
   /** The turn-end sequence number; also the band's React key, so a new turn replays it. */
   seq: number;
