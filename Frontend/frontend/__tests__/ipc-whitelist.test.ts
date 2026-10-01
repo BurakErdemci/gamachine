@@ -87,8 +87,14 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // pair/start, pair/approve and the relay URL stays in the main process; the
   // action is one of a fixed table (helpers/remote-control.ts) and the path is
   // never taken from the renderer.
-  it('tam olarak 31 kanal içerir', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(31)
+  // 31 -> 32: bundled appearance settings can select one of three zoom factors.
+  it('tam olarak 32 kanal içerir', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(32)
+  })
+
+  it('app-zoom-set is whitelisted', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.has('app-zoom-set')).toBe(true)
+    expect(() => assertAllowedInvokeChannel('app-zoom-set')).not.toThrow()
   })
 
   it("remote-control kanalı whitelist'te", () => {

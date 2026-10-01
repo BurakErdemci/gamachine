@@ -700,6 +700,14 @@ handleSecure('path-exists', async (_event, targetPath: string) => {
 
 handleSecure('app-token-get', () => localAppToken)
 
+handleSecure('app-zoom-set', (event, factor: unknown) => {
+  if (factor !== 0.9 && factor !== 1 && factor !== 1.1) {
+    throw new Error('Invalid text size factor.')
+  }
+  event.sender.setZoomFactor(factor)
+  return true
+})
+
 handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown) => {
   if (mode !== 'auto' && mode !== 'balanced' && mode !== 'step') {
     throw new Error('Geçersiz çalışma modu.')

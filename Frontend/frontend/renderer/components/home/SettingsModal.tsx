@@ -9,6 +9,12 @@ import { useLang, type Lang } from "../../lib/i18n";
 import { stripBidi } from "../../lib/modelText";
 import { RemoteControlSection } from "./RemoteControlSection";
 import type { RemoteStatus } from "../../lib/remoteControl";
+import { CODE_FONTS, FONT_STACKS, READING_FONTS, TEXT_SIZES, THEMES, useAppearance, type CodeFont, type ReadingFont } from "../../lib/appearance";
+
+const FONT_NAMES = {
+  inter: 'Inter', geist: 'Geist', 'plex-sans': 'IBM Plex Sans', figtree: 'Figtree', atkinson: 'Atkinson Hyperlegible',
+  jetbrains: 'JetBrains Mono', 'geist-mono': 'Geist Mono', 'plex-mono': 'IBM Plex Mono', fira: 'Fira Code', cascadia: 'Cascadia Code',
+} as const;
 
 
 
@@ -90,6 +96,7 @@ export const SettingsModal = ({
   onRemoteStatus,
 }: SettingsModalProps) => {
   const { t } = useLang();
+  const { appearance, setAppearance } = useAppearance();
   const [tab, setTab] = useState<SettingsTab>('general');
   const TABS: { id: SettingsTab; label: string }[] = [
     { id: 'general', label: t('settings.tabGeneral') },
@@ -301,6 +308,79 @@ export const SettingsModal = ({
                   {unityMcpToggling && <Loader2 size={10} className="text-purple-600 animate-spin" />}
                 </span>
               </button>
+            </div>
+
+            <div role="group" aria-label={t('settings.appearance.title')} className="space-y-2">
+              <p className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-2">{t('settings.appearance.title')}</p>
+              <div className="flex items-center justify-between gap-2 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
+                <p className="text-xs font-semibold text-slate-200">{t('settings.appearance.theme')}</p>
+                <div role="group" aria-label={t('settings.appearance.theme')} className="flex flex-wrap gap-1 justify-end">
+                  {THEMES.map(theme => (
+                    <button key={theme} type="button" aria-pressed={appearance.theme === theme}
+                      onClick={() => setAppearance({ theme })}
+                      className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all border ${
+                        appearance.theme === theme
+                          ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
+                          : 'bg-white/[0.04] border-white/[0.08] text-slate-500 hover:text-slate-300 hover:border-white/20'
+                      }`}
+                    >{t(`settings.appearance.${theme}`)}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-2 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
+                <label htmlFor="appearance-reading-font" className="text-xs font-semibold text-slate-200">{t('settings.appearance.readingFont')}</label>
+                <select id="appearance-reading-font" value={appearance.readingFont}
+                  onChange={event => setAppearance({ readingFont: event.target.value as ReadingFont })}
+                  className="min-w-0 max-w-[60%] bg-white/[0.04] border border-white/[0.08] rounded-lg px-2 py-1 text-slate-200 text-[11px] outline-none focus:border-blue-500/60"
+                >
+                  {READING_FONTS.map(font => (
+                    <option key={font} value={font} style={font === 'theme' ? undefined : { fontFamily: FONT_STACKS[font] }}>
+                      {font === 'theme' ? t('settings.appearance.themeDefault') : FONT_NAMES[font]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center justify-between gap-2 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
+                <label htmlFor="appearance-code-font" className="text-xs font-semibold text-slate-200">{t('settings.appearance.codeFont')}</label>
+                <select id="appearance-code-font" value={appearance.codeFont}
+                  onChange={event => setAppearance({ codeFont: event.target.value as CodeFont })}
+                  className="min-w-0 max-w-[60%] bg-white/[0.04] border border-white/[0.08] rounded-lg px-2 py-1 text-slate-200 text-[11px] outline-none focus:border-blue-500/60"
+                >
+                  {CODE_FONTS.map(font => (
+                    <option key={font} value={font} style={font === 'theme' ? undefined : { fontFamily: FONT_STACKS[font] }}>
+                      {font === 'theme' ? t('settings.appearance.themeDefault') : FONT_NAMES[font]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center justify-between gap-2 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
+                <p className="text-xs font-semibold text-slate-200">{t('settings.appearance.textSize')}</p>
+                <div role="group" aria-label={t('settings.appearance.textSize')} className="flex gap-1">
+                  {TEXT_SIZES.map(textSize => (
+                    <button key={textSize} type="button" aria-pressed={appearance.textSize === textSize}
+                      onClick={() => setAppearance({ textSize })}
+                      className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all border ${
+                        appearance.textSize === textSize
+                          ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
+                          : 'bg-white/[0.04] border-white/[0.08] text-slate-500 hover:text-slate-300 hover:border-white/20'
+                      }`}
+                    >{t(`settings.appearance.${textSize}`)}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
+                <p className="text-xs font-semibold text-slate-200">{t('settings.appearance.intro')}</p>
+                <button type="button" role="switch" aria-checked={appearance.intro} aria-label={t('settings.appearance.intro')}
+                  onClick={() => setAppearance({ intro: !appearance.intro })}
+                  className={`relative w-10 h-5 shrink-0 rounded-full transition-colors duration-200 focus:outline-none ${
+                    appearance.intro ? 'bg-purple-600' : 'bg-slate-700'
+                  }`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
+                    appearance.intro ? 'translate-x-5' : 'translate-x-0'
+                  }`} />
+                </button>
+              </div>
             </div>
 
             {/* Language */}

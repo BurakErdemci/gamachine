@@ -6,10 +6,11 @@ import '../styles/gm/tokens.css'
 import '../styles/globals.css'
 import { ConfirmDialogHost } from '../components/ui/ConfirmDialog'
 import { ErrorBoundary } from '../components/ui/ErrorBoundary'
+import { AppearanceProvider } from '../lib/appearance'
 
 function MyApp({ Component, pageProps }: AppProps) {
   return (
-    <>
+    <AppearanceProvider>
       {/* Sayfa ağacındaki bir render hatası eskiden TÜM pencereyi boşaltıyordu
           ve uygulamayı kapatıp açmak gerekiyordu. */}
       <ErrorBoundary>
@@ -21,7 +22,7 @@ function MyApp({ Component, pageProps }: AppProps) {
           sessizce native `confirm()`e düşürürdü — yani düzeltildiği bilinen
           Electron focus-kilit arızasına geri dönerdi. */}
       <ConfirmDialogHost />
-    </>
+    </AppearanceProvider>
   )
 }
 
