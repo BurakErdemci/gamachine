@@ -1401,7 +1401,7 @@ class CodexSession:
                 _note = params.get("message", "yeniden bağlanılıyor…")
                 await out_q.put({"type": "thinking", "text": f"🔁 Codex: {_note}"})
                 return
-            _err = params.get("message") or json.dumps(params, ensure_ascii=False)[:300]
+            _err = str(params.get("message") or json.dumps(params, ensure_ascii=False)[:300])
             _info = params.get("codexErrorInfo")
             _details = ((_info.get("additionalDetails") if isinstance(_info, dict) else "")
                         or params.get("additionalDetails") or "")

@@ -14,6 +14,20 @@ from providers.codex_session import (
 
 
 class TestCodexCapacityErrors(unittest.IsolatedAsyncioTestCase):
+    async def test_non_string_error_messages_are_coerced_and_end_the_turn(self):
+        import asyncio
+
+        for message in [123, {"a": 1}, [1, 2]]:
+            with self.subTest(message=message):
+                session = CodexSession(0)
+                session._out_q = asyncio.Queue()
+
+                await session._handle_notification({"method": "error", "params": {"message": message}})
+
+                self.assertEqual(session._out_q.get_nowait(), {"type": "error", "message": str(message)})
+                self.assertIsNone(session._out_q.get_nowait())
+                self.assertTrue(session._out_q.empty())
+
     async def test_capacity_errors_end_the_turn_with_model_switch_advice(self):
         import asyncio
 
