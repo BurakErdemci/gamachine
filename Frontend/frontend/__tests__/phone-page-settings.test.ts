@@ -77,6 +77,7 @@ const boot = async () => {
     open_chat: () => ok({ messages: [], events: [] }),
     send_message: () => ok({ status: 'accepted' }),
   }
+  localStorage.setItem('gm-ui-lang', 'tr')
   vi.resetModules()
   await import('../../../relay/public/app.js')
   await vi.waitFor(() => expect($('chats').querySelector('button')).toBeTruthy())

@@ -8,6 +8,7 @@ export { Room, IpLimiter };
 const STATIC = {
   '/p': '/index.html',
   '/app.js': '/app.js',
+  '/i18n.js': '/i18n.js',
   '/crypto.js': '/crypto.js',
   '/net.js': '/net.js',
   '/store.js': '/store.js',

@@ -1,3 +1,6 @@
+import { setLang } from '../public/i18n.js';
+setLang('tr');
+
 // The phone page's model and effort controls: the DOM-free helpers in
 // public/net.js (what app.js renders) and what the markup and app.js wire up.
 // The requests themselves are the PC's (Backend/tests/test_remote_effort.py,
@@ -80,7 +83,7 @@ test('every failure of set_effort says plainly that nothing changed', () => {
   // An older desktop app that does not know the request, and a request it cannot read.
   assert.match(effortFailureNote('unknown_type'), /^Düşünme seviyesi değişmedi\. Bilgisayardaki Gamachine bu isteği tanımıyor; .*güncelle\.$/);
   assert.equal(effortFailureNote('bad_request'), 'Düşünme seviyesi değişmedi. İstek anlaşılamadı.');
-  assert.match(EFFORT_UNKNOWN_NOTE, /bilinmiyor/);
+  assert.match(EFFORT_UNKNOWN_NOTE(), /bilinmiyor/);
 });
 
 // ---------------------------------------------------------------- model

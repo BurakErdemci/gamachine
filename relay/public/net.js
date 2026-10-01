@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 // Relay connections for the phone: one-shot pairing socket and the long-lived
 // session link. No DOM access, so tests can drive it from node.
 
@@ -381,21 +383,21 @@ export class Link {
 
 // Backend/app/remote/rpc.py TEXT_MAX: longer send_message texts are refused.
 export const SEND_TEXT_MAX = 20_000;
-export const ASK_ON_PC = 'Bu soruyu bilgisayardan cevaplayın';
+export const ASK_ON_PC = () => t('text.54');
 
 // The composer note for a failed send_message.
 export function sendFailureNote(error) {
-  if (error === 'too_large') return 'Mesaj tek seferde gönderilemeyecek kadar uzun; kısaltıp tekrar dene.';
-  return 'Gönderilemedi: ' + error;
+  if (error === 'too_large') return t('text.55');
+  return t('text.56') + error;
 }
 
 // A `/compact` sent from the phone runs on the PC and gets no reply beyond
 // "accepted" (docs/remote-control.md), so the note says where to look.
 export function sentNote(text, status) {
-  if (status !== 'accepted') return 'Yanıt: ' + (status || 'bilinmiyor');
+  if (status !== 'accepted') return t('text.57') + (status || t('text.139'));
   return String(text ?? '').trim() === '/compact'
-    ? 'Sıkıştırma isteği bilgisayara iletildi; sonuç bilgisayarda görünür.'
-    : 'Gönderildi.';
+    ? t('text.58')
+    : t('text.59');
 }
 
 // ---- slash commands (list_slash_commands)
@@ -451,21 +453,21 @@ export function withCommand(current, insert) {
 }
 
 export function slashFailureNote(error) {
-  if (error === 'not_ready') return 'Önce bilgisayara bağlanmalı.';
-  if (error === 'unknown_chat') return 'Bu sohbet artık yok.';
-  if (error === 'unavailable') return 'Bilgisayardaki uygulama komut listesini veremedi.';
-  return 'Komutlar alınamadı: ' + error;
+  if (error === 'not_ready') return t('text.44');
+  if (error === 'unknown_chat') return t('text.36');
+  if (error === 'unavailable') return t('text.140');
+  return t('text.60') + error;
 }
 
 // ---- approval mode (get_config, set_approval_mode)
 
 // Labels and descriptions as the desktop shows them (mode.* in i18n.tsx).
 export const APPROVAL_MODES = [
-  { id: 'auto', label: 'Otomatik', desc: 'Onay kartı yok — dış AI istemcileri (Claude Code vb.) dahil.' },
-  { id: 'balanced', label: 'Güvenli Otomatik', desc: 'Kendi başına çalışır; yalnız kritik işlemlerde onay sorar (önerilen).' },
-  { id: 'step', label: 'Adım Adım', desc: 'Her değişiklik için onay kartı çıkar.' },
+  { id: 'auto', get label() { return t('text.141'); }, get desc() { return t('text.61'); } },
+  { id: 'balanced', get label() { return t('text.62'); }, get desc() { return t('text.63'); } },
+  { id: 'step', get label() { return t('text.64'); }, get desc() { return t('text.65'); } },
 ];
-export const AUTO_MODE_WARNING = 'Otomatik modda yapay zekâ dosya yazma, silme, komut çalıştırma ve Unity\'deki her değişikliği sana sormadan yapar; onay kartı hiç çıkmaz. Otomatik moda geçilsin mi?';
+export const AUTO_MODE_WARNING = () => t('text.66');
 
 export function modeInfo(id) {
   return APPROVAL_MODES.find((m) => m.id === id) || null;
@@ -474,22 +476,20 @@ export function modeInfo(id) {
 export function modeChangedNote(result) {
   const info = modeInfo(result?.mode);
   const n = Number(result?.approved_pending) || 0;
-  return 'Mod değişti: ' + (info ? info.label : String(result?.mode)) + '.'
-    + (n > 0 ? ' Bekleyen ' + n + ' onay otomatik onaylandı.' : '');
+  return t('mode.changed', { mode: info ? info.label : String(result?.mode), pending: n > 0 ? t('mode.pending', { count: n }) : '' });
 }
 
 // What the mode note says when set_approval_mode failed; the mode did not change.
 export function modeFailureNote(error, reply = {}, wanted = '') {
   if (error === 'agy_step_refused') {
-    const target = wanted === 'balanced' ? 'Güvenli Otomatik moda' : 'Adım adım onay moduna';
+    const target = wanted === 'balanced' ? t('text.69') : t('text.70');
     const pids = reply?.params?.pids || '?';
-    return target + ' geçilemedi: agy\'nin onay kapısı güncellenemedi ve çalışan agy süreci durdurulamadı (pid ' + pids
-      + '). Mod değişmedi. Bilgisayarda o agy sürecini kapat ya da uygulamayı yeniden başlat, sonra yeniden dene.';
+    return t('mode.agyRefused', { target, pids });
   }
-  if (error === 'not_ready') return 'Önce bilgisayara bağlanmalı.';
-  if (error === 'bad_mode') return 'Bilinmeyen mod; hiçbir şey değişmedi.';
-  if (error === 'unavailable') return 'Bilgisayardaki uygulama modu değiştiremedi.';
-  return 'Mod değiştirilemedi: ' + error;
+  if (error === 'not_ready') return t('text.44');
+  if (error === 'bad_mode') return t('text.73');
+  if (error === 'unavailable') return t('text.74');
+  return t('text.75') + error;
 }
 
 // ---- model and effort (get_config, list_models, set_model, set_effort)
@@ -497,7 +497,7 @@ export function modeFailureNote(error, reply = {}, wanted = '') {
 // Labels as the desktop shows them (effort.label.* in i18n.tsx), in the
 // registry's canonical order.
 export const EFFORT_LABELS = {
-  auto: 'Auto', off: 'Kapalı', none: 'None', minimal: 'Minimal', low: 'Düşük', medium: 'Orta', high: 'Yüksek', xhigh: 'XHigh', max: 'Max',
+  get auto() { return t('text.144'); }, get off() { return t('text.76'); }, get none() { return t('text.145'); }, get minimal() { return t('text.146'); }, get low() { return t('text.77'); }, get medium() { return t('text.143'); }, get high() { return t('text.78'); }, get xhigh() { return t('text.147'); }, get max() { return t('text.148'); },
 };
 
 const knownEffort = (level) => Object.prototype.hasOwnProperty.call(EFFORT_LABELS, level);
@@ -528,9 +528,9 @@ export function parseModelValue(value) {
 }
 
 const MODEL_GROUPS = [
-  { key: 'subscription', label: 'Abonelik (komut satırı)' },
-  { key: 'cloud', label: 'Bulut (API)' },
-  { key: 'local', label: 'Yerel' },
+  { key: 'subscription', get label() { return t('text.79'); } },
+  { key: 'cloud', get label() { return t('text.149'); } },
+  { key: 'local', get label() { return t('text.150'); } },
 ];
 
 // The picker's catalog as option groups. The chat's current model is always
@@ -553,14 +553,14 @@ export function modelGroups(catalog, current) {
       const name = typeof m.name === 'string' && m.name ? m.name : m.id;
       // The desktop's plan lock (`disabled`): shown, but not pickable.
       items.push(m.disabled === true
-        ? { value, label: name + ' (planında kilitli)', disabled: true }
+        ? { value, label: name + t('text.80'), disabled: true }
         : { value, label: name });
     }
     if (items.length) groups.push({ label, items });
   }
   if (currentValue && !seen.has(currentValue)) {
-    const name = current.model_name || 'sağlayıcının varsayılanı';
-    groups.unshift({ label: 'Bu sohbetteki', items: [{ value: currentValue, label: current.provider_type + ' · ' + name }] });
+    const name = current.model_name || t('text.81');
+    groups.unshift({ get label() { return t('text.151'); }, items: [{ value: currentValue, label: current.provider_type + ' · ' + name }] });
   }
   return { groups, currentValue };
 }
@@ -568,76 +568,75 @@ export function modelGroups(catalog, current) {
 // Refusals every request can meet, worded once.
 function commonFailure(error) {
   switch (error) {
-    case 'not_ready': return 'Önce bilgisayara bağlanmalı.';
-    case 'busy': return 'Bilgisayar şu an meşgul; biraz sonra tekrar dene.';
-    case 'timeout': return 'Bilgisayardan yanıt gelmedi.';
-    case 'disconnected': return 'Bağlantı koptu; bağlanınca tekrar dene.';
-    case 'internal': return 'Bilgisayarda beklenmeyen bir hata oldu.';
-    case 'too_large': return 'İstek gönderilemedi.';
-    case 'unknown_type': return 'Bilgisayardaki Gamachine bu isteği tanımıyor; bilgisayardaki uygulamayı güncelle.';
-    case 'bad_request': return 'İstek anlaşılamadı.';
+    case 'not_ready': return t('text.44');
+    case 'busy': return t('text.82');
+    case 'timeout': return t('text.83');
+    case 'disconnected': return t('text.84');
+    case 'internal': return t('text.152');
+    case 'too_large': return t('text.85');
+    case 'unknown_type': return t('text.86');
+    case 'bad_request': return t('text.87');
     default: return null;
   }
 }
 
 // What the provider lacks, from not_ready's `needs`.
 const MODEL_NEEDS = {
-  apikey: 'Bu sağlayıcı için bilgisayarda API anahtarı girilmemiş.',
-  install: 'Bu modelin komut satırı aracı bilgisayarda kurulu değil.',
-  login: 'Bu modelin komut satırı aracında bilgisayarda oturum açılmamış.',
-  service: 'Yerel model servisi (Ollama) bilgisayarda çalışmıyor.',
+  get apikey() { return t('text.88'); },
+  get install() { return t('text.89'); },
+  get login() { return t('text.90'); },
+  get service() { return t('text.91'); },
 };
 
 // The model note when set_model failed; the chat's model did not change.
 // `not_ready` is both the link's own error (no `needs`) and the PC's refusal.
 export function modelFailureNote(error, reply = {}) {
   if (error === 'not_ready' && reply?.needs !== undefined) {
-    return 'Model değişmedi. ' + (MODEL_NEEDS[reply.needs] || 'Sağlayıcı şu an hazır değil.');
+    return t('text.92') + (MODEL_NEEDS[reply.needs] || t('text.93'));
   }
   const why = commonFailure(error)
-    ?? (error === 'unknown_chat' ? 'Bu sohbet artık yok.'
-      : error === 'bad_chat_id' ? 'Sohbet numarası geçersiz.'
-      : error === 'unknown_provider' ? 'Bilinmeyen sağlayıcı.'
-      : error === 'bad_model' ? 'Model adı geçersiz.'
-      : error === 'unavailable' ? 'Bilgisayardaki uygulama şu an model değiştiremiyor; uygulamayı yeniden başlatmayı dene.'
-      : error === 'plan_locked' ? 'Aboneliğin bu modeli desteklemiyor; Auto modelini kullanabilirsin.'
+    ?? (error === 'unknown_chat' ? t('text.36')
+      : error === 'bad_chat_id' ? t('text.94')
+      : error === 'unknown_provider' ? t('text.95')
+      : error === 'bad_model' ? t('text.96')
+      : error === 'unavailable' ? t('text.97')
+      : error === 'plan_locked' ? t('text.98')
       : null);
-  return why ? 'Model değişmedi. ' + why : 'Model değiştirilemedi: ' + error;
+  return why ? t('text.92') + why : t('text.99') + error;
 }
 
 // list_models failing leaves the select with the chat's current model only.
 export function modelListFailureNote(error) {
-  if (error === 'unavailable') return 'Bilgisayardaki uygulama model listesini veremedi.';
-  return 'Model listesi alınamadı: ' + (commonFailure(error) ?? error);
+  if (error === 'unavailable') return t('text.153');
+  return t('text.100') + (commonFailure(error) ?? error);
 }
 
 export function modelChangedNote(result) {
-  const name = result?.model_name || 'sağlayıcının varsayılanı';
-  return 'Model değişti: ' + name + '. Çalışan bir tur başladığı modelle biter; yeni model sonraki mesajdan itibaren geçerli.';
+  const name = result?.model_name || t('text.81');
+  return t('model.changed', { name });
 }
 
 // The effort note when set_effort failed or was not delivered; nothing changed.
 export function effortFailureNote(error) {
   const why = commonFailure(error)
-    ?? (error === 'bad_effort' ? 'Bu düşünme seviyesi geçersiz.' : null);
-  return why ? 'Düşünme seviyesi değişmedi. ' + why : 'Düşünme seviyesi değiştirilemedi: ' + error;
+    ?? (error === 'bad_effort' ? t('text.103') : null);
+  return why ? t('text.104') + why : t('text.105') + error;
 }
 
 // set_effort replies {status: accepted | desktop_not_ready}. `accepted` only
 // says the desktop app got the request: it applies the level when the active
 // model offers it, and the page learns the real value from the PC afterwards.
 export function effortSetNote(status, level) {
-  if (status === 'accepted') return 'Bilgisayara iletildi: ' + effortLabel(level) + '.';
-  if (status === 'desktop_not_ready') return 'Düşünme seviyesi değişmedi. Bilgisayardaki uygulama hazır değil.';
-  return 'Düşünme seviyesi değişmedi. Yanıt: ' + (status || 'bilinmiyor');
+  if (status === 'accepted') return t('text.154') + effortLabel(level) + '.';
+  if (status === 'desktop_not_ready') return t('text.106');
+  return t('text.107') + (status || t('text.139'));
 }
 
 // What the PC really has after a request the desktop accepted; it may not
 // offer the level (the model the desktop shows differs from the chat's).
 export function effortOutcomeNote(requested, actual, ultracode = false) {
-  if (requested === actual && !ultracode) return 'Bilgisayarda değişti: ' + effortLabel(actual) + '.';
-  return 'Bilgisayar ' + effortLabel(requested) + ' seviyesini uygulamadı (açık sohbetin modeli desteklemiyor olabilir); şu an: '
-    + (ultracode ? 'Ultracode' : effortLabel(actual)) + '.';
+  if (requested === actual && !ultracode) return t('text.108') + effortLabel(actual) + '.';
+  return t('effort.notApplied', { requested: effortLabel(requested), actual: ultracode ? t('text.132') : effortLabel(actual) });
 }
 
 // Ultracode is on at the PC: its panel then shows "Ultracode" and no level,
@@ -645,39 +644,39 @@ export function effortOutcomeNote(requested, actual, ultracode = false) {
 // shows the same, so that choosing that level is a change the page can send.
 export const ULTRACODE_OPTION = 'ultracode';
 
-export const EFFORT_UNKNOWN_NOTE = 'Bilgisayardaki düşünme seviyesi bilinmiyor: uygulama açık değil ya da henüz bildirmedi.';
+export const EFFORT_UNKNOWN_NOTE = () => t('text.110');
 
 export function configFailureNote(error) {
-  if (error === 'unknown_chat') return 'Bu sohbet artık yok.';
-  return 'Bilgisayardaki ayarlar okunamadı: ' + (commonFailure(error) ?? error);
+  if (error === 'unknown_chat') return t('text.36');
+  return t('text.111') + (commonFailure(error) ?? error);
 }
 
 // turn_end.status comes from the PC's turn-event ring: done | error | stopped.
 export function turnEndLine(status) {
-  if (!status || status === 'done') return { text: 'Tur bitti', error: false };
-  if (status === 'error') return { text: 'Tur hatayla bitti', error: true };
-  if (status === 'stopped') return { text: 'Tur durduruldu', error: false };
-  return { text: 'Tur bitti (' + status + ')', error: false };
+  if (!status || status === 'done') return { text: t('text.156'), error: false };
+  if (status === 'error') return { text: t('text.157'), error: true };
+  if (status === 'stopped') return { text: t('text.158'), error: false };
+  return { text: t('text.159') + status + ')', error: false };
 }
 
 // One log line for a non-text event.
 export function eventLine(ev) {
   switch (ev.kind) {
-    case 'tool_call': return { text: 'Araç: ' + (ev.tool || '?') + (ev.summary ? ' - ' + ev.summary : ''), error: false };
-    case 'turn_start': return { text: 'Tur başladı', error: false };
+    case 'tool_call': return { text: t('text.112') + (ev.tool || '?') + (ev.summary ? ' - ' + ev.summary : ''), error: false };
+    case 'turn_start': return { text: t('text.113'), error: false };
     case 'turn_end': return turnEndLine(ev.status);
-    case 'card_opened': return { text: (ev.card_kind === 'question' ? 'Soru kartı açıldı' : 'Onay kartı açıldı') + (ev.tool ? ': ' + ev.tool : ''), error: false };
-    case 'card_closed': return { text: 'Kart kapandı', error: false };
+    case 'card_opened': return { text: (ev.card_kind === 'question' ? t('text.114') : t('text.115')) + (ev.tool ? ': ' + ev.tool : ''), error: false };
+    case 'card_closed': return { text: t('text.116'), error: false };
     case undefined:
       // split_reply puts {truncated:true} where one item alone would not fit a frame.
-      if (ev.truncated) return { text: 'Çok büyük bir olay gösterilemedi', error: false };
+      if (ev.truncated) return { text: t('text.117'), error: false };
   }
-  return { text: String(ev.kind || 'olay'), error: false };
+  return { text: String(ev.kind || t('text.160')), error: false };
 }
 
 export function messageText(m) {
-  if (typeof m.text !== 'string') return m.truncated ? '(Mesaj telefonda gösterilemeyecek kadar uzun.)' : '';
-  return m.truncated ? m.text + ' … (kısaltıldı)' : m.text;
+  if (typeof m.text !== 'string') return m.truncated ? t('text.118') : '';
+  return m.truncated ? m.text + t('text.119') : m.text;
 }
 
 // The buttons a card gets, each with the exact answer_card payload the bridge
@@ -697,11 +696,11 @@ export function cardActions(card) {
       const label = typeof ch === 'string' ? ch : ch.label || ch.id;
       buttons.push({ label, payload: pay('choice', id) });
     }
-    if (!buttons.length) note = ASK_ON_PC;
+    if (!buttons.length) note = ASK_ON_PC();
   } else {
-    buttons.push({ label: 'Onayla', payload: pay('approve') });
+    buttons.push({ get label() { return t('text.161'); }, payload: pay('approve') });
   }
-  buttons.push({ label: 'Reddet', secondary: true, payload: pay('reject') });
+  buttons.push({ get label() { return t('text.162'); }, secondary: true, payload: pay('reject') });
   return { buttons, note };
 }
 
@@ -721,27 +720,27 @@ export function cardsMissing(cards, events) {
 
 // `by` of a card answer: desktop | phone:<device name> | system (timeout, Stop).
 export function answeredBy(by) {
-  if (by === 'desktop') return 'bilgisayar';
-  if (typeof by === 'string' && by.startsWith('phone:')) return by.slice(6) || 'telefon';
-  return typeof by === 'string' && by ? by : 'bilinmiyor';
+  if (by === 'desktop') return t('text.163');
+  if (typeof by === 'string' && by.startsWith('phone:')) return by.slice(6) || t('text.164');
+  return typeof by === 'string' && by ? by : t('text.139');
 }
 
 // What the card shows after a failed answer_card; `close` removes the card.
 export function answerFailure(error, reply = {}) {
   if (error === 'already_answered') {
-    if (reply.by === 'system') return { close: true, note: 'Bu kart zaten kapanmış (süre doldu ya da tur durduruldu).' };
-    return { close: true, note: 'Başka cihaz (' + answeredBy(reply.by) + ') cevapladı.' };
+    if (reply.by === 'system') return { close: true, note: t('text.120') };
+    return { close: true, note: t('card.answered', { device: answeredBy(reply.by) }) };
   }
-  if (error === 'not_found') return { close: true, note: 'Bu kart artık açık değil.' };
-  if (error === 'unsupported_on_phone') return { close: false, onlyReject: true, note: ASK_ON_PC };
-  return { close: false, note: 'Gönderilemedi: ' + error };
+  if (error === 'not_found') return { close: true, note: t('text.123') };
+  if (error === 'unsupported_on_phone') return { close: false, onlyReject: true, note: ASK_ON_PC() };
+  return { close: false, note: t('text.56') + error };
 }
 
 // stop replies {status: ok | no_session | error}.
 export function stopLine(status) {
-  if (status === 'no_session') return 'Çalışan bir tur bulunamadı.';
-  if (status === 'error') return 'Durdurulamadı.';
-  return 'Durdurma isteği gönderildi.';
+  if (status === 'no_session') return t('text.124');
+  if (status === 'error') return t('text.125');
+  return t('text.126');
 }
 
 // chat_changed carries a summary; list_chats leaves out hidden idle chats, so this does too.

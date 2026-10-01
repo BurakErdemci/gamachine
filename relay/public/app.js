@@ -1,3 +1,5 @@
+import { t, setLang, getLang, applyStatic } from './i18n.js';
+
 // Phone UI. Everything shown comes from the PC and is written with
 // textContent only: chat text is untrusted input on this page.
 
@@ -14,7 +16,30 @@ import {
 const $ = (id) => document.getElementById(id);
 const SCREENS = ['loading', 'install', 'welcome', 'pairing', 'main', 'chat'];
 const CARD_PUSH_GRACE_MS = 1500;
-const REMOVED_TEXT = 'Bu telefon bilgisayardan kaldırıldı. Yeniden eşleştirmek için bilgisayarda Gamachine\'de AI Yapılandırması > Uzaktan kontrol > Telefon eşleştir ile QR kodunu aç ve telefonun kamerasıyla okut.';
+const textRenderers = new Map();
+function setText(node, render) {
+  textRenderers.set(node, render);
+  node.textContent = render();
+}
+
+function applyDesktopUI(ui) {
+  if (!ui) return;
+  if (['arena', 'sade', 'pafta', 'atolye'].includes(ui.theme)) document.documentElement.dataset.theme = ui.theme;
+  if (!['en', 'tr'].includes(ui.lang) || ui.lang === getLang()) return;
+  setLang(ui.lang);
+  applyStatic();
+  for (const [node, render] of textRenderers) {
+    if (node.isConnected) node.textContent = render();
+    else textRenderers.delete(node);
+  }
+  renderChats();
+  renderChatHeader();
+  renderCards();
+  renderChatSettings();
+  if (!$('slash-panel').hidden) renderSlash();
+  if (view.shown) loadChat();
+}
+const REMOVED_TEXT = () => t('text.0');
 
 let device = null;
 let link = null;
@@ -57,30 +82,30 @@ function clock(ms) {
   if (!ms) return '';
   const d = new Date(ms);
   const sameDay = d.toDateString() === new Date().toDateString();
-  const time = d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
-  return sameDay ? time : d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' }) + ' ' + time;
+  const time = d.toLocaleTimeString((getLang() === 'tr' ? 'tr-TR' : 'en-GB'), { hour: '2-digit', minute: '2-digit' });
+  return sameDay ? time : d.toLocaleDateString((getLang() === 'tr' ? 'tr-TR' : 'en-GB'), { day: 'numeric', month: 'short' }) + ' ' + time;
 }
 
-const STATUS_WORDS = { running: 'çalışıyor', idle: 'boşta', awaiting_card: 'onay bekliyor' };
+const STATUS_WORDS = () => ({ running: t('text.1'), idle: t('text.2'), awaiting_card: t('text.127') });
 
 // ---------------------------------------------------------------- pairing
 
 const PAIR_ERRORS = {
-  no_room: 'Bu eşleştirme kodu için bekleyen bir bilgisayar yok. Bilgisayarda uzaktan kontrolü açıp yeni QR oluştur.',
-  pc_offline: 'Bilgisayar şu an bağlı değil. Gamachine açık mı, internet var mı?',
-  refused: 'Bağlantı kabul edilmedi. Kısa sürede çok fazla deneme yapılmış olabilir; biraz bekle.',
-  rejected: 'Bilgisayar eşleştirmeyi reddetti.',
-  timeout: 'Bilgisayardan 5 dakika içinde yanıt gelmedi.',
-  bad_reply: 'Bilgisayardan gelen yanıt doğrulanamadı. Eşleştirme yapılmadı.',
-  expired: 'QR kodunun süresi dolmuş.',
-  rate_limited: 'Çok fazla deneme yapıldı. Biraz bekle.',
+  get no_room() { return t('text.3'); },
+  get pc_offline() { return t('text.4'); },
+  get refused() { return t('text.5'); },
+  get rejected() { return t('text.6'); },
+  get timeout() { return t('text.7'); },
+  get bad_reply() { return t('text.8'); },
+  get expired() { return t('text.9'); },
+  get rate_limited() { return t('text.10'); },
 };
 
 async function startPairing(parsed) {
   history.replaceState(null, '', '/p');
   show('pairing');
-  $('pair-status').textContent = 'Bilgisayara bağlanılıyor…';
-  $('pair-error').textContent = '';
+  setText($('pair-status'), () => t('text.11'));
+  setText($('pair-error'), () => '');
   $('pair-code-box').hidden = true;
   $('btn-pair-back').hidden = true;
   try {
@@ -89,9 +114,9 @@ async function startPairing(parsed) {
       parsed,
       deviceName: deviceName(),
       onSas: (code) => {
-        $('pair-code').textContent = code;
+        setText($('pair-code'), () => code);
         $('pair-code-box').hidden = false;
-        $('pair-status').textContent = 'Bilgisayarın onayı bekleniyor…';
+        setText($('pair-status'), () => t('text.12'));
       },
     });
     if (link) link.stop();
@@ -110,56 +135,56 @@ async function startPairing(parsed) {
     startMain();
   } catch (err) {
     $('pair-code-box').hidden = true;
-    $('pair-status').textContent = 'Eşleştirme olmadı.';
-    const advice = err.message === 'no_room' ? '' : ' Bilgisayarda yeni bir QR kodu oluşturup tekrar dene.';
-    $('pair-error').textContent = (PAIR_ERRORS[err.message] || 'Hata: ' + err.message) + advice;
+    setText($('pair-status'), () => t('text.13'));
+    const advice = () => err.message === 'no_room' ? '' : t('text.14');
+    setText($('pair-error'), () => (PAIR_ERRORS[err.message] || t('text.128') + err.message) + advice());
     $('btn-pair-back').hidden = false;
   }
 }
 
 function showWelcome(text) {
   show('welcome');
-  $('welcome-error').textContent = '';
-  if (text) $('welcome-text').textContent = text;
+  setText($('welcome-error'), () => '');
+  if (text) setText($('welcome-text'), typeof text === 'function' ? text : () => text);
   $('btn-show-install').hidden = !(isIos() && !isStandalone());
 }
 
 function pasteToFragment(value) {
   const v = value.trim();
   const hashAt = v.indexOf('#');
-  if (hashAt < 0) return { error: 'Bağlantıda # işaretinden sonraki kısım yok.' };
+  if (hashAt < 0) return { error: t('text.15') };
   if (hashAt > 0) {
     let url;
-    try { url = new URL(v); } catch { return { error: 'Bu bir bağlantı gibi görünmüyor.' }; }
-    if (url.origin !== location.origin) return { error: 'Bu bağlantı başka bir sunucuya ait (' + url.origin + '). O adresi Safari\'de aç.' };
+    try { url = new URL(v); } catch { return { error: t('text.16') }; }
+    if (url.origin !== location.origin) return { error: t('pair.otherOrigin', { origin: url.origin }) };
   }
   const parsed = C.parsePairFragment(v.slice(hashAt));
-  return parsed ? { parsed } : { error: 'Bağlantı eksik ya da bozuk.' };
+  return parsed ? { parsed } : { error: t('text.19') };
 }
 
 // ---------------------------------------------------------------- main screen
 
 function setStatus(status, info = {}) {
-  const t = $('status-text');
+  const statusText = $('status-text');
   const note = $('main-note');
-  note.textContent = '';
+  setText(note, () => '');
   if (status === 'ready') {
-    t.textContent = 'Bağlı';
+    setText(statusText, () => t('text.20'));
     refreshAll();
     return;
   }
   $('mode-select').disabled = true;
   renderChatSettings();
-  if (status === 'connecting') t.textContent = 'Bağlanıyor…';
-  else if (status === 'pc_offline') t.textContent = 'Bilgisayar çevrimdışı' + (info.lastSeen ? ' (son görülme ' + clock(info.lastSeen) + ')' : '');
+  if (status === 'connecting') setText(statusText, () => t('text.21'));
+  else if (status === 'pc_offline') setText(statusText, () => t('status.offline', { lastSeen: info.lastSeen ? t('status.lastSeen', { time: clock(info.lastSeen) }) : '' }));
   else if (status === 'removed' || (status === 'hello_rejected' && info.reason === 'unknown_device')) {
     forgetRemoved();
     return;
   } else if (status === 'hello_rejected') {
-    t.textContent = 'Bilgisayar bu telefonu kabul etmedi';
-    note.textContent = info.reason === 'clock'
-      ? 'Telefonun saati yanlış görünüyor. Ayarlar > Genel > Tarih ve Saat\'ten otomatik saati aç.'
-      : 'Telefon bilgisayarda kayıtlı değil. Eşleşmeyi silip yeniden eşleştir.';
+    setText(statusText, () => t('text.129'));
+    setText(note, () => info.reason === 'clock'
+      ? t('text.24')
+      : t('text.25'));
   }
   renderChatHeader();
 }
@@ -206,7 +231,7 @@ async function refreshAll() {
       refreshChatSettings();
     }
   } catch (err) {
-    $('main-note').textContent = 'Liste alınamadı: ' + err.message;
+    setText($('main-note'), () => t('text.26') + err.message);
   }
 }
 
@@ -215,38 +240,38 @@ function renderChats() {
   list.replaceChildren();
   const sorted = [...chats].sort((a, b) => (b.last_activity || 0) - (a.last_activity || 0));
   for (const chat of sorted) {
-    const status = STATUS_WORDS[chat.status] || chat.status || '';
+    const status = STATUS_WORDS()[chat.status] || chat.status || '';
     const who = [chat.provider, chat.model].filter(Boolean).join(' · ');
     const meta = [status, who, clock(chat.last_activity)].filter(Boolean).join(' · ');
     list.append(el('li', {}, el('button', { type: 'button', onclick: () => openChat(chat.chat_id) },
-      chat.title || 'Adsız sohbet',
+      chat.title || t('text.27'),
       el('span', { class: chat.status === 'awaiting_card' ? 'meta wait' : 'meta', textContent: meta }))));
   }
   $('chats-empty').hidden = chats.length > 0;
 }
 
 function chatTitle(id) {
-  return chats.find((c) => c.chat_id === id)?.title || 'Sohbet';
+  return chats.find((c) => c.chat_id === id)?.title || t('text.130');
 }
 
 function cardNode(card) {
   const box = el('div', { class: 'card' });
   const { buttons, note: hint } = cardActions(card);
   const note = el('p', { class: 'note', textContent: hint || '' });
-  const title = card.title || 'Onay bekliyor';
+  const title = card.title || t('text.131');
   box.append(el('b', { textContent: title }));
   if (card.chat_id && view.shown !== card.chat_id) box.append(el('span', { class: 'meta', textContent: chatTitle(card.chat_id) }));
   if (card.detail) box.append(el('pre', { class: 'detail', textContent: String(card.detail) }));
   const row = el('div', { class: 'row' });
   const answer = async (payload) => {
     for (const b of row.querySelectorAll('button')) b.disabled = true;
-    note.textContent = 'Gönderiliyor…';
+    setText(note, () => t('text.28'));
     try {
       await call('answer_card', payload);
       removeCard(card.card_id);
     } catch (err) {
       const f = answerFailure(err.message, err.reply);
-      note.textContent = f.note;
+      setText(note, () => answerFailure(err.message, err.reply).note);
       if (f.close) {
         setTimeout(() => removeCard(card.card_id), 3000);
         return;
@@ -292,7 +317,7 @@ let currentMode = null;
 function showMode(mode) {
   currentMode = mode;
   $('mode-select').value = mode;
-  $('mode-note').textContent = modeInfo(mode)?.desc || '';
+  setText($('mode-note'), () => modeInfo(mode)?.desc || '');
 }
 
 // Read whenever the main screen shows, and again when the link comes back.
@@ -301,15 +326,16 @@ async function refreshConfig() {
   const select = $('mode-select');
   try {
     const cfg = await call('get_config');
+    applyDesktopUI(cfg.desktop_ui);
     if (modeInfo(cfg.approval_mode)) {
       showMode(cfg.approval_mode);
       select.disabled = false;
     } else {
       select.disabled = true;
-      $('mode-note').textContent = 'Bilgisayardaki onay modu tanınmadı: ' + cfg.approval_mode;
+      setText($('mode-note'), () => t('text.29') + cfg.approval_mode);
     }
   } catch (err) {
-    $('mode-note').textContent = 'Onay modu okunamadı: ' + err.message;
+    setText($('mode-note'), () => t('text.30') + err.message);
   }
 }
 
@@ -317,24 +343,24 @@ async function changeMode() {
   const select = $('mode-select');
   const mode = select.value;
   if (mode === currentMode) return;
-  if (mode === 'auto' && !confirm(AUTO_MODE_WARNING)) {
+  if (mode === 'auto' && !confirm(AUTO_MODE_WARNING())) {
     select.value = currentMode;
     return;
   }
   const note = $('mode-note');
   select.disabled = true;
-  note.textContent = 'Değiştiriliyor…';
+  setText(note, () => t('text.31'));
   try {
     const r = await call('set_approval_mode', { mode });
     if (modeInfo(r.mode)) {
       showMode(r.mode);
-      note.textContent = modeChangedNote(r) + ' ' + modeInfo(r.mode).desc;
+      setText(note, () => modeChangedNote(r) + ' ' + modeInfo(r.mode).desc);
     } else {
       await refreshConfig();
     }
   } catch (err) {
     select.value = currentMode;
-    note.textContent = modeFailureNote(err.message, err.reply, mode);
+    setText(note, () => modeFailureNote(err.message, err.reply, mode));
   } finally {
     select.disabled = !link?.ready || !currentMode;
   }
@@ -382,13 +408,13 @@ function renderChatSettings() {
   effort.replaceChildren();
   const note = $('effort-note');
   if (pcEffort) {
-    if (pcEffort.ultracode) effort.append(el('option', { value: ULTRACODE_OPTION, textContent: 'Ultracode' }));
+    if (pcEffort.ultracode) effort.append(el('option', { value: ULTRACODE_OPTION, textContent: t('text.132') }));
     for (const level of pcEffort.levels) effort.append(el('option', { value: level, textContent: effortLabel(level) }));
     effort.value = pcEffort.ultracode ? ULTRACODE_OPTION : pcEffort.level;
-    if (note.textContent === EFFORT_UNKNOWN_NOTE) note.textContent = '';
+    if (note.textContent === EFFORT_UNKNOWN_NOTE()) setText(note, () => '');
   } else {
-    effort.append(el('option', { value: '', textContent: 'Bilinmiyor' }));
-    note.textContent = EFFORT_UNKNOWN_NOTE;
+    effort.append(el('option', { value: '', textContent: t('text.133') }));
+    setText(note, () => EFFORT_UNKNOWN_NOTE());
   }
   $('effort-ultracode').hidden = !pcEffort?.ultracode;
   applySettingsEnabled();
@@ -400,7 +426,8 @@ function renderChatSettings() {
 function takePcEffort(next, source) {
   pcEffort = next;
   if (requestedEffort !== null && next && ((next.level === requestedEffort && !next.ultracode) || source === 'reconcile')) {
-    $('effort-note').textContent = effortOutcomeNote(requestedEffort, next.level, next.ultracode);
+    const requested = requestedEffort;
+    setText($('effort-note'), () => effortOutcomeNote(requested, next.level, next.ultracode));
     requestedEffort = null;
   }
   renderChatSettings();
@@ -418,18 +445,19 @@ async function refreshChatSettings(source = 'told') {
     wantCatalog ? call('list_models') : Promise.resolve(null),
   ]);
   if (seq !== settingsSeq || view.shown !== chatId) return;
+  if (cfg.status === 'fulfilled') applyDesktopUI(cfg.value.desktop_ui);
   if (list.status === 'fulfilled') {
     if (list.value) catalog = { at: Date.now(), data: list.value };
   } else {
     catalog = { at: Date.now(), error: list.reason?.message };
-    $('model-note').textContent = modelListFailureNote(list.reason?.message);
+    setText($('model-note'), () => modelListFailureNote(list.reason?.message));
   }
   if (cfg.status === 'fulfilled' && typeof cfg.value.provider_type === 'string' && typeof cfg.value.model_name === 'string') {
     chatConfig = { chatId, provider_type: cfg.value.provider_type, model_name: cfg.value.model_name };
     takePcEffort(desktopEffort(cfg.value.desktop_effort), source);
   } else {
     chatConfig = null;
-    $('model-note').textContent = configFailureNote(cfg.status === 'rejected' ? cfg.reason?.message : 'bad_reply');
+    setText($('model-note'), () => configFailureNote(cfg.status === 'rejected' ? cfg.reason?.message : 'bad_reply'));
     renderChatSettings();
   }
 }
@@ -452,17 +480,17 @@ async function changeModel() {
   const note = $('model-note');
   settingsBusy = true;
   applySettingsEnabled();
-  note.textContent = 'Değiştiriliyor…';
+  setText(note, () => t('text.31'));
   let changed = false;
   try {
     const r = await call('set_model', { chat_id: chatId, ...wanted });
     if (view.shown === chatId) {
       chatConfig = { chatId, provider_type: r.provider_type, model_name: r.model_name };
-      note.textContent = modelChangedNote(r);
+      setText(note, () => modelChangedNote(r));
     }
     changed = true;
   } catch (err) {
-    if (view.shown === chatId) note.textContent = modelFailureNote(err.message, err.reply);
+    if (view.shown === chatId) setText(note, () => modelFailureNote(err.message, err.reply));
   } finally {
     settingsBusy = false;
     renderChatSettings();
@@ -478,10 +506,10 @@ async function changeEffort() {
   const note = $('effort-note');
   settingsBusy = true;
   applySettingsEnabled();
-  note.textContent = 'Değiştiriliyor…';
+  setText(note, () => t('text.31'));
   try {
     const r = await call('set_effort', { level });
-    note.textContent = effortSetNote(r.status, level);
+    setText(note, () => effortSetNote(r.status, level));
     if (r.status === 'accepted') {
       // Shown as asked until the PC says what it really has.
       requestedEffort = level;
@@ -490,7 +518,7 @@ async function changeEffort() {
       reconcileTimer = setTimeout(() => refreshChatSettings('reconcile'), RECONCILE_MS);
     }
   } catch (err) {
-    note.textContent = effortFailureNote(err.message);
+    setText(note, () => effortFailureNote(err.message));
   } finally {
     settingsBusy = false;
     renderChatSettings();
@@ -504,8 +532,8 @@ function clearChatSettings() {
   clearTimeout(reconcileTimer);
   clearTimeout(settingsTimer);
   settingsTimer = null;
-  $('model-note').textContent = '';
-  $('effort-note').textContent = '';
+  setText($('model-note'), () => '');
+  setText($('effort-note'), () => '');
   renderChatSettings();
 }
 
@@ -514,9 +542,9 @@ function clearChatSettings() {
 function renderChatHeader() {
   if (!view.shown) return;
   const chat = chats.find((c) => c.chat_id === view.shown);
-  $('chat-title').textContent = chat?.title || 'Sohbet';
-  const status = chat ? STATUS_WORDS[chat.status] || chat.status || '' : '';
-  $('chat-status').textContent = link?.ready ? status : $('status-text').textContent;
+  setText($('chat-title'), () => chat?.title || t('text.130'));
+  const status = chat ? STATUS_WORDS()[chat.status] || chat.status || '' : '';
+  setText($('chat-status'), () => link?.ready ? status : $('status-text').textContent);
   // A turn waiting on a card is still running and can be stopped.
   $('btn-stop').hidden = !(chat && (chat.status === 'running' || chat.status === 'awaiting_card'));
   $('btn-send').disabled = !link?.ready;
@@ -544,8 +572,8 @@ function renderSlash() {
       '/' + item.name + (item.hint ? ' ' + item.hint : ''),
       item.description ? el('span', { class: 'meta', textContent: item.description }) : null)));
   }
-  $('slash-note').textContent = !total ? 'Eşleşen komut yok.'
-    : total > shown.length ? total + ' sonuçtan ilk ' + shown.length + ' tanesi; aramayı daraltabilirsin.' : '';
+  setText($('slash-note'), () => !total ? t('text.32')
+    : total > shown.length ? t('slash.results', { total, shown: shown.length }) : '');
 }
 
 function pickSlash(item) {
@@ -569,18 +597,18 @@ async function toggleSlash() {
   renderSlash();
   const cached = slashCache.get(chatId);
   if (cached && Date.now() - cached.at < SLASH_TTL_MS) return;
-  $('slash-note').textContent = 'Komutlar alınıyor…';
+  setText($('slash-note'), () => t('text.35'));
   try {
     slashCache.set(chatId, { at: Date.now(), items: slashItems(await call('list_slash_commands', { chat_id: chatId })) });
   } catch (err) {
-    if (view.shown === chatId) $('slash-note').textContent = slashFailureNote(err.message);
+    if (view.shown === chatId) setText($('slash-note'), () => slashFailureNote(err.message));
     return;
   }
   if (view.shown === chatId && !$('slash-panel').hidden) renderSlash();
 }
 
 function logMessage(m) {
-  const who = m.role === 'user' ? (m.source === 'phone' ? 'Sen (telefon)' : 'Sen') : m.role === 'assistant' ? 'Asistan' : m.role || '';
+  const who = m.role === 'user' ? (m.source === 'phone' ? t('text.134') : t('text.135')) : m.role === 'assistant' ? t('text.136') : m.role || '';
   $('log').append(el('div', { class: 'msg' }, el('span', { class: 'who', textContent: who }), messageText(m)));
 }
 
@@ -588,7 +616,7 @@ function logEvent(ev) {
   const log = $('log');
   if (ev.kind === 'text') {
     if (!liveText) {
-      liveText = el('div', { class: 'msg' }, el('span', { class: 'who', textContent: 'Asistan' }));
+      liveText = el('div', { class: 'msg' }, el('span', { class: 'who', textContent: t('text.136') }));
       log.append(liveText);
     }
     liveText.append(String(ev.text ?? ''));
@@ -613,9 +641,9 @@ async function loadChat() {
     if (view.endLoad(token) !== 'apply') return;
     if (err.message === 'unknown_chat') {
       closeChat();
-      $('main-note').textContent = 'Bu sohbet artık yok.';
+      setText($('main-note'), () => t('text.36'));
     } else {
-      $('chat-status').textContent = 'Sohbet açılamadı: ' + err.message;
+      setText($('chat-status'), () => t('text.37') + err.message);
     }
     return;
   }
@@ -647,7 +675,7 @@ function openChat(id) {
   if (prev) closeOnPc(prev);
   $('log').replaceChildren();
   liveText = null;
-  $('composer-note').textContent = '';
+  setText($('composer-note'), () => '');
   closeSlash();
   clearChatSettings();
   show('chat');
@@ -666,7 +694,9 @@ function closeChat() {
 }
 
 function onPush(msg) {
-  if (msg.type === 'event') {
+  if (msg.type === 'ui_changed') {
+    applyDesktopUI(msg.desktop_ui);
+  } else if (msg.type === 'event') {
     const chat = chats.find((c) => c.chat_id === msg.chat_id);
     if (chat && msg.kind === 'turn_start') chat.status = 'running';
     if (chat && msg.kind === 'turn_end') chat.status = 'idle';
@@ -721,31 +751,31 @@ function renderNotifyButton() {
 async function enableNotifications() {
   const note = $('notify-note');
   if (!('Notification' in window) || !('PushManager' in window) || !('serviceWorker' in navigator)) {
-    note.textContent = isIos() ? 'Bildirimler için sayfayı ana ekrana ekleyip oradan açman gerekiyor.' : 'Bu tarayıcı bildirim desteklemiyor.';
+    setText(note, () => isIos() ? t('text.38') : t('text.39'));
     return;
   }
   // iOS only grants this from a direct tap, so it must be the first await.
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') {
-    note.textContent = 'İzin verilmedi. Ayarlar > Bildirimler > Gamachine\'den açabilirsin.';
+    setText(note, () => t('text.40'));
     return;
   }
   if (!device.vapidPub) {
-    note.textContent = 'Bilgisayar bildirim anahtarını göndermedi; bildirim ayarlanamadı.';
+    setText(note, () => t('text.41'));
     return;
   }
   try {
-    note.textContent = 'Ayarlanıyor…';
+    setText(note, () => t('text.42'));
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: C.fromB64u(device.vapidPub) });
     await call('push_subscribe', { subscription: sub.toJSON() });
     device.pushDone = true;
     await store.put('device', device);
-    note.textContent = 'Bildirimler açık.';
+    setText(note, () => t('text.43'));
     renderNotifyButton();
   } catch (err) {
-    note.textContent = err.message === 'not_ready' ? 'Önce bilgisayara bağlanmalı.' : 'Bildirim ayarlanamadı: ' + err.message;
+    setText(note, () => err.message === 'not_ready' ? t('text.44') : t('text.45') + err.message);
   }
 }
 
@@ -787,7 +817,7 @@ async function forgetDevice() {
 }
 
 async function unpair() {
-  if (!confirm('Bu telefondaki eşleşme silinsin mi? Bilgisayardaki cihaz listesinden de kaldırmayı unutma.')) return;
+  if (!confirm(t('text.46'))) return;
   await forgetDevice();
   location.replace('/p');
 }
@@ -804,15 +834,15 @@ function wire() {
   $('btn-copy-link').addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(location.origin + '/p#' + pendingFragment);
-      $('copy-note').textContent = 'Kopyalandı. Şimdi ana ekrandaki simgeden aç ve yapıştır.';
+      setText($('copy-note'), () => t('text.47'));
     } catch {
-      $('copy-note').textContent = 'Kopyalanamadı.';
+      setText($('copy-note'), () => t('text.48'));
     }
   });
   $('btn-pair-here').addEventListener('click', () => startPairing(C.parsePairFragment(pendingFragment)));
   $('btn-paste-pair').addEventListener('click', () => {
     const r = pasteToFragment($('paste-link').value);
-    if (r.error) $('welcome-error').textContent = r.error;
+    if (r.error) setText($('welcome-error'), () => r.error);
     else startPairing(r.parsed);
   });
   $('btn-show-install').addEventListener('click', () => {
@@ -833,18 +863,18 @@ function wire() {
   $('btn-stop').addEventListener('click', async () => {
     const btn = $('btn-stop');
     if (!stopArmed) {
-      btn.textContent = 'Durdurmak için tekrar dokun';
-      stopArmed = setTimeout(() => { stopArmed = null; btn.textContent = 'Durdur'; }, 4000);
+      setText(btn, () => t('text.49'));
+      stopArmed = setTimeout(() => { stopArmed = null; setText(btn, () => t('text.137')); }, 4000);
       return;
     }
     clearTimeout(stopArmed);
     stopArmed = null;
-    btn.textContent = 'Durdur';
+    setText(btn, () => t('text.137'));
     try {
       const r = await call('stop', { chat_id: view.shown });
-      $('chat-status').textContent = stopLine(r.status);
+      setText($('chat-status'), () => stopLine(r.status));
     } catch (err) {
-      $('chat-status').textContent = 'Durdurulamadı: ' + err.message;
+      setText($('chat-status'), () => t('text.50') + err.message);
     }
   });
 
@@ -854,22 +884,22 @@ function wire() {
     if (!text || !view.shown) return;
     const note = $('composer-note');
     if (text.length > SEND_TEXT_MAX) {
-      note.textContent = 'Mesaj çok uzun (en fazla ' + SEND_TEXT_MAX + ' karakter).';
+      setText(note, () => t('send.tooLong', { max: SEND_TEXT_MAX }));
       return;
     }
     $('btn-send').disabled = true;
-    note.textContent = 'Gönderiliyor…';
+    setText(note, () => t('text.28'));
     try {
       const r = await call('send_message', { chat_id: view.shown, text });
       if (r.status === 'desktop_not_ready') {
-        note.textContent = 'Bilgisayardaki uygulama hazır değil; mesaj gönderilmedi.';
+        setText(note, () => t('text.52'));
       } else {
         $('composer-text').value = '';
         closeSlash();
-        note.textContent = sentNote(text, r.status);
+        setText(note, () => sentNote(text, r.status));
       }
     } catch (err) {
-      note.textContent = sendFailureNote(err.message);
+      setText(note, () => sendFailureNote(err.message));
     } finally {
       $('btn-send').disabled = !link?.ready;
     }
@@ -889,6 +919,7 @@ function wire() {
 }
 
 async function boot() {
+  applyStatic();
   wire();
   navigator.serviceWorker?.register('/sw.js', { scope: '/' }).catch(() => {});
   try {
@@ -909,7 +940,7 @@ async function boot() {
   }
   pendingFragment = hash.slice(1);
   if (device) {
-    showWelcome('Bu telefon zaten bir bilgisayarla eşli. Yeni eşleştirme eskisinin yerine geçer.');
+    showWelcome(() => t('text.53'));
     $('paste-link').value = location.href;
     return;
   }

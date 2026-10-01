@@ -163,7 +163,7 @@ test('static routes on the real runtime', { skip: !enabled }, async () => {
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /connect-src 'self' wss?:\/\//);
   assert.match(await page.text(), /rel="manifest"/);
-  for (const p of ['/sw.js', '/manifest.webmanifest', '/app.js', '/crypto.js', '/net.js', '/store.js', '/style.css', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png']) {
+  for (const p of ['/sw.js', '/manifest.webmanifest', '/app.js', '/i18n.js', '/crypto.js', '/net.js', '/store.js', '/style.css', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png']) {
     assert.equal((await fetch(HTTP + p)).status, 200, p);
   }
   assert.equal((await fetch(HTTP + '/index.html')).status, 404);

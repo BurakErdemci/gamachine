@@ -1,3 +1,6 @@
+import { setLang } from '../public/i18n.js';
+setLang('tr');
+
 // What the phone page does when the PC no longer knows it: the REAL app.js and
 // index.html in jsdom, only the transport and storage faked. jsdom is taken
 // from the desktop frontend's install, as in page-model-refresh.test.mjs.
@@ -23,6 +26,8 @@ const REMOVED_TEXT = 'Bu telefon bilgisayardan kaldırıldı. Yeniden eşleştir
 
 async function boot({ paired = true } = {}) {
   const { window } = new JSDOM(html, { url: 'https://phone.invalid/p', runScripts: 'outside-only' });
+  window.localStorage.setItem('gm-ui-lang', 'tr');
+  window.eval(fs.readFileSync(new URL('i18n.js', PUBLIC), 'utf8').replace(/export /g, ''));
   window.scrollTo = () => {};
   window.matchMedia = () => ({ matches: false, addListener() {}, removeListener() {} });
   window.Element.prototype.scrollIntoView = () => {};

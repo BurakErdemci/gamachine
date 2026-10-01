@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Gamachine Uzaktan</title>
+<title data-i18n="static.0">Gamachine Uzaktan</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,103 +17,103 @@
 <body>
 
 <section id="screen-loading">
-  <p>Yükleniyor…</p>
+  <p data-i18n="static.1">Yükleniyor…</p>
 </section>
 
 <section id="screen-install" hidden>
-  <h1>Önce ana ekrana ekle</h1>
-  <p>Bildirim alabilmek için bu sayfa iPhone'da ana ekrandan açılmalı.</p>
+  <h1 data-i18n="static.2">Önce ana ekrana ekle</h1>
+  <p data-i18n="static.3">Bildirim alabilmek için bu sayfa iPhone'da ana ekrandan açılmalı.</p>
   <ol>
-    <li>Bu sayfanın <b>Safari</b>'de açık olduğundan emin ol.</li>
-    <li><b>Paylaş</b> düğmesine dokun. Göremiyorsan adres çubuğundaki <b>•••</b> menüsüne dokun, Paylaş orada.
-      İstersen <b>Ayarlar &gt; Safari &gt; Sekmeler</b>'den <b>Alt</b> düzenini seç; Paylaş düğmesi alta gelir.</li>
-    <li><b>Ana Ekrana Ekle</b>'yi seç. "Web uygulaması olarak aç" açık kalsın.</li>
-    <li>Ana ekrandaki <b>Gamachine</b> simgesinden aç.</li>
+    <li><span data-i18n="static.4">Bu sayfanın </span><b data-i18n="static.5">Safari</b><span data-i18n="static.6">'de açık olduğundan emin ol.</span></li>
+    <li><b data-i18n="static.7">Paylaş</b><span data-i18n="static.8"> düğmesine dokun. Göremiyorsan adres çubuğundaki </span><b data-i18n="static.9">•••</b><span data-i18n="static.10"> menüsüne dokun, Paylaş orada.
+      İstersen </span><b data-i18n="static.11">Ayarlar &gt; Safari &gt; Sekmeler</b><span data-i18n="static.12">'den </span><b data-i18n="static.13">Alt</b><span data-i18n="static.14"> düzenini seç; Paylaş düğmesi alta gelir.</span></li>
+    <li><b data-i18n="static.15">Ana Ekrana Ekle</b><span data-i18n="static.16">'yi seç. "Web uygulaması olarak aç" açık kalsın.</span></li>
+    <li><span data-i18n="static.17">Ana ekrandaki </span><b data-i18n="static.18">Gamachine</b><span data-i18n="static.19"> simgesinden aç.</span></li>
   </ol>
   <div id="install-pair" hidden>
-    <p>Açılan uygulamada eşleştirme bağlantısı istenirse aşağıdaki düğmeyle kopyalayıp oraya yapıştır. Bağlantı 5 dakika geçerli.</p>
-    <button id="btn-copy-link" type="button">Eşleştirme bağlantısını kopyala</button>
+    <p data-i18n="static.20">Açılan uygulamada eşleştirme bağlantısı istenirse aşağıdaki düğmeyle kopyalayıp oraya yapıştır. Bağlantı 5 dakika geçerli.</p>
+    <button id="btn-copy-link" type="button" data-i18n="static.21">Eşleştirme bağlantısını kopyala</button>
     <p id="copy-note" class="note"></p>
-    <button id="btn-pair-here" type="button" class="secondary">Yine de burada eşleştir (bildirim gelmez)</button>
+    <button id="btn-pair-here" type="button" class="secondary" data-i18n="static.22">Yine de burada eşleştir (bildirim gelmez)</button>
   </div>
 </section>
 
 <section id="screen-welcome" hidden>
-  <h1>Gamachine'i telefondan yönet</h1>
-  <p id="welcome-text">Bilgisayarda Gamachine'de <b>Uzaktan kontrol</b>'ü aç ve çıkan QR kodunu telefonun kamerasıyla tara.</p>
-  <label for="paste-link">Ya da eşleştirme bağlantısını buraya yapıştır:</label>
-  <input id="paste-link" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/p#…">
-  <button id="btn-paste-pair" type="button">Eşleştir</button>
+  <h1 data-i18n="static.23">Gamachine'i telefondan yönet</h1>
+  <p id="welcome-text"><span data-i18n="static.24">Bilgisayarda Gamachine'de </span><b data-i18n="static.25">Uzaktan kontrol</b><span data-i18n="static.26">'ü aç ve çıkan QR kodunu telefonun kamerasıyla tara.</span></p>
+  <label for="paste-link" data-i18n="static.27">Ya da eşleştirme bağlantısını buraya yapıştır:</label>
+  <input id="paste-link" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/p#…" data-i18n-attr="placeholder:attr.214">
+  <button id="btn-paste-pair" type="button" data-i18n="static.28">Eşleştir</button>
   <p id="welcome-error" class="error"></p>
-  <button id="btn-show-install" type="button" class="secondary" hidden>Ana ekrana nasıl eklenir?</button>
+  <button id="btn-show-install" type="button" class="secondary" data-i18n="static.29" hidden>Ana ekrana nasıl eklenir?</button>
 </section>
 
 <section id="screen-pairing" hidden>
-  <h1>Eşleştiriliyor</h1>
-  <p id="pair-status">Bilgisayara bağlanılıyor…</p>
+  <h1 data-i18n="static.30">Eşleştiriliyor</h1>
+  <p id="pair-status" data-i18n="text.11">Bilgisayara bağlanılıyor…</p>
   <div id="pair-code-box" hidden>
-    <p>Bilgisayarda görünen kod bununla aynı olmalı:</p>
+    <p data-i18n="static.32">Bilgisayarda görünen kod bununla aynı olmalı:</p>
     <p id="pair-code" class="code"></p>
-    <p>Aynıysa bilgisayarda <b>Onayla</b>'ya bas. Farklıysa <b>Reddet</b>.</p>
+    <p><span data-i18n="static.33">Aynıysa bilgisayarda </span><b data-i18n="text.161">Onayla</b><span data-i18n="static.35">'ya bas. Farklıysa </span><b data-i18n="text.162">Reddet</b><span data-i18n="static.37">.</span></p>
   </div>
   <p id="pair-error" class="error"></p>
-  <button id="btn-pair-back" type="button" class="secondary" hidden>Geri</button>
+  <button id="btn-pair-back" type="button" class="secondary" data-i18n="static.38" hidden>Geri</button>
 </section>
 
 <section id="screen-main" hidden>
   <header class="bar">
-    <span id="status-text">Bağlanıyor…</span>
+    <span id="status-text" data-i18n="text.21">Bağlanıyor…</span>
   </header>
   <p id="main-note" class="note"></p>
   <div id="cards-box" hidden>
-    <h2>Onay bekleyenler</h2>
+    <h2 data-i18n="static.40">Onay bekleyenler</h2>
     <div id="cards"></div>
   </div>
-  <h2>Onay modu</h2>
-  <select id="mode-select" aria-label="Onay modu" disabled>
-    <option value="auto">Otomatik</option>
-    <option value="balanced">Güvenli Otomatik</option>
-    <option value="step">Adım Adım</option>
+  <h2 data-i18n="static.41">Onay modu</h2>
+  <select id="mode-select" aria-label="Onay modu" disabled data-i18n-attr="aria-label:static.41">
+    <option value="auto" data-i18n="text.141">Otomatik</option>
+    <option value="balanced" data-i18n="text.62">Güvenli Otomatik</option>
+    <option value="step" data-i18n="text.64">Adım Adım</option>
   </select>
   <p id="mode-note" class="note"></p>
-  <h2>Sohbetler</h2>
+  <h2 data-i18n="static.45">Sohbetler</h2>
   <ul id="chats" class="list"></ul>
-  <p id="chats-empty" class="note" hidden>Henüz sohbet yok.</p>
+  <p id="chats-empty" class="note" data-i18n="static.46" hidden>Henüz sohbet yok.</p>
   <div class="footer">
-    <button id="btn-notify" type="button" class="secondary" hidden>Bildirimlere izin ver</button>
+    <button id="btn-notify" type="button" class="secondary" data-i18n="static.47" hidden>Bildirimlere izin ver</button>
     <p id="notify-note" class="note"></p>
-    <button id="btn-unpair" type="button" class="secondary">Bu telefondaki eşleşmeyi sil</button>
+    <button id="btn-unpair" type="button" class="secondary" data-i18n="static.48">Bu telefondaki eşleşmeyi sil</button>
   </div>
 </section>
 
 <section id="screen-chat" hidden>
   <header class="bar">
-    <button id="btn-back" type="button" class="secondary small">‹ Geri</button>
+    <button id="btn-back" type="button" class="secondary small" data-i18n="static.49">‹ Geri</button>
     <span id="chat-title"></span>
   </header>
   <p id="chat-status" class="note"></p>
-  <h2>Model (bu sohbet)</h2>
-  <select id="model-select" aria-label="Model" disabled></select>
-  <p class="note">Çalışan bir tur, başladığı modelle biter.</p>
+  <h2 data-i18n="static.50">Model (bu sohbet)</h2>
+  <select id="model-select" aria-label="Model" disabled data-i18n-attr="aria-label:attr.215"></select>
+  <p class="note" data-i18n="static.51">Çalışan bir tur, başladığı modelle biter.</p>
   <p id="model-note" class="note"></p>
-  <h2>Düşünme seviyesi (bilgisayardaki)</h2>
-  <select id="effort-select" aria-label="Düşünme seviyesi" disabled></select>
-  <p id="effort-ultracode" class="note" hidden>Bilgisayarda Ultracode açık. Bir seviye seçersen Ultracode kapanır; bilgisayarda da böyle.</p>
+  <h2 data-i18n="static.52">Düşünme seviyesi (bilgisayardaki)</h2>
+  <select id="effort-select" aria-label="Düşünme seviyesi" disabled data-i18n-attr="aria-label:attr.216"></select>
+  <p id="effort-ultracode" class="note" data-i18n="static.53" hidden>Bilgisayarda Ultracode açık. Bir seviye seçersen Ultracode kapanır; bilgisayarda da böyle.</p>
   <p id="effort-note" class="note"></p>
-  <button id="btn-stop" type="button" class="danger" hidden>Durdur</button>
+  <button id="btn-stop" type="button" class="danger" data-i18n="text.137" hidden>Durdur</button>
   <div id="log" class="log"></div>
   <div id="chat-cards"></div>
   <!-- Outside the form: Enter in the search box must not send the message. -->
   <div id="slash-panel" hidden>
-    <input id="slash-filter" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Komut ara…">
+    <input id="slash-filter" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Komut ara…" data-i18n-attr="placeholder:attr.217">
     <p id="slash-note" class="note"></p>
     <ul id="slash-list" class="list"></ul>
   </div>
   <form id="composer">
-    <textarea id="composer-text" rows="3" placeholder="Mesaj yaz…"></textarea>
+    <textarea id="composer-text" rows="3" placeholder="Mesaj yaz…" data-i18n-attr="placeholder:attr.218"></textarea>
     <div class="composer-row">
-      <button id="btn-slash" type="button" class="secondary" aria-label="Komutlar" aria-expanded="false" aria-controls="slash-panel">/</button>
-      <button id="btn-send" type="submit">Gönder</button>
+      <button id="btn-slash" type="button" class="secondary" aria-label="Komutlar" aria-expanded="false" aria-controls="slash-panel" data-i18n="static.55" data-i18n-attr="aria-label:attr.219">/</button>
+      <button id="btn-send" type="submit" data-i18n="static.56">Gönder</button>
     </div>
     <p id="composer-note" class="note"></p>
   </form>

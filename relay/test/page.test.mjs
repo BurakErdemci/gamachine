@@ -1,3 +1,6 @@
+import { setLang } from '../public/i18n.js';
+setLang('tr');
+
 // The phone page against the shapes the PC bridge sends (Backend/app/remote/):
 // the real Link over a fake socket with a node:crypto PC, and the page's
 // DOM-free helpers in public/net.js.
@@ -267,7 +270,7 @@ test('question card: one button per option sending decision "choice" with the op
 
 test('question card without choices: no answer button, "answer on the PC" note, Reject still works', () => {
   const { buttons, note } = cardActions(multiQuestion);
-  assert.equal(note, ASK_ON_PC);
+  assert.equal(note, ASK_ON_PC());
   assert.deepEqual(buttons.map((b) => b.payload), [{ card_id: 'q2', decision: 'reject' }]);
   for (const b of buttons) assert.ok(bridgeAccepts(multiQuestion, null, b.payload));
 });
@@ -285,7 +288,7 @@ test('answer failures: already_answered names who answered and closes the card',
   assert.equal(answerFailure('already_answered', { by: 'system' }).close, true);
   assert.doesNotMatch(answerFailure('already_answered', { by: 'system' }).note, /Başka cihaz/);
   assert.equal(answerFailure('not_found').close, true);
-  assert.deepEqual(answerFailure('unsupported_on_phone'), { close: false, onlyReject: true, note: ASK_ON_PC });
+  assert.deepEqual(answerFailure('unsupported_on_phone'), { close: false, onlyReject: true, note: ASK_ON_PC() });
   assert.deepEqual(answerFailure('busy'), { close: false, note: 'Gönderilemedi: busy' });
 });
 
@@ -611,7 +614,7 @@ test('the mode selector offers the desktop\'s three modes with the desktop\'s Tu
       assert.ok(src.includes(`'mode.${m.id}': '${m.label}'`), `desktop i18n has no "${m.label}" for mode.${m.id}`);
     }
   }
-  assert.match(AUTO_MODE_WARNING, /onay kartı hiç çıkmaz/);
+  assert.match(AUTO_MODE_WARNING(), /onay kartı hiç çıkmaz/);
 });
 
 test('a successful switch reads as a sentence, with the cards it approved', () => {

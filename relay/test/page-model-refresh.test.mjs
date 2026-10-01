@@ -1,3 +1,6 @@
+import { setLang } from '../public/i18n.js';
+setLang('tr');
+
 // What the phone page reads when a model pick is announced: the REAL app.js and
 // index.html in jsdom, only the transport faked. jsdom is not a relay dependency;
 // it is taken from the desktop frontend's install and the tests skip without it.
@@ -38,6 +41,8 @@ async function boot({ manualSettingsClock = false } = {}) {
       if (!settingsTimers.delete(timer)) clear(timer);
     };
   }
+  window.localStorage.setItem('gm-ui-lang', 'tr');
+  window.eval(fs.readFileSync(new URL('i18n.js', PUBLIC), 'utf8').replace(/export /g, ''));
   window.scrollTo = () => {};
   window.matchMedia = () => ({ matches: false, addListener() {}, removeListener() {} });
   window.Element.prototype.scrollIntoView = () => {};
