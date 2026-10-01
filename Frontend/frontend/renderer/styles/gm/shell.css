@@ -50,14 +50,15 @@
 .tex-shell { background-image: var(--shell-tex); background-size: var(--shell-tex-size); }
 
 /* ======================= APP FRAME ======================= */
-/* Round 9 (B1): the app is the window. Height follows the viewport (620 px floor, 1200 px
-   ceiling), width grows to 1920 and centres past that. The mockup's middle track is the chat and
-   its right track the workspace with three fixed widths; in the app today the middle is the
-   editor / preview and the right is the chat panel, whose open/close keeps its own width
-   animation. So the side tracks are `auto` (sized by their animated content) until the
-   workspace phase (P3) brings the mockup's fixed tracks. */
+/* The frame is exactly the window. The mockup's clamp(620px, 100vh, 1200px) height and 1920 px
+   centred cap were for a mockup page in a browser; in the app window they clipped below 620 px
+   with no scroll and left a dead band above 1200 px.
+   The mockup's middle track is the chat and its right track the workspace with three fixed
+   widths; in the app today the middle is the editor / preview and the right is the chat panel,
+   whose open/close keeps its own width animation. So the side tracks are `auto` (sized by their
+   animated content) until the workspace phase (P3) brings the mockup's fixed tracks. */
 .app {
-  width: min(1920px, 100%); height: clamp(620px, 100vh, 1200px); margin-inline: auto;
+  width: 100%; height: 100vh; height: 100dvh;
   overflow: hidden; position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
