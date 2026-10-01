@@ -123,6 +123,10 @@ class RemoteBridge:
         self._pairs.clear()
         self._pair_ok_sent.clear()
 
+    def _drop_stale_pending(self, why: str) -> None:
+        if self.pairing.drop_pending_unless_live(self._pairs):
+            logger.info("[remote] pending pairing dropped (%s): its pairing socket is gone", why)
+
     async def enable(self) -> dict:
         self.keys = self.store.ensure_keys()
         self.store.set_enabled(True)
@@ -290,6 +294,7 @@ class RemoteBridge:
 
     async def _on_disconnect(self) -> None:
         self._drop_connections()
+        self._drop_stale_pending("disconnect")
 
     async def _on_relay(self, m: dict) -> None:
         mtype = m.get("type")
@@ -302,6 +307,7 @@ class RemoteBridge:
             for p in m.get("pairs") or []:
                 if isinstance(p, dict) and isinstance(p.get("conn"), str):
                     self._pairs[p["conn"]] = str(p.get("ip") or "unknown")
+            self._drop_stale_pending("welcome")
             # Always the exact list: covers a recreated room (`tokens: 0`), a
             # drop_token lost while offline, and a device removed meanwhile.
             fut = self.client.send_token_op({"type": "register_tokens", "replace": True,
@@ -330,7 +336,8 @@ class RemoteBridge:
             self.pairing.on_socket_gone(conn)
         elif mtype == "from" and isinstance(m.get("data"), str):
             if conn in self._pairs:
-                self._spawn(self.pairing.on_request(conn, self._pairs[conn], m["data"]))
+                self._spawn(self.pairing.on_request(conn, self._pairs[conn], m["data"],
+                                                    is_live=lambda c: c in self._pairs))
             elif conn in self._phones:
                 await self._on_phone_data(conn, m["data"])
 

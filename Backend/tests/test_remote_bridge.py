@@ -286,6 +286,73 @@ async def test_pairing_needs_remote_on(env):
     assert exc.value.code == "remote_off"
 
 
+async def _waiting_phone(env):
+    """A phone whose pairing request waits for the desktop's approval."""
+    await enable(env)
+    start = await env.bridge.start_pairing()
+    phone = FakePhone(env.relay)
+    task = asyncio.create_task(phone.pair(start["qr_url"]))
+    await until(lambda: env.bridge.pending_pairing() is not None)
+    return start, phone, task
+
+
+async def _assert_no_pending(env):
+    assert env.bridge.pending_pairing() is None
+    assert env.bridge.status()["pairing"]["pending"] is False
+    with pytest.raises(BridgeError) as exc:
+        await env.bridge.approve_pairing()
+    assert (exc.value.code, exc.value.status) == ("no_pending_pairing", 404)
+
+
+async def test_pending_pairing_ends_when_the_relay_connection_drops(env):
+    _, _, task = await _waiting_phone(env)
+    await env.bridge._on_disconnect()
+    await _assert_no_pending(env)
+    task.cancel()
+
+
+async def test_pending_pairing_ends_on_a_welcome_without_its_socket(env):
+    _, _, task = await _waiting_phone(env)
+    await env.bridge._on_relay({"type": "welcome", "phones": [], "pairs": [], "tokens": 0})
+    await _assert_no_pending(env)
+    task.cancel()
+
+
+async def test_pending_pairing_survives_a_welcome_that_lists_its_socket(env):
+    _, phone, task = await _waiting_phone(env)
+    conn = env.bridge.pairing.pending.conn
+    await env.bridge._on_relay({"type": "welcome", "phones": [], "pairs": [{"conn": conn, "ip": "x"}], "tokens": 0})
+    assert env.bridge.pending_pairing() is not None
+    await env.bridge.approve_pairing()
+    assert "ok" in await asyncio.wait_for(task, 5)
+
+
+async def test_pending_pairing_ends_when_the_relay_drops_the_pc(env):
+    # End to end: the relay closes the pairing socket itself (pc_offline) and
+    # no pair_close reaches the PC after it reconnects.
+    _, _, task = await _waiting_phone(env)
+    await env.relay.kick_pc(env.bridge.keys.pair_id)
+    assert await asyncio.wait_for(task, 5) == {"error": "pc_offline"}
+    await until(lambda: env.relay.pc_connects == 2 and env.bridge.client.connected)
+    await _assert_no_pending(env)
+
+
+async def test_pairing_request_from_a_socket_already_gone_is_ignored(env):
+    await enable(env)
+    start = await env.bridge.start_pairing()
+    _, pc_pub, secret = FakePhone.parse_qr(start["qr_url"])
+    key = C.KeyPair.generate()
+    request = json.dumps({"type": "pair_request", "phone_pub": C.b64u(key.public_raw), "device_name": "iPhone",
+                          "mac": C.b64u(C.pair_mac(secret, key.public_raw, "iPhone"))})
+    await env.bridge._on_relay({"type": "pair_open", "conn": "gone-conn", "ip": "x"})
+    # The request is handled in a task; the relay connection drops before it runs.
+    await env.bridge._on_relay({"type": "from", "conn": "gone-conn", "data": request})
+    await env.bridge._on_disconnect()
+    await asyncio.sleep(0.1)
+    assert env.bridge.pending_pairing() is None
+    assert env.bridge.pairing.live_offer() is not None, "the offer is not spent on a dead socket"
+
+
 # ── session ────────────────────────────────────────────────────────────────
 
 async def test_unknown_device_and_clock_skew_are_rejected(env):

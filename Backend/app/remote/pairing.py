@@ -17,7 +17,7 @@ import secrets
 import time
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Deque, Dict, Optional
+from typing import Any, Awaitable, Callable, Container, Deque, Dict, Optional
 
 from remote import crypto as C
 
@@ -120,9 +120,12 @@ class PairingManager:
         return over
 
     # ── the phone's request ────────────────────────────────────────────
-    async def on_request(self, conn: str, ip: str, data: str) -> Optional[str]:
+    async def on_request(self, conn: str, ip: str, data: str,
+                         is_live: Optional[Callable[[str], bool]] = None) -> Optional[str]:
         """Handle one `pair_request`; returns the reject reason, or None when
-        the request now waits for the desktop's approval."""
+        the request now waits for the desktop's approval. `is_live` answers
+        whether the pairing socket is still there: the caller runs this as a
+        task, and the relay connection may have dropped since the frame came."""
         if self._limited(ip):
             await self._reject(conn, "rate_limited")
             return "rate_limited"
@@ -152,6 +155,9 @@ class PairingManager:
             logger.info("[remote] pairing request refused: %s", exc)
             await self._reject(conn, "rejected")
             return "rejected"
+        if is_live is not None and not is_live(conn):
+            logger.info("[remote] pairing request ignored: its socket is gone")
+            return "gone"
         # Single use: the first request that proves the secret consumes it.
         offer.used = True
         k_static = self._static_key().ecdh(phone_pub)
@@ -195,6 +201,17 @@ class PairingManager:
             self.pending = None
             if pending.timer is not None:
                 pending.timer.cancel()
+
+    def drop_pending_unless_live(self, live: Container[str]) -> bool:
+        """Forget a pending approval whose pairing socket is not in `live`.
+        When the PC's relay socket drops, the relay closes the pairing sockets
+        itself and no `pair_close` ever reaches us, so this is the only way such
+        a pending ends before its timer. Nothing is sent: no socket to hear it."""
+        pending = self.pending
+        if pending is None or pending.conn in live:
+            return False
+        self.on_socket_gone(pending.conn)
+        return True
 
     def _drop_pending(self, reason: str) -> None:
         pending = self.pending
