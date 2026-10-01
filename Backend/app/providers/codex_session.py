@@ -270,10 +270,20 @@ def _risk_actions(method: str, params: dict, file_changes, workspace: str) -> li
     """
     if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
         cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else ""
-        return [{"kind": "shell",
-                 "command": _classified_command(params.get("command"), params.get("cwd"),
-                                                workspace),
-                 "cwd": cwd or workspace, "workspace": workspace}]
+        raw = _command_text(params.get("command"))
+        actions = [{"kind": "shell",
+                    "command": _classified_command(raw, params.get("cwd"), workspace),
+                    "cwd": cwd or workspace, "workspace": workspace}]
+        script, _ = _shell_script(raw)
+        if script == raw:
+            first_word = raw.split(maxsplit=1)[0] if raw.strip() else ""
+            if (any(char in first_word for char in "\"'`\\") or first_word in {"&", "."}
+                    or _CLASSIFY_RAW.search(raw) or _UNSAFE_INNER.search(raw) or _tree_writes(raw)
+                    or (_first_verb(raw) in _READ_VERBS
+                        and not _is_read_only_command(raw, params.get("cwd"), workspace))):
+                # Bare commands have no wrapper to force critical (measured, 1 Oct 2026).
+                actions.append({"kind": "permission", "tool": "codex_bare_command"})
+        return actions
     if method == "item/fileChange/requestApproval":
         actions = []
         for change in file_changes or ():

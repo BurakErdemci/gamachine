@@ -423,6 +423,87 @@ async def test_codex_balanced_routine_is_accepted_without_a_card(balanced, ws):
         os.path.join(ws, "Assets", "B.cs"): {"type": "add"}}}) == ("accept", None)
 
 
+@pytest.mark.parametrize("command", [
+    "cat -Path.link/secret.txt",
+    "grep -R x Assets",
+    '"grep" -R x Assets',
+    'g""rep -R x Assets',
+    "find -L . -name x",
+    "find . -follow -name x",
+    "cat nul",
+    "cat Assets/nul.txt",
+    "cat COM1",
+    "cat a.txt,link/secret.txt",
+    "tail -f a.txt",
+    "ls -laR .",
+    "wc --files0-from=a.txt",
+    "grep -rP x .",
+])
+@pytest.mark.parametrize("method,as_argv", [
+    ("item/commandExecution/requestApproval", False),
+    ("execCommandApproval", True),
+], ids=["string", "argv"])
+async def test_codex_balanced_bare_refused_read_asks(balanced, ws, tmp_path,
+                                                   command, method, as_argv):
+    (tmp_path / "a.txt").write_text("x\n", encoding="utf-8")
+    (tmp_path / "link").mkdir()
+    (tmp_path / "link" / "secret.txt").write_text("x\n", encoding="utf-8")
+    decision, ev = await _codex_drive(_codex(ws), method, {
+        "command": command.split() if as_argv else command, "cwd": ws})
+    assert decision == "decline"
+    assert ev is not None and ev["type"] == "command_approval_needed"
+
+
+@pytest.mark.parametrize("command", [
+    "dotnet build", "npm test", "python -m pytest -q",
+    "cat a.txt", "grep -rn x src", "rg -n pattern Assets",
+])
+async def test_codex_balanced_bare_confined_command_runs(balanced, ws, tmp_path, command):
+    (tmp_path / "a.txt").write_text("x\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    assert await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                              {"command": command, "cwd": ws}) == ("accept", None)
+
+
+@pytest.mark.parametrize("command", [
+    "Get-ChildItem -Name",
+    "/bin/bash -lc 'grep -R x Assets'",
+])
+async def test_codex_balanced_bare_cmdlet_and_wrapped_control_ask(balanced, ws, command):
+    decision, ev = await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                                      {"command": command, "cwd": ws})
+    assert decision == "decline"
+    assert ev is not None and ev["type"] == "command_approval_needed"
+
+
+@pytest.mark.parametrize("command", [
+    "grep -R x Assets", '"dotnet" build', "d`otnet build", "d\\otnet build",
+    "& dotnet build", ". dotnet build", "dotnet build *", "dotnet build @args",
+    "tree -o out.txt",
+])
+def test_codex_bare_guard_keeps_shell_and_uses_permission_action(ws, command):
+    from providers.codex_session import _risk_actions
+
+    actions = _risk_actions("item/commandExecution/requestApproval",
+                            {"command": command, "cwd": ws}, None, ws)
+    assert actions[0]["kind"] == "shell"
+    assert actions[0]["command"] == command
+    assert actions[1] == {"kind": "permission", "tool": "codex_bare_command"}
+    assert approval_mode.needs_card_many(actions, mode="balanced").card is True
+
+
+@pytest.mark.parametrize("mode,expected", [("step", "decline"), ("auto", "accept")])
+async def test_codex_bare_refused_read_preserves_step_and_auto(ws, mode, expected):
+    approval_mode.set_mode(mode, source="test")
+    decision, ev = await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                                      {"command": "grep -R x Assets", "cwd": ws})
+    assert decision == expected
+    if mode == "step":
+        assert ev is not None and ev["type"] == "command_approval_needed"
+    else:
+        assert ev is None
+
+
 @pytest.mark.parametrize("method,params,reason", [
     ("item/commandExecution/requestApproval", {"command": "git push"}, "shell_git_write"),
     ("item/permissions/requestApproval", {"permissions": {"network": True}}, "permission_request"),
