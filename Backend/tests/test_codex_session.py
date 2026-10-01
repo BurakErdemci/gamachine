@@ -307,7 +307,7 @@ def ws(tmp_path):
 @pytest.mark.parametrize("command", [
     _PS + "'Get-ChildItem -File -Name'",
     _PS + "'Get-Content Assets\\A.cs'",
-    _PS + "'gci -Recurse -Filter *.cs Assets'",
+    _PS + "'gci -Recurse -Filter Assets'",
     _PS + "'Select-String -Pattern Player -Path Assets\\A.cs'",
     _PS + "'rg -n Player Assets'",
     _PS + "'rg --files'",
@@ -345,6 +345,32 @@ def test_read_only_command_is_recognised(ws, command):
     None,
 ])
 def test_anything_else_is_not_read_only(ws, command):
+    assert _is_read_only_command(command, ws, ws) is False
+
+
+# The shortcut has no card behind it, so the inner script must be plain text
+# that command_safety reads the way the shell does.
+@pytest.mark.parametrize("command", [
+    # PowerShell reads both elements of a comma array.
+    _PS + "'Get-Content inside.txt,..\\secret.txt'",
+    _PS + "'Get-ChildItem Assets,\\\\host\\share'",
+    # PowerShell treats typographic quotes as quotes and strips them.
+    _PS + "'Get-Content \N{LEFT SINGLE QUOTATION MARK}..\\secret.txt\N{RIGHT SINGLE QUOTATION MARK}'",
+    _PS + "'Get-Content \N{LEFT DOUBLE QUOTATION MARK}..\\secret.txt\N{RIGHT DOUBLE QUOTATION MARK}'",
+    # A glob can match a workspace junction or symlink that points outside;
+    # command_safety checks the literal pattern.
+    _PS + "'Get-Content */secret.txt'",
+    _PS + "'Get-Content linked*/SPEC.md'",
+    _PS + "'Get-Content Assets/A?.cs'",
+    _PS + "'gci -Recurse -Filter *.cs Assets'",
+    "/bin/bash -lc 'cat linked*/SPEC.md'",
+    "/bin/bash -lc 'cat Assets/[A]/x'",
+    _PS + "'Get-Content A.cs #x'",
+    _PS + "'Get-Content +A.cs'",
+    _PS + "'Get-Content A.cs ~'",
+    _PS + "'Get-Content \N{LATIN SMALL LETTER E WITH ACUTE}.cs'",
+])
+def test_a_script_with_anything_but_plain_characters_is_not_read_only(ws, command):
     assert _is_read_only_command(command, ws, ws) is False
 
 

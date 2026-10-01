@@ -314,6 +314,10 @@ _POSIX_SHELLS = frozenset({"bash", "zsh", "sh"})
 # Quotes PowerShell would strip before resolving a path (`'..\x'` is `..\x`),
 # brace expansion (`{..,x}/f`), splatting, and a glob that can match `..`.
 _UNSAFE_INNER = re.compile(r"""['{}@]|(?:^|[\s/\\])\.[*?\[]""")
+# The read shortcut has no card behind it, so it takes only text command_safety
+# reads the way the shell does: a comma is a PowerShell array, curly quotes
+# are quotes to PowerShell, and a glob can reach through a workspace link.
+_PLAIN_SCRIPT = re.compile(r'[A-Za-z0-9 _./\\:="-]*')
 
 # Claude step mode lets Read/Glob/Grep/LS through without a card; these are
 # the shell forms of the same reads. git/echo/diff are left out: they are
@@ -386,7 +390,7 @@ def _is_read_only_command(command, cwd, workspace: str) -> bool:
     if not cwd_ok or not root:
         return False
     script, powershell = _shell_script(command)
-    if not script or _UNSAFE_INNER.search(script):
+    if not script or not _PLAIN_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script):
         return False
     head, _, rest = script.strip().partition(" ")
     verb = head.lower()
