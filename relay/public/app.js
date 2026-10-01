@@ -14,6 +14,7 @@ import {
 const $ = (id) => document.getElementById(id);
 const SCREENS = ['loading', 'install', 'welcome', 'pairing', 'main', 'chat'];
 const CARD_PUSH_GRACE_MS = 1500;
+const REMOVED_TEXT = 'Bu telefon bilgisayardan kaldırıldı. Yeniden kullanmak için bilgisayarda yeni bir QR kodu tara.';
 
 let device = null;
 let link = null;
@@ -150,9 +151,9 @@ function setStatus(status, info = {}) {
   renderChatSettings();
   if (status === 'connecting') t.textContent = 'Bağlanıyor…';
   else if (status === 'pc_offline') t.textContent = 'Bilgisayar çevrimdışı' + (info.lastSeen ? ' (son görülme ' + clock(info.lastSeen) + ')' : '');
-  else if (status === 'removed') {
-    t.textContent = 'Bu telefon bilgisayardan kaldırıldı';
-    note.textContent = 'Yeniden kullanmak için eşleşmeyi silip bilgisayarda yeni bir QR kodu tara.';
+  else if (status === 'removed' || (status === 'hello_rejected' && info.reason === 'unknown_device')) {
+    forgetRemoved();
+    return;
   } else if (status === 'hello_rejected') {
     t.textContent = 'Bilgisayar bu telefonu kabul etmedi';
     note.textContent = info.reason === 'clock'
@@ -770,16 +771,30 @@ function handleHash(hash) {
   return false;
 }
 
-async function unpair() {
-  if (!confirm('Bu telefondaki eşleşme silinsin mi? Bilgisayardaki cihaz listesinden de kaldırmayı unutma.')) return;
+async function forgetDevice() {
   if (link) link.stop();
+  link = null;
+  device = null;
   try {
     const reg = await navigator.serviceWorker?.getRegistration();
     const sub = await reg?.pushManager?.getSubscription();
     await sub?.unsubscribe();
   } catch {}
   await store.del('device');
+}
+
+async function unpair() {
+  if (!confirm('Bu telefondaki eşleşme silinsin mi? Bilgisayardaki cihaz listesinden de kaldırmayı unutma.')) return;
+  await forgetDevice();
   location.replace('/p');
+}
+
+// The PC removed this phone (or reset remote control): its token can never
+// connect again, so keeping it would only leave the page retrying.
+async function forgetRemoved() {
+  view.hide();
+  await forgetDevice();
+  showWelcome(REMOVED_TEXT);
 }
 
 function wire() {
