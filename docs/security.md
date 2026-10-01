@@ -73,6 +73,8 @@ The read/write split is not a guess, it is a ledger: `unity-mcp/Server/src/servi
 
 Codex and agy are still handed unityMCP with `default_tools_approval_mode = "approve"` (Codex) and `trust: true` (agy). That only stops the client from asking a second time; the server-side gate still asks before a mutating call reaches Unity.
 
+**How a Codex command reaches the card.** A Codex chat thread starts with `approvalPolicy: "untrusted"` in a `workspace-write` sandbox, so every command Codex does not itself trust asks before it runs and the approval mode decides card or no card. A command that only lists, reads or searches inside the workspace (`Get-ChildItem`, `Get-Content`, `rg`, `ls`, `cat`, `grep`...) passes without a card, as Claude's read tools do. Threads used to start with `on-request` in a read-only sandbox, which left asking to the model: a write failed inside the sandbox and step mode showed no card (measured with codex-cli 0.157.0, 1 Oct 2026). The side chat keeps the read-only sandbox and declines every request.
+
 ### 3. Terminal security
 - Safe (read-only) commands run directly; any command outside the whitelist shows an approval card
 - Attempts to write files via the terminal (`python3 -c "open().write()"`, `printf > path`, `echo > path`) are caught and routed to the DiffViewer
