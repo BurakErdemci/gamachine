@@ -13,6 +13,63 @@ from providers.codex_session import (
 )
 
 
+class TestCodexCapacityErrors(unittest.IsolatedAsyncioTestCase):
+    async def test_capacity_errors_end_the_turn_with_model_switch_advice(self):
+        import asyncio
+
+        advice = (
+            "Seçilen Codex modeli şu an yoğun (OpenAI tarafında kapasite dolu). "
+            "Biraz sonra tekrar dene ya da başka bir modele geç (örneğin GPT-6 Sol)."
+        )
+        payloads = [
+            {"message": "Provider unavailable", "codexErrorInfo": "serverOverloaded"},
+            {"message": "Selected model is at capacity. Please try a different model."},
+            {
+                "message": "Selected model is at capacity. Please try a different model.",
+                "codexErrorInfo": {"additionalDetails": "Busy"},
+            },
+        ]
+        for params in payloads:
+            with self.subTest(params=params):
+                session = CodexSession(0)
+                session._out_q = asyncio.Queue()
+                session._send = AsyncMock()
+                session._request = AsyncMock()
+
+                await session._handle_notification({"method": "error", "params": params})
+
+                self.assertEqual(session._out_q.get_nowait(), {"type": "error", "message": advice})
+                self.assertIsNone(session._out_q.get_nowait())
+                self.assertTrue(session._out_q.empty())
+                session._send.assert_not_awaited()
+                session._request.assert_not_awaited()
+
+    async def test_string_error_info_is_safe_and_other_error_details_are_preserved(self):
+        import asyncio
+
+        for params, expected in [
+            ({"message": "Other failure", "codexErrorInfo": "otherError"}, "Other failure"),
+            (
+                {"message": "Other failure", "codexErrorInfo": {"additionalDetails": "Details"}},
+                "Other failure — Details",
+            ),
+            (
+                {"message": "Other failure", "codexErrorInfo": "otherError", "additionalDetails": "Details"},
+                "Other failure — Details",
+            ),
+            ({"message": "Other failure"}, "Other failure"),
+        ]:
+            with self.subTest(params=params):
+                session = CodexSession(0)
+                session._out_q = asyncio.Queue()
+
+                await session._handle_notification({"method": "error", "params": params})
+
+                self.assertEqual(session._out_q.get_nowait(), {"type": "error", "message": expected})
+                self.assertIsNone(session._out_q.get_nowait())
+                self.assertTrue(session._out_q.empty())
+
+
 class TestProtocolLimits(unittest.TestCase):
     def test_stream_limit_handles_large_unity_tool_schemas(self):
         self.assertGreater(_APP_SERVER_STREAM_LIMIT, 64 * 1024)

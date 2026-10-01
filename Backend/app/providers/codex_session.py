@@ -1402,10 +1402,16 @@ class CodexSession:
                 await out_q.put({"type": "thinking", "text": f"🔁 Codex: {_note}"})
                 return
             _err = params.get("message") or json.dumps(params, ensure_ascii=False)[:300]
-            _details = ((params.get("codexErrorInfo") or {}).get("additionalDetails")
+            _info = params.get("codexErrorInfo")
+            _details = ((_info.get("additionalDetails") if isinstance(_info, dict) else "")
                         or params.get("additionalDetails") or "")
             if _details and _details not in _err:
                 _err = f"{_err} — {_details}"[:400]
+            if _info == "serverOverloaded" or "at capacity" in _err.lower():
+                _err = (
+                    "Seçilen Codex modeli şu an yoğun (OpenAI tarafında kapasite dolu). "
+                    "Biraz sonra tekrar dene ya da başka bir modele geç (örneğin GPT-6 Sol)."
+                )
             await self._emit_terminal({"type": "error", "message": _err})
 
     @staticmethod
