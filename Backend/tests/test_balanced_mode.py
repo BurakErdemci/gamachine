@@ -528,6 +528,61 @@ async def test_codex_balanced_plain_read_runs_without_a_card(balanced, ws, comma
                               {"command": command, "cwd": ws}) == ("accept", None)
 
 
+@pytest.mark.parametrize("command", [
+    '/bin/bash -lc \'"grep" -R x Assets\'',
+    '/bin/zsh -lc \'"cat" Assets/a.txt\'',
+    '/bin/bash -lc \'g"r"ep -R x Assets\'',
+    _CODEX_PS + '"\'cat\' Assets/a.txt"',
+    _CODEX_PS + "'& cat Assets/a.txt'",
+    _CODEX_PS + "'. cat Assets/a.txt'",
+    _CODEX_PS + '\'& "Get-Content" Assets/a.txt\'',
+    _CODEX_PS + "'`cat Assets/a.txt'",
+    _CODEX_PS + "'c`at Assets/a.txt'",
+    _CODEX_PS + "'c\\at Assets/a.txt'",
+    "/bin/bash -lc 'g\\rep -R x Assets'",
+    '/bin/bash -lc \'"dotnet" build\'',
+    _CODEX_PS + '\'"dotnet" build\'',
+])
+@pytest.mark.parametrize("mode", ["balanced", "step"])
+async def test_codex_wrapped_quoted_or_invoked_verb_asks(balanced, ws, command, mode):
+    from providers.codex_session import _classified_command
+
+    approval_mode.set_mode(mode, source="test")
+    decision, ev = await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                                      {"command": command, "cwd": ws})
+    assert decision == "decline"
+    assert ev is not None and ev["type"] == "command_approval_needed"
+    assert _classified_command(command, ws, ws) == command
+
+
+@pytest.mark.parametrize("command", [
+    _CODEX_PS + "'Get-ChildItem'",
+    _CODEX_PS + "'Get-Content a.txt'",
+    _CODEX_PS + "'rg -n pattern Assets'",
+    _CODEX_PS + "'cat file'",
+    "/bin/bash -lc 'rg -n pattern Assets'",
+    "/bin/bash -lc 'cat file'",
+])
+async def test_codex_balanced_confined_read_still_runs_without_a_card(balanced, ws, command):
+    assert await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                              {"command": command, "cwd": ws}) == ("accept", None)
+
+
+@pytest.mark.parametrize("script,expected", [
+    ('"grep" -R x', "grep"),
+    ("'cat' Assets/a.txt", "cat"),
+    ('g"r"ep -R x', "grep"),
+    ("`cat Assets/a.txt", "cat"),
+    ("c`at Assets/a.txt", "cat"),
+    ('"CAT.EXE" file', "cat"),
+    ("", ""),
+])
+def test_first_verb_strips_quotes_and_backticks(script, expected):
+    from providers.codex_session import _first_verb
+
+    assert _first_verb(script) == expected
+
+
 # Round 3 findings: each read went past the step grammar to action_risk,
 # which called it routine.
 @pytest.mark.parametrize("command", [

@@ -522,6 +522,10 @@ def _classified_command(command, cwd, workspace: str) -> str:
     if (not script or not _CLASSIFIABLE_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script)
             or _CLASSIFY_RAW.search(script) or _tree_writes(script)):
         return raw
+    # Quoted/escaped verbs and call operators bypassed the read check (1 Oct 2026).
+    first_word = script.split(maxsplit=1)[0] if script.strip() else ""
+    if any(char in first_word for char in "\"'`\\") or first_word in {"&", "."}:
+        return raw
     # Bash reads `.\.` as `..`; action_risk reads the backslash literally.
     if not powershell and "\\" in script:
         return raw
@@ -532,7 +536,8 @@ def _classified_command(command, cwd, workspace: str) -> str:
 
 def _first_verb(script: str) -> str:
     words = script.split()
-    name = re.split(r"[\\/]", words[0])[-1].lower() if words else ""
+    word = re.sub(r"""["'`]""", "", words[0]) if words else ""
+    name = re.split(r"[\\/]", word)[-1].lower()
     return name.removesuffix(".exe")
 
 
