@@ -963,3 +963,6 @@
    standard property overrides the ::-webkit-scrollbar rules), which drew a dark bar on the light
    themes. */
 .stage, .stage *, .workspace, .workspace * { scrollbar-color: var(--paper-line-strong) transparent; }
+/* the box scrolls only once its text passes the maximum height (the auto-resize hook switches
+   this to auto inline); a one-line box shows no bar */
+.composer textarea { overflow-y: hidden; }
