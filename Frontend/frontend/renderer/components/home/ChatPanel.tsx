@@ -482,6 +482,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   {pendingGenFiles && pendingGenFiles.messageId === msg.id && (
                     <FileCreationApproval
                       files={pendingGenFiles.files}
+                      phonePaired={phonePaired}
                       autoAccept={false}
                       onAcceptOne={async (file) => {
                         if (!ipc || !workspacePath) return false;
@@ -525,6 +526,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   {pendingDelete && pendingDelete.messageId === msg.id && (
                     <FileDeleteApproval
                       path={pendingDelete.path}
+                      phonePaired={phonePaired}
                       onConfirm={async () => {
                         await deleteFile(pendingDelete.path);
                         setPendingDelete(null);
@@ -540,6 +542,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                       kind={pendingCommand.kind}
                       riskReason={pendingCommand.riskReason}
                       riskDetail={pendingCommand.riskDetail}
+                      phonePaired={phonePaired}
                       onConfirm={async () => {
                         // onApproveCommand kuyruktaki sıradaki onayı kendi gösterir → burada setPendingCommand(null) ÇAĞIRMA
                         const failure = await onApproveCommand(pendingCommand.gateId, true);
@@ -656,6 +659,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           setDiffFile={setDiffFile}
           onOpenFile={openFile}
           setCode={setCode}
+          phonePaired={phonePaired}
         />
 
         <div ref={messagesEndRef} className="thread-end" aria-hidden="true" />
