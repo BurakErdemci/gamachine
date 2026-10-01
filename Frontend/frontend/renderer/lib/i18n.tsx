@@ -1416,26 +1416,15 @@ export function ceviriUygula(lang: Lang, key: string, degerler?: TValues): strin
 }
 
 /**
- * REACT AĞACI DIŞINDAN dil okumak için. `useLang` çağıramayan üç tür tüketici var:
- * hook'lar (`useChat`, `useFileSystem`, …), saf yardımcı modüller
- * (`gateResponse.ts`) ve class bileşenleri (`ErrorBoundary`).
- *
- * ⚠️ Neden modül düzeyinde bir değer ve neden doğrudan `localStorage` okumuyor:
- * dilin TEK doğruluk kaynağı `home.tsx`'teki `lang` state'i ve o state
- * localStorage'ta karşılığı OLMAYAN bir durumu da temsil edebiliyor — kayıtlı
- * tercih yokken işletim sistemi dilinden türetilen dil BİLEREK kaydedilmiyor
- * (gerekçe `osDilindenDil`'in başlığında). Burada localStorage'ı tek başına
- * okusaydık İngilizce arayüz gören bir kullanıcı Türkçe toast'lar alırdı: aynı
- * anda iki dil, yani hiç çevirmemekten kötü.
- *
- * Kayıt yapılmadan önceki ilk anlar için yedek yol yine localStorage; o da yoksa
- * `'tr'`. Hooks'ların ilk render'ında metin üretmesi olağan değil, ama olursa
- * sessizce patlamak yerine bir dil seçilmiş olmalı.
+ * Non-React consumers must use the same language as the home page state.
+ * Before that state is announced, use a stored preference or English ('en').
  */
 let aktifDilDegeri: Lang | null = null;
 
 /** `home.tsx` dili her değiştirdiğinde çağırır — bkz `aktifDil`. */
-export function aktifDilAyarla(l: Lang): void {
+export function aktifDilAyarla(l: Lang | null): void {
+  // null forgets the announced language so `aktifDil` reads storage again
+  // (used by tests of that storage path).
   aktifDilDegeri = l;
 }
 
@@ -1445,30 +1434,14 @@ export function aktifDil(): Lang {
     const kayitli = localStorage.getItem('app-lang');
     if (kayitli === 'tr' || kayitli === 'en') return kayitli;
   } catch {
-    /* localStorage yok (SSR/test) — aşağıdaki varsayılana düş */
+    /* Storage may be unavailable during SSR; English is the default. */
   }
-  return 'tr';
+  return 'en';
 }
 
 /** React dışı bağlamlarda `t()`nin karşılığı. */
 export function cevir(key: TKey, degerler?: TValues): string {
   return ceviriUygula(aktifDil(), key, degerler);
-}
-
-/** İşletim sistemi / tarayıcı yerel ayarından uygulama dilini türetir.
- *
- * Neden gerekti: kayıtlı tercih yokken dil sabit `'tr'` kalıyordu ve bunun
- * bedeli iki katmanlıydı — İngilizce bir kullanıcı hem Türkçe arayüz görüyor,
- * hem `language: 'tr'` backend'e gidip `prompts.get_language_instr` modele
- * "yanıtını tamamen TÜRKÇE ver" dedirtiyordu. Yani eksik olan tek satır,
- * arayüzü değil MODELİN CEVABINI da bozuyordu.
- *
- * Türkçe DIŞINDAKİ her şey `en`'e düşüyor: desteklenen iki dil var ve bilinmeyen
- * bir yerel ayarda İngilizce'ye düşmek, Türkçe'ye düşmekten kıyaslanamaz derecede
- * daha az yanlış.
- */
-export function osDilindenDil(navigatorLanguage: string | undefined | null): Lang {
-  return (navigatorLanguage ?? '').toLowerCase().startsWith('tr') ? 'tr' : 'en';
 }
 
 export interface LangContextValue {
@@ -1478,11 +1451,12 @@ export interface LangContextValue {
 }
 
 export const LangContext = createContext<LangContextValue>({
-  lang: 'tr',
+  // Outside the provider (isolated renders, tests) follow the active language
+  // rather than a constant, so a component rendered alone speaks the same
+  // language as the rest of the app. The app itself always has the provider.
+  get lang() { return aktifDil(); },
   setLang: () => {},
-  // Provider'sız çizilen bileşenler (testler, workspace dışı dallar) de yer
-  // tutucu doldurabilmeli; ham `tr[k]` döndürmek `{ad}` bırakırdı.
-  t: (k, v) => ceviriUygula('tr', k, v),
+  t: (k, v) => ceviriUygula(aktifDil(), k, v),
 });
 
 export const useLang = () => useContext(LangContext);

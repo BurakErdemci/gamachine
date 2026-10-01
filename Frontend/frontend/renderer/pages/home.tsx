@@ -8,7 +8,7 @@ import {
   Code2, Activity, X, PanelRightClose,
   Zap, Code, Layout, MessageSquare, ArrowDown
 } from 'lucide-react';
-import { LangContext, aktifDilAyarla, ceviriUygula, osDilindenDil, type Lang, type TValues } from '../lib/i18n';
+import { LangContext, aktifDilAyarla, ceviriUygula, type Lang, type TValues } from '../lib/i18n';
 import { sohbetKilitliMi } from '../lib/providerGate';
 import { getUnsavedEditorContext } from '../lib/editor-context';
 import { contentPane } from '../lib/contentPane';
@@ -235,26 +235,23 @@ export default function Home() {
   }, [ipc, showToast]);
 
   // --- UI State ---
-  // Hydration uyumu: ilk render hem build/SSR hem istemcide DETERMINISTIK 'tr' olmalı.
-  // localStorage'ı render sırasında okumak (SSR 'tr' vs istemci 'en') hydration mismatch
-  // yaratıyordu ("Hoş geldin" vs "Welcome"). Bu yüzden kayıtlı dili mount SONRASI okuyoruz.
-  const [lang, setLangState] = useState<Lang>('tr');
+  // Hydration requires a deterministic 'en' render in both SSR and the client.
+  // Reading storage during render could make their translated text disagree,
+  // so the stored language is loaded only after mounting.
+  const [lang, setLangState] = useState<Lang>('en');
   useEffect(() => {
-    const stored = localStorage.getItem('app-lang') as Lang | null;
-    if (stored === 'tr' || stored === 'en') { setLangState(stored); return; }
-    // Kayıtlı tercih YOK → işletim sistemi dilinden türet. Eskiden burada hiçbir
-    // şey yapılmıyordu, yani dil sabit 'tr' kalıyordu ve İngilizce kullanıcı hem
-    // Türkçe arayüz hem Türkçe MODEL CEVABI alıyordu (gerekçe: osDilindenDil).
-    // Bilerek KAYDEDİLMİYOR: türetilmiş bir varsayımı kalıcı tercih gibi
-    // yazmak, kullanıcı OS dilini değiştirdiğinde onu eski dilde kilitlerdi.
-    setLangState(osDilindenDil(typeof navigator !== 'undefined' ? navigator.language : null));
+    try {
+      const stored = localStorage.getItem('app-lang');
+      setLangState(stored === 'tr' || stored === 'en' ? stored : 'en');
+    } catch {
+      setLangState('en');
+    }
   }, []);
+  useEffect(() => { document.documentElement.lang = lang; }, [lang]);
   const setLang = (l: Lang) => { setLangState(l); localStorage.setItem('app-lang', l); };
   const t = (key: string, degerler?: TValues) => ceviriUygula(lang, key, degerler);
-  // React ağacı DIŞINDAKİ tüketicilere (hook'lar, `gateResponse`, `ErrorBoundary`)
-  // aktif dili duyur. Gerekçesi `lib/i18n.tsx` → `aktifDil`: localStorage tek
-  // başına yetmiyor, çünkü işletim sistemi dilinden türetilen dil bilerek
-  // kaydedilmiyor. Render sırasında çağrılıyor (effect'te değil) çünkü ilk
+  // Announce state to non-React consumers before they render translated text.
+  // Storage alone cannot represent the initial English hydration state.
   // boyamadan önce bir toast üretilirse o da doğru dilde olmalı.
   aktifDilAyarla(lang);
 

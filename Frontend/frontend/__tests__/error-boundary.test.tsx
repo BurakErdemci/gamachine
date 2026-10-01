@@ -20,6 +20,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 
 import { ErrorBoundary } from '../renderer/components/ui/ErrorBoundary'
+import { aktifDilAyarla } from '../renderer/lib/i18n'
 
 const PATLAMA = 'getLineContent çağrısı geçersiz satır numarası aldı'
 
@@ -110,6 +111,9 @@ describe('ErrorBoundary — dil', () => {
     // Bu bileşen `LangContext`'i GÖREMİYOR (provider `home.tsx` içinde, sınır
     // onu saran katmanda). Dil bu yüzden localStorage'dan okunuyor; test o
     // yolun gerçekten çalıştığını ölçüyor, yoksa dil sessizce hep `tr` kalırdı.
+    // The test setup announces Turkish for out-of-provider renders; forget it
+    // so this test measures the storage path it is about.
+    aktifDilAyarla(null)
     localStorage.setItem('app-lang', 'en')
     render(
       <ErrorBoundary>

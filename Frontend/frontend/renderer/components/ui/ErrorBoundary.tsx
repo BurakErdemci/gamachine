@@ -24,14 +24,11 @@ import { aktifDil, ceviriUygula } from '../../lib/i18n';
  *   • Hata sınırı olabilmek için class component olmak zorunda (React yalnız
  *     class API'sinde `getDerivedStateFromError` sunuyor) ve class'ta hook
  *     çağrılamaz.
- *   • `LangContext.Provider` `_app.tsx`'te değil `home.tsx` İÇİNDE kuruluyor.
- *     Bu bileşen `home.tsx`'i saran katmanda duruyor, yani `contextType` ile
- *     bağlansa provider'ı göremez ve dil her zaman `tr` kalırdı — sessizce
- *     yanlış, ki bu hiç çevirmemekten kötü. Dil bu yüzden `aktifDil()`'den
- *     geliyor: `home.tsx` aktif dili her render'da oraya duyuruyor, kayıt
- *     yoksa `app-lang` anahtarına, o da yoksa `'tr'`e düşülüyor. Buraya ayrı
- *     bir okuyucu yazmak dilin ikinci bir kaynağını üretirdi — bu depodaki
- *     arızaların ortak biçimi tam olarak "uyuşması gereken iki yer uyuşmuyor".
+ *   • The language provider is inside `home.tsx`, below this boundary, so
+ *     context alone would always return its default. `aktifDil()` shares
+ *     the page's announced language and otherwise reads `app-lang`, falling
+ *     back to English ('en'). A separate reader would create a second source
+ *     of truth that could disagree with the page.
  */
 
 interface ErrorBoundaryProps {
@@ -118,9 +115,8 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     const { error } = this.state;
     if (!error) return this.props.children;
 
-    // Dili `aktifDil` veriyor: `home.tsx` her render'da onu güncelliyor, kayıt
-    // yoksa localStorage'a, o da yoksa `'tr'`e düşüyor (gerekçe lib/i18n.tsx).
-    // Kendi okuyucumuzu tutmak, dilin ikinci bir kaynağı olurdu.
+    // Reuse the page's announced language, then storage, then English ('en'),
+    // so the fallback does not introduce a second language source.
     const t = (k: string) => ceviriUygula(aktifDil(), k);
 
     return (

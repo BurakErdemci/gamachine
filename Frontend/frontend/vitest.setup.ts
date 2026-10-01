@@ -15,6 +15,7 @@
  * jsdom'un hangi sürümde neyi sağladığına bağlı değil.
  */
 import { beforeEach } from 'vitest'
+import { aktifDilAyarla } from './renderer/lib/i18n'
 
 const createStorage = (): Storage => {
   const map = new Map<string, string>()
@@ -45,10 +46,20 @@ if (typeof window !== 'undefined' && (window as unknown) !== globalThis) {
   install(window)
 }
 
+// Also at load time: some tests compute labels with `cevir()` at module scope,
+// before any beforeEach runs, and must agree with what the component renders.
+aktifDilAyarla('tr')
+
 // Testler arası sızıntıyı kapat: kalıcı KULLANICI TERCİHLERİ burada tutuluyor
 // (`generationMode`, dil), yani bir testin yazdığı anahtar bir sonrakinin
 // başlangıç varsayımını sessizce değiştirebilir.
 beforeEach(() => {
   globalThis.localStorage?.clear()
   globalThis.sessionStorage?.clear()
+  // Components rendered outside the app's provider used to fall back to
+  // Turkish, and the suite's copy assertions were written against that. The
+  // product default became English (2 Oct 2026); the out-of-provider fallback
+  // is pinned here so those renders keep their language, while `home.tsx`
+  // still sets its own language exactly as in the app.
+  aktifDilAyarla('tr')
 })
