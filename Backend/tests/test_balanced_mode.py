@@ -509,6 +509,74 @@ async def test_codex_balanced_inner_tree_write_or_glob_asks(balanced, ws, script
     assert ev is not None and ev["type"] == "command_approval_needed"
 
 
+@pytest.mark.parametrize("command", [
+    _CODEX_PS + "'Get-ChildItem'",
+    _CODEX_PS + "'Get-ChildItem -Name'",
+    _CODEX_PS + "'Get-Content a.txt'",
+    _CODEX_PS + "'Get-Content -Path Assets/A.cs'",
+    _CODEX_PS + "'rg -n pattern Assets'",
+    _CODEX_PS + "'cat a.txt'",
+    _CODEX_PS + "'Select-String -Pattern x -Path a.txt'",
+    _CODEX_PS + "'pwd'",
+    "/bin/bash -lc 'ls -la'",
+    "/bin/bash -lc 'grep -rn x src'",
+    "/bin/bash -lc 'cat a.txt'",
+    "/bin/bash -lc 'ls -R Assets'",
+])
+async def test_codex_balanced_plain_read_runs_without_a_card(balanced, ws, command):
+    assert await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                              {"command": command, "cwd": ws}) == ("accept", None)
+
+
+# Round 3 findings: each read went past the step grammar to action_risk,
+# which called it routine.
+@pytest.mark.parametrize("command", [
+    # PowerShell 5.1 recursion follows a workspace junction out (measured).
+    _CODEX_PS + "'Get-ChildItem -Recurse -Name'",
+    _CODEX_PS + "'dir -Recurse'",
+    _CODEX_PS + "'Get-ChildItem Assets -Recurse -File'",
+    _CODEX_PS + "'Get-ChildItem -Depth 2'",
+    _CODEX_PS + "'GCI -RECURSE'",
+    # An attached parameter value: action_risk reads one flag token.
+    _CODEX_PS + "'cat -Path.\\link\\secret.txt'",
+    _CODEX_PS + "'Get-Content -LiteralPath.\\link\\secret.txt'",
+    _CODEX_PS + "'cat -Pa.\\link\\secret.txt'",
+    _CODEX_PS + "'cat -PATH.\\link\\secret.txt'",
+    _CODEX_PS + "'Get-Content -Path:.\\link\\secret.txt'",
+    # Bash unescapes `.\.` to `..` (measured: real bash read the parent's file).
+    "/bin/bash -lc 'cat .\\./top.txt'",
+    "/bin/bash -lc 'ls .\\.'",
+    "/bin/bash -lc 'cat Assets/.\\./.\\./top.txt'",
+    "/bin/bash -lc 'grep x .\\./top.txt'",
+    "/bin/bash -lc 'tail -n 3 .\\./top.txt'",
+    "/bin/bash -lc 'wc -l .\\./top.txt'",
+    "/bin/bash -lc 'find .\\. -name top.txt'",
+    "/bin/zsh -lc 'cat .\\./top.txt'",
+    "/bin/bash -c 'cat .\\./top.txt'",
+    # Device names.
+    _CODEX_PS + "'Get-Content CON'",
+    _CODEX_PS + "'Get-Content NUL'",
+    _CODEX_PS + "'Get-Content COM1'",
+    _CODEX_PS + "'Get-Content PRN'",
+])
+async def test_codex_balanced_read_outside_the_step_grammar_asks(balanced, ws, command):
+    decision, ev = await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                                      {"command": command, "cwd": ws})
+    assert decision == "decline"
+    assert ev is not None and ev["type"] == "command_approval_needed"
+
+
+def test_classified_command_keeps_the_wrapper_unless_the_step_grammar_reads_it(ws):
+    from providers.codex_session import _classified_command
+
+    read = _CODEX_PS + "'Get-Content a.txt'"
+    assert _classified_command(read, ws, ws) == "Get-Content a.txt"
+    for raw in (_CODEX_PS + "'Get-ChildItem -Recurse'", _CODEX_PS + "'cat -Path.\\l\\x'",
+                "/bin/bash -lc 'cat .\\./x'"):
+        assert _classified_command(raw, ws, ws) == raw
+    assert _classified_command(_CODEX_PS + "'dotnet build'", ws, ws) == "dotnet build"
+
+
 @pytest.mark.parametrize("command,reason", [
     (_CODEX_PS + "'Remove-Item -Recurse Assets'", "shell_delete_move"),
     (_CODEX_PS + "'powershell -Command dotnet build'", "shell_inline_code"),

@@ -407,6 +407,21 @@ def test_anything_else_is_not_read_only(ws, command):
     "/bin/bash -lc 'ls -lX'",
     "/bin/bash -lc 'grep -R x Assets'",
     "/bin/bash -lc 'find Assets -type l'",
+    # Round 3: an attached value through a junction, and bash reading `.\.`
+    # as `..` (measured: real bash read the parent's file).
+    _PS + "'cat -Path.\\link\\secret.txt'",
+    _PS + "'Get-Content -LiteralPath.\\link\\secret.txt'",
+    _PS + "'cat -Pa.\\link\\secret.txt'",
+    _PS + "'cat -PATH.\\link\\secret.txt'",
+    "/bin/bash -lc 'cat .\\./top.txt'",
+    "/bin/bash -lc 'ls .\\.'",
+    "/bin/bash -lc 'cat Assets/.\\./.\\./top.txt'",
+    "/bin/bash -lc 'grep x .\\./top.txt'",
+    "/bin/bash -lc 'tail -n 3 .\\./top.txt'",
+    "/bin/bash -lc 'wc -l .\\./top.txt'",
+    "/bin/bash -lc 'find .\\. -name top.txt'",
+    "/bin/zsh -lc 'cat .\\./top.txt'",
+    "/bin/bash -c 'cat .\\./top.txt'",
 ])
 def test_an_attached_or_unknown_option_is_not_read_only(ws, command):
     assert _is_read_only_command(command, ws, ws) is False

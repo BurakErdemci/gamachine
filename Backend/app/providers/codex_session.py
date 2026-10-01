@@ -271,7 +271,8 @@ def _risk_actions(method: str, params: dict, file_changes, workspace: str) -> li
     if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
         cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else ""
         return [{"kind": "shell",
-                 "command": _classified_command(params.get("command")),
+                 "command": _classified_command(params.get("command"), params.get("cwd"),
+                                                workspace),
                  "cwd": cwd or workspace, "workspace": workspace}]
     if method == "item/fileChange/requestApproval":
         actions = []
@@ -505,20 +506,31 @@ def _shell_script(command: str) -> "tuple[Optional[str], bool]":
     return inner, powershell
 
 
-def _classified_command(command) -> str:
+def _classified_command(command, cwd, workspace: str) -> str:
     """The text action_risk classifies: the wrapped script when it can be read
     safely, else the raw string, whose wrapper action_risk calls inline code.
 
     The `_UNSAFE_INNER` forms stay wrapped: action_risk resolves
     `cat '..\\x'` and `cat {..,x}/f` inside the workspace (measured: routine),
     while PowerShell strips the quotes and bash expands the braces.
+    A read verb is unwrapped only when the step read grammar accepts it:
+    action_risk called `gci -Recurse` (follows a junction out) and
+    `cat -Path.\\link\\x` (one flag token to it) routine (round 3).
     """
     raw = _command_text(command)
     script, _ = _shell_script(raw)
     if (not script or not _CLASSIFIABLE_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script)
             or _CLASSIFY_RAW.search(script) or _tree_writes(script)):
         return raw
+    if _first_verb(script) in _READ_VERBS and not _is_read_only_command(raw, cwd, workspace):
+        return raw
     return script
+
+
+def _first_verb(script: str) -> str:
+    words = script.split()
+    name = re.split(r"[\\/]", words[0])[-1].lower() if words else ""
+    return name.removesuffix(".exe")
 
 
 # action_risk called `cat lin*\x` routine (the literal pattern stays in the
