@@ -92,7 +92,9 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     current.current = stored
     setState(stored)
     applyAppearance(stored)
-    applyZoom(stored.textSize)
+    // 'normal' is the window's own zoom; resetting it on every launch would
+    // undo a zoom the user set with the View menu (Ctrl+/-).
+    if (stored.textSize !== 'normal') applyZoom(stored.textSize)
   }, [])
 
   const setAppearance = useCallback((partial: Partial<Appearance>) => {
