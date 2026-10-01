@@ -1,5 +1,4 @@
 import React from 'react';
-import { ShieldAlert } from 'lucide-react';
 import { useLang, translations, type Lang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
 
@@ -17,8 +16,10 @@ interface RiskReasonLineProps {
 }
 
 /**
- * "Critical: <why>" on an approval card that balanced mode raised. Renders
- * nothing without a reason, so cards from auto/step look exactly as before.
+ * "Critical: <why>" on an approval card that balanced mode raised, drawn as the mockup's risk
+ * line (`.approval-why` with `.risk` bars). Every reason balanced mode raises is a critical one,
+ * so the bars read level 3 of 3. Renders nothing without a reason, so cards from auto/step look
+ * exactly as before. The test id sits on the sentence alone: the bars are decoration.
  */
 export const RiskReasonLine: React.FC<RiskReasonLineProps> = ({ reason, detail, className = '' }) => {
   const { lang, t } = useLang();
@@ -27,16 +28,16 @@ export const RiskReasonLine: React.FC<RiskReasonLineProps> = ({ reason, detail, 
   // gets the same bidi cleanup as the command itself.
   const shownDetail = detail ? stripBidi(detail) : '';
   return (
-    <div
-      data-testid="risk-reason"
-      className={`flex items-start gap-1.5 text-[11px] leading-snug text-amber-300 ${className}`}
-    >
-      <ShieldAlert size={12} className="mt-px shrink-0" />
-      <span className="min-w-0 break-words">
-        <span className="font-bold">{t('risk.label')}</span>{' '}
-        {stripBidi(riskReasonLabel(lang, reason))}
-        {shownDetail && <span className="font-mono text-amber-200/80"> — {shownDetail}</span>}
+    <p className={`approval-why ${className}`.trim()}>
+      <span className="risk" data-level="3" role="img" aria-label={t('card.riskHigh')}>
+        <span className="risk-k" aria-hidden="true">{t('card.risk')}</span><i /><i /><i />
       </span>
-    </div>
+      <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l7.5 13h-15z" /><path d="M10 8v3.6M10 13.6v.2" /></svg>
+      <span data-testid="risk-reason" className="risk-text">
+        <b>{t('risk.label')}</b>{' '}
+        {stripBidi(riskReasonLabel(lang, reason))}
+        {shownDetail && <span className="risk-detail"> — {shownDetail}</span>}
+      </span>
+    </p>
   );
 };
