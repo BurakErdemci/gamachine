@@ -54,6 +54,9 @@ class PendingPair:
     created: float
     expires: float
     timer: Any = field(default=None, repr=False)
+    # The PC's relay socket dropped; the next welcome says whether the
+    # pairing socket is still there.
+    awaiting_relay: bool = False
 
     def public(self) -> dict:
         # The SAS is always part of what the desktop shows: it is the defence
@@ -202,13 +205,27 @@ class PairingManager:
             if pending.timer is not None:
                 pending.timer.cancel()
 
+    def await_relay(self) -> None:
+        """The PC's relay socket dropped. The pending approval stays: the relay
+        may keep the pairing socket (a half-open PC socket replaced) and list
+        it again in the next welcome, and the offer is already spent."""
+        if self.pending is not None:
+            self.pending.awaiting_relay = True
+
+    def awaiting_relay(self) -> bool:
+        return self.pending is not None and self.pending.awaiting_relay
+
     def drop_pending_unless_live(self, live: Container[str]) -> bool:
         """Forget a pending approval whose pairing socket is not in `live`.
         When the PC's relay socket drops, the relay closes the pairing sockets
-        itself and no `pair_close` ever reaches us, so this is the only way such
-        a pending ends before its timer. Nothing is sent: no socket to hear it."""
+        itself and no `pair_close` ever reaches us, so a welcome without the
+        socket is the only way such a pending ends before its timer. Nothing
+        is sent: no socket to hear it."""
         pending = self.pending
-        if pending is None or pending.conn in live:
+        if pending is None:
+            return False
+        if pending.conn in live:
+            pending.awaiting_relay = False
             return False
         self.on_socket_gone(pending.conn)
         return True

@@ -61,6 +61,7 @@ const ERROR_KEYS: Record<string, TKey> = {
   relay_unreachable: 'remote.err.relayUnreachable',
   no_pending_pairing: 'remote.err.noPending',
   phone_left: 'remote.err.phoneLeft',
+  relay_reconnecting: 'remote.err.relayReconnecting',
   bad_relay_url: 'remote.err.badRelayUrl',
   unknown_device: 'remote.err.unknownDevice',
 };

@@ -304,11 +304,47 @@ async def _assert_no_pending(env):
     assert (exc.value.code, exc.value.status) == ("no_pending_pairing", 404)
 
 
-async def test_pending_pairing_ends_when_the_relay_connection_drops(env):
+async def test_pending_pairing_waits_for_the_relay_when_the_connection_drops(env):
+    # The relay may keep the pairing socket and list it in the next welcome;
+    # the offer is spent, so dropping the pending here would kill the QR.
     _, _, task = await _waiting_phone(env)
     await env.bridge._on_disconnect()
+    assert env.bridge.pending_pairing() is not None
+    with pytest.raises(BridgeError) as exc:
+        await env.bridge.approve_pairing()
+    assert (exc.value.code, exc.value.status) == ("relay_reconnecting", 503)
+    assert env.bridge.pending_pairing() is not None, "a refused approve does not consume it"
+    task.cancel()
+
+
+async def test_pending_pairing_ends_on_a_welcome_after_a_drop_without_its_socket(env):
+    _, _, task = await _waiting_phone(env)
+    await env.bridge._on_disconnect()
+    await env.bridge._on_relay({"type": "welcome", "phones": [], "pairs": [], "tokens": 0})
     await _assert_no_pending(env)
     task.cancel()
+
+
+async def test_pending_pairing_is_approvable_after_a_welcome_that_lists_its_socket_again(env):
+    _, _, task = await _waiting_phone(env)
+    conn = env.bridge.pairing.pending.conn
+    await env.bridge._on_disconnect()
+    await env.bridge._on_relay({"type": "welcome", "phones": [], "pairs": [{"conn": conn, "ip": "x"}],
+                                "tokens": 0})
+    assert env.bridge.pending_pairing() is not None
+    await env.bridge.approve_pairing()
+    assert "ok" in await asyncio.wait_for(task, 5)
+
+
+async def test_pending_pairing_survives_a_half_open_pc_socket_being_replaced(env):
+    # End to end: the PC's socket dies without the relay noticing, the PC
+    # reconnects and replaces it, and the pairing socket stayed open.
+    _, _, task = await _waiting_phone(env)
+    await env.relay.drop_pc_half_open(env.bridge.keys.pair_id)
+    await until(lambda: env.relay.pc_connects == 2 and env.bridge.client.connected)
+    assert env.bridge.pending_pairing() is not None
+    await env.bridge.approve_pairing()
+    assert "ok" in await asyncio.wait_for(task, 5)
 
 
 async def test_pending_pairing_ends_on_a_welcome_without_its_socket(env):

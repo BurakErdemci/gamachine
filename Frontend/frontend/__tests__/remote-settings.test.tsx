@@ -151,6 +151,25 @@ describe('remote settings · pairing', () => {
     expect(screen.queryByTestId('remote-qr')).toBeNull()
   })
 
+  it('an approve refused while the computer reconnects keeps the request to approve again', async () => {
+    backend.enabled = true; backend.connected = true
+    backend.failures['pair-approve'] = 'relay_reconnecting'
+    section()
+    await waitFor(() => expect((screen.getByTestId('remote-pair') as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByTestId('remote-pair'))
+    await screen.findByTestId('remote-qr')
+    backend.pending = { device_name: 'iPhone', sas: '7314', source: 'qr', expires_at: Date.now() + 60_000 }
+    await screen.findByTestId('remote-sas')
+    fireEvent.click(screen.getByTestId('remote-approve'))
+    await waitFor(() => expect(screen.getByTestId('remote-error').textContent)
+      .toBe('Bilgisayarın bağlantısı yenileniyor, birkaç saniye sonra tekrar onayla.'))
+    expect(screen.getByTestId('remote-sas').textContent).toBe('7314')
+
+    delete backend.failures['pair-approve']
+    fireEvent.click(screen.getByTestId('remote-approve'))
+    await waitFor(() => expect(screen.getByTestId('remote-note').textContent).toBe('iPhone eşleşti.'))
+  })
+
   it('a refused start shows the reason in the app language', async () => {
     backend.enabled = true; backend.connected = true
     backend.failures['pair-start'] = 'relay_unreachable'

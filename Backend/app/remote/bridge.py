@@ -223,6 +223,12 @@ class RemoteBridge:
         return self.pairing.pending_public()
 
     async def approve_pairing(self) -> dict:
+        # Checked before take_pending: the pending must survive until the
+        # welcome says whether its pairing socket is still there.
+        if self.pairing.pending_public() is not None and self.client is not None and (
+                self.pairing.awaiting_relay() or not self.client.connected):
+            logger.info("[remote] approve refused: relay reconnecting")
+            raise BridgeError("relay_reconnecting", 503)
         pending = self.pairing.take_pending()
         if pending is None:
             logger.info("[remote] approve refused: no pending pairing")
@@ -304,7 +310,7 @@ class RemoteBridge:
 
     async def _on_disconnect(self) -> None:
         self._drop_connections("disconnect")
-        self._drop_stale_pending("disconnect")
+        self.pairing.await_relay()
 
     async def _on_relay(self, m: dict) -> None:
         mtype = m.get("type")

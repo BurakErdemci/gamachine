@@ -207,6 +207,13 @@ class FakeRelay:
         if room is not None and room.pc is not None:
             await room.pc.close(1011, "dropped by test")
 
+    async def drop_pc_half_open(self, pair_id: str):
+        """The PC's socket dies without the relay noticing: the PC's reconnect
+        replaces it, and the pairing sockets stay open throughout."""
+        room = self.rooms[pair_id]
+        ws, room.pc = room.pc, _HalfOpenPc()
+        await ws.close(1011, "half-open")
+
     # ── phones ──────────────────────────────────────────────────────────
     async def _phone(self, ws, pair_id):
         room = self.rooms[pair_id]
@@ -268,6 +275,16 @@ async def _quiet_send(ws, text):
     try:
         await ws.send(text)
     except Exception:
+        pass
+
+
+class _HalfOpenPc:
+    """The relay's view of a PC socket that died without a close."""
+
+    async def send(self, text):
+        pass
+
+    async def close(self, code=1000, reason=""):
         pass
 
 
