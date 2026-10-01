@@ -33,6 +33,7 @@ export const CLOSE = {
   roomExpired: 4007,
   noRoom: 4008,
   unknownToken: 4009,
+  tokensPending: 4010,
 };
 
 const PING = '{"type":"ping"}';
@@ -133,7 +134,9 @@ export class Room {
       try { old.close(CLOSE.replaced, 'replaced'); } catch {}
     }
     const conn = randomId();
-    const { server, response } = this.accept(['pc'], { role: 'pc', conn }, request);
+    // synced: this PC has sent register_tokens with replace:true, so the
+    // token list is its own and an unknown token is really unknown.
+    const { server, response } = this.accept(['pc'], { role: 'pc', conn, synced: false }, request);
     const phones = [];
     const pairs = [];
     for (const s of this.sockets()) {
@@ -155,7 +158,11 @@ export class Room {
     const hash = token && SECRET_RE.test(token) ? await sha256b64u(token) : null;
     const meta = await this.load();
     if (meta.lastPc === null) return plain(404, 'not found');
-    if (!hash || !meta.tokens.some((t) => equalStrings(t, hash))) return this.refuseUnknownToken(request);
+    if (!hash || !meta.tokens.some((t) => equalStrings(t, hash))) {
+      const pc = this.pcSocket();
+      if (hash && pc && !pc.deserializeAttachment()?.synced) return this.refuseTokensPending(request);
+      return this.refuseUnknownToken(request);
+    }
     const conn = randomId();
     const { server, response } = this.accept(['phone', 'tok:' + hash], { role: 'phone', conn, tokenHash: hash }, request);
     const pc = this.pcSocket();
@@ -202,11 +209,21 @@ export class Room {
 
   // Same reason as refuseNoRoom: a refused upgrade reaches the page as a bare
   // close, so a phone revoked while offline could not tell it from a network
-  // drop and retried forever. Not final on its own: right after a room is
-  // recreated the PC may not have registered its tokens yet.
+  // drop and retried forever. Sent when the connected PC has replaced the
+  // list, or no PC is connected; the page still waits for several in a row
+  // (net.js), since with the PC away the stored list may be a stale one.
   refuseUnknownToken(request) {
     const { server, response } = this.accept(['none'], { role: 'none' }, request);
     server.close(CLOSE.unknownToken, 'unknown_token');
+    return response;
+  }
+
+  // The connected PC has not replaced the token list yet (recreated room, or
+  // its registration failed or is late), so the token may still be valid:
+  // a non-final close the phone just retries.
+  refuseTokensPending(request) {
+    const { server, response } = this.accept(['none'], { role: 'none' }, request);
+    server.close(CLOSE.tokensPending, 'tokens_pending');
     return response;
   }
 
@@ -286,6 +303,8 @@ export class Room {
         meta.tokens = next;
         await this.ctx.storage.put('tokens', next);
         if (m.replace) {
+          const att = pc.deserializeAttachment();
+          if (att && !att.synced) pc.serializeAttachment({ ...att, synced: true });
           for (const s of this.sockets('phone')) {
             const a = s.deserializeAttachment();
             if (!next.includes(a.tokenHash)) s.close(CLOSE.tokenDropped, 'token_dropped');

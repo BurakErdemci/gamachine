@@ -206,7 +206,7 @@ test('pairing, handshake, encrypted RPC and token drop through the real relay', 
   assert.equal(verified.sas, phoneSas, 'both screens show the same code');
   const deviceId = N.enc(randomBytes(16));
   const token = N.enc(randomBytes(32));
-  pc.send({ type: 'register_tokens', hashes: [N.enc(N.sha256(Buffer.from(token)))] });
+  pc.send({ type: 'register_tokens', hashes: [N.enc(N.sha256(Buffer.from(token)))], replace: true });
   await pc.next((m) => m.type === 'tokens_ok');
   pc.send({ type: 'to', conn: opened.conn, data: JSON.stringify(N.pcPairOk(verified.kPair, { device_id: deviceId, token, vapid_pub: 'x' })) });
   const paired = await pairing;

@@ -72,9 +72,17 @@ function assertUnknownToken(r, message) {
   assert.deepEqual(r.sock.closed, { code: CLOSE.unknownToken, reason: 'unknown_token' }, message);
 }
 
+// Same shape, non-final: the connected PC has not replaced its token list yet.
+function assertTokensPending(r, message) {
+  assert.equal(r.status, 101, message);
+  assert.deepEqual(r.sock.sent, [], message);
+  assert.deepEqual(r.sock.closed, { code: CLOSE.tokensPending, reason: 'tokens_pending' }, message);
+}
+
+// The bridge answers every welcome with the exact list (replace:true).
 async function pcWithToken(env, tokens = [TOKEN]) {
   const pc = await pcOpen(env);
-  await msg(env, pc.sock, JSON.stringify({ type: 'register_tokens', hashes: tokens.map(hash) }));
+  await msg(env, pc.sock, JSON.stringify({ type: 'register_tokens', hashes: tokens.map(hash), replace: true }));
   pc.sock.take();
   return pc.sock;
 }
@@ -101,10 +109,12 @@ test('phones are turned away unless their token hash is registered', async () =>
   const env = makeEnv();
   assert.equal((await phoneOpen(env)).status, 404, 'room does not exist yet');
   const pc = await pcOpen(env);
+  await msg(env, pc.sock, JSON.stringify({ type: 'register_tokens', hashes: [], replace: true }));
   assertUnknownToken(await phoneOpen(env), 'token not registered');
   assertUnknownToken(await open(env, 'phone', ['gamachine.v1']), 'no token');
   assertUnknownToken(await phoneOpen(env, 'short'), 'malformed token');
-  assert.deepEqual(pc.sock.take().filter((m) => m.type !== 'welcome'), [], 'the PC hears nothing of a refused phone');
+  assert.deepEqual(pc.sock.take().filter((m) => m.type !== 'welcome' && m.type !== 'tokens_ok'), [],
+    'the PC hears nothing of a refused phone');
   await msg(env, pc.sock, JSON.stringify({ type: 'register_tokens', hashes: [hash(TOKEN)] }));
   assert.deepEqual(pc.sock.last(), { type: 'tokens_ok', count: 1 });
   assertUnknownToken(await phoneOpen(env, TOKEN2), 'other token');
@@ -114,6 +124,32 @@ test('phones are turned away unless their token hash is registered', async () =>
   assert.equal(open1.type, 'phone_open');
   assert.equal(open1.token_hash, hash(TOKEN));
   assert.match(open1.conn, /^[A-Za-z0-9_-]{11}$/);
+});
+
+test('an unknown token is pending until the connected PC replaces its token list', async () => {
+  const env = makeEnv();
+  // A recreated room: the PC is connected but its register_tokens has not landed.
+  let pc = (await pcOpen(env)).sock;
+  assertTokensPending(await phoneOpen(env), 'before the PC replaced the list');
+  assertUnknownToken(await phoneOpen(env, 'short'), 'a malformed token is never pending');
+  await msg(env, pc, JSON.stringify({ type: 'register_tokens', hashes: [hash(TOKEN2)] }));
+  assertTokensPending(await phoneOpen(env), 'an additive register is not the PC list');
+  env.ROOM.hibernate(PAIR);
+  assertTokensPending(await phoneOpen(env), 'the flag lives in the socket attachment');
+
+  await msg(env, pc, JSON.stringify({ type: 'register_tokens', hashes: [hash(TOKEN2)], replace: true }));
+  assertUnknownToken(await phoneOpen(env), 'after replace');
+  env.ROOM.hibernate(PAIR);
+  assertUnknownToken(await phoneOpen(env), 'after replace and a hibernation');
+
+  await hangup(env, pc);
+  assertUnknownToken(await phoneOpen(env), 'PC away: the stored list answers');
+
+  pc = (await pcOpen(env)).sock;
+  assertTokensPending(await phoneOpen(env), 'a new PC connection starts unsynced');
+  await msg(env, pc, JSON.stringify({ type: 'register_tokens', hashes: [hash(TOKEN)], replace: true }));
+  assert.equal((await phoneOpen(env)).status, 101);
+  assertUnknownToken(await phoneOpen(env, TOKEN2), 'dropped by the replace');
 });
 
 test('frames pass through unchanged in both directions', async () => {

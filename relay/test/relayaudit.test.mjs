@@ -181,7 +181,7 @@ test('phone route needs the page origin; PC route refuses any browser origin', a
   assert.equal((await open(env, 'phone', id, { credential: tok, origin: 'http://relay.test' })).status, 403, 'scheme is part of the origin');
   const reached = await open(env, 'phone', id, { credential: tok });
   assert.equal(reached.status, 101, 'right origin reaches the token check');
-  assert.equal(reached.sock.closed.code, CLOSE.unknownToken);
+  assert.equal(reached.sock.closed.code, CLOSE.tokensPending, 'the PC has not sent its token list');
 });
 
 test('pairing into a room that does not exist: told so, closed, no quota spent', async () => {

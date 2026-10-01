@@ -12,7 +12,7 @@ import {
   slashItems, filterSlash, withCommand, slashFailureNote, SLASH_SHOWN_MAX,
   APPROVAL_MODES, AUTO_MODE_WARNING, modeInfo, modeChangedNote, modeFailureNote,
   messageText, mergeChat, stopLine, ASK_ON_PC, cardsMissing, CLOSE_UNKNOWN_TOKEN, UNKNOWN_TOKEN_FINAL,
-  UNKNOWN_TOKEN_GRACE_MS,
+  UNKNOWN_TOKEN_GRACE_MS, CLOSE_TOKENS_PENDING,
 } from '../public/net.js';
 import { readFileSync, existsSync } from 'node:fs';
 
@@ -843,6 +843,43 @@ test('unknown token: a frame or another close code in between restarts the strea
   clock.advance(UNKNOWN_TOKEN_GRACE_MS);
   await closeWith(CLOSE_UNKNOWN_TOKEN);
   assert.equal(removed(), true);
+});
+
+test('tokens pending (4010) never removes the phone and restarts the 4009 streak', async (t) => {
+  assert.equal(CLOSE_TOKENS_PENDING, 4010);
+  const clock = shiftedClock(t);
+  const { link, statuses, closeWith, removed } = await unpaired();
+  for (let i = 0; i < 10; i++) {
+    await closeWith(CLOSE_TOKENS_PENDING);
+    clock.advance(UNKNOWN_TOKEN_GRACE_MS);
+  }
+  assert.equal(removed(), false);
+  assert.equal(link.stopped, false);
+  assert.equal(statuses.at(-1)[0], 'connecting');
+
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  clock.advance(UNKNOWN_TOKEN_GRACE_MS);
+  await closeWith(CLOSE_TOKENS_PENDING);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), false, 'only 4009s after the PC list is in place count');
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  clock.advance(UNKNOWN_TOKEN_GRACE_MS);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), true);
+});
+
+test('tokens pending backs off like any retry', async () => {
+  const { link } = await unpaired();
+  for (let i = 1; i <= 3; i++) {
+    const ws = FakeWS.last;
+    ws.closed = true;
+    ws.onclose({ code: CLOSE_TOKENS_PENDING });
+    assert.equal(link.attempt, i);
+    clearTimeout(link.retryTimer);
+    link.connect();
+    await tick();
+  }
 });
 
 test('unknown token: a recreated room whose tokens arrive after three closes keeps the phone', async () => {

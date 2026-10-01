@@ -169,13 +169,17 @@ are final; 4007 room expired is not (the PC may come back and register the
 token again). A phone that was offline when it was removed learns it on its
 next connect: the relay accepts a socket with an unknown or missing token and
 closes it with 4009 `unknown_token` (a refused upgrade reaches a browser as a
-bare close, the same as a network drop). One 4009 is not final, because a
-recreated room refuses every token until the PC registers them again, and its
-`register_tokens` can land seconds later while the first retries come about a
-second apart. Removal is final after at least three 4009 closes in a row with
-no frame between them, at least 30 s after the first of them
-(`UNKNOWN_TOKEN_GRACE_MS`); any frame or any other close code starts the count
-again. The retry backoff resets on a received frame, not on open, so the
+bare close, the same as a network drop). While the connected PC has not yet
+replaced its token list on this connection (`register_tokens` with
+`replace:true`, which the bridge sends on every `welcome`), an unknown token
+is closed with 4010 `tokens_pending` instead: a recreated room, or a
+registration that failed or is late, then cannot cost a valid pairing. 4010
+is never final; the page retries with the normal backoff. One 4009 is not
+final either, because with the PC away the stored list may be stale. Removal
+is final after at least three 4009 closes in a row with no frame between
+them, at least 30 s after the first of them (`UNKNOWN_TOKEN_GRACE_MS`); any
+frame or any other close code, 4010 included, starts the count again, so a
+streak never spans a PC that had not sent its list yet. The retry backoff resets on a received frame, not on open, so the
 refused sockets back off normally. On a final close, and on
 `hello_reject` with reason `unknown_device` (not `clock`), the page deletes its
 stored pairing, unsubscribes from push and shows the pairing screen. Full

@@ -70,10 +70,15 @@ this code" apart from "too many attempts". It counts against no limit.
 Likewise a phone socket whose token is missing or not registered is accepted
 and closed with 4009 (nothing is sent and the PC hears nothing of it): with a
 plain 401 the page could not tell a removed phone from a network drop and
-retried forever. Right after a room is recreated the PC has not registered
-its tokens yet, so the page takes removal as final only after three 4009
-closes in a row with no frame between them, spread over at least 30 s
-(`UNKNOWN_TOKEN_GRACE_MS` in `public/net.js`).
+retried forever. While the connected PC has not yet sent `register_tokens`
+with `replace:true` on this connection (a recreated room, or a registration
+that failed or is late), an unknown well-formed token is closed with 4010
+`tokens_pending` instead: not final, the page just retries. The flag lives in
+the PC socket's attachment, so it survives hibernation, and every new PC
+connection starts without it. With the PC away the stored list answers 4009,
+which may be stale, so the page still takes removal as final only after three
+4009 closes in a row with no frame or other close code between them, spread
+over at least 30 s (`UNKNOWN_TOKEN_GRACE_MS` in `public/net.js`).
 
 The PC connects before it shows the QR code, so the room exists when the phone
 scans it. A new PC connection with the right key replaces the old one (close 4000).
@@ -134,7 +139,9 @@ over 64 KiB from a phone, second pairing request), 4005 PC offline during
 pairing, 4006 room reset, 4007 room deleted after 30 days without the PC
 (phones keep retrying), 4008 no such room (pairing socket), 4009 unknown or
 missing phone token (the page forgets its pairing after three in a row over
-at least 30 s).
+at least 30 s), 4010 phone token not known yet because the connected PC has
+not replaced its token list on this connection (phones keep retrying; it
+restarts the 4009 count).
 
 Frame limits count UTF-8 bytes, not characters: 64 KiB for a phone or pairing
 frame (the socket is closed with 4004), 1 MiB for a PC frame (answered with

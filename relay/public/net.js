@@ -16,6 +16,10 @@ export const CLOSE_UNKNOWN_TOKEN = 4009;
 // first retries come about a second apart.
 export const UNKNOWN_TOKEN_FINAL = 3;
 export const UNKNOWN_TOKEN_GRACE_MS = 30_000;
+// The connected PC has not replaced its token list yet, so the token may still
+// be valid. Never final; like any other code it restarts the 4009 streak, so a
+// streak never spans a PC that had not sent its list yet.
+export const CLOSE_TOKENS_PENDING = 4010;
 const PAIR_TIMEOUT_MS = 330_000; // pair_secret lives 5 min on the PC
 const REQUEST_TIMEOUT_MS = 20_000;
 // The bridge cuts replies over ~700 KB of plaintext into parts (docs/remote-control.md,
