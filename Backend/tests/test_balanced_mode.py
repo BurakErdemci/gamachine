@@ -409,6 +409,19 @@ async def _codex_drive(session, method, params):
     return await asyncio.wait_for(task, timeout=2), ev
 
 
+@pytest.mark.parametrize("verb", ["ll", "la"])
+@pytest.mark.parametrize("method,as_argv", [
+    ("item/commandExecution/requestApproval", False),
+    ("execCommandApproval", True),
+], ids=["string", "argv"])
+async def test_codex_balanced_listing_aliases_raise_a_card(balanced, ws, verb, method, as_argv):
+    command = f"{verb} -L -R Assets"
+    decision, ev = await _codex_drive(_codex(ws), method, {
+        "command": command.split() if as_argv else command, "cwd": ws})
+    assert decision == "decline"
+    assert ev is not None and ev["type"] == "command_approval_needed"
+
+
 async def test_codex_balanced_routine_is_accepted_without_a_card(balanced, ws):
     s = _codex(ws)
     assert await _codex_drive(s, "item/commandExecution/requestApproval",

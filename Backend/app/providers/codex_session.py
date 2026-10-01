@@ -342,6 +342,7 @@ _CLASSIFIABLE_SCRIPT = re.compile(r"[\x20-\x2b\x2d-\x7e]*")
 # not reads of that kind (git diff/show can run a repo's diff drivers).
 _READ_VERBS = {
     "get-childitem": "ls", "gci": "ls", "dir": "ls", "ls": "ls",
+    "ll": "ls", "la": "ls",
     "get-content": "cat", "gc": "cat", "type": "cat", "cat": "cat",
     "get-location": "pwd", "gl": "pwd", "pwd": "pwd",
     "select-string": "cat", "sls": "cat",

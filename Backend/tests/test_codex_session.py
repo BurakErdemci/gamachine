@@ -656,6 +656,18 @@ async def test_step_mode_accepts_a_read_only_command_without_a_card(ws):
     assert (decision, ev) == ("accept", None)
 
 
+@pytest.mark.parametrize("verb", ["ll", "la"])
+async def test_step_mode_cards_a_wrapped_listing_alias(ws, verb):
+    from providers.codex_session import _classified_command
+
+    command = "/" + f"bin/bash -lc '{verb}'"
+    assert _is_read_only_command(command, ws, ws) is False
+    decision, ev = await _drive(_session(ws), _CMD, {"command": command, "cwd": ws})
+    assert ev is not None and ev["type"] == "command_approval_needed"
+    assert decision == "decline"
+    assert _classified_command(command, ws, ws) == command
+
+
 async def test_step_mode_cards_a_read_outside_the_workspace(ws, tmp_path_factory):
     outside = str(tmp_path_factory.mktemp("outside"))
     decision, ev = await _drive(_session(ws), _CMD,
