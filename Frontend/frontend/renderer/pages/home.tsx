@@ -44,7 +44,8 @@ import { SidebarToggle } from '../components/home/AwaitingBadge';
 import { RemoteBadge, useRemoteStatus } from '../components/home/RemoteBadge';
 import { ModeChip } from '../components/home/ModeChip';
 import { modelFamily } from '../lib/modelFamily';
-import { useRemoteEffort } from '../lib/remoteControl';
+import { useRemoteEffort, useRemoteUi } from '../lib/remoteControl';
+import { useAppearance } from '../lib/appearance';
 import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
 import { useNewChatShortcut } from '../lib/newChatShortcut';
 import { useTurnDone } from '../lib/turnDone';
@@ -298,6 +299,7 @@ export default function Home() {
     levels: effortCaps?.levels ?? null, ultracode: isClaudeSub && ultracode,
     setLevel: chooseEffort, showToast,
   });
+  useRemoteUi({ api: API, token: auth.user?.sessionToken, lang, theme: useAppearance().appearance.theme });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   // The right column is the workspace (editor, previews, terminal) since the v4 column swap; the
   // chat is the main stage and is never hidden. TODO(P3): the dar / yarim / odak width modes.

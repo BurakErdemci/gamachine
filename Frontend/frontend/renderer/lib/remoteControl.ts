@@ -10,6 +10,7 @@ import { useEffect, useRef } from 'react';
 import axios from 'axios';
 import { cevir, type TKey } from './i18n';
 import { stripBidi } from './modelText';
+import type { Theme } from './appearance';
 
 export interface RemoteStatus {
   enabled: boolean;
@@ -417,6 +418,26 @@ export function deliverEffortRequest(request: EffortRequest): void {
 /** Also the retry after a backend that was not up yet or restarted, which
  *  forgets the snapshot: the backend ignores a report that changes nothing. */
 export const EFFORT_REPORT_EVERY_MS = 30_000;
+
+export interface RemoteUiOptions {
+  api: string | undefined;
+  token: string | undefined;
+  lang: 'tr' | 'en';
+  theme: Theme;
+}
+
+export function useRemoteUi({ api, token, lang, theme }: RemoteUiOptions): void {
+  useEffect(() => {
+    if (!api || !token) return;
+    const report = () => {
+      axios.put(`${api}/remote/desktop-ui`, { lang, theme },
+        { headers: { 'X-Session-Token': token } }).catch(() => {});
+    };
+    report();
+    const timer = setInterval(report, EFFORT_REPORT_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [api, token, lang, theme]);
+}
 
 export interface RemoteEffortOptions {
   api: string | undefined;
