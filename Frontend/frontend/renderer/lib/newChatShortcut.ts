@@ -8,6 +8,12 @@ import { useEffect } from 'react';
  * conversation), on key auto-repeat while held, inside a rename input or Monaco's textarea,
  * and behind an open modal. Each of those cases is ignored here; the event is left untouched
  * (no preventDefault) so the focused widget still gets its own Ctrl+N.
+ *
+ * The one text field it does fire from is the composer: the user is usually typing there when
+ * they want a fresh chat, and Ctrl+N means nothing to a plain textarea. A blanket TEXTAREA guard
+ * made the shortcut work only with nothing focused (P2 audit). The side question panel is a
+ * `role="dialog"`, so while it is open the modal guard below still blocks the shortcut, even
+ * from the composer: the panel owns the keyboard then.
  */
 export function isNewChatShortcut(e: KeyboardEvent): boolean {
   if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return false;
@@ -16,9 +22,10 @@ export function isNewChatShortcut(e: KeyboardEvent): boolean {
 
   const target = e.target instanceof Element ? e.target : null;
   if (target) {
-    if (target.closest('.xterm')) return false;
+    if (target.closest('.xterm') || target.closest('.monaco-editor')) return false;
     const tag = target.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return false;
+    const inComposer = tag === 'TEXTAREA' && !!target.closest('.composer');
+    if (!inComposer && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return false;
     if ((target as HTMLElement).isContentEditable || target.closest('[contenteditable=""], [contenteditable="true"]')) return false;
   }
 

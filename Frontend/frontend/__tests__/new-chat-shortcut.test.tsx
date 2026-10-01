@@ -67,6 +67,43 @@ describe('useNewChatShortcut', () => {
     expect(onNew).not.toHaveBeenCalled()
   })
 
+  it('fires from the composer: the user is typing there when they want a new chat', () => {
+    const onNew = mount()
+    const composer = document.createElement('div')
+    composer.className = 'composer'
+    const box = document.createElement('textarea')
+    composer.appendChild(box)
+    document.body.appendChild(composer)
+    const e = press(box)
+    expect(onNew).toHaveBeenCalledTimes(1)
+    expect(e.defaultPrevented).toBe(true)
+  })
+
+  it('still ignores the composer while the side question panel (a dialog) is open', () => {
+    const onNew = mount()
+    const composer = document.createElement('div')
+    composer.className = 'composer'
+    const box = document.createElement('textarea')
+    composer.appendChild(box)
+    document.body.appendChild(composer)
+    const side = document.createElement('aside')
+    side.setAttribute('role', 'dialog')
+    document.body.appendChild(side)
+    press(box)
+    expect(onNew).not.toHaveBeenCalled()
+  })
+
+  it('ignores Monaco even though its input is a textarea', () => {
+    const onNew = mount()
+    const editor = document.createElement('div')
+    editor.className = 'monaco-editor'
+    const ta = document.createElement('textarea')
+    editor.appendChild(ta)
+    document.body.appendChild(editor)
+    press(ta)
+    expect(onNew).not.toHaveBeenCalled()
+  })
+
   it('ignores Ctrl+N while a modal is open', () => {
     const onNew = mount()
     const modal = document.createElement('div')
