@@ -395,13 +395,22 @@ _POSIX_READS = {
 _PS_ARG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./\\-]*")
 _POSIX_ARG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 _INT_ARG = re.compile(r"[0-9]+")
+# Windows opens the device for these names in any folder and with any
+# extension (`Assets\nul.txt`), not a workspace file.
+_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", "conin$", "conout$"}
+    | {f"{p}{n}" for p in ("com", "lpt") for n in range(1, 10)})
+
+
+def _is_device_name(tok: str) -> bool:
+    return re.split(r"[\\/]", tok)[-1].split(".")[0].lower() in _DEVICE_NAMES
 
 
 def _read_args_ok(tokens: "list[str]", grammar: dict, powershell: bool) -> bool:
     arg_re = _PS_ARG if powershell else _POSIX_ARG
 
     def arg_ok(tok: str) -> bool:
-        return bool(arg_re.fullmatch(tok)) and ".." not in tok
+        return bool(arg_re.fullmatch(tok)) and ".." not in tok and not _is_device_name(tok)
 
     def value_ok(kind, tok: str) -> bool:
         if kind == "int":

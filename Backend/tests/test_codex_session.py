@@ -437,6 +437,22 @@ def test_a_recursion_that_can_follow_a_junction_is_not_read_only(ws, command):
     assert _is_read_only_command(command, ws, ws) is False
 
 
+# A Windows device name opens the device, not a workspace file, whatever the
+# folder or extension in front of it.
+@pytest.mark.parametrize("name", [
+    "CON", "con", "NUL", "PRN", "AUX", "COM1", "com9", "LPT1", "lpt9",
+    "nul.txt", "Assets\\NUL", "Assets/con.cs", "Assets\\aux.tar.gz",
+])
+@pytest.mark.parametrize("wrap", [
+    lambda n: _PS + "'Get-Content " + n + "'",
+    lambda n: _PS + "'Select-String -Pattern x -Path " + n + "'",
+    lambda n: _PS + "'Get-ChildItem -LiteralPath " + n + "'",
+    lambda n: "/bin/bash -lc 'cat " + n.replace("\\", "/") + "'",
+], ids=["gc", "sls", "gci", "bash"])
+def test_a_windows_device_name_is_not_read_only(ws, name, wrap):
+    assert _is_read_only_command(wrap(name), ws, ws) is False
+
+
 def test_an_unresolvable_path_is_not_read_only(ws):
     # realpath raised WinError 267 out of the shortcut (1 Oct 2026).
     open(os.path.join(os.path.dirname(ws), "top.txt"), "w").close()
