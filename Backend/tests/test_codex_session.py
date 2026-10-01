@@ -96,7 +96,7 @@ class TestCodexSessionNamesItsChat(unittest.IsolatedAsyncioTestCase):
     (measured, 0.157.0), so the id must be in the app-server's env AND named in
     the thread config, or neither bridge sees it."""
 
-    async def _start(self, conversation_id):
+    async def _start(self, conversation_id, **session_kwargs):
         from providers import codex_session as cs
 
         spawned = {}
@@ -117,7 +117,7 @@ class TestCodexSessionNamesItsChat(unittest.IsolatedAsyncioTestCase):
 
         manager = MagicMock()
         manager.unity_mcp_manager.is_running.return_value = True
-        session = CodexSession(conversation_id)
+        session = CodexSession(conversation_id, **session_kwargs)
         with patch.object(cs.asyncio, "create_subprocess_exec", side_effect=fake_spawn), \
                 patch.object(session, "_request", side_effect=fake_request), \
                 patch.object(session, "_notify", AsyncMock()), \
@@ -127,8 +127,8 @@ class TestCodexSessionNamesItsChat(unittest.IsolatedAsyncioTestCase):
                 patch.dict(sys.modules, {"unity_ai_mcp.unity_mcp_manager": manager}), \
                 patch.dict(os.environ, {"GAMACHINE_CONVERSATION_ID": "999"}):
             await session.start()
-        thread_config = dict(requests)["thread/start"]["config"]
-        return spawned["env"], thread_config
+        self.thread_start = dict(requests)["thread/start"]
+        return spawned["env"], self.thread_start["config"]
 
     async def test_a_chat_session_passes_its_id_to_both_servers(self):
         env, config = await self._start(7)
@@ -146,6 +146,20 @@ class TestCodexSessionNamesItsChat(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("GAMACHINE_CONVERSATION_ID", env)
             for entry in config["mcp_servers"].values():
                 self.assertNotIn("env_vars", entry)
+
+    async def test_chat_thread_asks_before_every_untrusted_command(self):
+        # on-request + read-only left asking to the model, so a failed sandboxed
+        # write never reached the step-mode card (owner test, 1 Oct 2026).
+        await self._start(7)
+        self.assertEqual(self.thread_start["approvalPolicy"], "untrusted")
+        self.assertEqual(self.thread_start["sandbox"], "workspace-write")
+        self.assertEqual(self.thread_start["approvalsReviewer"], "user")
+
+    async def test_side_chat_thread_keeps_read_only_sandbox(self):
+        await self._start(7, read_only=True)
+        self.assertEqual(self.thread_start["approvalPolicy"], "on-request")
+        self.assertEqual(self.thread_start["sandbox"], "read-only")
+        self.assertEqual(self.thread_start["approvalsReviewer"], "user")
 
 
 class TestCodexApprovalResponses(unittest.IsolatedAsyncioTestCase):

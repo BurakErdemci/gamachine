@@ -531,6 +531,27 @@ def _configured_codex_mcp_names() -> Set[str]:
         return set()
 
 
+def _thread_policy(read_only: bool) -> Dict[str, str]:
+    """approvalPolicy + sandbox for a new thread.
+
+    "on-request" leaves asking to the model: a write just fails in the sandbox
+    and reaches `_resolve_approval` only if the model retries with escalation,
+    so step mode showed no card (owner test). Measured 1 Oct 2026, codex-cli
+    0.157.0, every request accepted: on-request+read-only wrote only after a
+    model-chosen retry (A); untrusted+read-only asked, still ran sandboxed,
+    failed and asked again, two cards per write (B); untrusted+workspace-write
+    asked exactly once before running and wrote (E). So under E every command
+    Codex does not itself trust asks before it runs, and the approval mode,
+    read live in `_resolve_approval`, decides card or accept in every mode.
+
+    The side chat keeps the old pair: it declines every request anyway, and
+    under "untrusted" its plain reads would be asked for and declined too.
+    """
+    if read_only:
+        return {"approvalPolicy": "on-request", "sandbox": "read-only"}
+    return {"approvalPolicy": "untrusted", "sandbox": "workspace-write"}
+
+
 class CodexSession:
     """Tek bir sohbete ait kalıcı codex app-server süreç sarmalayıcısı."""
 
@@ -625,12 +646,12 @@ class CodexSession:
         }, timeout=30)
         await self._notify("initialized")
 
-        # 2) thread/start — kalıcı thread. read-only sandbox + on-request → her mutasyon
-        #    escalation ile native onaya gider (oto modda otomatik accept'lenir).
+        # 2) thread/start — the persistent thread. The policy pair comes from
+        #    `_thread_policy`; this is the only place a thread is created
+        #    (there is no thread/resume or thread/fork call).
         params: Dict[str, Any] = {
             "cwd": self.cwd or os.getcwd(),
-            "approvalPolicy": "on-request",
-            "sandbox": "read-only",
+            **_thread_policy(self.read_only),
             # ⚠️ ONAYI KİMİN VERECEĞİNİ SABİTLE — ölçülmüş açık, 2 Ağu 2026.
             #
             # Bu alan gönderilmediğinde Codex, reviewer'ı kullanıcının KENDİ
