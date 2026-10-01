@@ -50,7 +50,7 @@ import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
 import { useNewChatShortcut } from '../lib/newChatShortcut';
 import { useTurnDone, cardOnScreen } from '../lib/turnDone';
 import { ThreadHeader } from '../components/home/ThreadHeader';
-import { EmptyChat } from '../components/home/EmptyChat';
+import { EmptyChat, questDraft } from '../components/home/EmptyChat';
 import { AchievementToast } from '../components/home/AchievementToast';
 import { isChatEmpty } from '../components/home/ChatPanel';
 
@@ -633,9 +633,10 @@ export default function Home() {
   const chatEmpty = isChatEmpty(chat.activeConvId, chat.messages.length, chat.loading, !!mcp.activeGate);
   // A request waits in this chat (the title block's approval cell).
   const cardWaiting = !!(chat.pendingCommand || chat.pendingQuestion || fs.pendingDelete || fs.pendingGenFiles || chat.pendingFix || mcp.activeGate);
-  // A mission-board card fills the composer; nothing is sent until the user presses Enter.
+  // A mission-board card fills the composer; nothing is sent until the user presses Enter. A draft
+  // already in the box is kept (questDraft).
   const pickQuest = (prompt: string) => {
-    chat.setChatInput(prompt);
+    chat.setChatInput(prev => questDraft(prev, prompt));
     requestAnimationFrame(() => {
       const box = document.querySelector<HTMLTextAreaElement>('.composer textarea');
       if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }

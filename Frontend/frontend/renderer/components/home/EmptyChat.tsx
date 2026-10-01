@@ -20,6 +20,18 @@ export const QUESTS: Quest[] = [
   { id: 'codegen', xp: 80, writes: true },
 ];
 
+/**
+ * The composer text after a mission card is picked. A card used to REPLACE the composer, so text
+ * the user had already typed was lost to one click (P2 audit). A draft is kept and the starting
+ * prompt goes under it on a new line; an empty (or blank) composer just takes the prompt. The
+ * same card picked twice is not stacked.
+ */
+export const questDraft = (current: string, prompt: string): string => {
+  if (!current.trim()) return prompt;
+  if (current.includes(prompt)) return current;
+  return `${current.replace(/\s+$/, '')}\n${prompt}`;
+};
+
 interface EmptyChatProps {
   userName?: string | null;
   projectName?: string | null;
