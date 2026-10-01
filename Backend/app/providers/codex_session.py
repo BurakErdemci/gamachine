@@ -26,6 +26,7 @@ import collections
 import json
 import logging
 import os
+import re
 import sys
 import uuid
 from datetime import datetime
@@ -297,6 +298,92 @@ def _command_text(command) -> str:
         return " ".join(f'"{a}"' if isinstance(a, str) and " " in a and '"' not in a else str(a)
                         for a in command)
     return command if isinstance(command, str) else ""
+
+
+# The wire shape of a Codex command on Windows (codex-cli 0.157.0, probe log
+# 1 Oct 2026): `"C:\...\powershell.exe" -Command 'Get-ChildItem -File -Name'`,
+# double-quoted when the script holds single quotes. POSIX: `bash -lc '...'`.
+_SHELL_WRAPPER = re.compile(
+    r"""^\s*(?:"(?P<qexe>[^"]+)"|(?P<exe>[^\s"']+))\s+"""
+    r"""(?P<flags>(?:-(?:NoProfile|NoLogo|NonInteractive)\s+)*)"""
+    r"""(?P<flag>-Command|-lc|-c)\s+(?P<q>['"])(?P<inner>.*)(?P=q)\s*$""",
+    re.IGNORECASE | re.DOTALL,
+)
+_POWERSHELLS = frozenset({"powershell", "pwsh"})
+_POSIX_SHELLS = frozenset({"bash", "zsh", "sh"})
+# Quotes PowerShell would strip before resolving a path (`'..\x'` is `..\x`),
+# brace expansion (`{..,x}/f`), splatting, and a glob that can match `..`.
+_UNSAFE_INNER = re.compile(r"""['{}@]|(?:^|[\s/\\])\.[*?\[]""")
+
+# Claude step mode lets Read/Glob/Grep/LS through without a card; these are
+# the shell forms of the same reads. git/echo/diff are left out: they are
+# not reads of that kind (git diff/show can run a repo's diff drivers).
+_READ_VERBS = {
+    "get-childitem": "ls", "gci": "ls", "dir": "ls", "ls": "ls",
+    "get-content": "cat", "gc": "cat", "type": "cat", "cat": "cat",
+    "get-location": "pwd", "gl": "pwd", "pwd": "pwd",
+    "select-string": "cat", "sls": "cat",
+    "head": "head", "tail": "tail", "wc": "wc", "tree": "tree",
+    "grep": "grep", "find": "find", "rg": "grep",
+}
+_POSIX_READ_VERBS = frozenset({"ls", "cat", "pwd", "head", "tail", "wc", "tree",
+                               "grep", "find", "rg"})
+# ripgrep flags that start another program (preprocessor, decompressor).
+_RG_EXEC_FLAG = re.compile(r"^(?:--pre|--hostname-bin|--search-zip|-[A-Za-y]*z)")
+
+
+def _shell_script(command: str) -> "tuple[Optional[str], bool]":
+    """(script the shell runs, is PowerShell). A wrapper whose script cannot
+    be read safely gives (None, False); a bare command is its own script."""
+    m = _SHELL_WRAPPER.match(command)
+    if not m:
+        return command, False
+    exe = re.split(r"[\\/]", m.group("qexe") or m.group("exe"))[-1].lower()
+    exe = exe[:-4] if exe.endswith(".exe") else exe
+    flag = m.group("flag").lower()
+    inner = m.group("inner")
+    if exe in _POWERSHELLS and flag == "-command":
+        powershell = True
+    elif exe in _POSIX_SHELLS and flag in ("-lc", "-c") and not m.group("flags"):
+        powershell = False
+    else:
+        return None, False
+    if m.group("q") in inner:
+        return None, False
+    return inner, powershell
+
+
+def _is_read_only_command(command, cwd, workspace: str) -> bool:
+    """True when a Codex command only lists, reads or searches inside the
+    workspace, so step mode treats it like Claude's Read/Glob/Grep/LS.
+
+    Anything unsure is False and goes to the mode as before. The verdict on
+    the rest is command_safety's: no chaining, redirection, pipes, variables
+    or command substitution, and every path stays in the workspace.
+    """
+    from action_risk import _confinement_root
+    from agentic import command_safety
+
+    command = _command_text(command)
+    if not command.strip():
+        return False
+    root, cwd_ok = _confinement_root(cwd if isinstance(cwd, str) else "", workspace)
+    if not cwd_ok or not root:
+        return False
+    script, powershell = _shell_script(command)
+    if not script or _UNSAFE_INNER.search(script):
+        return False
+    head, _, rest = script.strip().partition(" ")
+    verb = head.lower()
+    if powershell:
+        mapped = _READ_VERBS.get(verb)
+    else:
+        mapped = _READ_VERBS.get(verb) if verb in _POSIX_READ_VERBS else None
+    if mapped is None:
+        return False
+    if verb == "rg" and any(_RG_EXEC_FLAG.match(t) for t in rest.split()):
+        return False
+    return command_safety.is_auto_safe(f"{mapped} {rest}".strip(), root)
 
 
 def _notification_turn_id(params: dict) -> Optional[str]:
@@ -901,6 +988,12 @@ class CodexSession:
         # action_risk calls critical gets the card. The mode is read live, not
         # from the session flag, so a flip bites on the next request.
         from agentic import approval_mode
+        # Under "untrusted" plain reads ask too (measured: one request for
+        # `Get-ChildItem -File -Name`); they pass the way Claude's read tools do.
+        if (method in ("item/commandExecution/requestApproval", "execCommandApproval")
+                and _is_read_only_command(params.get("command"), params.get("cwd"),
+                                          self.cwd or "")):
+            return "accept"
         decision = approval_mode.needs_card_many(
             _risk_actions(method, params, self._file_changes.get(params.get("itemId")),
                           self.cwd or ""))

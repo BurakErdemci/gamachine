@@ -449,6 +449,20 @@ async def test_codex_file_change_mixing_routine_and_critical_asks(balanced, ws):
     assert ev is not None and ev["risk_reason"] == "file_delete"
 
 
+_CODEX_PS = '"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '
+
+
+async def test_codex_balanced_wrapped_read_passes_and_wrapped_write_asks(balanced, ws):
+    # The shape codex-cli 0.157.0 sends under "untrusted" (probe log, 1 Oct 2026).
+    s = _codex(ws)
+    assert await _codex_drive(s, "item/commandExecution/requestApproval", {
+        "command": _CODEX_PS + "'Get-ChildItem -File -Name'", "cwd": ws}) == ("accept", None)
+    decision, ev = await _codex_drive(s, "item/commandExecution/requestApproval", {
+        "command": _CODEX_PS + "'Remove-Item Assets\\A.cs'", "cwd": ws})
+    assert decision == "decline"
+    assert ev is not None and ev["type"] == "command_approval_needed"
+
+
 async def test_codex_side_session_declines_before_balanced(balanced, ws):
     s = _codex(ws, read_only=True)
     assert await _codex_drive(s, "item/commandExecution/requestApproval",

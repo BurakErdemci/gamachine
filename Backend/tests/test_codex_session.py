@@ -282,3 +282,132 @@ class TestCodexApprovalResponses(unittest.IsolatedAsyncioTestCase):
                 ),
             },
         })
+
+
+# ── Step mode under "untrusted": reads pass, mutations card ─────────────────
+
+import asyncio  # noqa: E402
+
+import pytest  # noqa: E402
+
+from providers.codex_session import _is_read_only_command  # noqa: E402
+
+# The wire shape measured with codex-cli 0.157.0 (probe log, 1 Oct 2026).
+_PS = '"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '
+_CMD = "item/commandExecution/requestApproval"
+
+
+@pytest.fixture
+def ws(tmp_path):
+    for d in ("Assets", "ProjectSettings"):
+        (tmp_path / d).mkdir()
+    return str(tmp_path)
+
+
+@pytest.mark.parametrize("command", [
+    _PS + "'Get-ChildItem -File -Name'",
+    _PS + "'Get-Content Assets\\A.cs'",
+    _PS + "'gci -Recurse -Filter *.cs Assets'",
+    _PS + "'Select-String -Pattern Player -Path Assets\\A.cs'",
+    _PS + "'rg -n Player Assets'",
+    _PS + "'rg --files'",
+    "/bin/bash -lc 'ls -la Assets'",
+    "/bin/zsh -lc 'grep -rn Player Assets'",
+    ["ls", "Assets"],
+])
+def test_read_only_command_is_recognised(ws, command):
+    assert _is_read_only_command(command, ws, ws) is True
+
+
+@pytest.mark.parametrize("command", [
+    _PS + "\"Set-Content -LiteralPath 'probe.txt' -Value 'hello'\"",
+    _PS + "'Remove-Item probe.txt'",
+    _PS + "'Get-ChildItem > out.txt'",
+    _PS + "'Get-ChildItem | Out-File x.txt'",
+    _PS + "'Get-Content A.cs; Remove-Item A.cs'",
+    _PS + "'Get-Content $env:TOKEN'",
+    _PS + "'Get-Content Env:TOKEN'",
+    _PS + "'Get-Content ..\\secret.txt'",
+    _PS + "\"Get-Content '..\\secret.txt'\"",
+    _PS + "'Get-Content .*\\secret.txt'",
+    _PS + "'Get-ChildItem C:\\'",
+    _PS + "'cat ~\\.ssh\\id_rsa'",
+    _PS + "'rg --pre sh Player'",
+    _PS + "'rg -nz Player'",
+    _PS + "'git status'",
+    _PS + "'echo hi'",
+    "/bin/bash -lc 'cat {..,x}/secret'",
+    "/bin/bash -lc 'find . -delete'",
+    "/bin/bash -lc 'Get-ChildItem'",
+    "cmd.exe /c dir",
+    "Get-ChildItem",
+    "",
+    None,
+])
+def test_anything_else_is_not_read_only(ws, command):
+    assert _is_read_only_command(command, ws, ws) is False
+
+
+def test_a_read_from_outside_the_workspace_is_not_read_only(ws, tmp_path_factory):
+    outside = str(tmp_path_factory.mktemp("outside"))
+    assert _is_read_only_command(_PS + "'Get-ChildItem'", outside, ws) is False
+    assert _is_read_only_command(_PS + "'Get-ChildItem'", ws, "") is False
+
+
+def _session(ws, **kw):
+    s = CodexSession(kw.pop("cid", 11), cwd=ws, **kw)
+    s._out_q = asyncio.Queue()
+    s.approval_timeout = 2.0
+    return s
+
+
+async def _drive(session, method, params, answer=False):
+    from agentic.command_gates import APPROVAL_GATES, APPROVAL_RESULTS
+
+    task = asyncio.create_task(session._resolve_approval(method, params))
+    try:
+        ev = await asyncio.wait_for(session._out_q.get(), timeout=0.3)
+    except asyncio.TimeoutError:
+        ev = None
+    if ev is not None and ev.get("type") == "command_approval_needed":
+        APPROVAL_RESULTS[ev["gate_id"]] = answer
+        APPROVAL_GATES[ev["gate_id"]].set()
+    return await asyncio.wait_for(task, timeout=2), ev
+
+
+async def test_step_mode_cards_a_write_request(ws):
+    from agentic import approval_mode
+    assert approval_mode.current_mode() == "step"
+    params = {"command": _PS + "\"Set-Content -LiteralPath 'probe.txt' -Value 'hello'\"",
+              "cwd": ws}
+    decision, ev = await _drive(_session(ws), _CMD, params, answer=True)
+    assert ev is not None and ev["type"] == "command_approval_needed"
+    assert decision == "accept"
+
+
+async def test_step_mode_accepts_a_read_only_command_without_a_card(ws):
+    decision, ev = await _drive(_session(ws), _CMD,
+                                {"command": _PS + "'Get-ChildItem -File -Name'", "cwd": ws})
+    assert (decision, ev) == ("accept", None)
+
+
+async def test_step_mode_cards_a_read_outside_the_workspace(ws, tmp_path_factory):
+    outside = str(tmp_path_factory.mktemp("outside"))
+    decision, ev = await _drive(_session(ws), _CMD,
+                                {"command": _PS + "'Get-ChildItem'", "cwd": outside})
+    assert ev is not None and ev["type"] == "command_approval_needed"
+    assert decision == "decline"
+
+
+async def test_auto_mode_accepts_a_write_request_without_a_card(ws):
+    from agentic import approval_mode
+    approval_mode.set_mode("auto", source="test")
+    params = {"command": _PS + "'Remove-Item probe.txt'", "cwd": ws}
+    assert await _drive(_session(ws), _CMD, params) == ("accept", None)
+
+
+async def test_side_chat_still_declines_a_read_only_command(ws):
+    from agentic import approval_mode
+    approval_mode.set_mode("auto", source="test")
+    params = {"command": _PS + "'Get-ChildItem'", "cwd": ws}
+    assert await _drive(_session(ws, read_only=True), _CMD, params) == ("decline", None)
