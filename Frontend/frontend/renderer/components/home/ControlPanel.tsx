@@ -1,15 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
-import {
-  Brain,
-  Sparkles,
-  ChevronDown,
-  Download,
-  Upload,
-  Gauge,
-  Rocket
-} from 'lucide-react';
+import { Sparkles, ChevronDown, Download, Upload, Gauge, Rocket } from 'lucide-react';
 import { ContextUsage } from './types';
 import { GenerationModeSelector, GenerationMode } from './GenerationModeSelector';
 
@@ -77,88 +69,84 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const { t } = useLang();
   const [showMemoryMenu, setShowMemoryMenu] = useState(false);
   const [showThinkingMenu, setShowThinkingMenu] = useState(false);
+  const [showMore, setShowMore] = useState(false);
 
   const yuzde = contextUsage?.percent ?? 0;
 
-  // Seviye görselleri — hangi seviyelerin listeleneceğine backend kayıtçısı karar
-  // verir (effortCaps.levels). Burada yalnız etiket/renk/açıklama eşlemesi var.
-  const LEVEL_META: Record<string, { label: string; color: string; desc: string }> = {
-    auto:    { label: t('effort.label.auto'),    color: 'text-sky-400',     desc: t('effort.desc.auto') },
-    off:     { label: t('effort.label.off'),     color: 'text-slate-500',   desc: t('effort.desc.off') },
-    none:    { label: t('effort.label.none'),    color: 'text-slate-500',   desc: t('effort.desc.none') },
-    minimal: { label: t('effort.label.minimal'), color: 'text-teal-400',    desc: t('effort.desc.minimal') },
-    low:     { label: t('effort.label.low'),     color: 'text-emerald-400', desc: t('effort.desc.low') },
-    medium:  { label: t('effort.label.medium'),  color: 'text-violet-400',  desc: t('effort.desc.medium') },
-    high:    { label: t('effort.label.high'),    color: 'text-fuchsia-400', desc: t('effort.desc.high') },
-    xhigh:   { label: t('effort.label.xhigh'),   color: 'text-orange-400',  desc: t('effort.desc.xhigh') },
-    max:     { label: t('effort.label.max'),     color: 'text-red-400',     desc: t('effort.desc.max') },
+  // Labels and descriptions per level; which levels are LISTED is the backend registry's call
+  // (effortCaps.levels). `pips` is the mockup's 3-step effort meter for each level.
+  const LEVEL_META: Record<string, { label: string; desc: string; pips: number }> = {
+    auto:    { label: t('effort.label.auto'),    desc: t('effort.desc.auto'),    pips: 0 },
+    off:     { label: t('effort.label.off'),     desc: t('effort.desc.off'),     pips: 0 },
+    none:    { label: t('effort.label.none'),    desc: t('effort.desc.none'),    pips: 0 },
+    minimal: { label: t('effort.label.minimal'), desc: t('effort.desc.minimal'), pips: 1 },
+    low:     { label: t('effort.label.low'),     desc: t('effort.desc.low'),     pips: 1 },
+    medium:  { label: t('effort.label.medium'),  desc: t('effort.desc.medium'),  pips: 2 },
+    high:    { label: t('effort.label.high'),    desc: t('effort.desc.high'),    pips: 3 },
+    xhigh:   { label: t('effort.label.xhigh'),   desc: t('effort.desc.xhigh'),   pips: 3 },
+    max:     { label: t('effort.label.max'),     desc: t('effort.desc.max'),     pips: 3 },
   };
   const levels = (effortCaps?.levels?.length ? effortCaps.levels : ['auto'])
     .filter((l) => LEVEL_META[l]);
   const effLevel: string = levels.includes(thinkingLevel) ? thinkingLevel : 'auto';
   const activeMeta = LEVEL_META[effLevel] || LEVEL_META.auto;
-  const onlyAuto = levels.length <= 1; // model effort desteklemiyor → bilgi amaçlı panel
-  const triggerLabel = isClaudeSubscription && ultracode
-    ? 'Ultracode'
-    : `Effort ${activeMeta.label}`;
+  const onlyAuto = levels.length <= 1; // the model has no effort control: the panel only informs
+  const ultra = isClaudeSubscription && ultracode;
+  const shownLabel = ultra ? 'Ultracode' : activeMeta.label;
+  const shownPips = ultra ? 3 : activeMeta.pips;
+  // The memory bar: ten segments of the context window (mockup `.energy`).
+  const energyOn = contextUsage ? Math.min(10, Math.max(0, Math.round(yuzde / 10))) : 0;
 
   return (
-    // `flex-wrap`: bu şerit sabit genişlikte bir çekmecenin içinde ve her yeni
-    // düğme onu sessizce taşırıyor — 30 Ağu 2026'da gösterge eklenince "Hafıza"
-    // etiketi kesildi. Taşan içerik kırpılmak yerine alt satıra iniyor.
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1 mt-1.5">
-      <GenerationModeSelector value={generationMode} onChange={setGenerationMode} />
-      <div className="w-px h-3 bg-slate-800" />
-      
-      {/* Effort Selector — dinamik segmented bar (seviyeler backend kayıtçısından) */}
-      <div className="relative">
+    // The mockup's status strip under the composer box: thinking, memory, more settings, the
+    // key hint. The less used controls (mode, project memory, usage report) live behind
+    // "More settings"; the popover stays mounted (hidden) so nothing it holds loses state.
+    <div className="strip" data-testid="composer-strip">
+      <div className="strip-anchor">
         <button
+          type="button"
+          className="strip-item"
+          data-level={ultra ? 'ultracode' : effLevel}
+          aria-expanded={showThinkingMenu}
+          aria-label={t('strip.thinkingAria', { seviye: shownLabel })}
           onClick={() => setShowThinkingMenu(!showThinkingMenu)}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
-            effLevel !== 'auto' || (isClaudeSubscription && ultracode)
-              ? 'bg-violet-500/15 border border-violet-500/30 text-violet-400 shadow-[0_0_15px_rgba(139,92,246,0.1)]'
-              : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/30'
-          } ${showThinkingMenu ? 'bg-violet-500/20 text-violet-300' : ''}`}
           title={effortCaps?.note || t('effort.title')}
         >
-          <Brain size={11} className={effLevel !== 'auto' ? 'animate-pulse' : ''} />
-          <span>{triggerLabel}</span>
-          {!ultracode && (effLevel === 'xhigh' || effLevel === 'max') && <Gauge size={10} className="text-orange-400" />}
-          {isClaudeSubscription && ultracode && <Rocket size={10} className="text-cyan-400" />}
-          <ChevronDown size={10} className={`opacity-50 transition-transform duration-200 ${showThinkingMenu ? 'rotate-180' : ''}`} />
+          {t('strip.thinking')}
+          <span className="pips" aria-hidden="true">
+            {[1, 2, 3].map(n => <i key={n} className={n <= shownPips ? 'on' : undefined} />)}
+          </span>
+          <b>{shownLabel}</b>
         </button>
 
-        {/* Segmented panel */}
         <AnimatePresence>
           {showThinkingMenu && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowThinkingMenu(false)} />
               <motion.div
-                initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                className="absolute bottom-10 left-0 w-[300px] bg-[#0a0a0f] border border-slate-800 rounded-xl shadow-2xl z-50 p-2.5 overflow-hidden"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 6 }}
+                className="strip-pop strip-effort"
               >
-                <div className="flex items-center justify-between px-0.5 pb-2">
-                  <span className="text-[8.5px] font-semibold uppercase tracking-wider text-slate-500">Effort</span>
-                  <span className={`text-[8.5px] font-medium ${activeMeta.color}`}>{activeMeta.label}</span>
+                <div className="strip-pop-head">
+                  <span className="strip-pop-k">Effort</span>
+                  <span className="strip-pop-v">{activeMeta.label}</span>
                 </div>
 
-                {/* Segmented bar — yalnız modelin GERÇEKTEN desteklediği seviyeler */}
-                <div className="flex w-full rounded-lg border border-slate-800 bg-black/40 p-0.5 gap-0.5">
+                {/* Segmented bar: only the levels the model really supports */}
+                <div className="seg" role="group" aria-label="Effort">
                   {levels.map((id) => {
                     const meta = LEVEL_META[id];
-                    const active = effLevel === id && !(isClaudeSubscription && ultracode);
+                    const active = effLevel === id && !ultra;
                     return (
                       <button
                         key={id}
+                        type="button"
+                        aria-pressed={active}
                         onClick={() => setThinkingLevel(id as ThinkingLevel)}
                         title={meta.desc}
-                        className={`flex-1 min-w-0 px-1 py-1.5 rounded-md text-[9px] font-semibold truncate transition-all ${
-                          active
-                            ? `${meta.color} bg-white/[0.07] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]`
-                            : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'
-                        }`}
+                        className="seg-btn"
                       >
                         {meta.label}
                       </button>
@@ -166,28 +154,25 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   })}
                 </div>
 
-                {/* Aktif seviye açıklaması / model notu */}
-                <div className="px-0.5 pt-2 text-[9px] leading-relaxed text-slate-500">
-                  {isClaudeSubscription && ultracode
+                {/* The active level's description, or the model's own note */}
+                <p className="strip-pop-note">
+                  {ultra
                     ? t('effort.ultracodeDesc')
                     : (onlyAuto && effortCaps?.note) ? effortCaps.note : activeMeta.desc}
-                </div>
+                </p>
 
-                {/* Claude-only: Ultracode — bağımsız mod satırı */}
+                {/* Claude only: Ultracode, its own switch row */}
                 {isClaudeSubscription && (
-                  <>
-                    <div className="my-2 h-px bg-slate-800" />
-                    <button
-                      onClick={() => setUltracode?.(!ultracode)}
-                      title={t('ultracode.title')}
-                      className={`w-full text-left px-2 py-1.5 rounded-lg text-[10px] transition-all hover:bg-white/5 flex items-center justify-between ${
-                        ultracode ? 'text-cyan-400 bg-white/5' : 'text-slate-400'
-                      }`}
-                    >
-                      <span className="flex items-center gap-1.5 font-medium"><Rocket size={11} />Ultracode</span>
-                      <span className={`w-1.5 h-1.5 rounded-full ${ultracode ? 'bg-current shadow-[0_0_8px_currentColor]' : 'bg-slate-700'}`} />
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => setUltracode?.(!ultracode)}
+                    title={t('ultracode.title')}
+                    aria-pressed={ultracode}
+                    className="strip-pop-row"
+                  >
+                    <span className="strip-pop-row-l"><Rocket size={14} aria-hidden="true" />Ultracode</span>
+                    <span className="strip-pop-dot" data-on={ultracode || undefined} aria-hidden="true" />
+                  </button>
                 )}
               </motion.div>
             </>
@@ -195,95 +180,19 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         </AnimatePresence>
       </div>
 
-      <div className="w-px h-3 bg-slate-800" />
-
-      {/* Projeyi Öğren & Hafıza Menüsü */}
-      <div className="relative flex items-center">
-        <button
-          onClick={() => analyzeProject()}
-          disabled={isAnalyzingProject}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-l-lg text-[11px] font-medium transition-all ${
-            isAnalyzingProject
-              ? 'bg-blue-500/20 text-blue-400 animate-pulse'
-              : 'text-slate-500 hover:text-blue-400 hover:bg-blue-500/5'
-          }`}
-          title={t('memory.learnTitle')}
-        >
-          {isAnalyzingProject ? (
-            <div className="flex items-center gap-2">
-              <div className="w-2.5 h-2.5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
-              <span>{t('memory.learning')}</span>
-            </div>
-          ) : (
-            <>
-              <Sparkles size={11} className="text-blue-500" />
-              <span>{t('memory.learnProject')}</span>
-            </>
-          )}
-        </button>
-        <button
-          onClick={() => setShowMemoryMenu(!showMemoryMenu)}
-          disabled={isAnalyzingProject || !activeConvId}
-          className={`px-1.5 py-1 border-l border-slate-800 rounded-r-lg text-slate-500 hover:text-blue-400 hover:bg-blue-500/5 transition-all ${
-            showMemoryMenu ? 'bg-blue-500/10 text-blue-400' : ''
-          }`}
-        >
-          <ChevronDown size={12} className={`transition-transform duration-200 ${showMemoryMenu ? 'rotate-180' : ''}`} />
-        </button>
-
-        <AnimatePresence>
-          {showMemoryMenu && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowMemoryMenu(false)} />
-              <motion.div
-                initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                className="absolute bottom-10 right-0 w-48 bg-[#0a0a0f] border border-slate-800 rounded-xl shadow-2xl z-50 py-1.5 overflow-hidden"
-              >
-                <button
-                  onClick={() => { analyzeProject(); setShowMemoryMenu(false); }}
-                  className="w-full flex items-center justify-between px-3 py-2 text-[11px] text-slate-300 hover:bg-blue-600/10 hover:text-blue-400 transition-all"
-                >
-                  <span>{t('memory.refresh')}</span>
-                  <Sparkles size={11} />
-                </button>
-                <button
-                  onClick={async () => { setShowMemoryMenu(false); await exportMemory(); }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-[11px] text-slate-300 hover:bg-blue-600/10 hover:text-blue-400 transition-colors"
-                >
-                  <Download size={13} />
-                  {t('memory.export')}
-                </button>
-                <button
-                  onClick={async () => { setShowMemoryMenu(false); await importMemory(); }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-[11px] text-slate-300 hover:bg-emerald-600/10 hover:text-emerald-400 transition-colors"
-                >
-                  <Upload size={13} />
-                  {t('memory.import')}
-                </button>
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
-      </div>
-
-      {/* Kalıcı bağlam + kullanım göstergesi.
-          Eskiden `contextUsage.percent > 0` koşuluyla çiziliyordu, yani ilk tur
-          bitene kadar hiç görünmüyordu — "sürekli görünen bir yer" isteğinin tam
-          tersi. Artık aktif sohbet varsa hep duruyor ve verisi yokken bunu
-          SÖYLÜYOR; boş bir halka "doluluk sıfır" diye okunurdu. */}
+      {/* Context window + usage gauge. Drawn whenever a chat is active, before its first turn
+          too ("a place that is always visible"); without data it SAYS so: an empty bar would
+          read as "zero full", which nobody measured. A click summarises the chat, as before. */}
       {activeConvId && (
         <>
-          <div className="w-px h-3 bg-slate-800" />
-          {/* Başlık YANINDAKİ SAYIYI anlatmak zorunda; ayrımı `real` yapıyor,
-              çünkü yüzdenin kendisi de aşağıda ona bakarak çiziliyor. İki ayrı
-              koşul kullanmak, sayının ölçüm ama başlığın tahmin dediği kartı
-              yeniden mümkün kılardı — ölçüldü 30 Ağu 2026: `%7 · 69.9k/1m`
-              sayısının üstünde "Yaklaşık doluluk… bu bir tahmin" yazıyordu ve
-              kullanıcı hangisinin doğru olduğunu seçemiyordu. */}
+          <span className="strip-sep" aria-hidden="true" />
+          {/* The title must describe the number next to it; `real` decides both, so the number
+              cannot be a measurement while the title calls it an estimate (measured 30 Aug 2026:
+              `%7 · 69.9k/1m` sat under "approximate fill... this is an estimate"). */}
           <button
+            type="button"
             data-testid="context-gauge"
+            data-level={!contextUsage ? 'none' : yuzde >= 90 ? 'full' : yuzde >= 75 ? 'high' : 'ok'}
             onClick={() => compactConversation()}
             disabled={isCompacting}
             title={!contextUsage
@@ -295,78 +204,109 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     total: contextUsage.real.total,
                   })
                 : t('usage.estimateTitle', { yuzde: contextUsage.percent, sayi: contextUsage.message_count })}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors group relative ${
-              yuzde >= 90 ? 'bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20'
-              : yuzde >= 75 ? 'bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
-              : 'text-slate-500 hover:text-slate-300 border border-transparent hover:border-slate-800/50 hover:bg-slate-800/30'
-            }`}
+            className="strip-item strip-memory"
           >
-            <div className="relative w-3.5 h-3.5 flex items-center justify-center">
-              <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                <path
-                  className="text-slate-800"
-                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className={`${yuzde >= 90 ? 'text-red-500'
-                      : yuzde >= 75 ? 'text-amber-500'
-                        : 'text-blue-500'
-                    } transition-all duration-500`}
-                  strokeDasharray={`${yuzde}, 100`}
-                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-              </svg>
-              {contextUsage?.should_compact && (
-                <span className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-red-500 rounded-full animate-ping" />
-              )}
-            </div>
-            {/* "~" YALNIZ tahminde. Gerçek sayı geldiğinde (bkz. `/context`
-                raporu) işaret kalkıyor ve kullanılan/pencere olduğu gibi
-                yazılıyor — tahmin işaretini ölçülmüş bir sayının üstünde
-                bırakmak da bir yalan olurdu, ters yönde. */}
-            <span data-testid="context-percent">
-              {!contextUsage
-                ? t('usage.noData')
-                : contextUsage.real
-                  ? `%${yuzde} · ${contextUsage.real.used}/${contextUsage.real.total}`
-                  : `~%${yuzde}`}
+            {t('strip.memory')}
+            <span className="energy" aria-hidden="true">
+              {Array.from({ length: 10 }, (_, i) => <i key={i} className={i < energyOn ? 'on' : undefined} />)}
             </span>
-            <span>{isCompacting ? t('memory.compacting') : t('memory.compact')}</span>
+            {/* "~" ONLY on an estimate. When the real figure arrives (the `/context` report) the
+                mark goes and used/window is written as is: an estimate mark over a measured
+                number would be a lie too, the other way round. */}
+            <b>
+              <span data-testid="context-percent" className="num">
+                {!contextUsage
+                  ? t('usage.noData')
+                  : contextUsage.real
+                    ? `%${yuzde} · ${contextUsage.real.used}/${contextUsage.real.total}`
+                    : `~%${yuzde}`}
+              </span>
+              {contextUsage && <> {t('strip.full')}</>}
+            </b>
+            {/* Past the compaction threshold: one quiet marker, no ping. */}
+            {contextUsage?.should_compact && <span className="strip-alert" data-should-compact aria-hidden="true" />}
+            {isCompacting && <span className="strip-busy">{t('memory.compacting')}</span>}
           </button>
+        </>
+      )}
 
-          {/* The per-turn token/cost readout was REMOVED on 5 Sep 2026. The
-              counter only summed SSE `turn_usage` events: 4 of the 8 run paths
-              report no tokens at all, the counter restarted from zero whenever
-              the app restarted and reset on every conversation switch — so the
-              number on screen answered none of the questions the user was
-              actually asking of it ("what did this chat cost"). The real
-              figures live in the "Kullanım" panel, which states their source. */}
-          {/* Kullanım/bağlam raporlarını SOHBETE YAZMADAN açan düğme. Bu iki
-              rapora bugüne kadar ancak sohbete `/usage` yazarak bakılabiliyordu,
-              yani her bakış geçmişe bir mesaj çifti bırakıyordu. */}
-          {onToggleReports && (
+      <span className="strip-sep strip-sep-last" aria-hidden="true" />
+      <div className="strip-anchor">
+        <button
+          type="button"
+          className="strip-item strip-more"
+          aria-expanded={showMore}
+          aria-controls="strip-more-pop"
+          onClick={() => setShowMore(v => !v)}
+        >
+          <span className="strip-more-t">{t('strip.more')}</span>
+          <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
+        </button>
+        {showMore && <div className="fixed inset-0 z-40" onClick={() => { setShowMore(false); setShowMemoryMenu(false); }} />}
+        <div id="strip-more-pop" className="strip-pop strip-more-pop" hidden={!showMore}>
+          <GenerationModeSelector value={generationMode} onChange={setGenerationMode} />
+
+          {/* Learn the project, and the memory menu */}
+          <div className="strip-pop-pair">
             <button
+              type="button"
+              onClick={() => analyzeProject()}
+              disabled={isAnalyzingProject}
+              className="strip-pop-row"
+              title={t('memory.learnTitle')}
+              data-busy={isAnalyzingProject || undefined}
+            >
+              <span className="strip-pop-row-l">
+                <Sparkles size={14} aria-hidden="true" />
+                {isAnalyzingProject ? t('memory.learning') : t('memory.learnProject')}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowMemoryMenu(!showMemoryMenu)}
+              disabled={isAnalyzingProject || !activeConvId}
+              aria-expanded={showMemoryMenu}
+              className="icon-btn"
+            >
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
+          </div>
+          {showMemoryMenu && (
+            <div className="strip-pop-sub">
+              <button type="button" className="strip-pop-row" onClick={() => { analyzeProject(); setShowMemoryMenu(false); }}>
+                <span className="strip-pop-row-l"><Sparkles size={14} aria-hidden="true" />{t('memory.refresh')}</span>
+              </button>
+              <button type="button" className="strip-pop-row" onClick={async () => { setShowMemoryMenu(false); await exportMemory(); }}>
+                <span className="strip-pop-row-l"><Download size={14} aria-hidden="true" />{t('memory.export')}</span>
+              </button>
+              <button type="button" className="strip-pop-row" onClick={async () => { setShowMemoryMenu(false); await importMemory(); }}>
+                <span className="strip-pop-row-l"><Upload size={14} aria-hidden="true" />{t('memory.import')}</span>
+              </button>
+            </div>
+          )}
+
+          {/* The per-turn token/cost readout was REMOVED on 5 Sep 2026. The counter only summed
+              SSE `turn_usage` events: 4 of the 8 run paths report no tokens at all, it restarted
+              from zero with the app and reset on every conversation switch, so the number
+              answered none of the questions asked of it. The real figures live in the usage
+              panel, which states their source. */}
+          {/* Opens the usage / context reports WITHOUT writing to the chat (`/usage` used to leave
+              a message pair in the history for every look). */}
+          {activeConvId && onToggleReports && (
+            <button
+              type="button"
               data-testid="reports-toggle"
               onClick={onToggleReports}
               title={t('report.title')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors border ${
-                reportsOpen
-                  ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
-                  : 'text-slate-500 hover:text-slate-300 border-transparent hover:border-slate-800/50 hover:bg-slate-800/30'
-              }`}
+              aria-pressed={reportsOpen}
+              className="strip-pop-row"
             >
-              <Gauge size={12} />
-              <span>{t('report.button')}</span>
+              <span className="strip-pop-row-l"><Gauge size={14} aria-hidden="true" />{t('report.button')}</span>
             </button>
           )}
-        </>
-      )}
+        </div>
+      </div>
+      <span className="strip-hint">{t('strip.hint')}</span>
     </div>
   );
 };

@@ -142,17 +142,19 @@ describe('the removed per-turn token readout', () => {
 })
 
 describe('uyarı eşiği', () => {
+  // v4 strip: the threshold marker is a quiet dot with a state attribute, not a pinging
+  // Tailwind animation; the tests read the attribute (the old one read `.animate-ping`).
   it('sıkıştırma eşiği aşılınca nabız işareti çıkıyor', () => {
     const { container } = ciz({
       contextUsage: { percent: 91, should_compact: true, message_count: 40 },
     })
-    expect(container.querySelector('.animate-ping')).toBeTruthy()
+    expect(container.querySelector('[data-should-compact]')).toBeTruthy()
   })
 
   it('eşik altında nabız işareti yok', () => {
     const { container } = ciz({
       contextUsage: { percent: 40, should_compact: false, message_count: 10 },
     })
-    expect(container.querySelector('.animate-ping')).toBeNull()
+    expect(container.querySelector('[data-should-compact]')).toBeNull()
   })
 })
