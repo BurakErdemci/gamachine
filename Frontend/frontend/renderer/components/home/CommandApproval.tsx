@@ -33,7 +33,6 @@ const METIN = {
     run: 'cmdApproval.run',
     warning: 'cmdApproval.warning',
     name: 'card.nameShell',
-    who: 'card.whoShell',
   },
   unity: {
     title: 'unityApproval.title',
@@ -41,7 +40,6 @@ const METIN = {
     run: 'unityApproval.run',
     warning: 'unityApproval.warning',
     name: 'card.nameUnity',
-    who: 'card.whoUnity',
   },
   // A note from one chat's AI to another chat (`send_chat_message`). The
   // first line of `command` names both chats, the rest is the note itself.
@@ -51,7 +49,6 @@ const METIN = {
     run: 'mailApproval.run',
     warning: 'mailApproval.warning',
     name: 'card.nameMail',
-    who: 'card.whoMail',
   },
 } as const;
 
@@ -67,8 +64,7 @@ export const CommandApproval: React.FC<CommandApprovalProps> = ({ command, onCon
     <ApprovalCard
       kind={kind}
       testId="command-approval"
-      title={t(m.title)}
-      who={t(m.who)}
+      who={t(m.title)}
       name={t(m.name)}
       sentence={t(m.confirm)}
       // The balanced-mode reason when there is one; otherwise the card's own warning.

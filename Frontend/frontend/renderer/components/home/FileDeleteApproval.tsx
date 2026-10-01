@@ -30,8 +30,7 @@ export const FileDeleteApproval: React.FC<FileDeleteApprovalProps> = ({
     <ApprovalCard
       kind="delete"
       testId="delete-approval"
-      title={t('deleteApproval.title')}
-      who={t('card.whoFile')}
+      who={t('deleteApproval.title')}
       name={t('card.nameDelete', { ad: fileName })}
       sentence={<>"<code>{fileName}</code>" {t('deleteApproval.confirm')}</>}
       why={riskReason ? <RiskReasonLine reason={riskReason} detail={riskDetail} /> : <ApprovalWhy>{t('deleteApproval.warning')}</ApprovalWhy>}

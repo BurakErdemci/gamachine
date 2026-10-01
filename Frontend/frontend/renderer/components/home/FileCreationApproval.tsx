@@ -195,8 +195,7 @@ export const FileCreationApproval = ({
     <ApprovalCard
       kind="create"
       testId="create-approval"
-      title={t('approval.title')}
-      who={t('card.whoFile')}
+      who={t('approval.title')}
       name={files.length === 1 ? t('card.nameCreateOne', { ad: files[0].name }) : t('card.nameCreate', { sayi: files.length })}
       sentence={<span className="num">{remaining} {t('approval.pending')}</span>}
       why={riskReason ? <RiskReasonLine reason={riskReason} detail={riskDetail} /> : undefined}
