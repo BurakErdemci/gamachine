@@ -466,12 +466,47 @@ async def test_codex_balanced_wrapped_read_passes_and_wrapped_write_asks(balance
 @pytest.mark.parametrize("command", [
     _CODEX_PS + "'dotnet build'",
     _CODEX_PS + '"dotnet build"',
+    _CODEX_PS + "'dotnet test'",
     _CODEX_PS + "'python -m pytest'",
+    _CODEX_PS + "'python -m pytest -q'",
+    _CODEX_PS + "'npm test'",
+    _CODEX_PS + "'npm run build'",
+    "/bin/bash -lc 'dotnet build'",
     "/bin/bash -lc 'dotnet test'",
+    "/bin/bash -lc 'python -m pytest -q'",
+    "/bin/bash -lc 'npm test'",
+    "/bin/bash -lc 'npm run build'",
 ])
 async def test_codex_balanced_wrapped_build_runs_without_a_card(balanced, ws, command):
     assert await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
                               {"command": command, "cwd": ws}) == ("accept", None)
+
+
+@pytest.mark.parametrize("script", [
+    # tree -o writes its listing into a protected path; -R reruns with -o.
+    "tree -o .git/config",
+    "tree -R",
+    "tree -ao x",
+    'tree "-o" x',
+    "tree --output=x",
+    "tree -oout.txt",
+    # A glob can match a workspace junction that points outside.
+    "cat lin*\\secret.txt",
+    "ls lin*",
+    "grep SECRET lin*\\*",
+    "head l?nk\\x",
+    "cat [l]ink\\x",
+    "cat link\\..\\..\\x",
+])
+@pytest.mark.parametrize("wrap", [
+    lambda s: "/bin/bash -lc '" + s + "'",
+    lambda s: _CODEX_PS + "'" + s + "'",
+], ids=["bash", "powershell"])
+async def test_codex_balanced_inner_tree_write_or_glob_asks(balanced, ws, script, wrap):
+    decision, ev = await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                                      {"command": wrap(script), "cwd": ws})
+    assert decision == "decline"
+    assert ev is not None and ev["type"] == "command_approval_needed"
 
 
 @pytest.mark.parametrize("command,reason", [

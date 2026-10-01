@@ -512,9 +512,23 @@ def _classified_command(command, cwd: Optional[str] = None) -> str:
     """
     raw = _command_text(command)
     script, _ = _shell_script(raw, cwd)
-    if not script or not _CLASSIFIABLE_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script):
+    if (not script or not _CLASSIFIABLE_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script)
+            or _CLASSIFY_RAW.search(script) or _tree_writes(script)):
         return raw
     return script
+
+
+# action_risk called `cat lin*\x` routine (the literal pattern stays in the
+# workspace, the glob can match a junction out of it) and has no tree -o/-R
+# check (measured, 1 Oct 2026). These and any `..` keep the wrapper.
+_CLASSIFY_RAW = re.compile(r"\.\.|[*?\[\]]")
+
+
+def _tree_writes(script: str) -> bool:
+    tokens = re.split(r"[\s;|&()]+", script.replace('"', ""))
+    names = {re.split(r"[\\/]", t)[-1].lower() for t in tokens}
+    return (bool(names & {"tree", "tree.exe", "tree.com"})
+            and any(_TREE_WRITE_FLAG.match(t) for t in tokens))
 
 
 def _is_read_only_command(command, cwd, workspace: str) -> bool:
