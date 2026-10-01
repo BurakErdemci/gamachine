@@ -170,8 +170,13 @@ token again). A phone that was offline when it was removed learns it on its
 next connect: the relay accepts a socket with an unknown or missing token and
 closes it with 4009 `unknown_token` (a refused upgrade reaches a browser as a
 bare close, the same as a network drop). One 4009 is not final, because a
-recreated room refuses every token until the PC registers them again; three
-in a row with no frame between them are. On a final close, and on
+recreated room refuses every token until the PC registers them again, and its
+`register_tokens` can land seconds later while the first retries come about a
+second apart. Removal is final after at least three 4009 closes in a row with
+no frame between them, at least 30 s after the first of them
+(`UNKNOWN_TOKEN_GRACE_MS`); any frame or any other close code starts the count
+again. The retry backoff resets on a received frame, not on open, so the
+refused sockets back off normally. On a final close, and on
 `hello_reject` with reason `unknown_device` (not `clock`), the page deletes its
 stored pairing, unsubscribes from push and shows the pairing screen. Full
 list: relay/README.md, "Close codes".

@@ -12,6 +12,7 @@ import {
   slashItems, filterSlash, withCommand, slashFailureNote, SLASH_SHOWN_MAX,
   APPROVAL_MODES, AUTO_MODE_WARNING, modeInfo, modeChangedNote, modeFailureNote,
   messageText, mergeChat, stopLine, ASK_ON_PC, cardsMissing, CLOSE_UNKNOWN_TOKEN, UNKNOWN_TOKEN_FINAL,
+  UNKNOWN_TOKEN_GRACE_MS,
 } from '../public/net.js';
 import { readFileSync, existsSync } from 'node:fs';
 
@@ -782,36 +783,99 @@ async function unpaired() {
     }
   };
   const removed = () => statuses.some(([s]) => s === 'removed');
-  return { link, statuses, closeWith, removed };
+  const kStatic = N.ecdh(pc.d, Buffer.from(phone.publicRaw));
+  return { link, statuses, closeWith, removed, kStatic };
 }
 
-test(`unknown token: ${UNKNOWN_TOKEN_FINAL} closes with 4009 in a row report removed, fewer keep retrying`, async () => {
+// Date.now moved forward by `advance`; real time still flows underneath.
+function shiftedClock(t) {
+  const real = Date.now;
+  let offset = 0;
+  Date.now = () => real() + offset;
+  t.after(() => { Date.now = real; });
+  return { advance: (ms) => { offset += ms; } };
+}
+
+test(`unknown token: ${UNKNOWN_TOKEN_FINAL} closes with 4009 in a row over ${UNKNOWN_TOKEN_GRACE_MS} ms report removed`, async (t) => {
   assert.equal(UNKNOWN_TOKEN_FINAL, 3);
+  assert.equal(UNKNOWN_TOKEN_GRACE_MS, 30_000);
+  const clock = shiftedClock(t);
   const { link, closeWith, removed } = await unpaired();
-  await closeWith(CLOSE_UNKNOWN_TOKEN);
-  await closeWith(CLOSE_UNKNOWN_TOKEN);
-  assert.equal(removed(), false, 'two may be a recreated room whose tokens are not registered yet');
+  for (let i = 0; i < 5; i++) await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), false, 'a recreated room may not have its tokens registered yet');
   assert.equal(link.stopped, false);
   assert.equal(FakeWS.last.closed, false, 'a new socket is open');
+  clock.advance(UNKNOWN_TOKEN_GRACE_MS);
   await closeWith(CLOSE_UNKNOWN_TOKEN);
   assert.equal(removed(), true);
   assert.equal(link.stopped, true);
 });
 
-test('unknown token: a frame or another close code in between restarts the count', async () => {
+test(`unknown token: the grace alone is not enough, ${UNKNOWN_TOKEN_FINAL} closes are`, async (t) => {
+  const clock = shiftedClock(t);
+  const { link, closeWith, removed } = await unpaired();
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  clock.advance(UNKNOWN_TOKEN_GRACE_MS);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), false);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), true);
+  assert.equal(link.stopped, true);
+});
+
+test('unknown token: a frame or another close code in between restarts the streak and its clock', async (t) => {
+  const clock = shiftedClock(t);
   const { closeWith, removed } = await unpaired();
   await closeWith(CLOSE_UNKNOWN_TOKEN);
   await closeWith(CLOSE_UNKNOWN_TOKEN);
+  clock.advance(UNKNOWN_TOKEN_GRACE_MS);
   FakeWS.last.deliver({ type: 'pc_offline', last_seen: null });
   await closeWith(CLOSE_UNKNOWN_TOKEN);
   await closeWith(CLOSE_UNKNOWN_TOKEN);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
   assert.equal(removed(), false, 'the relay accepted the token in between');
+  clock.advance(UNKNOWN_TOKEN_GRACE_MS);
   await closeWith(1006);
   await closeWith(CLOSE_UNKNOWN_TOKEN);
   await closeWith(CLOSE_UNKNOWN_TOKEN);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
   assert.equal(removed(), false, 'a network close in between');
+  clock.advance(UNKNOWN_TOKEN_GRACE_MS);
   await closeWith(CLOSE_UNKNOWN_TOKEN);
   assert.equal(removed(), true);
+});
+
+test('unknown token: a recreated room whose tokens arrive after three closes keeps the phone', async () => {
+  // The PC's register_tokens lands a few seconds after the room is recreated.
+  const { link, statuses, closeWith, removed, kStatic } = await unpaired();
+  for (let i = 0; i < UNKNOWN_TOKEN_FINAL; i++) await closeWith(CLOSE_UNKNOWN_TOKEN);
+  const ws = FakeWS.last;
+  await until(() => ws.sent.length === 1);
+  const { ack } = N.pcHandleHello(JSON.parse(ws.sent[0]), {
+    kStatic, knownDeviceId: 'd', nowSeconds: Math.floor(Date.now() / 1000),
+  });
+  ws.deliver(ack);
+  await until(() => link.ready);
+  assert.equal(removed(), false);
+  assert.equal(link.stopped, false);
+  assert.equal(link.unknownTokenCloses, 0);
+  assert.equal(statuses.at(-1)[0], 'ready');
+});
+
+test('unknown token: a refused socket that opened does not reset the backoff', async () => {
+  const { link } = await unpaired();
+  for (let i = 1; i <= 3; i++) {
+    const ws = FakeWS.last;
+    ws.closed = true;
+    ws.onclose({ code: CLOSE_UNKNOWN_TOKEN });
+    assert.equal(link.attempt, i, 'the retries back off');
+    // Reconnect now instead of after the delay; the new socket opens.
+    clearTimeout(link.retryTimer);
+    link.connect();
+    await tick();
+  }
+  FakeWS.last.deliver({ type: 'pc_offline', last_seen: null });
+  assert.equal(link.attempt, 0, 'a frame resets it');
 });
 
 test('token dropped and room reset are final at once; room expired is not', async () => {

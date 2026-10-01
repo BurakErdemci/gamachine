@@ -256,7 +256,8 @@ test('pairing, handshake, encrypted RPC and token drop through the real relay', 
   link.stop();
   // A dropped token is accepted and closed with 4009 (a refused upgrade would
   // reach a browser as a bare close); a phone that was offline when it was
-  // removed learns it after UNKNOWN_TOKEN_FINAL such closes in a row.
+  // removed learns it after UNKNOWN_TOKEN_FINAL such closes in a row (the
+  // grace period is zero here; test/page.test.mjs covers it).
   assert.equal(await upgradeStatus(`/ws/phone/${pairId}`, ['gamachine.v1', 'tok.' + token]), 101);
   const lateStatuses = [];
   const closes = [];
@@ -272,6 +273,7 @@ test('pairing, handshake, encrypted RPC and token drop through the real relay', 
     onStatus: (s) => lateStatuses.push(s),
     onPush: () => {},
     WS: CountingWS,
+    timeouts: { unknownTokenGrace: 0 },
   });
   await late.start();
   await waitFor(() => lateStatuses.includes('removed'), 15_000);

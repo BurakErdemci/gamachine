@@ -72,7 +72,8 @@ and closed with 4009 (nothing is sent and the PC hears nothing of it): with a
 plain 401 the page could not tell a removed phone from a network drop and
 retried forever. Right after a room is recreated the PC has not registered
 its tokens yet, so the page takes removal as final only after three 4009
-closes in a row with no frame between them.
+closes in a row with no frame between them, spread over at least 30 s
+(`UNKNOWN_TOKEN_GRACE_MS` in `public/net.js`).
 
 The PC connects before it shows the QR code, so the room exists when the phone
 scans it. A new PC connection with the right key replaces the old one (close 4000).
@@ -132,7 +133,8 @@ delivered, 4003 pairing socket older than 6 minutes, 4004 bad frame (binary,
 over 64 KiB from a phone, second pairing request), 4005 PC offline during
 pairing, 4006 room reset, 4007 room deleted after 30 days without the PC
 (phones keep retrying), 4008 no such room (pairing socket), 4009 unknown or
-missing phone token (the page forgets its pairing after three in a row).
+missing phone token (the page forgets its pairing after three in a row over
+at least 30 s).
 
 Frame limits count UTF-8 bytes, not characters: 64 KiB for a phone or pairing
 frame (the socket is closed with 4004), 1 MiB for a PC frame (answered with

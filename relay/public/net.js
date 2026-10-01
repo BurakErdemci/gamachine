@@ -10,8 +10,12 @@ export const CLOSE_ROOM_RESET = 4006;
 export const CLOSE_NO_ROOM = 4008;
 export const CLOSE_UNKNOWN_TOKEN = 4009;
 // A recreated room refuses every token until the PC registers them again, so
-// one 4009 is not proof of removal; this many in a row, with no frame between, is.
+// one 4009 is not proof of removal. Removal is final after this many in a row
+// with no frame between, spread over at least UNKNOWN_TOKEN_GRACE_MS: the PC's
+// register_tokens can land seconds after the room is recreated, while the
+// first retries come about a second apart.
 export const UNKNOWN_TOKEN_FINAL = 3;
+export const UNKNOWN_TOKEN_GRACE_MS = 30_000;
 const PAIR_TIMEOUT_MS = 330_000; // pair_secret lives 5 min on the PC
 const REQUEST_TIMEOUT_MS = 20_000;
 // The bridge cuts replies over ~700 KB of plaintext into parts (docs/remote-control.md,
@@ -142,6 +146,7 @@ export class Link {
   constructor({ origin, device, onStatus, onPush, WS = globalThis.WebSocket, timeouts = {} }) {
     this.origin = origin;
     this.requestTimeoutMs = timeouts.request ?? REQUEST_TIMEOUT_MS;
+    this.unknownTokenGraceMs = timeouts.unknownTokenGrace ?? UNKNOWN_TOKEN_GRACE_MS;
     this.partGapMs = timeouts.partGap ?? PART_GAP_MS;
     this.device = device;
     this.onStatus = onStatus;
@@ -154,6 +159,7 @@ export class Link {
     this.stopped = true;
     this.attempt = 0;
     this.unknownTokenCloses = 0;
+    this.unknownTokenSince = 0;
     this.seq = 0;
     this.pending = new Map();
     this.inbox = Promise.resolve();
@@ -184,14 +190,16 @@ export class Link {
     const ws = new this.WS(`${this.origin}/ws/phone/${this.device.pairId}`, [PROTOCOL, 'tok.' + this.device.token]);
     this.ws = ws;
     ws.onopen = () => {
-      this.attempt = 0;
       this.lastPong = Date.now();
       this.pingTimer = setInterval(() => this.ping(), PING_EVERY_MS);
       this.inbox = this.inbox.then(() => this.sendHello());
     };
     ws.onmessage = (ev) => {
-      // The relay sends nothing on a socket it refuses, so any frame means the token was accepted.
+      // The relay sends nothing on a socket it refuses, so any frame means the
+      // token was accepted. The backoff resets here, not on open: a refused
+      // socket opens too, and its retries must still back off.
       this.unknownTokenCloses = 0;
+      this.attempt = 0;
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
       // In order: a frame right after hello_ack must see the new channel.
@@ -202,8 +210,15 @@ export class Link {
       this.ws = null;
       this.dropSession();
       clearInterval(this.pingTimer);
-      this.unknownTokenCloses = ev.code === CLOSE_UNKNOWN_TOKEN ? this.unknownTokenCloses + 1 : 0;
-      if (ev.code === CLOSE_TOKEN_DROPPED || ev.code === CLOSE_ROOM_RESET || this.unknownTokenCloses >= UNKNOWN_TOKEN_FINAL) {
+      if (ev.code === CLOSE_UNKNOWN_TOKEN) {
+        if (this.unknownTokenCloses === 0) this.unknownTokenSince = Date.now();
+        this.unknownTokenCloses += 1;
+      } else {
+        this.unknownTokenCloses = 0;
+      }
+      const unknownTokenFinal = this.unknownTokenCloses >= UNKNOWN_TOKEN_FINAL
+        && Date.now() - this.unknownTokenSince >= this.unknownTokenGraceMs;
+      if (ev.code === CLOSE_TOKEN_DROPPED || ev.code === CLOSE_ROOM_RESET || unknownTokenFinal) {
         this.stopped = true;
         this.onStatus('removed');
         return;
