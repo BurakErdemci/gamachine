@@ -64,6 +64,14 @@ async function hangup(env, sock, pairId = PAIR) {
   await room(env, pairId).webSocketClose(sock, 1000, 'client', true);
 }
 
+// An unknown token is accepted and closed at once with 4009: a refused
+// upgrade would reach the page as a bare close.
+function assertUnknownToken(r, message) {
+  assert.equal(r.status, 101, message);
+  assert.deepEqual(r.sock.sent, [], message);
+  assert.deepEqual(r.sock.closed, { code: CLOSE.unknownToken, reason: 'unknown_token' }, message);
+}
+
 async function pcWithToken(env, tokens = [TOKEN]) {
   const pc = await pcOpen(env);
   await msg(env, pc.sock, JSON.stringify({ type: 'register_tokens', hashes: tokens.map(hash) }));
@@ -89,15 +97,17 @@ test('PC room key must be the one the pairing id is derived from', async () => {
   assert.deepEqual(first.sock.closed, { code: CLOSE.replaced, reason: 'replaced' });
 });
 
-test('phones are refused before the upgrade unless their token hash is registered', async () => {
+test('phones are turned away unless their token hash is registered', async () => {
   const env = makeEnv();
   assert.equal((await phoneOpen(env)).status, 404, 'room does not exist yet');
   const pc = await pcOpen(env);
-  assert.equal((await phoneOpen(env)).status, 401, 'token not registered');
-  assert.equal((await open(env, 'phone', ['gamachine.v1'])).status, 401, 'no token');
+  assertUnknownToken(await phoneOpen(env), 'token not registered');
+  assertUnknownToken(await open(env, 'phone', ['gamachine.v1']), 'no token');
+  assertUnknownToken(await phoneOpen(env, 'short'), 'malformed token');
+  assert.deepEqual(pc.sock.take().filter((m) => m.type !== 'welcome'), [], 'the PC hears nothing of a refused phone');
   await msg(env, pc.sock, JSON.stringify({ type: 'register_tokens', hashes: [hash(TOKEN)] }));
   assert.deepEqual(pc.sock.last(), { type: 'tokens_ok', count: 1 });
-  assert.equal((await phoneOpen(env, TOKEN2)).status, 401, 'other token');
+  assertUnknownToken(await phoneOpen(env, TOKEN2), 'other token');
   const phone = await phoneOpen(env);
   assert.equal(phone.status, 101);
   const open1 = pc.sock.last();
@@ -176,12 +186,12 @@ test('drop_token and replace close the dropped phones and refuse them afterwards
   assert.equal(p1.closed.code, CLOSE.tokenDropped);
   assert.equal(p1b.closed.code, CLOSE.tokenDropped);
   assert.equal(p2.closed, null);
-  assert.equal((await phoneOpen(env)).status, 401);
+  assertUnknownToken(await phoneOpen(env));
 
   await msg(env, pc, JSON.stringify({ type: 'register_tokens', hashes: [hash(TOKEN)], replace: true }));
   assert.deepEqual(pc.last(), { type: 'tokens_ok', count: 1 });
   assert.equal(p2.closed.code, CLOSE.tokenDropped, 'replace drops tokens missing from the new list');
-  assert.equal((await phoneOpen(env, TOKEN2)).status, 401);
+  assertUnknownToken(await phoneOpen(env, TOKEN2));
   assert.equal((await phoneOpen(env)).status, 101);
 
   await msg(env, pc, JSON.stringify({ type: 'register_tokens', hashes: ['bad'] }));

@@ -164,6 +164,18 @@ hash; the relay closes that phone's sockets. Turning remote control off and
 forgetting everything: the PC sends `reset_room`, the relay deletes all it
 holds for the pairing id and closes every socket.
 
+Close codes the phone page acts on: 4001 token dropped and 4006 room reset
+are final; 4007 room expired is not (the PC may come back and register the
+token again). A phone that was offline when it was removed learns it on its
+next connect: the relay accepts a socket with an unknown or missing token and
+closes it with 4009 `unknown_token` (a refused upgrade reaches a browser as a
+bare close, the same as a network drop). One 4009 is not final, because a
+recreated room refuses every token until the PC registers them again; three
+in a row with no frame between them are. On a final close, and on
+`hello_reject` with reason `unknown_device` (not `clock`), the page deletes its
+stored pairing, unsubscribes from push and shows the pairing screen. Full
+list: relay/README.md, "Close codes".
+
 ## Session crypto (per connection)
 
 Static-static ECDH authenticates both ends; a fresh ephemeral ECDH per

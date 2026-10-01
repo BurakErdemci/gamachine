@@ -8,6 +8,10 @@ export const CLOSE_TOKEN_DROPPED = 4001;
 export const CLOSE_PAIR_DONE = 4002;
 export const CLOSE_ROOM_RESET = 4006;
 export const CLOSE_NO_ROOM = 4008;
+export const CLOSE_UNKNOWN_TOKEN = 4009;
+// A recreated room refuses every token until the PC registers them again, so
+// one 4009 is not proof of removal; this many in a row, with no frame between, is.
+export const UNKNOWN_TOKEN_FINAL = 3;
 const PAIR_TIMEOUT_MS = 330_000; // pair_secret lives 5 min on the PC
 const REQUEST_TIMEOUT_MS = 20_000;
 // The bridge cuts replies over ~700 KB of plaintext into parts (docs/remote-control.md,
@@ -149,6 +153,7 @@ export class Link {
     this.kStatic = null;
     this.stopped = true;
     this.attempt = 0;
+    this.unknownTokenCloses = 0;
     this.seq = 0;
     this.pending = new Map();
     this.inbox = Promise.resolve();
@@ -185,6 +190,8 @@ export class Link {
       this.inbox = this.inbox.then(() => this.sendHello());
     };
     ws.onmessage = (ev) => {
+      // The relay sends nothing on a socket it refuses, so any frame means the token was accepted.
+      this.unknownTokenCloses = 0;
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
       // In order: a frame right after hello_ack must see the new channel.
@@ -195,7 +202,8 @@ export class Link {
       this.ws = null;
       this.dropSession();
       clearInterval(this.pingTimer);
-      if (ev.code === CLOSE_TOKEN_DROPPED || ev.code === CLOSE_ROOM_RESET) {
+      this.unknownTokenCloses = ev.code === CLOSE_UNKNOWN_TOKEN ? this.unknownTokenCloses + 1 : 0;
+      if (ev.code === CLOSE_TOKEN_DROPPED || ev.code === CLOSE_ROOM_RESET || this.unknownTokenCloses >= UNKNOWN_TOKEN_FINAL) {
         this.stopped = true;
         this.onStatus('removed');
         return;

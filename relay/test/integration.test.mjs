@@ -253,8 +253,30 @@ test('pairing, handshake, encrypted RPC and token drop through the real relay', 
 
   pc.send({ type: 'drop_token', hash: N.enc(N.sha256(Buffer.from(token))) });
   await waitFor(() => statuses.some(([s]) => s === 'removed'));
-  assert.equal(await upgradeStatus(`/ws/phone/${pairId}`, ['gamachine.v1', 'tok.' + token]), 401);
   link.stop();
+  // A dropped token is accepted and closed with 4009 (a refused upgrade would
+  // reach a browser as a bare close); a phone that was offline when it was
+  // removed learns it after UNKNOWN_TOKEN_FINAL such closes in a row.
+  assert.equal(await upgradeStatus(`/ws/phone/${pairId}`, ['gamachine.v1', 'tok.' + token]), 101);
+  const lateStatuses = [];
+  const closes = [];
+  class CountingWS extends PageWS {
+    constructor(url, protocols) {
+      super(url, protocols);
+      this.addEventListener('close', (ev) => closes.push(ev.code));
+    }
+  }
+  const late = new Link({
+    origin: WSO,
+    device: { pairId, pcPub: parsed.pcPub, deviceId, token, privateKey: paired.privateKey },
+    onStatus: (s) => lateStatuses.push(s),
+    onPush: () => {},
+    WS: CountingWS,
+  });
+  await late.start();
+  await waitFor(() => lateStatuses.includes('removed'), 15_000);
+  assert.deepEqual(closes, [4009, 4009, 4009]);
+  late.stop();
   await resetRoom(pc);
 });
 

@@ -11,7 +11,7 @@ import {
   sendFailureNote, sentNote,
   slashItems, filterSlash, withCommand, slashFailureNote, SLASH_SHOWN_MAX,
   APPROVAL_MODES, AUTO_MODE_WARNING, modeInfo, modeChangedNote, modeFailureNote,
-  messageText, mergeChat, stopLine, ASK_ON_PC, cardsMissing,
+  messageText, mergeChat, stopLine, ASK_ON_PC, cardsMissing, CLOSE_UNKNOWN_TOKEN, UNKNOWN_TOKEN_FINAL,
 } from '../public/net.js';
 import { readFileSync, existsSync } from 'node:fs';
 
@@ -752,4 +752,86 @@ test('hello_ack still being processed when the socket closes does not report rea
   assert.ok(statuses.includes('removed'), 'the close landed mid-handshake');
   assert.equal(statuses.at(-1), 'removed');
   assert.equal(link.ready, false);
+});
+
+// ---------------------------------------------------------------- removal by close code
+
+// A Link that has not finished a handshake; each socket opens on its own.
+async function unpaired() {
+  const pc = N.keyPair();
+  const phone = await C.generateKeyPair();
+  const statuses = [];
+  const link = new Link({
+    origin: 'wss://relay.test',
+    device: { pairId: 'p', pcPub: new Uint8Array(pc.pub), deviceId: 'd', token: 't', privateKey: phone.privateKey },
+    onStatus: (s, info) => statuses.push([s, info]),
+    onPush: () => {},
+    WS: FakeWS,
+  });
+  links.push(link);
+  await link.start();
+  await tick();
+  // The relay closes the current socket; wake() reconnects at once instead of after the backoff.
+  const closeWith = async (code) => {
+    const ws = FakeWS.last;
+    ws.closed = true;
+    ws.onclose({ code });
+    if (!link.stopped) {
+      link.wake();
+      await tick();
+    }
+  };
+  const removed = () => statuses.some(([s]) => s === 'removed');
+  return { link, statuses, closeWith, removed };
+}
+
+test(`unknown token: ${UNKNOWN_TOKEN_FINAL} closes with 4009 in a row report removed, fewer keep retrying`, async () => {
+  assert.equal(UNKNOWN_TOKEN_FINAL, 3);
+  const { link, closeWith, removed } = await unpaired();
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), false, 'two may be a recreated room whose tokens are not registered yet');
+  assert.equal(link.stopped, false);
+  assert.equal(FakeWS.last.closed, false, 'a new socket is open');
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), true);
+  assert.equal(link.stopped, true);
+});
+
+test('unknown token: a frame or another close code in between restarts the count', async () => {
+  const { closeWith, removed } = await unpaired();
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  FakeWS.last.deliver({ type: 'pc_offline', last_seen: null });
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), false, 'the relay accepted the token in between');
+  await closeWith(1006);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), false, 'a network close in between');
+  await closeWith(CLOSE_UNKNOWN_TOKEN);
+  assert.equal(removed(), true);
+});
+
+test('token dropped and room reset are final at once; room expired is not', async () => {
+  for (const code of [4001, 4006]) {
+    const { link, closeWith, removed } = await unpaired();
+    await closeWith(code);
+    assert.equal(removed(), true, String(code));
+    assert.equal(link.stopped, true);
+  }
+  const { link, statuses, closeWith, removed } = await unpaired();
+  for (let i = 0; i < 5; i++) await closeWith(4007);
+  assert.equal(removed(), false, 'room_expired: the PC may come back and register the token again');
+  assert.equal(link.stopped, false);
+  assert.equal(statuses.at(-1)[0], 'connecting');
+});
+
+test('hello_reject passes its reason on', async () => {
+  const { statuses } = await unpaired();
+  FakeWS.last.deliver({ type: 'hello_reject', reason: 'unknown_device' });
+  FakeWS.last.deliver({ type: 'hello_reject', reason: 'clock' });
+  await until(() => statuses.filter(([s]) => s === 'hello_rejected').length === 2);
+  assert.deepEqual(statuses.filter(([s]) => s === 'hello_rejected').map(([, info]) => info.reason), ['unknown_device', 'clock']);
 });

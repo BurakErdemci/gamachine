@@ -57,7 +57,7 @@ before the upgrade, as a plain HTTP status:
 | Status | When |
 |---|---|
 | 400 | `gamachine.v1` not offered |
-| 401 | PC without a well-formed key (43-128 base64url chars); phone without a registered token |
+| 401 | PC without a well-formed key (43-128 base64url chars) |
 | 403 | wrong `Origin` (see above); PC key that does not derive the `pair_id` |
 | 404 | unknown path, bad `pair_id`, or phone socket for a room that does not exist |
 | 426 | not a WebSocket upgrade |
@@ -67,6 +67,12 @@ One exception: a pairing socket for a room that does not exist is accepted,
 gets `{type:"no_room"}` and is closed with 4008, because a browser cannot read
 the status of a refused upgrade and the page must tell "no PC is waiting for
 this code" apart from "too many attempts". It counts against no limit.
+Likewise a phone socket whose token is missing or not registered is accepted
+and closed with 4009 (nothing is sent and the PC hears nothing of it): with a
+plain 401 the page could not tell a removed phone from a network drop and
+retried forever. Right after a room is recreated the PC has not registered
+its tokens yet, so the page takes removal as final only after three 4009
+closes in a row with no frame between them.
 
 The PC connects before it shows the QR code, so the room exists when the phone
 scans it. A new PC connection with the right key replaces the old one (close 4000).
@@ -125,7 +131,8 @@ Close codes: 4000 replaced PC, 4001 token dropped, 4002 pairing reply
 delivered, 4003 pairing socket older than 6 minutes, 4004 bad frame (binary,
 over 64 KiB from a phone, second pairing request), 4005 PC offline during
 pairing, 4006 room reset, 4007 room deleted after 30 days without the PC
-(phones keep retrying), 4008 no such room (pairing socket).
+(phones keep retrying), 4008 no such room (pairing socket), 4009 unknown or
+missing phone token (the page forgets its pairing after three in a row).
 
 Frame limits count UTF-8 bytes, not characters: 64 KiB for a phone or pairing
 frame (the socket is closed with 4004), 1 MiB for a PC frame (answered with

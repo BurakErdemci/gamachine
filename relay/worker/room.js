@@ -32,6 +32,7 @@ export const CLOSE = {
   roomReset: 4006,
   roomExpired: 4007,
   noRoom: 4008,
+  unknownToken: 4009,
 };
 
 const PING = '{"type":"ping"}';
@@ -154,7 +155,7 @@ export class Room {
     const hash = token && SECRET_RE.test(token) ? await sha256b64u(token) : null;
     const meta = await this.load();
     if (meta.lastPc === null) return plain(404, 'not found');
-    if (!hash || !meta.tokens.some((t) => equalStrings(t, hash))) return plain(401, 'unauthorized');
+    if (!hash || !meta.tokens.some((t) => equalStrings(t, hash))) return this.refuseUnknownToken(request);
     const conn = randomId();
     const { server, response } = this.accept(['phone', 'tok:' + hash], { role: 'phone', conn, tokenHash: hash }, request);
     const pc = this.pcSocket();
@@ -196,6 +197,16 @@ export class Room {
     const { server, response } = this.accept(['none'], { role: 'none' }, request);
     server.send(JSON.stringify({ type: 'no_room' }));
     server.close(CLOSE.noRoom, 'no_room');
+    return response;
+  }
+
+  // Same reason as refuseNoRoom: a refused upgrade reaches the page as a bare
+  // close, so a phone revoked while offline could not tell it from a network
+  // drop and retried forever. Not final on its own: right after a room is
+  // recreated the PC may not have registered its tokens yet.
+  refuseUnknownToken(request) {
+    const { server, response } = this.accept(['none'], { role: 'none' }, request);
+    server.close(CLOSE.unknownToken, 'unknown_token');
     return response;
   }
 
