@@ -334,6 +334,9 @@ _POSIX_READ_VERBS = frozenset({"ls", "cat", "pwd", "head", "tail", "wc", "tree",
                                "grep", "find", "rg"})
 # ripgrep flags that start another program (preprocessor, decompressor).
 _RG_EXEC_FLAG = re.compile(r"^(?:--pre|--hostname-bin|--search-zip|-[A-Za-y]*z)")
+# tree writes its listing to a file with -o, and -R reruns itself with
+# `-o 00Tree.html` in every directory.
+_TREE_WRITE_FLAG = re.compile(r"^(?:--o|-[A-Za-z]*[oR])")
 
 
 def _shell_script(command: str) -> "tuple[Optional[str], bool]":
@@ -400,7 +403,11 @@ def _is_read_only_command(command, cwd, workspace: str) -> bool:
         mapped = _READ_VERBS.get(verb) if verb in _POSIX_READ_VERBS else None
     if mapped is None:
         return False
-    if verb == "rg" and any(_RG_EXEC_FLAG.match(t) for t in rest.split()):
+    # Both shells strip the quotes before the program sees the flag.
+    args = rest.replace('"', "").split()
+    if verb == "rg" and any(_RG_EXEC_FLAG.match(t) for t in args):
+        return False
+    if mapped == "tree" and any(_TREE_WRITE_FLAG.match(t) for t in args):
         return False
     return command_safety.is_auto_safe(f"{mapped} {rest}".strip(), root)
 

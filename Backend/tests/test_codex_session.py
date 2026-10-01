@@ -374,6 +374,52 @@ def test_a_script_with_anything_but_plain_characters_is_not_read_only(ws, comman
     assert _is_read_only_command(command, ws, ws) is False
 
 
+@pytest.mark.parametrize("command", [
+    # tree -o writes the listing to a file; -R reruns tree with -o 00Tree.html.
+    "/bin/bash -lc 'tree -o .git/hooks/pre-commit'",
+    "/bin/bash -lc 'tree -o=out.txt'",
+    "/bin/bash -lc 'tree -ao out.txt'",
+    "/bin/bash -lc 'tree --output out.txt'",
+    "/bin/bash -lc 'tree \"-o\" out.txt'",
+    "/bin/bash -lc 'tree -R -L 1'",
+    _PS + "'tree -o out.txt'",
+    # find predicates that write or run a program (refused by command_safety).
+    "/bin/bash -lc 'find . -fprint out.txt'",
+    "/bin/bash -lc 'find . -fprint0 out.txt'",
+    "/bin/bash -lc 'find . -fprintf out.txt x'",
+    "/bin/bash -lc 'find . -fls out.txt'",
+    "/bin/bash -lc 'find . -ok rm'",
+    "/bin/bash -lc 'find . -okdir rm'",
+    "/bin/bash -lc 'find . -exec rm'",
+    "/bin/bash -lc 'find . -execdir rm'",
+    "/bin/bash -lc 'find . \"-delete\"'",
+    # ripgrep flags that start a program, also when quoted.
+    _PS + "'rg \"--pre\" sh Player'",
+    "/bin/bash -lc 'rg \"--pre=sh\" Player'",
+    "/bin/bash -lc 'rg -\"z\" Player'",
+    "/bin/bash -lc 'rg --search-zip Player'",
+    "/bin/bash -lc 'rg --hostname-bin=x Player'",
+])
+def test_a_read_verb_with_a_write_or_exec_option_is_not_read_only(ws, command):
+    assert _is_read_only_command(command, ws, ws) is False
+
+
+@pytest.mark.parametrize("command", [
+    # Options with no write or exec form stay on the shortcut: head/tail/wc/
+    # grep/cat/ls and the PowerShell read cmdlets have none.
+    "/bin/bash -lc 'tree -L 2 -a Assets'",
+    "/bin/bash -lc 'tree -d Assets'",
+    "/bin/bash -lc 'find Assets -name A.cs -type f'",
+    "/bin/bash -lc 'grep -o -n Player Assets'",
+    "/bin/bash -lc 'head -n 5 Assets/A.cs'",
+    "/bin/bash -lc 'wc -l Assets/A.cs'",
+    _PS + "'Get-Content -Raw -Encoding UTF8 Assets\\A.cs'",
+    _PS + "'Get-ChildItem -Recurse -Force Assets'",
+])
+def test_a_read_verb_with_a_plain_option_is_read_only(ws, command):
+    assert _is_read_only_command(command, ws, ws) is True
+
+
 def test_a_read_from_outside_the_workspace_is_not_read_only(ws, tmp_path_factory):
     outside = str(tmp_path_factory.mktemp("outside"))
     assert _is_read_only_command(_PS + "'Get-ChildItem'", outside, ws) is False
