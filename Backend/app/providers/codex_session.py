@@ -321,6 +321,10 @@ _UNSAFE_INNER = re.compile(r"""['{}@]|(?:^|[\s/\\])\.[*?\[]""")
 # reads the way the shell does: a comma is a PowerShell array, curly quotes
 # are quotes to PowerShell, and a glob can reach through a workspace link.
 _PLAIN_SCRIPT = re.compile(r'[A-Za-z0-9 _./\\:="-]*')
+# action_risk reads `cat a,..\x` and `cat` with curly-quoted `..\x` as one
+# in-workspace name (measured: routine), while PowerShell reads an array and
+# strips the curly quotes. Printable ASCII without a comma.
+_CLASSIFIABLE_SCRIPT = re.compile(r"[\x20-\x2b\x2d-\x7e]*")
 
 # Claude step mode lets Read/Glob/Grep/LS through without a card; these are
 # the shell forms of the same reads. git/echo/diff are left out: they are
@@ -425,7 +429,7 @@ def _classified_command(command, cwd: Optional[str] = None) -> str:
     """
     raw = _command_text(command)
     script, _ = _shell_script(raw, cwd)
-    if not script or _UNSAFE_INNER.search(script):
+    if not script or not _CLASSIFIABLE_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script):
         return raw
     return script
 
