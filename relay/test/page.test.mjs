@@ -899,6 +899,23 @@ test('unknown token: a recreated room whose tokens arrive after three closes kee
   assert.equal(statuses.at(-1)[0], 'ready');
 });
 
+test('a hello queued behind a closed socket is not sent on the next one', async () => {
+  // Each socket queues its hello on the inbox when it opens; a quick reconnect
+  // used to let an older socket's hello go out on the new one, and that second
+  // hello reset a session already acked (relay CI, 1 Oct 2026).
+  const { link, closeWith } = await unpaired();
+  await until(() => FakeWS.last.sent.length === 1);
+  // Hold the inbox, as a slow frame would, while the socket is replaced.
+  let release;
+  link.inbox = new Promise((r) => { release = r; });
+  for (let i = 0; i < 3; i++) await closeWith(1006);
+  const ws = FakeWS.last;
+  release();
+  await until(() => ws.sent.length >= 1);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(ws.sent.length, 1);
+});
+
 test('unknown token: a refused socket that opened does not reset the backoff', async () => {
   const { link } = await unpaired();
   for (let i = 1; i <= 3; i++) {

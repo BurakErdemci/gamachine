@@ -196,7 +196,9 @@ export class Link {
     ws.onopen = () => {
       this.lastPong = Date.now();
       this.pingTimer = setInterval(() => this.ping(), PING_EVERY_MS);
-      this.inbox = this.inbox.then(() => this.sendHello());
+      // Bound to this socket: queued behind an older socket's hello, it must not
+      // send a second hello on whichever socket is current by then.
+      this.inbox = this.inbox.then(() => this.sendHello(ws));
     };
     ws.onmessage = (ev) => {
       // The relay sends nothing on a socket it refuses, so any frame means the
@@ -263,9 +265,8 @@ export class Link {
     this.pending.clear();
   }
 
-  async sendHello() {
-    const ws = this.ws;
-    if (!ws) return;
+  async sendHello(ws = this.ws) {
+    if (!ws || this.ws !== ws) return;
     this.dropSession();
     const eph = await C.generateKeyPair();
     this.eph = eph;
