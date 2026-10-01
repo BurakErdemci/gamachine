@@ -9,6 +9,13 @@ import '../styles/gm/theme-sade.shell.css'
 import '../styles/gm/theme-pafta.shell.css'
 import '../styles/gm/theme-atolye.shell.css'
 import '../styles/globals.css'
+// After globals.css on purpose: the thread styles replace the old slate chat rules (.chat-prose,
+// .chat-table) that globals.css still carries for the not-yet-ported surfaces.
+import '../styles/gm/thread.css'
+import '../styles/gm/theme-arena.thread.css'
+import '../styles/gm/theme-sade.thread.css'
+import '../styles/gm/theme-pafta.thread.css'
+import '../styles/gm/theme-atolye.thread.css'
 import { ConfirmDialogHost } from '../components/ui/ConfirmDialog'
 import { ErrorBoundary } from '../components/ui/ErrorBoundary'
 import { AppearanceProvider } from '../lib/appearance'

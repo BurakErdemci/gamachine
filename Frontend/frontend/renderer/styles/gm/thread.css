@@ -1,0 +1,497 @@
+/* Gamachine v4 chat thread: the stage, thread, messages, tool chips, code plate, approval card,
+   composer + status strip, achievement band and the empty new chat.
+   Ported from the approved mockup (gamachine-tasarim/maket/base.css: "chat stage" through
+   "code block", "APPROVAL CARD", "composer", "ACHIEVEMENT BAND", "SCREEN 3: EMPTY NEW CHAT").
+   The mockup's rules are kept with their class names and values so React can emit the mockup
+   DOM 1:1; every colour is a token from tokens.css and themes restyle under [data-theme] in
+   theme-*.thread.css. App-only glue (things the mockup never drew: mail notes, wake rows,
+   attachments, the live-activity line, side panels) is at the end, also on tokens only. */
+
+/* ---------- atoms the mockup set globally, scoped to the stage ---------- */
+.paper { background: var(--paper-bg); color: var(--ink); position: relative; }
+.stage, .workspace { font-size: var(--fs-body); line-height: var(--lh-body); }
+.stage code, .stage kbd, .stage pre, .achv .num { font-family: var(--font-mono); font-variant-ligatures: none; }
+.stage .num, .stage time, .achv .num { font-variant-numeric: tabular-nums; }
+.stage :focus-visible, .workspace :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
+/* clipped shapes would cut an outside ring: draw it inside */
+.stage .btn-primary:focus-visible, .stage .send:focus-visible { outline-color: var(--btn-focus); }
+.stage .btn:focus-visible, .stage .send:focus-visible { outline-offset: -3px; }
+.stage button { cursor: pointer; }
+.stage button:disabled { cursor: not-allowed; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.mascot { width: 40px; height: 40px; flex: none; display: block; }
+
+/* The approved full mascot keeps its original paths; only its colours are re-pointed to tokens
+   (the head mark is handled by `.brand-head` in shell.css). */
+#gamachine [fill="#2A2F3D"] { fill: var(--mascot-body); }
+#gamachine [fill="#FF6B3D"] { fill: var(--mascot-visor); }
+#gamachine [fill="#141826"] { fill: var(--mascot-screen); }
+#gamachine [stroke="#141826"] { stroke: var(--mascot-line); }
+#gamachine [fill="#F1EEE6"] { fill: var(--mascot-eye); }
+#gamachine [stroke="#F1EEE6"] { stroke: var(--mascot-eye); }
+
+/* m4: a message keeps the colour of the model that wrote it; --model is the current pick only */
+.msg[data-m] .model-dot { background: var(--m); }
+[data-m="claude"] { --m: var(--model-claude); }
+[data-m="codex"] { --m: var(--model-codex); }
+[data-m="gemini"] { --m: var(--model-gemini); }
+[data-m="other"] { --m: var(--model-other); }
+
+/* ---------- chat stage ---------- */
+/* The grid cell is `.app-main` (shell.css); the stage only adds the mockup's clip and its
+   container, which the narrow rules below query. */
+.stage {
+  min-height: 0; position: relative;
+  display: flex; flex-direction: column; overflow: hidden;
+  container: stage / inline-size;
+}
+/* round 7: the chat shares the row at half width and becomes a strip at focus width */
+@container stage (max-width: 760px) {
+  .title-block .tb-date, .title-block .tb-scene, .strip-hint { display: none; }
+}
+@container stage (max-width: 520px) {
+  .title-block { padding: 14px 20px 10px; gap: 12px; }
+  .title-block .tb-no { display: none; }
+  .thread-col { padding: 14px 18px 18px; }
+  .composer-wrap { padding: 2px 18px 12px; }
+  .approval-hint, .code-copy:not(.code-open), .code-diff, .strip-sep-last { display: none; }
+  /* m4: "Diğer ayarlar" stays reachable as its chevron at the right end (name kept for screen readers) */
+  .strip-more { margin-left: auto; }
+  /* the base .strip rules come later in the file: .stage raises these above them */
+  .stage .strip { gap: 2px; padding-left: 0; padding-right: 0; }
+  .stage .strip-item, .stage .strip-sep { flex: none; }
+  .stage .strip-item { padding: 2px 4px; white-space: nowrap; }
+  .strip-more-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  /* m4: a clipped code line fades out over 24 px at the right edge: reads as "scrolls", not as a cut */
+  .stage .thread .code-body {
+    -webkit-mask-image: linear-gradient(to top, transparent 0, black 22px), linear-gradient(to left, transparent 0, black 24px);
+    mask-image: linear-gradient(to top, transparent 0, black 22px), linear-gradient(to left, transparent 0, black 24px);
+    -webkit-mask-composite: source-in; mask-composite: intersect;
+  }
+  .code-path { min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg-user { max-width: 100%; }
+  .thread-col .approval-who { display: none; }
+  .thread-col .approval-wait { margin-left: auto; }
+  .thread-col .aw-ic { display: inline-block; }
+  .thread-col .aw-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  /* M3 (round 9, from Pafta): the icon stays on the first line of its text, never alone */
+  .thread-col .approval-why { flex-wrap: nowrap; align-items: flex-start; }
+  .thread-col .approval-why .ic { flex: none; margin-top: 3px; }
+  /* the chat strip uses the phone's card layout (same widths, same reasoning) */
+  .thread-col .approval:not([data-state="pending"]) { padding-right: 16px; }
+  .thread-col .approval:not([data-state="pending"]) > .approval-head { flex-basis: 100%; min-height: 26px; padding-right: 124px; }
+  .thread-col .approval:not([data-state="pending"]) > .approval-result,
+  .thread-col .approval:not([data-state="pending"]) > .approval-sentence { flex-basis: 100%; white-space: normal; min-width: 0; }
+  .thread-col .approval[data-state="approved"] > .approval-result { display: none; }
+  .thread-col .approval[data-state="approved"] .stamp, .thread-col .approval[data-state="rejected"] .stamp { top: 25px; }
+  .thread-col .approval[data-state="pending"] > .approval-detail { grid-column: 1 / -1; grid-row: 5; justify-self: start; margin-top: 0; }
+  .thread-col .approval[data-state="pending"] > .approval-actions { grid-column: 1 / -1; grid-row: 6; }
+}
+/* #9 model light: a radial pool of the model colour, no filter, no blur. */
+.lamp {
+  position: absolute; inset: 0 0 auto 0; height: 260px; pointer-events: none; z-index: 0;
+  background: radial-gradient(ellipse var(--lamp-size) at 50% 0,
+    color-mix(in srgb, var(--model) calc(var(--lamp-strength) + var(--lamp-boost)), transparent), transparent);
+}
+.lamp.is-breathing { animation: lamp-breath 600ms var(--g-ease-move); }
+@keyframes lamp-breath { 50% { --lamp-boost: 8%; } }
+.app.is-working .lamp { --lamp-boost: 4%; }   /* busy mind: one level up, no loop */
+
+.title-block {
+  position: relative; z-index: 1; flex: none;
+  display: flex; align-items: baseline; gap: 18px;
+  width: 100%; max-width: 800px; margin: 0 auto; padding: 18px 40px 12px;
+  border-bottom: var(--line-w) solid var(--tb-rule);
+}
+.tb-cell { display: flex; align-items: baseline; gap: 6px; }
+.tb-k {
+  font-family: var(--font-label); font-size: var(--fs-meta); color: var(--ink-faint);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.tb-v { font-size: var(--fs-small); color: var(--ink-dim); }
+.tb-title { order: -1; margin-right: auto; }
+.tb-title .tb-k { display: none; }
+.tb-title .tb-v { font-family: var(--font-title); font-size: var(--fs-title); font-weight: 600; color: var(--ink); }
+.tb-no .tb-v, .tb-rev .tb-v, .tb-date .tb-v { font-family: var(--font-mono); }
+
+/* M3: room under the header; content scrolling up fades out instead of touching it */
+.thread {
+  position: relative; z-index: 1; flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 16px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 16px);
+}
+/* M1: the opening frame holds the whole scene (request -> answer -> waiting card) in every
+   theme, so the paddings are tight; the 16 px fade reads as "scrolled", never as a cut. */
+.thread-col { max-width: 800px; margin: 0 auto; padding: 18px 40px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+.msg-who {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+  font-family: var(--font-who); text-transform: var(--who-case); letter-spacing: var(--who-track);
+  font-size: var(--fs-small); font-weight: 600; color: var(--ink);
+}
+.msg-who time { font-family: var(--font-mono); font-weight: 400; color: var(--ink-faint); font-size: var(--fs-meta); text-transform: none; letter-spacing: 0; }
+.msg-body p + p, .msg-body p + ul { margin-top: 8px; }
+.msg-body ul { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.msg-body li { position: relative; padding-left: 18px; }
+.msg-body li::before { content: ""; position: absolute; left: 4px; top: .78em; width: 6px; height: var(--line-w); background: var(--ink-dim); }
+.msg-body code, .approval-sentence code, .tool-text code {
+  font-size: .9em; padding: 1px 5px; border-radius: var(--radius-sm);
+  background: var(--paper-sunk); color: var(--ink);
+}
+.msg-user { align-self: flex-end; max-width: 88%; }
+.msg-user .msg-who { justify-content: flex-end; }
+.msg-user .msg-body {
+  background: var(--paper-raised); border: var(--line-w) solid var(--paper-line);
+  border-radius: var(--radius-lg); padding: 10px 14px;
+}
+.msg-ai { display: flex; flex-direction: column; gap: 10px; }
+.msg-ai > .msg-who { margin-bottom: -6px; }
+.msg-ai > .approval { margin-top: 2px; }       /* m9: the decision gets air */
+.msg-cont { margin-top: 0; }
+
+/* #1 gonder: the user's message is accepted */
+.msg.is-sent { animation: send-in var(--g-dur-base) var(--g-ease-press) both; transform-origin: bottom right; }
+@keyframes send-in { from { opacity: 0; transform: translateY(6px) scale(.96); } }
+/* #2 murekkep: a streamed word arrives tinted and settles to ink in 400 ms */
+.ink-new { animation: ink-settle 400ms ease-out both; }
+@keyframes ink-settle { from { color: var(--stream-ink); } }
+
+/* #3 calisiyor + #4 adim */
+.working { display: none; align-items: center; gap: 10px; font-size: var(--fs-small); color: var(--ink-dim); min-height: 24px; }
+.working.is-on { display: flex; }
+.dots { display: inline-flex; gap: 4px; align-items: center; height: 12px; }
+.dots i { width: 3px; height: 3px; border-radius: 50%; background: var(--run-text); animation: dot-hop 1.6s ease-in-out infinite; }
+.dots i:nth-child(2) { animation-delay: .16s; }
+.dots i:nth-child(3) { animation-delay: .32s; }
+@keyframes dot-hop { 0%, 30%, 100% { transform: none; } 15% { transform: translateY(-2px); } }
+.working-label { display: none; }
+.step { display: inline-block; overflow: hidden; }
+.step-text { display: inline-block; }
+.step-text.is-out { animation: step-out var(--g-dur-quick) var(--g-ease-exit) forwards; }
+.step-text.is-in { animation: step-in var(--g-dur-base) var(--g-ease-enter); }
+@keyframes step-out { to { opacity: 0; transform: translateY(-4px); } }
+@keyframes step-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* #5 katla: folded detail opens on grid rows 0fr -> 1fr */
+.fold { display: grid; grid-template-rows: 1fr; }
+.fold-in { min-height: 0; overflow: hidden; }
+.fold-host.is-unfolding .fold { animation: fold-open 200ms var(--g-ease-enter); }
+.fold-host.is-folding .fold { animation: fold-close 140ms var(--g-ease-exit) forwards; }
+@keyframes fold-open { from { grid-template-rows: 0fr; opacity: 0; } }
+@keyframes fold-close { to { grid-template-rows: 0fr; opacity: 0; } }
+
+/* chat -> workspace links (round 7): file chips, tool "Ayrıntı", code "Panelde aç" */
+.chip-file { border-radius: var(--radius-sm); }
+.chip-file code { box-shadow: inset 0 -1px 0 var(--paper-line-strong); transition: background var(--g-dur-tap) var(--ease); }
+.chip-file:hover code { background: var(--paper-line); }
+.tool-row { align-self: flex-start; display: flex; align-items: flex-start; gap: 6px; }
+.tool-open {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 8px;
+  border-radius: var(--radius-md); font-size: var(--fs-small); color: var(--ink-faint);
+}
+.tool-open:hover { background: var(--paper-sunk); color: var(--ink); }
+
+/* tool summary line */
+.tool { align-self: flex-start; }
+.tool summary {
+  list-style: none; display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 5px 10px 5px 8px; border-radius: var(--radius-md);
+  border: var(--line-w) solid var(--paper-line); color: var(--ink-dim); font-size: var(--fs-small);
+}
+.tool summary::-webkit-details-marker { display: none; }
+.tool summary:hover { background: var(--paper-sunk); color: var(--ink); }
+.tool-sep { color: var(--ink-faint); margin: 0 2px; }
+.tool-text code { font-size: var(--fs-meta); }   /* m1: never below 12px */
+.tool[open] .tool-chev { transform: rotate(180deg); }
+.tool-steps { margin-top: 6px; padding: 8px 12px; border-left: var(--line-w) solid var(--paper-line); display: flex; flex-direction: column; gap: 3px; }
+.tool-steps li { display: flex; gap: 10px; font-size: var(--fs-meta); color: var(--ink-dim); }
+.tool-verb { width: 44px; color: var(--ink-faint); }
+.tool-steps code { font-size: var(--fs-meta); }
+
+/* code block */
+.code {
+  margin: 0; border-radius: var(--radius-md); overflow: hidden;
+  background: var(--code-bg); color: var(--code-text);
+  border: var(--line-w) solid var(--code-line);
+}
+.code-head {
+  display: flex; align-items: center; gap: 12px; padding: 0 8px 0 14px; height: 34px;
+  background: var(--code-head-bg); border-bottom: var(--line-w) solid var(--code-line);
+  font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--code-dim);
+}
+.code-path b { color: var(--code-text); font-weight: 500; }
+.code-diff { margin-right: auto; }
+.code-diff .add { color: var(--code-type); }
+.code-copy {
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px;
+  border-radius: var(--radius-sm); font-family: var(--font-body); font-size: var(--fs-meta); color: var(--code-dim);
+}
+.code-copy:hover { color: var(--code-text); background: var(--code-line); }
+.code-body { margin: 0; padding: 10px 0 11px; font-size: 13px; line-height: 1.58; overflow-x: auto; }
+/* the block shows the head of the file (+42 lines): the last line fades so it reads as "continues" */
+.thread .code-body { -webkit-mask-image: linear-gradient(to top, transparent 0, black 22px); mask-image: linear-gradient(to top, transparent 0, black 22px); }
+.code-body .ln { display: inline-block; width: 40px; padding-right: 14px; text-align: right; color: var(--code-dim); user-select: none; opacity: .75; }
+.code-body .k { color: var(--code-kw); }
+.code-body .t { color: var(--code-type); }
+.code-body .f { color: var(--code-fn); }
+.code-body .n { color: var(--code-num); }
+.code-body .a { color: var(--code-attr); }
+
+
+/* ======================= APPROVAL CARD (quest window structure) =======================
+   strip (.approval-head: mark, kicker, label, wait counter, source)
+   title (.approval-name, human language) / sentence / risk line (.approval-why + .risk)
+   actions / result tag (.stamp). Base shows a calm card; themes restyle. */
+.approval {
+  position: relative;
+  background: var(--paper-raised);
+  border: var(--card-line-w) solid var(--paper-line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 14px 18px 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.approval[data-state="pending"] { border-color: var(--accent); }
+.approval-corner, .approval-line { display: none; }   /* hooks: themes may draw these */
+/* absolutely positioned hooks must not take a grid area, or their box shrinks to the content box */
+.approval[data-state] > .approval-corner, .approval[data-state] > .approval-line,
+.approval[data-state] > .stamp, .approval[data-state] > .strike { grid-column: auto; grid-row: auto; }
+.approval-head { display: flex; align-items: center; gap: 10px; }
+.approval-mark { width: 10px; height: 10px; border-radius: 50%; background: var(--ink-faint); flex: none; }
+.approval[data-state="pending"] .approval-mark { background: var(--accent); }
+.approval[data-state="approved"] .approval-mark { background: var(--ok); }
+.approval-kicker { display: none; }
+.approval-title {
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+  color: var(--ink-dim);
+}
+.approval[data-state="pending"] .approval-title { color: var(--accent-text); }
+.approval-wait { display: none; font-size: var(--fs-meta); color: var(--accent-text); }
+/* round 8: header items never break inside ("ONAYIN / GEREKİYOR", "bekliyor / 0:02" at focus width) */
+.approval-head > * { flex: none; white-space: nowrap; }
+.aw-ic { display: none; width: 14px; height: 14px; margin-right: 4px; vertical-align: -2px; }
+/* narrow card (phone, chat strip): the wait counter is a clock + time; the word stays for screen readers */
+.phone .approval-wait { margin-left: auto; }
+.phone .aw-ic { display: inline-block; }
+.phone .aw-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.approval-who { margin-left: auto; font-size: var(--fs-meta); color: var(--ink-faint); }
+.approval-name { font-family: var(--font-title); font-size: 17px; font-weight: 600; line-height: 1.3; color: var(--ink); }
+.approval-sentence { font-size: var(--fs-body); line-height: 1.45; color: var(--ink-dim); }
+.approval-why { display: flex; align-items: center; gap: 7px; font-size: var(--fs-small); color: var(--ink-dim); }
+.approval[data-state="pending"] .approval-why { color: var(--accent-text); }
+.risk { display: none; align-items: center; gap: 3px; margin-right: 4px; }
+.risk-k { margin-right: 4px; font-family: var(--font-label); font-weight: var(--label-weight); text-transform: var(--label-case); letter-spacing: var(--label-track); font-size: var(--fs-meta); }
+.risk i { width: 8px; height: 8px; background: var(--pip-off); }
+.risk[data-level="1"] i:nth-of-type(-n+1), .risk[data-level="2"] i:nth-of-type(-n+2), .risk[data-level="3"] i { background: currentColor; }
+.approval-detail summary {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+  font-size: var(--fs-small); color: var(--ink-dim); padding: 2px 0;
+}
+.approval-detail summary::-webkit-details-marker { display: none; }
+.approval-detail summary::before { content: "+"; font-family: var(--font-mono); width: 12px; color: var(--ink-faint); }
+.approval-detail[open] summary::before { content: "−"; }
+.approval-detail summary:hover { color: var(--ink); }
+.approval-detail pre {
+  margin: 6px 0 0; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--code-bg); color: var(--code-text); font-size: var(--fs-meta); line-height: 1.6; overflow-x: auto;
+}
+.approval-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.approval[data-state="pending"] { display: grid; grid-template-columns: auto 1fr; row-gap: 8px; }
+.approval[data-state="pending"] > * { grid-column: 1 / -1; }
+.approval[data-state="pending"] > .approval-actions { grid-column: 1; grid-row: 5; }
+.approval[data-state="pending"] > .approval-detail { grid-column: 2; grid-row: 5; justify-self: end; align-self: center; margin-top: 4px; }
+.approval[data-state="pending"] > .approval-detail[open] { grid-column: 1 / -1; grid-row: 6; justify-self: stretch; }
+.approval-hint { margin-left: 10px; font-size: var(--fs-meta); color: var(--ink-faint); }
+.btn {
+  white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 36px; padding: 0 16px; border-radius: var(--radius-md); font-size: 14px; font-weight: 600;
+  font-family: var(--btn-font); text-transform: var(--btn-case); letter-spacing: var(--btn-track);
+  transition: background var(--g-dur-tap) var(--ease), transform var(--g-dur-tap) var(--ease);
+}
+.btn-primary { background: var(--btn-bg); color: var(--btn-text); box-shadow: var(--shadow-btn); clip-path: var(--clip-sm); }
+.btn-primary:hover { background: var(--btn-hover); }
+.btn-primary:active { transform: translate(1px, 1px); box-shadow: none; }
+.btn-ghost { color: var(--ink); border: var(--line-w) solid var(--paper-line-strong); }
+.btn-ghost:hover { background: var(--paper-sunk); }
+.approval-result { display: none; font-size: var(--fs-meta); color: var(--ink-faint); }
+.approval-result time { font-family: var(--font-mono); }
+.res-extra::before { content: " · "; }
+
+.stamp, .strike { display: none; pointer-events: none; }
+.stamp-no { display: none; }
+
+/* decided: a compact record. The name switches to past tense (M2); "Ayrıntı" sits right (m3). */
+.approval:not([data-state="pending"]) .approval-actions { display: none; }
+.approval:not([data-state="pending"]) .approval-result { display: block; }
+.approval:not([data-state="pending"]) {
+  padding: 11px 170px 12px 18px; flex-direction: row; flex-wrap: wrap; align-items: center; column-gap: 14px; row-gap: 4px;
+}
+.approval:not([data-state="pending"]) > .approval-result { order: 1; flex: 1; white-space: nowrap; }
+.approval:not([data-state="pending"]) > .approval-name { display: none; }
+.approval:not([data-state="pending"]) > .approval-sentence { order: 2; flex: 1 1 calc(100% - 110px); font-size: 15px; color: var(--ink); font-weight: 500; }
+.approval:not([data-state="pending"]) > .approval-detail { order: 3; margin-left: auto; }
+.approval:not([data-state="pending"]) > .approval-detail[open] { flex-basis: 100%; }
+.approval:not([data-state="pending"]) .approval-who,
+.approval:not([data-state="pending"]) .approval-wait,
+.approval[data-state="approved"] .approval-why,
+.approval[data-state="rejected"] .approval-why { display: none; }
+
+.approval[data-state="approved"] .stamp,
+.approval[data-state="rejected"] .stamp {
+  display: block; position: absolute; right: 20px; top: 50%;
+  transform: translateY(-50%) rotate(var(--stamp-rotate));
+  padding: 4px 10px; border: 2px solid var(--ok); border-radius: var(--radius-sm);
+  color: var(--ok-text); font-family: var(--font-label); font-weight: 700; font-size: 13px;
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.approval[data-state="rejected"] .stamp { border-color: var(--accent); color: var(--accent-text); }
+.approval[data-state="rejected"] .stamp-ok { display: none; }
+.approval[data-state="rejected"] .stamp-no { display: inline; }
+.approval[data-state="rejected"] .approval-sentence { color: var(--ink-dim); text-decoration: line-through; text-decoration-color: var(--accent); }
+
+/* #8 / #13 the decision lands (themes retune with --dur-stamp / --stamp-ease / --stamp-from) */
+.approval.is-fresh .stamp { animation: stamp-in var(--dur-stamp) var(--stamp-ease) both; }
+.approval.is-fresh .approval-mark { animation: pop 300ms var(--g-ease-press); }
+@keyframes stamp-in {
+  from { opacity: 0; transform: translateY(-50%) rotate(var(--stamp-rotate)) scale(var(--stamp-from)); }
+  to   { opacity: 1; transform: translateY(-50%) rotate(var(--stamp-rotate)) scale(1); }
+}
+/* #6 onay-gelis: the card arrives, its edge is drawn left to right */
+.approval.is-arriving { animation: quest-in var(--g-dur-base) var(--g-ease-enter) both; }
+.approval.is-arriving > .approval-line {
+  display: block; position: absolute; left: 0; right: 0; top: -1px; height: 2px; background: var(--accent);
+  transform-origin: left center; animation: line-draw 300ms var(--g-ease-enter) both;
+}
+@keyframes quest-in { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
+@keyframes line-draw { from { transform: scaleX(0); } }
+/* #7 durtu: the header mark nudges -2, +2, -1, 0 px */
+.approval.is-nudging .approval-mark,
+.approval.is-nudging .approval-kicker { animation: nudge 320ms var(--g-ease-move); }
+@keyframes nudge { 25% { transform: translateX(-2px); } 50% { transform: translateX(2px); } 75% { transform: translateX(-1px); } }
+
+
+/* ---------- composer ---------- */
+.composer-wrap { position: relative; z-index: 1; flex: none; width: 100%; max-width: 800px; margin: 0 auto; padding: 2px 40px 12px; }
+.composer {
+  display: flex; align-items: center; gap: 4px; padding: 6px 6px 6px 8px;
+  background: var(--paper-raised); border: var(--line-w) solid var(--paper-line-strong);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-card); color: var(--ink-dim);
+}
+.composer:focus-within { border-color: var(--ink-dim); }
+.composer textarea {
+  flex: 1; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink);
+  font-size: var(--fs-body); line-height: 1.5; padding: 7px 6px; min-height: 36px; max-height: 160px;
+}
+.composer textarea::placeholder { color: var(--ink-faint); }
+.send {
+  width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--radius-md);
+  background: var(--btn-bg); color: var(--btn-text); clip-path: var(--clip-sm);
+}
+.send:hover { background: var(--btn-hover); }
+/* #14 hata */
+.composer.is-shaking { animation: shake 280ms var(--g-ease-move); }
+@keyframes shake { 25% { transform: translateX(-4px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
+.has-error .composer { border-color: var(--accent); }
+.composer-msg { display: none; margin-left: auto; color: var(--accent-text); font-size: var(--fs-meta); }
+.has-error .composer-msg { display: inline; }
+.has-error .strip-hint { display: none; }
+
+.strip { display: flex; align-items: center; gap: 4px; padding: 7px 4px 0; font-size: var(--fs-meta); color: var(--ink-faint); }
+.strip-item { display: inline-flex; align-items: center; gap: 7px; padding: 2px 6px; border-radius: var(--radius-sm); color: var(--ink-faint); font-size: var(--fs-meta); }
+.strip-item b { font-weight: 600; color: var(--ink-dim); }
+.strip-item:hover { background: var(--paper-sunk); color: var(--ink); }
+.strip-sep { width: 3px; height: 3px; border-radius: 50%; background: var(--paper-line-strong); }
+.strip-hint { margin-left: auto; }
+/* effort = level pips (1-3); memory = segmented energy bar */
+.pips, .energy { display: inline-flex; align-items: center; gap: 2px; }
+.pips i { width: 7px; height: 7px; background: var(--pip-off); border-radius: 1px; transform: skewX(var(--seg-skew)); }
+.pips i.on { background: var(--pip); }
+.energy i { width: 4px; height: 9px; background: var(--energy-off); transform: skewX(var(--seg-skew)); }
+.energy i.on { background: var(--energy); }
+.meter { display: inline-block; width: 36px; height: 4px; background: var(--paper-line); border-radius: 2px; overflow: hidden; }
+.meter span { display: block; height: 100%; background: var(--ink-dim); }
+
+/* ======================= ACHIEVEMENT BAND (#15) =======================
+   240 ms in, 4 s hold, 400 ms out; reduced motion: appears/leaves without a tween. */
+.achv {
+  position: absolute; right: 16px; bottom: 48px; z-index: 30; width: 344px;   /* clears the terminal strip */
+  display: grid; grid-template-columns: 52px 1fr auto; align-items: center; column-gap: 12px;
+  padding: 10px 16px 12px 10px; overflow: hidden;
+  background: var(--toast-bg); color: var(--toast-text);
+  border: var(--line-w) solid var(--toast-line); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+.achv.is-gone { display: none; }
+.achv-icon { width: 52px; height: 52px; display: grid; place-items: center; background: var(--mascot-tile); border-radius: var(--radius-md); clip-path: var(--clip-badge); }
+.achv-icon .mascot { width: 40px; height: 40px; }
+.achv-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.achv-kicker {
+  color: var(--toast-kicker); font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.achv-title { font-size: 15px; font-weight: 600; }
+.achv-xp { font-family: var(--font-mono); font-size: 13px; color: var(--toast-xp); }
+.achv-life { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--toast-xp); transform-origin: left center; transform: scaleX(.62); }
+.achv.is-playing { animation: achv-in-out 4640ms linear both; }
+.achv.is-playing .achv-life { animation: achv-life 4000ms linear 240ms both; }
+@keyframes achv-in-out {
+  0% { opacity: 0; transform: translateX(28px); animation-timing-function: cubic-bezier(.19, 1, .22, 1); }
+  5.2% { opacity: 1; transform: none; animation-timing-function: linear; }
+  91.4% { opacity: 1; transform: none; animation-timing-function: cubic-bezier(.65, 0, .4, 1); }
+  100% { opacity: 0; transform: none; }
+}
+@keyframes achv-life { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+/* ======================= EMPTY NEW CHAT (mockup ?screen=bos) =======================
+   Neutral fallback: small head mark + greeting + four starter tasks. Arena / Pafta / Atolye show
+   the full mascot instead. The mockup hid the title block, thread and workspace with
+   :root[data-screen="bos"]; the app renders the empty screen in the thread's place, so only the
+   composer width rule survives, on the stage's own flag. */
+.stage[data-empty] .composer-wrap { max-width: 880px; }
+.empty {
+  position: relative; z-index: 1; flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; justify-content: center; gap: 30px;
+  width: 100%; max-width: 880px; margin: 0 auto; padding: 32px 40px 28px;
+}
+.empty-hero { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 20px; }
+.empty-mascot { display: none; }
+.empty-head { width: 64px; height: 64px; }
+.empty-kicker {
+  color: var(--ink-faint); font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.empty-title { margin-top: 2px; font-family: var(--font-title); font-size: 24px; line-height: 1.25; font-weight: 600; color: var(--ink); }
+.empty-sub { margin-top: 6px; font-size: 15px; color: var(--ink-dim); }
+.empty-board-k {
+  display: flex; align-items: center; gap: 10px; color: var(--ink-dim);
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.empty-board-k::after { content: ""; flex: 1; height: var(--line-w); background: var(--label-rule-paper); }
+.quests { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+.quests li { display: flex; }
+.qc {
+  flex: 1; display: flex; flex-direction: column; gap: 3px; text-align: left; position: relative;
+  padding: 14px 16px 12px; color: var(--ink);
+  background: var(--paper-raised); border: var(--line-w) solid var(--paper-line); border-radius: var(--radius-lg);
+  transition: border-color var(--g-dur-tap) var(--ease), transform var(--g-dur-tap) var(--ease);
+}
+.qc:hover { border-color: var(--paper-line-strong); }
+.qc:active { transform: translate(1px, 1px); }
+.qc-tag {
+  color: var(--ink-faint); font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.qc-title { font-family: var(--font-title); font-size: 16px; font-weight: 600; line-height: 1.3; }
+.qc-text { font-size: var(--fs-small); line-height: 1.45; color: var(--ink-dim); }
+.qc-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 8px; font-size: var(--fs-meta); color: var(--ink-faint); }
+.qc-safe, .qc-ask { display: inline-flex; align-items: center; gap: 6px; }
+.qc-safe .ic { color: var(--ok-text); }
+.qc-xp { display: none; margin-left: auto; font-family: var(--font-mono); color: var(--run-text); }
+/* the full mascot (when a theme shows it) idles: 1.5 px breath + a blink every ~5.6 s
+   (maskot-demo "idle" state). It says "I'm here, listening" and nothing else moves. */
+.empty-mascot #upper { animation: gm-breathe 4.8s ease-in-out infinite; }
+.empty-mascot #eyes { animation: gm-blink 5.6s 1.2s infinite; }
+@keyframes gm-breathe { 50% { transform: translateY(1.5px); } }
+@keyframes gm-blink { 0%, 94%, 100% { transform: none; } 96% { transform: scaleY(.08); } }

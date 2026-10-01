@@ -1,0 +1,64 @@
+/* Sade thread touches, ported from maket/theme-sade.css (KARAKTER 12, round 10 palette).
+   Game ornaments are switched off through this file only (same DOM): quest window -> plain
+   approval card, achievement band -> quiet "Done" notification without mascot or XP, effort pips
+   and memory bar -> thin lines, no mascot on the empty chat. */
+
+/* ================= game ornaments off (same DOM) ================= */
+/* mascot: gone from the app; the profile emblem is a plain level square */
+[data-theme="sade"] .achv-icon { display: none; }
+/* composer strip: effort and memory become thin lines */
+[data-theme="sade"] .pips, [data-theme="sade"] .energy { gap: 0; }
+[data-theme="sade"] .pips i { width: 8px; height: 2px; border-radius: 0; }
+[data-theme="sade"] .pips i + i { margin-left: 2px; }
+[data-theme="sade"] .energy i { width: 4px; height: 2px; }
+[data-theme="sade"] .energy i:first-child { border-radius: 1px 0 0 1px; }
+[data-theme="sade"] .energy i:last-child { border-radius: 0 1px 1px 0; }
+[data-theme="sade"] .composer { border-color: var(--sade-card-line); }
+[data-theme="sade"] .composer:focus-within { border-color: var(--accent); }
+[data-theme="sade"] .send { width: 32px; height: 32px; border-radius: var(--radius-sm); }
+/* ================= Signature 1: APPROVAL CARD =================
+   No strip, no tag, no risk pips: a header line (blue dot + "Onayın gerekiyor"), the request in
+   plain words, the reason, two buttons. Decided cards collapse to a log line with a text status. */
+[data-theme="sade"] .approval { border-color: var(--sade-card-line); border-radius: var(--radius-md); }
+[data-theme="sade"] .approval[data-state="pending"] { border-color: var(--sade-pending-line); padding: 16px 20px; row-gap: 8px; }
+[data-theme="sade"] .approval-mark { width: 7px; height: 7px; }
+[data-theme="sade"] .approval-title { font-size: var(--fs-meta); font-weight: 500; }
+[data-theme="sade"] .approval-name { font-size: 15px; font-weight: 600; line-height: 1.4; }
+[data-theme="sade"] .approval[data-state="pending"] .approval-sentence { margin-top: -4px; font-size: 14px; }
+[data-theme="sade"] .approval[data-state="pending"] .approval-why { color: var(--ink-faint); font-size: var(--fs-small); }
+[data-theme="sade"] .approval[data-state="pending"] .approval-why .ic { color: var(--accent-text); }
+[data-theme="sade"] .approval .btn { height: 32px; padding: 0 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); gap: 6px; }
+[data-theme="sade"] .approval .btn .ic { width: 15px; height: 15px; }
+[data-theme="sade"] .btn-ghost { border-color: var(--sade-card-line); }
+/* no nudge in Sade: the waiting time is said in words instead (KARAKTER 12) */
+[data-theme="sade"] .approval.is-nudging .approval-mark,
+[data-theme="sade"] .approval.is-nudging .approval-kicker { animation: none; }
+[data-theme="sade"] .approval.is-waiting .approval-wait { display: inline; color: var(--ink-faint); }
+/* decided: a log line; the stamp becomes a quiet status word */
+[data-theme="sade"] .approval:not([data-state="pending"]) { padding: 10px 140px 10px 16px; background: transparent; }
+[data-theme="sade"] .approval:not([data-state="pending"]) > .approval-sentence { font-size: 14px; }
+[data-theme="sade"] .approval[data-state="approved"] .stamp,
+[data-theme="sade"] .approval[data-state="rejected"] .stamp {
+  right: 16px; padding: 2px 8px; border: 1px solid var(--ok-soft); background: var(--ok-soft);
+  font-family: var(--font-body); font-size: var(--fs-meta); font-weight: 500; color: var(--ok-text);
+}
+[data-theme="sade"] .approval[data-state="rejected"] .stamp { border-color: var(--paper-line-strong); background: transparent; color: var(--ink-dim); }
+[data-theme="sade"] .approval[data-state="rejected"] .approval-sentence { text-decoration-color: var(--ink-faint); }
+/* ================= Signature 2: NOTIFICATION =================
+   The achievement band is a plain toast: no mascot, no fuse, no XP; the kicker is the
+   base .lex-s word "Bitti" (KARAKTER 12: "basarim bandi -> sade bildirim"). */
+[data-theme="sade"] .achv {
+  grid-template-columns: 1fr; width: 320px; padding: 12px 16px; row-gap: 0;
+  border-radius: var(--radius-md);
+}
+[data-theme="sade"] .achv-kicker { font-size: var(--fs-meta); }
+[data-theme="sade"] .achv-title { font-size: 14px; font-weight: 500; }
+[data-theme="sade"] .achv .xp { display: none; }
+[data-theme="sade"] .achv-life { display: none; }
+/* decided cards recede: the record reads in ink-dim, regular weight */
+[data-theme="sade"] .approval:not([data-state="pending"]) > .approval-sentence { color: var(--ink-dim); font-weight: 400; }
+/* empty chat: no head at all (KARAKTER 12 "hic"); at .35 opacity it read as two floating dots.
+   The game word "panodan" is not shown: the base .lex slot keeps its plain .lex-d "asagidan". */
+[data-theme="sade"] .empty-head { display: none; }
+[data-theme="sade"] .has-error .composer { border-color: var(--sade-err); }
+[data-theme="sade"] .composer-msg { color: var(--sade-err-text); }

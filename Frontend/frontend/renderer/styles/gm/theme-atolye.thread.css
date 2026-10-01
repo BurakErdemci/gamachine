@@ -1,0 +1,73 @@
+/* Atolye thread touches, ported from maket/theme-atolye.css. Signature 1: the WORK-ORDER TAG
+   (approval card with a tear-off stub and grommet; approving punches it, rejecting clips its
+   corner). Signature 2: the DONE TAG (the achievement band as the same paper tag). */
+
+/* header hairline sits on the reading column's edges, with air under it (M3) */
+[data-theme="atolye"] .title-block {
+  width: calc(100% - 80px); max-width: 720px; padding: 18px 0 12px; margin-bottom: 8px;
+}
+/* ================= Signature 1: the WORK-ORDER TAG =================
+   Left stub, torn along a perforation, with a reinforced grommet hole. */
+[data-theme="atolye"] .approval { padding-left: 50px; }
+[data-theme="atolye"] .approval > .approval-corner {
+  display: block; position: absolute; left: 0; top: 0; bottom: 0; width: 32px;
+  border-right: 1px dashed var(--paper-line-strong);
+  background: var(--paper-sunk);
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+}
+/* M8: the waiting tag is the one brass object on the bench */
+[data-theme="atolye"] .approval[data-state="pending"] { border-width: 2px; }
+[data-theme="atolye"] .approval[data-state="pending"] > .approval-corner { background: var(--accent-soft); border-right-color: var(--accent); }
+[data-theme="atolye"] .approval[data-state="pending"] .approval-kicker {
+  display: block; position: absolute; left: 0; top: 46px; width: 30px;
+  writing-mode: vertical-rl; transform: rotate(180deg); text-align: right;
+  line-height: 30px; color: var(--accent-text);
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: 700;
+  text-transform: uppercase; letter-spacing: .12em;
+}
+/* Grommet: a hole showing the bench through, ringed in plain metal. */
+[data-theme="atolye"] .approval-corner::before {
+  content: ""; position: absolute; left: 7px; top: 14px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--paper-bg); border: 3px solid var(--atolye-metal);
+  box-shadow: inset 1px 1px 0 var(--atolye-hole);
+}
+/* The decision is cut into the stub. Approved: punched like a ticket - a check-shaped cut,
+   the dark gap under the tag showing through. Rejected: cancelled like a voided cheque -
+   the stub's corner is clipped off along a brass cut line. */
+[data-theme="atolye"] .approval[data-state="approved"] .approval-corner::after {
+  content: ""; position: absolute; left: 8px; bottom: 13px; width: 16px; height: 13px;
+  background: var(--atolye-void);
+  clip-path: polygon(0 52%, 17% 36%, 38% 58%, 83% 0, 100% 16%, 38% 96%);
+}
+[data-theme="atolye"] .approval[data-state="rejected"] .approval-corner::after {
+  content: ""; position: absolute; left: -1px; bottom: -4px; width: 26px; height: 26px;
+  background: linear-gradient(to top right, var(--paper-bg) calc(50% - 1px), var(--accent) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px));
+}
+[data-theme="atolye"] .approval[data-state="rejected"] .approval-corner { border-right-color: var(--accent); }
+[data-theme="atolye"] .approval.is-fresh .approval-corner::after { animation: atolye-punch var(--dur-stamp) var(--stamp-ease) both; }
+@keyframes atolye-punch { from { opacity: 0; transform: scale(1.7); } to { opacity: 1; transform: scale(1); } }
+/* The verdict: lettering only, no frame - the hole is the mark. */
+[data-theme="atolye"] .approval[data-state="approved"] .stamp,
+[data-theme="atolye"] .approval[data-state="rejected"] .stamp {
+  border: 0; padding: 0; font-size: 13px; letter-spacing: .1em;
+}
+/* ================= Signature 2: the DONE TAG (achievement band) =================
+   The same paper tag as the work order: stub perforation and grommet on the left edge,
+   the mascot plate on the tag, laid on the bench with the hard workshop shadow. */
+[data-theme="atolye"] .achv {
+  width: 372px; padding-left: 40px; border-radius: var(--radius-lg);
+}
+[data-theme="atolye"] .achv::before {
+  content: ""; position: absolute; left: 9px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%;
+  background: var(--paper-bg-2); border: 3px solid var(--atolye-metal);
+  box-shadow: inset 1px 1px 0 var(--atolye-hole);
+}
+[data-theme="atolye"] .achv::after {
+  content: ""; position: absolute; left: 31px; top: 0; bottom: 0; border-left: 1px dashed var(--paper-line-strong);
+}
+[data-theme="atolye"] .achv-kicker { font-weight: 700; }
+[data-theme="atolye"] .achv-title { font-size: 15.5px; }
+/* empty chat: the full mascot in walnut and brass-steel, standing beside the greeting */
+[data-theme="atolye"] .empty-hero { grid-template-columns: 150px 1fr; gap: 24px; }
+[data-theme="atolye"] .empty-head { display: none; }
+[data-theme="atolye"] .empty-mascot { display: block; width: 150px; height: auto; }

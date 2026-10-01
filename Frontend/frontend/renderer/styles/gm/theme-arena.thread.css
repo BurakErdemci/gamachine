@@ -1,0 +1,147 @@
+/* Arena thread touches, ported from maket/theme-arena.css. Its two signatures live here:
+   1) the QUEST WINDOW (approval card: three clipped layers draw a chamfered frame with a hard
+   offset shadow, no blur), 2) the ACHIEVEMENT BAND (chamfered HUD toast). The empty chat shows
+   the full mascot as the quest giver beside a dialogue box, and the starter tasks as a board. */
+
+/* ================= Signature 1: QUEST WINDOW =================
+   Three clipped layers draw a chamfered frame with a hard offset shadow (no blur, no filter):
+   .approval-corner = shadow, ::before = edge, ::after = fill. */
+[data-theme="arena"] .approval {
+  --c: var(--quest-cut);
+  --chamfer: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
+  background: transparent; border: 0; border-radius: 0; box-shadow: none; isolation: isolate;
+}
+[data-theme="arena"] .approval::before,
+[data-theme="arena"] .approval::after,
+[data-theme="arena"] .approval > .approval-corner {
+  content: ""; position: absolute; inset: 0; clip-path: var(--chamfer);
+}
+[data-theme="arena"] .approval::before { z-index: -2; background: var(--quest-edge); }
+[data-theme="arena"] .approval::after { z-index: -1; inset: 1px; background: var(--paper-raised); }
+[data-theme="arena"] .approval > .approval-corner { display: block; z-index: -3; transform: translate(5px, 5px); background: var(--quest-shadow); }
+/* pending: navy title strip, orange GÖREV tag + underline, display-face title, risk pips */
+[data-theme="arena"] .approval[data-state="pending"] { padding: 0 22px 18px; row-gap: 9px; }
+[data-theme="arena"] .approval[data-state="pending"] > .approval-head {
+  margin: 0 -22px 8px; height: 40px; padding: 0 18px 0 20px; gap: 12px;
+  background: var(--quest-strip); color: var(--shell-text);
+  clip-path: polygon(var(--c) 0, 100% 0, 100% 100%, 0 100%, 0 var(--c));
+}
+[data-theme="arena"] .approval[data-state="pending"] > .approval-line {
+  display: block; position: absolute; left: 0; right: 0; top: 40px; height: 2px; background: var(--accent);
+  transform-origin: left center;
+}
+[data-theme="arena"] .approval.is-arriving > .approval-line { top: 40px; }
+[data-theme="arena"] .approval-mark { display: none; }
+[data-theme="arena"] .approval-kicker {
+  display: inline-flex; align-items: center; position: relative; z-index: 0; height: 22px; padding: 0 11px 0 12px;
+  font-family: var(--font-display); font-size: var(--fs-meta); font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--accent-ink);
+}
+[data-theme="arena"] .approval-kicker::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; background: var(--accent); transform: skewX(-12deg);
+}
+[data-theme="arena"] .approval[data-state="pending"] .approval-title { color: var(--shell-text); letter-spacing: .14em; }
+[data-theme="arena"] .approval[data-state="pending"] .approval-who { color: var(--shell-text-dim); }
+[data-theme="arena"] .approval[data-state="pending"] .approval-wait { color: var(--accent); }
+[data-theme="arena"] .approval-name { font-size: 22px; font-weight: 600; letter-spacing: .005em; line-height: 1.25; }
+[data-theme="arena"] .approval[data-state="pending"] .approval-sentence { margin-top: -4px; font-size: 14px; }
+[data-theme="arena"] .approval[data-state="pending"] .approval-why { margin-top: 2px; gap: 10px; }
+[data-theme="arena"] .approval[data-state="pending"] .approval-why > .ic { display: none; }
+[data-theme="arena"] .approval .risk { display: inline-flex; gap: 3px; }
+[data-theme="arena"] .risk i { width: 7px; height: 12px; transform: skewX(-14deg); }
+[data-theme="arena"] .approval[data-state="pending"] .approval-actions { margin-top: 8px; gap: 10px; }
+[data-theme="arena"] .approval .btn { height: 40px; padding: 0 22px; font-size: 13.5px; font-weight: 700; }
+[data-theme="arena"] .approval .btn-ghost { border: 0; box-shadow: inset 0 0 0 1.5px var(--ink); font-family: var(--btn-font); text-transform: uppercase; letter-spacing: .1em; }
+[data-theme="arena"] .approval.is-nudging .approval-kicker { animation: nudge 320ms var(--g-ease-move); }
+/* decided: a quiet log entry with a navy result tag */
+[data-theme="arena"] .approval:not([data-state="pending"]) {
+  --c: 9px; --quest-edge: var(--paper-line); padding: 12px 158px 13px 20px; row-gap: 3px;
+}
+[data-theme="arena"] .approval:not([data-state="pending"]) > .approval-corner { display: none; }
+[data-theme="arena"] .approval:not([data-state="pending"]) .approval-kicker {
+  height: 18px; padding: 0 8px; color: var(--ink-faint); letter-spacing: .14em;
+}
+[data-theme="arena"] .approval:not([data-state="pending"]) .approval-kicker::before { background: transparent; box-shadow: inset 0 0 0 1px var(--paper-line-strong); }
+[data-theme="arena"] .approval:not([data-state="pending"]) > .approval-name { display: block; order: 2; flex: 1 1 calc(100% - 110px); font-size: 17px; }
+[data-theme="arena"] .approval:not([data-state="pending"]) > .approval-sentence { display: none; }
+[data-theme="arena"] .approval[data-state="rejected"] > .approval-name { color: var(--ink-dim); }
+[data-theme="arena"] .approval .res-extra { display: none; }
+[data-theme="arena"] .approval[data-state="approved"] .stamp,
+[data-theme="arena"] .approval[data-state="rejected"] .stamp {
+  right: 22px; z-index: 0; padding: 5px 15px; border: 0; border-radius: 0;
+  font-family: var(--font-display); font-size: 12.5px; font-weight: 700; letter-spacing: .16em;
+  color: var(--shell-text);
+}
+[data-theme="arena"] .approval[data-state="approved"] .stamp::before,
+[data-theme="arena"] .approval[data-state="rejected"] .stamp::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; background: var(--quest-strip); transform: skewX(-12deg);
+}
+[data-theme="arena"] .approval[data-state="rejected"] .stamp { color: var(--ink-dim); }
+[data-theme="arena"] .approval[data-state="rejected"] .stamp::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-faint); }
+/* ================= Signature 2: ACHIEVEMENT BAND =================
+   A chamfered HUD toast: mascot tile, orange "Başarım açıldı", teal XP, a lifetime fuse. */
+[data-theme="arena"] .achv {
+  --c: 14px;
+  --chamfer: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
+  right: 12px; bottom: 46px; width: 336px; padding: 12px 20px 14px 12px; column-gap: 14px;
+  background: transparent; border: 0; border-radius: 0; box-shadow: none; overflow: visible; isolation: isolate;
+}
+[data-theme="arena"] .achv::before,
+[data-theme="arena"] .achv::after { content: ""; position: absolute; inset: 0; clip-path: var(--chamfer); }
+[data-theme="arena"] .achv::before { z-index: -2; background: var(--toast-line); transform: translate(0, 0); }
+[data-theme="arena"] .achv::after { z-index: -1; inset: 1px; background: var(--toast-bg); }
+[data-theme="arena"] .achv-icon { width: 54px; height: 54px; }
+[data-theme="arena"] .achv-icon .mascot { width: 42px; height: 42px; }
+[data-theme="arena"] .achv-kicker { letter-spacing: .18em; font-weight: 700; }
+[data-theme="arena"] .achv-title { font-family: var(--font-display); font-size: 16px; font-weight: 600; letter-spacing: .01em; }
+[data-theme="arena"] .achv-xp { font-weight: 600; font-size: 13.5px; }
+[data-theme="arena"] .achv-life { left: 1px; right: var(--c); bottom: 1px; width: auto; height: 3px; transform-origin: left center; }
+/* ================= Empty new chat: the mascot is the quest giver =================
+   Same hooks as the base fallback; Arena shows the full mascot (idle) beside a game
+   dialogue box with an orange name plate, and the starter tasks read as a quest board. */
+[data-theme="arena"] .empty { gap: 34px; }
+[data-theme="arena"] .empty-hero { grid-template-columns: 236px 1fr; align-items: end; gap: 4px; }
+[data-theme="arena"] .empty-head { display: none; }
+[data-theme="arena"] .empty-mascot { display: block; width: 236px; height: auto; margin-bottom: -6px; }
+[data-theme="arena"] .empty-say {
+  --c: 14px;
+  position: relative; margin-bottom: 34px; padding: 26px 26px 20px;
+  background: var(--quest-strip); color: var(--shell-text);
+  clip-path: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
+}
+[data-theme="arena"] .empty-kicker {
+  position: absolute; top: 0; left: 22px; z-index: 0; height: 22px; padding: 0 12px; line-height: 22px;
+  font-family: var(--font-display); font-weight: 700; letter-spacing: .16em; color: var(--accent-ink);
+}
+[data-theme="arena"] .empty-kicker::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--accent); transform: skewX(-12deg); }
+[data-theme="arena"] .empty-title { margin-top: 0; font-size: 23px; color: var(--shell-text); letter-spacing: .005em; }
+[data-theme="arena"] .empty-sub { color: var(--shell-text-dim); font-size: 14.5px; }
+[data-theme="arena"] .empty-board-k { color: var(--ink); font-family: var(--font-display); font-weight: 700; letter-spacing: .16em; }
+[data-theme="arena"] .qc {
+  --c: 10px; --ch: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
+  background: transparent; border: 0; border-radius: 0; isolation: isolate; padding: 15px 18px 13px;
+}
+[data-theme="arena"] .qc::before,
+[data-theme="arena"] .qc::after { content: ""; position: absolute; inset: 0; clip-path: var(--ch); }
+[data-theme="arena"] .qc::before { z-index: -2; background: var(--paper-line-strong); transition: background var(--g-dur-tap) var(--ease); }
+[data-theme="arena"] .qc::after { z-index: -1; inset: 1px; background: var(--paper-raised); }
+[data-theme="arena"] .qc:hover::before { background: var(--ink); }
+[data-theme="arena"] .qc-tag { align-self: flex-start; position: relative; z-index: 0; padding: 0 8px; line-height: 18px; letter-spacing: .14em; font-weight: 700; }
+[data-theme="arena"] .qc-tag::before { content: ""; position: absolute; inset: 0; z-index: -1; box-shadow: inset 0 0 0 1px var(--paper-line-strong); transform: skewX(-12deg); }
+[data-theme="arena"] .qc:hover .qc-tag { color: var(--accent-ink); }
+[data-theme="arena"] .qc:hover .qc-tag::before { background: var(--accent); box-shadow: none; }
+[data-theme="arena"] .qc-title { font-size: 17px; margin-top: 4px; }
+[data-theme="arena"] .qc-xp { display: inline; font-weight: 600; }
+/* ---------- round 7: the chat as a strip (focus width): the decided record keeps its tag ---------- */
+@container stage (max-width: 520px) {
+  [data-theme="arena"] .approval:not([data-state="pending"]) { padding-right: 16px; }
+  [data-theme="arena"] .approval:not([data-state="pending"]) > .approval-result { flex-basis: 100%; order: 2; }
+  [data-theme="arena"] .approval:not([data-state="pending"]) > .approval-name { order: 3; font-size: 15.5px; flex-basis: 100%; }
+  [data-theme="arena"] .approval:not([data-state="pending"]) > .approval-head { min-height: 30px; margin-bottom: 2px; }
+  [data-theme="arena"] .approval:not([data-state="pending"]) > .approval-detail { order: 4; }
+  [data-theme="arena"] .approval:not([data-state="pending"]) .approval-kicker { display: none; }
+  [data-theme="arena"] .approval[data-state] .stamp { top: 27px; right: 14px; }
+  [data-theme="arena"] .approval-name { font-size: 19px; }
+  [data-theme="arena"] .approval .btn { padding: 0 16px; }
+  [data-theme="arena"] .thread-col .approval-why { flex-wrap: wrap; row-gap: 2px; }
+}

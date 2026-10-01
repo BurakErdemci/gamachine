@@ -1,0 +1,77 @@
+/* Pafta thread touches, ported from maket/theme-pafta.css. Signature 1: the TITLE BLOCK (the
+   chat header as the boxed cell row of a technical drawing). Signature 2: the REVISION REQUEST
+   (approval card head as a cell row, the double-ruled stamp, the vermilion correction line). */
+
+/* ================= Signature 1: the TITLE BLOCK =================
+   Chat header: boxed cells like the corner of a technical drawing. */
+[data-theme="pafta"] .title-block {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  gap: 0; padding: 0;
+  margin-top: 14px; margin-bottom: 16px;
+  width: calc(100% - 80px); max-width: 720px;
+  border: 1px solid var(--ink);
+  background: var(--paper-bg);
+}
+[data-theme="pafta"] .tb-cell {
+  flex-direction: column; align-items: flex-start; gap: 0;
+  padding: 5px 14px 6px; border-left: 1px solid var(--paper-line-strong);
+  line-height: 1.35;
+}
+[data-theme="pafta"] .tb-cell:first-child { border-left: 0; }
+[data-theme="pafta"] .tb-title { order: 0; margin: 0; }
+[data-theme="pafta"] .tb-title .tb-k { display: block; }
+[data-theme="pafta"] .tb-k { font-weight: 600; color: var(--ink-faint); }
+[data-theme="pafta"] .tb-v { font-size: 14px; color: var(--ink); }
+[data-theme="pafta"] .tb-title .tb-v { font-size: 15px; }
+[data-theme="pafta"] .tb-no { background: var(--ink); border-left: 0; }
+[data-theme="pafta"] .tb-no .tb-k { color: var(--shell-text-dim); }
+[data-theme="pafta"] .tb-no .tb-v { color: var(--paper-raised); font-weight: 500; font-size: 15px; }
+/* ================= Signature 2: the REVISION REQUEST =================
+   Pending: the card head is a cell row of the title block (M5b) - an ink "Revizyon" cell,
+   the request, and the source in its own cell. Decided: the stamp, or the correction line. */
+[data-theme="pafta"] .approval[data-state="pending"] > .approval-head {
+  margin: -14px -18px 4px; height: 36px; gap: 0; align-items: stretch;
+  border-bottom: 1px solid var(--paper-line-strong);
+}
+[data-theme="pafta"] .approval[data-state="pending"] .approval-kicker {
+  order: -1; display: flex; align-items: center; padding: 0 12px;
+  background: var(--ink); border-top-left-radius: 2px; color: var(--paper-raised);
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .1em; font-stretch: 87.5%;
+}
+[data-theme="pafta"] .approval[data-state="pending"] .approval-mark { align-self: center; margin: 0 9px 0 14px; width: 9px; height: 9px; }
+[data-theme="pafta"] .approval[data-state="pending"] .approval-title { align-self: center; }
+[data-theme="pafta"] .approval[data-state="pending"] .approval-wait { align-self: center; margin-left: 12px; }
+[data-theme="pafta"] .approval[data-state="pending"] .approval-who {
+  display: flex; align-items: center; padding: 0 16px; border-left: 1px solid var(--paper-line-strong);
+}
+[data-theme="pafta"] .approval[data-state="pending"] .approval-name { margin-top: 4px; }
+/* the stamp: double-ruled, slightly askew - the only tilt on the sheet */
+[data-theme="pafta"] .approval[data-state="approved"] .stamp {
+  padding: 3px 12px 2px;
+  border: 3px double var(--ok);
+  border-radius: 3px;
+  font-size: 15px; letter-spacing: .16em;
+  color: var(--ok-text);
+  opacity: .92;
+}
+[data-theme="pafta"] .approval[data-state="rejected"] .stamp { display: none; }
+/* rejected: one vermilion correction line through the request. A text line, so it follows
+   the words when the sentence wraps (phone) and ends where the words end. */
+[data-theme="pafta"] .approval[data-state="rejected"] { padding-right: 18px; }
+[data-theme="pafta"] .approval[data-state="rejected"] .approval-sentence {
+  text-decoration: line-through 2px var(--accent); text-decoration-skip-ink: none;
+}
+[data-theme="pafta"] .approval.is-fresh[data-state="rejected"] .approval-sentence { animation: pafta-strike var(--dur-stamp) var(--ease) both; }
+@keyframes pafta-strike { from { text-decoration-color: transparent; } }
+/* empty chat: the full mascot drawn in the sheet's inks, smaller than Arena's, beside the text */
+[data-theme="pafta"] .empty-hero { grid-template-columns: 150px 1fr; gap: 24px; }
+[data-theme="pafta"] .empty-head { display: none; }
+[data-theme="pafta"] .empty-mascot { display: block; width: 150px; height: auto; }
+/* narrow chat (focus width): the revision head keeps two cells - the source cell
+   ("Unity · SampleScene") is the third one and wrapped the row; the panel already names it */
+@container stage (max-width: 520px) {
+  [data-theme="pafta"] .thread-col .approval[data-state="pending"] .approval-who { display: none; }
+  [data-theme="pafta"] .thread-col .approval[data-state="pending"] .approval-title { white-space: nowrap; }
+}
