@@ -15,6 +15,9 @@ interface ThreadHeaderProps {
 /** dd.mm.yy, the mockup's date cell; nothing when the stored date does not parse. */
 export const shortDate = (iso?: string | null): string => {
   if (!iso) return '';
+  // The backend stores naive local "YYYY-MM-DD HH:MM:SS": read the date part as written.
+  const naive = /^(\d{4})-(\d{2})-(\d{2})(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/.exec(iso);
+  if (naive) return `${naive[3]}.${naive[2]}.${naive[1].slice(-2)}`;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   const p = (n: number) => String(n).padStart(2, '0');
