@@ -134,13 +134,36 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   const workspaceRequest = useLatestRequest();
   const contentRequest = useLatestRequest();
 
-  const openPreview = useCallback((filePath: string) => {
+  // Read by the async open paths below, which must see the buffer as it is now.
+  const isDirtyRef = useRef(isDirty);
+  isDirtyRef.current = isDirty;
+
+  /**
+   * Opening another file or a preview replaces the editor buffer. With unsaved edits that lost
+   * them without a word, and the chat's "Open in panel" / tool "Details" links made it easy to
+   * hit (P2 audit). Asks first; `true` = go ahead.
+   */
+  const confirmDropEdits = useCallback(async (): Promise<boolean> => {
+    if (!isDirtyRef.current) return true;
+    const open: unknown = openedFilePathRef.current;
+    const ad = typeof open === 'string' ? open.split(/[\\/]/).pop() || '' : '';
+    return confirmDialog(cevir('file.discardConfirm', { ad }), cevir('file.discardButton'), cevir('confirm.cancel'));
+  }, []);
+
+  const showPreview = useCallback((filePath: string) => {
     contentRequest.invalidate();
     setOpenedFilePath(null);
     setCode('');
     setOriginalCode('');
     setPreviewFile({ path: filePath, name: filePath.split(/[\\/]/).pop() || filePath });
   }, [contentRequest]);
+
+  // Synchronous while the buffer is clean, as it always was: only a dirty buffer waits on the ask.
+  const openPreview = useCallback((filePath: string) => {
+    if (!isDirtyRef.current) { showPreview(filePath); return; }
+    // A throw here would otherwise surface as an unhandled rejection with no caller to see it.
+    void confirmDropEdits().then(ok => { if (ok) showPreview(filePath); }).catch(err => console.error(err));
+  }, [confirmDropEdits, showPreview]);
 
   const closePreview = useCallback(() => setPreviewFile(null), []);
 
@@ -478,7 +501,11 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     // file goes to `read-file`, which answers `unsupported`, and the user gets
     // a refusal for a format the app can now display. Routing is a decision
     // about the path alone, so it precedes the channel check.
-    if (routeForFile(filePath) !== 'text') { openPreview(filePath); return; }
+    // The file already open with unsaved edits: showing it is the whole request, and a re-read
+    // would throw the edits away.
+    if (isDirtyRef.current && openedFilePathRef.current && samePath(openedFilePathRef.current, filePath)) return;
+    if (isDirtyRef.current && !(await confirmDropEdits())) return;
+    if (routeForFile(filePath) !== 'text') { showPreview(filePath); return; }
     if (!ipc) return;
     // Claiming WITH the path: a path-changing operation that lands while this
     // read is out needs to know whether the read is for the path it changed.
@@ -519,7 +546,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     // TAHMİN ETMİYOR — ne bilmediğimizi söylüyor ve yolu gösteriyor ki
     // kullanıcı kendisi karar verebilsin.
     showToast(cevir('file.openFailed', { yol: filePath }), 'warning');
-  }, [workspacePath, showToast, openPreview, contentRequest]);
+  }, [workspacePath, showToast, showPreview, confirmDropEdits, samePath, contentRequest]);
 
   const toggleDir = useCallback(async (dirPath: string) => {
     const next = new Set(expandedDirs);
