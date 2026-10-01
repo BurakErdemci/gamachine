@@ -47,6 +47,8 @@ import { ChatTabs, BranchButton, hasBranches } from '../components/home/ChatTabs
 import { SideChatPanel, SideQuestionButton } from '../components/home/SideChatPanel';
 import { SidebarToggle } from '../components/home/AwaitingBadge';
 import { RemoteBadge, useRemoteStatus } from '../components/home/RemoteBadge';
+import { ModeChip } from '../components/home/ModeChip';
+import { modelFamily } from '../lib/modelFamily';
 import { useRemoteEffort } from '../lib/remoteControl';
 import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
 
@@ -443,6 +445,18 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [fs.saveFile, fs.workspacePath, auth.user]);
 
+  // --- New chat shortcut (Ctrl+N / Cmd+N), the one the sidebar's "New chat" row names ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        chat.createNewConversation();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [chat.createNewConversation]);
+
   const handleLogout = () => { fs.closeWorkspace(); };
 
   const handleProblemClick = async (problem: any) => {
@@ -609,7 +623,9 @@ export default function Home() {
 
   return (
     <LangContext.Provider value={langCtxValue}>
-    <div className="flex h-screen bg-[#0B0D12] text-slate-200 font-sans overflow-hidden">
+    {/* The v4 frame (shell.css `.app`): sidebar | main | right panel under one top bar.
+        data-model drives the model colour (--model) the picker's dot reads. */}
+    <div className="app" data-model={modelFamily(ai.aiConfig?.model_name, ai.effectiveProvider)}>
       <Head>
         <title>{`Gamachine | ${auth.user?.name || t('home.signIn')}`}</title>
         <style>{globalStyles}</style>
@@ -655,86 +671,94 @@ export default function Home() {
         treeContextMenu={fs.treeContextMenu} setTreeContextMenu={fs.setTreeContextMenu}
         gitStatus={fs.gitStatus}
         user={auth.user} setShowSettings={ai.setShowSettings} handleLogout={handleLogout}
+        unityStatus={ai.unityMcpStatus}
       />
 
-      <div className="flex-1 flex flex-col min-w-0 border-r border-white/[0.06]">
-        <div className="h-12 border-b border-white/[0.06] flex items-center justify-between px-4 bg-white/[0.015] shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
+      <header className="topbar shell">
+        <div className="tex tex-shell" aria-hidden="true" />
+        <div className="topbar-left">
+          {/* Unity connection: the app's signature control, its own bay at the far left.
+              A component (not inline JSX) so every state is testable in the DOM. */}
+          <UnityMcpToggle
+            status={ai.unityMcpStatus}
+            toggling={ai.unityMcpToggling}
+            reason={ai.unityMcpReason}
+            error={ai.unityMcpError}
+            onToggle={ai.toggleUnityMcp}
+            projectName={fs.workspacePath?.split(/[\\/]/).filter(Boolean).pop() ?? null}
+          />
+          {/* Not in the mockup: the editor's own controls (sidebar, terminal, open file). They
+              stay here until the workspace panel (P3) gives them their place. */}
+          <div className="topbar-mid">
             <SidebarToggle
               open={isSidebarOpen}
               onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
               awaiting={awaitingElsewhere(chat.convStatus, chat.activeConvId, chat.conversations)}
             />
-            <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className={`p-1.5 hover:bg-white/[0.06] rounded-lg transition-all shrink-0 ${isTerminalOpen ? 'text-blue-400 bg-blue-500/10' : 'text-slate-500 hover:text-slate-300'}`}>
+            <button
+              type="button"
+              onClick={() => setIsTerminalOpen(!isTerminalOpen)}
+              className="icon-btn"
+              aria-pressed={isTerminalOpen}
+              aria-label={t('home.terminalToggle')}
+              title={t('home.terminalToggle')}
+            >
               <TerminalIcon size={16} />
             </button>
-            <div className="flex items-center gap-2 border-l border-white/[0.06] pl-3 ml-1 min-w-0" title={fs.previewFile?.path || fs.openedFilePath || undefined}>
-              <Code2 size={14} className="text-blue-500 shrink-0" />
-              <div className="flex items-center gap-1.5 min-w-0">
-                {/* Windows yolları '\' kullanır — her iki ayraçta da böl; dar ekranda kırp */}
-                <span className="text-[12px] font-semibold text-slate-400 truncate">
-                  {fs.previewFile ? fs.previewFile.name : (fs.openedFilePath ? fs.openedFilePath.split(/[\\/]/).pop() : 'C# Editor')}
-                </span>
-                {/* No dirty dot in preview mode: the model is never edited here. */}
-                {!fs.previewFile && fs.isDirty && <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse shrink-0" />}
-              </div>
+            <div className="topbar-file" title={fs.previewFile?.path || fs.openedFilePath || undefined}>
+              <Code2 size={14} className="shrink-0" />
+              {/* Windows paths use a backslash: split on both separators; trim on narrow windows */}
+              <span className="topbar-file-name">
+                {fs.previewFile ? fs.previewFile.name : (fs.openedFilePath ? fs.openedFilePath.split(/[\\/]/).pop() : 'C# Editor')}
+              </span>
+              {/* No dirty dot in preview mode: the model is never edited here. */}
+              {!fs.previewFile && fs.isDirty && <span className="topbar-dirty" aria-hidden="true" />}
               {fs.previewFile && (
-                <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={fs.closePreview} title={t('approval.close')} className="p-0.5 hover:bg-slate-700 rounded text-slate-500"><X size={12} /></button>
-                </div>
+                <button type="button" onClick={fs.closePreview} title={t('approval.close')} className="chat-act"><X size={12} /></button>
               )}
               {!fs.previewFile && fs.openedFilePath && (
-                <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={async () => { await fs.saveFile(); }} disabled={!fs.isDirty} className={`p-1 rounded hover:bg-slate-800 ${fs.isDirty ? 'text-blue-400' : 'text-slate-600 opacity-50'}`}>
+                <>
+                  <button type="button" onClick={async () => { await fs.saveFile(); }} disabled={!fs.isDirty} className="chat-act disabled:opacity-50">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
                   </button>
-                  <button onClick={() => { fs.setOpenedFilePath(null); fs.setCode(''); }} className="p-0.5 hover:bg-slate-700 rounded text-slate-500"><X size={12} /></button>
-                </div>
+                  <button type="button" onClick={() => { fs.setOpenedFilePath(null); fs.setCode(''); }} className="chat-act"><X size={12} /></button>
+                </>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2 relative shrink-0">
-            {/* C# analizi (OmniSharp) hazırlanıyor rozeti */}
-            <RemoteBadge status={remote.status} onClick={() => ai.setShowSettings(true)} />
-            {lspStatus?.state === 'starting' && (
-              <span className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] text-[10px] font-semibold text-slate-400 whitespace-nowrap">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                {t('home.csharpAnalyzing')}
-              </span>
-            )}
-            {/* Unity MCP durum göstergesi + gerekçe şeritleri.
-                Satır içi JSX'ten bileşene taşındı: üç ayrı ternary zincirinin
-                `else` dalı `blocked`'ı gri "kapalı" gösteriyordu ve başlıkta
-                "Unity açık olmalı" diyordu — yanlış talimat, çünkü o durumda
-                sorun Unity değil portun sahibi. Ayrıca satır içi olduğu sürece
-                hiçbiri DOM'da sınanamıyordu. */}
-            <UnityMcpToggle
-              status={ai.unityMcpStatus}
-              toggling={ai.unityMcpToggling}
-              reason={ai.unityMcpReason}
-              error={ai.unityMcpError}
-              onToggle={ai.toggleUnityMcp}
-            />
-            <ModelSelector
-              aiConfig={ai.aiConfig} setAiConfig={ai.setAiConfig} availableModels={ai.availableModels} providersWithKeys={ai.providersWithKeys}
-              effectiveProvider={ai.effectiveProvider} displayModelName={ai.displayModelName} isModelDropdownOpen={ai.isModelDropdownOpen} setIsModelDropdownOpen={ai.setIsModelDropdownOpen}
-              modelOrToggles={ai.modelOrToggles} setModelOrToggles={ai.setModelOrToggles} user={auth.user} fetchAvailableModels={ai.fetchAvailableModels} setShowSettings={ai.setShowSettings}
-              API={API} axios={axios} showToast={showToast as any} conversationId={chat.activeConvId}
-            />
-            <Activity size={14} className="text-emerald-500 animate-pulse" />
-            {!isChatOpen && (
-              <button 
-                onClick={() => setIsChatOpen(true)} 
-                className="p-1.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 rounded-lg transition-all flex items-center gap-2 px-3 ml-2 border border-blue-500/20"
-                title={t('home.openChat')}
-              >
-                <MessageSquare size={14} />
-                <span className="text-[10px] font-bold uppercase tracking-wider">{t('home.openChat')}</span>
-              </button>
-            )}
-          </div>
         </div>
+        <div className="topbar-right">
+          <RemoteBadge status={remote.status} onClick={() => ai.setShowSettings(true)} />
+          {/* C# analysis (OmniSharp) is starting */}
+          {lspStatus?.state === 'starting' && (
+            <span className="bar-chip">
+              <span className="status status-running" aria-hidden="true" />
+              {t('home.csharpAnalyzing')}
+            </span>
+          )}
+          <ModelSelector
+            aiConfig={ai.aiConfig} setAiConfig={ai.setAiConfig} availableModels={ai.availableModels} providersWithKeys={ai.providersWithKeys}
+            effectiveProvider={ai.effectiveProvider} displayModelName={ai.displayModelName} isModelDropdownOpen={ai.isModelDropdownOpen} setIsModelDropdownOpen={ai.setIsModelDropdownOpen}
+            modelOrToggles={ai.modelOrToggles} setModelOrToggles={ai.setModelOrToggles} user={auth.user} fetchAvailableModels={ai.fetchAvailableModels} setShowSettings={ai.setShowSettings}
+            API={API} axios={axios} showToast={showToast as any} conversationId={chat.activeConvId}
+          />
+          <ModeChip value={chat.generationMode} onChange={chat.setGenerationMode} />
+          {/* The right panel toggle (mockup: the workspace; here: the chat panel until P3). */}
+          <button
+            type="button"
+            className="icon-btn"
+            data-testid="right-panel-toggle"
+            aria-pressed={isChatOpen}
+            aria-label={isChatOpen ? t('home.panelHide') : t('home.panelShow')}
+            title={isChatOpen ? t('home.panelHide') : t('home.panelShow')}
+            onClick={() => setIsChatOpen(!isChatOpen)}
+          >
+            <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.2" /><path d="M12.5 4v12" /></svg>
+          </button>
+        </div>
+      </header>
 
+      <div className="app-main">
         <div className="flex-1 overflow-hidden relative flex flex-col bg-[#0B0D12]">
           {pane === 'preview' && fs.previewFile ? (
             previewRoute === 'image' || previewRoute === 'blocked-image' ? (
@@ -810,6 +834,7 @@ export default function Home() {
         />
       </div>
 
+      <div className="app-right">
       <motion.div animate={{ width: isChatOpen ? 450 : 0, opacity: isChatOpen ? 1 : 0 }} transition={{ duration: 0.2 }} className="bg-[#0B0D12] flex flex-col overflow-hidden shrink-0 border-l border-white/[0.06]">
         <div className="flex-1 relative flex flex-col min-h-0">
           {/* İmza: aktif modelin markası panelin tepesinden içeri süzülen ışık */}
@@ -945,6 +970,7 @@ export default function Home() {
           </div>
         </div>
       </motion.div>
+      </div>
 
       {/* Bildirim kanalının çizen ucu. Bu satır olmadan `showToast` sessiz bir
           state güncellemesinden ibaret: mesaj üretiliyor, kimse görmüyor. */}
