@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { motion } from 'framer-motion';
-import { HelpCircle, Check } from 'lucide-react';
+import { Check } from 'lucide-react';
+import { ApprovalCard, CheckIcon } from './ApprovalCard';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
 
@@ -115,123 +115,94 @@ const QuestionGateCard: React.FC<QuestionApprovalProps> = ({ questions, onSubmit
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      className="mt-3 rounded-xl border border-indigo-500/30 bg-indigo-950/10 overflow-hidden shadow-lg shadow-indigo-950/20"
-    >
-      <div className="flex items-center gap-2 px-4 py-2.5 bg-indigo-500/10 border-b border-indigo-500/20">
-        <div className="flex items-center gap-2 text-indigo-300 font-bold text-[11px] uppercase tracking-wider">
-          <HelpCircle size={14} />
-          {t('question.asking')}
-        </div>
-      </div>
-
-      <div className="p-4 space-y-4">
-        {questions.map((q, qi) => {
-          const isSkipped = !!skipped[qi];
-          const chosen = picks[qi] || [];
-          return (
-            <div key={qi} className={isSkipped ? 'opacity-45' : undefined}>
-              {q.header && (
-                <div className="text-[10px] uppercase tracking-wider text-indigo-400/70 font-bold mb-1">
-                  {stripBidi(q.header)}
-                </div>
-              )}
-              <p className="text-[13px] text-white font-medium leading-tight mb-1 break-words">
-                {stripBidi(q.question)}
-              </p>
-              {q.multiSelect && (
-                <p className="text-[10.5px] text-indigo-300/70 mb-2">{t('question.multiHint')}</p>
-              )}
-              <div className="grid gap-2 mt-2">
-                {q.options.map((opt, oi) => {
-                  // Sanitise once and use the SAME string for display and for the
-                  // submitted value. Showing a cleaned label while sending the raw
-                  // one would reopen the exact gap stripBidi exists to close: what
-                  // the user picked would differ from what the model receives.
-                  // The question text is NOT sanitised — it is the payload KEY and
-                  // the SDK matches it against what it sent us.
-                  const label = stripBidi(opt.label);
-                  const isSel = chosen.includes(label);
-                  return (
-                    <button
-                      key={oi}
-                      data-testid="question-option"
-                      disabled={isSkipped}
-                      onClick={() => togglePick(qi, q, label)}
-                      className={
-                        'text-left px-3 py-2 rounded-lg border transition-all active:scale-[0.99] ' +
-                        (isSel
-                          ? 'border-indigo-400 bg-indigo-500/20 ring-1 ring-indigo-400/40'
-                          : 'border-white/10 bg-black/30 hover:bg-white/5 hover:border-white/20')
-                      }
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={
-                            'w-5 h-5 flex items-center justify-center shrink-0 text-[10px] font-bold ' +
-                            // Square for multi-select, circle for single: the shape is the
-                            // only cue that more than one pick is allowed before you try it.
-                            (q.multiSelect ? 'rounded-[5px] ' : 'rounded-full ') +
-                            (isSel ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-300')
-                          }
-                        >
+    <ApprovalCard
+      kind="question"
+      testId="question-approval"
+      who={t('card.whoQuestion')}
+      name={t('question.asking')}
+      body={(
+        <div className="approval-questions">
+          {questions.map((q, qi) => {
+            const isSkipped = !!skipped[qi];
+            const chosen = picks[qi] || [];
+            return (
+              <div key={qi} className="approval-q" data-skipped={isSkipped || undefined}>
+                {q.header && <p className="approval-q-head">{stripBidi(q.header)}</p>}
+                <p className="approval-q-text">{stripBidi(q.question)}</p>
+                {q.multiSelect && <p className="approval-q-hint">{t('question.multiHint')}</p>}
+                <div className="approval-opts">
+                  {q.options.map((opt, oi) => {
+                    // Sanitise once and use the SAME string for display and for the
+                    // submitted value. Showing a cleaned label while sending the raw
+                    // one would reopen the exact gap stripBidi exists to close: what
+                    // the user picked would differ from what the model receives.
+                    // The question text is NOT sanitised — it is the payload KEY and
+                    // the SDK matches it against what it sent us.
+                    const label = stripBidi(opt.label);
+                    const isSel = chosen.includes(label);
+                    return (
+                      <button
+                        key={oi}
+                        type="button"
+                        data-testid="question-option"
+                        data-selected={isSel || undefined}
+                        aria-pressed={isSel}
+                        disabled={isSkipped}
+                        onClick={() => togglePick(qi, q, label)}
+                        className="approval-opt"
+                      >
+                        {/* Square for multi-select, circle for single: the shape is the
+                            only cue that more than one pick is allowed before you try it. */}
+                        <span className={`approval-opt-key${q.multiSelect ? ' is-multi' : ''}`} aria-hidden="true">
                           {q.multiSelect
-                            ? (isSel ? <Check size={11} className="stroke-[3px]" /> : null)
+                            ? (isSel ? <Check size={12} strokeWidth={3} /> : null)
                             : String.fromCharCode(65 + oi)}
                         </span>
-                        <span className="text-[12px] text-white font-medium break-words">
-                          {label}
+                        <span className="approval-opt-text">
+                          <span className="approval-opt-label">{label}</span>
+                          {opt.description && <span className="approval-opt-desc">{stripBidi(opt.description)}</span>}
                         </span>
-                      </div>
-                      {opt.description && (
-                        <p className="text-[11px] text-slate-400 mt-1 ml-7 leading-snug break-words">
-                          {stripBidi(opt.description)}
-                        </p>
-                      )}
-                    </button>
-                  );
-                })}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <input
+                  data-testid="question-custom"
+                  type="text"
+                  disabled={isSkipped}
+                  value={custom[qi] || ''}
+                  onChange={(e) => typeCustom(qi, q, e.target.value)}
+                  placeholder={t('question.otherPlaceholder')}
+                  className="approval-input"
+                />
+
+                <button
+                  type="button"
+                  data-testid="question-skip"
+                  onClick={() => toggleSkip(qi)}
+                  className="approval-link"
+                >
+                  {isSkipped ? t('question.skipped') : t('question.skip')}
+                </button>
               </div>
-
-              <input
-                data-testid="question-custom"
-                type="text"
-                disabled={isSkipped}
-                value={custom[qi] || ''}
-                onChange={(e) => typeCustom(qi, q, e.target.value)}
-                placeholder={t('question.otherPlaceholder')}
-                className="mt-2 w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-[12px] text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-400/60 focus:ring-1 focus:ring-indigo-400/30 disabled:cursor-not-allowed"
-              />
-
-              <button
-                data-testid="question-skip"
-                onClick={() => toggleSkip(qi)}
-                className="mt-1.5 text-[11px] text-slate-400 hover:text-slate-200 underline underline-offset-2 transition-colors"
-              >
-                {isSkipped ? t('question.skipped') : t('question.skip')}
-              </button>
-            </div>
-          );
-        })}
-
+            );
+          })}
+        </div>
+      )}
+      actions={(
         <button
+          type="button"
           data-testid="question-send"
           onClick={submit}
           disabled={!allResolved}
-          className={
-            'w-full flex items-center justify-center gap-2 py-2 rounded-lg text-[12px] font-bold transition-all ' +
-            (allResolved
-              ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/20 active:scale-[0.98]'
-              : 'bg-slate-800 text-slate-500 cursor-not-allowed')
-          }
+          className="btn btn-primary"
         >
-          <Check size={14} className="stroke-[3px]" />
-          {t('question.send')}
+          <CheckIcon />
+          <span>{t('question.send')}</span>
         </button>
-      </div>
-    </motion.div>
+      )}
+    />
   );
 };
 
