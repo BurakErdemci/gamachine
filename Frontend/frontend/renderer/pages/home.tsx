@@ -884,6 +884,7 @@ export default function Home() {
             value={chat.chatInput} setValue={chat.setChatInput} onSendMessage={handleSendMessage} isLoading={chat.loading}
             api={API}
             placeholder={t('chat.placeholder')}
+            shortPlaceholder={t('chat.placeholderShort')}
             disabled={sohbetKilitli}
             disabledPlaceholder={t('gate.placeholder')}
             slashCommands={slashCommands}

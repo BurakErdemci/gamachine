@@ -5,15 +5,9 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import {
     FileUp,
-    CircleUserRound,
-    ArrowUpIcon,
-    Paperclip,
-    PlusIcon,
-    SendIcon,
     XIcon,
     Square,
     Sparkles,
-    Mic,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as React from "react"
@@ -83,60 +77,6 @@ interface CommandSuggestion {
     isSkill?: boolean;  // backend 'skills' listesinde mi (palette'te rozet için)
 }
 
-interface TextareaProps
-  extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
-  containerClassName?: string;
-  showRing?: boolean;
-}
-
-const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
-  ({ className, containerClassName, showRing = true, ...props }, ref) => {
-    const [isFocused, setIsFocused] = React.useState(false);
-    
-    return (
-      <div className={cn(
-        "relative",
-        containerClassName
-      )}>
-        <textarea
-          className={cn(
-            "flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm",
-            "transition-all duration-200 ease-in-out",
-            "placeholder:text-muted-foreground",
-            "disabled:cursor-not-allowed disabled:opacity-50",
-            showRing ? "focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0" : "",
-            className
-          )}
-          ref={ref}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
-          {...props}
-        />
-        
-        {showRing && isFocused && (
-          <motion.span 
-            className="absolute inset-0 rounded-md pointer-events-none ring-2 ring-offset-0 ring-violet-500/30"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-          />
-        )}
-
-        {props.onChange && (
-          <div 
-            className="absolute bottom-2 right-2 opacity-0 w-2 h-2 bg-violet-500 rounded-full"
-            style={{
-              animation: 'none',
-            }}
-            id="textarea-ripple"
-          />
-        )}
-      </div>
-    )
-  }
-)
-Textarea.displayName = "Textarea"
 
 export function AnimatedChatInput({
     value,
@@ -150,6 +90,7 @@ export function AnimatedChatInput({
     // Eskiden burada "Ask zap a question..." yazıyordu — başka bir ürünün
     // şablonundan kalmış bir metin, ve kullanıcının ilk yazacağı yerde duruyordu.
     placeholder = "Type a message...",
+    shortPlaceholder,
     className,
     disabled = false,
     disabledPlaceholder = "Unavailable",
@@ -172,6 +113,8 @@ export function AnimatedChatInput({
     onFileDrop?: (entry: { path: string, name: string }) => void;
     isLoading: boolean;
     placeholder?: string;
+    /** The mockup's short placeholder for the narrow chat strip (<= 520 px). */
+    shortPlaceholder?: string;
     className?: string;
     disabled?: boolean;
     disabledPlaceholder?: string;
@@ -191,10 +134,24 @@ export function AnimatedChatInput({
     const { t, lang } = useLang();
     const [activeSuggestion, setActiveSuggestion] = useState<number>(-1);
     const [showCommandPalette, setShowCommandPalette] = useState(false);
+    // Mockup `.composer textarea`: one line tall (36 px) growing to 160 px.
     const { textareaRef, adjustHeight } = useAutoResizeTextarea({
-        minHeight: 60,
-        maxHeight: 200,
+        minHeight: 36,
+        maxHeight: 160,
     });
+    const inputId = React.useId();
+    // The chat strip rule (mockup `@container stage (max-width: 520px)`): measured on the stage,
+    // because the placeholder is text, which a container query cannot swap.
+    const hostRef = useRef<HTMLDivElement>(null);
+    const [narrow, setNarrow] = useState(false);
+    useEffect(() => {
+        const host = hostRef.current;
+        const stage = (host?.closest('.stage') as HTMLElement | null) ?? host;
+        if (!stage || typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(() => setNarrow(stage.getBoundingClientRect().width <= 520));
+        ro.observe(stage);
+        return () => ro.disconnect();
+    }, []);
     const [inputFocused, setInputFocused] = useState(false);
     const [showSkillsGallery, setShowSkillsGallery] = useState(false);
     const commandPaletteRef = useRef<HTMLDivElement>(null);
@@ -755,41 +712,31 @@ export function AnimatedChatInput({
     const hasDraft = Boolean(internalValue.trim()) || attachments.length > 0;
 
     return (
-        <motion.div 
-            className={cn("relative backdrop-blur-2xl bg-black rounded-2xl border border-white/[0.08] shadow-2xl transition-all duration-300", 
-                inputFocused ? "border-white/20 shadow-white/[0.02]" : "",
-                className)}
-            initial={{ scale: 0.98 }}
-            animate={{ scale: 1 }}
-        >
+        <div ref={hostRef} className={cn("composer-host", className)}>
             <AnimatePresence>
                 {showCommandPalette && (
-                    <motion.div 
+                    <motion.div
                         ref={commandPaletteRef}
-                        className="absolute left-4 right-4 bottom-full mb-2 backdrop-blur-xl bg-black rounded-lg z-50 shadow-lg border border-white/10 overflow-hidden"
+                        className="composer-pop"
                         initial={{ opacity: 0, y: 5 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 5 }}
                     >
-                        <div className="py-1 bg-black max-h-[280px] overflow-y-auto">
+                        <div className="composer-pop-list custom-scrollbar">
                             {filteredSuggestions.map((suggestion, index) => (
                                 <div
                                     key={suggestion.prefix}
-                                    className={cn(
-                                        "flex items-center gap-2 px-3 py-2 text-xs transition-colors cursor-pointer",
-                                        activeSuggestion === index ? "bg-white/10 text-white" : "text-white/70 hover:bg-white/5"
-                                    )}
+                                    className="composer-pop-row"
+                                    data-active={activeSuggestion === index || undefined}
                                     onClick={() => {
                                         setInternalValue(suggestion.prefix + ' ');
                                         setShowCommandPalette(false);
                                     }}
                                 >
-                                    <div className="w-5 h-5 flex items-center justify-center text-white/60">{suggestion.icon}</div>
-                                    <div className="font-medium text-[11px]">{suggestion.label}</div>
-                                    {suggestion.isSkill && (
-                                        <span className="text-[8px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300 border border-violet-500/20">skill</span>
-                                    )}
-                                    <div className="text-white/40 text-[10px] ml-auto">{suggestion.prefix}</div>
+                                    <span className="composer-pop-ic">{suggestion.icon}</span>
+                                    <span className="composer-pop-label">{suggestion.label}</span>
+                                    {suggestion.isSkill && <span className="composer-pop-tag">skill</span>}
+                                    <span className="composer-pop-key">{suggestion.prefix}</span>
                                 </div>
                             ))}
                         </div>
@@ -802,38 +749,32 @@ export function AnimatedChatInput({
                     <motion.div
                         ref={mentionMenuRef}
                         data-testid="mention-menu"
-                        className="absolute left-4 right-4 bottom-full mb-2 backdrop-blur-xl bg-black rounded-lg z-50 shadow-lg border border-white/10 overflow-hidden"
+                        className="composer-pop"
                         initial={{ opacity: 0, y: 5 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 5 }}
                     >
-                        <div className="px-3 pt-2 pb-1 text-[9px] font-semibold uppercase tracking-wider text-white/30">
-                            {t('mention.menuTitle')}
-                        </div>
-                        <div role="listbox" aria-label={t('mention.menuTitle')} className="relative pb-1 bg-black max-h-[280px] overflow-y-auto">
+                        <div className="composer-pop-k">{t('mention.menuTitle')}</div>
+                        <div role="listbox" aria-label={t('mention.menuTitle')} className="composer-pop-list custom-scrollbar">
                             {mentionOptions.map((target, index) => (
                                 <div
                                     key={target.id}
                                     role="option"
                                     aria-selected={activeMention === index}
                                     data-testid={`mention-option-${target.id}`}
+                                    data-active={activeMention === index || undefined}
                                     // Keep the textarea focused, or the caret the pick needs is lost.
                                     onMouseDown={(e) => e.preventDefault()}
                                     onMouseEnter={() => setActiveMention(index)}
                                     onClick={() => pickMention(target.id)}
-                                    className={cn(
-                                        "flex items-center gap-2 px-3 py-1.5 text-xs transition-colors cursor-pointer min-w-0",
-                                        activeMention === index ? "bg-white/10 text-white" : "text-white/70 hover:bg-white/5"
-                                    )}
+                                    className="composer-pop-row"
                                 >
-                                    <span className="font-mono text-[10px] text-white/40 shrink-0 w-10">#{target.id}</span>
-                                    <span className="font-medium text-[11px] truncate">{target.title}</span>
+                                    <span className="composer-pop-key is-lead">#{target.id}</span>
+                                    <span className="composer-pop-label">{target.title}</span>
                                     {target.parentId != null && (
                                         <>
-                                            <span className="text-[8px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/[0.06] text-white/50 border border-white/10 shrink-0">
-                                                {t('mention.branch')}
-                                            </span>
-                                            <span className="text-white/30 text-[10px] truncate ml-auto">
+                                            <span className="composer-pop-tag">{t('mention.branch')}</span>
+                                            <span className="composer-pop-key">
                                                 {t('mention.branchOf', { no: target.parentId, ad: target.parentTitle ?? '' })}
                                             </span>
                                         </>
@@ -860,9 +801,81 @@ export function AnimatedChatInput({
 
             {queue && <MessageQueue {...queue} onEditTake={takeBackQueued} />}
 
-            <div className="p-3">
-                <Textarea
+            <AnimatePresence>
+                {attachments.length > 0 && (
+                    <div className="composer-atts no-scrollbar">
+                        {attachments.map((file, index) => (
+                            <motion.div
+                                key={index}
+                                initial={{ opacity: 0, scale: 0.8, x: -10 }}
+                                animate={{ opacity: 1, scale: 1, x: 0 }}
+                                exit={{ opacity: 0, scale: 0.8 }}
+                                className="composer-att"
+                            >
+                                {file.type === 'image' ? (
+                                    <img src={file.data} alt="preview" />
+                                ) : file.type === 'video' ? (
+                                    <span className="composer-att-file" title={file.name}>
+                                        <span aria-hidden="true">🎬</span>
+                                        <span>{file.url ? 'URL' : file.name}</span>
+                                    </span>
+                                ) : (
+                                    <span className="composer-att-file">
+                                        <FileUp size={16} aria-hidden="true" />
+                                        <span>{file.name}</span>
+                                    </span>
+                                )}
+                                <button
+                                    type="button"
+                                    aria-label={t('approval.close')}
+                                    onClick={() => setAttachments(prev => prev.filter((_, i) => i !== index))}
+                                    className="composer-att-x"
+                                >
+                                    <XIcon size={12} aria-hidden="true" />
+                                </button>
+                            </motion.div>
+                        ))}
+                    </div>
+                )}
+            </AnimatePresence>
+
+            {/* The mockup composer: one box, the text area flanked by its tools, send at the end. */}
+            <div
+                className="composer"
+                data-focused={inputFocused || undefined}
+                data-disabled={disabled || undefined}
+            >
+                <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileChange}
+                    accept="image/*"
+                    className="hidden"
+                    multiple
+                />
+                <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="icon-btn"
+                    aria-label={t('composer.addImage')}
+                    title={t('composer.addImage')}
+                >
+                    <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M14.5 9.5l-5 5a3 3 0 01-4.2-4.2l5.6-5.6a2 2 0 012.8 2.8l-5.4 5.4a1 1 0 01-1.4-1.4l4.8-4.8" /></svg>
+                </button>
+                <button
+                    type="button"
+                    onClick={pickVideoFile}
+                    className="icon-btn"
+                    aria-label={t('composer.addVideo')}
+                    title={t('composer.addVideo')}
+                >
+                    <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1" /><path d="M6.5 4v12M13.5 4v12M3 8h3.5M3 12h3.5M13.5 8H17M13.5 12H17" /></svg>
+                </button>
+                <label className="sr-only" htmlFor={inputId}>{t('chat.placeholder')}</label>
+                <textarea
+                    id={inputId}
                     ref={textareaRef}
+                    rows={1}
                     value={internalValue}
                     onChange={(e) => {
                         setInternalValue(e.target.value);
@@ -879,178 +892,69 @@ export function AnimatedChatInput({
                     }}
                     onFocus={() => setInputFocused(true)}
                     onBlur={() => setInputFocused(false)}
-                    placeholder={disabled ? disabledPlaceholder : placeholder}
-                    containerClassName="w-full"
+                    // The narrow chat strip (<= 520 px, mockup rule) gets the short placeholder.
+                    placeholder={disabled ? disabledPlaceholder : (narrow && shortPlaceholder ? shortPlaceholder : placeholder)}
                     disabled={disabled}
                     // readOnly, not disabled: a disabled textarea loses focus
                     // and cannot hold a selection, and the live transcript is
                     // written by moving the caret inside this element.
                     readOnly={dictating}
-                    className={cn(
-                        "w-full px-3 py-2 resize-none bg-transparent border-none text-[13px] focus:outline-none min-h-[40px] custom-scrollbar",
-                        disabled ? "text-orange-500/50 cursor-not-allowed italic" : "text-white/90 placeholder:text-white/20"
-                    )}
-                    // maxHeight (200px) aşıldığında textarea içinde mouse/trackpad ile
-                    // scroll yapılabilsin diye overflow-y: auto (önceden hidden'dı → metin kilitleniyordu)
+                    className="custom-scrollbar"
+                    // The box scrolls inside itself past its maximum height (it was
+                    // `hidden` once, which locked long text out of reach).
                     style={{ overflowY: "auto" }}
-                    showRing={false}
                 />
-                {resolvedMentions.length > 0 && (
-                    <div
-                        data-testid="mention-resolved"
-                        aria-label={t('mention.resolved')}
-                        title={t('mention.resolved')}
-                        className="px-3 flex flex-wrap gap-x-3 gap-y-0.5 text-[10.5px] text-slate-500"
-                    >
-                        {resolvedMentions.map(m => (
-                            <span key={m.id} className="whitespace-nowrap">
-                                <span className="font-mono">@{m.id}</span> → <span className="text-blue-300/80">{m.label}</span>
-                            </span>
-                        ))}
-                    </div>
-                )}
-            </div>
-
-            <AnimatePresence>
-                {attachments.length > 0 && (
-                    <div className="px-3 pb-3 flex gap-2 overflow-x-auto custom-scrollbar no-scrollbar py-2 border-t border-white/[0.03]">
-                        {attachments.map((file, index) => (
-                            <motion.div 
-                                key={index} 
-                                initial={{ opacity: 0, scale: 0.8, x: -10 }}
-                                animate={{ opacity: 1, scale: 1, x: 0 }}
-                                exit={{ opacity: 0, scale: 0.8 }}
-                                className="relative flex-shrink-0 group"
-                            >
-                                {file.type === 'image' ? (
-                                    <img src={file.data} alt="preview" className="w-14 h-14 object-cover rounded-lg border border-white/10 shadow-md" />
-                                ) : file.type === 'video' ? (
-                                    <div className="w-14 h-14 flex flex-col items-center justify-center bg-white/5 rounded-lg border border-white/10 shadow-md px-1 overflow-hidden" title={file.name}>
-                                        <span className="text-lg leading-none mb-0.5">🎬</span>
-                                        <span className="text-[8px] text-white/50 truncate w-full text-center">{file.url ? 'URL' : file.name}</span>
-                                    </div>
-                                ) : (
-                                    <div className="w-14 h-14 flex flex-col items-center justify-center bg-white/5 rounded-lg border border-white/10 shadow-md px-1 overflow-hidden">
-                                        <FileUp className="w-5 h-5 text-blue-400 mb-0.5" />
-                                        <span className="text-[8px] text-white/50 truncate w-full text-center">{file.name}</span>
-                                    </div>
-                                )}
-                                <button 
-                                    onClick={() => setAttachments(prev => prev.filter((_, i) => i !== index))} 
-                                    className="absolute -top-1.5 -right-1.5 bg-red-500/90 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-red-600"
-                                >
-                                    <XIcon className="w-3 h-3" />
-                                </button>
-                            </motion.div>
-                        ))}
-                    </div>
-                )}
-            </AnimatePresence>
-
-            <div className="p-2 border-t border-white/[0.05] flex items-center justify-between gap-4 bg-white/[0.01] rounded-b-2xl">
-                <div className="flex items-center gap-2">
-                    <input 
-                        type="file" 
-                        ref={fileInputRef} 
-                        onChange={handleFileChange} 
-                        accept="image/*" 
-                        className="hidden" 
-                        multiple 
-                    />
+                <button
+                    type="button"
+                    data-mic-button
+                    onClick={handleMicClick}
+                    disabled={micBlocked || voice.state === 'transcribing'}
+                    aria-pressed={voice.state === 'recording'}
+                    aria-label={voice.state === 'recording' ? t('mic.stop') : t('mic.start')}
+                    title={
+                        micBlocked ? t('mic.err.server')
+                            : voice.state === 'recording' ? t('mic.stop')
+                            : voice.state === 'transcribing' ? t('mic.transcribing')
+                            : t('mic.start')
+                    }
+                    className="icon-btn composer-mic"
+                    data-voice={voice.state}
+                >
+                    <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="7.5" y="3" width="5" height="9" rx="2.5" /><path d="M5 10a5 5 0 0010 0M10 15v2.5" /></svg>
+                    {voice.state === 'recording' && (
+                        <span className="composer-rec num">{formatElapsed(voice.elapsedMs)}</span>
+                    )}
+                </button>
+                {commandMeta.length > 0 && (
                     <button
                         type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="p-2 rounded-lg text-white/40 hover:text-white/90 hover:bg-white/5 transition-colors"
-                        title={t('composer.addImage')}
+                        data-gallery-button
+                        aria-pressed={showSkillsGallery}
+                        onClick={() => { setShowSkillsGallery(v => !v); setShowCommandPalette(false); }}
+                        className="icon-btn"
+                        aria-label={t('skills.title')}
+                        title={t('skills.title')}
                     >
-                        <PlusIcon className="w-3.5 h-3.5" />
+                        <Sparkles size={17} aria-hidden="true" />
                     </button>
-                    <button
-                        type="button"
-                        onClick={pickVideoFile}
-                        className="p-2 rounded-lg text-white/40 hover:text-white/90 hover:bg-white/5 transition-colors text-sm leading-none"
-                        title={t('composer.addVideo')}
-                    >🎬</button>
-                    <button
-                        type="button"
-                        data-mic-button
-                        onClick={handleMicClick}
-                        disabled={micBlocked || voice.state === 'transcribing'}
-                        aria-pressed={voice.state === 'recording'}
-                        aria-label={voice.state === 'recording' ? t('mic.stop') : t('mic.start')}
-                        title={
-                            micBlocked ? t('mic.err.server')
-                                : voice.state === 'recording' ? t('mic.stop')
-                                : voice.state === 'transcribing' ? t('mic.transcribing')
-                                : t('mic.start')
-                        }
-                        className={cn(
-                            "p-2 rounded-lg transition-colors flex items-center gap-1",
-                            voice.state === 'recording'
-                                ? "text-red-400 bg-red-500/10"
-                                : voice.state === 'transcribing'
-                                    ? "text-violet-300 bg-violet-500/10 animate-pulse"
-                                    : "text-white/40 hover:text-white/90 hover:bg-white/5",
-                            micBlocked ? "opacity-40 cursor-not-allowed" : ""
-                        )}
-                    >
-                        <Mic className="w-3.5 h-3.5" />
-                        {voice.state === 'recording' && (
-                            <>
-                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                                <span className="text-[10px] tabular-nums">{formatElapsed(voice.elapsedMs)}</span>
-                            </>
-                        )}
-                    </button>
-                    {voice.state === 'transcribing' && (
-                        // Visible text, not only the button title: on a
-                        // CPU-only machine this state lasts several seconds
-                        // and is the only sign the recording was kept.
-                        <span data-mic-transcribing className="text-[10px] text-violet-300">{t('mic.transcribing')}</span>
-                    )}
-                    {voice.error && (
-                        // Inline text, NOT a toast: the error has to stay next
-                        // to the button so it is still visible while the user
-                        // tries again. The raw detail goes in `title` — no
-                        // jargon on screen.
-                        <span
-                            data-mic-error
-                            className="text-[10px] text-red-400"
-                            title={voice.error.detail || t(`mic.err.${voice.error.kind}` as any)}
-                        >{t(`mic.err.${voice.error.kind}` as any)}</span>
-                    )}
-                    {commandMeta.length > 0 && (
-                        <button
-                            type="button"
-                            data-gallery-button
-                            onClick={() => { setShowSkillsGallery(v => !v); setShowCommandPalette(false); }}
-                            className={cn(
-                                "p-2 rounded-lg transition-colors",
-                                showSkillsGallery ? "text-violet-300 bg-violet-500/10" : "text-white/40 hover:text-white/90 hover:bg-white/5"
-                            )}
-                            title={t('skills.title')}
-                        >
-                            <Sparkles className="w-3.5 h-3.5" />
-                        </button>
-                    )}
-                </div>
-                
-                <div className="flex items-center gap-2">
+                )}
                 {isLoading && (
-                    <button 
-                        type="button" 
-                        onClick={onStop} 
-                        className="px-4 py-1.5 rounded-lg text-[10px] font-bold transition-all flex items-center gap-2 bg-red-500 text-white hover:bg-red-600 shadow-[0_0_15px_rgba(239,68,68,0.3)] animate-pulse"
+                    <button
+                        type="button"
+                        onClick={onStop}
+                        className="send is-stop"
+                        title={t('composer.stop')}
+                        data-stop-button
                     >
-                        <Square className="w-3 h-3 fill-current" />
-                        <span>{t('composer.stop')}</span>
+                        <Square size={13} className="fill-current" aria-hidden="true" />
+                        <span className="sr-only">{t('composer.stop')}</span>
                     </button>
                 )}
                 {/* While a turn runs, Send appears only with something to queue. */}
                 {(!isLoading || hasDraft) && (
-                    <button 
-                        type="button" 
-                        onClick={handleSendMessage} 
+                    <button
+                        type="button"
+                        onClick={handleSendMessage}
                         // `sendBlockedByDictation`, not just `dictating`: the box is
                         // still showing unconfirmed interim text while `transcribing`
                         // too, AND for one more render after an error commits state
@@ -1060,20 +964,51 @@ export function AnimatedChatInput({
                         disabled={disabled || sendBlockedByDictation || !hasDraft}
                         data-send-button
                         title={isLoading ? t('queue.addHint') : undefined}
-                        className={cn(
-                            "px-4 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5",
-                            hasDraft && !disabled && !sendBlockedByDictation
-                                ? "bg-white text-black hover:bg-white/90 active:scale-95 shadow-lg shadow-white/5" 
-                                : "bg-white/[0.05] text-white/20"
-                        )}
+                        className="send"
+                        data-queue={isLoading || undefined}
                     >
-                        <SendIcon className="w-3 h-3" />
-                        <span>{isLoading ? t('queue.add') : 'Send'}</span>
+                        <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.5V4.5M5.5 9L10 4.5 14.5 9" /></svg>
+                        <span className="sr-only">{isLoading ? t('queue.add') : 'Send'}</span>
                     </button>
                 )}
-                </div>
             </div>
-        </motion.div>
+
+            {(resolvedMentions.length > 0 || voice.state === 'transcribing' || voice.error) && (
+                <div className="composer-notes">
+                    {resolvedMentions.length > 0 && (
+                        <div
+                            data-testid="mention-resolved"
+                            aria-label={t('mention.resolved')}
+                            title={t('mention.resolved')}
+                            className="composer-mentions"
+                        >
+                            {resolvedMentions.map(m => (
+                                <span key={m.id}>
+                                    <span className="num">@{m.id}</span> → <b>{m.label}</b>
+                                </span>
+                            ))}
+                        </div>
+                    )}
+                    {voice.state === 'transcribing' && (
+                        // Visible text, not only the button title: on a
+                        // CPU-only machine this state lasts several seconds
+                        // and is the only sign the recording was kept.
+                        <span data-mic-transcribing className="composer-note">{t('mic.transcribing')}</span>
+                    )}
+                    {voice.error && (
+                        // Inline text, NOT a toast: the error has to stay next
+                        // to the button so it is still visible while the user
+                        // tries again. The raw detail goes in `title` — no
+                        // jargon on screen.
+                        <span
+                            data-mic-error
+                            className="composer-note is-error"
+                            title={voice.error.detail || t(`mic.err.${voice.error.kind}` as any)}
+                        >{t(`mic.err.${voice.error.kind}` as any)}</span>
+                    )}
+                </div>
+            )}
+        </div>
     );
 }
 
