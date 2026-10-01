@@ -104,6 +104,9 @@ const CodeBlock = ({ match, codeString, workspacePath, onExportToUnity, onOpenFi
         <SyntaxHighlighter
           language={match[1]}
           useInlineStyles={false}
+          // Without this the library still puts its default theme's inline font and colours on
+          // <code> (its default `codeTagProps`), whatever `useInlineStyles` says.
+          codeTagProps={{ className: `language-${match[1]}` }}
           showLineNumbers
           PreTag="pre"
           className="code-body custom-scrollbar"
