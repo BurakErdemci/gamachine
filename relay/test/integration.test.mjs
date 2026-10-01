@@ -24,13 +24,17 @@ const HTTP = REMOTE || `http://127.0.0.1:${PORT}`;
 const WSO = HTTP.replace(/^http/, 'ws');
 const RELAY_DIR = fileURLToPath(new URL('..', import.meta.url));
 // The relay only accepts phone sockets from its own page, as a browser would
-// send them; Node's WebSocket sends no Origin unless told to.
-class PageWS extends WebSocket {
-  constructor(url, protocols) {
-    super(url, { protocols, headers: { Origin: HTTP } });
+// send them; Node's WebSocket sends no Origin unless told to. The global
+// WebSocket arrived in Node 22 and CI runs Node 20, where this file must still
+// load so its tests can skip.
+const PageWS = typeof WebSocket === 'function'
+  ? class extends WebSocket {
+    constructor(url, protocols) {
+      super(url, { protocols, headers: { Origin: HTTP } });
+    }
   }
-}
-const enabled = !!REMOTE || (process.env.RELAY_IT !== '0' && spawnSync('wrangler --version', { shell: true }).status === 0);
+  : null;
+const enabled = !!PageWS && (!!REMOTE || (process.env.RELAY_IT !== '0' && spawnSync('wrangler --version', { shell: true }).status === 0));
 
 let proc = null;
 let stateDir = null;
