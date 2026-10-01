@@ -167,8 +167,14 @@ class RelayClient:
                     welcomed = await self._session(ws)
                     if welcomed:
                         attempt = 0
+                # A clean close (1000/1001) ends the read loop without raising.
+                if not self._stopping:
+                    logger.warning("[remote] relay socket closed: code=%s reason=%r welcomed=%s connects=%d",
+                                   ws.close_code, ws.close_reason, welcomed, self.connects)
             except InvalidStatus as exc:
                 status = exc.response.status_code
+                logger.warning("[remote] relay refused the PC socket: http %s, connects=%d",
+                               status, self.connects)
                 if status == 429:
                     retry = _retry_after(exc.response.headers.get("Retry-After"))
                     delay = min(self.rate_limit_cap_s, max(self.rate_limit_min_s, retry or 0))
@@ -180,6 +186,10 @@ class RelayClient:
                     self.last_error = f"http_{status}"
             except ConnectionClosed as exc:
                 code = exc.rcvd.code if exc.rcvd is not None else None
+                if not self._stopping:
+                    logger.warning("[remote] relay socket closed: code=%s reason=%r sent_code=%s connects=%d",
+                                   code, exc.rcvd.reason if exc.rcvd is not None else None,
+                                   exc.sent.code if exc.sent is not None else None, self.connects)
                 if code == CLOSE_REPLACED:
                     # Another Gamachine with this room key took over; two PCs
                     # would replace each other forever.
@@ -196,7 +206,7 @@ class RelayClient:
                 raise
             except Exception as exc:
                 self.last_error = type(exc).__name__
-                logger.info("[remote] relay connection failed: %s", exc)
+                logger.info("[remote] relay connection failed: %s (connects=%d)", exc, self.connects)
             finally:
                 await self._dropped()
             if self._stopping:
@@ -256,7 +266,8 @@ class RelayClient:
             while True:
                 await asyncio.sleep(self.ping_every_s)
                 if time.monotonic() - last_rx() > self.dead_after_s:
-                    logger.info("[remote] relay silent for %.0f s; reconnecting", self.dead_after_s)
+                    logger.warning("[remote] relay silent for %.0f s; closing the socket to reconnect (connects=%d)",
+                                   self.dead_after_s, self.connects)
                     await ws.close(code=1000, reason="silent")
                     return
                 await ws.send('{"type":"ping"}')

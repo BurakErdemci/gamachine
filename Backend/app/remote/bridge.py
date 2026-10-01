@@ -113,15 +113,18 @@ class RemoteBridge:
         client, self.client = self.client, None
         if client is not None:
             await client.stop()
-        self._drop_connections()
+        self._drop_connections("stop")
 
-    def _drop_connections(self) -> None:
+    def _drop_connections(self, why: str) -> None:
+        phones, pairs, sessions = len(self._phones), len(self._pairs), len(self.sessions)
         for session in self.sessions.values():
             session.close()
         self.sessions.clear()
         self._phones.clear()
         self._pairs.clear()
         self._pair_ok_sent.clear()
+        logger.info("[remote] relay connections dropped (%s): %d phone, %d pairing, %d session",
+                    why, phones, pairs, sessions)
 
     def _drop_stale_pending(self, why: str) -> None:
         if self.pairing.drop_pending_unless_live(self._pairs):
@@ -222,8 +225,12 @@ class RemoteBridge:
     async def approve_pairing(self) -> dict:
         pending = self.pairing.take_pending()
         if pending is None:
+            logger.info("[remote] approve refused: no pending pairing")
             raise BridgeError("no_pending_pairing", 404)
         if pending.conn not in self._pairs or self.client is None:
+            logger.warning("[remote] approve refused (phone_left): pairing socket listed=%s, "
+                           "relay client=%s, connected=%s", pending.conn in self._pairs,
+                           self.client is not None, bool(self.client and self.client.connected))
             raise BridgeError("phone_left")
         device_id = C.random_b64u(16)
         token = C.random_b64u(32)
@@ -234,12 +241,15 @@ class RemoteBridge:
             # README: register the hash before the pair_ok that carries the token.
             await self.client.token_op({"type": "register_tokens", "hashes": [token_hash]})
         except TokenOpError as exc:
+            logger.warning("[remote] approve refused: token registration failed (%s)", exc)
             self.store.remove_device(device_id)
             await self._send_to(pending.conn, {"type": "pair_reject", "reason": "rejected"})
             raise BridgeError(f"relay_{exc}", 503)
         ok = C.pair_ok(pending.k_pair, {"device_id": device_id, "token": token,
                                         "vapid_pub": C.b64u(self.keys.vapid.public_raw)})
         if not await self._send_to(pending.conn, ok):
+            logger.warning("[remote] approve refused (phone_left): pair_ok not sent, relay connected=%s",
+                           bool(self.client and self.client.connected))
             await self._forget_device(device_id)
             raise BridgeError("phone_left")
         # The relay answers `gone` when the socket left before `to` reached it.
@@ -293,14 +303,14 @@ class RemoteBridge:
         return await client.send({"type": "to", "conn": conn, "data": C.compact_json(obj)})
 
     async def _on_disconnect(self) -> None:
-        self._drop_connections()
+        self._drop_connections("disconnect")
         self._drop_stale_pending("disconnect")
 
     async def _on_relay(self, m: dict) -> None:
         mtype = m.get("type")
         conn = m.get("conn")
         if mtype == "welcome":
-            self._drop_connections()
+            self._drop_connections("welcome")
             for p in m.get("phones") or []:
                 if isinstance(p, dict) and isinstance(p.get("conn"), str) and isinstance(p.get("token_hash"), str):
                     self._phones[p["conn"]] = p["token_hash"]
