@@ -19,9 +19,9 @@ const net = await import(new URL('net.js', PUBLIC).href);
 const html = fs.readFileSync(fileURLToPath(new URL('index.html', PUBLIC)), 'utf8');
 const source = fs.readFileSync(fileURLToPath(new URL('app.js', PUBLIC)), 'utf8');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const REMOVED_TEXT = 'Bu telefon bilgisayardan kaldırıldı. Yeniden kullanmak için bilgisayarda yeni bir QR kodu tara.';
+const REMOVED_TEXT = 'Bu telefon bilgisayardan kaldırıldı. Yeniden eşleştirmek için bilgisayarda Gamachine\'de AI Yapılandırması > Uzaktan kontrol > Telefon eşleştir ile QR kodunu aç ve telefonun kamerasıyla okut.';
 
-async function boot() {
+async function boot({ paired = true } = {}) {
   const { window } = new JSDOM(html, { url: 'https://phone.invalid/p', runScripts: 'outside-only' });
   window.scrollTo = () => {};
   window.matchMedia = () => ({ matches: false, addListener() {}, removeListener() {} });
@@ -29,6 +29,7 @@ async function boot() {
   window.confirm = () => { throw new Error('a removal must not ask'); };
   window.C = { fromB64u: () => new Uint8Array() };
   const page = { link: null, stops: 0, stored: { pairId: 'p', pcPub: 'AAAA', deviceId: 'd', token: 't', privateKey: {}, pushDone: true } };
+  if (!paired) page.stored = null;
   window.store = {
     get: async (k) => (k === 'device' ? page.stored : null),
     put: async (k, v) => { if (k === 'device') page.stored = v; },
@@ -48,10 +49,17 @@ async function boot() {
   };
   window.eval(source.slice(source.indexOf('const $ = (id) =>')));
   const $ = (id) => window.document.getElementById(id);
-  for (let i = 0; i < 100 && !page.link?.ready; i++) await sleep(10);
-  assert.ok(page.link?.ready, 'the page did not connect');
-  assert.equal($('screen-main').hidden, false);
+  if (paired) {
+    for (let i = 0; i < 100 && !page.link?.ready; i++) await sleep(10);
+    assert.ok(page.link?.ready, 'the page did not connect');
+    assert.equal($('screen-main').hidden, false);
+  } else {
+    for (let i = 0; i < 100 && $('screen-welcome').hidden; i++) await sleep(10);
+    assert.equal($('screen-welcome').hidden, false);
+    assert.equal(page.link, null);
+  }
   page.$ = $;
+  page.showWelcome = () => window.eval('showWelcome()');
   page.status = (s, info) => page.link.options.onStatus(s, info);
   page.close = () => window.close();
   return page;
@@ -100,4 +108,36 @@ test('connecting and pc_offline keep the pairing', { skip }, async () => {
   assert.notEqual(page.stored, null);
   assert.equal(page.$('screen-main').hidden, false);
   page.close();
+});
+
+test('welcome: fresh visits are clear, invalid submissions show an error, reopening clears it', { skip }, async () => {
+  const page = await boot({ paired: false });
+  try {
+    assert.equal(page.$('paste-link').value, '');
+    assert.equal(page.$('welcome-error').textContent, '');
+    page.$('paste-link').value = 'https://phone.invalid/p';
+    page.$('btn-paste-pair').click();
+    assert.equal(page.$('welcome-error').textContent, 'Bağlantıda # işaretinden sonraki kısım yok.');
+    page.showWelcome();
+    assert.equal(page.$('welcome-error').textContent, '');
+  } finally {
+    page.close();
+  }
+});
+
+test('removal clears a previous link error and explains where to open the QR', { skip }, async () => {
+  for (const [status, info] of [['removed', {}], ['hello_rejected', { reason: 'unknown_device' }]]) {
+    const page = await boot();
+    try {
+      page.$('paste-link').value = 'https://phone.invalid/p';
+      page.$('btn-paste-pair').click();
+      assert.equal(page.$('welcome-error').textContent, 'Bağlantıda # işaretinden sonraki kısım yok.');
+      page.status(status, info);
+      await sleep(50);
+      assertForgotten(page);
+      assert.equal(page.$('welcome-error').textContent, '');
+    } finally {
+      page.close();
+    }
+  }
 });

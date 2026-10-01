@@ -14,7 +14,7 @@ import {
 const $ = (id) => document.getElementById(id);
 const SCREENS = ['loading', 'install', 'welcome', 'pairing', 'main', 'chat'];
 const CARD_PUSH_GRACE_MS = 1500;
-const REMOVED_TEXT = 'Bu telefon bilgisayardan kaldırıldı. Yeniden kullanmak için bilgisayarda yeni bir QR kodu tara.';
+const REMOVED_TEXT = 'Bu telefon bilgisayardan kaldırıldı. Yeniden eşleştirmek için bilgisayarda Gamachine\'de AI Yapılandırması > Uzaktan kontrol > Telefon eşleştir ile QR kodunu aç ve telefonun kamerasıyla okut.';
 
 let device = null;
 let link = null;
@@ -119,6 +119,7 @@ async function startPairing(parsed) {
 
 function showWelcome(text) {
   show('welcome');
+  $('welcome-error').textContent = '';
   if (text) $('welcome-text').textContent = text;
   $('btn-show-install').hidden = !(isIos() && !isStandalone());
 }
