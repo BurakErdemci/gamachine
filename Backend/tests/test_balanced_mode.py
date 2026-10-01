@@ -486,6 +486,10 @@ async def test_codex_balanced_wrapped_build_runs_without_a_card(balanced, ws, co
     (_CODEX_PS + "'dotnet build\"", "shell_inline_code"),
     (_CODEX_PS + "\"dotnet build \\\"x\\\"\"", "shell_inline_code"),
     ("cmd.exe /c dotnet build", "shell_inline_code"),
+    # A shell outside the system locations may be a workspace binary.
+    (".\\tools\\sh.exe -c 'ls'", "shell_inline_code"),
+    ("C:\\Users\\x\\evil\\pwsh.exe -Command 'ls'", "shell_inline_code"),
+    ("/tmp/bash -lc 'dotnet build'", "shell_metachar"),
     # PowerShell strips these quotes, so the read leaves the workspace.
     (_CODEX_PS + "\"cat '..\\secret.txt'\"", "shell_inline_code"),
     ("/bin/bash -lc 'cat {..,x}/secret'", "shell_metachar"),

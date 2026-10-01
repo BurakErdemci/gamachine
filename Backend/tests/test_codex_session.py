@@ -420,6 +420,68 @@ def test_a_read_verb_with_a_plain_option_is_read_only(ws, command):
     assert _is_read_only_command(command, ws, ws) is True
 
 
+@pytest.fixture
+def system_dirs(monkeypatch):
+    monkeypatch.setenv("SYSTEMROOT", "C:\\WINDOWS")
+    monkeypatch.setenv("ProgramFiles", "C:\\Program Files")
+    monkeypatch.delenv("ProgramW6432", raising=False)
+
+
+@pytest.mark.parametrize("command", [
+    _PS + "'Get-ChildItem'",
+    '"c:\\windows\\system32\\windowspowershell\\v1.0\\POWERSHELL.EXE" -Command \'Get-ChildItem\'',
+    "C:/Windows/SysWOW64/WindowsPowerShell/v1.0/powershell.exe -Command 'Get-ChildItem'",
+    '"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command \'Get-ChildItem\'',
+    "powershell -Command 'Get-ChildItem'",
+    "pwsh.exe -Command 'Get-ChildItem'",
+    "bash -lc 'ls'",
+    "/usr/bin/bash -lc 'ls'",
+    "/usr/local/bin/zsh -lc 'ls'",
+    "/opt/homebrew/bin/bash -lc 'ls'",
+    "/bin/sh -c 'ls'",
+])
+def test_a_system_shell_is_unwrapped(ws, system_dirs, command):
+    assert _is_read_only_command(command, ws, ws) is True
+
+
+@pytest.mark.parametrize("command", [
+    # A shell outside the system locations may be a workspace binary.
+    ".\\tools\\sh.exe -c 'ls'",
+    "tools/bash -lc 'ls'",
+    "./bash -lc 'ls'",
+    "C:\\Users\\x\\evil\\pwsh.exe -Command 'Get-ChildItem'",
+    '"C:\\Windows\\Temp\\powershell.exe" -Command \'Get-ChildItem\'',
+    '"C:\\Windows\\System32\\spool\\drivers\\color\\powershell.exe" -Command \'Get-ChildItem\'',
+    '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\..\\..\\..\\Temp\\powershell.exe"'
+    " -Command 'Get-ChildItem'",
+    '"\\\\host\\share\\powershell.exe" -Command \'Get-ChildItem\'',
+    '"C:\\Program Files\\Evil\\pwsh.exe" -Command \'Get-ChildItem\'',
+    "/tmp/bash -lc 'ls'",
+    "/usr/bin/../../tmp/bash -lc 'ls'",
+    "/home/x/bin/zsh -lc 'ls'",
+    # Right directory, wrong program.
+    '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\bash.exe" -lc \'ls\'',
+    "/usr/bin/python -c 'ls'",
+])
+def test_a_shell_outside_the_system_locations_is_not_unwrapped(ws, system_dirs, command):
+    assert _is_read_only_command(command, ws, ws) is False
+
+
+def test_the_windows_directory_comes_from_the_environment(ws, monkeypatch):
+    monkeypatch.setenv("SYSTEMROOT", "D:\\Win")
+    shell = "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -Command 'Get-ChildItem'"
+    assert _is_read_only_command(shell, ws, ws) is True
+    assert _is_read_only_command(_PS + "'Get-ChildItem'", ws, ws) is False
+
+
+@pytest.mark.parametrize("name", ["powershell.exe", "bash"])
+def test_a_bare_shell_name_shadowed_in_cwd_is_not_unwrapped(ws, name):
+    open(os.path.join(ws, name), "w").close()
+    shell = name.removesuffix(".exe")
+    flag = "-Command 'Get-ChildItem'" if shell == "powershell" else "-lc 'ls'"
+    assert _is_read_only_command(f"{shell} {flag}", ws, ws) is False
+
+
 def test_a_read_from_outside_the_workspace_is_not_read_only(ws, tmp_path_factory):
     outside = str(tmp_path_factory.mktemp("outside"))
     assert _is_read_only_command(_PS + "'Get-ChildItem'", outside, ws) is False
