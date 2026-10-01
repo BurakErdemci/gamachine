@@ -1,6 +1,3 @@
-import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronRight, Sparkles } from 'lucide-react';
-import { useState } from 'react';
 import { useLang } from '../../lib/i18n';
 
 interface ThinkingBlockProps {
@@ -8,47 +5,24 @@ interface ThinkingBlockProps {
   durationMs?: number | null;
 }
 
+/** "Thought for 12s": the same folding chip as the tool summary (mockup `.tool`), opening the reasoning. */
 export const ThinkingBlock = ({ thinking, durationMs }: ThinkingBlockProps) => {
   const { t } = useLang();
-  const [open, setOpen] = useState(false);
-
   const seconds = durationMs ? Math.round(durationMs / 1000) : null;
   const label = seconds ? t('thinking.seconds', { sayi: seconds }) : t('thinking.done');
 
   return (
-    <div className="mb-2.5">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-white/[0.07] bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/[0.12] text-[11px] text-slate-500 hover:text-slate-300 transition-colors select-none group"
-      >
-        <Sparkles size={10.5} className="text-violet-400/70" />
-        <span>{label}</span>
-        <motion.span
-          animate={{ rotate: open ? 90 : 0 }}
-          transition={{ duration: 0.15 }}
-          className="flex items-center"
-        >
-          <ChevronRight size={11} />
-        </motion.span>
-      </button>
-
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="overflow-hidden"
-          >
-            <div className="mt-2 pl-3 border-l border-white/[0.08] max-h-[320px] overflow-y-auto custom-scrollbar">
-              <p className="text-[11px] text-slate-500 whitespace-pre-wrap leading-relaxed font-mono">
-                {thinking}
-              </p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+    <div className="tool-row">
+      <details className="tool tool-thinking fold-host">
+        <summary>
+          <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 6v4.3l2.8 1.8" /></svg>
+          <span className="tool-text">{label}</span>
+          <svg className="ic ic-sm tool-chev" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
+        </summary>
+        <div className="fold"><div className="fold-in">
+          <p className="thinking-text custom-scrollbar">{thinking}</p>
+        </div></div>
+      </details>
     </div>
   );
 };
