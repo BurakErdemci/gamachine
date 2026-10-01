@@ -14,10 +14,11 @@ import { parseContextReport } from '../../lib/contextReport';
  * NOT: `/cost` bu Claude Code sürümünde yok — session cost `/usage` içindedir.
  */
 
-function barColor(p: number): string {
-  if (p >= 80) return 'bg-red-500';
-  if (p >= 50) return 'bg-amber-500';
-  return 'bg-emerald-500';
+// The bar's fill level as a state the theme colours (thread.css `.slash-bar`), not a colour class.
+function barLevel(p: number): 'high' | 'mid' | 'low' {
+  if (p >= 80) return 'high';
+  if (p >= 50) return 'mid';
+  return 'low';
 }
 
 // ── /context: markdown özeti → headline bar + tam markdown ────────────────
@@ -33,36 +34,36 @@ const ContextCard: React.FC<{
   // Özet çıkmazsa ham markdown'a düş (tablolar zaten güzel render olur)
   if (!head) {
     return (
-      <div className="prose prose-invert max-w-none text-[13px] leading-relaxed prose-table:text-[11px]">
+      <div className="msg-body">
         <MarkdownRenderer content={text} workspacePath={workspacePath} onOpenFile={onOpenFile} />
       </div>
     );
   }
 
   return (
-    <div className="bg-[#000000] rounded-xl border border-violet-500/20 overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-violet-500/20">
-        <Layers size={14} className="text-violet-400" />
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">{t('slash.context')}</span>
-        <span className="text-[10px] text-slate-500 ml-auto font-mono">/context</span>
+    <div className="slash" data-slash="context">
+      <div className="slash-head">
+        <Layers size={14} aria-hidden="true" />
+        <span className="slash-k">{t('slash.context')}</span>
+        <span className="slash-cmd">/context</span>
       </div>
-      <div className="px-4 py-3 space-y-2.5">
-        {head.model && <p className="text-[11px] text-slate-500 font-mono">{head.model}</p>}
+      <div className="slash-body">
+        {head.model && <p className="slash-model">{head.model}</p>}
         <div>
-          <div className="flex items-baseline justify-between mb-1">
-            <span className="text-[12px] text-slate-200 font-medium">{head.used} / {head.total} token</span>
-            <span className="text-[12px] font-semibold tabular-nums text-slate-300">{head.pct}%</span>
+          <div className="slash-row">
+            <span className="slash-label">{head.used} / {head.total} token</span>
+            <span className="slash-pct num">{head.pct}%</span>
           </div>
-          <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
-            <div className={`h-full rounded-full ${barColor(head.pct)} transition-all duration-500`} style={{ width: `${Math.max(head.pct, 1)}%` }} />
+          <div className="slash-track">
+            <div className="slash-bar" data-level={barLevel(head.pct)} style={{ width: `${Math.max(head.pct, 1)}%` }} />
           </div>
         </div>
-        <button onClick={() => setOpen(v => !v)} className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-300 transition-colors">
-          {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        <button onClick={() => setOpen(v => !v)} className="slash-more">
+          {open ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
           <span>{t('slash.categoryBreakdown')}</span>
         </button>
         {open && (
-          <div className="prose prose-invert max-w-none text-[11px] leading-relaxed prose-table:text-[10.5px] prose-th:py-1 prose-td:py-0.5 border-t border-slate-800 pt-2">
+          <div className="msg-body slash-detail">
             <MarkdownRenderer content={text} workspacePath={workspacePath} onOpenFile={onOpenFile} />
           </div>
         )}
@@ -126,44 +127,45 @@ export const SlashCommandCard: React.FC<Props> = ({ command, text, workspacePath
   // Hiçbir yapısal sinyal yoksa → ham metne düş (markdown)
   if (bars.length === 0 && stats.length === 0 && !subtitle) {
     return (
-      <div className="prose prose-invert max-w-none text-[13px] leading-relaxed">
+      <div className="msg-body">
         <MarkdownRenderer content={text} workspacePath={workspacePath} onOpenFile={onOpenFile} />
       </div>
     );
   }
 
   return (
-    <div className="bg-[#000000] rounded-xl border border-blue-500/20 overflow-hidden">
+    <div className="slash" data-slash="usage">
       {/* Başlık */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-blue-500/20">
-        <Gauge size={14} className="text-blue-400" />
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-blue-400">{t('slash.usage')}</span>
-        <span className="text-[10px] text-slate-500 ml-auto font-mono">/{command}</span>
+      <div className="slash-head">
+        <Gauge size={14} aria-hidden="true" />
+        <span className="slash-k">{t('slash.usage')}</span>
+        <span className="slash-cmd">/{command}</span>
       </div>
 
-      <div className="px-4 py-3 space-y-3">
+      <div className="slash-body">
         {subtitle && (
-          <p className="text-[12px] text-slate-400 leading-relaxed">{subtitle}</p>
+          <p className="slash-sub">{subtitle}</p>
         )}
 
         {/* Yüzde bar'ları */}
         {bars.length > 0 && (
-          <div className="space-y-2.5">
+          <div className="slash-bars">
             {bars.map((b, i) => (
               <div key={i}>
-                <div className="flex items-baseline justify-between mb-1">
-                  <span className="text-[12px] text-slate-200 font-medium">{b.label}</span>
-                  <span className="text-[12px] font-semibold tabular-nums text-slate-300">{b.pct}%</span>
+                <div className="slash-row">
+                  <span className="slash-label">{b.label}</span>
+                  <span className="slash-pct num">{b.pct}%</span>
                 </div>
-                <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                <div className="slash-track">
                   <div
-                    className={`h-full rounded-full ${barColor(b.pct)} transition-all duration-500`}
+                    className="slash-bar"
+                    data-level={barLevel(b.pct)}
                     style={{ width: `${Math.max(b.pct, 1)}%` }}
                   />
                 </div>
                 {b.reset && (
-                  <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-500">
-                    <Clock size={9} />
+                  <div className="slash-reset">
+                    <Clock size={12} aria-hidden="true" />
                     <span>{b.reset.replace(/^resets?\s*/i, t('slash.resetsPrefix'))}</span>
                   </div>
                 )}
@@ -174,11 +176,11 @@ export const SlashCommandCard: React.FC<Props> = ({ command, text, workspacePath
 
         {/* Key: Value istatistikleri */}
         {stats.length > 0 && (
-          <div className="space-y-1.5 pt-0.5">
+          <div className="slash-stats">
             {stats.map((s, i) => (
-              <div key={i} className="flex items-baseline justify-between gap-3 text-[12px]">
-                <span className="text-slate-400 shrink-0">{s.label}</span>
-                <span className="text-slate-200 font-medium text-right tabular-nums break-all">{s.value}</span>
+              <div key={i} className="slash-stat">
+                <span className="slash-stat-k">{s.label}</span>
+                <span className="slash-stat-v num">{s.value}</span>
               </div>
             ))}
           </div>
@@ -186,16 +188,16 @@ export const SlashCommandCard: React.FC<Props> = ({ command, text, workspacePath
 
         {/* Detay notları (katlanır) */}
         {notes.length > 0 && (
-          <div className="pt-1">
+          <div>
             <button
               onClick={() => setNotesOpen(v => !v)}
-              className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+              className="slash-more"
             >
-              {notesOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+              {notesOpen ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
               <span>{t('slash.details', { sayi: notes.length })}</span>
             </button>
             {notesOpen && (
-              <div className="mt-2 space-y-1 text-[11px] text-slate-500 leading-relaxed border-l border-slate-800 pl-2.5">
+              <div className="slash-notes">
                 {notes.map((n, i) => <p key={i}>{n}</p>)}
               </div>
             )}

@@ -931,3 +931,30 @@
 .strip-pop-pair .strip-pop-row { flex: 1; }
 .strip-pop-pair .icon-btn { width: 30px; height: 30px; color: var(--ink-dim); }
 .strip-pop-sub { display: flex; flex-direction: column; padding-left: 10px; border-left: var(--line-w) solid var(--paper-line); }
+
+/* ---------- /usage and /context cards (app-only) ---------- */
+.slash { border-radius: var(--radius-lg); background: var(--paper-raised); border: var(--line-w) solid var(--paper-line); overflow: hidden; }
+.slash-head {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: var(--line-w) solid var(--paper-line);
+  color: var(--ink-dim);
+}
+.slash-k { font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight); text-transform: var(--label-case); letter-spacing: var(--label-track); }
+.slash-cmd { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-faint); }
+.slash-body { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+.slash-model, .slash-sub { font-size: var(--fs-small); color: var(--ink-dim); }
+.slash-model { font-family: var(--font-mono); font-size: var(--fs-meta); }
+.slash-bars, .slash-stats { display: flex; flex-direction: column; gap: 8px; }
+.slash-row, .slash-stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: var(--fs-small); }
+.slash-label, .slash-stat-v { color: var(--ink); font-weight: 600; }
+.slash-pct { color: var(--ink-dim); font-weight: 600; }
+.slash-stat-k { flex: none; color: var(--ink-dim); }
+.slash-stat-v { text-align: right; overflow-wrap: anywhere; }
+.slash-track { height: 6px; margin-top: 4px; border-radius: 3px; background: var(--energy-off); overflow: hidden; }
+.slash-bar { height: 100%; border-radius: 3px; background: var(--energy); }
+.slash-bar[data-level="mid"] { background: var(--run); }
+.slash-bar[data-level="high"] { background: var(--accent); }
+.slash-reset { display: flex; align-items: center; gap: 4px; margin-top: 4px; font-size: var(--fs-meta); color: var(--ink-faint); }
+.slash-more { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-meta); color: var(--ink-dim); }
+.slash-more:hover { color: var(--ink); }
+.slash-detail { padding-top: 8px; border-top: var(--line-w) solid var(--paper-line); font-size: var(--fs-small); }
+.slash-notes { margin-top: 6px; padding-left: 10px; border-left: var(--line-w) solid var(--paper-line); display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-meta); color: var(--ink-dim); }
