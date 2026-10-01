@@ -338,7 +338,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
               original={diffFile.originalCode || ""}
               modified={diffFile.code}
               theme={THEME_NAME}
-              onMount={(editor, monaco) => defineUnityTheme(monaco)}
+              // Defined before the first paint, so the editor never flashes another theme.
+              beforeMount={defineUnityTheme}
               options={{
                 readOnly: true,
                 renderSideBySide: true,
@@ -389,12 +390,12 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
               defaultLanguage="csharp"
               language={monacoLangFor(openedFilePath)}
               theme={THEME_NAME}
+              beforeMount={defineUnityTheme}
               value={code}
               onChange={(val) => setCode(val || '')}
               onMount={(editor, monaco) => {
                 editorRef.current = editor;
                 monacoRef.current = monaco;
-                defineUnityTheme(monaco);
                 lspBridgeRef.current.registerCsProviders(monaco);
 
                 // İlk açılışta marker'ları tetikle

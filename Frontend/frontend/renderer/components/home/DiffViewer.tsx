@@ -106,7 +106,7 @@ export const DiffViewer = ({ diffData, filename, applied, onAccept, onReject, ph
             original={diffData.original_code}
             modified={diffData.fixed_code}
             theme={THEME_NAME}
-            onMount={(_, monaco) => defineUnityTheme(monaco)}
+            beforeMount={defineUnityTheme}
             options={{
               readOnly: true,
               renderSideBySide: true,

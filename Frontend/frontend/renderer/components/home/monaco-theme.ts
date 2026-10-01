@@ -6,8 +6,9 @@
 // import ediyor; oradaki amaç sıralama garantisi, buradaki unutmaya karşı.)
 import './monaco-loader';
 import type * as Monaco from 'monaco-editor';
+import { isLight, onThemeChange, readColorTokens } from '../../lib/themeTokens';
 
-export const THEME_NAME = 'gamachineDark';
+export const THEME_NAME = 'gamachine';
 
 // The bundled JetBrains Mono webfont (styles/gm/fonts.css) can finish loading
 // after Monaco measured its glyphs; a stale measurement puts clicks in the wrong
@@ -23,38 +24,109 @@ const hookFontRemeasure = (monaco: typeof Monaco) => {
   fonts?.addEventListener?.('loadingdone', remeasure);
 };
 
-export const defineUnityTheme = (monaco: typeof Monaco) => {
-  hookFontRemeasure(monaco);
-  monaco.editor.defineTheme(THEME_NAME, {
-    base: 'vs-dark',
+/**
+ * The editor tokens (tokens.css `--ed-*` / `--diff-*`), with Arena's values as the fallback so
+ * a page without the stylesheet (tests, a failed load) still gets a readable dark editor.
+ */
+export const EDITOR_TOKEN_DEFAULTS = {
+  '--ed-bg': '#141925',
+  '--ed-head-bg': '#1a2030',
+  '--ed-line': '#2b3248',
+  '--ed-text': '#e1e3ea',
+  '--ed-dim': '#8c95ab',
+  '--ed-kw': '#8fb3f0',
+  '--ed-type': '#8ccfc2',
+  '--ed-fn': '#e9c98a',
+  '--ed-num': '#f2a585',
+  '--ed-attr': '#b4bccc',
+  '--ed-str': '#c9d6a2',
+  '--ed-com': '#8c95ab',
+  '--ed-tab-mark': '#dddad2',
+  '--diff-add-bg': '#193130',
+  '--diff-del-bg': '#3a2228',
+  '--diff-add-mark': '#4fd8c8',
+  '--diff-del-mark': '#f2937c',
+} as const;
+export type EditorTokens = Record<keyof typeof EDITOR_TOKEN_DEFAULTS, string>;
+
+const bare = (hex: string) => hex.replace('#', '');
+
+/**
+ * A Monaco theme drawn from the editor tokens, so the editor speaks the theme's language
+ * (KARAKTER 13B) instead of the fixed VS Code palette it had. A light editor ground (Pafta,
+ * Atölye) gets Monaco's light base, or its widgets, scrollbars and cursor would stay dark.
+ * Translucent colours are the token plus an alpha byte: Monaco accepts `#rrggbbaa`.
+ */
+export const monacoThemeFromTokens = (tk: EditorTokens): Monaco.editor.IStandaloneThemeData => {
+  const light = isLight(tk['--ed-bg']);
+  return {
+    base: light ? 'vs' : 'vs-dark',
     inherit: true,
     rules: [
-      { token: 'keyword',           foreground: '569CD6' },
-      { token: 'keyword.control',   foreground: 'C586C0' },
-      { token: 'type',              foreground: '4EC9B0' },
-      { token: 'type.identifier',   foreground: '4EC9B0' },
-      { token: 'identifier',        foreground: '9CDCFE' },
-      { token: 'number',            foreground: 'B5CEA8' },
-      { token: 'string',            foreground: 'CE9178' },
-      { token: 'string.escape',     foreground: 'D7BA7D' },
-      { token: 'comment',           foreground: '6A9955', fontStyle: 'italic' },
-      { token: 'delimiter',         foreground: 'D4D4D4' },
-      { token: 'attribute.name',    foreground: '9CDCFE' },
-      { token: 'attribute.value',   foreground: 'CE9178' },
-      { token: 'annotation',        foreground: 'DCDCAA' },
+      { token: '', foreground: bare(tk['--ed-text']) },
+      { token: 'keyword', foreground: bare(tk['--ed-kw']) },
+      { token: 'keyword.control', foreground: bare(tk['--ed-kw']) },
+      { token: 'type', foreground: bare(tk['--ed-type']) },
+      { token: 'type.identifier', foreground: bare(tk['--ed-type']) },
+      { token: 'identifier', foreground: bare(tk['--ed-text']) },
+      { token: 'number', foreground: bare(tk['--ed-num']) },
+      { token: 'string', foreground: bare(tk['--ed-str']) },
+      { token: 'string.escape', foreground: bare(tk['--ed-fn']) },
+      { token: 'comment', foreground: bare(tk['--ed-com']), fontStyle: 'italic' },
+      { token: 'delimiter', foreground: bare(tk['--ed-text']) },
+      { token: 'attribute.name', foreground: bare(tk['--ed-attr']) },
+      { token: 'attribute.value', foreground: bare(tk['--ed-str']) },
+      { token: 'annotation', foreground: bare(tk['--ed-fn']) },
+      { token: 'tag', foreground: bare(tk['--ed-kw']) },
+      { token: 'key', foreground: bare(tk['--ed-attr']) },
     ],
     colors: {
-      'editor.background':                  '#000000',
-      'editor.foreground':                  '#D4D4D4',
-      'editorLineNumber.foreground':        '#334155',
-      'editorLineNumber.activeForeground':  '#858585',
-      'editor.selectionBackground':         '#264F78',
-      'editor.lineHighlightBackground':     '#0A0A0A',
-      'diffEditor.insertedTextBackground':  '#00ff0015',
-      'diffEditor.removedTextBackground':   '#ff000015',
-      'diffEditor.insertedLineBackground':  '#00ff0010',
-      'diffEditor.removedLineBackground':   '#ff000010',
+      'editor.background': tk['--ed-bg'],
+      'editor.foreground': tk['--ed-text'],
+      'editorGutter.background': tk['--ed-bg'],
+      'editorLineNumber.foreground': tk['--ed-dim'],
+      'editorLineNumber.activeForeground': tk['--ed-text'],
+      'editorCursor.foreground': tk['--ed-tab-mark'],
+      'editor.selectionBackground': `${tk['--ed-kw']}40`,
+      'editor.inactiveSelectionBackground': `${tk['--ed-kw']}26`,
+      'editor.lineHighlightBackground': tk['--ed-head-bg'],
+      'editor.lineHighlightBorder': '#00000000',
+      'editorIndentGuide.background1': tk['--ed-line'],
+      'editorWhitespace.foreground': tk['--ed-line'],
+      'editorWidget.background': tk['--ed-head-bg'],
+      'editorWidget.border': tk['--ed-line'],
+      'editorHoverWidget.background': tk['--ed-head-bg'],
+      'editorHoverWidget.border': tk['--ed-line'],
+      'editorSuggestWidget.background': tk['--ed-head-bg'],
+      'editorSuggestWidget.border': tk['--ed-line'],
+      'scrollbarSlider.background': `${tk['--ed-dim']}40`,
+      'scrollbarSlider.hoverBackground': `${tk['--ed-dim']}66`,
+      'diffEditor.insertedLineBackground': tk['--diff-add-bg'],
+      'diffEditor.removedLineBackground': tk['--diff-del-bg'],
+      'diffEditor.insertedTextBackground': `${tk['--diff-add-mark']}33`,
+      'diffEditor.removedTextBackground': `${tk['--diff-del-mark']}33`,
+      'diffEditorGutter.insertedLineBackground': tk['--diff-add-bg'],
+      'diffEditorGutter.removedLineBackground': tk['--diff-del-bg'],
     },
-  });
+  };
+};
+
+const applyTheme = (monaco: typeof Monaco) => {
+  monaco.editor.defineTheme(THEME_NAME, monacoThemeFromTokens(readColorTokens(EDITOR_TOKEN_DEFAULTS)));
   monaco.editor.setTheme(THEME_NAME);
+};
+
+// Monaco's theme is global (one per page), so one watcher is enough however many editors mount.
+let _themeWatched = false;
+
+/**
+ * Define the token-driven theme and keep it in step with the appearance: a theme switch
+ * re-reads the tokens and redefines it, so every open editor recolours without a reload.
+ */
+export const defineUnityTheme = (monaco: typeof Monaco) => {
+  hookFontRemeasure(monaco);
+  applyTheme(monaco);
+  if (_themeWatched) return;
+  _themeWatched = true;
+  onThemeChange(() => applyTheme(monaco));
 };

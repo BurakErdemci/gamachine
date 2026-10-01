@@ -75,7 +75,6 @@ const globalStyles = `
   .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
   .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
-  .monaco-editor, .monaco-editor .margin, .monaco-editor-background { background-color: #0B0D12 !important; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
 `;
 
