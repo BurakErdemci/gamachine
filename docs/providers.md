@@ -15,7 +15,7 @@ The backend invokes the official CLI on your machine as a subprocess, using the 
 | CLI Tool | Models (example) | Config file | Tool mechanism |
 |---|---|---|---|
 | **Claude Code** | claude-sonnet-5-5, claude-sonnet-5, claude-fable-5, claude-opus-5-5, claude-opus-4-8, claude-haiku-4-5 | `~/.claude.json` (user scope) | MCP native (stdio + HTTP) |
-| **Codex** | gpt-6-astra/sol/luna, gpt-5.6-sol/terra/luna, gpt-5.5, gpt-5.4 | `~/.codex/config.toml` | MCP native |
+| **Codex** | gpt-6-astra/sol/luna, gpt-6.1-sol, gpt-5.6-sol/terra/luna, gpt-5.5, gpt-5.4 | `~/.codex/config.toml` | MCP native |
 | **Antigravity (agy)** | Gemini 3.5 Flash + Claude/GPT-OSS via agy | `~/.gemini/antigravity-cli/` | `run_command` → `unityai` bridge |
 | **GitHub Copilot** | copilot-auto + Claude/GPT/Gemini options | session-scoped `--additional-mcp-config` | MCP native (global config untouched) |
 | **Cursor** | cursor-auto + Claude/GPT options | session-scoped | MCP native |

@@ -67,7 +67,7 @@ class TestManagerRouting(unittest.TestCase):
         astra = self._get("gpt-6-astra")
         self.assertIsInstance(astra, CodexProvider)
         self.assertEqual(astra.binary_name, "gpt-6-astra")
-        for mid in ("gpt-6-sol", "gpt-6-luna"):
+        for mid in ("gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"):
             codex = self._get(mid)
             self.assertIsInstance(codex, CodexProvider)
             self.assertEqual(codex.binary_name, mid)

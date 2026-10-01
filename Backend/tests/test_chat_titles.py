@@ -88,7 +88,7 @@ def test_claude_code_titles_with_haiku(model):
     assert choice.effort is None
 
 
-@pytest.mark.parametrize("model,luna", [("gpt-6-sol", "gpt-6-luna"), ("gpt-6-astra", "gpt-6-luna"),
+@pytest.mark.parametrize("model,luna", [("gpt-6-sol", "gpt-6-luna"), ("gpt-6.1-sol", "gpt-6-luna"), ("gpt-6-astra", "gpt-6-luna"),
                                         ("gpt-5.6-sol", "gpt-5.6-luna"), ("gpt-5.5", "gpt-5.6-luna")])
 def test_codex_titles_with_luna_at_low_effort(model, luna):
     choice = ct.title_model_for("subscription", model)

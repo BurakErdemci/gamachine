@@ -468,8 +468,10 @@ def create_config_router(db):
     # bunlara kalıcı UI kilidi uygulanmaz; kullanıcı modeli her zaman deneyebilir.
     _CODEX_MODELS = [
         # Ids as listed by Codex's own model catalog (~/.codex/models_cache.json,
-        # fetched 24 Sep 2026 by codex-cli 0.156.1: gpt-6-astra/sol/luna visible).
+        # fetched 24 Sep 2026 by codex-cli 0.156.1: gpt-6-astra/sol/luna visible;
+        # ids as listed by codex-cli 0.159.3 on 1 Oct 2026, gpt-6.1-sol added).
         {"id": "gpt-6-astra",   "name": "GPT-6 Astra",    "provider": "subscription"},
+        {"id": "gpt-6.1-sol",   "name": "GPT-6.1 Sol",    "provider": "subscription"},
         {"id": "gpt-6-sol",     "name": "GPT-6 Sol",      "provider": "subscription"},
         {"id": "gpt-6-luna",    "name": "GPT-6 Luna",     "provider": "subscription"},
         {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra",  "provider": "subscription"},

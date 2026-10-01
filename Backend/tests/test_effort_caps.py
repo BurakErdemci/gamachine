@@ -79,6 +79,7 @@ def test_new_models_share_their_siblings_effort_levels():
     for p in ("subscription", "openai"):
         astra = get_effort_caps(p, "gpt-6-astra")["levels"]
         assert get_effort_caps(p, "gpt-6-sol")["levels"] == astra
+        assert get_effort_caps(p, "gpt-6.1-sol")["levels"] == astra
         assert get_effort_caps(p, "gpt-6-luna")["levels"] == astra
     for p in ("subscription", "anthropic"):
         assert get_effort_caps(p, "claude-opus-5-5")["levels"] == get_effort_caps(p, "claude-opus-5")["levels"]

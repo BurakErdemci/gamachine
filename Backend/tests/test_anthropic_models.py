@@ -109,6 +109,7 @@ def test_gpt_6_sol_and_luna_are_offered_on_the_codex_side():
     subscription = {model["id"]: model for model in catalog["subscription"]}
 
     assert subscription["gpt-6-sol"]["name"] == "Codex (GPT-6 Sol)"
+    assert subscription["gpt-6.1-sol"]["name"] == "Codex (GPT-6.1 Sol)"
     assert subscription["gpt-6-luna"]["name"] == "Codex (GPT-6 Luna)"
     assert subscription["gpt-6-astra"]["name"] == "Codex (GPT-6 Astra)"
 
