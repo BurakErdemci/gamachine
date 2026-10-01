@@ -173,7 +173,7 @@ export const useSideChat = (API: string, user: UserData | null) => {
       body: JSON.stringify({
         message: q,
         live_context: opts.liveContext || '',
-        language: opts.lang || 'tr',
+        language: opts.lang || 'en',
         thinking_level: opts.thinkingLevel && ['off', 'low', 'medium', 'high'].includes(opts.thinkingLevel)
           ? opts.thinkingLevel : 'medium',
         effort_level: opts.thinkingLevel || 'medium',
