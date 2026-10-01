@@ -14,7 +14,7 @@ import { MessageNotice } from './types';
  * called" is not "the user saw it", and this repo has already paid for that
  * (`ToastContainer` was defined, exported and mounted nowhere).
  *
- * Amber and no ❌: the red/❌ look is reserved for a turn that actually failed.
+ * Not red and no ❌: that look is reserved for a turn that actually failed.
  * A capped run did real work, so dressing it as a crash sends the user looking
  * for a bug that is not there.
  */
@@ -22,22 +22,22 @@ export const MessageNotices: React.FC<{ notices?: MessageNotice[] }> = ({ notice
   const { t } = useLang();
   if (!notices || notices.length === 0) return null;
   return (
-    <div className="mt-3 space-y-2">
+    <div className="notices">
       {notices.map((notice, i) => (
-        <div key={i} className="rounded-lg border border-amber-500/25 bg-amber-500/[0.07] p-2.5">
-          <div className="flex items-start gap-2">
-            <AlertTriangle size={12} className="text-amber-400 shrink-0 mt-0.5" />
+        <div key={i} className="notice" data-kind={notice.kind}>
+          <div className="notice-row">
+            <AlertTriangle size={14} className="notice-ic" aria-hidden="true" />
             <div className="min-w-0">
-              <div className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider mb-1">{notice.title}</div>
+              <div className="notice-k">{notice.title}</div>
               {/* break-words: the message can carry one unbroken token (a URL,
-                  a path) long enough to push the 450px chat panel sideways. */}
-              <div className="text-[12px] text-slate-300 leading-relaxed break-words">{stripBidi(notice.message)}</div>
+                  a path) long enough to push the chat column sideways. */}
+              <div className="notice-msg">{stripBidi(notice.message)}</div>
               {notice.detail && (
-                <details className="mt-1.5">
-                  <summary className="text-[10.5px] text-slate-500 hover:text-slate-300 cursor-pointer select-none">
+                <details className="notice-detail">
+                  <summary>
                     {t('notice.detail')}
                   </summary>
-                  <pre className="mt-1 text-[10.5px] text-slate-500 whitespace-pre-wrap break-all font-mono">{stripBidi(notice.detail)}</pre>
+                  <pre>{stripBidi(notice.detail)}</pre>
                 </details>
               )}
             </div>
