@@ -2,12 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import axios from 'axios';
-import { motion } from 'framer-motion';
-import {
-  Terminal as TerminalIcon,
-  Code2, Activity, X, PanelRightClose,
-  Zap, Code, Layout, MessageSquare, ArrowDown
-} from 'lucide-react';
+import { Terminal as TerminalIcon, Code2, X, MessageSquare, ArrowDown } from 'lucide-react';
 import { LangContext, aktifDilAyarla, ceviriUygula, type Lang, type TValues } from '../lib/i18n';
 import { sohbetKilitliMi } from '../lib/providerGate';
 import { getUnsavedEditorContext } from '../lib/editor-context';
@@ -52,6 +47,19 @@ import { modelFamily } from '../lib/modelFamily';
 import { useRemoteEffort } from '../lib/remoteControl';
 import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
 import { useNewChatShortcut } from '../lib/newChatShortcut';
+import { useTurnDone } from '../lib/turnDone';
+import { ThreadHeader } from '../components/home/ThreadHeader';
+import { EmptyChat } from '../components/home/EmptyChat';
+import { AchievementToast } from '../components/home/AchievementToast';
+import { isChatEmpty } from '../components/home/ChatPanel';
+
+/** Mockup "dar" (narrow) workspace width; the default until P3's width modes. */
+const WS_DEFAULT_WIDTH = 360;
+/** Keep the panel usable and the chat readable (mockup: the chat strip floor is 400 px). */
+const clampWsWidth = (w: number) => {
+  const max = typeof window !== 'undefined' ? Math.max(320, window.innerWidth - 240 - 400) : 900;
+  return Math.round(Math.min(Math.max(w, 300), max));
+};
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
 // this app needs, and off the server render (it touches WebGL on mount).
@@ -69,28 +77,6 @@ const globalStyles = `
   .monaco-editor, .monaco-editor .margin, .monaco-editor-background { background-color: #0B0D12 !important; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
 `;
-
-// Aktif modelin marka rengi (r,g,b) — imza "ambient ışık" bunu kullanır:
-// copilot panelindeki üst süzülme + hero glow, hangi zekayla konuşulduğunu
-// renkle hissettirir (Claude turuncu, Gemini mavi, Copilot menekşe...).
-const BRAND_RGB: Record<string, string> = {
-  claude: '251, 146, 60',
-  openai: '52, 211, 153',
-  gemini: '96, 165, 250',
-  copilot: '196, 181, 253',
-  cursor: '226, 232, 240',
-  opencode: '94, 234, 212',
-};
-const getBrandRgb = (modelName?: string, provider?: string): string => {
-  const m = (modelName || '').toLowerCase();
-  if (m.startsWith('claude-')) return BRAND_RGB.claude;
-  if (m.startsWith('gpt-')) return BRAND_RGB.openai;
-  if (m.startsWith('gemini') || m.startsWith('agy-')) return BRAND_RGB.gemini;
-  if (m.startsWith('copilot-')) return BRAND_RGB.copilot;
-  if (m.startsWith('cursor-')) return BRAND_RGB.cursor;
-  if (m.startsWith('opencode:')) return BRAND_RGB.opencode;
-  return BRAND_RGB[(provider || '').toLowerCase()] || '96, 165, 250';
-};
 
 export default function Home() {
   // `toasts` ve `dismissToast` bilerek alınıyor: hook ikisini de döndürüyordu,
@@ -313,7 +299,11 @@ export default function Home() {
     setLevel: chooseEffort, showToast,
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isChatOpen, setIsChatOpen] = useState(true);
+  // The right column is the workspace (editor, previews, terminal) since the v4 column swap; the
+  // chat is the main stage and is never hidden. TODO(P3): the dar / yarim / odak width modes.
+  const [isWsOpen, setIsWsOpen] = useState(true);
+  const [wsWidth, setWsWidth] = useState(WS_DEFAULT_WIDTH);
+  const [wsDragging, setWsDragging] = useState(false);
   const [reportsOpen, setReportsOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<'chats' | 'files'>('chats');
   const [isEditorFocused, setIsEditorFocused] = useState(false);
@@ -408,35 +398,52 @@ export default function Home() {
     setHasUnreadBelow(false);
   }, [chat.activeConvId, chatScroll.repin]);
 
-  // Sohbet paneli KAPALIYKEN kart 0 piksel genişlikte çiziliyor: state'te var,
-  // ekranda yok. Aynı bulgunun ikinci bacağı. Onay isteği kullanıcının panelde
-  // olup olmamasına bağlı olamaz — köprü paneli bilmiyor ve karar verilmezse
-  // istek reddediliyor. Paneli açmak geri alınabilir bir müdahale; kaçırılan
-  // onay değil.
-  //
-  // Dört kapının DÖRDÜ de burada: kapı yalnız `mcp.activeGate` için açılıyordu,
-  // oysa komut / soru / silme kartları da kapalı panelin içinde kalıyordu —
-  // 30 Ağu 2026 denetiminin bulgusu, ve bu deponun ölçülmüş en sık arıza
-  // biçimi (kapı yollardan yalnız birine konuyor).
-  // The unknown-source tray sits at the top of the chat column, so it is
-  // hidden by the same closed panel.
-  const hasTrayRequest = mcp.unknownGates.length > 0;
+  // Approval cards used to live in a closable right-hand chat panel, so an effect re-opened the
+  // panel whenever any of the four gates (or the unknown-source tray) arrived: a card drawn at
+  // 0 px width is a request nobody can answer (30 Aug 2026 audit). Since the v4 column swap the
+  // chat is the main stage and has no closed state, so every card and the tray are always on
+  // screen and that effect has nothing left to open.
+
+  // The workspace shows what the chat or the sidebar opens: a file, a preview, a diff or the
+  // terminal. Before the swap the editor had the middle column and could not be hidden, so
+  // opening one of these must bring a closed panel back or the click would do nothing visible.
   useEffect(() => {
-    if (mcp.activeGate || hasTrayRequest || chat.pendingCommand || chat.pendingQuestion || fs.pendingDelete) {
-      setIsChatOpen(true);
-    }
-  }, [mcp.activeGate, hasTrayRequest, chat.pendingCommand, chat.pendingQuestion, fs.pendingDelete]);
+    if (fs.openedFilePath || fs.previewFile || diffFile || isTerminalOpen) setIsWsOpen(true);
+  }, [fs.openedFilePath, fs.previewFile, diffFile, isTerminalOpen]);
+
+  // Drag the panel's left edge to resize it (and arrow keys on the focused handle).
+  const startWsResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = wsWidth;
+    setWsDragging(true);
+    const move = (ev: MouseEvent) => setWsWidth(clampWsWidth(startW + (startX - ev.clientX)));
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      setWsDragging(false);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+  const keyWsResize = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowLeft') { e.preventDefault(); setWsWidth(w => clampWsWidth(w + 24)); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); setWsWidth(w => clampWsWidth(w - 24)); }
+  };
 
   // --- Desktop notifications (background chats) ---
+  const screenCardOpen = !!fs.pendingDelete || !!fs.pendingGenFiles;
   useChatNotifications({
     conversations: chat.conversations,
     activeConvId: chat.activeConvId,
     attention: chat.attention,
     trayGates: mcp.unknownGates,
     bridgeSynced: mcp.synced,
-    screenCardOpen: !!fs.pendingDelete || !!fs.pendingGenFiles,
-    onOpenConversation: (conv) => { chat.selectConversation(conv); setIsChatOpen(true); },
+    screenCardOpen,
+    onOpenConversation: (conv) => { chat.selectConversation(conv); },
   });
+  // The on-screen counterpart of the "finished" notification: the achievement band.
+  const turnDone = useTurnDone(chat.attention, chat.activeConvId, screenCardOpen);
 
   // --- Save Shortcut (Ctrl+S / Cmd+S) ---
   useEffect(() => {
@@ -537,8 +544,6 @@ export default function Home() {
 
   const langCtxValue = { lang, setLang, t };
 
-  // İmza ambient ışık: aktif modelin marka rengi
-  const brandRgb = getBrandRgb(ai.aiConfig?.model_name, ai.effectiveProvider);
 
   if (backendError) {
     return (
@@ -617,6 +622,20 @@ export default function Home() {
   const familyHasBranches = hasBranches(chat.conversations, chat.activeConvId);
   // Which preview panel the open file belongs to; the two share one slot.
   const previewRoute = fs.previewFile ? routeForFile(fs.previewFile.path) : null;
+  const activeConversation = chat.conversations.find(c => c.id === chat.activeConvId) ?? null;
+  const projectName = fs.workspacePath?.split(/[\\/]/).filter(Boolean).pop() ?? null;
+  // Same predicate ChatPanel uses for "nothing to draw": the empty new chat takes its place.
+  const chatEmpty = isChatEmpty(chat.activeConvId, chat.messages.length, chat.loading, !!mcp.activeGate);
+  // A request waits in this chat (the title block's approval cell).
+  const cardWaiting = !!(chat.pendingCommand || chat.pendingQuestion || fs.pendingDelete || fs.pendingGenFiles || chat.pendingFix || mcp.activeGate);
+  // A mission-board card fills the composer; nothing is sent until the user presses Enter.
+  const pickQuest = (prompt: string) => {
+    chat.setChatInput(prompt);
+    requestAnimationFrame(() => {
+      const box = document.querySelector<HTMLTextAreaElement>('.composer textarea');
+      if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+    });
+  };
 
   return (
     <LangContext.Provider value={langCtxValue}>
@@ -682,7 +701,7 @@ export default function Home() {
             reason={ai.unityMcpReason}
             error={ai.unityMcpError}
             onToggle={ai.toggleUnityMcp}
-            projectName={fs.workspacePath?.split(/[\\/]/).filter(Boolean).pop() ?? null}
+            projectName={projectName}
           />
           {/* Not in the mockup: the editor's own controls (sidebar, terminal, open file). They
               stay here until the workspace panel (P3) gives them their place. */}
@@ -740,122 +759,48 @@ export default function Home() {
             API={API} axios={axios} showToast={showToast as any} conversationId={chat.activeConvId}
           />
           <ModeChip value={chat.generationMode} onChange={chat.setGenerationMode} />
-          {/* The right panel toggle (mockup: the workspace; here: the chat panel until P3). */}
+          {/* The workspace toggle (mockup `[data-panel-toggle]`). */}
           <button
             type="button"
-            className="icon-btn"
+            className={`icon-btn${isWsOpen ? ' is-on' : ''}`}
             data-testid="right-panel-toggle"
-            aria-pressed={isChatOpen}
-            aria-label={isChatOpen ? t('home.panelHide') : t('home.panelShow')}
-            title={isChatOpen ? t('home.panelHide') : t('home.panelShow')}
-            onClick={() => setIsChatOpen(!isChatOpen)}
+            aria-pressed={isWsOpen}
+            aria-label={isWsOpen ? t('home.panelHide') : t('home.panelShow')}
+            title={isWsOpen ? t('home.panelHide') : t('home.panelShow')}
+            onClick={() => setIsWsOpen(!isWsOpen)}
           >
             <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.2" /><path d="M12.5 4v12" /></svg>
           </button>
         </div>
       </header>
 
-      <div className="app-main">
-        <div className="flex-1 overflow-hidden relative flex flex-col bg-[#0B0D12]">
-          {pane === 'preview' && fs.previewFile ? (
-            previewRoute === 'image' || previewRoute === 'blocked-image' ? (
-              <ImagePreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />
-            ) : (
-              <ModelPreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />
-            )
-          ) : pane === 'editor' ? (
-            <>
-            <CsharpProjectHint inProject={diffFile ? null : csInProject} />
-            <EditorPanel
-              code={fs.code} setCode={fs.setCode} openedFilePath={fs.openedFilePath} isEditorFocused={isEditorFocused} setIsEditorFocused={setIsEditorFocused}
-              workspacePath={fs.workspacePath} problems={flattenedProblems} diffFile={diffFile}
-              apiUrl={API} sessionToken={auth.user?.sessionToken} openFile={fs.openFile}
-            />
-            </>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-center p-8 relative overflow-hidden">
-              {/* Marka renkli ambient zemin — hangi zekayla çalışıldığını hissettirir */}
-              <div
-                className="pointer-events-none absolute inset-0 transition-all duration-700"
-                style={{ background: `radial-gradient(ellipse 55% 42% at 50% 36%, rgba(${brandRgb}, 0.06), transparent 70%)` }}
-              />
-              <div className="relative mb-8">
-                <div
-                  className="absolute inset-0 blur-[80px] rounded-full animate-pulse transition-colors duration-700"
-                  style={{ backgroundColor: `rgba(${brandRgb}, 0.16)` }}
-                />
-                <Zap size={48} className="relative z-10 opacity-60 transition-colors duration-700" style={{ color: `rgb(${brandRgb})` }} />
-              </div>
-              <h2 className="text-2xl font-bold text-slate-100 mb-3 tracking-tight relative">GAMACHINE ENGINE</h2>
-              <p className="text-slate-500 text-sm max-w-md leading-relaxed mb-8 relative">{t("home.editorHint")}</p>
-              <div className="grid grid-cols-3 gap-3 max-w-lg w-full mb-10 relative">
-                {[ {icon:<Activity size={14}/>, label: t('home.bugfix')}, {icon:<Code size={14}/>, label: t('home.codegen')}, {icon:<Layout size={14}/>, label: t('home.analyze')} ].map((item, i) => (
-                  <div key={i} className="px-4 py-3 bg-white/[0.03] border border-white/[0.07] rounded-xl flex items-center justify-center gap-2 text-[11px] font-semibold text-slate-400 hover:bg-white/[0.06] hover:border-white/[0.12] hover:text-slate-200 transition-all cursor-default">
-                    {item.icon} {item.label}
-                  </div>
-                ))}
-              </div>
-              {/* Son sohbetler — boş ekran gerçek bir karşılamaya dönüşsün */}
-              {rootsOf(chat.conversations).length > 0 && (
-                <div className="w-full max-w-lg relative">
-                  <div className="text-[10px] uppercase tracking-widest text-slate-600 font-semibold mb-2 text-left">
-                    {t('chat.recent')}
-                  </div>
-                  <div className="space-y-1.5">
-                    {rootsOf(chat.conversations).slice(0, 3).map((conv) => (
-                      <button
-                        key={conv.id}
-                        onClick={() => { chat.selectConversation(conv); setIsChatOpen(true); }}
-                        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/[0.1] text-left transition-colors group"
-                      >
-                        <MessageSquare size={13} className="text-slate-600 group-hover:text-slate-400 shrink-0 transition-colors" />
-                        <span className="text-[12px] text-slate-400 group-hover:text-slate-200 truncate transition-colors">{conv.title}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-        <TerminalPanel
-          id="main-terminal"
-          isOpen={isTerminalOpen}
-          onClose={() => setIsTerminalOpen(false)}
-          workspacePath={fs.workspacePath}
-          problems={flattenedProblems}
-          onProblemClick={handleProblemClick}
-          apiUrl={API}
-          sessionToken={auth.user?.sessionToken}
-          unityConnected={ai.unityMcpStatus === 'connected'}
-        />
-      </div>
+      {/* ===== Chat stage (mockup `main.stage.paper`): the main column since the v4 swap. ===== */}
+      <main
+        className={`app-main stage paper${chat.loading ? ' is-working' : ''}`}
+        aria-label={t('sidebar.chats')}
+        data-empty={chatEmpty || undefined}
+      >
+        {/* #9 model light: a pool of the current model's colour at the top of the stage. */}
+        <div className="lamp" aria-hidden="true" />
 
-      <div className="app-right">
-      <motion.div animate={{ width: isChatOpen ? 450 : 0, opacity: isChatOpen ? 1 : 0 }} transition={{ duration: 0.2 }} className="bg-[#0B0D12] flex flex-col overflow-hidden shrink-0 border-l border-white/[0.06]">
-        <div className="flex-1 relative flex flex-col min-h-0">
-          {/* İmza: aktif modelin markası panelin tepesinden içeri süzülen ışık */}
-          <div
-            className="pointer-events-none absolute top-0 inset-x-0 h-36 transition-all duration-700"
-            style={{ background: `linear-gradient(180deg, rgba(${brandRgb}, 0.05), transparent)` }}
+        {!chatEmpty && (
+          <ThreadHeader
+            conversation={activeConversation}
+            projectName={projectName}
+            awaiting={cardWaiting}
+            actions={(
+              <>
+                <SideQuestionButton convId={chat.activeConvId} active={side.isOpen} onOpen={toggleSideChat} />
+                {!familyHasBranches && (
+                  <BranchButton sourceId={chat.activeConvId} blocked={branchBlocked} onBranch={chat.branchConversation} />
+                )}
+              </>
+            )}
           />
-          <div className="h-12 border-b border-white/[0.06] flex items-center justify-between px-4 shrink-0 relative">
-            <div className="flex items-center gap-2">
-              <span
-                className="w-1.5 h-1.5 rounded-full transition-colors duration-700"
-                style={{ backgroundColor: `rgba(${brandRgb}, 0.9)` }}
-              />
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Architect Copilot</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <SideQuestionButton convId={chat.activeConvId} active={side.isOpen} onOpen={toggleSideChat} />
-              {!familyHasBranches && (
-                <BranchButton sourceId={chat.activeConvId} blocked={branchBlocked} onBranch={chat.branchConversation} />
-              )}
-              <button onClick={() => setIsChatOpen(false)} className="p-1 hover:bg-white/[0.06] rounded transition-all text-slate-500 hover:text-slate-300"><PanelRightClose size={16} /></button>
-            </div>
-          </div>
+        )}
 
+        {/* Branch tabs keep their own (shell-toned) bar until they are ported. */}
+        <div className="thread-tabs">
           <ChatTabs
             conversations={chat.conversations}
             activeConvId={chat.activeConvId}
@@ -867,107 +812,190 @@ export default function Home() {
             onRename={chat.renameConversation}
             onDelete={chat.deleteBranch}
           />
+        </div>
 
-          {/* Outside ChatPanel on purpose: these requests belong to no chat,
-              so they stay here whichever chat is open. */}
-          <McpUnknownTray
-            gates={mcp.unknownGates}
-            apiBase={API}
-            sessionToken={auth.user?.sessionToken ?? ''}
-            showToast={showToast as any}
-          />
+        {/* Outside ChatPanel on purpose: these requests belong to no chat,
+            so they stay here whichever chat is open. */}
+        <McpUnknownTray
+          gates={mcp.unknownGates}
+          apiBase={API}
+          sessionToken={auth.user?.sessionToken ?? ''}
+          showToast={showToast as any}
+        />
 
-          {/* The scroll listener sits HERE, not on `ChatPanel`'s own root. Measured:
-              ChatPanel's root carries `flex-1 overflow-y-auto`, but its parent is a
-              block box, so `flex-1` does nothing, its height stays `auto` and it
-              never overflows — the element that actually scrolls is this one, and a
-              handler on the inner div would never fire. */}
-          <div className="flex-1 relative flex flex-col min-h-0">
-          <div className="flex-1 overflow-y-auto custom-scrollbar relative" onScroll={chatScroll.onScroll}>
-            <ChatPanel
-              messages={chat.messages} activeConvId={chat.activeConvId} conversations={chat.conversations} user={auth.user} loading={chat.loading} clearHistory={chat.clearHistory} lang={lang}
-              thinkingLevel={thinkingLevel} workspacePath={fs.workspacePath} handleExportToUnity={fs.handleExportToUnity}
-              pendingGenFiles={fs.pendingGenFiles} setPendingGenFiles={fs.setPendingGenFiles} pendingFix={chat.pendingFix} setPendingFix={chat.setPendingFix} openedFilePath={fs.openedFilePath}
-              setCode={fs.setCode} refreshFileTree={fs.refreshFileTree} analyzeProject={chat.analyzeProject} openFile={fs.openFile} sendMessage={handleSendMessage}
-              messagesEndRef={chatEndRef} ipc={ipc} showToast={showToast as any} diffFile={diffFile} setDiffFile={setDiffFile}
-              pendingDelete={fs.pendingDelete} setPendingDelete={fs.setPendingDelete} pendingCommand={chat.pendingCommand} setPendingCommand={chat.setPendingCommand} onApproveCommand={chat.approveCommand} pendingQuestion={chat.pendingQuestion} setPendingQuestion={chat.setPendingQuestion} onAnswerQuestion={chat.answerQuestion} deleteFile={fs.deleteFile} setIsTerminalOpen={setIsTerminalOpen}
-              activity={chat.activity}
-              apiBase={API}
-              mcpGate={mcp.activeGate} mcpWorkspaceMismatch={mcp.gateWorkspaceMismatch}
-              mcpWorkspaceCheckPending={mcp.gateWorkspaceCheckPending}
-              mcpOpenWorkspacePath={mcp.openWorkspacePath} onMcpResolved={mcp.resolveActiveGate}
-            />
-          </div>
-            {hasUnreadBelow && (
-              <button
-                type="button"
-                onClick={() => { chatScroll.scrollToBottom(); setHasUnreadBelow(false); }}
-                className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-600/90 hover:bg-blue-600 text-white text-[11.5px] font-medium shadow-lg shadow-black/40 border border-white/10 transition-colors"
-              >
-                <ArrowDown size={13} />
-                {t('chat.newBelow')}
-              </button>
-            )}
-            {/* Over the chat, outside ChatPanel: nothing it shows is part of
-                the main chat until the user adds it to the message box. */}
-            {side.isOpen && (
-              <SideChatPanel
-                messages={side.messages}
-                loading={side.loading}
-                onAsk={askSideQuestion}
-                onStop={side.stop}
-                onClose={side.close}
-                onAddToMain={addSideAnswerToMain}
-              />
-            )}
-          </div>
-
-          <div className="p-4 border-t border-white/[0.06] bg-white/[0.015] relative">
-            <SessionReportPanel
-              open={reportsOpen}
-              onClose={() => setReportsOpen(false)}
-              API={API || ''}
-              sessionToken={auth.user?.sessionToken ?? ''}
-              convId={chat.activeConvId}
-              onContextText={chat.applyContextReport}
-            />
-            <ControlPanel
-              thinkingLevel={thinkingLevel} setThinkingLevel={chooseEffort} generationMode={chat.generationMode} setGenerationMode={chat.setGenerationMode}
-              isAnalyzingProject={chat.isAnalyzingProject} activeConvId={chat.activeConvId} analyzeProject={chat.analyzeProject}
-              exportMemory={chat.exportMemory} importMemory={chat.importMemory} compactConversation={chat.compactConversation} isCompacting={chat.isCompacting} contextUsage={chat.contextUsage}
-              reportsOpen={reportsOpen} onToggleReports={() => setReportsOpen(v => !v)}
-              isClaudeSubscription={isClaudeSub} ultracode={ultracode} setUltracode={setUltracode} effortCaps={effortCaps}
-            />
-            <div className="mt-3">
-              <AnimatedChatInput
-                value={chat.chatInput} setValue={chat.setChatInput} onSendMessage={handleSendMessage} isLoading={chat.loading}
-                api={API}
-                placeholder={t('chat.placeholder')}
-                disabled={sohbetKilitli}
-                disabledPlaceholder={t('gate.placeholder')}
-                slashCommands={slashCommands}
-                skills={skills}
-                commandMeta={commandMeta}
-                galleryProvider={slashProvider}
-                chats={chat.conversations}
-                currentChatId={chat.activeConvId}
-                onStop={chat.stopMessage}
-                queue={{
-                  items: chat.queue, paused: chat.queuePaused,
-                  onEdit: chat.editQueued, onDelete: chat.deleteQueued,
-                  onSendNow: (id) => { void chat.sendQueuedNow(id); }, onResume: () => { chat.resumeQueue(); },
-                }}
-                onFileDrop={(entry) => chat.setChatInput(prev => prev + ` [File Attached: ${entry.path}]`)}
-                onCommand={(cmd) => {
-                  if (cmd === '/compact') { chat.compactConversation(); return true; }
-                  return false;
-                }}
+        {/* The scroll listener sits on `.thread`, the element that actually scrolls (measured
+            before the swap: ChatPanel's own root never overflows, so a handler there would
+            never fire). The empty new chat takes the thread's place. */}
+        <div className="thread-wrap">
+          {chatEmpty ? (
+            <EmptyChat userName={auth.user?.name} projectName={projectName} onPick={pickQuest} />
+          ) : (
+            <div className="thread custom-scrollbar" onScroll={chatScroll.onScroll}>
+              <ChatPanel
+                messages={chat.messages} activeConvId={chat.activeConvId} conversations={chat.conversations} user={auth.user} loading={chat.loading} clearHistory={chat.clearHistory} lang={lang}
+                thinkingLevel={thinkingLevel} workspacePath={fs.workspacePath} handleExportToUnity={fs.handleExportToUnity}
+                pendingGenFiles={fs.pendingGenFiles} setPendingGenFiles={fs.setPendingGenFiles} pendingFix={chat.pendingFix} setPendingFix={chat.setPendingFix} openedFilePath={fs.openedFilePath}
+                setCode={fs.setCode} refreshFileTree={fs.refreshFileTree} analyzeProject={chat.analyzeProject} openFile={fs.openFile} sendMessage={handleSendMessage}
+                messagesEndRef={chatEndRef} ipc={ipc} showToast={showToast as any} diffFile={diffFile} setDiffFile={setDiffFile}
+                pendingDelete={fs.pendingDelete} setPendingDelete={fs.setPendingDelete} pendingCommand={chat.pendingCommand} setPendingCommand={chat.setPendingCommand} onApproveCommand={chat.approveCommand} pendingQuestion={chat.pendingQuestion} setPendingQuestion={chat.setPendingQuestion} onAnswerQuestion={chat.answerQuestion} deleteFile={fs.deleteFile} setIsTerminalOpen={setIsTerminalOpen}
+                activity={chat.activity}
+                apiBase={API}
+                mcpGate={mcp.activeGate} mcpWorkspaceMismatch={mcp.gateWorkspaceMismatch}
+                mcpWorkspaceCheckPending={mcp.gateWorkspaceCheckPending}
+                mcpOpenWorkspacePath={mcp.openWorkspacePath} onMcpResolved={mcp.resolveActiveGate}
+                phonePaired={!!remote.status?.enabled && (remote.status?.devices ?? 0) > 0}
               />
             </div>
-          </div>
+          )}
+          {hasUnreadBelow && !chatEmpty && (
+            <button
+              type="button"
+              onClick={() => { chatScroll.scrollToBottom(); setHasUnreadBelow(false); }}
+              className="new-below"
+            >
+              <ArrowDown size={13} aria-hidden="true" />
+              {t('chat.newBelow')}
+            </button>
+          )}
+          {/* Over the chat, outside ChatPanel: nothing it shows is part of
+              the main chat until the user adds it to the message box. */}
+          {side.isOpen && (
+            <SideChatPanel
+              messages={side.messages}
+              loading={side.loading}
+              onAsk={askSideQuestion}
+              onStop={side.stop}
+              onClose={side.close}
+              onAddToMain={addSideAnswerToMain}
+            />
+          )}
         </div>
-      </motion.div>
+
+        <div className="composer-wrap">
+          <SessionReportPanel
+            open={reportsOpen}
+            onClose={() => setReportsOpen(false)}
+            API={API || ''}
+            sessionToken={auth.user?.sessionToken ?? ''}
+            convId={chat.activeConvId}
+            onContextText={chat.applyContextReport}
+          />
+          <AnimatedChatInput
+            value={chat.chatInput} setValue={chat.setChatInput} onSendMessage={handleSendMessage} isLoading={chat.loading}
+            api={API}
+            placeholder={t('chat.placeholder')}
+            disabled={sohbetKilitli}
+            disabledPlaceholder={t('gate.placeholder')}
+            slashCommands={slashCommands}
+            skills={skills}
+            commandMeta={commandMeta}
+            galleryProvider={slashProvider}
+            chats={chat.conversations}
+            currentChatId={chat.activeConvId}
+            onStop={chat.stopMessage}
+            queue={{
+              items: chat.queue, paused: chat.queuePaused,
+              onEdit: chat.editQueued, onDelete: chat.deleteQueued,
+              onSendNow: (id) => { void chat.sendQueuedNow(id); }, onResume: () => { chat.resumeQueue(); },
+            }}
+            onFileDrop={(entry) => chat.setChatInput(prev => prev + ` [File Attached: ${entry.path}]`)}
+            onCommand={(cmd) => {
+              if (cmd === '/compact') { chat.compactConversation(); return true; }
+              return false;
+            }}
+          />
+          {/* The status strip under the box: thinking, memory, more settings, the key hint. */}
+          <ControlPanel
+            thinkingLevel={thinkingLevel} setThinkingLevel={chooseEffort} generationMode={chat.generationMode} setGenerationMode={chat.setGenerationMode}
+            isAnalyzingProject={chat.isAnalyzingProject} activeConvId={chat.activeConvId} analyzeProject={chat.analyzeProject}
+            exportMemory={chat.exportMemory} importMemory={chat.importMemory} compactConversation={chat.compactConversation} isCompacting={chat.isCompacting} contextUsage={chat.contextUsage}
+            reportsOpen={reportsOpen} onToggleReports={() => setReportsOpen(v => !v)}
+            isClaudeSubscription={isClaudeSub} ultracode={ultracode} setUltracode={setUltracode} effortCaps={effortCaps}
+          />
+        </div>
+      </main>
+
+      {/* ===== Workspace (mockup `aside.workspace`): the editor, the previews and the terminal,
+          one panel for now. TODO(P3): the Sahne / Dosyalar / Kod / Onizleme tabs. ===== */}
+      <div className="app-right">
+        {/* Hidden, never unmounted: closing the panel must not kill the terminal session or
+            drop the editor buffer (the old closable chat panel stayed mounted the same way). */}
+          <aside
+            className="workspace is-entering"
+            aria-label={t('ws.title')}
+            style={{ width: wsWidth }}
+            hidden={!isWsOpen}
+            data-testid="workspace"
+          >
+            <div
+              className={`ws-resize${wsDragging ? ' is-dragging' : ''}`}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t('ws.resize')}
+              aria-valuenow={wsWidth}
+              tabIndex={0}
+              onMouseDown={startWsResize}
+              onKeyDown={keyWsResize}
+            />
+            <header className="ws-head">
+              <span className="ws-title">{t('ws.title')}</span>
+              <button type="button" className="icon-btn" aria-label={t('ws.close')} title={t('ws.close')} onClick={() => setIsWsOpen(false)}>
+                <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" /></svg>
+              </button>
+            </header>
+            <div className="ws-body">
+              <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
+                {pane === 'preview' && fs.previewFile ? (
+                  previewRoute === 'image' || previewRoute === 'blocked-image' ? (
+                    <ImagePreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />
+                  ) : (
+                    <ModelPreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />
+                  )
+                ) : pane === 'editor' ? (
+                  <>
+                  <CsharpProjectHint inProject={diffFile ? null : csInProject} />
+                  <EditorPanel
+                    code={fs.code} setCode={fs.setCode} openedFilePath={fs.openedFilePath} isEditorFocused={isEditorFocused} setIsEditorFocused={setIsEditorFocused}
+                    workspacePath={fs.workspacePath} problems={flattenedProblems} diffFile={diffFile}
+                    apiUrl={API} sessionToken={auth.user?.sessionToken} openFile={fs.openFile}
+                  />
+                  </>
+                ) : (
+                  <div className="ws-empty">
+                    <p>{t('ws.empty')}</p>
+                    {rootsOf(chat.conversations).length > 0 && (
+                      <div>
+                        <h3 className="ws-label"><span>{t('chat.recent')}</span></h3>
+                        <div className="ws-recent">
+                          {rootsOf(chat.conversations).slice(0, 3).map((conv) => (
+                            <button key={conv.id} type="button" onClick={() => { chat.selectConversation(conv); }}>
+                              <MessageSquare size={14} className="ic" aria-hidden="true" />
+                              <span>{conv.title}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <TerminalPanel
+                id="main-terminal"
+                isOpen={isTerminalOpen}
+                onClose={() => setIsTerminalOpen(false)}
+                workspacePath={fs.workspacePath}
+                problems={flattenedProblems}
+                onProblemClick={handleProblemClick}
+                apiUrl={API}
+                sessionToken={auth.user?.sessionToken}
+                unityConnected={ai.unityMcpStatus === 'connected'}
+              />
+            </div>
+          </aside>
       </div>
+
+      {/* The achievement band / "Done" toast: the on-screen chat finished a turn. */}
+      <AchievementToast event={turnDone} title={activeConversation?.title} />
 
       {/* Bildirim kanalının çizen ucu. Bu satır olmadan `showToast` sessiz bir
           state güncellemesinden ibaret: mesaj üretiliyor, kimse görmüyor. */}

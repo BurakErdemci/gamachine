@@ -60,7 +60,7 @@ vi.mock('axios', () => {
 })
 
 import axios from 'axios'
-import { ChatPanel } from '../renderer/components/home/ChatPanel'
+import { ChatPanel, isChatEmpty } from '../renderer/components/home/ChatPanel'
 import { McpApprovalCards } from '../renderer/components/home/McpApprovalCards'
 import {
   useMCPApproval,
@@ -101,8 +101,12 @@ const GATE: McpActiveGate = {
   workspacePath: '/ws',
 }
 
-/** Boş ekran (erken return) metninin kendisi — i18n.tsx:42, varsayılan dil tr. */
-const BOS_EKRAN = /Sohbet başlatmak için soldan/
+/**
+ * v4 (P2): the empty state is no longer a text inside ChatPanel. ChatPanel draws NOTHING and
+ * home.tsx puts the empty new chat (mission board) in the thread's place; both decide with the
+ * one exported predicate `isChatEmpty`, so the tests below measure the predicate and the panel's
+ * empty output instead of the old "select a chat" sentence.
+ */
 
 /**
  * ⚠️ ChatPanel.tsx'te `messages.length === 0 && !loading` erken return'ü var:
@@ -582,21 +586,24 @@ describe('D3 · ChatPanel\'in erken return\'leri MCP kartını yutmaz', () => {
     expect(screen.queryByText('Kabul Et')).not.toBeNull()
   })
 
-  it('kart YOKKEN konuşmasız hâl hâlâ BOŞ EKRAN çizer — ters yön', () => {
+  it('kart YOKKEN konuşmasız hâl boş sohbet ekranına devreder — ters yön', () => {
     renderPanel({ activeConvId: null, pendingFix: null, mcpGate: null })
     // ⚠️ Denetim bulgusu `negative-assertion-under-specifies-outcome`: eskiden
     // yalnız "Kabul Et yok" sınanıyordu. Erken return'ü tamamen KALDIRMAK da o
     // iddiayı sağlıyordu (kart zaten yoktu), yani test korumadığı bir şeyi
-    // koruyor sanılıyordu. Boş ekranın KENDİSİ pozitif olarak aranıyor.
-    expect(screen.queryByText(BOS_EKRAN)).not.toBeNull()
+    // koruyor sanılıyordu. Boş hâlin KENDİSİ pozitif olarak ölçülüyor: home.tsx'in
+    // boş sohbet ekranını seçtiği yüklem doğru, ve panel hiçbir şey çizmiyor.
+    expect(isChatEmpty(null, 1, false, false)).toBe(true)
+    expect(document.body.textContent).toBe('')
     // Erken return gerçekten koştuysa mesaj listesi hiç çizilmemiştir.
     expect(screen.queryByText('merhaba')).toBeNull()
     expect(screen.queryByText('Kabul Et')).toBeNull()
   })
 
-  it('kart VARKEN boş ekran metni çizilmez — erken return atlanmış olmalı', () => {
+  it('kart VARKEN boş sohbet ekranı seçilmez — erken return atlanmış olmalı', () => {
+    expect(isChatEmpty(null, 0, false, true)).toBe(false)
     renderMcpEdit({ activeConvId: null })
-    expect(screen.queryByText(BOS_EKRAN)).toBeNull()
+    expect(screen.queryByText('Kabul Et')).not.toBeNull()
   })
 })
 
@@ -1200,13 +1207,19 @@ describe('kablolama · çağrı yeri kartı sağlayıcıya geri bağlamaz', () =
     expect(jsxAdlari).toContain('McpApprovalCards')
   })
 
-  it('kart geldiğinde panel AÇILIR ve karta KAYDIRILIR', () => {
+  it('kart geldiğinde sohbet GÖRÜNÜR ve karta KAYDIRILIR', () => {
     /**
      * `approval-card-hidden-by-view-state` üç bacaklıydı; workspace ekranı
      * bunlardan yalnız biri. Diğer ikisi: (a) sohbet paneli kapalıyken kart
      * 0 piksel genişlikte çiziliyor, (b) kart mesaj listesinin dışında
      * olduğu için `messages`/`loading` değişmiyor ve hiçbir şey ona
      * kaydırmıyor — uzun sohbette kart ekranın altında kalıyor.
+     *
+     * v4 (P2): (a) artık yapıyla kapalı. Sohbet ana sahne (`main.stage`),
+     * kapanan bir paneli yok; eski "kart gelince paneli aç" effect'i bu yüzden
+     * kalktı. Tripwire aynı niyeti yeni biçimde ölçüyor: kartları taşıyan sahne
+     * hiçbir koşula ya da `hidden`a bağlı değil, ve boş sohbet ekranı bekleyen
+     * bir Unity kartına yer bırakıyor.
      *
      * ⚠️ SINIR: bu da bir tripwire, doğruluk kanıtı değil. `home.tsx` mount
      * edilemiyor (Electron IPC + auth + Monaco). Ölçtüğü şey iki effect'in
@@ -1238,8 +1251,35 @@ describe('kablolama · çağrı yeri kartı sağlayıcıya geri bağlamaz', () =
     // higher up, which is the fault this tripwire exists for.
     expect(gateEffektleri.some(b => b.includes('scrollIntoView') || b.includes('scrollToBottom(')),
       'kart geldiğinde kaydırma yapan effect yok').toBe(true)
-    expect(gateEffektleri.some(b => b.includes('setIsChatOpen(true)')),
-      'kart geldiğinde sohbet panelini açan effect yok').toBe(true)
+    // (a) The stage that holds the cards has no closed state.
+    let stage: ts.JsxElement | null = null
+    const findStage = (n: ts.Node): void => {
+      if (ts.isJsxElement(n) && n.openingElement.tagName.getText() === 'main'
+          && /\bstage\b/.test(n.openingElement.attributes.getText())) stage = n
+      ts.forEachChild(n, findStage)
+    }
+    findStage(sf)
+    expect(stage, "home.tsx'te sohbet sahnesi (main.stage) yok").not.toBeNull()
+    const sahne = stage as unknown as ts.JsxElement
+    const attrs = sahne.openingElement.attributes.properties
+      .map(a => (ts.isJsxAttribute(a) ? a.name.getText() : ''))
+    expect(attrs, 'sahne gizlenebiliyor').not.toContain('hidden')
+    expect(attrs, 'sahne stille daraltılabiliyor').not.toContain('style')
+    for (let p: ts.Node | undefined = sahne.parent; p && !ts.isSourceFile(p); p = p.parent) {
+      expect(ts.isConditionalExpression(p) || ts.isBinaryExpression(p),
+        'sahne bir koşula bağlı çiziliyor').toBe(false)
+    }
+    const icindekiler: string[] = []
+    const topla = (n: ts.Node): void => {
+      if ((ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) && ts.isIdentifier(n.tagName)) icindekiler.push(n.tagName.text)
+      ts.forEachChild(n, topla)
+    }
+    topla(sahne)
+    expect(icindekiler).toContain('ChatPanel')
+    expect(icindekiler).toContain('McpUnknownTray')
+    expect(src).not.toMatch(/isChatOpen/)
+    // The empty new chat never stands in front of a waiting Unity card.
+    expect(src).toMatch(/isChatEmpty\([^)]*mcp\.activeGate/)
   })
 
   it('ayrıştırıcı yorumla kandırılamaz — tripwire\'ın kendi kanıtı', () => {

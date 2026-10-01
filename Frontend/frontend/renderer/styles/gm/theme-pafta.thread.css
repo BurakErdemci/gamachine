@@ -75,3 +75,7 @@
   [data-theme="pafta"] .thread-col .approval[data-state="pending"] .approval-who { display: none; }
   [data-theme="pafta"] .thread-col .approval[data-state="pending"] .approval-title { white-space: nowrap; }
 }
+/* App: the cell count varies (project, waiting and date cells only when known, plus the chat
+   tools), so the mockup's fixed five-column template becomes "number, subject, then auto". */
+[data-theme="pafta"] .title-block { grid-template-columns: auto 1fr; grid-auto-flow: column; grid-auto-columns: auto; }
+[data-theme="pafta"] .tb-actions { margin: 0; padding: 0 6px; border-left: 1px solid var(--paper-line-strong); align-self: stretch; }

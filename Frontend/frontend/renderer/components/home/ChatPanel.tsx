@@ -53,6 +53,21 @@ export const mailNoteParts = (content: string) => {
   return { text, autoForwarded: text !== content };
 };
 
+/**
+ * Nothing to draw in the thread: no chat yet, or a chat with no messages and no turn running,
+ * and no Unity request waiting. home.tsx shows the empty new chat (mission board) in that case;
+ * ChatPanel draws nothing. One predicate for both, so they cannot disagree.
+ *
+ * The MCP card is the exception on purpose (see `hasMcpCard` below): the bridge works without a
+ * chat, and a card hidden behind an empty-state screen is rejected after 180 s unseen.
+ */
+export const isChatEmpty = (
+  activeConvId: number | null,
+  messageCount: number,
+  loading: boolean,
+  hasMcpCard: boolean,
+): boolean => !hasMcpCard && (!activeConvId || (messageCount === 0 && !loading));
+
 interface ChatPanelProps {
   messages: Message[];
   activeConvId: number | null;
@@ -105,6 +120,8 @@ interface ChatPanelProps {
   activity?: ChatActivity | null;
   /** Titles for the `@<id>` chips in the user's bubbles. */
   conversations?: Conversation[];
+  /** A phone is paired: pending cards say it can approve there too. */
+  phonePaired?: boolean;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -217,28 +234,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
    */
   const hasMcpCard = mcpGate !== null;
 
-  if (!activeConvId && !hasMcpCard) {
-    return (
-      <div className="flex flex-col h-full">
-        <div className="flex-1 flex flex-col items-center justify-center text-slate-600 gap-3">
-          <Bot size={32} className="opacity-20" />
-          <p className="text-[11px] text-center">
-            {t('chat.empty').split('\n').map((line, i) => <span key={i}>{line}{i === 0 && <br />}</span>)}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (messages.length === 0 && !loading && !hasMcpCard) {
-    return (
-      <div className="flex flex-col h-full">
-        <div className="flex-1 flex items-center justify-center">
-          <Bot size={20} className="opacity-10 text-blue-500" />
-        </div>
-      </div>
-    );
-  }
+  // The empty new chat is drawn by home.tsx in the thread's place (mission board).
+  if (isChatEmpty(activeConvId, messages.length, loading, hasMcpCard)) return null;
 
   /**
    * Mesaja bağlı (API akışı) düzeltme kartı — `messageId === msg.id`.
