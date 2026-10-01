@@ -566,6 +566,24 @@ async def test_codex_balanced_read_outside_the_step_grammar_asks(balanced, ws, c
     assert ev is not None and ev["type"] == "command_approval_needed"
 
 
+# Non-read verbs keep action_risk's verdict, but an attached parameter value
+# or a backslash in a POSIX script cannot ride along.
+@pytest.mark.parametrize("command", [
+    _CODEX_PS + "'git diff -O.\\link\\order'",
+    _CODEX_PS + "'echo -Path.\\link\\x'",
+    _CODEX_PS + "'echo -X:x'",
+    "/bin/bash -lc 'echo .\\./top.txt'",
+    "/bin/bash -lc 'git diff .\\./top.txt'",
+    "/bin/bash -lc 'diff a.txt .\\./top.txt'",
+    "/bin/zsh -lc 'git log .\\./x'",
+])
+async def test_codex_balanced_attached_value_or_posix_backslash_asks(balanced, ws, command):
+    decision, ev = await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                                      {"command": command, "cwd": ws})
+    assert decision == "decline"
+    assert ev is not None and ev["type"] == "command_approval_needed"
+
+
 def test_classified_command_keeps_the_wrapper_unless_the_step_grammar_reads_it(ws):
     from providers.codex_session import _classified_command
 

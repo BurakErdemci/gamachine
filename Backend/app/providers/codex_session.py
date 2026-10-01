@@ -518,9 +518,12 @@ def _classified_command(command, cwd, workspace: str) -> str:
     `cat -Path.\\link\\x` (one flag token to it) routine (round 3).
     """
     raw = _command_text(command)
-    script, _ = _shell_script(raw)
+    script, powershell = _shell_script(raw)
     if (not script or not _CLASSIFIABLE_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script)
             or _CLASSIFY_RAW.search(script) or _tree_writes(script)):
+        return raw
+    # Bash reads `.\.` as `..`; action_risk reads the backslash literally.
+    if not powershell and "\\" in script:
         return raw
     if _first_verb(script) in _READ_VERBS and not _is_read_only_command(raw, cwd, workspace):
         return raw
@@ -535,8 +538,10 @@ def _first_verb(script: str) -> str:
 
 # action_risk called `cat lin*\x` routine (the literal pattern stays in the
 # workspace, the glob can match a junction out of it) and has no tree -o/-R
-# check (measured, 1 Oct 2026). These and any `..` keep the wrapper.
-_CLASSIFY_RAW = re.compile(r"\.\.|[*?\[\]]")
+# check (measured, 1 Oct 2026). These and any `..` keep the wrapper, as does
+# a PowerShell parameter with an attached value (`-Path.\link\x`): PowerShell
+# binds the path, action_risk reads one flag token.
+_CLASSIFY_RAW = re.compile(r"\.\.|[*?\[\]]|(?:^|\s)-[A-Za-z]+[.\\/:~]")
 
 
 def _tree_writes(script: str) -> bool:
