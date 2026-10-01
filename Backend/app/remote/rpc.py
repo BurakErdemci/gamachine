@@ -309,10 +309,19 @@ class Dispatcher:
         stored: list = []
         try:
             # Off the loop: the readiness probes read the API key and may ask Ollama.
-            result = await asyncio.to_thread(
+            worker = asyncio.create_task(asyncio.to_thread(
                 chat_model.pick_chat_model, self.db, chats.LOCAL_USER_ID, conv,
                 req.get("provider_type"), req.get("model_name"), require_ready=True,
-                on_chat_stored=stored.append)
+                on_chat_stored=stored.append))
+            result = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Teardown cannot stop the thread's write (measured, 1 Oct 2026).
+            # Wait for its stored callback before the renderer notification.
+            try:
+                await worker
+            except Exception:
+                pass
+            raise
         except chat_model.ChatModelError as exc:
             raise RpcError(exc.code, **exc.extra)
         finally:

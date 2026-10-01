@@ -7,6 +7,7 @@ database). Readiness is decided by an API key in the database, or by a patched
 CLI probe, so no test depends on what is installed on the machine.
 """
 import asyncio
+import threading
 import time
 from unittest.mock import MagicMock, patch
 
@@ -566,6 +567,57 @@ async def test_the_renderer_hears_of_a_changed_chat_once_when_the_default_write_
         CHANNEL.unlisten(q)
     assert (frame["type"], frame["conversation_id"], frame["provider_type"], frame["model_name"]) == (
         "chat_model_changed", conv, "openai", "gpt-5.5")
+
+
+@pytest.mark.parametrize("fail_after_store", [False, True])
+async def test_cancelled_model_pick_still_notifies_the_renderer_once(env, monkeypatch, fail_after_store):
+    from types import SimpleNamespace
+
+    conv = make_chat(env.db, stored=("subscription", "gpt-6-sol"))
+    started = asyncio.Event()
+    finished = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    picked = {"provider_type": "openai", "model_name": "gpt-5.5"}
+
+    def pick(*args, on_chat_stored, **kwargs):
+        loop.call_soon_threadsafe(started.set)
+        try:
+            assert release.wait(2), "worker was not released"
+            on_chat_stored(picked)
+            if fail_after_store:
+                raise RuntimeError("default write failed")
+            return picked
+        finally:
+            loop.call_soon_threadsafe(finished.set)
+
+    monkeypatch.setattr(chat_model, "pick_chat_model", pick)
+    q = CHANNEL.listen()
+    task = asyncio.create_task(env.bridge.rpc.set_model(
+        SimpleNamespace(device_label="iPhone"),
+        {"chat_id": conv, **picked}, "r"))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(finished.wait(), timeout=2)
+        frame = q.get_nowait()
+        assert q.empty()
+        assert (frame["type"], frame["conversation_id"], frame["provider_type"], frame["model_name"]) == (
+            "chat_model_changed", conv, "openai", "gpt-5.5")
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.wait_for(finished.wait(), timeout=2)
+        CHANNEL.unlisten(q)
 
 
 def test_pick_chat_model_reports_the_stored_chat_before_the_default_write(env, monkeypatch):
