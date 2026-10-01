@@ -653,7 +653,7 @@ export default function Home() {
         conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus} selectConversation={chat.selectConversation}
         createNewConversation={chat.createNewConversation} deleteConversation={chat.deleteConversation}
         editingId={chat.editingId} setEditingId={chat.setEditingId} tempTitle={chat.tempTitle} setTempTitle={chat.setTempTitle} saveRename={chat.saveRename}
-        workspacePath={fs.workspacePath} closeWorkspace={fs.closeWorkspace} rootFolderPath={fs.rootFolderPath}
+        workspacePath={fs.workspacePath} closeWorkspace={fs.closeWorkspace} isDirty={fs.isDirty} rootFolderPath={fs.rootFolderPath}
         openFolder={fs.openFolder} openFilePicker={fs.openFilePicker} treeCreating={fs.treeCreating}
         setTreeCreating={fs.setTreeCreating} treeCreateValue={fs.treeCreateValue} setTreeCreateValue={fs.setTreeCreateValue}
         submitTreeCreate={fs.submitTreeCreate} fileTree={fs.fileTree}

@@ -19,6 +19,7 @@ import { STATUS_DOT, awaitingElsewhere, familyRootId, mostUrgent, rootsOf } from
 import { AwaitingBadge } from './AwaitingBadge';
 import { BrandLogo } from './BrandLogo';
 import { useUnityLinkPulse } from './UnityMcpToggle';
+import { confirmDialog } from '../ui/ConfirmDialog';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -37,6 +38,8 @@ interface SidebarProps {
   saveRename: (id: number) => void;
   workspacePath: string | null;
   closeWorkspace: () => void;
+  /** The open editor file has unsaved changes: switching project asks first. */
+  isDirty?: boolean;
   rootFolderPath: string | null;
   openFolder: () => void;
   openFilePicker: () => void;
@@ -105,13 +108,19 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     closeWorkspace, rootFolderPath, openFolder, openFilePicker, user,
     setShowSettings, fileTree, treeContextMenu, setTreeContextMenu,
     treeCreating, startTreeCreate, treeCreateValue, setTreeCreateValue, submitTreeCreate, setTreeCreating,
-    convStatus, unityStatus,
+    convStatus, unityStatus, isDirty,
   } = props;
 
   const { t } = useLang();
   const linked = useUnityLinkPulse(unityStatus);
 
   if (!user) return null;
+
+  // Closing the workspace drops the editor buffer; a dirty file must not vanish on one click.
+  const switchProject = async () => {
+    if (isDirty && !(await confirmDialog(t('sidebar.switchProjectDirty'), t('sidebar.switchProjectConfirm'), t('confirm.cancel')))) return;
+    closeWorkspace();
+  };
 
   // Branches live in the chat column's tabs; a row stands for its whole family.
   const roots = rootsOf(conversations);
@@ -218,7 +227,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
 
         {/* The project switcher: closing the workspace returns to the project picker, which is
             how a different project is opened today. */}
-        <button type="button" className="project" onClick={closeWorkspace} title={t('sidebar.switchProject')}>
+        <button type="button" className="project" onClick={() => { void switchProject(); }} title={t('sidebar.switchProject')}>
           <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5h4.5l1.5 1.8h8v8.2H3z" /></svg>
           <span className="project-text">
             <span className="project-name">{baseName(workspacePath) || 'Workspace'}</span>
