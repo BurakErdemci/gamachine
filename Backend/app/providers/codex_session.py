@@ -356,8 +356,11 @@ def _grammar(flags=(), values=None, short="", fold=False, max_args=None) -> dict
 
 _ENCODINGS = frozenset({"utf8", "unicode", "ascii", "default", "oem", "utf32",
                         "bigendianunicode"})
-_GCI = _grammar(("-name", "-file", "-directory", "-recurse", "-force"),
-                {"-path": "arg", "-literalpath": "arg", "-depth": "int"}, fold=True)
+# No -Recurse/-Depth: Windows PowerShell 5.1 follows a workspace junction
+# while recursing and lists the files behind it (measured, 1 Oct 2026).
+# POSIX ls -R, grep -r and rg without -L did not follow it.
+_GCI = _grammar(("-name", "-file", "-directory", "-force"),
+                {"-path": "arg", "-literalpath": "arg"}, fold=True)
 _GC = _grammar(("-raw",), {"-path": "arg", "-literalpath": "arg", "-totalcount": "int",
                            "-head": "int", "-tail": "int", "-encoding": _ENCODINGS}, fold=True)
 _SLS = _grammar(("-simplematch", "-casesensitive", "-list"),

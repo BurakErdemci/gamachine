@@ -308,9 +308,12 @@ def ws(tmp_path):
     _PS + "'Get-ChildItem'",
     _PS + "'Get-ChildItem -Name'",
     _PS + "'Get-ChildItem -File -Name'",
-    _PS + "'gci -Recurse -Force Assets'",
-    _PS + "'Get-ChildItem -Path Assets -Depth 2'",
+    _PS + "'gci -Force Assets'",
+    _PS + "'Get-ChildItem -Path Assets'",
     _PS + "'Get-Content a.txt'",
+    _PS + "'Get-Content Assets\\Console.cs'",
+    _PS + "'cat CONTRIBUTING.md'",
+    _PS + "'cat com10.txt'",
     _PS + "'Get-Content Assets\\A.cs'",
     _PS + "'Get-Content -Path Assets/A.cs'",
     _PS + "'Get-Content -LiteralPath Assets\\A.cs'",
@@ -331,6 +334,8 @@ def ws(tmp_path):
     "/bin/bash -lc 'cat a.txt'",
     "/bin/bash -lc 'pwd'",
     "/bin/zsh -lc 'grep -rn Player Assets'",
+    "/bin/bash -lc 'grep -rn x src'",
+    "/bin/bash -lc 'ls -R Assets'",
     "/bin/bash -lc 'rg -n pattern src'",
     "/bin/bash -lc 'tree -L 2 -a Assets'",
     "/bin/bash -lc 'tree -d Assets'",
@@ -404,6 +409,31 @@ def test_anything_else_is_not_read_only(ws, command):
     "/bin/bash -lc 'find Assets -type l'",
 ])
 def test_an_attached_or_unknown_option_is_not_read_only(ws, command):
+    assert _is_read_only_command(command, ws, ws) is False
+
+
+# Windows PowerShell 5.1 follows a workspace junction while recursing and
+# lists the files behind it (measured, 1 Oct 2026: `Get-ChildItem -Recurse
+# -Name` printed `link\secret.txt`). rg without -L, grep -r, ls -R and find
+# did not follow it; rg -L/--follow and grep -R do.
+@pytest.mark.parametrize("command", [
+    _PS + "'Get-ChildItem -Recurse -Name'",
+    _PS + "'Get-ChildItem -recurse'",
+    _PS + "'dir -Recurse'",
+    _PS + "'ls -Recurse'",
+    _PS + "'Get-ChildItem Assets -Recurse -File'",
+    _PS + "'gci -Recurse -Force Assets'",
+    _PS + "'Get-ChildItem -Depth 2'",
+    _PS + "'Get-ChildItem -Path Assets -Depth 2'",
+    _PS + "'rg -L x'",
+    _PS + "'rg -nL x'",
+    _PS + "'rg --follow x'",
+    "/bin/bash -lc 'rg -L x'",
+    "/bin/bash -lc 'rg --follow x Assets'",
+    "/bin/bash -lc 'grep -R x Assets'",
+    "/bin/bash -lc 'grep -rR x Assets'",
+])
+def test_a_recursion_that_can_follow_a_junction_is_not_read_only(ws, command):
     assert _is_read_only_command(command, ws, ws) is False
 
 
