@@ -51,6 +51,7 @@ import { ModeChip } from '../components/home/ModeChip';
 import { modelFamily } from '../lib/modelFamily';
 import { useRemoteEffort } from '../lib/remoteControl';
 import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
+import { useNewChatShortcut } from '../lib/newChatShortcut';
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
 // this app needs, and off the server render (it touches WebGL on mount).
@@ -449,17 +450,9 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [fs.saveFile, fs.workspacePath, auth.user]);
 
-  // --- New chat shortcut (Ctrl+N / Cmd+N), the one the sidebar's "New chat" row names ---
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
-        e.preventDefault();
-        chat.createNewConversation();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [chat.createNewConversation]);
+  // --- New chat shortcut (Ctrl+N / Cmd+N), the one the sidebar's "New chat" row names.
+  // Guarded (terminal, inputs, repeat, open modal): see lib/newChatShortcut.ts. ---
+  useNewChatShortcut(chat.createNewConversation);
 
   const handleLogout = () => { fs.closeWorkspace(); };
 

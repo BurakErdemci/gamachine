@@ -31,7 +31,7 @@ export const ExportModal = ({
   return (
   <AnimatePresence>
     {exportModal?.isOpen && (
-      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]" onClick={() => !exportModal.exportResult && onClose()}>
+      <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]" onClick={() => !exportModal.exportResult && onClose()}>
         <motion.div
           initial={{ scale: 0.95, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}

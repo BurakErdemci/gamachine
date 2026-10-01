@@ -68,7 +68,11 @@ export function ConfirmDialogHost() {
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
           onClick={() => resolve(false)}
         >
+          {/* role + aria-modal: screen readers announce it, and window-level shortcuts
+              (Ctrl+N new chat) can tell a modal owns the keyboard. */}
           <motion.div
+            role="alertdialog"
+            aria-modal="true"
             className="bg-[#0a0a0a] border border-slate-700 rounded-2xl shadow-2xl w-[340px] max-w-[90vw] p-5"
             initial={{ scale: 0.95, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 10 }}
             onClick={(e) => e.stopPropagation()}

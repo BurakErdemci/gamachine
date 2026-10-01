@@ -151,7 +151,7 @@ export const SettingsModal = ({
   return (
   <AnimatePresence>
     {open && (
-      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]">
+      <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]">
         <motion.div
           initial={{ scale: 0.96, opacity: 0, y: 8 }}
           animate={{ scale: 1, opacity: 1, y: 0 }}
