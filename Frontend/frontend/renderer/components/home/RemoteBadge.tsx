@@ -30,18 +30,23 @@ export const RemoteBadge = ({ status, onClick }: { status: RemoteStatus | null; 
   const state = status.connected ? t("remote.status.connected")
     : status.gave_up || status.last_error ? t("remote.status.error", { hata: status.last_error || "" })
       : t("remote.status.connecting");
-  const dot = status.connected ? "bg-emerald-400"
-    : status.gave_up || status.last_error ? "bg-red-500" : "bg-yellow-400 animate-pulse";
+  // The mockup's lamps: live = ok, failed = the alert accent, still trying = the running pulse.
+  const lamp = status.connected ? "status-ok"
+    : status.gave_up || status.last_error ? "status-err" : "status-running";
   return (
     <button
       type="button"
       data-testid="remote-badge"
       onClick={onClick}
       title={t("remote.badgeTitle", { durum: state })}
-      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] text-[10px] font-semibold text-slate-400 whitespace-nowrap hover:bg-white/[0.06]"
+      className="bar-chip"
     >
-      <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-      📱 {t("remote.badge")}
+      <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="6" y="2.5" width="8" height="15" rx="1.6" />
+        <path d="M9 15h2" />
+      </svg>
+      {t("remote.badge")}
+      <span className={`status ${lamp}`} aria-hidden="true" />
     </button>
   );
 };
