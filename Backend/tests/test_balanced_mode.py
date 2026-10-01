@@ -463,6 +463,40 @@ async def test_codex_balanced_wrapped_read_passes_and_wrapped_write_asks(balance
     assert ev is not None and ev["type"] == "command_approval_needed"
 
 
+@pytest.mark.parametrize("command", [
+    _CODEX_PS + "'dotnet build'",
+    _CODEX_PS + '"dotnet build"',
+    _CODEX_PS + "'python -m pytest'",
+    "/bin/bash -lc 'dotnet test'",
+])
+async def test_codex_balanced_wrapped_build_runs_without_a_card(balanced, ws, command):
+    assert await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                              {"command": command, "cwd": ws}) == ("accept", None)
+
+
+@pytest.mark.parametrize("command,reason", [
+    (_CODEX_PS + "'Remove-Item -Recurse Assets'", "shell_delete_move"),
+    (_CODEX_PS + "'powershell -Command dotnet build'", "shell_inline_code"),
+    (_CODEX_PS + "'python -c \"print(1)\"'", "shell_inline_code"),
+    (_CODEX_PS + "'iex x'", "shell_inline_code"),
+    (_CODEX_PS + "'Invoke-Expression x'", "shell_inline_code"),
+    (_CODEX_PS + "'dotnet build; Remove-Item x'", "shell_delete_move"),
+    (_CODEX_PS + "'dotnet build & del x'", "shell_delete_move"),
+    # Unparseable or unsure wrappers keep the raw string, which reads as inline code.
+    (_CODEX_PS + "'dotnet build\"", "shell_inline_code"),
+    (_CODEX_PS + "\"dotnet build \\\"x\\\"\"", "shell_inline_code"),
+    ("cmd.exe /c dotnet build", "shell_inline_code"),
+    # PowerShell strips these quotes, so the read leaves the workspace.
+    (_CODEX_PS + "\"cat '..\\secret.txt'\"", "shell_inline_code"),
+    ("/bin/bash -lc 'cat {..,x}/secret'", "shell_metachar"),
+])
+async def test_codex_balanced_wrapped_risky_command_asks(balanced, ws, command, reason):
+    decision, ev = await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
+                                      {"command": command, "cwd": ws})
+    assert decision == "decline"
+    assert ev is not None and ev["risk_reason"] == reason
+
+
 async def test_codex_side_session_declines_before_balanced(balanced, ws):
     s = _codex(ws, read_only=True)
     assert await _codex_drive(s, "item/commandExecution/requestApproval",

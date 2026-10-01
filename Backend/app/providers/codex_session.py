@@ -268,7 +268,7 @@ def _risk_actions(method: str, params: dict, file_changes, workspace: str) -> li
     """
     if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
         cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else ""
-        return [{"kind": "shell", "command": _command_text(params.get("command")),
+        return [{"kind": "shell", "command": _classified_command(params.get("command")),
                  "cwd": cwd or workspace, "workspace": workspace}]
     if method == "item/fileChange/requestApproval":
         actions = []
@@ -351,6 +351,21 @@ def _shell_script(command: str) -> "tuple[Optional[str], bool]":
     if m.group("q") in inner:
         return None, False
     return inner, powershell
+
+
+def _classified_command(command) -> str:
+    """The text action_risk classifies: the wrapped script when it can be read
+    safely, else the raw string, whose wrapper action_risk calls inline code.
+
+    The `_UNSAFE_INNER` forms stay wrapped: action_risk resolves
+    `cat '..\\x'` and `cat {..,x}/f` inside the workspace (measured: routine),
+    while PowerShell strips the quotes and bash expands the braces.
+    """
+    raw = _command_text(command)
+    script, _ = _shell_script(raw)
+    if not script or _UNSAFE_INNER.search(script):
+        return raw
+    return script
 
 
 def _is_read_only_command(command, cwd, workspace: str) -> bool:
