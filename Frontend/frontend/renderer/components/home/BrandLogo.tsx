@@ -40,35 +40,50 @@ const LETTERS: Array<[number, string]> = [
   [786, 'M0 12L12 0H76V22H24V39H64V61H24V78H76V100H0Z'],
 ];
 
+/** The approved head group (512-unit box), shared by the lockup, the toast and the empty chat. */
+const MascotHeadArt = () => (
+  <g transform="translate(-146 -79) scale(1.3)">
+    {/* sticker outline: the whole silhouette drawn fat in the eye colour */}
+    <g fill="#F1EEE6" stroke="#F1EEE6" strokeWidth="31.3" strokeLinejoin="round">
+      <path d={EAR} />
+      <path transform={MIRROR} d={EAR} />
+      <ellipse cx="160" cy="272" rx="34" ry="46" />
+      <ellipse cx="440" cy="272" rx="34" ry="46" />
+      <ellipse cx="146" cy="272" rx="11" ry="22" />
+      <ellipse cx="454" cy="272" rx="11" ry="22" />
+      <path d={HEAD} />
+    </g>
+    <g stroke="#141826" strokeWidth="10.4" strokeLinejoin="round" strokeLinecap="round">
+      <Ear />
+      <g transform={MIRROR}><Ear /></g>
+      <Cheek />
+      <g transform={MIRROR}><Cheek /></g>
+      <path fill="#2A2F3D" d={HEAD} />
+      <path fill="#FF6B3D" d="M180 328Q300 360 420 328L417 352Q300 390 183 352Z" />
+      <rect x="192" y="204" width="216" height="122" rx="30" fill="#FF6B3D" />
+      <rect x="209" y="220" width="182" height="90" rx="18" fill="#141826" stroke="none" />
+      <g fill="#F1EEE6" stroke="none">
+        <ellipse cx="258" cy="265" rx="18" ry="23" />
+        <ellipse cx="342" cy="265" rx="18" ry="23" />
+      </g>
+    </g>
+  </g>
+);
+
+/**
+ * The head mark on its own (mockup `<symbol id="mascot-head">` users: achievement band, empty
+ * chat fallback). `brand-head` carries the token re-pointing from shell.css.
+ */
+export const MascotHead: React.FC<{ className?: string }> = ({ className = 'mascot' }) => (
+  <svg className={`brand-head ${className}`} viewBox="0 0 512 512" overflow="visible" aria-hidden="true" focusable="false">
+    <MascotHeadArt />
+  </svg>
+);
+
 export const BrandLogo: React.FC = () => (
   <svg className="brand-logo" viewBox="0 0 714.4 150" role="img" aria-label="Gamachine">
     <svg className="brand-head" viewBox="0 0 512 512" width="153.6" height="153.6" overflow="visible">
-      <g transform="translate(-146 -79) scale(1.3)">
-        {/* sticker outline: the whole silhouette drawn fat in the eye colour */}
-        <g fill="#F1EEE6" stroke="#F1EEE6" strokeWidth="31.3" strokeLinejoin="round">
-          <path d={EAR} />
-          <path transform={MIRROR} d={EAR} />
-          <ellipse cx="160" cy="272" rx="34" ry="46" />
-          <ellipse cx="440" cy="272" rx="34" ry="46" />
-          <ellipse cx="146" cy="272" rx="11" ry="22" />
-          <ellipse cx="454" cy="272" rx="11" ry="22" />
-          <path d={HEAD} />
-        </g>
-        <g stroke="#141826" strokeWidth="10.4" strokeLinejoin="round" strokeLinecap="round">
-          <Ear />
-          <g transform={MIRROR}><Ear /></g>
-          <Cheek />
-          <g transform={MIRROR}><Cheek /></g>
-          <path fill="#2A2F3D" d={HEAD} />
-          <path fill="#FF6B3D" d="M180 328Q300 360 420 328L417 352Q300 390 183 352Z" />
-          <rect x="192" y="204" width="216" height="122" rx="30" fill="#FF6B3D" />
-          <rect x="209" y="220" width="182" height="90" rx="18" fill="#141826" stroke="none" />
-          <g fill="#F1EEE6" stroke="none">
-            <ellipse cx="258" cy="265" rx="18" ry="23" />
-            <ellipse cx="342" cy="265" rx="18" ry="23" />
-          </g>
-        </g>
-      </g>
+      <MascotHeadArt />
     </svg>
     <g className="brand-word" fill="#141826" fillRule="evenodd" transform="translate(180 44) scale(0.6)">
       {LETTERS.map(([x, d]) => <path key={x} transform={`translate(${x} 0)`} d={d} />)}
