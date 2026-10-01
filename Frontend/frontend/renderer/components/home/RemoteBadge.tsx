@@ -45,7 +45,7 @@ export const RemoteBadge = ({ status, onClick }: { status: RemoteStatus | null; 
         <rect x="6" y="2.5" width="8" height="15" rx="1.6" />
         <path d="M9 15h2" />
       </svg>
-      {t("remote.badge")}
+      <span className="bar-chip-label">{t("remote.badge")}</span>
       <span className={`status ${lamp}`} aria-hidden="true" />
     </button>
   );

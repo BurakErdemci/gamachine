@@ -733,7 +733,7 @@ export default function Home() {
           {lspStatus?.state === 'starting' && (
             <span className="bar-chip">
               <span className="status status-running" aria-hidden="true" />
-              {t('home.csharpAnalyzing')}
+              <span className="bar-chip-label">{t('home.csharpAnalyzing')}</span>
             </span>
           )}
           <ModelSelector

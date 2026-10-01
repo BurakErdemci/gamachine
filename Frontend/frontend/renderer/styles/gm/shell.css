@@ -213,8 +213,10 @@
   padding: 0 14px 0 24px;
   border-bottom: var(--line-w) solid var(--shell-line);
 }
-.topbar-left { display: flex; align-items: center; gap: 8px; min-width: 0; align-self: stretch; }
-.topbar-mid { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 4px; }
+/* The left group gives way first: the bay keeps its fixed width, the editor controls after it
+   shrink and clip, so nothing slides under the right group on a narrow window. */
+.topbar-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; align-self: stretch; }
+.topbar-mid { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 4px; overflow: hidden; }
 .topbar-file { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--shell-text-dim); font-size: 13px; }
 .topbar-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .topbar-dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; }
@@ -392,6 +394,9 @@
 button.bar-chip:hover { background: var(--shell-bg-2); color: var(--shell-text); }
 .bar-chip .status { width: 7px; height: 7px; }
 .status-err { background: var(--accent); }
+/* Round 8 breakpoint: below 1500 px the bay reaches past the window's centre, so the bar chips
+   keep their icon and lamp and drop the words (the title still carries them). */
+@media (max-width: 1499px) { .bar-chip-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } }
 
 /* ---------- motion preference: every moment jumps to its end state ---------- */
 @media (prefers-reduced-motion: reduce) {
