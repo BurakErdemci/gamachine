@@ -49,6 +49,9 @@ function useAutoResizeTextarea({
             );
 
             textarea.style.height = `${newHeight}px`;
+            // Scroll inside only past the maximum height: a one-line box must not show a bar,
+            // and a long text must stay reachable (it was locked out when this was `hidden`).
+            textarea.style.overflowY = maxHeight != null && textarea.scrollHeight > maxHeight ? "auto" : "hidden";
         },
         [minHeight, maxHeight]
     );
@@ -900,9 +903,6 @@ export function AnimatedChatInput({
                     // written by moving the caret inside this element.
                     readOnly={dictating}
                     className="custom-scrollbar"
-                    // The box scrolls inside itself past its maximum height (it was
-                    // `hidden` once, which locked long text out of reach).
-                    style={{ overflowY: "auto" }}
                 />
                 <button
                     type="button"
