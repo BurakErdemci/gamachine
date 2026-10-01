@@ -424,8 +424,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   return (
-    <div className="relative">
+    <div className="model-wrap">
+      {/* The mockup's model "character card": the model colour dot (--model, set on .app from
+          the current pick), the name over its provider. Logic unchanged, restyle only. */}
       <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={isModelDropdownOpen}
         onClick={() => {
           const opening = !isModelDropdownOpen;
           setIsModelDropdownOpen(opening);
@@ -436,18 +441,16 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             }
           }
         }}
-        className="flex items-center gap-1.5 hover:bg-white/[0.06] px-2 py-1 rounded-lg transition-all text-left shrink-0 max-w-[160px]"
+        className="pick model-pick"
       >
-        <ModelAvatar provider={activeGroupKey ? CLI_GROUPS.find(g => g.key === activeGroupKey)!.brand : aiConfig.provider_type} size={14} />
-        <div className="flex flex-col min-w-0">
-          <span className="text-[12px] font-semibold text-slate-300 leading-tight whitespace-nowrap truncate">
-            {goster(displayModelName)}
-          </span>
-          <span className="text-[9px] text-slate-500 leading-tight capitalize whitespace-nowrap truncate">
+        <span className="model-dot" aria-hidden="true" />
+        <span className="model-text">
+          <span className="model-name" lang="en">{goster(displayModelName)}</span>
+          <span className="model-sub">
             {activeGroupKey ? CLI_GROUPS.find(g => g.key === activeGroupKey)!.label : goster(effectiveProvider)}
           </span>
-        </div>
-        <ChevronDown size={14} className="text-slate-500" />
+        </span>
+        <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
       </button>
 
       <AnimatePresence>
@@ -462,7 +465,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -8, scale: 0.98 }}
               transition={{ duration: 0.16, ease: 'easeOut' }}
-              className="absolute top-10 left-0 w-[340px] rounded-2xl z-50 overflow-hidden border border-white/10 bg-[#0B0D12]/95 backdrop-blur-xl shadow-[0_24px_64px_-16px_rgba(0,0,0,0.9)]"
+              className="model-menu"
             >
               {/* Arama */}
               <div className="p-2 border-b border-white/[0.06]">
