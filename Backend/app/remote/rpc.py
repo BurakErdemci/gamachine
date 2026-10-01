@@ -316,11 +316,14 @@ class Dispatcher:
             result = await asyncio.shield(worker)
         except asyncio.CancelledError:
             # Teardown cannot stop the thread's write (measured, 1 Oct 2026).
-            # Wait for its stored callback before the renderer notification.
-            try:
-                await worker
-            except Exception:
-                pass
+            # Repeated cancellation must not skip its stored callback or notification.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
             raise
         except chat_model.ChatModelError as exc:
             raise RpcError(exc.code, **exc.extra)

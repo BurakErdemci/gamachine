@@ -620,6 +620,74 @@ async def test_cancelled_model_pick_still_notifies_the_renderer_once(env, monkey
         CHANNEL.unlisten(q)
 
 
+@pytest.mark.parametrize("cancel_count", [2, 3])
+@pytest.mark.parametrize("fail_after_store", [False, True])
+async def test_repeatedly_cancelled_model_pick_still_notifies_the_renderer_once(
+        env, monkeypatch, cancel_count, fail_after_store):
+    from types import SimpleNamespace
+
+    conv = make_chat(env.db, stored=("subscription", "gpt-6-sol"))
+    started = asyncio.Event()
+    finished = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    picked = {"provider_type": "openai", "model_name": "gpt-5.5"}
+    stored = []
+    workers = []
+    to_thread = asyncio.to_thread
+
+    async def track_worker(*args, **kwargs):
+        workers.append(asyncio.current_task())
+        return await to_thread(*args, **kwargs)
+
+    def pick(*args, on_chat_stored, **kwargs):
+        loop.call_soon_threadsafe(started.set)
+        try:
+            assert release.wait(2), "worker was not released"
+            on_chat_stored(picked)
+            stored.append(picked)
+            if fail_after_store:
+                raise RuntimeError("default write failed")
+            return picked
+        finally:
+            loop.call_soon_threadsafe(finished.set)
+
+    monkeypatch.setattr(asyncio, "to_thread", track_worker)
+    monkeypatch.setattr(chat_model, "pick_chat_model", pick)
+    q = CHANNEL.listen()
+    task = asyncio.create_task(env.bridge.rpc.set_model(
+        SimpleNamespace(device_label="iPhone"),
+        {"chat_id": conv, **picked}, "r"))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        for _ in range(cancel_count):
+            task.cancel()
+            await asyncio.sleep(0)
+        # Let a forwarded cancellation reach the handler before releasing the thread.
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(finished.wait(), timeout=2)
+        assert task.cancelled()
+        assert stored == [picked]
+        frame = q.get_nowait()
+        assert q.empty()
+        assert (frame["type"], frame["conversation_id"], frame["provider_type"], frame["model_name"]) == (
+            "chat_model_changed", conv, "openai", "gpt-5.5")
+        assert len(workers) == 1 and workers[0].done() and not workers[0].cancelled()
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.wait_for(finished.wait(), timeout=2)
+        CHANNEL.unlisten(q)
+
+
 def test_pick_chat_model_reports_the_stored_chat_before_the_default_write(env, monkeypatch):
     keyed(env)
     conv = make_chat(env.db)
