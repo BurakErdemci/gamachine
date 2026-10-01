@@ -795,6 +795,17 @@ def test_plan_locked_reads_the_family_the_runner_dispatches_on(env, monkeypatch)
     assert locked("subscription", "Copilot-gpt-5") is False  # copilot's cap is unknown here
 
 
+@pytest.mark.parametrize("model,expected", [
+    ("cursor-auto", False), ("Cursor-Auto", False), ("COPILOT-AUTO", False),
+    ("cursor-gpt-x", True),
+])
+def test_locked_plans_allow_auto_regardless_of_case(env, monkeypatch, model, expected):
+    import providers.oneshot_cli as oc
+
+    monkeypatch.setattr(oc, "get_named_models_cap", lambda cli: False)
+    assert create_config_router(env.db).plan_locked("subscription", model) is expected
+
+
 def test_plan_locked_follows_the_same_function_as_the_desktop_list(env, auto_only_copilot):
     locked = create_config_router(env.db).plan_locked
     assert locked("subscription", LOCKED_COPILOT) is True

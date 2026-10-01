@@ -648,7 +648,7 @@ def create_config_router(db):
         from providers.oneshot_cli import get_named_models_cap
         if get_named_models_cap(cli) is False:
             for m in models:
-                if m["id"] not in (f"{cli}-auto",):
+                if m["id"].lower() != f"{cli}-auto":
                     m["disabled"] = True
                     m["disabled_reason"] = "plan"
         return models
