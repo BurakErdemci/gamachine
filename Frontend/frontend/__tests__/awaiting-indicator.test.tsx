@@ -223,7 +223,7 @@ describe('awaiting · places that had no marker', () => {
     expect(title('closed-branches-status')).toBe(AWAITING)
   })
 
-  it('a collapsed sidebar puts an amber count on its toggle; open, the rows carry it', async () => {
+  it('a collapsed sidebar puts an accent count on its toggle; open, the rows carry it', async () => {
     await mount()
     await open(1)
     act(() => setOpen(false))
@@ -232,9 +232,13 @@ describe('awaiting · places that had no marker', () => {
     pending = { g2: unityReq(2), g5: unityReq(5) }
     await poll()
     const badge = screen.getByTestId('sidebar-toggle-awaiting')
-    expect(badge.textContent).toBe('2')
+    // v4: the chip is the mockup's `.badge`; Arena shows "!" in place of the number
+    // through CSS, so the count is the `.badge-n` part and the label, not all text.
+    expect(badge.querySelector('.badge-n')?.textContent).toBe('2')
     expect(badge.getAttribute('title')).toBe(cevir('sidebar.awaitingCount', { sayi: 2 }))
-    expect(badge.className).toContain('bg-amber-400')
+    // The colour now comes from the `.badge` rule in shell.css (accent token), which
+    // the stylesheet test below checks exists; the class is what links the two.
+    expect(badge.classList.contains('badge')).toBe(true)
     expect(badge.className).not.toMatch(/animate-/)
 
     act(() => setOpen(true))
@@ -254,7 +258,7 @@ describe('awaiting · places that had no marker', () => {
     await poll()
     expect(screen.queryByTestId('sidebar-toggle-awaiting')).toBeNull()
     await open(1)
-    expect(screen.getByTestId('sidebar-toggle-awaiting').textContent).toBe('1')
+    expect(screen.getByTestId('sidebar-toggle-awaiting').querySelector('.badge-n')?.textContent).toBe('1')
   })
 
   it('the Chats tab carries the count while the sidebar shows Files', async () => {
@@ -264,7 +268,7 @@ describe('awaiting · places that had no marker', () => {
     await poll()
     expect(screen.queryByTestId('chats-tab-awaiting')).toBeNull()
     act(() => setTab('files'))
-    expect(screen.getByTestId('chats-tab-awaiting').textContent).toBe('1')
+    expect(screen.getByTestId('chats-tab-awaiting').querySelector('.badge-n')?.textContent).toBe('1')
     fireEvent.click(screen.getByText(cevir('sidebar.chats')))
     expect(screen.queryByTestId('chats-tab-awaiting')).toBeNull()
     expect(title('conv-status-2')).toBe(AWAITING)
@@ -273,5 +277,19 @@ describe('awaiting · places that had no marker', () => {
   it('the count string exists in both languages', () => {
     expect(translations.tr['sidebar.awaitingCount']).toContain('{sayi}')
     expect(translations.en['sidebar.awaitingCount']).toContain('{sayi}')
+  })
+})
+
+// The chip's colour lives in the ported stylesheet now, not in a Tailwind class, so the old
+// "the class has a CSS rule" guard (tailwind-status-colors.test.ts) moves here: the `.badge`
+// rule must exist and paint with the accent token, or the chip is a transparent box again.
+describe('awaiting · the chip is painted', () => {
+  it('shell.css gives .badge the accent background', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const css = fs.readFileSync(path.resolve(__dirname, '../renderer/styles/gm/shell.css'), 'utf8')
+    const rule = css.match(/(^|\n)\.badge \{([^}]*)\}/)
+    expect(rule).toBeTruthy()
+    expect(rule![2]).toMatch(/background:\s*var\(--accent\)/)
   })
 })
