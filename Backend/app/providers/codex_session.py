@@ -271,7 +271,7 @@ def _risk_actions(method: str, params: dict, file_changes, workspace: str) -> li
     if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
         cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else ""
         return [{"kind": "shell",
-                 "command": _classified_command(params.get("command"), cwd or workspace),
+                 "command": _classified_command(params.get("command")),
                  "cwd": cwd or workspace, "workspace": workspace}]
     if method == "item/fileChange/requestApproval":
         actions = []
@@ -429,38 +429,29 @@ def _read_args_ok(tokens: "list[str]", grammar: dict, powershell: bool) -> bool:
     return grammar["max_args"] is None or args <= grammar["max_args"]
 
 
-_BARE_SHELLS = frozenset({"powershell", "powershell.exe", "pwsh", "pwsh.exe",
-                          "bash", "sh", "zsh"})
 _POSIX_SHELL_DIRS = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"})
 
 
-def _windows_shell_dirs() -> "set[str]":
+def _windows_shell_dirs() -> "dict[str, set[str]]":
     # Exact directories, not all of %SystemRoot%: users can write to some
     # folders under it (Windows\Temp, System32\spool\drivers\color).
     root = os.environ.get("SYSTEMROOT") or os.environ.get("WINDIR") or "C:\\Windows"
-    dirs = {ntpath.join(root, sub, "WindowsPowerShell", "v1.0")
-            for sub in ("System32", "SysWOW64", "Sysnative")}
-    for key in ("ProgramFiles", "ProgramW6432"):
-        dirs.add(ntpath.join(os.environ.get(key) or "C:\\Program Files", "PowerShell"))
-    return {ntpath.normcase(ntpath.normpath(d)) for d in dirs}
+    powershell = {ntpath.join(root, sub, "WindowsPowerShell", "v1.0")
+                  for sub in ("System32", "SysWOW64", "Sysnative")}
+    pwsh = {ntpath.join(os.environ.get(key) or "C:\\Program Files", "PowerShell")
+            for key in ("ProgramFiles", "ProgramW6432")}
+    return {name: {ntpath.normcase(ntpath.normpath(d)) for d in dirs}
+            for name, dirs in (("powershell", powershell), ("pwsh", pwsh))}
 
 
-def _system_shell(exe: str, cwd: Optional[str]) -> Optional[str]:
+def _system_shell(exe: str) -> Optional[str]:
     """The shell's name when `exe` is the system copy of it, else None.
 
-    A shell named by a relative path or from any other directory may be a
-    workspace binary, and then the script is not what runs.
+    A shell named by a bare name (found through cwd or PATH), a relative path
+    or any other directory may be a project binary, and then the script is
+    not what runs. Codex names it by absolute path (measured on codex-cli
+    0.157.0 and 0.159.3).
     """
-    if "/" not in exe and "\\" not in exe:
-        if exe.lower() not in _BARE_SHELLS:
-            return None
-        name = exe.lower().removesuffix(".exe")
-        # Measured wire shapes name the shell by absolute path; a bare name
-        # next to a file of that name in cwd could resolve to that file.
-        if cwd and any(os.path.lexists(os.path.join(cwd, n))
-                       for n in (name, name + ".exe")):
-            return None
-        return name
     if exe.startswith("/"):
         path = posixpath.normpath(exe)
         name = posixpath.basename(path)
@@ -475,18 +466,18 @@ def _system_shell(exe: str, cwd: Optional[str]) -> Optional[str]:
     parent = ntpath.dirname(path)
     if name == "pwsh":
         parent = ntpath.dirname(parent)
-    if name not in _POWERSHELLS or parent not in _windows_shell_dirs():
+    if name not in _POWERSHELLS or parent not in _windows_shell_dirs()[name]:
         return None
     return name
 
 
-def _shell_script(command: str, cwd: Optional[str] = None) -> "tuple[Optional[str], bool]":
+def _shell_script(command: str) -> "tuple[Optional[str], bool]":
     """(script the shell runs, is PowerShell). A wrapper whose script cannot
     be read safely gives (None, False); a bare command is its own script."""
     m = _SHELL_WRAPPER.match(command)
     if not m:
         return command, False
-    exe = _system_shell(m.group("qexe") or m.group("exe"), cwd)
+    exe = _system_shell(m.group("qexe") or m.group("exe"))
     if exe is None:
         return None, False
     flag = m.group("flag").lower()
@@ -502,7 +493,7 @@ def _shell_script(command: str, cwd: Optional[str] = None) -> "tuple[Optional[st
     return inner, powershell
 
 
-def _classified_command(command, cwd: Optional[str] = None) -> str:
+def _classified_command(command) -> str:
     """The text action_risk classifies: the wrapped script when it can be read
     safely, else the raw string, whose wrapper action_risk calls inline code.
 
@@ -511,7 +502,7 @@ def _classified_command(command, cwd: Optional[str] = None) -> str:
     while PowerShell strips the quotes and bash expands the braces.
     """
     raw = _command_text(command)
-    script, _ = _shell_script(raw, cwd)
+    script, _ = _shell_script(raw)
     if (not script or not _CLASSIFIABLE_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script)
             or _CLASSIFY_RAW.search(script) or _tree_writes(script)):
         return raw
@@ -557,7 +548,7 @@ def _read_only_verdict(command, cwd, workspace: str) -> bool:
     root, cwd_ok = _confinement_root(cwd if isinstance(cwd, str) else "", workspace)
     if not cwd_ok or not root:
         return False
-    script, powershell = _shell_script(command, cwd if isinstance(cwd, str) and cwd else root)
+    script, powershell = _shell_script(command)
     if not script or not _PLAIN_SCRIPT.fullmatch(script) or _UNSAFE_INNER.search(script):
         return False
     tokens = script.split()

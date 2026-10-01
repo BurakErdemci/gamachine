@@ -532,6 +532,12 @@ async def test_codex_balanced_inner_tree_write_or_glob_asks(balanced, ws, script
     (".\\tools\\sh.exe -c 'ls'", "shell_inline_code"),
     ("C:\\Users\\x\\evil\\pwsh.exe -Command 'ls'", "shell_inline_code"),
     ("/tmp/bash -lc 'dotnet build'", "shell_metachar"),
+    # A bare name resolves through cwd and PATH.
+    ("powershell.exe -Command 'dotnet build'", "shell_inline_code"),
+    ("pwsh -Command 'dotnet build'", "shell_inline_code"),
+    ("bash -lc 'dotnet build'", "shell_metachar"),
+    ('"C:\\Program Files\\PowerShell\\powershell.exe" -Command \'dotnet build\'',
+     "shell_inline_code"),
     # PowerShell strips these quotes, so the read leaves the workspace.
     (_CODEX_PS + "\"cat '..\\secret.txt'\"", "shell_inline_code"),
     ("/bin/bash -lc 'cat {..,x}/secret'", "shell_metachar"),

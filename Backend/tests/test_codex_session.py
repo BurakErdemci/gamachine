@@ -494,9 +494,6 @@ def system_dirs(monkeypatch):
     '"c:\\windows\\system32\\windowspowershell\\v1.0\\POWERSHELL.EXE" -Command \'Get-ChildItem\'',
     "C:/Windows/SysWOW64/WindowsPowerShell/v1.0/powershell.exe -Command 'Get-ChildItem'",
     '"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command \'Get-ChildItem\'',
-    "powershell -Command 'Get-ChildItem'",
-    "pwsh.exe -Command 'Get-ChildItem'",
-    "bash -lc 'ls'",
     "/usr/bin/bash -lc 'ls'",
     "/usr/local/bin/zsh -lc 'ls'",
     "/opt/homebrew/bin/bash -lc 'ls'",
@@ -524,6 +521,10 @@ def test_a_system_shell_is_unwrapped(ws, system_dirs, command):
     # Right directory, wrong program.
     '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\bash.exe" -lc \'ls\'',
     "/usr/bin/python -c 'ls'",
+    # Each PowerShell only in its own folder.
+    '"C:\\Program Files\\PowerShell\\powershell.exe" -Command \'Get-ChildItem\'',
+    '"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\7\\pwsh.exe" -Command \'Get-ChildItem\'',
+    '"C:\\Windows\\System32\\pwsh.exe" -Command \'Get-ChildItem\'',
 ])
 def test_a_shell_outside_the_system_locations_is_not_unwrapped(ws, system_dirs, command):
     assert _is_read_only_command(command, ws, ws) is False
@@ -536,12 +537,19 @@ def test_the_windows_directory_comes_from_the_environment(ws, monkeypatch):
     assert _is_read_only_command(_PS + "'Get-ChildItem'", ws, ws) is False
 
 
-@pytest.mark.parametrize("name", ["powershell.exe", "bash"])
-def test_a_bare_shell_name_shadowed_in_cwd_is_not_unwrapped(ws, name):
-    open(os.path.join(ws, name), "w").close()
-    shell = name.removesuffix(".exe")
-    flag = "-Command 'Get-ChildItem'" if shell == "powershell" else "-lc 'ls'"
-    assert _is_read_only_command(f"{shell} {flag}", ws, ws) is False
+# A bare name resolves through cwd and PATH, which can hold a project binary;
+# Codex always sends an absolute path (codex-cli 0.157.0 and 0.159.3).
+@pytest.mark.parametrize("command", [
+    "powershell -Command 'Get-ChildItem'",
+    "powershell.exe -Command 'Get-ChildItem'",
+    "pwsh -Command 'Get-ChildItem'",
+    "pwsh.exe -Command 'Get-ChildItem'",
+    "bash -lc 'ls'",
+    "sh -c 'ls'",
+    "zsh -lc 'ls'",
+])
+def test_a_bare_shell_name_is_not_unwrapped(ws, system_dirs, command):
+    assert _is_read_only_command(command, ws, ws) is False
 
 
 def test_a_read_from_outside_the_workspace_is_not_read_only(ws, tmp_path_factory):
