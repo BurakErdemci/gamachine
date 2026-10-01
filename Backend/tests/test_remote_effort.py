@@ -183,7 +183,7 @@ async def test_a_body_that_is_not_an_object_is_refused(api, env):
 
 async def test_get_config_says_unknown_until_the_renderer_reported(env):
     phone = await pair_phone(env)
-    assert (await phone.request("get_config"))["result"] == {"approval_mode": "step", "desktop_effort": None}
+    assert (await phone.request("get_config"))["result"] == {"approval_mode": "step", "desktop_effort": None, "desktop_ui": None}
     conv = make_chat(env.db, stored=("subscription", "claude-opus-5"))
     got = (await phone.request("get_config", chat_id=str(conv)))["result"]
     assert got["desktop_effort"] is None
@@ -195,7 +195,7 @@ async def test_get_config_returns_what_the_renderer_reported(api, env):
     await report(api, "xhigh", OPUS)
     without_chat = (await phone.request("get_config"))["result"]
     assert without_chat == {"approval_mode": "step", "desktop_effort": {
-        "level": "xhigh", "levels": OPUS, "ultracode": False}}
+        "level": "xhigh", "levels": OPUS, "ultracode": False}, "desktop_ui": None}
     with_chat = (await phone.request("get_config", chat_id=str(conv)))["result"]
     assert with_chat["desktop_effort"] == {"level": "xhigh", "levels": OPUS, "ultracode": False}
     # The chat's own model levels stay as they were, a different thing from the desktop's.

@@ -77,6 +77,7 @@ class RemoteBridge:
         # The desktop renderer's effort as it last reported it: {level, levels, ultracode}.
         # The renderer owns the state (see set_desktop_effort); None until it reports.
         self.desktop_effort: Optional[dict] = None
+        self.desktop_ui: Optional[dict] = None
 
     # ── lifecycle ──────────────────────────────────────────────────────
     async def startup(self) -> None:
@@ -467,6 +468,36 @@ class RemoteBridge:
         if snapshot is None:
             return None
         return {"level": snapshot["level"], "levels": list(snapshot["levels"]), "ultracode": snapshot["ultracode"]}
+
+    def set_desktop_ui(self, lang: Any, theme: Any) -> dict:
+        """The renderer owns its language and theme. Keep its last report for
+        phones and tell them when it changes. A refused report clears the
+        snapshot so phones do not show stale desktop settings."""
+        try:
+            snapshot = self._checked_ui(lang, theme)
+        except BridgeError:
+            self._set_ui_snapshot(None)
+            raise
+        return {"changed": self._set_ui_snapshot(snapshot)}
+
+    @staticmethod
+    def _checked_ui(lang: Any, theme: Any) -> dict:
+        if not isinstance(lang, str) or lang not in ("tr", "en"):
+            raise BridgeError("bad_lang", 400)
+        if not isinstance(theme, str) or theme not in ("arena", "sade", "pafta", "atolye"):
+            raise BridgeError("bad_theme", 400)
+        return {"lang": lang, "theme": theme}
+
+    def _set_ui_snapshot(self, snapshot: Optional[dict]) -> bool:
+        changed = snapshot != self.desktop_ui
+        self.desktop_ui = snapshot
+        if changed:
+            self._broadcast({"type": "ui_changed", "desktop_ui": self.current_desktop_ui()})
+        return changed
+
+    def current_desktop_ui(self) -> Optional[dict]:
+        snapshot = self.desktop_ui
+        return None if snapshot is None else dict(snapshot)
 
     def _broadcast(self, obj: dict) -> None:
         for session in list(self.sessions.values()):

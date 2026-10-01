@@ -35,7 +35,7 @@ async def test_the_new_requests_are_on_the_allow_list(env):
 async def test_get_config_without_a_chat_is_unchanged(env):
     phone = await pair_phone(env)
     # The desktop's effort is null until its renderer reports (test_remote_effort.py).
-    unchanged = {"approval_mode": "step", "desktop_effort": None}
+    unchanged = {"approval_mode": "step", "desktop_effort": None, "desktop_ui": None}
     assert (await phone.request("get_config"))["result"] == unchanged
     assert (await phone.request("get_config", chat_id=None))["result"] == unchanged
 
@@ -53,7 +53,7 @@ async def test_get_config_with_a_chat_reports_its_model_and_effort_levels(env, s
     conv = make_chat(env.db, stored=stored)
     r = await phone.request("get_config", chat_id=str(conv))
     assert r["ok"] is True
-    assert r["result"] == {"approval_mode": "step", "desktop_effort": None, "provider_type": stored[0],
+    assert r["result"] == {"approval_mode": "step", "desktop_effort": None, "desktop_ui": None, "provider_type": stored[0],
                            "model_name": stored[1], "family": family, "effort_levels": levels(*stored)}
 
 

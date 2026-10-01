@@ -276,7 +276,8 @@ class Dispatcher:
 
     async def get_config(self, session, req, rid):
         out = {"approval_mode": approval_mode.current_mode(),
-               "desktop_effort": self.bridge.current_desktop_effort()}
+               "desktop_effort": self.bridge.current_desktop_effort(),
+               "desktop_ui": self.bridge.current_desktop_ui()}
         if req.get("chat_id") is not None:
             row = self._chat(req.get("chat_id"))
             out.update(provider_type=row["provider_type"], model_name=row["model_name"],

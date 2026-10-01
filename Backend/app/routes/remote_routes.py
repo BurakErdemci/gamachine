@@ -144,4 +144,15 @@ def create_remote_router(bridge: RemoteBridge) -> APIRouter:
         except BridgeError as exc:
             fail(exc)
 
+    @router.put("/desktop-ui")
+    async def put_desktop_ui(body: dict,
+                             x_session_token: str = Header(alias="X-Session-Token", default="")):
+        """The renderer reports its language and theme with the app token,
+        just as it reports effort; the UI secret is not held by page JS."""
+        _check_token(x_session_token)
+        try:
+            return bridge.set_desktop_ui(body.get("lang"), body.get("theme"))
+        except BridgeError as exc:
+            fail(exc)
+
     return router
