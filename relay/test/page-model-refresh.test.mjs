@@ -22,8 +22,22 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const SETTLE_MS = 400;
 
 // Chat 7 has no model of its own and follows the default; chat 8 has one.
-async function boot() {
+async function boot({ manualSettingsClock = false } = {}) {
   const { window } = new JSDOM(html, { url: 'https://phone.invalid/p', runScripts: 'outside-only' });
+  const settingsTimers = new Map();
+  if (manualSettingsClock) {
+    const set = window.setTimeout.bind(window);
+    const clear = window.clearTimeout.bind(window);
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay !== 100) return set(callback, delay, ...args);
+      const timer = {};
+      settingsTimers.set(timer, () => callback(...args));
+      return timer;
+    };
+    window.clearTimeout = (timer) => {
+      if (!settingsTimers.delete(timer)) clear(timer);
+    };
+  }
   window.scrollTo = () => {};
   window.matchMedia = () => ({ matches: false, addListener() {}, removeListener() {} });
   window.Element.prototype.scrollIntoView = () => {};
@@ -74,9 +88,31 @@ async function boot() {
   };
   pc.configReads = (chatId) => pc.calls.filter((c) => c.type === 'get_config' && c.params?.chat_id === chatId).length;
   pc.push = (msg) => pc.link.options.onPush(msg);
+  pc.pendingSettingsTimers = () => settingsTimers.size;
+  pc.advanceSettingsClock = async () => {
+    const callbacks = [...settingsTimers.values()];
+    settingsTimers.clear();
+    callbacks.forEach((callback) => callback());
+    await sleep(20);
+  };
   pc.close = () => window.close();
   return pc;
 }
+
+test('opening another chat cancels the pending settings refresh', { skip }, async () => {
+  const pc = await boot({ manualSettingsClock: true });
+  try {
+    await pc.open('Follows default', 'claude-opus-5');
+    pc.push({ type: 'chat_model_changed', chat_id: '7', provider_type: 'subscription', model_name: 'gpt-6-sol' });
+    assert.equal(pc.pendingSettingsTimers(), 1);
+    const before = pc.configReads('8');
+    await pc.open('Own model', 'gpt-6-luna');
+    await pc.advanceSettingsClock();
+    assert.equal(pc.configReads('8') - before, 1);
+  } finally {
+    pc.close();
+  }
+});
 
 test('a pick in another chat moves the default: the open chat that follows it re-reads once', { skip }, async () => {
   const pc = await boot();

@@ -501,6 +501,8 @@ function clearChatSettings() {
   chatConfig = null;
   requestedEffort = null;
   clearTimeout(reconcileTimer);
+  clearTimeout(settingsTimer);
+  settingsTimer = null;
   $('model-note').textContent = '';
   $('effort-note').textContent = '';
   renderChatSettings();
