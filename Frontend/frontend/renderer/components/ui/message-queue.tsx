@@ -21,7 +21,8 @@ export type MessageQueueProps = {
     onResume: () => void;
 };
 
-const iconButton = "p-1 rounded text-white/40 hover:text-white/90 hover:bg-white/5 transition-colors";
+// The queue sits above the composer box on the paper, in the strip's small type.
+const iconButton = "icon-btn queue-btn";
 
 export function MessageQueue({
     items, paused, onEdit, onDelete, onSendNow, onResume, onEditTake,
@@ -29,9 +30,9 @@ export function MessageQueue({
     const { t } = useLang();
     if (items.length === 0) return null;
     return (
-        <div data-message-queue className="px-3 pt-2 pb-1 border-b border-white/[0.06]">
-            <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] uppercase tracking-wide text-white/40">
+        <div data-message-queue className="queue">
+            <div className="queue-head">
+                <span className="queue-k">
                     {paused ? t('queue.paused') : t('queue.title')} · {items.length}
                 </span>
                 {paused && (
@@ -39,22 +40,22 @@ export function MessageQueue({
                         type="button"
                         data-queue-resume
                         onClick={onResume}
-                        className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+                        className="strip-item queue-resume"
                     >
-                        <Play className="w-3 h-3" />
+                        <Play size={13} aria-hidden="true" />
                         <span>{t('queue.sendNext')}</span>
                     </button>
                 )}
             </div>
-            <ul className="space-y-0.5 max-h-[96px] overflow-y-auto custom-scrollbar">
+            <ul className="queue-list custom-scrollbar">
                 {items.map(item => {
                     const extra = (item.images?.length ?? 0) + (item.videos?.length ?? 0);
                     const preview = item.draft.replace(/\s+/g, ' ').trim();
                     return (
-                        <li key={item.id} data-queue-item className="flex items-center gap-2 text-[12px] text-white/70">
-                            <span className="flex-1 min-w-0 truncate" title={item.draft}>
+                        <li key={item.id} data-queue-item className="queue-item">
+                            <span className="queue-text" title={item.draft}>
                                 {preview || t('queue.attachmentsOnly')}
-                                {extra > 0 && <span className="text-white/30"> · {t('queue.attachments', { sayi: extra })}</span>}
+                                {extra > 0 && <span className="queue-extra"> · {t('queue.attachments', { sayi: extra })}</span>}
                             </span>
                             <button
                                 type="button"
@@ -64,7 +65,7 @@ export function MessageQueue({
                                 title={t('queue.edit')}
                                 aria-label={t('queue.edit')}
                             >
-                                <Pencil className="w-3 h-3" />
+                                <Pencil size={14} aria-hidden="true" />
                             </button>
                             <button
                                 type="button"
@@ -74,7 +75,7 @@ export function MessageQueue({
                                 title={t('queue.sendNow')}
                                 aria-label={t('queue.sendNow')}
                             >
-                                <ArrowUpIcon className="w-3 h-3" />
+                                <ArrowUpIcon size={14} aria-hidden="true" />
                             </button>
                             <button
                                 type="button"
@@ -84,7 +85,7 @@ export function MessageQueue({
                                 title={t('queue.delete')}
                                 aria-label={t('queue.delete')}
                             >
-                                <XIcon className="w-3 h-3" />
+                                <XIcon size={14} aria-hidden="true" />
                             </button>
                         </li>
                     );
