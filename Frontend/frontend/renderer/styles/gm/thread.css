@@ -958,3 +958,8 @@
 .slash-more:hover { color: var(--ink); }
 .slash-detail { padding-top: 8px; border-top: var(--line-w) solid var(--paper-line); font-size: var(--fs-small); }
 .slash-notes { margin-top: 6px; padding-left: 10px; border-left: var(--line-w) solid var(--paper-line); display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-meta); color: var(--ink-dim); }
+
+/* Scrollbars on the paper: globals.css sets a slate `scrollbar-color` on every element (and the
+   standard property overrides the ::-webkit-scrollbar rules), which drew a dark bar on the light
+   themes. */
+.stage, .stage *, .workspace, .workspace * { scrollbar-color: var(--paper-line-strong) transparent; }
