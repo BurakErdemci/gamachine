@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
 import {
@@ -113,6 +113,8 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
 
   const { t } = useLang();
   const linked = useUnityLinkPulse(unityStatus);
+  // Which list the row being renamed sat in when its input opened (see `inTasks` below).
+  const renameListRef = useRef<{ id: number; task: boolean } | null>(null);
 
   if (!user) return null;
 
@@ -131,8 +133,17 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   // Mockup: work that is running or waiting on the user is an "active task" with a second line;
   // everything else (unread included) stays in the plain chat list, in the same order as before.
   const isTask = (s: ConvStatus | undefined) => s === 'running' || s === 'awaiting';
-  const tasks = roots.filter(c => isTask(statusOf(c.id)));
-  const chats = roots.filter(c => !isTask(statusOf(c.id)));
+  // A row whose status changes while its rename input is open would jump between the two
+  // lists, and the move remounts the input (focus and draft lost). It stays put until the
+  // rename ends.
+  if (editingId == null) renameListRef.current = null;
+  const inTasks = (c: Conversation) => {
+    if (editingId !== c.id) return isTask(statusOf(c.id));
+    if (renameListRef.current?.id !== c.id) renameListRef.current = { id: c.id, task: isTask(statusOf(c.id)) };
+    return renameListRef.current.task;
+  };
+  const tasks = roots.filter(inTasks);
+  const chats = roots.filter(c => !inTasks(c));
 
   const row = (conv: Conversation, quest: boolean) => {
     const isActive = activeRootId === conv.id;
