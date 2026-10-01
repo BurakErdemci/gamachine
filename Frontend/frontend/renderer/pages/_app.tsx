@@ -1,6 +1,8 @@
 import React from 'react'
 import type { AppProps } from 'next/app'
 
+import '../styles/gm/fonts.css'
+import '../styles/gm/tokens.css'
 import '../styles/globals.css'
 import { ConfirmDialogHost } from '../components/ui/ConfirmDialog'
 import { ErrorBoundary } from '../components/ui/ErrorBoundary'

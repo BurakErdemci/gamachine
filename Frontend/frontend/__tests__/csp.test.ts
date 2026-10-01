@@ -46,13 +46,11 @@ describe('CSP — Monaco yerelden servis ediliyor', () => {
     }
   })
 
-  it('hiçbir dalda uzak STYLE kaynağı yoktur — fonts.googleapis.com hariç', () => {
-    // Monaco'nun editor.main.css'i artık same-origin (ölçüldü:
-    // `app://./monaco/vs/editor/editor.main.css`). Geriye yalnızca globals.css'in
-    // @import ettiği Google Fonts stil dosyası kalıyor.
+  it('has no remote style or font origin in either policy', () => {
+    // Bundled fonts and Monaco styles must load without remote origins.
     for (const [name, policy] of [['prod', prod], ['dev', dev]] as const) {
-      const remote = directive(policy, 'style-src').match(/https?:\/\/[^\s;]+/g) ?? []
-      expect(remote, `${name}: beklenmeyen uzak style kaynağı`).toEqual(['https://fonts.googleapis.com'])
+      expect(directive(policy, 'style-src'), `${name}: style origins`).toBe("style-src 'self' 'unsafe-inline'")
+      expect(directive(policy, 'font-src'), `${name}: font origins`).toBe("font-src 'self' data:")
     }
   })
 

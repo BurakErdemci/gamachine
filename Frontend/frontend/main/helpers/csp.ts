@@ -114,19 +114,11 @@ export const buildPolicy = (isProd: boolean): string => {
     // framer-motion çalışma anında <style> enjekte ediyor. Bunu nonce'a
     // çevirmek üçüncü parti kütüphanelerin içine girmeyi gerektirirdi.
     // Kabul edilebilir olmasının sebebi: satır içi stil KOD ÇALIŞTIRMAZ, ve
-    // CSS üzerinden veri sızdırma yolu ayrıca kapalı — stil/görsel/font
-    // kaynakları tek tek sayıldığı için CSS keyfi bir origin'e istek atamıyor.
-    // Monaco `editor.main.css`'i hâlâ bir <link> ile çekiyor ama artık
-    // same-origin (`toUrl('vs/editor/editor.main.css')`) → 'self' yetiyor,
-    // jsdelivr izni kaldırıldı.
-    'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+    // Font styles and Monaco CSS are bundled; no remote style origin is needed.
+    'style-src': ["'self'", "'unsafe-inline'"],
 
-    // data: ölçülerek eklendi: Monaco'nun codicon ikon fontu bir
-    // `data:font/ttf;base64,...` URI'si. İlk politikada yoktu ve tek gerçek
-    // ihlali o üretti — kopyalanmış bir politika bu kalemi kaçırırdı.
-    // fonts.gstatic.com gerekiyor çünkü globals.css fonts.googleapis.com'dan
-    // @import ettiği stil dosyası fontları oradan çekiyor.
-    'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
+    // Fonts are bundled. Monaco's embedded codicon font still requires data:.
+    'font-src': ["'self'", 'data:'],
 
     // data: ölçülmüş bir ihtiyaç: sohbete eklenen görseller ve önizlemeleri
     // FileReader.readAsDataURL ile data: URI olarak render ediliyor

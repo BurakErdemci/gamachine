@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,7 +6,8 @@
   body {
     /* Saf siyah yerine hafif mavi-kömür: katman hiyerarşisinin zemini
        (paneller white/[0.015-0.06] tonlarıyla bunun üstünde yükselir) */
-    @apply bg-[#0B0D12] text-slate-200 font-sans;
+    @apply bg-[#0B0D12] text-slate-200;
+    font-family: var(--font-body);
     -webkit-font-smoothing: antialiased;
   }
 

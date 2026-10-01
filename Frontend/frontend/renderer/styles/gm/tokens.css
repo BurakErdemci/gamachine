@@ -1,0 +1,1062 @@
+/* Gamachine design tokens, generated from the approved mockup (gamachine-tasarim/maket).
+   Do not hand-edit values here without updating the mockup: base.css :root + every :root[data-theme] block. */
+
+/* ---- base ---- */
+:root {
+  /* --- page around the mockup --- */
+  --page-bg: #2b2b2b;
+  --page-text: #e6e6e6;
+  --page-text-dim: #b0b0b0;
+
+  /* --- shell: sidebar, top bar (the darker tone) --- */
+  --shell-bg: #2e2e2e;
+  --shell-bg-2: #383838;
+  --shell-bg-active: #434343;
+  --shell-line: #474747;
+  --shell-text: #ececec;
+  --shell-text-dim: #b4b4b4;
+  --shell-tex: none;
+  --shell-tex-size: auto;
+
+  /* --- paper: the reading area --- */
+  --paper-bg: #e4e4e4;
+  --paper-bg-2: #dadada;
+  --paper-raised: #efefef;
+  --paper-sunk: #d6d6d6;
+  --paper-line: #b8b8b8;
+  --paper-line-strong: #8a8a8a;
+  --ink: #1e1e1e;
+  --ink-dim: #4f4f4f;
+  --ink-faint: #6a6a6a;
+  --panel-tex: none;
+  --panel-tex-size: auto;
+
+  /* --- code panel inside paper --- */
+  --code-bg: #262626;
+  --code-head-bg: #303030;
+  --code-line: #3d3d3d;
+  --code-text: #e2e2e2;
+  --code-dim: #9a9a9a;
+  --code-kw: #c0c0ff;
+  --code-type: #a8e0d0;
+  --code-fn: #f0d8a8;
+  --code-num: #f0b8a0;
+  --code-attr: #c8c8c8;
+
+  /* --- round 7: workspace editor, diff, preview, terminal. Every one falls back to the
+     --code-* panel, so a theme that defines none gets a dark editor like its code block. --- */
+  --code-str: var(--code-fn);
+  --code-com: var(--code-dim);
+  --ed-bg: var(--code-bg);
+  --ed-head-bg: var(--code-head-bg);
+  --ed-line: var(--code-line);
+  --ed-text: var(--code-text);
+  --ed-dim: var(--code-dim);
+  --ed-kw: var(--code-kw);
+  --ed-type: var(--code-type);
+  --ed-fn: var(--code-fn);
+  --ed-num: var(--code-num);
+  --ed-attr: var(--code-attr);
+  --ed-str: var(--code-str);
+  --ed-com: var(--code-com);
+  --ed-tab-mark: var(--ed-text);
+  --diff-add-bg: color-mix(in srgb, var(--ed-type) 14%, var(--ed-bg));
+  --diff-del-bg: color-mix(in srgb, var(--ed-num) 14%, var(--ed-bg));
+  --diff-add-mark: var(--ed-type);
+  --diff-del-mark: var(--ed-num);
+  --pv-bg: var(--ed-bg);
+  --pv-grid: var(--ed-line);
+  --pv-ink: var(--ed-dim);
+  --pv-face-1: color-mix(in srgb, var(--ed-text) 36%, var(--pv-bg));
+  --pv-face-2: color-mix(in srgb, var(--ed-text) 22%, var(--pv-bg));
+  --pv-face-3: color-mix(in srgb, var(--ed-text) 12%, var(--pv-bg));
+  --pv-edge: color-mix(in srgb, var(--ed-text) 70%, var(--pv-bg));
+  --pv-shadow: rgba(0, 0, 0, .3);
+  --pv-check-a: #d4d4d4;
+  --pv-check-b: #bcbcbc;
+  --term-bg: var(--ed-bg);
+  --term-text: var(--ed-text);
+  --term-dim: var(--ed-dim);
+  --term-prompt: var(--ed-type);
+  --term-warn: var(--ed-fn);
+  --tab-mark: var(--ink);           /* underline of the selected workspace tab */
+
+  /* --- round 7: floating menus over the shell (model menu, Unity reason) --- */
+  --menu-bg: var(--shell-bg-2);
+  --menu-line: var(--shell-line);
+
+  /* --- round 7: Unity connection switch (top bar) --- */
+  --us-w: 56px;                     /* track size; the knob travels the rest (round 8: was 48x26/20) */
+  --us-h: 30px;
+  --us-knob-w: 24px;
+  --us-ic: 16px;                    /* plug / lock glyph on the knob */
+  --us-led-h: 16px;
+  --us-bay-bg: transparent;         /* round 8: the switch's own bay at the top bar's left */
+  --us-bay-line: var(--shell-line); /* hairline closing the bay */
+  --us-live: transparent;           /* 2 px foot line of the bay while connected (Arena: teal) */
+  --us-hover: var(--shell-bg-2);
+  --us-bay-w: 0;                    /* fixed bay width so the hairline does not jump between states */
+  --us-track-shade: inset 0 0 0 0 transparent;   /* extra inset depth (no blur) */
+  --us-knob-shade: none;
+  --us-cut: 0px;                    /* chamfer size of --us-clip / --us-knob-clip, so the cut corners keep their edge line */
+  --us-knob-cut: 0px;
+  --us-radius: 13px;
+  --us-knob-radius: 50%;
+  --us-clip: none;                  /* clip-path for the track (Arena: chamfer) */
+  --us-knob-clip: none;
+  --us-track: var(--shell-bg);
+  --us-track-on: var(--shell-bg-active);
+  --us-edge: var(--shell-line);
+  --us-knob: var(--shell-bg-active);
+  --us-knob-ink: var(--shell-text-dim);
+  --us-on: var(--ok-shell);         /* connected light: knob, LEDs, phone lamp */
+  --us-on-ink: var(--shell-bg);     /* glyph on the lit knob */
+  --us-on-text: var(--shell-text);  /* the word "Bağlı" */
+  --us-led-off: var(--shell-line);
+  --us-alert: var(--accent);        /* blocked: knob ring + phone lamp */
+  --us-alert-text: var(--shell-text);
+
+  /* --- signal colours (the saturation budget) --- */
+  --accent: #b03a2e;
+  --accent-ink: #ffffff;
+  --accent-soft: #f1dcd8;
+  --accent-text: #9a3026;
+  --run: #3b6ea8;
+  --run-text: var(--run);          /* running / energy used as text on paper */
+  --ok: #3e6b52;
+  --ok-text: #335a45;
+  --ok-soft: #d6e3da;
+  --ok-shell: #6a9a80;
+  --focus: #3b6ea8;
+  --del-text: var(--accent-text);  /* "-1" in diffs */
+  --trace-bg: var(--accent-soft);  /* #10 "iz": a row that just changed */
+  --stream-ink: var(--accent-text);/* #2 "murekkep": colour a streamed word arrives in */
+
+  /* --- primary button --- */
+  --btn-bg: #1e1e1e;
+  --btn-text: #f2f2f2;
+  --btn-hover: #383838;
+  --btn-font: inherit;
+  --btn-case: none;
+  --btn-track: 0;
+  --btn-focus: var(--focus);      /* ring drawn inside the primary button */
+
+  /* --- model ambient light --- */
+  --model-claude: #b9785a;
+  --model-codex: #4f8a78;
+  --model-gemini: #5a78b9;
+  --model-other: #8a8a8a;
+  --lamp-strength: 0%;
+  --lamp-size: 70% 220px;
+
+  /* --- HUD hooks: meters, level, achievement band, profile --- */
+  --energy: var(--ink-dim);        /* filled segment of the memory bar / xp bar */
+  --energy-off: var(--paper-line); /* empty segment */
+  --pip: var(--ink-dim);           /* filled effort pip */
+  --pip-off: var(--paper-line);
+  --seg-skew: 0deg;                /* meter segments may lean (bands only) */
+  --label-rule: transparent;       /* hairline after shell section labels */
+  --label-rule-paper: transparent; /* same on paper (workspace, profile) */
+  --row-mark: transparent;         /* left edge of the selected sidebar row */
+  --lvl-bg: var(--shell-bg-active);
+  --lvl-text: var(--shell-text);
+  --lvl-dim: var(--shell-text-dim);
+  --badge-bg: var(--shell-bg-active);   /* earned achievement badge */
+  --badge-ink: var(--shell-text);
+  --badge-new-bg: var(--badge-bg);
+  --badge-new-ink: var(--badge-ink);
+  --tile-rule: var(--paper-line-strong);
+  --tile-new-mark: transparent;   /* left edge of the newest achievement tile */
+  --tb-rule: transparent;         /* hairline under the chat title row */
+  --xp: var(--energy);            /* xp bar on the profile hero */
+  --xp-off: var(--energy-off);
+  --hero-bg: transparent;         /* profile header band */
+  --hero-text: var(--ink);
+  --hero-dim: var(--ink-dim);
+  --hero-quip-bg: var(--paper-raised);
+  --hero-on: var(--paper-raised);  /* text on a --hero-text fill (selected range tab) */
+  --hero-pad: 0;
+  --toast-bg: var(--shell-bg-2);
+  --toast-line: var(--shell-line);
+  --toast-text: var(--shell-text);
+  --toast-kicker: var(--shell-text-dim);
+  --toast-xp: var(--ok-shell);
+  --heat-0: #d0d0d0;
+  --heat-1: #b0b0b0;
+  --heat-2: #8c8c8c;
+  --heat-3: #666666;
+  --heat-4: #3e3e3e;
+  /* mascot placeholder colours (m1 palette) */
+  --mascot-body: #2a2f3d;
+  --mascot-visor: #ff6b3d;
+  --mascot-screen: #141826;
+  --mascot-eye: #f1eee6;
+  --mascot-tile: var(--shell-bg);
+  --mascot-outline: var(--mascot-eye);  /* the head mark's sticker outline */
+  --mascot-line: var(--mascot-screen);  /* its inner drawing lines */
+  --brand-word: var(--shell-text);      /* GAMACHINE letters in the sidebar lockup */
+
+  /* --- type --- */
+  --font-body: system-ui, "Segoe UI", sans-serif;
+  --font-label: system-ui, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, Consolas, monospace;
+  --font-display: var(--font-label);  /* wordmark, below-title, profile numbers */
+  --font-title: var(--font-body);     /* approval card title, profile name */
+  --font-who: var(--font-body);       /* message author line + model name ("nameplate") */
+  --who-case: none;
+  --who-track: 0;
+  --fs-body: 14.5px;
+  --lh-body: 1.6;
+  --fs-small: 13px;
+  --fs-meta: 12px;                /* hard floor */
+  --fs-title: 16px;
+  --label-case: uppercase;
+  --label-track: 0.06em;
+  --label-weight: 600;
+  --label-stretch: normal;
+
+  /* --- shape --- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --clip-sm: none;                /* chamfer for filled chips/buttons (clip-path value) */
+  --clip-md: none;                /* chamfer for tiles */
+  --clip-badge: none;             /* level / achievement badge outline */
+  --line-w: 1px;
+  --card-line-w: 1px;
+  --shadow-card: none;
+  --shadow-btn: none;
+
+  /* --- motion: MOTION-ARASTIRMA.md section 5 tokens (themes may retune, not remove) --- */
+  --g-dur-tap: 90ms;
+  --g-dur-quick: 160ms;
+  --g-dur-base: 240ms;
+  --g-dur-slow: 420ms;
+  --g-ease-enter: cubic-bezier(.19, 1, .22, 1);
+  --g-ease-exit: cubic-bezier(.65, 0, .4, 1);
+  --g-ease-move: cubic-bezier(.65, 0, .35, 1);
+  --g-ease-press: cubic-bezier(.34, 1.3, .64, 1);
+
+  --dur-fast: 120ms;
+  --dur-stamp: 180ms;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --stamp-ease: var(--ease);
+  --stamp-rotate: 0deg;
+  --stamp-from: 1.25;
+  --device: #111;
+
+  /* --- mockup controls (page chrome, deliberately not themed) --- */
+  --mk-bg: #1d1e22;
+  --mk-text: #f1f1f3;
+  --mk-dim: #a7a8b0;
+  --mk-line: #55565f;
+  --mk-shadow: #000000;
+}
+
+/* ---- arena: 1 block(s) ---- */
+:root[data-theme="arena"] {
+  --page-bg: #0D1018;
+  --page-text: #ECE9E2;
+  --page-text-dim: #A0A8BC;
+
+  /* shell: deep night navy, the game menu chrome */
+  --shell-bg: #141826;
+  --shell-bg-2: #1B2031;
+  --shell-bg-active: #232A3F;
+  --shell-line: #2C344B;
+  --shell-text: #ECE9E2;
+  --shell-text-dim: #A0A8BC;
+  /* a faint top sheen, like a lit menu panel; no pattern */
+  --shell-tex: linear-gradient(180deg, rgba(160, 175, 215, .045), transparent 220px);
+  --shell-tex-size: auto;
+
+  /* reading surface (round 7, KARAKTER 13A): mid-dark slate, one tone lighter than the navy
+     shell, never black. Ink is a warm off-white, not white: 11.4:1 on paper, calm for 8 hours. */
+  --paper-bg: #1F2433;
+  --paper-bg-2: #1A1F2C;          /* workspace ground: a half step back from the chat */
+  --paper-raised: #272D3F;        /* user bubble, cards, composer */
+  --paper-sunk: #30374B;          /* code chips, hover */
+  --paper-line: #343B50;
+  --paper-line-strong: #5A6380;
+  --ink: #DDDAD2;
+  --ink-dim: #BEC3CF;
+  --ink-faint: #A2A9B9;
+  --panel-tex: none;
+
+  /* code: a darker HUD plate inside the slate page */
+  --code-bg: #141925;
+  --code-head-bg: #1A2030;
+  --code-line: #2B3248;
+  --code-text: #E1E3EA;
+  --code-dim: #8C95AB;
+  --code-kw: #8FB3F0;
+  --code-type: #8CCFC2;
+  --code-fn: #E9C98A;
+  --code-num: #F2A585;
+  --code-attr: #B4BCCC;
+  --code-str: #C9D6A2;
+  --code-com: #8C95AB;
+  /* workspace editor / diff / preview / terminal (round 7 hooks) */
+  --diff-add-bg: #193130;
+  --diff-del-bg: #3A2228;
+  --diff-add-mark: #4FD8C8;
+  --diff-del-mark: #F2937C;
+  --pv-bg: #141925;
+  --pv-grid: #2B3248;
+  --pv-check-a: #2A3043;
+  --pv-check-b: #222839;
+  --term-bg: #10141E;
+  --term-prompt: #8CCFC2;
+  --term-warn: #E9C98A;
+  --tab-mark: #DDDAD2;
+  --menu-line: #4C5571;           /* menus float over the dark panels: a lighter edge */
+  --pv-face-1: #5A6380;
+  --pv-face-2: #3E4660;
+  --pv-face-3: #2C3348;
+  --pv-edge: #A0A8BC;
+  --pv-shadow: #0B0E16;
+
+  /* Unity switch: a chunky console power switch in its own recessed bay (round 8: 84x38, was
+     60x30). Off is a dark slot; on lights teal (teal = live work) plus a 2 px teal foot line under
+     the bay. Depth is drawn with hard inset lines only (no blur). Chamfers like every filled chip;
+     the LEDs lean like the energy meter. */
+  --us-w: 84px;
+  --us-h: 38px;
+  --us-knob-w: 40px;
+  --us-ic: 18px;
+  --us-led-h: 20px;
+  --us-radius: 0;
+  --us-knob-radius: 0;
+  --us-clip: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  --us-cut: 10px;
+  --us-knob-cut: 7px;
+  --us-knob-clip: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+  --us-bay-w: 400px;
+  --us-bay-bg: #10131E;
+  --us-bay-line: #2A3145;
+  --us-live: #2CC5B4;
+  --us-hover: #181D2C;
+  --us-track: #0B0E16;
+  --us-track-on: #0E2B2A;
+  --us-track-shade: inset 0 3px 0 rgba(0, 0, 0, .45);
+  --us-knob-shade: inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 -3px 0 rgba(0, 0, 0, .32);
+  --us-edge: #3A4361;
+  --us-knob: #2C344B;
+  --us-knob-ink: #A0A8BC;
+  --us-on: #2CC5B4;
+  --us-on-ink: #0B0E16;
+  --us-on-text: #4FD8C8;
+  --us-led-off: #2C344B;
+  --us-alert: #FF6B3D;
+  --us-alert-text: #FF946F;
+
+  /* signal budget: on the dark ground orange is spent even more carefully */
+  --accent: #FF6B3D;              /* quests / action only */
+  --accent-ink: #141826;
+  --accent-soft: #3A2622;
+  --accent-text: #FF946F;
+  --run: #2CC5B4;                 /* energy: running work, meters, XP */
+  --run-text: #4FD8C8;
+  --ok: #6FA592;                  /* done is quiet: muted sage */
+  --ok-text: #93C7B3;
+  --ok-soft: #1E312C;
+  --ok-shell: #77B09B;
+  --focus: #DDDAD2;               /* a plain light ring: teal is reserved for running work */
+  --del-text: #F2937C;
+  --trace-bg: #1D3A38;            /* "this changed" is energy, not a quest */
+  --stream-ink: var(--run-text);
+
+  --btn-bg: #FF6B3D;              /* the confirm button is the one orange you press */
+  --btn-text: #141826;
+  --btn-hover: #FF8257;
+  --btn-font: "Chakra Petch", "Figtree", sans-serif;
+  --btn-case: uppercase;
+  --btn-track: .1em;
+  --btn-focus: #141826;
+  --shadow-btn: inset 0 -3px 0 rgba(20, 24, 38, .26);   /* pressed-key lip; inset survives the chamfer clip */
+
+  /* model colours stay low-chroma so none competes with the signal orange */
+  --model-claude: #C9A27E;
+  --model-codex: #A4B3C6;
+  --model-gemini: #A3A6E6;
+  --model-other: #8C93A3;
+  --lamp-strength: 10%;
+  --lamp-size: 70% 240px;
+
+  /* HUD meters */
+  --energy: #2CC5B4;
+  --energy-off: #3A4157;
+  --pip: #BEC3CF;
+  --pip-off: #3A4157;
+  --seg-skew: -14deg;
+  --label-rule: #262D42;
+  --label-rule-paper: #343B50;
+  --row-mark: #ECE9E2;
+  --tb-rule: #2E3446;
+  --lvl-bg: #232A3F;
+  --lvl-text: #ECE9E2;
+  --lvl-dim: #A0A8BC;
+  --badge-bg: #1B2031;
+  --badge-ink: #ECE9E2;
+  --badge-new-bg: #1B2031;
+  --badge-new-ink: #ECE9E2;
+  --tile-rule: #5A6380;
+  --tile-new-mark: #FF6B3D;
+  --toast-bg: #232A3F;            /* lifted one step above the dark workspace */
+  --toast-line: #4C5571;
+  --toast-text: #ECE9E2;
+  --toast-kicker: #2CC5B4;      /* m11: a finished thing is quiet; orange stays for what waits on you */
+  --toast-xp: #2CC5B4;
+  --heat-0: #2A3043;
+  --heat-1: #1B4744;
+  --heat-2: #1C766C;
+  --heat-3: #2BAE9F;
+  --heat-4: #7FE3D6;
+  --xp: #2CC5B4;
+  --xp-off: #2C344B;
+  --hero-bg: #141826;
+  --hero-text: #ECE9E2;
+  --hero-dim: #A0A8BC;
+  --hero-quip-bg: #1B2031;
+  --hero-on: #141826;
+  --hero-pad: 24px 28px 24px 26px;
+  /* brand art in its approved colours (maskot/_build.py palette) */
+  --mascot-body: #2A2F3D;
+  --mascot-visor: #FF6B3D;
+  --mascot-screen: #141826;
+  --mascot-eye: #F1EEE6;
+  --mascot-outline: #F1EEE6;
+  --mascot-line: #141826;
+  --mascot-tile: #0E111A;
+  /* the approved lockup draws its letters navy (for light grounds); on the navy shell they
+     take the brand off-white instead, same hex as the mascot's eyes */
+  --brand-word: #F1EEE6;
+
+  /* type */
+  --font-body: "Figtree", system-ui, sans-serif;
+  --font-label: "Chakra Petch", "Figtree", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Chakra Petch", "Figtree", sans-serif;
+  --font-title: "Chakra Petch", "Figtree", sans-serif;
+  --font-who: "Chakra Petch", "Figtree", sans-serif;
+  --who-case: uppercase;
+  --who-track: .09em;
+  --fs-body: 14.5px;
+  --lh-body: 1.62;
+  --fs-title: 19px;
+  --label-case: uppercase;
+  --label-track: .13em;
+  --label-weight: 600;
+  --label-stretch: normal;
+
+  /* shape: chamfers on filled things, sharp corners elsewhere */
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 3px;
+  --clip-sm: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  --clip-md: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+  --clip-badge: polygon(28% 0, 72% 0, 100% 28%, 100% 72%, 72% 100%, 28% 100%, 0 72%, 0 28%);
+  --line-w: 1px;
+  --card-line-w: 1px;
+  --shadow-card: 3px 3px 0 #12151F;
+
+  /* motion: the shared vocabulary; the result tag lands with the press overshoot */
+  --dur-fast: 90ms;
+  --dur-stamp: 240ms;
+  --stamp-ease: cubic-bezier(.34, 1.3, .64, 1);
+  --stamp-rotate: 0deg;
+  --stamp-from: 1.18;
+  --device: #07090E;
+
+  /* signature-only tokens */
+  --quest-cut: 12px;
+  --quest-edge: #4C5571;
+  --quest-shadow: #0E111A;
+  --quest-strip: #141826;
+}
+
+/* ---- sade: 3 block(s) ---- */
+:root[data-theme="sade"] {
+  --shell-tex: none;
+  --panel-tex: none;
+
+  --shadow-btn: none;
+
+  --lamp-strength: 3%;
+  --lamp-size: 60% 200px;
+
+  /* meters: thin lines, never segments */
+  --seg-skew: 0deg;
+  --label-rule: transparent;
+  --label-rule-paper: transparent;
+  --row-mark: transparent;
+  --tile-rule: transparent;
+  --tile-new-mark: transparent;
+  --hero-bg: transparent;
+  --hero-pad: 0;
+  /* head mark: the palette block tints it (body lilac-grey, visor = accent); outline = body, a flat mark, not a sticker */
+
+  /* type */
+  --font-body: "Geist", "Inter", system-ui, sans-serif;
+  --font-label: "Geist", "Inter", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Geist", "Inter", system-ui, sans-serif;
+  --font-title: "Geist", "Inter", system-ui, sans-serif;
+  --font-who: "Geist", "Inter", system-ui, sans-serif;
+  --who-case: none;
+  --who-track: 0;
+  --fs-body: 14px;
+  --lh-body: 1.6;
+  --fs-small: 13px;
+  --fs-meta: 12px;
+  --fs-title: 15px;
+  --label-case: none;
+  --label-track: 0;
+  --label-weight: 500;
+  --label-stretch: normal;
+  --btn-font: inherit;
+  --btn-case: none;
+  --btn-track: 0;
+
+  /* shape */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --clip-sm: none;
+  --clip-md: none;
+  --clip-badge: none;
+  --line-w: 1px;
+  --card-line-w: 1px;
+  --shadow-card: none;
+
+  /* motion: short, quiet, no overshoot */
+  --g-dur-tap: 90ms;
+  --g-dur-quick: 120ms;
+  --g-dur-base: 160ms;
+  --g-dur-slow: 160ms;
+  --g-ease-enter: cubic-bezier(.2, 0, 0, 1);
+  --g-ease-exit: cubic-bezier(.4, 0, 1, 1);
+  --g-ease-move: cubic-bezier(.4, 0, .2, 1);
+  --g-ease-press: cubic-bezier(.2, 0, 0, 1);
+  --dur-fast: 90ms;
+  --ease: cubic-bezier(.2, 0, 0, 1);
+  --dur-stamp: 120ms;
+  --stamp-ease: cubic-bezier(.2, 0, 0, 1);
+  --stamp-rotate: 0deg;
+  --stamp-from: 1;
+
+  /* theme-local */
+}
+:root[data-theme="sade"] {
+  /* Unity switch: a flat, fully round switch. No LEDs, no chamfer; connected = green, connecting =
+     the sky secondary, not open = gold, blocked = rose (colours in the palette block).
+     Round 9: full size (72x36, near Arena's 84x38) and a fixed bay, so the bar never moves
+     between states (widest state measured 356 px at this size: "Açık değil · Unity'yi açınca
+     bağlanır"; 356 + 16). */
+  --us-w: 72px;
+  --us-h: 36px;
+  --us-ic: 16px;
+  --us-bay-w: 372px;
+  --us-radius: 999px;
+  --us-knob-radius: 50%;
+  --us-knob-w: calc(var(--us-h) - 6px);
+  --us-bay-line: transparent;    /* no bay: the switch sits in the bar like any control */
+}
+:root[data-theme="sade"] {
+  --page-bg: #0D0B13; --page-text: #E6E2F0; --page-text-dim: #BAB3CC;
+  --shell-bg: #13111B; --shell-bg-2: #1A1725; --shell-bg-active: #221E30; --shell-line: #272338;
+  --shell-text: #E6E2F0; --shell-text-dim: #9790AE;
+  --paper-bg: #1A1725; --paper-bg-2: #16141F; --paper-raised: #201C2D; --paper-sunk: #2A2539;
+  --paper-line: #2C273B; --paper-line-strong: #3E3752;
+  --ink: #E6E2F0; --ink-dim: #BAB3CC; --ink-faint: #9890AE;
+  --code-bg: #131119; --code-head-bg: #15131C; --code-line: #24202F; --code-text: #DCD7E8; --code-dim: #9189A7;
+  --code-kw: #C4A2FF; --code-type: #7DD0E2; --code-fn: #8FB6FF; --code-num: #F5A6C6; --code-attr: #E9C77E;
+  --code-str: #B2DB92; --code-com: #9189A7;
+  --accent: #A68BFA; --accent-ink: #0D0B13; --accent-soft: #302A47; --accent-text: #C2B0FF;
+  --run: #6FC3EA; --run-text: #8CD0F0;
+  --ok: #72CB9B; --ok-text: #8FD9B0; --ok-soft: #263036; --ok-shell: #72CB9B;
+  --focus: #C2B0FF; --del-text: #F6A1B2; --trace-bg: #302A47; --stream-ink: #C2B0FF;
+  --btn-bg: #7655E3; --btn-text: #FFFFFF; --btn-hover: #6B4AD6; --btn-focus: #FFFFFF;
+  --model-claude: #DDAA84; --model-codex: #B4B9CC; --model-gemini: #8FB6FF; --model-other: #857E99;
+  --energy: #6FC3EA; --energy-off: #2A2539; --pip: #A68BFA; --pip-off: #2A2539;
+  --tb-rule: #2C273B; --lvl-bg: #221E30; --lvl-text: #E6E2F0; --lvl-dim: #9790AE;
+  --badge-bg: #A68BFA; --badge-ink: #0D0B13; --badge-new-bg: #302A47; --badge-new-ink: #C2B0FF;
+  --toast-bg: #201C2D; --toast-line: #3E3752; --toast-text: #E6E2F0; --toast-kicker: #8FD9B0; --toast-xp: #8FD9B0;
+  --heat-0: #2A2539; --heat-1: #493F69; --heat-2: #665696; --heat-3: #836EC4; --heat-4: #A68BFA;
+  --xp: #BAB3CC; --xp-off: #2A2539;  /* the XP meter stays muted: the accent only means "your turn" */
+  --hero-text: #E6E2F0; --hero-dim: #BAB3CC; --hero-quip-bg: #201C2D; --hero-on: #13111B;
+  --mascot-body: #57516A; --mascot-visor: #A68BFA; --mascot-screen: #13111B; --mascot-eye: #E6E2F0;
+  --mascot-line: #13111B; --mascot-tile: #221E30; --mascot-outline: var(--mascot-body);
+  --ed-bg: #131119; --ed-head-bg: #13111B; --ed-line: #24202F; --ed-text: #DCD7E8; --ed-dim: #9189A7; --ed-tab-mark: #A68BFA;
+  --diff-add-bg: #1D2426; --diff-del-bg: #291D26; --diff-add-mark: #8FD9B0; --diff-del-mark: #F6A1B2;
+  --pv-bg: #131119; --pv-grid: #24202F; --pv-ink: #BAB3CC;
+  --pv-face-1: #62548D; --pv-face-2: #453B63; --pv-face-3: #38314E;
+  --pv-edge: #C2B0FF; --pv-shadow: #0D0B13; --pv-check-a: #24202F; --pv-check-b: #1A1722;
+  --term-bg: #13111B; --term-text: #DCD7E8; --term-dim: #9189A7; --term-prompt: #8FD9B0; --term-warn: #E9C77E;
+  --tab-mark: #A68BFA; --menu-bg: #1A1725; --menu-line: #3E3752;
+  --us-track: #1A1725; --us-track-on: #263635; --us-edge: #3E3752; --us-knob: #9790AE; --us-knob-ink: #13111B;
+  --us-on: #72CB9B; --us-on-ink: #0D0B13; --us-on-text: #8FD9B0;
+  --us-alert: #F0869C; --us-alert-text: #F6A1B2; --us-hover: #1A1725;
+  --sade-card-line: #3E3752; --sade-pending-line: #67579A;
+  --sade-run-soft: #283345; --sade-err: #F0869C; --sade-err-text: #F6A1B2; --sade-err-soft: #382736;
+  --sade-warn: #E9C77E;
+}
+
+/* ---- pafta: 2 block(s) ---- */
+:root[data-theme="pafta"] {
+  --page-bg: #11171F;
+  --page-text: #E4E1D9;
+  --page-text-dim: #A3ADB8;
+
+  /* shell: ink-navy graphite */
+  --shell-bg: #18202A;
+  --shell-bg-2: #212B36;
+  --shell-bg-active: #2A3542;
+  --shell-line: #2F3B49;
+  --shell-text: #E4E1D9;
+  --shell-text-dim: #A1ACB8;
+  --shell-tex: none;
+
+  /* paper: dimmed drafting paper, never white */
+  --paper-bg: #E6E1D5;
+  --paper-bg-2: #DCD9CF;
+  --paper-raised: #EEEAE1;
+  --paper-sunk: #DAD4C6;
+  --paper-line: #B3BAC1;          /* blue-grey drafting line */
+  --paper-line-strong: #7E8893;
+  --ink: #18212C;
+  --ink-dim: #434D59;
+  --ink-faint: #535D69;
+  --pafta-grid: rgba(70, 98, 128, .06);
+  --panel-tex:
+    linear-gradient(var(--pafta-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--pafta-grid) 1px, transparent 1px);
+  --panel-tex-size: 20px 20px;
+
+  /* code: dark ink plate laid on the paper */
+  --code-bg: #1A222D;
+  --code-head-bg: #202936;
+  --code-line: #2C3744;
+  --code-text: #DCE0E4;
+  --code-dim: #8B97A5;
+  --code-kw: #93B4D6;            /* blueprint blue */
+  --code-type: #A3C6B3;          /* ink green */
+  --code-fn: #DFC690;            /* pencil ochre */
+  --code-num: #E39F86;
+  --code-attr: #B3BDC8;
+
+  /* signal budget: vermilion only for "waiting on you" / critical / rejected */
+  --accent: #C23B2A;
+  --accent-ink: #FFFAF3;
+  --accent-soft: #EFD6CC;
+  --accent-text: #A1301F;
+  --run: #4F82B5;                /* blueprint blue: running work (shell) */
+  --run-text: #2F5F8E;           /* the same ink on paper */
+  --ok: #3F6B57;
+  --ok-text: #335846;
+  --ok-soft: #D3DED3;
+  --ok-shell: #6FA58B;
+  --focus: #2E68A0;
+  --del-text: #8C3B2E;           /* "-1": a brick note, not the signal */
+  --trace-bg: #D3DCE4;           /* a changed row: pale blueprint wash */
+  --stream-ink: #2F5F8E;         /* streamed words arrive in blueprint ink */
+
+  --btn-bg: #18212C;
+  --btn-text: #EEEAE1;
+  --btn-hover: #2A3542;
+
+  /* M4: the model colours are inks, not signals */
+  --model-claude: #A0806A;       /* clay */
+  --model-codex: #5E7F72;        /* ink green */
+  --model-gemini: #5F7699;       /* blueprint */
+  --model-other: #858C94;
+  --lamp-strength: 11%;          /* m8: a desk lamp pool you can actually see */
+  --lamp-size: 70% 240px;
+
+  /* HUD hooks in drafting terms: meters are hatched ink, levels are sheet numbers */
+  --energy: #3F6A94;
+  --energy-off: #C6C9C8;
+  --pip: #434D59;
+  --pip-off: #C6C9C8;
+  --seg-skew: 0deg;
+  --label-rule: #2F3B49;
+  --label-rule-paper: #C2C6C8;
+  --row-mark: #A1ACB8;
+  --tb-rule: transparent;
+  --lvl-bg: #2A3542;
+  --lvl-text: #EEEAE1;
+  --lvl-dim: #A1ACB8;
+  --badge-bg: #2A3542;
+  --badge-ink: #EEEAE1;
+  --badge-new-bg: #2A3542;
+  --badge-new-ink: #EEEAE1;
+  --tile-rule: #18212C;
+  --tile-new-mark: #3F6B57;
+  --toast-bg: #212B36;
+  --toast-line: #3D4A5A;
+  --toast-text: #E4E1D9;
+  --toast-kicker: #A1ACB8;
+  --toast-xp: #8DBBA4;
+  /* heat map: ink density on drafting paper */
+  --heat-0: #DAD6CB;
+  --heat-1: #BCC8D3;
+  --heat-2: #8FA6BE;
+  --heat-3: #5D7FA2;
+  --heat-4: #2F5378;
+  --xp: #3F6A94;
+  --xp-off: #C6C9C8;
+  --hero-bg: #EEEAE1;
+  --hero-text: #18212C;
+  --hero-dim: #434D59;
+  --hero-quip-bg: #E6E1D5;
+  --hero-on: #EEEAE1;
+  --hero-pad: 22px 26px;
+  /* mascot drawn in the shell's inks: graphite body, blue-grey visor, paper eyes */
+  --mascot-body: #2E3A48;
+  --mascot-visor: #8C9BAC;
+  --mascot-screen: #11171F;
+  --mascot-eye: #E6E1D5;
+  --mascot-tile: #11171F;
+
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-label: "Archivo", "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-display: "Archivo", "IBM Plex Sans", sans-serif;
+  --font-title: "IBM Plex Sans", system-ui, sans-serif;
+  /* M5a: the author line reads like a title-block label */
+  --font-who: "Archivo", "IBM Plex Sans", sans-serif;
+  --who-case: uppercase;
+  --who-track: .07em;
+  --fs-body: 14.5px;
+  --label-case: uppercase;
+  --label-track: .085em;
+  --label-weight: 600;
+  --label-stretch: 87.5%;
+
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 3px;
+  --line-w: 1px;
+  --card-line-w: 1px;
+  --shadow-card: 2px 2px 0 rgba(24, 33, 44, .9);
+  --shadow-btn: none;
+
+  --dur-fast: 110ms;
+  --dur-stamp: 180ms;
+  --ease: cubic-bezier(.2, .8, .25, 1);
+  --stamp-ease: cubic-bezier(.2, 1.25, .4, 1);   /* a stamp lands with a small bounce */
+  --stamp-rotate: -4deg;
+  --stamp-from: 1.3;
+  --device: #0B0F14;
+}
+:root[data-theme="pafta"] {
+  --code-str: #C9D3A0;           /* thread code plate (dark): olive pencil */
+  --code-com: #8B97A5;
+
+  --ed-bg: #F0ECE3;              /* the editor sheet: one step lighter than the chat paper */
+  --ed-head-bg: #E2DDD1;
+  --ed-line: #C3C7C6;
+  --ed-text: #18212C;
+  --ed-dim: #59636F;             /* line numbers, crumb: 5.2:1 on the sheet */
+  --ed-kw: #2C5B8A;              /* blueprint */
+  --ed-type: #2E6650;            /* ink green */
+  --ed-fn: #7A5512;              /* pencil ochre */
+  --ed-num: #8C4523;             /* brick, not vermilion */
+  --ed-attr: #4F5B69;
+  --ed-str: #5A6618;             /* olive */
+  --ed-com: #535C67;
+  --ed-tab-mark: #18212C;
+  --diff-add-bg: #DCE6D8;
+  --diff-del-bg: #F2DCD2;
+  --diff-add-mark: #2E6650;
+  --diff-del-mark: #A1301F;
+
+  /* preview stage: a drafting board with a blueprint grid */
+  --pv-bg: #EEEAE0;
+  --pv-grid: #CDD5DB;
+  --pv-ink: #4A5866;
+  --pv-face-1: #C5D0DA;
+  --pv-face-2: #9EB0C2;
+  --pv-face-3: #7A8FA6;
+  --pv-edge: #18212C;
+  --pv-shadow: rgba(24, 33, 44, .16);
+  --pv-check-a: #ECE8DF;
+  --pv-check-b: #D7D2C6;
+
+  /* terminal: the same sheet, ink type */
+  --term-bg: #ECE8DF;
+  --term-text: #18212C;
+  --term-dim: #59636F;
+  --term-prompt: #2C5B8A;
+  --term-warn: #7A5512;
+  --tab-mark: #18212C;
+
+  /* Unity switch: a drafting-table breaker. Round 9: a VERTICAL breaker - an upright housing
+     sunk in the navy desk edge, a slot down its middle, a pale paper-coloured lever handle
+     that sits DOWN when off and is thrown UP in every "intent on" state (connecting, on,
+     closed, blocked). Live = blueprint blue, blocked = vermilion. The bay is fixed: widest
+     state measured 346 px ("Açık değil · Unity'yi açınca bağlanır"); 346 + 16. */
+  --us-w: 48px;                  /* housing */
+  --us-h: 42px;
+  --us-knob-w: 32px;             /* lever handle */
+  --us-knob-h: 18px;             /* theme-local: handle height */
+  --us-throw: calc(var(--us-h) - var(--us-knob-h) - 6px);   /* theme-local: handle travel */
+  --us-ic: 14px;
+  --us-bay-w: 362px;
+  --us-radius: 2px;
+  --us-knob-radius: 0;
+  --us-knob-clip: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+  --us-knob-cut: 4px;
+  --us-track: #0F151C;
+  --us-track-on: #17293B;
+  --us-edge: #4A5869;
+  --us-knob: #D9D3C5;
+  --us-knob-ink: #2F3B49;
+  --us-on: #6B9FD1;
+  --us-on-ink: #0F151C;
+  --us-on-text: #9CC3EA;
+  --us-led-off: #2F3B49;
+  --us-alert: #E0573F;
+  --us-bay-bg: #141B24;          /* round 8 bay: the sunk edge of the desk */
+  --us-bay-line: #2F3B49;
+  --us-live: #6B9FD1;            /* foot line while connected = the live blueprint blue */
+  --us-hover: #212B36;
+  --us-track-shade: inset 0 2px 0 rgba(0, 0, 0, .35);
+  --us-knob-shade: inset 0 -2px 0 rgba(24, 33, 44, .3);   /* the toggle block's lower lip */
+  --us-led-h: 6px;
+  --us-connect-ink: #2C5B8A;        /* theme-local: glyph on the knob while connecting */
+  --us-alert-text: #F29A86;
+}
+
+/* ---- atolye: 2 block(s) ---- */
+:root[data-theme="atolye"] {
+  --page-bg: #15120F;
+  --page-text: #EAE2D5;
+  --page-text-dim: #ADA190;
+
+  /* shell: dark walnut / charcoal */
+  --shell-bg: #1E1A16;
+  --shell-bg-2: #29231D;
+  --shell-bg-active: #352D25;
+  --shell-line: #3A3229;
+  --shell-text: #EDE5D8;
+  --shell-text-dim: #B5A997;
+  /* Wood grain: two out-of-phase stripe sets at slightly different angles so the
+     repeat never reads as a pattern. Alpha is kept at the edge of visibility. */
+  --atolye-grain:
+    repeating-linear-gradient(90.6deg, rgba(255, 228, 190, .022) 0 1px, transparent 1px 9px),
+    repeating-linear-gradient(89.2deg, rgba(0, 0, 0, .07) 0 2px, transparent 2px 31px),
+    repeating-linear-gradient(90deg, rgba(255, 220, 170, .015) 0 14px, transparent 14px 57px);
+  --shell-tex: var(--atolye-grain);
+  --shell-tex-size: auto;
+
+  /* paper: warm grey-cream bench top, never white */
+  --paper-bg: #E2DCD0;
+  --paper-bg-2: #D8D1C3;
+  --paper-raised: #EBE6DC;
+  --paper-sunk: #D5CDBE;
+  --paper-line: #C2B8A6;
+  --paper-line-strong: #8A7D69;
+  --ink: #241E18;
+  --ink-dim: #4C4237;
+  --ink-faint: #5F5447;
+  /* Pegboard: the tool wall. Faint holes on an 18px pitch, workspace panel only. */
+  --panel-tex: radial-gradient(circle at 9px 9px, rgba(58, 44, 30, .10) 0 1.6px, transparent 2.2px);
+  --panel-tex-size: 18px 18px;
+
+  /* code: oiled dark-wood board on the bench */
+  --code-bg: #231E19;
+  --code-head-bg: #2B251F;
+  --code-line: #3B332A;
+  --code-text: #E6DDCF;
+  --code-dim: #A09484;
+  --code-kw: #D7A57C;            /* copper */
+  --code-type: #A9C29C;          /* sage */
+  --code-fn: #E4CD95;            /* beeswax */
+  --code-num: #DC9C86;
+  --code-attr: #B9AC99;
+
+  /* signal budget (M8): brass only for "waiting on you" / critical / rejected,
+     pushed toward orange-brass so the one pending tag is found at a glance */
+  --accent: #BF6E14;
+  --accent-ink: #160F08;
+  --accent-soft: #EBCD9C;
+  --accent-text: #8A3F0A;
+  --run: #7FA674;                /* soft green: a job is running */
+  --run-text: #3D5F33;
+  --ok: #4F6B46;
+  --ok-text: #3E5636;
+  --ok-soft: #D6DDC8;
+  --ok-shell: #8DAF7E;
+  --focus: #9C5A12;
+  --del-text: #7E4428;           /* "-1": copper-brown, not the signal */
+  --trace-bg: #DAE1CC;           /* a changed row: pale sage */
+  --stream-ink: #3D5F33;
+
+  --btn-bg: #2A231C;
+  --btn-text: #F0E8DA;
+  --btn-hover: #3A3027;
+
+  /* model colours stay muted so none reads as brass (M4 in Atolye) */
+  --model-claude: #A3826C;
+  --model-codex: #5F8475;
+  --model-gemini: #6C80A8;
+  --model-other: #8C8273;
+  --lamp-strength: 10%;
+  --lamp-size: 72% 250px;
+
+  /* HUD hooks in workshop terms: meters are a walnut gauge, levels are burnt-in plates */
+  --energy: #6B5A47;
+  --energy-off: #CDC4B3;
+  --pip: #4C4237;
+  --pip-off: #CDC4B3;
+  --seg-skew: 0deg;
+  --label-rule: #3A3229;
+  --label-rule-paper: #C9BFAD;
+  --row-mark: #9C8F7B;
+  --tb-rule: #B9AE9A;
+  --lvl-bg: #43382D;
+  --lvl-text: #EDE5D8;
+  --lvl-dim: #C2B5A2;
+  --badge-bg: #3A3027;
+  --badge-ink: #EDE5D8;
+  --badge-new-bg: #3A3027;
+  --badge-new-ink: #EDE5D8;
+  --tile-rule: #4C4237;
+  --tile-new-mark: #4F6B46;
+  /* the done tag (signature 2) is paper, like the work-order tag */
+  --toast-bg: #EBE6DC;
+  --toast-line: #8A7D69;
+  --toast-text: #241E18;
+  --toast-kicker: #5F5447;
+  --toast-xp: #3E5636;
+  /* heat map: sage, the colour of work that ran - never brass */
+  --heat-0: #D6CFC2;
+  --heat-1: #BCC7A9;
+  --heat-2: #93AA85;
+  --heat-3: #6A8660;
+  --heat-4: #435D3C;
+  --xp: #8DAF7E;
+  --xp-off: #3F362C;
+  /* profile header: the workshop's walnut sign board, same grain as the shell */
+  --hero-bg: var(--atolye-grain), #29231D;
+  --hero-text: #EDE5D8;
+  --hero-dim: #BDB09D;
+  --hero-quip-bg: #352D25;
+  --hero-on: #1E1A16;
+  --hero-pad: 24px 28px;
+  /* mascot in walnut and dull brass-steel; no bright visor */
+  --mascot-body: #3A3027;
+  --mascot-visor: #A39581;
+  --mascot-screen: #15120F;
+  --mascot-eye: #EDE5D8;
+  --mascot-tile: #2A231C;
+
+  --font-body: "Source Sans 3", system-ui, sans-serif;
+  --font-label: "Bitter", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Bitter", Georgia, serif;
+  --font-title: "Source Sans 3", system-ui, sans-serif;
+  --fs-body: 15px;
+  --fs-title: 18px;
+  --label-case: uppercase;
+  --label-track: .07em;
+  --label-weight: 600;
+  --label-stretch: normal;
+
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --line-w: 1px;
+  --card-line-w: 1px;
+  --shadow-card: 3px 3px 0 #3A2C20;
+  --shadow-btn: 2px 2px 0 #8A7D69;
+
+  --dur-fast: 120ms;
+  --dur-stamp: 140ms;
+  --ease: cubic-bezier(.3, .9, .3, 1);
+  --stamp-ease: cubic-bezier(.3, 1.2, .5, 1);   /* the punch bites, then settles */
+  --stamp-rotate: 0deg;
+  --stamp-from: 1.12;
+  --device: #0F0D0B;
+  /* signature-only tokens */
+  --atolye-metal: #9C8F7B;       /* grommet ring: plain steel/brass gone dull */
+  --atolye-hole: rgba(36, 30, 24, .30); /* hard inner edge of a punched hole */
+  --atolye-void: #2B231C;        /* the dark gap seen through a punched hole */
+}
+:root[data-theme="atolye"] {
+  --code-str: #C3CC95;           /* thread code board (dark wood): olive */
+  --code-com: #A09484;
+
+  --ed-bg: #EFEAE0;
+  --ed-head-bg: #E3DCCE;
+  --ed-line: #CFC5B2;
+  --ed-text: #241E18;
+  --ed-dim: #66594A;             /* line numbers, crumb */
+  --ed-kw: #8E4A1E;              /* copper */
+  --ed-type: #3D6234;            /* sage ink */
+  --ed-fn: #74560F;              /* beeswax, burnt */
+  --ed-num: #3F5A88;             /* indigo dye */
+  --ed-attr: #5F5447;
+  --ed-str: #5A661B;             /* olive */
+  --ed-com: #63574A;
+  --ed-tab-mark: #6B5A47;        /* walnut, not brass */
+  --diff-add-bg: #DDE5CF;
+  --diff-del-bg: #F1DACB;
+  --diff-add-mark: #3D6234;
+  --diff-del-mark: #93391A;
+
+  /* preview stage: the bench under a lamp, a chalk grid; the crate is wood */
+  --pv-bg: #EAE4D8;
+  --pv-grid: #D4CAB8;
+  --pv-ink: #5F5447;
+  --pv-face-1: #CDB48C;
+  --pv-face-2: #AD9068;
+  --pv-face-3: #8D714D;
+  --pv-edge: #3A2C20;
+  --pv-shadow: rgba(58, 44, 32, .2);
+  --pv-check-a: #EDE7DC;
+  --pv-check-b: #D9D0C0;
+
+  /* terminal: the same cream board */
+  --term-bg: #EAE4D8;
+  --term-text: #241E18;
+  --term-dim: #66594A;
+  --term-prompt: #3D6234;
+  --term-warn: #7E4A0C;
+  --tab-mark: #4C4237;
+
+  /* Unity switch: a brass lever in a dark walnut slot. The lever stays brass in every state
+     (metal does not change colour); the slot lights sage when Unity is live (the theme's
+     running green); blocked rings the lever in the signal brass-orange. */
+  /* Round 9: a horizontal brass LEVER - a round brass head on a brass rod that slides out
+     along an engraved groove. Off = the head rests at the left end, rod hidden; thrown =
+     head at the right end, rod drawn out behind it. The bay is fixed: widest state measured
+     381 px ("Açık değil · Unity'yi açınca bağlanır"); 381 + 16. */
+  --us-w: 84px;
+  --us-h: 36px;
+  --us-knob-w: calc(var(--us-h) - 6px);   /* round head */
+  --us-ic: 14px;
+  --us-bay-w: 397px;
+  --us-rod: #9C8456;               /* theme-local: the brass rod (a shade under the head) */
+  --us-radius: 3px;
+  --us-knob-radius: 50%;
+  --us-track: #15110D;
+  --us-track-on: #26331F;
+  --us-edge: #4A3E32;
+  --us-knob: #B39A6A;            /* dull brass: metal, not the signal */
+  --us-knob-ink: #2A231C;
+  --us-on: #8DAF7E;
+  --us-on-ink: #2A231C;
+  --us-on-text: #A9C79B;
+  --us-led-off: #3A3229;
+  --us-alert: #D98A2B;
+  --us-bay-bg: #19150F;
+  --us-bay-line: #3A3229;
+  --us-live: #8DAF7E;            /* foot line while connected = the running sage */
+  --us-hover: #29231D;
+  --us-track-shade: inset 0 2px 0 rgba(0, 0, 0, .5);
+  --us-knob-shade: inset 0 1px 0 rgba(255, 240, 200, .35), inset 0 -2px 0 rgba(60, 40, 10, .35);  /* brass bevel, no blur */
+  --us-connect-ink: #2F4D27;        /* theme-local: glyph on the knob while connecting */
+  --us-alert-text: #EBB070;
+}
