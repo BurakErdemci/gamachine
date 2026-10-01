@@ -98,6 +98,8 @@ interface McpApprovalCardsProps {
   onOpenFile?: (path: string) => void;
   /** Onay sonrası editör tamponunu tazelemek için; editör yoksa verilmez. */
   setCode?: (code: string) => void;
+  /** A paired phone can decide these cards too ("Or approve on your phone"). */
+  phonePaired?: boolean;
 }
 
 /**
@@ -128,27 +130,25 @@ const WorkspaceBanner: React.FC<{
   // AÇIK kalıyor: kartı beklemek ya da butonları kilitlemek, cevap hiç
   // gelmediğinde isteği 180 sn'lik sessiz redde kilitlerdi — bu bileşenin
   // baştan beri reddettiği hâl (bkz. yukarıdaki kullanıcı kararı).
-  const renk = mismatch
-    ? 'border-amber-500/50 bg-amber-500/10 text-amber-300'
-    : checking
-      ? 'border-sky-500/40 bg-sky-500/10 text-sky-300'
-      : 'border-slate-700 bg-slate-800/50 text-slate-400';
+  // Drawn on tokens as a strip on top of the card; the state is an attribute, so the styling
+  // (and any test) reads `data-source` rather than a colour class.
+  const durum = mismatch ? 'mismatch' : checking ? 'checking' : 'match';
   return (
-    <div className={`flex items-start gap-2 rounded-t-lg border border-b-0 px-3 py-1.5 text-[11px] ${renk}`}>
-      {mismatch ? <AlertTriangle size={13} className="mt-px shrink-0" />
-                : checking ? <Loader2 size={13} className="mt-px shrink-0 animate-spin" />
-                : <FolderOpen size={13} className="mt-px shrink-0" />}
-      <div className="min-w-0">
-        {mismatch && <div className="font-bold">{t('mcp.otherProject')}</div>}
-        {!mismatch && checking && <div className="font-bold">{t('mcp.workspaceChecking')}</div>}
-        <div className="truncate font-mono">
+    <div className="approval-src" data-source={durum}>
+      {mismatch ? <AlertTriangle size={14} className="approval-src-ic" aria-hidden="true" />
+                : checking ? <Loader2 size={14} className="approval-src-ic animate-spin" aria-hidden="true" />
+                : <FolderOpen size={14} className="approval-src-ic" aria-hidden="true" />}
+      <div className="approval-src-text">
+        {mismatch && <div className="approval-src-k">{t('mcp.otherProject')}</div>}
+        {!mismatch && checking && <div className="approval-src-k">{t('mcp.workspaceChecking')}</div>}
+        <div className="approval-src-path">
           {bilinmiyor ? t('mcp.sourceUnknown') : gate.workspacePath}
         </div>
         {!mismatch && checking && (
-          <div className="opacity-80">{t('mcp.workspaceCheckingHint')}</div>
+          <div className="approval-src-hint">{t('mcp.workspaceCheckingHint')}</div>
         )}
         {mismatch && openWorkspacePath && (
-          <div className="truncate opacity-70">{t('mcp.openWorkspace')} {openWorkspacePath}</div>
+          <div className="approval-src-hint">{t('mcp.openWorkspace')} {openWorkspacePath}</div>
         )}
       </div>
     </div>
@@ -176,6 +176,7 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
   setDiffFile,
   onOpenFile,
   setCode,
+  phonePaired,
 }) => {
   const { t } = useLang();
   /**
@@ -314,9 +315,10 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
     <fieldset disabled={busy} aria-busy={busy} className="contents">{node}</fieldset>
   );
 
-  // The risk line rides under the banner so all four card kinds get it from
-  // one place; it renders nothing for cards that auto/step raised.
-  const banner = (
+  // The source strip sits on top of every card. The risk line goes INTO the card as its
+  // `.approval-why` (mockup); the diff viewer has no such slot yet, so for it alone the line
+  // rides under the strip. Either way it renders nothing for cards that auto/step raised.
+  const banner = (withRisk: boolean) => (
     <>
       <WorkspaceBanner
         gate={gate}
@@ -324,22 +326,20 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
         checking={workspaceCheckPending && !workspaceMismatch}
         openWorkspacePath={openWorkspacePath}
       />
-      <RiskReasonLine
-        reason={gate.riskReason}
-        detail={gate.riskDetail}
-        className="border-x border-amber-500/30 bg-amber-500/10 px-3 py-1.5"
-      />
+      {withRisk && <RiskReasonLine reason={gate.riskReason} detail={gate.riskDetail} className="approval-src-risk" />}
     </>
   );
+  const risk = { riskReason: gate.riskReason, riskDetail: gate.riskDetail, phonePaired };
 
   return (
     <>
       {pendingGenFiles?.messageId === MCP_MSG_ID && (
-        <div className="px-4 pb-2">
-          {banner}
+        <div className="approval-slot">
+          {banner(false)}
           {lock(
           <FileCreationApproval
             files={pendingGenFiles.files}
+            {...risk}
             autoAccept={false}
             setDiffFile={setDiffFile ?? (() => {})}
             onOpenFile={onOpenFile ?? (() => {})}
@@ -386,11 +386,12 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
       )}
 
       {pendingDelete?.messageId === MCP_MSG_ID && (
-        <div className="px-4 pb-2">
-          {banner}
+        <div className="approval-slot">
+          {banner(false)}
           {lock(
           <FileDeleteApproval
             path={pendingDelete.path}
+            {...risk}
             onConfirm={async () => {
               const result = await decide(true);
               setPendingDelete(null);
@@ -409,12 +410,13 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
       )}
 
       {pendingCommand?.messageId === MCP_MSG_ID && (
-        <div className="px-4 pb-2">
-          {banner}
+        <div className="approval-slot">
+          {banner(false)}
           {lock(
           <CommandApproval
             command={pendingCommand.command}
             kind={pendingCommand.kind}
+            {...risk}
             onConfirm={async () => {
               const result = await decide(true);
               setPendingCommand(null);
@@ -445,8 +447,8 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
       )}
 
       {pendingFix?.messageId === MCP_MSG_ID && (
-        <div className="px-4 pb-2">
-          {banner}
+        <div className="approval-slot">
+          {banner(true)}
           {lock(
           <DiffViewer
             diffData={pendingFix.data}
