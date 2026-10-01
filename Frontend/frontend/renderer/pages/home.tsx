@@ -250,7 +250,11 @@ export default function Home() {
     }
   }, []);
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
-  const setLang = (l: Lang) => { setLangState(l); localStorage.setItem('app-lang', l); };
+  const setLang = (l: Lang) => {
+    setLangState(l);
+    // A denied storage must not break the language switch itself.
+    try { localStorage.setItem('app-lang', l); } catch { /* keep the in-memory choice */ }
+  };
   const t = (key: string, degerler?: TValues) => ceviriUygula(lang, key, degerler);
   // Announce state to non-React consumers before they render translated text.
   // Storage alone cannot represent the initial English hydration state.
