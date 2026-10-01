@@ -169,6 +169,12 @@
 }
 .badge-bang { display: none; }
 
+/* file tree context menu: the shell's floating menu surface */
+.side-menu-item { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: var(--shell-text-dim); text-align: left; }
+.side-menu-item:hover { background: var(--shell-bg-active); color: var(--shell-text); }
+.side-menu-item.is-danger { color: var(--accent); }
+.side-menu-sep { height: var(--line-w); margin: 4px 0; background: var(--menu-line); }
+
 /* maker profile entry */
 .side-profile {
   margin-top: 10px; flex: none; display: flex; align-items: center; gap: 11px;
