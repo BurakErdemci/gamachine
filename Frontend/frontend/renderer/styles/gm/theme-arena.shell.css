@@ -1,0 +1,8 @@
+/* Arena shell touches, ported from maket/theme-arena.css. Arena's two signatures (quest window,
+   achievement band) live in the thread and the toast (P2); the shell only takes its lexicon: the
+   "Now" label reads "Active tasks" and a waiting count reads "!" (the count stays in aria-label). */
+[data-theme="arena"] .lex-d,
+[data-theme="arena"] .badge-n { display: none; }
+[data-theme="arena"] .lex-q,
+[data-theme="arena"] .badge-bang { display: inline; }
+[data-theme="arena"] .badge { font-family: var(--font-display); font-size: 13px; min-width: 22px; height: 22px; line-height: 22px; border-radius: 0; }

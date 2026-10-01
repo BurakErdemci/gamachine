@@ -4,9 +4,10 @@
 
 @layer base {
   body {
-    /* Saf siyah yerine hafif mavi-kömür: katman hiyerarşisinin zemini
-       (paneller white/[0.015-0.06] tonlarıyla bunun üstünde yükselir) */
-    @apply bg-[#0B0D12] text-slate-200;
+    /* The shell token is the ground every theme paints first (sidebar and top bar sit on it).
+       Text stays slate until the chat and workspace are ported, which still assume it. */
+    background: var(--shell-bg);
+    @apply text-slate-200;
     font-family: var(--font-body);
     -webkit-font-smoothing: antialiased;
   }

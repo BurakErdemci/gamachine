@@ -1,0 +1,40 @@
+/* Sade shell touches, ported from maket/theme-sade.css (game ornaments off, same DOM). */
+
+/* sidebar meters: hairline progress */
+[data-theme="sade"] .xp-mini { height: 2px; border-radius: 1px; }
+[data-theme="sade"] .xp-mini span { border-radius: 1px; }
+/* sidebar profile entry: a plain person icon + "Usage and history", no level, no XP (ELESTIRI-2 M5) */
+[data-theme="sade"] .side-profile .level,
+[data-theme="sade"] .side-profile .xp { display: none; }
+[data-theme="sade"] .side-profile-ic { display: block; }
+[data-theme="sade"] .side-profile-plain { display: inline; }
+[data-theme="sade"] .lvl { width: 28px; height: 28px; font-size: 13px; font-weight: 600; border-radius: var(--radius-sm); font-family: var(--font-mono); }
+[data-theme="sade"] .badge { border-radius: var(--radius-sm); height: 18px; line-height: 18px; min-width: 18px; padding: 0 5px; }
+
+/* model "character card" -> plain selector: name + version on one line */
+[data-theme="sade"] .model-pick { height: 32px; }
+[data-theme="sade"] .model-text { flex-direction: row; align-items: baseline; gap: 8px; }
+[data-theme="sade"] .model-name { font-size: 13px; font-weight: 500; }
+[data-theme="sade"] .model-dot { width: 7px; height: 7px; }
+[data-theme="sade"] .pick { height: 32px; border-radius: var(--radius-sm); font-size: 13px; }
+[data-theme="sade"] .model-menu { border-radius: var(--radius-md); }
+[data-theme="sade"] .mode-menu { padding: 4px; }
+[data-theme="sade"] .model-opt { padding: 8px; border-radius: var(--radius-sm); }
+[data-theme="sade"] .model-opt-name { font-size: 13px; font-weight: 500; }
+
+/* Unity switch (round 8): no LEDs, a quieter bay */
+[data-theme="sade"] .us-leds { display: none; }
+[data-theme="sade"] .unity-switch { padding: 4px; }
+/* the link lands: a quiet 4% settle that keeps the knob where it is (base "pop" scales from
+   no translate and would drag the knob back to the left for 300 ms) */
+[data-theme="sade"] .unity.is-linked .us-knob { animation: sade-us-land 160ms var(--g-ease-press); }
+@keyframes sade-us-land { 50% { transform: translateX(calc(var(--us-w) - var(--us-knob-w) - 6px)) scale(1.04); } }
+
+/* Round 10: coloured states (KARAKTER 14A). Waiting on you = the accent, connecting = the
+   secondary, connected = green, error = rose, Unity not open = soft gold (a warning, not an error). */
+[data-theme="sade"] .unity[data-unity="connecting"] .us-track { box-shadow: inset 0 0 0 1px var(--run); }
+[data-theme="sade"] .unity[data-unity="connecting"] .us-knob { background: var(--run); color: var(--us-knob-ink); }
+[data-theme="sade"] .unity[data-unity="connecting"] .unity-word { color: var(--run-text); }
+[data-theme="sade"] .unity[data-unity="closed"] .us-knob { color: var(--sade-warn); box-shadow: inset 0 0 0 1px var(--sade-warn); }
+[data-theme="sade"] .unity[data-unity="closed"] .unity-word { color: var(--sade-warn); }
+[data-theme="sade"] .unity[data-unity="blocked"] .us-track { background: var(--sade-err-soft); }

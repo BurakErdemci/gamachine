@@ -1,0 +1,395 @@
+/* Gamachine v4 shell: app frame, sidebar, top bar, Unity switch bay, model picker.
+   Ported from the approved mockup (gamachine-tasarim/maket/base.css, "DESKTOP LAYOUT" through
+   ".icon-btn"). Rules keep the mockup's class names and values so the React DOM can follow the
+   mockup 1:1; every colour is a token from tokens.css, themes retune them under [data-theme].
+   Deliberately NOT ported here: global element resets (Tailwind preflight already covers them
+   and a second reset would restyle the not-yet-ported chat and workspace), the mockup's page
+   chrome (.mk), the phone frame and the intro. */
+
+/* Registered so the model colour can be transitioned and the visor animated (mockup #9, round 7). */
+@property --model { syntax: '<color>'; inherits: true; initial-value: #888888; }
+@property --mascot-visor { syntax: '<color>'; inherits: true; initial-value: #ff6b3d; }
+
+/* ---------- shared atoms ---------- */
+.ic { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ic-sm { width: 15px; height: 15px; }
+.ic .fill { fill: currentColor; stroke: none; }
+.shell .num, .shell time { font-variant-numeric: tabular-nums; }
+.shell :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
+/* clipped shapes would cut an outside ring: draw it inside */
+.shell .pick:focus-visible, .shell .side-profile:focus-visible { outline-offset: -3px; }
+.shell kbd { font-family: var(--font-mono); font-variant-ligatures: none; }
+.shell button { cursor: pointer; }
+
+/* Approved brand art keeps its original paths; only its colours are re-pointed to tokens. The
+   mockup scoped these to #mascot-head; the app inlines the head once, under .brand-head. */
+.brand-head [fill="#2A2F3D"] { fill: var(--mascot-body); }
+.brand-head [fill="#FF6B3D"] { fill: var(--mascot-visor); }
+.brand-head [fill="#141826"] { fill: var(--mascot-screen); }
+.brand-head [stroke="#141826"] { stroke: var(--mascot-line); }
+.brand-head [fill="#F1EEE6"] { fill: var(--mascot-eye); }
+.brand-head [stroke="#F1EEE6"] { fill: var(--mascot-outline); stroke: var(--mascot-outline); }
+
+/* lexicon hook: a theme may swap a word by showing .lex-q / .lex-p / .lex-w, see HOOKS.md.
+   .lex-s is Sade's plain word (KARAKTER 12: game words off), so base switches it on there. */
+.lex-q, .lex-p, .lex-w, .lex-s { display: none; }
+[data-theme="sade"] .lex-s { display: inline; }
+[data-theme="sade"] .lex:has(> .lex-s) > :not(.lex-s) { display: none; }
+
+/* Status lamps */
+.status { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; }
+.status-ok { background: var(--ok); }
+.shell .status-ok { background: var(--ok-shell); }
+.status-idle { width: 7px; height: 7px; border: var(--line-w) solid var(--shell-text-dim); opacity: .7; }
+.status-running { background: var(--run); animation: run-pulse 1.6s ease-in-out infinite; }
+.status-pending { width: 10px; height: 10px; background: var(--accent); }
+@keyframes run-pulse { 50% { opacity: .35; } }
+@keyframes pop { 50% { transform: scale(1.25); } }
+
+.tex { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+.tex-shell { background-image: var(--shell-tex); background-size: var(--shell-tex-size); }
+
+/* ======================= APP FRAME ======================= */
+/* Round 9 (B1): the app is the window. Height follows the viewport (620 px floor, 1200 px
+   ceiling), width grows to 1920 and centres past that. The mockup's middle track is the chat and
+   its right track the workspace with three fixed widths; in the app today the middle is the
+   editor / preview and the right is the chat panel, whose open/close keeps its own width
+   animation. So the side tracks are `auto` (sized by their animated content) until the
+   workspace phase (P3) brings the mockup's fixed tracks. */
+.app {
+  width: min(1920px, 100%); height: clamp(620px, 100vh, 1200px); margin-inline: auto;
+  overflow: hidden; position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: 52px minmax(0, 1fr);
+  background: var(--shell-bg);
+  color: var(--shell-text);
+  transition: --model 600ms var(--g-ease-move);
+}
+.app[data-model="claude"] { --model: var(--model-claude); }
+.app[data-model="codex"] { --model: var(--model-codex); }
+.app[data-model="gemini"] { --model: var(--model-gemini); }
+.app[data-model="other"] { --model: var(--model-other); }
+.app-main { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.app-right { grid-column: 3; grid-row: 2; min-height: 0; display: flex; }
+
+.shell { background: var(--shell-bg); color: var(--shell-text); position: relative; }
+.shell > *:not(.tex) { position: relative; z-index: 1; }
+
+/* ---------- sidebar ---------- */
+/* The slot is the grid cell and carries the collapse animation; the sidebar inside keeps the
+   mockup's fixed 240 px so its rows never reflow while it slides. */
+.sidebar-slot { grid-row: 1 / 3; grid-column: 1; min-height: 0; overflow: hidden; display: flex; }
+.sidebar {
+  width: 240px; flex: none; min-height: 0;
+  display: flex; flex-direction: column;
+  border-right: var(--line-w) solid var(--shell-line);
+  padding: 0 12px 12px;
+}
+.brand { height: 52px; flex: none; display: flex; align-items: center; padding: 0 8px; }
+/* approved lockup (head + letter-drawn GAMACHINE); 150-unit viewBox -> 32 px tall */
+.brand-logo { display: block; width: 152.4px; height: 32px; flex: none; }
+.brand-word { fill: var(--brand-word); }
+.project {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; flex: none;
+  padding: 9px 10px; margin-top: 6px; border-radius: var(--radius-md);
+  border: var(--line-w) solid var(--shell-line); color: var(--shell-text);
+}
+.project:hover { background: var(--shell-bg-2); }
+.project-text { display: flex; flex-direction: column; line-height: 1.25; flex: 1; min-width: 0; }
+.project-name { font-weight: 600; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-meta { font-size: var(--fs-meta); color: var(--shell-text-dim); }
+.project .ic { color: var(--shell-text-dim); }
+
+/* Chats / Files switch: not in the mockup (it has no file tree); drawn as two shell labels so the
+   existing file tree keeps its place without a new visual language. */
+.side-tabs { display: flex; gap: 2px; margin-top: 10px; flex: none; }
+.side-tab {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px;
+  border-radius: var(--radius-md); color: var(--shell-text-dim);
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.side-tab:hover { background: var(--shell-bg-2); color: var(--shell-text); }
+.side-tab[aria-selected="true"] { background: var(--shell-bg-active); color: var(--shell-text); box-shadow: inset 0 -2px 0 var(--row-mark); }
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; margin: 0 -12px; padding: 0 12px; }
+
+.new-chat {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  margin-top: 10px; padding: 8px 10px; border-radius: var(--radius-md);
+  color: var(--shell-text); font-size: 14px;
+}
+.new-chat:hover { background: var(--shell-bg-2); }
+.new-chat kbd { margin-left: auto; font-size: var(--fs-meta); color: var(--shell-text-dim); }
+
+.side-label {
+  display: flex; align-items: center; gap: 8px;
+  margin: 18px 10px 6px; color: var(--shell-text-dim);
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.side-label::after { content: ""; order: 1; flex: 1; height: var(--line-w); background: var(--label-rule); }
+.side-count { order: 2; font-family: var(--font-mono); letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.chat-list { display: flex; flex-direction: column; gap: 1px; }
+.chat {
+  position: relative; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px;
+  border-radius: var(--radius-md); color: var(--shell-text-dim); font-size: 14px;
+}
+.chat .status { margin: 0 2px; }
+.chat:hover { background: var(--shell-bg-2); color: var(--shell-text); }
+.chat.is-active { background: var(--shell-bg-active); color: var(--shell-text); box-shadow: inset 3px 0 0 var(--row-mark); }
+.chat-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-meta { font-size: var(--fs-meta); color: var(--shell-text-dim); }
+.chat-no { font-family: var(--font-mono); }
+/* active quests: two lines, human-language state under the title */
+.chat-quest { height: auto; min-height: 52px; padding: 8px 10px; align-items: flex-start; }
+.chat-quest .status { margin-top: 6px; }
+.chat-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.chat-sub { font-size: var(--fs-meta); color: var(--shell-text-dim); line-height: 1.35; }
+.chat-quest .badge { margin-top: 3px; }
+/* one signal per state: the badge says "waiting", the lamp steps aside (m5) */
+.chat:has(.badge) .status { visibility: hidden; }
+/* row actions (rename / delete): app-only, shown on hover like the old rows */
+.chat-actions { display: none; gap: 2px; margin-left: auto; }
+.chat:hover .chat-actions, .chat:focus-within .chat-actions { display: inline-flex; }
+.chat:hover .chat-meta, .chat:focus-within .chat-meta { display: none; }
+.chat-act { width: 24px; height: 24px; display: inline-grid; place-items: center; border-radius: var(--radius-sm); color: var(--shell-text-dim); }
+.chat-act:hover { background: var(--shell-bg-active); color: var(--shell-text); }
+.chat-rename {
+  flex: 1; min-width: 0; height: 26px; padding: 0 8px; border-radius: var(--radius-sm);
+  background: var(--shell-bg); color: var(--shell-text); font-size: 13px;
+  border: var(--line-w) solid var(--focus); outline: none;
+}
+.badge {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; flex: none;
+  background: var(--accent); color: var(--accent-ink);
+  font-size: var(--fs-meta); font-weight: 700; line-height: 20px; text-align: center;
+  font-family: var(--font-mono); clip-path: var(--clip-sm);
+}
+.badge-bang { display: none; }
+
+/* maker profile entry */
+.side-profile {
+  margin-top: 10px; flex: none; display: flex; align-items: center; gap: 11px;
+  padding: 9px 10px; border-radius: var(--radius-md); color: var(--shell-text);
+  border: var(--line-w) solid var(--shell-line);
+}
+.lvl {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+  background: var(--lvl-bg); color: var(--lvl-text); border-radius: var(--radius-md);
+  clip-path: var(--clip-badge);
+  font-family: var(--font-display); font-weight: 700; font-size: 15px; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.side-profile-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.side-profile-name { font-size: 14px; font-weight: 600; }
+.side-profile-meta { font-size: var(--fs-meta); color: var(--shell-text-dim); }
+.xp-mini { display: block; height: 3px; margin-top: 5px; background: var(--shell-line); }
+.xp-mini span { display: block; height: 100%; background: var(--run); }
+/* XP / level hooks: a theme that hides .side-profile .level and .xp shows these two instead */
+.side-profile-ic, .side-profile-plain { display: none; }
+.side-profile-ic { width: 34px; height: 20px; color: var(--shell-text-dim); }
+.side-foot {
+  margin-top: 8px; flex: none; display: flex; align-items: center; gap: 6px;
+  padding-top: 8px; border-top: var(--line-w) solid var(--shell-line);
+}
+.foot-btn {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-md);
+  color: var(--shell-text-dim); font-size: 14px;
+}
+.foot-btn:hover { background: var(--shell-bg-2); color: var(--shell-text); }
+.foot-user { margin-left: auto; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-meta); color: var(--shell-text-dim); }
+
+/* ---------- top bar ---------- */
+.topbar {
+  grid-column: 2 / 4; grid-row: 1; z-index: 5; min-width: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 0 14px 0 24px;
+  border-bottom: var(--line-w) solid var(--shell-line);
+}
+.topbar-left { display: flex; align-items: center; gap: 8px; min-width: 0; align-self: stretch; }
+.topbar-mid { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 4px; }
+.topbar-file { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--shell-text-dim); font-size: 13px; }
+.topbar-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.topbar-dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; }
+.topbar-right { display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* ---------- Unity connection switch (round 7, module round 8): the app's signature control ----------
+   Switch position = the user's intent; the light = the real state. data-unity on .unity:
+   off | connecting | on | closed (editor not running / status unknown) | blocked (reason in .unity-why).
+   Its own bay at the far left of the top bar (full bar height, hairline after it) with a
+   two-line readout: "Unity" over the state word + project/scene (or a plain hint). */
+.unity {
+  position: relative; align-self: stretch; flex: none; display: flex; align-items: center; gap: 12px;
+  margin-left: -24px; padding: 0 22px 0 14px; min-width: var(--us-bay-w); font-size: 14px;
+  background: var(--us-bay-bg); border-right: var(--line-w) solid var(--us-bay-line);
+}
+/* "live" edge: a 2 px line along the bay's foot while connected (no glow) */
+.unity::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: calc(-1 * var(--line-w)); height: 2px;
+  background: var(--us-live); opacity: 0; transition: opacity var(--g-dur-base) var(--g-ease-move);
+}
+.unity[data-unity="on"]::after { opacity: 1; }
+.unity-switch { display: inline-flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: var(--radius-md); }
+.unity-switch:hover { background: var(--us-hover); }
+.unity-switch:disabled { cursor: progress; }
+.us-track {
+  position: relative; display: block; flex: none; width: var(--us-w); height: var(--us-h);
+  background: var(--us-track); box-shadow: inset 0 0 0 1px var(--us-edge), var(--us-track-shade);
+  border-radius: var(--us-radius); clip-path: var(--us-clip);
+  transition: background var(--g-dur-base) var(--g-ease-move), box-shadow var(--g-dur-base) var(--g-ease-move);
+}
+.us-knob {
+  position: absolute; top: 3px; left: 3px; display: grid; place-items: center;
+  width: var(--us-knob-w); height: calc(var(--us-h) - 6px);
+  background: var(--us-knob); color: var(--us-knob-ink); box-shadow: var(--us-knob-shade);
+  border-radius: var(--us-knob-radius); clip-path: var(--us-knob-clip);
+  transition: transform var(--g-dur-base) var(--g-ease-press), background var(--g-dur-base) var(--g-ease-move), color var(--g-dur-base);
+}
+/* clip-path chamfers cut the inset edge at two corners; redraw those diagonals (size 0 = off) */
+.us-track { --us-cc: var(--us-edge); }
+.us-knob { --us-cc: transparent; }
+.us-track::before, .us-knob::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  --us-diag: linear-gradient(to bottom right, transparent calc(50% - .8px), var(--us-cc) calc(50% - .8px) calc(50% + .8px), transparent calc(50% + .8px));
+  background: var(--us-diag) top left / var(--us-cut) var(--us-cut) no-repeat, var(--us-diag) bottom right / var(--us-cut) var(--us-cut) no-repeat;
+}
+.us-knob::before { background-size: var(--us-knob-cut) var(--us-knob-cut); }
+.unity[data-unity="on"] .us-track { --us-cc: var(--us-on); }
+.unity[data-unity="closed"] .us-knob { --us-cc: var(--shell-text-dim); }
+.unity[data-unity="blocked"] .us-knob { --us-cc: var(--us-alert); }
+.us-knob .ic { width: var(--us-ic); height: var(--us-ic); stroke-width: 1.8; }
+.us-lock { display: none; }
+.us-leds { display: inline-flex; gap: 3px; }
+.us-leds i { width: 5px; height: var(--us-led-h); background: var(--us-led-off); transform: skewX(var(--seg-skew)); }
+/* two-line readout: row 1 "Unity", row 2 state word + path / hint / "Why?" */
+.unity-read { display: grid; grid-template-columns: auto auto; justify-content: start; align-items: baseline; column-gap: 0; row-gap: 1px; min-width: 0; line-height: 1.3; }
+.unity-text { display: contents; }
+.unity-k {
+  grid-row: 1; grid-column: 1 / -1; color: var(--shell-text-dim);
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.unity-word { grid-row: 2; grid-column: 1; white-space: nowrap; color: var(--shell-text); font-size: 15px; font-weight: 600; }
+.unity-path, .unity-hint, .unity-why-btn { grid-row: 2; grid-column: 2; }
+.unity-path, .unity-hint, .unity-why-btn, .unity-why { display: none; }
+.unity-path { color: var(--shell-text-dim); font-family: var(--font-mono); font-size: 13px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.unity-path::before, .unity-hint::before { content: "·"; margin: 0 8px; font-family: var(--font-body); }
+.unity-hint { color: var(--shell-text-dim); font-size: var(--fs-small); white-space: nowrap; }
+.unity-why-btn { margin-left: 10px; color: var(--shell-text-dim); font-size: var(--fs-small); text-decoration: underline dotted; text-underline-offset: 3px; }
+.unity-why-btn:hover { color: var(--shell-text); }
+.unity-why {
+  position: absolute; top: calc(100% + 10px); left: 12px; width: 360px; z-index: 45;
+  padding: 12px 14px; background: var(--menu-bg); border: var(--line-w) solid var(--menu-line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
+  font-size: 13px; line-height: 1.5; color: var(--shell-text-dim); white-space: normal;
+}
+.unity-why b { color: var(--shell-text); font-weight: 600; }
+/* intent on: the knob sits right in every state but off */
+.unity:not([data-unity="off"]) .us-knob { transform: translateX(calc(var(--us-w) - var(--us-knob-w) - 6px)); }
+.unity[data-unity="on"] .us-track { background: var(--us-track-on); box-shadow: inset 0 0 0 1px var(--us-on); }
+.unity[data-unity="on"] .us-knob { background: var(--us-on); color: var(--us-on-ink); }
+.unity[data-unity="on"] .us-leds i { background: var(--us-on); }
+.unity[data-unity="on"] .unity-word { color: var(--us-on-text); }
+.unity[data-unity="on"] .unity-path { display: inline; }
+.unity[data-unity="off"] .unity-hint { display: inline; }
+.unity[data-unity="connecting"] .unity-word { color: var(--shell-text); }
+.unity[data-unity="connecting"] .us-knob { color: var(--us-on); }
+.unity[data-unity="connecting"] .us-leds i:first-child { background: var(--us-on); }   /* static end state (reduced motion) */
+/* connecting: the LEDs chase left to right */
+.unity[data-unity="connecting"] .us-leds i { animation: us-chase 900ms linear infinite both; }
+.unity[data-unity="connecting"] .us-leds i:nth-child(2) { animation-delay: 150ms; }
+.unity[data-unity="connecting"] .us-leds i:nth-child(3) { animation-delay: 300ms; }
+@keyframes us-chase { 0% { background: var(--us-led-off); } 1%, 60% { background: var(--us-on); } 61%, 100% { background: var(--us-led-off); } }
+.unity[data-unity="closed"] .unity-word { color: var(--shell-text); }
+.unity[data-unity="closed"] .unity-hint { display: inline; }
+.unity[data-unity="closed"] .us-knob { background: transparent; box-shadow: inset 0 0 0 1px var(--shell-text-dim); }
+.unity[data-unity="blocked"] .us-knob { background: transparent; color: var(--us-alert-text); box-shadow: inset 0 0 0 1.5px var(--us-alert); }
+.unity[data-unity="blocked"] .us-plug { display: none; }
+.unity[data-unity="blocked"] .us-lock { display: block; }
+.unity[data-unity="blocked"] .unity-word { color: var(--us-alert-text); font-weight: 600; }
+.unity[data-unity="blocked"] .unity-why-btn { display: inline; }
+.unity[data-unity="off"] .unity-word { color: var(--shell-text-dim); }
+.unity[data-unity="blocked"]:is(.why-open, :has(.unity-why-btn:hover), :has(.unity-why-btn:focus-visible)) .unity-why { display: block; }
+.unity.is-linked .us-knob .ic { animation: pop 300ms var(--g-ease-press); }  /* on the glyph: a transform on the knob would replace its translateX and snap it back */
+/* the link lands: the sidebar head's visor goes dark and lights again, once */
+.brand.is-linked .brand-logo { animation: visor-blink 520ms var(--g-ease-move); }
+@keyframes visor-blink { 30%, 55% { --mascot-visor: var(--mascot-body); } }
+/* The Why popover and a failed throw (transient, the caller clears it) can both be up: they stack
+   in one floating column under the bay instead of covering each other. */
+.unity-pops {
+  position: absolute; top: calc(100% + 10px); left: 12px; width: 360px; z-index: 45;
+  display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+}
+.unity-pops > * { pointer-events: auto; }
+.unity-pops > .unity-why { position: static; width: auto; }
+.unity-err {
+  padding: 10px 14px; background: var(--menu-bg); border: var(--line-w) solid var(--us-alert);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
+  font-size: 13px; line-height: 1.5; color: var(--shell-text);
+}
+
+/* ---------- pickers ---------- */
+.pick {
+  display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px;
+  border: var(--line-w) solid var(--shell-line); border-radius: var(--radius-md);
+  font-size: 14px; color: var(--shell-text); white-space: nowrap;
+}
+.pick:hover { background: var(--shell-bg-2); }
+.pick .ic-sm { color: var(--shell-text-dim); }
+.model-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--model); flex: none; display: inline-block; }
+/* model chip = "character card": name over provider + version */
+.model-wrap { position: relative; }
+.model-pick { height: 40px; padding: 0 10px 0 12px; gap: 10px; text-align: left; max-width: 240px; }
+.model-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.model-name { font-weight: 600; font-size: 13.5px; font-family: var(--font-who); text-transform: var(--who-case); letter-spacing: var(--who-track); overflow: hidden; text-overflow: ellipsis; }
+.model-sub { font-size: var(--fs-meta); color: var(--shell-text-dim); overflow: hidden; text-overflow: ellipsis; }
+/* The model menu keeps its catalog (CLI groups, cloud, local, search) and only takes the mockup's
+   floating surface; its rows are restyled with the thread in P2. */
+.model-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); width: 340px; z-index: 50; overflow: hidden;
+  background: var(--menu-bg); border: var(--line-w) solid var(--menu-line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-card); color: var(--shell-text);
+  transform-origin: top right;
+}
+.model-menu-k {
+  padding: 4px 8px 8px; color: var(--shell-text-dim);
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.model-opt {
+  width: 100%; display: flex; align-items: center; gap: 12px; padding: 9px 10px; text-align: left;
+  border-radius: var(--radius-md); color: var(--shell-text);
+}
+.model-opt + .model-opt { margin-top: 2px; }
+.model-opt:hover { background: var(--shell-bg-active); }
+.model-opt[aria-selected="true"] { background: var(--shell-bg-active); box-shadow: inset 3px 0 0 var(--row-mark); }
+.model-opt-text { flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+.model-opt-name { font-weight: 600; font-size: 14px; }
+.model-opt-sub { font-size: var(--fs-meta); color: var(--shell-text-dim); }
+.mode-pick .ic:first-child { color: var(--ok-shell); }
+.mode-wrap { position: relative; }
+.mode-menu { width: 320px; padding: 8px; }
+.icon-btn {
+  width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: var(--radius-md);
+  color: inherit; opacity: .8; position: relative; flex: none;
+}
+.icon-btn:hover { opacity: 1; background: var(--shell-bg-2); }
+.icon-btn[aria-pressed="true"] { opacity: 1; }
+.icon-btn .badge { position: absolute; top: -2px; right: -4px; min-width: 18px; height: 18px; line-height: 18px; padding: 0 4px; border-radius: 9px; }
+/* small status chips that share the bar (remote control, C# analysis) */
+.bar-chip {
+  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px;
+  border: var(--line-w) solid var(--shell-line); border-radius: var(--radius-md);
+  color: var(--shell-text-dim); font-size: var(--fs-meta); white-space: nowrap;
+}
+button.bar-chip:hover { background: var(--shell-bg-2); color: var(--shell-text); }
+.bar-chip .status { width: 7px; height: 7px; }
+.status-err { background: var(--accent); }
+
+/* ---------- motion preference: every moment jumps to its end state ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .shell *, .shell *::before, .shell *::after { animation: none !important; transition: none !important; }
+  .app { transition: none !important; }
+}
+:root[data-motion="reduced"] .shell *, :root[data-motion="reduced"] .shell *::before, :root[data-motion="reduced"] .shell *::after { animation: none !important; transition: none !important; }

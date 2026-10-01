@@ -1,0 +1,31 @@
+/* Atolye shell touches, ported from maket/theme-atolye.css (the workshop). */
+
+/* word swap only (lexicon) */
+[data-theme="atolye"] .lex-w { display: inline; }
+[data-theme="atolye"] .lex:has(> .lex-w) > :not(.lex-w) { display: none; }
+
+/* the lever is brass in every state; "live" is the lit slot and the gauge lamps */
+[data-theme="atolye"] .unity[data-unity="on"] .us-knob { background: var(--us-knob); color: var(--us-knob-ink); }
+[data-theme="atolye"] .unity[data-unity="on"] .us-track { box-shadow: inset 0 0 0 1.5px var(--us-on); }
+[data-theme="atolye"] .us-leds i { border-radius: 1px; }
+/* the lever: an engraved groove end to end (::before, replaces the unused chamfer lines),
+   the brass rod from the groove's left end to the head (::after), the head on top */
+[data-theme="atolye"] .us-track::before {
+  inset: auto 9px auto 9px; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px;
+  background: #0B0907; box-shadow: 0 1px 0 rgba(255, 240, 200, .10);
+}
+[data-theme="atolye"] .us-track::after {
+  content: ""; position: absolute; left: 9px; top: 50%; height: 4px; margin-top: -2px; width: 0;
+  border-radius: 2px; background: var(--us-rod); box-shadow: inset 0 -1px 0 rgba(60, 40, 10, .45);
+  transition: width var(--g-dur-base) var(--g-ease-press);
+}
+/* rod ends under the head's left edge, so a hollow head (closed / blocked) shows groove, not brass */
+[data-theme="atolye"] .unity:not([data-unity="off"]) .us-track::after { width: calc(var(--us-w) - var(--us-knob-w) - 3px - 9px + 4px); }
+[data-theme="atolye"] .unity[data-unity="closed"] .us-track::after { background: #5A4C3C; }
+[data-theme="atolye"] .us-knob { z-index: 1; }
+[data-theme="atolye"] .unity.is-linked .us-knob { animation: atolye-us-land 200ms var(--g-ease-press); }
+@keyframes atolye-us-land { 50% { transform: translateX(calc(var(--us-w) - var(--us-knob-w) - 6px + 2px)); } }
+/* connecting: the sage glyph vanished on brass; it is cut in sage ink instead */
+[data-theme="atolye"] .unity[data-unity="connecting"] .us-knob { color: var(--us-connect-ink); }
+/* closed (editor not running): the hollow knob shows its glyph in the shell dim ink */
+[data-theme="atolye"] .unity[data-unity="closed"] .us-knob { color: var(--shell-text-dim); }

@@ -1,0 +1,30 @@
+/* Pafta shell touches, ported from maket/theme-pafta.css (the drafting sheet). */
+
+/* sheet words in the shared lexicon slots */
+[data-theme="pafta"] .lex-p { display: inline; }
+[data-theme="pafta"] .lex:has(> .lex-p) > :not(.lex-p) { display: none; }
+/* m14: the sidebar lockup sits in the smallest title block - one hairline box, nothing inside changes */
+[data-theme="pafta"] .brand-logo { box-sizing: content-box; padding: 5px 9px; border: 1px solid var(--shell-line); }
+
+/* the breaker: the handle rides a vertical slot; off = down, any "on" intent = up */
+[data-theme="pafta"] .unity-switch { padding: 3px 6px; gap: 7px; }
+[data-theme="pafta"] .us-track::after {
+  content: ""; position: absolute; left: 50%; top: 6px; bottom: 6px; width: 6px; margin-left: -3px;
+  background: #0A0F14; box-shadow: inset 0 0 0 1px #2F3B49;
+}
+[data-theme="pafta"] .unity[data-unity="on"] .us-track::after { box-shadow: inset 0 0 0 1px var(--us-on); }
+[data-theme="pafta"] .us-knob {
+  z-index: 1; top: auto; bottom: 3px; left: calc((var(--us-w) - var(--us-knob-w)) / 2);
+  height: var(--us-knob-h);
+}
+[data-theme="pafta"] .unity:not([data-unity="off"]) .us-knob { transform: translateY(calc(-1 * var(--us-throw))); }
+[data-theme="pafta"] .unity.is-linked .us-knob { animation: pafta-us-land 180ms var(--g-ease-press); }
+@keyframes pafta-us-land { 50% { transform: translateY(calc(-1 * var(--us-throw) - 2px)); } }
+/* the breaker's indicator window: three square flags stacked beside the housing; they fill
+   bottom to top while connecting (column-reverse: the first flag is the lowest) */
+[data-theme="pafta"] .us-leds { flex-direction: column-reverse; gap: 3px; }
+[data-theme="pafta"] .us-leds i { width: 8px; }
+/* connecting: the pale toggle carries the glyph in blueprint ink (the light blue vanished on it) */
+[data-theme="pafta"] .unity[data-unity="connecting"] .us-knob { color: var(--us-connect-ink); }
+/* closed (editor not running): the hollow knob shows its glyph in the shell dim ink */
+[data-theme="pafta"] .unity[data-unity="closed"] .us-knob { color: var(--shell-text-dim); }
