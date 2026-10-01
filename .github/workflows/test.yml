@@ -178,7 +178,9 @@ jobs:
         working-directory: relay
         env:
           RELAY_IT: '0'
-        run: node --test "test/*.test.mjs"
+        # Unquoted on purpose: Node 20 has no glob support in --test, so the
+        # shell expands the pattern.
+        run: node --test test/*.test.mjs
 
       # `__tests__/workspace-fingerprint-parity.test.ts` is the ONLY thing that
       # runs both `gamachine-ws-fp-2` implementations, and it needs a Python to
