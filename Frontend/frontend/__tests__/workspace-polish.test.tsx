@@ -188,7 +188,7 @@ describe('workspace polish regressions', () => {
   })
   it('G5 hides the placeholder in the welcome and uses Gamachine as the home title', () => {
     render(<WorkspaceScreen {...pickerProps()} />)
-    expect(screen.getByRole('heading').textContent?.trim()).toBe(tr['workspace.welcome'])
+    expect(screen.getByRole('heading').textContent?.trim()).toBe(tr['workspace.welcomeNoName'])
     const source = ts.createSourceFile('home.tsx', readFileSync('renderer/pages/home.tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
     let expression = ''
     const visit = (node: ts.Node) => {
