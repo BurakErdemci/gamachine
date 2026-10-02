@@ -109,6 +109,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
   }, []);
   const [availableModels, setAvailableModels] = useState<AvailableModelsState>({ local: [], cloud: [], subscription: [] });
   const [providersWithKeys, setProvidersWithKeys] = useState<string[]>([]);
+  const [providersWithKeysLoaded, setProvidersWithKeysLoaded] = useState(false);
   // Sohbet kapısı. Tek doğruluk kaynağı backend'de (`/provider-ready`): model →
   // CLI ailesi eşlemesi orada yaşıyor ve burada ikinci bir kopyasını tutmak
   // ikisini zamanla ayrıştırırdı.
@@ -386,6 +387,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     try {
       const res = await axios.get(`${API}/api-keys/${userId}`);
       if (res.data?.providers_with_keys) setProvidersWithKeys(res.data.providers_with_keys);
+      setProvidersWithKeysLoaded(true);
     } catch (err) { console.error("API keys hatası:", err); }
   }, [API]);
 
@@ -536,6 +538,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     setAiConfig,
     availableModels,
     providersWithKeys,
+    providersWithKeysLoaded,
     modelOrToggles,
     setModelOrToggles,
     showSettings,

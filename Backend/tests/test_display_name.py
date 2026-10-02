@@ -86,3 +86,13 @@ def test_token_required(client_db, headers):
     assert client.get("/me", headers=headers).status_code == 401
     assert client.put("/me/name", headers=headers, json={"name": "Burak"}).status_code == 401
     assert db.get_setting("user_display_name") is None
+
+
+@pytest.mark.parametrize("separator", ["\t", "\n"])
+def test_whitespace_controls_separate_name_words(client_db, separator):
+    client, db = client_db
+    response = client.put("/me/name", headers=H,
+                          json={"name": f"Burak{separator}Emre"})
+    assert response.status_code == 200
+    assert response.json() == {"name": "Burak Emre"}
+    assert db.get_setting("user_display_name") == "Burak Emre"

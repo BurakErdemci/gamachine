@@ -22,6 +22,7 @@ export interface SettingsScreenProps {
   aiConfig: AIConfig;
   availableModels?: AvailableModelsState;
   providersWithKeys: string[];
+  providersWithKeysLoaded?: boolean;
   onClose: () => void;
   onLogout: () => void;
   onDeleteKey: (provider: string) => Promise<boolean | void>;
@@ -219,6 +220,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
           {page === 'modeller' && (
             <ModelsPage
               aiConfig={props.aiConfig} availableModels={props.availableModels} providersWithKeys={props.providersWithKeys}
+              providersWithKeysLoaded={props.providersWithKeysLoaded}
               defaultModel={props.defaultModel} onSaveDefaultModel={props.onSaveDefaultModel}
               onSaveApiKey={props.onSaveApiKey} onDeleteKey={props.onDeleteKey} onUseCustomModel={props.onUseCustomModel}
               usage={usage} API={props.API} http={props.http} token={user?.sessionToken} showToast={props.showToast}

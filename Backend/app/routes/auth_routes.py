@@ -47,8 +47,9 @@ def create_auth_router(db):
     async def put_name(body: DisplayNameBody,
                        x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
-        # Display name, 2 Oct 2026: remove invisible controls before counting or storing.
-        name = "".join(char for char in body.name if unicodedata.category(char) not in {"Cc", "Cf"})
+        # Minor audit fixes, 2 Oct 2026: preserve word separators before dropping controls.
+        name = "".join(" " if char.isspace() else char for char in body.name)
+        name = "".join(char for char in name if unicodedata.category(char) not in {"Cc", "Cf"})
         name = " ".join(name.split())
         if len(name) > 40:
             raise HTTPException(status_code=422, detail="name_too_long")

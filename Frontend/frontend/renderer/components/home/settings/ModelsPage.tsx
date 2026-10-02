@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 
 import { useLang, type TKey } from '../../../lib/i18n';
@@ -22,6 +22,7 @@ export interface ModelsPageProps {
   aiConfig: AIConfig;
   availableModels?: AvailableModelsState | { local: ModelItem[]; cloud: ModelItem[]; subscription: ModelItem[] };
   providersWithKeys: string[];
+  providersWithKeysLoaded?: boolean;
   /** The default for a new chat; null until read (the chat on screen's pair is shown meanwhile). */
   defaultModel?: { provider_type: string; model_name: string } | null;
   onSaveDefaultModel?: (provider: string, model: string) => Promise<boolean>;
@@ -42,7 +43,7 @@ const SEP = '\u0000';
 const noHttp = { get: async () => ({ data: null }), post: async () => ({ data: null }) };
 
 export const ModelsPage = ({
-  aiConfig, availableModels, providersWithKeys, defaultModel, onSaveDefaultModel, onSaveApiKey,
+  aiConfig, availableModels, providersWithKeys, providersWithKeysLoaded, defaultModel, onSaveDefaultModel, onSaveApiKey,
   onDeleteKey, onUseCustomModel, usage = null, API = '', http, token, showToast, saved,
 }: ModelsPageProps) => {
   const { t } = useLang();
@@ -106,7 +107,8 @@ export const ModelsPage = ({
     const [provider, ...rest] = value.split(SEP);
     const model = rest.join(SEP);
     if (!provider || !model || !onSaveDefaultModel) return;
-    if (cloudGroups.some(g => g.provider === provider) && !providersWithKeys.includes(provider)) {
+    // Minor audit fixes, 2 Oct 2026: an unfinished read cannot establish a missing key.
+    if (providersWithKeysLoaded !== false && cloudGroups.some(g => g.provider === provider) && !providersWithKeys.includes(provider)) {
       toast(`${goster(provider)} ${t('models.apiKeyNeeded')}`, 'warning');
       startEdit(provider);
       return;
@@ -166,6 +168,7 @@ export const ModelsPage = ({
   const [editing, setEditing] = useState<string | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const deletePending = useRef(false);
   const startEdit = (p: string) => { setEditing(p); setKeyInput(''); };
   const cancelEdit = () => { setEditing(null); setKeyInput(''); };
   const commitKey = async (p: string) => {
@@ -176,10 +179,18 @@ export const ModelsPage = ({
     if (ok) { setEditing(null); setKeyInput(''); saved(); }
   };
   const deleteKey = async (p: string) => {
-    const label = API_KEY_PROVIDERS.find(provider => provider.value === p)?.label || goster(p);
-    if (!(await confirmDialog(t('set.key.deleteConfirm', { saglayici: label }), t('set.key.delete'), t('confirm.cancel')))) return;
-    setBusyKey(p);
-    try { if (await onDeleteKey(p) === true) saved(); } finally { setBusyKey(null); }
+    // Minor audit fixes, 2 Oct 2026: the shared dialog must have only one pending caller.
+    if (deletePending.current) return;
+    deletePending.current = true;
+    try {
+      const label = API_KEY_PROVIDERS.find(provider => provider.value === p)?.label || goster(p);
+      if (!(await confirmDialog(t('set.key.deleteConfirm', { saglayici: label }), t('set.key.delete'), t('confirm.cancel')))) return;
+      setBusyKey(p);
+      if (await onDeleteKey(p) === true) saved();
+    } finally {
+      deletePending.current = false;
+      setBusyKey(null);
+    }
   };
   const keyRow = (p: { value: string; label: string; badge?: string }) => {
     const has = providersWithKeys.includes(p.value);

@@ -356,12 +356,14 @@ export const AccountPage = ({ user, userName, onSaveName, onLogout, onOpenProfil
   const name = currentName || t('set.me.anon');
   const [nameInput, setNameInput] = React.useState(currentName);
   const [savingName, setSavingName] = React.useState(false);
-  React.useEffect(() => { setNameInput(currentName); }, [currentName]);
+  const [nameSaveCount, setNameSaveCount] = React.useState(0);
+  // Minor audit fixes, 2 Oct 2026: normalization may leave the saved prop unchanged.
+  React.useEffect(() => { setNameInput(currentName); }, [currentName, nameSaveCount]);
   const saveName = async () => {
     if (!onSaveName || savingName || nameInput.trim() === currentName) return;
     setSavingName(true);
     try {
-      if (await onSaveName(nameInput)) saved?.();
+      if (await onSaveName(nameInput)) { setNameSaveCount(count => count + 1); saved?.(); }
       else showToast?.(t('set.hesap.nameFailed'), 'error');
     } catch {
       showToast?.(t('set.hesap.nameFailed'), 'error');
@@ -412,6 +414,8 @@ export const AccountPage = ({ user, userName, onSaveName, onLogout, onOpenProfil
                   aria-label={t('set.hesap.name')} value={nameInput} disabled={savingName}
                   onChange={e => setNameInput(e.target.value)}
                   onKeyDown={e => {
+                    // Minor audit fixes, 2 Oct 2026: IME Enter commits composition first.
+                    if (e.key === 'Enter' && (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229)) return;
                     if (e.key === 'Enter') { e.preventDefault(); void saveName(); }
                     // Display name, 2 Oct 2026: restore the draft before the screen sees Esc.
                     if (e.key === 'Escape') { e.preventDefault(); setNameInput(currentName); e.currentTarget.blur(); }

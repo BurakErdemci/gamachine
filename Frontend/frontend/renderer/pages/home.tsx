@@ -837,6 +837,7 @@ export default function Home() {
       <SettingsScreen
         open={ai.showSettings} page={settingsPage} onPageChange={setSettingsPage}
         aiConfig={ai.aiConfig} availableModels={ai.availableModels} providersWithKeys={ai.providersWithKeys}
+        providersWithKeysLoaded={ai.providersWithKeysLoaded}
         onClose={closeSettings} onLogout={handleLogout} onDeleteKey={ai.deleteApiKey}
         defaultModel={ai.defaultConfig} onSaveDefaultModel={ai.saveDefaultModel}
         onSaveApiKey={ai.saveApiKey} onUseCustomModel={ai.applyCustomModel}

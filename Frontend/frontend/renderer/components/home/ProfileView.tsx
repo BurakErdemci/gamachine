@@ -128,6 +128,7 @@ export const ProfileView = ({
   const mix = mixRows(s.models.mix);
   const fav = s.models.favourite ? favouriteView(s.models.favourite) : null;
   const unlocked = s.achievements.filter(a => a.unlocked).length;
+  const unknown = s.achievements.filter(a => a.unlocked === null).length;
   const avg = perActiveDay(c);
 
   // ---- stat tiles: only those with a data source (PROFIL-PLANI §5) ----
@@ -343,7 +344,7 @@ export const ProfileView = ({
         <section className="pf-card pf-shelf" data-guide="profile-shelf" aria-label={t('pf.shelf.label')}>
           <header className="pf-card-head">
             <h2 className="pf-h">{t('pf.shelf.title')}</h2>
-            <span className="pf-card-meta"><Num>{t('pf.shelf.meta', { n: unlocked, total: s.achievements.length })}</Num></span>
+            <span className="pf-card-meta"><Num>{t(unknown > 0 ? 'pf.shelf.metaUnknown' : 'pf.shelf.meta', { n: unlocked, total: s.achievements.length, u: unknown })}</Num></span>
           </header>
           <ul className="shelf">{s.achievements.map(achTile)}</ul>
         </section>
