@@ -103,20 +103,19 @@ export const SettingsModal = ({
     { id: 'mode', label: t('settings.tabMode') },
     { id: 'remote', label: t('settings.tabRemote') },
   ];
-  const UNITY_STATUS_CONFIG: Record<UnityMCPStatus, { label: string; dot: string; bg: string; border: string }> = {
-    off:       { label: t('unity.off'),       dot: "bg-slate-600",                bg: "bg-slate-900/50",   border: "border-slate-700/50" },
-    // `blocked` satırının yokluğu ÇALIŞMA ANINDA çökme üretiyordu: aşağıda
-    // `UNITY_STATUS_CONFIG[unityMcpStatus].border` okunuyor ve backend bu değeri
-    // `b4065f1`'den beri döndürüyor, yani yabancı bir sunucu 8080'i tutarken
-    // Ayarlar'ı açmak `undefined.border` demekti.
-    blocked:   { label: t('unity.blocked'),   dot: "bg-red-500",                  bg: "bg-red-500/5",      border: "border-red-500/30" },
-    starting:  { label: t('unity.starting'),  dot: "bg-yellow-400 animate-pulse", bg: "bg-yellow-500/5",   border: "border-yellow-500/20" },
-    running:   { label: t('unity.running'),   dot: "bg-yellow-400 animate-pulse", bg: "bg-yellow-500/5",   border: "border-yellow-500/20" },
-    connected: { label: t('unity.connected'), dot: "bg-emerald-400",              bg: "bg-emerald-500/5",  border: "border-emerald-500/20" },
-    // Gri ve nabızsız: durum bilinmiyor, "çalışıyor" da denmiyor. Yeşil
-    // bırakmak bulgu I-2'nin ta kendisiydi — yoklama başarısızken gösterge
-    // süresiz `connected` kalıyordu.
-    unknown:   { label: t('unity.unknown'),   dot: "bg-slate-500",                bg: "bg-slate-900/50",   border: "border-slate-700/50" },
+  // Each Unity state maps to a tone; settings.css turns the tone into colour.
+  // The `blocked` entry is load-bearing: the backend has returned that value
+  // since `b4065f1`, and a missing key crashed the modal on open whenever a
+  // foreign server held port 8080. `unknown` is a quiet grey with no pulse:
+  // the state is not known, so it must not read as "working" (finding I-2,
+  // where a failed poll left the indicator on `connected` indefinitely).
+  const UNITY_STATUS_CONFIG: Record<UnityMCPStatus, { label: string; tone: 'off' | 'danger' | 'busy' | 'ok' }> = {
+    off:       { label: t('unity.off'),       tone: 'off' },
+    blocked:   { label: t('unity.blocked'),   tone: 'danger' },
+    starting:  { label: t('unity.starting'),  tone: 'busy' },
+    running:   { label: t('unity.running'),   tone: 'busy' },
+    connected: { label: t('unity.connected'), tone: 'ok' },
+    unknown:   { label: t('unity.unknown'),   tone: 'off' },
   };
   // Anahtarın AÇIK görünmesi için sunucunun BİZİM olması gerekiyor. Eski koşul
   // `!== 'off'` idi ve `blocked`'ı açık sayıyordu — oysa o durumda 8080'de duran
@@ -151,24 +150,21 @@ export const SettingsModal = ({
   return (
   <AnimatePresence>
     {open && (
-      <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100]">
+      <div role="dialog" aria-modal="true" aria-label={t('settings.title')} className="gm-set-scrim">
         <motion.div
           initial={{ scale: 0.96, opacity: 0, y: 8 }}
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.96, opacity: 0, y: 8 }}
           transition={{ duration: 0.16, ease: 'easeOut' }}
-          className="bg-[#0B0D12]/95 backdrop-blur-xl border border-white/10 rounded-2xl max-w-lg w-full shadow-[0_24px_64px_-16px_rgba(0,0,0,0.9)] flex flex-col max-h-[88vh] overflow-hidden"
+          className="gm-set"
         >
-          <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-white/[0.06] shrink-0">
-            <div className="flex items-center gap-2.5">
-              <div className="p-1.5 bg-blue-500/10 rounded-lg text-blue-500"><Settings size={18} /></div>
-              <h2 className="text-base font-bold text-white">{t('settings.title')}</h2>
-            </div>
-            <button onClick={onClose} className="p-1.5 hover:bg-white/[0.06] rounded-lg transition-colors text-slate-400">
+          <div className="gm-set-head">
+            <h2 className="gm-set-title"><Settings size={18} className="gm-set-title-ic" />{t('settings.title')}</h2>
+            <button type="button" onClick={onClose} aria-label={t('settings.close')} className="gm-set-close">
               <X size={18} />
             </button>
           </div>
-          <div role="tablist" className="flex gap-1 px-5 pt-3 shrink-0">
+          <div role="tablist" className="gm-set-tabs">
             {TABS.map(item => (
               <button
                 key={item.id}
@@ -176,21 +172,17 @@ export const SettingsModal = ({
                 type="button"
                 aria-selected={tab === item.id}
                 onClick={() => setTab(item.id)}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors border ${
-                  tab === item.id
-                    ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
-                    : 'bg-transparent border-transparent text-slate-500 hover:text-slate-300 hover:bg-white/[0.04]'
-                }`}
+                className="gm-set-tab"
               >
                 {item.label}
               </button>
             ))}
           </div>
-          <div className="space-y-4 px-5 py-4 overflow-y-auto custom-scrollbar">
+          <div className="gm-set-body custom-scrollbar">
             {tab === 'general' && (<>
-            <div>
-              <label className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-2">{t('settings.provider')}</label>
-              <div className="grid grid-cols-3 gap-1.5">
+            <div className="gm-set-group">
+              <label className="gm-set-k">{t('settings.provider')}</label>
+              <div className="gm-set-grid">
                 {PROVIDER_TILES.map(tile => {
                   const selected = aiConfig.provider_type === tile.value;
                   const hasKey = providersWithKeys.includes(tile.value);
@@ -198,50 +190,48 @@ export const SettingsModal = ({
                     <button
                       key={tile.value}
                       type="button"
+                      aria-pressed={selected}
                       onClick={() => onChange({ ...aiConfig, provider_type: tile.value, api_key: '', model_name: '' })}
-                      className={`relative flex items-center gap-2 px-2 py-2 rounded-xl border text-left transition-all ${
-                        selected
-                          ? 'border-blue-500/60 bg-blue-500/10 shadow-[0_0_0_1px_rgba(59,130,246,0.25)]'
-                          : 'border-white/[0.07] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/15'
-                      } ${tile.value === 'subscription' ? 'col-span-2' : ''}`}
+                      className={`gm-set-tile ${tile.value === 'subscription' ? 'gm-set-tile-wide' : ''}`}
                     >
                       <ModelAvatar provider={tile.brand} size={11} containerSize="h-5 w-5" />
-                      <span className={`text-[11px] font-semibold truncate ${selected ? 'text-blue-300' : 'text-slate-300'}`}>
-                        {tile.labelKey ? t(tile.labelKey as any) : tile.label}
+                      <span className="gm-set-tile-text">
+                        <span className="gm-set-tile-name">{tile.labelKey ? t(tile.labelKey as any) : tile.label}</span>
+                        {/* The badge is a sub line under the name: as a corner sticker it
+                            had to shrink to 7px to fit, far below the 12px floor. */}
+                        {tile.badge && <span className="gm-set-tile-sub">{t(tile.badge as any)}</span>}
                       </span>
-                      {tile.badge && (
-                        <span className="absolute -top-1.5 -right-1 text-[7px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/40 rounded px-1 uppercase tracking-wide">
-                          {t(tile.badge as any)}
-                        </span>
-                      )}
                       {!tile.badge && hasKey && tile.value !== 'subscription' && tile.value !== 'ollama' && (
-                        <Key size={8} className="absolute top-1.5 right-1.5 text-blue-400/60" />
+                        <Key size={10} className="gm-set-tile-key" />
                       )}
-                      {selected && <Check size={11} className="ml-auto text-blue-400 shrink-0" />}
+                      {selected && <Check size={12} className="gm-set-tile-check" />}
                     </button>
                   );
                 })}
               </div>
             </div>
             {aiConfig.provider_type !== 'ollama' && aiConfig.provider_type !== 'subscription' && (
-              <div>
-                <label className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-1.5">
+              <div className="gm-set-group">
+                <label className="gm-set-k" htmlFor="settings-api-key">
                   {t('settings.apiKey')}
                   {providersWithKeys.includes(aiConfig.provider_type) && !aiConfig.api_key && (
-                    <span className="ml-2 text-emerald-400 normal-case tracking-normal">{t('settings.savedKey')}</span>
+                    <span className="gm-set-k-note">{t('settings.savedKey')}</span>
                   )}
                 </label>
                 <input
+                  id="settings-api-key"
                   type="password"
                   value={aiConfig.api_key}
                   onChange={e => onChange({ ...aiConfig, api_key: e.target.value })}
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl p-3 text-white text-sm outline-none focus:border-blue-500/60 focus:bg-white/[0.06] transition-colors placeholder:text-slate-600"
+                  className="gm-set-input"
                   placeholder={providersWithKeys.includes(aiConfig.provider_type) ? t('settings.savedKeyPlaceholder') : t('settings.apiKeyPlaceholder')}
                 />
                 {providersWithKeys.includes(aiConfig.provider_type) && !aiConfig.api_key && (
                   <button
+                    type="button"
                     onClick={() => onDeleteKey(aiConfig.provider_type)}
-                    className="mt-2 flex items-center gap-1.5 text-[11px] text-red-500/70 hover:text-red-400 transition-colors"
+                    data-tone="danger"
+                    className="gm-set-link self-start"
                   >
                     <Trash2 size={12} /> {t('settings.deleteKey')}
                   </button>
@@ -249,33 +239,29 @@ export const SettingsModal = ({
               </div>
             )}
             {aiConfig.provider_type === 'subscription' && (
-              <div className="p-3 rounded-xl border border-purple-500/30 bg-purple-500/5">
-                <p className="text-[10px] text-purple-300 font-medium">{t('settings.subscriptionActive')}</p>
-                <p className="text-[9px] text-purple-400/70 mt-0.5">
-                  {t('settings.subscriptionDesc')}
-                </p>
+              <div className="gm-set-card">
+                <p className="gm-set-name">{t('settings.subscriptionActive')}</p>
+                <p className="gm-set-hint">{t('settings.subscriptionDesc')}</p>
               </div>
             )}
-            <div>
-              <label className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-1.5">{t('settings.modelName')}</label>
+            <div className="gm-set-group">
+              <label className="gm-set-k" htmlFor="settings-model-name">{t('settings.modelName')}</label>
               <input
+                id="settings-model-name"
                 value={aiConfig.model_name}
                 onChange={e => onChange({ ...aiConfig, model_name: e.target.value })}
-                className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl p-3 text-white text-sm outline-none focus:border-blue-500/60 focus:bg-white/[0.06] transition-colors placeholder:text-slate-600"
+                className="gm-set-input"
                 placeholder={varsayilanModel || t('settings.modelPlaceholder')}
               />
               {MODEL_HINTS.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
+                <div className="gm-set-chips">
                   {MODEL_HINTS.map(hint => (
                     <button
                       key={hint.value}
                       type="button"
+                      aria-pressed={aiConfig.model_name === hint.value}
                       onClick={() => onChange({ ...aiConfig, model_name: hint.value })}
-                      className={`px-2 py-0.5 rounded-md text-[10px] transition-colors border ${
-                        aiConfig.model_name === hint.value
-                          ? 'bg-blue-500/20 border-blue-500/40 text-blue-300'
-                          : 'bg-white/[0.03] border-white/[0.08] text-slate-500 hover:text-slate-300 hover:border-white/20'
-                      }`}
+                      className="gm-set-chip"
                     >
                       {hint.label}
                     </button>
@@ -283,55 +269,59 @@ export const SettingsModal = ({
                 </div>
               )}
             </div>
-            {/* Unity MCP Toggle */}
-            <div className={`flex items-center justify-between p-3 rounded-xl border ${UNITY_STATUS_CONFIG[unityMcpStatus].border} ${UNITY_STATUS_CONFIG[unityMcpStatus].bg}`}>
-              <div className="flex items-center gap-2.5">
-                <Gamepad2 size={15} className="text-purple-400 shrink-0" />
+            {/* Unity MCP toggle. The row carries the status as a tone: `blocked`
+                must not look like the grey "off", because it hides a foreign server. */}
+            <div
+              data-testid="unity-mcp-row"
+              data-status={unityMcpStatus}
+              data-tone={UNITY_STATUS_CONFIG[unityMcpStatus].tone}
+              className="gm-set-card gm-set-row"
+            >
+              <div className="gm-set-row-l">
+                <Gamepad2 size={15} className="gm-set-ic" />
                 <div>
-                  <p className="text-xs font-semibold text-slate-200">Unity MCP</p>
+                  <p className="gm-set-name">Unity MCP</p>
                   <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${UNITY_STATUS_CONFIG[unityMcpStatus].dot}`} />
-                    <span className="text-[10px] text-slate-400">{UNITY_STATUS_CONFIG[unityMcpStatus].label}</span>
+                    <span className="gm-set-lamp" data-tone={UNITY_STATUS_CONFIG[unityMcpStatus].tone} />
+                    <span className="gm-set-meta">{UNITY_STATUS_CONFIG[unityMcpStatus].label}</span>
                   </div>
                 </div>
               </div>
+              {/* Kept a plain button (no role="switch") so its accessible role does not
+                  change; data-state says whether it reads as on. */}
               <button
+                type="button"
+                aria-label="Unity MCP"
+                data-testid="unity-mcp-toggle"
+                data-state={unityMcpAcik ? 'on' : 'off'}
                 onClick={onToggleUnityMcp}
                 disabled={unityMcpToggling || unityMcpStatus === 'starting'}
-                className={`relative w-10 h-5 rounded-full transition-colors duration-200 focus:outline-none disabled:opacity-50 ${
-                  unityMcpAcik ? 'bg-purple-600' : 'bg-slate-700'
-                }`}
+                className="gm-set-switch"
               >
-                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 flex items-center justify-center ${
-                  unityMcpAcik ? 'translate-x-5' : 'translate-x-0'
-                }`}>
-                  {unityMcpToggling && <Loader2 size={10} className="text-purple-600 animate-spin" />}
+                <span className="gm-set-knob">
+                  {unityMcpToggling && <Loader2 size={10} className="animate-spin" />}
                 </span>
               </button>
             </div>
 
-            <div role="group" aria-label={t('settings.appearance.title')} className="space-y-2">
-              <p className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-2">{t('settings.appearance.title')}</p>
-              <div className="flex items-center justify-between gap-2 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
-                <p className="text-xs font-semibold text-slate-200">{t('settings.appearance.theme')}</p>
-                <div role="group" aria-label={t('settings.appearance.theme')} className="flex flex-wrap gap-1 justify-end">
+            <div role="group" aria-label={t('settings.appearance.title')} className="gm-set-group">
+              <p className="gm-set-k">{t('settings.appearance.title')}</p>
+              <div className="gm-set-card gm-set-row">
+                <p className="gm-set-name">{t('settings.appearance.theme')}</p>
+                <div role="group" aria-label={t('settings.appearance.theme')} className="gm-set-seg">
                   {THEMES.map(theme => (
                     <button key={theme} type="button" aria-pressed={appearance.theme === theme}
                       onClick={() => setAppearance({ theme })}
-                      className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all border ${
-                        appearance.theme === theme
-                          ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
-                          : 'bg-white/[0.04] border-white/[0.08] text-slate-500 hover:text-slate-300 hover:border-white/20'
-                      }`}
+                      className="gm-set-seg-btn"
                     >{t(`settings.appearance.${theme}`)}</button>
                   ))}
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-2 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
-                <label htmlFor="appearance-reading-font" className="text-xs font-semibold text-slate-200">{t('settings.appearance.readingFont')}</label>
+              <div className="gm-set-card gm-set-row">
+                <label htmlFor="appearance-reading-font" className="gm-set-name">{t('settings.appearance.readingFont')}</label>
                 <select id="appearance-reading-font" value={appearance.readingFont}
                   onChange={event => setAppearance({ readingFont: event.target.value as ReadingFont })}
-                  className="min-w-0 max-w-[60%] bg-white/[0.04] border border-white/[0.08] rounded-lg px-2 py-1 text-slate-200 text-[11px] outline-none focus:border-blue-500/60"
+                  className="gm-set-select"
                 >
                   {READING_FONTS.map(font => (
                     <option key={font} value={font} style={font === 'theme' ? undefined : { fontFamily: FONT_STACKS[font] }}>
@@ -340,11 +330,11 @@ export const SettingsModal = ({
                   ))}
                 </select>
               </div>
-              <div className="flex items-center justify-between gap-2 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
-                <label htmlFor="appearance-code-font" className="text-xs font-semibold text-slate-200">{t('settings.appearance.codeFont')}</label>
+              <div className="gm-set-card gm-set-row">
+                <label htmlFor="appearance-code-font" className="gm-set-name">{t('settings.appearance.codeFont')}</label>
                 <select id="appearance-code-font" value={appearance.codeFont}
                   onChange={event => setAppearance({ codeFont: event.target.value as CodeFont })}
-                  className="min-w-0 max-w-[60%] bg-white/[0.04] border border-white/[0.08] rounded-lg px-2 py-1 text-slate-200 text-[11px] outline-none focus:border-blue-500/60"
+                  className="gm-set-select"
                 >
                   {CODE_FONTS.map(font => (
                     <option key={font} value={font} style={font === 'theme' ? undefined : { fontFamily: FONT_STACKS[font] }}>
@@ -353,52 +343,42 @@ export const SettingsModal = ({
                   ))}
                 </select>
               </div>
-              <div className="flex items-center justify-between gap-2 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
-                <p className="text-xs font-semibold text-slate-200">{t('settings.appearance.textSize')}</p>
-                <div role="group" aria-label={t('settings.appearance.textSize')} className="flex gap-1">
+              <div className="gm-set-card gm-set-row">
+                <p className="gm-set-name">{t('settings.appearance.textSize')}</p>
+                <div role="group" aria-label={t('settings.appearance.textSize')} className="gm-set-seg">
                   {TEXT_SIZES.map(textSize => (
                     <button key={textSize} type="button" aria-pressed={appearance.textSize === textSize}
                       onClick={() => setAppearance({ textSize })}
-                      className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all border ${
-                        appearance.textSize === textSize
-                          ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
-                          : 'bg-white/[0.04] border-white/[0.08] text-slate-500 hover:text-slate-300 hover:border-white/20'
-                      }`}
+                      className="gm-set-seg-btn"
                     >{t(`settings.appearance.${textSize}`)}</button>
                   ))}
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
-                <p className="text-xs font-semibold text-slate-200">{t('settings.appearance.intro')}</p>
+              <div className="gm-set-card gm-set-row">
+                <p className="gm-set-name">{t('settings.appearance.intro')}</p>
                 <button type="button" role="switch" aria-checked={appearance.intro} aria-label={t('settings.appearance.intro')}
                   onClick={() => setAppearance({ intro: !appearance.intro })}
-                  className={`relative w-10 h-5 shrink-0 rounded-full transition-colors duration-200 focus:outline-none ${
-                    appearance.intro ? 'bg-purple-600' : 'bg-slate-700'
-                  }`}
+                  className="gm-set-switch"
                 >
-                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
-                    appearance.intro ? 'translate-x-5' : 'translate-x-0'
-                  }`} />
+                  <span className="gm-set-knob" />
                 </button>
               </div>
             </div>
 
             {/* Language */}
-            <div className="flex items-center justify-between p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
-              <div className="flex items-center gap-2.5">
-                <Globe size={15} className="text-slate-400 shrink-0" />
-                <p className="text-xs font-semibold text-slate-200">{t('settings.language')}</p>
+            <div className="gm-set-card gm-set-row">
+              <div className="gm-set-row-l">
+                <Globe size={15} className="gm-set-ic" />
+                <p className="gm-set-name">{t('settings.language')}</p>
               </div>
-              <div className="flex gap-1">
+              <div role="group" aria-label={t('settings.language')} className="gm-set-seg">
                 {(['tr', 'en'] as Lang[]).map(l => (
                   <button
                     key={l}
+                    type="button"
+                    aria-pressed={lang === l}
                     onClick={() => onLangChange(l)}
-                    className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all border ${
-                      lang === l
-                        ? 'bg-blue-600/20 border-blue-500/40 text-blue-300'
-                        : 'bg-white/[0.04] border-white/[0.08] text-slate-500 hover:text-slate-300 hover:border-white/20'
-                    }`}
+                    className="gm-set-seg-btn"
                   >
                     {l === 'tr' ? '🇹🇷 TR' : '🇬🇧 EN'}
                   </button>
@@ -408,12 +388,12 @@ export const SettingsModal = ({
 
             {/* Auto chat titles */}
             {onToggleAutoTitles && (
-              <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <Type size={15} className="text-slate-400 shrink-0" />
+              <div className="gm-set-card gm-set-row">
+                <div className="gm-set-row-l">
+                  <Type size={15} className="gm-set-ic" />
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold text-slate-200">{t('settings.autoTitles')}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">{t('settings.autoTitlesHint')}</p>
+                    <p className="gm-set-name">{t('settings.autoTitles')}</p>
+                    <p className="gm-set-hint">{t('settings.autoTitlesHint')}</p>
                   </div>
                 </div>
                 <button
@@ -424,25 +404,21 @@ export const SettingsModal = ({
                   data-testid="auto-titles-toggle"
                   onClick={onToggleAutoTitles}
                   disabled={autoTitlesSaving}
-                  className={`relative w-10 h-5 shrink-0 rounded-full transition-colors duration-200 focus:outline-none disabled:opacity-50 ${
-                    autoTitles ? 'bg-purple-600' : 'bg-slate-700'
-                  }`}
+                  className="gm-set-switch"
                 >
-                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
-                    autoTitles ? 'translate-x-5' : 'translate-x-0'
-                  }`} />
+                  <span className="gm-set-knob" />
                 </button>
               </div>
             )}
 
             {/* Dictation: detect the spoken language on a CPU-only machine too */}
             {onToggleDictationAutoLang && (
-              <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-white/[0.07] bg-white/[0.03]">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <Mic size={15} className="text-slate-400 shrink-0" />
+              <div className="gm-set-card gm-set-row">
+                <div className="gm-set-row-l">
+                  <Mic size={15} className="gm-set-ic" />
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold text-slate-200">{t('settings.dictationAutoLang')}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">{t('settings.dictationAutoLangHint')}</p>
+                    <p className="gm-set-name">{t('settings.dictationAutoLang')}</p>
+                    <p className="gm-set-hint">{t('settings.dictationAutoLangHint')}</p>
                   </div>
                 </div>
                 <button
@@ -453,55 +429,48 @@ export const SettingsModal = ({
                   data-testid="dictation-auto-lang-toggle"
                   onClick={onToggleDictationAutoLang}
                   disabled={dictationAutoLangSaving}
-                  className={`relative w-10 h-5 shrink-0 rounded-full transition-colors duration-200 focus:outline-none disabled:opacity-50 ${
-                    dictationAutoLang ? 'bg-purple-600' : 'bg-slate-700'
-                  }`}
+                  className="gm-set-switch"
                 >
-                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${
-                    dictationAutoLang ? 'translate-x-5' : 'translate-x-0'
-                  }`} />
+                  <span className="gm-set-knob" />
                 </button>
               </div>
             )}
             </>)}
 
             {tab === 'mode' && (
-              <div className="space-y-2">
-                <label className="block text-[9.5px] font-bold text-slate-500 uppercase tracking-[0.14em] mb-1">{t('settings.tabMode')}</label>
+              <div className="gm-set-group">
+                <label className="gm-set-k">{t('settings.tabMode')}</label>
                 {([
                   { id: 'auto' as GenerationMode, icon: <Cpu size={14} />, label: t('settings.modeAutoTitle'), explain: t('settings.modeAutoExplain'), warn: true, recommended: false },
                   { id: 'balanced' as GenerationMode, icon: <ShieldCheck size={14} />, label: t('settings.modeBalancedTitle'), explain: t('settings.modeBalancedExplain'), warn: false, recommended: true },
                   { id: 'step' as GenerationMode, icon: <Hand size={14} />, label: t('settings.modeStepTitle'), explain: t('settings.modeStepExplain'), warn: false, recommended: false },
                 ]).map(option => {
                   const selected = approvalMode === option.id;
-                  // The auto card stays red whether or not it is selected: the
-                  // warning is about the mode itself, not about the current choice.
+                  // The auto card keeps its warning whether or not it is selected:
+                  // the warning is about the mode itself, not about the current choice.
                   return (
                     <button
                       key={option.id}
                       type="button"
                       disabled={!onApprovalModeChange}
                       onClick={() => onApprovalModeChange?.(option.id)}
+                      aria-pressed={selected}
                       data-warn={option.warn ? 'true' : undefined}
-                      className={`w-full flex items-start gap-3 p-3 rounded-xl border text-left transition-all disabled:opacity-50 ${
-                        selected
-                          ? 'border-blue-500/60 bg-blue-500/10'
-                          : 'border-white/[0.07] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/15'
-                      } ${option.warn ? 'border-l-[3px] border-l-red-500' : ''}`}
+                      className="gm-set-mode"
                     >
-                      <span className={`mt-0.5 shrink-0 ${option.warn ? 'text-red-400' : selected ? 'text-blue-400' : 'text-slate-500'}`}>{option.icon}</span>
+                      <span className="gm-set-mode-ic">{option.icon}</span>
                       <span className="flex-1 min-w-0">
-                        <span className="flex items-center gap-1.5">
-                          <span className={`block text-xs ${option.warn ? 'font-bold tracking-wide text-red-400' : selected ? 'font-semibold text-blue-300' : 'font-semibold text-slate-200'}`}>{option.label}</span>
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <span className="gm-set-mode-title" data-warn={option.warn ? 'true' : undefined}>{option.label}</span>
                           {option.recommended && (
-                            <span data-testid="mode-recommended-badge" className="px-1.5 py-px rounded-full border border-emerald-500/40 bg-emerald-500/10 text-[9.5px] font-semibold text-emerald-300">
+                            <span data-testid="mode-recommended-badge" className="gm-set-badge">
                               {t('mode.recommended')}
                             </span>
                           )}
                         </span>
-                        <span className="block text-[10.5px] text-slate-400 mt-0.5 leading-relaxed">{option.explain}</span>
+                        <span className="gm-set-hint block leading-relaxed">{option.explain}</span>
                       </span>
-                      {selected && <Check size={12} className="text-blue-400 shrink-0 mt-0.5" />}
+                      {selected && <Check size={12} className="gm-set-mode-ic" />}
                     </button>
                   );
                 })}
@@ -510,16 +479,19 @@ export const SettingsModal = ({
 
             {tab === 'remote' && <RemoteControlSection onStatus={onRemoteStatus} />}
 
-            <div className="flex gap-3 pt-2 mt-2 border-t border-white/[0.06]">
+            <div className="gm-set-foot">
               <button
+                type="button"
                 onClick={onSave}
-                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white p-3 rounded-xl font-bold text-xs tracking-wide transition-all"
+                className="gm-set-btn gm-set-btn-lg gm-set-btn-primary"
               >
                 {t('settings.save')}
               </button>
               <button
+                type="button"
                 onClick={onLogout}
-                className="bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 px-4 py-3 rounded-xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2"
+                data-tone="danger"
+                className="gm-set-btn gm-set-btn-lg"
               >
                 <LogOut size={14} /> {t('settings.logout')}
               </button>

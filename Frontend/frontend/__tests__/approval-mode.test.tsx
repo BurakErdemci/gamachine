@@ -81,13 +81,13 @@ describe('SettingsModal · Çalışma modu sekmesi', () => {
       const autoCard = autoTitle.closest('button')!
       const balancedCard = screen.getByText(cevir('settings.modeBalancedTitle')).closest('button')!
       const stepCard = screen.getByText(cevir('settings.modeStepTitle')).closest('button')!
-      expect(autoTitle.className).toContain('text-red-400')
-      expect(autoCard.className).toContain('border-l-red-500')
+      // v4: the colour comes from settings.css, keyed on data-warn (the rule
+      // itself is checked below), so the card and its title carry the state.
+      expect(autoTitle.getAttribute('data-warn')).toBe('true')
       expect(autoCard.getAttribute('data-warn')).toBe('true')
       for (const card of [balancedCard, stepCard]) {
-        expect(card.className).not.toContain('red')
-        expect(card.innerHTML).not.toContain('red-')
         expect(card.getAttribute('data-warn')).toBeNull()
+        expect(card.querySelector('[data-warn]')).toBeNull()
       }
       expect(screen.getByText(cevir('settings.modeStepExplain'))).toBeTruthy()
       expect(screen.getByText(cevir('settings.modeBalancedExplain'))).toBeTruthy()
@@ -116,8 +116,17 @@ describe('SettingsModal · Çalışma modu sekmesi', () => {
     render(<SettingsModal {...props} approvalMode="balanced" onApprovalModeChange={vi.fn()} />)
     fireEvent.click(screen.getByRole('tab', { name: cevir('settings.tabMode') }))
     const balancedCard = screen.getByText(cevir('settings.modeBalancedTitle')).closest('button')!
-    expect(balancedCard.className).toContain('border-blue-500/60')
-    expect(screen.getByText(cevir('settings.modeStepTitle')).closest('button')!.className).not.toContain('border-blue-500/60')
+    expect(balancedCard.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByText(cevir('settings.modeStepTitle')).closest('button')!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('settings.css draws the warning and the highlight from those attributes', () => {
+    // The attributes above are only worth asserting if a rule turns them into
+    // colour: the warning in the danger token, the selection as a raised card.
+    const css = readFileSync(resolve(__dirname, '../renderer/styles/gm/settings.css'), 'utf8')
+    expect(css).toMatch(/\.gm-set-mode\[data-warn="true"\]\s*\{[^}]*var\(--set-warn\)/)
+    expect(css).toMatch(/\.gm-set-mode-title\[data-warn="true"\]\s*\{[^}]*var\(--set-warn-text\)/)
+    expect(css).toMatch(/\.gm-set-mode\[aria-pressed="true"\]\s*\{[^}]*border-color/)
   })
 
   it('the new mode-card wording is in both languages, without the removed trust line', () => {

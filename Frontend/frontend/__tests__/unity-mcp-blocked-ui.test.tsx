@@ -19,6 +19,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import React from 'react'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 import { UnityMcpToggle } from '../renderer/components/home/UnityMcpToggle'
 import { SettingsModal } from '../renderer/components/home/SettingsModal'
@@ -245,31 +247,32 @@ describe('SettingsModal — blocked satırı', () => {
   it('blocked satırı KIRMIZI — "kapalı" görünümünden ayrışıyor', () => {
     // Satırın var olması yetmez: `blocked`'ı `off`un kopyası yapmak çökmeyi
     // önler ama kullanıcıya yine gri "kapalı" gösterir, yani sorunu gizler.
-    const { container } = renderModal('blocked')
-    const satir = Array.from(container.querySelectorAll('div')).find(d =>
-      d.className.includes('rounded-xl') && d.className.includes('border') &&
-      d.textContent?.includes('Unity MCP')
-    ) as HTMLElement
-    expect(satir).toBeTruthy()
-    expect(satir.className).toMatch(/red/)
+    // v4: the row's colour comes from settings.css keyed on data-tone (the
+    // rule is checked below), the same move the shell switch made to data-unity.
+    renderModal('blocked')
+    const satir = screen.getByTestId('unity-mcp-row')
+    expect(satir.textContent).toContain('Unity MCP')
+    expect(satir.getAttribute('data-tone')).toBe('danger')
+    cleanup()
+    renderModal('off')
+    expect(screen.getByTestId('unity-mcp-row').getAttribute('data-tone')).not.toBe('danger')
   })
 
   it('blocked ta AÇIK gibi görünmüyor — anahtar sola bakıyor', () => {
-    // `unityMcpStatus !== 'off'` testi blocked'ı "açık" sayıp anahtarı mor
-    // yapıyordu; oysa sunucu bizim değil, yani kapalıdan da kötü.
+    // `unityMcpStatus !== 'off'` counted blocked as "on" and lit the switch,
+    // yet the server is not ours, which is worse than off.
     renderModal('blocked')
-    const anahtar = screen.getAllByRole('button').find(b =>
-      b.className.includes('rounded-full') && b.className.includes('w-10')
-    ) as HTMLElement
-    expect(anahtar).toBeTruthy()
-    expect(anahtar.className).not.toMatch(/bg-purple-600/)
+    expect(screen.getByTestId('unity-mcp-toggle').getAttribute('data-state')).toBe('off')
   })
 
   it('connected ta anahtar AÇIK — yön korunuyor', () => {
     renderModal('connected')
-    const anahtar = screen.getAllByRole('button').find(b =>
-      b.className.includes('rounded-full') && b.className.includes('w-10')
-    ) as HTMLElement
-    expect(anahtar.className).toMatch(/bg-purple-600/)
+    expect(screen.getByTestId('unity-mcp-toggle').getAttribute('data-state')).toBe('on')
+  })
+
+  it('settings.css turns the danger tone and the on state into their look', () => {
+    const css = readFileSync(resolve(__dirname, '../renderer/styles/gm/settings.css'), 'utf8')
+    expect(css).toMatch(/\.gm-set-card\[data-tone="danger"\]\s*\{[^}]*var\(--set-warn\)/)
+    expect(css).toMatch(/\.gm-set-switch:is\([^)]*\[data-state="on"\][^)]*\)\s*\{[^}]*background/)
   })
 })

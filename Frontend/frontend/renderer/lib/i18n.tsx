@@ -176,6 +176,7 @@ export const tr = {
   'error.agyClosedChildAlive': 'Kapatılan bir agy süreci durdurulamadı (pid {pids}). O çalışırken yeni agy süreci başlatılmadı, çünkü ikisi aynı onay kapısını paylaşıyor. O süreci kapat ya da uygulamayı yeniden başlat, sonra mesajını yeniden gönder.',
   // SettingsModal
   'settings.title': 'AI Yapılandırması',
+  'settings.close': 'Ayarları kapat',
   'settings.language': 'Dil',
   // Appearance
   'settings.appearance.title': 'Görünüm',
@@ -1101,6 +1102,7 @@ export const en: Record<keyof typeof tr, string> = {
   'error.agyClosedChildAlive': 'A closed agy process could not be stopped (pid {pids}). No new agy process was started while it runs, because both would share one approval gate. Close that process or restart the app, then send your message again.',
   // SettingsModal
   'settings.title': 'AI Configuration',
+  'settings.close': 'Close settings',
   'settings.language': 'Language',
   // Appearance
   'settings.appearance.title': 'Appearance',
