@@ -145,10 +145,11 @@ def test_empty_shape_and_routes(db):
         response = client.get("/profile/stats", headers=H)
         assert response.status_code == 200
         result = response.json()
-        assert set(result) == {"range", "since", "ledger_ok", "xp", "level", "level_xp",
+        assert set(result) == {"range", "since", "ledger_ok", "xp_partial", "xp", "level", "level_xp",
                                "level_need", "rank", "counts", "streak", "best_hour",
                                "busiest_weekday", "heatmap", "models", "achievements"}
         assert result["range"] == "all" and result["since"] is None and result["ledger_ok"]
+        assert result["xp_partial"] is False
         assert (result["xp"], result["level"], result["level_xp"], result["level_need"], result["rank"]) == (
             0, 1, 0, 100, "rookie")
         assert set(result["counts"]) == {"tasks", "tasks_this_month", "tasks_last_month",
@@ -235,6 +236,7 @@ def test_ledger_counts_range_and_xp(db):
     _ledger(db, "2026-10-01 09:00:00", outcome="answered")
     result = ps.compute(db, "month", NOW)
     assert result["ledger_ok"]
+    assert result["xp_partial"] is False
     assert result["counts"]["approved_cards"] == 6
     assert result["counts"]["rejected_cards"] == 1
     assert result["counts"]["phone_approvals"] == 4
@@ -249,6 +251,11 @@ def test_ledger_failure_is_null_and_not_500(db, monkeypatch, error):
     monkeypatch.setattr(db, "_ledger_read_connection", fail)
     result = ps.compute(db, "all", NOW)
     assert not result["ledger_ok"] and result["xp"] == 30
+    assert result["xp_partial"] is True
+    for achievement in result["achievements"]:
+        if achievement["id"] in ("careful", "pocket"):
+            assert achievement["progress"] is None and achievement["unlocked"] is None
+            assert achievement["unlocked_at"] is None and achievement["new"] is False
     assert all(result["counts"][key] is None
                for key in ("approved_cards", "rejected_cards", "phone_approvals"))
     with _client(db) as client:
@@ -271,7 +278,7 @@ def test_levels_and_ranks(db, xp, level, remainder, need, rank):
 def test_99_xp_boundary_with_read_seam(db, monkeypatch):
     # Persisted XP is a multiple of five; inject 99 to cover the requested boundary.
     counts = {"approved_cards": 19.8, "phone_approvals": 0, "rejected_cards": 0}
-    monkeypatch.setattr(ps, "_ledger_counts", lambda *_: (counts, counts))
+    monkeypatch.setattr(ps, "_ledger_counts", lambda *_: (counts, counts, {}))
     result = ps.compute(db, "all", NOW)
     assert (result["xp"], result["level"], result["level_xp"], result["level_need"]) == (99, 1, 99, 100)
 
@@ -290,7 +297,10 @@ def test_all_achievement_progress_and_unlock_seen_once(db):
         assert achievement["progress"] == values[achievement["id"]]
         unlocked = achievement["progress"] == achievement["goal"]
         assert achievement["unlocked"] == achievement["new"] == unlocked
-        assert achievement["unlocked_at"] == (NOW.strftime(ps.TIME_FORMAT) if unlocked else None)
+        earned = {"first_task": "2026-09-26 02:00:00", "night_owl": "2026-10-02 02:00:00",
+                  "streak_7": "2026-10-02 00:00:00", "pocket": "2026-10-01 09:00:00",
+                  "careful": "2026-10-01 09:00:00", "polyglot": "2026-09-28 02:00:00"}
+        assert achievement["unlocked_at"] == (earned[achievement["id"]] if unlocked else None)
     seen = json.loads(db.get_setting("profile_achievements_seen"))
     assert set(seen) == {"first_task", "night_owl", "streak_7", "pocket", "careful", "polyglot"}
     repeated = ps.compute(db, "all", NOW + timedelta(hours=1))
@@ -300,6 +310,68 @@ def test_all_achievement_progress_and_unlock_seen_once(db):
     final = {a["id"]: a for a in ps.compute(db, "all", NOW)["achievements"]}
     assert final["tasks_100"]["progress"] == 100 and final["tasks_100"]["new"]
     assert final["tasks_1000"]["progress"] == 1000 and final["tasks_1000"]["new"]
+    assert final["tasks_100"]["unlocked_at"] == final["tasks_1000"]["unlocked_at"] == NOW.strftime(ps.TIME_FORMAT)
+
+
+def test_ledger_down_keeps_seen_dates_and_does_not_store_unknown_unlocks(db, monkeypatch):
+    _ledger(db, "2026-05-01 09:00:00", device="phone:Burak", count=100)
+    ps.compute(db, "all", NOW)
+    seen_before = db.get_setting("profile_achievements_seen")
+    def fail():
+        raise sqlite3.OperationalError("locked")
+    monkeypatch.setattr(db, "_ledger_read_connection", fail)
+    result = ps.compute(db, "all", NOW + timedelta(days=1))
+    assert result["xp_partial"] and result["xp"] == 0
+    for achievement in result["achievements"]:
+        if achievement["id"] in ("careful", "pocket"):
+            assert achievement["progress"] is None and achievement["unlocked"] is None
+            assert achievement["unlocked_at"] == json.loads(seen_before)[achievement["id"]]
+            assert achievement["new"] is False
+    assert db.get_setting("profile_achievements_seen") == seen_before
+    _turns(db, NOW)
+    result = ps.compute(db, "all", NOW)
+    assert next(a for a in result["achievements"] if a["id"] == "first_task")["new"]
+    seen = json.loads(db.get_setting("profile_achievements_seen"))
+    assert seen["careful"] == seen["pocket"] == json.loads(seen_before)["careful"]
+
+
+def test_earn_dates_order_by_time_then_id_and_ignore_first_seen(db, monkeypatch):
+    _turns(db, "2026-07-01 12:00:00", 900, provider="agy")
+    _turns(db, "2026-05-01 12:00:00", 99, provider="claude")
+    _turns(db, "2026-05-01 12:00:00", provider="codex")
+    for offset in range(8):
+        _turns(db, datetime(2026, 4, 1 + offset, 2), 7, provider=None)
+    for offset in range(7):
+        _turns(db, datetime(2026, 6, 1 + offset, 2), provider=None)
+    _ledger(db, "2026-08-01 09:00:00", count=50)
+    _ledger(db, "2026-04-01 09:00:00", device="PHONE:Burak", count=49)
+    _ledger(db, "2026-04-02 09:00:00", device="phone:Burak")
+    _ledger(db, "2026-03-01 09:00:00", outcome="rejected", device="phone:Burak", count=100)
+    db.set_setting("profile_achievements_seen", json.dumps(dict.fromkeys(
+        (id_ for id_, _ in ps.ACHIEVEMENTS), NOW.strftime(ps.TIME_FORMAT))))
+    list_activity = db.list_activity
+    monkeypatch.setattr(db, "list_activity", lambda **kwargs: list(reversed(list_activity(**kwargs))))
+    achievements = {a["id"]: a for a in ps.compute(db, "month", NOW)["achievements"]}
+    expected = {"first_task": "2026-04-01 02:00:00", "tasks_100": "2026-05-01 12:00:00",
+                "tasks_1000": "2026-07-01 12:00:00", "night_owl": "2026-04-08 02:00:00",
+                "streak_7": "2026-04-07 00:00:00", "polyglot": "2026-07-01 12:00:00",
+                "careful": "2026-08-01 09:00:00", "pocket": "2026-04-02 09:00:00"}
+    assert {id_: a["unlocked_at"] for id_, a in achievements.items()} == expected
+    assert not any(a["new"] for a in achievements.values())
+
+
+def test_uncomputable_ledger_earn_date_falls_back_to_first_seen(db):
+    _ledger(db, "unknown timestamp", device="phone:Burak", count=100)
+    first_seen = "2026-09-01 12:00:00"
+    db.set_setting("profile_achievements_seen", json.dumps({"careful": first_seen, "pocket": first_seen}))
+    seen_before = db.get_setting("profile_achievements_seen")
+    result = ps.compute(db, "all", NOW)
+    assert not result["xp_partial"]
+    for achievement in result["achievements"]:
+        if achievement["id"] in ("careful", "pocket"):
+            assert achievement["unlocked"] and achievement["unlocked_at"] == first_seen
+            assert not achievement["new"]
+    assert db.get_setting("profile_achievements_seen") == seen_before
 
 
 def test_reset_secret_token_maintenance_and_no_rebackfill(db, monkeypatch):

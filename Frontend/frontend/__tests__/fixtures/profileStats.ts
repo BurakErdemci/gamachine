@@ -21,7 +21,7 @@ function fullHeat() {
 }
 
 export const FULL = {
-  range: '6m', since: '2026-04-14', ledger_ok: true,
+  range: '6m', since: '2026-04-14', ledger_ok: true, xp_partial: false,
   xp: 8420, level: 14, level_xp: 820, level_need: 1400, rank: 'scene_master',
   counts: {
     tasks: 312, tasks_this_month: 48, tasks_last_month: 37,
@@ -53,7 +53,7 @@ export const FULL = {
 
 /** A fresh install: the backend's answer with an empty activity table and an empty ledger. */
 export const EMPTY = {
-  range: '6m', since: null, ledger_ok: true,
+  range: '6m', since: null, ledger_ok: true, xp_partial: false,
   xp: 0, level: 1, level_xp: 0, level_need: 100, rank: 'rookie',
   counts: {
     tasks: 0, tasks_this_month: 0, tasks_last_month: 0,
@@ -73,7 +73,12 @@ export const EMPTY = {
 export const LEDGER_DOWN = {
   ...FULL,
   ledger_ok: false,
+  xp_partial: true,
+  // Non-ledger XP: 312 tasks * 10 + 163 active days * 20 (profile screen audit, 2 Oct 2026).
+  xp: 6380, level: 11, level_xp: 880, level_need: 1100, rank: 'scene_master',
   counts: { ...FULL.counts, approved_cards: null, rejected_cards: null, phone_approvals: null },
+  achievements: FULL.achievements.map(a => ['careful', 'pocket'].includes(a.id)
+    ? { ...a, progress: null, unlocked: null, new: false } : a),
 }
 
 /** Same user, "Bu ay" range. */

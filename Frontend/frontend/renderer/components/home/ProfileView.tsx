@@ -13,7 +13,7 @@ import { MascotHead } from './BrandLogo';
 export interface ProfileViewProps {
   open: boolean;
   onClose: () => void;
-  /** The answer for `range`, or null before the first one arrives. */
+  /** The selected range's answer, or the previous answer while its replacement loads. */
   data: ProfileStats | null;
   range: ProfileRange;
   onRangeChange: (r: ProfileRange) => void;
@@ -90,19 +90,31 @@ export const ProfileView = ({
     </button>
   );
 
+  const rangeTabs = (
+    <div className="pf-range" role="tablist" aria-label={t('pf.rangeLabel')} aria-busy={loading || undefined}>
+      {PROFILE_RANGES.map(r => (
+        <button key={r} type="button" role="tab" aria-selected={r === range} data-range={r}
+          onClick={() => { if (r !== range) onRangeChange(r); }}>
+          {t(`pf.range.${r}` as TKey)}
+        </button>
+      ))}
+    </div>
+  );
+  const readState = loading ? <p className="pf-state" role="status">{t('pf.loading')}</p>
+    : failed ? (
+      <div className="pf-state" role="alert">
+        <p>{t('pf.failed')}</p>
+        {onRetry && <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t('pf.retry')}</button>}
+      </div>
+    ) : null;
+
   if (!data) {
     return (
       <main className="profile paper" aria-label={t('pf.title')} data-testid="profile-view" ref={rootRef} tabIndex={-1}>
         <div className="pf-wrap">
           {back}
-          {failed && !loading ? (
-            <div className="pf-state" role="alert">
-              <p>{t('pf.failed')}</p>
-              {onRetry && <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t('pf.retry')}</button>}
-            </div>
-          ) : (
-            <p className="pf-state" role="status">{t('pf.loading')}</p>
-          )}
+          {rangeTabs}
+          {readState ?? <p className="pf-state" role="status">{t('pf.loading')}</p>}
         </div>
       </main>
     );
@@ -163,6 +175,15 @@ export const ProfileView = ({
 
   const achTile = (a: ProfileAchievement) => {
     const nameKey = `pf.ach.${a.id}.name` as TKey;
+    if (a.unlocked === null) {
+      return (
+        <li key={a.id} className="achv-tile is-unknown" data-ach={a.id} title={t('pf.stat.ledgerTip')}>
+          <span className="achv-badge" aria-hidden="true"><svg className="ic" viewBox="0 0 20 20">{ACH_ICON[a.id]}</svg></span>
+          <span className="achv-t">{t(nameKey)}</span>
+          <span className="achv-d">—</span>
+        </li>
+      );
+    }
     if (a.unlocked) {
       return (
         <li key={a.id} className={`achv-tile is-got${a.new ? ' is-new' : ''}`} data-ach={a.id}>
@@ -175,7 +196,7 @@ export const ProfileView = ({
         </li>
       );
     }
-    const pct = Math.max(0, Math.min(100, (a.progress / a.goal) * 100));
+    const pct = Math.max(0, Math.min(100, ((a.progress ?? 0) / a.goal) * 100));
     return (
       <li key={a.id} className="achv-tile is-locked" data-ach={a.id}>
         <span className="achv-badge" aria-hidden="true"><svg className="ic" viewBox="0 0 20 20">{LOCK_ICON}</svg></span>
@@ -184,7 +205,7 @@ export const ProfileView = ({
           <span className="achv-hint">{t(`pf.ach.${a.id}.hint` as TKey)}</span>
           <span className="achv-pl">
             <span className="achv-prog" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
-            <Num>{n(a.progress)} / {n(a.goal)}</Num>
+            <Num>{a.progress === null ? '—' : n(a.progress)} / {n(a.goal)}</Num>
           </span>
         </span>
       </li>
@@ -220,21 +241,16 @@ export const ProfileView = ({
                   ? <>{t('pf.nextRank')} <b>{t(`pf.rank.${next.rank}` as TKey)}</b> ({t('pf.nextRankAt', { n: next.level })})</>
                   : t('pf.topRank')}
               </span>
+              {s.xp_partial && <small className="pf-xp-partial" title={t('pf.stat.ledgerTip')}>{t('pf.xpPartial')}</small>}
               <span className="pf-since">{s.since ? t('pf.since', { date: formatLongDay(s.since, lang) }) : t('pf.noRecords')}</span>
             </div>
           </div>
           <div className="pf-side">
-            <div className="pf-range" role="tablist" aria-label={t('pf.rangeLabel')}>
-              {PROFILE_RANGES.map(r => (
-                <button key={r} type="button" role="tab" aria-selected={r === range} data-range={r}
-                  onClick={() => { if (r !== range) onRangeChange(r); }}>
-                  {t(`pf.range.${r}` as TKey)}
-                </button>
-              ))}
-            </div>
+            {rangeTabs}
             {quip && <p className="pf-quip">{quip}</p>}
           </div>
         </header>
+        {readState}
 
         <section className="pf-stats" aria-label={t('pf.statsLabel')}>
           {tiles.map(tile => (

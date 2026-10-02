@@ -41,6 +41,9 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
         params: { range: r },
         headers: { 'X-Session-Token': token ?? '' },
       });
+      // Guard every cache and session-new write, including responses issued before reset
+      // (profile screen audit, 2 Oct 2026).
+      if (mine !== seq.current) return;
       const stats = normalizeProfileStats(res?.data);
       if (!stats) throw new Error('not a profile answer');
       for (const a of stats.achievements) if (a.new) newIds.current.add(a.id);
@@ -48,8 +51,6 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
         ...stats,
         achievements: stats.achievements.map(a => (newIds.current.has(a.id) && a.unlocked ? { ...a, new: true } : a)),
       };
-      // Answers are kept per range, so a slow answer for a range the user already left cannot
-      // overwrite the one on screen; only the newest request moves the loading and error state.
       setByRange(prev => ({ ...prev, [r]: marked }));
       setLatest(marked);
       if (mine === seq.current) setFailed(false);
@@ -70,15 +71,17 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
 
   /** After a reset every cached range is stale: drop them and read the one on screen. */
   const afterReset = useCallback(async () => {
+    ++seq.current;
     newIds.current.clear();
     setByRange({});
+    setLatest(null);
     await load(rangeRef.current);
   }, [load]);
 
   return {
     range,
     setRange,
-    data: byRange[range] ?? null,
+    data: byRange[range] ?? latest,
     latest,
     loading,
     failed,

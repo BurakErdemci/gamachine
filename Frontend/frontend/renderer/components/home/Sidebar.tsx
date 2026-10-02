@@ -80,7 +80,7 @@ interface SidebarProps {
   /** The phone button opens the settings screen on "Uzaktan kontrol" (falls back to Settings). */
   onOpenRemote?: () => void;
   /** Level and XP from GET /profile/stats (all-time whatever the range); null until it answers. */
-  profileLevel?: { level: number; xp: number; levelXp: number; levelNeed: number } | null;
+  profileLevel?: { level: number; xp: number; levelXp: number; levelNeed: number; xp_partial?: boolean } | null;
   /** The maker profile is on screen (the card is marked active). */
   profileOpen?: boolean;
   /** The card opens the maker profile. */
@@ -302,7 +302,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
         <button
           type="button"
           className={`side-profile${profileOpen ? ' is-active' : ''}`}
-          title={name || undefined}
+          title={profileLevel?.xp_partial ? t('pf.xpPartial') : name || undefined}
           aria-current={profileOpen ? 'page' : undefined}
           onClick={onOpenProfile}
           data-testid="sidebar-profile"

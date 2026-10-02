@@ -9,7 +9,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 
 import { ProfileView } from '../renderer/components/home/ProfileView'
 import { LangContext, ceviriUygula, tr, en, type Lang } from '../renderer/lib/i18n'
-import { normalizeProfileStats, type ProfileRange } from '../renderer/lib/profileStats'
+import { mixRows, normalizeProfileStats, type ProfileRange } from '../renderer/lib/profileStats'
 import { EMPTY, FULL, LEDGER_DOWN, dayIndex } from './fixtures/profileStats'
 
 afterEach(() => cleanup())
@@ -164,7 +164,7 @@ describe('profile · model mix and favourite', () => {
       ...FULL,
       models: {
         favourite: null,
-        mix: ['claude', 'codex', 'agy', 'cursor', 'unknown', 'kimi'].map((family, i) => ({ family, turns: 10 - i, share: 0 })),
+        mix: ['claude', 'codex', 'agy', 'cursor', 'unknown', 'kimi'].map((family, i) => ({ family, turns: 10 - i, share: (10 - i) / 45 })),
       },
     })
     expect(qa('.mix-list .model-chip').map(c => c.textContent)).toEqual(['Claude Code', 'Codex', 'Antigravity', 'Cursor', 'Others'])
@@ -241,6 +241,29 @@ describe('profile · fresh install (all zeros)', () => {
 })
 
 describe('profile · approval ledger unreadable (ledger_ok false)', () => {
+  it.each(['en', 'tr'] as const)('labels the partial XP and unknown achievements in %s', lang => {
+    view(LEDGER_DOWN, { lang })
+    expect(text('.lvl-lg .lvl-n')).toBe('11')
+    expect(text('.pf-head')).toContain(lang === 'en' ? 'may be incomplete' : 'eksik olabilir')
+    expect(text('.pf-xp-text')).toContain(lang === 'en' ? '880 / 1,100 XP' : '880 / 1.100 XP')
+    for (const id of ['careful', 'pocket']) {
+      const badge = q(`.achv-tile[data-ach="${id}"]`)
+      expect(badge.classList.contains('is-got')).toBe(false)
+      expect(badge.classList.contains('is-locked')).toBe(false)
+      expect(badge.classList.contains('is-new')).toBe(false)
+      expect(badge.querySelector('.achv-d')?.textContent).toBe('—')
+      expect(badge.querySelector('.achv-prog')).toBeNull()
+      expect(badge.title).toBe(tile('cards').title)
+      expect(badge.textContent).not.toMatch(/Locked|Kilitli|100|50/)
+    }
+    const normalized = normalizeProfileStats(LEDGER_DOWN)!
+    expect(normalized.xp_partial).toBe(true)
+    expect(normalized.xp).toBe(10 * FULL.counts.tasks + 20 * FULL.counts.active_days)
+    expect(normalized.achievements.find(a => a.id === 'careful')).toMatchObject({
+      progress: null, unlocked: null, unlocked_at: '2026-06-01 09:00:00', new: false,
+    })
+  })
+
   it('card-based counts show a dash with a tooltip, never 0', () => {
     view(LEDGER_DOWN)
     for (const id of ['cards', 'phone']) {
@@ -257,6 +280,30 @@ describe('profile · approval ledger unreadable (ledger_ok false)', () => {
   it('a ledger_ok false answer with numbers in it is still shown as unknown', () => {
     view({ ...FULL, ledger_ok: false })
     expect(text('.pf-stat[data-stat="cards"] .pf-stat-v')).toBe('—')
+  })
+})
+
+describe('profile · percentage rounding', () => {
+  it('uses backend shares even when turn ratios differ, distributing tied remainders stably', () => {
+    view({ ...FULL, models: { favourite: null, mix: [
+      { family: 'claude', turns: 90, share: .333 },
+      { family: 'codex', turns: 9, share: .333 },
+      { family: 'agy', turns: 1, share: .333 },
+    ] } })
+    expect(qa('.mix-seg').map(s => s.style.width)).toEqual(['34%', '33%', '33%'])
+    expect(qa('.mix-list .mix-n').map(s => s.textContent)).toEqual([
+      '34% · 90 tasks', '33% · 9 tasks', '33% · 1 tasks',
+    ])
+  })
+
+  it('rounds the folded Others share and sums to 100 with under/over-rounded shares', () => {
+    for (const share of [.166, .167]) {
+      const rows = mixRows(['claude', 'codex', 'agy', 'cursor', 'unknown', 'kimi']
+        .map(family => ({ family, turns: 1, share })))
+      expect(rows).toHaveLength(5)
+      expect(rows[4]).toMatchObject({ key: 'rest', turns: 2, percent: 33 })
+      expect(rows.reduce((sum, row) => sum + row.percent, 0)).toBe(100)
+    }
   })
 })
 

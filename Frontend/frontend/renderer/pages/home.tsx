@@ -796,6 +796,7 @@ export default function Home() {
         profileLevel={profileStats.latest ? {
           level: profileStats.latest.level, xp: profileStats.latest.xp,
           levelXp: profileStats.latest.level_xp, levelNeed: profileStats.latest.level_need,
+          xp_partial: profileStats.latest.xp_partial,
         } : null}
         profileOpen={profileOpen && !ai.showSettings}
         onOpenProfile={openProfile}

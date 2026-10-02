@@ -24,8 +24,8 @@ export const ACHIEVEMENT_IDS: readonly AchievementId[] = [
 export interface ProfileAchievement {
   id: AchievementId;
   goal: number;
-  progress: number;
-  unlocked: boolean;
+  progress: number | null;
+  unlocked: boolean | null;
   unlocked_at: string | null;
   new: boolean;
 }
@@ -34,6 +34,7 @@ export interface ProfileStats {
   range: ProfileRange;
   since: string | null;
   ledger_ok: boolean;
+  xp_partial: boolean;
   xp: number;
   level: number;
   level_xp: number;
@@ -82,7 +83,7 @@ export function normalizeProfileStats(raw: unknown): ProfileStats | null {
   const mix = Array.isArray(r.models?.mix)
     ? r.models.mix
       .filter((m: any) => m && typeof m.family === 'string')
-      .map((m: any) => ({ family: m.family as string, turns: int(m.turns), share: typeof m.share === 'number' ? Math.max(0, Math.min(1, m.share)) : 0 }))
+      .map((m: any) => ({ family: m.family as string, turns: int(m.turns), share: typeof m.share === 'number' && Number.isFinite(m.share) ? Math.max(0, Math.min(1, m.share)) : 0 }))
     : [];
   const fav = r.models?.favourite;
   const achievements: ProfileAchievement[] = Array.isArray(r.achievements)
@@ -91,8 +92,8 @@ export function normalizeProfileStats(raw: unknown): ProfileStats | null {
       .map((a: any) => ({
         id: a.id as AchievementId,
         goal: Math.max(1, int(a.goal, 1)),
-        progress: int(a.progress),
-        unlocked: a.unlocked === true,
+        progress: a.progress === null || (!ledgerOk && (a.id === 'careful' || a.id === 'pocket')) ? null : int(a.progress),
+        unlocked: a.unlocked === null || (!ledgerOk && (a.id === 'careful' || a.id === 'pocket')) ? null : a.unlocked === true,
         unlocked_at: str(a.unlocked_at),
         new: a.new === true,
       }))
@@ -101,6 +102,7 @@ export function normalizeProfileStats(raw: unknown): ProfileStats | null {
     range,
     since: str(r.since),
     ledger_ok: ledgerOk,
+    xp_partial: r.xp_partial === true,
     xp: int(r.xp),
     level: Math.max(1, int(r.level, 1)),
     level_xp: int(r.level_xp),
@@ -276,22 +278,34 @@ export function familyColour(family: string | null | undefined): ModelFamily {
 
 /** Rows for the mix bar and its list: the first `max - 1` families, the rest folded into one. */
 export function mixRows(mix: ProfileStats['models']['mix'], max = 5): MixRow[] {
-  const total = mix.reduce((sum, m) => sum + m.turns, 0);
-  const pct = (turns: number) => (total ? Math.round((turns / total) * 100) : 0);
-  const row = (m: { family: string; turns: number }): MixRow => {
+  const shown = mix.length <= max ? mix : [
+    ...mix.slice(0, max - 1),
+    { family: 'rest', turns: mix.slice(max - 1).reduce((sum, m) => sum + m.turns, 0),
+      share: mix.slice(max - 1).reduce((sum, m) => sum + m.share, 0) },
+  ];
+  const total = shown.reduce((sum, m) => sum + m.share, 0);
+  // Normalize the backend's rounded shares, then award remaining points by remainder
+  // (profile screen audit, 2 Oct 2026).
+  const exact = shown.map(m => total > 0 ? m.share / total * 100 : 0);
+  const percents = exact.map(Math.floor);
+  const order = exact.map((value, i) => ({ i, remainder: value - percents[i] }))
+    .sort((a, b) => b.remainder - a.remainder || a.i - b.i);
+  const remaining = total > 0 ? 100 - percents.reduce((sum, p) => sum + p, 0) : 0;
+  for (let i = 0; i < remaining; i++) percents[order[i].i]++;
+  const row = (m: { family: string; turns: number }, i: number): MixRow => {
+    if (mix.length > max && i === max - 1) {
+      return { key: 'rest', name: null, brand: null, colour: 'other', turns: m.turns, percent: percents[i], kind: 'rest' };
+    }
     if (m.family === 'unknown') {
-      return { key: 'unknown', name: null, brand: null, colour: 'other', turns: m.turns, percent: pct(m.turns), kind: 'unknown' };
+      return { key: 'unknown', name: null, brand: null, colour: 'other', turns: m.turns, percent: percents[i], kind: 'unknown' };
     }
     const agent = messageAgent(m.family);
     return {
       key: m.family, name: agent?.name ?? m.family, brand: agent?.brand ?? null,
-      colour: familyColour(m.family), turns: m.turns, percent: pct(m.turns), kind: 'family',
+      colour: familyColour(m.family), turns: m.turns, percent: percents[i], kind: 'family',
     };
   };
-  if (mix.length <= max) return mix.map(row);
-  const head = mix.slice(0, max - 1).map(row);
-  const restTurns = mix.slice(max - 1).reduce((sum, m) => sum + m.turns, 0);
-  return [...head, { key: 'rest', name: null, brand: null, colour: 'other', turns: restTurns, percent: pct(restTurns), kind: 'rest' }];
+  return shown.map(row);
 }
 
 /** The favourite model's name and logo. */

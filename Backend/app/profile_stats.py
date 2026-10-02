@@ -90,7 +90,7 @@ def _ledger_counts(db, since):
     with closing(db._ledger_read_connection()) as conn:
         rows = conn.execute(
             "SELECT at, outcome, device FROM approval_ledger "
-            "WHERE outcome IN ('approved', 'rejected')").fetchall()
+            "WHERE outcome IN ('approved', 'rejected') ORDER BY at, id").fetchall()
     def count(selected):
         return {
             "approved_cards": sum(outcome == "approved" for _, outcome, _ in selected),
@@ -99,10 +99,48 @@ def _ledger_counts(db, since):
                                    (device or "").lower().startswith("phone:")
                                    for _, outcome, device in selected),
         }
-    return count([row for row in rows if since is None or row[0] >= since]), count(rows)
+    approved = [at for at, outcome, _ in rows if outcome == "approved"]
+    phone = [at for at, outcome, device in rows if outcome == "approved"
+             and (device or "").lower().startswith("phone:")]
+    earned = {"careful": _threshold_at(approved, 100), "pocket": _threshold_at(phone, 50)}
+    return count([row for row in rows if since is None or row[0] >= since]), count(rows), earned
 
 
-def _achievements(db, values, now):
+def _threshold_at(times, goal):
+    if len(times) < goal:
+        return None
+    try:
+        return datetime.strptime(times[goal - 1], TIME_FORMAT).strftime(TIME_FORMAT)
+    except (ValueError, TypeError):
+        return None
+
+
+def _activity_earn_dates(events, dates):
+    # Earn dates follow historical rule satisfaction, not the first profile visit
+    # (profile screen audit, 2 Oct 2026).
+    times = [event["at"] for event in events]
+    earned = {id_: _threshold_at(times, goal)
+              for id_, goal in ACHIEVEMENTS if id_ in ("first_task", "tasks_100", "tasks_1000")}
+    earned["night_owl"] = _threshold_at(
+        [event["at"] for event in events if int(event["at"][11:13]) < 5], 50)
+    providers = set()
+    for event in events:
+        if event["provider"] is not None:
+            providers.add(event["provider"])
+        if len(providers) == 3:
+            earned["polyglot"] = event["at"]
+            break
+    previous, run = None, 0
+    for day in sorted(dates):
+        run = run + 1 if previous is not None and day == previous + timedelta(days=1) else 1
+        if run == 7:
+            earned["streak_7"] = datetime.combine(day, datetime.min.time()).strftime(TIME_FORMAT)
+            break
+        previous = day
+    return earned
+
+
+def _achievements(db, values, now, earned):
     global _invalid_seen_logged
     # Only the caller that stores an unlock may announce it as new.
     with closing(sqlite3.connect(db.db_path)) as conn, conn:
@@ -122,13 +160,20 @@ def _achievements(db, values, now):
                     _invalid_seen_logged = True
                     logger.warning("[profile] invalid achievement seen record; resetting")
         for id_, goal in ACHIEVEMENTS:
+            if values[id_] is None:
+                # A failed ledger read must never create or clear its seen entries
+                # (profile screen audit, 2 Oct 2026).
+                result.append({"id": id_, "goal": goal, "progress": None,
+                               "unlocked": None, "unlocked_at": seen.get(id_), "new": False})
+                continue
             unlocked = values[id_] >= goal
             new = unlocked and id_ not in seen
             if new:
                 seen[id_] = now.strftime(TIME_FORMAT)
                 changed = True
             result.append({"id": id_, "goal": goal, "progress": min(values[id_], goal),
-                           "unlocked": unlocked, "unlocked_at": seen.get(id_) if unlocked else None,
+                           "unlocked": unlocked,
+                           "unlocked_at": (earned.get(id_) or seen.get(id_)) if unlocked else None,
                            "new": new})
         if changed:
             conn.execute(
@@ -165,17 +210,19 @@ def compute(db, range_, now=None) -> dict:
                     logger.warning("[profile] invalid activity timestamp; skipping event")
             continue
         events.append({**event, "at": at.strftime(TIME_FORMAT)})
+    events.sort(key=lambda event: (event["at"], event["id"]))
     selected = [event for event in events if since is None or event["at"] >= since]
     dates = Counter(datetime.strptime(event["at"], TIME_FORMAT).date() for event in events)
     selected_dates = Counter(datetime.strptime(event["at"], TIME_FORMAT).date()
                              for event in selected)
     streak = _streak(dates, today)
     try:
-        ledger, all_ledger = _ledger_counts(db, since)
+        ledger, all_ledger, ledger_earned = _ledger_counts(db, since)
         ledger_ok = True
     except sqlite3.Error:
         ledger = dict.fromkeys(("approved_cards", "rejected_cards", "phone_approvals"))
         all_ledger = {key: 0 for key in ledger}
+        ledger_earned = {}
         ledger_ok = False
 
     hours = Counter(int(event["at"][11:13]) for event in selected)
@@ -219,13 +266,14 @@ def compute(db, range_, now=None) -> dict:
             "engine_whisperer")
     values = {"first_task": len(events), "tasks_100": len(events), "tasks_1000": len(events),
               "night_owl": sum(int(event["at"][11:13]) < 5 for event in events),
-              "streak_7": streak["longest"], "pocket": all_ledger["phone_approvals"],
-              "careful": all_ledger["approved_cards"],
+              "streak_7": streak["longest"], "pocket": all_ledger["phone_approvals"] if ledger_ok else None,
+              "careful": all_ledger["approved_cards"] if ledger_ok else None,
               "polyglot": len({event["provider"] for event in events
                                if event["provider"] is not None})}
     return {
         "range": range_, "since": events[0]["at"][:10] if events else None,
-        "ledger_ok": ledger_ok, "xp": xp, "level": level, "level_xp": level_xp,
+        "ledger_ok": ledger_ok, "xp_partial": not ledger_ok,
+        "xp": xp, "level": level, "level_xp": level_xp,
         "level_need": 100 * level, "rank": rank,
         "counts": {"tasks": len(selected),
                    "tasks_this_month": sum(month_start.strftime(TIME_FORMAT) <= event["at"]
@@ -241,5 +289,5 @@ def compute(db, range_, now=None) -> dict:
         "heatmap": {"start": start.isoformat(), "today": today.isoformat(),
                     "days": heat_days, "levels": levels},
         "models": {"mix": mix, "favourite": favourite},
-        "achievements": _achievements(db, values, now),
+        "achievements": _achievements(db, values, now, {**_activity_earn_dates(events, dates), **ledger_earned}),
     }
