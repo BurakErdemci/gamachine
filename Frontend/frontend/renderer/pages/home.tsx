@@ -748,10 +748,13 @@ export default function Home() {
             olmadan) pencere komple boşalırdı. Ad yerine boş metin: yanlış bir
             ad göstermektense selamlamayı adsız bırakmak dürüst olan. */}
         <WorkspaceScreen
-          userName={me.name} lastWorkspacePath={fs.lastWorkspacePath}
-          onOpenWorkspaceDialog={fs.openFolder} onSelectLastWorkspace={() => fs.selectWorkspace(fs.lastWorkspacePath!)}
-          onLogout={handleLogout}
+          api={API} user={auth.user} userName={me.name}
+          onOpenFolder={fs.openFolder} onSelectWorkspace={fs.selectWorkspace}
+          onLogout={handleLogout} showToast={showToast as any}
         />
+        {/* The welcome screen's own messages (drop errors, Unity Hub fallback, a missing folder)
+            need the toast host too; it was only mounted in the workspace branch. */}
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
         {/* Workspace seçilmemişken de onay kartı gelebilir: unityMCP köprüsü
             ürünün penceresinden bağımsız çalışıyor (kullanıcı unityMCP'yi
             doğrudan başka bir istemciye bağlamış olabilir). Bu dal olmadan kart

@@ -69,8 +69,8 @@ const panelProps = (): any => ({
   setIsTerminalOpen: vi.fn(), apiBase: 'http://backend', mcpGate: null,
   mcpWorkspaceMismatch: false, mcpOpenWorkspacePath: null, onMcpResolved: vi.fn(),
 })
-const pickerProps = () => ({ userName: 'local', lastWorkspacePath: 'project/recent',
-  onOpenWorkspaceDialog: vi.fn(), onSelectLastWorkspace: vi.fn(), onLogout: vi.fn() })
+const pickerProps = () => ({ api: 'http://backend', user: { id: 1, name: 'local', sessionToken: 'tok' }, userName: 'local',
+  onOpenFolder: vi.fn(async () => null), onSelectWorkspace: vi.fn(), onLogout: vi.fn(), showToast: vi.fn() })
 beforeEach(() => {
   mocks.invoke.mockReset().mockResolvedValue({ success: true })
   mocks.editors.length = 0
@@ -188,7 +188,7 @@ describe('workspace polish regressions', () => {
   })
   it('G5 hides the placeholder in the welcome and uses Gamachine as the home title', () => {
     render(<WorkspaceScreen {...pickerProps()} />)
-    expect(screen.getByRole('heading').textContent?.trim()).toBe(tr['workspace.welcomeNoName'])
+    expect(screen.getByRole('heading', { level: 1 }).textContent?.trim()).toBe(tr['workspace.welcomeNoName'])
     const source = ts.createSourceFile('home.tsx', readFileSync('renderer/pages/home.tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
     let expression = ''
     const visit = (node: ts.Node) => {
@@ -221,18 +221,23 @@ describe('workspace polish regressions', () => {
     expect(screen.getByRole('button', { name: tr['diff.accept'] })).toBeTruthy()
     expect(translations.en['chat.fixNoTarget']).toBe('This fix has no target file; open the file first.')
   })
-  it('G7 uses shell tokens without raw colours and preserves picker handlers', () => {
+  it('G7 uses shell tokens without raw colours and preserves picker handlers', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: { workspaces: [{ path: '/b/recent', last_accessed: '', chat_count: 0 }] } })
+    mocks.invoke.mockImplementation(async (channel: string, arg: any) =>
+      channel === 'host-workspace-path' ? arg.replace('/b/', '/h/')
+        : channel === 'workspace-info' ? arg.map((path: string) => ({ path, status: 'ok', unityVersion: null })) : null)
     const props = pickerProps()
     const view = render(<WorkspaceScreen {...props} />)
-    const classes = [...view.container.querySelectorAll('[class]')].map(el => el.className).join(' ')
+    const card = await screen.findByRole('button', { name: tr['welcome.openProject'].replace('{name}', 'recent') })
+    const classes = [...view.container.querySelectorAll('[class]')].map(el => el.getAttribute('class')).join(' ')
     expect(classes).not.toMatch(/(?:bg|text|border|from|to|shadow)-(?:slate|blue|violet|red|white|black)|\[#[0-9a-f]+\]/i)
-    expect(classes).toContain('var(--shell-bg)')
+    expect(classes).toMatch(/\bshell\b/)
     expect(classes).toContain('btn-primary')
-    fireEvent.click(screen.getByRole('button', { name: tr['workspace.selectFolder'] }))
-    fireEvent.click(screen.getByRole('button', { name: /recent/ }))
-    fireEvent.click(screen.getByRole('button', { name: tr['workspace.logout'] }))
-    expect(props.onOpenWorkspaceDialog).toHaveBeenCalledTimes(1)
-    expect(props.onSelectLastWorkspace).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(tr['welcome.open']) }))
+    fireEvent.click(card)
+    fireEvent.click(screen.getByRole('button', { name: tr['welcome.logout'] }))
+    expect(props.onOpenFolder).toHaveBeenCalledTimes(1)
+    expect(props.onSelectWorkspace).toHaveBeenCalledWith('/h/recent')
     expect(props.onLogout).toHaveBeenCalledTimes(1)
   })
 })
