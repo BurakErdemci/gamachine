@@ -166,6 +166,8 @@ function pasteToFragment(value) {
 
 function setStatus(status, info = {}) {
   const statusText = $('status-text');
+  // Read only by style.css: the lamp in the status bands follows the link.
+  document.body.dataset.link = status;
   const note = $('main-note');
   setText(note, () => '');
   if (status === 'ready') {
@@ -259,6 +261,8 @@ function cardNode(card) {
   const { buttons, note: hint } = cardActions(card);
   const note = el('p', { class: 'note', textContent: hint || '' });
   const title = card.title || t('text.131');
+  // The head strip of the approval card (Arena's quest window, Pafta's title block).
+  box.append(el('div', { class: 'card-head' }, el('span', { class: 'card-mark' }), el('span', { class: 'card-state', textContent: t('text.131') })));
   box.append(el('b', { textContent: title }));
   if (card.chat_id && view.shown !== card.chat_id) box.append(el('span', { class: 'meta', textContent: chatTitle(card.chat_id) }));
   if (card.detail) box.append(el('pre', { class: 'detail', textContent: String(card.detail) }));
@@ -609,14 +613,14 @@ async function toggleSlash() {
 
 function logMessage(m) {
   const who = m.role === 'user' ? (m.source === 'phone' ? t('text.134') : t('text.135')) : m.role === 'assistant' ? t('text.136') : m.role || '';
-  $('log').append(el('div', { class: 'msg' }, el('span', { class: 'who', textContent: who }), messageText(m)));
+  $('log').append(el('div', { class: msgClass(m.role) }, el('span', { class: 'who', textContent: who }), messageText(m)));
 }
 
 function logEvent(ev) {
   const log = $('log');
   if (ev.kind === 'text') {
     if (!liveText) {
-      liveText = el('div', { class: 'msg' }, el('span', { class: 'who', textContent: t('text.136') }));
+      liveText = el('div', { class: msgClass('assistant') }, el('span', { class: 'who', textContent: t('text.136') }));
       log.append(liveText);
     }
     liveText.append(String(ev.text ?? ''));
@@ -624,7 +628,21 @@ function logEvent(ev) {
   }
   liveText = null;
   const line = eventLine(ev);
-  log.append(el('div', { class: line.error ? 'ev error' : 'ev', textContent: line.text }));
+  const node = el('div', { class: eventClass(ev, line), textContent: line.text });
+  if (ev.kind === 'card_closed') node.dataset.state = DECIDED.get(ev.decision) || 'closed';
+  log.append(node);
+}
+
+// Class names for style.css only. The PC's strings never become class names
+// directly: only the kinds and decisions listed here are mapped.
+function msgClass(role) {
+  return role === 'user' ? 'msg msg-user' : role === 'assistant' ? 'msg msg-ai' : 'msg';
+}
+const EVENT_KINDS = new Set(['tool_call', 'turn_start', 'turn_end', 'card_opened', 'card_closed']);
+const DECIDED = new Map([['approve', 'approved'], ['choice', 'approved'], ['reject', 'rejected']]);
+function eventClass(ev, line) {
+  const kind = EVENT_KINDS.has(ev.kind) ? ' ev-' + ev.kind.replace('_', '-') : '';
+  return 'ev' + kind + (line.error ? ' error' : '');
 }
 
 function closeOnPc(id) {
