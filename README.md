@@ -198,6 +198,10 @@ and ffmpeg/yt-dlp are all bundled — nothing else to install.
 want the Unity MCP integration). Full steps, environment variables and packaging are
 in [Building from source](docs/building.md).
 
+**The previous version (v3, the interface before the v4 redesign)** stays available on the
+[`legacy-v3`](https://github.com/BurakErdemci/gamachine/tree/legacy-v3) branch. It is
+kept as it was and gets no new features.
+
 ---
 
 ## 💡 Usage

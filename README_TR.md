@@ -202,6 +202,10 @@ kurulum gerekmiyor.
 entegrasyonunu istiyorsan Unity Editor de). Adımlar, ortam değişkenleri ve paketleme
 [Building from source](docs/building.md) dosyasında.
 
+**Önceki sürüm (v3, v4 yenilemesinden önceki arayüz)**
+[`legacy-v3`](https://github.com/BurakErdemci/gamachine/tree/legacy-v3) dalında duruyor.
+Olduğu gibi korunuyor, yeni özellik almıyor.
+
 ---
 
 ## 💡 Kullanım
