@@ -382,10 +382,18 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     }
   }, [API, user?.sessionToken, showToast]);
 
+  // The key list belongs to one user: a new id un-loads it BEFORE its fetch runs, so the keyless
+  // gate never reads the previous user's list as loaded (guide audit, 2 Oct 2026).
+  const keysUserRef = useRef<number | undefined>(user?.id);
+  keysUserRef.current = user?.id;
+  useEffect(() => { setProvidersWithKeysLoaded(false); }, [user?.id]);
+
   const fetchProvidersWithKeys = useCallback(async (userId: number) => {
     if (!API) return;
     try {
       const res = await axios.get(`${API}/api-keys/${userId}`);
+      // A slow answer for the user just left must not mark the new user's list loaded.
+      if (keysUserRef.current != null && keysUserRef.current !== userId) return;
       if (res.data?.providers_with_keys) setProvidersWithKeys(res.data.providers_with_keys);
       setProvidersWithKeysLoaded(true);
     } catch (err) { console.error("API keys hatası:", err); }
