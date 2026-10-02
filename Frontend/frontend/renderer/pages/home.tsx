@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import axios from 'axios';
-import { Terminal as TerminalIcon, Code2, X, MessageSquare, ArrowDown } from 'lucide-react';
+import { ArrowDown } from 'lucide-react';
 import { LangContext, aktifDilAyarla, ceviriUygula, type Lang, type TValues } from '../lib/i18n';
 import { sohbetKilitliMi } from '../lib/providerGate';
 import { getUnsavedEditorContext } from '../lib/editor-context';
@@ -18,6 +18,8 @@ import { SettingsModal } from '../components/home/SettingsModal';
 import { ExportModal } from '../components/home/ExportModal';
 import { ModelSelector } from '../components/home/ModelSelector';
 import { WorkspaceScreen } from '../components/home/WorkspaceScreen';
+import { Workspace, KodPane, PreviewPane, ScenePane, type WsDiff, type ChangedFile } from '../components/home/Workspace';
+import { ProjectFiles } from '../components/home/FileTree';
 import { ControlPanel, ThinkingLevel, EffortCaps } from '../components/home/ControlPanel';
 import { SessionReportPanel } from '../components/home/SessionReportPanel';
 import { UnityMcpToggle } from '../components/home/UnityMcpToggle';
@@ -46,21 +48,15 @@ import { ModeChip } from '../components/home/ModeChip';
 import { modelFamily } from '../lib/modelFamily';
 import { useRemoteEffort, useRemoteUi } from '../lib/remoteControl';
 import { useAppearance } from '../lib/appearance';
-import { awaitingElsewhere, rootsOf } from '../lib/convFamily';
+import { awaitingElsewhere } from '../lib/convFamily';
 import { useNewChatShortcut } from '../lib/newChatShortcut';
 import { useTurnDone, cardOnScreen } from '../lib/turnDone';
+import { useWorkspacePanel, tabForPath } from '../lib/workspacePanel';
+import { usePendingChange } from '../lib/pendingChange';
 import { ThreadHeader } from '../components/home/ThreadHeader';
 import { EmptyChat, questDraft } from '../components/home/EmptyChat';
 import { AchievementToast } from '../components/home/AchievementToast';
 import { isChatEmpty } from '../components/home/ChatPanel';
-
-/** Mockup "dar" (narrow) workspace width; the default until P3's width modes. */
-const WS_DEFAULT_WIDTH = 360;
-/** Keep the panel usable and the chat readable (mockup: the chat strip floor is 400 px). */
-const clampWsWidth = (w: number) => {
-  const max = typeof window !== 'undefined' ? Math.max(320, window.innerWidth - 240 - 400) : 900;
-  return Math.round(Math.min(Math.max(w, 300), max));
-};
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
 // this app needs, and off the server render (it touches WebGL on mount).
@@ -302,11 +298,13 @@ export default function Home() {
   });
   useRemoteUi({ api: API, token: auth.user?.sessionToken, lang, theme: useAppearance().appearance.theme });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  // The right column is the workspace (editor, previews, terminal) since the v4 column swap; the
-  // chat is the main stage and is never hidden. TODO(P3): the dar / yarim / odak width modes.
-  const [isWsOpen, setIsWsOpen] = useState(true);
-  const [wsWidth, setWsWidth] = useState(WS_DEFAULT_WIDTH);
-  const [wsDragging, setWsDragging] = useState(false);
+  // The right column is the workspace (Sahne / Dosyalar / Kod / Önizleme + the terminal drawer)
+  // since the v4 column swap; the chat is the main stage and is never hidden. Width modes
+  // dar / yarim / odak replace P2's drag handle (lib/workspacePanel.ts).
+  const ws = useWorkspacePanel();
+  const { reveal: wsReveal, setOpen: setWsOpen, setTab: setWsTab } = ws;
+  // The file change a card is waiting on, with that card's own Accept / Reject handlers.
+  const pendingChange = usePendingChange();
   const [reportsOpen, setReportsOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<'chats' | 'files'>('chats');
   const [isEditorFocused, setIsEditorFocused] = useState(false);
@@ -407,32 +405,56 @@ export default function Home() {
   // chat is the main stage and has no closed state, so every card and the tray are always on
   // screen and that effect has nothing left to open.
 
-  // The workspace shows what the chat or the sidebar opens: a file, a preview, a diff or the
-  // terminal. Before the swap the editor had the middle column and could not be hidden, so
-  // opening one of these must bring a closed panel back or the click would do nothing visible.
-  useEffect(() => {
-    if (fs.openedFilePath || fs.previewFile || diffFile || isTerminalOpen) setIsWsOpen(true);
-  }, [fs.openedFilePath, fs.previewFile, diffFile, isTerminalOpen]);
+  // Every open request names its tab and opens the panel (wsReveal): asking again for the file
+  // already open must still bring a closed panel back, which an effect on the opened path cannot
+  // do because the path did not change (P2 audit). Text goes to Kod, images and models to
+  // Önizleme; from the narrow width both open at half (mockup HOOKS round 7).
+  const openInPanel = useCallback((path: string) => {
+    wsReveal(tabForPath(path));
+    void fs.openFile(path);
+  }, [wsReveal, fs.openFile]);
+  const previewInPanel = useCallback((path: string) => {
+    wsReveal('onizleme');
+    fs.openPreview(path);
+  }, [wsReveal, fs.openPreview]);
 
-  // Drag the panel's left edge to resize it (and arrow keys on the focused handle).
-  const startWsResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = wsWidth;
-    setWsDragging(true);
-    const move = (ev: MouseEvent) => setWsWidth(clampWsWidth(startW + (startX - ev.clientX)));
-    const up = () => {
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
-      setWsDragging(false);
-    };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
-  };
-  const keyWsResize = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowLeft') { e.preventDefault(); setWsWidth(w => clampWsWidth(w + 24)); }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); setWsWidth(w => clampWsWidth(w - 24)); }
-  };
+  // Things that arrive without a click still have to be visible: a file opened by the sidebar's
+  // "Open file" picker or a definition jump, a preview, a change a card waits on, the terminal
+  // opened from the app menu. They show their tab without widening a panel the user sized.
+  // Which tab is decided by contentPane's precedence: a change a card is asking about outranks an
+  // open preview, so the card never asks about something off screen.
+  const arrived = contentPane(fs.previewFile, diffFile || pendingChange, fs.openedFilePath);
+  useEffect(() => {
+    if (arrived === 'hero') return;
+    setWsOpen(true);
+    setWsTab(arrived === 'preview' ? 'onizleme' : 'kod');
+  }, [arrived, fs.previewFile, fs.openedFilePath, diffFile, pendingChange?.id, setWsOpen, setWsTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (isTerminalOpen) setWsOpen(true); }, [isTerminalOpen, setWsOpen]);
+
+  // Sahne's "Changed files": the git status the file tree already polls every 20 s. Its keys are
+  // lowercased absolute paths (main/background.ts git-status), so the case is taken back from the
+  // tree entries read from disk where they are known; elsewhere the path keeps the workspace
+  // root's case and a lowercased tail, which still opens on a case-insensitive disk. Capped so a
+  // repo with thousands of untracked files cannot flood the pane.
+  const changedFiles = useMemo(() => {
+    const root = fs.workspacePath;
+    if (!root || !fs.gitStatus?.isRepo) return { shown: [] as ChangedFile[], total: 0 };
+    const slash = (p: string) => p.replace(/\\/g, '/');
+    const known = new Map<string, string>();
+    for (const e of fs.fileTree || []) known.set(slash(e.path).toLowerCase(), e.path);
+    for (const list of Object.values(fs.dirContents || {})) for (const e of list) known.set(slash(e.path).toLowerCase(), e.path);
+    const rootN = slash(root).replace(/\/+$/, '');
+    const rootL = `${rootN.toLowerCase()}/`;
+    const out: ChangedFile[] = [];
+    for (const [key, status] of Object.entries(fs.gitStatus.files)) {
+      const k = slash(key);
+      if (!k.startsWith(rootL)) continue;
+      const tail = k.slice(rootL.length);
+      out.push({ path: known.get(k) ?? `${root.replace(/[\\/]+$/, '')}/${tail}`, rel: tail, status });
+    }
+    out.sort((a, b) => a.rel.localeCompare(b.rel));
+    return { shown: out.slice(0, 200), total: out.length };
+  }, [fs.gitStatus, fs.workspacePath, fs.fileTree, fs.dirContents]);
 
   // --- Desktop notifications (background chats) ---
   const screenCardOpen = !!fs.pendingDelete || !!fs.pendingGenFiles;
@@ -477,7 +499,7 @@ export default function Home() {
     // which names nothing on this side of the mount. Same rule as a definition
     // result, in one shared place, so the two return legs cannot drift.
     const hedef = await hostOpenTarget(problem.file);
-    if (hedef) fs.openFile(hedef);
+    if (hedef) openInPanel(hedef);
   };
 
   const handleSendMessage = async (msg?: string, images?: string[], videos?: any[]) => {
@@ -621,7 +643,13 @@ export default function Home() {
     );
   }
 
-  const pane = contentPane(fs.previewFile, diffFile, fs.openedFilePath);
+  // The change shown on the Kod tab: the card's diff (FileCreationApproval sets diffFile), or a
+  // proposed fix the DiffViewer card published (it has no diffFile).
+  const kodDiff: WsDiff | null = diffFile
+    ? { name: diffFile.name, path: diffFile.suggestedPath, original: diffFile.originalCode ?? '', modified: diffFile.code }
+    : pendingChange
+      ? { name: pendingChange.name, path: pendingChange.path, original: pendingChange.original, modified: pendingChange.modified }
+      : null;
   // Branching copies the chat as it stands; mid-turn or with a card open there
   // is no settled "now" to copy (the backend answers 409 for the same case).
   const branchBlocked = chat.loading
@@ -650,7 +678,13 @@ export default function Home() {
     <LangContext.Provider value={langCtxValue}>
     {/* The v4 frame (shell.css `.app`): sidebar | main | right panel under one top bar.
         data-model drives the model colour (--model) the picker's dot reads. */}
-    <div className="app" data-model={modelFamily(ai.aiConfig?.model_name, ai.effectiveProvider)}>
+    <div
+      className="app"
+      data-model={modelFamily(ai.aiConfig?.model_name, ai.effectiveProvider)}
+      // Panel width mode (workspace.css): none = dar; the sidebar's state feeds the half / focus math.
+      data-ws={ws.open && ws.width !== 'dar' ? ws.width : undefined}
+      data-side={isSidebarOpen ? undefined : 'closed'}
+    >
       <Head>
         <title>{`Gamachine | ${auth.user?.name || t('home.signIn')}`}</title>
         <style>{globalStyles}</style>
@@ -686,7 +720,7 @@ export default function Home() {
         setTreeCreating={fs.setTreeCreating} treeCreateValue={fs.treeCreateValue} setTreeCreateValue={fs.setTreeCreateValue}
         submitTreeCreate={fs.submitTreeCreate} fileTree={fs.fileTree}
         openedFilePath={fs.openedFilePath} expandedDirs={fs.expandedDirs} dirContents={fs.dirContents}
-        toggleDir={fs.toggleDir} openFile={fs.openFile} openPreview={fs.openPreview} treeDragSource={fs.treeDragSource}
+        toggleDir={fs.toggleDir} openFile={openInPanel} openPreview={previewInPanel} treeDragSource={fs.treeDragSource}
         treeDragTarget={fs.treeDragTarget} renamingPath={fs.renamingPath} renameValue={fs.renameValue}
         setRenameValue={fs.setRenameValue} submitRename={fs.submitRename} setRenamingPath={fs.setRenamingPath}
         handleTreeDragStart={fs.handleTreeDragStart} handleTreeDragOver={fs.handleTreeDragOver}
@@ -712,44 +746,15 @@ export default function Home() {
             onToggle={ai.toggleUnityMcp}
             projectName={projectName}
           />
-          {/* Not in the mockup: the editor's own controls (sidebar, terminal, open file). They
-              stay here until the workspace panel (P3) gives them their place. */}
+          {/* Not in the mockup: the sidebar toggle. The editor's controls that shared this spot (the
+              terminal button, the open file's name / save / close) moved into the workspace: the
+              drawer's own toggle, the Kod tab's file tab and crumb, the Önizleme close button. */}
           <div className="topbar-mid">
             <SidebarToggle
               open={isSidebarOpen}
               onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
               awaiting={awaitingElsewhere(chat.convStatus, chat.activeConvId, chat.conversations)}
             />
-            <button
-              type="button"
-              onClick={() => setIsTerminalOpen(!isTerminalOpen)}
-              className="icon-btn"
-              aria-pressed={isTerminalOpen}
-              aria-label={t('home.terminalToggle')}
-              title={t('home.terminalToggle')}
-            >
-              <TerminalIcon size={16} />
-            </button>
-            <div className="topbar-file" title={fs.previewFile?.path || fs.openedFilePath || undefined}>
-              <Code2 size={14} className="shrink-0" />
-              {/* Windows paths use a backslash: split on both separators; trim on narrow windows */}
-              <span className="topbar-file-name">
-                {fs.previewFile ? fs.previewFile.name : (fs.openedFilePath ? fs.openedFilePath.split(/[\\/]/).pop() : 'C# Editor')}
-              </span>
-              {/* No dirty dot in preview mode: the model is never edited here. */}
-              {!fs.previewFile && fs.isDirty && <span className="topbar-dirty" aria-hidden="true" />}
-              {fs.previewFile && (
-                <button type="button" onClick={fs.closePreview} title={t('approval.close')} className="chat-act"><X size={12} /></button>
-              )}
-              {!fs.previewFile && fs.openedFilePath && (
-                <>
-                  <button type="button" onClick={async () => { await fs.saveFile(); }} disabled={!fs.isDirty} className="chat-act disabled:opacity-50">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
-                  </button>
-                  <button type="button" onClick={() => { fs.setOpenedFilePath(null); fs.setCode(''); }} className="chat-act"><X size={12} /></button>
-                </>
-              )}
-            </div>
           </div>
         </div>
         <div className="topbar-right">
@@ -771,12 +776,12 @@ export default function Home() {
           {/* The workspace toggle (mockup `[data-panel-toggle]`). */}
           <button
             type="button"
-            className={`icon-btn${isWsOpen ? ' is-on' : ''}`}
+            className={`icon-btn${ws.open ? ' is-on' : ''}`}
             data-testid="right-panel-toggle"
-            aria-pressed={isWsOpen}
-            aria-label={isWsOpen ? t('home.panelHide') : t('home.panelShow')}
-            title={isWsOpen ? t('home.panelHide') : t('home.panelShow')}
-            onClick={() => setIsWsOpen(!isWsOpen)}
+            aria-pressed={ws.open}
+            aria-label={ws.open ? t('home.panelHide') : t('home.panelShow')}
+            title={ws.open ? t('home.panelHide') : t('home.panelShow')}
+            onClick={() => setWsOpen(!ws.open)}
           >
             <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.2" /><path d="M12.5 4v12" /></svg>
           </button>
@@ -845,7 +850,7 @@ export default function Home() {
                 messages={chat.messages} activeConvId={chat.activeConvId} conversations={chat.conversations} user={auth.user} loading={chat.loading} clearHistory={chat.clearHistory} lang={lang}
                 thinkingLevel={thinkingLevel} workspacePath={fs.workspacePath} handleExportToUnity={fs.handleExportToUnity}
                 pendingGenFiles={fs.pendingGenFiles} setPendingGenFiles={fs.setPendingGenFiles} pendingFix={chat.pendingFix} setPendingFix={chat.setPendingFix} openedFilePath={fs.openedFilePath}
-                setCode={fs.setCode} refreshFileTree={fs.refreshFileTree} analyzeProject={chat.analyzeProject} openFile={fs.openFile} sendMessage={handleSendMessage}
+                setCode={fs.setCode} refreshFileTree={fs.refreshFileTree} analyzeProject={chat.analyzeProject} openFile={openInPanel} sendMessage={handleSendMessage}
                 messagesEndRef={chatEndRef} ipc={ipc} showToast={showToast as any} diffFile={diffFile} setDiffFile={setDiffFile}
                 pendingDelete={fs.pendingDelete} setPendingDelete={fs.setPendingDelete} pendingCommand={chat.pendingCommand} setPendingCommand={chat.setPendingCommand} onApproveCommand={chat.approveCommand} pendingQuestion={chat.pendingQuestion} setPendingQuestion={chat.setPendingQuestion} onAnswerQuestion={chat.answerQuestion} deleteFile={fs.deleteFile} setIsTerminalOpen={setIsTerminalOpen}
                 activity={chat.activity}
@@ -931,78 +936,86 @@ export default function Home() {
       <div className="app-right">
         {/* Hidden, never unmounted: closing the panel must not kill the terminal session or
             drop the editor buffer (the old closable chat panel stayed mounted the same way). */}
-          <aside
-            className="workspace is-entering"
-            aria-label={t('ws.title')}
-            style={{ width: wsWidth }}
-            hidden={!isWsOpen}
-            data-testid="workspace"
-          >
-            <div
-              className={`ws-resize${wsDragging ? ' is-dragging' : ''}`}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label={t('ws.resize')}
-              aria-valuenow={wsWidth}
-              tabIndex={0}
-              onMouseDown={startWsResize}
-              onKeyDown={keyWsResize}
-            />
-            <header className="ws-head">
-              <span className="ws-title">{t('ws.title')}</span>
-              <button type="button" className="icon-btn" aria-label={t('ws.close')} title={t('ws.close')} onClick={() => setIsWsOpen(false)}>
-                <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" /></svg>
-              </button>
-            </header>
-            <div className="ws-body">
-              <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
-                {pane === 'preview' && fs.previewFile ? (
-                  previewRoute === 'image' || previewRoute === 'blocked-image' ? (
-                    <ImagePreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />
-                  ) : (
-                    <ModelPreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />
-                  )
-                ) : pane === 'editor' ? (
-                  <>
-                  <CsharpProjectHint inProject={diffFile ? null : csInProject} />
+        <Workspace
+          open={ws.open}
+          tab={ws.tab}
+          onTab={setWsTab}
+          width={ws.width}
+          onWidth={ws.setWidth}
+          onClose={() => setWsOpen(false)}
+          panes={{
+            sahne: (
+              <ScenePane
+                change={pendingChange}
+                changed={changedFiles.shown}
+                changedTotal={changedFiles.total}
+                isRepo={!!fs.gitStatus?.isRepo}
+                workspacePath={fs.workspacePath}
+                onShowChange={() => setWsTab('kod')}
+                onOpen={openInPanel}
+              />
+            ),
+            dosyalar: (
+              <ProjectFiles
+                {...fs}
+                openFile={openInPanel}
+                openPreview={previewInPanel}
+                // One host draws the right-click menu: the sidebar while it shows its Files tab.
+                showMenu={!(isSidebarOpen && sidebarTab === 'files')}
+              />
+            ),
+            kod: (
+              <KodPane
+                workspacePath={fs.workspacePath}
+                openedFilePath={fs.openedFilePath}
+                isDirty={fs.isDirty}
+                onSave={() => { void fs.saveFile(); }}
+                // As the old top bar's X did: the buffer goes with the file.
+                onCloseFile={() => { fs.setOpenedFilePath(null); fs.setCode(''); }}
+                diff={kodDiff}
+                change={pendingChange}
+                hint={<CsharpProjectHint inProject={csInProject} />}
+                fileEditor={(
                   <EditorPanel
                     code={fs.code} setCode={fs.setCode} openedFilePath={fs.openedFilePath} isEditorFocused={isEditorFocused} setIsEditorFocused={setIsEditorFocused}
-                    workspacePath={fs.workspacePath} problems={flattenedProblems} diffFile={diffFile}
-                    apiUrl={API} sessionToken={auth.user?.sessionToken} openFile={fs.openFile}
+                    workspacePath={fs.workspacePath} problems={flattenedProblems} diffFile={null}
+                    apiUrl={API} sessionToken={auth.user?.sessionToken} openFile={openInPanel}
                   />
-                  </>
-                ) : (
-                  <div className="ws-empty">
-                    <p>{t('ws.empty')}</p>
-                    {rootsOf(chat.conversations).length > 0 && (
-                      <div>
-                        <h3 className="ws-label"><span>{t('chat.recent')}</span></h3>
-                        <div className="ws-recent">
-                          {rootsOf(chat.conversations).slice(0, 3).map((conv) => (
-                            <button key={conv.id} type="button" onClick={() => { chat.selectConversation(conv); }}>
-                              <MessageSquare size={14} className="ic" aria-hidden="true" />
-                              <span>{conv.title}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
                 )}
-              </div>
-              <TerminalPanel
-                id="main-terminal"
-                isOpen={isTerminalOpen}
-                onClose={() => setIsTerminalOpen(false)}
-                workspacePath={fs.workspacePath}
-                problems={flattenedProblems}
-                onProblemClick={handleProblemClick}
-                apiUrl={API}
-                sessionToken={auth.user?.sessionToken}
-                unityConnected={ai.unityMcpStatus === 'connected'}
+                diffEditor={kodDiff && (
+                  <EditorPanel
+                    code={fs.code} setCode={fs.setCode} openedFilePath={fs.openedFilePath} isEditorFocused={isEditorFocused} setIsEditorFocused={setIsEditorFocused}
+                    workspacePath={fs.workspacePath} problems={[]}
+                    diffFile={{ name: kodDiff.name, code: kodDiff.modified, originalCode: kodDiff.original, suggestedPath: kodDiff.path ?? kodDiff.name }}
+                  />
+                )}
               />
-            </div>
-          </aside>
+            ),
+            onizleme: (
+              <PreviewPane
+                file={fs.previewFile}
+                kind={previewRoute == null ? null : previewRoute === 'image' || previewRoute === 'blocked-image' ? 'image' : 'model'}
+                onClose={fs.closePreview}
+                viewer={fs.previewFile && (previewRoute === 'image' || previewRoute === 'blocked-image'
+                  ? <ImagePreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />
+                  : <ModelPreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />)}
+              />
+            ),
+          }}
+          drawer={(
+            <TerminalPanel
+              id="main-terminal"
+              isOpen={isTerminalOpen}
+              onClose={() => setIsTerminalOpen(false)}
+              workspacePath={fs.workspacePath}
+              problems={flattenedProblems}
+              onProblemClick={handleProblemClick}
+              apiUrl={API}
+              sessionToken={auth.user?.sessionToken}
+              unityConnected={ai.unityMcpStatus === 'connected'}
+            />
+          )}
+        />
       </div>
 
       {/* The achievement band / "Done" toast: the on-screen chat finished a turn. */}
