@@ -46,6 +46,7 @@ export function useRecentWorkspaces(api: string, user: RecentUser | null) {
       const hosts = await Promise.all(rows.map(r => hostWorkspacePath(String(r.path ?? ''))));
       const known = hosts.filter((h): h is string => !!h);
       let info: Record<string, { status: RecentStatus; unityVersion: string | null }> = {};
+      let defaultStatus: RecentStatus = 'ok';
       const ipc = getIpc();
       if (known.length && ipc) {
         try {
@@ -57,10 +58,11 @@ export function useRecentWorkspaces(api: string, user: RecentUser | null) {
                 info[i.path] = { status, unityVersion: typeof i.unityVersion === 'string' ? i.unityVersion : null };
               }
             }
+          } else {
+            defaultStatus = 'untrusted';
           }
         } catch {
-          // No folder facts: cards still open, and selectWorkspace checks existence itself.
-          info = {};
+          defaultStatus = 'untrusted';
         }
       }
       if (mine !== seq.current) return;
@@ -74,7 +76,7 @@ export function useRecentWorkspaces(api: string, user: RecentUser | null) {
           name: folderName(hostPath || backendPath),
           lastAccessed: String(r.last_accessed ?? ''),
           chatCount: Number(r.chat_count) > 0 ? Number(r.chat_count) : 0,
-          status: hostPath ? (facts?.status ?? 'ok') : 'missing',
+          status: hostPath ? (facts?.status ?? defaultStatus) : 'missing',
           unityVersion: facts?.unityVersion ?? null,
         };
       }));

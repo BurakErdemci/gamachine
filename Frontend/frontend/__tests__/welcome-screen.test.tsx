@@ -123,6 +123,24 @@ describe('welcome screen: recent projects', () => {
     expect(p.onOpenFolder).toHaveBeenCalledWith('/h')
   })
 
+  it.each(['rejected', 'non-array'])('uses the dialog when workspace-info is %s', async failure => {
+    mocks.invoke.mockImplementation(async (channel: string, arg: any) => {
+      if (channel === 'workspace-info') {
+        if (failure === 'rejected') throw new Error('inspection failed')
+        return { error: 'inspection failed' }
+      }
+      return ipcDefault(channel, arg)
+    })
+    const { p } = view()
+    await waitFor(() => expect(cards()).toHaveLength(4))
+    for (const name of ['Arena', 'KagitKart', 'Gone']) {
+      fireEvent.click(screen.getByRole('button', { name: `Open ${name}` }))
+      await waitFor(() => expect(p.onOpenFolder).toHaveBeenCalledWith(`/h/${name}`))
+    }
+    expect(p.onSelectWorkspace).not.toHaveBeenCalled()
+    expect(cardNamed('nomap').className).toContain('is-missing')
+  })
+
   it('missing: a cancelled Locate removes nothing', async () => {
     const { p } = view()
     await waitFor(() => expect(cards()).toHaveLength(4))

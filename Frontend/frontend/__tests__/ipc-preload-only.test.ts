@@ -75,6 +75,21 @@ describe('preload-only channel boundary', () => {
   })
 })
 
+describe('invalid dropped files', () => {
+  it('resolves non-File path resolution errors without IPC', async () => {
+    await import('../main/preload')
+    const handler = electron.contextBridge.exposeInMainWorld.mock.calls[0][1]
+    const invalid = { name: 'forged' }
+    electron.ipcRenderer.invoke.mockClear()
+    electron.webUtils.getPathForFile.mockImplementationOnce(() => {
+      throw new TypeError('Expected a File')
+    })
+    await expect(handler.registerDroppedFolder(invalid)).resolves.toEqual({ error: 'not-a-folder' })
+    expect(electron.webUtils.getPathForFile).toHaveBeenLastCalledWith(invalid)
+    expect(electron.ipcRenderer.invoke).not.toHaveBeenCalled()
+  })
+})
+
 describe('welcome screen main-process actions', () => {
   let root: string
   beforeAll(async () => {

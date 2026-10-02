@@ -24,7 +24,12 @@ const handler = {
   registerDroppedFolder(file: File): Promise<{ path: string } | { error: string }> {
     // The renderer supplies a real dropped File, never a path string.
     // Only Electron's webUtils resolves its path; generic invoke cannot register it.
-    const path = webUtils.getPathForFile(file)
+    let path: string
+    try {
+      path = webUtils.getPathForFile(file)
+    } catch {
+      return Promise.resolve({ error: 'not-a-folder' })
+    }
     if (!path) return Promise.resolve({ error: 'not-a-folder' })
     return ipcRenderer.invoke('register-dropped-folder', path)
   },

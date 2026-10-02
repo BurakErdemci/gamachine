@@ -1151,7 +1151,7 @@ def create_conversation_router(db, progress_store):
     @router.post("/conversations")
     async def create_conversation(req: NewConversationRequest, x_session_token: str = Header(alias="X-Session-Token")):
         user_id, _ = require_user(db, x_session_token, req.user_id)
-        conv_id = db.create_conversation(user_id, req.title)
+        conv_id = db.create_conversation(user_id, req.title, workspace=req.workspace)
         return {"id": conv_id, "title": req.title, "status": "success"}
 
     @router.get("/conversations/{user_id}")

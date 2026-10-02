@@ -57,6 +57,26 @@ def test_claude_reset_with_at_form_from_the_macos_cli():
     assert windows[1]["resets_at"] == datetime(2026, 10, 8, 0, 59).astimezone(timezone.utc).isoformat()
 
 
+@pytest.mark.parametrize("text, expected", [
+    ("Oct 3, 1am", datetime(2026, 10, 3, 1)),
+    ("Oct 8, 2am (Europe/Istanbul)", datetime(2026, 10, 8, 2)),
+    ("Oct 3 at 1am (Europe/Istanbul)", datetime(2026, 10, 3, 1)),
+    ("Oct 8 at 12:59am (Europe/Istanbul)", datetime(2026, 10, 8, 0, 59)),
+])
+def test_claude_reset_preserves_real_cli_forms(text, expected):
+    assert ul._claude_reset(text, NOW) == expected.astimezone(timezone.utc).isoformat()
+
+
+@pytest.mark.parametrize("text", [
+    "Oct 3 at 1am arbitrary garbage", "Oct 3, 1am garbage",
+    "Oct 3 at 1am (Europe/Istanbul) garbage",
+    "Oct 3 at 1am (Europe/Istanbul) (Local)",
+    "Oct 3 at 1am (Europe/Istanbul", "Oct 3 at 1am garbage (Local)",
+])
+def test_claude_reset_rejects_trailing_garbage(text):
+    assert ul._claude_reset(text, NOW) is None
+
+
 def test_claude_rollover_parse_miss_and_recent_past():
     text = "Current session: 1% used · resets Jan 1, 12am (Local)"
     w = ul.parse_claude_usage(text, now=datetime(2026, 12, 31))["windows"][0]

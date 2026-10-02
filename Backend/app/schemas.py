@@ -43,6 +43,7 @@ class APIKeySaveRequest(BaseModel):
 class NewConversationRequest(BaseModel):
     user_id: int
     title: str = "Yeni Sohbet"
+    workspace: Optional[str] = Field(default=None, max_length=4096)
 
 
 class ChatRequest(BaseModel):

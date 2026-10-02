@@ -72,4 +72,12 @@ describe('Unity project inspection', () => {
     fs.writeFileSync(path.join(root, 'file'), '')
     expect(inspectProject(path.join(root, 'file'))).toEqual({ exists: false, unityVersion: null })
   })
+
+  it('rejects a directory version file before attempting to open it', () => {
+    makeProject()
+    fs.mkdirSync(versionFile())
+    const open = vi.spyOn(fs, 'openSync')
+    expect(readUnityVersion(root)).toBeNull()
+    expect(open).not.toHaveBeenCalled()
+  })
 })

@@ -40,7 +40,7 @@ def _pct(value):
 
 def _claude_reset(text, now):
     # Windows CLI: "Oct 3, 1am"; macOS CLI: "Oct 3 at 1am" (both measured, 2 Oct 2026).
-    match = re.match(r"^([A-Za-z]{3})\s+(\d{1,2})(?:,\s*|\s+at\s+)(\d{1,2})(?::(\d{2}))?(am|pm)(?:\s|$)",
+    match = re.match(r"^([A-Za-z]{3})\s+(\d{1,2})(?:,\s*|\s+at\s+)(\d{1,2})(?::(\d{2}))?(am|pm)(?:\s*\([^)]*\))?\Z",
                      text, re.IGNORECASE)
     if not match:
         return None

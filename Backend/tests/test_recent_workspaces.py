@@ -1,5 +1,7 @@
 import sqlite3
 from contextlib import closing
+from datetime import datetime
+from unittest.mock import Mock
 
 import pytest
 from cryptography.fernet import Fernet
@@ -7,6 +9,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from database import DatabaseManager
+import database
+from routes.conversation_routes import create_conversation_router
 from routes.workspace_routes import create_workspace_router
 
 
@@ -56,6 +60,82 @@ def test_new_chat_stamps_latest_workspace_for_its_user(db):
     assert workspace_of(db, db.create_conversation(1)) == "latest"
     query(db, "UPDATE workspaces SET last_accessed = '2000' WHERE user_id = 1")
     assert workspace_of(db, db.create_conversation(1)) == "latest"
+
+
+def test_explicit_workspace_overrides_latest_saved_row(db):
+    db.save_workspace(1, "newer-project")
+    assert workspace_of(db, db.create_conversation(1, workspace="open-project")) == "open-project"
+
+
+@pytest.mark.parametrize("workspace", [None, ""])
+def test_empty_workspace_keeps_latest_saved_fallback(db, workspace):
+    db.save_workspace(1, "saved-project")
+    assert workspace_of(db, db.create_conversation(1, workspace=workspace)) == "saved-project"
+
+
+def test_same_second_resave_stamps_reopened_workspace(db, monkeypatch):
+    times = iter(datetime(2026, 10, 2, 12, 0, 0, microsecond) for microsecond in (1, 2, 3, 4))
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls):
+            return next(times)
+
+    monkeypatch.setattr(database, "datetime", Clock)
+    db.save_workspace(1, "A")
+    db.save_workspace(1, "B")
+    db.save_workspace(1, "A")
+    assert workspace_of(db, db.create_conversation(1)) == "A"
+
+
+def test_recent_workspace_timestamp_hides_stored_microseconds(db):
+    db.save_workspace(1, "project")
+    stored = query(db, "SELECT last_accessed FROM workspaces")[0][0]
+    assert len(stored) == 26
+    assert db.get_recent_workspaces(1)[0]["last_accessed"] == stored[:19]
+    assert len(db.get_recent_workspaces(1)[0]["last_accessed"]) == 19
+
+
+def test_recent_workspace_truncates_existing_fractional_timestamp(db):
+    db.save_workspace(1, "project")
+    query(db, "UPDATE workspaces SET last_accessed = '2026-10-02 12:00:00.123456'")
+    assert db.get_recent_workspaces(1)[0]["last_accessed"] == "2026-10-02 12:00:00"
+
+
+@pytest.fixture
+def conversation_client(db):
+    app = FastAPI()
+    app.include_router(create_conversation_router(db, {}))
+    with TestClient(app) as client:
+        yield client
+
+
+def test_conversation_route_forwards_explicit_workspace(db, conversation_client, monkeypatch):
+    db.save_workspace(1, "newer-project")
+    create = Mock(wraps=db.create_conversation)
+    monkeypatch.setattr(db, "create_conversation", create)
+    response = conversation_client.post("/conversations", headers={"X-Session-Token": ""},
+                                        json={"user_id": 1, "title": "explicit", "workspace": "open-project"})
+    assert response.status_code == 200
+    create.assert_called_once_with(1, "explicit", workspace="open-project")
+    assert workspace_of(db, response.json()["id"]) == "open-project"
+
+
+def test_conversation_route_rejects_overlong_workspace(db, conversation_client, monkeypatch):
+    create = Mock(wraps=db.create_conversation)
+    monkeypatch.setattr(db, "create_conversation", create)
+    response = conversation_client.post("/conversations", headers={"X-Session-Token": ""},
+                                        json={"user_id": 1, "workspace": "x" * 4097})
+    assert response.status_code == 422
+    create.assert_not_called()
+
+
+def test_conversation_route_accepts_workspace_at_length_limit(db, conversation_client):
+    workspace = "x" * 4096
+    response = conversation_client.post("/conversations", headers={"X-Session-Token": ""},
+                                        json={"user_id": 1, "workspace": workspace})
+    assert response.status_code == 200
+    assert workspace_of(db, response.json()["id"]) == workspace
 
 
 @pytest.mark.parametrize("path", [None, "source-project"])

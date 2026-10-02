@@ -17,7 +17,9 @@ export function isUnityProjectDir(dir: string): boolean {
 export function readUnityVersion(dir: string): string | null {
   let fd: number | undefined
   try {
-    fd = fs.openSync(path.join(dir, 'ProjectSettings', 'ProjectVersion.txt'), 'r')
+    const versionFile = path.join(dir, 'ProjectSettings', 'ProjectVersion.txt')
+    if (!fs.statSync(versionFile).isFile()) return null
+    fd = fs.openSync(versionFile, 'r')
     const buffer = Buffer.alloc(4096)
     const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0)
     const line = buffer.toString('utf8', 0, bytes).split(/\r?\n/)

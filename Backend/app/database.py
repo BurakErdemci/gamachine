@@ -524,18 +524,20 @@ class DatabaseManager:
             conn.commit()
 
     # ===================== YENİ: SOHBETLER =====================
-    def create_conversation(self, user_id: int, title: str = "Yeni Sohbet") -> int:
+    def create_conversation(self, user_id: int, title: str = "Yeni Sohbet", workspace: Optional[str] = None) -> int:
         self._ensure_workspace_table()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            row = conn.execute(
-                'SELECT path FROM workspaces WHERE user_id = ? ORDER BY last_accessed DESC, id DESC LIMIT 1',
-                (user_id,)
-            ).fetchone()
+            if not isinstance(workspace, str) or not workspace:
+                row = conn.execute(
+                    'SELECT path FROM workspaces WHERE user_id = ? ORDER BY last_accessed DESC, id DESC LIMIT 1',
+                    (user_id,)
+                ).fetchone()
+                workspace = row[0] if row else None
             cursor = conn.execute(
                 'INSERT INTO conversations (user_id, title, created_at, updated_at, workspace) '
                 'VALUES (?, ?, ?, ?, ?)',
-                (user_id, title, now, now, row[0] if row else None)
+                (user_id, title, now, now, workspace)
             )
             conn.commit()
             return cursor.lastrowid
@@ -1357,7 +1359,7 @@ class DatabaseManager:
     def save_workspace(self, user_id: int, path: str) -> None:
         """Kullanıcının workspace yolunu kaydet/güncelle."""
         self._ensure_workspace_table()
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             # Aynı kullanıcı + aynı path var mı?
             existing = conn.execute(
@@ -1395,7 +1397,7 @@ class DatabaseManager:
                 'FROM workspaces w WHERE w.user_id = ? ORDER BY w.last_accessed DESC, w.id DESC LIMIT ?',
                 (user_id, limit)
             ).fetchall()
-            return [{"path": row[0], "last_accessed": row[1], "chat_count": row[2]} for row in rows]
+            return [{"path": row[0], "last_accessed": row[1][:19], "chat_count": row[2]} for row in rows]
 
     def remove_workspace(self, user_id: int, path: str) -> bool:
         self._ensure_workspace_table()

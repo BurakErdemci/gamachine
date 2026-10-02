@@ -715,7 +715,11 @@ export const useChat = (
     if (!user || !API) return null;
     const selection = selectionRef.current;
     try {
-      const res = await axios.post(`${API}/conversations`, { user_id: user.id, title: baslik });
+      const workspace = workspacePath ? await backendWorkspacePath(workspacePath) : null;
+      const res = await axios.post(`${API}/conversations`, {
+        user_id: user.id, title: baslik,
+        ...(typeof workspace === 'string' && workspace ? { workspace } : {}),
+      });
       await fetchConversations(user.id);
       patchConv(res.data.id, () => ({ ...EMPTY_RUNTIME }));
       // A chat the user opened while this was in flight stays on screen; the
@@ -726,7 +730,7 @@ export const useChat = (
       }
       return res.data.id;
     } catch (err) { console.error("Yeni sohbet hatası:", err); return null; }
-  }, [API, fetchConversations, patchConv, setActiveConvId, user]);
+  }, [API, fetchConversations, patchConv, setActiveConvId, user, workspacePath]);
 
   // "Branch from now": the server copies the source chat's text history into a
   // new chat under the same root. A chat mid-turn or waiting on a card is
