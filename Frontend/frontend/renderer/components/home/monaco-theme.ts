@@ -6,7 +6,7 @@
 // import ediyor; oradaki amaç sıralama garantisi, buradaki unutmaya karşı.)
 import './monaco-loader';
 import type * as Monaco from 'monaco-editor';
-import { isLight, onThemeChange, readColorTokens } from '../../lib/themeTokens';
+import { isLight, onThemeChange, readColorTokens, readToken } from '../../lib/themeTokens';
 
 export const THEME_NAME = 'gamachine';
 
@@ -127,6 +127,14 @@ const applyTheme = (monaco: typeof Monaco) => {
   monaco.editor.setTheme(THEME_NAME);
 };
 
+export const codeFontFamily = () => readToken('--font-mono') || "'JetBrains Mono', 'Consolas', monospace";
+const fontEditors = new Set<{ updateOptions: (options: { fontFamily: string }) => void }>();
+export const watchEditorFont = (editor: { updateOptions: (options: { fontFamily: string }) => void }) => {
+  fontEditors.add(editor);
+  editor.updateOptions({ fontFamily: codeFontFamily() });
+  return () => { fontEditors.delete(editor); };
+};
+
 // Monaco's theme is global (one per page), so one watcher is enough however many editors mount.
 let _themeWatched = false;
 
@@ -139,5 +147,9 @@ export const defineUnityTheme = (monaco: typeof Monaco) => {
   applyTheme(monaco);
   if (_themeWatched) return;
   _themeWatched = true;
-  onThemeChange(() => applyTheme(monaco));
+  onThemeChange(() => {
+    applyTheme(monaco);
+    for (const editor of fontEditors) editor.updateOptions({ fontFamily: codeFontFamily() });
+    monaco.editor.remeasureFonts();
+  });
 };

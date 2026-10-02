@@ -11,6 +11,7 @@ import { AwaitingBadge } from './AwaitingBadge';
 import { BrandLogo } from './BrandLogo';
 import { useUnityLinkPulse } from './UnityMcpToggle';
 import { confirmDialog } from '../ui/ConfirmDialog';
+import { displayName } from '../../lib/displayName';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -107,6 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   const renameListRef = useRef<{ id: number; task: boolean } | null>(null);
 
   if (!user) return null;
+  const name = displayName(user.name);
 
   // Closing the workspace drops the editor buffer; a dirty file must not vanish on one click.
   const switchProject = async () => {
@@ -287,7 +289,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           )}
         </div>
 
-        <div className="side-profile" title={user.name}>
+        <div className="side-profile" title={name || undefined}>
           <span className="lvl level" aria-hidden="true"><span className="lvl-n">{PROFILE_LEVEL}</span></span>
           <svg className="ic side-profile-ic" viewBox="0 0 20 20" aria-hidden="true">
             <circle cx="10" cy="7" r="3.2" />
@@ -312,7 +314,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
             </svg>
             <span>{t('sidebar.settings')}</span>
           </button>
-          <span className="foot-user" title={user.name}>{user.name}</span>
+          {name && <span className="foot-user" title={name}>{name}</span>}
         </div>
       </div>
     </motion.aside>

@@ -18,7 +18,7 @@ import { SettingsModal } from '../components/home/SettingsModal';
 import { ExportModal } from '../components/home/ExportModal';
 import { ModelSelector } from '../components/home/ModelSelector';
 import { WorkspaceScreen } from '../components/home/WorkspaceScreen';
-import { Workspace, KodPane, PreviewPane, ScenePane, type WsDiff, type ChangedFile } from '../components/home/Workspace';
+import { Workspace, KodPane, PreviewPane, ScenePane, toggleTerminalDrawer, type WsDiff, type ChangedFile } from '../components/home/Workspace';
 import { ProjectFiles } from '../components/home/FileTree';
 import { ControlPanel, ThinkingLevel, EffortCaps } from '../components/home/ControlPanel';
 import { SessionReportPanel } from '../components/home/SessionReportPanel';
@@ -200,27 +200,6 @@ export default function Home() {
   // caller (`selectWorkspace`; `closeWorkspace` only clears it), so the effect
   // covered no case that writer does not.
 
-  // --- Electron Menu IPC Listeners ---
-  useEffect(() => {
-    if (ipc) {
-      const handleToggleTerminal = () => setIsTerminalOpen(prev => !prev);
-      const handleOpenTerminal = () => setIsTerminalOpen(true);
-      const handleClearTerminal = () => {
-        showToast(t('home.terminalCleared'), "info");
-      };
-
-      const off1 = ipc.on('menu-toggle-terminal', handleToggleTerminal);
-      const off2 = ipc.on('menu-open-terminal', handleOpenTerminal);
-      const off3 = ipc.on('menu-clear-terminal', handleClearTerminal);
-
-      return () => {
-        if (typeof off1 === 'function') off1();
-        if (typeof off2 === 'function') off2();
-        if (typeof off3 === 'function') off3();
-      };
-    }
-  }, [ipc, showToast]);
-
   // --- UI State ---
   // Hydration requires a deterministic 'en' render in both SSR and the client.
   // Reading storage during render could make their translated text disagree,
@@ -309,6 +288,23 @@ export default function Home() {
   const [sidebarTab, setSidebarTab] = useState<'chats' | 'files'>('chats');
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!ipc) return;
+    const off1 = ipc.on('menu-toggle-terminal', () => {
+      toggleTerminalDrawer(ws.open, isTerminalOpen, setWsOpen, setIsTerminalOpen);
+    });
+    const off2 = ipc.on('menu-open-terminal', () => {
+      setWsOpen(true);
+      setIsTerminalOpen(true);
+    });
+    const off3 = ipc.on('menu-clear-terminal', () => showToast(t('home.terminalCleared'), 'info'));
+    return () => {
+      if (typeof off1 === 'function') off1();
+      if (typeof off2 === 'function') off2();
+      if (typeof off3 === 'function') off3();
+    };
+  }, [ipc, ws.open, isTerminalOpen, setWsOpen, showToast, t]);
   const [projectProblems, setProjectProblems] = useState<Record<string, any[]>>({});
   // Chat'te '/' autocomplete için Claude Code slash komutları + skill'ler (backend'den)
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
@@ -423,12 +419,12 @@ export default function Home() {
   // opened from the app menu. They show their tab without widening a panel the user sized.
   // Which tab is decided by contentPane's precedence: a change a card is asking about outranks an
   // open preview, so the card never asks about something off screen.
-  const arrived = contentPane(fs.previewFile, diffFile || pendingChange, fs.openedFilePath);
+  const arrived = contentPane(fs.previewFile, pendingChange, fs.openedFilePath);
   useEffect(() => {
     if (arrived === 'hero') return;
     setWsOpen(true);
     setWsTab(arrived === 'preview' ? 'onizleme' : 'kod');
-  }, [arrived, fs.previewFile, fs.openedFilePath, diffFile, pendingChange?.id, setWsOpen, setWsTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [arrived, fs.previewFile, fs.openedFilePath, pendingChange?.id, setWsOpen, setWsTab]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (isTerminalOpen) setWsOpen(true); }, [isTerminalOpen, setWsOpen]);
 
   // Sahne's "Changed files": the git status the file tree already polls every 20 s. Its keys are
@@ -643,13 +639,8 @@ export default function Home() {
     );
   }
 
-  // The change shown on the Kod tab: the card's diff (FileCreationApproval sets diffFile), or a
-  // proposed fix the DiffViewer card published (it has no diffFile).
-  const kodDiff: WsDiff | null = diffFile
-    ? { name: diffFile.name, path: diffFile.suggestedPath, original: diffFile.originalCode ?? '', modified: diffFile.code }
-    : pendingChange
-      ? { name: pendingChange.name, path: pendingChange.path, original: pendingChange.original, modified: pendingChange.modified }
-      : null;
+  // Content and decisions belong to the same published card, including when cards coexist.
+  const kodDiff: WsDiff | null = pendingChange;
   // Branching copies the chat as it stands; mid-turn or with a card open there
   // is no settled "now" to copy (the backend answers 409 for the same case).
   const branchBlocked = chat.loading
@@ -850,7 +841,7 @@ export default function Home() {
                 messages={chat.messages} activeConvId={chat.activeConvId} conversations={chat.conversations} user={auth.user} loading={chat.loading} clearHistory={chat.clearHistory} lang={lang}
                 thinkingLevel={thinkingLevel} workspacePath={fs.workspacePath} handleExportToUnity={fs.handleExportToUnity}
                 pendingGenFiles={fs.pendingGenFiles} setPendingGenFiles={fs.setPendingGenFiles} pendingFix={chat.pendingFix} setPendingFix={chat.setPendingFix} openedFilePath={fs.openedFilePath}
-                setCode={fs.setCode} refreshFileTree={fs.refreshFileTree} analyzeProject={chat.analyzeProject} openFile={openInPanel} sendMessage={handleSendMessage}
+                setCode={fs.setCode} setOriginalCode={fs.setOriginalCode} refreshFileTree={fs.refreshFileTree} analyzeProject={chat.analyzeProject} openFile={openInPanel} sendMessage={handleSendMessage}
                 messagesEndRef={chatEndRef} ipc={ipc} showToast={showToast as any} diffFile={diffFile} setDiffFile={setDiffFile}
                 pendingDelete={fs.pendingDelete} setPendingDelete={fs.setPendingDelete} pendingCommand={chat.pendingCommand} setPendingCommand={chat.setPendingCommand} onApproveCommand={chat.approveCommand} pendingQuestion={chat.pendingQuestion} setPendingQuestion={chat.setPendingQuestion} onAnswerQuestion={chat.answerQuestion} deleteFile={fs.deleteFile} setIsTerminalOpen={setIsTerminalOpen}
                 activity={chat.activity}
@@ -971,7 +962,7 @@ export default function Home() {
                 isDirty={fs.isDirty}
                 onSave={() => { void fs.saveFile(); }}
                 // As the old top bar's X did: the buffer goes with the file.
-                onCloseFile={() => { fs.setOpenedFilePath(null); fs.setCode(''); }}
+                onCloseFile={fs.closeFile}
                 diff={kodDiff}
                 change={pendingChange}
                 hint={<CsharpProjectHint inProject={csInProject} />}

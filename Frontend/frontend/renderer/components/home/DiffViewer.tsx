@@ -3,9 +3,9 @@ import './monaco-loader';
 import { DiffEditor } from '@monaco-editor/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, Check, CheckCircle2, FileCode, X } from 'lucide-react';
-import { defineUnityTheme, THEME_NAME } from './monaco-theme';
+import { defineUnityTheme, THEME_NAME, codeFontFamily, watchEditorFont } from './monaco-theme';
 import { useLang } from '../../lib/i18n';
-import { useEffect, useId, useRef } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { publishPendingChange } from '../../lib/pendingChange';
 
 export interface DiffData {
@@ -18,32 +18,55 @@ export interface DiffData {
 interface DiffViewerProps {
   diffData: DiffData;
   filename?: string;
+  filePath?: string | null;
   applied?: boolean;
-  onAccept: (fixedCode: string) => void;
+  onAccept: (fixedCode: string) => void | Promise<void>;
   onReject: () => void;
   /** The phone can decide this diff: true only for the unityMCP gate's diff (a registry card);
    *  the chat flow's own diff writes through IPC here and no phone can answer it. */
   phonePaired?: boolean;
 }
 
-export const DiffViewer = ({ diffData, filename, applied, onAccept, onReject, phonePaired }: DiffViewerProps) => {
+export const DiffViewer = ({ diffData, filename, filePath, applied, onAccept, onReject, phonePaired }: DiffViewerProps) => {
   const { t } = useLang();
   // While undecided, the workspace's Kod tab shows this diff with an Accept / Reject strip that
   // calls these same two handlers (lib/pendingChange.ts); deciding there is deciding here.
   const id = useId();
   const handlers = useRef({ onAccept, onReject });
   handlers.current = { onAccept, onReject };
+  const accepting = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const stopFontWatch = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopFontWatch.current?.(), []);
+  const accept = useCallback(async () => {
+    // The strip and card can call before React has painted the disabled state.
+    if (accepting.current) return;
+    accepting.current = true;
+    setBusy(true);
+    try {
+      await handlers.current.onAccept(diffData.fixed_code);
+    } finally {
+      accepting.current = false;
+      setBusy(false);
+    }
+  }, [diffData]);
+  const reject = useCallback(() => {
+    // The owning card reports a conflicting decision while acceptance is in flight.
+    handlers.current.onReject();
+  }, []);
   useEffect(() => {
     if (applied) return;
     return publishPendingChange({
       id: `fix:${id}`,
       name: filename || t('diff.fileFallback'),
+      path: filePath ?? undefined,
       original: diffData.original_code,
       modified: diffData.fixed_code,
-      accept: () => handlers.current.onAccept(diffData.fixed_code),
-      reject: () => handlers.current.onReject(),
+      accept,
+      reject,
+      busy,
     });
-  }, [applied, diffData, filename, id, t]);
+  }, [applied, diffData, filename, filePath, id, t, accept, reject, busy]);
   // The fix card on the chat's code plate (thread.css `.code`, `--code-*`): head with the file and
   // the old / new legend, the explanation and the Unity hint as lines under it, Monaco's diff, then
   // the decision row with the shared `.btn`s. Applied, it folds to one record line.
@@ -99,12 +122,16 @@ export const DiffViewer = ({ diffData, filename, applied, onAccept, onReject, ph
             modified={diffData.fixed_code}
             theme={THEME_NAME}
             beforeMount={defineUnityTheme}
+            onMount={(editor) => {
+              stopFontWatch.current?.();
+              stopFontWatch.current = watchEditorFont(editor);
+            }}
             options={{
               readOnly: true,
               renderSideBySide: true,
               minimap: { enabled: false },
               fontSize: 12,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+              fontFamily: codeFontFamily(),
               lineHeight: 1.6,
               scrollBeyondLastLine: false,
               padding: { top: 14, bottom: 14 },
@@ -116,11 +143,11 @@ export const DiffViewer = ({ diffData, filename, applied, onAccept, onReject, ph
         </div>
 
         <div className="diffcard-acts">
-          <button type="button" onClick={() => onAccept(diffData.fixed_code)} className="btn btn-primary">
+          <button type="button" onClick={accept} disabled={busy} className="btn btn-primary">
             <Check size={13} strokeWidth={2.5} aria-hidden="true" />
             {t('diff.accept')}
           </button>
-          <button type="button" onClick={onReject} className="btn btn-ghost">
+          <button type="button" onClick={reject} className="btn btn-ghost">
             <X size={13} strokeWidth={2.5} aria-hidden="true" />
             {t('diff.reject')}
           </button>

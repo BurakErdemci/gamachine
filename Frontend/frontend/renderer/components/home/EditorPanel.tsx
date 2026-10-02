@@ -4,9 +4,8 @@
 import './monaco-loader';
 import React from 'react';
 import { Editor, DiffEditor } from '@monaco-editor/react';
-import { defineUnityTheme, THEME_NAME } from './monaco-theme';
+import { defineUnityTheme, THEME_NAME, codeFontFamily, watchEditorFont } from './monaco-theme';
 import { hostWorkspacePath } from '../../lib/backendWorkspacePath';
-import { readToken } from '../../lib/themeTokens';
 
 // Açık dosyanın uzantısına göre Monaco dili — .md/.json/.yaml vb. artık editörde
 // açılabildiği için csharp'a sabitlemek yanlış vurgu yapıyordu.
@@ -247,6 +246,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 }) => {
   const monacoRef = React.useRef<any>(null);
   const editorRef = React.useRef<any>(null);
+  const stopFontWatch = React.useRef<(() => void) | null>(null);
+  React.useEffect(() => () => stopFontWatch.current?.(), []);
   const [modelChangedTrigger, setModelChangedTrigger] = React.useState(0);
 
   // Provider closure'ları bir kez kaydedilir; güncel prop'ları ref üzerinden görsünler
@@ -320,8 +321,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   }, [problems, openedFilePath, modelChangedTrigger]);
 
   // Fonts from the theme tokens: the user's code font pick (Settings) is an inline --font-mono on
-  // :root, so it reaches the editor too. Read at render; Monaco remeasures on font load.
-  const monoFont = readToken('--font-mono') || "'JetBrains Mono', 'Consolas', monospace";
+  // :root; the theme watcher also updates already mounted editors.
+  const monoFont = codeFontFamily();
 
   // The frame (file tabs, crumb, save) is the workspace's Kod pane (Workspace.tsx); this is only
   // the editor surface. `automaticLayout` because the pane is hidden behind other tabs and the
@@ -335,6 +336,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
       theme={THEME_NAME}
       // Defined before the first paint, so the editor never flashes another theme.
       beforeMount={defineUnityTheme}
+      onMount={(editor) => {
+        stopFontWatch.current?.();
+        stopFontWatch.current = watchEditorFont(editor);
+      }}
       options={{
         readOnly: true,
         renderSideBySide: true,
@@ -360,6 +365,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
       onMount={(editor, monaco) => {
         editorRef.current = editor;
         monacoRef.current = monaco;
+        stopFontWatch.current?.();
+        stopFontWatch.current = watchEditorFont(editor);
         lspBridgeRef.current.registerCsProviders(monaco);
 
         // İlk açılışta marker'ları tetikle

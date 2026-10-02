@@ -804,7 +804,7 @@ describe('stale-preview-state', () => {
   it('inventories the hook surface, so a seventh path operation cannot arrive unnoticed', () => {
     const { result } = mount()
     expect(Object.keys(result.current).sort()).toEqual([
-      'changeExportDir', 'closePreview', 'closeWorkspace', 'code', 'deleteFile', 'dirContents',
+      'changeExportDir', 'closeFile', 'closePreview', 'closeWorkspace', 'code', 'deleteFile', 'dirContents',
       'expandedDirs', 'exportFileName', 'exportModal', 'exportMultipleFiles', 'exportSingleFile',
       'fetchLastWorkspace', 'fileTree', 'gitStatus', 'handleExportToUnity', 'handleTreeContextMenu',
       'handleTreeDelete', 'handleTreeDragLeave', 'handleTreeDragOver', 'handleTreeDragStart',
@@ -812,7 +812,7 @@ describe('stale-preview-state', () => {
       'openPreview', 'openedFilePath', 'pendingDelete', 'pendingGenFiles', 'previewFile',
       'refreshFileTree', 'refreshGitStatus', 'renameValue', 'renamingPath', 'rootFolderPath',
       'saveFile', 'selectWorkspace', 'setCode', 'setExportFileName', 'setExportModal',
-      'setOpenedFilePath', 'setPendingDelete', 'setPendingGenFiles', 'setRenameValue',
+      'setOpenedFilePath', 'setOriginalCode', 'setPendingDelete', 'setPendingGenFiles', 'setRenameValue',
       'setRenamingPath', 'setTreeContextMenu', 'setTreeCreateValue', 'setTreeCreating',
       'startRename', 'startTreeCreate', 'submitRename', 'submitTreeCreate', 'suggestFilePath',
       'toggleDir', 'treeContextMenu', 'treeCreateValue', 'treeCreating', 'treeDragSource',

@@ -148,7 +148,40 @@ interface TerminalSession {
   cwd: string | null;
 }
 
-type DrawerTab = 'terminal' | 'konsol' | 'sorunlar';
+type DrawerTab = 'terminal' | 'konsol' | 'sorunlar' | 'baglantilar';
+
+const ConnectionsPane: React.FC<{ apiUrl?: string }> = ({ apiUrl }) => {
+  const { t } = useLang();
+  const [backendOk, setBackendOk] = useState<boolean | null>(null);
+  const [mcpOk, setMcpOk] = useState<boolean | null>(null);
+  const check = useCallback(async () => {
+    try {
+      await axios.get(`${apiUrl}/health`);
+      setBackendOk(true);
+    } catch { setBackendOk(false); }
+    try {
+      await axios.get('http://localhost:8080/health', { timeout: 1000 });
+      setMcpOk(true);
+    } catch { setMcpOk(false); }
+  }, [apiUrl]);
+  // The historical PortsTab checks on mount and on refresh, without an interval.
+  useEffect(() => { void check(); }, [check]);
+  const ports = [
+    { name: 'Backend API', port: apiUrl ? new URL(apiUrl).port || '8000' : '8000', ok: backendOk, desc: 'FastAPI · Gamachine' },
+    { name: 'Unity MCP', port: '8080', ok: mcpOk, desc: t('terminal.unityMcpDesc') },
+  ];
+  return <>
+    <div className="con-filters">
+      <span>{t('terminal.activePorts')}</span>
+      <button type="button" className="con-filter" onClick={check}>{t('report.refresh')}</button>
+    </div>
+    {ports.map(port => <div className="connection-row" key={port.name} data-online={port.ok === null ? 'unknown' : String(port.ok)}>
+      <span className="connection-dot" aria-hidden="true" />
+      <span className="prob-text"><b>{port.name} <span className="tm">:{port.port}</span></b><span className="prob-at">{port.desc}</span></span>
+      <span className="connection-status">{port.ok === null ? '…' : port.ok ? 'Online' : 'Offline'}</span>
+    </div>)}
+  </>;
+};
 const DEFAULT_HEIGHT = 228;
 
 /**
@@ -309,7 +342,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   // xterm cannot read CSS: recolour every shell when the appearance changes.
   useEffect(() => onThemeChange(() => {
     const theme = currentXtermTheme();
-    Object.values(terminalInstancesRef.current).forEach(term => { try { term.options.theme = theme; } catch {} });
+    const fontFamily = readToken('--font-mono') || 'Menlo, Monaco, "Courier New", monospace';
+    Object.entries(terminalInstancesRef.current).forEach(([id, term]) => {
+      try {
+        term.options.theme = theme;
+        term.options.fontFamily = fontFamily;
+        const host = terminalRefs.current[id];
+        if (host?.offsetWidth && host.offsetHeight) fitAddonsRef.current[id]?.fit();
+      } catch {}
+    });
   }), []);
 
   // Cleanup removed sessions
@@ -422,6 +463,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     { id: 'terminal', label: 'terminal.tabTerminal' },
     { id: 'konsol', label: 'terminal.tabConsole' },
     { id: 'sorunlar', label: 'terminal.tabProblems' },
+    { id: 'baglantilar', label: 'terminal.tabConnections' },
   ];
 
   return (
@@ -530,6 +572,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             {isOpen && tab === 'konsol' && (
               <ConsolePane apiUrl={apiUrl} sessionToken={sessionToken} unityConnected={unityConnected} />
             )}
+          </div>
+
+          <div className="term-pane" data-term="baglantilar">
+            {isOpen && tab === 'baglantilar' && <ConnectionsPane apiUrl={apiUrl} />}
           </div>
 
           <div className="term-pane" data-term="sorunlar">

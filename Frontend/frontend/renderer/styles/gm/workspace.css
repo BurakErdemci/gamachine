@@ -307,6 +307,7 @@ button.file-row:hover { background: var(--paper-sunk); box-shadow: 0 0 0 4px var
 .term-pane { display: none; flex: 1; min-height: 0; margin: 0; padding: 10px 14px 12px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.65; color: var(--term-text); overflow: auto; }
 .term[data-term="terminal"] .term-pane[data-term="terminal"],
 .term[data-term="konsol"] .term-pane[data-term="konsol"],
+.term[data-term="baglantilar"] .term-pane[data-term="baglantilar"],
 .term[data-term="sorunlar"] .term-pane[data-term="sorunlar"] { display: flex; flex-direction: column; }
 .tp { color: var(--term-prompt); }
 .tm, .tt { color: var(--term-dim); }
@@ -348,6 +349,13 @@ button.prob:hover { background: color-mix(in srgb, var(--term-text) 6%, transpar
 .con-row { display: flex; gap: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .con-row[data-level="warning"] { color: var(--term-warn); }
 .con-row[data-level="error"] { color: var(--diff-del-mark); }
+.connection-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+.connection-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--term-dim); }
+.connection-status { margin-left: auto; color: var(--term-dim); }
+.connection-row[data-online="true"] .connection-dot { background: var(--term-prompt); }
+.connection-row[data-online="true"] .connection-status { color: var(--term-prompt); }
+.connection-row[data-online="false"] .connection-dot { background: var(--diff-del-mark); }
+.connection-row[data-online="false"] .connection-status { color: var(--diff-del-mark); }
 
 /* ---------- app glue: hosts and empty states ---------- */
 .ed-host { position: relative; flex: 1; min-height: 0; }

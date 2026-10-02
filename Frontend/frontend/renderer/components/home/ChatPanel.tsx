@@ -110,6 +110,7 @@ interface ChatPanelProps {
   setPendingFix: (val: any) => void;
   openedFilePath: string | null;
   setCode: (code: string) => void;
+  setOriginalCode?: (code: string) => void;
   refreshFileTree: () => void;
   analyzeProject: (silent?: boolean) => void;
   openFile: (path: string) => void;
@@ -165,6 +166,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   setPendingFix,
   openedFilePath,
   setCode,
+  setOriginalCode,
   refreshFileTree,
   analyzeProject,
   openFile,
@@ -194,6 +196,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   phonePaired,
 }) => {
   const { t } = useLang();
+  // A card keeps the file/workspace it was created for across editor navigation.
+  const fixTarget = useRef<{ data: DiffData; path: string | null; workspace: string | null } | null>(null);
+  if (!pendingFix) fixTarget.current = null;
+  else if (fixTarget.current?.data !== pendingFix.data) {
+    fixTarget.current = { data: pendingFix.data, path: openedFilePath, workspace: workspacePath };
+  }
+  const currentEditor = useRef({ path: openedFilePath, workspace: workspacePath });
+  currentEditor.current = { path: openedFilePath, workspace: workspacePath };
   // Stable across stream tokens, so the memoised bubbles do not re-parse.
   const mentionTitles = useMemo(
     () => new Map((conversations || []).map(c => [c.id, c.title] as [number, string])),
@@ -279,27 +289,32 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
    * koddu. (API akışının kendi tipinde `gateId` alanı hiç yok:
    * `useChat.ts:29`.)
    */
-  const pendingFixCard = pendingFix ? (
+  const target = fixTarget.current;
+  const pendingFixCard = pendingFix && target ? (
     <DiffViewer
       diffData={pendingFix.data}
-      filename={pendingFix.data?.editor_hint?.split('/').pop() || (openedFilePath ? openedFilePath.split('/').pop() : undefined)}
+      filename={target.path?.split(/[\\/]/).pop() || pendingFix.data?.editor_hint?.split('/').pop()}
+      filePath={target.path}
       applied={pendingFix.applied}
       onAccept={async (fixedCode) => {
-        // Editör tamponu her hâlükârda güncellenir
-        // (kullanıcı düzeltmeyi görsün), ama "dosya güncellendi"
-        // iddiası yalnız disk yazımı DOĞRULANDIYSA basılır.
-        setCode(fixedCode);
-        if (!ipc || !openedFilePath || !workspacePath) {
+        const isOpenTarget = () => currentEditor.current.path === target.path
+          && currentEditor.current.workspace === target.workspace;
+        if (isOpenTarget()) setCode(fixedCode);
+        if (!ipc || !target.path || !target.workspace) {
           // Hiçbir yazım denenmedi: diskte değişen bir şey yok.
           // Eskiden burada da "✅ Dosya güncellendi" basılıyordu.
           setPendingFix((prev: any) => prev ? { ...prev, applied: true } : null);
           showToast(t('chat.diffApplied'), 'info');
           return;
         }
-        const res = await ipc.invoke('write-file', openedFilePath, fixedCode, workspacePath);
+        const res = await ipc.invoke('write-file', target.path, fixedCode, target.workspace);
         if (!res?.success) {
-          showToast(writeErrorText(openedFilePath.split('/').pop() || openedFilePath, res), 'error');
+          showToast(writeErrorText(target.path.split(/[\\/]/).pop() || target.path, res), 'error');
           return;
+        }
+        if (isOpenTarget()) {
+          setCode(fixedCode);
+          setOriginalCode?.(fixedCode);
         }
         setPendingFix((prev: any) => prev ? { ...prev, applied: true } : null);
         refreshFileTree();

@@ -138,6 +138,16 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   const isDirtyRef = useRef(isDirty);
   isDirtyRef.current = isDirty;
 
+  const closeFile = useCallback(() => {
+    contentRequest.invalidate();
+    openedFilePathRef.current = null;
+    isDirtyRef.current = false;
+    setOpenedFilePath(null);
+    setCode('');
+    setOriginalCode('');
+    setIsDirty(false);
+  }, [contentRequest]);
+
   /**
    * Opening another file or a preview replaces the editor buffer. With unsaved edits that lost
    * them without a word, and the chat's "Open in panel" / tool "Details" links made it easy to
@@ -760,7 +770,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   }, [exportModal, refreshFileTree, showToast, workspacePath]);
 
   return {
-    workspacePath, lastWorkspacePath, fileTree, openedFilePath, code, setCode, setOpenedFilePath,
+    workspacePath, lastWorkspacePath, fileTree, openedFilePath, code, setCode, setOriginalCode, setOpenedFilePath, closeFile,
     isDirty, saveFile, previewFile, openPreview, closePreview,
     fetchLastWorkspace, selectWorkspace, openFolder, closeWorkspace, openFile, refreshFileTree,
     openFilePicker, treeCreating, setTreeCreating, treeCreateValue, setTreeCreateValue,

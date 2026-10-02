@@ -145,6 +145,15 @@ const extOf = (p: string) => { const m = /\.[^./\\]+$/.exec(p); return m ? m[0].
 
 export interface WsDiff { name: string; path?: string; original: string; modified: string }
 
+/** A hidden workspace also hides an expanded drawer; the menu must reveal both. */
+export function toggleTerminalDrawer(
+  workspaceOpen: boolean, drawerOpen: boolean,
+  setWorkspaceOpen: (open: boolean) => void, setDrawerOpen: (open: boolean) => void,
+) {
+  if (!workspaceOpen) setWorkspaceOpen(true);
+  setDrawerOpen(!workspaceOpen || !drawerOpen);
+}
+
 interface KodPaneProps {
   workspacePath: string | null;
   openedFilePath: string | null;

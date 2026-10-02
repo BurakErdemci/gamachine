@@ -2,6 +2,7 @@ import React from 'react';
 import { useLang, type TKey } from '../../lib/i18n';
 import { GamachineMascot } from './GamachineMascot';
 import { MascotHead } from './BrandLogo';
+import { displayName } from '../../lib/displayName';
 
 // TODO(profile): quest XP has no data source yet; these are the mockup's constants. Only Arena
 // shows them (`.qc-xp` is hidden in the base theme).
@@ -49,7 +50,7 @@ const shield = (
 /** Mockup "Yeni sohbet (bos)": the mascot greets as the quest giver, the board lists starters. */
 export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onPick }) => {
   const { t } = useLang();
-  const name = (userName || '').trim();
+  const name = displayName(userName);
   const project = (projectName || '').trim() || 'Workspace';
   return (
     <section className="empty" aria-label={t('sidebar.newChat')} data-testid="empty-chat">
