@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="tr" data-theme="arena">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gamachine Açılış</title>
+<!-- Round 10 (KARAKTER 14B): five scenes, ?scene=1..5. Without ?scene the launch rule picks one
+     (first launch ever = 1, then random but never the previous one; intro.js, localStorage).
+     "Açılış animasyonu" Kapalı (or ?introOff=1; ?introOff=0 turns it back on) opens the app
+     directly: the same end state as reduced motion. Scenes 4 and 5: intro-scenes.css header.
+     Intro (KARAKTER 9-10, 13C): three scenes picked by ?scene=1|2|3 (default 1). Scene 1, 7.3 s, skippable (click / Esc), "Tekrar oynat",
+     reduced motion -> last frame at once, ?t=<ms> freezes a frame for screenshots.
+     The last frame is the REAL app on its first launch, the empty new chat that "İlk görevin seni
+     bekliyor" promises (M3): index.html?intro&screen=bos runs in the iframe and its UI entrance
+     (base.css intro-*) is started by postMessage on the same timeline.
+     Storyboard and timings: intro.css header (scene 1), intro-scenes.css header (scenes 2, 3). -->
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="theme-arena.css">
+<link rel="stylesheet" href="intro.css">
+<link rel="stylesheet" href="intro-scenes.css">
+</head>
+<body>
+
+<iframe class="app-frame" id="app-frame" title="Gamachine" src="index.html?theme=arena&amp;intro=1&amp;screen=bos"></iframe>
+
+<div class="ov" id="ov" aria-hidden="true">
+  <div class="ov-bg"></div>
+
+  <!-- the arena: a floor line and four HUD corner marks -->
+  <svg class="hud" viewBox="0 0 1600 1000">
+    <path class="hud-floor" d="M200 703H1400" pathLength="1"/>
+    <path class="hud-c" d="M24 64V24H64" pathLength="1"/>
+    <path class="hud-c" d="M1536 24H1576V64" pathLength="1"/>
+    <path class="hud-c" d="M1576 936V976H1536" pathLength="1"/>
+    <path class="hud-c" d="M64 976H24V936" pathLength="1"/>
+  </svg>
+
+  <!-- round 8: camera rig. Scene 3 punches in on the slot during the insert (intro-scenes.css);
+       scenes 1 and 2 never move it, so its children sit exactly where they did. -->
+  <div class="cam">
+  <!-- scene 3 "Kartus": a monitor and a cartridge console; the mascot's cartridge goes into the slot -->
+  <div class="s3">
+    <svg class="s3-mach" viewBox="0 0 1600 1000">
+      <path class="s3-floor" d="M200 703H1400"/>   <!-- the floor moves with the camera; the HUD frame does not -->
+      <path class="s3-fill" d="M232 200H968L980 212V620L968 632H232L220 620V212Z"/>
+      <path class="s3-fill" d="M560 632H640L660 703H540Z"/>
+      <path class="s3-fill" d="M1052 560H1178L1190 572V703H1040V572Z"/>
+      <path class="s3-ol" pathLength="1" d="M232 200H968L980 212V620L968 632H232L220 620V212Z"/>
+      <path class="s3-ol" pathLength="1" d="M560 632H640L660 703H540Z"/>
+      <path class="s3-ol" pathLength="1" d="M1052 560H1178L1190 572V703H1040V572Z"/>
+      <g class="s3-detail">
+        <rect class="s3-bay" x="1063" y="551" width="104" height="18" rx="3"/>
+        <rect class="s3-slot" x="1071" y="555" width="88" height="10" rx="2"/>
+        <path class="s3-vent" d="M1132 600H1170M1132 612H1170M1132 624H1170"/>
+        <rect class="s3-led s3-led-con" x="1058" y="598" width="20" height="6" rx="1"/>
+        <rect class="s3-led s3-led-mon" x="932" y="612" width="20" height="5" rx="1"/>
+        <path class="s3-cable" d="M1040 686H652"/>
+        <path class="s3-pulse" pathLength="1" d="M1040 686H652"/>
+      </g>
+    </svg>
+    <div class="s3-scr"><div class="s3-on"></div><div class="s3-line"></div><div class="s3-sweep"></div></div>
+    <div class="s3-cart"><svg class="s3-cart-svg" viewBox="-38.5 -42.5 77 85"><g stroke="#141826" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"><path class="c-body" d="M-35-39H27l8 8V39H-35Z"/><rect class="c-label" x="-25" y="-29" width="42" height="36" rx="5" stroke="none"/><path fill="none" stroke-width="5" d="M24-24h5M24-12h5M24 0h5M-22 25H14"/></g></svg></div>
+  </div>
+
+  <!-- scene 4 "Piksel": a sprite canvas on an easel; four taps paint four colours, the sprite walks -->
+  <div class="s4">
+    <svg class="s4-easel" viewBox="0 0 1600 1000">
+      <path class="s4-leg" d="M842 646L812 703M1328 646L1358 703"/>
+      <path class="s4-ol" pathLength="1" d="M766 246H1404V644H766Z"/>
+    </svg>
+    <p class="s4-tag">SPRITE · 14×12</p>
+    <div class="s4-pal"><i style="--c:#141826"></i><i style="--c:#2A2F3D"></i><i style="--c:#FF6B3D"></i><i style="--c:#F1EEE6"></i><b class="s4-sel"></b></div>
+    <div class="s4-cv"><div class="s4-walk"><svg class="s4-spr" viewBox="0 0 420 360" shape-rendering="crispEdges"><path class="s4-l s4-L1" fill="#141826" d="M60 0h30v30h-30zM90 0h30v30h-30zM300 0h30v30h-30zM330 0h30v30h-30zM60 30h30v30h-30zM120 30h30v30h-30zM270 30h30v30h-30zM330 30h30v30h-30zM60 60h30v30h-30zM120 60h30v30h-30zM150 60h30v30h-30zM180 60h30v30h-30zM210 60h30v30h-30zM240 60h30v30h-30zM270 60h30v30h-30zM330 60h30v30h-30zM30 90h30v30h-30zM360 90h30v30h-30zM30 120h30v30h-30zM360 120h30v30h-30zM0 150h30v30h-30zM120 150h30v30h-30zM150 150h30v30h-30zM180 150h30v30h-30zM210 150h30v30h-30zM240 150h30v30h-30zM270 150h30v30h-30zM390 150h30v30h-30zM0 180h30v30h-30zM120 180h30v30h-30zM180 180h30v30h-30zM210 180h30v30h-30zM270 180h30v30h-30zM390 180h30v30h-30zM0 210h30v30h-30zM120 210h30v30h-30zM180 210h30v30h-30zM210 210h30v30h-30zM270 210h30v30h-30zM390 210h30v30h-30zM30 240h30v30h-30zM360 240h30v30h-30zM60 270h30v30h-30zM330 270h30v30h-30zM90 300h30v30h-30zM300 300h30v30h-30z"/><path class="s4-l s4-L2" fill="#2A2F3D" d="M60 90h30v30h-30zM90 90h30v30h-30zM120 90h30v30h-30zM150 90h30v30h-30zM180 90h30v30h-30zM210 90h30v30h-30zM240 90h30v30h-30zM270 90h30v30h-30zM300 90h30v30h-30zM330 90h30v30h-30zM60 120h30v30h-30zM330 120h30v30h-30zM60 150h30v30h-30zM330 150h30v30h-30zM60 180h30v30h-30zM330 180h30v30h-30zM60 210h30v30h-30zM330 210h30v30h-30zM60 240h30v30h-30zM330 240h30v30h-30zM90 270h30v30h-30zM120 270h30v30h-30zM150 270h30v30h-30zM180 270h30v30h-30zM210 270h30v30h-30zM240 270h30v30h-30zM270 270h30v30h-30zM300 270h30v30h-30zM120 300h30v30h-30zM270 300h30v30h-30z"/><path class="s4-l s4-L3" fill="#FF6B3D" d="M90 30h30v30h-30zM300 30h30v30h-30zM90 60h30v30h-30zM300 60h30v30h-30zM90 120h30v30h-30zM120 120h30v30h-30zM150 120h30v30h-30zM180 120h30v30h-30zM210 120h30v30h-30zM240 120h30v30h-30zM270 120h30v30h-30zM300 120h30v30h-30zM30 150h30v30h-30zM90 150h30v30h-30zM300 150h30v30h-30zM360 150h30v30h-30zM30 180h30v30h-30zM90 180h30v30h-30zM300 180h30v30h-30zM360 180h30v30h-30zM30 210h30v30h-30zM90 210h30v30h-30zM300 210h30v30h-30zM360 210h30v30h-30zM90 240h30v30h-30zM120 240h30v30h-30zM150 240h30v30h-30zM180 240h30v30h-30zM210 240h30v30h-30zM240 240h30v30h-30zM270 240h30v30h-30zM300 240h30v30h-30zM150 300h30v30h-30zM180 300h30v30h-30zM210 300h30v30h-30zM240 300h30v30h-30z"/><path class="s4-l s4-L4" fill="#F1EEE6" d="M150 180h30v30h-30zM240 180h30v30h-30zM150 210h30v30h-30zM240 210h30v30h-30z"/><path class="s4-l s4-L3 s4-fa" fill="#FF6B3D" d="M90 330h30v30h-30zM120 330h30v30h-30zM270 330h30v30h-30zM300 330h30v30h-30z"/><path class="s4-fb" fill="#FF6B3D" d="M120 330h30v30h-30zM150 330h30v30h-30zM240 330h30v30h-30zM270 330h30v30h-30z"/></svg></div></div>
+  </div>
+
+  <!-- scene 5 "Yukleme": a loading bar the mascot has to push to 100 % -->
+  <div class="s5">
+    <p class="s5-lbl">YÜKLENİYOR</p>
+    <p class="s5-pct"></p>
+    <div class="s5-bar"><div class="s5-fill"></div></div>
+    <p class="s5-ok">HAZIR</p>
+  </div>
+
+  <div class="m-shadow"></div>
+  <div class="dust"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+
+  <!-- approved full mascot (maskot/gamachine-maskot.svg, verbatim) -->
+  <div class="m-pos"><div class="m-drop"><svg xmlns="http://www.w3.org/2000/svg" id="gamachine" viewBox="-50 0 700 640" class="m-svg" aria-hidden="true" focusable="false"><title id="gm-title">Gamachine</title><style>#gamachine *{transform-box:view-box} #upper,#rig{transform-origin:300px 612px} #head{transform-origin:300px 372px} #eyes{transform-origin:300px 262px} #horn-left{transform-origin:228px 190px} #horn-right{transform-origin:372px 190px} #card{transform-origin:300px 472px} #shadow{transform-origin:300px 614px} #arm-left,#arm-right{transform-origin:206px 402px}#arm-left-fore,#arm-right-fore{transform-origin:206px 448px}#block-placed{transform-origin:444px 542px}</style><defs><clipPath id="gm-torso"><path d="M228 366H372Q404 368 404 398L400 466Q398 500 366 502H234Q202 500 200 466L196 398Q196 368 228 366Z"/></clipPath></defs><ellipse id="shadow" cx="300" cy="618" rx="110" ry="8" fill="#141826" opacity="0"/><g id="rig" stroke="#141826" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"><g id="blocks" display="none"><g ><rect x="426" y="578" width="36" height="36" rx="6" fill="#FF6B3D"/><rect x="435" y="587" width="18" height="18" rx="2" fill="none" stroke-width="5"/></g><g ><rect x="426" y="542" width="36" height="36" rx="6" fill="#FF6B3D"/><rect x="435" y="551" width="18" height="18" rx="2" fill="none" stroke-width="5"/></g><g id="block-placed"><rect x="426" y="506" width="36" height="36" rx="6" fill="#FF6B3D"/><rect x="435" y="515" width="18" height="18" rx="2" fill="none" stroke-width="5"/></g></g><g id="legs"><g id="leg-left"><rect x="226" y="498" width="56" height="50" rx="18" fill="#2A2F3D"/><rect x="230" y="540" width="48" height="52" rx="16" fill="#2A2F3D"/><ellipse cx="254" cy="542" rx="18" ry="15" fill="#FF6B3D"/><path fill="#2A2F3D" d="M212 614Q212 584 240 584H270Q298 584 298 614Z"/><path fill="#FF6B3D" d="M213 614Q214 603 222 602H288Q296 603 297 614Z"/></g><g id="leg-right" transform="matrix(-1 0 0 1 600 0)"><rect x="226" y="498" width="56" height="50" rx="18" fill="#2A2F3D"/><rect x="230" y="540" width="48" height="52" rx="16" fill="#2A2F3D"/><ellipse cx="254" cy="542" rx="18" ry="15" fill="#FF6B3D"/><path fill="#2A2F3D" d="M212 614Q212 584 240 584H270Q298 584 298 614Z"/><path fill="#FF6B3D" d="M213 614Q214 603 222 602H288Q296 603 297 614Z"/></g><path fill="#2A2F3D" d="M238 488H362L356 518Q300 532 244 518Z"/><path fill="#FF6B3D" d="M284 497H316L312 522H288Z"/></g><g id="upper"><g id="body"><path fill="#2A2F3D" d="M228 366H372Q404 368 404 398L400 466Q398 500 366 502H234Q202 500 200 466L196 398Q196 368 228 366Z"/><g clip-path="url(#gm-torso)"><path fill="#FF6B3D" d="M190 380H410V398H352L344 406H256L248 398H190Z"/></g><path fill="none" d="M228 366H372Q404 368 404 398L400 466Q398 500 366 502H234Q202 500 200 466L196 398Q196 368 228 366Z"/><circle cx="250" cy="446" r="17" fill="#FF6B3D"/><circle cx="250" cy="446" r="7" fill="none" stroke-width="5"/><path fill="none" stroke-width="5" d="M286 436H362M286 450H362M286 464H346"/><circle cx="224" cy="482" r="4" fill="#141826" stroke="none"/><circle cx="376" cy="482" r="4" fill="#141826" stroke="none"/></g><g id="head"><g id="horn-left"><path fill="#2A2F3D" stroke="none" d="M192 222L200 142Q203 126 216 134L268 180Z"/><path fill="#FF6B3D" stroke="none" d="M197.2 170L200 142Q203 126 216 134L237.8 153.3Z"/><path fill="none" stroke-width="5" d="M197.2 170L237.8 153.3"/><path fill="none" d="M192 222L200 142Q203 126 216 134L268 180Z"/></g><g id="horn-right"><g transform="matrix(-1 0 0 1 600 0)"><path fill="#2A2F3D" stroke="none" d="M192 222L200 142Q203 126 216 134L268 180Z"/><path fill="#FF6B3D" stroke="none" d="M197.2 170L200 142Q203 126 216 134L237.8 153.3Z"/><path fill="none" stroke-width="5" d="M197.2 170L237.8 153.3"/><path fill="none" d="M192 222L200 142Q203 126 216 134L268 180Z"/></g></g><g id="ear-left"><ellipse cx="166" cy="272" rx="28" ry="40" fill="#FF6B3D"/><ellipse cx="146" cy="272" rx="11" ry="22" fill="#2A2F3D"/><ellipse cx="143" cy="272" rx="3.5" ry="10" fill="#141826" stroke="none"/></g><g id="ear-right" transform="matrix(-1 0 0 1 600 0)"><ellipse cx="166" cy="272" rx="28" ry="40" fill="#FF6B3D"/><ellipse cx="146" cy="272" rx="11" ry="22" fill="#2A2F3D"/><ellipse cx="143" cy="272" rx="3.5" ry="10" fill="#141826" stroke="none"/></g><path fill="#2A2F3D" d="M300 168C390 168 432 190 434 248L436 316Q436 374 384 376H216Q164 374 164 316L166 248C168 190 210 168 300 168Z"/><path fill="#FF6B3D" d="M182 336Q300 368 418 336L416 352Q300 386 184 352Z"/><g id="visor"><rect x="192" y="204" width="216" height="122" rx="30" fill="#FF6B3D"/><rect x="209" y="220" width="182" height="90" rx="18" fill="#141826" stroke="none"/><g fill="#FF6B3D" stroke="none" opacity=".9"><ellipse cx="228" cy="293" rx="11" ry="5.5"/><ellipse cx="372" cy="293" rx="11" ry="5.5"/></g><g id="eyes" stroke="none"><g id="eyes-normal" fill="#F1EEE6"><ellipse cx="258" cy="259" rx="16" ry="21"/><ellipse cx="342" cy="259" rx="16" ry="21"/><path fill="none" stroke="#F1EEE6" stroke-width="5" stroke-linecap="round" d="M289 289Q300 298 311 289"/></g><g id="eyes-dots" display="none" fill="#F1EEE6"><circle class="dot" cx="276" cy="264" r="8"/><circle class="dot" cx="300" cy="264" r="8"/><circle class="dot" cx="324" cy="264" r="8"/></g><g id="eyes-happy" display="none"><g fill="none" stroke="#F1EEE6" stroke-width="9" stroke-linecap="round"><path d="M242 268Q258 240 274 268"/><path d="M326 268Q342 240 358 268"/></g><path fill="#F1EEE6" d="M287 284H313Q313 299 300 299Q287 299 287 284Z"/></g><g id="eyes-up" display="none"><ellipse cx="258" cy="261" rx="18" ry="21" fill="#F1EEE6"/><ellipse cx="342" cy="261" rx="18" ry="21" fill="#F1EEE6"/><circle cx="261" cy="250" r="8" fill="#141826"/><circle cx="339" cy="250" r="8" fill="#141826"/></g><g id="eyes-focus" display="none"><path fill="#F1EEE6" d="M244.4 249H271.6A16 21 0 1 1 244.4 249ZM328.4 249H355.6A16 21 0 1 1 328.4 249Z"/><path fill="none" stroke="#F1EEE6" stroke-width="5" stroke-linecap="round" d="M292 290Q300 295 308 290"/></g></g></g></g><g id="card" display="none"><rect x="194" y="438" width="212" height="68" rx="12" fill="#F1EEE6"/><path fill="none" stroke-width="5" opacity=".18" d="M222 462H300"/></g><g id="arm-left"><g transform="rotate(40 206 402)"><rect x="191" y="406" width="30" height="46" rx="14" fill="#2A2F3D"/><circle cx="206" cy="448" r="13" fill="#2A2F3D"/><circle cx="206" cy="402" r="22" fill="#2A2F3D"/><circle cx="203" cy="400" r="11" fill="#FF6B3D"/><g id="arm-left-fore"><g transform="rotate(100 206 448)"><path fill="#2A2F3D" d="M193 458Q193 450 201 450H211Q219 450 219 458L223 490H189Z"/><path fill="#FF6B3D" d="M191 475H221L223 490H189Z"/><g id="cartridge" transform="translate(206 550) rotate(-154)"><path fill="#FF6B3D" d="M-35-39H27l8 8V39H-35Z"/><rect x="-25" y="-29" width="42" height="36" rx="5" fill="#141826" stroke="none"/><path fill="none" stroke-width="5" d="M24-24h5M24-12h5M24 0h5M-22 25H14"/></g><rect x="184" y="486" width="44" height="40" rx="17" fill="#2A2F3D"/><path fill="none" stroke-width="5" d="M192 510H210"/><rect x="204" y="490" width="25" height="16" rx="8" fill="#2A2F3D"/></g></g></g></g><g transform="matrix(-1 0 0 1 600 0)"><g id="arm-right"><g transform="rotate(10 206 402)"><rect x="191" y="406" width="30" height="46" rx="14" fill="#2A2F3D"/><circle cx="206" cy="448" r="13" fill="#2A2F3D"/><circle cx="206" cy="402" r="22" fill="#2A2F3D"/><circle cx="203" cy="400" r="11" fill="#FF6B3D"/><g id="arm-right-fore"><g transform="rotate(-6 206 448)"><path fill="#2A2F3D" d="M193 458Q193 450 201 450H211Q219 450 219 458L223 490H189Z"/><path fill="#FF6B3D" d="M191 475H221L223 490H189Z"/><g id="block-hand" transform="rotate(-5.2 206 534)" display="none"><rect x="188" y="516" width="36" height="36" rx="6" fill="#FF6B3D"/><rect x="197" y="525" width="18" height="18" rx="2" fill="none" stroke-width="5"/></g><rect x="184" y="486" width="44" height="40" rx="17" fill="#2A2F3D"/><path fill="none" stroke-width="5" d="M192 510H210"/><rect x="204" y="490" width="25" height="16" rx="8" fill="#2A2F3D"/></g></g></g></g></g></g></g></svg></div></div>
+  <!-- scene 3, the click: HUD lock-on brackets + tag snap around the slot as the cartridge seats.
+       Drawn above the mascot (it is HUD, not world), inside the camera rig so it tracks the slot. -->
+  <svg class="s3-hud" viewBox="0 0 1600 1000" aria-hidden="true"><g class="s3-lock"><path d="M1051 550V534H1067M1163 534H1179V550M1179 572V588H1163M1067 588H1051V572"/><text class="s3-tag" x="1051" y="524">YERLEŞTİ</text></g></svg>
+  </div>
+
+  <!-- three blocks: thrown, landed, then each becomes three letters of the wordmark -->
+  <div class="blk b1"><div class="blk-x"><div class="blk-y"><div class="blk-face"></div></div></div></div>
+  <div class="blk b2"><div class="blk-x"><div class="blk-y"><div class="blk-face"></div></div></div></div>
+  <div class="blk b3"><div class="blk-x"><div class="blk-y"><div class="blk-face"></div></div></div></div>
+
+  <!-- scene 2 "Insaat": five blocks become a tiny level; the level then shrinks into the mascot's visor -->
+  <div class="s2">
+    <div class="s2-world">
+      <div class="s2-screen"></div>
+      <svg class="s2-frame" viewBox="0 0 1600 1000">
+        <path class="s2-floor" d="M580 703H1540"/>
+        <path class="s2-c" pathLength="1" d="M580 108V80H608M1512 80H1540V108M1540 695V723H1512M608 723H580V695"/>
+      </svg>
+      <div class="s2-lvl">
+      <div class="s2b" style="--x:600px;--y:655px;--d:1290ms"><i></i></div>
+      <div class="s2b" style="--x:648px;--y:655px;--d:1540ms"><i></i></div>
+      <div class="s2b" style="--x:776px;--y:590px;--d:1790ms"><i></i></div>
+      <div class="s2b" style="--x:824px;--y:590px;--d:2040ms"><i></i></div>
+      <div class="s2b s2b-star" style="--x:721px;--y:524px;--d:2290ms"><i></i></div>
+      <div class="s2-slab s2-g"></div>
+      <div class="s2-slab s2-r"></div>
+      <svg class="s2-star" viewBox="-22 -22 44 44"><path d="M0-19L5-6.9L18.1-5.9L8.1 2.6L11.2 15.4L0 8.5L-11.2 15.4L-8.1 2.6L-18.1-5.9L-5-6.9Z"/></svg>
+      <div class="s2-spark"><i></i><i></i><i></i><i></i></div>
+      <span class="s2-plus">+1</span>
+      <div class="s2-hero"><div class="s2-hero-y"><svg class="s2-hero-b" viewBox="0 0 30 34"><g stroke="#141826" stroke-width="2" stroke-linejoin="round"><rect class="h-ant" x="12.5" y="1" width="5" height="6" rx="1"/><rect class="h-body" x="2" y="5" width="26" height="28" rx="7"/></g><rect class="h-visor" x="6" y="11" width="18" height="10" rx="3"/><rect class="h-eye" x="10" y="14" width="3" height="4" rx="1"/><rect class="h-eye" x="17" y="14" width="3" height="4" rx="1"/></svg></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- scene 4: the sprite's pixels, freed at the end of its walk, fly into the wordmark -->
+  <div class="s4-px"><i style="left:1040px;top:370px;--c:#2A2F3D;--tx:-371.9px;--ty:77.2px;--d:4463ms"></i><i style="left:1070px;top:370px;--c:#2A2F3D;--tx:-346.1px;--ty:65.8px;--d:4497ms"></i><i style="left:1100px;top:370px;--c:#2A2F3D;--tx:-324.5px;--ty:67.1px;--d:4532ms"></i><i style="left:1130px;top:370px;--c:#2A2F3D;--tx:-298.6px;--ty:63.1px;--d:4552ms"></i><i style="left:1160px;top:370px;--c:#2A2F3D;--tx:-269.9px;--ty:36.5px;--d:4567ms"></i><i style="left:1190px;top:370px;--c:#2A2F3D;--tx:-258.9px;--ty:63.9px;--d:4580ms"></i><i style="left:1220px;top:370px;--c:#2A2F3D;--tx:-243.9px;--ty:50.1px;--d:4640ms"></i><i style="left:1250px;top:370px;--c:#2A2F3D;--tx:-222.2px;--ty:29.4px;--d:4649ms"></i><i style="left:1280px;top:370px;--c:#2A2F3D;--tx:-200.8px;--ty:63.3px;--d:4680ms"></i><i style="left:1310px;top:370px;--c:#2A2F3D;--tx:-200.6px;--ty:76.7px;--d:4715ms"></i><i style="left:1040px;top:400px;--c:#2A2F3D;--tx:-354.7px;--ty:12.1px;--d:4484ms"></i><i style="left:1310px;top:400px;--c:#2A2F3D;--tx:-211.9px;--ty:1.2px;--d:4691ms"></i><i style="left:1040px;top:430px;--c:#2A2F3D;--tx:-352.1px;--ty:-20.3px;--d:4488ms"></i><i style="left:1310px;top:430px;--c:#2A2F3D;--tx:-201.5px;--ty:5.8px;--d:4714ms"></i><i style="left:1040px;top:460px;--c:#2A2F3D;--tx:-369.2px;--ty:-51.6px;--d:4473ms"></i><i style="left:1310px;top:460px;--c:#2A2F3D;--tx:-203.8px;--ty:-42.7px;--d:4687ms"></i><i style="left:1040px;top:490px;--c:#2A2F3D;--tx:-330.0px;--ty:-94.7px;--d:4466ms"></i><i style="left:1310px;top:490px;--c:#2A2F3D;--tx:-211.4px;--ty:-58.1px;--d:4716ms"></i><i style="left:1040px;top:520px;--c:#2A2F3D;--tx:-348.1px;--ty:-118.1px;--d:4467ms"></i><i style="left:1310px;top:520px;--c:#2A2F3D;--tx:-214.1px;--ty:-106.1px;--d:4696ms"></i><i style="left:1070px;top:550px;--c:#2A2F3D;--tx:-340.5px;--ty:-126.1px;--d:4501ms"></i><i style="left:1100px;top:550px;--c:#2A2F3D;--tx:-329.0px;--ty:-103.6px;--d:4520ms"></i><i style="left:1130px;top:550px;--c:#2A2F3D;--tx:-283.9px;--ty:-119.9px;--d:4552ms"></i><i style="left:1160px;top:550px;--c:#2A2F3D;--tx:-283.8px;--ty:-127.7px;--d:4580ms"></i><i style="left:1190px;top:550px;--c:#2A2F3D;--tx:-248.2px;--ty:-134.2px;--d:4606ms"></i><i style="left:1220px;top:550px;--c:#2A2F3D;--tx:-263.9px;--ty:-122.8px;--d:4617ms"></i><i style="left:1250px;top:550px;--c:#2A2F3D;--tx:-244.1px;--ty:-134.5px;--d:4660ms"></i><i style="left:1280px;top:550px;--c:#2A2F3D;--tx:-202.9px;--ty:-151.3px;--d:4687ms"></i><i style="left:1100px;top:580px;--c:#2A2F3D;--tx:-336.1px;--ty:-163.6px;--d:4508ms"></i><i style="left:1250px;top:580px;--c:#2A2F3D;--tx:-255.8px;--ty:-128.2px;--d:4637ms"></i><i style="left:1070px;top:310px;--c:#FF6B3D;--tx:-326.7px;--ty:90.7px;--d:4494ms"></i><i style="left:1280px;top:310px;--c:#FF6B3D;--tx:-216.0px;--ty:90.3px;--d:4691ms"></i><i style="left:1070px;top:340px;--c:#FF6B3D;--tx:-315.0px;--ty:105.4px;--d:4511ms"></i><i style="left:1280px;top:340px;--c:#FF6B3D;--tx:-201.5px;--ty:97.7px;--d:4665ms"></i><i style="left:1070px;top:400px;--c:#FF6B3D;--tx:-355.3px;--ty:6.9px;--d:4479ms"></i><i style="left:1100px;top:400px;--c:#FF6B3D;--tx:-339.6px;--ty:29.0px;--d:4511ms"></i><i style="left:1130px;top:400px;--c:#FF6B3D;--tx:-289.5px;--ty:21.4px;--d:4555ms"></i><i style="left:1160px;top:400px;--c:#FF6B3D;--tx:-296.6px;--ty:44.9px;--d:4561ms"></i><i style="left:1190px;top:400px;--c:#FF6B3D;--tx:-274.3px;--ty:45.7px;--d:4583ms"></i><i style="left:1220px;top:400px;--c:#FF6B3D;--tx:-252.9px;--ty:-7.8px;--d:4640ms"></i><i style="left:1250px;top:400px;--c:#FF6B3D;--tx:-230.0px;--ty:47.3px;--d:4629ms"></i><i style="left:1280px;top:400px;--c:#FF6B3D;--tx:-201.8px;--ty:3.3px;--d:4693ms"></i><i style="left:1010px;top:430px;--c:#FF6B3D;--tx:-361.9px;--ty:2.8px;--d:4436ms"></i><i style="left:1070px;top:430px;--c:#FF6B3D;--tx:-345.5px;--ty:-25.5px;--d:4499ms"></i><i style="left:1280px;top:430px;--c:#FF6B3D;--tx:-240.9px;--ty:8.2px;--d:4682ms"></i><i style="left:1340px;top:430px;--c:#FF6B3D;--tx:-178.2px;--ty:-8.1px;--d:4706ms"></i><i style="left:1010px;top:460px;--c:#FF6B3D;--tx:-382.8px;--ty:-12.9px;--d:4430ms"></i><i style="left:1070px;top:460px;--c:#FF6B3D;--tx:-324.1px;--ty:-14.4px;--d:4477ms"></i><i style="left:1280px;top:460px;--c:#FF6B3D;--tx:-202.6px;--ty:-16.3px;--d:4694ms"></i><i style="left:1340px;top:460px;--c:#FF6B3D;--tx:-167.2px;--ty:-22.1px;--d:4722ms"></i><i style="left:1010px;top:490px;--c:#FF6B3D;--tx:-376.5px;--ty:-54.3px;--d:4460ms"></i><i style="left:1070px;top:490px;--c:#FF6B3D;--tx:-337.4px;--ty:-83.9px;--d:4492ms"></i><i style="left:1280px;top:490px;--c:#FF6B3D;--tx:-202.4px;--ty:-64.5px;--d:4668ms"></i><i style="left:1340px;top:490px;--c:#FF6B3D;--tx:-182.5px;--ty:-53.9px;--d:4718ms"></i><i style="left:1070px;top:520px;--c:#FF6B3D;--tx:-322.4px;--ty:-102.6px;--d:4484ms"></i><i style="left:1100px;top:520px;--c:#FF6B3D;--tx:-325.4px;--ty:-68.9px;--d:4542ms"></i><i style="left:1130px;top:520px;--c:#FF6B3D;--tx:-294.5px;--ty:-75.7px;--d:4564ms"></i><i style="left:1160px;top:520px;--c:#FF6B3D;--tx:-298.4px;--ty:-89.3px;--d:4557ms"></i><i style="left:1190px;top:520px;--c:#FF6B3D;--tx:-268.6px;--ty:-94.6px;--d:4609ms"></i><i style="left:1220px;top:520px;--c:#FF6B3D;--tx:-231.9px;--ty:-99.1px;--d:4610ms"></i><i style="left:1250px;top:520px;--c:#FF6B3D;--tx:-238.8px;--ty:-118.0px;--d:4655ms"></i><i style="left:1280px;top:520px;--c:#FF6B3D;--tx:-219.2px;--ty:-94.3px;--d:4674ms"></i><i style="left:1130px;top:580px;--c:#FF6B3D;--tx:-288.8px;--ty:-166.3px;--d:4557ms"></i><i style="left:1160px;top:580px;--c:#FF6B3D;--tx:-306.4px;--ty:-170.1px;--d:4574ms"></i><i style="left:1190px;top:580px;--c:#FF6B3D;--tx:-282.2px;--ty:-144.6px;--d:4590ms"></i><i style="left:1220px;top:580px;--c:#FF6B3D;--tx:-264.6px;--ty:-148.4px;--d:4620ms"></i><i style="left:1130px;top:460px;--c:#F1EEE6;--tx:-320.2px;--ty:-21.6px;--d:4560ms"></i><i style="left:1220px;top:460px;--c:#F1EEE6;--tx:-233.3px;--ty:-13.4px;--d:4630ms"></i><i style="left:1130px;top:490px;--c:#F1EEE6;--tx:-279.5px;--ty:-96.5px;--d:4557ms"></i><i style="left:1220px;top:490px;--c:#F1EEE6;--tx:-247.7px;--ty:-54.6px;--d:4639ms"></i><i style="left:1070px;top:610px;--c:#FF6B3D;--tx:-354.1px;--ty:-209.8px;--d:4479ms"></i><i style="left:1100px;top:610px;--c:#FF6B3D;--tx:-334.7px;--ty:-212.9px;--d:4502ms"></i><i style="left:1250px;top:610px;--c:#FF6B3D;--tx:-231.5px;--ty:-161.3px;--d:4636ms"></i><i style="left:1280px;top:610px;--c:#FF6B3D;--tx:-237.1px;--ty:-205.9px;--d:4681ms"></i></div>
+
+  <!-- approved lockup (maskot/logo-yatay.svg): head + letters, letters split GAM / ACH / INE -->
+  <svg class="lockup" viewBox="0 0 714.4 150"><g class="lk-head"><g transform="scale(0.3)"><g transform="translate(-146 -79) scale(1.3)"><g fill="#F1EEE6" stroke="#F1EEE6" stroke-width="31.3" stroke-linejoin="round"><path d="M192 222L200 142Q203 126 216 134L268 180Z"/><path transform="matrix(-1 0 0 1 600 0)" d="M192 222L200 142Q203 126 216 134L268 180Z"/><ellipse cx="160" cy="272" rx="34" ry="46"/><ellipse cx="440" cy="272" rx="34" ry="46"/><ellipse cx="146" cy="272" rx="11" ry="22"/><ellipse cx="454" cy="272" rx="11" ry="22"/><path d="M300 168C390 168 432 190 434 248L436 316Q436 374 384 376H216Q164 374 164 316L166 248C168 190 210 168 300 168Z"/></g><g stroke="#141826" stroke-width="10.4" stroke-linejoin="round" stroke-linecap="round"><path fill="#2A2F3D" stroke="none" d="M192 222L200 142Q203 126 216 134L268 180Z"/><path fill="#FF6B3D" stroke="none" d="M196 182L200 142Q203 126 216 134L248.2 162.5Z"/><path fill="none" stroke-width="6.7" d="M196 182L248.2 162.5"/><path fill="none" d="M192 222L200 142Q203 126 216 134L268 180Z"/><g transform="matrix(-1 0 0 1 600 0)"><path fill="#2A2F3D" stroke="none" d="M192 222L200 142Q203 126 216 134L268 180Z"/><path fill="#FF6B3D" stroke="none" d="M196 182L200 142Q203 126 216 134L248.2 162.5Z"/><path fill="none" stroke-width="6.7" d="M196 182L248.2 162.5"/><path fill="none" d="M192 222L200 142Q203 126 216 134L268 180Z"/></g><ellipse cx="160" cy="272" rx="34" ry="46" fill="#FF6B3D"/><ellipse cx="146" cy="272" rx="11" ry="22" fill="#2A2F3D"/><g transform="matrix(-1 0 0 1 600 0)"><ellipse cx="160" cy="272" rx="34" ry="46" fill="#FF6B3D"/><ellipse cx="146" cy="272" rx="11" ry="22" fill="#2A2F3D"/></g><path fill="#2A2F3D" d="M300 168C390 168 432 190 434 248L436 316Q436 374 384 376H216Q164 374 164 316L166 248C168 190 210 168 300 168Z"/><path fill="#FF6B3D" d="M180 328Q300 360 420 328L417 352Q300 390 183 352Z"/><rect x="192" y="204" width="216" height="122" rx="30" fill="#FF6B3D"/><rect x="209" y="220" width="182" height="90" rx="18" fill="#141826" stroke="none"/><g fill="#F1EEE6" stroke="none"><ellipse cx="258" cy="265" rx="18" ry="23"/><ellipse cx="342" cy="265" rx="18" ry="23"/></g></g></g></g></g><g class="lk-w lk-w1" fill="#F1EEE6" fill-rule="evenodd" transform="translate(180 44) scale(0.6)"><path transform="translate(0 0)" d="M18 0H88V22H24V78H64V64H46V42H88V82L70 100H18L0 82V18Z"/><path transform="translate(102 0)" d="M0 100L28 0H68L96 100H72L67 82H29L24 100ZM45.8 22L35.2 60H60.8L50.2 22Z"/><path transform="translate(212 0)" d="M0 100V12L12 0H28L55 40L82 0H110V100H86V44L62 76H48L24 44V100Z"/></g><g class="lk-w lk-w2" fill="#F1EEE6" fill-rule="evenodd" transform="translate(180 44) scale(0.6)"><path transform="translate(336 0)" d="M0 100L28 0H68L96 100H72L67 82H29L24 100ZM45.8 22L35.2 60H60.8L50.2 22Z"/><path transform="translate(446 0)" d="M18 0H82V22H24V78H82V100H18L0 82V18Z"/><path transform="translate(542 0)" d="M0 12L12 0H24V39H64V0H88V100H64V61H24V100H0Z"/></g><g class="lk-w lk-w3" fill="#F1EEE6" fill-rule="evenodd" transform="translate(180 44) scale(0.6)"><path transform="translate(644 0)" d="M0 12L12 0H24V100H0Z"/><path transform="translate(682 0)" d="M0 100V12L12 0H26L66 58V0H90V100H66L24 42V100Z"/><path transform="translate(786 0)" d="M0 12L12 0H76V22H24V39H64V61H24V78H76V100H0Z"/></g></svg>
+
+  <div class="prompt">
+    <span class="pr-tag">Görev</span>
+    <span class="pr-text">Arena hazır. İlk görevin seni bekliyor.</span>
+    <span class="pr-btn">Başla</span>
+  </div>
+
+  <p class="skip-hint">Geçmek için tıkla ya da Esc</p>
+</div>
+
+<button class="replay" id="replay" type="button">Tekrar oynat</button>
+
+<!-- mockup chrome: which intro to play (13C) -->
+<nav class="scenes" id="scenes" aria-label="Açılış sahnesi">
+  <div class="sc-row"><span class="sc-label">Sahne</span><a class="sc-btn" data-scene="1" href="?scene=1">1</a><a class="sc-btn" data-scene="2" href="?scene=2">2</a><a class="sc-btn" data-scene="3" href="?scene=3">3</a><a class="sc-btn" data-scene="4" href="?scene=4">4</a><a class="sc-btn" data-scene="5" href="?scene=5">5</a></div>
+  <!-- round 10: the Ayarlar setting, mirrored here so the mockup can flip it (index.html Maket > Ayarlar has it too) -->
+  <div class="sc-row sc-set"><span class="sc-label">Açılış animasyonu</span><a class="sc-tg" data-off="0" href="?introOff=0">Açık</a><a class="sc-tg" data-off="1" href="?introOff=1">Kapalı</a></div>
+  <p class="sc-note">Maket notu: ilk açılış her zaman Sahne 1.</p>
+  <p class="sc-note">Sonra her açılışta rastgele, öncekinden farklı bir sahne.</p>
+  <p class="sc-now" id="sc-now"></p>
+</nav>
+
+<script src="intro.js"></script>
+</body>
+</html>

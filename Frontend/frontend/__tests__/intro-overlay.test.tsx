@@ -86,7 +86,7 @@ describe('intro scene rotation', () => {
 
 describe('intro markup', () => {
   it('copies exactly the approved overlay except for text placeholders', () => {
-    const source = readFileSync(resolve(__dirname, '../../../.delegate-runs/2026-10-02-uip4/design/intro.html'), 'utf8')
+    const source = readFileSync(resolve(__dirname, 'fixtures/intro.approved.html'), 'utf8')
     const approved = source.split(/\r?\n/).slice(25, 136).join('\n')
     expect(renderIntroMarkup(texts)).toBe(approved)
     expect(INTRO_MARKUP).not.toContain('app-frame')
