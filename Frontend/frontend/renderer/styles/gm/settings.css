@@ -1,0 +1,214 @@
+/* Gamachine v4 Settings modal (General, Mode, Remote tabs).
+   The mockup has no settings screen, so this follows the app's ported surfaces: the modal is a
+   paper card like the approval card and the strip popovers, its controls are the thread's
+   segmented control (.seg), the model menu's rows and the Unity switch's states. Every colour is
+   a token from tokens.css, so the four themes retune it under [data-theme].
+   State is carried by attributes the component sets (aria-pressed, aria-selected, aria-checked,
+   data-state, data-warn, data-tone); the tests assert those, and the rules below are the only
+   place that turns them into colour. Text never goes below --fs-meta (12px, the hard floor). */
+
+.gm-set {
+  /* "danger": the auto mode, the blocked Unity port, delete / log out. The approval card's risk
+     colour (accent) everywhere except Sade, whose accent is its violet action colour and whose
+     error is rose. */
+  --set-warn: var(--accent);
+  --set-warn-text: var(--accent-text);
+  --set-ok-text: var(--ok-text);
+  /* lamps (non-text): connected / working / off */
+  --set-lamp-ok: var(--ok);
+  --set-lamp-busy: var(--run);
+  --set-lamp-off: var(--paper-line-strong);
+}
+[data-theme="sade"] .gm-set { --set-warn: var(--sade-err); --set-warn-text: var(--sade-err-text); }
+
+/* ---------- frame ---------- */
+.gm-set-scrim {
+  position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: color-mix(in srgb, var(--page-bg) 72%, transparent);
+}
+.gm-set {
+  width: 100%; max-width: 32rem; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--paper-bg); color: var(--ink); font-family: var(--font-body);
+  border: var(--line-w) solid var(--paper-line-strong); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), 0 24px 64px -16px rgba(0, 0, 0, .55);
+}
+.gm-set :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
+.gm-set button:not(:disabled) { cursor: pointer; }
+.gm-set button:disabled { cursor: not-allowed; opacity: .55; }
+
+.gm-set-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px 20px 12px; border-bottom: var(--line-w) solid var(--paper-line); flex: none;
+}
+.gm-set-title { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700; color: var(--ink); }
+.gm-set-title .gm-set-title-ic { color: var(--ink-dim); }
+.gm-set-close {
+  width: 32px; height: 32px; display: inline-grid; place-items: center; border-radius: var(--radius-md);
+  color: var(--ink-dim);
+}
+.gm-set-close:hover { background: var(--paper-sunk); color: var(--ink); }
+
+/* tabs: the workspace tab language (an underline in --tab-mark under the selected one) */
+.gm-set-tabs { display: flex; gap: 4px; padding: 0 20px; border-bottom: var(--line-w) solid var(--paper-line); flex: none; }
+.gm-set-tab {
+  position: relative; padding: 10px 10px 9px; font-size: 13px; font-weight: 600; color: var(--ink-dim);
+}
+.gm-set-tab:hover { color: var(--ink); }
+.gm-set-tab[aria-selected="true"] { color: var(--ink); }
+.gm-set-tab[aria-selected="true"]::after {
+  content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; background: var(--tab-mark);
+}
+.gm-set .gm-set-tab:focus-visible { outline-offset: -2px; }
+
+.gm-set-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px; overflow-y: auto; }
+.gm-set-group { display: flex; flex-direction: column; gap: 8px; }
+
+/* section label: the shell/strip label face (case, track and stretch per theme) */
+.gm-set-k {
+  display: block; color: var(--ink-faint);
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.gm-set-k-note { margin-left: 8px; color: var(--set-ok-text); text-transform: none; letter-spacing: 0; font-family: var(--font-body); }
+
+/* ---------- cards and rows ---------- */
+.gm-set-card {
+  padding: 12px; border-radius: var(--radius-lg);
+  background: var(--paper-raised); border: var(--card-line-w) solid var(--paper-line);
+}
+.gm-set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.gm-set-row-l { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.gm-set-ic { color: var(--ink-dim); flex: none; }
+.gm-set-name { font-size: 13px; font-weight: 600; color: var(--ink); }
+.gm-set-hint { margin-top: 2px; font-size: var(--fs-meta); line-height: 1.45; color: var(--ink-dim); }
+.gm-set-meta { font-size: var(--fs-meta); color: var(--ink-dim); }
+.gm-set-ok { font-size: var(--fs-meta); color: var(--set-ok-text); }
+.gm-set-err { font-size: var(--fs-meta); color: var(--set-warn-text); }
+
+/* status lamp: a tone, not a colour class */
+.gm-set-lamp { width: 7px; height: 7px; border-radius: 50%; flex: none; display: inline-block; background: var(--set-lamp-off); }
+.gm-set-lamp[data-tone="ok"] { background: var(--set-lamp-ok); }
+.gm-set-lamp[data-tone="busy"] { background: var(--set-lamp-busy); animation: gm-set-pulse 1.4s ease-in-out infinite; }
+.gm-set-lamp[data-tone="danger"] { background: var(--set-warn); }
+@keyframes gm-set-pulse { 50% { opacity: .4; } }
+
+/* Unity row: the blocked port is drawn as a danger card, never as the grey "off" */
+.gm-set-card[data-tone="danger"] { border-color: var(--set-warn); box-shadow: inset 3px 0 0 var(--set-warn); }
+.gm-set-card[data-tone="danger"] .gm-set-meta { color: var(--set-warn-text); }
+
+/* ---------- provider grid ---------- */
+.gm-set-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.gm-set-tile {
+  position: relative; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 8px;
+  border-radius: var(--radius-md); text-align: left; color: var(--ink);
+  background: var(--paper-raised); border: var(--line-w) solid var(--paper-line);
+  transition: background var(--g-dur-tap, 120ms) ease, border-color var(--g-dur-tap, 120ms) ease;
+}
+.gm-set-tile:hover { background: var(--paper-sunk); }
+.gm-set-tile[aria-pressed="true"] { background: var(--paper-sunk); border-color: var(--ink-dim); box-shadow: inset 0 0 0 1px var(--ink-dim); }
+.gm-set-tile-wide { grid-column: span 2; }
+.gm-set-tile-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.gm-set-tile-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-set-tile-sub { font-size: var(--fs-meta); color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-set-tile-key { position: absolute; top: 5px; right: 5px; color: var(--ink-faint); }
+.gm-set-tile-check { margin-left: auto; color: var(--ink); flex: none; }
+
+/* ---------- inputs ---------- */
+.gm-set-input, .gm-set-select {
+  min-width: 0; color: var(--ink); background: var(--paper-raised);
+  border: var(--line-w) solid var(--paper-line-strong); border-radius: var(--radius-md); outline: none;
+}
+.gm-set-input { width: 100%; padding: 10px 12px; font-size: 14px; }
+.gm-set-input-sm { padding: 7px 10px; font-size: 13px; }
+.gm-set-input::placeholder { color: var(--ink-faint); opacity: 1; }
+.gm-set-select { max-width: 60%; padding: 5px 8px; font-size: 13px; }
+.gm-set-select option { background: var(--paper-raised); color: var(--ink); }
+.gm-set .gm-set-input:focus-visible, .gm-set .gm-set-select:focus-visible { outline-offset: 0; border-color: var(--focus); }
+
+/* model shortcut chips */
+.gm-set-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gm-set-chip {
+  max-width: 100%; padding: 4px 9px; border-radius: var(--radius-sm); font-size: var(--fs-meta);
+  color: var(--ink-dim); background: var(--paper-raised); border: var(--line-w) solid var(--paper-line);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gm-set-chip:hover { color: var(--ink); border-color: var(--paper-line-strong); }
+.gm-set-chip[aria-pressed="true"] { color: var(--ink); background: var(--paper-sunk); border-color: var(--ink-dim); }
+
+/* segmented control: the thread's .seg on the settings card */
+.gm-set-seg { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; padding: 2px; border-radius: var(--radius-md); background: var(--paper-sunk); }
+.gm-set-seg-btn {
+  min-width: 0; padding: 5px 10px; border-radius: var(--radius-sm);
+  font-size: var(--fs-meta); font-weight: 600; color: var(--ink-dim); white-space: nowrap;
+}
+.gm-set-seg-btn:hover { color: var(--ink); }
+.gm-set-seg-btn[aria-pressed="true"] { background: var(--paper-raised); color: var(--ink); box-shadow: inset 0 0 0 var(--line-w) var(--paper-line-strong); }
+.gm-set .gm-set-seg-btn:focus-visible { outline-offset: 0; }
+
+/* ---------- switch ---------- */
+.gm-set-switch {
+  position: relative; width: 40px; height: 22px; flex: none; border-radius: 11px;
+  background: var(--paper-sunk); box-shadow: inset 0 0 0 var(--line-w) var(--paper-line-strong);
+  transition: background var(--g-dur-tap, 120ms) ease;
+}
+.gm-set-knob {
+  position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--ink-faint); color: var(--paper-raised);
+  transition: transform var(--g-dur-tap, 120ms) ease;
+}
+.gm-set-switch:is([aria-checked="true"], [data-state="on"]) { background: var(--ok); box-shadow: none; }
+.gm-set-switch:is([aria-checked="true"], [data-state="on"]) .gm-set-knob { transform: translateX(18px); background: var(--paper-raised); color: var(--ok); }
+
+/* the remote tab's keep-awake checkbox stays native (keyboard and screen reader for free) */
+.gm-set input[type="checkbox"] { width: 16px; height: 16px; margin-top: 2px; flex: none; accent-color: var(--ok); }
+
+/* ---------- mode cards (the model menu's rows, with a check) ---------- */
+.gm-set-mode {
+  width: 100%; display: flex; align-items: flex-start; gap: 12px; padding: 12px; text-align: left;
+  border-radius: var(--radius-lg); background: var(--paper-raised); border: var(--line-w) solid var(--paper-line);
+}
+.gm-set-mode:hover:not(:disabled) { background: var(--paper-sunk); }
+.gm-set-mode[aria-pressed="true"] { background: var(--paper-sunk); border-color: var(--ink-dim); box-shadow: inset 0 0 0 1px var(--ink-dim); }
+.gm-set-mode-ic { margin-top: 2px; flex: none; color: var(--ink-dim); }
+.gm-set-mode[aria-pressed="true"] .gm-set-mode-ic { color: var(--ink); }
+.gm-set-mode-title { display: block; font-size: 13px; font-weight: 600; color: var(--ink); }
+/* the auto card keeps its warning whether or not it is selected: it is about the mode itself */
+.gm-set-mode[data-warn="true"] { border-left: 3px solid var(--set-warn); }
+.gm-set-mode[data-warn="true"] .gm-set-mode-ic,
+.gm-set-mode-title[data-warn="true"] { color: var(--set-warn-text); font-weight: 700; letter-spacing: .02em; }
+.gm-set-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: var(--fs-meta); font-weight: 600;
+  color: var(--set-ok-text); border: var(--line-w) solid currentColor;
+}
+
+/* ---------- buttons ---------- */
+.gm-set-foot { display: flex; gap: 12px; padding-top: 12px; border-top: var(--line-w) solid var(--paper-line); }
+.gm-set-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 6px 12px; border-radius: var(--radius-md); font-size: var(--fs-meta); font-weight: 600;
+  color: var(--ink); border: var(--line-w) solid var(--paper-line-strong); background: transparent;
+}
+.gm-set-btn:hover:not(:disabled) { background: var(--paper-sunk); }
+.gm-set-btn-lg { height: 40px; padding: 0 16px; font-size: 13px; }
+.gm-set-btn-primary {
+  flex: 1; border-color: transparent; background: var(--btn-bg); color: var(--btn-text);
+  font-family: var(--btn-font); text-transform: var(--btn-case); letter-spacing: var(--btn-track);
+  box-shadow: var(--shadow-btn); clip-path: var(--clip-sm);
+}
+.gm-set-btn-primary:hover:not(:disabled) { background: var(--btn-hover); }
+.gm-set .gm-set-btn-primary:focus-visible { outline-color: var(--btn-focus); outline-offset: -3px; }
+.gm-set-btn[data-tone="danger"] { color: var(--set-warn-text); border-color: var(--set-warn); }
+.gm-set-btn[data-tone="danger"]:hover:not(:disabled) { background: var(--accent-soft); }
+[data-theme="sade"] .gm-set-btn[data-tone="danger"]:hover:not(:disabled) { background: var(--sade-err-soft); }
+/* a text-only action (delete key, remove device, use default relay) */
+.gm-set-link { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--ink-dim); }
+.gm-set-link:hover:not(:disabled) { color: var(--ink); text-decoration: underline; }
+.gm-set-link[data-tone="danger"] { color: var(--set-warn-text); }
+
+/* remote pairing code */
+.gm-set-sas { font-size: 30px; font-weight: 700; letter-spacing: .3em; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-set *, .gm-set *::before, .gm-set *::after { animation: none !important; transition: none !important; }
+}
+:root[data-motion="reduced"] .gm-set *, :root[data-motion="reduced"] .gm-set *::before, :root[data-motion="reduced"] .gm-set *::after { animation: none !important; transition: none !important; }
