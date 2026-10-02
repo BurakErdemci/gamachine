@@ -29,7 +29,7 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 
 import { CommandApproval } from '../renderer/components/home/CommandApproval'
 import { ModelSelector } from '../renderer/components/home/ModelSelector'
-import { SettingsModal } from '../renderer/components/home/SettingsModal'
+import { SettingsScreen } from '../renderer/components/home/settings/SettingsScreen'
 import { stripBidi } from '../renderer/lib/modelText'
 
 afterEach(() => cleanup())
@@ -207,9 +207,10 @@ describe('canlı katalogdan gelen model adı', () => {
 describe('ayarlar ekranındaki model önerileri', () => {
   it('öneri çipi de temizleniyor — aynı katalog, ikinci ekran', () => {
     render(
-      <SettingsModal
+      <SettingsScreen
         {...({
-          open: true, providersWithKeys: ['anthropic'], onChange: () => {}, onClose: () => {},
+          // Round 11: the live list is the "Varsayılan model" list on the Modeller page.
+          open: true, page: 'modeller', providersWithKeys: ['anthropic'], onChange: () => {}, onClose: () => {},
           onSave: async () => {}, onLogout: () => {}, onDeleteKey: async () => {},
           unityMcpStatus: 'off', unityMcpToggling: false, onToggleUnityMcp: () => {},
           lang: 'tr', onLangChange: () => {},

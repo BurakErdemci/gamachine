@@ -15,7 +15,7 @@ vi.mock('axios', () => {
 })
 
 import axios from 'axios'
-import { SettingsModal } from '../renderer/components/home/SettingsModal'
+import { SettingsScreen } from '../renderer/components/home/settings/SettingsScreen'
 import { useDictationSettings } from '../renderer/hooks/home/useDictationSettings'
 import { cevir } from '../renderer/lib/i18n'
 
@@ -45,7 +45,7 @@ describe('settings · dictation auto-language toggle', () => {
   it('shows its state as a switch and reports clicks', () => {
     const onToggle = vi.fn()
     const { rerender } = render(
-      <SettingsModal {...temel} dictationAutoLang onToggleDictationAutoLang={onToggle} />,
+      <SettingsScreen {...temel} dictationAutoLang onToggleDictationAutoLang={onToggle} />,
     )
     const sw = screen.getByTestId('dictation-auto-lang-toggle')
     expect(sw.getAttribute('role')).toBe('switch')
@@ -53,17 +53,17 @@ describe('settings · dictation auto-language toggle', () => {
     expect(screen.getByText(cevir('settings.dictationAutoLang'))).toBeTruthy()
     fireEvent.click(sw)
     expect(onToggle).toHaveBeenCalledTimes(1)
-    rerender(<SettingsModal {...temel} dictationAutoLang={false} onToggleDictationAutoLang={onToggle} />)
+    rerender(<SettingsScreen {...temel} dictationAutoLang={false} onToggleDictationAutoLang={onToggle} />)
     expect(screen.getByTestId('dictation-auto-lang-toggle').getAttribute('aria-checked')).toBe('false')
   })
 
   it('is not rendered at all without a handler', () => {
-    render(<SettingsModal {...temel} />)
+    render(<SettingsScreen {...temel} />)
     expect(screen.queryByTestId('dictation-auto-lang-toggle')).toBeNull()
   })
 
   it('is disabled while the change is being saved', () => {
-    render(<SettingsModal {...temel} dictationAutoLang dictationAutoLangSaving onToggleDictationAutoLang={vi.fn()} />)
+    render(<SettingsScreen {...temel} dictationAutoLang dictationAutoLangSaving onToggleDictationAutoLang={vi.fn()} />)
     expect((screen.getByTestId('dictation-auto-lang-toggle') as HTMLButtonElement).disabled).toBe(true)
   })
 })

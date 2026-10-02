@@ -15,7 +15,8 @@ import { EditorPanel, hostOpenTarget } from '../components/home/EditorPanel';
 import { CsharpProjectHint } from '../components/home/CsharpProjectHint';
 import { TerminalPanel } from '../components/home/TerminalPanel';
 import { ChatPanel } from '../components/home/ChatPanel';
-import { SettingsModal } from '../components/home/SettingsModal';
+import { SettingsScreen } from '../components/home/settings/SettingsScreen';
+import type { SettingsPage } from '../components/home/settings/pages';
 import { ExportModal } from '../components/home/ExportModal';
 import { ModelSelector } from '../components/home/ModelSelector';
 import { WorkspaceScreen } from '../components/home/WorkspaceScreen';
@@ -33,6 +34,7 @@ import { useFileSystem } from '../hooks/home/useFileSystem';
 import { useChat } from '../hooks/home/useChat';
 import { useAutoChatTitles } from '../hooks/home/useAutoChatTitles';
 import { useDictationSettings } from '../hooks/home/useDictationSettings';
+import { useUsageLimits } from '../hooks/home/useUsageLimits';
 import { useSideChat, sideQuote } from '../hooks/home/useSideChat';
 import { useAIConfig } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
@@ -166,8 +168,30 @@ export default function Home() {
   // listeden geliyor, ve liste kullanıcının anahtarına bağlı. Açılışta bir kez
   // çekmek yetmiyor — kullanıcı anahtar ekleyip aynı ekranda öneri bekliyor.
   useEffect(() => {
-    if (ai.showSettings) ai.fetchAvailableModels();
-  }, [ai.showSettings]);
+    if (!ai.showSettings) return;
+    ai.fetchAvailableModels();
+    // The "Varsayılan model" row shows the default for a new chat, which can differ from
+    // the chat on screen; read it fresh on every opening.
+    ai.fetchDefaultConfig();
+  }, [ai.showSettings]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The settings screen (round 11) replaces the modal: one page at a time. Every entry point
+  // names its page: Ayarlar -> Genel, the top-bar shield -> Onay modu, the phone icon ->
+  // Uzaktan kontrol, the model menu's "Kullanım ve hesaplar" -> Modeller.
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>('genel');
+  const { setShowSettings, setIsModelDropdownOpen } = ai;
+  const openSettings = useCallback((page: SettingsPage) => {
+    setSettingsPage(page);
+    setIsModelDropdownOpen(false);
+    setShowSettings(true);
+  }, [setShowSettings, setIsModelDropdownOpen]);
+  const closeSettings = useCallback(() => setShowSettings(false), [setShowSettings]);
+
+  // 5-hour and weekly subscription usage for the model chip, the menu and the Modeller page.
+  const usage = useUsageLimits({
+    api: API, token: auth.user?.sessionToken, menuOpen: ai.isModelDropdownOpen,
+    enabled: backendReady && !!auth.user && !auth.tokenError,
+  });
 
   // Per-chat model: the selector, and everything derived from `ai.aiConfig`
   // (effort caps, slash catalog, Codex/ultracode checks, the gate below), shows
@@ -518,7 +542,7 @@ export default function Home() {
     if (sohbetKilitliMi(ai.aiConfig.provider_type, _hazir)) {
       const _sebep = _hazir?.needs ? t(`gate.needs.${_hazir.needs}`) : t('gate.hint');
       showToast(`${_sebep} (${_hazir?.provider ?? ''})`.trim(), 'warning');
-      ai.setShowSettings(true);
+      openSettings('modeller');
       return;
     }
 
@@ -676,17 +700,23 @@ export default function Home() {
       // Panel width mode (workspace.css): none = dar; the sidebar's state feeds the half / focus math.
       data-ws={ws.open && ws.width !== 'dar' ? ws.width : undefined}
       data-side={isSidebarOpen ? undefined : 'closed'}
+      // While the settings screen shows, the rest of the frame is hidden (settings.css), not
+      // unmounted: running chats, the terminal and the editor keep their state.
+      data-screen={ai.showSettings ? 'ayarlar' : undefined}
     >
       <Head>
         <title>{displayName(auth.user?.name) ? `Gamachine | ${displayName(auth.user?.name)}` : 'Gamachine'}</title>
         <style>{globalStyles}</style>
       </Head>
 
-      <SettingsModal
-        open={ai.showSettings} aiConfig={ai.aiConfig} availableModels={ai.availableModels} providersWithKeys={ai.providersWithKeys}
-        onChange={ai.setAiConfig} onClose={() => ai.setShowSettings(false)} onSave={ai.saveAIConfig}
-        onLogout={handleLogout} onDeleteKey={ai.deleteApiKey}
+      <SettingsScreen
+        open={ai.showSettings} page={settingsPage} onPageChange={setSettingsPage}
+        aiConfig={ai.aiConfig} availableModels={ai.availableModels} providersWithKeys={ai.providersWithKeys}
+        onClose={closeSettings} onLogout={handleLogout} onDeleteKey={ai.deleteApiKey}
+        defaultModel={ai.defaultConfig} onSaveDefaultModel={ai.saveDefaultModel}
+        onSaveApiKey={ai.saveApiKey} onUseCustomModel={ai.applyCustomModel}
         unityMcpStatus={ai.unityMcpStatus} unityMcpToggling={ai.unityMcpToggling} onToggleUnityMcp={ai.toggleUnityMcp}
+        unityProjectName={projectName}
         lang={lang} onLangChange={setLang}
         approvalMode={chat.generationMode} onApprovalModeChange={(m) => chat.setGenerationMode(m, 'settings')}
         autoTitles={autoTitles.autoTitles} autoTitlesSaving={autoTitles.autoTitlesSaving}
@@ -694,6 +724,7 @@ export default function Home() {
         dictationAutoLang={dictation.autoLanguageCpu} dictationAutoLangSaving={dictation.autoLanguageCpuSaving}
         onToggleDictationAutoLang={dictation.toggleAutoLanguageCpu}
         onRemoteStatus={remote.setStatus}
+        usage={usage.data} user={auth.user} API={API} http={axios} showToast={showToast as any}
       />
 
       <ExportModal
@@ -721,7 +752,8 @@ export default function Home() {
         startRename={fs.startRename} handleTreeDelete={fs.handleTreeDelete}
         treeContextMenu={fs.treeContextMenu} setTreeContextMenu={fs.setTreeContextMenu}
         gitStatus={fs.gitStatus}
-        user={auth.user} setShowSettings={ai.setShowSettings} handleLogout={handleLogout}
+        user={auth.user} setShowSettings={(open: boolean) => (open ? openSettings('genel') : closeSettings())} handleLogout={handleLogout}
+        onOpenRemote={() => openSettings('uzak')}
         remoteStatus={remote.status}
         unityStatus={ai.unityMcpStatus}
       />
@@ -763,8 +795,10 @@ export default function Home() {
             effectiveProvider={ai.effectiveProvider} displayModelName={ai.displayModelName} isModelDropdownOpen={ai.isModelDropdownOpen} setIsModelDropdownOpen={ai.setIsModelDropdownOpen}
             modelOrToggles={ai.modelOrToggles} setModelOrToggles={ai.setModelOrToggles} user={auth.user} fetchAvailableModels={ai.fetchAvailableModels} setShowSettings={ai.setShowSettings}
             API={API} axios={axios} showToast={showToast as any} conversationId={chat.activeConvId}
+            usage={usage.data} openSettings={openSettings}
+            thinkingLevel={thinkingLevel} effortLevels={effortCaps?.levels ?? null} onThinkingChange={chooseEffort}
           />
-          <ModeChip value={chat.generationMode} onChange={chat.setGenerationMode} />
+          <ModeChip value={chat.generationMode} onOpen={() => openSettings('onay')} />
           {/* The workspace toggle (mockup `[data-panel-toggle]`). */}
           <button
             type="button"

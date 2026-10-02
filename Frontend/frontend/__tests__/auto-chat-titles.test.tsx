@@ -25,7 +25,7 @@ vi.mock('axios', () => {
 })
 
 import axios from 'axios'
-import { SettingsModal } from '../renderer/components/home/SettingsModal'
+import { SettingsScreen } from '../renderer/components/home/settings/SettingsScreen'
 import { Sidebar } from '../renderer/components/home/Sidebar'
 import { MarkdownRenderer } from '../renderer/components/home/MarkdownRenderer'
 import { useChat } from '../renderer/hooks/home/useChat'
@@ -62,14 +62,14 @@ const temel: any = {
 describe('settings · auto chat titles toggle', () => {
   it('shows its state as a switch and reports clicks', () => {
     const onToggle = vi.fn()
-    const { rerender } = render(<SettingsModal {...temel} autoTitles onToggleAutoTitles={onToggle} />)
+    const { rerender } = render(<SettingsScreen {...temel} autoTitles onToggleAutoTitles={onToggle} />)
     const sw = screen.getByTestId('auto-titles-toggle')
     expect(sw.getAttribute('role')).toBe('switch')
     expect(sw.getAttribute('aria-checked')).toBe('true')
     expect(screen.getByText(cevir('settings.autoTitles'))).toBeTruthy()
     fireEvent.click(sw)
     expect(onToggle).toHaveBeenCalledTimes(1)
-    rerender(<SettingsModal {...temel} autoTitles={false} onToggleAutoTitles={onToggle} />)
+    rerender(<SettingsScreen {...temel} autoTitles={false} onToggleAutoTitles={onToggle} />)
     expect(screen.getByTestId('auto-titles-toggle').getAttribute('aria-checked')).toBe('false')
   })
 
@@ -87,7 +87,7 @@ describe('settings · auto chat titles toggle', () => {
   })
 
   it('is disabled while the change is being saved', () => {
-    render(<SettingsModal {...temel} autoTitles autoTitlesSaving onToggleAutoTitles={vi.fn()} />)
+    render(<SettingsScreen {...temel} autoTitles autoTitlesSaving onToggleAutoTitles={vi.fn()} />)
     expect((screen.getByTestId('auto-titles-toggle') as HTMLButtonElement).disabled).toBe(true)
   })
 })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Smartphone, Loader2, Trash2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { create as createQr } from "qrcode";
 
 import { useLang } from "../../lib/i18n";
@@ -9,6 +9,7 @@ import {
   remoteCall, remoteErrorKey,
   type PairOffer, type PendingPair, type RemoteDevice, type RemoteResult, type RemoteStatus,
 } from "../../lib/remoteControl";
+import { Chev, Lamp, SetCard, SetGroup, SetRow, SetSwitch } from "./settings/controls";
 
 /** One SVG path for the dark modules, built in memory: nothing is fetched and
  *  no markup string is injected. */
@@ -29,8 +30,8 @@ const QrCode = ({ text }: { text: string }) => {
   const quiet = 4;
   const full = size + quiet * 2;
   return (
-    <svg data-testid="remote-qr" viewBox={`${-quiet} ${-quiet} ${full} ${full}`} width={200} height={200}
-      shapeRendering="crispEdges" className="rounded-lg">
+    <svg data-testid="remote-qr" viewBox={`${-quiet} ${-quiet} ${full} ${full}`}
+      shapeRendering="crispEdges" role="img" aria-label="QR">
       <rect x={-quiet} y={-quiet} width={full} height={full} fill="#fff" />
       <path d={d} fill="#000" />
     </svg>
@@ -48,20 +49,16 @@ const mmss = (ms: number) => {
 const fmtDate = (ms: number | null, lang: string) =>
   ms ? new Date(ms).toLocaleString(lang === "tr" ? "tr-TR" : "en-GB") : "";
 
-// Styled by the Settings modal sheet (styles/gm/settings.css): this section is
-// only ever rendered inside it, on the same paper card.
-const rowClass = "gm-set-card";
-const labelClass = "gm-set-k mb-1.5";
-const neutralBtn = "gm-set-btn";
-
 interface Props {
   /** Every status this section reads, so the always-visible badge follows at once. */
   onStatus?: (status: RemoteStatus) => void;
   statusPollMs?: number;
   pendingPollMs?: number;
+  /** Called after a change the screen confirms with its "Saved" note. */
+  onSaved?: () => void;
 }
 
-export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, pendingPollMs = PENDING_POLL_MS }: Props) => {
+export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, pendingPollMs = PENDING_POLL_MS, onSaved }: Props) => {
   const { t, lang } = useLang();
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
@@ -184,6 +181,7 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
     if (res.ok) {
       applyStatus(res.data);
       if (!turningOn) { setOffer(null); setPending(null); }
+      onSaved?.();
     }
   };
 
@@ -193,13 +191,14 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
       setNeedsRepair(!!res.data?.devices_need_repair);
       setNote(t("remote.relaySaved"));
       if (url === null) setRelayInput("");
+      onSaved?.();
       void refresh();
     }
   };
 
   const setKeepAwake = async (on: boolean) => {
     const res = await run("set-keep-awake", on);
-    if (res.ok) void refresh();
+    if (res.ok) { void refresh(); onSaved?.(); }
   };
 
   const removeDevice = async (device: RemoteDevice) => {
@@ -239,175 +238,173 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
     : status.connected ? "ok"
       : status.gave_up || status.last_error ? "danger" : "busy";
 
+  const phoneIc = (
+    <svg className="ic set-dev-ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="2.5" width="8" height="15" rx="1.6" /><path d="M9 15h2" /></svg>
+  );
+
   return (
-    <div className="flex flex-col gap-3" data-testid="remote-section">
-      {/* On / off */}
-      <div className={`gm-set-row ${rowClass}`}>
-        <div className="gm-set-row-l">
-          <Smartphone size={15} className="gm-set-ic" />
-          <div className="min-w-0">
-            <p className="gm-set-name">{t("remote.title")}</p>
-            <p className="gm-set-hint">{t("remote.hint")}</p>
-            <div className="flex items-center gap-1.5 mt-1">
-              <span data-testid="remote-status-lamp" data-tone={dotTone} className="gm-set-lamp" />
-              <span data-testid="remote-status" className="gm-set-meta">{statusText}</span>
-              {status?.enabled && status.connected && status.phones_online > 0 && (
-                <span className="gm-set-meta">· {t("remote.status.phonesOnline", { sayi: status.phones_online })}</span>
-              )}
+    <div data-testid="remote-section">
+      {/* On / off + keep awake */}
+      <SetGroup>
+        <SetCard>
+          <div className="set-row set-row-hero">
+            {phoneIc}
+            <div className="set-rt">
+              <p className="set-name">{t("remote.title")}</p>
+              <div className="set-hint">
+                <span data-testid="remote-status-lamp" data-tone={dotTone}
+                  className={`lamp-dot${dotTone === "ok" ? " is-ok" : dotTone === "danger" ? " is-warn" : dotTone === "busy" ? " is-busy" : ""}`} />
+                <b data-testid="remote-status" className="set-state">{statusText}</b>
+                {status?.enabled && status.connected && status.phones_online > 0 && (
+                  <> · {t("remote.status.phonesOnline", { sayi: status.phones_online })}</>
+                )}
+              </div>
             </div>
+            <SetSwitch checked={enabled} label={t("remote.title")} testId="remote-toggle" onToggle={toggle}
+              disabled={!status || busy === "enable" || busy === "disable"} />
           </div>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          aria-label={t("remote.title")}
-          data-testid="remote-toggle"
-          onClick={toggle}
-          disabled={!status || busy === "enable" || busy === "disable"}
-          className="gm-set-switch"
-        >
-          <span className="gm-set-knob" />
-        </button>
-      </div>
-
-      {error && <p data-testid="remote-error" className="gm-set-err">{error}</p>}
-      {note && <p data-testid="remote-note" className="gm-set-ok">{note}</p>}
-
-      {/* Pairing */}
-      <div className={rowClass}>
-        {!offer && !pending && (
-          <button type="button" data-testid="remote-pair" onClick={startPairing}
-            disabled={!enabled || busy === "pair-start"} className={neutralBtn}>
-            {busy === "pair-start" && <Loader2 size={12} className="animate-spin" />}
-            {t("remote.pair")}
-          </button>
-        )}
-        {expired && !offer && !pending && (
-          <p data-testid="remote-pair-expired" className="gm-set-meta mt-2">{t("remote.pairExpired")}</p>
-        )}
-        {offer && !pending && (
-          <div className="flex flex-col items-center gap-2">
-            <p className="gm-set-meta">{t("remote.pairScan")}</p>
-            <QrCode text={offer.qr_url} />
-            <p data-testid="remote-pair-countdown" className="gm-set-meta tabular-nums">
-              {t("remote.pairExpiresIn", { sure: mmss(offer.expires_at - now) })}
-            </p>
-            <button type="button" onClick={cancelPairing} className={neutralBtn}>{t("remote.pairCancel")}</button>
-          </div>
-        )}
-        {pending && (
-          <div data-testid="remote-pair-request" className="flex flex-col items-center gap-2">
-            <p className="gm-set-name">
-              {t("remote.pairRequest", { cihaz: stripBidi(pending.device_name) || t("chat.phoneUnnamed") })}
-            </p>
-            <p className="gm-set-k">{t("remote.pairCode")}</p>
-            <p data-testid="remote-sas" className="gm-set-sas">{pending.sas}</p>
-            <p className="gm-set-meta">{t("remote.pairCodeHint")}</p>
-            <div className="flex gap-2">
-              <button type="button" data-testid="remote-approve" onClick={approve} disabled={busy === "pair-approve"}
-                className="gm-set-btn gm-set-btn-primary">
-                {t("remote.approve")}
-              </button>
-              <button type="button" data-testid="remote-reject" onClick={reject} disabled={busy === "pair-reject"}
-                data-tone="danger" className="gm-set-btn">
-                {t("remote.reject")}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Paired devices */}
-      <div className={rowClass}>
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="gm-set-k">{t("remote.devices")}</span>
-          {devices.length > 0 && (
-            <button type="button" data-testid="remote-remove-all" onClick={removeAll}
-              data-tone="danger" className="gm-set-link">{t("remote.removeAll")}</button>
-          )}
-        </div>
-        {devices.length === 0 ? (
-          <p className="gm-set-meta">{t("remote.noDevices")}</p>
-        ) : (
-          <ul className="space-y-1.5">
-            {devices.map(device => (
-              <li key={device.device_id} data-testid="remote-device" className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="gm-set-name truncate">
-                    {stripBidi(device.name) || t("chat.phoneUnnamed")}
-                    {device.online && <span className="gm-set-ok ml-1.5 font-normal">{t("remote.deviceOnline")}</span>}
-                  </p>
-                  <p className="gm-set-meta">
-                    {t("remote.deviceCreated", { tarih: fmtDate(device.created, lang) })}
-                    {" · "}
-                    {device.last_seen
-                      ? t("remote.deviceLastSeen", { tarih: fmtDate(device.last_seen, lang) })
-                      : t("remote.deviceNeverSeen")}
-                  </p>
-                </div>
-                <button type="button" onClick={() => removeDevice(device)}
-                  data-tone="danger" className="gm-set-link shrink-0">
-                  <Trash2 size={12} /> {t("remote.remove")}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {/* Relay */}
-      <div className={rowClass}>
-        <span className={labelClass}>{t("remote.relay")}</span>
-        {status && (
-          <>
-            <p className="gm-set-meta break-all">{t("remote.relayCurrent", { url: status.relay_url })}</p>
-            <p className="gm-set-meta break-all">{t("remote.relayDefault", { url: status.default_relay_url })}</p>
-          </>
-        )}
-        <label className="gm-set-meta block mt-2 mb-1" htmlFor="remote-relay-input">{t("remote.relayCustomLabel")}</label>
-        <div className="flex gap-1.5">
-          <input
-            id="remote-relay-input"
-            data-testid="remote-relay-input"
-            value={relayInput}
-            onChange={e => setRelayInput(e.target.value)}
-            placeholder="https://"
-            className="gm-set-input gm-set-input-sm flex-1"
+          <SetRow
+            name={t("remote.keepAwake")}
+            hint={t("remote.keepAwakeHint")}
+            control={<SetSwitch checked={!!status?.keep_awake} label={t("remote.keepAwake")} testId="remote-keep-awake"
+              disabled={!status || busy === "set-keep-awake"} onToggle={() => setKeepAwake(!status?.keep_awake)} />}
           />
-          <button type="button" data-testid="remote-relay-save" onClick={() => saveRelay(relayInput.trim())}
-            disabled={!relayInput.trim() || busy === "set-relay-url"} className={neutralBtn}>{t("remote.relaySave")}</button>
-        </div>
-        {status?.custom_relay && (
-          <button type="button" onClick={() => saveRelay(null)} disabled={busy === "set-relay-url"}
-            className="gm-set-link mt-1.5">{t("remote.relayUseDefault")}</button>
-        )}
-        {needsRepair && (
-          <p data-testid="remote-relay-repair" className="gm-set-err mt-1.5">{t("remote.relayNeedsRepair")}</p>
-        )}
-      </div>
+        </SetCard>
+        {error && <p data-testid="remote-error" className="set-msg set-msg-err" role="alert">{error}</p>}
+        {note && <p data-testid="remote-note" className="set-msg set-msg-ok" role="status">{note}</p>}
+      </SetGroup>
 
-      {/* Keep awake */}
-      <label className={`flex items-start gap-2.5 ${rowClass} cursor-pointer`}>
-        <input
-          type="checkbox"
-          data-testid="remote-keep-awake"
-          checked={!!status?.keep_awake}
-          disabled={!status || busy === "set-keep-awake"}
-          onChange={e => setKeepAwake(e.target.checked)}
-          className="mt-0.5"
-        />
-        <span className="min-w-0">
-          <span className="gm-set-name block">{t("remote.keepAwake")}</span>
-          <span className="gm-set-hint block">{t("remote.keepAwakeHint")}</span>
-        </span>
-      </label>
+      {/* Paired phones + pairing a new one */}
+      <SetGroup
+        title={t("set.uzak.phones")}
+        action={devices.length > 0 ? (
+          <button type="button" data-testid="remote-remove-all" onClick={removeAll} className="set-link set-gk-act">
+            {t("remote.removeAll")}
+          </button>
+        ) : undefined}
+      >
+        <SetCard>
+          {devices.length === 0 && <SetRow name={t("remote.noDevices")} />}
+          {devices.map(device => (
+            <div key={device.device_id} data-testid="remote-device" className="set-row set-prov">
+              {phoneIc}
+              <div className="set-rt">
+                <p className="set-name">{stripBidi(device.name) || t("chat.phoneUnnamed")}</p>
+                <div className="set-hint">
+                  <Lamp tone={device.online ? "ok" : undefined} />
+                  {device.online && <>{t("remote.deviceOnline")} · </>}
+                  {device.last_seen
+                    ? t("remote.deviceLastSeen", { tarih: fmtDate(device.last_seen, lang) })
+                    : t("remote.deviceNeverSeen")}
+                  {" · "}
+                  {t("remote.deviceCreated", { tarih: fmtDate(device.created, lang) })}
+                </div>
+              </div>
+              <button type="button" onClick={() => removeDevice(device)} className="set-link">{t("remote.remove")}</button>
+            </div>
+          ))}
 
-      {/* Forget */}
-      <button type="button" data-testid="remote-forget" onClick={forget} disabled={busy === "forget"}
-        data-tone="danger" className="gm-set-link self-start">
-        <Trash2 size={12} /> {t("remote.forget")}
-      </button>
+          {!offer && !pending && (
+            <SetRow
+              name={t("set.uzak.pairNew")}
+              hint={expired
+                ? <span data-testid="remote-pair-expired">{t("remote.pairExpired")}</span>
+                : (enabled ? t("set.uzak.pairHint") : t("remote.err.remoteOff"))}
+              control={(
+                <button type="button" data-testid="remote-pair" onClick={startPairing}
+                  disabled={!enabled || busy === "pair-start"} className="btn btn-ghost btn-sm">
+                  {busy === "pair-start" && <Loader2 size={13} className="animate-spin" />}
+                  {t("remote.pair")}
+                </button>
+              )}
+            />
+          )}
+          {offer && !pending && (
+            <div className="set-row set-pair">
+              <div className="set-qr"><QrCode text={offer.qr_url} /></div>
+              <div className="set-rt">
+                <p className="set-name">{t("set.uzak.pairNew")}</p>
+                <div className="set-hint">
+                  {t("remote.pairScan")}{" "}
+                  <span data-testid="remote-pair-countdown" className="num">
+                    {t("remote.pairExpiresIn", { sure: mmss(offer.expires_at - now) })}
+                  </span>
+                </div>
+              </div>
+              <button type="button" onClick={cancelPairing} className="btn btn-ghost btn-sm">{t("remote.pairCancel")}</button>
+            </div>
+          )}
+          {pending && (
+            <div data-testid="remote-pair-request" className="set-row set-pair-req">
+              <div className="set-rt">
+                <p className="set-name">
+                  {t("remote.pairRequest", { cihaz: stripBidi(pending.device_name) || t("chat.phoneUnnamed") })}
+                </p>
+                <div className="set-hint">
+                  {t("remote.pairCode")}: <b data-testid="remote-sas" className="set-sas">{pending.sas}</b>
+                  <br />{t("remote.pairCodeHint")}
+                </div>
+              </div>
+              <span className="set-acts">
+                <button type="button" data-testid="remote-approve" onClick={approve} disabled={busy === "pair-approve"}
+                  className="btn btn-primary btn-sm">
+                  {t("remote.approve")}
+                </button>
+                <button type="button" data-testid="remote-reject" onClick={reject} disabled={busy === "pair-reject"}
+                  className="btn btn-ghost btn-sm btn-danger">
+                  {t("remote.reject")}
+                </button>
+              </span>
+            </div>
+          )}
+        </SetCard>
+      </SetGroup>
+
+      {/* Advanced: relay + forget */}
+      <details className="set-group set-adv">
+        <summary className="set-gk set-adv-sum">{t("set.advanced")} <Chev /></summary>
+        <SetCard>
+          <SetRow
+            name={t("remote.relay")}
+            hint={status ? (
+              <>
+                <p className="set-relay-line">{t("remote.relayCurrent", { url: status.relay_url })}</p>
+                <p className="set-relay-line">{t("remote.relayDefault", { url: status.default_relay_url })}</p>
+                {needsRepair && <p data-testid="remote-relay-repair" className="set-msg-err">{t("remote.relayNeedsRepair")}</p>}
+              </>
+            ) : undefined}
+            extra={(
+              <form className="set-field" onSubmit={e => { e.preventDefault(); if (relayInput.trim()) void saveRelay(relayInput.trim()); }}>
+                <input
+                  id="remote-relay-input"
+                  data-testid="remote-relay-input"
+                  value={relayInput}
+                  onChange={e => setRelayInput(e.target.value)}
+                  placeholder="https://"
+                  aria-label={t("remote.relayCustomLabel")}
+                  className="set-input set-input-mono"
+                />
+                <button type="submit" data-testid="remote-relay-save"
+                  disabled={!relayInput.trim() || busy === "set-relay-url"} className="btn btn-ghost btn-sm">{t("remote.relaySave")}</button>
+                {status?.custom_relay && (
+                  <button type="button" onClick={() => saveRelay(null)} disabled={busy === "set-relay-url"}
+                    className="set-link">{t("remote.relayUseDefault")}</button>
+                )}
+              </form>
+            )}
+          />
+          <SetRow
+            name={t("remote.forget")}
+            hint={t("set.uzak.forgetHint")}
+            control={(
+              <button type="button" data-testid="remote-forget" onClick={forget} disabled={busy === "forget"}
+                className="btn btn-ghost btn-sm btn-danger">
+                {t("remote.forgetConfirmButton")}
+              </button>
+            )}
+          />
+        </SetCard>
+      </details>
     </div>
   );
 };

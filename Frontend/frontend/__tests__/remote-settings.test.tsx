@@ -10,7 +10,7 @@ import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-libra
 
 import { RemoteControlSection, qrPath } from '../renderer/components/home/RemoteControlSection'
 import { RemoteBadge } from '../renderer/components/home/RemoteBadge'
-import { SettingsModal } from '../renderer/components/home/SettingsModal'
+import { SettingsScreen } from '../renderer/components/home/settings/SettingsScreen'
 import { aktifDilAyarla } from '../renderer/lib/i18n'
 
 const DEFAULT_RELAY = 'https://relay.gamachine.example'
@@ -220,13 +220,16 @@ describe('remote settings · devices, relay, keep awake, forget', () => {
     expect(calls).toContainEqual(['set-relay-url', null])
   })
 
-  it('the keep-awake checkbox writes the flag', async () => {
+  it('the keep-awake switch writes the flag', async () => {
+    // Round 11: a settings switch (role="switch", aria-checked) instead of a checkbox.
     backend.enabled = true
     section()
-    const box = await screen.findByTestId('remote-keep-awake') as HTMLInputElement
-    await waitFor(() => expect(box.disabled).toBe(false))
-    fireEvent.click(box)
-    await waitFor(() => expect(box.checked).toBe(true))
+    const sw = await screen.findByTestId('remote-keep-awake') as HTMLButtonElement
+    expect(sw.getAttribute('role')).toBe('switch')
+    await waitFor(() => expect(sw.disabled).toBe(false))
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(sw)
+    await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('true'))
     expect(calls).toContainEqual(['set-keep-awake', true])
   })
 
@@ -265,15 +268,15 @@ describe('remote control · always-visible badge and the settings tab', () => {
     expect(screen.getByRole('button', { name: /Uzaktan kontrol açık/ })).toBeTruthy()
   })
 
-  it('the settings modal has a Remote control tab holding the section', async () => {
-    render(<SettingsModal {...({
+  it('the settings screen has a Remote control page holding the section', async () => {
+    render(<SettingsScreen {...({
       open: true, providersWithKeys: [], onChange: () => {}, onClose: () => {}, onSave: async () => {},
       onLogout: () => {}, onDeleteKey: async () => {}, unityMcpStatus: 'off', unityMcpToggling: false,
       onToggleUnityMcp: () => {}, lang: 'tr', onLangChange: () => {},
       aiConfig: { provider_type: 'anthropic', model_name: '', api_key: '' },
     } as any)} />)
     expect(screen.queryByTestId('remote-section')).toBeNull()
-    fireEvent.click(screen.getByRole('tab', { name: 'Uzaktan kontrol' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Uzaktan kontrol' }))
     expect(screen.getByTestId('remote-section')).toBeTruthy()
     await waitFor(() => expect(calls.some(c => c[0] === 'status')).toBe(true))
   })

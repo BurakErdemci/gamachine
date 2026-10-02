@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { UnityMcpToggle } from '../renderer/components/home/UnityMcpToggle'
-import { SettingsModal } from '../renderer/components/home/SettingsModal'
+import { SettingsScreen } from '../renderer/components/home/settings/SettingsScreen'
 import { cevir } from '../renderer/lib/i18n'
 import type { AIConfig } from '../renderer/components/home/types'
 
@@ -209,7 +209,7 @@ describe('UnityMcpToggle — blocked görünürlüğü', () => {
   })
 })
 
-describe('SettingsModal — blocked satırı', () => {
+describe('Settings screen Unity page — blocked row', () => {
   const aiConfig: AIConfig = {
     provider_type: 'subscription',
     api_key: '',
@@ -219,8 +219,9 @@ describe('SettingsModal — blocked satırı', () => {
 
   const renderModal = (status: any) =>
     render(
-      <SettingsModal
+      <SettingsScreen
         open
+        page="unity"
         aiConfig={aiConfig}
         providersWithKeys={[]}
         onChange={vi.fn()}
@@ -241,7 +242,8 @@ describe('SettingsModal — blocked satırı', () => {
     // TypeError, modal hiç açılmıyor. Backend bu değeri `b4065f1`'den beri
     // döndürüyor, yani erişilebilir bir çökme.
     expect(() => renderModal('blocked')).not.toThrow()
-    expect(screen.getByText('Unity MCP')).toBeTruthy()
+    // Round 11: the row is named "Unity connection" (mockup), not "Unity MCP".
+    expect(screen.getByText(cevir('set.unity.conn'))).toBeTruthy()
   })
 
   it('blocked satırı KIRMIZI — "kapalı" görünümünden ayrışıyor', () => {
@@ -251,7 +253,7 @@ describe('SettingsModal — blocked satırı', () => {
     // rule is checked below), the same move the shell switch made to data-unity.
     renderModal('blocked')
     const satir = screen.getByTestId('unity-mcp-row')
-    expect(satir.textContent).toContain('Unity MCP')
+    expect(satir.textContent).toContain(cevir('set.unity.conn'))
     expect(satir.getAttribute('data-tone')).toBe('danger')
     cleanup()
     renderModal('off')
@@ -263,16 +265,21 @@ describe('SettingsModal — blocked satırı', () => {
     // yet the server is not ours, which is worse than off.
     renderModal('blocked')
     expect(screen.getByTestId('unity-mcp-toggle').getAttribute('data-state')).toBe('off')
+    expect(screen.getByTestId('unity-mcp-toggle').getAttribute('aria-checked')).toBe('false')
   })
 
   it('connected ta anahtar AÇIK — yön korunuyor', () => {
     renderModal('connected')
     expect(screen.getByTestId('unity-mcp-toggle').getAttribute('data-state')).toBe('on')
+    expect(screen.getByTestId('unity-mcp-toggle').getAttribute('aria-checked')).toBe('true')
   })
 
   it('settings.css turns the danger tone and the on state into their look', () => {
     const css = readFileSync(resolve(__dirname, '../renderer/styles/gm/settings.css'), 'utf8')
-    expect(css).toMatch(/\.gm-set-card\[data-tone="danger"\]\s*\{[^}]*var\(--set-warn\)/)
-    expect(css).toMatch(/\.gm-set-switch:is\([^)]*\[data-state="on"\][^)]*\)\s*\{[^}]*background/)
+    // Round 11: the danger tone marks the row's edge and its state word; the switch reads
+    // aria-checked, which the component derives from the same "is the server ours" rule as data-state.
+    expect(css).toMatch(/\.set-row\[data-tone="danger"\]\s*\{[^}]*var\(--set-warn\)/)
+    expect(css).toMatch(/\.set-row\[data-tone="danger"\] \.set-state\s*\{[^}]*var\(--set-warn-text\)/)
+    expect(css).toMatch(/\.set-switch\[aria-checked="true"\]\s*\{[^}]*background/)
   })
 })

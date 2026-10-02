@@ -77,6 +77,8 @@ interface SidebarProps {
   unityStatus?: UnityMCPStatus;
   /** Remote control state for the phone button in the foot; hidden while remote control is off. */
   remoteStatus?: RemoteStatus | null;
+  /** The phone button opens the settings screen on "Uzaktan kontrol" (falls back to Settings). */
+  onOpenRemote?: () => void;
 }
 
 /** Sidebar width from the mockup (base.css `.app` first track). */
@@ -103,7 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     setEditingId, tempTitle, setTempTitle, saveRename, workspacePath,
     closeWorkspace, rootFolderPath, openFolder, openFilePicker, user,
     setShowSettings, fileTree, treeContextMenu, setTreeContextMenu,
-    convStatus, unityStatus, isDirty, remoteStatus,
+    convStatus, unityStatus, isDirty, remoteStatus, onOpenRemote,
   } = props;
 
   const { t } = useLang();
@@ -319,7 +321,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
             <span>{t('sidebar.settings')}</span>
           </button>
           {name && <span className="foot-user" title={name}>{name}</span>}
-          <RemoteBadge status={remoteStatus ?? null} onClick={() => setShowSettings(true)} />
+          <RemoteBadge status={remoteStatus ?? null} onClick={() => (onOpenRemote ? onOpenRemote() : setShowSettings(true))} />
         </div>
       </div>
     </motion.aside>

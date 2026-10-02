@@ -351,12 +351,11 @@
 .pick:hover { background: var(--shell-bg-2); }
 .pick .ic-sm { color: var(--shell-text-dim); }
 .model-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--model); flex: none; display: inline-block; }
-/* model chip = "character card": name over provider + version */
+/* model chip (round 11 in settings.css: provider mark + model name + usage hairlines) */
 .model-wrap { position: relative; }
 .model-pick { height: 40px; padding: 0 10px 0 12px; gap: 10px; text-align: left; max-width: 240px; }
 .model-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .model-name { font-weight: 600; font-size: 13.5px; font-family: var(--font-who); text-transform: var(--who-case); letter-spacing: var(--who-track); overflow: hidden; text-overflow: ellipsis; }
-.model-sub { font-size: var(--fs-meta); color: var(--shell-text-dim); overflow: hidden; text-overflow: ellipsis; }
 /* The model menu keeps its catalog (CLI groups, cloud, local, search) and only takes the mockup's
    floating surface; its rows are restyled with the thread in P2. */
 .model-menu {

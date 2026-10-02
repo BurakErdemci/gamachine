@@ -13,16 +13,17 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import React from 'react'
 import { render, screen, cleanup } from '@testing-library/react'
 
-import { SettingsModal } from '../renderer/components/home/SettingsModal'
+import { SettingsScreen } from '../renderer/components/home/settings/SettingsScreen'
 
 afterEach(() => cleanup())
 
 const temel = {
   open: true,
+  // Round 11: the live list is the "Varsayılan model" list on the Modeller page (the modal's
+  // eight suggestion chips for one provider became one select over every provider).
+  page: 'modeller',
   providersWithKeys: ['anthropic'],
-  onChange: () => {},
   onClose: () => {},
-  onSave: async () => {},
   onLogout: () => {},
   onDeleteKey: async () => {},
   unityMcpStatus: 'off' as any,
@@ -34,7 +35,7 @@ const temel = {
 
 const ciz = (provider: string, cloud: any[], ekler: any = {}) =>
   render(
-    <SettingsModal
+    <SettingsScreen
       {...(temel as any)}
       aiConfig={{ provider_type: provider, model_name: '', api_key: '' } as any}
       availableModels={{ local: [], subscription: [], cloud, ...ekler }}
@@ -42,20 +43,23 @@ const ciz = (provider: string, cloud: any[], ekler: any = {}) =>
   )
 
 const M = (id: string, name: string, provider: string) => ({ id, name, provider })
+const secenekler = () => Array.from(screen.getByTestId('default-model-select').querySelectorAll('option')).map(o => o.textContent)
+const grup = (label: string) => screen.getByTestId('default-model-select').querySelector(`optgroup[label="${label}"]`)
 
-describe('model önerileri', () => {
+describe('varsayılan model listesi', () => {
   it('seçili sağlayıcının CANLI modellerini gösteriyor', () => {
     ciz('anthropic', [M('claude-opus-9', 'Claude Opus 9', 'anthropic')])
     expect(screen.getByText('Claude Opus 9')).toBeTruthy()
   })
 
-  it('başka sağlayıcının modellerini göstermiyor', () => {
+  it('her sağlayıcının modeli kendi adının altında — karışmıyor', () => {
     ciz('anthropic', [
       M('claude-opus-9', 'Claude Opus 9', 'anthropic'),
       M('gpt-9', 'GPT-9', 'openai'),
     ])
-    expect(screen.getByText('Claude Opus 9')).toBeTruthy()
-    expect(screen.queryByText('GPT-9')).toBeNull()
+    expect(grup('Anthropic')!.textContent).toContain('Claude Opus 9')
+    expect(grup('Anthropic')!.textContent).not.toContain('GPT-9')
+    expect(grup('OpenAI')!.textContent).toContain('GPT-9')
   })
 
   it('artık ELLE YAZILI bir model önerisi kalmadı', () => {
@@ -66,26 +70,25 @@ describe('model önerileri', () => {
     expect(container.textContent).not.toContain('Llama 3.3 70B')
   })
 
-  it('liste boşken çip alanı hiç çizilmiyor', () => {
-    const { container } = ciz('groq', [])
-    // Tek bir öneri çipi bile yoksa boş bir satır bırakmıyoruz.
-    expect(container.querySelectorAll('button').length).toBeGreaterThan(0)  // sağlayıcı kutuları
-    expect(container.textContent).not.toContain('(Önerilen)')
+  it('liste boşken seçenek uydurulmuyor', () => {
+    ciz('groq', [])
+    // Yalnız "seçili olan" yer tutucusu kalıyor; katalogdan tek satır yok.
+    expect(secenekler()).toHaveLength(1)
+    expect(screen.getByTestId('default-model-select').querySelectorAll('optgroup')).toHaveLength(0)
   })
 
-  it('çok uzun canlı liste sekiz öneriyle sınırlanıyor', () => {
-    // Canlı liste yüzlerce model dönebiliyor; burası bir çip serisi, katalog değil.
+  it('uzun canlı liste bir seçim listesinde EKSİKSİZ sunuluyor', () => {
+    // Eski sekiz çip sınırı bir çip SATIRI içindi; burası bir liste.
     const cok = Array.from({ length: 40 }, (_, i) => M(`m-${i}`, `Model ${i}`, 'anthropic'))
     ciz('anthropic', cok)
     expect(screen.getByText('Model 0')).toBeTruthy()
-    expect(screen.getByText('Model 7')).toBeTruthy()
-    expect(screen.queryByText('Model 8')).toBeNull()
+    expect(screen.getByText('Model 39')).toBeTruthy()
   })
 
-  it('Ollama seçiliyken yerel modeller kullanılıyor', () => {
+  it('yerel modeller Ollama başlığı altında', () => {
     ciz('ollama', [M('claude-opus-9', 'Claude Opus 9', 'anthropic')],
         { local: [M('qwen3:8b', 'Qwen3 8B', 'ollama')] })
-    expect(screen.getByText('Qwen3 8B')).toBeTruthy()
-    expect(screen.queryByText('Claude Opus 9')).toBeNull()
+    expect(grup('Ollama')!.textContent).toContain('Qwen3 8B')
+    expect(grup('Ollama')!.textContent).not.toContain('Claude Opus 9')
   })
 })

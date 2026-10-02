@@ -1,12 +1,13 @@
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { SettingsModal } from '../renderer/components/home/SettingsModal'
+import { SettingsScreen } from '../renderer/components/home/settings/SettingsScreen'
 import { AppearanceProvider, applyAppearance, DEFAULTS, FONT_STACKS } from '../renderer/lib/appearance'
 import { LangContext, ceviriUygula, type Lang } from '../renderer/lib/i18n'
 
-const props: React.ComponentProps<typeof SettingsModal> = {
-  open: true, providersWithKeys: [], onChange: () => {}, onClose: () => {}, onSave: async () => {},
+// Round 11: appearance lives on the settings screen's "Görünüm" page.
+const props: React.ComponentProps<typeof SettingsScreen> = {
+  open: true, page: 'gorunum', providersWithKeys: [], onClose: () => {},
   onLogout: () => {}, onDeleteKey: async () => {}, unityMcpStatus: 'off', unityMcpToggling: false,
   onToggleUnityMcp: () => {}, lang: 'en', onLangChange: () => {},
   aiConfig: { provider_type: 'anthropic', model_name: '', api_key: '', thinking_level: 'off' },
@@ -15,7 +16,7 @@ const props: React.ComponentProps<typeof SettingsModal> = {
 function settings(lang: Lang = 'en') {
   return render(
     <LangContext.Provider value={{ lang, setLang: () => {}, t: (key, values) => ceviriUygula(lang, key, values) }}>
-      <AppearanceProvider><SettingsModal {...props} lang={lang} /></AppearanceProvider>
+      <AppearanceProvider><SettingsScreen {...props} lang={lang} /></AppearanceProvider>
     </LangContext.Provider>,
   )
 }
@@ -34,7 +35,8 @@ afterEach(() => {
 describe('appearance settings', () => {
   it.each([['en', 'Workshop'], ['tr', 'Atölye']] as const)('applies and persists the workshop theme in %s', (lang, label) => {
     settings(lang)
-    fireEvent.click(screen.getByRole('button', { name: label }))
+    // Theme cards are a radiogroup now; the accessible name is the theme name + its sub line.
+    fireEvent.click(screen.getByRole('radio', { name: new RegExp(`^${label}`) }))
     expect(document.documentElement.dataset.theme).toBe('atolye')
     expect(localStorage.getItem('app-theme')).toBe('atolye')
   })
@@ -55,7 +57,7 @@ describe('appearance settings', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Reading font' }), { target: { value: 'inter' } })
     expect(document.documentElement.style.getPropertyValue('--font-body')).toBe(FONT_STACKS.inter)
     expect(localStorage.getItem('app-font-reading')).toBe('inter')
-    fireEvent.click(screen.getByRole('button', { name: 'Large' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Large' }))
     expect(window.ipc.invoke).toHaveBeenLastCalledWith('app-zoom-set', 1.1)
     expect(localStorage.getItem('app-text-size')).toBe('large')
     fireEvent.click(screen.getByRole('switch', { name: 'Opening animation' }))

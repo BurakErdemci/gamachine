@@ -24,7 +24,7 @@ vi.mock('axios', () => {
 })
 
 import axios from 'axios'
-import { SettingsModal } from '../renderer/components/home/SettingsModal'
+import { SettingsScreen } from '../renderer/components/home/settings/SettingsScreen'
 import { GenerationModeSelector } from '../renderer/components/home/GenerationModeSelector'
 import { useChat } from '../renderer/hooks/home/useChat'
 import { useMCPApproval, gateRisk, MCP_MSG_ID } from '../renderer/hooks/home/useMCPApproval'
@@ -39,15 +39,15 @@ const KEY = 'unityai-generation-mode'
 
 afterEach(() => { cleanup() })
 
-describe('SettingsModal · Çalışma modu sekmesi', () => {
+describe('Settings screen · Onay modu page', () => {
+  // Round 11: the modal's "Work mode" tab became the screen's "Onay modu" page; the cards are a
+  // radiogroup (aria-checked) in the mockup's order step → balanced → auto.
   const props: any = {
     open: true,
     aiConfig: { provider_type: 'anthropic', model_name: '', api_key: '' },
     availableModels: { local: [], subscription: [], cloud: [] },
     providersWithKeys: [],
-    onChange: () => {},
     onClose: () => {},
-    onSave: async () => {},
     onLogout: () => {},
     onDeleteKey: async () => {},
     unityMcpStatus: 'off',
@@ -56,32 +56,35 @@ describe('SettingsModal · Çalışma modu sekmesi', () => {
     lang: 'tr',
     onLangChange: () => {},
   }
+  const openOnay = () => fireEvent.click(screen.getByRole('button', { name: cevir('set.nav.onay') }))
 
-  it('existing fields stay on the first tab', () => {
-    render(<SettingsModal {...props} approvalMode="step" onApprovalModeChange={vi.fn()} />)
-    expect(screen.getByText(cevir('settings.provider'))).toBeTruthy()
-    expect(screen.getByText('Unity MCP')).toBeTruthy()
-    expect(screen.getByText(cevir('settings.language'))).toBeTruthy()
+  it('the first page holds the language; Unity and the models have their own pages', () => {
+    render(<SettingsScreen {...props} approvalMode="step" onApprovalModeChange={vi.fn()} />)
+    expect(screen.getByText(cevir('set.uiLang'))).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Unity' }))
+    expect(screen.getByTestId('unity-mcp-row')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: cevir('set.nav.modeller') }))
+    expect(screen.getByTestId('default-model-select')).toBeTruthy()
   })
 
-  it('mode tab explains auto and writes through the handler', () => {
+  it('mode page explains auto and writes through the handler', () => {
     const onChange = vi.fn()
-    render(<SettingsModal {...props} approvalMode="step" onApprovalModeChange={onChange} />)
-    fireEvent.click(screen.getByRole('tab', { name: cevir('settings.tabMode') }))
+    render(<SettingsScreen {...props} approvalMode="step" onApprovalModeChange={onChange} />)
+    openOnay()
     expect(screen.getByText(cevir('settings.modeAutoExplain'))).toBeTruthy()
-    fireEvent.click(screen.getByText(cevir('settings.modeAutoTitle')))
+    fireEvent.click(screen.getByText(cevir('set.mode.autoTitle')))
     expect(onChange).toHaveBeenCalledWith('auto')
   })
 
   it('the auto card is red whether or not it is selected; balanced and step are not', () => {
     for (const mode of ['auto', 'balanced', 'step'] as const) {
-      render(<SettingsModal {...props} approvalMode={mode} onApprovalModeChange={vi.fn()} />)
-      fireEvent.click(screen.getByRole('tab', { name: cevir('settings.tabMode') }))
-      const autoTitle = screen.getByText(cevir('settings.modeAutoTitle'))
+      render(<SettingsScreen {...props} approvalMode={mode} onApprovalModeChange={vi.fn()} />)
+      openOnay()
+      const autoTitle = screen.getByText(cevir('set.mode.autoTitle'))
       const autoCard = autoTitle.closest('button')!
-      const balancedCard = screen.getByText(cevir('settings.modeBalancedTitle')).closest('button')!
-      const stepCard = screen.getByText(cevir('settings.modeStepTitle')).closest('button')!
-      // v4: the colour comes from settings.css, keyed on data-warn (the rule
+      const balancedCard = screen.getByText(cevir('set.mode.balancedTitle')).closest('button')!
+      const stepCard = screen.getByText(cevir('set.mode.stepTitle')).closest('button')!
+      // The colour comes from settings.css, keyed on data-warn (the rule
       // itself is checked below), so the card and its title carry the state.
       expect(autoTitle.getAttribute('data-warn')).toBe('true')
       expect(autoCard.getAttribute('data-warn')).toBe('true')
@@ -97,11 +100,11 @@ describe('SettingsModal · Çalışma modu sekmesi', () => {
 
   it('shows three mode cards in order, balanced marked recommended, and writes balanced', () => {
     const onChange = vi.fn()
-    render(<SettingsModal {...props} approvalMode="step" onApprovalModeChange={onChange} />)
-    fireEvent.click(screen.getByRole('tab', { name: cevir('settings.tabMode') }))
-    const titles = [cevir('settings.modeAutoTitle'), cevir('settings.modeBalancedTitle'), cevir('settings.modeStepTitle')]
+    render(<SettingsScreen {...props} approvalMode="step" onApprovalModeChange={onChange} />)
+    openOnay()
+    const titles = [cevir('set.mode.stepTitle'), cevir('set.mode.balancedTitle'), cevir('set.mode.autoTitle')]
     const cards = titles.map(title => screen.getByText(title).closest('button')!)
-    // DOM order: auto, balanced, step (balanced sits between the two old modes).
+    // DOM order (mockup round 11): step, balanced, auto — from most to least asking.
     expect(cards[0].compareDocumentPosition(cards[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(cards[1].compareDocumentPosition(cards[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     const badges = screen.getAllByTestId('mode-recommended-badge')
@@ -112,21 +115,23 @@ describe('SettingsModal · Çalışma modu sekmesi', () => {
     expect(onChange).toHaveBeenCalledWith('balanced')
   })
 
-  it('the selected balanced card is the highlighted one', () => {
-    render(<SettingsModal {...props} approvalMode="balanced" onApprovalModeChange={vi.fn()} />)
-    fireEvent.click(screen.getByRole('tab', { name: cevir('settings.tabMode') }))
-    const balancedCard = screen.getByText(cevir('settings.modeBalancedTitle')).closest('button')!
-    expect(balancedCard.getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByText(cevir('settings.modeStepTitle')).closest('button')!.getAttribute('aria-pressed')).toBe('false')
+  it('the selected balanced card is the checked one', () => {
+    render(<SettingsScreen {...props} approvalMode="balanced" onApprovalModeChange={vi.fn()} />)
+    openOnay()
+    const balancedCard = screen.getByText(cevir('set.mode.balancedTitle')).closest('button')!
+    expect(balancedCard.getAttribute('role')).toBe('radio')
+    expect(balancedCard.getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByText(cevir('set.mode.stepTitle')).closest('button')!.getAttribute('aria-checked')).toBe('false')
   })
 
   it('settings.css draws the warning and the highlight from those attributes', () => {
     // The attributes above are only worth asserting if a rule turns them into
-    // colour: the warning in the danger token, the selection as a raised card.
+    // colour: the warning in the danger token, the selection as an outlined card.
     const css = readFileSync(resolve(__dirname, '../renderer/styles/gm/settings.css'), 'utf8')
-    expect(css).toMatch(/\.gm-set-mode\[data-warn="true"\]\s*\{[^}]*var\(--set-warn\)/)
-    expect(css).toMatch(/\.gm-set-mode-title\[data-warn="true"\]\s*\{[^}]*var\(--set-warn-text\)/)
-    expect(css).toMatch(/\.gm-set-mode\[aria-pressed="true"\]\s*\{[^}]*border-color/)
+    expect(css).toMatch(/\.mode-card\[data-warn="true"\]\[aria-checked="true"\]\s*\{[^}]*var\(--set-warn\)/)
+    expect(css).toMatch(/\.mode-title\[data-warn="true"\]\s*\{[^}]*var\(--set-warn-text\)/)
+    expect(css).toMatch(/\.mode-card\[aria-checked="true"\]\s*\{[^}]*border-color/)
+    expect(css).toMatch(/\.mode-risk\s*\{[^}]*var\(--set-warn-text\)/)
   })
 
   it('the new mode-card wording is in both languages, without the removed trust line', () => {

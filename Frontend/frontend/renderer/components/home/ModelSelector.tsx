@@ -1,25 +1,25 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-  ChevronDown,
-  ChevronRight,
-  Sparkles,
-  Cpu,
-  Key,
-  Search,
-  Check,
-  AlertTriangle,
-  Loader2,
-  Download,
-  LogIn,
-  RefreshCw
-} from 'lucide-react';
-import { ModelAvatar } from './ModelAvatar';
+import { Search, Check, AlertTriangle, Loader2, Download, LogIn, RefreshCw, LayoutGrid } from 'lucide-react';
+
+import { ModelLogo } from '../ui/ModelLogos';
 import { AIConfig, UserData } from './types';
 import { useLang } from '../../lib/i18n';
 import { apiHataMesaji } from '../../lib/apiError';
 import { stripBidi } from '../../lib/modelText';
 import type { AvailableModelsState } from '../../hooks/home/useAIConfig';
+import { GROUP_USAGE_FAMILY, familyFor, minutesSince, type UsageLimits } from '../../lib/usageLimits';
+import { ChipUse, UseBlock, UsePair } from './UsageMeters';
+import {
+  CLI_GROUPS, CLOUD_PROVIDER_META, activeProviderKey, chipModelName,
+  type CliGroupDef, type ModelItem,
+} from './providerGroups';
+import type { SettingsPage } from './settings/pages';
+import type { ThinkingLevel } from './ControlPanel';
+import { useCliDoctor } from '../../hooks/home/useCliDoctor';
+
+// Kept as exports of this module: messageAgent.ts and older callers import them from here.
+export { CLI_GROUPS, CLOUD_PROVIDER_META };
 
 interface ModelSelectorProps {
   aiConfig: AIConfig;
@@ -40,78 +40,17 @@ interface ModelSelectorProps {
   showToast: (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
   // The chat on screen: a pick sets its model as well as the default for new chats.
   conversationId?: number | null;
+  /** Usage windows (`useUsageLimits`); absent = no meters anywhere. */
+  usage?: UsageLimits | null;
+  /** The composer's thinking level: the menu's switch reads and writes the same value. */
+  thinkingLevel?: ThinkingLevel;
+  effortLevels?: string[] | null;
+  onThinkingChange?: (level: ThinkingLevel) => void;
+  /** Opens one page of the settings screen (falls back to `setShowSettings(true)`). */
+  openSettings?: (page: SettingsPage) => void;
 }
 
-interface CliGroupDef {
-  key: string;
-  label: string;
-  brand: string;               // ModelAvatar/ModelLogo marka anahtarı
-  availKey: string;            // /cli-availability yanıtındaki anahtar
-  cliLabel: string;            // "kurulu değil" uyarısında insan-okur ad
-  matches: (id: string) => boolean;
-  dynamic?: 'cursor' | 'opencode' | 'copilot' | 'codex'; // /cli-models/{cli} ile liste
-  accent: string;              // aktif model rengi (tailwind text sınıfı)
-  dot: string;                 // aktif nokta rengi (tailwind bg sınıfı)
-  badge?: string;              // grup başlığı yanındaki küçük rozet
-}
-
-export const CLI_GROUPS: CliGroupDef[] = [
-  {
-    key: 'claude', label: 'Claude Code', brand: 'claude', availKey: 'claude', cliLabel: 'Claude Code',
-    matches: id => id.startsWith('claude-'),
-    accent: 'text-orange-400', dot: 'bg-orange-400',
-  },
-  {
-    key: 'codex', label: 'Codex', brand: 'openai', availKey: 'codex', cliLabel: 'Codex',
-    matches: id => id.startsWith('gpt-'),
-    dynamic: 'codex',
-    accent: 'text-emerald-400', dot: 'bg-emerald-400',
-  },
-  {
-    key: 'gemini', label: 'Antigravity', brand: 'gemini', availKey: 'agy', cliLabel: 'Antigravity (agy)',
-    matches: id => id.startsWith('gemini') || id.startsWith('agy-'),
-    accent: 'text-blue-400', dot: 'bg-blue-400',
-  },
-  {
-    key: 'copilot', label: 'GitHub Copilot', brand: 'copilot', availKey: 'copilot', cliLabel: 'GitHub Copilot CLI',
-    matches: id => id.startsWith('copilot-'),
-    dynamic: 'copilot',
-    accent: 'text-violet-300', dot: 'bg-violet-300',
-  },
-  {
-    key: 'cursor', label: 'Cursor', brand: 'cursor', availKey: 'cursor', cliLabel: 'Cursor CLI (agent)',
-    matches: id => id.startsWith('cursor-'),
-    dynamic: 'cursor',
-    accent: 'text-slate-100', dot: 'bg-slate-100',
-  },
-  {
-    key: 'opencode', label: 'OpenCode', brand: 'opencode', availKey: 'opencode', cliLabel: 'OpenCode',
-    matches: id => id.startsWith('opencode:'),
-    dynamic: 'opencode',
-    accent: 'text-teal-300', dot: 'bg-teal-300',
-    badge: 'FREE + GO',
-  },
-  {
-    key: 'kimi', label: 'Kimi Code', brand: 'moonshot', availKey: 'kimi', cliLabel: 'Kimi Code CLI',
-    matches: id => id.startsWith('kimi-'),
-    accent: 'text-fuchsia-300', dot: 'bg-fuchsia-300',
-  },
-];
-
-type ModelItem = { id: string; name: string; provider?: string; openrouter_id?: string; disabled?: boolean; disabled_reason?: string; available?: boolean; verified?: boolean; source?: 'live' | 'openrouter'; context_length?: number };
-type CliDoctor = Record<string, { installed: boolean; loggedIn: boolean | null }>;
-
-// Bulut API sağlayıcı grupları (abonelik CLI grupları gibi kategorize görünüm)
-export const CLOUD_PROVIDER_META: Record<string, { label: string; badge?: string }> = {
-  anthropic:  { label: 'Anthropic' },
-  openai:     { label: 'OpenAI' },
-  google:     { label: 'Google' },
-  deepseek:   { label: 'DeepSeek' },
-  groq:       { label: 'Groq' },
-  moonshot:   { label: 'Moonshot' },
-  'z-ai':     { label: 'Z.ai' },
-  nvidia:     { label: 'NVIDIA NIM', badge: 'provider.badge.free' },
-};
+const LOCAL_KEY = 'local';
 
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   aiConfig,
@@ -131,65 +70,55 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   axios,
   showToast,
   conversationId = null,
+  usage = null,
+  thinkingLevel,
+  effortLevels,
+  onThinkingChange,
+  openSettings,
 }) => {
   const { t } = useLang();
-  const activeGroupKey = CLI_GROUPS.find(g => g.matches(aiConfig.model_name || ''))?.key ?? null;
-  // Aktif bulut sağlayıcısının grubu da başlangıçta açık gelsin (cloud:<provider>)
-  const activeCloudKey = CLOUD_PROVIDER_META[aiConfig.provider_type] ? `cloud:${aiConfig.provider_type}` : null;
-  const [expandedGroup, setExpandedGroup] = useState<string | null>(activeGroupKey ?? activeCloudKey);
+  const activeKey = activeProviderKey(aiConfig.provider_type, aiConfig.model_name || '');
+  const activeGroup = CLI_GROUPS.find(g => g.key === activeKey) ?? null;
+  const [selProv, setSelProv] = useState<string | null>(activeKey);
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // CLI doktoru: kurulu mu + giriş yapılmış mı (Kur/Giriş butonlarını sürer).
-  const [doctor, setDoctor] = useState<CliDoctor | null>(null);
-  const [doctorRefreshing, setDoctorRefreshing] = useState(false);
-  const fetchDoctor = async (refresh = false) => {
-    if (refresh) setDoctorRefreshing(true);
-    try {
-      const res = await axios.get(`${API}/cli-doctor${refresh ? '?refresh=true' : ''}`, { headers: { 'X-Session-Token': user?.sessionToken ?? '' } });
-      setDoctor(res.data || {});
-      if (refresh) showToast(t('models.doctorRefreshed'), 'success');
-    } catch {
-      if (refresh) showToast(t('models.doctorFailed'), 'error');
-    } finally {
-      if (refresh) setDoctorRefreshing(false);
-    }
+  const goSettings = (page: SettingsPage) => {
+    if (openSettings) openSettings(page); else setShowSettings(true);
   };
+
+  // CLI doktoru: kurulu mu + giriş yapılmış mı (Kur/Giriş butonlarını sürer). Shared with the
+  // settings screen's "Modeller ve hesaplar" page.
+  const cli = useCliDoctor({ API, http: axios, token: user?.sessionToken, showToast, t });
+  const { doctor, fetchDoctor, busyCli, installCli, loginCli } = cli;
+  const doctorRefreshing = cli.refreshing;
   useEffect(() => {
-    if (!isModelDropdownOpen || !API) return;
-    fetchDoctor();
+    if (!isModelDropdownOpen) return;
+    // Every opening starts on the provider of the model on screen.
+    setSelProv(activeKey);
     setQuery('');
+    if (!API) return;
+    fetchDoctor();
     // Plan kilitleri TUR SIRASINDA öğrenilebilir (mesaj plan-blok yiyince backend
-    // blocklist'e yazar) → dropdown her açılışta yüklü dinamik listeleri arka planda
+    // blocklist'e yazar) → menü her açılışta yüklü dinamik listeleri arka planda
     // tazele; yoksa kilit ancak uygulama yeniden başlayınca görünüyordu.
     (['cursor', 'opencode', 'copilot', 'codex'] as const).forEach(cli => {
       if (dynModels[cli]) fetchDynModels(cli, true);
     });
+    if (activeGroup?.dynamic) fetchDynModels(activeGroup.dynamic);
     setTimeout(() => searchRef.current?.focus(), 60);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isModelDropdownOpen, API]);
 
-  const [busyCli, setBusyCli] = useState<string | null>(null);
-  const installCli = async (g: CliGroupDef) => {
-    setBusyCli(g.key);
-    try {
-      await axios.post(`${API}/cli-install/${g.availKey}`, null, { headers: { 'X-Session-Token': user?.sessionToken ?? '' } });
-      showToast(t('models.installStarted'), 'info');
-    } catch (e: any) {
-      showToast(apiHataMesaji(e, t('models.installFailed')), 'error');
-    } finally { setBusyCli(null); }
-  };
-  const loginCli = async (g: CliGroupDef) => {
-    setBusyCli(g.key);
-    try {
-      await axios.post(`${API}/cli-login/${g.availKey}`, null, { headers: { 'X-Session-Token': user?.sessionToken ?? '' } });
-      showToast(t('models.loginStarted'), 'info');
-    } catch (e: any) {
-      showToast(apiHataMesaji(e, t('models.loginFailed')), 'error');
-    } finally { setBusyCli(null); }
-  };
+  // Esc closes the menu (the settings screen has its own Esc).
+  useEffect(() => {
+    if (!isModelDropdownOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setIsModelDropdownOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isModelDropdownOpen, setIsModelDropdownOpen]);
 
-  // Cursor/OpenCode: hesaba/kuruluma göre CANLI model listesi (grup ilk açılınca çekilir).
+  // Cursor/OpenCode/Copilot/Codex: hesaba/kuruluma göre CANLI model listesi (sağlayıcı ilk seçilince çekilir).
   const [dynModels, setDynModels] = useState<Record<string, ModelItem[]>>({});
   const [dynLoading, setDynLoading] = useState<Record<string, boolean>>({});
   const fetchDynModels = async (cli: 'cursor' | 'opencode' | 'copilot' | 'codex', force = false) => {
@@ -208,12 +137,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
   };
 
-  const isGroupInstalled = (g: CliGroupDef): boolean => {
-    if (!doctor) return true; // henüz yüklenmedi → uyarı gösterme
-    return doctor[g.availKey]?.installed !== false;
-  };
-  const groupNeedsLogin = (g: CliGroupDef): boolean =>
-    !!doctor && doctor[g.availKey]?.installed === true && doctor[g.availKey]?.loggedIn === false;
+  const isGroupInstalled = cli.isInstalled;
+  const groupNeedsLogin = cli.needsLogin;
 
   const groupModels = (g: CliGroupDef): ModelItem[] => {
     if (g.dynamic) return dynModels[g.dynamic] || [];
@@ -280,7 +205,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     setIsModelDropdownOpen(false);
     if (!(await savePick(newCfg))) return;
     if (!hasKey) {
-      setShowSettings(true);
+      goSettings('modeller');
       showToast(`${orToggle ? 'OpenRouter' : goster(m.provider)} ${t('models.apiKeyNeeded')}`, 'warning');
     }
   };
@@ -318,12 +243,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     return aiConfig.model_name === id;
   };
 
-  const sectionLabel = (icon: React.ReactNode, text: string) => (
-    <div className="px-4 pt-3 pb-1.5 text-[9.5px] font-bold tracking-[0.14em] text-slate-500 uppercase flex items-center gap-1.5 select-none">
-      {icon} {text}
-    </div>
-  );
-
   /**
    * Katalog metni HER ZAMAN buradan geçerek ekrana çıkıyor.
    *
@@ -340,35 +259,38 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
    */
   const goster = (s?: string) => stripBidi(s || '');
 
-  const cliModelRow = (g: CliGroupDef, m: ModelItem, indent = true) => {
+  const check = <Check size={14} className="model-opt-check" aria-hidden="true" />;
+
+  const cliModelRow = (g: CliGroupDef, m: ModelItem) => {
     const active = isActive(m.id);
     if (m.disabled) {
       // Plan bu modeli desteklemiyor → soluk + kilitli (tıklanınca açıklayıcı toast)
       return (
         <button
           key={m.id}
+          type="button"
+          role="option"
+          aria-selected={false}
           onClick={() => selectCliModel(g, m)}
           title={t('models.planLockedTitle')}
-          className={`w-full text-left ${indent ? 'pl-[46px]' : 'pl-4'} pr-3 py-[7px] text-[12px] flex items-center justify-between rounded-lg hover:bg-white/[0.03] transition-colors`}
+          className="model-opt is-locked"
         >
-          <span className="truncate font-medium text-slate-600 line-through decoration-slate-700">{goster(m.name)}</span>
-          <span className="text-[9px] text-slate-600 shrink-0 ml-2">{t('models.notInPlan')}</span>
+          <span className="model-opt-text">
+            <span className="model-opt-name" lang="en">{goster(m.name)}</span>
+            <span className="model-opt-sub">{t('models.notInPlan')}</span>
+          </span>
         </button>
       );
     }
     return (
-      <button
-        key={m.id}
-        onClick={() => selectCliModel(g, m)}
-        className={`w-full text-left ${indent ? 'pl-[46px]' : 'pl-4'} pr-3 py-[7px] text-[12px] flex items-center justify-between rounded-lg transition-colors hover:bg-white/[0.05] group/row`}
-      >
-        <span className={`truncate font-medium ${active ? g.accent : 'text-slate-300'}`}>{goster(m.name)}</span>
-        {active && <Check size={13} className={`${g.accent} shrink-0 ml-2`} />}
+      <button key={m.id} type="button" role="option" aria-selected={active} onClick={() => selectCliModel(g, m)} className="model-opt">
+        <span className="model-opt-text"><span className="model-opt-name" lang="en">{goster(m.name)}</span></span>
+        {check}
       </button>
     );
   };
 
-  const cloudModelRow = (m: ModelItem) => {
+  const cloudModelRow = (m: ModelItem, withMark = false) => {
     const orToggle = modelOrToggles[m.id] ?? false;
     const effectiveModelId = (orToggle && m.openrouter_id) ? m.openrouter_id : m.id;
     const cloudProvider = (orToggle && m.openrouter_id) ? 'openrouter' : (m.provider || '');
@@ -376,45 +298,43 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const active = isActive(effectiveModelId);
 
     return (
-      <div key={m.id} className={`flex items-center gap-1 rounded-lg transition-colors hover:bg-white/[0.05] ${active ? 'bg-blue-500/[0.08]' : ''}`}>
+      <div key={m.id} className="mm-cloud-row">
         <button
+          type="button"
+          role="option"
+          aria-selected={active}
           onClick={() => selectCloudModel(m, orToggle)}
-          className={`flex-1 min-w-0 text-left pl-3 pr-1 py-[7px] flex items-center gap-2.5 ${!hasKey ? 'opacity-60' : ''}`}
+          className={`model-opt${!hasKey ? ' is-keyless' : ''}`}
         >
-          <ModelAvatar provider={orToggle ? 'openrouter' : m.provider} size={11} containerSize="h-5 w-5" />
-          <span className="flex flex-col min-w-0">
-            <span className={`text-[12px] font-medium truncate flex items-center gap-1.5 ${active ? 'text-blue-400' : 'text-slate-300'}`}>
-              {goster(m.name)}
-              {hasKey
-                ? <Key size={9} className="text-blue-400/70 shrink-0" />
-                : <span className="text-[8px] text-amber-400/90 bg-amber-500/10 border border-amber-500/30 rounded px-1 leading-tight shrink-0">{t('models.noKey')}</span>}
+          {withMark && <ModelLogo provider={orToggle ? 'openrouter' : m.provider} size={16} className="plogo" />}
+          <span className="model-opt-text">
+            <span className="model-opt-name" lang="en">{goster(m.name)}</span>
+            <span className="model-opt-sub">
+              {orToggle ? 'via OpenRouter' : goster(m.provider)}
+              {!hasKey && <span className="mm-tag">{t('models.noKey')}</span>}
               {/* Doğrulanmamış = OpenRouter'ın açık kataloğundan geliyor: "böyle
                   bir model var" ama "senin hesabında var" DEĞİL. Bunu sessizce
                   doğrulanmış gibi göstermek, kullanıcıyı çalışmayacak bir modele
                   yollamak olurdu. */}
               {m.verified === false && (
-                <span data-testid="model-unverified" title={t('models.unverifiedTitle')}
-                  className="text-[8px] text-slate-400/90 bg-slate-500/10 border border-slate-500/30 rounded px-1 leading-tight shrink-0">
+                <span data-testid="model-unverified" title={t('models.unverifiedTitle')} className="mm-tag">
                   {t('models.unverified')}
                 </span>
               )}
             </span>
-            <span className="text-[9.5px] text-slate-500 truncate">{orToggle ? 'via OpenRouter' : goster(m.provider)}</span>
           </span>
+          {check}
         </button>
-        {active && <Check size={13} className="text-blue-400 shrink-0" />}
         {m.openrouter_id && (
           <button
+            type="button"
             onClick={e => {
               e.stopPropagation();
               setModelOrToggles({ ...modelOrToggles, [m.id]: !orToggle });
             }}
             title={orToggle && !providersWithKeys.includes('openrouter') ? t('models.openrouterNoKey') : t('models.viaOpenrouter')}
-            className={`mr-2 px-1.5 py-0.5 rounded-md text-[8px] font-semibold border transition-colors ${
-              orToggle
-                ? (providersWithKeys.includes('openrouter') ? 'border-purple-500/70 text-purple-300 bg-purple-500/10' : 'border-amber-500/70 text-amber-300 bg-amber-500/10')
-                : 'border-slate-700 text-slate-500 hover:border-slate-500'
-            }`}
+            aria-pressed={orToggle}
+            className="mm-or"
           >
             OR
           </button>
@@ -423,14 +343,152 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   };
 
+  const localModelRow = (m: ModelItem) => (
+    <button key={m.id} type="button" role="option" aria-selected={isActive(m.id)} onClick={() => selectLocalModel(m)} className="model-opt">
+      <span className="model-opt-text"><span className="model-opt-name" lang="en">{goster(m.name)}</span></span>
+      {check}
+    </button>
+  );
+
+  // ── the chip ───────────────────────────────────────────────────
+  const chipBrand = activeGroup ? activeGroup.brand
+    : aiConfig.provider_type === 'ollama' ? 'ollama'
+      : (aiConfig.provider_type || effectiveProvider || '');
+  const markIsClaude = activeKey === 'claude' || activeKey === 'cloud:anthropic';
+  const chipName = chipModelName(goster(displayModelName), markIsClaude);
+  const activeFamily = activeGroup ? GROUP_USAGE_FAMILY[activeGroup.key] ?? null : null;
+  const providerName = activeGroup ? activeGroup.label
+    : aiConfig.provider_type === 'ollama' ? 'Ollama'
+      : (CLOUD_PROVIDER_META[aiConfig.provider_type]?.label || goster(aiConfig.provider_type));
+
+  // ── provider column ────────────────────────────────────────────
+  type ProvRow = { key: string; name: string; brand: string; sub: string; off: boolean; right: React.ReactNode };
+  const provRows: ProvRow[] = [
+    ...CLI_GROUPS.map(g => {
+      const fam = familyFor(usage, GROUP_USAGE_FAMILY[g.key]);
+      const installed = isGroupInstalled(g);
+      const needsLogin = groupNeedsLogin(g);
+      const sub = !installed ? t('mm.sub.notInstalled')
+        : needsLogin ? t('mm.sub.needsLogin')
+          : fam?.plan ? t('mm.sub.subscriptionPlan', { plan: goster(fam.plan) }) : t('mm.sub.subscription');
+      const right = installed && !needsLogin
+        ? <UsePair fam={fam} modelId={g.key === activeKey ? aiConfig.model_name : null} />
+        : null;
+      return { key: g.key, name: g.label, brand: g.brand, sub, off: !installed || needsLogin, right };
+    }),
+    ...cloudGroups.map(({ provider, meta }) => {
+      const hasKey = providersWithKeys.includes(provider);
+      return {
+        key: `cloud:${provider}`, name: meta.label, brand: provider,
+        sub: hasKey ? t('mm.sub.apiKey') : t('mm.sub.noKey'), off: !hasKey, right: null,
+      };
+    }),
+    { key: LOCAL_KEY, name: 'Ollama', brand: 'ollama', sub: t('mm.sub.local'), off: false,
+      right: <span className="use-note">{t('use.unlimited')}</span> },
+  ];
+
+  const selRow = provRows.find(r => r.key === selProv) ?? provRows.find(r => r.key === activeKey) ?? provRows[0];
+
+  const pickProv = (key: string) => {
+    setSelProv(key);
+    const g = CLI_GROUPS.find(x => x.key === key);
+    if (g?.dynamic) fetchDynModels(g.dynamic);
+  };
+
+  const catalogError = availableModels.catalog_error ? (
+    <div data-testid="cloud-catalog-error" className="mm-warn" role="status">
+      <AlertTriangle size={14} aria-hidden="true" />
+      <span className="mm-warn-t">{t('models.catalogFailed')}</span>
+      <button type="button" data-testid="cloud-catalog-retry" onClick={() => fetchAvailableModels()} className="btn btn-ghost btn-sm">
+        {t('models.catalogRetry')}
+      </button>
+    </div>
+  ) : null;
+
+  const pane = () => {
+    const key = selRow.key;
+    const g = CLI_GROUPS.find(x => x.key === key);
+    if (g) {
+      const models = groupModels(g);
+      const installed = isGroupInstalled(g);
+      const needsLogin = groupNeedsLogin(g);
+      const loading = g.dynamic ? dynLoading[g.dynamic] : false;
+      const fam = familyFor(usage, GROUP_USAGE_FAMILY[g.key]);
+      return (
+        <>
+          {installed && !needsLogin && <UseBlock fam={fam} className="mm-use" nowIso={usage?.now}
+            modelId={g.key === activeKey ? aiConfig.model_name : null} />}
+          {!installed && (
+            <>
+              <p className="mm-note">{t('mm.note.install', { ad: g.cliLabel })}</p>
+              <button type="button" className="btn btn-ghost btn-sm mm-act" data-testid="mm-install"
+                title={t('models.installHint', { cli: g.cliLabel })}
+                onClick={() => { if (busyCli !== g.key) installCli(g); }}>
+                {busyCli === g.key ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} {t('models.install')}
+              </button>
+            </>
+          )}
+          {needsLogin && (
+            <>
+              <p className="mm-note">{t('mm.note.login', { ad: g.label })}</p>
+              <button type="button" className="btn btn-ghost btn-sm mm-act" data-testid="mm-login"
+                title={t('models.loginHint', { cli: g.cliLabel })}
+                onClick={() => { if (busyCli !== g.key) loginCli(g); }}>
+                {busyCli === g.key ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />} {t('models.login')}
+              </button>
+            </>
+          )}
+          {loading && <p className="mm-note"><Loader2 size={13} className="animate-spin" /> {t('models.loading')}</p>}
+          {!loading && models.length === 0 && installed && !needsLogin && <p className="mm-note">{t('models.emptyGroup')}</p>}
+          {!loading && models.length > 0 && (
+            <div className="mm-list" role="listbox" aria-label={t('mm.models', { ad: g.label })}>
+              {models.map(m => cliModelRow(g, m))}
+            </div>
+          )}
+        </>
+      );
+    }
+    if (key === LOCAL_KEY) {
+      return (
+        <>
+          <p className="mm-note">{t('mm.note.local')}</p>
+          {availableModels.local.length === 0
+            ? <p className="mm-note">{t('models.noLocal')}</p>
+            : <div className="mm-list" role="listbox" aria-label={t('mm.models', { ad: 'Ollama' })}>{availableModels.local.map(localModelRow)}</div>}
+        </>
+      );
+    }
+    const provider = key.replace(/^cloud:/, '');
+    const group = cloudGroups.find(c => c.provider === provider);
+    return (
+      <>
+        <p className="mm-note">{t('mm.note.api')}</p>
+        {/* Listenin NEREDEN geldiğini söyle. Sessiz kalırsak elle yazılı bir
+            katalog canlı sanılır ve eksikliği fark edilmez. */}
+        {availableModels.cloud_sources?.[provider] === 'unknown' && (
+          <p data-testid="cloud-source-unknown" className="mm-note mm-note-warn">{t('models.listUnverified')}</p>
+        )}
+        {group && (
+          <div className="mm-list" role="listbox" aria-label={t('mm.models', { ad: group.meta.label })}>
+            {group.models.map(m => cloudModelRow(m))}
+          </div>
+        )}
+      </>
+    );
+  };
+
+  const levels = (effortLevels && effortLevels.length ? effortLevels : ['auto']);
+  const effLevel = thinkingLevel && levels.includes(thinkingLevel) ? thinkingLevel : 'auto';
+  const activeFam = familyFor(usage, activeFamily);
+  const measuredMin = minutesSince(activeFam?.measured_at, usage?.now);
+
   return (
     <div className="model-wrap">
-      {/* The mockup's model "character card": the model colour dot (--model, set on .app from
-          the current pick), the name over its provider. Logic unchanged, restyle only. */}
       <button
         type="button"
-        aria-haspopup="listbox"
+        aria-haspopup="dialog"
         aria-expanded={isModelDropdownOpen}
+        data-testid="model-pick"
         onClick={() => {
           const opening = !isModelDropdownOpen;
           setIsModelDropdownOpen(opening);
@@ -443,275 +501,136 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         }}
         className="pick model-pick"
       >
-        <span className="model-dot" aria-hidden="true" />
-        <span className="model-text">
-          <span className="model-name" lang="en">{goster(displayModelName)}</span>
-          <span className="model-sub">
-            {activeGroupKey ? CLI_GROUPS.find(g => g.key === activeGroupKey)!.label : goster(effectiveProvider)}
-          </span>
-        </span>
+        <ModelLogo provider={chipBrand} size={18} className="plogo" />
+        <span className="model-text"><span className="model-name" lang="en">{chipName}</span></span>
+        <ChipUse limits={usage} family={activeFamily} modelId={aiConfig.model_name} providerName={providerName} />
         <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
       </button>
 
       <AnimatePresence>
         {isModelDropdownOpen && (
           <>
-            <div
-              className="fixed inset-0 z-40"
-              onClick={() => setIsModelDropdownOpen(false)}
-            />
+            <div className="fixed inset-0 z-40" onClick={() => setIsModelDropdownOpen(false)} />
             <motion.div
               initial={{ opacity: 0, y: -8, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -8, scale: 0.98 }}
               transition={{ duration: 0.16, ease: 'easeOut' }}
               className="model-menu"
+              role="dialog"
+              aria-label={t('mm.title')}
+              data-testid="model-menu"
             >
-              {/* Arama */}
-              <div className="p-2 border-b border-white/[0.06]">
-                <div className="flex items-center gap-2 px-2.5 py-[7px] rounded-xl bg-white/[0.05] border border-white/[0.06] focus-within:border-white/20 transition-colors">
-                  <Search size={12} className="text-slate-500 shrink-0" />
+              <div className="mm-top">
+                <span className="model-menu-k">{t('mm.title')}</span>
+                <label className="mm-search">
+                  <Search size={14} aria-hidden="true" />
                   <input
                     ref={searchRef}
                     value={query}
                     onChange={e => setQuery(e.target.value)}
                     placeholder={t('models.search')}
-                    className="w-full bg-transparent outline-none text-[12px] text-slate-200 placeholder:text-slate-600"
+                    aria-label={t('models.search')}
                   />
-                  {query && (
-                    <button onClick={() => setQuery('')} className="text-slate-500 hover:text-slate-300 text-[11px] leading-none">✕</button>
-                  )}
-                </div>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => { if (!doctorRefreshing) { fetchDoctor(true); setDynModels({}); } }}
+                  disabled={doctorRefreshing}
+                  title={t('models.refreshTitle')}
+                  aria-label={t('models.refreshTitle')}
+                  className="icon-btn mm-refresh"
+                >
+                  <RefreshCw size={14} className={doctorRefreshing ? 'animate-spin' : ''} />
+                </button>
               </div>
 
-              <div className="max-h-[62vh] overflow-y-auto custom-scrollbar pb-1">
-                {searchResults ? (
-                  /* ── ARAMA SONUÇLARI (düz liste) ── */
-                  <div className="p-1">
-                    {searchResults.cli.length === 0 && searchResults.cloud.length === 0 && searchResults.local.length === 0 && (
-                      <div className="px-4 py-6 text-center text-[11.5px] text-slate-500">{t('models.noResults')}</div>
-                    )}
+              {searchResults ? (
+                <div className="mm-results custom-scrollbar">
+                  {catalogError}
+                  {searchResults.cli.length === 0 && searchResults.cloud.length === 0 && searchResults.local.length === 0 && (
+                    <p className="mm-note">{t('models.noResults')}</p>
+                  )}
+                  <div className="mm-list" role="listbox" aria-label={t('models.search')}>
                     {searchResults.cli.map(({ g, m }) => (
-                      <div key={m.id} className="flex items-center">
-                        <div className="pl-3 shrink-0"><ModelAvatar provider={g.brand} size={11} containerSize="h-5 w-5" /></div>
-                        <div className="flex-1 min-w-0">{cliModelRow(g, m, false)}</div>
+                      <div key={`${g.key}:${m.id}`} className="mm-result">
+                        <ModelLogo provider={g.brand} size={16} className="plogo" />
+                        {cliModelRow(g, m)}
                       </div>
                     ))}
-                    {searchResults.cloud.map(m => cloudModelRow(m))}
+                    {searchResults.cloud.map(m => cloudModelRow(m, true))}
                     {searchResults.local.map(m => (
+                      <div key={`local:${m.id}`} className="mm-result">
+                        <ModelLogo provider="ollama" size={16} className="plogo" />
+                        {localModelRow(m)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="mm-body">
+                  <div className="mm-provs custom-scrollbar" role="tablist" aria-label={t('mm.providers')} aria-orientation="vertical">
+                    {provRows.map(r => (
                       <button
-                        key={m.id}
-                        onClick={() => selectLocalModel(m)}
-                        className={`w-full text-left px-4 py-[7px] text-[12px] rounded-lg hover:bg-white/[0.05] ${isActive(m.id) ? 'text-emerald-400' : 'text-slate-300'}`}
+                        key={r.key}
+                        type="button"
+                        role="tab"
+                        data-prov={r.key}
+                        data-testid={`mm-prov-${r.key}`}
+                        aria-selected={r.key === selRow.key}
+                        className={`mm-prov${r.off ? ' is-off' : ''}${r.key === activeKey ? ' is-current' : ''}`}
+                        onClick={() => pickProv(r.key)}
                       >
-                        {goster(m.name)}
+                        <ModelLogo provider={r.brand} size={18} className="plogo" />
+                        <span className="mm-prov-t">
+                          <span className="mm-prov-name" lang="en">{r.name}</span>
+                          <span className="mm-prov-sub">{r.sub}</span>
+                        </span>
+                        {r.right}
                       </button>
                     ))}
                   </div>
-                ) : (
-                  <>
-                    {/* ── CLI ABONELİKLERİ ── */}
-                    <div className="p-1">
-                      <div className="flex items-center justify-between pr-2">
-                        {sectionLabel(<Key size={9} />, t('models.subscription'))}
-                        <button
-                          onClick={() => { if (!doctorRefreshing) { fetchDoctor(true); setDynModels({}); } }}
-                          disabled={doctorRefreshing}
-                          title={t('models.refreshTitle')}
-                          className={`p-1 rounded-md transition-colors ${doctorRefreshing
-                            ? 'text-blue-400 bg-blue-500/10'
-                            : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.06] active:scale-90'}`}
-                        >
-                          <RefreshCw size={11} className={doctorRefreshing ? 'animate-spin' : ''} />
-                        </button>
-                      </div>
-                      {CLI_GROUPS.map(g => {
-                        const models = groupModels(g);
-                        const isOpen = expandedGroup === g.key;
-                        const installed = isGroupInstalled(g);
-                        const isGroupActive = g.key === activeGroupKey;
-                        const loading = g.dynamic ? dynLoading[g.dynamic] : false;
-                        return (
-                          <div key={g.key} className={`rounded-xl transition-colors ${isOpen ? 'bg-white/[0.03]' : ''}`}>
-                            <button
-                              onClick={() => {
-                                const next = isOpen ? null : g.key;
-                                setExpandedGroup(next);
-                                if (next && g.dynamic) fetchDynModels(g.dynamic);
-                              }}
-                              className="w-full text-left px-3 py-2 flex items-center gap-2.5 rounded-xl hover:bg-white/[0.04] transition-colors"
-                            >
-                              <ModelAvatar provider={g.brand} size={12} containerSize="h-6 w-6" />
-                              <span className={`flex-1 min-w-0 text-[12.5px] font-semibold truncate ${isGroupActive ? g.accent : 'text-slate-200'}`}>
-                                {g.label}
-                              </span>
-                              {isGroupActive && <span className={`h-1.5 w-1.5 rounded-full ${g.dot} shrink-0`} />}
-                              {g.badge && installed && (
-                                <span className="text-[8px] font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-md px-1.5 py-0.5 uppercase tracking-wide shrink-0">
-                                  {t(g.badge as any)}
-                                </span>
-                              )}
-                              {!installed && (
-                                <span
-                                  onClick={e => { e.stopPropagation(); if (busyCli !== g.key) installCli(g); }}
-                                  title={t('models.installHint', { cli: g.cliLabel })}
-                                  className="flex items-center gap-1 text-amber-200 bg-amber-500/15 border border-amber-500/40 rounded-md px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-wide shrink-0 hover:bg-amber-500/30 transition-colors cursor-pointer"
-                                >
-                                  {busyCli === g.key ? <Loader2 size={10} className="animate-spin" /> : <Download size={10} />} {t('models.install')}
-                                </span>
-                              )}
-                              {groupNeedsLogin(g) && (
-                                <span
-                                  onClick={e => { e.stopPropagation(); if (busyCli !== g.key) loginCli(g); }}
-                                  title={t('models.loginHint', { cli: g.cliLabel })}
-                                  className="flex items-center gap-1 text-sky-200 bg-sky-500/15 border border-sky-500/40 rounded-md px-1.5 py-0.5 text-[8.5px] font-semibold uppercase tracking-wide shrink-0 hover:bg-sky-500/30 transition-colors cursor-pointer"
-                                >
-                                  {busyCli === g.key ? <Loader2 size={10} className="animate-spin" /> : <LogIn size={10} />} {t('models.login')}
-                                </span>
-                              )}
-                              <ChevronDown size={12} className={`text-slate-500 transition-transform duration-200 shrink-0 ${isOpen ? 'rotate-180' : ''}`} />
-                            </button>
-                            <AnimatePresence initial={false}>
-                              {isOpen && (
-                                <motion.div
-                                  initial={{ height: 0, opacity: 0 }}
-                                  animate={{ height: 'auto', opacity: 1 }}
-                                  exit={{ height: 0, opacity: 0 }}
-                                  transition={{ duration: 0.15 }}
-                                  className="overflow-hidden pb-1"
-                                >
-                                  {loading && (
-                                    <div className="pl-[46px] py-2 flex items-center gap-2 text-[11px] text-slate-500">
-                                      <Loader2 size={11} className="animate-spin" /> {t('models.loading')}
-                                    </div>
-                                  )}
-                                  {!loading && models.length === 0 && (
-                                    <div className="pl-[46px] pr-3 py-2 text-[10.5px] text-slate-500 leading-snug">
-                                      {installed ? t('models.emptyGroup') : `${g.cliLabel} ${t('models.installFirst')}`}
-                                    </div>
-                                  )}
-                                  {!loading && models.map(m => cliModelRow(g, m))}
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        );
-                      })}
+                  <div className="mm-pane custom-scrollbar" role="tabpanel" data-prov={selRow.key} data-testid="mm-pane">
+                    {catalogError}
+                    {pane()}
+                  </div>
+                  {onThinkingChange && (
+                    <div className="mm-effort" data-testid="mm-effort">
+                      <span className="mm-effort-k">{t('mm.effort')}</span>
+                      <span className="gm-seg gm-seg-sm" role="radiogroup" aria-label={t('mm.effortGroup')}>
+                        {levels.map(id => (
+                          <button
+                            key={id}
+                            type="button"
+                            role="radio"
+                            aria-checked={id === effLevel}
+                            disabled={levels.length <= 1}
+                            onClick={() => onThinkingChange(id as ThinkingLevel)}
+                          >
+                            {t(`effort.label.${id}` as any)}
+                          </button>
+                        ))}
+                      </span>
                     </div>
+                  )}
+                </div>
+              )}
 
-                    {/* Katalog ÇEKİLEMEDİĞİNDE bunu söyle.
-                        Bölüm `cloudGroups.length > 0` ile gizlendiği için arıza
-                        "bütün bulut modelleri kayboldu" gibi görünüyordu; boş
-                        liste ile alınamamış liste aynı şey değil. Yeniden dene
-                        düğmesi şart: kullanıcıya bir hâl gösterip çıkış yolu
-                        vermemek, arızayı yalnız daha görünür yapardı. */}
-                    {availableModels.catalog_error && (
-                      <div
-                        data-testid="cloud-catalog-error"
-                        className="p-3 border-t border-white/[0.06] flex items-center gap-2 text-[11px] text-amber-400/90"
-                      >
-                        <AlertTriangle size={12} className="shrink-0" />
-                        <span className="flex-1 leading-snug">{t('models.catalogFailed')}</span>
-                        <button
-                          data-testid="cloud-catalog-retry"
-                          onClick={() => fetchAvailableModels()}
-                          className="shrink-0 px-2 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-200 text-[10px] font-semibold hover:bg-amber-500/20 transition-colors"
-                        >
-                          {t('models.catalogRetry')}
-                        </button>
-                      </div>
-                    )}
-
-                    {/* ── BULUT API (sağlayıcıya göre gruplu) ── */}
-                    {cloudGroups.length > 0 && (
-                      <div className="p-1 border-t border-white/[0.06]">
-                        {sectionLabel(<Sparkles size={9} />, t('models.cloud'))}
-                        {cloudGroups.map(({ provider, meta, models }) => {
-                          const gKey = `cloud:${provider}`;
-                          const isOpen = expandedGroup === gKey;
-                          const hasKey = providersWithKeys.includes(provider);
-                          const isGroupActive = aiConfig.provider_type === provider ||
-                            models.some(m => isActive(m.id) || (m.openrouter_id && aiConfig.model_name === m.openrouter_id));
-                          return (
-                            <div key={gKey} className={`rounded-xl transition-colors ${isOpen ? 'bg-white/[0.03]' : ''}`}>
-                              <button
-                                onClick={() => setExpandedGroup(isOpen ? null : gKey)}
-                                className="w-full text-left px-3 py-2 flex items-center gap-2.5 rounded-xl hover:bg-white/[0.04] transition-colors"
-                              >
-                                <ModelAvatar provider={provider} size={12} containerSize="h-6 w-6" />
-                                <span className={`flex-1 min-w-0 text-[12.5px] font-semibold truncate ${isGroupActive ? 'text-blue-400' : 'text-slate-200'}`}>
-                                  {meta.label}
-                                </span>
-                                {isGroupActive && <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shrink-0" />}
-                                {meta.badge && (
-                                  <span className="text-[8px] font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-md px-1.5 py-0.5 uppercase tracking-wide shrink-0">
-                                    {t(meta.badge as any)}
-                                  </span>
-                                )}
-                                {hasKey ? (
-                                  <Key size={10} className="text-blue-400/70 shrink-0" />
-                                ) : (
-                                  <span className="text-[8px] text-amber-400/90 bg-amber-500/10 border border-amber-500/30 rounded px-1 leading-tight shrink-0">{t('models.noKey')}</span>
-                                )}
-                                <ChevronDown size={12} className={`text-slate-500 transition-transform duration-200 shrink-0 ${isOpen ? 'rotate-180' : ''}`} />
-                              </button>
-                              <AnimatePresence initial={false}>
-                                {isOpen && (
-                                  <motion.div
-                                    initial={{ height: 0, opacity: 0 }}
-                                    animate={{ height: 'auto', opacity: 1 }}
-                                    exit={{ height: 0, opacity: 0 }}
-                                    transition={{ duration: 0.15 }}
-                                    className="overflow-hidden pb-1 pl-6"
-                                  >
-                                    {/* Listenin NEREDEN geldiğini söyle. Sessiz
-                                        kalırsak elle yazılı bir katalog canlı
-                                        sanılır ve eksikliği fark edilmez —
-                                        kaymış bir liste hiç liste olmamasından
-                                        kötü, çünkü güncel sanılıp okunuyor. */}
-                                    {availableModels.cloud_sources?.[provider] === 'unknown' && (
-                                      <div data-testid="cloud-source-unknown" className="px-3 pb-1.5 text-[10px] text-amber-400/80">
-                                        {t('models.listUnverified')}
-                                      </div>
-                                    )}
-                                    {models.map(m => cloudModelRow(m))}
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {/* ── YEREL ── */}
-                    <div className="p-1 border-t border-white/[0.06]">
-                      {sectionLabel(<Cpu size={9} />, t('models.local'))}
-                      {availableModels.local.length === 0 && (
-                        <div className="px-4 pb-2 text-[10.5px] text-slate-600">{t('models.noLocal')}</div>
-                      )}
-                      {availableModels.local.map(m => (
-                        <button
-                          key={m.id}
-                          onClick={() => selectLocalModel(m)}
-                          className={`w-full text-left px-4 py-[7px] text-[12px] rounded-lg hover:bg-white/[0.05] flex items-center justify-between ${isActive(m.id) ? 'text-emerald-400' : 'text-slate-300'}`}
-                        >
-                          <span className="truncate">{goster(m.name)}</span>
-                          {isActive(m.id) && <Check size={13} className="text-emerald-400 shrink-0 ml-2" />}
-                        </button>
-                      ))}
-                    </div>
-                  </>
+              <div className="mm-foot">
+                <button
+                  type="button"
+                  className="mm-link"
+                  data-testid="mm-usage-link"
+                  onClick={() => { setIsModelDropdownOpen(false); goSettings('modeller'); }}
+                >
+                  <LayoutGrid size={14} aria-hidden="true" />{t('mm.usageLink')}
+                </button>
+                {measuredMin != null && (
+                  <span className="mm-foot-r">
+                    {measuredMin < 1 ? t('use.measuredNow') : t('use.measured', { dk: measuredMin })}
+                  </span>
                 )}
               </div>
-
-              <button
-                onClick={() => { setIsModelDropdownOpen(false); setShowSettings(true); }}
-                className="w-full text-left px-4 py-3 text-[11px] text-slate-400 border-t border-white/[0.06] hover:bg-white/[0.04] transition-colors flex items-center justify-between group"
-              >
-                {t('models.settings')}
-                <ChevronRight size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </button>
             </motion.div>
           </>
         )}

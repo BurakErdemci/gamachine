@@ -432,6 +432,84 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     }
   }, [API, fetchProvidersWithKeys, showToast, user]);
 
+  // ── Live-apply writers for the settings screen (round 11) ─────────────────
+  // The old modal collected a provider, a key and a model and wrote them with one
+  // Save. The screen applies each of them the moment it is committed, so each has
+  // its own writer; every one reports success so the screen can flash "Saved".
+
+  // The default for a new chat (`/get-ai-config`), which the settings page shows
+  // even while a chat with another model is on screen.
+  const [defaultConfig, setDefaultConfig] = useState<{ provider_type: string; model_name: string } | null>(null);
+  const fetchDefaultConfig = useCallback(async () => {
+    if (!API || !user) return;
+    try {
+      const res = await axios.get(`${API}/get-ai-config/${user.id}`);
+      if (res?.data) setDefaultConfig({ provider_type: res.data.provider_type, model_name: res.data.model_name });
+    } catch (err) { console.error("Config hatası:", err); }
+  }, [API, user]);
+
+  /** One provider's API key, written on its own (no model change). */
+  const saveApiKey = useCallback(async (provider: string, key: string): Promise<boolean> => {
+    if (!user || !API || !key.trim()) return false;
+    try {
+      await axios.post(`${API}/api-keys/save`, { user_id: user.id, provider_type: provider, api_key: key.trim() });
+      await fetchProvidersWithKeys(user.id);
+      return true;
+    } catch (err: any) {
+      showToast(apiHataMesaji(err, cevir('settings.saveFailed')), 'error');
+      return false;
+    }
+  }, [API, fetchProvidersWithKeys, showToast, user]);
+
+  /**
+   * "Varsayılan model": the default for new chats only. Written without a
+   * conversation id, so the chat on screen keeps its own model; with no chat on
+   * screen the screen shows that default, so it follows.
+   */
+  const saveDefaultModel = useCallback(async (provider_type: string, model_name: string): Promise<boolean> => {
+    if (!user || !API) return false;
+    // Same api_key rule as the menu's picks: never a stale key that could overwrite a stored one.
+    const cfg = { provider_type, model_name, api_key: provider_type === 'subscription' ? 'CLI_SESSION' : '' };
+    try {
+      await axios.post(`${API}/save-ai-config`, { ...aiConfigRef.current, ...cfg, user_id: user.id });
+      setDefaultConfig({ provider_type, model_name });
+      if (chatIdRef.current == null) setAiConfig(prev => ({ ...prev, ...cfg, api_key: '' }));
+      return true;
+    } catch (err: any) {
+      showToast(apiHataMesaji(err, cevir('settings.saveFailed')), 'error');
+      return false;
+    }
+  }, [API, setAiConfig, showToast, user]);
+
+  /**
+   * "Özel model kimliği": a model id typed by hand, sent to the provider on screen.
+   * It is the old modal's model-name field + Save: the chat on screen takes it as
+   * well as the default, and a cloud provider without a stored key is refused.
+   */
+  const applyCustomModel = useCallback(async (modelName: string): Promise<boolean> => {
+    const name = modelName.trim();
+    if (!user || !API || !name) return false;
+    const current = aiConfigRef.current;
+    const isCloud = !['ollama', 'kb', 'subscription'].includes(current.provider_type);
+    if (isCloud && !providersWithKeys.includes(current.provider_type)) {
+      showToast(cevir('settings.apiKeyMissingFor', { saglayici: current.provider_type }), 'warning');
+      return false;
+    }
+    const cfg = { ...current, model_name: name, api_key: current.provider_type === 'subscription' ? 'CLI_SESSION' : '' };
+    try {
+      await axios.post(`${API}/save-ai-config`, {
+        ...cfg, user_id: user.id,
+        ...(chatIdRef.current != null ? { conversation_id: chatIdRef.current } : {}),
+      });
+      setAiConfig({ ...cfg, api_key: '' });
+      setDefaultConfig({ provider_type: cfg.provider_type, model_name: name });
+      return true;
+    } catch (err: any) {
+      showToast(apiHataMesaji(err, cevir('settings.saveFailed')), 'error');
+      return false;
+    }
+  }, [API, providersWithKeys, setAiConfig, showToast, user]);
+
   const effectiveProvider = useMemo(() => aiConfig.provider_type, [aiConfig.provider_type]);
 
   const displayModelName = useMemo(() => {
@@ -464,6 +542,11 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     fetchProviderReady,
     saveAIConfig,
     deleteApiKey,
+    defaultConfig,
+    fetchDefaultConfig,
+    saveApiKey,
+    saveDefaultModel,
+    applyCustomModel,
     effectiveProvider,
     displayModelName,
     unityMcpStatus,
