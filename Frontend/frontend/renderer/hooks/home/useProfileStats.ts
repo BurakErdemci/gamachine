@@ -37,6 +37,12 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
   // Bumped only by a reset: answers issued before it must not write session-new ids, but a
   // merely superseded answer still may (guide audit, 2 Oct 2026).
   const epoch = useRef(0);
+  // Unlock events carry their own counter, and an event that has not rendered yet absorbs the
+  // next one: two answers settling in one React batch would otherwise overwrite each other and
+  // lose an announcement forever, since `newIds` already holds both (guide fix verify, 2 Oct 2026).
+  const unlockSeq = useRef(0);
+  const renderedUnlockSeq = useRef<number | null>(null);
+  useEffect(() => { renderedUnlockSeq.current = unlocked?.seq ?? null; }, [unlocked]);
 
   const load = useCallback(async (r: ProfileRange) => {
     if (!api || !enabled) return;
@@ -57,7 +63,14 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
       if (myEpoch === epoch.current) {
         const fresh = ACHIEVEMENT_IDS.filter(id => !newIds.current.has(id)
           && stats.achievements.some(a => a.id === id && a.new && a.unlocked === true));
-        if (fresh.length) setUnlocked({ seq: mine, ids: fresh });
+        if (fresh.length) {
+          const eventSeq = ++unlockSeq.current;
+          setUnlocked(prev => {
+            const pending = prev && prev.seq !== renderedUnlockSeq.current ? prev.ids : [];
+            const ids = ACHIEVEMENT_IDS.filter(id => pending.includes(id) || fresh.includes(id));
+            return { seq: eventSeq, ids };
+          });
+        }
         for (const a of stats.achievements) if (a.new) newIds.current.add(a.id);
       }
       // Guard every cache write, including responses issued before reset

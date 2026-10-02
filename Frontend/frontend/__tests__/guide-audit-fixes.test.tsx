@@ -174,6 +174,30 @@ describe('7 superseded profile answer', () => {
     await act(async () => { await result.current.refresh() })
     expect(result.current.unlocked).toBe(first)
   })
+
+  it('two answers settling in one batch announce both unlocks, once each', async () => {
+    const unlock = (id: string) => ({ ...EMPTY, achievements: EMPTY.achievements.map(a => (a.id === id ? { ...a, unlocked: true, new: true } : a)) })
+    const both = { ...EMPTY, achievements: EMPTY.achievements.map(a => (a.id === 'first_task' || a.id === 'night_owl' ? { ...a, unlocked: true, new: true } : a)) }
+    let releaseA!: (v: { data: unknown }) => void
+    let releaseB!: (v: { data: unknown }) => void
+    const get = vi.fn()
+      .mockResolvedValueOnce({ data: EMPTY })
+      .mockReturnValueOnce(new Promise<{ data: unknown }>(r => { releaseA = r }))
+      .mockReturnValueOnce(new Promise<{ data: unknown }>(r => { releaseB = r }))
+      .mockResolvedValue({ data: both })
+    const http = { get }
+    const { result } = renderHook(() => useProfileStats({ api: 'a', http }))
+    await waitFor(() => expect(result.current.latest).not.toBeNull())
+    let a!: Promise<void>
+    let b!: Promise<void>
+    act(() => { a = result.current.refresh(); b = result.current.refresh() })
+    // Guide fix verify (2 Oct 2026): both settle before React renders.
+    await act(async () => { releaseB({ data: unlock('night_owl') }); releaseA({ data: unlock('first_task') }); await Promise.all([a, b]) })
+    expect(result.current.unlocked?.ids).toEqual(['first_task', 'night_owl'])
+    const event = result.current.unlocked
+    await act(async () => { await result.current.refresh() })
+    expect(result.current.unlocked).toBe(event)
+  })
 })
 
 describe('8 provider key list per user', () => {
