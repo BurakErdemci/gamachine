@@ -271,7 +271,7 @@ class DatabaseManager:
                             "hidden INTEGER NOT NULL DEFAULT 0", "side_of INTEGER",
                             "title_source TEXT NOT NULL DEFAULT 'auto'",
                             "auto_title_runs INTEGER NOT NULL DEFAULT 0",
-                            "copied_until INTEGER"):
+                            "copied_until INTEGER", "workspace TEXT"):
                 try:
                     cursor.execute(f"ALTER TABLE conversations ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
@@ -525,11 +525,17 @@ class DatabaseManager:
 
     # ===================== YENİ: SOHBETLER =====================
     def create_conversation(self, user_id: int, title: str = "Yeni Sohbet") -> int:
+        self._ensure_workspace_table()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute(
+                'SELECT path FROM workspaces WHERE user_id = ? ORDER BY last_accessed DESC, id DESC LIMIT 1',
+                (user_id,)
+            ).fetchone()
             cursor = conn.execute(
-                'INSERT INTO conversations (user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)',
-                (user_id, title, now, now)
+                'INSERT INTO conversations (user_id, title, created_at, updated_at, workspace) '
+                'VALUES (?, ?, ?, ?, ?)',
+                (user_id, title, now, now, row[0] if row else None)
             )
             conn.commit()
             return cursor.lastrowid
@@ -620,13 +626,13 @@ class DatabaseManager:
             # so a family delete on another connection cannot land in between.
             conn.execute('BEGIN IMMEDIATE')
             src = conn.execute(
-                'SELECT user_id, title, memory_summary, parent_id, side_of, provider_type, model_name '
+                'SELECT user_id, title, memory_summary, parent_id, side_of, provider_type, model_name, workspace '
                 'FROM conversations WHERE id = ?',
                 (source_id,)
             ).fetchone()
             if not src or src[4] is not None:
                 return None
-            user_id, title, memory_summary, parent_id, _, provider_type, model_name = src
+            user_id, title, memory_summary, parent_id, _, provider_type, model_name, workspace = src
             root_id = parent_id or source_id
             if parent_id is not None and conn.execute(
                 'SELECT 1 FROM conversations WHERE id = ?', (root_id,)
@@ -642,10 +648,10 @@ class DatabaseManager:
             ).fetchone()[0]
             cur = conn.execute(
                 'INSERT INTO conversations (user_id, title, created_at, updated_at, memory_summary, '
-                'parent_id, fork_at, hidden, provider_type, model_name) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
+                'parent_id, fork_at, hidden, provider_type, model_name, workspace) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
                 (user_id, new_title, now, now, memory_summary or "", root_id, fork_at,
-                 provider_type, model_name)
+                 provider_type, model_name, workspace)
             )
             new_id = cur.lastrowid
             if fork_at is not None:
@@ -805,7 +811,7 @@ class DatabaseManager:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('BEGIN IMMEDIATE')
             row = conn.execute(
-                'SELECT user_id, side_of FROM conversations WHERE id = ?', (main_id,)
+                'SELECT user_id, side_of, workspace FROM conversations WHERE id = ?', (main_id,)
             ).fetchone()
             if row is None or row[0] != user_id or row[1] is not None:
                 return None
@@ -817,8 +823,8 @@ class DatabaseManager:
                 return existing[0]
             cur = conn.execute(
                 'INSERT INTO conversations (user_id, title, created_at, updated_at, '
-                'parent_id, hidden, side_of) VALUES (?, ?, ?, ?, NULL, 1, ?)',
-                (user_id, "Yan soru", now, now, main_id)
+                'parent_id, hidden, side_of, workspace) VALUES (?, ?, ?, ?, NULL, 1, ?, ?)',
+                (user_id, "Yan soru", now, now, main_id, row[2])
             )
             conn.commit()
             return cur.lastrowid
@@ -1377,3 +1383,23 @@ class DatabaseManager:
                 (user_id,)
             ).fetchone()
             return row[0] if row else None
+
+    def get_recent_workspaces(self, user_id: int, limit: int = 12) -> List[Dict[str, Any]]:
+        self._ensure_workspace_table()
+        limit = max(1, min(50, limit))
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            rows = conn.execute(
+                'SELECT w.path, w.last_accessed, '
+                '(SELECT COUNT(*) FROM conversations c WHERE c.user_id = w.user_id '
+                'AND c.workspace = w.path AND c.parent_id IS NULL AND c.side_of IS NULL AND c.hidden = 0) '
+                'FROM workspaces w WHERE w.user_id = ? ORDER BY w.last_accessed DESC, w.id DESC LIMIT ?',
+                (user_id, limit)
+            ).fetchall()
+            return [{"path": row[0], "last_accessed": row[1], "chat_count": row[2]} for row in rows]
+
+    def remove_workspace(self, user_id: int, path: str) -> bool:
+        self._ensure_workspace_table()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cursor = conn.execute('DELETE FROM workspaces WHERE user_id = ? AND path = ?', (user_id, path))
+            conn.commit()
+            return cursor.rowcount > 0

@@ -22,6 +22,17 @@ def create_workspace_router(db):
         path = db.get_last_workspace(user_id)
         return {"path": path}
 
+    @router.get("/recent-workspaces/{user_id}")
+    async def get_recent_workspaces(user_id: int, limit: int = 12,
+                                    x_session_token: str = Header(alias="X-Session-Token")):
+        require_user(db, x_session_token, user_id)
+        return {"workspaces": db.get_recent_workspaces(user_id, limit)}
+
+    @router.post("/remove-workspace")
+    async def remove_workspace(req: WorkspaceRequest, x_session_token: str = Header(alias="X-Session-Token")):
+        user_id, _ = require_user(db, x_session_token, req.user_id)
+        return {"removed": db.remove_workspace(user_id, req.path)}
+
     @router.post("/write-file")
     async def write_file(req: WriteFileRequest, x_session_token: str = Header(alias="X-Session-Token")):
         get_current_user(db, x_session_token)
