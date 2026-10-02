@@ -362,12 +362,14 @@ describe('home.tsx wires the profile', () => {
   it('mounts ProfileView with the shared stats hook and the open state', () => {
     expect(src).toMatch(/const profileStats = useProfileStats\(/)
     expect(src).toMatch(/<ProfileView[\s\S]{0,80}open=\{profileOpen\} onClose=\{closeProfile\}/)
-    expect(src).toMatch(/data-screen=\{ai\.showSettings \? 'ayarlar' : profileOpen \? 'profil' : undefined\}/)
+    // The guide (round 12b) ranks below the profile: settings > profile > guide > chat.
+    expect(src).toMatch(/data-screen=\{ai\.showSettings \? 'ayarlar' : profileOpen \? 'profil' : guide\.guideOpen \? 'rehber' : undefined\}/)
   })
   it('both entry points open it and the sidebar card reads the real level', () => {
     expect(src).toMatch(/onOpenProfile=\{openProfile\} onProfileReset=/)
     expect(src).toMatch(/profileLevel=\{profileStats\.latest \?/)
     expect(src).toMatch(/xp_partial: profileStats\.latest\.xp_partial/)
-    expect(src).toMatch(/onOpenProfile=\{openProfile\}\n\s*\/>/)
+    // The Sidebar's card (the guide's two props follow it since round 12b).
+    expect(src).toMatch(/profileOpen=\{profileOpen && !ai\.showSettings\}\s+onOpenProfile=\{openProfile\}\s/)
   })
 })

@@ -24,11 +24,12 @@ export const APP_VERSION: string = (appPackage as { version?: string }).version 
 
 export const GeneralPage = ({
   lang, onLangChange, autoTitles, autoTitlesSaving, onToggleAutoTitles,
-  dictationAutoLang, dictationAutoLangSaving, onToggleDictationAutoLang, saved,
+  dictationAutoLang, dictationAutoLangSaving, onToggleDictationAutoLang, onOpenGuide, onReplayTour, tourSteps, saved,
 }: {
   lang: Lang; onLangChange: (l: Lang) => void;
   autoTitles: boolean; autoTitlesSaving: boolean; onToggleAutoTitles?: () => Promise<boolean> | void;
   dictationAutoLang: boolean; dictationAutoLangSaving: boolean; onToggleDictationAutoLang?: () => Promise<boolean> | void;
+  onOpenGuide?: () => void; onReplayTour?: () => void; tourSteps?: number;
   saved: () => void;
 }) => {
   const { t } = useLang();
@@ -73,6 +74,38 @@ export const GeneralPage = ({
               control={<SetSwitch checked={dictationAutoLang} label={t('settings.dictationAutoLang')} testId="dictation-auto-lang-toggle"
                 disabled={dictationAutoLangSaving} onToggle={async () => { if (await onToggleDictationAutoLang() === true) saved(); }} />}
             />
+          </SetCard>
+        </SetGroup>
+      )}
+      {/* Round 12b: the guide and the first-launch tour. The opening animation keeps its own row
+          under Görünüm. */}
+      {(onOpenGuide || onReplayTour) && (
+        <SetGroup title={t('set.group.intro')}>
+          <SetCard>
+            {onOpenGuide && (
+              <SetRow
+                name={t('set.guide')}
+                hint={t('set.guideHint')}
+                control={(
+                  <button type="button" className="btn btn-ghost btn-sm" data-testid="set-guide-open" onClick={onOpenGuide}>
+                    <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M7.9 8a2.2 2.2 0 114.2.9c-.5 1-2.1 1.3-2.1 2.7" /><path d="M10 14.2v.1" /></svg>
+                    {t('set.guideOpen')}
+                  </button>
+                )}
+              />
+            )}
+            {onReplayTour && (
+              <SetRow
+                name={t('set.tour')}
+                hint={t('set.tourHint', { n: tourSteps ?? 6 })}
+                control={(
+                  <button type="button" className="btn btn-ghost btn-sm" data-testid="set-tour-replay" onClick={onReplayTour}>
+                    <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10a6 6 0 1 0 1.8-4.3" /><path d="M4 4v3.5h3.5" /></svg>
+                    {t('set.tourReplay')}
+                  </button>
+                )}
+              />
+            )}
           </SetCard>
         </SetGroup>
       )}

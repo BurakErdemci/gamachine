@@ -55,6 +55,10 @@ export interface SettingsScreenProps {
   onOpenProfile?: () => void;
   /** Account page: a confirmed statistics reset succeeded. */
   onProfileReset?: () => void;
+  /** General page, "Tanıtım": open the guide, replay the first-launch tour (its step count). */
+  onOpenGuide?: () => void;
+  onReplayTour?: () => void;
+  tourSteps?: number;
 }
 
 const NAV_ICON: Record<SettingsPage, React.ReactNode> = {
@@ -72,7 +76,7 @@ const NAV_ICON: Record<SettingsPage, React.ReactNode> = {
  * both languages, so "tema" and "theme" both land on Görünüm.
  */
 const SEARCH_KEYS: Record<SettingsPage, TKey[]> = {
-  genel: ['set.nav.genel', 'set.uiLang', 'settings.language', 'settings.autoTitles', 'settings.dictationAutoLang', 'set.group.dictation'],
+  genel: ['set.nav.genel', 'set.uiLang', 'settings.language', 'settings.autoTitles', 'settings.dictationAutoLang', 'set.group.dictation', 'set.group.intro', 'set.guide', 'set.tour'],
   modeller: ['set.nav.modeller', 'set.defaultModel', 'set.group.subs', 'set.group.keys', 'set.customModel', 'set.group.local'],
   gorunum: ['set.nav.gorunum', 'settings.appearance.theme', 'settings.appearance.readingFont', 'settings.appearance.codeFont', 'settings.appearance.textSize', 'settings.appearance.intro'],
   unity: ['set.unity.conn', 'set.unity.trouble'],
@@ -208,6 +212,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
               onToggleAutoTitles={props.onToggleAutoTitles}
               dictationAutoLang={props.dictationAutoLang ?? false} dictationAutoLangSaving={props.dictationAutoLangSaving ?? false}
               onToggleDictationAutoLang={props.onToggleDictationAutoLang}
+              onOpenGuide={props.onOpenGuide} onReplayTour={props.onReplayTour} tourSteps={props.tourSteps}
               saved={saved}
             />
           )}

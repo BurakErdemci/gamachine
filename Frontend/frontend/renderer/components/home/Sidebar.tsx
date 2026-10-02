@@ -87,6 +87,9 @@ interface SidebarProps {
   profileOpen?: boolean;
   /** The card opens the maker profile. */
   onOpenProfile?: () => void;
+  /** The guide (Rehber) is on screen: its `?` button in the foot is marked active. */
+  guideOpen?: boolean;
+  onOpenGuide?: () => void;
 }
 
 /** Sidebar width from the mockup (base.css `.app` first track). */
@@ -109,7 +112,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     closeWorkspace, rootFolderPath, openFolder, openFilePicker, user, userName,
     setShowSettings, fileTree, treeContextMenu, setTreeContextMenu,
     convStatus, unityStatus, isDirty, remoteStatus, onOpenRemote,
-    profileLevel, profileOpen, onOpenProfile,
+    profileLevel, profileOpen, onOpenProfile, guideOpen, onOpenGuide,
   } = props;
 
   const { t, lang } = useLang();
@@ -340,6 +343,21 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
             </svg>
             <span>{t('sidebar.settings')}</span>
           </button>
+          {/* The guide (round 12b): also F1, /rehber in the composer, Settings > General. */}
+          {onOpenGuide && (
+            <button
+              type="button"
+              className={`foot-btn foot-help${guideOpen ? ' is-active' : ''}`}
+              data-testid="sidebar-guide"
+              data-guide="guide-entry"
+              aria-label={t('guide.entry')}
+              aria-current={guideOpen ? 'page' : undefined}
+              title={t('guide.entryTitle')}
+              onClick={onOpenGuide}
+            >
+              <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M7.9 8a2.2 2.2 0 114.2.9c-.5 1-2.1 1.3-2.1 2.7" /><path d="M10 14.2v.1" /></svg>
+            </button>
+          )}
           {name && <span className="foot-user" title={name}>{name}</span>}
           <RemoteBadge status={remoteStatus ?? null} onClick={() => (onOpenRemote ? onOpenRemote() : setShowSettings(true))} />
         </div>

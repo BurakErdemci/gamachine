@@ -13,9 +13,10 @@ import { routeForFile } from '../components/model-viewer/extensions';
 import { Sidebar } from '../components/home/Sidebar';
 import { EditorPanel, hostOpenTarget } from '../components/home/EditorPanel';
 import { CsharpProjectHint } from '../components/home/CsharpProjectHint';
-import { TerminalPanel } from '../components/home/TerminalPanel';
+import { TerminalPanel, type DrawerTab } from '../components/home/TerminalPanel';
 import { ChatPanel } from '../components/home/ChatPanel';
 import { SettingsScreen } from '../components/home/settings/SettingsScreen';
+import { APP_VERSION } from '../components/home/settings/SettingsPages';
 import type { SettingsPage } from '../components/home/settings/pages';
 import { ExportModal } from '../components/home/ExportModal';
 import { ModelSelector } from '../components/home/ModelSelector';
@@ -65,6 +66,23 @@ import { useProfileStats } from '../hooks/home/useProfileStats';
 import { latestUnlocked } from '../lib/profileStats';
 import { useAchievementQueue } from '../lib/achievementQueue';
 import { isChatEmpty } from '../components/home/ChatPanel';
+import { GuideScreen } from '../components/home/GuideScreen';
+import { GuideTour } from '../components/home/GuideTour';
+import { useGuide, type GuideHost } from '../hooks/home/useGuide';
+import { capabilities } from '../lib/guide/capabilities';
+import { parseGuideCommand } from '../lib/guide/command';
+import { wants, type PrepareHandlers } from '../lib/guide/prepare';
+import type { WsTab, WsWidth } from '../lib/workspacePanel';
+
+// The guide's prepare-action arguments (REHBER-KAYITLARI.md section 4) in this app's own ids.
+const GUIDE_SETTINGS: Record<Parameters<PrepareHandlers['settings']>[0], SettingsPage> = {
+  general: 'genel', models: 'modeller', appearance: 'gorunum', unity: 'unity', approval: 'onay', remote: 'uzak', account: 'hesap',
+};
+const GUIDE_TABS: Record<Parameters<PrepareHandlers['workspace.tab']>[0], WsTab> = { scene: 'sahne', files: 'dosyalar', code: 'kod', preview: 'onizleme' };
+const GUIDE_WIDTHS: Record<Parameters<PrepareHandlers['workspace.width']>[0], WsWidth> = { narrow: 'dar', half: 'yarim', focus: 'odak' };
+const GUIDE_DRAWER: Record<Parameters<PrepareHandlers['drawer']>[0], DrawerTab> = { terminal: 'terminal', console: 'konsol', problems: 'sorunlar', connections: 'baglantilar' };
+/** What a guide topic changed and gives back when it ends. */
+type GuideSnapshot = { open: boolean; width: WsWidth; tab: WsTab; terminal: boolean; convId: number | null };
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
 // this app needs, and off the server render (it touches WebGL on mount).
@@ -624,6 +642,80 @@ export default function Home() {
     showToast(t('side.added'), 'success');
   };
 
+  // --- Guide (Rehber) and the first-launch tour (round 12b) ---
+  // The prepare actions run the app's own controls; leaving a topic gives back the panel, the
+  // drawer and (for a topic) the chat it started on. See hooks/home/useGuide.ts.
+  const [drawerTabRequest, setDrawerTabRequest] = useState<{ tab: DrawerTab } | null>(null);
+  const guideSnapRef = useRef<GuideSnapshot | null>(null);
+  const guidePeekRef = useRef(false);
+  // A chat switch the guide makes itself must not close the guide it is about to show again.
+  const guideNavRef = useRef<number | null | undefined>(undefined);
+  const guideGoTo = (convId: number | null) => {
+    if (chat.activeConvId === convId) return;
+    guideNavRef.current = convId;
+    if (convId == null) { chat.setActiveConvId(null); return; }
+    const conv = chat.conversations.find(c => c.id === convId);
+    if (conv) void chat.selectConversation(conv);
+  };
+  const guideHost: GuideHost = {
+    screen: (a) => {
+      if (a === 'profile') { openProfile(); return; }
+      closeSettings();
+      setProfileOpen(false);
+      if (a === 'new_chat' && !isChatEmpty(chat.activeConvId, chat.messages.length, chat.loading, !!mcp.activeGate)) guideGoTo(null);
+    },
+    settings: (page) => openSettings(GUIDE_SETTINGS[page]),
+    'workspace.tab': (tab) => { setWsOpen(true); setWsTab(GUIDE_TABS[tab]); },
+    'workspace.width': (w) => { setWsOpen(true); ws.setWidth(GUIDE_WIDTHS[w]); },
+    'workspace.peek': () => { if (!ws.open) { guidePeekRef.current = true; setWsOpen(true); } },
+    // No "most recent asset" list exists: the Preview tab shows what is open, or its empty state.
+    'preview.open': () => { setWsOpen(true); setWsTab('onizleme'); },
+    drawer: (tab) => { setWsOpen(true); setIsTerminalOpen(true); setDrawerTabRequest({ tab: GUIDE_DRAWER[tab] }); },
+    menu: () => { ai.fetchAvailableModels(); setIsModelDropdownOpen(true); },
+    showGuideScreen: () => { closeSettings(); setProfileOpen(false); setIsModelDropdownOpen(false); },
+    snapshot: () => {
+      const snap: GuideSnapshot = { open: ws.open, width: ws.width, tab: ws.tab, terminal: isTerminalOpen, convId: chat.activeConvId };
+      guideSnapRef.current = snap;
+      return snap;
+    },
+    unprepare: (prep) => {
+      const snap = guideSnapRef.current;
+      if (!wants(prep, 'menu')) setIsModelDropdownOpen(false);
+      if (!wants(prep, 'drawer') && snap) setIsTerminalOpen(snap.terminal);
+      if (!wants(prep, 'workspace.peek') && guidePeekRef.current) { guidePeekRef.current = false; setWsOpen(snap?.open ?? false); }
+    },
+    restore: (s, mode) => {
+      const snap = s as GuideSnapshot | null;
+      guideSnapRef.current = null;
+      guidePeekRef.current = false;
+      setIsModelDropdownOpen(false);
+      if (!snap) return;
+      setIsTerminalOpen(snap.terminal);
+      setWsOpen(snap.open);
+      ws.setWidth(snap.width);
+      setWsTab(snap.tab);
+      // The core tour ends on the new chat; a topic goes back to the chat it started on.
+      if (mode === 'topic') guideGoTo(snap.convId);
+    },
+    focusComposer: () => {
+      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus({ preventScroll: true }));
+    },
+  };
+  const isGitRepo = !!fs.gitStatus?.isRepo;
+  const guideCtx = useMemo(() => ({ caps: capabilities({ isGitRepo }) }), [isGitRepo]);
+  const guide = useGuide({
+    ctx: guideCtx, host: guideHost, userName: me.name, saveName: me.saveName, appVersion: APP_VERSION,
+    frameReady: !!fs.workspacePath && backendReady && !auth.isLoading,
+  });
+  const { closeGuide } = guide;
+  // Another screen (settings, profile) or another chat replaces the guide.
+  useEffect(() => { if (ai.showSettings || profileOpen) closeGuide(); }, [ai.showSettings, profileOpen, closeGuide]);
+  useEffect(() => {
+    if (guideNavRef.current !== undefined && guideNavRef.current === chat.activeConvId) { guideNavRef.current = undefined; return; }
+    guideNavRef.current = undefined;
+    closeGuide();
+  }, [chat.activeConvId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const langCtxValue = { lang, setLang, t };
 
 
@@ -735,7 +827,7 @@ export default function Home() {
       data-side={isSidebarOpen ? undefined : 'closed'}
       // While the settings screen shows, the rest of the frame is hidden (settings.css), not
       // unmounted: running chats, the terminal and the editor keep their state.
-      data-screen={ai.showSettings ? 'ayarlar' : profileOpen ? 'profil' : undefined}
+      data-screen={ai.showSettings ? 'ayarlar' : profileOpen ? 'profil' : guide.guideOpen ? 'rehber' : undefined}
     >
       <Head>
         <title>{displayName(me.name) ? `Gamachine | ${displayName(me.name)}` : 'Gamachine'}</title>
@@ -760,6 +852,7 @@ export default function Home() {
         usage={usage.data} user={auth.user} API={API} http={axios} showToast={showToast as any}
         userName={me.name} onSaveName={me.saveName}
         onOpenProfile={openProfile} onProfileReset={() => { void profileStats.afterReset(); }}
+        onOpenGuide={() => guide.openGuide()} onReplayTour={() => guide.openTour(1)} tourSteps={guide.coreSteps}
       />
 
       {/* Kept mounted with the rest of the frame: the chat column is only hidden (profile.css). */}
@@ -768,6 +861,15 @@ export default function Home() {
         data={profileStats.data} range={profileStats.range} onRangeChange={profileStats.setRange}
         loading={profileStats.loading} failed={profileStats.failed} onRetry={() => { void profileStats.refresh(); }}
         userName={me.name}
+      />
+
+      {/* The guide takes the same place as the profile: the chat column and the panel are hidden. */}
+      <GuideScreen
+        open={guide.guideOpen && !ai.showSettings && !profileOpen}
+        topics={guide.topics} query={guide.query} onQuery={guide.setQuery}
+        isSeen={guide.isSeen} isNew={guide.isNew} coreSteps={guide.coreSteps}
+        onPlay={id => guide.playTopic(id)} onTour={() => guide.openTour(1)} onClose={closeGuide}
+        focusTopic={guide.focusTopic} onFocused={guide.clearFocusTopic}
       />
 
       <ExportModal
@@ -780,8 +882,8 @@ export default function Home() {
         isSidebarOpen={isSidebarOpen} sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}
         conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus}
         // Picking a chat (even the one already open) or starting one leaves the profile.
-        selectConversation={(...a: Parameters<typeof chat.selectConversation>) => { setProfileOpen(false); return chat.selectConversation(...a); }}
-        createNewConversation={(...a: Parameters<typeof chat.createNewConversation>) => { setProfileOpen(false); return chat.createNewConversation(...a); }}
+        selectConversation={(...a: Parameters<typeof chat.selectConversation>) => { setProfileOpen(false); closeGuide(); return chat.selectConversation(...a); }}
+        createNewConversation={(...a: Parameters<typeof chat.createNewConversation>) => { setProfileOpen(false); closeGuide(); return chat.createNewConversation(...a); }}
         deleteConversation={chat.deleteConversation}
         editingId={chat.editingId} setEditingId={chat.setEditingId} tempTitle={chat.tempTitle} setTempTitle={chat.setTempTitle} saveRename={chat.saveRename}
         workspacePath={fs.workspacePath} closeWorkspace={fs.closeWorkspace} isDirty={fs.isDirty} rootFolderPath={fs.rootFolderPath}
@@ -810,6 +912,8 @@ export default function Home() {
         } : null}
         profileOpen={profileOpen && !ai.showSettings}
         onOpenProfile={openProfile}
+        guideOpen={guide.guideOpen && !ai.showSettings && !profileOpen}
+        onOpenGuide={() => guide.openGuide()}
       />
 
       <header className="topbar shell">
@@ -997,6 +1101,9 @@ export default function Home() {
             onFileDrop={(entry) => chat.setChatInput(prev => prev + ` [File Attached: ${entry.path}]`)}
             onCommand={(cmd) => {
               if (cmd === '/compact') { chat.compactConversation(); return true; }
+              // "/rehber telefon": the guide opens searching "telefon"; nothing is sent.
+              const guideQuery = parseGuideCommand(cmd);
+              if (guideQuery != null) { guide.openGuide(guideQuery); return true; }
               return false;
             }}
           />
@@ -1107,10 +1214,19 @@ export default function Home() {
               apiUrl={API}
               sessionToken={auth.user?.sessionToken}
               unityConnected={ai.unityMcpStatus === 'connected'}
+              tabRequest={drawerTabRequest}
             />
           )}
         />
       </div>
+
+      {/* The tour overlay (core tour or one guide topic) over the whole frame. */}
+      {guide.tour && (
+        <GuideTour
+          tour={guide.tour} approvalMode={chat.generationMode}
+          onNext={guide.next} onBack={guide.back} onSkip={guide.skip} onNameDraft={guide.setNameDraft}
+        />
+      )}
 
       {/* The achievement band / "Done" toast: the on-screen chat finished a turn. */}
       <AchievementToast event={achievementBand} title={achievementBand?.title}

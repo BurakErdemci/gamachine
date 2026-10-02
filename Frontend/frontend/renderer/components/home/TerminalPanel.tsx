@@ -22,6 +22,9 @@ interface TerminalPanelProps {
   apiUrl?: string;
   sessionToken?: string;
   unityConnected?: boolean;
+  /** Show this tab (the guide's `drawer:<tab>` step). A new object each time, so asking for the
+   *  tab the user has since left still switches back to it. */
+  tabRequest?: { tab: DrawerTab } | null;
 }
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
@@ -148,7 +151,7 @@ interface TerminalSession {
   cwd: string | null;
 }
 
-type DrawerTab = 'terminal' | 'konsol' | 'sorunlar' | 'baglantilar';
+export type DrawerTab = 'terminal' | 'konsol' | 'sorunlar' | 'baglantilar';
 
 const ConnectionsPane: React.FC<{ apiUrl?: string }> = ({ apiUrl }) => {
   const { t } = useLang();
@@ -205,10 +208,11 @@ const DEFAULT_HEIGHT = 228;
  */
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   id, isOpen, onClose, onOpen, workspacePath, problems = [], problemsKnown = false, onProblemClick,
-  apiUrl, sessionToken, unityConnected
+  apiUrl, sessionToken, unityConnected, tabRequest
 }) => {
   const { t: ceviri } = useLang();
   const [tab, setTab] = useState<DrawerTab>('terminal');
+  useEffect(() => { if (tabRequest) setTab(tabRequest.tab); }, [tabRequest]);
   const [isMaximized, setIsMaximized] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_HEIGHT);
   const [isResizing, setIsResizing] = useState(false);

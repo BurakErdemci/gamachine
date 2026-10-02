@@ -78,6 +78,8 @@ interface CommandSuggestion {
     description: string;
     prefix: string;
     isSkill?: boolean;  // backend 'skills' listesinde mi (palette'te rozet için)
+    /** Enter on this pick runs it at once instead of completing it into the box (the guide). */
+    runs?: boolean;
 }
 
 
@@ -472,6 +474,8 @@ export function AnimatedChatInput({
     const commandSuggestions: CommandSuggestion[] = useMemo(() => {
         const builtin: CommandSuggestion[] = [
             { icon: <span>🧠</span>, label: 'Compact', description: t('composer.compactDesc'), prefix: '/compact' },
+            // The guide (round 12b). Listed under the UI language's name; the page accepts both.
+            { icon: <span>?</span>, label: lang === 'tr' ? 'Rehber' : 'Guide', description: t('guide.commandDesc'), prefix: lang === 'tr' ? '/rehber' : '/guide', runs: true },
         ];
         const skillSet = new Set(skills || []);
         const dynamic: CommandSuggestion[] = (slashCommands || []).map(name => ({
@@ -482,7 +486,7 @@ export function AnimatedChatInput({
             isSkill: skillSet.has(name),
         }));
         return [...builtin, ...dynamic];
-    }, [slashCommands, skills]);
+    }, [slashCommands, skills, lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Yazdıkça filtrele: '/' sonrası metin prefix/label içinde geçenler (perf için ilk 50)
     const filteredSuggestions = useMemo(() => {
@@ -643,6 +647,14 @@ export function AnimatedChatInput({
                 e.preventDefault();
                 if (activeSuggestion >= 0 && filteredSuggestions[activeSuggestion]) {
                     const selectedCommand = filteredSuggestions[activeSuggestion];
+                    // "/rehber" + Enter opens the guide at once (mockup); Tab still completes it.
+                    if (e.key === 'Enter' && selectedCommand.runs && onCommand?.(selectedCommand.prefix)) {
+                        setShowCommandPalette(false);
+                        setInternalValue('');
+                        setValue('');
+                        adjustHeight(true);
+                        return;
+                    }
                     setInternalValue(selectedCommand.prefix + ' ');
                     setShowCommandPalette(false);
                 }
