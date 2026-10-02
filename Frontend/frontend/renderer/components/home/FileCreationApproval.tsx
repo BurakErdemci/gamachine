@@ -2,7 +2,8 @@ import { useLang } from '../../lib/i18n';
 import { CheckCircle2, FileCode, SkipForward, XCircle, Eye } from 'lucide-react';
 import { ApprovalCard, CheckIcon } from './ApprovalCard';
 import { RiskReasonLine } from './RiskReasonLine';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { publishPendingChange } from '../../lib/pendingChange';
 
 export interface PendingFile {
   name: string;
@@ -135,6 +136,29 @@ export const FileCreationApproval = ({
     setSkipped(prev => new Set([...prev, idx]));
     advance(idx);
   };
+
+  // The workspace's Kod tab shows the file on screen with its own Accept / Reject strip. It gets
+  // THESE handlers (apply / skip the file on screen), through a ref so the strip always calls
+  // the current closure; the decision logic is not copied anywhere (lib/pendingChange.ts).
+  const decideRef = useRef({ accept: () => {}, reject: () => {} });
+  decideRef.current = {
+    accept: () => { void handleAccept(currentIdx); },
+    reject: () => handleSkip(currentIdx),
+  };
+  useEffect(() => {
+    const file = files[currentIdx];
+    if (allDone || !file) return;
+    return publishPendingChange({
+      id: `create:${currentIdx}:${file.suggestedPath}`,
+      name: file.name,
+      path: file.suggestedPath,
+      original: file.originalCode ?? '',
+      modified: file.code,
+      accept: () => decideRef.current.accept(),
+      reject: () => decideRef.current.reject(),
+      busy: processing,
+    });
+  }, [currentIdx, allDone, files, processing]);
 
   const handleAcceptAll = async () => {
     if (processing) return;

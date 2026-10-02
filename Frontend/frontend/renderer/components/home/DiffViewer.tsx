@@ -5,6 +5,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, Check, CheckCircle2, FileCode, X } from 'lucide-react';
 import { defineUnityTheme, THEME_NAME } from './monaco-theme';
 import { useLang } from '../../lib/i18n';
+import { useEffect, useId, useRef } from 'react';
+import { publishPendingChange } from '../../lib/pendingChange';
 
 export interface DiffData {
   original_code: string;
@@ -26,6 +28,22 @@ interface DiffViewerProps {
 
 export const DiffViewer = ({ diffData, filename, applied, onAccept, onReject, phonePaired }: DiffViewerProps) => {
   const { t } = useLang();
+  // While undecided, the workspace's Kod tab shows this diff with an Accept / Reject strip that
+  // calls these same two handlers (lib/pendingChange.ts); deciding there is deciding here.
+  const id = useId();
+  const handlers = useRef({ onAccept, onReject });
+  handlers.current = { onAccept, onReject };
+  useEffect(() => {
+    if (applied) return;
+    return publishPendingChange({
+      id: `fix:${id}`,
+      name: filename || t('diff.fileFallback'),
+      original: diffData.original_code,
+      modified: diffData.fixed_code,
+      accept: () => handlers.current.onAccept(diffData.fixed_code),
+      reject: () => handlers.current.onReject(),
+    });
+  }, [applied, diffData, filename, id, t]);
   return (
   <AnimatePresence mode="wait">
     {applied ? (
