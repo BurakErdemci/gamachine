@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { IntroOverlay, pickIntroScene } from '../renderer/components/intro/IntroOverlay'
+import { INTRO_SAFETY_MS, IntroOverlay, pickIntroScene } from '../renderer/components/intro/IntroOverlay'
 import { INTRO_MARKUP, renderIntroMarkup, type IntroTexts } from '../renderer/components/intro/introMarkup'
 import { AppearanceContext, AppearanceProvider, DEFAULTS } from '../renderer/lib/appearance'
 import { LangContext, ceviriUygula, type Lang } from '../renderer/lib/i18n'
@@ -298,7 +298,8 @@ describe('IntroOverlay', () => {
     const view = mount()
     const wrapper = view.container.querySelector('.intro-overlay')!
     const removeOverlay = vi.spyOn(wrapper, 'removeEventListener')
-    expect(vi.getTimerCount()).toBe(1)
+    // scene 2's offset timer + the INTRO_SAFETY_MS dismissal timer
+    expect(vi.getTimerCount()).toBe(2)
     view.unmount()
     expect(removeWindow).toHaveBeenCalledWith('keydown', expect.any(Function), true)
     expect(removeDocument).toHaveBeenCalledWith('focusin', expect.any(Function), true)
@@ -309,5 +310,22 @@ describe('IntroOverlay', () => {
     expect(document.documentElement.hasAttribute('data-scene')).toBe(false)
     act(() => vi.advanceTimersByTime(10000))
     expect(document.documentElement.classList.contains('intro-run')).toBe(false)
+  })
+
+  it('fits the 1600x1000 stage into the window', () => {
+    vi.stubGlobal('innerWidth', 2560)
+    vi.stubGlobal('innerHeight', 1343)
+    const view = mount()
+    const wrapper = view.container.querySelector<HTMLElement>('.intro-overlay')!
+    expect(wrapper.style.getPropertyValue('--intro-fit')).toBe(String(1343 / 1000))
+  })
+
+  it('dismisses itself after INTRO_SAFETY_MS even when no scene ever ends', () => {
+    const view = mount()
+    expect(view.container.querySelector('#ov')).not.toBeNull()
+    act(() => vi.advanceTimersByTime(INTRO_SAFETY_MS))
+    expect(view.container.querySelector('#ov')).toBeNull()
+    act(() => vi.advanceTimersByTime(1000))
+    expect(document.documentElement.hasAttribute('data-intro')).toBe(false)
   })
 })

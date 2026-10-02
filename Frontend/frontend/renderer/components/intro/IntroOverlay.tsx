@@ -4,6 +4,9 @@ import { useLang } from '../../lib/i18n'
 import { renderIntroMarkup } from './introMarkup'
 
 const OFF: Record<number, number> = { 1: 0, 2: 600, 3: 0, 4: 0, 5: 0 }
+// The longest scene ends at ~8 s. Past this the overlay is dismissed whatever state it is in, so a
+// scene that never started (or lost its listeners) can never leave a screen that cannot be skipped.
+export const INTRO_SAFETY_MS = 12_000
 
 export function pickIntroScene(): number {
   let last = 0
@@ -22,6 +25,10 @@ export function IntroOverlay() {
   const [visible, setVisible] = useState(false)
   const chosenScene = useRef<number | null>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
+  // The running scene's `end`, for the safety net below; null while no scene is wired up.
+  const endRef = useRef<((skip: boolean) => void) | null>(null)
+  // The 1 s handoff after a scene ends outlives that scene's effect; only unmount cancels it.
+  const handoffRef = useRef<{ timer?: ReturnType<typeof setTimeout>; clean?: () => void }>({})
 
   useEffect(() => {
     // The provider initially exposes defaults; consult storage before showing even one frame.
@@ -34,13 +41,16 @@ export function IntroOverlay() {
 
   useEffect(() => {
     const wrapper = wrapperRef.current
-    if (scene === null || !wrapper) return
+    // Keyed on `visible` too: the overlay could be shown again with a fresh wrapper (dev hot reload
+    // re-runs the mount effect) while `scene` stayed the same, and a [scene]-only effect then never
+    // wired the new wrapper up: an overlay with no scene classes and no skip listeners, frozen on
+    // screen (measured twice on 2 Oct).
+    if (scene === null || !visible || !wrapper) return
     const root = document.documentElement
     const intro = wrapper.querySelector('#ov')
     const run = scene === 1 ? 'run' : `run${scene}`
     let ended = false
     let offsetTimer: ReturnType<typeof setTimeout> | undefined
-    let cleanupTimer: ReturnType<typeof setTimeout> | undefined
 
     const siblings = Array.from(document.querySelectorAll<HTMLElement>('#__next > *'))
       .filter(element => element !== wrapper && !element.contains(wrapper))
@@ -92,7 +102,7 @@ export function IntroOverlay() {
       setVisible(false)
       // The overlay ends just before the last app entrance does. Keep its fill styles until
       // every panel has arrived; one second after dismissal also clears the skip handoff.
-      cleanupTimer = setTimeout(cleanRoot, 1000)
+      handoffRef.current = { timer: setTimeout(cleanRoot, 1000), clean: cleanRoot }
     }
     function onClick() { end(true) }
     function onKeyDown(event: KeyboardEvent) {
@@ -114,6 +124,7 @@ export function IntroOverlay() {
     fit()
     window.addEventListener('resize', fit)
 
+    endRef.current = end
     root.setAttribute('data-intro', '')
     root.setAttribute('data-scene', String(scene))
     root.classList.add(run)
@@ -127,19 +138,30 @@ export function IntroOverlay() {
 
     return () => {
       clearTimeout(offsetTimer)
-      clearTimeout(cleanupTimer)
       detachListeners()
       window.removeEventListener('resize', fit)
+      endRef.current = null
+      // An ended scene keeps its root classes for the 1 s handoff (see `end`).
       if (!ended) {
         releaseFocus()
-        // This cleanup strips the scene classes and the skip listeners. An overlay left up after
-        // it is frozen and cannot be dismissed (measured 2 Oct after a dev hot reload: overlay
-        // present, no run class, no listeners), so it goes with them.
-        setVisible(false)
+        cleanRoot()
       }
-      cleanRoot()
     }
-  }, [scene])
+  }, [scene, visible])
+
+  useEffect(() => () => {
+    clearTimeout(handoffRef.current.timer)
+    handoffRef.current.clean?.()
+  }, [])
+
+  useEffect(() => {
+    if (!visible) return
+    const timer = setTimeout(() => {
+      if (endRef.current) endRef.current(true)
+      else setVisible(false)
+    }, INTRO_SAFETY_MS)
+    return () => clearTimeout(timer)
+  }, [visible])
 
   if (!visible) return null
   // The design markup is static and trusted; only HTML-escaped i18n strings are dynamic.
