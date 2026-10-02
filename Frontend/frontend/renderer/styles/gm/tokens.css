@@ -585,7 +585,7 @@
   --heat-0: #2A2539; --heat-1: #493F69; --heat-2: #665696; --heat-3: #836EC4; --heat-4: #A68BFA;
   --xp: #BAB3CC; --xp-off: #2A2539;  /* the XP meter stays muted: the accent only means "your turn" */
   --hero-text: #E6E2F0; --hero-dim: #BAB3CC; --hero-quip-bg: #201C2D; --hero-on: #13111B;
-  --mascot-body: #57516A; --mascot-visor: #A68BFA; --mascot-screen: #13111B; --mascot-eye: #E6E2F0;
+  --mascot-body: #4E4380; --mascot-visor: #A68BFA; --mascot-screen: #13111B; --mascot-eye: #E6E2F0;
   --mascot-line: #13111B; --mascot-tile: #221E30; --mascot-outline: var(--mascot-body);
   --ed-bg: #131119; --ed-head-bg: #13111B; --ed-line: #24202F; --ed-text: #DCD7E8; --ed-dim: #9189A7; --ed-tab-mark: #A68BFA;
   --diff-add-bg: #1D2426; --diff-del-bg: #291D26; --diff-add-mark: #8FD9B0; --diff-del-mark: #F6A1B2;
@@ -711,9 +711,9 @@
   --hero-quip-bg: #E6E1D5;
   --hero-on: #EEEAE1;
   --hero-pad: 22px 26px;
-  /* mascot drawn in the shell's inks: graphite body, blue-grey visor, paper eyes */
+  /* mascot in the shell's inks with the sheet's red-pencil visor: grey alone read as black and white on paper (Burak, 2 Oct) */
   --mascot-body: #2E3A48;
-  --mascot-visor: #8C9BAC;
+  --mascot-visor: #C23B2A;
   --mascot-screen: #11171F;
   --mascot-eye: #E6E1D5;
   --mascot-tile: #11171F;
@@ -945,9 +945,9 @@
   --hero-quip-bg: #352D25;
   --hero-on: #1E1A16;
   --hero-pad: 24px 28px;
-  /* mascot in walnut and dull brass-steel; no bright visor */
+  /* mascot in walnut with a polished-brass visor: the dull steel read as grey (Burak, 2 Oct) */
   --mascot-body: #3A3027;
-  --mascot-visor: #A39581;
+  --mascot-visor: #D98A2B;
   --mascot-screen: #15120F;
   --mascot-eye: #EDE5D8;
   --mascot-tile: #2A231C;
