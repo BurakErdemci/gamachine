@@ -36,12 +36,17 @@ vi.mock('../main/helpers/ipc-trust', () => ({
 vi.mock('../main/helpers/csp', () => ({ applyContentSecurityPolicy: vi.fn() }))
 
 const consulted: string[] = []
+const refuse = (channel: string) => {
+  consulted.push(channel)
+  throw new Error(`IPC channel izinsiz: ${channel}`)
+}
+// Registration goes through assertRegistrableChannel since the preload-only drop
+// channel (2 Oct 2026); both checks refuse everything here.
 vi.mock('../main/helpers/ipc-whitelist', () => ({
   ALLOWED_INVOKE_CHANNELS: new Set<string>(),
-  assertAllowedInvokeChannel: (channel: string) => {
-    consulted.push(channel)
-    throw new Error(`IPC channel izinsiz: ${channel}`)
-  },
+  PRELOAD_ONLY_CHANNELS: new Set<string>(),
+  assertAllowedInvokeChannel: refuse,
+  assertRegistrableChannel: refuse,
 }))
 
 it('the main process serves no channel the permitted list rejects', async () => {
