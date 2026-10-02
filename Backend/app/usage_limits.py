@@ -298,10 +298,10 @@ def _consume_task_result(task):
         task.exception()
 
 
-def _spawn_options():
-    if os.name == "nt":
-        return {"creationflags": subprocess.CREATE_NO_WINDOW}
-    return {"start_new_session": True}
+# Spelled out as plain keyword arguments at each spawn, not a **dict: the spawn-env gate
+# (tests/test_spawn_env_gate.py) cannot prove a splatted dict leaves `env` alone.
+_CREATIONFLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+_NEW_SESSION = os.name != "nt"
 
 
 async def _kill_probe(proc):
@@ -350,7 +350,8 @@ async def fetch_codex_usage():
                 *_resolve_codex_appserver_cmd(), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 env=build_spawn_env(family="codex", overrides={"NO_COLOR": "1"}),
-                cwd=_neutral_cwd(), limit=_APP_SERVER_STREAM_LIMIT, **_spawn_options())
+                cwd=_neutral_cwd(), limit=_APP_SERVER_STREAM_LIMIT,
+                creationflags=_CREATIONFLAGS, start_new_session=_NEW_SESSION)
 
             async def send(message):
                 proc.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
@@ -392,7 +393,8 @@ async def fetch_agy_usage():
                 *BaseCLIProvider._resolve_exec([binary, "-p", "/usage", "--output-format", "json"]),
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, env=build_spawn_env(family="agy"),
-                cwd=_neutral_cwd(), **_spawn_options())
+                cwd=_neutral_cwd(),
+                creationflags=_CREATIONFLAGS, start_new_session=_NEW_SESSION)
             stdout, stderr = await proc.communicate()
             if proc.returncode:
                 raise RuntimeError(f"Antigravity usage failed ({proc.returncode}): {stderr.decode('utf-8', errors='replace')[:500]}")
