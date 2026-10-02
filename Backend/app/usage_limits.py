@@ -1,0 +1,437 @@
+"""Cached subscription limits, independent of conversation sessions."""
+import asyncio
+import copy
+import json
+import math
+import os
+import re
+import shutil
+import signal
+import subprocess
+import time
+from datetime import datetime, timedelta, timezone
+
+
+FAMILIES = ("claude", "codex", "agy")
+# Local /usage queries need no model turn (usage spike, 2 Oct 2026).
+FETCH_TIMEOUT_S = 45
+_MONTHS = {name: i for i, name in enumerate(
+    ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
+
+
+def _utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _object(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _pct(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Non-finite usage percentage")
+    return max(0, min(100, round(number)))
+
+
+def _claude_reset(text, now):
+    match = re.match(r"^([A-Za-z]{3})\s+(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?(am|pm)(?:\s|$)",
+                     text, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        month, day, hour, minute, meridiem = match.groups()
+        hour = int(hour)
+        if not 1 <= hour <= 12:
+            return None
+        local_now = now.astimezone().replace(tzinfo=None) if now.tzinfo else now
+        local = datetime(local_now.year, _MONTHS[month.title()], int(day),
+                         hour % 12 + (12 if meridiem.lower() == "pm" else 0), int(minute or 0))
+        if local < local_now - timedelta(days=1):
+            local = local.replace(year=local.year + 1)
+        # CLI zone annotations describe the machine's local zone, not an IANA lookup.
+        # Windows has no tz database in this venv (usage spike, 2 Oct 2026).
+        return local.astimezone(timezone.utc).isoformat()
+    except (ValueError, KeyError, OverflowError, OSError):
+        return None
+
+
+def parse_claude_usage(text, now=None):
+    result = {"plan": None, "windows": []}
+    if not isinstance(text, str):
+        return result
+    now = now or datetime.now()
+    for line in text.splitlines():
+        match = re.match(r"^\s*(Current session|Current week \(([^)]+)\)):\s*(\d+)% used\s*.*?resets\s+(.+?)\s*$", line)
+        if not match:
+            continue
+        label, model, percentage, reset = match.groups()
+        group = model if model and model != "all models" else None
+        kind = "5h" if label == "Current session" else "week"
+        identifier = "session" if kind == "5h" else (f"week-{group.lower()}" if group else "week")
+        result["windows"].append({
+            "id": identifier, "group": group, "label": label, "kind": kind,
+            "used_pct": _pct(percentage), "resets_at": _claude_reset(reset, now),
+            "resets_text": reset,
+        })
+    return result
+
+
+def parse_codex_ratelimits(result):
+    limits = _object(_object(result).get("rateLimits"))
+    plan = limits.get("planType")
+    parsed = {"plan": plan if isinstance(plan, str) else None, "windows": []}
+    for name in ("primary", "secondary"):
+        window = _object(limits.get(name))
+        try:
+            minutes = int(window["windowDurationMins"])
+            if minutes <= 0:
+                continue
+            used = _pct(window["usedPercent"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        kind = "5h" if minutes < 1440 else "week"
+        identifier = {300: "5h", 10080: "week"}.get(minutes, f"w{minutes}")
+        reset = None
+        try:
+            reset = datetime.fromtimestamp(float(window["resetsAt"]), timezone.utc).isoformat()
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            pass
+        parsed["windows"].append({
+            "id": identifier, "group": None,
+            "label": "5-hour limit" if minutes == 300 else ("Weekly limit" if minutes == 10080 else f"{minutes}-minute limit"),
+            "kind": kind, "used_pct": used, "resets_at": reset, "resets_text": None,
+        })
+    return parsed
+
+
+def parse_agy_usage(obj):
+    parsed = {"plan": None, "windows": []}
+    groups = _object(_object(_object(obj).get("command")).get("data")).get("groups")
+    if not isinstance(groups, list):
+        return parsed
+    for group in groups:
+        group = _object(group)
+        buckets = group.get("buckets")
+        if not isinstance(buckets, list):
+            continue
+        for bucket in buckets:
+            bucket = _object(bucket)
+            if bucket.get("window") not in ("5h", "weekly") or not isinstance(bucket.get("id"), str):
+                continue
+            try:
+                used = _pct((1 - float(bucket["remaining_fraction"])) * 100)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            parsed["windows"].append({
+                "id": bucket["id"], "group": group.get("name") if isinstance(group.get("name"), str) else None,
+                "label": bucket.get("name") if isinstance(bucket.get("name"), str) else bucket["id"],
+                "kind": "5h" if bucket["window"] == "5h" else "week",
+                "used_pct": used, "resets_at": bucket.get("reset_time") if isinstance(bucket.get("reset_time"), str) else None,
+                "resets_text": None,
+            })
+    return parsed
+
+
+class CLIUnavailable(RuntimeError):
+    """No resolvable CLI; retrying cannot produce data in this process."""
+
+
+def _claude_binary():
+    from providers.claude_sdk_session import claude_ikilisini_coz
+    resolved = claude_ikilisini_coz()
+    if not resolved and not shutil.which("claude"):
+        raise CLIUnavailable("Claude CLI is not installed")
+    return resolved
+
+
+def _agy_binary():
+    from providers.agy_provider import AgyProvider
+    binary = AgyProvider._agy_binary()
+    if not shutil.which("agy") and not os.path.isfile(binary):
+        raise CLIUnavailable("Antigravity CLI is not installed")
+    return binary
+
+
+def _neutral_cwd():
+    database = os.environ.get("DB_PATH")
+    return os.path.dirname(os.path.abspath(database)) if database else os.path.expanduser("~/.unity_architect_ai")
+
+
+class ClaudeUsageProbe:
+    """Own one lazy SDK connection, so SessionStart hooks run only at connect."""
+
+    def __init__(self, cwd=None, client_factory=None):
+        self.cwd = cwd or _neutral_cwd()
+        self._factory = client_factory
+        self._client = None
+        self._lock = asyncio.Lock()
+        self._requests = asyncio.Queue()
+        self._runner = None
+        self._closed = False
+
+    def _new_client(self):
+        if self._factory is not None:
+            return self._factory()
+        from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+        from providers.claude_sdk_session import CLAUDE_SETTING_SOURCES
+        binary = _claude_binary()
+        options = dict(cwd=self.cwd, setting_sources=list(CLAUDE_SETTING_SOURCES), strict_mcp_config=True)
+        if binary:
+            options["cli_path"] = binary
+        return ClaudeSDKClient(options=ClaudeAgentOptions(**options))
+
+    async def _disconnect(self):
+        client, self._client = self._client, None
+        if client is not None:
+            await client.disconnect()
+
+    async def _query(self):
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+        try:
+            async with asyncio.timeout(FETCH_TIMEOUT_S):
+                if self._client is None:
+                    self._client = self._new_client()
+                    await self._client.connect()
+                await self._client.query("/usage")
+                texts = []
+                async for message in self._client.receive_response():
+                    if isinstance(message, AssistantMessage):
+                        texts.extend(block.text for block in message.content if isinstance(block, TextBlock))
+                    elif isinstance(message, ResultMessage):
+                        if message.is_error:
+                            raise RuntimeError("Claude usage query failed")
+                        return parse_claude_usage("\n".join(texts))
+                raise RuntimeError("Claude usage stream ended before a result")
+        except BaseException:
+            await self._disconnect()
+            raise
+
+    async def _serve(self):
+        # SDK/AnyIO connection scopes must be entered and exited in one task.
+        # HTTP refresh tasks are short-lived; this owner lasts until shutdown.
+        try:
+            while True:
+                response = await self._requests.get()
+                if response is None:
+                    break
+                try:
+                    parsed = await self._query()
+                except asyncio.CancelledError:
+                    if not response.done():
+                        response.cancel()
+                    raise
+                except Exception as error:
+                    if not response.done():
+                        response.set_exception(error)
+                else:
+                    if not response.done():
+                        response.set_result(parsed)
+        finally:
+            await self._disconnect()
+
+    async def fetch(self):
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("Claude usage probe is closed")
+            if self._runner is None or self._runner.done():
+                self._runner = asyncio.create_task(self._serve())
+            response = asyncio.get_running_loop().create_future()
+            self._requests.put_nowait(response)
+            try:
+                return await response
+            except asyncio.CancelledError:
+                self._runner.cancel()
+                await asyncio.gather(self._runner, return_exceptions=True)
+                raise
+
+    async def aclose(self):
+        async with self._lock:
+            self._closed = True
+            if self._runner is not None and not self._runner.done():
+                self._requests.put_nowait(None)
+                await self._runner
+
+
+def _spawn_options():
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {"start_new_session": True}
+
+
+async def _kill_probe(proc):
+    """Kill the owned tree, including native CLI children of npm launchers."""
+    if proc is None:
+        return
+    if proc.returncode is None:
+        if os.name == "nt":
+            # One bounded cleanup helper per owned probe; never match by name.
+            try:
+                await asyncio.to_thread(subprocess.run,
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW, timeout=5, check=False)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            finally:
+                if proc.returncode is None:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    await proc.wait()
+
+
+async def fetch_codex_usage():
+    if not shutil.which("codex"):
+        raise CLIUnavailable("Codex CLI is not installed")
+    from providers.cli_base import build_spawn_env
+    from providers.codex_session import _APP_SERVER_STREAM_LIMIT, _resolve_codex_appserver_cmd
+    proc = None
+    try:
+        async with asyncio.timeout(FETCH_TIMEOUT_S):
+            proc = await asyncio.create_subprocess_exec(
+                *_resolve_codex_appserver_cmd(), stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                env=build_spawn_env(family="codex", overrides={"NO_COLOR": "1"}),
+                cwd=_neutral_cwd(), limit=_APP_SERVER_STREAM_LIMIT, **_spawn_options())
+
+            async def send(message):
+                proc.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
+                await proc.stdin.drain()
+
+            async def receive(identifier):
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        raise RuntimeError("Codex usage process exited before a response")
+                    try:
+                        message = json.loads(line)
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+                    if not isinstance(message, dict) or message.get("id") != identifier:
+                        continue
+                    if "error" in message:
+                        raise RuntimeError(f"Codex usage request failed: {message['error']}")
+                    if "result" in message:
+                        return message["result"]
+
+            await send({"id": 1, "method": "initialize", "params": {
+                "clientInfo": {"name": "gamachine", "version": "0.1.0"}}})
+            await receive(1)
+            await send({"method": "initialized"})
+            await send({"id": 2, "method": "account/rateLimits/read", "params": {}})
+            return parse_codex_ratelimits(await receive(2))
+    finally:
+        await _kill_probe(proc)
+
+
+async def fetch_agy_usage():
+    from providers.cli_base import BaseCLIProvider, build_spawn_env
+    binary = _agy_binary()
+    proc = None
+    try:
+        async with asyncio.timeout(FETCH_TIMEOUT_S):
+            proc = await asyncio.create_subprocess_exec(
+                *BaseCLIProvider._resolve_exec([binary, "-p", "/usage", "--output-format", "json"]),
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, env=build_spawn_env(family="agy"),
+                cwd=_neutral_cwd(), **_spawn_options())
+            stdout, stderr = await proc.communicate()
+            if proc.returncode:
+                raise RuntimeError(f"Antigravity usage failed ({proc.returncode}): {stderr.decode('utf-8', errors='replace')[:500]}")
+            return parse_agy_usage(json.loads(stdout))
+    finally:
+        await _kill_probe(proc)
+
+
+class UsageService:
+    def __init__(self, fetchers: dict | None = None, clock=time.monotonic, ttl_s=120):
+        self._clock = clock
+        self._ttl = ttl_s
+        self._closed = False
+        self._tasks = {}
+        self._measured = {}
+        self._probe = ClaudeUsageProbe() if fetchers is None else None
+        self._fetchers = ({"claude": self._probe.fetch, "codex": fetch_codex_usage, "agy": fetch_agy_usage}
+                          if fetchers is None else dict(fetchers))
+        self._cache = {family: {
+            "family": family, "status": "loading" if self._fetchers.get(family) else "unavailable",
+            "plan": None, "measured_at": None, "stale": False, "error": None, "windows": [],
+        } for family in FAMILIES}
+
+    def _start_refresh(self, family):
+        if self._closed or self._cache[family]["status"] == "unavailable":
+            return None
+        task = self._tasks.get(family)
+        if task is None or task.done():
+            task = asyncio.create_task(self._perform_refresh(family))
+            self._tasks[family] = task
+        return task
+
+    def snapshot(self, force=False):
+        now = self._clock()
+        for family in FAMILIES:
+            measured = self._measured.get(family)
+            if force or measured is None or now - measured >= self._ttl:
+                self._start_refresh(family)
+        entries = copy.deepcopy([self._cache[family] for family in FAMILIES])
+        for entry in entries:
+            family = entry["family"]
+            measured = self._measured.get(family)
+            entry["stale"] = entry["status"] == "error" or (measured is not None and (
+                now - measured >= self._ttl or family in self._tasks))
+        return {"families": entries, "now": _utc_now()}
+
+    async def _perform_refresh(self, family):
+        entry = self._cache[family]
+        try:
+            # Bound injected fetchers as well as the three production probes.
+            async with asyncio.timeout(FETCH_TIMEOUT_S):
+                parsed = await self._fetchers[family]()
+            entry.update(status="ok", plan=parsed.get("plan"), windows=copy.deepcopy(parsed["windows"]),
+                         measured_at=_utc_now(), error=None)
+            self._measured[family] = self._clock()
+        except CLIUnavailable as error:
+            entry.update(status="unavailable", error=str(error))
+        except asyncio.CancelledError:
+            if entry["measured_at"] is None:
+                entry.update(status="error", error="Usage service closed")
+            raise
+        except Exception as error:
+            entry.update(status="error", error=str(error) or type(error).__name__)
+        finally:
+            self._tasks.pop(family, None)
+
+    async def refresh(self, family):
+        if family not in FAMILIES:
+            raise ValueError(f"Unknown usage family: {family}")
+        task = self._start_refresh(family)
+        if task is not None:
+            await asyncio.shield(task)
+
+    async def wait_for_refreshes(self, timeout_s=50):
+        pending = tuple(self._tasks.values())
+        if pending:
+            # Waiting for HTTP responses never cancels service-owned probes.
+            await asyncio.wait(pending, timeout=timeout_s)
+
+    async def aclose(self):
+        self._closed = True
+        tasks = tuple(self._tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
+        for entry in self._cache.values():
+            if entry["status"] == "loading":
+                entry.update(status="error", error="Usage service closed")
+        owners = {getattr(fetcher, "__self__", None) for fetcher in self._fetchers.values()}
+        for owner in owners:
+            if owner is not None and hasattr(owner, "aclose"):
+                await owner.aclose()

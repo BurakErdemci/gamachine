@@ -128,6 +128,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from error_i18n import localized_http_exception_handler
 
 from database import DatabaseManager
+from usage_limits import UsageService
 from routes import (
     create_analysis_router,
     create_auth_router,
@@ -139,6 +140,7 @@ from routes import (
     create_transcribe_router,
     create_remote_router,
     create_profile_router,
+    create_usage_router,
 )
 
 
@@ -231,6 +233,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await usage_service.aclose()
+
     try:
         await remote_bridge.shutdown()
     except Exception as e:
@@ -315,6 +319,7 @@ app = FastAPI(
 )
 app.add_exception_handler(StarletteHTTPException, localized_http_exception_handler)
 db = DatabaseManager(db_path=db_path)
+usage_service = UsageService()
 PROGRESS_STORE = {}
 
 from agentic import approval_mode  # noqa: E402
@@ -348,6 +353,7 @@ app.include_router(create_lsp_router(db))
 _conversation_router = create_conversation_router(db, PROGRESS_STORE)
 app.include_router(_conversation_router)
 app.include_router(create_profile_router(db))
+app.include_router(create_usage_router(usage_service))
 app.include_router(create_mcp_router())
 app.include_router(create_transcribe_router(db))
 
