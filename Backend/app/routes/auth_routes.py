@@ -1,6 +1,8 @@
 import os
+import unicodedata
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel, StrictStr
 from auth_utils import _check_token
 
 # Where docker-compose.yml binds the host workspace. The container cannot learn
@@ -25,15 +27,35 @@ from workspace_fingerprint import (  # noqa: E402
 )
 
 
+class DisplayNameBody(BaseModel):
+    name: StrictStr
+
+
 def create_auth_router(db):
     router = APIRouter()
 
     @router.get("/me")
     async def get_me(x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
+        name = db.get_setting("user_display_name")
+        name = name if isinstance(name, str) and name else "local"
         # user_id, username, name, avatar — eski frontend uyumluluğu
-        return {"user_id": 1, "id": 1, "username": "local", "name": "local",
+        return {"user_id": 1, "id": 1, "username": "local", "name": name,
                 "email": "local@localhost", "avatar": ""}
+
+    @router.put("/me/name")
+    async def put_name(body: DisplayNameBody,
+                       x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        # Display name, 2 Oct 2026: remove invisible controls before counting or storing.
+        name = "".join(char for char in body.name if unicodedata.category(char) not in {"Cc", "Cf"})
+        name = " ".join(name.split())
+        if len(name) > 40:
+            raise HTTPException(status_code=422, detail="name_too_long")
+        if name.lower() == "local":
+            name = ""
+        db.set_setting("user_display_name", name)
+        return {"name": name}
 
     @router.get("/health/auth")
     async def health_auth(x_session_token: str = Header(alias="X-Session-Token", default="")):

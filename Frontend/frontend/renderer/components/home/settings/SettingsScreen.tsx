@@ -46,6 +46,8 @@ export interface SettingsScreenProps {
   onRemoteStatus?: (status: RemoteStatus) => void;
   usage?: UsageLimits | null;
   user?: UserData | null;
+  userName?: string;
+  onSaveName?: (name: string) => Promise<boolean>;
   API?: string;
   http?: { get: (...a: any[]) => Promise<any>; post: (...a: any[]) => Promise<any> };
   showToast?: Toast;
@@ -152,7 +154,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
       </button>
     </li>
   );
-  const name = displayName(user?.name) || t('set.me.anon');
+  const name = displayName(props.userName ?? user?.name) || t('set.me.anon');
 
   return (
     <section className="settings" aria-label={t('set.title')} data-set={page} data-testid="settings-screen">
@@ -232,6 +234,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
           )}
           {page === 'hesap' && (
             <AccountPage user={user} onLogout={props.onLogout} onOpenProfile={props.onOpenProfile}
+              userName={props.userName} onSaveName={props.onSaveName}
               onProfileReset={props.onProfileReset} saved={saved} showToast={props.showToast} />
           )}
         </article>

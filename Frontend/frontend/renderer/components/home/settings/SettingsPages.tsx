@@ -306,8 +306,10 @@ export const ApprovalPage = ({ mode, onChange, saved }: {
 
 // ───────────────────────────── Hesap ─────────────────────────────
 
-export const AccountPage = ({ user, onLogout, onOpenProfile, onProfileReset, saved, showToast }: {
+export const AccountPage = ({ user, userName, onSaveName, onLogout, onOpenProfile, onProfileReset, saved, showToast }: {
   user?: UserData | null;
+  userName?: string;
+  onSaveName?: (name: string) => Promise<boolean>;
   onLogout: () => void;
   /** The hero row's "Yapımcı profili" button (mockup round 11 hesap page). */
   onOpenProfile?: () => void;
@@ -317,7 +319,23 @@ export const AccountPage = ({ user, onLogout, onOpenProfile, onProfileReset, sav
   showToast?: (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }) => {
   const { t } = useLang();
-  const name = displayName(user?.name) || t('set.me.anon');
+  const currentName = displayName(userName ?? user?.name);
+  const name = currentName || t('set.me.anon');
+  const [nameInput, setNameInput] = React.useState(currentName);
+  const [savingName, setSavingName] = React.useState(false);
+  React.useEffect(() => { setNameInput(currentName); }, [currentName]);
+  const saveName = async () => {
+    if (!onSaveName || savingName || nameInput.trim() === currentName) return;
+    setSavingName(true);
+    try {
+      if (await onSaveName(nameInput)) saved?.();
+      else showToast?.(t('set.hesap.nameFailed'), 'error');
+    } catch {
+      showToast?.(t('set.hesap.nameFailed'), 'error');
+    } finally {
+      setSavingName(false);
+    }
+  };
   const [resetting, setResetting] = React.useState(false);
   // POST /profile/reset needs the UI secret, which only the main process holds: the renderer
   // asks through the 'profile-reset' channel (main/helpers/profile-reset.ts).
@@ -353,6 +371,26 @@ export const AccountPage = ({ user, onLogout, onOpenProfile, onProfileReset, sav
               </button>
             )}
           </div>
+          {onSaveName && (
+            <SetRow name={t('set.hesap.name')} hint={t('set.hesap.nameHint')} control={(
+              <span className="set-field">
+                <input className="set-input" type="text" data-testid="settings-name-input"
+                  maxLength={40} autoComplete="off" placeholder={t('set.hesap.namePlaceholder')}
+                  aria-label={t('set.hesap.name')} value={nameInput} disabled={savingName}
+                  onChange={e => setNameInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { e.preventDefault(); void saveName(); }
+                    // Display name, 2 Oct 2026: restore the draft before the screen sees Esc.
+                    if (e.key === 'Escape') { e.preventDefault(); setNameInput(currentName); e.currentTarget.blur(); }
+                  }}
+                />
+                <button type="button" data-testid="settings-name-save" className="btn btn-ghost btn-sm"
+                  disabled={savingName || nameInput.trim() === currentName} onClick={() => { void saveName(); }}>
+                  {t('set.hesap.nameSave')}
+                </button>
+              </span>
+            )} />
+          )}
           <SetRow name={t('set.hesap.version')} hint={<>Gamachine <span className="num">{APP_VERSION}</span></>} />
         </SetCard>
       </SetGroup>

@@ -201,9 +201,11 @@ describe('workspace polish regressions', () => {
     visit(source)
     expect(expression).not.toBe('')
     const js = ts.transpile(`(${expression})`, { target: ts.ScriptTarget.ES2020 })
-    const title = new Function('auth', 'displayName', `return ${js}`)
-    expect(title({ user: { name: 'local' } }, displayName)).toBe('Gamachine')
-    expect(title({ user: { name: ' Burak ' } }, displayName)).toBe('Gamachine | Burak')
+    // The name now comes from useDisplayName (`me`), not auth.user (display name, 2 Oct 2026).
+    const title = new Function('me', 'displayName', `return ${js}`)
+    expect(title({ name: 'local' }, displayName)).toBe('Gamachine')
+    expect(title({ name: '' }, displayName)).toBe('Gamachine')
+    expect(title({ name: ' Burak ' }, displayName)).toBe('Gamachine | Burak')
   })
   it.each(['path', 'workspace', 'ipc'])('G6 missing %s warns without writes or optimistic edits and stays pending', async missing => {
     const props = panelProps()

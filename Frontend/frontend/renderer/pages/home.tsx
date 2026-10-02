@@ -30,6 +30,7 @@ import { ToastContainer } from '../components/ui/Toast';
 
 import { useAppInitialization } from '../hooks/home/useAppInitialization';
 import { useAuth } from '../hooks/home/useAuth';
+import { useDisplayName } from '../hooks/home/useDisplayName';
 import { useFileSystem } from '../hooks/home/useFileSystem';
 import { useChat } from '../hooks/home/useChat';
 import { useAutoChatTitles } from '../hooks/home/useAutoChatTitles';
@@ -87,6 +88,7 @@ export default function Home() {
   // ve bunu 10/10 mutasyon bile göremedi (hepsi hook state'ine bakıyordu).
   const { API, backendReady, backendError, showToast, toasts, dismissToast } = useAppInitialization();
   const auth = useAuth(API, backendReady);
+  const me = useDisplayName(API, !auth.isLoading);
   const fs = useFileSystem(API, auth.user, showToast as any);
   const ai = useAIConfig(API, auth.user, showToast as any, fs.workspacePath);
   const hasAutoLoadedRef = useRef(false);
@@ -640,7 +642,7 @@ export default function Home() {
             olmadan) pencere komple boşalırdı. Ad yerine boş metin: yanlış bir
             ad göstermektense selamlamayı adsız bırakmak dürüst olan. */}
         <WorkspaceScreen
-          userName={auth.user?.name ?? ''} lastWorkspacePath={fs.lastWorkspacePath}
+          userName={me.name} lastWorkspacePath={fs.lastWorkspacePath}
           onOpenWorkspaceDialog={fs.openFolder} onSelectLastWorkspace={() => fs.selectWorkspace(fs.lastWorkspacePath!)}
           onLogout={handleLogout}
         />
@@ -730,7 +732,7 @@ export default function Home() {
       data-screen={ai.showSettings ? 'ayarlar' : profileOpen ? 'profil' : undefined}
     >
       <Head>
-        <title>{displayName(auth.user?.name) ? `Gamachine | ${displayName(auth.user?.name)}` : 'Gamachine'}</title>
+        <title>{displayName(me.name) ? `Gamachine | ${displayName(me.name)}` : 'Gamachine'}</title>
         <style>{globalStyles}</style>
       </Head>
 
@@ -750,6 +752,7 @@ export default function Home() {
         onToggleDictationAutoLang={dictation.toggleAutoLanguageCpu}
         onRemoteStatus={remote.setStatus}
         usage={usage.data} user={auth.user} API={API} http={axios} showToast={showToast as any}
+        userName={me.name} onSaveName={me.saveName}
         onOpenProfile={openProfile} onProfileReset={() => { void profileStats.afterReset(); }}
       />
 
@@ -758,7 +761,7 @@ export default function Home() {
         open={profileOpen} onClose={closeProfile}
         data={profileStats.data} range={profileStats.range} onRangeChange={profileStats.setRange}
         loading={profileStats.loading} failed={profileStats.failed} onRetry={() => { void profileStats.refresh(); }}
-        userName={auth.user?.name}
+        userName={me.name}
       />
 
       <ExportModal
@@ -789,7 +792,7 @@ export default function Home() {
         startRename={fs.startRename} handleTreeDelete={fs.handleTreeDelete}
         treeContextMenu={fs.treeContextMenu} setTreeContextMenu={fs.setTreeContextMenu}
         gitStatus={fs.gitStatus}
-        user={auth.user} setShowSettings={(open: boolean) => (open ? openSettings('genel') : closeSettings())} handleLogout={handleLogout}
+        user={auth.user} userName={me.name} setShowSettings={(open: boolean) => (open ? openSettings('genel') : closeSettings())} handleLogout={handleLogout}
         onOpenRemote={() => openSettings('uzak')}
         remoteStatus={remote.status}
         unityStatus={ai.unityMcpStatus}
@@ -913,7 +916,7 @@ export default function Home() {
             never fire). The empty new chat takes the thread's place. */}
         <div className="thread-wrap">
           {chatEmpty ? (
-            <EmptyChat userName={auth.user?.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} />
+            <EmptyChat userName={me.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} />
           ) : (
             <div className="thread custom-scrollbar" onScroll={chatScroll.onScroll}>
               <ChatPanel

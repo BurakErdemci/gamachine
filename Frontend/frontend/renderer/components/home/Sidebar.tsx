@@ -71,6 +71,7 @@ interface SidebarProps {
   gitStatus?: { isRepo: boolean; files: Record<string, string>; dirs: Record<string, string> };
 
   user: UserData | null;
+  userName?: string;
   setShowSettings: (val: boolean) => void;
   handleLogout: () => void;
   /** Drives the brand head's visor blink when Unity connects (mockup round 7). */
@@ -104,7 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     isSidebarOpen, sidebarTab, setSidebarTab, conversations, activeConvId,
     selectConversation, createNewConversation, deleteConversation, editingId,
     setEditingId, tempTitle, setTempTitle, saveRename, workspacePath,
-    closeWorkspace, rootFolderPath, openFolder, openFilePicker, user,
+    closeWorkspace, rootFolderPath, openFolder, openFilePicker, user, userName,
     setShowSettings, fileTree, treeContextMenu, setTreeContextMenu,
     convStatus, unityStatus, isDirty, remoteStatus, onOpenRemote,
     profileLevel, profileOpen, onOpenProfile,
@@ -116,7 +117,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   const renameListRef = useRef<{ id: number; task: boolean } | null>(null);
 
   if (!user) return null;
-  const name = displayName(user.name);
+  const name = displayName(userName ?? user.name);
 
   // Closing the workspace drops the editor buffer; a dirty file must not vanish on one click.
   const switchProject = async () => {
