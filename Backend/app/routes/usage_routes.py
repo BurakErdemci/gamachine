@@ -17,7 +17,7 @@ def create_usage_router(service):
         snapshot = service.snapshot(force=refresh)
         if wait:
             await service.wait_for_refreshes(timeout_s=50)
-            snapshot = service.snapshot()
+            snapshot = service.snapshot(start=False)
         return snapshot
 
     return router

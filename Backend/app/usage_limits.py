@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import json
+import logging
 import math
 import os
 import re
@@ -15,6 +16,9 @@ from datetime import datetime, timedelta, timezone
 FAMILIES = ("claude", "codex", "agy")
 # Local /usage queries need no model turn (usage spike, 2 Oct 2026).
 FETCH_TIMEOUT_S = 45
+_CLOSE_TIMEOUT_S = 5
+_SERVICE_CLOSE_TIMEOUT_S = 10
+logger = logging.getLogger(__name__)
 _MONTHS = {name: i for i, name in enumerate(
     ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
 
@@ -68,7 +72,8 @@ def parse_claude_usage(text, now=None):
         label, model, percentage, reset = match.groups()
         group = model if model and model != "all models" else None
         kind = "5h" if label == "Current session" else "week"
-        identifier = "session" if kind == "5h" else (f"week-{group.lower()}" if group else "week")
+        slug = re.sub(r"[^a-z0-9]+", "-", group.lower()).strip("-") if group else ""
+        identifier = "session" if kind == "5h" else (f"week-{slug}" if group else "week")
         result["windows"].append({
             "id": identifier, "group": group, "label": label, "kind": kind,
             "used_pct": _pct(percentage), "resets_at": _claude_reset(reset, now),
@@ -181,21 +186,28 @@ class ClaudeUsageProbe:
             options["cli_path"] = binary
         return ClaudeSDKClient(options=ClaudeAgentOptions(**options))
 
-    async def _disconnect(self):
-        client, self._client = self._client, None
+    async def _disconnect(self, client=None):
+        client = self._client if client is None else client
+        if self._client is client:
+            self._client = None
         if client is not None:
-            await client.disconnect()
+            try:
+                await client.disconnect()
+            except Exception:
+                # Cleanup must not replace cancellation (usage audit, 2 Oct 2026).
+                logger.warning("Claude usage disconnect failed", exc_info=True)
 
     async def _query(self):
         from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+        client = self._client
         try:
             async with asyncio.timeout(FETCH_TIMEOUT_S):
-                if self._client is None:
-                    self._client = self._new_client()
-                    await self._client.connect()
-                await self._client.query("/usage")
+                if client is None:
+                    client = self._client = self._new_client()
+                    await client.connect()
+                await client.query("/usage")
                 texts = []
-                async for message in self._client.receive_response():
+                async for message in client.receive_response():
                     if isinstance(message, AssistantMessage):
                         texts.extend(block.text for block in message.content if isinstance(block, TextBlock))
                     elif isinstance(message, ResultMessage):
@@ -204,15 +216,21 @@ class ClaudeUsageProbe:
                         return parse_claude_usage("\n".join(texts))
                 raise RuntimeError("Claude usage stream ended before a result")
         except BaseException:
-            await self._disconnect()
+            failed_client, client = client, None
+            await self._disconnect(failed_client)
             raise
+        finally:
+            # A retired runner must never touch its replacement's connection.
+            # Keep cleanup in the SDK owner task (usage audit, 2 Oct 2026).
+            if asyncio.current_task() is not self._runner and client is not None:
+                await self._disconnect(client)
 
-    async def _serve(self):
+    async def _serve(self, requests):
         # SDK/AnyIO connection scopes must be entered and exited in one task.
         # HTTP refresh tasks are short-lived; this owner lasts until shutdown.
         try:
-            while True:
-                response = await self._requests.get()
+            while asyncio.current_task() is self._runner:
+                response = await requests.get()
                 if response is None:
                     break
                 try:
@@ -228,29 +246,56 @@ class ClaudeUsageProbe:
                     if not response.done():
                         response.set_result(parsed)
         finally:
-            await self._disconnect()
+            if asyncio.current_task() is self._runner:
+                await self._disconnect()
 
     async def fetch(self):
         async with self._lock:
             if self._closed:
                 raise RuntimeError("Claude usage probe is closed")
             if self._runner is None or self._runner.done():
-                self._runner = asyncio.create_task(self._serve())
+                self._runner = asyncio.create_task(self._serve(self._requests))
             response = asyncio.get_running_loop().create_future()
             self._requests.put_nowait(response)
             try:
                 return await response
             except asyncio.CancelledError:
-                self._runner.cancel()
-                await asyncio.gather(self._runner, return_exceptions=True)
+                runner = self._runner
+                runner.cancel()
+                try:
+                    done, _ = await asyncio.wait((runner,), timeout=_CLOSE_TIMEOUT_S)
+                    if not done:
+                        logger.warning("Claude usage runner abandoned after cancellation")
+                finally:
+                    runner.add_done_callback(_consume_task_result)
+                    self._runner = None
+                    self._requests = asyncio.Queue()
+                    self._client = None
                 raise
 
     async def aclose(self):
-        async with self._lock:
-            self._closed = True
-            if self._runner is not None and not self._runner.done():
-                self._requests.put_nowait(None)
-                await self._runner
+        self._closed = True
+
+        async def close():
+            async with self._lock:
+                if self._runner is not None:
+                    self._requests.put_nowait(None)
+                    await asyncio.shield(self._runner)
+
+        try:
+            await asyncio.wait_for(close(), _CLOSE_TIMEOUT_S)
+        except (Exception, asyncio.CancelledError):
+            logger.warning("Claude usage close failed or timed out", exc_info=True)
+        finally:
+            if self._runner is not None:
+                self._runner.cancel()
+                self._runner.add_done_callback(_consume_task_result)
+
+
+def _consume_task_result(task):
+    # Abandoned tasks can finish later (usage audit, 2 Oct 2026).
+    if not task.cancelled():
+        task.exception()
 
 
 def _spawn_options():
@@ -284,7 +329,13 @@ async def _kill_probe(proc):
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-    await proc.wait()
+    # Release pipes even after a timeout (usage audit, 2 Oct 2026).
+    if proc.stdin is not None:
+        proc.stdin.close()
+    try:
+        await asyncio.wait_for(proc.wait(), _CLOSE_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning("Usage probe process did not exit after kill")
 
 
 async def fetch_codex_usage():
@@ -357,6 +408,8 @@ class UsageService:
         self._closed = False
         self._tasks = {}
         self._measured = {}
+        self._attempted = {}
+        self._retry_delay = {}
         self._probe = ClaudeUsageProbe() if fetchers is None else None
         self._fetchers = ({"claude": self._probe.fetch, "codex": fetch_codex_usage, "agy": fetch_agy_usage}
                           if fetchers is None else dict(fetchers))
@@ -366,7 +419,7 @@ class UsageService:
         } for family in FAMILIES}
 
     def _start_refresh(self, family):
-        if self._closed or self._cache[family]["status"] == "unavailable":
+        if self._closed or not self._fetchers.get(family):
             return None
         task = self._tasks.get(family)
         if task is None or task.done():
@@ -374,11 +427,12 @@ class UsageService:
             self._tasks[family] = task
         return task
 
-    def snapshot(self, force=False):
+    def snapshot(self, force=False, start=True):
         now = self._clock()
         for family in FAMILIES:
-            measured = self._measured.get(family)
-            if force or measured is None or now - measured >= self._ttl:
+            attempted = self._attempted.get(family)
+            delay = self._retry_delay.get(family, self._ttl)
+            if start and (force or attempted is None or now - attempted >= delay):
                 self._start_refresh(family)
         entries = copy.deepcopy([self._cache[family] for family in FAMILIES])
         for entry in entries:
@@ -397,15 +451,21 @@ class UsageService:
             entry.update(status="ok", plan=parsed.get("plan"), windows=copy.deepcopy(parsed["windows"]),
                          measured_at=_utc_now(), error=None)
             self._measured[family] = self._clock()
+            self._retry_delay.pop(family, None)
         except CLIUnavailable as error:
             entry.update(status="unavailable", error=str(error))
+            self._retry_delay[family] = self._ttl
         except asyncio.CancelledError:
             if entry["measured_at"] is None:
                 entry.update(status="error", error="Usage service closed")
             raise
         except Exception as error:
+            delay = (self._retry_delay.get(family, 15) * 2
+                     if entry["status"] == "error" else 30)
             entry.update(status="error", error=str(error) or type(error).__name__)
+            self._retry_delay[family] = min(self._ttl, delay)
         finally:
+            self._attempted[family] = self._clock()
             self._tasks.pop(family, None)
 
     async def refresh(self, family):
@@ -426,12 +486,33 @@ class UsageService:
         tasks = tuple(self._tasks.values())
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        self._tasks.clear()
-        for entry in self._cache.values():
-            if entry["status"] == "loading":
-                entry.update(status="error", error="Usage service closed")
-        owners = {getattr(fetcher, "__self__", None) for fetcher in self._fetchers.values()}
-        for owner in owners:
-            if owner is not None and hasattr(owner, "aclose"):
-                await owner.aclose()
+
+        async def close_owner(owner):
+            try:
+                await asyncio.wait_for(owner.aclose(), _CLOSE_TIMEOUT_S)
+            except (Exception, asyncio.CancelledError):
+                logger.warning("Usage owner close failed or timed out", exc_info=True)
+
+        pending = set(tasks)
+        try:
+            owners = {getattr(fetcher, "__self__", None) for fetcher in self._fetchers.values()}
+            for owner in owners:
+                if owner is not None and hasattr(owner, "aclose"):
+                    pending.add(asyncio.create_task(close_owner(owner)))
+            # wait_for alone can hang on cancellation-resistant cleanup.
+            # The outer wait bounds all owners together (usage audit, 2 Oct 2026).
+            if pending:
+                _, pending = await asyncio.wait(pending, timeout=_SERVICE_CLOSE_TIMEOUT_S)
+        except (Exception, asyncio.CancelledError):
+            logger.warning("Usage service close failed", exc_info=True)
+        finally:
+            for task in pending:
+                task.cancel()
+            for task in tasks:
+                task.add_done_callback(_consume_task_result)
+            for task in pending:
+                task.add_done_callback(_consume_task_result)
+            self._tasks.clear()
+            for entry in self._cache.values():
+                if entry["status"] == "loading":
+                    entry.update(status="error", error="Usage service closed")

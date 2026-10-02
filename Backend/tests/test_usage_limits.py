@@ -194,7 +194,7 @@ async def test_service_unavailable_and_close_cancel():
     await started.wait()
     await service.refresh("codex")
     assert service.snapshot(force=True)["families"][1]["status"] == "unavailable"
-    assert set(service._tasks) == {"claude"}
+    assert set(service._tasks) == {"claude", "codex"}
     await service.aclose()
     assert cancelled.is_set()
     assert not service._tasks
@@ -471,3 +471,349 @@ def test_route_loading_wait_and_force(route_app):
         assert all(e["status"] == "ok" for e in response.json()["families"])
         assert len(calls) == 6
         client.portal.call(service.aclose)
+
+
+@pytest.mark.parametrize("group, slug", [
+    ("Sonnet only", "sonnet-only"),
+    ("  SONNET / Opus...only  ", "sonnet-opus-only"),
+    ("Fable", "fable"),
+])
+def test_claude_week_ids_are_slugs(group, slug):
+    parsed = ul.parse_claude_usage(
+        f"Current week ({group}): 10% used resets Oct 8, 2am", now=NOW)
+    assert parsed["windows"][0]["id"] == f"week-{slug}"
+    assert parsed["windows"][0]["group"] == group
+
+
+async def test_claude_disconnect_error_preserves_timeout_and_allows_recovery(monkeypatch, caplog):
+    AssistantMessage, ResultMessage = fake_messages(monkeypatch)
+    monkeypatch.setattr(ul, "FETCH_TIMEOUT_S", 0.02)
+    clients = []
+
+    class Client:
+        async def connect(self):
+            self.owner = asyncio.current_task()
+
+        async def query(self, text):
+            if self is clients[0]:
+                await asyncio.Event().wait()
+
+        async def disconnect(self):
+            assert asyncio.current_task() is self.owner
+            if self is clients[0]:
+                raise OSError("fake disconnect failed")
+
+        async def receive_response(self):
+            yield AssistantMessage(fixture("claude_usage.txt"))
+            yield ResultMessage()
+
+    def factory():
+        client = Client()
+        clients.append(client)
+        return client
+
+    probe = ul.ClaudeUsageProbe(cwd=".", client_factory=factory)
+    service = ul.UsageService({"claude": probe.fetch})
+    try:
+        service.snapshot()
+        await service.wait_for_refreshes(timeout_s=1)
+        assert not service._tasks
+        assert service.snapshot(start=False)["families"][0]["status"] == "error"
+        assert "fake disconnect failed" in caplog.text
+        service.snapshot(force=True)
+        await service.wait_for_refreshes(timeout_s=1)
+        assert not service._tasks
+        assert service.snapshot(start=False)["families"][0]["status"] == "ok"
+        assert len(clients) == 2
+    finally:
+        await service.aclose()
+
+
+async def test_claude_abandoned_runner_does_not_capture_next_fetch(monkeypatch):
+    AssistantMessage, ResultMessage = fake_messages(monkeypatch)
+    monkeypatch.setattr(ul, "FETCH_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(ul, "_CLOSE_TIMEOUT_S", 0.02)
+    release = asyncio.Event()
+    clients = []
+
+    class Client:
+        async def connect(self):
+            pass
+
+        async def query(self, text):
+            if self is clients[0]:
+                await asyncio.Event().wait()
+
+        async def disconnect(self):
+            if self is clients[0]:
+                await release.wait()
+
+        async def receive_response(self):
+            yield AssistantMessage(fixture("claude_usage.txt"))
+            yield ResultMessage()
+
+    def factory():
+        client = Client()
+        clients.append(client)
+        return client
+
+    probe = ul.ClaudeUsageProbe(cwd=".", client_factory=factory)
+    service = ul.UsageService({"claude": probe.fetch})
+    try:
+        service.snapshot()
+        await asyncio.sleep(0)
+        retired = probe._runner
+        await service.wait_for_refreshes(timeout_s=1)
+        assert not service._tasks
+        assert retired is not None and not retired.done()
+        await service.refresh("claude")
+        assert service.snapshot(start=False)["families"][0]["status"] == "ok"
+        assert len(clients) == 2
+        release.set()
+        await asyncio.wait_for(asyncio.gather(retired, return_exceptions=True), 1)
+        assert retired.cancelled()
+        await service.refresh("claude")
+        assert len(clients) == 2
+    finally:
+        release.set()
+        await service.aclose()
+
+
+def test_route_wait_on_failure_fetches_exactly_once():
+    calls = []
+
+    async def fail():
+        calls.append(1)
+        raise RuntimeError("fake failure")
+
+    # Zero TTL exposes a post-wait refresh even with backoff in place.
+    service = ul.UsageService({"claude": fail}, ttl_s=0)
+    app = FastAPI()
+    app.include_router(create_usage_router(service))
+    with TestClient(app) as client:
+        response = client.get("/usage/limits?wait=1")
+        assert response.status_code == 200
+        assert response.json()["families"][0]["status"] == "error"
+        client.portal.call(asyncio.sleep, 0)
+        assert calls == [1]
+        assert not service._tasks
+        client.portal.call(service.aclose)
+
+
+async def test_service_error_backoff_force_and_success_reset():
+    clock = [0]
+    calls = []
+    broken = [True]
+
+    async def fetch():
+        calls.append(clock[0])
+        if broken[0]:
+            raise RuntimeError("fake failure")
+        return data()
+
+    service = ul.UsageService({"claude": fetch}, clock=lambda: clock[0], ttl_s=120)
+    try:
+        await service.refresh("claude")
+        for clock[0] in (1, 5, 10, 20, 29):
+            service.snapshot()
+            await service.wait_for_refreshes()
+        assert calls == [0]
+        clock[0] = 30
+        service.snapshot()
+        await service.wait_for_refreshes()
+        assert calls == [0, 30]
+        clock[0] = 89
+        service.snapshot()
+        assert not service._tasks
+        clock[0] = 90
+        service.snapshot()
+        await service.wait_for_refreshes()
+        assert calls == [0, 30, 90]
+        clock[0] = 209
+        service.snapshot()
+        assert not service._tasks
+        clock[0] = 210
+        service.snapshot()
+        await service.wait_for_refreshes()
+        assert calls == [0, 30, 90, 210]
+        clock[0] = 330
+        service.snapshot()
+        await service.wait_for_refreshes()
+        assert calls == [0, 30, 90, 210, 330]
+        clock[0] = 331
+        service.snapshot(force=True)
+        await service.wait_for_refreshes()
+        assert calls[-1] == 331 and len(calls) == 6
+        broken[0] = False
+        clock[0] = 332
+        service.snapshot(force=True)
+        await service.wait_for_refreshes()
+        clock[0] = 451
+        service.snapshot()
+        assert not service._tasks
+        broken[0] = True
+        clock[0] = 452
+        service.snapshot()
+        await service.wait_for_refreshes()
+        assert calls[-1] == 452 and len(calls) == 8
+        clock[0] = 481
+        service.snapshot()
+        assert not service._tasks
+        clock[0] = 482
+        service.snapshot()
+        await service.wait_for_refreshes()
+        assert calls[-1] == 482 and len(calls) == 9
+    finally:
+        await service.aclose()
+
+
+async def test_service_attempt_clock_is_completion_time_and_unavailable_retries():
+    clock = [0]
+    calls = []
+
+    async def unavailable():
+        calls.append(clock[0])
+        clock[0] += 10
+        raise ul.CLIUnavailable("missing")
+
+    service = ul.UsageService({"claude": unavailable}, clock=lambda: clock[0], ttl_s=120)
+    try:
+        await service.refresh("claude")
+        clock[0] = 129
+        service.snapshot()
+        assert not service._tasks
+        clock[0] = 130
+        service.snapshot()
+        await service.wait_for_refreshes()
+        assert calls == [0, 130]
+        clock[0] = 141
+        service.snapshot(force=True, start=False)
+        assert not service._tasks
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.parametrize("mode", ["raise", "hang"])
+@pytest.mark.parametrize("via_service", [False, True])
+async def test_claude_close_is_bounded_and_does_not_raise(monkeypatch, mode, via_service):
+    AssistantMessage, ResultMessage = fake_messages(monkeypatch)
+    disconnected = asyncio.Event()
+    owner_tasks = []
+
+    class Client:
+        async def connect(self):
+            self.owner = asyncio.current_task()
+            owner_tasks.append(self.owner)
+
+        async def query(self, text):
+            pass
+
+        async def receive_response(self):
+            yield AssistantMessage(fixture("claude_usage.txt"))
+            yield ResultMessage()
+
+        async def disconnect(self):
+            assert asyncio.current_task() is self.owner
+            disconnected.set()
+            if mode == "raise":
+                raise OSError("fake close failed")
+            await asyncio.Event().wait()
+
+    probe = ul.ClaudeUsageProbe(cwd=".", client_factory=Client)
+    service = ul.UsageService({"claude": probe.fetch})
+    await service.refresh("claude")
+    start = asyncio.get_running_loop().time()
+    await asyncio.wait_for(service.aclose() if via_service else probe.aclose(), 10)
+    assert asyncio.get_running_loop().time() - start < 10
+    assert disconnected.is_set()
+    await asyncio.wait_for(asyncio.gather(*owner_tasks, return_exceptions=True), 1)
+    assert not service._tasks
+    await service.aclose()
+
+
+async def test_service_close_abandons_cancellation_resistant_owners(monkeypatch):
+    monkeypatch.setattr(ul, "_CLOSE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(ul, "_SERVICE_CLOSE_TIMEOUT_S", 0.03)
+    release = asyncio.Event()
+    closing = []
+
+    class Owner:
+        async def fetch(self):
+            return data()
+
+        async def aclose(self):
+            closing.append(asyncio.current_task())
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    pass
+
+    class BrokenOwner(Owner):
+        async def aclose(self):
+            raise OSError("fake owner close failed")
+
+    owners = [Owner(), Owner(), BrokenOwner()]
+    service = ul.UsageService(dict(zip(ul.FAMILIES, [o.fetch for o in owners])))
+    try:
+        await asyncio.wait_for(service.aclose(), 1)
+        assert len(closing) == 2
+        assert not service._tasks
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*closing, return_exceptions=True), 1)
+        await asyncio.sleep(0)
+
+
+@pytest.mark.parametrize("running", [False, True])
+async def test_kill_probe_closes_stdin_and_reaps_process(monkeypatch, running):
+    events = []
+
+    class Stdin:
+        def close(self):
+            events.append("close")
+
+    class Proc:
+        pid = 123
+        stdin = Stdin()
+        returncode = None if running else 0
+
+        def kill(self):
+            events.append("kill")
+
+        async def wait(self):
+            events.append("wait")
+            self.returncode = 0
+
+    def killpg(pid, sig):
+        assert pid == 123
+        events.append("kill")
+
+    def taskkill(*args, **kwargs):
+        assert kwargs["timeout"] == 5
+        events.append("tree-kill")
+
+    monkeypatch.setattr(ul.os, "killpg", killpg, raising=False)
+    monkeypatch.setattr(ul.subprocess, "run", taskkill)
+    proc = Proc()
+    await ul._kill_probe(proc)
+    assert events[-2:] == ["close", "wait"]
+    assert proc.returncode == 0
+    assert ("kill" in events) is running
+
+
+async def test_kill_probe_wait_is_bounded(monkeypatch):
+    monkeypatch.setattr(ul, "_CLOSE_TIMEOUT_S", 0.01)
+    cancelled = asyncio.Event()
+    closed = []
+
+    async def wait():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    proc = SimpleNamespace(returncode=0, stdin=SimpleNamespace(close=lambda: closed.append(1)), wait=wait)
+    await asyncio.wait_for(ul._kill_probe(proc), 1)
+    assert closed == [1]
+    assert cancelled.is_set()

@@ -233,7 +233,11 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    await usage_service.aclose()
+    try:
+        await usage_service.aclose()
+    except Exception as e:
+        # Later shutdown steps must still run (usage audit, 2 Oct 2026).
+        logger.warning(f"[Shutdown] usage service not stopped: {e}")
 
     try:
         await remote_bridge.shutdown()
