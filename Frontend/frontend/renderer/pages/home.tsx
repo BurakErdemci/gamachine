@@ -59,6 +59,8 @@ import { usePendingChange } from '../lib/pendingChange';
 import { ThreadHeader } from '../components/home/ThreadHeader';
 import { EmptyChat, questDraft } from '../components/home/EmptyChat';
 import { AchievementToast } from '../components/home/AchievementToast';
+import { ProfileView } from '../components/home/ProfileView';
+import { useProfileStats } from '../hooks/home/useProfileStats';
 import { isChatEmpty } from '../components/home/ChatPanel';
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
@@ -186,6 +188,23 @@ export default function Home() {
     setShowSettings(true);
   }, [setShowSettings, setIsModelDropdownOpen]);
   const closeSettings = useCallback(() => setShowSettings(false), [setShowSettings]);
+
+  // Maker profile (mockup screen 2): replaces the chat stage, opened from the sidebar card and
+  // from Settings > Hesap. One stats hook feeds both the profile and the sidebar card's level,
+  // so the backend's one-time "new achievement" mark is not consumed by the wrong reader.
+  const profileStats = useProfileStats({
+    api: API, token: auth.user?.sessionToken,
+    enabled: backendReady && !!auth.user && !auth.tokenError,
+  });
+  const [profileOpen, setProfileOpen] = useState(false);
+  const { refresh: refreshProfile } = profileStats;
+  const openProfile = useCallback(() => {
+    setShowSettings(false);
+    setIsModelDropdownOpen(false);
+    setProfileOpen(true);
+    void refreshProfile();
+  }, [setShowSettings, setIsModelDropdownOpen, refreshProfile]);
+  const closeProfile = useCallback(() => setProfileOpen(false), []);
 
   // 5-hour and weekly subscription usage for the model chip, the menu and the Modeller page.
   const usage = useUsageLimits({
@@ -493,6 +512,12 @@ export default function Home() {
     pendingDelete: fs.pendingDelete, pendingGenFiles: fs.pendingGenFiles,
     pendingFix: chat.pendingFix, activeGate: mcp.activeGate,
   }));
+  // A finished task moves the sidebar card's XP: re-read the profile numbers.
+  useEffect(() => {
+    if (turnDone) void refreshProfile();
+  }, [turnDone?.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Switching chats by any route (shortcut, notification click) leaves the profile.
+  useEffect(() => { setProfileOpen(false); }, [chat.activeConvId]);
 
   // --- Save Shortcut (Ctrl+S / Cmd+S) ---
   useEffect(() => {
@@ -702,7 +727,7 @@ export default function Home() {
       data-side={isSidebarOpen ? undefined : 'closed'}
       // While the settings screen shows, the rest of the frame is hidden (settings.css), not
       // unmounted: running chats, the terminal and the editor keep their state.
-      data-screen={ai.showSettings ? 'ayarlar' : undefined}
+      data-screen={ai.showSettings ? 'ayarlar' : profileOpen ? 'profil' : undefined}
     >
       <Head>
         <title>{displayName(auth.user?.name) ? `Gamachine | ${displayName(auth.user?.name)}` : 'Gamachine'}</title>
@@ -725,6 +750,15 @@ export default function Home() {
         onToggleDictationAutoLang={dictation.toggleAutoLanguageCpu}
         onRemoteStatus={remote.setStatus}
         usage={usage.data} user={auth.user} API={API} http={axios} showToast={showToast as any}
+        onOpenProfile={openProfile}
+      />
+
+      {/* Kept mounted with the rest of the frame: the chat column is only hidden (profile.css). */}
+      <ProfileView
+        open={profileOpen} onClose={closeProfile}
+        data={profileStats.data} range={profileStats.range} onRangeChange={profileStats.setRange}
+        loading={profileStats.loading} failed={profileStats.failed} onRetry={() => { void profileStats.refresh(); }}
+        userName={auth.user?.name}
       />
 
       <ExportModal
@@ -735,8 +769,11 @@ export default function Home() {
 
       <Sidebar
         isSidebarOpen={isSidebarOpen} sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}
-        conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus} selectConversation={chat.selectConversation}
-        createNewConversation={chat.createNewConversation} deleteConversation={chat.deleteConversation}
+        conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus}
+        // Picking a chat (even the one already open) or starting one leaves the profile.
+        selectConversation={(...a: Parameters<typeof chat.selectConversation>) => { setProfileOpen(false); return chat.selectConversation(...a); }}
+        createNewConversation={(...a: Parameters<typeof chat.createNewConversation>) => { setProfileOpen(false); return chat.createNewConversation(...a); }}
+        deleteConversation={chat.deleteConversation}
         editingId={chat.editingId} setEditingId={chat.setEditingId} tempTitle={chat.tempTitle} setTempTitle={chat.setTempTitle} saveRename={chat.saveRename}
         workspacePath={fs.workspacePath} closeWorkspace={fs.closeWorkspace} isDirty={fs.isDirty} rootFolderPath={fs.rootFolderPath}
         openFolder={fs.openFolder} openFilePicker={fs.openFilePicker} treeCreating={fs.treeCreating}
@@ -756,6 +793,12 @@ export default function Home() {
         onOpenRemote={() => openSettings('uzak')}
         remoteStatus={remote.status}
         unityStatus={ai.unityMcpStatus}
+        profileLevel={profileStats.latest ? {
+          level: profileStats.latest.level, xp: profileStats.latest.xp,
+          levelXp: profileStats.latest.level_xp, levelNeed: profileStats.latest.level_need,
+        } : null}
+        profileOpen={profileOpen && !ai.showSettings}
+        onOpenProfile={openProfile}
       />
 
       <header className="topbar shell">

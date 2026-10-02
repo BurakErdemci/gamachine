@@ -79,6 +79,12 @@ interface SidebarProps {
   remoteStatus?: RemoteStatus | null;
   /** The phone button opens the settings screen on "Uzaktan kontrol" (falls back to Settings). */
   onOpenRemote?: () => void;
+  /** Level and XP from GET /profile/stats (all-time whatever the range); null until it answers. */
+  profileLevel?: { level: number; xp: number; levelXp: number; levelNeed: number } | null;
+  /** The maker profile is on screen (the card is marked active). */
+  profileOpen?: boolean;
+  /** The card opens the maker profile. */
+  onOpenProfile?: () => void;
 }
 
 /** Sidebar width from the mockup (base.css `.app` first track). */
@@ -91,11 +97,6 @@ const LAMP: Record<ConvStatus, string> = {
   unread: 'status-ok',
 };
 
-// TODO(profile): level and XP have no data source yet (ENTEGRASYON-PLANI "Later": a local usage
-// stats source needs its own spec). Until then the card shows a fresh maker; Sade hides both.
-const PROFILE_LEVEL = 1;
-const PROFILE_XP = 0;
-
 const baseName = (p: string | null | undefined) => (p ? p.split(/[\\/]/).filter(Boolean).pop() : undefined);
 
 export const Sidebar: React.FC<SidebarProps> = (props) => {
@@ -106,9 +107,10 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     closeWorkspace, rootFolderPath, openFolder, openFilePicker, user,
     setShowSettings, fileTree, treeContextMenu, setTreeContextMenu,
     convStatus, unityStatus, isDirty, remoteStatus, onOpenRemote,
+    profileLevel, profileOpen, onOpenProfile,
   } = props;
 
-  const { t } = useLang();
+  const { t, lang } = useLang();
   const linked = useUnityLinkPulse(unityStatus);
   // Which list the row being renamed sat in when its input opened (see `inTasks` below).
   const renameListRef = useRef<{ id: number; task: boolean } | null>(null);
@@ -295,8 +297,17 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           )}
         </div>
 
-        <div className="side-profile" title={name || undefined}>
-          <span className="lvl level" aria-hidden="true"><span className="lvl-n">{PROFILE_LEVEL}</span></span>
+        {/* Level and XP are the profile's own numbers (GET /profile/stats); before the first answer
+            the card shows a dash, not a made-up level. Sade hides both (theme-sade.shell.css). */}
+        <button
+          type="button"
+          className={`side-profile${profileOpen ? ' is-active' : ''}`}
+          title={name || undefined}
+          aria-current={profileOpen ? 'page' : undefined}
+          onClick={onOpenProfile}
+          data-testid="sidebar-profile"
+        >
+          <span className="lvl level" aria-hidden="true"><span className="lvl-n">{profileLevel ? profileLevel.level : '–'}</span></span>
           <svg className="ic side-profile-ic" viewBox="0 0 20 20" aria-hidden="true">
             <circle cx="10" cy="7" r="3.2" />
             <path d="M3.8 17c.8-3.2 3.3-5 6.2-5s5.4 1.8 6.2 5" />
@@ -304,13 +315,17 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           <span className="side-profile-text">
             <span className="side-profile-name">{t('sidebar.profile')}</span>
             <span className="side-profile-meta">
-              <span className="level">{t('sidebar.level', { seviye: PROFILE_LEVEL })}</span>
-              <span className="xp"> · <span className="num">{t('sidebar.xp', { xp: PROFILE_XP })}</span></span>
+              <span className="level">{t('sidebar.level', { seviye: profileLevel ? profileLevel.level : '–' })}</span>
+              {profileLevel && (
+                <span className="xp"> · <span className="num">{t('sidebar.xp', { xp: profileLevel.xp.toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-GB') })}</span></span>
+              )}
               <span className="side-profile-plain">{t('sidebar.profilePlain')}</span>
             </span>
-            <span className="xp-mini xp" aria-hidden="true"><span style={{ width: '0%' }} /></span>
+            <span className="xp-mini xp" aria-hidden="true">
+              <span style={{ width: `${profileLevel ? Math.max(0, Math.min(100, (profileLevel.levelXp / Math.max(1, profileLevel.levelNeed)) * 100)) : 0}%` }} />
+            </span>
           </span>
-        </div>
+        </button>
 
         <div className="side-foot">
           <button type="button" className="foot-btn" onClick={() => setShowSettings(true)}>

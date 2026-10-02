@@ -302,7 +302,12 @@ export const ApprovalPage = ({ mode, onChange, saved }: {
 
 // ───────────────────────────── Hesap ─────────────────────────────
 
-export const AccountPage = ({ user, onLogout }: { user?: UserData | null; onLogout: () => void }) => {
+export const AccountPage = ({ user, onLogout, onOpenProfile }: {
+  user?: UserData | null;
+  onLogout: () => void;
+  /** The hero row's "Yapımcı profili" button (mockup round 11 hesap page). */
+  onOpenProfile?: () => void;
+}) => {
   const { t } = useLang();
   const name = displayName(user?.name) || t('set.me.anon');
   return (
@@ -313,6 +318,11 @@ export const AccountPage = ({ user, onLogout }: { user?: UserData | null; onLogo
           <div className="set-row set-row-hero">
             <span className="set-avatar set-avatar-lg" aria-hidden="true">{name.charAt(0).toUpperCase()}</span>
             <div className="set-rt"><p className="set-name">{name}</p></div>
+            {onOpenProfile && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenProfile} data-testid="settings-open-profile">
+                {t('set.hesap.profile')}
+              </button>
+            )}
           </div>
           <SetRow name={t('set.hesap.version')} hint={<>Gamachine <span className="num">{APP_VERSION}</span></>} />
         </SetCard>
