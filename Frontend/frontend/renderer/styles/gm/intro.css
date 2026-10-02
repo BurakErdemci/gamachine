@@ -1,0 +1,1196 @@
+/* The wrapper fills the window; the approved artwork keeps its native canvas coordinates. */
+.intro-overlay { position: fixed; inset: 0; z-index: 10000; overflow: hidden; }
+.intro-overlay .ov { width: 100%; height: 100%; }
+
+
+:where(.intro-overlay) .ov { position: absolute; inset: 0; width: 1600px; height: 1000px; z-index: 10; cursor: pointer; overflow: hidden; }
+
+:where(.intro-overlay) .ov > * { position: absolute; }
+
+:where(.intro-overlay) .ov-bg { inset: 0; background: var(--shell-bg); }
+
+:where(.intro-overlay) .hud { left: 0; top: 0; width: 1600px; height: 1000px; fill: none; stroke: var(--shell-line); stroke-width: 1.5; }
+
+:where(.intro-overlay) .hud-c { stroke: #3A4361; stroke-width: 2; stroke-dasharray: 1; }
+
+:where(.intro-overlay) .hud-floor { transform-box: fill-box; transform-origin: center; }
+
+
+/* ---------- mascot ---------- */
+:where(.intro-overlay) .m-pos {
+  left: 270.25px; top: 300.14px; width: 343.92px; height: 314.44px;
+  transform-origin: 171.96px 301.67px;                   /* the feet */
+  transform: translate(77.79px, 100.19px) scale(1.5);    /* act 1: on the floor */
+}
+
+:where(.intro-overlay) .m-drop,
+:where(.intro-overlay) .m-svg { width: 100%; height: 100%; display: block; }
+
+:where(.intro-overlay) .m-svg { overflow: visible; }
+
+:where(.intro-overlay) .m-shadow { left: 405px; top: 697px; width: 230px; height: 13px; border-radius: 50%; background: #0B0E16; opacity: 0; }
+
+:where(.intro-overlay) .dust i { position: absolute; left: 517px; top: 694px; width: 7px; height: 7px; background: #3A4361; opacity: 0; transform: rotate(45deg); }
+
+
+/* ---------- blocks ---------- */
+:where(.intro-overlay) .blk { left: var(--x); top: 654px; width: 48px; height: 48px; transform-origin: 0 0; }
+
+:where(.intro-overlay) .b1 { --x: 706px; --fx: -74px; --rel: 2570ms; --mx: -129.24px; --msx: 5.0708; --md: 4250ms; --wd: 4900ms; }
+
+:where(.intro-overlay) .b2 { --x: 786px; --fx: -154px; --rel: 3170ms; --mx: 44.74px; --msx: 4.6298; --md: 4320ms; --wd: 4980ms; }
+
+:where(.intro-overlay) .b3 { --x: 866px; --fx: -234px; --rel: 3770ms; --mx: 197.55px; --msx: 3.4329; --md: 4390ms; --wd: 5060ms; }
+
+:where(.intro-overlay) .blk-x,
+:where(.intro-overlay) .blk-y,
+:where(.intro-overlay) .blk-face { width: 100%; height: 100%; }
+
+:where(.intro-overlay) .blk-face { position: relative; background: var(--accent); border-radius: 6px; transform-origin: 50% 100%; }
+
+:where(.intro-overlay) .blk-face::after { content: ""; position: absolute; inset: 13px; border: 3px solid var(--shell-bg); border-radius: 2px; }
+
+:where(.intro-overlay) .blk-x { opacity: 0; }
+
+
+/* ---------- lockup + prompt ---------- */
+:where(.intro-overlay) .lockup { left: 350px; top: 330px; width: 900px; height: 188.97px; overflow: visible; transform-origin: 0 0; }
+
+:where(.intro-overlay) .lk-head { opacity: 0; }
+
+:where(.intro-overlay) .lk-w { clip-path: inset(0 100% 0 0); }
+
+:where(.intro-overlay) .prompt {
+  left: 50%; top: 574px; transform: translateX(-50%); opacity: 0;
+  display: flex; align-items: center; gap: 16px; height: 52px; padding: 0 8px 0 20px; white-space: nowrap;
+  background: var(--shell-bg-2); color: var(--shell-text);
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  box-shadow: inset 0 0 0 1px #3A4361;
+}
+
+:where(.intro-overlay) .pr-tag {
+  position: relative; z-index: 0; padding: 0 11px; line-height: 22px; color: var(--accent-ink);
+  font-family: var(--font-display); font-size: 12px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
+}
+
+:where(.intro-overlay) .pr-tag::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--accent); transform: skewX(-12deg); }
+
+:where(.intro-overlay) .pr-text { font-size: 15px; color: var(--shell-text); }
+
+:where(.intro-overlay) .pr-btn {
+  height: 36px; padding: 0 20px; display: inline-flex; align-items: center;
+  background: var(--btn-bg); color: var(--btn-text); box-shadow: var(--shadow-btn); clip-path: var(--clip-sm);
+  font-family: var(--btn-font); font-size: 13.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+}
+
+/* round 9: bottom left (the scene selector moved to the bottom right, m6) */
+:where(.intro-overlay) .skip-hint { left: 84px; bottom: 22px; margin: 0; font-size: 12px; color: var(--shell-text-dim); }
+
+
+/* ======================= the timeline (runs while :root.run) ======================= */
+@keyframes i-fade { to { opacity: 0; } }
+
+@keyframes i-show { to { opacity: 1; } }
+
+
+/* the stage: floor draws outward from the centre, corners trace in */
+.run :where(.intro-overlay) .hud-floor { animation: i-floor 600ms var(--g-ease-enter) both, i-fade 200ms linear 6250ms both; }
+
+@keyframes i-floor { from { transform: scaleX(0); } }
+
+.run :where(.intro-overlay) .hud-c { animation: i-draw 500ms var(--g-ease-enter) 100ms both, i-fade 200ms linear 6250ms both; }
+
+@keyframes i-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+
+
+/* act 1: fall, land, dust */
+.run :where(.intro-overlay) .m-drop { animation: i-fall 650ms cubic-bezier(.55, 0, 1, .45) 500ms both, i-fade 150ms linear 5050ms both; }
+
+@keyframes i-fall { from { transform: translateY(-520px); } }
+
+.run :where(.intro-overlay) .m-shadow { animation: i-shadow 650ms cubic-bezier(.55, 0, 1, .45) 500ms both, i-fade 250ms linear 4250ms both; }
+
+@keyframes i-shadow { from { opacity: 0; transform: scaleX(.3); } to { opacity: .9; } }
+
+.run :where(.intro-overlay) .m-svg #rig { animation: i-squash 270ms var(--g-ease-move) 1150ms both; }
+
+@keyframes i-squash { 30% { transform: scale(1.07, .9); } 65% { transform: scale(.98, 1.03); } }
+
+.run :where(.intro-overlay) .dust i { animation: i-dust 520ms cubic-bezier(.2, .7, .3, 1) 1150ms forwards; }
+
+:where(.intro-overlay) .dust i:nth-child(1) { --dx: -118px; --dy: -14px; }
+
+:where(.intro-overlay) .dust i:nth-child(2) { --dx: -82px; --dy: -26px; background: #A0A8BC; }
+
+:where(.intro-overlay) .dust i:nth-child(3) { --dx: -54px; --dy: -8px; }
+
+:where(.intro-overlay) .dust i:nth-child(4) { --dx: 60px; --dy: -10px; }
+
+:where(.intro-overlay) .dust i:nth-child(5) { --dx: 90px; --dy: -24px; background: #A0A8BC; }
+
+:where(.intro-overlay) .dust i:nth-child(6) { --dx: 124px; --dy: -12px; }
+
+@keyframes i-dust {
+  0% { opacity: 1; transform: translate(0, 0) rotate(45deg) scale(1); }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(45deg) scale(.5); }
+}
+
+
+/* act 2: boot. Visor ring powers on with one flicker; eyes open from a scan line; one blink. */
+:where(.intro-overlay) .m-svg #visor > rect:first-child { fill: var(--mascot-body); }
+
+:where(.intro-overlay) .m-svg #visor > g[opacity] { opacity: 0; }
+
+:where(.intro-overlay) .m-svg #eyes { transform: scaleY(0); }
+
+.run :where(.intro-overlay) .m-svg #visor > rect:first-child { animation: i-power 280ms linear 1450ms both; }
+
+@keyframes i-power {
+  0%, 9% { fill: var(--mascot-body); } 10%, 38% { fill: var(--mascot-visor); }
+  39%, 58% { fill: var(--mascot-body); } 59%, 100% { fill: var(--mascot-visor); }
+}
+
+.run :where(.intro-overlay) .m-svg #visor > g[opacity] { animation: i-cheek 200ms ease-out 1650ms both; }
+
+@keyframes i-cheek { to { opacity: .9; } }
+
+.run :where(.intro-overlay) .m-svg #eyes { animation: i-eyes 710ms linear 1550ms both; }
+
+@keyframes i-eyes {
+  0% { transform: scaleY(0); }
+  1%, 14% { transform: scaleY(.08); animation-timing-function: cubic-bezier(.34, 1.3, .64, 1); }
+  32%, 80% { transform: none; animation-timing-function: ease-in; }
+  87% { transform: scaleY(.08); animation-timing-function: ease-out; }
+  94%, 100% { transform: none; }
+}
+
+
+/* act 3: three throws. The right arm swings out and up (positive = outward in the maskot rig);
+   at act 4 the whole body leaves and only the head stays. */
+.run :where(.intro-overlay) .m-svg #arm-right { animation: i-throw 1800ms var(--g-ease-move) 2350ms both, i-fade 300ms linear 4250ms both; }
+
+@keyframes i-throw {
+  0%, 33.3%, 66.6%, 100% { transform: none; }
+  10%, 18%, 43.3%, 51.3%, 76.6%, 84.6% { transform: rotate(105deg); }
+  30%, 63.3%, 96.6% { transform: none; }
+}
+
+/* a block leaves the hand on a true arc: X linear, Y up then down, squash on landing */
+/* forwards, not both: before its release a block must not sit at the hand */
+.run :where(.intro-overlay) .blk-x { animation: i-bx 440ms linear var(--rel) forwards; }
+
+@keyframes i-bx { 0% { opacity: 1; transform: translateX(var(--fx)) scale(.6); } 100% { opacity: 1; transform: none; } }
+
+.run :where(.intro-overlay) .blk-y { animation: i-by 440ms linear var(--rel) forwards; }
+
+@keyframes i-by {
+  0% { transform: translateY(-163px); animation-timing-function: cubic-bezier(.2, .6, .4, 1); }
+  32% { transform: translateY(-205px); animation-timing-function: cubic-bezier(.6, 0, .9, .5); }
+  100% { transform: none; }
+}
+
+.run :where(.intro-overlay) .blk-face { animation: i-land 160ms var(--g-ease-move) calc(var(--rel) + 440ms) both; }
+
+@keyframes i-land { 40% { transform: scale(1.12, .84); } }
+
+
+/* act 4: blocks rise into the three letter boxes; each bar wipes away as its letters appear */
+/* the wipe fills forwards only: its first frame clips to the 48 px slot, which would hide
+   a block while it is still in the air */
+.run :where(.intro-overlay) .blk { animation: i-morph 600ms var(--g-ease-move) var(--md) both, i-wipe 300ms var(--g-ease-move) var(--wd) forwards; }
+
+@keyframes i-morph { to { transform: translate(var(--mx), -268.57px) scale(var(--msx), 1.5748); } }
+
+@keyframes i-wipe { from { clip-path: inset(0 0 0 0); } to { clip-path: inset(0 0 0 100%); } }
+
+.run :where(.intro-overlay) .blk-face::after { animation: i-fade 200ms linear var(--md) both; }
+
+.run :where(.intro-overlay) .lk-w { animation: i-letters 300ms var(--g-ease-move) both; }
+
+.run :where(.intro-overlay) .lk-w1 { animation-delay: 4900ms; }
+
+.run :where(.intro-overlay) .lk-w2 { animation-delay: 4980ms; }
+
+.run :where(.intro-overlay) .lk-w3 { animation-delay: 5060ms; }
+
+@keyframes i-letters { to { clip-path: inset(0 0 0 0); } }
+
+/* the mascot rises onto the lockup head; the body goes, the head mark (with its outline) stays */
+.run :where(.intro-overlay) .m-pos { animation: i-rise 700ms var(--g-ease-move) 4250ms both; }
+
+@keyframes i-rise { to { transform: none; } }
+
+.run :where(.intro-overlay) .m-svg :is(#legs, #body, #arm-left) { animation: i-fade 300ms linear 4250ms both; }
+
+.run :where(.intro-overlay) .lk-head { animation: i-show 200ms linear 4950ms both; }
+
+
+/* act 5: the prompt; the button is pressed for you (it is an intro, not a form) */
+.run :where(.intro-overlay) .prompt { animation: i-prompt 240ms var(--g-ease-enter) 5450ms both, i-fade 150ms linear 6250ms both; }
+
+@keyframes i-prompt { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translateX(-50%); } }
+
+.run :where(.intro-overlay) .pr-btn { animation: i-press 140ms var(--g-ease-press) 6000ms both; }
+
+@keyframes i-press { 40%, 100% { transform: translate(1px, 1px); box-shadow: none; background: var(--btn-hover); } }
+
+.run :where(.intro-overlay) .skip-hint { animation: i-fade 200ms linear 6250ms both; }
+
+
+/* act 6: the lockup becomes the sidebar logo (20, 10, 152.4 x 32 in index.html) */
+.run :where(.intro-overlay) .lockup { animation: i-home 900ms var(--g-ease-move) 6250ms both, i-fade 80ms linear 7150ms both; }
+
+@keyframes i-home { to { transform: translate(-330px, -320px) scale(.169333); } }
+
+.run :where(.intro-overlay) .ov-bg { animation: i-fade 600ms var(--g-ease-exit) 6300ms both; }
+
+.run :where(.intro-overlay) .ov { animation: i-end 1ms linear 7300ms both; }
+
+@keyframes i-end { to { visibility: hidden; } }
+
+
+/* reduced motion: the last frame at once (no overlay; the page underneath is already final) */
+:root.is-reduced :where(.intro-overlay) .ov { display: none; }
+/* Gamachine intro, scenes 2 and 3 (KARAKTER 13C); scenes 4 and 5 (round 10, KARAKTER 14B) and
+   their storyboards are in the ROUND 10 section at the end. Scene 1 lives in intro.css and is untouched:
+   it runs under :root.run, these under :root.run2 / :root.run3, chosen by ?scene= (intro.js).
+   Shared with scene 1: the stage (floor + HUD corners), the mascot, the lockup, the quest prompt
+   and the handoff (lockup flies into the sidebar logo, the app slides in underneath).
+   --H is the handoff moment; every scene ends at H + 1050 ms like scene 1 (6250 -> 7300).
+
+   SCENE 2 "Insaat" (H = 6850, ends 7900; the iframe UI timeline starts 600 ms late, intro.js):
+     0-600      floor + corners draw; the level viewport's corner marks trace in -> a stage, a level
+     250-1050   mascot hops in from the left, lands with a squash          -> arrival
+     1100-2600  arm points; five taps, five blocks drop into place          -> it builds
+     2650-3260  marks fade, block pairs become platforms, the last block
+                turns into a star, a tiny hero pops up on the low platform  -> blocks become a game
+     3300-4140  hero crouches, jumps once, takes the star (+1), lands       -> it plays
+     3730-4170  the mascot's eyes go happy, a small hop                     -> it is pleased
+     4300-4900  the mascot rises into the lockup head; its visor is empty
+     4400-5200  camera pulls back: the level shrinks INTO the visor screen   -> the game is in its head
+     5200-5500  hold: the level stays in the visor (300 ms)
+     5500-5650  the level gives way to the eyes; head mark + wordmark 5550-6010
+     6050-7900  prompt, auto-press, handoff (as scene 1, shifted by 600 ms)
+   Round 9 (critique M4): the level is shown 3.3x (2x round 8) and laid out compact at 1:1, so the
+   platforms (317 px), the hero (132 px) and the star fill the right two-thirds of the frame
+   (page x 600-1497, y 99-703). Viewport box 580-1540 x 80-723.
+   End geometry: the world box 580-1520 x 170-703 (940 x 533) lands centred in the visor's inner
+   screen at the lockup position (397.50, 408.23) 89.42 x 44.22 -> scale 0.083, translate
+   (355.06, 394.11). The head is in place before the level arrives, so it reads as entering.
+
+   SCENE 3 "Kartus" (H = 6250, ends 7300):
+     0-600      floor + corners draw; 200-900 monitor and console outline, then fill -> a machine
+     500-1300   mascot hops in from the right, holding its cartridge        -> arrival
+     1500-2000  it looks up at the cartridge                                -> this is the thing
+     2000-2250  round 8: the camera punches in on the slot (x1.45)          -> look here
+     2200-2850  crouch-push: the cartridge goes into the slot               -> insert
+     2750-3000  the click: HUD lock-on brackets snap round the slot, the
+                slot rim lights teal, the cartridge settles (overshoot)     -> it is in
+     2900-3150  the camera pulls back out (before the monitor wakes)
+     2750-3200  console lamp on, a pulse runs down the cable                -> power
+     3200-3500  monitor wakes: a line, then the picture opens from it       -> boot
+     3500-3850  one scanline sweep, the logo is revealed unlit behind it
+     3950-4210  the logo lights up (on, off, on)                            -> Gamachine is on
+     4300-4700  happy eyes, a small hop
+     5450-7300  prompt (on the monitor), auto-press, handoff; the machine fades as the app arrives
+   Geometry: the hand-held cartridge sits at page (1115.04, 514.14), -14deg, 0.736965 px/unit
+   (mascot at translate(812.16, 100.19) scale(1.5)); the loose copy takes over there and then.
+   No blur, no filter anywhere; colours are Arena tokens (the approved brand palette). */
+
+:root[data-scene="2"] { --H: 6850ms; }
+
+:root[data-scene="3"] { --H: 6250ms; }
+
+:where(.intro-overlay) .s2,
+:where(.intro-overlay) .s3 { display: none; }
+
+:root[data-scene="2"] :where(.intro-overlay) .s2,
+:root[data-scene="3"] :where(.intro-overlay) .s3 { display: block; inset: 0; }
+
+:root:not([data-scene="1"]) :where(.intro-overlay) :is(.blk, .dust) { display: none; }
+
+
+/* the mascot is already awake in scenes 2 and 3 (scene 1 boots it) */
+:root:not([data-scene="1"]) :where(.intro-overlay) .m-svg #visor > rect:first-child { fill: var(--mascot-visor); }
+
+:root:not([data-scene="1"]) :where(.intro-overlay) .m-svg #visor > g[opacity] { opacity: .9; }
+
+:root:not([data-scene="1"]) :where(.intro-overlay) .m-svg #eyes { transform: none; }
+
+:root:not([data-scene="1"]) :where(.intro-overlay) .m-svg :is(#eyes-focus, #eyes-happy, #eyes-up) { display: inline; opacity: 0; }
+
+
+/* ---------- shared: stage, prompt, handoff ---------- */
+:is(.run2, .run3) :where(.intro-overlay) .hud-floor { animation: i-floor 600ms var(--g-ease-enter) both, i-fade 200ms linear var(--fade-at, var(--H)) both; }
+
+:is(.run2, .run3) :where(.intro-overlay) .hud-c { animation: i-draw 500ms var(--g-ease-enter) 100ms both, i-fade 200ms linear var(--fade-at, var(--H)) both; }
+
+.run2 { --fade-at: 4300ms; }
+
+:is(.run2, .run3) :where(.intro-overlay) .prompt { animation: i-prompt 240ms var(--g-ease-enter) calc(var(--H) - 800ms) both, i-fade 150ms linear var(--H) both; }
+
+:is(.run2, .run3) :where(.intro-overlay) .pr-btn { animation: i-press 140ms var(--g-ease-press) calc(var(--H) - 250ms) both; }
+
+:is(.run2, .run3) :where(.intro-overlay) .skip-hint { animation: i-fade 200ms linear var(--H) both; }
+
+:is(.run2, .run3) :where(.intro-overlay) .lockup { animation: i-home 900ms var(--g-ease-move) var(--H) both, i-fade 80ms linear calc(var(--H) + 900ms) both; }
+
+:is(.run2, .run3) :where(.intro-overlay) .ov-bg { animation: i-fade 600ms var(--g-ease-exit) calc(var(--H) + 50ms) both; }
+
+:is(.run2, .run3) :where(.intro-overlay) .ov { animation: i-end 1ms linear calc(var(--H) + 1050ms) both; }
+
+@keyframes gs-on { from { opacity: 0; } to { opacity: 1; } }
+
+
+/* ======================= SCENE 2: INSAAT ======================= */
+:root[data-scene="2"] :where(.intro-overlay) .m-pos { transform: translate(-42.21px, 100.19px) scale(1.5); }
+   /* feet at (400, 702) */
+:root[data-scene="2"] :where(.intro-overlay) .m-shadow { left: 285px; opacity: .9; }
+
+
+:where(.intro-overlay) .s2-world { position: absolute; left: 0; top: 0; width: 1600px; height: 1000px; transform-origin: 0 0;
+  clip-path: inset(80px 60px 277px 580px round 0px); }
+
+:where(.intro-overlay) .s2-world > * { position: absolute; }
+
+:where(.intro-overlay) .s2-screen { left: 580px; top: 80px; width: 960px; height: 643px; }
+   /* no fill: the level floats over the visor, never cuts the head */
+/* round 9: laid out at 1:1, shown 3.3x anchored on the floor at x 600: page = 600 + (x - 600) * 3.3.
+   Content 600-872 at 1:1 -> 600-1497 on the page; the star block top (524) -> y 112. */
+:where(.intro-overlay) .s2-lvl { left: 0; top: 0; width: 1600px; height: 1000px; transform: scale(3.3); transform-origin: 600px 703px; }
+
+:where(.intro-overlay) .s2-lvl > * { position: absolute; }
+
+:where(.intro-overlay) .s2-frame { left: 0; top: 0; width: 1600px; height: 1000px; fill: none; }
+
+:where(.intro-overlay) .s2-floor { stroke: var(--shell-line); stroke-width: 1.5; }
+
+:where(.intro-overlay) .s2-c { stroke: #3A4361; stroke-width: 2; stroke-dasharray: 1; }
+
+
+/* blocks: the scene-1 block, at the size the level needs */
+:where(.intro-overlay) .s2b { left: var(--x); top: var(--y); width: 48px; height: 48px; opacity: 0; }
+
+:where(.intro-overlay) .s2b i { position: absolute; inset: 0; background: var(--accent); border-radius: 6px; transform-origin: 50% 100%; }
+
+:where(.intro-overlay) .s2b i::after { content: ""; position: absolute; inset: 13px; border: 3px solid var(--mascot-screen); border-radius: 2px; }
+
+:where(.intro-overlay) .s2b-star i { transform-origin: 50% 50%; }
+
+/* platforms: graphite slabs with an orange top lip (two blocks wide) */
+:where(.intro-overlay) .s2-slab { width: 96px; height: 48px; opacity: 0; background: var(--mascot-body);
+  clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0 calc(100% - 6px), 0 6px); }
+
+:where(.intro-overlay) .s2-slab::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 9px; background: var(--accent); }
+
+:where(.intro-overlay) .s2-slab::after { content: ""; position: absolute; left: 18px; right: 18px; top: 26px; height: 3px; background: var(--mascot-screen);
+  box-shadow: 0 8px 0 var(--mascot-screen); }
+
+:where(.intro-overlay) .s2-g { left: 600px; top: 655px; }
+
+:where(.intro-overlay) .s2-r { left: 776px; top: 590px; }
+
+:where(.intro-overlay) .s2-star { left: 717px; top: 520px; width: 56px; height: 56px; overflow: visible; opacity: 0; }
+   /* centre (745, 548) */
+:where(.intro-overlay) .s2-star path { fill: var(--accent); stroke: var(--mascot-screen); stroke-width: 3; stroke-linejoin: round; }
+
+:where(.intro-overlay) .s2-spark { left: 745px; top: 548px; }
+
+:where(.intro-overlay) .s2-spark i { position: absolute; left: -4px; top: -4px; width: 8px; height: 8px; background: var(--mascot-eye); opacity: 0; transform: rotate(45deg); }
+
+:where(.intro-overlay) .s2-spark i:nth-child(1) { --dx: -24px; --dy: -18px; }
+
+:where(.intro-overlay) .s2-spark i:nth-child(2) { --dx: 24px; --dy: -18px; background: var(--accent); }
+
+:where(.intro-overlay) .s2-spark i:nth-child(3) { --dx: -22px; --dy: 16px; background: var(--accent); }
+
+:where(.intro-overlay) .s2-spark i:nth-child(4) { --dx: 23px; --dy: 15px; }
+
+:where(.intro-overlay) .s2-plus { left: 770px; top: 528px; opacity: 0; color: var(--accent); font-family: var(--font-display); font-weight: 700;
+  font-size: 13px; line-height: 1; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+
+:where(.intro-overlay) .s2-hero { left: 628px; top: 610px; width: 40px; height: 45px; }
+   /* stands on the low platform (top 655), centre x 648 */
+:where(.intro-overlay) .s2-hero-y,
+:where(.intro-overlay) .s2-hero-b { display: block; width: 40px; height: 45px; }
+
+:where(.intro-overlay) .s2-hero-b { overflow: visible; transform-origin: 50% 100%; }
+
+:where(.intro-overlay) .s2-hero-b .h-body { fill: var(--mascot-eye); }
+
+:where(.intro-overlay) .s2-hero-b .h-ant,
+:where(.intro-overlay) .s2-hero-b .h-eye { fill: var(--accent); }
+
+:where(.intro-overlay) .s2-hero-b .h-visor { fill: var(--mascot-screen); }
+
+
+/* --- act 1: the level viewport, the mascot hops in --- */
+.run2 :where(.intro-overlay) .s2-c { animation: i-draw 500ms var(--g-ease-enter) 200ms both, i-fade 200ms linear 4300ms both; }
+
+.run2 :where(.intro-overlay) .s2-floor { animation: i-floor 600ms var(--g-ease-enter) both; transform-box: fill-box; transform-origin: center; }
+
+.run2 :where(.intro-overlay) .m-drop { animation: s2-hx 800ms linear 250ms both, i-fade 150ms linear 5600ms both; }
+
+@keyframes s2-hx { from { transform: translateX(-380px); } }
+
+.run2 :where(.intro-overlay) .m-shadow { animation: s2-shx 800ms linear 250ms both, i-fade 250ms linear 4300ms both; }
+
+@keyframes s2-shx { from { transform: translateX(-570px); } }
+
+/* two hops (Y only; X is linear above); fill none: idle before and after */
+.run2 :where(.intro-overlay) .m-svg { animation: s2-hops 800ms 250ms, s2-joy 400ms 3770ms; }
+
+@keyframes s2-hops {
+  0%, 50% { transform: none; animation-timing-function: cubic-bezier(.2, .6, .4, 1); }
+  25%, 75% { transform: translateY(-40px); animation-timing-function: cubic-bezier(.6, 0, .8, .4); }
+  100% { transform: none; }
+}
+
+@keyframes s2-joy {
+  0% { transform: none; animation-timing-function: cubic-bezier(.2, .6, .4, 1); }
+  45% { transform: translateY(-26px); animation-timing-function: cubic-bezier(.6, 0, .8, .4); }
+  100% { transform: none; }
+}
+
+.run2 :where(.intro-overlay) .m-svg #rig { animation: i-squash 270ms var(--g-ease-move) 1050ms both; }
+
+
+/* faces: normal -> focus (building) -> happy (star) -> normal (pull back) */
+.run2 :where(.intro-overlay) .m-svg #eyes-normal { animation: s2-eye-n 5500ms linear both; }
+   /* eyes off 1100-5500: the visor becomes the level's screen */
+.run2 :where(.intro-overlay) .m-svg #eyes-focus { animation: s2-eye-f 4400ms linear both; }
+
+.run2 :where(.intro-overlay) .m-svg #eyes-happy { animation: s2-eye-h 4400ms linear both; }
+
+@keyframes s2-eye-n { 0%, 19.99% { opacity: 1; } 20%, 99.99% { opacity: 0; } 100% { opacity: 1; } }
+
+@keyframes s2-eye-f { 0%, 24.99% { opacity: 0; } 25%, 84.76% { opacity: 1; } 84.77%, 100% { opacity: 0; } }
+
+@keyframes s2-eye-h { 0%, 84.76% { opacity: 0; } 84.77%, 99.99% { opacity: 1; } 100% { opacity: 0; } }
+
+
+/* --- act 2: point, tap, a block drops into place (taps peak at 1290/1540/1790/2040/2290) --- */
+.run2 :where(.intro-overlay) .m-svg #arm-right { animation: s2-point 1500ms var(--g-ease-move) 1100ms both, i-fade 300ms linear 4300ms both; }
+
+@keyframes s2-point {
+  0%, 100% { transform: none; }
+  8%, 17%, 25.33%, 33.67%, 42%, 50.33%, 58.67%, 67%, 75.33%, 83.67%, 88% { transform: rotate(62deg); }
+  12.67%, 29.33%, 46%, 62.67%, 79.33% { transform: rotate(76deg); }
+}
+
+.run2 :where(.intro-overlay) .s2b { animation: s2-drop 220ms cubic-bezier(.55, 0, 1, .45) var(--d) both, i-fade 200ms linear 2700ms both; }
+
+@keyframes s2-drop { 0% { opacity: 0; transform: translateY(-44px); } 30% { opacity: 1; } 100% { opacity: 1; transform: none; } }
+
+.run2 :where(.intro-overlay) .s2b i { animation: i-land 160ms var(--g-ease-move) calc(var(--d) + 220ms); }
+
+.run2 :where(.intro-overlay) .s2b i::after { animation: i-fade 180ms linear 2650ms both; }
+
+/* --- act 3: blocks become a game --- */
+.run2 :where(.intro-overlay) .s2b-star { animation: s2-drop 220ms cubic-bezier(.55, 0, 1, .45) var(--d) both, i-fade 80ms linear 2900ms both; }
+
+.run2 :where(.intro-overlay) .s2b-star i { animation: i-land 160ms var(--g-ease-move) calc(var(--d) + 220ms), s2-tostar 220ms var(--g-ease-move) 2700ms forwards; }
+
+@keyframes s2-tostar { to { transform: rotate(45deg) scale(.7); } }
+
+.run2 :where(.intro-overlay) .s2-slab { animation: gs-on 220ms linear 2700ms both; }
+
+.run2 :where(.intro-overlay) .s2-r { animation: gs-on 220ms linear 2700ms both, s2-dip 180ms var(--g-ease-move) 4000ms; }
+
+@keyframes s2-dip { 40% { transform: translateY(3px); } }
+
+.run2 :where(.intro-overlay) .s2-star { animation: s2-pop 300ms var(--g-ease-enter) 2900ms both, s2-take 200ms cubic-bezier(.2, .7, .3, 1) 3730ms forwards; }
+
+@keyframes s2-pop { 0% { opacity: 0; transform: scale(.3); } 60% { opacity: 1; transform: scale(1.15); } 100% { opacity: 1; transform: none; } }
+
+@keyframes s2-take { to { opacity: 0; transform: scale(1.6); } }
+
+/* hero: pops up, crouches, jumps once (X linear, Y arc), lands */
+.run2 :where(.intro-overlay) .s2-hero-b { animation: s2-spawn 260ms var(--g-ease-enter) 3000ms both, s2-crouch 100ms ease-out 3300ms, s2-squash 140ms var(--g-ease-move) 4000ms; }
+
+@keyframes s2-spawn { 0% { transform: scale(1, 0); } 60% { transform: scale(.95, 1.15); } 100% { transform: none; } }
+
+@keyframes s2-crouch { 100% { transform: scale(1.1, .85); } }
+
+@keyframes s2-squash { 0% { transform: scale(1.1, .85); } 45% { transform: scale(1.15, .82); } }
+
+.run2 :where(.intro-overlay) .s2-hero { animation: s2-jx 600ms linear 3400ms both; }
+
+@keyframes s2-jx { to { transform: translateX(176px); } }
+   /* centre 648 -> 824, the high platform */
+.run2 :where(.intro-overlay) .s2-hero-y { animation: s2-jy 600ms 3400ms both; }
+
+@keyframes s2-jy {
+  0% { transform: none; animation-timing-function: cubic-bezier(.25, .6, .45, 1); }
+  55% { transform: translateY(-84.5px); animation-timing-function: cubic-bezier(.55, 0, .75, .45); }   /* centre on the star (548) */
+  100% { transform: translateY(-65px); }   /* feet on the high platform (590) */
+}
+
+.run2 :where(.intro-overlay) .s2-spark i { animation: s2-spark 380ms cubic-bezier(.2, .7, .3, 1) 3730ms forwards; }
+
+@keyframes s2-spark {
+  0% { opacity: 1; transform: translate(0, 0) rotate(45deg) scale(1); }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(45deg) scale(.4); }
+}
+
+.run2 :where(.intro-overlay) .s2-plus { animation: s2-plus 600ms var(--g-ease-enter) 3730ms forwards; }
+
+@keyframes s2-plus { 0% { opacity: 1; transform: translateY(8px); } 60% { opacity: 1; } 100% { opacity: 0; transform: translateY(-18px); } }
+
+
+/* --- act 4: camera pulls back; the level lands in the visor as the mascot becomes the head --- */
+.run2 :where(.intro-overlay) .m-pos { animation: i-rise 600ms var(--g-ease-move) 4300ms both; }
+
+.run2 :where(.intro-overlay) .m-svg :is(#legs, #body, #arm-left) { animation: i-fade 300ms linear 4300ms both; }
+
+/* the head is in place at 4900; the level lands in its visor at 5200 and stays there until 5500 */
+.run2 :where(.intro-overlay) .s2-world { animation: s2-back 800ms var(--g-ease-move) 4400ms both, i-fade 150ms linear 5500ms both; }
+
+@keyframes s2-back {
+  to { transform: translate(355.06px, 394.11px) scale(.083); clip-path: inset(170px 80px 297px 580px round 106px); }
+}
+
+.run2 :where(.intro-overlay) .lk-head { animation: i-show 200ms linear 5550ms both; }
+
+.run2 :where(.intro-overlay) .lk-w { animation: i-letters 300ms var(--g-ease-move) both; }
+
+.run2 :where(.intro-overlay) .lk-w1 { animation-delay: 5550ms; }
+
+.run2 :where(.intro-overlay) .lk-w2 { animation-delay: 5630ms; }
+
+.run2 :where(.intro-overlay) .lk-w3 { animation-delay: 5710ms; }
+
+
+/* ======================= SCENE 3: KARTUS ======================= */
+:root[data-scene="3"] :where(.intro-overlay) .m-pos { transform: translate(812.16px, 100.19px) scale(1.5); }
+    /* feet at (1254.37, 702) */
+:root[data-scene="3"] :where(.intro-overlay) .m-shadow { left: 1139.4px; opacity: .9; }
+
+:root[data-scene="3"] :where(.intro-overlay) .lockup { transform: translate(-20px, -8px) scale(.6); clip-path: inset(0 0 100% 0); }
+  /* on the monitor */
+:root[data-scene="3"] :where(.intro-overlay) .lk-w { clip-path: none; fill: var(--energy-off); }
+
+:root[data-scene="3"] :where(.intro-overlay) .lk-head { opacity: .3; }
+
+:root[data-scene="3"] :where(.intro-overlay) .prompt { left: 600px; top: 474px; }
+
+
+:where(.intro-overlay) .cam { inset: 0; }
+
+:where(.intro-overlay) .cam > * { position: absolute; }
+
+:where(.intro-overlay) .s3 > * { position: absolute; }
+
+/* scene 3 draws its own floor inside the camera rig; the HUD floor would stay put while the world zooms */
+:root[data-scene="3"] :where(.intro-overlay) .hud-floor { display: none; }
+
+:where(.intro-overlay) .s3-floor { fill: none; stroke: var(--shell-line); stroke-width: 1.5; transform-box: fill-box; transform-origin: center; }
+
+:where(.intro-overlay) .s3-bay { fill: var(--mascot-body); stroke: #3A4361; stroke-width: 1.5; }
+
+:where(.intro-overlay) .s3-hud { display: none; left: 0; top: 0; width: 1600px; height: 1000px; overflow: visible; pointer-events: none; }
+
+:root[data-scene="3"] :where(.intro-overlay) .s3-hud { display: block; }
+
+:where(.intro-overlay) .s3-lock { opacity: 0; transform-box: view-box; transform-origin: 1115px 561px; }
+
+:where(.intro-overlay) .s3-lock path { fill: none; stroke: var(--mascot-eye); stroke-width: 3; stroke-linecap: square; }
+
+:where(.intro-overlay) .s3-tag { fill: var(--energy); font-family: var(--font-display); font-size: 14px; font-weight: 700; letter-spacing: .16em; }
+   /* x1.45 on screen */
+:where(.intro-overlay) .s3-mach { left: 0; top: 0; width: 1600px; height: 1000px; overflow: visible; }
+
+:where(.intro-overlay) .s3-fill { fill: var(--mascot-body); }
+
+:where(.intro-overlay) .s3-ol { fill: none; stroke: #3A4361; stroke-width: 2; stroke-linejoin: round; stroke-dasharray: 1; }
+
+:where(.intro-overlay) .s3-slot { fill: #0B0E16; stroke: #4C5571; stroke-width: 1.5; }
+
+:where(.intro-overlay) .s3-vent { fill: none; stroke: #3A4361; stroke-width: 3; stroke-linecap: round; }
+
+:where(.intro-overlay) .s3-led { fill: var(--energy-off); }
+
+:where(.intro-overlay) .s3-cable { fill: none; stroke: #3A4361; stroke-width: 4; stroke-linecap: round; }
+
+:where(.intro-overlay) .s3-pulse { fill: none; stroke: var(--energy); stroke-width: 4; stroke-linecap: round; stroke-dasharray: .14 1.2; stroke-dashoffset: .14; opacity: 0; }
+
+:where(.intro-overlay) .s3-scr { left: 246px; top: 226px; width: 708px; height: 380px; overflow: hidden; background: #0B0E16; }
+
+:where(.intro-overlay) .s3-scr > * { position: absolute; }
+
+:where(.intro-overlay) .s3-on { inset: 0; background: var(--shell-bg-2); transform: scaleY(0);
+  background-image: repeating-linear-gradient(180deg, rgba(160, 175, 215, .035) 0 1px, transparent 1px 4px); }
+
+:where(.intro-overlay) .s3-line { left: 0; right: 0; top: 189px; height: 2px; background: var(--mascot-eye); transform: scaleX(0); }
+
+:where(.intro-overlay) .s3-sweep { left: 0; right: 0; top: -70px; height: 70px; opacity: 0;
+  background: linear-gradient(180deg, transparent, rgba(241, 238, 230, .07) 80%, rgba(241, 238, 230, .16) 96%, var(--mascot-eye) 96%); }
+
+/* the loose cartridge: the clip box ends at the slot, so whatever passes y = 564 is inside */
+:where(.intro-overlay) .s3-cart { left: 1060px; top: 380px; width: 110px; height: 184px; overflow: hidden; }
+
+:where(.intro-overlay) .s3-cart-svg { position: absolute; left: 26.66px; top: 102.82px; width: 56.75px; height: 62.64px; opacity: 0; transform: rotate(-14deg); }
+
+:where(.intro-overlay) .s3-cart-svg .c-body { fill: var(--mascot-visor); }
+
+:where(.intro-overlay) .s3-cart-svg .c-label { fill: var(--mascot-screen); }
+
+
+/* --- act 1: the machine draws in; the mascot hops in from the right --- */
+.run3 :where(.intro-overlay) .s3-floor { animation: i-floor 600ms var(--g-ease-enter) both, i-fade 200ms linear var(--H) both; }
+
+.run3 :where(.intro-overlay) .s3-ol { animation: i-draw 600ms var(--g-ease-enter) 200ms both, i-fade 250ms linear var(--H) both; }
+
+.run3 :where(.intro-overlay) .s3-fill { animation: gs-on 300ms linear 600ms both; }
+
+.run3 :where(.intro-overlay) .s3-detail { animation: gs-on 300ms linear 700ms both; }
+
+.run3 :where(.intro-overlay) .s3-mach { animation: i-fade 250ms linear var(--H) both; }
+
+.run3 :where(.intro-overlay) .s3-scr { animation: gs-on 300ms linear 600ms both, i-fade 250ms linear var(--H) both; }
+
+.run3 :where(.intro-overlay) .s3-cart { animation: i-fade 250ms linear var(--H) both; }
+
+.run3 :where(.intro-overlay) .m-drop { animation: s3-hx 800ms linear 500ms both, i-fade 250ms linear var(--H) both; }
+
+@keyframes s3-hx { from { transform: translateX(380px); } }
+
+.run3 :where(.intro-overlay) .m-shadow { animation: s3-shx 800ms linear 500ms both, i-fade 250ms linear var(--H) both; }
+
+@keyframes s3-shx { from { transform: translateX(570px); } }
+
+.run3 :where(.intro-overlay) .m-svg { animation: s2-hops 800ms 500ms, s2-joy 400ms 4320ms; }
+
+.run3 :where(.intro-overlay) .m-svg #rig { animation: i-squash 270ms var(--g-ease-move) 1300ms both; }
+
+
+/* faces: normal -> looks up at the cartridge -> focus (insert) -> normal -> happy (logo on) */
+.run3 :where(.intro-overlay) .m-svg #eyes-normal { animation: s3-eye-n 4300ms linear both; }
+
+.run3 :where(.intro-overlay) .m-svg #eyes-up { animation: s3-eye-u 4300ms linear both; }
+
+.run3 :where(.intro-overlay) .m-svg #eyes-focus { animation: s3-eye-f 4300ms linear both; }
+
+.run3 :where(.intro-overlay) .m-svg #eyes-happy { animation: gs-on 1ms linear 4300ms both; }
+
+@keyframes s3-eye-n { 0%, 34.87% { opacity: 1; } 34.88%, 67.43% { opacity: 0; } 67.44%, 99.99% { opacity: 1; } 100% { opacity: 0; } }
+
+@keyframes s3-eye-u { 0%, 34.87% { opacity: 0; } 34.88%, 46.5% { opacity: 1; } 46.51%, 100% { opacity: 0; } }
+
+@keyframes s3-eye-f { 0%, 46.5% { opacity: 0; } 46.51%, 67.43% { opacity: 1; } 67.44%, 100% { opacity: 0; } }
+
+
+/* --- act 2: crouch-push; the hand's cartridge is swapped for the loose one at 2200 --- */
+.run3 :where(.intro-overlay) .m-svg #upper { animation: s3-push 500ms 2200ms; }
+
+@keyframes s3-push {
+  0% { transform: none; animation-timing-function: cubic-bezier(.5, 0, .75, .3); }
+  50% { transform: translateY(18px); animation-timing-function: cubic-bezier(.25, .7, .4, 1); }
+  100% { transform: none; }
+}
+
+.run3 :where(.intro-overlay) .m-svg #cartridge { animation: i-fade 1ms linear 2200ms both; }
+
+.run3 :where(.intro-overlay) .s3-cart-svg { animation: gs-on 1ms linear 2200ms both, s3-cart 650ms 2200ms both; }
+
+@keyframes s3-cart {
+  0% { transform: rotate(-14deg); animation-timing-function: cubic-bezier(.5, 0, .75, .3); }
+  38.46% { transform: translateY(13.27px) rotate(-14deg); animation-timing-function: cubic-bezier(.45, 0, .8, .5); }
+  84.6% { transform: translateY(49.5px) rotate(0deg); animation-timing-function: ease-out; }   /* bottoms out: the click */
+  100% { transform: translateY(46px) rotate(0deg); }   /* seated half out, 35 px above the slot */
+}
+
+/* the camera: in on the slot before the push, out again before the monitor wakes (3200) */
+.run3 :where(.intro-overlay) .cam { transform-origin: 1115px 560px; animation: s3-cam 1150ms linear 2000ms both; }
+
+@keyframes s3-cam {   /* x1.45 on the slot, slot pulled 140 px toward the centre */
+  0% { transform: none; animation-timing-function: cubic-bezier(.3, 0, .15, 1); }
+  21.74%, 78.26% { transform: translate(-140px, -30px) scale(1.45); }
+  78.26% { animation-timing-function: cubic-bezier(.45, 0, .25, 1); }
+  100% { transform: none; }
+}
+
+/* the click (the cartridge bottoms out at 2750): brackets snap in, the slot rim lights and stays lit */
+.run3 :where(.intro-overlay) .s3-lock { animation: s3-lock 220ms var(--g-ease-enter) 2750ms both, i-fade 250ms linear 3000ms both; }
+
+@keyframes s3-lock { 0% { opacity: 0; transform: scale(1.7); } 100% { opacity: 1; transform: none; } }
+
+.run3 :where(.intro-overlay) .s3-slot { animation: s3-slot 450ms linear 2750ms forwards; }
+
+@keyframes s3-slot { 0%, 35% { stroke: var(--energy); stroke-width: 3.5; } 100% { stroke: var(--energy); stroke-width: 1.5; } }
+
+
+/* --- act 3: power, boot, light --- */
+.run3 :where(.intro-overlay) .s3-led-con { animation: s3-led 1ms linear 2750ms both; }
+
+.run3 :where(.intro-overlay) .s3-led-mon { animation: s3-led 1ms linear 3200ms both; }
+
+@keyframes s3-led { to { fill: var(--energy); } }
+
+.run3 :where(.intro-overlay) .s3-pulse { animation: s3-pulse 450ms cubic-bezier(.4, 0, .6, 1) 2780ms both; }
+
+@keyframes s3-pulse { 0% { opacity: 1; stroke-dashoffset: .14; } 99% { opacity: 1; } 100% { opacity: 0; stroke-dashoffset: -1; } }
+
+.run3 :where(.intro-overlay) .s3-line { animation: s3-line 240ms 3200ms both; }
+
+@keyframes s3-line {
+  0% { transform: scaleX(0); animation-timing-function: cubic-bezier(.19, 1, .22, 1); }
+  50% { transform: none; opacity: 1; }
+  100% { transform: none; opacity: 0; }
+}
+
+.run3 :where(.intro-overlay) .s3-on { animation: s3-open 180ms var(--g-ease-enter) 3320ms both; }
+
+@keyframes s3-open { to { transform: none; } }
+
+.run3 :where(.intro-overlay) .s3-sweep { animation: s3-sweep 350ms linear 3500ms both; }
+
+@keyframes s3-sweep {
+  0% { opacity: 1; transform: none; }
+  96% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(450px); }
+}
+
+/* the sweep's bright edge crosses the lockup between 3575 and 3663: reveal it there, unlit */
+.run3 :where(.intro-overlay) .lockup { animation: s3-reveal 88ms linear 3575ms both, i-home 900ms var(--g-ease-move) var(--H) both, i-fade 80ms linear calc(var(--H) + 900ms) both; }
+
+@keyframes s3-reveal { to { clip-path: inset(0 0 0 0); } }
+
+.run3 :where(.intro-overlay) .lk-w { animation: s3-lit 260ms linear 3950ms both; }
+
+@keyframes s3-lit {
+  0% { fill: var(--energy-off); } 1%, 30% { fill: var(--mascot-eye); }
+  31%, 52% { fill: var(--energy-off); } 53%, 100% { fill: var(--mascot-eye); }
+}
+
+.run3 :where(.intro-overlay) .lk-head { animation: s3-lit-h 260ms linear 3950ms both; }
+
+@keyframes s3-lit-h { 0% { opacity: .3; } 1%, 30% { opacity: 1; } 31%, 52% { opacity: .3; } 53%, 100% { opacity: 1; } }
+   /* 12 px floor */
+
+/* ======================= ROUND 10: SCENES 4 AND 5 (KARAKTER 14B) =======================
+   Same contract as 2 and 3: --H = 6250 (ends 7300, iframe offset 0), the shared prompt and
+   handoff below, the mascot awake (the :not([data-scene="1"]) rules above), no blur, no filter.
+
+   SCENE 4 "Piksel" - the monster paints its own sprite, the sprite walks, its pixels write the name.
+     0-600      floor + HUD corners; 150-750 an easel frame traces in, the checker canvas,
+                "SPRITE 14x12" and a four-colour palette appear                  -> a sprite editor
+     300-720    the mascot spawns at x 400 (pops up from its feet, squash)      -> arrival
+     1100-2400  it points; four taps. Each tap the palette cursor jumps one swatch and that
+                colour prints onto the canvas, row by row (ink outline + screen, graphite,
+                orange, cream eyes; 1290/1590/1890/2190): a pixel mini-me      -> it paints
+     3200-4250  the sprite plays a 2-frame walk cycle, 7 frames x 150 ms, one cell a frame
+                (6 cells right); the mascot watches happy, hops once (3300)     -> it plays
+     4350       the sprite breaks into its 74 coloured pixels; the canvas fades
+     4400-5250  the pixels fly left to right into the wordmark band; GAM / ACH / INE wipe in
+                behind them (4900 / 5010 / 5120)                                -> pixels write the name
+     4350-5050  the mascot rises into the lockup head (as scene 1); head mark 5050
+     5450-7300  prompt, auto-press, handoff (shared)
+
+   SCENE 5 "Yukleme" - a retro loading bar that only the monster can push to 100 %.
+     0-600      floor + corners; 150-750 the bar wipes in, "YUKLENIYOR" above it and "2%" at its
+                right end (where the mascot never covers it)                   -> loading
+     300-1100   the mascot (1.5x, as scenes 1-4) hops in from the left to the bar's
+                leading edge                                                   -> arrival
+     1150-1350  it braces: leans in, arm on the bar, eyes focus
+     1350-2900  three shoves; the segmented fill, the counter and the mascot move as one
+                (2 -> 34 -> 68 -> 99 %)                                       -> it pushes
+     2900-3400  stuck at 99 %: the counter blinks twice, the mascot strains   -> the joke
+     3400-3680  it winds back and shoves; 100 %, the bar turns teal            -> done
+     3700-3960  "HAZIR" stamps in above the bar; happy eyes, a hop (3800)     -> ready
+     4300-5000  the mascot rises into the lockup head; the bar (emptied) becomes the wordmark box
+     4900-5350  GAM / ACH / INE load into it left to right like a second bar; box fades 5350
+     5450-7300  prompt, auto-press, handoff (shared)
+   Geometry (scene 5): the fill's leading edge is at x = 386 + 928 f; the pushing fist is 155 px
+   right of the mascot's feet (measured: fist 822-889 x 546-598 at f .517, edge 865), so the feet
+   are at 249.6 + 928 (f - .02); .m-drop sits inside the 1.5x .m-pos, so its push is that / 1.5.
+   The wordmark box (577, 385) 651 x 76 = the bar (380, 544) 940 x 56 x (.6926, 1.3571) + (197, -159). */
+
+:root[data-scene="4"],
+:root[data-scene="5"] { --H: 6250ms; }
+
+:where(.intro-overlay) .s4,
+:where(.intro-overlay) .s5,
+:where(.intro-overlay) .s4-px { display: none; }
+
+:root[data-scene="4"] :where(.intro-overlay) :is(.s4, .s4-px),
+:root[data-scene="5"] :where(.intro-overlay) .s5 { display: block; inset: 0; }
+
+
+/* shared stage, prompt and handoff (the scene 2/3 rules, repeated so theirs stay untouched) */
+:is(.run4, .run5) { --fade-at: 4350ms; }
+
+:is(.run4, .run5) :where(.intro-overlay) .hud-floor { animation: i-floor 600ms var(--g-ease-enter) both, i-fade 200ms linear var(--fade-at) both; }
+
+:is(.run4, .run5) :where(.intro-overlay) .hud-c { animation: i-draw 500ms var(--g-ease-enter) 100ms both, i-fade 200ms linear var(--fade-at) both; }
+
+:is(.run4, .run5) :where(.intro-overlay) .prompt { animation: i-prompt 240ms var(--g-ease-enter) calc(var(--H) - 800ms) both, i-fade 150ms linear var(--H) both; }
+
+:is(.run4, .run5) :where(.intro-overlay) .pr-btn { animation: i-press 140ms var(--g-ease-press) calc(var(--H) - 250ms) both; }
+
+:is(.run4, .run5) :where(.intro-overlay) .skip-hint { animation: i-fade 200ms linear var(--H) both; }
+
+:is(.run4, .run5) :where(.intro-overlay) .lockup { animation: i-home 900ms var(--g-ease-move) var(--H) both, i-fade 80ms linear calc(var(--H) + 900ms) both; }
+
+:is(.run4, .run5) :where(.intro-overlay) .ov-bg { animation: i-fade 600ms var(--g-ease-exit) calc(var(--H) + 50ms) both; }
+
+:is(.run4, .run5) :where(.intro-overlay) .ov { animation: i-end 1ms linear calc(var(--H) + 1050ms) both; }
+
+/* both scenes end in the scene-1 lockup: the body goes, the head mark stays */
+.run4 { --rise: 4350ms; }
+
+.run5 { --rise: 4300ms; }
+
+:is(.run4, .run5) :where(.intro-overlay) .m-svg :is(#legs, #body, #arm-left) { animation: i-fade 300ms linear var(--rise) both; }
+
+:is(.run4, .run5) :where(.intro-overlay) .m-pos { animation: i-rise 700ms var(--g-ease-move) var(--rise) both; }
+
+:is(.run4, .run5) :where(.intro-overlay) .lk-head { animation: i-show 200ms linear calc(var(--rise) + 700ms) both; }
+
+
+/* ======================= SCENE 4: PIKSEL ======================= */
+:root[data-scene="4"] :where(.intro-overlay) .m-pos { transform: translate(-42.21px, 100.19px) scale(1.5); }
+   /* feet at (400, 702), as scene 2 */
+:root[data-scene="4"] :where(.intro-overlay) .m-shadow { left: 285px; opacity: .9; }
+
+:root[data-scene="4"] :where(.intro-overlay) .m-svg { transform-origin: 171.96px 301.67px; }
+   /* the feet, for the spawn */
+:where(.intro-overlay) .s4 > * { position: absolute; margin: 0; }
+
+:where(.intro-overlay) .s4-easel { left: 0; top: 0; width: 1600px; height: 1000px; overflow: visible; fill: none; }
+
+:where(.intro-overlay) .s4-leg { stroke: #3A4361; stroke-width: 6; stroke-linecap: round; }
+
+:where(.intro-overlay) .s4-ol { stroke: #3A4361; stroke-width: 2; stroke-dasharray: 1; }
+
+:where(.intro-overlay) .s4-tag { left: 766px; top: 218px; font: 700 13px/1 var(--font-display); letter-spacing: .16em; color: var(--shell-text-dim); }
+
+/* palette: five 28 px swatches on a 40 px pitch; the cursor is a cream square bracket */
+:where(.intro-overlay) .s4-pal { left: 712px; top: 262px; width: 40px; height: 200px; }
+
+:where(.intro-overlay) .s4-pal i { display: block; width: 28px; height: 28px; margin: 0 0 12px 6px; background: var(--c); box-shadow: inset 0 0 0 2px #3A4361; }
+
+:where(.intro-overlay) .s4-sel { position: absolute; left: 0; top: -6px; width: 40px; height: 40px; box-sizing: border-box; border: 3px solid var(--mascot-eye); opacity: 0; }
+
+/* the canvas: a 21 x 13 grid of 30 px cells, drawn as an editor's transparency checker (light
+   enough that the ink outline and the graphite read, as in a real sprite editor) */
+:where(.intro-overlay) .s4-cv { left: 770px; top: 250px; width: 630px; height: 390px; overflow: hidden; opacity: 0;
+  background: repeating-conic-gradient(#3A4361 0 25%, #323A53 0 50%) 0 0 / 60px 60px; }
+
+:where(.intro-overlay) .s4-walk { position: absolute; left: 30px; top: 30px; width: 420px; height: 360px; }
+
+:where(.intro-overlay) .s4-walk svg { position: absolute; left: 0; top: 0; width: 420px; height: 360px; }
+
+:where(.intro-overlay) .s4-l { clip-path: inset(0 0 100% 0); }
+
+:where(.intro-overlay) .s4-fb { opacity: 0; }
+
+:where(.intro-overlay) .s4-px i { position: absolute; width: 30px; height: 30px; background: var(--c); opacity: 0; }
+
+
+/* --- act 1: the editor, the mascot spawns --- */
+.run4 :where(.intro-overlay) .s4-ol { animation: i-draw 600ms var(--g-ease-enter) 150ms both, i-fade 250ms linear 4350ms both; }
+
+.run4 :where(.intro-overlay) .s4-leg { animation: gs-on 300ms linear 450ms both, i-fade 250ms linear 4350ms both; }
+
+.run4 :where(.intro-overlay) .s4-cv { animation: gs-on 300ms linear 500ms both, i-fade 250ms linear 4350ms both; }
+
+.run4 :where(.intro-overlay) :is(.s4-tag, .s4-pal) { animation: gs-on 300ms linear 650ms both, i-fade 250ms linear 4350ms both; }
+
+.run4 :where(.intro-overlay) .m-svg { animation: s4-spawn 420ms var(--g-ease-enter) 300ms both, s2-joy 400ms 3300ms; }
+
+@keyframes s4-spawn {
+  0% { transform: scale(.5, 0); }
+  45% { transform: scale(.92, 1.12); }
+  75% { transform: scale(1.05, .95); }
+  100% { transform: none; }
+}
+
+.run4 :where(.intro-overlay) .m-shadow { animation: s4-shadow 300ms linear 300ms both, i-fade 250ms linear 4350ms both; }
+
+@keyframes s4-shadow { from { opacity: 0; transform: scaleX(.3); } }
+
+.run4 :where(.intro-overlay) .m-drop { animation: i-fade 150ms linear 5150ms both; }
+
+
+/* faces: normal -> focus (painting) -> happy (it walks) -> normal (the lockup head) */
+.run4 :where(.intro-overlay) .m-svg #eyes-normal { animation: s4-eye-n 4350ms linear both; }
+
+.run4 :where(.intro-overlay) .m-svg #eyes-focus { animation: s4-eye-f 4350ms linear both; }
+
+.run4 :where(.intro-overlay) .m-svg #eyes-happy { animation: s4-eye-h 4350ms linear both; }
+
+@keyframes s4-eye-n { 0%, 25.28% { opacity: 1; } 25.29%, 99.99% { opacity: 0; } 100% { opacity: 1; } }
+
+@keyframes s4-eye-f { 0%, 25.28% { opacity: 0; } 25.29%, 73.55% { opacity: 1; } 73.56%, 100% { opacity: 0; } }
+
+@keyframes s4-eye-h { 0%, 73.55% { opacity: 0; } 73.56%, 99.99% { opacity: 1; } 100% { opacity: 0; } }
+
+
+/* --- act 2: four taps (peaks 1290/1590/1890/2190), four colours --- */
+.run4 :where(.intro-overlay) .m-svg #arm-right { animation: s4-point 1300ms var(--g-ease-move) 1100ms both, i-fade 300ms linear 4350ms both; }
+
+@keyframes s4-point {
+  0%, 100% { transform: none; }
+  9.2%, 19.2%, 32.3%, 42.3%, 55.4%, 65.4%, 78.5%, 88.5%, 92% { transform: rotate(62deg); }
+  14.6%, 37.7%, 60.8%, 83.8% { transform: rotate(76deg); }
+}
+
+.run4 :where(.intro-overlay) .s4-sel { animation: gs-on 1ms linear 1150ms both, s4-sel 900ms 1150ms both, i-fade 200ms linear 2500ms forwards; }
+
+@keyframes s4-sel {   /* step-end: the cursor jumps a swatch 140 ms before each tap */
+  0% { transform: none; animation-timing-function: step-end; }
+  33.33% { transform: translateY(40px); animation-timing-function: step-end; }
+  66.67% { transform: translateY(80px); animation-timing-function: step-end; }
+  100% { transform: translateY(120px); }
+}
+
+.run4 :where(.intro-overlay) .s4-l { animation: s4-paint 216ms steps(12, end) var(--pd) forwards; }
+
+@keyframes s4-paint { to { clip-path: inset(0 0 0 0); } }
+
+:where(.intro-overlay) .s4-L1 { --pd: 1290ms; }
+
+:where(.intro-overlay) .s4-L2 { --pd: 1590ms; }
+
+:where(.intro-overlay) .s4-L3 { --pd: 1890ms; }
+
+:where(.intro-overlay) .s4-L4 { --pd: 2190ms; }
+
+
+/* --- act 3: the walk cycle. 7 frames of 150 ms (A B A B A B A), one cell right per frame --- */
+.run4 :where(.intro-overlay) .s4-walk { animation: s4-walk 1050ms steps(7, jump-none) 3200ms both, i-fade 1ms linear 4350ms both; }
+
+@keyframes s4-walk { to { transform: translateX(180px); } }
+
+.run4 :where(.intro-overlay) .s4-fa { animation: s4-paint 216ms steps(12, end) var(--pd) forwards, s4-fa 1050ms 3200ms both; }
+
+.run4 :where(.intro-overlay) .s4-fb { animation: s4-fb 1050ms 3200ms both; }
+
+@keyframes s4-fa {
+  0% { opacity: 1; animation-timing-function: step-end; } 14.29% { opacity: 0; animation-timing-function: step-end; }
+  28.57% { opacity: 1; animation-timing-function: step-end; } 42.86% { opacity: 0; animation-timing-function: step-end; }
+  57.14% { opacity: 1; animation-timing-function: step-end; } 71.43% { opacity: 0; animation-timing-function: step-end; }
+  85.71%, 100% { opacity: 1; }
+}
+
+@keyframes s4-fb {
+  0% { opacity: 0; animation-timing-function: step-end; } 14.29% { opacity: 1; animation-timing-function: step-end; }
+  28.57% { opacity: 0; animation-timing-function: step-end; } 42.86% { opacity: 1; animation-timing-function: step-end; }
+  57.14% { opacity: 0; animation-timing-function: step-end; } 71.43% { opacity: 1; animation-timing-function: step-end; }
+  85.71%, 100% { opacity: 0; }
+}
+
+
+/* --- act 4: the sprite's pixels fly into the wordmark; the letters wipe in behind them --- */
+.run4 :where(.intro-overlay) .s4-px i { animation: gs-on 1ms linear 4350ms both, s4-fly 520ms var(--g-ease-move) var(--d) forwards; }
+
+@keyframes s4-fly {
+  0% { opacity: 1; transform: none; }
+  70% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(.3); }
+}
+
+.run4 :where(.intro-overlay) .lk-w { animation: i-letters 300ms var(--g-ease-move) both; }
+
+.run4 :where(.intro-overlay) .lk-w1 { animation-delay: 4900ms; }
+
+.run4 :where(.intro-overlay) .lk-w2 { animation-delay: 5010ms; }
+
+.run4 :where(.intro-overlay) .lk-w3 { animation-delay: 5120ms; }
+
+
+/* ======================= SCENE 5: YUKLEME ======================= */
+@property --p { syntax: '<integer>'; inherits: false; initial-value: 2; }
+
+:root[data-scene="5"] :where(.intro-overlay) .m-pos { transform: translate(-192.61px, 100.19px) scale(1.5); }
+   /* feet at (249.6, 702) */
+:root[data-scene="5"] :where(.intro-overlay) .m-shadow { left: 134.6px; opacity: .9; }
+
+:where(.intro-overlay) .s5 > * { position: absolute; margin: 0; }
+
+:where(.intro-overlay) .s5-lbl { left: 380px; top: 501px; font: 700 14px/1 var(--font-display); letter-spacing: .16em; color: var(--shell-text-dim); opacity: 0; }
+
+:where(.intro-overlay) .s5-pct { left: 1356px; top: 561px; font: 700 22px/1 var(--font-display); color: var(--shell-text); font-variant-numeric: tabular-nums; opacity: 0; --p: 2; counter-reset: p var(--p); }
+
+:where(.intro-overlay) .s5-pct::after { content: counter(p) "%"; }
+   /* the counter lives on the element: --p does not inherit */
+:where(.intro-overlay) .s5-bar { left: 380px; top: 544px; width: 940px; height: 56px; border-radius: 4px; transform-origin: 0 0;
+  box-shadow: inset 0 0 0 2px #3A4361; clip-path: inset(0 100% 0 0); }
+
+/* the retro fill: 29 orange segments on a 32 px pitch, revealed from the left */
+:where(.intro-overlay) .s5-fill { position: absolute; left: 6px; top: 6px; bottom: 6px; width: 928px; clip-path: inset(0 98% 0 0);
+  background: repeating-linear-gradient(90deg, var(--accent) 0 26px, transparent 26px 32px); }
+
+:where(.intro-overlay) .s5-fill::before { content: ""; position: absolute; inset: 0; opacity: 0;
+  background: repeating-linear-gradient(90deg, var(--energy) 0 26px, transparent 26px 32px); }
+
+:where(.intro-overlay) .s5-ok { left: 650px; top: 400px; width: 400px; text-align: center; opacity: 0;
+  font: 700 64px/1 var(--font-display); letter-spacing: .14em; color: var(--energy); }
+
+
+/* --- act 1: the bar, the mascot hops in --- */
+.run5 :where(.intro-overlay) .s5-bar { animation: s5-bar 600ms var(--g-ease-enter) 150ms both, s5-ready 1ms linear 3680ms forwards,
+  s5-box 700ms var(--g-ease-move) 4300ms forwards, i-fade 150ms linear 5350ms both; }
+
+@keyframes s5-bar { to { clip-path: inset(0 0 0 0); } }
+
+@keyframes s5-ready { to { box-shadow: inset 0 0 0 2px var(--energy); } }
+
+@keyframes s5-box { to { transform: translate(197px, -159px) scale(.6926, 1.3571); box-shadow: inset 0 0 0 2px #3A4361; } }
+
+.run5 :where(.intro-overlay) .s5-lbl { animation: gs-on 200ms linear 550ms both, i-fade 200ms linear 4300ms both; }
+
+.run5 :where(.intro-overlay) .m-drop { animation: s5-hx 800ms linear 300ms both, s5-push 1550ms 1350ms forwards, s5-shove 280ms 3400ms forwards,
+  s5-home 700ms var(--g-ease-move) 4300ms forwards, i-fade 150ms linear 5100ms both; }
+
+@keyframes s5-hx { from { transform: translateX(-280px); } }
+   /* inside the 1.5x m-pos: 420 px on the page */
+@keyframes s5-hxs { from { transform: translateX(-420px); } }
+
+.run5 :where(.intro-overlay) .m-shadow { animation: s5-hxs 800ms linear 300ms both, s5-pushs 1550ms 1350ms forwards, s5-shoves 280ms 3400ms forwards,
+  i-fade 250ms linear 4300ms both; }
+
+.run5 :where(.intro-overlay) .m-svg { animation: s2-hops 800ms 300ms, s5-strain 400ms linear 2950ms, s2-joy 400ms 3800ms; }
+
+.run5 :where(.intro-overlay) .m-svg #rig { animation: i-squash 270ms var(--g-ease-move) 1100ms both; }
+
+
+/* --- act 2: three shoves. One timing for mascot, shadow, fill and counter, so they move as one --- */
+/* s5-push moves .m-drop inside the 1.5x .m-pos, so its values are the page distance / 1.5;
+   s5-pushs moves the shadow (not scaled) by the page distance */
+@keyframes s5-push {
+  0% { transform: translateX(0); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  32.26% { transform: translateX(197.97px); animation-timing-function: linear; }
+  35.48% { transform: translateX(197.97px); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  67.74% { transform: translateX(408.32px); animation-timing-function: linear; }
+  70.97% { transform: translateX(408.32px); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  100% { transform: translateX(600.11px); }
+}
+
+@keyframes s5-pushs {
+  0% { transform: translateX(0); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  32.26% { transform: translateX(296.96px); animation-timing-function: linear; }
+  35.48% { transform: translateX(296.96px); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  67.74% { transform: translateX(612.48px); animation-timing-function: linear; }
+  70.97% { transform: translateX(612.48px); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  100% { transform: translateX(900.16px); }
+}
+
+.run5 :where(.intro-overlay) .s5-fill { animation: s5-fill 1550ms 1350ms forwards, s5-full 120ms ease-in 3560ms forwards, i-fade 200ms linear 4300ms both; }
+
+@keyframes s5-fill {
+  0% { clip-path: inset(0 98% 0 0); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  32.26% { clip-path: inset(0 66% 0 0); animation-timing-function: linear; }
+  35.48% { clip-path: inset(0 66% 0 0); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  67.74% { clip-path: inset(0 32% 0 0); animation-timing-function: linear; }
+  70.97% { clip-path: inset(0 32% 0 0); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  100% { clip-path: inset(0 1% 0 0); }
+}
+
+@keyframes s5-full { 0% { clip-path: inset(0 1% 0 0); } 100% { clip-path: inset(0 0 0 0); } }
+
+.run5 :where(.intro-overlay) .s5-fill::before { animation: gs-on 1ms linear 3680ms both; }
+
+.run5 :where(.intro-overlay) .s5-pct { animation: gs-on 200ms linear 550ms both, s5-count 1550ms 1350ms forwards, s5-blink 400ms linear 2950ms,
+  s5-hundred 1ms linear 3680ms forwards, i-fade 200ms linear 4300ms both; }
+
+@keyframes s5-count {
+  0% { --p: 2; animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  32.26% { --p: 34; animation-timing-function: linear; }
+  35.48% { --p: 34; animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  67.74% { --p: 68; animation-timing-function: linear; }
+  70.97% { --p: 68; animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  100% { --p: 99; }
+}
+
+@keyframes s5-blink { 0%, 24.9%, 50%, 74.9% { opacity: 1; } 25%, 49.9%, 75%, 100% { opacity: .55; } }
+   /* .55 keeps 5.2:1 */
+@keyframes s5-hundred { to { --p: 100; color: var(--energy); } }
+
+
+/* the push pose: lean in, arm on the bar's edge; stuck; wind back; shove */
+.run5 :where(.intro-overlay) .m-svg #upper { animation: s5-lean 2700ms 1150ms both; }
+
+@keyframes s5-lean {
+  0% { transform: none; animation-timing-function: var(--g-ease-move); }
+  7.4%, 83.3% { transform: rotate(6deg); animation-timing-function: var(--g-ease-move); }
+  88.9% { transform: rotate(-2deg); animation-timing-function: cubic-bezier(.6, 0, .9, .5); }
+  94.4% { transform: rotate(10deg); animation-timing-function: var(--g-ease-move); }
+  100% { transform: none; }
+}
+
+.run5 :where(.intro-overlay) .m-svg #arm-right { animation: s5-arm 2700ms var(--g-ease-move) 1150ms both, i-fade 300ms linear 4300ms both; }
+
+@keyframes s5-arm { 0%, 100% { transform: none; } 6%, 96% { transform: rotate(72deg); } }
+
+@keyframes s5-strain {
+  0%, 100% { transform: none; }
+  12.5%, 37.5%, 62.5%, 87.5% { transform: translateX(3px); }
+  25%, 50%, 75% { transform: translateX(-2px); }
+}
+
+@keyframes s5-shove {
+  0% { transform: translateX(600.11px); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  57% { transform: translateX(578.67px); animation-timing-function: cubic-bezier(.6, 0, .9, .5); }
+  100% { transform: translateX(606.29px); }
+}
+
+@keyframes s5-shoves {
+  0% { transform: translateX(900.16px); animation-timing-function: cubic-bezier(.2, .6, .35, 1); }
+  57% { transform: translateX(868px); animation-timing-function: cubic-bezier(.6, 0, .9, .5); }
+  100% { transform: translateX(909.44px); }
+}
+
+@keyframes s5-home { from { transform: translateX(606.29px); } to { transform: none; } }
+
+
+/* faces: normal -> focus (pushing) -> happy (100 %) -> normal (the lockup head) */
+.run5 :where(.intro-overlay) .m-svg #eyes-normal { animation: s5-eye-n 4300ms linear both; }
+
+.run5 :where(.intro-overlay) .m-svg #eyes-focus { animation: s5-eye-f 4300ms linear both; }
+
+.run5 :where(.intro-overlay) .m-svg #eyes-happy { animation: s5-eye-h 4300ms linear both; }
+
+@keyframes s5-eye-n { 0%, 26.73% { opacity: 1; } 26.74%, 99.99% { opacity: 0; } 100% { opacity: 1; } }
+
+@keyframes s5-eye-f { 0%, 26.73% { opacity: 0; } 26.74%, 86.04% { opacity: 1; } 86.05%, 100% { opacity: 0; } }
+
+@keyframes s5-eye-h { 0%, 86.04% { opacity: 0; } 86.05%, 99.99% { opacity: 1; } 100% { opacity: 0; } }
+
+
+/* --- act 3: HAZIR; the emptied bar becomes the wordmark box and the name loads into it --- */
+.run5 :where(.intro-overlay) .s5-ok { animation: s5-stamp 260ms var(--g-ease-press) 3700ms both, i-fade 200ms linear 4300ms both; }
+
+@keyframes s5-stamp { 0% { opacity: 0; transform: scale(1.5); } 100% { opacity: 1; transform: none; } }
+
+.run5 :where(.intro-overlay) .lk-w { animation: i-letters 150ms linear both; }
+
+.run5 :where(.intro-overlay) .lk-w1 { animation-delay: 4900ms; }
+
+.run5 :where(.intro-overlay) .lk-w2 { animation-delay: 5050ms; }
+
+.run5 :where(.intro-overlay) .lk-w3 { animation-delay: 5200ms; }
+
+/* ======================= INTRO: last frame of intro.html =======================
+   index.html?intro is loaded inside intro.html. On {gm:'intro'} the UI enters around the
+   lockup that flies into the sidebar; times are on the intro timeline (intro.css). */
+:root[data-intro].intro-run .sidebar   { animation: intro-left 520ms var(--g-ease-enter) 6350ms both; }
+:root[data-intro].intro-run .topbar    { animation: intro-down 480ms var(--g-ease-enter) 6450ms both; }
+/* m10: the lockup flies over the sidebar, top bar and the stage's upper left until ~7150 ms.
+   Panels arrive empty; their words and the stage content appear once the logo has landed. */
+:root[data-intro].intro-run .sidebar > :not(.tex):not(.brand),
+:root[data-intro].intro-run .topbar > :not(.tex) { animation: intro-show 240ms var(--g-ease-enter) 7100ms both; }
+:root[data-intro].intro-run .stage     { animation: intro-up 520ms var(--g-ease-enter) 6950ms both; }
+:root[data-intro].intro-run .workspace { animation: intro-right 520ms var(--g-ease-enter) 6650ms both; }
+:root[data-intro].intro-run .achv.is-held { animation: intro-right 420ms var(--g-ease-enter) 7050ms both; }
+:root[data-intro].intro-run .brand-logo { animation: intro-show 1ms linear 7150ms both; }
+/* M3: the intro is the FIRST launch: no chats yet, level 1, no achievement (index.html sets the
+   numbers); intro.html opens it on the empty new chat (?screen=bos). */
+@keyframes intro-left { from { opacity: 0; transform: translateX(-28px); } }
+@keyframes intro-right { from { opacity: 0; transform: translateX(28px); } }
+@keyframes intro-down { from { opacity: 0; transform: translateY(-14px); } }
+@keyframes intro-up { from { opacity: 0; transform: translateY(18px); } }
+@keyframes intro-show { from { opacity: 0; } to { opacity: 1; } }
+
+

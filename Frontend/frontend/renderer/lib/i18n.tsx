@@ -9,6 +9,17 @@ export type Lang = 'tr' | 'en';
  * way into `translations` was invisible to it.
  */
 export const tr = {
+  // Intro
+  'intro.skip': 'Geçmek için tıkla ya da Esc',
+  'intro.quest': 'Arena hazır. İlk görevin seni bekliyor.',
+  'intro.start': 'BAŞLA',
+  'intro.questTag': 'Görev',
+  'intro.sprite': 'SPRITE · 14×12',
+  'intro.loading': 'YÜKLENİYOR',
+  'intro.ready': 'HAZIR',
+  'intro.inserted': 'YERLEŞTİ',
+  'intro.plus': '+1',
+  'intro.brand': 'Gamachine',
   // Sidebar
   'sidebar.chats': 'Sohbetler',
   'sidebar.files': 'Dosyalar',
@@ -855,6 +866,17 @@ export const tr = {
 
 /** Exported for the same reason `tr` is. */
 export const en: Record<keyof typeof tr, string> = {
+  // Intro
+  'intro.skip': 'Click or press Esc to skip',
+  'intro.quest': 'The arena is ready. Your first quest awaits.',
+  'intro.start': 'START',
+  'intro.questTag': 'Quest',
+  'intro.sprite': 'SPRITE · 14×12',
+  'intro.loading': 'LOADING',
+  'intro.ready': 'READY',
+  'intro.inserted': 'INSERTED',
+  'intro.plus': '+1',
+  'intro.brand': 'Gamachine',
   // Sidebar
   'sidebar.chats': 'Chats',
   'sidebar.files': 'Files',

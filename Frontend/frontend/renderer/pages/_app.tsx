@@ -16,6 +16,8 @@ import '../styles/gm/theme-arena.thread.css'
 import '../styles/gm/theme-sade.thread.css'
 import '../styles/gm/theme-pafta.thread.css'
 import '../styles/gm/theme-atolye.thread.css'
+import '../styles/gm/intro.css'
+import { IntroOverlay } from '../components/intro/IntroOverlay'
 import { ConfirmDialogHost } from '../components/ui/ConfirmDialog'
 import { ErrorBoundary } from '../components/ui/ErrorBoundary'
 import { AppearanceProvider } from '../lib/appearance'
@@ -28,6 +30,7 @@ function MyApp({ Component, pageProps }: AppProps) {
       <ErrorBoundary>
         <Component {...pageProps} />
       </ErrorBoundary>
+      <IntroOverlay />
       {/* Native confirm() yerine uygulama-içi onay (Electron focus-kilit bug fix).
           ⚠️ BİLEREK sınırın DIŞINDA: global bir singleton ve sınırın içine
           alınsaydı bir render hatası onu da unmount edip `confirmDialog()`'u
