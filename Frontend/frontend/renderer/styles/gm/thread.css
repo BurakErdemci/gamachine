@@ -498,53 +498,7 @@
 @keyframes gm-breathe { 50% { transform: translateY(1.5px); } }
 @keyframes gm-blink { 0%, 94%, 100% { transform: none; } 96% { transform: scaleY(.08); } }
 
-/* ======================= WORKSPACE PANEL (right column) =======================
-   From the mockup's `.workspace` + `.ws-head`. P2 only moves the existing editor, previews and
-   terminal into this column as one panel; the tabbed workspace (Sahne / Dosyalar / Kod /
-   Onizleme) and its three width modes are P3.
-   TODO(P3): widths dar 360 / yarim / odak. P2 ships the default "dar" 360 px and keeps the panel
-   resizable with a drag handle on its left edge (the app's chat column had no resize before,
-   the editor column flexed; a fixed 360 px editor would be a regression for long code lines). */
-.workspace {
-  position: relative; overflow: hidden; min-width: 0; min-height: 0;
-  background: var(--paper-bg-2); color: var(--ink);
-  border-left: var(--line-w) solid var(--paper-line);
-  display: flex; flex-direction: column;
-}
-.workspace.is-entering { animation: panel-in var(--g-dur-base) var(--g-ease-enter); }
-@keyframes panel-in { from { opacity: 0; transform: translateX(16px); } }
-.ws-head { display: flex; align-items: center; gap: 8px; height: 44px; flex: none; padding: 0 8px 0 20px; }
-.ws-title { margin-right: auto; font-weight: 600; font-size: 14px; font-family: var(--font-who); text-transform: var(--who-case); letter-spacing: var(--who-track); }
-.workspace .icon-btn:hover { background: var(--paper-sunk); }
-.ws-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-/* drag handle on the panel's left edge (app-only: see the TODO above) */
-.ws-resize {
-  position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; z-index: 5; cursor: col-resize;
-  background: transparent; transition: background var(--g-dur-tap) var(--ease);
-}
-.ws-resize:hover, .ws-resize.is-dragging { background: var(--paper-line-strong); }
-.ws-empty {
-  flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 18px;
-  padding: 24px 20px; color: var(--ink-dim); font-size: var(--fs-small);
-}
-.ws-label {
-  margin: 0; display: flex; align-items: center; gap: 8px; color: var(--ink-dim);
-  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
-  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
-}
-.ws-label::after { content: ""; flex: 1; height: var(--line-w); background: var(--label-rule-paper); }
-.ws-recent { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
-.ws-recent button {
-  display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; text-align: left;
-  border-radius: var(--radius-md); color: var(--ink); font-size: var(--fs-small);
-}
-.ws-recent button:hover { background: var(--paper-sunk); }
-.ws-recent .ic { color: var(--ink-faint); }
-.ws-recent span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 /* ======================= APP GLUE (no mockup counterpart) ======================= */
-/* hidden, never unmounted (home.tsx): the class's display would otherwise beat [hidden] */
-.workspace[hidden] { display: none; }
 /* the thread and the overlays drawn over it (new-messages pill, side question panel) */
 .thread-wrap { position: relative; z-index: 1; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* the chat's own tools at the end of the title block (side question, branch) */

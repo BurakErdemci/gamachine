@@ -1,0 +1,10 @@
+/* Sade on the workspace (mockup theme-sade.css round 8): plain tabs, a hairline width control,
+   the pending strip and its buttons in the IDE's own grammar. Tokens only. */
+[data-theme="sade"] .ws-tab { font-weight: 500; }
+[data-theme="sade"] .ws-tab[aria-selected="true"]::after { height: 1px; }
+[data-theme="sade"] .ws-widths { border-color: var(--sade-card-line); }
+[data-theme="sade"] .ws-w[aria-pressed="true"] { box-shadow: none; background: var(--paper-sunk); }
+[data-theme="sade"] .ws-pending { border-bottom-width: 1px; }
+[data-theme="sade"] .ws-pending .btn { height: 28px; font-weight: 500; border-radius: var(--radius-sm); }
+[data-theme="sade"] .pv-pick[aria-selected="true"] { box-shadow: inset 0 0 0 1px var(--sade-card-line); }
+[data-theme="sade"] .tag-del { color: var(--sade-err-text); background: var(--sade-err-soft); border-color: var(--sade-err); }

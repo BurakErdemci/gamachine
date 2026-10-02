@@ -1,0 +1,9 @@
+/* Pafta on the workspace (mockup theme-pafta.css round 8): the tabs read like title-block labels,
+   the width control is a boxed cell row, the editor is a ruled sheet under the head. */
+[data-theme="pafta"] .ws-widths { border-color: var(--paper-line-strong); border-radius: 0; gap: 0; padding: 0; }
+[data-theme="pafta"] .ws-w { border-radius: 0; }
+[data-theme="pafta"] .ws-w + .ws-w { border-left: 1px solid var(--paper-line); }
+[data-theme="pafta"] .ws-w[aria-pressed="true"] { background: var(--ink); color: var(--paper-raised); box-shadow: none; }
+[data-theme="pafta"] .ws-code { border-top: 1px solid var(--paper-line-strong); }
+[data-theme="pafta"] .ed-tab[aria-selected="true"] { box-shadow: inset 0 2px 0 var(--ed-tab-mark); }
+[data-theme="pafta"] .term { border-top-color: var(--paper-line-strong); }

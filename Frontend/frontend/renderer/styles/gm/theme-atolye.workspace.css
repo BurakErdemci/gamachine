@@ -1,0 +1,10 @@
+/* Atölye on the workspace (mockup theme-atolye.css round 8): a framed width control, the editor
+   board pinned under the tabs, a hard shadow under the preview stage. */
+[data-theme="atolye"] .ws-w[aria-pressed="true"] { background: var(--paper-raised); box-shadow: inset 0 0 0 1px var(--paper-line-strong), 1px 1px 0 var(--paper-line-strong); }
+[data-theme="atolye"] .ws-tab { font-family: var(--font-body); font-size: 14px; }
+[data-theme="atolye"] .ws-code { border-top: 1px solid var(--paper-line-strong); }
+[data-theme="atolye"] .pv-stage { box-shadow: 2px 2px 0 var(--paper-line-strong); }
+[data-theme="atolye"] .term { border-top-color: var(--paper-line-strong); }
+/* git status letters in the terminal: one step darker. term-dim measured 4.47 on the closed
+   drawer (#D8D1C3); #5A4D3F = 5.38 there, 6.46 on the open pane (#EAE4D8) */
+[data-theme="atolye"] .tm { color: #5A4D3F; }
