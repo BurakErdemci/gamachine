@@ -1,6 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { installRuntimeGlobals, FakeNamespace } from './fake-do.mjs';
 import { pairIdFor } from './nodeimpl.mjs';
 
@@ -377,6 +378,34 @@ test('ping is answered without reaching the PC', async () => {
   await msg(env, phone, '{"type":"ping"}');
   assert.equal(phone.sent.at(-1), '{"type":"pong"}');
   assert.deepEqual(pc.take(), []);
+});
+
+// The page's stylesheet names the fonts; each must be on the worker's allowlist, typed as a
+// font and cached for a year, or phones silently fall back to system faces.
+test('bundled fonts: every face in fonts.css is served as woff2 with a long cache', async () => {
+  const pub = new URL('../public/', import.meta.url);
+  const env = { ASSETS: { fetch: async (req) => {
+    try {
+      return new Response(await readFile(new URL('.' + new URL(req.url).pathname, pub)));
+    } catch {
+      return new Response('nope', { status: 404 });
+    }
+  } } };
+  const page = await worker.fetch(new Request('https://relay.test/p'), env);
+  assert.match(page.headers.get('Content-Security-Policy'), /font-src 'self'/);
+  assert.match(await page.text(), /href="\/fonts\.css"/);
+  const css = await worker.fetch(new Request('https://relay.test/fonts.css'), env);
+  assert.equal(css.headers.get('Content-Type'), 'text/css; charset=utf-8');
+  const urls = [...(await css.text()).matchAll(/url\((\/fonts\/[^)]+\.woff2)\)/g)].map((m) => m[1]);
+  assert.ok(urls.length >= 6, 'fonts.css names the faces');
+  for (const u of urls) {
+    const res = await worker.fetch(new Request('https://relay.test' + u), env);
+    assert.equal(res.status, 200, u);
+    assert.equal(res.headers.get('Content-Type'), 'font/woff2', u);
+    assert.equal(res.headers.get('Cache-Control'), 'public, max-age=31536000, immutable', u);
+  }
+  assert.equal((await worker.fetch(new Request('https://relay.test/fonts/licenses/figtree-OFL.txt'), env)).status, 404);
+  assert.equal((await worker.fetch(new Request('https://relay.test/app.js'), env)).headers.get('Cache-Control'), 'no-cache');
 });
 
 test('HTTP routes: page with CSP, whitelist only, sockets need an upgrade and a valid id', async () => {

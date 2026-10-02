@@ -13,6 +13,15 @@ const STATIC = {
   '/net.js': '/net.js',
   '/store.js': '/store.js',
   '/style.css': '/style.css',
+  '/fonts.css': '/fonts.css',
+  '/fonts/ChakraPetch-600-latin.woff2': '/fonts/ChakraPetch-600-latin.woff2',
+  '/fonts/ChakraPetch-600-latin-ext.woff2': '/fonts/ChakraPetch-600-latin-ext.woff2',
+  '/fonts/ChakraPetch-700-latin.woff2': '/fonts/ChakraPetch-700-latin.woff2',
+  '/fonts/ChakraPetch-700-latin-ext.woff2': '/fonts/ChakraPetch-700-latin-ext.woff2',
+  '/fonts/Figtree-300-900-latin.woff2': '/fonts/Figtree-300-900-latin.woff2',
+  '/fonts/Figtree-300-900-latin-ext.woff2': '/fonts/Figtree-300-900-latin-ext.woff2',
+  '/fonts/JetBrainsMono-400-700-latin.woff2': '/fonts/JetBrainsMono-400-700-latin.woff2',
+  '/fonts/JetBrainsMono-400-700-latin-ext.woff2': '/fonts/JetBrainsMono-400-700-latin-ext.woff2',
   '/sw.js': '/sw.js',
   '/manifest.webmanifest': '/manifest.webmanifest',
   '/icon-192.png': '/icon-192.png',
@@ -27,6 +36,14 @@ const TYPES = {
   css: 'text/css; charset=utf-8',
   webmanifest: 'application/manifest+json',
   png: 'image/png',
+  woff2: 'font/woff2',
+};
+
+// Code and markup stay no-cache so relay fixes reach phones at once. A font file never changes
+// under its name (a new cut gets a new file), so phones keep it for a year.
+const CACHE = {
+  png: 'public, max-age=86400',
+  woff2: 'public, max-age=31536000, immutable',
 };
 
 function csp(url) {
@@ -36,6 +53,7 @@ function csp(url) {
     "default-src 'none'",
     "script-src 'self'",
     "style-src 'self'",
+    "font-src 'self'",
     "img-src 'self'",
     `connect-src 'self' ${ws}`,
     "manifest-src 'self'",
@@ -57,7 +75,7 @@ async function serveStatic(request, env, url) {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
     'Cross-Origin-Opener-Policy': 'same-origin',
-    'Cache-Control': ext === 'png' ? 'public, max-age=86400' : 'no-cache',
+    'Cache-Control': CACHE[ext] || 'no-cache',
   });
   if (ext === 'html') {
     headers.set('Content-Security-Policy', csp(url));
