@@ -66,7 +66,7 @@
 .use-pair .meter i { width: 3px; height: min(5px, var(--meter-h)); }
 .use-note { font-size: var(--fs-meta); color: var(--shell-text-dim); white-space: nowrap; }
 .use-row {
-  display: grid; grid-template-columns: 46px auto 38px 1fr; align-items: center; column-gap: 10px;
+  display: grid; grid-template-columns: 46px auto auto 1fr; align-items: center; column-gap: 10px;
   font-size: var(--fs-meta); color: var(--shell-text-dim); line-height: 1.4;
 }
 .use-v { color: var(--shell-text); font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }

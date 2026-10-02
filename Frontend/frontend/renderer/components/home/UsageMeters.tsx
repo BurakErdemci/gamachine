@@ -26,17 +26,20 @@ export const Meter = ({ value, loading = false, className = '' }: { value: numbe
   );
 };
 
-/** One "5 saat ▮▮▮▯ %62  18:40" line of the menu's and the settings page's usage box. */
+/** One "5 saat ▮▮▮▯ %62 kullanıldı  yenilenme 18:40" line of the menu's and the settings page's usage box. */
 export const UseRow = ({ label, win, state, nowIso }: { label: string; win: UsageWindow | null; state: MeterState; nowIso?: string | null }) => {
-  const { lang } = useLang();
+  const { lang, t } = useLang();
   const loading = state === 'loading';
   const v = win ? clampPct(win.used_pct) : null;
+  const reset = !loading ? resetLabel(win, lang, nowIso) : '';
+  // Spent, not remaining, spelled out: Claude's /usage counts what is used, the Codex app
+  // what is left, and a bare "%66" next to the Codex app read as the opposite (owner, 2 Oct 2026).
   return (
     <div className="use-row" data-testid="use-row">
       <span className="use-k">{label}</span>
       <Meter value={v} loading={loading || !win} />
-      <span className="use-v num">{!loading && v != null ? `%${v}` : ''}</span>
-      <span className="use-r">{!loading ? resetLabel(win, lang, nowIso) : ''}</span>
+      <span className="use-v num">{!loading && v != null ? t('use.used', { yuzde: v }) : ''}</span>
+      <span className="use-r">{reset ? t('use.resets', { zaman: reset }) : ''}</span>
     </div>
   );
 };
