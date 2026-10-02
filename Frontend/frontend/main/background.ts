@@ -40,6 +40,7 @@ import {
 } from './helpers/workspace-fingerprint'
 import { createNotifier } from './helpers/notify'
 import { createRemoteControl } from './helpers/remote-control'
+import { createProfileReset } from './helpers/profile-reset'
 
 const useDockerBackend = process.env.USE_DOCKER_BACKEND === 'true'
 
@@ -738,6 +739,16 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
     throw new Error(text || 'Çalışma modu backend’e iletilemedi.')
   }
 })
+
+// Maker profile reset (Settings > Account): the UI secret stays here (helpers/profile-reset.ts).
+const profileReset = createProfileReset({
+  baseUrl: getBackendBaseUrl,
+  appToken: localAppToken,
+  uiSecret,
+  http: axios,
+  log: (...args) => console.error(...args),
+})
+handleSecure('profile-reset', () => profileReset())
 
 // Remote control: every call under /remote/, so the UI secret stays here and the
 // keep-awake blocker sees every answer (helpers/remote-control.ts).

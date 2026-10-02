@@ -88,8 +88,12 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // action is one of a fixed table (helpers/remote-control.ts) and the path is
   // never taken from the renderer.
   // 31 -> 32: bundled appearance settings can select one of three zoom factors.
-  it('tam olarak 32 kanal içerir', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(32)
+  //
+  // 32 -> 33, 2 Oct 2026: 'profile-reset' (Settings > Account > Reset statistics).
+  // POST /profile/reset needs the UI secret, so it goes through the main process
+  // like 'approval-mode-set'; the handler takes no argument from the renderer.
+  it('tam olarak 33 kanal içerir', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(33)
   })
 
   it('app-zoom-set is whitelisted', () => {

@@ -31,6 +31,7 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'terminal-resize',
   'notify',
   'remote-control',
+  'profile-reset',
 ])
 
 export function assertAllowedInvokeChannel(channel: string): void {
