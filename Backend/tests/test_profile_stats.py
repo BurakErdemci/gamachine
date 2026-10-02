@@ -1,4 +1,5 @@
 """Maker profile plan, 2 Oct 2026: persistent counts and local calendar rules."""
+import inspect
 import json
 import sqlite3
 from collections import defaultdict
@@ -374,3 +375,104 @@ def test_turn_record_real_routes_with_fake_runner(db, monkeypatch, mode):
         assert any(row["role"] == "assistant" for row in db.get_conversation_messages(conv))
     if mode == "save_failure":
         assert "turn_not_saved" in response.text
+
+
+def test_six_month_boundary_includes_morning_and_midnight(db):
+    for at in ("2026-04-01 23:59:59", "2026-04-02 00:00:00", "2026-04-02 08:00:00"):
+        _turns(db, at)
+        _ledger(db, at)
+    result = ps.compute(db, "6m", NOW)
+    assert result["counts"]["tasks"] == 2
+    assert result["counts"]["active_days"] == 1
+    assert result["counts"]["approved_cards"] == 2
+
+
+@pytest.mark.parametrize("with_older_message", [False, True])
+def test_backfill_after_live_turn_imports_only_strictly_older_messages(db, with_older_message):
+    conv = db.create_conversation(1, "root")
+    live = db.add_message(conv, "assistant", "live answer")
+    with closing(sqlite3.connect(db.db_path)) as conn, conn:
+        conn.execute("UPDATE messages SET timestamp = ? WHERE id = ?",
+                     ("2026-10-02 10:00:00", live))
+    assert db.record_activity("turn_done", conversation_id=conv, at="2026-10-02 10:00:00")
+    if with_older_message:
+        older = db.add_message(conv, "assistant", "older answer")
+        with closing(sqlite3.connect(db.db_path)) as conn, conn:
+            conn.execute("UPDATE messages SET timestamp = ? WHERE id = ?",
+                         ("2026-10-01 10:00:00", older))
+        _turns(db, "2026-10-02 11:00:00")
+    assert db.get_setting("profile_backfill_done") is None
+    assert ps.backfill_once(db) == int(with_older_message)
+    rows = db.list_activity(["turn_done"])
+    assert len(rows) == (3 if with_older_message else 1)
+    assert sum(row["at"] == "2026-10-02 10:00:00" for row in rows) == 1
+    if with_older_message:
+        assert rows[0]["at"] == "2026-10-01 10:00:00"
+    assert ps.backfill_once(db) == 0
+
+
+def test_malformed_event_and_message_times_are_ignored(db, monkeypatch, caplog):
+    monkeypatch.setattr(ps, "_invalid_at_logged", False, raising=False)
+    conv = db.create_conversation(1, "root")
+    message = db.add_message(conv, "assistant", "malformed answer")
+    with closing(sqlite3.connect(db.db_path)) as conn, conn:
+        conn.execute("UPDATE messages SET timestamp = ? WHERE id = ?",
+                     ("2026-09-01T10:00:00", message))
+    assert ps.backfill_once(db) == 0
+    _turns(db, "2026-09-01T10:00:00")
+    _turns(db, "2026-10-02T02:00:00", 5, provider="bad", model="bad")
+    _turns(db, "2026-10-02 25:00:00")
+    _turns(db, "2026-02-30 10:00:00")
+    empty = ps.compute(db, "all", NOW)
+    assert empty["counts"]["tasks"] == empty["xp"] == 0
+    assert empty["since"] is None and empty["models"]["favourite"] is None
+    _turns(db, NOW, 10)
+    for range_ in ("all", "month", "6m"):
+        result = ps.compute(db, range_, NOW)
+        assert result["counts"]["tasks"] == result["counts"]["tasks_this_month"] == 10
+        assert result["counts"]["tasks_last_month"] == 0
+        assert result["counts"]["active_days"] == 1 and result["xp"] == 120
+        assert result["best_hour"] == 12 and result["busiest_weekday"] == 4
+        assert sum(result["heatmap"]["days"]) == 10
+        assert result["streak"] == {"current": 1, "longest": 1, "longest_end": "2026-10-02"}
+        assert result["models"]["mix"] == [{"family": "claude", "turns": 10, "share": 1.0}]
+        assert result["models"]["favourite"]["model"] == "claude-sonnet-5"
+        assert next(a for a in result["achievements"] if a["id"] == "night_owl")["progress"] == 0
+    assert sum("invalid activity timestamp" in record.message for record in caplog.records) == 1
+
+
+@pytest.mark.parametrize("raw", ["not json", "[1]", "null", "42", '"text"'])
+@pytest.mark.parametrize("with_turn", [False, True])
+def test_corrupt_achievement_seen_is_repaired(db, monkeypatch, caplog, raw, with_turn):
+    monkeypatch.setattr(ps, "_invalid_seen_logged", False, raising=False)
+    if with_turn:
+        _turns(db, NOW)
+    db.set_setting("profile_achievements_seen", raw)
+    result = ps.compute(db, "all", NOW)
+    assert result["counts"]["tasks"] == int(with_turn)
+    seen = json.loads(db.get_setting("profile_achievements_seen"))
+    assert isinstance(seen, dict)
+    assert set(seen) == ({"first_task"} if with_turn else set())
+    db.set_setting("profile_achievements_seen", raw)
+    with _client(db) as client:
+        response = client.get("/profile/stats", headers=H)
+        assert response.status_code == 200 and set(response.json()) == set(result)
+    assert isinstance(json.loads(db.get_setting("profile_achievements_seen")), dict)
+    assert sum("invalid achievement seen record" in record.message for record in caplog.records) == 1
+
+
+def test_profile_handlers_are_sync_and_keep_get_post_behavior(db):
+    router = create_profile_router(db)
+    assert {route.path for route in router.routes} == {"/profile/stats", "/profile/reset"}
+    assert all(not inspect.iscoroutinefunction(route.endpoint) for route in router.routes)
+    _turns(db, NOW)
+    approval_mode.set_ui_secret("profile-sync-secret")
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.get("/profile/stats", headers=H)
+        assert response.status_code == 200 and response.json()["counts"]["tasks"] == 1
+        response = client.post("/profile/reset", headers={
+            **H, "X-Gamachine-UI-Secret": "profile-sync-secret"})
+        assert response.status_code == 200 and response.json() == {"cleared": 1}
+        assert client.get("/profile/stats", headers=H).json()["counts"]["tasks"] == 0

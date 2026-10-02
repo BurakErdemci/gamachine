@@ -1,16 +1,22 @@
 """Local maker profile rules (maker profile plan, 2 Oct 2026)."""
 import calendar
 import json
+import logging
 import sqlite3
 from bisect import bisect_left
 from collections import Counter, defaultdict
 from contextlib import closing
 from datetime import datetime, timedelta
 from statistics import quantiles
+from threading import Lock
 
 from agentic.chat_model import agent_label
 
 
+logger = logging.getLogger(__name__)
+_warning_lock = Lock()
+_invalid_at_logged = False
+_invalid_seen_logged = False
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 SUMMARY_PREFIXES = ("📝 **Sohbet özetlendi.**", "🧠 **Analiz Raporu**")
 ACHIEVEMENTS = (
@@ -27,15 +33,21 @@ def backfill_once(db) -> int:
         if conn.execute("SELECT value FROM app_settings WHERE key = ?",
                         ("profile_backfill_done",)).fetchone():
             return 0
+        # A retry must not import turns already recorded live (profile audit, 2 Oct 2026).
+        earliest = conn.execute(
+            "SELECT MIN(at) FROM activity_events WHERE kind = 'turn_done'").fetchone()[0]
         rows = conn.execute(
             "SELECT m.timestamp, m.conversation_id, m.provider, m.model, "
             "c.provider_type, c.model_name FROM messages m "
             "JOIN conversations c ON c.id = m.conversation_id "
             "WHERE m.role = 'assistant' AND c.side_of IS NULL "
             "AND (c.copied_until IS NULL OR m.id > c.copied_until) "
+            "AND m.timestamp GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] "
+            "[0-9][0-9]:[0-9][0-9]:[0-9][0-9]' "
+            "AND (? IS NULL OR m.timestamp < ?) "
             "AND substr(m.content, 1, ?) != ? AND substr(m.content, 1, ?) != ? "
             "ORDER BY m.timestamp, m.id",
-            (len(SUMMARY_PREFIXES[0]), SUMMARY_PREFIXES[0],
+            (earliest, earliest, len(SUMMARY_PREFIXES[0]), SUMMARY_PREFIXES[0],
              len(SUMMARY_PREFIXES[1]), SUMMARY_PREFIXES[1])).fetchall()
         for at, conversation_id, provider, model, conv_provider, conv_model in rows:
             family = provider or (agent_label(conv_provider, conv_model)
@@ -91,13 +103,24 @@ def _ledger_counts(db, since):
 
 
 def _achievements(db, values, now):
+    global _invalid_seen_logged
     # Only the caller that stores an unlock may announce it as new.
     with closing(sqlite3.connect(db.db_path)) as conn, conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT value FROM app_settings WHERE key = ?",
                            ("profile_achievements_seen",)).fetchone()
-        seen = json.loads(row[0]) if row else {}
         result, changed = [], False
+        # Repair corrupt state even without an unlock (profile audit, 2 Oct 2026).
+        try:
+            seen = json.loads(row[0]) if row else {}
+            if not isinstance(seen, dict):
+                raise ValueError("Achievement seen record must be an object")
+        except (ValueError, TypeError):
+            seen, changed = {}, True
+            with _warning_lock:
+                if not _invalid_seen_logged:
+                    _invalid_seen_logged = True
+                    logger.warning("[profile] invalid achievement seen record; resetting")
         for id_, goal in ACHIEVEMENTS:
             unlocked = values[id_] >= goal
             new = unlocked and id_ not in seen
@@ -117,6 +140,7 @@ def _achievements(db, values, now):
 
 
 def compute(db, range_, now=None) -> dict:
+    global _invalid_at_logged
     if range_ not in ("month", "6m", "all"):
         raise ValueError("Invalid profile range")
     now = now or datetime.now()
@@ -124,9 +148,23 @@ def compute(db, range_, now=None) -> dict:
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     last_month = _months_ago(month_start, 1)
     next_month = _months_ago(month_start, -1)
-    since = {"month": month_start, "6m": _months_ago(now, 6), "all": None}[range_]
+    # Include the entire boundary day (profile audit, 2 Oct 2026).
+    six_month_start = _months_ago(now, 6).replace(hour=0, minute=0, second=0, microsecond=0)
+    since = {"month": month_start, "6m": six_month_start, "all": None}[range_]
     since = since.strftime(TIME_FORMAT) if since else None
-    events = db.list_activity(kinds=["turn_done"])
+    # Validate before any counters or slices; normalize parseable times for slices
+    # and lexical windows (profile audit, 2 Oct 2026).
+    events = []
+    for event in db.list_activity(kinds=["turn_done"]):
+        try:
+            at = datetime.strptime(event["at"], TIME_FORMAT)
+        except (ValueError, TypeError):
+            with _warning_lock:
+                if not _invalid_at_logged:
+                    _invalid_at_logged = True
+                    logger.warning("[profile] invalid activity timestamp; skipping event")
+            continue
+        events.append({**event, "at": at.strftime(TIME_FORMAT)})
     selected = [event for event in events if since is None or event["at"] >= since]
     dates = Counter(datetime.strptime(event["at"], TIME_FORMAT).date() for event in events)
     selected_dates = Counter(datetime.strptime(event["at"], TIME_FORMAT).date()

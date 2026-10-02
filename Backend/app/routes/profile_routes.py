@@ -18,8 +18,9 @@ def create_profile_router(db):
     except Exception:
         logger.exception("[profile] backfill failed")
 
+    # Sync handlers run blocking SQLite work in the threadpool (profile audit, 2 Oct 2026).
     @router.get("/profile/stats")
-    async def get_stats(
+    def get_stats(
         range_: str = Query(default="all", alias="range"),
         x_session_token: str = Header(alias="X-Session-Token", default=""),
     ):
@@ -29,7 +30,7 @@ def create_profile_router(db):
         return profile_stats.compute(db, range_)
 
     @router.post("/profile/reset")
-    async def reset(
+    def reset(
         x_session_token: str = Header(alias="X-Session-Token", default=""),
         x_ui_secret: str = Header(alias="X-Gamachine-UI-Secret", default=""),
         x_maintenance: str = Header(alias="X-UnityAI-Maintenance", default=""),
