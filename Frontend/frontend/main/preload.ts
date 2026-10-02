@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, IpcRendererEvent, webUtils } from 'electron'
 import { assertAllowedInvokeChannel } from './helpers/ipc-whitelist'
 
 const handler = {
@@ -20,6 +20,13 @@ const handler = {
     } catch (error) {
       return Promise.reject(error)
     }
+  },
+  registerDroppedFolder(file: File): Promise<{ path: string } | { error: string }> {
+    // The renderer supplies a real dropped File, never a path string.
+    // Only Electron's webUtils resolves its path; generic invoke cannot register it.
+    const path = webUtils.getPathForFile(file)
+    if (!path) return Promise.resolve({ error: 'not-a-folder' })
+    return ipcRenderer.invoke('register-dropped-folder', path)
   },
 }
 

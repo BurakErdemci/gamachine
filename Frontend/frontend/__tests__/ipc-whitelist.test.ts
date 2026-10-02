@@ -92,8 +92,17 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // 32 -> 33, 2 Oct 2026: 'profile-reset' (Settings > Account > Reset statistics).
   // POST /profile/reset needs the UI secret, so it goes through the main process
   // like 'approval-mode-set'; the handler takes no argument from the renderer.
-  it('tam olarak 33 kanal içerir', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(33)
+  // 33 -> 35, 2 Oct 2026: 'workspace-info' inspects trusted project folders;
+  // 'open-unity-hub' opens only a locally discovered Unity Hub installation.
+  it('contains exactly 35 channels', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(35)
+  })
+
+  it('allows welcome screen project information and Unity Hub actions', () => {
+    for (const channel of ['workspace-info', 'open-unity-hub']) {
+      expect(ALLOWED_INVOKE_CHANNELS.has(channel)).toBe(true)
+      expect(() => assertAllowedInvokeChannel(channel)).not.toThrow()
+    }
   })
 
   it('app-zoom-set is whitelisted', () => {

@@ -32,7 +32,15 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'notify',
   'remote-control',
   'profile-reset',
+  'workspace-info',
+  'open-unity-hub',
 ])
+
+export const PRELOAD_ONLY_CHANNELS = new Set(['register-dropped-folder'])
+
+export function assertRegistrableChannel(channel: string): void {
+  if (!PRELOAD_ONLY_CHANNELS.has(channel)) assertAllowedInvokeChannel(channel)
+}
 
 export function assertAllowedInvokeChannel(channel: string): void {
   if (!ALLOWED_INVOKE_CHANNELS.has(channel)) {

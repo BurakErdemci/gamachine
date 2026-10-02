@@ -26,7 +26,9 @@ import {
   registerTrustedRoot,
 } from './helpers/ipc-trust'
 import { applyContentSecurityPolicy } from './helpers/csp'
-import { assertAllowedInvokeChannel } from './helpers/ipc-whitelist'
+import { assertRegistrableChannel } from './helpers/ipc-whitelist'
+import { inspectProject, isUnityProjectDir } from './helpers/unity-project'
+import { findUnityHub } from './helpers/unity-hub'
 import * as pty from 'node-pty'
 import {
   DOCKER_WORKSPACE_MOUNT,
@@ -129,7 +131,7 @@ const handleSecure = (
   // has no handler at all, and the declaration and the enforcement cannot drift
   // apart quietly — adding a handler without a list entry fails at startup,
   // which every test that loads this module already exercises.
-  assertAllowedInvokeChannel(channel)
+  assertRegistrableChannel(channel)
   ipcMain.handle(channel, (event, ...args) => {
     if (!isOwnFrame(event)) {
       console.error(`[ipc-trust] '${channel}' reddedildi — gönderen:`, event.senderFrame?.url ?? '(bilinmiyor)')
@@ -288,16 +290,46 @@ handleSecure('open-video-dialog', async () => {
   return result.filePaths.map(p => ({ path: p, name: path.basename(p) }))
 })
 
-handleSecure('open-folder-dialog', async () => {
+handleSecure('open-folder-dialog', async (_event, defaultPath: unknown) => {
   const result = await dialog.showOpenDialog({
-    properties: ['openDirectory']
+    properties: ['openDirectory'],
+    ...(typeof defaultPath === 'string' && path.isAbsolute(defaultPath) ? { defaultPath } : {})
   })
   if (result.canceled || result.filePaths.length === 0) return null
-  // Yetkili kök kütüğüne YALNIZCA buradan giriliyor: kullanıcının native
-  // diyalogda kendi eliyle seçtiği klasör. Renderer'ın önerdiği hiçbir yol
-  // kendiliğinden yetkili olmuyor (bkz. helpers/ipc-trust.ts).
+  // A suggested default path does not grant trust; only the selected result does.
   registerTrustedRoot(result.filePaths[0])
   return result.filePaths[0]
+})
+
+handleSecure('workspace-info', (_event, paths: unknown) => {
+  if (!Array.isArray(paths)) return []
+  return paths.filter((p): p is string => typeof p === 'string').slice(0, 50).map(p => {
+    if (!isTrustedRoot(p)) return { path: p, status: 'untrusted', unityVersion: null }
+    const info = inspectProject(p)
+    return { path: p, status: info.exists ? 'ok' : 'missing', unityVersion: info.unityVersion }
+  })
+})
+
+handleSecure('open-unity-hub', async () => {
+  try {
+    const hub = findUnityHub(process.platform, process.env, os.homedir(), fs.existsSync)
+    return { opened: hub ? await shell.openPath(hub) === '' : false }
+  } catch {
+    return { opened: false }
+  }
+})
+
+handleSecure('register-dropped-folder', (_event, p: unknown) => {
+  if (typeof p !== 'string' || !p || !path.isAbsolute(p)) return { error: 'not-a-folder' }
+  try {
+    const real = fs.realpathSync(p)
+    if (!fs.statSync(real).isDirectory()) return { error: 'not-a-folder' }
+    if (!isUnityProjectDir(real)) return { error: 'not-a-unity-project' }
+    registerTrustedRoot(real)
+    return { path: real }
+  } catch {
+    return { error: 'not-a-folder' }
+  }
 })
 
 handleSecure('save-file-dialog', async (_event, options) => {
