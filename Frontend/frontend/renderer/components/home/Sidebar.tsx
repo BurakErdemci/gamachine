@@ -1,18 +1,9 @@
 import React, { useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
-import {
-  Plus,
-  Edit3,
-  Trash2,
-  Folder,
-  FolderOpen,
-  File as FileIcon,
-  FolderPlus,
-  Pencil,
-} from 'lucide-react';
+import { Edit3, Trash2 } from 'lucide-react';
 import { Conversation, FileEntry, UserData } from './types';
-import { FileTree } from './FileTree';
+import { ProjectFiles } from './FileTree';
 import type { ConvStatus } from '../../hooks/home/useChat';
 import type { UnityMCPStatus } from '../../hooks/home/useAIConfig';
 import { STATUS_DOT, awaitingElsewhere, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
@@ -107,7 +98,6 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     setEditingId, tempTitle, setTempTitle, saveRename, workspacePath,
     closeWorkspace, rootFolderPath, openFolder, openFilePicker, user,
     setShowSettings, fileTree, treeContextMenu, setTreeContextMenu,
-    treeCreating, startTreeCreate, treeCreateValue, setTreeCreateValue, submitTreeCreate, setTreeCreating,
     convStatus, unityStatus, isDirty,
   } = props;
 
@@ -292,51 +282,8 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
               <ul className="chat-list">{chats.map(c => row(c, false))}</ul>
             </>
           ) : (
-            <div className="pt-2" onClick={() => treeContextMenu && setTreeContextMenu(null)}>
-              <div className="flex gap-1 mb-2">
-                <button onClick={openFolder} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[12px] text-blue-500 hover:bg-blue-600/10 rounded-lg transition-all font-semibold"><FolderOpen size={13} /> {t('sidebar.openFolder')}</button>
-                <button onClick={openFilePicker} className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[12px] text-emerald-500 hover:bg-emerald-600/10 rounded-lg transition-all font-semibold"><FileIcon size={13} /> {t('sidebar.openFile')}</button>
-              </div>
-              {rootFolderPath ? (
-                <div>
-                  <div className="px-2 py-1.5 flex items-center justify-between mb-1">
-                    <span className="text-[12px] font-bold text-slate-500 uppercase tracking-wider truncate flex-1 min-w-0">{baseName(rootFolderPath)}</span>
-                    <div className="flex items-center gap-0.5 shrink-0 ml-1">
-                      <button onClick={(e) => { e.stopPropagation(); startTreeCreate(rootFolderPath, 'file'); }} className="p-1 text-slate-600 hover:text-white rounded transition-colors"><Plus size={11} /></button>
-                      <button onClick={(e) => { e.stopPropagation(); startTreeCreate(rootFolderPath, 'folder'); }} className="p-1 text-slate-600 hover:text-white rounded transition-colors"><FolderPlus size={11} /></button>
-                    </div>
-                  </div>
-                  {treeCreating?.parentPath === rootFolderPath && (
-                    <div className="flex items-center gap-1.5 px-2 py-[3px]">
-                      <Folder size={13} className="text-emerald-400 shrink-0" />
-                      <input autoFocus value={treeCreateValue} onChange={e => setTreeCreateValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submitTreeCreate(); if (e.key === 'Escape') setTreeCreating(null); }} onBlur={() => setTreeCreating(null)} className="chat-rename" />
-                    </div>
-                  )}
-                  <FileTree {...props} entries={fileTree} />
-                </div>
-              ) : (
-                <div className="text-center py-8 text-slate-600">
-                  <FolderOpen size={24} className="mx-auto mb-2 opacity-20" />
-                  <p className="text-[12px]">{t('sidebar.emptyFolder')}</p>
-                </div>
-              )}
-
-              {treeContextMenu && (
-                // The floating menu takes the shell's menu surface instead of a hard-coded near-black.
-                <div className="fixed z-50 rounded-lg shadow-2xl py-1 min-w-[160px] text-[12px]" style={{ left: treeContextMenu.x, top: treeContextMenu.y, background: 'var(--menu-bg)', border: 'var(--line-w) solid var(--menu-line)', color: 'var(--shell-text)' }} onClick={e => e.stopPropagation()}>
-                  {treeContextMenu.entry.isDirectory && (
-                    <>
-                      <button onClick={() => startTreeCreate(treeContextMenu.entry.path, 'file')} className="side-menu-item"><Plus size={13} /> {t('sidebar.newFile')}</button>
-                      <button onClick={() => startTreeCreate(treeContextMenu.entry.path, 'folder')} className="side-menu-item"><FolderPlus size={13} /> {t('sidebar.newFolder')}</button>
-                      <div className="side-menu-sep" />
-                    </>
-                  )}
-                  <button onClick={() => props.startRename(treeContextMenu.entry)} className="side-menu-item"><Pencil size={13} /> {t('sidebar.rename')}</button>
-                  <div className="side-menu-sep" />
-                  <button onClick={() => props.handleTreeDelete(treeContextMenu.entry)} className="side-menu-item is-danger"><Trash2 size={13} /> {t('sidebar.delete')}</button>
-                </div>
-              )}
-            </div>
+            <ProjectFiles {...props} fileTree={fileTree} rootFolderPath={rootFolderPath} openFolder={openFolder}
+              openFilePicker={openFilePicker} treeContextMenu={treeContextMenu} setTreeContextMenu={setTreeContextMenu} showMenu />
           )}
         </div>
 
