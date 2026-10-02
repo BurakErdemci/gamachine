@@ -324,6 +324,9 @@ interface ScenePaneProps {
   changed: ChangedFile[];
   /** Total before the list was capped. */
   changedTotal: number;
+  seenHidden?: number;
+  onAck?: () => void;
+  onShowAll?: () => void;
   isRepo: boolean;
   workspacePath: string | null;
   onShowChange: () => void;
@@ -341,7 +344,7 @@ const STATUS_TAG: Record<string, string> = { modified: 'tag-mod', untracked: 'ta
  * changed files come from the git status the file tree already polls, with the change a card is
  * waiting on at the top.
  */
-export const ScenePane: React.FC<ScenePaneProps> = ({ change, changed, changedTotal, isRepo, workspacePath, onShowChange, onOpen }) => {
+export const ScenePane: React.FC<ScenePaneProps> = ({ change, changed, changedTotal, seenHidden = 0, onAck, onShowAll, isRepo, workspacePath, onShowChange, onOpen }) => {
   const { t } = useLang();
   const count = changedTotal + (change ? 1 : 0);
   return (
@@ -351,9 +354,19 @@ export const ScenePane: React.FC<ScenePaneProps> = ({ change, changed, changedTo
         <p className="ws-note">{t('ws.sceneEmpty')}</p>
       </section>
       <section className="ws-sec" data-guide="changed-files">
-        <h3 className="ws-label"><span>{t('ws.changed')}</span> <span className="ws-count">{count}</span></h3>
+        <h3 className="ws-label">
+          <span>{t('ws.changed')}</span> <span className="ws-count">{count}</span>
+          {changedTotal > 0 && onAck && (
+            <button type="button" className="ws-ack" title={t('ws.ackTitle')} aria-label={t('ws.ackTitle')} onClick={onAck}>{t('ws.ack')}</button>
+          )}
+        </h3>
         {count === 0 ? (
-          <p className="ws-note">{t(isRepo ? 'ws.changedEmpty' : 'ws.changedNoRepo')}</p>
+          seenHidden > 0 ? (
+            <p className="ws-note">
+              <span>{t('ws.changedSeenNote', { sayi: seenHidden })}</span>{' '}
+              <button type="button" className="ws-ack" onClick={onShowAll}>{t('ws.showAll')}</button>
+            </p>
+          ) : <p className="ws-note">{t(isRepo ? 'ws.changedEmpty' : 'ws.changedNoRepo')}</p>
         ) : (
           <ul className="files">
             {change && (() => {
@@ -401,6 +414,12 @@ export const ScenePane: React.FC<ScenePaneProps> = ({ change, changed, changedTo
         )}
         {changedTotal > changed.length && (
           <p className="ws-note">{t('ws.changedMore', { sayi: changedTotal - changed.length })}</p>
+        )}
+        {count > 0 && seenHidden > 0 && (
+          <p className="ws-note">
+            <span>{t('ws.changedSeenMore', { sayi: seenHidden })}</span>{' '}
+            <button type="button" className="ws-ack" onClick={onShowAll}>{t('ws.showAll')}</button>
+          </p>
         )}
       </section>
     </>

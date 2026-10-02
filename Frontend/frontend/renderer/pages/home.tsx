@@ -58,6 +58,7 @@ import { useNewChatShortcut } from '../lib/newChatShortcut';
 import { useTurnDone, cardOnScreen } from '../lib/turnDone';
 import { useWorkspacePanel, tabForPath } from '../lib/workspacePanel';
 import { usePendingChange } from '../lib/pendingChange';
+import { clearSeen, isUnseen, loadSeen, saveSeen, type Seen } from '../lib/changesSeen';
 import { ThreadHeader } from '../components/home/ThreadHeader';
 import { EmptyChat, questDraft } from '../components/home/EmptyChat';
 import { AchievementToast } from '../components/home/AchievementToast';
@@ -493,6 +494,20 @@ export default function Home() {
   }, [arrived, fs.previewFile, fs.openedFilePath, pendingChange?.id, setWsOpen, setWsTab]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (isTerminalOpen) setWsOpen(true); }, [isTerminalOpen, setWsOpen]);
 
+  const [seen, setSeen] = useState<Seen | null>(null);
+  useEffect(() => {
+    setSeen(fs.workspacePath ? loadSeen(fs.workspacePath) : null);
+  }, [fs.workspacePath]);
+  const onAckChanges = useCallback(() => {
+    if (!fs.workspacePath) return;
+    setSeen(saveSeen(fs.workspacePath, fs.gitStatus.files, Date.now()));
+  }, [fs.workspacePath, fs.gitStatus.files]);
+  const onShowAllChanges = useCallback(() => {
+    if (!fs.workspacePath) return;
+    clearSeen(fs.workspacePath);
+    setSeen(null);
+  }, [fs.workspacePath]);
+
   // Sahne's "Changed files": the git status the file tree already polls every 20 s. Its keys are
   // lowercased absolute paths (main/background.ts git-status), so the case is taken back from the
   // tree entries read from disk where they are known; elsewhere the path keeps the workspace
@@ -500,7 +515,7 @@ export default function Home() {
   // repo with thousands of untracked files cannot flood the pane.
   const changedFiles = useMemo(() => {
     const root = fs.workspacePath;
-    if (!root || !fs.gitStatus?.isRepo) return { shown: [] as ChangedFile[], total: 0 };
+    if (!root || !fs.gitStatus?.isRepo) return { shown: [] as ChangedFile[], total: 0, seenHidden: 0 };
     const slash = (p: string) => p.replace(/\\/g, '/');
     const known = new Map<string, string>();
     for (const e of fs.fileTree || []) known.set(slash(e.path).toLowerCase(), e.path);
@@ -508,15 +523,20 @@ export default function Home() {
     const rootN = slash(root).replace(/\/+$/, '');
     const rootL = `${rootN.toLowerCase()}/`;
     const out: ChangedFile[] = [];
+    let seenHidden = 0;
     for (const [key, status] of Object.entries(fs.gitStatus.files)) {
       const k = slash(key);
       if (!k.startsWith(rootL)) continue;
+      if (!isUnseen(key, status, fs.gitStatus.mtimes?.[key], seen)) {
+        seenHidden++;
+        continue;
+      }
       const tail = k.slice(rootL.length);
       out.push({ path: known.get(k) ?? `${root.replace(/[\\/]+$/, '')}/${tail}`, rel: tail, status });
     }
     out.sort((a, b) => a.rel.localeCompare(b.rel));
-    return { shown: out.slice(0, 200), total: out.length };
-  }, [fs.gitStatus, fs.workspacePath, fs.fileTree, fs.dirContents]);
+    return { shown: out.slice(0, 200), total: out.length, seenHidden };
+  }, [fs.gitStatus, fs.workspacePath, fs.fileTree, fs.dirContents, seen]);
 
   // --- Desktop notifications (background chats) ---
   const screenCardOpen = !!fs.pendingDelete || !!fs.pendingGenFiles;
@@ -1148,6 +1168,9 @@ export default function Home() {
                 change={pendingChange}
                 changed={changedFiles.shown}
                 changedTotal={changedFiles.total}
+                seenHidden={changedFiles.seenHidden}
+                onAck={onAckChanges}
+                onShowAll={onShowAllChanges}
                 isRepo={!!fs.gitStatus?.isRepo}
                 workspacePath={fs.workspacePath}
                 onShowChange={() => setWsTab('kod')}

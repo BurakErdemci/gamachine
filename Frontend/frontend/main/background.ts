@@ -43,6 +43,7 @@ import {
 import { createNotifier } from './helpers/notify'
 import { createRemoteControl } from './helpers/remote-control'
 import { createProfileReset } from './helpers/profile-reset'
+import { collectMtimes } from './helpers/stat-mtimes'
 
 const useDockerBackend = process.env.USE_DOCKER_BACKEND === 'true'
 
@@ -403,7 +404,7 @@ handleSecure('read-directory', async (_event, dirPath: string, workspacePath?: s
 // VSCode tarzı git durum rozetleri: workspace bir git reposuysa değişen/yeni/
 // silinen dosyaların mutlak-yol → durum haritasını döner (dosya ağacı boyar).
 handleSecure('git-status', async (_event, workspacePath?: string) => {
-  const empty = { isRepo: false, files: {}, dirs: {} }
+  const empty = { isRepo: false, files: {}, dirs: {}, mtimes: {} }
   try {
     if (!workspacePath || !fs.existsSync(workspacePath)) return empty
     // Kök doğrulanmasaydı `git -C <herhangi bir dizin>` çalıştırılabilirdi:
@@ -431,6 +432,7 @@ handleSecure('git-status', async (_event, workspacePath?: string) => {
 
     const files: Record<string, string> = {}
     const dirs: Record<string, string> = {}
+    const statEntries: Array<[string, string]> = []
     const parts = raw.split('\0')
     let count = 0
     for (let i = 0; i < parts.length && count < 8000; i++) {
@@ -447,8 +449,10 @@ handleSecure('git-status', async (_event, workspacePath?: string) => {
       else if (xy.includes('A')) status = 'added'
       // Anahtarlar lowercase: renderer'daki entry.path ile sürücü-harfi/case
       // farklarından bağımsız eşleşme (renderer da lowercase ile arar).
-      const abs = path.normalize(path.join(toplevel, rel)).toLowerCase()
+      const originalAbs = path.join(toplevel, rel)
+      const abs = path.normalize(originalAbs).toLowerCase()
       files[abs] = status
+      statEntries.push([abs, originalAbs])
       count++
       // Üst klasörleri işaretle (workspace köküne kadar) — klasörde nokta rozeti.
       // Windows'ta sürücü harfi büyük/küçük gelebilir (C:\ vs c:\) → karşılaştırma
@@ -462,7 +466,8 @@ handleSecure('git-status', async (_event, workspacePath?: string) => {
         dir = parent
       }
     }
-    return { isRepo: true, files, dirs }
+    const mtimes = await collectMtimes(statEntries, p => fs.promises.stat(p))
+    return { isRepo: true, files, dirs, mtimes }
   } catch {
     return empty // git yok / repo değil / timeout → rozetsiz devam
   }

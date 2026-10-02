@@ -261,7 +261,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   const pathOperationScope = useCallback(() => workspaceRequest.observe(), [workspaceRequest]);
 
   // VSCode tarzı git rozetleri: mutlak yol → durum (modified/added/untracked/deleted)
-  const [gitStatus, setGitStatus] = useState<{ isRepo: boolean; files: Record<string, string>; dirs: Record<string, string> }>({ isRepo: false, files: {}, dirs: {} });
+  const [gitStatus, setGitStatus] = useState<{ isRepo: boolean; files: Record<string, string>; dirs: Record<string, string>; mtimes?: Record<string, number> }>({ isRepo: false, files: {}, dirs: {} });
   const refreshGitStatus = useCallback(async (ws?: string | null) => {
     const target = ws ?? workspacePath;
     if (!ipc || !target) return;
