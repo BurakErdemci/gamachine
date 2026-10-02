@@ -23,17 +23,19 @@ export function useAutoChatTitles(API: string, userId: number | null | undefined
     return () => { live = false; };
   }, [API, userId]);
 
-  const toggleAutoTitles = useCallback(async () => {
-    if (!API || saving) return;
+  const toggleAutoTitles = useCallback(async (): Promise<boolean> => {
+    if (!API || saving) return false;
     touchedRef.current = true;
     const next = !autoTitles;
     setAutoTitles(next);
     setSaving(true);
     try {
       await axios.post(`${API}/chat-title-setting`, { enabled: next });
+      return true;
     } catch {
       setAutoTitles(!next);
       showToast?.(cevir('settings.autoTitlesFailed'), 'error');
+      return false;
     } finally {
       setSaving(false);
     }

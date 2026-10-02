@@ -25,17 +25,19 @@ export function useDictationSettings(API: string, userId: number | null | undefi
     return () => { live = false; };
   }, [API, userId]);
 
-  const toggleAutoLanguageCpu = useCallback(async () => {
-    if (!API || saving) return;
+  const toggleAutoLanguageCpu = useCallback(async (): Promise<boolean> => {
+    if (!API || saving) return false;
     touchedRef.current = true;
     const next = !autoLanguageCpu;
     setAutoLanguageCpu(next);
     setSaving(true);
     try {
       await axios.post(`${API}/transcribe/settings`, { auto_language_cpu: next });
+      return true;
     } catch {
       setAutoLanguageCpu(!next);
       showToast?.(cevir('settings.dictationAutoLangFailed'), 'error');
+      return false;
     } finally {
       setSaving(false);
     }

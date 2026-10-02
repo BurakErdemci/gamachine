@@ -204,8 +204,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     }
   }, [API, stopPolling]);
 
-  const toggleUnityMcp = useCallback(async () => {
-    if (!API || unityMcpToggling) return;
+  const toggleUnityMcp = useCallback(async (): Promise<boolean> => {
+    if (!API || unityMcpToggling || unityMcpStatus === 'starting') return false;
     setUnityMcpToggling(true);
     // `blocked` de bir AÇMA denemesidir: kullanıcı çakışan sunucuyu kapattıysa
     // tek yolu bu düğme. Eskiden koşul `=== 'off'` olduğu için blocked'da
@@ -237,7 +237,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
         showToast(cevir('workspace.outsideDockerMount'), 'warning');
       }
       await axios.post(`${API}/mcp/unity/toggle`, { enabled: turningOn, workspace_path: mcpWorkspace });
-      if (!guncelMi()) return;
+      if (!guncelMi()) return false;
       if (turningOn) {
         setUnityMcpStatus('starting');
         startingUntilRef.current = Date.now() + 30000; // 30s boyunca 'off' yanıtını yoksay
@@ -249,8 +249,9 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
         setUnityMcpStatus('off');
         pollRef.current = setInterval(fetchUnityMcpStatus, 8000);
       }
+      return true;
     } catch (err: any) {
-      if (!guncelMi()) return;
+      if (!guncelMi()) return false;
       // `detail` artık HER durum kodunda okunuyor. 500'ün gövdesi portu tutan
       // sürecin ADINI taşıyor (`unity_mcp_manager._blocked_reason`) ve eskiden
       // sabit bir "toggle başarısız" metniyle eziliyordu: sebep üretiliyor ama
@@ -273,6 +274,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       // port başkasındayken bu yanlış bilgi: kullanıcı gri "kapalı" görüyor,
       // aynı düğmeye basıyor ve sebebi hiç öğrenmiyor.
       await fetchUnityMcpStatus();
+      return false;
     } finally {
       setUnityMcpToggling(false);
     }
@@ -421,14 +423,16 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     } catch (err) { showToast(cevir('settings.saveFailed'), 'error'); }
   }, [API, aiConfig, fetchProvidersWithKeys, providersWithKeys, showToast, user]);
 
-  const deleteApiKey = useCallback(async (provider: string) => {
-    if (!user || !API) return;
+  const deleteApiKey = useCallback(async (provider: string): Promise<boolean> => {
+    if (!user || !API) return false;
     try {
       await axios.delete(`${API}/api-keys/${user.id}/${provider}`);
       await fetchProvidersWithKeys(user.id);
       setAiConfig(prev => ({ ...prev, api_key: '' }));
+      return true;
     } catch (err) {
       showToast(cevir('settings.keyDeleteError'), 'error');
+      return false;
     }
   }, [API, fetchProvidersWithKeys, showToast, user]);
 

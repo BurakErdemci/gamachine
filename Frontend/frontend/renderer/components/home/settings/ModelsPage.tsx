@@ -5,8 +5,10 @@ import { useLang, type TKey } from '../../../lib/i18n';
 import { stripBidi, shortModelId } from '../../../lib/modelText';
 import { GROUP_USAGE_FAMILY, familyFor, type UsageLimits } from '../../../lib/usageLimits';
 import { useCliDoctor } from '../../../hooks/home/useCliDoctor';
+import { useUsageLimits } from '../../../hooks/home/useUsageLimits';
 import type { AvailableModelsState } from '../../../hooks/home/useAIConfig';
 import { ModelLogo } from '../../ui/ModelLogos';
+import { confirmDialog } from '../../ui/ConfirmDialog';
 import { UseBlock } from '../UsageMeters';
 import type { AIConfig } from '../types';
 import {
@@ -24,7 +26,7 @@ export interface ModelsPageProps {
   defaultModel?: { provider_type: string; model_name: string } | null;
   onSaveDefaultModel?: (provider: string, model: string) => Promise<boolean>;
   onSaveApiKey?: (provider: string, key: string) => Promise<boolean>;
-  onDeleteKey: (provider: string) => Promise<void>;
+  onDeleteKey: (provider: string) => Promise<boolean | void>;
   onUseCustomModel?: (model: string) => Promise<boolean>;
   usage?: UsageLimits | null;
   API?: string;
@@ -47,6 +49,7 @@ export const ModelsPage = ({
   const goster = (s?: string) => stripBidi(s || '');
   const toast: Toast = showToast ?? (() => {});
   const cli = useCliDoctor({ API, http: http ?? noHttp, token, showToast: toast, t });
+  const pageUsage = useUsageLimits({ api: API, token, http, enabled: !!API, menuOpen: true });
   const models = availableModels ?? { local: [], cloud: [], subscription: [] };
 
   // Dynamic CLI lists (Codex, Copilot, Cursor, OpenCode) for the default-model list. Asked only
@@ -103,6 +106,11 @@ export const ModelsPage = ({
     const [provider, ...rest] = value.split(SEP);
     const model = rest.join(SEP);
     if (!provider || !model || !onSaveDefaultModel) return;
+    if (cloudGroups.some(g => g.provider === provider) && !providersWithKeys.includes(provider)) {
+      toast(`${goster(provider)} ${t('models.apiKeyNeeded')}`, 'warning');
+      startEdit(provider);
+      return;
+    }
     if (await onSaveDefaultModel(provider, model)) saved();
   };
 
@@ -111,7 +119,8 @@ export const ModelsPage = ({
     const loggedIn = cli.isLoggedIn(g);
     const installed = cli.isInstalled(g);
     const needsLogin = cli.needsLogin(g);
-    const fam = familyFor(usage, GROUP_USAGE_FAMILY[g.key]);
+    const limits = pageUsage.data ?? usage;
+    const fam = familyFor(limits, GROUP_USAGE_FAMILY[g.key]);
     const count = groupModels(g).length;
     const parts: string[] = [];
     let tone: 'ok' | 'warn' | undefined;
@@ -137,7 +146,7 @@ export const ModelsPage = ({
           onClick={() => cli.loginCli(g)}>
           {cli.busyCli === g.key && <Loader2 size={13} className="animate-spin" />}{t('set.cli.login')}
         </button>
-      ) : <UseBlock fam={fam} nowIso={usage?.now} />;
+      ) : <UseBlock fam={fam} nowIso={limits?.now} />;
     return (
       <SetRow
         key={g.key}
@@ -158,6 +167,7 @@ export const ModelsPage = ({
   const [keyInput, setKeyInput] = useState('');
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const startEdit = (p: string) => { setEditing(p); setKeyInput(''); };
+  const cancelEdit = () => { setEditing(null); setKeyInput(''); };
   const commitKey = async (p: string) => {
     if (!onSaveApiKey || !keyInput.trim()) return;
     setBusyKey(p);
@@ -166,8 +176,10 @@ export const ModelsPage = ({
     if (ok) { setEditing(null); setKeyInput(''); saved(); }
   };
   const deleteKey = async (p: string) => {
+    const label = API_KEY_PROVIDERS.find(provider => provider.value === p)?.label || goster(p);
+    if (!(await confirmDialog(t('set.key.deleteConfirm', { saglayici: label }), t('set.key.delete'), t('confirm.cancel')))) return;
     setBusyKey(p);
-    try { await onDeleteKey(p); saved(); } finally { setBusyKey(null); }
+    try { if (await onDeleteKey(p) === true) saved(); } finally { setBusyKey(null); }
   };
   const keyRow = (p: { value: string; label: string; badge?: string }) => {
     const has = providersWithKeys.includes(p.value);
@@ -189,13 +201,16 @@ export const ModelsPage = ({
           autoComplete="off"
           value={keyInput}
           onChange={e => setKeyInput(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); cancelEdit(); }
+          }}
           placeholder={has ? t('settings.savedKeyPlaceholder') : t('settings.apiKeyPlaceholder')}
           aria-label={inputLabel}
           data-testid={`key-input-${p.value}`}
         />
         <button type="submit" className="btn btn-primary btn-sm" data-testid={`key-save-${p.value}`}
           disabled={!keyInput.trim() || busyKey === p.value}>{t('set.key.save')}</button>
-        <button type="button" className="set-link" onClick={() => setEditing(null)}>{t('set.key.cancel')}</button>
+        <button type="button" className="set-link" onClick={cancelEdit}>{t('set.key.cancel')}</button>
       </form>
     ) : undefined;
     const control = isEditing ? undefined : has ? (
@@ -335,6 +350,9 @@ export const ModelsPage = ({
                   type="text"
                   value={custom}
                   onChange={e => setCustom(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') { e.preventDefault(); setCustom(''); e.currentTarget.blur(); }
+                  }}
                   placeholder={goster(aiConfig.model_name) || t('settings.modelPlaceholder')}
                   aria-label={t('set.customModel')}
                   data-testid="custom-model-input"

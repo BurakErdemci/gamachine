@@ -444,6 +444,7 @@ export const tr = {
   'provider.badge.local': 'yerel',
   'provider.subscriptionCli': 'Abonelik (CLI)',
   'models.apiKeyNeeded': "API anahtarı gerekli — Ayarlar'dan ekle.",
+  'set.key.deleteConfirm': '{saglayici} API anahtarı silinsin mi? Bu işlem geri alınamaz.',
   // --- Sohbet akışı (useChat) ---
   'chat.deleteConfirm': 'Bu sohbet silinsin mi?',
   'chat.errorOccurred': '❌ Hata oluştu.',
@@ -1589,6 +1590,7 @@ export const en: Record<keyof typeof tr, string> = {
   'provider.badge.local': 'local',
   'provider.subscriptionCli': 'Subscription (CLI)',
   'models.apiKeyNeeded': 'API key required — add it in Settings.',
+  'set.key.deleteConfirm': 'Delete the {saglayici} API key? This cannot be undone.',
   // --- Chat flow (useChat) ---
   'chat.deleteConfirm': 'Delete this chat?',
   'chat.errorOccurred': '❌ Something went wrong.',

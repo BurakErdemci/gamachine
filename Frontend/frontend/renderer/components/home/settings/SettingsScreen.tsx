@@ -24,14 +24,14 @@ export interface SettingsScreenProps {
   providersWithKeys: string[];
   onClose: () => void;
   onLogout: () => void;
-  onDeleteKey: (provider: string) => Promise<void>;
+  onDeleteKey: (provider: string) => Promise<boolean | void>;
   defaultModel?: { provider_type: string; model_name: string } | null;
   onSaveDefaultModel?: (provider: string, model: string) => Promise<boolean>;
   onSaveApiKey?: (provider: string, key: string) => Promise<boolean>;
   onUseCustomModel?: (model: string) => Promise<boolean>;
   unityMcpStatus: UnityMCPStatus;
   unityMcpToggling: boolean;
-  onToggleUnityMcp: () => void;
+  onToggleUnityMcp: () => Promise<boolean> | void;
   unityProjectName?: string | null;
   lang: Lang;
   onLangChange: (l: Lang) => void;
@@ -39,10 +39,10 @@ export interface SettingsScreenProps {
   onApprovalModeChange?: (mode: GenerationMode) => void;
   autoTitles?: boolean;
   autoTitlesSaving?: boolean;
-  onToggleAutoTitles?: () => void;
+  onToggleAutoTitles?: () => Promise<boolean> | void;
   dictationAutoLang?: boolean;
   dictationAutoLangSaving?: boolean;
-  onToggleDictationAutoLang?: () => void;
+  onToggleDictationAutoLang?: () => Promise<boolean> | void;
   onRemoteStatus?: (status: RemoteStatus) => void;
   usage?: UsageLimits | null;
   user?: UserData | null;
@@ -115,6 +115,13 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       if (document.querySelector('[data-confirm-dialog], [role="alertdialog"]')) return;
+      // A field owns the first Esc (settings audit, 2 Oct 2026).
+      const field = document.activeElement;
+      if (field instanceof HTMLElement && field.matches('input, textarea, select')) {
+        e.preventDefault();
+        field.blur();
+        return;
+      }
       onClose();
     };
     document.addEventListener('keydown', onKey);
@@ -163,7 +170,10 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && matches[0]) go(matches[0]); }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && matches[0]) go(matches[0]);
+              if (e.key === 'Escape') { e.preventDefault(); setQuery(''); e.currentTarget.blur(); }
+            }}
             placeholder={t('set.search')}
             aria-label={t('set.search')}
             data-testid="settings-search"

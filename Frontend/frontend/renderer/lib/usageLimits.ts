@@ -7,6 +7,8 @@
  * `unavailable`, simply has no meters.
  */
 
+import { stripBidi } from './modelText';
+
 export type UsageFamilyId = 'claude' | 'codex' | 'agy';
 export type UsageStatus = 'ok' | 'loading' | 'error' | 'unavailable';
 
@@ -129,7 +131,7 @@ export function resetLabel(w: UsageWindow | null, lang: string, nowIso?: string 
       return `${at.toLocaleDateString(locale, { weekday: 'short' })} ${time}`;
     }
   }
-  return w.resets_text || '';
+  return stripBidi(w.resets_text || '');
 }
 
 /** Minutes since the family was measured, or null when unknown. */

@@ -24,6 +24,7 @@ function isLimits(v: unknown): v is UsageLimits {
 interface Options {
   api: string;
   token?: string | null;
+  http?: { get: (...a: any[]) => Promise<any> };
   /** The model menu is open: poll every minute and ask once for a fresh measurement. */
   menuOpen?: boolean;
   /** False until a user and a backend exist. */
@@ -38,17 +39,22 @@ interface Options {
  * their own `stale` flag); with no answer at all there are simply no meters.
  */
 export function useUsageLimits({
-  api, token, menuOpen = false, enabled = true, openMs = USAGE_POLL_OPEN_MS, idleMs = USAGE_POLL_IDLE_MS,
+  api, token, http = axios, menuOpen = false, enabled = true, openMs = USAGE_POLL_OPEN_MS, idleMs = USAGE_POLL_IDLE_MS,
 }: Options) {
   const [data, setData] = useState<UsageLimits | null>(() => (api ? cache.get(api) ?? null : null));
   const [failed, setFailed] = useState(false);
   const seqRef = useRef(0);
+  const followUpRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const delayRef = useRef(4000);
 
-  const load = useCallback(async (refresh = false) => {
+  const load = useCallback(async (refresh = false, followUp = false): Promise<void> => {
+    if (followUpRef.current !== null) clearTimeout(followUpRef.current);
+    followUpRef.current = null;
+    if (!followUp) delayRef.current = 4000;
     if (!api || !enabled) return;
     const seq = ++seqRef.current;
     try {
-      const res = await axios.get(`${api}/usage/limits`, {
+      const res = await http.get(`${api}/usage/limits`, {
         params: refresh ? { refresh: 1 } : undefined,
         headers: { 'X-Session-Token': token ?? '' },
       });
@@ -57,13 +63,28 @@ export function useUsageLimits({
         cache.set(api, res.data);
         setData(res.data);
         setFailed(false);
+        // The backend refreshes in the background (settings audit, 2 Oct 2026).
+        // Follow the cache until ready without starting another refresh.
+        if (res.data.families.some(f => f && (f.status === 'loading' || (f.stale && f.status !== 'error')))) {
+          const delay = delayRef.current;
+          delayRef.current = Math.min(delay * 2, 30000);
+          followUpRef.current = setTimeout(() => { void load(false, true); }, delay);
+        } else {
+          delayRef.current = 4000;
+        }
       } else {
         setFailed(true);
       }
     } catch {
       if (seq === seqRef.current) setFailed(true);
     }
-  }, [api, token, enabled]);
+  }, [api, token, http, enabled]);
+
+  useEffect(() => () => {
+    ++seqRef.current;
+    if (followUpRef.current !== null) clearTimeout(followUpRef.current);
+    followUpRef.current = null;
+  }, [load]);
 
   // First read once a backend and a user exist (a menu opening first reads it below instead).
   useEffect(() => {

@@ -27,8 +27,8 @@ export const GeneralPage = ({
   dictationAutoLang, dictationAutoLangSaving, onToggleDictationAutoLang, saved,
 }: {
   lang: Lang; onLangChange: (l: Lang) => void;
-  autoTitles: boolean; autoTitlesSaving: boolean; onToggleAutoTitles?: () => void;
-  dictationAutoLang: boolean; dictationAutoLangSaving: boolean; onToggleDictationAutoLang?: () => void;
+  autoTitles: boolean; autoTitlesSaving: boolean; onToggleAutoTitles?: () => Promise<boolean> | void;
+  dictationAutoLang: boolean; dictationAutoLangSaving: boolean; onToggleDictationAutoLang?: () => Promise<boolean> | void;
   saved: () => void;
 }) => {
   const { t } = useLang();
@@ -59,7 +59,7 @@ export const GeneralPage = ({
               name={t('settings.autoTitles')}
               hint={t('settings.autoTitlesHint')}
               control={<SetSwitch checked={autoTitles} label={t('settings.autoTitles')} testId="auto-titles-toggle"
-                disabled={autoTitlesSaving} onToggle={() => { onToggleAutoTitles(); saved(); }} />}
+                disabled={autoTitlesSaving} onToggle={async () => { if (await onToggleAutoTitles() === true) saved(); }} />}
             />
           </SetCard>
         </SetGroup>
@@ -71,7 +71,7 @@ export const GeneralPage = ({
               name={t('settings.dictationAutoLang')}
               hint={t('settings.dictationAutoLangHint')}
               control={<SetSwitch checked={dictationAutoLang} label={t('settings.dictationAutoLang')} testId="dictation-auto-lang-toggle"
-                disabled={dictationAutoLangSaving} onToggle={() => { onToggleDictationAutoLang(); saved(); }} />}
+                disabled={dictationAutoLangSaving} onToggle={async () => { if (await onToggleDictationAutoLang() === true) saved(); }} />}
             />
           </SetCard>
         </SetGroup>
@@ -185,7 +185,7 @@ export const AppearancePage = ({ saved }: { saved: () => void }) => {
 // ───────────────────────────── Unity ─────────────────────────────
 
 export const UnityPage = ({ status, toggling, onToggle, projectName, saved }: {
-  status: UnityMCPStatus; toggling: boolean; onToggle: () => void; projectName?: string | null; saved: () => void;
+  status: UnityMCPStatus; toggling: boolean; onToggle: () => Promise<boolean> | void; projectName?: string | null; saved: () => void;
 }) => {
   const { t } = useLang();
   // Each Unity state maps to a tone; settings.css turns the tone into colour.
@@ -228,7 +228,10 @@ export const UnityPage = ({ status, toggling, onToggle, projectName, saved }: {
               data-testid="unity-mcp-toggle"
               data-state={on ? 'on' : 'off'}
               aria-busy={toggling || undefined}
-              onClick={() => { onToggle(); saved(); }}
+              onClick={async () => {
+                if (toggling || status === 'starting') return;
+                if (await onToggle() === true && status !== 'blocked') saved();
+              }}
               disabled={toggling || status === 'starting'}
               className="set-switch"
             >

@@ -129,10 +129,10 @@ describe('settings screen · navigation', () => {
 describe('settings screen · live apply', () => {
   it('has no Save button on any page and flashes "Saved" after a change', async () => {
     vi.useFakeTimers()
-    const onToggleAutoTitles = vi.fn()
+    const onToggleAutoTitles = vi.fn(async () => true)
     render(<AppearanceProvider><SettingsScreen {...base({ onToggleAutoTitles, autoTitles: true })} /></AppearanceProvider>)
     expect(screen.getByTestId('settings-saved').textContent).toBe(cevir('set.savedIdle'))
-    fireEvent.click(screen.getByTestId('auto-titles-toggle'))
+    await act(async () => { fireEvent.click(screen.getByTestId('auto-titles-toggle')) })
     expect(onToggleAutoTitles).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('settings-saved').textContent).toBe(cevir('set.savedNow'))
     act(() => { vi.advanceTimersByTime(1700) })
@@ -208,7 +208,7 @@ describe('settings mapping · old modal -> new pages', () => {
 
   it('General tab provider + model name + Save -> Modeller / Default model (applies at once)', async () => {
     const onSaveDefaultModel = vi.fn(async () => true)
-    render(<SettingsScreen {...base({ page: 'modeller', onSaveDefaultModel,
+    render(<SettingsScreen {...base({ page: 'modeller', onSaveDefaultModel, providersWithKeys: ['anthropic', 'openai'],
       defaultModel: { provider_type: 'subscription', model_name: 'claude-opus-5-5' } })} />)
     const select = screen.getByTestId('default-model-select') as HTMLSelectElement
     expect(select.value).toBe('subscription\u0000claude-opus-5-5')
@@ -240,11 +240,14 @@ describe('settings mapping · old modal -> new pages', () => {
   })
 
   it('General tab "Delete API key" -> Modeller / API keys row Delete', async () => {
-    const onDeleteKey = vi.fn(async () => {})
+    const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const onDeleteKey = vi.fn(async () => true)
     render(<SettingsScreen {...base({ page: 'modeller', onDeleteKey })} />)
     expect(screen.getByTestId('key-row-anthropic').textContent).toContain(cevir('set.key.saved'))
     await act(async () => { fireEvent.click(screen.getByTestId('key-delete-anthropic')) })
     expect(onDeleteKey).toHaveBeenCalledWith('anthropic')
+    expect(confirmation).toHaveBeenCalledTimes(1)
+    confirmation.mockRestore()
     // A provider without a key has no Delete.
     expect(screen.queryByTestId('key-delete-openai')).toBeNull()
   })

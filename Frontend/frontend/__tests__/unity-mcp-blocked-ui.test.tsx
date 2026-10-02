@@ -224,9 +224,7 @@ describe('Settings screen Unity page — blocked row', () => {
         page="unity"
         aiConfig={aiConfig}
         providersWithKeys={[]}
-        onChange={vi.fn()}
         onClose={vi.fn()}
-        onSave={vi.fn(async () => {})}
         onLogout={vi.fn()}
         onDeleteKey={vi.fn(async () => {})}
         unityMcpStatus={status}
