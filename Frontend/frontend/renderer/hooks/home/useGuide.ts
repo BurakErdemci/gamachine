@@ -180,6 +180,9 @@ export function useGuide({ ctx, host, userName, saveName, appVersion, frameReady
         if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); skip(); return; }
         const typing = e.target instanceof HTMLElement && e.target.matches('input, textarea');
         if (typing) return;
+        // Alt/Ctrl/Meta + arrow is the browser's or OS's (history, word jump): never a tour step
+        // (guide audit, 2 Oct 2026).
+        if (e.altKey || e.ctrlKey || e.metaKey) return;
         if (e.key === 'ArrowRight') { e.preventDefault(); e.stopImmediatePropagation(); if (st.cur < st.seq.length) go(st.cur + 1); }
         if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopImmediatePropagation(); if (st.cur > 1) go(st.cur - 1); }
         return;

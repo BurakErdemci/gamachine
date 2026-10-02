@@ -69,6 +69,7 @@ export const GuideTour: React.FC<GuideTourProps> = ({ tour, approvalMode, onNext
   const dotRef = useRef<SVGCircleElement>(null);
   const nextRef = useRef<HTMLButtonElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const targetRef = useRef<Element | null>(null);
   const [fig, setFig] = useState<{ pose: string; flip: boolean }>({ pose: 'wave', flip: false });
 
   const { seq, cur, mode } = tour;
@@ -84,6 +85,7 @@ export const GuideTour: React.FC<GuideTourProps> = ({ tour, approvalMode, onNext
     let target = step.anchor ? findAnchor(step.anchor) : null;
     if (step.anchor && !target) console.info('[guide] anchor not on screen, card centred:', step.anchor);
     if (target) { revealInPane(target); target = findAnchor(step.anchor!); }
+    targetRef.current = target;
     const F = root.getBoundingClientRect();
     const r = target?.getBoundingClientRect();
     const out: PlaceOutput = place({
@@ -126,7 +128,16 @@ export const GuideTour: React.FC<GuideTourProps> = ({ tour, approvalMode, onNext
     if (!reduced) { replay(boxRef.current, 'is-entering', 260); replay(holeRef.current, 'is-locking', 260); }
     const focus = setTimeout(() => (onName ? nameRef.current : nextRef.current)?.focus({ preventScroll: true }), 0);
     window.addEventListener('resize', measure);
+    // The spotlighted element can vanish mid-step (a pending approval card gets resolved): measure
+    // again so the anchor is re-resolved or the card falls back to the centre instead of leaving
+    // the hole on the old spot (guide audit, 2 Oct 2026).
+    const gone = new MutationObserver(() => {
+      const t = targetRef.current;
+      if (t && !t.isConnected) measure();
+    });
+    gone.observe(document.body, { childList: true, subtree: true });
     return () => {
+      gone.disconnect();
       cancelAnimationFrame(raf); clearTimeout(again); clearTimeout(focus);
       window.removeEventListener('resize', measure);
       app?.classList.remove('is-init');
@@ -155,7 +166,9 @@ export const GuideTour: React.FC<GuideTourProps> = ({ tour, approvalMode, onNext
     return () => { watch.disconnect(); touched.forEach(el => el.removeAttribute('inert')); };
   }, []);
 
-  const text = name && step.text_named ? tx(step.text_named, lang).replace('{name}', name) : tx(step.text, lang);
+  // Function form: a plain string would read `$&`, `$'` in a typed name as replacement patterns
+  // (guide audit, 2 Oct 2026).
+  const text = name && step.text_named ? tx(step.text_named, lang).replace('{name}', () => name) : tx(step.text, lang);
   const nextLabel = last
     ? (mode === 'core' && !tour.toGuide ? t('tour.last') : t('tour.toGuide'))
     : onName ? t('tour.cont') : t('tour.next');
