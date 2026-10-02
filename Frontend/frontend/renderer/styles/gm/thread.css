@@ -498,6 +498,39 @@
 @keyframes gm-breathe { 50% { transform: translateY(1.5px); } }
 @keyframes gm-blink { 0%, 94%, 100% { transform: none; } 96% { transform: scaleY(.08); } }
 
+
+/* the proposed-fix card (DiffViewer): the code plate with an explanation row and the decision */
+.diffcard { margin-top: 12px; }
+.diffcard .code-head { gap: 10px; }
+.diffcard .code-head svg { color: var(--code-dim); flex: none; }
+.diffcard-legend { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-body); }
+.diffcard-legend i { width: 8px; height: 8px; border-radius: 50%; }
+.diffcard-legend .is-old { background: var(--diff-del-mark); }
+.diffcard-legend .is-new { background: var(--diff-add-mark); }
+.diffcard-why {
+  margin: 0; display: flex; align-items: flex-start; gap: 8px; padding: 9px 14px;
+  border-bottom: var(--line-w) solid var(--code-line); font-family: var(--font-body); font-size: var(--fs-small);
+  line-height: 1.5; color: var(--code-text);
+}
+.diffcard-why b { color: var(--code-fn); font-weight: 600; }
+.diffcard-why.is-hint svg { flex: none; margin-top: 3px; color: var(--code-fn); }
+.diffcard-ed { height: 300px; }
+.diffcard-acts {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  background: var(--code-head-bg); border-top: var(--line-w) solid var(--code-line);
+}
+.diffcard-acts .btn-ghost { color: var(--code-text); border-color: var(--code-line); }
+.diffcard-acts .btn-ghost:hover { background: var(--code-line); }
+.diffcard-hint { margin-left: auto; font-family: var(--font-body); font-size: var(--fs-meta); color: var(--code-dim); }
+.diffcard-acts .approval-hint { color: var(--code-dim); }
+.diffcard-done {
+  margin-top: 12px; display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px;
+  border: var(--line-w) solid var(--paper-line); border-radius: var(--radius-md); background: var(--paper-raised);
+}
+.diffcard-done svg { flex: none; margin-top: 2px; color: var(--ok-text); }
+.diffcard-done-k { margin: 0; font-size: var(--fs-small); font-weight: 600; color: var(--ok-text); }
+.diffcard-done-s { margin: 2px 0 0; font-size: var(--fs-meta); color: var(--ink-dim); }
+
 /* ======================= APP GLUE (no mockup counterpart) ======================= */
 /* the thread and the overlays drawn over it (new-messages pill, side question panel) */
 .thread-wrap { position: relative; z-index: 1; flex: 1; min-height: 0; display: flex; flex-direction: column; }

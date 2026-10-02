@@ -11,11 +11,9 @@ export function CsharpProjectHint({ inProject }: { inProject: boolean | null }) 
   const { t } = useLang();
   if (inProject !== false) return null;
   return (
-    <div
-      role="status"
-      className="flex items-start gap-2 px-4 py-1.5 border-b border-amber-500/20 bg-amber-500/[0.06] text-[11px] leading-snug text-amber-200/90 shrink-0"
-    >
-      <Info size={13} className="mt-[1px] shrink-0 text-amber-400" />
+    // The Kod pane's note line (workspace.css `.ws-hint`), on the paper tokens.
+    <div role="status" className="ws-hint flex items-start gap-2">
+      <Info size={13} className="mt-[2px] shrink-0" aria-hidden="true" />
       <span>{t('editor.csharpNotInProject')}</span>
     </div>
   );
