@@ -1,0 +1,454 @@
+/* Gamachine guide (Rehber) and first-launch tour: mockup round 12 / 12b (base.css "PRODUCT TOUR" and
+   "ROUND 12b: THE GUIDE" + the ROUND 12 / 12b blocks of each theme file, approved 2 Oct 2026). The
+   welcome-screen rules of those blocks are not here (next port). Colours come only from tokens.css
+   roles; text never goes below --fs-meta (12px). */
+
+/* ======================= tokens ======================= */
+:root {
+  --tour-dim: rgba(8, 10, 16, .64);          /* the dimmed app around the spotlight (spread only, no blur) */
+  --tour-ring: var(--focus);                 /* spotlight edge */
+  --tour-ring-w: 2px;
+  --tour-ring-style: solid;
+  --tour-hole-radius: var(--radius-md);
+  --tour-pad: 6px;                           /* spotlight margin around the element (read by JS) */
+  --tour-gap: 18px;                          /* card distance from the spotlight (read by JS) */
+  --tour-bg: var(--paper-raised);
+  --tour-text: var(--ink);
+  --tour-text-dim: var(--ink-dim);
+  --tour-line: var(--paper-line-strong);
+  --tour-shadow: var(--shadow-card);
+  --tour-radius: var(--radius-lg);
+  --tour-w: 360px;
+  --tour-dot: var(--paper-line-strong);
+  --tour-dot-on: var(--ink);
+  --tour-lead: var(--ink);                   /* leader line (Pafta) / string (Atölye) */
+  --tour-lead-show: none;
+  --tour-lead-sag: 0;                        /* px the line sags at its middle (read by JS) */
+  --tour-lead-inset: 0;                      /* px the line starts inside the box edge (read by JS) */
+  --tour-fig: none;                          /* full mascot beside the box: none | block */
+  --tour-fig-w: 120px;
+  --tour-fig-toward: 1;                      /* 1 = stands between box and target, pointing; 0 = far side (read by JS) */
+  --tour-avatar: none;                       /* small head in the box header (Sade) */
+  --gd-tile-bg: var(--paper-raised);
+  --gd-tile-line: var(--paper-line);
+  --gd-tile-hover: var(--paper-line-strong);
+  --gd-tile-radius: var(--radius-lg);
+  --gd-new: var(--accent-text);              /* "Yeni": text + hairline, never a filled badge (colour budget) */
+  --gd-seen: var(--ink-dim);
+  --gd-cols: 3;
+}
+@media (max-width: 1300px) { :root { --gd-cols: 2; } }
+
+/* ======================= the full mascot figure (.gm-full): colours + poses ======================= */
+.gm-full [fill="#2A2F3D"] { fill: var(--mascot-body); }
+.gm-full [fill="#FF6B3D"] { fill: var(--mascot-visor); }
+.gm-full [fill="#141826"] { fill: var(--mascot-screen); }
+.gm-full [stroke="#141826"] { stroke: var(--mascot-line); }
+.gm-full [fill="#F1EEE6"] { fill: var(--mascot-eye); }
+.gm-full [stroke="#F1EEE6"] { stroke: var(--mascot-eye); }
+.gm-full { display: block; width: 100%; height: auto; overflow: visible; }
+.gm-full [id$="-upper"] { animation: gm-breathe 4.8s ease-in-out infinite; }
+.gm-full [id$="-eyes"] { animation: gm-blink 5.6s 1.2s infinite; }
+.gm-full :is([id$="-arm-left"], [id$="-arm-right"], [id$="-arm-left-fore"], [id$="-arm-right-fore"], [id$="-head"]) {
+  transition: transform var(--g-dur-slow) var(--g-ease-move);
+}
+.gm-full:is(.pose-wave, .pose-tag) [id$="-eyes-normal"] { display: none; }
+.gm-full.pose-wave [id$="-eyes-happy"] { display: inline; }
+.gm-full.pose-wave [id$="-arm-right"] { transform: rotate(140deg); }
+.gm-full.pose-wave [id$="-arm-right-fore"] { transform: rotate(16deg); animation: r12-wave 1.1s ease-in-out .3s 2; }
+@keyframes r12-wave { 25% { transform: rotate(-12deg); } 50% { transform: rotate(16deg); } 75% { transform: rotate(-12deg); } }
+/* tag: the "waiting" pose holding its blank card up; the card carries the name being typed */
+.gm-full.pose-tag [id$="-eyes-up"] { display: inline; }
+.gm-full.pose-tag [id$="-card"] { display: inline; }
+.gm-full.pose-tag [id$="-cartridge"] { opacity: 0; }
+.gm-full.pose-tag [id$="-arm-left"] { transform: rotate(6deg); }
+.gm-full.pose-tag [id$="-arm-left-fore"] { transform: rotate(-193.2deg); }
+.gm-full.pose-tag [id$="-arm-right"] { transform: rotate(36deg); }
+.gm-full.pose-tag [id$="-arm-right-fore"] { transform: rotate(-87.2deg); }
+.gm-tag { fill: var(--mascot-screen); stroke: none; font-family: var(--font-display); font-weight: 700; letter-spacing: .02em; }
+/* pointing poses: the screen-right arm points up / out / down at the spotlight */
+.gm-full.pose-up [id$="-arm-right"] { transform: rotate(140deg); }
+.gm-full.pose-up [id$="-arm-right-fore"] { transform: rotate(16deg); }
+.gm-full.pose-out [id$="-arm-right"] { transform: rotate(86deg); }
+.gm-full.pose-out [id$="-arm-right-fore"] { transform: rotate(-4deg); }
+.gm-full.pose-low [id$="-arm-right"] { transform: rotate(44deg); }
+.gm-full.pose-low [id$="-arm-right-fore"] { transform: rotate(-18deg); }
+
+/* ======================= the tour overlay ======================= */
+.tour { position: absolute; inset: 0; z-index: 80; }
+.tour.is-opening { animation: guide-show var(--g-dur-base) var(--g-ease-enter); }
+@keyframes guide-show { from { opacity: 0; } to { opacity: 1; } }
+.tour-hole {
+  position: absolute; pointer-events: none; border-radius: var(--tour-hole-radius);
+  box-shadow: 0 0 0 200vmax var(--tour-dim);
+  outline: var(--tour-ring-w) var(--tour-ring-style) var(--tour-ring); outline-offset: 0;
+  transition: left var(--g-dur-slow) var(--g-ease-move), top var(--g-dur-slow) var(--g-ease-move),
+              width var(--g-dur-slow) var(--g-ease-move), height var(--g-dur-slow) var(--g-ease-move);
+}
+.tour[data-side="center"] .tour-hole { outline-color: transparent; }
+.tour-lead { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; display: var(--tour-lead-show); }
+.tour[data-side="center"] .tour-lead { display: none; }
+.tour-lead-p { fill: none; stroke: var(--tour-lead); stroke-width: 1.25; }
+.tour-lead-dot { fill: var(--tour-lead); }
+.tour-card {
+  position: absolute; left: 0; top: 0; display: flex; align-items: flex-end; outline: none;
+  transition: left var(--g-dur-slow) var(--g-ease-move), top var(--g-dur-slow) var(--g-ease-move);
+}
+.tour-card[data-fig="right"] { flex-direction: row-reverse; }
+.tour-figure { display: var(--tour-fig); flex: none; width: var(--tour-fig-w); margin-bottom: -4px; }
+.tour-figure.is-flip .gm-full { transform: scaleX(-1); }
+.tour[data-side="center"] .tour-figure { width: calc(var(--tour-fig-w) * 1.6); }
+.tour-box {
+  position: relative; width: var(--tour-w); padding: 14px 18px 14px;
+  background: var(--tour-bg); color: var(--tour-text);
+  border: var(--line-w) solid var(--tour-line); border-radius: var(--tour-radius); box-shadow: var(--tour-shadow);
+}
+.tour[data-side="center"] .tour-box { width: calc(var(--tour-w) + 60px); padding: 18px 22px 18px; }
+.tour-box.is-entering { animation: r12-in var(--g-dur-base) var(--g-ease-enter) both; }
+@keyframes r12-in { from { opacity: 0; transform: translateY(6px); } }
+.tour-hole.is-locking { animation: r12-lock var(--g-dur-base) var(--g-ease-enter); }
+@keyframes r12-lock { from { outline-offset: 6px; } }
+.tour-pin { display: none; }
+.tour-head-row { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 8px; }
+.tour-avatar { display: var(--tour-avatar); width: 22px; height: 22px; flex: none; }
+.tour-kicker {
+  color: var(--tour-text-dim); font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.tour-count { font-size: var(--fs-meta); color: var(--tour-text-dim); }
+.tour-skip {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px;
+  border-radius: var(--radius-md); color: var(--tour-text-dim); font-size: 13px; font-weight: 500;
+}
+.tour-skip kbd { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--tour-text-dim); }
+.tour-skip:hover { color: var(--tour-text); background: color-mix(in srgb, var(--tour-text) 9%, transparent); }
+.tour-title { font-family: var(--font-title); font-size: 19px; line-height: 1.3; font-weight: 700; color: var(--tour-text); }
+.tour[data-side="center"] .tour-title { font-size: 23px; }
+.tour-text { margin-top: 6px; font-size: 14.5px; line-height: 1.5; color: var(--tour-text-dim); }
+.tour-name { margin-top: 16px; }
+.tour-name-k { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: var(--tour-text); }
+.tour-opt { font-weight: 400; color: var(--tour-text-dim); }
+.tour-name-in {
+  width: 100%; height: 44px; padding: 0 12px; font-size: 16px; color: var(--ink);
+  background: var(--paper-bg); border: var(--line-w) solid var(--tour-line); border-radius: var(--radius-md);
+}
+.tour-name-in::placeholder { color: var(--ink-faint); opacity: 1; }
+.tour-name-in:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
+.tour-modes { display: grid; margin-top: 12px; gap: 10px; }
+.tour-sample {
+  display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 10px; padding: 8px 10px;
+  background: var(--paper-bg); border: var(--line-w) solid var(--paper-line); border-left: 3px solid var(--accent); border-radius: var(--radius-md);
+}
+.tour-sample-k { grid-column: 1; font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight); text-transform: var(--label-case); letter-spacing: var(--label-track); color: var(--accent-text); }
+.tour-sample-t { grid-column: 1; font-size: 13px; font-weight: 600; color: var(--ink); }
+.tour-sample-b { grid-column: 2; grid-row: 1 / 3; display: flex; gap: 6px; }
+.tour-sample-b i { font-style: normal; font-size: var(--fs-meta); font-weight: 600; padding: 3px 8px; border-radius: var(--radius-sm); border: var(--line-w) solid var(--paper-line-strong); color: var(--ink); }
+.tour-sample-b i:first-child { background: var(--btn-bg); color: var(--btn-text); border-color: var(--btn-bg); }
+.tour-mode-list { display: grid; gap: 4px; }
+.tour-mode-list li { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--tour-text-dim); }
+.tour-mode-list li::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--tour-text-dim); transform: translateY(-1px); }
+.tour-mode-list li.is-on::before { background: var(--tour-text); border-color: var(--tour-text); }
+.tour-mode-list b { color: var(--tour-text); font-weight: 600; }
+.tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.tour-dots { display: flex; align-items: center; gap: 5px; margin-right: auto; }
+.tour-dots i { width: 6px; height: 6px; border-radius: 3px; background: var(--tour-dot); transition: width var(--g-dur-base) var(--g-ease-move); }
+.tour-dots i.is-done { background: var(--tour-dot-on); opacity: .5; }
+.tour-dots i.is-cur { width: 18px; background: var(--tour-dot-on); }
+:is(.tour, .guide) .btn-sm { height: 32px; padding: 0 12px; font-size: 13px; gap: 6px; }
+.tour .btn-ghost { color: var(--tour-text); border-color: var(--tour-line); }
+.tour .btn-ghost:hover { background: color-mix(in srgb, var(--tour-text) 9%, transparent); }
+.tour button:not(:disabled) { cursor: pointer; }
+.tour :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* the topic's name beside the kicker while one guide topic plays */
+.tour-topic { font-size: var(--fs-meta); font-weight: 600; color: var(--tour-text); max-width: 172px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tour-topic::before { content: "· "; color: var(--tour-text-dim); font-weight: 400; }
+
+/* ======================= the guide screen: replaces the chat stage and the panel ======================= */
+/* Hidden screens stay mounted (profile.css); the guide itself renders only while open. */
+.guide { grid-column: 2 / 4; grid-row: 2; min-width: 0; min-height: 0; overflow-y: auto; background: var(--paper-bg); color: var(--ink); }
+.guide:focus { outline: none; }
+.guide button:not(:disabled) { cursor: pointer; }
+.app[data-screen="rehber"] > :is(.app-main, .app-right) { display: none; }
+.app[data-screen="rehber"] .achv { display: none; }
+.app[data-screen="rehber"] .chat.is-active { background: transparent; box-shadow: none; color: var(--shell-text-dim); }
+.foot-help { padding: 8px; }
+.foot-help.is-active { background: var(--shell-bg-active); color: var(--shell-text); }
+
+.gd-wrap { max-width: 1120px; margin: 0 auto; padding: 30px 48px 40px; display: flex; flex-direction: column; gap: 18px; }
+.gd-head { display: grid; grid-template-columns: auto 1fr auto; gap: 20px; align-items: center; }
+.gd-mascot { width: 64px; height: 64px; }
+.gd-kicker {
+  color: var(--ink-dim); font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.gd-title { margin-top: 2px; font-family: var(--font-title); font-size: 28px; line-height: 1.2; font-weight: 700; color: var(--ink); }
+.gd-lede { margin-top: 4px; font-size: 15px; line-height: 1.45; color: var(--ink-dim); max-width: 620px; }
+.gd-back { align-self: start; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border-radius: var(--radius-md); color: var(--ink-dim); font-size: 13.5px; }
+.gd-back:hover { background: var(--paper-sunk); color: var(--ink); }
+.gd-back kbd { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-dim); }
+
+.gd-tools { display: flex; align-items: center; gap: 14px; }
+.gd-search { flex: 0 1 440px; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border: var(--line-w) solid var(--paper-line-strong); border-radius: var(--radius-md); color: var(--ink-dim); background: var(--paper-raised); }
+.gd-search input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-size: 14.5px; color: var(--ink); }
+.gd-search input::placeholder { color: var(--ink-faint); opacity: 1; }
+.gd-search input::-webkit-search-cancel-button { filter: grayscale(1); }
+.gd-search:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.gd-stat { font-size: 13px; color: var(--ink-dim); }
+
+.gd-core {
+  display: flex; align-items: center; gap: 14px; padding: 12px 16px;
+  background: var(--gd-tile-bg); border: var(--card-line-w) solid var(--gd-tile-line); border-radius: var(--gd-tile-radius);
+}
+.gd-core-ic { width: 22px; height: 22px; color: var(--ink-dim); flex: none; }
+.gd-core-t { flex: 1; display: flex; flex-direction: column; gap: 1px; font-size: 13.5px; color: var(--ink-dim); line-height: 1.4; }
+.gd-core-t b { font-size: 14.5px; color: var(--ink); font-weight: 600; }
+.guide .btn-ghost { color: var(--ink); border-color: var(--paper-line-strong); }
+.guide .btn-ghost:hover { background: var(--paper-sunk); }
+
+.gd-groups { display: flex; flex-direction: column; gap: 26px; }
+.gd-group-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.gd-gk {
+  color: var(--ink); font-family: var(--font-label); font-size: 13px; font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.gd-gn { font-size: var(--fs-meta); color: var(--ink-dim); }
+.gd-gsub { font-size: 13px; color: var(--ink-dim); }
+.gd-list { display: grid; grid-template-columns: repeat(var(--gd-cols), minmax(0, 1fr)); gap: 12px; }
+.gd-topic {
+  position: relative; width: 100%; height: 100%; min-height: 112px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 13px 14px 11px; text-align: left; color: var(--ink);
+  background: var(--gd-tile-bg); border: var(--card-line-w) solid var(--gd-tile-line); border-radius: var(--gd-tile-radius); box-shadow: var(--shadow-card);
+  transition: border-color var(--g-dur-tap) var(--ease), transform var(--g-dur-tap) var(--ease);
+}
+.gd-topic:hover { border-color: var(--gd-tile-hover); }
+.gd-topic:active { transform: translate(1px, 1px); }
+.gd-topic:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.gd-t-title { font-family: var(--font-title); font-size: 15px; font-weight: 700; line-height: 1.3; padding-right: 54px; }
+.gd-t-sum { font-size: 13px; line-height: 1.45; color: var(--ink-dim); }
+.gd-t-meta { margin-top: auto; padding-top: 6px; display: flex; align-items: center; gap: 10px; width: 100%; font-size: var(--fs-meta); color: var(--ink-dim); }
+.gd-t-play { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; color: var(--ink); font-weight: 600; opacity: 0; transition: opacity var(--g-dur-tap) var(--ease); }
+.gd-topic:is(:hover, :focus-visible) .gd-t-play { opacity: 1; }
+.gd-new {
+  position: absolute; top: 11px; right: 12px; padding: 0 6px; line-height: 18px; border-radius: var(--radius-sm);
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: 700; letter-spacing: .04em;
+  color: var(--gd-new); border: var(--line-w) solid currentColor;
+}
+.gd-seen { display: inline-flex; align-items: center; gap: 4px; color: var(--gd-seen); }
+.gd-seen .ic { width: 14px; height: 14px; }
+.gd-none { padding: 24px; text-align: center; font-size: 14px; color: var(--ink-dim); border: var(--line-w) dashed var(--paper-line-strong); border-radius: var(--radius-lg); }
+.gd-foot { font-size: 13px; color: var(--ink-dim); }
+mark.gd-hit { background: color-mix(in srgb, var(--focus) 26%, transparent); color: inherit; border-radius: 2px; }
+
+/* ======================= Arena: tour = quest giver, guide = a quest log ======================= */
+/* The full mascot stands between its dialog and the spotlight and points at it; the dialog is a
+   chamfered HUD box with a "GAMACHINE" nameplate; the spotlight is a target lock (corner brackets). */
+:root[data-theme="arena"] {
+  --tour-dim: rgba(8, 10, 17, .74);
+  --tour-bg: var(--shell-bg-2);
+  --tour-text: var(--shell-text);
+  --tour-text-dim: var(--shell-text-dim);
+  --tour-line: var(--menu-line);
+  --tour-ring: transparent;
+  --tour-hole-radius: 0;
+  --tour-pad: 10px;
+  --tour-gap: 12px;
+  --tour-radius: 0;
+  --tour-shadow: none;
+  --tour-w: 372px;
+  --tour-fig: block;
+  --tour-fig-w: 116px;
+  --tour-dot: var(--shell-line);
+  --tour-dot-on: var(--shell-text);
+}
+/* target lock: four brackets just outside the spotlight; they close in once per step */
+[data-theme="arena"] .tour-hole::before {
+  content: ""; position: absolute; inset: -4px; --b: var(--ink);
+  background:
+    linear-gradient(var(--b) 0 0) 0 0 / 18px 2px, linear-gradient(var(--b) 0 0) 0 0 / 2px 18px,
+    linear-gradient(var(--b) 0 0) 100% 0 / 18px 2px, linear-gradient(var(--b) 0 0) 100% 0 / 2px 18px,
+    linear-gradient(var(--b) 0 0) 0 100% / 18px 2px, linear-gradient(var(--b) 0 0) 0 100% / 2px 18px,
+    linear-gradient(var(--b) 0 0) 100% 100% / 18px 2px, linear-gradient(var(--b) 0 0) 100% 100% / 2px 18px;
+  background-repeat: no-repeat;
+}
+[data-theme="arena"] .tour[data-side="center"] .tour-hole::before { display: none; }
+[data-theme="arena"] .tour-hole.is-locking::before { animation: r12-lock-a var(--g-dur-base) var(--g-ease-enter); }
+@keyframes r12-lock-a { from { inset: -14px; opacity: .2; } }
+/* HUD dialog: chamfered plate with a 1 px edge (two clipped layers, as the quest cards do) */
+[data-theme="arena"] .tour-box { --ch: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px)); background: none; border: 0; isolation: isolate; }
+[data-theme="arena"] .tour-box::before,
+[data-theme="arena"] .tour-box::after { content: ""; position: absolute; inset: 0; clip-path: var(--ch); }
+[data-theme="arena"] .tour-box::before { z-index: -2; background: var(--menu-line); }
+[data-theme="arena"] .tour-box::after { z-index: -1; inset: 1px; background: var(--shell-bg-2); }
+/* speech tail toward the speaker */
+[data-theme="arena"] .tour-pin { display: block; position: absolute; bottom: 28px; left: -9px; width: 10px; height: 18px; background: var(--menu-line); clip-path: polygon(100% 0, 0 50%, 100% 100%); }
+[data-theme="arena"] .tour-card[data-fig="right"] .tour-pin { left: auto; right: -9px; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+[data-theme="arena"] .tour-kicker { position: relative; z-index: 0; padding: 0 10px; line-height: 22px; color: var(--shell-bg); font-family: var(--font-display); font-weight: 700; letter-spacing: .16em; }
+[data-theme="arena"] .tour-kicker::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--shell-text); transform: skewX(-12deg); }
+[data-theme="arena"] .tour-count { font-family: var(--font-mono); margin-left: 4px; }
+[data-theme="arena"] .tour-title { font-size: 20px; letter-spacing: .005em; }
+[data-theme="arena"] .tour[data-side="center"] .tour-title { font-size: 25px; }
+[data-theme="arena"] .tour-dots i { width: 12px; height: 4px; border-radius: 0; transform: skewX(-20deg); }
+[data-theme="arena"] .tour-dots i.is-cur { width: 22px; }
+[data-theme="arena"] .tour-name-in { background: var(--shell-bg); border-color: var(--menu-line); color: var(--shell-text); font-family: var(--font-display); font-size: 18px; letter-spacing: .02em; }
+/* guide: chamfered quest plates; a watched topic is a cleared quest */
+[data-theme="arena"] .gd-topic { --ch: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px)); background: none; border: 0; box-shadow: none; isolation: isolate; }
+[data-theme="arena"] .gd-topic::before,
+[data-theme="arena"] .gd-topic::after { content: ""; position: absolute; inset: 0; clip-path: var(--ch); pointer-events: none; }
+[data-theme="arena"] .gd-topic::before { z-index: -2; background: var(--paper-line-strong); transition: background var(--g-dur-tap) var(--ease); }
+[data-theme="arena"] .gd-topic::after { z-index: -1; inset: 1px; background: var(--paper-raised); }
+[data-theme="arena"] .gd-topic:hover::before { background: var(--ink); }
+[data-theme="arena"] .gd-topic.is-seen::after { background: var(--paper-bg); }
+[data-theme="arena"] .gd-new { border-radius: 0; }
+[data-theme="arena"] .gd-gk { color: var(--ink); letter-spacing: .14em; }
+
+/* ======================= Sade: tour = coach marks, guide = a plain help index ======================= */
+/* No figure: a small popover with a caret pointing at a 1.5 px violet ring; the mascot is only the
+   22 px head in its header. The guide is one list per group: rows, hairline dividers, no cards. */
+:root[data-theme="sade"] {
+  --tour-dim: rgba(9, 7, 15, .64);
+  --tour-bg: var(--paper-raised);
+  --tour-line: var(--paper-line-strong);
+  --tour-ring: var(--accent);
+  --tour-ring-w: 1.5px;
+  --tour-hole-radius: 8px;
+  --tour-pad: 6px;
+  --tour-gap: 14px;
+  --tour-radius: 8px;
+  --tour-shadow: none;
+  --tour-w: 340px;
+  --tour-avatar: block;
+  --tour-dot: var(--paper-line-strong);
+  --tour-dot-on: var(--accent);
+}
+/* caret: a rotated square on the edge facing the spotlight, at the target's centre (--caret from JS) */
+[data-theme="sade"] .tour-box::before { content: ""; position: absolute; width: 10px; height: 10px; background: var(--tour-bg); border: 1px solid var(--tour-line); }
+[data-theme="sade"] .tour[data-side="below"] .tour-box::before { top: -6px; left: calc(var(--caret) - 5px); border-right: 0; border-bottom: 0; transform: rotate(45deg); }
+[data-theme="sade"] .tour[data-side="above"] .tour-box::before { bottom: -6px; left: calc(var(--caret) - 5px); border-left: 0; border-top: 0; transform: rotate(45deg); }
+[data-theme="sade"] .tour[data-side="left"] .tour-box::before { right: -6px; top: calc(var(--caret) - 5px); border-left: 0; border-bottom: 0; transform: rotate(45deg); }
+[data-theme="sade"] .tour[data-side="right"] .tour-box::before { left: -6px; top: calc(var(--caret) - 5px); border-right: 0; border-top: 0; transform: rotate(45deg); }
+[data-theme="sade"] .tour[data-side="center"] .tour-box::before { display: none; }
+[data-theme="sade"] .tour[data-side="center"] .tour-avatar { width: 36px; height: 36px; }
+[data-theme="sade"] .tour-title { font-size: 16.5px; font-weight: 600; }
+[data-theme="sade"] .tour[data-side="center"] .tour-title { font-size: 21px; }
+[data-theme="sade"] .tour-text { font-size: 14px; }
+[data-theme="sade"] .tour-kicker { font-weight: 500; letter-spacing: 0; text-transform: none; }
+[data-theme="sade"] .gd-list { grid-template-columns: 1fr 1fr; gap: 0 24px; }
+[data-theme="sade"] .gd-topic { min-height: 0; padding: 11px 64px 11px 0; background: transparent; border: 0; border-bottom: 1px solid var(--paper-line); border-radius: 0; box-shadow: none; }
+[data-theme="sade"] .gd-topic:hover { background: transparent; }
+[data-theme="sade"] .gd-topic:hover .gd-t-title { color: var(--accent-text); }
+[data-theme="sade"] .gd-t-title { font-size: 14.5px; font-weight: 600; padding-right: 0; }
+[data-theme="sade"] .gd-t-meta { position: absolute; right: 0; top: 12px; width: auto; margin: 0; padding: 0; }
+[data-theme="sade"] .gd-t-play { display: none; }
+[data-theme="sade"] .gd-new { border: 0; padding: 0; text-transform: none; letter-spacing: 0; font-weight: 600; }
+[data-theme="sade"] .gd-topic .gd-new { position: absolute; right: 0; top: 12px; }
+[data-theme="sade"] .gd-topic:has(.gd-new) .gd-t-meta { top: 32px; }
+[data-theme="sade"] .gd-core { background: transparent; border: 1px solid var(--paper-line); border-radius: 8px; }
+
+/* ======================= Pafta: tour = annotation callouts, guide = an index of drawing notes ======================= */
+/* Each step is a note on the sheet: a dashed blueprint-blue frame, a 1 px ink leader ending in a
+   dot, a boxed note with a "NOT" cell; the mascot stands beside the note as the scale figure. */
+:root[data-theme="pafta"] {
+  --tour-dim: rgba(21, 32, 51, .52);
+  --tour-bg: var(--paper-raised);
+  --tour-text: var(--ink);
+  --tour-text-dim: var(--ink-dim);
+  --tour-line: var(--ink);
+  --tour-ring: var(--run);
+  --tour-ring-w: 1.5px;
+  --tour-ring-style: dashed;
+  --tour-hole-radius: 0;
+  --tour-pad: 8px;
+  --tour-gap: 52px;
+  --tour-lead: var(--ink);
+  --tour-lead-show: block;
+  --tour-radius: 0;
+  --tour-shadow: 2px 2px 0 rgba(23, 34, 53, .9);
+  --tour-w: 356px;
+  --tour-fig: block;
+  --tour-fig-w: 84px;
+  --tour-fig-toward: 0;
+  --tour-dot: var(--paper-line-strong);
+  --tour-dot-on: var(--ink);
+}
+/* the note's header is a title-block row: boxed "NOT" cell + number, ruled off from the text */
+[data-theme="pafta"] .tour-head-row { margin: -14px -18px 10px; padding: 0 10px 0 0; min-height: 34px; border-bottom: 1px solid var(--ink); }
+[data-theme="pafta"] .tour[data-side="center"] .tour-head-row { margin: -18px -22px 12px; }
+[data-theme="pafta"] .tour-kicker { align-self: stretch; display: flex; align-items: center; padding: 0 12px; border-right: 1px solid var(--ink); color: var(--ink); font-weight: 700; }
+[data-theme="pafta"] .tour-count { font-family: var(--font-mono); color: var(--ink-dim); }
+[data-theme="pafta"] .tour-lead-p { stroke-width: 1; }
+[data-theme="pafta"] .tour-figure { margin-bottom: 0; }
+[data-theme="pafta"] .tour-name-in { border-color: var(--ink); border-radius: 0; }
+[data-theme="pafta"] .tour-dots i { border-radius: 0; }
+[data-theme="pafta"] .gd-groups { counter-reset: note; }
+[data-theme="pafta"] .gd-topic { counter-increment: note; border-color: var(--ink); border-radius: 0; padding-bottom: 0; }
+[data-theme="pafta"] .gd-t-meta { margin-inline: -14px; width: calc(100% + 28px); margin-top: auto; padding: 6px 0 6px 14px; border-top: 1px solid var(--ink); }
+[data-theme="pafta"] .gd-t-meta::after {
+  content: "NOT " counter(note, decimal-leading-zero); align-self: stretch; display: flex; align-items: center; margin: -6px 0; padding: 0 10px;
+  border-left: 1px solid var(--ink); color: var(--ink); font-family: var(--font-label); font-size: var(--fs-meta); font-weight: 700; letter-spacing: .1em; font-stretch: var(--label-stretch);
+}
+[data-theme="pafta"] .gd-t-play { margin-right: 4px; }
+[data-theme="pafta"] .gd-new { border-radius: 0; }
+[data-theme="pafta"] .gd-group-head { padding-bottom: 6px; border-bottom: 1px solid var(--ink); }
+[data-theme="pafta"] .gd-core { border-color: var(--ink); border-radius: 0; border-style: dashed; }
+
+/* ======================= Atölye: tour = a hanging tag, guide = a shop manual of tagged jobs ======================= */
+/* The card is a cream work tag with a punched, brass-ringed hole; a slack twine runs from the hole
+   to a brass ring around the element; the mascot stands beside the tag. */
+:root[data-theme="atolye"] {
+  --tour-dim: rgba(30, 24, 18, .56);
+  --tour-bg: var(--paper-raised);
+  --tour-text: var(--ink);
+  --tour-text-dim: var(--ink-dim);
+  --tag-edge: #3A2C20;           /* dark walnut: tag edge, ring outline (same as --shadow-card) */
+  --tour-line: var(--tag-edge);
+  --tour-ring: var(--accent);
+  --tour-ring-w: 2px;
+  --tour-hole-radius: 4px;
+  --tour-pad: 7px;
+  --tour-gap: 58px;
+  --tour-lead: var(--accent-text);
+  --tour-lead-show: block;
+  --tour-lead-sag: 18;
+  --tour-lead-inset: 15;
+  --tour-radius: 4px;
+  --tour-shadow: 3px 3px 0 var(--tag-edge);
+  --tour-w: 356px;
+  --tour-fig: block;
+  --tour-fig-w: 84px;
+  --tour-fig-toward: 0;
+  --tour-dot: var(--paper-line);
+  --tour-dot-on: var(--accent-text);
+}
+/* the punched hole sits on the edge facing the spotlight, where the twine goes in */
+[data-theme="atolye"] .tour-pin {
+  display: block; position: absolute; z-index: 2; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+  background: var(--tour-dim); box-shadow: 0 0 0 3px var(--accent), 0 0 0 4px var(--tag-edge);
+}
+[data-theme="atolye"] .tour[data-side="below"] .tour-pin { top: 15px; left: var(--caret); }
+[data-theme="atolye"] .tour[data-side="above"] .tour-pin { top: calc(100% - 15px); left: var(--caret); }
+[data-theme="atolye"] .tour[data-side="left"] .tour-pin { left: calc(100% - 15px); top: var(--caret); }
+[data-theme="atolye"] .tour[data-side="right"] .tour-pin { left: 15px; top: var(--caret); }
+[data-theme="atolye"] .tour[data-side="center"] .tour-pin { display: none; }
+[data-theme="atolye"] .tour[data-side="below"] .tour-box { padding-top: 30px; }
+[data-theme="atolye"] .tour[data-side="above"] .tour-box { padding-bottom: 30px; }
+[data-theme="atolye"] .tour[data-side="right"] .tour-box { padding-left: 34px; }
+[data-theme="atolye"] .tour[data-side="left"] .tour-box { padding-right: 34px; }
+[data-theme="atolye"] .tour-lead-p { stroke-width: 1.6; stroke-linecap: round; }
+[data-theme="atolye"] .tour-lead-dot { r: 3; }
+[data-theme="atolye"] .tour-kicker { color: var(--accent-text); font-weight: 700; }
+[data-theme="atolye"] .tour-count { font-family: var(--font-mono); }
+[data-theme="atolye"] .gd-topic { padding-top: 28px; }
+[data-theme="atolye"] .gd-topic::before {
+  content: ""; position: absolute; z-index: 2; top: 10px; left: 16px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--paper-bg); box-shadow: 0 0 0 2px var(--accent), 0 0 0 3px var(--tag-edge); pointer-events: none;
+}
+[data-theme="atolye"] .gd-topic.is-seen::before { background: var(--accent); }
+[data-theme="atolye"] .gd-new { top: 8px; }
+[data-theme="atolye"] .gd-core { border-style: dashed; border-color: var(--paper-line-strong); }
+
+/* ======================= reduced motion ======================= */
+/* The spotlight and the card move at once, the mascot holds its pose, the wave does not play. */
+@media (prefers-reduced-motion: reduce) {
+  .tour, .tour *, .tour *::before, .tour *::after, .guide * { animation: none !important; transition: none !important; }
+}
+:root[data-motion="reduced"] :is(.tour, .tour *, .tour *::before, .tour *::after, .guide *) { animation: none !important; transition: none !important; }

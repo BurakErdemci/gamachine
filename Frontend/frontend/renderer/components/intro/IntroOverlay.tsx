@@ -100,6 +100,9 @@ export function IntroOverlay() {
       detachListeners()
       releaseFocus()
       setVisible(false)
+      // The first-launch tour waits for this (useGuide): it opens shortly after the intro, and
+      // sooner after a skip, as in the mockup. `data-intro` itself lingers for the 1 s handoff.
+      window.dispatchEvent(new CustomEvent('gm-intro-end', { detail: { skip } }))
       // The overlay ends just before the last app entrance does. Keep its fill styles until
       // every panel has arrived; one second after dismissal also clears the skip handoff.
       handoffRef.current = { timer: setTimeout(cleanRoot, 1000), clean: cleanRoot }

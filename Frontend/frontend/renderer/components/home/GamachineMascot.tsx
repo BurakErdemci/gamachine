@@ -22,3 +22,44 @@ export const GamachineMascot: React.FC<{ className?: string }> = ({ className = 
     dangerouslySetInnerHTML={{ __html: ART }}
   />
 );
+
+const ART_IDS = Array.from(ART.matchAll(/\sid="([^"]+)"/g), m => m[1]).concat('gamachine')
+  .sort((a, b) => b.length - a.length);
+
+/**
+ * The same art with every id prefixed (mockup round 12 `cloneMascot`), so the guide's tour card can
+ * show the figure while the empty chat shows its own: duplicate ids would let one instance's
+ * style block and clip path drive the other. The viewBox is cropped to the figure; poses are
+ * classes (guide.css `.gm-full.pose-*`). `tag` is the name the "tag" pose holds up (escaped).
+ */
+export function figureMarkup(prefix: string, tag = ''): string {
+  let html = ART.replace(/<title[^>]*>.*?<\/title>/, '');
+  for (const id of ART_IDS) {
+    const e = id.replace(/-/g, '\\-');
+    html = html.replace(new RegExp(`id="${e}"`, 'g'), `id="${prefix}${id}"`)
+      .replace(new RegExp(`#${e}(?![\\w-])`, 'g'), `#${prefix}${id}`);
+  }
+  const safe = tag.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+  // The card shows ~130 units between the hands; a long name shrinks to fit (floor 16).
+  const size = Math.max(16, Math.min(30, Math.round(128 / (Math.max(1, tag.length) * 0.6))));
+  const text = `<text class="gm-tag" x="300" y="485" dominant-baseline="middle" text-anchor="middle" style="font-size:${size}px">${safe}</text>`;
+  return html.replace(new RegExp(`(<g id="${prefix}card"[^>]*>)`), `$1${text}`);
+}
+
+export const GamachineFigure: React.FC<{ pose: string; tag?: string }> = ({ pose, tag = '' }) => {
+  // useId gives ":r1:"-style ids; colons would break the art's own `#id` style selectors.
+  const prefix = `gmf${React.useId().replace(/[^a-zA-Z0-9]/g, '')}-`;
+  const html = React.useMemo(() => figureMarkup(prefix, tag), [prefix, tag]);
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      id={`${prefix}gamachine`}
+      viewBox="110 112 380 516"
+      className={`gm-full pose-${pose}`}
+      aria-hidden="true"
+      focusable="false"
+      // The approved art with prefixed ids, plus the escaped name (figureMarkup).
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+};
