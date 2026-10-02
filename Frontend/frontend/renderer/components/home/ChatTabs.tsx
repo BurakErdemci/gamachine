@@ -68,7 +68,7 @@ export const BranchButton: React.FC<BranchButtonProps> = ({ sourceId, blocked, o
         setPending(true);
         try { await onBranch(sourceId); } finally { setPending(false); }
       }}
-      className="p-1 rounded transition-all shrink-0 text-slate-500 hover:text-slate-300 hover:bg-white/[0.06] disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-500 disabled:cursor-not-allowed"
+      className="p-1 rounded transition-all shrink-0 text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)] hover:bg-[color:var(--paper-sunk)] disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[color:var(--ink-faint)] disabled:cursor-not-allowed"
     >
       <GitBranchPlus size={14} />
     </button>
@@ -159,7 +159,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
   };
 
   return (
-    <div className="h-9 border-b border-white/[0.06] flex items-center gap-1 px-2 shrink-0 relative">
+    <div className="h-9 border-b border-[color:var(--paper-line)] flex items-center gap-1 px-2 shrink-0 relative">
       <div role="tablist" aria-label={t('branch.tabs')} className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto no-scrollbar">
         {tabs.map(conv => {
           const active = conv.id === activeConvId;
@@ -169,10 +169,10 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
               key={conv.id}
               data-testid={`chat-tab-${conv.id}`}
               className={`group relative flex items-center gap-1 h-7 pl-2.5 ${isBranch ? 'pr-1' : 'pr-2.5'} rounded-md min-w-[64px] flex-[0_1_150px] transition-colors ${
-                active ? 'bg-white/[0.06] text-slate-100' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'
+                active ? 'bg-[color:var(--paper-sunk)] text-[color:var(--ink)]' : 'text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)] hover:bg-[color:var(--paper-sunk)]'
               }`}
             >
-              {active && <span className="absolute left-2 right-2 bottom-0 h-[2px] rounded-full bg-blue-400/80" />}
+              {active && <span className="absolute left-2 right-2 bottom-0 h-[2px] rounded-full bg-[color:var(--focus)]" />}
               {renaming?.id === conv.id ? (
                 <input
                   autoFocus
@@ -186,7 +186,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
                     if (e.key === 'Escape') { renamingRef.current = null; setRenaming(null); }
                   }}
                   onBlur={() => { void commitRename(); }}
-                  className="flex-1 min-w-0 bg-[#000000] text-white text-[11px] px-1.5 py-0.5 rounded border border-blue-500 outline-none"
+                  className="flex-1 min-w-0 bg-[color:var(--paper-bg)] text-[color:var(--ink)] text-[12px] px-1.5 py-0.5 rounded border border-[color:var(--focus)] outline-none"
                 />
               ) : (
                 <button
@@ -200,11 +200,11 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
                   className="flex-1 min-w-0 flex items-center gap-1.5 text-left"
                 >
                   <StatusDot status={convStatus?.[conv.id]} testId={`tab-status-${conv.id}`} />
-                  <span className="text-[11px] font-medium truncate">{conv.title}</span>
+                  <span className="text-[12px] font-medium truncate">{conv.title}</span>
                   <span
                     data-testid={`tab-number-${conv.id}`}
                     title={t('mention.chatNumber', { no: conv.id })}
-                    className="text-[9px] font-mono text-slate-600 shrink-0"
+                    className="text-[12px] font-mono text-[color:var(--ink-faint)] shrink-0"
                   >#{conv.id}</span>
                 </button>
               )}
@@ -215,7 +215,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
                   title={t('branch.close')}
                   aria-label={t('branch.close')}
                   onClick={(e) => { e.stopPropagation(); onClose(conv.id); }}
-                  className={`p-0.5 rounded shrink-0 text-slate-600 hover:text-slate-300 hover:bg-white/[0.06] transition-opacity ${
+                  className={`p-0.5 rounded shrink-0 text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)] hover:bg-[color:var(--paper-sunk)] transition-opacity ${
                     active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
                   }`}
                 >
@@ -237,8 +237,8 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen(v => !v)}
-            className={`flex items-center gap-1 h-7 px-2 rounded-md text-[10px] font-medium whitespace-nowrap transition-colors ${
-              menuOpen ? 'bg-white/[0.06] text-slate-200' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'
+            className={`flex items-center gap-1 h-7 px-2 rounded-md text-[12px] font-medium whitespace-nowrap transition-colors ${
+              menuOpen ? 'bg-[color:var(--paper-sunk)] text-[color:var(--ink)]' : 'text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)] hover:bg-[color:var(--paper-sunk)]'
             }`}
           >
             <StatusDot status={mostUrgent(convStatus, fam.hidden.map(c => c.id))} testId="closed-branches-status" />
@@ -246,7 +246,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
             <ChevronDown size={11} />
           </button>
           {menuOpen && (
-            <div role="menu" className="absolute right-0 top-full mt-1 z-30 bg-[#111111] border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] max-w-[260px] max-h-64 overflow-y-auto custom-scrollbar text-[12px]">
+            <div role="menu" className="absolute right-0 top-full mt-1 z-30 bg-[color:var(--paper-raised)] border border-[color:var(--paper-line-strong)] rounded-lg shadow-2xl py-1 min-w-[180px] max-w-[260px] max-h-64 overflow-y-auto custom-scrollbar text-[12px]">
               {fam.hidden.map(conv => (
                 <button
                   key={conv.id}
@@ -255,11 +255,11 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
                   data-testid={`closed-branch-${conv.id}`}
                   title={conv.title}
                   onClick={() => { setMenuOpen(false); onSelect(conv); }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 text-slate-300 hover:text-white transition-colors text-left"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[color:var(--paper-sunk)] text-[color:var(--ink-dim)] hover:text-[color:var(--ink)] transition-colors text-left"
                 >
                   <StatusDot status={convStatus?.[conv.id]} testId={`closed-status-${conv.id}`} />
                   <span className="truncate">{conv.title}</span>
-                  <span className="ml-auto text-[10px] font-mono text-slate-600 shrink-0">#{conv.id}</span>
+                  <span className="ml-auto text-[12px] font-mono text-[color:var(--ink-faint)] shrink-0">#{conv.id}</span>
                 </button>
               ))}
             </div>
@@ -276,7 +276,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
           onKeyDown={onMenuKey}
           onContextMenu={e => e.preventDefault()}
           style={{ left: tabMenu.x, top: tabMenu.y }}
-          className="fixed z-50 bg-[#111111] border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[160px] text-[12px]"
+          className="fixed z-50 bg-[color:var(--paper-raised)] border border-[color:var(--paper-line-strong)] rounded-lg shadow-2xl py-1 min-w-[160px] text-[12px]"
         >
           {onRename && (
             <button
@@ -284,7 +284,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
               role="menuitem"
               data-testid="tab-menu-rename"
               onClick={() => { setTabMenu(null); setRenaming({ id: menuConv.id, value: menuConv.title }); }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 focus:bg-slate-800 outline-none text-slate-300 hover:text-white transition-colors"
+              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[color:var(--paper-sunk)] focus:bg-[color:var(--paper-sunk)] outline-none text-[color:var(--ink-dim)] hover:text-[color:var(--ink)] transition-colors"
             >
               <Pencil size={13} /> {t('branch.menuRename')}
             </button>
@@ -295,20 +295,20 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
               role="menuitem"
               data-testid="tab-menu-close"
               onClick={() => { setTabMenu(null); onClose(menuConv.id); }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 focus:bg-slate-800 outline-none text-slate-300 hover:text-white transition-colors"
+              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[color:var(--paper-sunk)] focus:bg-[color:var(--paper-sunk)] outline-none text-[color:var(--ink-dim)] hover:text-[color:var(--ink)] transition-colors"
             >
               <X size={13} /> {t('branch.menuClose')}
             </button>
           )}
           {menuIsBranch && onDelete && (
             <>
-              <div className="border-t border-slate-700/50 my-1" />
+              <div className="border-t border-[color:var(--paper-line)] my-1" />
               <button
                 type="button"
                 role="menuitem"
                 data-testid="tab-menu-delete"
                 onClick={() => { setTabMenu(null); void onDelete(menuConv.id); }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 focus:bg-slate-800 outline-none text-red-400 hover:text-red-300 transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[color:var(--paper-sunk)] focus:bg-[color:var(--paper-sunk)] outline-none text-[color:var(--del-text)] hover:text-[color:var(--del-text)] transition-colors"
               >
                 <Trash2 size={13} /> {t('branch.menuDelete')}
               </button>

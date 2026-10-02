@@ -133,7 +133,7 @@ export const SessionReportPanel: React.FC<Props> = ({
       : r.durum === 'unsupported' ? 'report.unsupported'
       : r.durum === 'outdated' ? 'report.outdated'
       : 'report.error';
-    return <p data-testid={`report-empty-${r.durum}`} className="text-[11.5px] text-slate-500 px-1 py-2">{t(anahtar as any)}</p>;
+    return <p data-testid={`report-empty-${r.durum}`} className="text-[12px] text-[color:var(--ink-faint)] px-1 py-2">{t(anahtar as any)}</p>;
   };
 
   /**
@@ -147,39 +147,39 @@ export const SessionReportPanel: React.FC<Props> = ({
    */
   const tahminKarti = (c: NonNullable<Rapor['ctx']>) => {
     const y = Math.max(0, Math.min(100, c.percent ?? 0));
-    const renk = y >= 80 ? 'bg-red-500' : y >= 50 ? 'bg-amber-500' : 'bg-emerald-500';
+    const renk = y >= 80 ? 'bg-[color:var(--accent)]' : y >= 50 ? 'bg-[color:var(--accent)]' : 'bg-[color:var(--ok)]';
     return (
-      <div data-testid="report-context-estimate" className="bg-black rounded-xl border border-slate-700/40 overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-700/40">
-          <Layers size={14} className="text-slate-400" />
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+      <div data-testid="report-context-estimate" className="bg-[color:var(--paper-bg)] rounded-xl border border-[color:var(--paper-line)] overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[color:var(--paper-line)]">
+          <Layers size={14} className="text-[color:var(--ink-dim)]" />
+          <span className="text-[12px] font-semibold uppercase tracking-wider text-[color:var(--ink-dim)]">
             {t('report.estimateTag')}
           </span>
         </div>
         <div className="px-4 py-3 space-y-2.5">
           <div>
             <div className="flex items-baseline justify-between mb-1">
-              <span className="text-[12px] text-slate-300 font-medium">
+              <span className="text-[12px] text-[color:var(--ink-dim)] font-medium">
                 {t('report.estimateMeta', {
                   sayi: c.message_count ?? 0,
                   harf: (c.total_chars ?? 0).toLocaleString(numberLocale),
                 })}
               </span>
-              <span className="text-[12px] font-semibold tabular-nums text-slate-300">~%{y}</span>
+              <span className="text-[12px] font-semibold tabular-nums text-[color:var(--ink-dim)]">~%{y}</span>
             </div>
-            <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+            <div className="h-1.5 w-full rounded-full bg-[color:var(--paper-sunk)] overflow-hidden">
               <div className={`h-full rounded-full ${renk} transition-all duration-500`} style={{ width: `${Math.max(y, 1)}%` }} />
             </div>
           </div>
           {c.last_turn && (typeof c.last_turn.input_tokens === 'number' || typeof c.last_turn.output_tokens === 'number') && (
-            <p className="text-[11px] text-slate-400">
+            <p className="text-[12px] text-[color:var(--ink-dim)]">
               {t('report.estimateLastTurn', {
                 giris: (c.last_turn.input_tokens ?? 0).toLocaleString(numberLocale),
                 cikis: (c.last_turn.output_tokens ?? 0).toLocaleString(numberLocale),
               })}
             </p>
           )}
-          <p className="text-[10.5px] text-slate-500 leading-relaxed">{t('report.estimateNote')}</p>
+          <p className="text-[12px] text-[color:var(--ink-faint)] leading-relaxed">{t('report.estimateNote')}</p>
         </div>
       </div>
     );
@@ -187,7 +187,7 @@ export const SessionReportPanel: React.FC<Props> = ({
 
   const bolum = (baslik: string, kind: 'usage' | 'context', r: Rapor) => (
     <div className="space-y-1.5">
-      <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold px-1">{baslik}</div>
+      <div className="text-[12px] uppercase tracking-wider text-[color:var(--ink-faint)] font-bold px-1">{baslik}</div>
       {r.durum === 'ok' && r.text ? (
         <>
           <SlashCommandCard command={kind} text={r.text} />
@@ -195,7 +195,7 @@ export const SessionReportPanel: React.FC<Props> = ({
             // Serving a stale report without its age would pass it off as
             // fresh; quota windows roll and the user must know which moment
             // the numbers belong to.
-            <p data-testid={`report-stale-${kind}`} className="text-[10.5px] text-slate-500 px-1">
+            <p data-testid={`report-stale-${kind}`} className="text-[12px] text-[color:var(--ink-faint)] px-1">
               {t('report.stale', { sure: yasMetni(t, r.yasS ?? 0) })}
             </p>
           )}
@@ -213,24 +213,24 @@ export const SessionReportPanel: React.FC<Props> = ({
       data-testid="session-report-panel"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="absolute bottom-full left-0 right-0 mb-2 mx-2 z-30 rounded-xl border border-white/10 bg-[#0b0b0d] shadow-2xl shadow-black/60 overflow-hidden"
+      className="absolute bottom-full left-0 right-0 mb-2 mx-2 z-30 rounded-xl border border-[color:var(--paper-line)] bg-[color:var(--paper-raised)] shadow-2xl overflow-hidden"
     >
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-white/[0.07]">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-[color:var(--paper-line)]">
+        <span className="text-[12px] font-semibold uppercase tracking-wider text-[color:var(--ink-dim)]">
           {t('report.title')}
         </span>
         <button
           data-testid="report-refresh"
           onClick={() => void tazele()}
           title={t('report.refresh')}
-          className="ml-auto p-1 rounded-md text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-colors"
+          className="ml-auto p-1 rounded-md text-[color:var(--ink-faint)] hover:text-[color:var(--ink)] hover:bg-[color:var(--paper-sunk)] transition-colors"
         >
           <RefreshCw size={12} />
         </button>
         <button
           data-testid="report-close"
           onClick={onClose}
-          className="p-1 rounded-md text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-colors"
+          className="p-1 rounded-md text-[color:var(--ink-faint)] hover:text-[color:var(--ink)] hover:bg-[color:var(--paper-sunk)] transition-colors"
         >
           <X size={13} />
         </button>

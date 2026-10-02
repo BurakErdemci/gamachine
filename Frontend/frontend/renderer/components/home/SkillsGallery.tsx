@@ -60,11 +60,11 @@ export const SkillsGallery: React.FC<Props> = ({ meta, skills, provider, onSelec
     }
 
     const out: Group[] = [];
-    if (skillItems.length) out.push({ key: 'skills', label: 'Skills', icon: <Sparkles size={12} className="text-violet-300" />, items: skillItems });
+    if (skillItems.length) out.push({ key: 'skills', label: 'Skills', icon: <Sparkles size={12} className="text-[color:var(--focus)]" />, items: skillItems });
     Object.keys(pluginMap).sort().forEach(pfx =>
-      out.push({ key: 'plugin:' + pfx, label: pfx, icon: <Puzzle size={12} className="text-sky-300" />, items: pluginMap[pfx] })
+      out.push({ key: 'plugin:' + pfx, label: pfx, icon: <Puzzle size={12} className="text-[color:var(--focus)]" />, items: pluginMap[pfx] })
     );
-    if (general.length) out.push({ key: 'general', label: t('skills.commands'), icon: <Terminal size={12} className="text-slate-400" />, items: general });
+    if (general.length) out.push({ key: 'general', label: t('skills.commands'), icon: <Terminal size={12} className="text-[color:var(--ink-dim)]" />, items: general });
     return out;
     // `t` bağımlılıkta: grup etiketi artık çeviriden geliyor ve dil değişince
     // memo yeniden hesaplanmazsa etiket eski dilde asılı kalır. Maliyeti yok —
@@ -75,40 +75,40 @@ export const SkillsGallery: React.FC<Props> = ({ meta, skills, provider, onSelec
 
   return (
     <motion.div
-      className="absolute left-4 right-4 bottom-full mb-2 backdrop-blur-xl bg-black rounded-xl z-50 shadow-2xl border border-white/10 overflow-hidden"
+      className="absolute left-4 right-4 bottom-full mb-2 bg-[color:var(--paper-raised)] rounded-xl z-50 shadow-2xl border border-[color:var(--paper-line)] overflow-hidden"
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 6 }}
     >
       {/* Başlık + arama */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10 bg-white/[0.02]">
-        <Sparkles size={13} className="text-violet-300 shrink-0" />
-        <span className="text-[11px] font-semibold text-white/80 uppercase tracking-wider shrink-0">{t('skills.title')}</span>
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-[color:var(--paper-line)] bg-[color:var(--paper-bg-2)]">
+        <Sparkles size={13} className="text-[color:var(--focus)] shrink-0" />
+        <span className="text-[12px] font-semibold text-[color:var(--ink-dim)] uppercase tracking-wider shrink-0">{t('skills.title')}</span>
         <div className="relative flex-1 ml-1">
-          <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-white/30" />
+          <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-[color:var(--ink-faint)]" />
           <input
             ref={inputRef}
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder={t('skills.search')}
-            className="w-full bg-white/[0.04] border border-white/10 rounded-md pl-7 pr-2 py-1 text-[11px] text-white/80 placeholder:text-white/25 focus:outline-none focus:border-white/25"
+            className="w-full bg-[color:var(--paper-sunk)] border border-[color:var(--paper-line)] rounded-md pl-7 pr-2 py-1 text-[12px] text-[color:var(--ink)] placeholder:text-[color:var(--ink-faint)] focus:outline-none focus:border-[color:var(--paper-line-strong)]"
           />
         </div>
-        <button onClick={onClose} className="p-1 rounded text-white/40 hover:text-white/90 hover:bg-white/10 transition-colors shrink-0">
+        <button onClick={onClose} className="p-1 rounded text-[color:var(--ink-faint)] hover:text-[color:var(--ink)] hover:bg-[color:var(--paper-sunk)] transition-colors shrink-0">
           <X size={13} />
         </button>
       </div>
 
       <div className="max-h-[340px] overflow-y-auto custom-scrollbar py-1">
         {total === 0 ? (
-          <div className="px-3 py-6 text-center text-[11px] text-white/30">{t('skills.noMatch')}</div>
+          <div className="px-3 py-6 text-center text-[12px] text-[color:var(--ink-faint)]">{t('skills.noMatch')}</div>
         ) : (
           groups.map(g => (
             <div key={g.key} className="px-1 py-1">
               <div className="flex items-center gap-1.5 px-2 py-1">
                 {g.icon}
-                <span className="text-[9px] font-semibold uppercase tracking-wider text-white/40">{g.label}</span>
-                <span className="text-[9px] text-white/25">({g.items.length})</span>
+                <span className="text-[12px] font-semibold uppercase tracking-wider text-[color:var(--ink-faint)]">{g.label}</span>
+                <span className="text-[12px] text-[color:var(--ink-faint)]">({g.items.length})</span>
               </div>
               {g.items.map(c => {
                 const needsArgs = !!(c.argumentHint && c.argumentHint.trim());
@@ -118,16 +118,16 @@ export const SkillsGallery: React.FC<Props> = ({ meta, skills, provider, onSelec
                   <button
                     key={c.name}
                     onClick={() => onSelect(insertText)}
-                    className="w-full text-left flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg hover:bg-white/[0.06] transition-colors group"
+                    className="w-full text-left flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg hover:bg-[color:var(--paper-sunk)] transition-colors group"
                   >
                     <div className="flex items-baseline gap-2">
-                      <span className="text-[12px] font-medium text-white/85 group-hover:text-white">{label}</span>
+                      <span className="text-[12px] font-medium text-[color:var(--ink)]">{label}</span>
                       {needsArgs && (
-                        <span className="text-[9px] text-amber-300/70 font-mono">{c.argumentHint}</span>
+                        <span className="text-[12px] text-[color:var(--accent-text)] font-mono">{c.argumentHint}</span>
                       )}
                     </div>
                     {c.description && (
-                      <span className="text-[10.5px] text-white/40 leading-snug line-clamp-2">{c.description}</span>
+                      <span className="text-[12px] text-[color:var(--ink-faint)] leading-snug line-clamp-2">{c.description}</span>
                     )}
                   </button>
                 );

@@ -26,7 +26,7 @@ export const SideQuestionButton: React.FC<SideQuestionButtonProps> = ({ convId, 
       aria-label={t('side.open')}
       aria-pressed={active}
       onClick={() => onOpen(convId)}
-      className={`p-1 rounded transition-all shrink-0 hover:bg-white/[0.06] ${active ? 'text-blue-400 bg-blue-500/10' : 'text-slate-500 hover:text-slate-300'}`}
+      className={`p-1 rounded transition-all shrink-0 hover:bg-[color:var(--paper-sunk)] ${active ? 'text-[color:var(--focus)] bg-[color:color-mix(in_srgb,var(--focus)_14%,transparent)]' : 'text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)]'}`}
     >
       <MessageCircleQuestion size={14} />
     </button>
@@ -66,12 +66,12 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
       data-testid="side-panel"
       role="dialog"
       aria-label={t('side.title')}
-      className="absolute left-3 right-3 bottom-3 z-30 flex flex-col max-h-[75%] min-h-[240px] rounded-xl border border-white/[0.08] bg-[#0F1218]/95 backdrop-blur shadow-2xl shadow-black/50"
+      className="absolute left-3 right-3 bottom-3 z-30 flex flex-col max-h-[75%] min-h-[240px] rounded-xl border border-[color:var(--paper-line)] bg-[color:var(--paper-raised)] shadow-2xl"
     >
-      <div className="h-10 px-3 flex items-center justify-between border-b border-white/[0.06] shrink-0">
+      <div className="h-10 px-3 flex items-center justify-between border-b border-[color:var(--paper-line)] shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <MessageCircleQuestion size={13} className="text-blue-400 shrink-0" />
-          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest truncate">{t('side.title')}</span>
+          <MessageCircleQuestion size={13} className="text-[color:var(--focus)] shrink-0" />
+          <span className="text-[12px] font-bold text-[color:var(--ink-dim)] uppercase tracking-widest truncate">{t('side.title')}</span>
         </div>
         <button
           type="button"
@@ -79,7 +79,7 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
           onClick={onClose}
           title={t('side.close')}
           aria-label={t('side.close')}
-          className="p-1 hover:bg-white/[0.06] rounded transition-all text-slate-500 hover:text-slate-300"
+          className="p-1 hover:bg-[color:var(--paper-sunk)] rounded transition-all text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)]"
         >
           <X size={14} />
         </button>
@@ -87,20 +87,20 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
 
       <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-2 min-h-0" onScroll={scroll.onScroll}>
         {messages.length === 0 && (
-          <p className="text-[11.5px] text-slate-500 leading-relaxed">{t('side.empty')}</p>
+          <p className="text-[12px] text-[color:var(--ink-faint)] leading-relaxed">{t('side.empty')}</p>
         )}
         {messages.map(m => m.role === 'user' ? (
-          <div key={m.id} data-testid="side-question" className="ml-8 px-3 py-2 rounded-lg bg-blue-600/15 border border-blue-500/20 text-[12px] text-slate-200 whitespace-pre-wrap break-words">
+          <div key={m.id} data-testid="side-question" className="ml-8 px-3 py-2 rounded-lg bg-[color:color-mix(in_srgb,var(--focus)_14%,transparent)] border border-[color:var(--paper-line-strong)] text-[12px] text-[color:var(--ink)] whitespace-pre-wrap break-words">
             {m.content}
           </div>
         ) : (
-          <div key={m.id} data-testid="side-answer" className="px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.06] text-[12px] text-slate-300 break-words">
+          <div key={m.id} data-testid="side-answer" className="px-3 py-2 rounded-lg bg-[color:var(--paper-sunk)] border border-[color:var(--paper-line)] text-[12px] text-[color:var(--ink-dim)] break-words">
             {m.content && <MarkdownRenderer content={m.content} />}
             {!m.content && !(m.activity && !m.finished && !m.failed) && (
-              <span className="text-slate-500 animate-pulse">{t('side.thinking')}</span>
+              <span className="text-[color:var(--ink-faint)] animate-pulse">{t('side.thinking')}</span>
             )}
             {m.activity && !m.finished && !m.failed && (
-              <div data-testid="side-activity" className={`text-[11px] text-slate-500 animate-pulse truncate ${m.content ? 'mt-1.5' : ''}`}>
+              <div data-testid="side-activity" className={`text-[12px] text-[color:var(--ink-faint)] animate-pulse truncate ${m.content ? 'mt-1.5' : ''}`}>
                 {m.activity.kind === 'reading' ? t('side.activityReading') : t('side.activityThinking')}
                 {m.activity.detail ? ` — ${m.activity.detail.slice(0, 60)}` : ''}
               </div>
@@ -110,7 +110,7 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
                 type="button"
                 data-testid="side-add-to-main"
                 onClick={() => onAddToMain(m.question || '', m.content)}
-                className="mt-2 flex items-center gap-1 px-2 py-1 rounded-md border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.07] text-[10.5px] font-semibold text-slate-400 hover:text-slate-200 transition-colors"
+                className="mt-2 flex items-center gap-1 px-2 py-1 rounded-md border border-[color:var(--paper-line)] bg-[color:var(--paper-sunk)] hover:bg-[color:var(--paper-sunk)] text-[12px] font-semibold text-[color:var(--ink-dim)] hover:text-[color:var(--ink)] transition-colors"
               >
                 <Plus size={11} />
                 {t('side.addToMain')}
@@ -121,7 +121,7 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
         <div ref={scroll.endRef} />
       </div>
 
-      <div className="p-2 border-t border-white/[0.06] flex items-end gap-2 shrink-0">
+      <div className="p-2 border-t border-[color:var(--paper-line)] flex items-end gap-2 shrink-0">
         <textarea
           ref={inputRef}
           data-testid="side-input"
@@ -133,7 +133,7 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
             if (e.key === 'Escape') { e.preventDefault(); onClose(); }
           }}
           placeholder={t('side.placeholder')}
-          className="flex-1 resize-none rounded-lg bg-white/[0.03] border border-white/[0.08] focus:border-blue-500/40 outline-none px-2.5 py-1.5 text-[12px] text-slate-200 placeholder:text-slate-600"
+          className="flex-1 resize-none rounded-lg bg-[color:var(--paper-sunk)] border border-[color:var(--paper-line)] focus:border-[color:var(--focus)] outline-none px-2.5 py-1.5 text-[12px] text-[color:var(--ink)] placeholder:text-[color:var(--ink-faint)]"
         />
         {loading ? (
           <button
@@ -142,7 +142,7 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
             onClick={onStop}
             title={t('side.stop')}
             aria-label={t('side.stop')}
-            className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
+            className="p-2 rounded-lg bg-[color:var(--accent-soft)] hover:bg-[color:var(--accent-soft)] text-[color:var(--del-text)] border border-[color:var(--paper-line-strong)] transition-colors"
           >
             <Square size={13} />
           </button>
@@ -154,7 +154,7 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
             disabled={!draft.trim()}
             title={t('side.send')}
             aria-label={t('side.send')}
-            className="p-2 rounded-lg bg-blue-600/15 hover:bg-blue-600/25 text-blue-400 border border-blue-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="p-2 rounded-lg bg-[color:color-mix(in_srgb,var(--focus)_14%,transparent)] hover:bg-[color:color-mix(in_srgb,var(--focus)_24%,transparent)] text-[color:var(--focus)] border border-[color:var(--paper-line-strong)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <CornerDownLeft size={13} />
           </button>
