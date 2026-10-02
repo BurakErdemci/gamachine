@@ -1,4 +1,10 @@
 import { createContext, useContext } from 'react';
+import axios from 'axios';
+
+// Some isolated consumers supply an axios adapter without global defaults.
+if (axios.defaults?.headers?.common) {
+  axios.defaults.headers.common['X-UI-Lang'] = 'en';
+}
 
 export type Lang = 'tr' | 'en';
 
@@ -1873,6 +1879,9 @@ let aktifDilDegeri: Lang | null = null;
 
 /** `home.tsx` dili her değiştirdiğinde çağırır — bkz `aktifDil`. */
 export function aktifDilAyarla(l: Lang | null): void {
+  if (l && axios.defaults?.headers?.common) {
+    axios.defaults.headers.common['X-UI-Lang'] = l;
+  }
   // null forgets the announced language so `aktifDil` reads storage again
   // (used by tests of that storage path).
   aktifDilDegeri = l;
