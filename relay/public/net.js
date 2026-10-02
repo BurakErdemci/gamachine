@@ -383,21 +383,21 @@ export class Link {
 
 // Backend/app/remote/rpc.py TEXT_MAX: longer send_message texts are refused.
 export const SEND_TEXT_MAX = 20_000;
-export const ASK_ON_PC = () => t('text.54');
+export const ASK_ON_PC = () => t('answer.onPc');
 
 // The composer note for a failed send_message.
 export function sendFailureNote(error) {
-  if (error === 'too_large') return t('text.55');
-  return t('text.56') + error;
+  if (error === 'too_large') return t('send.frameTooLong');
+  return t('send.failed', { error });
 }
 
 // A `/compact` sent from the phone runs on the PC and gets no reply beyond
 // "accepted" (docs/remote-control.md), so the note says where to look.
 export function sentNote(text, status) {
-  if (status !== 'accepted') return t('text.57') + (status || t('text.139'));
+  if (status !== 'accepted') return t('send.reply', { status: status || t('common.unknown') });
   return String(text ?? '').trim() === '/compact'
-    ? t('text.58')
-    : t('text.59');
+    ? t('send.compactionRequested')
+    : t('send.sent');
 }
 
 // ---- slash commands (list_slash_commands)
@@ -453,21 +453,21 @@ export function withCommand(current, insert) {
 }
 
 export function slashFailureNote(error) {
-  if (error === 'not_ready') return t('text.44');
-  if (error === 'unknown_chat') return t('text.36');
-  if (error === 'unavailable') return t('text.140');
-  return t('text.60') + error;
+  if (error === 'not_ready') return t('common.connectFirst');
+  if (error === 'unknown_chat') return t('chat.removed');
+  if (error === 'unavailable') return t('slash.unavailable');
+  return t('slash.loadFailed', { error });
 }
 
 // ---- approval mode (get_config, set_approval_mode)
 
 // Labels and descriptions as the desktop shows them (mode.* in i18n.tsx).
 export const APPROVAL_MODES = [
-  { id: 'auto', get label() { return t('text.141'); }, get desc() { return t('text.61'); } },
-  { id: 'balanced', get label() { return t('text.62'); }, get desc() { return t('text.63'); } },
-  { id: 'step', get label() { return t('text.64'); }, get desc() { return t('text.65'); } },
+  { id: 'auto', get label() { return t('mode.auto'); }, get desc() { return t('mode.autoDescription'); } },
+  { id: 'balanced', get label() { return t('mode.safeAuto'); }, get desc() { return t('mode.safeAutoDescription'); } },
+  { id: 'step', get label() { return t('mode.stepByStep'); }, get desc() { return t('mode.stepByStepDescription'); } },
 ];
-export const AUTO_MODE_WARNING = () => t('text.66');
+export const AUTO_MODE_WARNING = () => t('mode.autoWarning');
 
 export function modeInfo(id) {
   return APPROVAL_MODES.find((m) => m.id === id) || null;
@@ -482,14 +482,14 @@ export function modeChangedNote(result) {
 // What the mode note says when set_approval_mode failed; the mode did not change.
 export function modeFailureNote(error, reply = {}, wanted = '') {
   if (error === 'agy_step_refused') {
-    const target = wanted === 'balanced' ? t('text.69') : t('text.70');
+    const target = wanted === 'balanced' ? t('mode.safeAutoTarget') : t('mode.stepByStepTarget');
     const pids = reply?.params?.pids || '?';
     return t('mode.agyRefused', { target, pids });
   }
-  if (error === 'not_ready') return t('text.44');
-  if (error === 'bad_mode') return t('text.73');
-  if (error === 'unavailable') return t('text.74');
-  return t('text.75') + error;
+  if (error === 'not_ready') return t('common.connectFirst');
+  if (error === 'bad_mode') return t('mode.unknown');
+  if (error === 'unavailable') return t('mode.unavailable');
+  return t('mode.changeFailed', { error });
 }
 
 // ---- model and effort (get_config, list_models, set_model, set_effort)
@@ -497,7 +497,7 @@ export function modeFailureNote(error, reply = {}, wanted = '') {
 // Labels as the desktop shows them (effort.label.* in i18n.tsx), in the
 // registry's canonical order.
 export const EFFORT_LABELS = {
-  get auto() { return t('text.144'); }, get off() { return t('text.76'); }, get none() { return t('text.145'); }, get minimal() { return t('text.146'); }, get low() { return t('text.77'); }, get medium() { return t('text.143'); }, get high() { return t('text.78'); }, get xhigh() { return t('text.147'); }, get max() { return t('text.148'); },
+  get auto() { return t('effort.auto'); }, get off() { return t('effort.off'); }, get none() { return t('effort.none'); }, get minimal() { return t('effort.minimal'); }, get low() { return t('effort.low'); }, get medium() { return t('effort.medium'); }, get high() { return t('effort.high'); }, get xhigh() { return t('effort.xHigh'); }, get max() { return t('effort.max'); },
 };
 
 const knownEffort = (level) => Object.prototype.hasOwnProperty.call(EFFORT_LABELS, level);
@@ -528,9 +528,9 @@ export function parseModelValue(value) {
 }
 
 const MODEL_GROUPS = [
-  { key: 'subscription', get label() { return t('text.79'); } },
-  { key: 'cloud', get label() { return t('text.149'); } },
-  { key: 'local', get label() { return t('text.150'); } },
+  { key: 'subscription', get label() { return t('model.subscription'); } },
+  { key: 'cloud', get label() { return t('model.cloud'); } },
+  { key: 'local', get label() { return t('model.local'); } },
 ];
 
 // The picker's catalog as option groups. The chat's current model is always
@@ -553,14 +553,14 @@ export function modelGroups(catalog, current) {
       const name = typeof m.name === 'string' && m.name ? m.name : m.id;
       // The desktop's plan lock (`disabled`): shown, but not pickable.
       items.push(m.disabled === true
-        ? { value, label: name + t('text.80'), disabled: true }
+        ? { value, label: t('model.planLocked', { name }), disabled: true }
         : { value, label: name });
     }
     if (items.length) groups.push({ label, items });
   }
   if (currentValue && !seen.has(currentValue)) {
-    const name = current.model_name || t('text.81');
-    groups.unshift({ get label() { return t('text.151'); }, items: [{ value: currentValue, label: current.provider_type + ' · ' + name }] });
+    const name = current.model_name || t('model.providerDefault');
+    groups.unshift({ get label() { return t('model.currentChat'); }, items: [{ value: currentValue, label: current.provider_type + ' · ' + name }] });
   }
   return { groups, currentValue };
 }
@@ -568,75 +568,75 @@ export function modelGroups(catalog, current) {
 // Refusals every request can meet, worded once.
 function commonFailure(error) {
   switch (error) {
-    case 'not_ready': return t('text.44');
-    case 'busy': return t('text.82');
-    case 'timeout': return t('text.83');
-    case 'disconnected': return t('text.84');
-    case 'internal': return t('text.152');
-    case 'too_large': return t('text.85');
-    case 'unknown_type': return t('text.86');
-    case 'bad_request': return t('text.87');
+    case 'not_ready': return t('common.connectFirst');
+    case 'busy': return t('common.pcBusy');
+    case 'timeout': return t('common.noReply');
+    case 'disconnected': return t('common.disconnected');
+    case 'internal': return t('common.pcError');
+    case 'too_large': return t('common.requestFailed');
+    case 'unknown_type': return t('common.updateRequired');
+    case 'bad_request': return t('common.badRequest');
     default: return null;
   }
 }
 
 // What the provider lacks, from not_ready's `needs`.
 const MODEL_NEEDS = {
-  get apikey() { return t('text.88'); },
-  get install() { return t('text.89'); },
-  get login() { return t('text.90'); },
-  get service() { return t('text.91'); },
+  get apikey() { return t('model.apiKeyMissing'); },
+  get install() { return t('model.cliNotInstalled'); },
+  get login() { return t('model.cliNotSignedIn'); },
+  get service() { return t('model.localServiceStopped'); },
 };
 
 // The model note when set_model failed; the chat's model did not change.
 // `not_ready` is both the link's own error (no `needs`) and the PC's refusal.
 export function modelFailureNote(error, reply = {}) {
   if (error === 'not_ready' && reply?.needs !== undefined) {
-    return t('text.92') + (MODEL_NEEDS[reply.needs] || t('text.93'));
+    return t('model.providerUnavailable', { reason: MODEL_NEEDS[reply.needs] || t('model.providerNotReady') });
   }
   const why = commonFailure(error)
-    ?? (error === 'unknown_chat' ? t('text.36')
-      : error === 'bad_chat_id' ? t('text.94')
-      : error === 'unknown_provider' ? t('text.95')
-      : error === 'bad_model' ? t('text.96')
-      : error === 'unavailable' ? t('text.97')
-      : error === 'plan_locked' ? t('text.98')
+    ?? (error === 'unknown_chat' ? t('chat.removed')
+      : error === 'bad_chat_id' ? t('chat.invalidId')
+      : error === 'unknown_provider' ? t('model.unknownProvider')
+      : error === 'bad_model' ? t('model.invalidName')
+      : error === 'unavailable' ? t('model.changeUnavailable')
+      : error === 'plan_locked' ? t('model.planUnsupported')
       : null);
-  return why ? t('text.92') + why : t('text.99') + error;
+  return why ? t('model.unchanged', { reason: why }) : t('model.changeFailed', { error });
 }
 
 // list_models failing leaves the select with the chat's current model only.
 export function modelListFailureNote(error) {
-  if (error === 'unavailable') return t('text.153');
-  return t('text.100') + (commonFailure(error) ?? error);
+  if (error === 'unavailable') return t('model.listUnavailable');
+  return t('model.loadFailed', { error: commonFailure(error) ?? error });
 }
 
 export function modelChangedNote(result) {
-  const name = result?.model_name || t('text.81');
+  const name = result?.model_name || t('model.providerDefault');
   return t('model.changed', { name });
 }
 
 // The effort note when set_effort failed or was not delivered; nothing changed.
 export function effortFailureNote(error) {
   const why = commonFailure(error)
-    ?? (error === 'bad_effort' ? t('text.103') : null);
-  return why ? t('text.104') + why : t('text.105') + error;
+    ?? (error === 'bad_effort' ? t('effort.invalid') : null);
+  return why ? t('effort.unchanged', { reason: why }) : t('effort.changeFailed', { error });
 }
 
 // set_effort replies {status: accepted | desktop_not_ready}. `accepted` only
 // says the desktop app got the request: it applies the level when the active
 // model offers it, and the page learns the real value from the PC afterwards.
 export function effortSetNote(status, level) {
-  if (status === 'accepted') return t('text.154') + effortLabel(level) + '.';
-  if (status === 'desktop_not_ready') return t('text.106');
-  return t('text.107') + (status || t('text.139'));
+  if (status === 'accepted') return t('effort.sentToPc', { level: effortLabel(level) });
+  if (status === 'desktop_not_ready') return t('effort.desktopNotReady');
+  return t('effort.reply', { status: status || t('common.unknown') });
 }
 
 // What the PC really has after a request the desktop accepted; it may not
 // offer the level (the model the desktop shows differs from the chat's).
 export function effortOutcomeNote(requested, actual, ultracode = false) {
-  if (requested === actual && !ultracode) return t('text.108') + effortLabel(actual) + '.';
-  return t('effort.notApplied', { requested: effortLabel(requested), actual: ultracode ? t('text.132') : effortLabel(actual) });
+  if (requested === actual && !ultracode) return t('effort.changedOnPc', { level: effortLabel(actual) });
+  return t('effort.notApplied', { requested: effortLabel(requested), actual: ultracode ? t('effort.ultracode') : effortLabel(actual) });
 }
 
 // Ultracode is on at the PC: its panel then shows "Ultracode" and no level,
@@ -644,39 +644,39 @@ export function effortOutcomeNote(requested, actual, ultracode = false) {
 // shows the same, so that choosing that level is a change the page can send.
 export const ULTRACODE_OPTION = 'ultracode';
 
-export const EFFORT_UNKNOWN_NOTE = () => t('text.110');
+export const EFFORT_UNKNOWN_NOTE = () => t('effort.unknownOnPc');
 
 export function configFailureNote(error) {
-  if (error === 'unknown_chat') return t('text.36');
-  return t('text.111') + (commonFailure(error) ?? error);
+  if (error === 'unknown_chat') return t('chat.removed');
+  return t('config.readFailed', { error: commonFailure(error) ?? error });
 }
 
 // turn_end.status comes from the PC's turn-event ring: done | error | stopped.
 export function turnEndLine(status) {
-  if (!status || status === 'done') return { text: t('text.156'), error: false };
-  if (status === 'error') return { text: t('text.157'), error: true };
-  if (status === 'stopped') return { text: t('text.158'), error: false };
-  return { text: t('text.159') + status + ')', error: false };
+  if (!status || status === 'done') return { text: t('event.turnFinished'), error: false };
+  if (status === 'error') return { text: t('event.turnError'), error: true };
+  if (status === 'stopped') return { text: t('event.turnStopped'), error: false };
+  return { text: t('event.turnFinishedStatus', { status }), error: false };
 }
 
 // One log line for a non-text event.
 export function eventLine(ev) {
   switch (ev.kind) {
-    case 'tool_call': return { text: t('text.112') + (ev.tool || '?') + (ev.summary ? ' - ' + ev.summary : ''), error: false };
-    case 'turn_start': return { text: t('text.113'), error: false };
+    case 'tool_call': return { text: t('event.toolCall', { tool: ev.tool || '?', summary: ev.summary ? ' - ' + ev.summary : '' }), error: false };
+    case 'turn_start': return { text: t('event.turnStarted'), error: false };
     case 'turn_end': return turnEndLine(ev.status);
-    case 'card_opened': return { text: (ev.card_kind === 'question' ? t('text.114') : t('text.115')) + (ev.tool ? ': ' + ev.tool : ''), error: false };
-    case 'card_closed': return { text: t('text.116'), error: false };
+    case 'card_opened': return { text: t(ev.card_kind === 'question' ? 'event.questionOpened' : 'event.approvalOpened', { tool: ev.tool ? ': ' + ev.tool : '' }), error: false };
+    case 'card_closed': return { text: t('event.cardClosed'), error: false };
     case undefined:
       // split_reply puts {truncated:true} where one item alone would not fit a frame.
-      if (ev.truncated) return { text: t('text.117'), error: false };
+      if (ev.truncated) return { text: t('event.oversized'), error: false };
   }
-  return { text: String(ev.kind || t('text.160')), error: false };
+  return { text: String(ev.kind || t('event.unknown')), error: false };
 }
 
 export function messageText(m) {
-  if (typeof m.text !== 'string') return m.truncated ? t('text.118') : '';
-  return m.truncated ? m.text + t('text.119') : m.text;
+  if (typeof m.text !== 'string') return m.truncated ? t('chat.messageTooLong') : '';
+  return m.truncated ? t('chat.messageShortened', { text: m.text }) : m.text;
 }
 
 // The buttons a card gets, each with the exact answer_card payload the bridge
@@ -698,9 +698,9 @@ export function cardActions(card) {
     }
     if (!buttons.length) note = ASK_ON_PC();
   } else {
-    buttons.push({ get label() { return t('text.161'); }, payload: pay('approve') });
+    buttons.push({ get label() { return t('card.approve'); }, payload: pay('approve') });
   }
-  buttons.push({ get label() { return t('text.162'); }, secondary: true, payload: pay('reject') });
+  buttons.push({ get label() { return t('card.reject'); }, secondary: true, payload: pay('reject') });
   return { buttons, note };
 }
 
@@ -720,27 +720,27 @@ export function cardsMissing(cards, events) {
 
 // `by` of a card answer: desktop | phone:<device name> | system (timeout, Stop).
 export function answeredBy(by) {
-  if (by === 'desktop') return t('text.163');
-  if (typeof by === 'string' && by.startsWith('phone:')) return by.slice(6) || t('text.164');
-  return typeof by === 'string' && by ? by : t('text.139');
+  if (by === 'desktop') return t('common.pc');
+  if (typeof by === 'string' && by.startsWith('phone:')) return by.slice(6) || t('common.phone');
+  return typeof by === 'string' && by ? by : t('common.unknown');
 }
 
 // What the card shows after a failed answer_card; `close` removes the card.
 export function answerFailure(error, reply = {}) {
   if (error === 'already_answered') {
-    if (reply.by === 'system') return { close: true, note: t('text.120') };
+    if (reply.by === 'system') return { close: true, note: t('card.alreadyClosed') };
     return { close: true, note: t('card.answered', { device: answeredBy(reply.by) }) };
   }
-  if (error === 'not_found') return { close: true, note: t('text.123') };
+  if (error === 'not_found') return { close: true, note: t('card.noLongerOpen') };
   if (error === 'unsupported_on_phone') return { close: false, onlyReject: true, note: ASK_ON_PC() };
-  return { close: false, note: t('text.56') + error };
+  return { close: false, note: t('answer.failed', { error }) };
 }
 
 // stop replies {status: ok | no_session | error}.
 export function stopLine(status) {
-  if (status === 'no_session') return t('text.124');
-  if (status === 'error') return t('text.125');
-  return t('text.126');
+  if (status === 'no_session') return t('stop.noRunningTurn');
+  if (status === 'error') return t('stop.failed');
+  return t('stop.requested');
 }
 
 // chat_changed carries a summary; list_chats leaves out hidden idle chats, so this does too.

@@ -39,7 +39,7 @@ function applyDesktopUI(ui) {
   if (!$('slash-panel').hidden) renderSlash();
   if (view.shown) loadChat();
 }
-const REMOVED_TEXT = () => t('text.0');
+const REMOVED_TEXT = () => t('pair.removed');
 
 let device = null;
 let link = null;
@@ -86,25 +86,25 @@ function clock(ms) {
   return sameDay ? time : d.toLocaleDateString((getLang() === 'tr' ? 'tr-TR' : 'en-GB'), { day: 'numeric', month: 'short' }) + ' ' + time;
 }
 
-const STATUS_WORDS = () => ({ running: t('text.1'), idle: t('text.2'), awaiting_card: t('text.127') });
+const STATUS_WORDS = () => ({ running: t('status.running'), idle: t('status.idle'), awaiting_card: t('status.awaitingApproval') });
 
 // ---------------------------------------------------------------- pairing
 
 const PAIR_ERRORS = {
-  get no_room() { return t('text.3'); },
-  get pc_offline() { return t('text.4'); },
-  get refused() { return t('text.5'); },
-  get rejected() { return t('text.6'); },
-  get timeout() { return t('text.7'); },
-  get bad_reply() { return t('text.8'); },
-  get expired() { return t('text.9'); },
-  get rate_limited() { return t('text.10'); },
+  get no_room() { return t('pair.noWaitingPc'); },
+  get pc_offline() { return t('pair.pcOffline'); },
+  get refused() { return t('pair.connectionRefused'); },
+  get rejected() { return t('pair.rejected'); },
+  get timeout() { return t('pair.timeout'); },
+  get bad_reply() { return t('pair.unverifiedReply'); },
+  get expired() { return t('pair.expired'); },
+  get rate_limited() { return t('pair.rateLimited'); },
 };
 
 async function startPairing(parsed) {
   history.replaceState(null, '', '/p');
   show('pairing');
-  setText($('pair-status'), () => t('text.11'));
+  setText($('pair-status'), () => t('pair.connecting'));
   setText($('pair-error'), () => '');
   $('pair-code-box').hidden = true;
   $('btn-pair-back').hidden = true;
@@ -116,7 +116,7 @@ async function startPairing(parsed) {
       onSas: (code) => {
         setText($('pair-code'), () => code);
         $('pair-code-box').hidden = false;
-        setText($('pair-status'), () => t('text.12'));
+        setText($('pair-status'), () => t('pair.awaitingApproval'));
       },
     });
     if (link) link.stop();
@@ -135,9 +135,9 @@ async function startPairing(parsed) {
     startMain();
   } catch (err) {
     $('pair-code-box').hidden = true;
-    setText($('pair-status'), () => t('text.13'));
-    const advice = () => err.message === 'no_room' ? '' : t('text.14');
-    setText($('pair-error'), () => (PAIR_ERRORS[err.message] || t('text.128') + err.message) + advice());
+    setText($('pair-status'), () => t('pair.failed'));
+    setText($('pair-error'), () => err.message === 'no_room' ? PAIR_ERRORS[err.message]
+      : t('pair.retryError', { error: PAIR_ERRORS[err.message] || t('pair.unknownError', { error: err.message }) }));
     $('btn-pair-back').hidden = false;
   }
 }
@@ -152,14 +152,14 @@ function showWelcome(text) {
 function pasteToFragment(value) {
   const v = value.trim();
   const hashAt = v.indexOf('#');
-  if (hashAt < 0) return { error: t('text.15') };
+  if (hashAt < 0) return { error: t('link.missingFragment') };
   if (hashAt > 0) {
     let url;
-    try { url = new URL(v); } catch { return { error: t('text.16') }; }
+    try { url = new URL(v); } catch { return { error: t('link.invalid') }; }
     if (url.origin !== location.origin) return { error: t('pair.otherOrigin', { origin: url.origin }) };
   }
   const parsed = C.parsePairFragment(v.slice(hashAt));
-  return parsed ? { parsed } : { error: t('text.19') };
+  return parsed ? { parsed } : { error: t('link.damaged') };
 }
 
 // ---------------------------------------------------------------- main screen
@@ -171,22 +171,22 @@ function setStatus(status, info = {}) {
   const note = $('main-note');
   setText(note, () => '');
   if (status === 'ready') {
-    setText(statusText, () => t('text.20'));
+    setText(statusText, () => t('status.connected'));
     refreshAll();
     return;
   }
   $('mode-select').disabled = true;
   renderChatSettings();
-  if (status === 'connecting') setText(statusText, () => t('text.21'));
+  if (status === 'connecting') setText(statusText, () => t('status.connecting'));
   else if (status === 'pc_offline') setText(statusText, () => t('status.offline', { lastSeen: info.lastSeen ? t('status.lastSeen', { time: clock(info.lastSeen) }) : '' }));
   else if (status === 'removed' || (status === 'hello_rejected' && info.reason === 'unknown_device')) {
     forgetRemoved();
     return;
   } else if (status === 'hello_rejected') {
-    setText(statusText, () => t('text.129'));
+    setText(statusText, () => t('status.phoneRejected'));
     setText(note, () => info.reason === 'clock'
-      ? t('text.24')
-      : t('text.25'));
+      ? t('status.clockIncorrect')
+      : t('pair.unregistered'));
   }
   renderChatHeader();
 }
@@ -233,7 +233,7 @@ async function refreshAll() {
       refreshChatSettings();
     }
   } catch (err) {
-    setText($('main-note'), () => t('text.26') + err.message);
+    setText($('main-note'), () => t('chats.loadFailed', { error: err.message }));
   }
 }
 
@@ -246,30 +246,30 @@ function renderChats() {
     const who = [chat.provider, chat.model].filter(Boolean).join(' · ');
     const meta = [status, who, clock(chat.last_activity)].filter(Boolean).join(' · ');
     list.append(el('li', {}, el('button', { type: 'button', onclick: () => openChat(chat.chat_id) },
-      chat.title || t('text.27'),
+      chat.title || t('chat.untitled'),
       el('span', { class: chat.status === 'awaiting_card' ? 'meta wait' : 'meta', textContent: meta }))));
   }
   $('chats-empty').hidden = chats.length > 0;
 }
 
 function chatTitle(id) {
-  return chats.find((c) => c.chat_id === id)?.title || t('text.130');
+  return chats.find((c) => c.chat_id === id)?.title || t('chat.title');
 }
 
 function cardNode(card) {
   const box = el('div', { class: 'card' });
   const { buttons, note: hint } = cardActions(card);
   const note = el('p', { class: 'note', textContent: hint || '' });
-  const title = card.title || t('text.131');
+  const title = card.title || t('card.awaitingApproval');
   // The head strip of the approval card (Arena's quest window, Pafta's title block).
-  box.append(el('div', { class: 'card-head' }, el('span', { class: 'card-mark' }), el('span', { class: 'card-state', textContent: t('text.131') })));
+  box.append(el('div', { class: 'card-head' }, el('span', { class: 'card-mark' }), el('span', { class: 'card-state', textContent: t('card.awaitingApproval') })));
   box.append(el('b', { textContent: title }));
   if (card.chat_id && view.shown !== card.chat_id) box.append(el('span', { class: 'meta', textContent: chatTitle(card.chat_id) }));
   if (card.detail) box.append(el('pre', { class: 'detail', textContent: String(card.detail) }));
   const row = el('div', { class: 'row' });
   const answer = async (payload) => {
     for (const b of row.querySelectorAll('button')) b.disabled = true;
-    setText(note, () => t('text.28'));
+    setText(note, () => t('send.sending'));
     try {
       await call('answer_card', payload);
       removeCard(card.card_id);
@@ -336,10 +336,10 @@ async function refreshConfig() {
       select.disabled = false;
     } else {
       select.disabled = true;
-      setText($('mode-note'), () => t('text.29') + cfg.approval_mode);
+      setText($('mode-note'), () => t('mode.unknownOnPc', { mode: cfg.approval_mode }));
     }
   } catch (err) {
-    setText($('mode-note'), () => t('text.30') + err.message);
+    setText($('mode-note'), () => t('mode.readFailed', { error: err.message }));
   }
 }
 
@@ -353,7 +353,7 @@ async function changeMode() {
   }
   const note = $('mode-note');
   select.disabled = true;
-  setText(note, () => t('text.31'));
+  setText(note, () => t('common.changing'));
   try {
     const r = await call('set_approval_mode', { mode });
     if (modeInfo(r.mode)) {
@@ -412,12 +412,12 @@ function renderChatSettings() {
   effort.replaceChildren();
   const note = $('effort-note');
   if (pcEffort) {
-    if (pcEffort.ultracode) effort.append(el('option', { value: ULTRACODE_OPTION, textContent: t('text.132') }));
+    if (pcEffort.ultracode) effort.append(el('option', { value: ULTRACODE_OPTION, textContent: t('effort.ultracode') }));
     for (const level of pcEffort.levels) effort.append(el('option', { value: level, textContent: effortLabel(level) }));
     effort.value = pcEffort.ultracode ? ULTRACODE_OPTION : pcEffort.level;
     if (note.textContent === EFFORT_UNKNOWN_NOTE()) setText(note, () => '');
   } else {
-    effort.append(el('option', { value: '', textContent: t('text.133') }));
+    effort.append(el('option', { value: '', textContent: t('common.unknownLabel') }));
     setText(note, () => EFFORT_UNKNOWN_NOTE());
   }
   $('effort-ultracode').hidden = !pcEffort?.ultracode;
@@ -484,7 +484,7 @@ async function changeModel() {
   const note = $('model-note');
   settingsBusy = true;
   applySettingsEnabled();
-  setText(note, () => t('text.31'));
+  setText(note, () => t('common.changing'));
   let changed = false;
   try {
     const r = await call('set_model', { chat_id: chatId, ...wanted });
@@ -510,7 +510,7 @@ async function changeEffort() {
   const note = $('effort-note');
   settingsBusy = true;
   applySettingsEnabled();
-  setText(note, () => t('text.31'));
+  setText(note, () => t('common.changing'));
   try {
     const r = await call('set_effort', { level });
     setText(note, () => effortSetNote(r.status, level));
@@ -546,7 +546,7 @@ function clearChatSettings() {
 function renderChatHeader() {
   if (!view.shown) return;
   const chat = chats.find((c) => c.chat_id === view.shown);
-  setText($('chat-title'), () => chat?.title || t('text.130'));
+  setText($('chat-title'), () => chat?.title || t('chat.title'));
   const status = chat ? STATUS_WORDS()[chat.status] || chat.status || '' : '';
   setText($('chat-status'), () => link?.ready ? status : $('status-text').textContent);
   // A turn waiting on a card is still running and can be stopped.
@@ -576,7 +576,7 @@ function renderSlash() {
       '/' + item.name + (item.hint ? ' ' + item.hint : ''),
       item.description ? el('span', { class: 'meta', textContent: item.description }) : null)));
   }
-  setText($('slash-note'), () => !total ? t('text.32')
+  setText($('slash-note'), () => !total ? t('slash.noMatches')
     : total > shown.length ? t('slash.results', { total, shown: shown.length }) : '');
 }
 
@@ -601,7 +601,7 @@ async function toggleSlash() {
   renderSlash();
   const cached = slashCache.get(chatId);
   if (cached && Date.now() - cached.at < SLASH_TTL_MS) return;
-  setText($('slash-note'), () => t('text.35'));
+  setText($('slash-note'), () => t('slash.loading'));
   try {
     slashCache.set(chatId, { at: Date.now(), items: slashItems(await call('list_slash_commands', { chat_id: chatId })) });
   } catch (err) {
@@ -612,7 +612,7 @@ async function toggleSlash() {
 }
 
 function logMessage(m) {
-  const who = m.role === 'user' ? (m.source === 'phone' ? t('text.134') : t('text.135')) : m.role === 'assistant' ? t('text.136') : m.role || '';
+  const who = m.role === 'user' ? (m.source === 'phone' ? t('chat.youOnPhone') : t('chat.you')) : m.role === 'assistant' ? t('chat.assistant') : m.role || '';
   $('log').append(el('div', { class: msgClass(m.role) }, el('span', { class: 'who', textContent: who }), messageText(m)));
 }
 
@@ -620,7 +620,7 @@ function logEvent(ev) {
   const log = $('log');
   if (ev.kind === 'text') {
     if (!liveText) {
-      liveText = el('div', { class: msgClass('assistant') }, el('span', { class: 'who', textContent: t('text.136') }));
+      liveText = el('div', { class: msgClass('assistant') }, el('span', { class: 'who', textContent: t('chat.assistant') }));
       log.append(liveText);
     }
     liveText.append(String(ev.text ?? ''));
@@ -659,9 +659,9 @@ async function loadChat() {
     if (view.endLoad(token) !== 'apply') return;
     if (err.message === 'unknown_chat') {
       closeChat();
-      setText($('main-note'), () => t('text.36'));
+      setText($('main-note'), () => t('chat.removed'));
     } else {
-      setText($('chat-status'), () => t('text.37') + err.message);
+      setText($('chat-status'), () => t('chat.openFailed', { error: err.message }));
     }
     return;
   }
@@ -769,31 +769,31 @@ function renderNotifyButton() {
 async function enableNotifications() {
   const note = $('notify-note');
   if (!('Notification' in window) || !('PushManager' in window) || !('serviceWorker' in navigator)) {
-    setText(note, () => isIos() ? t('text.38') : t('text.39'));
+    setText(note, () => isIos() ? t('notify.homeScreenRequired') : t('notify.unsupported'));
     return;
   }
   // iOS only grants this from a direct tap, so it must be the first await.
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') {
-    setText(note, () => t('text.40'));
+    setText(note, () => t('notify.permissionDenied'));
     return;
   }
   if (!device.vapidPub) {
-    setText(note, () => t('text.41'));
+    setText(note, () => t('notify.missingKey'));
     return;
   }
   try {
-    setText(note, () => t('text.42'));
+    setText(note, () => t('notify.settingUp'));
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: C.fromB64u(device.vapidPub) });
     await call('push_subscribe', { subscription: sub.toJSON() });
     device.pushDone = true;
     await store.put('device', device);
-    setText(note, () => t('text.43'));
+    setText(note, () => t('notify.enabled'));
     renderNotifyButton();
   } catch (err) {
-    setText(note, () => err.message === 'not_ready' ? t('text.44') : t('text.45') + err.message);
+    setText(note, () => err.message === 'not_ready' ? t('common.connectFirst') : t('notify.setupFailed', { error: err.message }));
   }
 }
 
@@ -835,7 +835,7 @@ async function forgetDevice() {
 }
 
 async function unpair() {
-  if (!confirm(t('text.46'))) return;
+  if (!confirm(t('unpair.confirm'))) return;
   await forgetDevice();
   location.replace('/p');
 }
@@ -852,9 +852,9 @@ function wire() {
   $('btn-copy-link').addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(location.origin + '/p#' + pendingFragment);
-      setText($('copy-note'), () => t('text.47'));
+      setText($('copy-note'), () => t('copy.pairingLinkCopied'));
     } catch {
-      setText($('copy-note'), () => t('text.48'));
+      setText($('copy-note'), () => t('copy.failed'));
     }
   });
   $('btn-pair-here').addEventListener('click', () => startPairing(C.parsePairFragment(pendingFragment)));
@@ -881,18 +881,18 @@ function wire() {
   $('btn-stop').addEventListener('click', async () => {
     const btn = $('btn-stop');
     if (!stopArmed) {
-      setText(btn, () => t('text.49'));
-      stopArmed = setTimeout(() => { stopArmed = null; setText(btn, () => t('text.137')); }, 4000);
+      setText(btn, () => t('stop.tapAgain'));
+      stopArmed = setTimeout(() => { stopArmed = null; setText(btn, () => t('stop.label')); }, 4000);
       return;
     }
     clearTimeout(stopArmed);
     stopArmed = null;
-    setText(btn, () => t('text.137'));
+    setText(btn, () => t('stop.label'));
     try {
       const r = await call('stop', { chat_id: view.shown });
       setText($('chat-status'), () => stopLine(r.status));
     } catch (err) {
-      setText($('chat-status'), () => t('text.50') + err.message);
+      setText($('chat-status'), () => t('stop.requestFailed', { error: err.message }));
     }
   });
 
@@ -906,11 +906,11 @@ function wire() {
       return;
     }
     $('btn-send').disabled = true;
-    setText(note, () => t('text.28'));
+    setText(note, () => t('send.sending'));
     try {
       const r = await call('send_message', { chat_id: view.shown, text });
       if (r.status === 'desktop_not_ready') {
-        setText(note, () => t('text.52'));
+        setText(note, () => t('send.desktopNotReady'));
       } else {
         $('composer-text').value = '';
         closeSlash();
@@ -958,7 +958,7 @@ async function boot() {
   }
   pendingFragment = hash.slice(1);
   if (device) {
-    showWelcome(() => t('text.53'));
+    showWelcome(() => t('pair.replaceExisting'));
     $('paste-link').value = location.href;
     return;
   }

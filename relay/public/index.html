@@ -51,11 +51,11 @@
 
 <section id="screen-pairing" hidden>
   <h1 data-i18n="static.30">Eşleştiriliyor</h1>
-  <p id="pair-status" data-i18n="text.11">Bilgisayara bağlanılıyor…</p>
+  <p id="pair-status" data-i18n="pair.connecting">Bilgisayara bağlanılıyor…</p>
   <div id="pair-code-box" hidden>
     <p data-i18n="static.32">Bilgisayarda görünen kod bununla aynı olmalı:</p>
     <p id="pair-code" class="code"></p>
-    <p><span data-i18n="static.33">Aynıysa bilgisayarda </span><b data-i18n="text.161">Onayla</b><span data-i18n="static.35">'ya bas. Farklıysa </span><b data-i18n="text.162">Reddet</b><span data-i18n="static.37">.</span></p>
+    <p><span data-i18n="static.33">Aynıysa bilgisayarda </span><b data-i18n="card.approve">Onayla</b><span data-i18n="static.35">'ya bas. Farklıysa </span><b data-i18n="card.reject">Reddet</b><span data-i18n="static.37">.</span></p>
   </div>
   <p id="pair-error" class="error"></p>
   <button id="btn-pair-back" type="button" class="secondary" data-i18n="static.38" hidden>Geri</button>
@@ -63,7 +63,7 @@
 
 <section id="screen-main" hidden>
   <header class="bar band">
-    <span id="status-text" data-i18n="text.21">Bağlanıyor…</span>
+    <span id="status-text" data-i18n="status.connecting">Bağlanıyor…</span>
   </header>
   <p id="main-note" class="note"></p>
   <div id="cards-box" hidden>
@@ -72,9 +72,9 @@
   </div>
   <h2 data-i18n="static.41">Onay modu</h2>
   <select id="mode-select" aria-label="Onay modu" disabled data-i18n-attr="aria-label:static.41">
-    <option value="auto" data-i18n="text.141">Otomatik</option>
-    <option value="balanced" data-i18n="text.62">Güvenli Otomatik</option>
-    <option value="step" data-i18n="text.64">Adım Adım</option>
+    <option value="auto" data-i18n="mode.auto">Otomatik</option>
+    <option value="balanced" data-i18n="mode.safeAuto">Güvenli Otomatik</option>
+    <option value="step" data-i18n="mode.stepByStep">Adım Adım</option>
   </select>
   <p id="mode-note" class="note"></p>
   <h2 data-i18n="static.45">Sohbetler</h2>
@@ -104,7 +104,7 @@
   <p id="effort-note" class="note"></p>
   </div>
   <p id="chat-status" class="note band"></p>
-  <button id="btn-stop" type="button" class="danger" data-i18n="text.137" hidden>Durdur</button>
+  <button id="btn-stop" type="button" class="danger" data-i18n="stop.label" hidden>Durdur</button>
   <div id="log" class="log"></div>
   <div id="chat-cards"></div>
   <!-- Outside the form: Enter in the search box must not send the message. -->
