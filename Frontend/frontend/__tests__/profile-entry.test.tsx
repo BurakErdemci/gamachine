@@ -1,7 +1,7 @@
 /**
  * How the maker profile is reached and fed: the stats hook (range refetch, the one-time "new"
- * mark), the sidebar card's real level, the Settings > Hesap profile link, and open/close wired
- * the way home.tsx wires it.
+ * mark), the sidebar card's real level, Settings > Hesap (profile link, statistics reset through
+ * the main process), and open/close wired the way home.tsx wires it.
  */
 import React, { useState } from 'react'
 import { readFileSync } from 'node:fs'
@@ -152,6 +152,45 @@ describe('Settings > Hesap', () => {
     fireEvent.click(screen.getByTestId('settings-open-profile'))
     expect(onOpenProfile).toHaveBeenCalledTimes(1)
   })
+
+  it('reset asks first, then resets through the main process (which adds the UI secret)', async () => {
+    // No ConfirmDialogHost here, so confirmDialog falls back to window.confirm.
+    const ask = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const onProfileReset = vi.fn()
+    const showToast = vi.fn()
+    hesap({ onProfileReset, showToast })
+    fireEvent.click(screen.getByTestId('settings-reset-stats'))
+    await flush()
+    expect(ask).toHaveBeenCalledWith(expect.stringMatching(/^Reset your profile statistics\?/))
+    const invoke = (globalThis as any).ipc.invoke
+    expect(invoke).toHaveBeenCalledWith('profile-reset')
+    // The renderer never sends a secret, a path or a body of its own.
+    expect(invoke.mock.calls[0]).toEqual(['profile-reset'])
+    expect(onProfileReset).toHaveBeenCalledTimes(1)
+    expect(showToast).toHaveBeenCalledWith('Statistics reset', 'success')
+  })
+
+  it('a cancelled confirm resets nothing', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const onProfileReset = vi.fn()
+    hesap({ onProfileReset })
+    fireEvent.click(screen.getByTestId('settings-reset-stats'))
+    await flush()
+    expect((globalThis as any).ipc.invoke).not.toHaveBeenCalled()
+    expect(onProfileReset).not.toHaveBeenCalled()
+  })
+
+  it('a refused reset says so and does not report success', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    ;(globalThis as any).ipc.invoke.mockRejectedValue(new Error('Profile reset requires the app UI'))
+    const onProfileReset = vi.fn()
+    const showToast = vi.fn()
+    hesap({ onProfileReset, showToast })
+    fireEvent.click(screen.getByTestId('settings-reset-stats'))
+    await flush()
+    expect(onProfileReset).not.toHaveBeenCalled()
+    expect(showToast).toHaveBeenCalledWith('Statistics could not be reset', 'error')
+  })
 })
 
 // ---------- open / close, wired as home.tsx wires it ----------
@@ -222,7 +261,7 @@ describe('home.tsx wires the profile', () => {
     expect(src).toMatch(/data-screen=\{ai\.showSettings \? 'ayarlar' : profileOpen \? 'profil' : undefined\}/)
   })
   it('both entry points open it and the sidebar card reads the real level', () => {
-    expect(src).toMatch(/onOpenProfile=\{openProfile\}\s*\/>\s*\{\/\* Kept mounted/)
+    expect(src).toMatch(/onOpenProfile=\{openProfile\} onProfileReset=/)
     expect(src).toMatch(/profileLevel=\{profileStats\.latest \?/)
     expect(src).toMatch(/onOpenProfile=\{openProfile\}\n\s*\/>/)
   })

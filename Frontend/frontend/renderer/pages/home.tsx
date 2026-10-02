@@ -750,7 +750,7 @@ export default function Home() {
         onToggleDictationAutoLang={dictation.toggleAutoLanguageCpu}
         onRemoteStatus={remote.setStatus}
         usage={usage.data} user={auth.user} API={API} http={axios} showToast={showToast as any}
-        onOpenProfile={openProfile}
+        onOpenProfile={openProfile} onProfileReset={() => { void profileStats.afterReset(); }}
       />
 
       {/* Kept mounted with the rest of the frame: the chat column is only hidden (profile.css). */}

@@ -51,6 +51,8 @@ export interface SettingsScreenProps {
   showToast?: Toast;
   /** Account page: the "Yapımcı profili" button. */
   onOpenProfile?: () => void;
+  /** Account page: a confirmed statistics reset succeeded. */
+  onProfileReset?: () => void;
 }
 
 const NAV_ICON: Record<SettingsPage, React.ReactNode> = {
@@ -74,7 +76,7 @@ const SEARCH_KEYS: Record<SettingsPage, TKey[]> = {
   unity: ['set.unity.conn', 'set.unity.trouble'],
   onay: ['set.nav.onay', 'set.mode.stepTitle', 'set.mode.balancedTitle', 'set.mode.autoTitle'],
   uzak: ['set.nav.uzak', 'set.uzak.phones', 'set.uzak.pairNew', 'remote.relay', 'remote.keepAwake', 'remote.forget'],
-  hesap: ['set.nav.hesap', 'set.hesap.logout', 'set.hesap.version', 'set.hesap.profile'],
+  hesap: ['set.nav.hesap', 'set.hesap.logout', 'set.hesap.version', 'set.hesap.profile', 'set.hesap.reset'],
 };
 const EXTRA_TERMS: Partial<Record<SettingsPage, string[]>> = {
   unity: ['unity', 'mcp'], modeller: ['api', 'claude', 'codex', 'antigravity', 'ollama', 'openrouter'], uzak: ['qr', 'relay'],
@@ -219,7 +221,8 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
             </>
           )}
           {page === 'hesap' && (
-            <AccountPage user={user} onLogout={props.onLogout} onOpenProfile={props.onOpenProfile} />
+            <AccountPage user={user} onLogout={props.onLogout} onOpenProfile={props.onOpenProfile}
+              onProfileReset={props.onProfileReset} saved={saved} showToast={props.showToast} />
           )}
         </article>
       </div>

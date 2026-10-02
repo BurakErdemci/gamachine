@@ -8,6 +8,7 @@ import {
 } from '../../../lib/appearance';
 import type { UnityMCPStatus } from '../../../hooks/home/useAIConfig';
 import type { GenerationMode, UserData } from '../types';
+import { confirmDialog } from '../../ui/ConfirmDialog';
 import { Lamp, SetCard, SetGroup, SetPageHead, SetRow, SetSeg, SetSwitch, Chev } from './controls';
 import appPackage from '../../../../package.json';
 
@@ -302,14 +303,39 @@ export const ApprovalPage = ({ mode, onChange, saved }: {
 
 // ───────────────────────────── Hesap ─────────────────────────────
 
-export const AccountPage = ({ user, onLogout, onOpenProfile }: {
+export const AccountPage = ({ user, onLogout, onOpenProfile, onProfileReset, saved, showToast }: {
   user?: UserData | null;
   onLogout: () => void;
   /** The hero row's "Yapımcı profili" button (mockup round 11 hesap page). */
   onOpenProfile?: () => void;
+  /** Called after a confirmed reset succeeded, so the profile and the sidebar card re-read. */
+  onProfileReset?: () => void;
+  saved?: () => void;
+  showToast?: (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }) => {
   const { t } = useLang();
   const name = displayName(user?.name) || t('set.me.anon');
+  const [resetting, setResetting] = React.useState(false);
+  // POST /profile/reset needs the UI secret, which only the main process holds: the renderer
+  // asks through the 'profile-reset' channel (main/helpers/profile-reset.ts).
+  const resetStats = async () => {
+    if (resetting) return;
+    const ok = await confirmDialog(t('set.hesap.resetConfirm'), t('set.hesap.resetGo'), t('confirm.cancel'));
+    if (!ok) return;
+    setResetting(true);
+    try {
+      const ipc = typeof window !== 'undefined' ? (window as any).ipc : undefined;
+      if (!ipc?.invoke) throw new Error('no ipc');
+      await ipc.invoke('profile-reset');
+      saved?.();
+      showToast?.(t('set.hesap.resetDone'), 'success');
+      onProfileReset?.();
+    } catch {
+      showToast?.(t('set.hesap.resetFailed'), 'error');
+    } finally {
+      setResetting(false);
+    }
+  };
   return (
     <>
       <SetPageHead title={t('set.nav.hesap')} lede={t('set.lede.hesap')} />
@@ -325,6 +351,19 @@ export const AccountPage = ({ user, onLogout, onOpenProfile }: {
             )}
           </div>
           <SetRow name={t('set.hesap.version')} hint={<>Gamachine <span className="num">{APP_VERSION}</span></>} />
+        </SetCard>
+      </SetGroup>
+      <SetGroup>
+        <SetCard>
+          <SetRow
+            name={t('set.hesap.reset')}
+            hint={t('set.hesap.resetHint')}
+            control={(
+              <button type="button" onClick={resetStats} disabled={resetting} data-testid="settings-reset-stats" className="btn btn-ghost btn-sm btn-danger">
+                {t('set.hesap.reset')}
+              </button>
+            )}
+          />
         </SetCard>
       </SetGroup>
       <SetGroup>
