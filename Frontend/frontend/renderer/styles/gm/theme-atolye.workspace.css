@@ -5,6 +5,6 @@
 [data-theme="atolye"] .ws-code { border-top: 1px solid var(--paper-line-strong); }
 [data-theme="atolye"] .pv-stage { box-shadow: 2px 2px 0 var(--paper-line-strong); }
 [data-theme="atolye"] .term { border-top-color: var(--paper-line-strong); }
-/* git status letters in the terminal: one step darker. term-dim measured 4.47 on the closed
-   drawer (#D8D1C3); #5A4D3F = 5.38 there, 6.46 on the open pane (#EAE4D8) */
-[data-theme="atolye"] .tm { color: #5A4D3F; }
+/* git status letters in the terminal: one step darker than term-dim, in walnut ink. #5E4330 =
+   6.37 on the closed drawer (#E5D7BE), 7.58 on the open pane (#F4EAD7); term-dim is 5.28 / 6.28 */
+[data-theme="atolye"] .tm { color: #5E4330; }

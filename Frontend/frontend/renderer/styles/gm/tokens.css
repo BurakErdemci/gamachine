@@ -851,16 +851,17 @@
   --shell-tex: var(--atolye-grain);
   --shell-tex-size: auto;
 
-  /* paper: warm grey-cream bench top, never white */
-  --paper-bg: #E2DCD0;
-  --paper-bg-2: #D8D1C3;
-  --paper-raised: #EBE6DC;
-  --paper-sunk: #D5CDBE;
-  --paper-line: #C2B8A6;
-  --paper-line-strong: #8A7D69;
-  --ink: #241E18;
-  --ink-dim: #4C4237;
-  --ink-faint: #5F5447;
+  /* paper: warm cream bench top, never white; the grey-cream read as dull (Burak, 2 Oct).
+     Secondary text and labels are walnut inks, lines are brass-tinted. */
+  --paper-bg: #EEE3CE;
+  --paper-bg-2: #E5D7BE;
+  --paper-raised: #F7EFDF;
+  --paper-sunk: #E1D2B7;
+  --paper-line: #D3B990;
+  --paper-line-strong: #9B7444;
+  --ink: #2A1E14;
+  --ink-dim: #553B26;
+  --ink-faint: #75492A;
   /* Pegboard: the tool wall. Faint holes on an 18px pitch, workspace panel only. */
   --panel-tex: radial-gradient(circle at 9px 9px, rgba(58, 44, 30, .10) 0 1.6px, transparent 2.2px);
   --panel-tex-size: 18px 18px;
@@ -908,14 +909,14 @@
 
   /* HUD hooks in workshop terms: meters are a walnut gauge, levels are burnt-in plates */
   --energy: #6B5A47;
-  --energy-off: #CDC4B3;
-  --pip: #4C4237;
-  --pip-off: #CDC4B3;
+  --energy-off: #DFCDAA;
+  --pip: #553B26;
+  --pip-off: #DFCDAA;
   --seg-skew: 0deg;
   --label-rule: #3A3229;
-  --label-rule-paper: #C9BFAD;
+  --label-rule-paper: #D6BC8E;
   --row-mark: #9C8F7B;
-  --tb-rule: #B9AE9A;
+  --tb-rule: #CDB083;
   --lvl-bg: #43382D;
   --lvl-text: #EDE5D8;
   --lvl-dim: #C2B5A2;
@@ -923,16 +924,16 @@
   --badge-ink: #EDE5D8;
   --badge-new-bg: #3A3027;
   --badge-new-ink: #EDE5D8;
-  --tile-rule: #4C4237;
+  --tile-rule: #553B26;
   --tile-new-mark: #4F6B46;
   /* the done tag (signature 2) is paper, like the work-order tag */
-  --toast-bg: #EBE6DC;
-  --toast-line: #8A7D69;
-  --toast-text: #241E18;
-  --toast-kicker: #5F5447;
+  --toast-bg: #F7EFDF;
+  --toast-line: #9B7444;
+  --toast-text: #2A1E14;
+  --toast-kicker: #75492A;
   --toast-xp: #3E5636;
   /* heat map: sage, the colour of work that ran - never brass */
-  --heat-0: #D6CFC2;
+  --heat-0: #E1D2B7;
   --heat-1: #BCC7A9;
   --heat-2: #93AA85;
   --heat-3: #6A8660;
@@ -971,7 +972,7 @@
   --line-w: 1px;
   --card-line-w: 1px;
   --shadow-card: 3px 3px 0 #3A2C20;
-  --shadow-btn: 2px 2px 0 #8A7D69;
+  --shadow-btn: 2px 2px 0 #9B7444;
 
   --dur-fast: 120ms;
   --dur-stamp: 140ms;
@@ -981,7 +982,7 @@
   --stamp-from: 1.12;
   --device: #0F0D0B;
   /* signature-only tokens */
-  --atolye-metal: #9C8F7B;       /* grommet ring: plain steel/brass gone dull */
+  --atolye-metal: #A89070;       /* grommet ring: plain steel/brass gone dull */
   --atolye-hole: rgba(36, 30, 24, .30); /* hard inner edge of a punched hole */
   --atolye-void: #2B231C;        /* the dark gap seen through a punched hole */
 }
@@ -989,18 +990,18 @@
   --code-str: #C3CC95;           /* thread code board (dark wood): olive */
   --code-com: #A09484;
 
-  --ed-bg: #EFEAE0;
-  --ed-head-bg: #E3DCCE;
-  --ed-line: #CFC5B2;
-  --ed-text: #241E18;
-  --ed-dim: #66594A;             /* line numbers, crumb */
+  --ed-bg: #F8F0E1;
+  --ed-head-bg: #EBDDC4;
+  --ed-line: #DCC7A2;
+  --ed-text: #2A1E14;
+  --ed-dim: #6E4E33;             /* line numbers, crumb */
   --ed-kw: #8E4A1E;              /* copper */
   --ed-type: #3D6234;            /* sage ink */
   --ed-fn: #74560F;              /* beeswax, burnt */
   --ed-num: #3F5A88;             /* indigo dye */
-  --ed-attr: #5F5447;
+  --ed-attr: #67503A;
   --ed-str: #5A661B;             /* olive */
-  --ed-com: #63574A;
+  --ed-com: #6B5642;
   --ed-tab-mark: #6B5A47;        /* walnut, not brass */
   --diff-add-bg: #DDE5CF;
   --diff-del-bg: #F1DACB;
@@ -1008,21 +1009,21 @@
   --diff-del-mark: #93391A;
 
   /* preview stage: the bench under a lamp, a chalk grid; the crate is wood */
-  --pv-bg: #EAE4D8;
-  --pv-grid: #D4CAB8;
-  --pv-ink: #5F5447;
+  --pv-bg: #F4EAD7;
+  --pv-grid: #DFCBA8;
+  --pv-ink: #6E4E33;
   --pv-face-1: #CDB48C;
   --pv-face-2: #AD9068;
   --pv-face-3: #8D714D;
   --pv-edge: #3A2C20;
   --pv-shadow: rgba(58, 44, 32, .2);
-  --pv-check-a: #EDE7DC;
-  --pv-check-b: #D9D0C0;
+  --pv-check-a: #F6EEDF;
+  --pv-check-b: #E3D3B8;
 
   /* terminal: the same cream board */
-  --term-bg: #EAE4D8;
-  --term-text: #241E18;
-  --term-dim: #66594A;
+  --term-bg: #F4EAD7;
+  --term-text: #2A1E14;
+  --term-dim: #6E4E33;
   --term-prompt: #3D6234;
   --term-warn: #7E4A0C;
   --tab-mark: #4C4237;
