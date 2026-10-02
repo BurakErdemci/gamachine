@@ -541,14 +541,14 @@
 .tb-actions button:hover:not(:disabled) { color: var(--ink); background: var(--paper-sunk); }
 /* labelled header actions: a bare 14px icon went unseen (owner, 2 Oct 2026) */
 .tb-actions { gap: 6px; }
-.tb-act {
+.tb-actions .tb-act {
   display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; white-space: nowrap;
   font-size: var(--fs-meta); font-weight: 600; color: var(--ink-dim);
   border: 1px solid var(--paper-line-strong); border-radius: var(--radius-sm); background: transparent;
 }
 .tb-actions .tb-act:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-faint); }
-.tb-act[aria-pressed="true"] { color: var(--focus); border-color: var(--focus); }
-.tb-act:disabled { opacity: .45; cursor: not-allowed; }
+.tb-actions .tb-act[aria-pressed="true"] { color: var(--focus); border-color: var(--focus); }
+.tb-actions .tb-act:disabled { opacity: .45; cursor: not-allowed; }
 /* branch tabs keep their own shell-toned bar until they are ported (their text is light) */
 .thread-tabs { position: relative; z-index: 2; flex: none; background: var(--shell-bg); color: var(--shell-text); }
 .thread-tabs:empty { display: none; }
