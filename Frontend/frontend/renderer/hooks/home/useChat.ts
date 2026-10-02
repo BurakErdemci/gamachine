@@ -179,7 +179,7 @@ export const useChat = (
 ) => {
   const onActiveChatModelChangedRef = useRef(onActiveChatModelChanged);
   onActiveChatModelChangedRef.current = onActiveChatModelChanged;
-  const workspaceStampRef = useRef<string | null>(null);
+  const workspaceStampRef = useRef<{ path: string; workspace: string | null } | null>(null);
   const workspacePathRef = useRef(workspacePath);
   workspacePathRef.current = workspacePath;
   useEffect(() => {
@@ -188,8 +188,10 @@ export const useChat = (
     let cancelled = false;
     void backendWorkspacePath(workspacePath).then(workspace => {
       if (!cancelled && workspacePathRef.current === workspacePath) {
-        workspaceStampRef.current = workspace;
+        workspaceStampRef.current = { path: workspacePath, workspace };
       }
+    }).catch(() => {
+      if (!cancelled && workspacePathRef.current === workspacePath) workspaceStampRef.current = null;
     });
     return () => { cancelled = true; };
   }, [workspacePath]);
@@ -729,7 +731,8 @@ export const useChat = (
     if (!user || !API) return null;
     const selection = selectionRef.current;
     try {
-      const workspace = workspaceStampRef.current;
+      const stamp = workspaceStampRef.current;
+      const workspace = stamp?.path === workspacePathRef.current ? stamp.workspace : null;
       const res = await axios.post(`${API}/conversations`, {
         user_id: user.id, title: baslik,
         ...(typeof workspace === 'string' && workspace ? { workspace } : {}),

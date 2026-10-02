@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, renderHook } from '@testing-library/react'
+import { useLayoutEffect } from 'react'
 
 const mocks = vi.hoisted(() => {
   const invoke = vi.fn()
@@ -10,6 +11,7 @@ vi.mock('axios', () => ({ default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), 
 
 import axios from 'axios'
 import { useChat } from '../renderer/hooks/home/useChat'
+import * as workspacePaths from '../renderer/lib/backendWorkspacePath'
 import type { AIConfig } from '../renderer/components/home/types'
 
 const hostPath = ['host', 'project'].join('/')
@@ -37,6 +39,37 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('new chat workspace stamp', () => {
+  it('omits the stamp when the mapping helper rejects', async () => {
+    vi.spyOn(workspacePaths, 'backendWorkspacePath').mockRejectedValueOnce(new Error('mapping helper failed'))
+    const { result } = mount()
+    await act(async () => {})
+    await act(async () => { expect(await result.current.createNewConversation('Rejected')).toBe(42) })
+    expect(axios.post).toHaveBeenCalledExactlyOnceWith('http://backend/conversations',
+      { user_id: 1, title: 'Rejected' })
+  })
+
+  it('omits the old stamp when a layout effect creates a chat before passive effects run', async () => {
+    const mapping = deferredMapping()
+    mocks.invoke.mockImplementation((channel, path) => {
+      if (channel !== 'backend-workspace-path') return Promise.resolve(null)
+      return path === 'old-project' ? Promise.resolve('old-backend') : mapping.promise
+    })
+    let created: Promise<number | null> | undefined
+    const { rerender } = renderHook(({ workspace }) => {
+      const chat = useChat('http://backend', user, config, workspace, vi.fn(), vi.fn(), name => name)
+      useLayoutEffect(() => {
+        if (workspace === 'new-project') created = chat.createNewConversation('Layout')
+      }, [workspace, chat.createNewConversation])
+      return chat
+    }, { initialProps: { workspace: 'old-project' } })
+    await act(async () => {})
+    rerender({ workspace: 'new-project' })
+    await act(async () => { expect(await created).toBe(42) })
+    expect(axios.post).toHaveBeenCalledExactlyOnceWith('http://backend/conversations',
+      { user_id: 1, title: 'Layout' })
+    await act(async () => { mapping.resolve('new-backend') })
+  })
+
   it('sends the backend-mapped workspace and uses the current workspace after rerender', async () => {
     mocks.invoke.mockImplementation(async (channel, path) =>
       channel === 'backend-workspace-path' ? `mapped-${path}` : null)

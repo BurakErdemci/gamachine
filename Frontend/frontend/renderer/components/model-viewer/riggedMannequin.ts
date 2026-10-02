@@ -152,6 +152,7 @@ export const buildRiggedMannequin = (
   instance.traverse(o => { if ((o as THREE.SkinnedMesh).isSkinnedMesh) meshes.push(o as THREE.SkinnedMesh); });
   if (meshes.length === 0) throw new Error('mannequin: no skinned mesh');
   const skeleton = meshes[0].skeleton;
+  const skeletons = new Set(meshes.map(mesh => mesh.skeleton));
   // Per-instance materials: the theme tints them, the cached template's stay put.
   const materials = new Map<THREE.Material, THREE.Material>();
   for (const mesh of meshes) {
@@ -170,128 +171,134 @@ export const buildRiggedMannequin = (
 
   // Retargeting drives the source through its clip; it is put back afterwards.
   const sourceLoaded = snapshot(source);
-  source.updateMatrixWorld(true);
-  const sourceRest = new Map(pairs.map(([t]) => [t, worldQuat(sourceOf(t)!)] as const));
+  try {
+    source.updateMatrixWorld(true);
+    const sourceRest = new Map(pairs.map(([t]) => [t, worldQuat(sourceOf(t)!)] as const));
 
-  // Swing the mannequin onto the source's rest directions, parents first.
-  for (const bone of skeleton.bones) {
-    const aimAt = (AIM[bone.name] ?? []).find(n => target.has(n) && sourceOf(n) && sourceOf(bone.name));
-    if (!aimAt) continue;
-    const s = sourceOf(bone.name)!;
-    const lateral = LATERAL[bone.name];
-    const lateralOk = lateral && lateral.every(n => target.has(n) && sourceOf(n));
-    const tPrimary = worldPos(target.get(aimAt)!).sub(worldPos(bone));
-    const sPrimary = worldPos(sourceOf(aimAt)!).sub(worldPos(s));
-    if (tPrimary.lengthSq() < 1e-12 || sPrimary.lengthSq() < 1e-12) continue;
-    const tLateral = lateralOk ? worldPos(target.get(lateral[0])!).sub(worldPos(target.get(lateral[1])!)) : null;
-    const sLateral = lateralOk ? worldPos(sourceOf(lateral[0])!).sub(worldPos(sourceOf(lateral[1])!)) : null;
-    const swing = frameRotation(tPrimary, tLateral, sPrimary, sLateral);
-    const aligned = swing.multiply(worldQuat(bone));
-    const parentWorld = bone.parent ? worldQuat(bone.parent) : new THREE.Quaternion();
-    bone.quaternion.copy(parentWorld.invert().multiply(aligned));
-    bone.updateMatrixWorld(true);
-  }
+    // Swing the mannequin onto the source's rest directions, parents first.
+    for (const bone of skeleton.bones) {
+      const aimAt = (AIM[bone.name] ?? []).find(n => target.has(n) && sourceOf(n) && sourceOf(bone.name));
+      if (!aimAt) continue;
+      const s = sourceOf(bone.name)!;
+      const lateral = LATERAL[bone.name];
+      const lateralOk = lateral && lateral.every(n => target.has(n) && sourceOf(n));
+      const tPrimary = worldPos(target.get(aimAt)!).sub(worldPos(bone));
+      const sPrimary = worldPos(sourceOf(aimAt)!).sub(worldPos(s));
+      if (tPrimary.lengthSq() < 1e-12 || sPrimary.lengthSq() < 1e-12) continue;
+      const tLateral = lateralOk ? worldPos(target.get(lateral[0])!).sub(worldPos(target.get(lateral[1])!)) : null;
+      const sLateral = lateralOk ? worldPos(sourceOf(lateral[0])!).sub(worldPos(sourceOf(lateral[1])!)) : null;
+      const swing = frameRotation(tPrimary, tLateral, sPrimary, sLateral);
+      const aligned = swing.multiply(worldQuat(bone));
+      const parentWorld = bone.parent ? worldQuat(bone.parent) : new THREE.Quaternion();
+      bone.quaternion.copy(parentWorld.invert().multiply(aligned));
+      bone.updateMatrixWorld(true);
+    }
 
-  const localOffsets: Record<string, THREE.Matrix4> = {};
-  for (const [t] of pairs) {
-    const offset = sourceRest.get(t)!.clone().invert().multiply(worldQuat(target.get(t)!));
-    localOffsets[t] = new THREE.Matrix4().makeRotationFromQuaternion(offset);
-  }
+    const localOffsets: Record<string, THREE.Matrix4> = {};
+    for (const [t] of pairs) {
+      const offset = sourceRest.get(t)!.clone().invert().multiply(worldQuat(target.get(t)!));
+      localOffsets[t] = new THREE.Matrix4().makeRotationFromQuaternion(offset);
+    }
 
-  // Source units per mannequin unit, from hip height over each rig's floor:
-  // Mixamo FBX arrives in centimetres, the mannequin is in metres.
-  const pelvis = target.get('pelvis')!;
-  const hips = sourceOf('pelvis')!;
-  const sourceFloor = lowestUnder(hips);
-  const sourceHipHeight = worldPos(hips).y - sourceFloor;
-  // Both floors are the lowest bone under the hips (toe tips on Mixamo and on
-  // the mannequin), so the ratio compares like with like; the mannequin's
-  // `root` bone sits at the origin and is not part of the body.
-  const targetHipHeight = worldPos(pelvis).y - lowestUnder(pelvis);
-  const toTarget = sourceHipHeight > 1e-6 && targetHipHeight > 1e-6 ? targetHipHeight / sourceHipHeight : 1;
+    // Source units per mannequin unit, from hip height over each rig's floor:
+    // Mixamo FBX arrives in centimetres, the mannequin is in metres.
+    const pelvis = target.get('pelvis')!;
+    const hips = sourceOf('pelvis')!;
+    const sourceFloor = lowestUnder(hips);
+    const sourceHipHeight = worldPos(hips).y - sourceFloor;
+    // Both floors are the lowest bone under the hips (toe tips on Mixamo and on
+    // the mannequin), so the ratio compares like with like; the mannequin's
+    // `root` bone sits at the origin and is not part of the body.
+    const targetHipHeight = worldPos(pelvis).y - lowestUnder(pelvis);
+    const toTarget = sourceHipHeight > 1e-6 && targetHipHeight > 1e-6 ? targetHipHeight / sourceHipHeight : 1;
 
-  let retargeted: THREE.AnimationClip | null = null;
-  if (clip) {
-    // A bare holder rather than a SkeletonHelper: retargetClip only needs
-    // `.skeleton`, and a helper would allocate line geometry nobody frees.
-    const holder = new THREE.Object3D() as THREE.Object3D & { skeleton: THREE.Skeleton };
-    holder.skeleton = new THREE.Skeleton([...src.values()]);
-    const names: Record<string, string> = {};
-    for (const [t, s] of pairs) names[t] = s;
-    const fps = Math.min(60, Math.max(...clip.tracks.map(tr => tr.times.length)) / clip.duration);
-    // `localOffsets` is read by three's retarget() but missing from its typings.
-    const options: SkeletonUtils.RetargetClipOptions & { localOffsets: Record<string, THREE.Matrix4> } = {
-      names,
-      hip: hips.name,
-      scale: toTarget,
-      localOffsets,
-      fps: Number.isFinite(fps) && fps > 0 ? fps : 30,
+    let retargeted: THREE.AnimationClip | null = null;
+    if (clip) {
+      // A bare holder rather than a SkeletonHelper: retargetClip only needs
+      // `.skeleton`, and a helper would allocate line geometry nobody frees.
+      const holder = new THREE.Object3D() as THREE.Object3D & { skeleton: THREE.Skeleton };
+      holder.skeleton = new THREE.Skeleton([...src.values()]);
+      const names: Record<string, string> = {};
+      for (const [t, s] of pairs) names[t] = s;
+      const fps = Math.min(60, Math.max(...clip.tracks.map(tr => tr.times.length)) / clip.duration);
+      // `localOffsets` is read by three's retarget() but missing from its typings.
+      const options: SkeletonUtils.RetargetClipOptions & { localOffsets: Record<string, THREE.Matrix4> } = {
+        names,
+        hip: hips.name,
+        scale: toTarget,
+        localOffsets,
+        fps: Number.isFinite(fps) && fps > 0 ? fps : 30,
+      };
+      const baked = SkeletonUtils.retargetClip(meshes[0], holder, clip, options);
+      // Rebind from `.bones[x]` (which needs a SkinnedMesh root) to plain node
+      // names, so the mixer can run on the whole instance. Only the hips keep
+      // their position track: retargetClip writes no other.
+      const tracks = baked.tracks.map(track => {
+        const match = /^\.bones\[(.+)\]\.(\w+)$/.exec(track.name);
+        if (match) track.name = `${match[1]}.${match[2]}`;
+        return track;
+      });
+      retargeted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+      restore(sourceLoaded);
+    }
+
+    const holderObject = new THREE.Group();
+    holderObject.name = 'mannequin:rigged';
+    holderObject.add(instance);
+    holderObject.scale.setScalar(1 / toTarget);
+
+    // Ground the figure at frame 0. A source touching its floor (within a tenth
+    // of hip height) gets the mannequin's lowest vertex put on the floor, so
+    // soles and a lying body rest on the grid whatever the toe-joint heights;
+    // a source starting in the air keeps its lowest joint's height instead.
+    const mixer = retargeted ? new THREE.AnimationMixer(instance) : null;
+    const sampler = retargeted ? new THREE.AnimationMixer(source) : null;
+    if (mixer && sampler) {
+      mixer.clipAction(retargeted!).play();
+      mixer.update(0);
+      sampler.clipAction(clip!).play();
+      sampler.update(0);
+    }
+    holderObject.updateMatrixWorld(true);
+    source.updateMatrixWorld(true);
+    let lowest: [string, number] | null = null;
+    for (const [t] of pairs) {
+      const y = worldPos(sourceOf(t)!).y;
+      if (!lowest || y < lowest[1]) lowest = [t, y];
+    }
+    if (lowest && lowest[1] - sourceFloor > 0.1 * sourceHipHeight) {
+      holderObject.position.y = lowest[1] - worldPos(target.get(lowest[0])!).y;
+    } else {
+      holderObject.position.y = sourceFloor - new THREE.Box3().setFromObject(holderObject, true).min.y;
+    }
+    holderObject.updateMatrixWorld(true);
+    // The mannequin's sampler is NOT stopped: stopping restores the bones' state
+    // from before it bound, and the caller frames and first paints frame 0.
+    if (sampler) {
+      sampler.stopAllAction();
+      sampler.uncacheRoot(source);
+    }
+    let disposed = false;
+    const handle: MannequinHandle = {
+      meshes,
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        holderObject.removeFromParent();
+        // Geometry is shared with the cached template and is not freed here.
+        for (const material of materials.values()) material.dispose();
+        for (const skeleton of skeletons) skeleton.dispose();
+      },
     };
-    const baked = SkeletonUtils.retargetClip(meshes[0], holder, clip, options);
-    // Rebind from `.bones[x]` (which needs a SkinnedMesh root) to plain node
-    // names, so the mixer can run on the whole instance. Only the hips keep
-    // their position track: retargetClip writes no other.
-    const tracks = baked.tracks.map(track => {
-      const match = /^\.bones\[(.+)\]\.(\w+)$/.exec(track.name);
-      if (match) track.name = `${match[1]}.${match[2]}`;
-      return track;
-    });
-    retargeted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+    return { object: holderObject, clip: retargeted, hips: pelvis, handle };
+  } catch (error) {
+    for (const material of materials.values()) material.dispose();
+    for (const skeleton of skeletons) skeleton.dispose();
+    throw error;
+  } finally {
     restore(sourceLoaded);
+    source.updateMatrixWorld(true);
   }
-
-  const holderObject = new THREE.Group();
-  holderObject.name = 'mannequin:rigged';
-  holderObject.add(instance);
-  holderObject.scale.setScalar(1 / toTarget);
-
-  // Ground the figure at frame 0. A source touching its floor (within a tenth
-  // of hip height) gets the mannequin's lowest vertex put on the floor, so
-  // soles and a lying body rest on the grid whatever the toe-joint heights;
-  // a source starting in the air keeps its lowest joint's height instead.
-  const mixer = retargeted ? new THREE.AnimationMixer(instance) : null;
-  const sampler = retargeted ? new THREE.AnimationMixer(source) : null;
-  if (mixer && sampler) {
-    mixer.clipAction(retargeted!).play();
-    mixer.update(0);
-    sampler.clipAction(clip!).play();
-    sampler.update(0);
-  }
-  holderObject.updateMatrixWorld(true);
-  source.updateMatrixWorld(true);
-  let lowest: [string, number] | null = null;
-  for (const [t] of pairs) {
-    const y = worldPos(sourceOf(t)!).y;
-    if (!lowest || y < lowest[1]) lowest = [t, y];
-  }
-  if (lowest && lowest[1] - sourceFloor > 0.1 * sourceHipHeight) {
-    holderObject.position.y = lowest[1] - worldPos(target.get(lowest[0])!).y;
-  } else {
-    holderObject.position.y = sourceFloor - new THREE.Box3().setFromObject(holderObject, true).min.y;
-  }
-  holderObject.updateMatrixWorld(true);
-  // The mannequin's sampler is NOT stopped: stopping restores the bones' state
-  // from before it bound, and the caller frames and first paints frame 0.
-  if (sampler) {
-    sampler.stopAllAction();
-    sampler.uncacheRoot(source);
-  }
-  restore(sourceLoaded);
-  source.updateMatrixWorld(true);
-
-  let disposed = false;
-  const handle: MannequinHandle = {
-    meshes,
-    dispose: () => {
-      if (disposed) return;
-      disposed = true;
-      holderObject.removeFromParent();
-      // Geometry is shared with the cached template and is not freed here.
-      for (const material of materials.values()) material.dispose();
-      skeleton.dispose();
-    },
-  };
-  return { object: holderObject, clip: retargeted, hips: pelvis, handle };
 };
 
 type Transform = [THREE.Vector3, THREE.Quaternion, THREE.Vector3];

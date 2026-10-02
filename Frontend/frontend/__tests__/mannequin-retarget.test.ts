@@ -4,10 +4,18 @@
  * centimetres, built on the mannequin's own joint positions so a correct
  * retarget lands the mannequin's hands and feet where the source's are.
  */
-import { describe, it, expect, beforeAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import * as THREE from 'three'
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js'
+
+vi.mock('three/examples/jsm/utils/SkeletonUtils.js', async importOriginal => {
+  const actual = await importOriginal<typeof SkeletonUtils>()
+  return { ...actual, clone: vi.fn(actual.clone), retargetClip: vi.fn(actual.retargetClip) }
+})
+
+afterEach(() => { vi.restoreAllMocks() })
 
 import { detectHumanoidRig, rigBonesOf } from '../renderer/components/model-viewer/humanoidRig'
 import { buildRiggedMannequin, MANNEQUIN_JOINT_MATERIAL, parseMannequinTemplate } from '../renderer/components/model-viewer/riggedMannequin'
@@ -81,6 +89,96 @@ const worldOf = (o: THREE.Object3D) => new THREE.Vector3().setFromMatrixPosition
 describe('buildRiggedMannequin', () => {
   let template: THREE.Object3D
   beforeAll(async () => { template = await parseMannequinTemplate(glb()) })
+
+  it.each(['retarget', 'sampling'])('restores the source and frees cloned resources when %s throws', step => {
+    const source = syntheticMixamo(template)
+    const before = new Map<THREE.Object3D, number[]>()
+    source.traverse(o => before.set(o, [...o.position.toArray(), ...o.quaternion.toArray(), ...o.scale.toArray(), ...o.matrixWorld.elements]))
+    const failure = new Error(`${step} failed`)
+    const materials: THREE.Material[] = []
+    const skeletons: THREE.Skeleton[] = []
+    const geometryDisposals: ReturnType<typeof vi.spyOn>[] = []
+    const clone = SkeletonUtils.clone
+    const realClone = vi.mocked(clone).getMockImplementation()!
+    vi.mocked(clone).mockImplementationOnce(object => {
+      const result = realClone(object)
+      result.traverse(o => {
+        if ((o as THREE.SkinnedMesh).isSkinnedMesh) {
+          const mesh = o as THREE.SkinnedMesh
+          skeletons.push(mesh.skeleton)
+          geometryDisposals.push(vi.spyOn(mesh.geometry, 'dispose'))
+        }
+      })
+      return result
+    })
+    const materialDispose = vi.spyOn(THREE.Material.prototype, 'dispose').mockImplementation(function (this: THREE.Material) { materials.push(this) })
+    const skeletonDispose = vi.spyOn(THREE.Skeleton.prototype, 'dispose')
+    if (step === 'retarget') {
+      vi.mocked(SkeletonUtils.retargetClip).mockImplementationOnce(() => {
+        source.getObjectByName(`${PREFIX}Hips`)!.position.y += 100
+        source.getObjectByName(`${PREFIX}LeftArm`)!.quaternion.set(0, 1, 0, 0)
+        source.getObjectByName(`${PREFIX}RightLeg`)!.scale.setScalar(2)
+        source.updateMatrixWorld(true)
+        throw failure
+      })
+    } else {
+      const update = THREE.AnimationMixer.prototype.update
+      vi.spyOn(THREE.AnimationMixer.prototype, 'update').mockImplementation(function (this: THREE.AnimationMixer, delta) {
+        const result = update.call(this, delta)
+        if (this.getRoot() === source && delta === 0) {
+          source.getObjectByName(`${PREFIX}Hips`)!.position.y += 100
+          source.updateMatrixWorld(true)
+          throw failure
+        }
+        return result
+      })
+    }
+    let thrown: unknown
+    try { buildRiggedMannequin(template, source, detectHumanoidRig(rigBonesOf(source))!, clip()) }
+    catch (error) { thrown = error }
+    expect(thrown).toBe(failure)
+    source.traverse(o => expect([...o.position.toArray(), ...o.quaternion.toArray(), ...o.scale.toArray(), ...o.matrixWorld.elements]).toEqual(before.get(o)))
+    expect(materialDispose).toHaveBeenCalledTimes(2)
+    const sharedMaterials: THREE.Material[] = []
+    template.traverse(o => { if ((o as THREE.Mesh).isMesh) sharedMaterials.push((o as THREE.Mesh).material as THREE.Material) })
+    expect(materials.every(m => !sharedMaterials.includes(m))).toBe(true)
+    expect(new Set(skeletons).size).toBe(2)
+    for (const skeleton of new Set(skeletons)) expect(skeletonDispose.mock.instances.filter(s => s === skeleton)).toHaveLength(1)
+    for (const disposal of geometryDisposals) expect(disposal).not.toHaveBeenCalled()
+    template.traverse(o => {
+      if ((o as THREE.SkinnedMesh).isSkinnedMesh) expect(skeletonDispose.mock.instances).not.toContain((o as THREE.SkinnedMesh).skeleton)
+    })
+  })
+
+  it('disposes both distinct cloned skeletons and their bone textures exactly once', () => {
+    const source = syntheticMixamo(template)
+    const rigged = buildRiggedMannequin(template, source, detectHumanoidRig(rigBonesOf(source))!, clip())
+    const skeletons = [...new Set(rigged.handle.meshes.map(m => (m as THREE.SkinnedMesh).skeleton))]
+    expect(skeletons).toHaveLength(2)
+    const disposals = skeletons.map(s => { s.computeBoneTexture(); return vi.spyOn(s.boneTexture!, 'dispose') })
+    const geometryDisposals = rigged.handle.meshes.map(m => vi.spyOn(m.geometry, 'dispose'))
+    rigged.handle.dispose()
+    rigged.handle.dispose()
+    for (const disposal of disposals) expect(disposal).toHaveBeenCalledTimes(1)
+    for (const disposal of geometryDisposals) expect(disposal).not.toHaveBeenCalled()
+  })
+
+  it('deduplicates a skeleton shared by the cloned meshes', () => {
+    const realClone = vi.mocked(SkeletonUtils.clone).getMockImplementation()!
+    vi.mocked(SkeletonUtils.clone).mockImplementationOnce(object => {
+      const result = realClone(object)
+      const meshes: THREE.SkinnedMesh[] = []
+      result.traverse(o => { if ((o as THREE.SkinnedMesh).isSkinnedMesh) meshes.push(o as THREE.SkinnedMesh) })
+      expect(meshes).toHaveLength(2)
+      meshes[1].skeleton = meshes[0].skeleton
+      return result
+    })
+    const source = syntheticMixamo(template)
+    const rigged = buildRiggedMannequin(template, source, detectHumanoidRig(rigBonesOf(source))!, null)
+    const dispose = vi.spyOn((rigged.handle.meshes[0] as THREE.SkinnedMesh).skeleton, 'dispose')
+    rigged.handle.dispose()
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
 
   it('rebakes the clip onto mannequin bones only, with a position track on the hips alone', () => {
     const source = syntheticMixamo(template)
@@ -184,6 +282,28 @@ describe('mountParsedModel with the bundled mannequin', () => {
     expect(stage.mannequin!.meshes.length).toBeGreaterThan(0)
     expect(stage.mannequin!.meshes.some(m => (m as THREE.SkinnedMesh).isSkinnedMesh)).toBe(false)
     expect(stage.playback!.duration).toBeCloseTo(1, 5)
+  })
+
+  it('removes and disposes a mounted rigged figure when the bounds step throws', () => {
+    const stage = fakeStage()
+    const { parsed, bounds } = parsedSource()
+    const map = detectHumanoidRig(rigBonesOf(parsed.object))!
+    let dispose: ReturnType<typeof vi.spyOn> | undefined
+    const actions = vi.spyOn(THREE.AnimationMixer.prototype, 'clipAction')
+    vi.spyOn(bounds.box, 'clone').mockImplementationOnce(() => {
+      expect(stage.content.getObjectByName('mannequin:rigged')).toBeDefined()
+      dispose = vi.spyOn(stage.mannequin!, 'dispose')
+      throw new Error('bounds failed')
+    })
+    mountParsedModel(stage, parsed, bounds, { template, map })
+    expect(stage.content.getObjectByName('mannequin:rigged')).toBeUndefined()
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(stage.mannequin!.meshes.length).toBeGreaterThan(0)
+    expect(stage.mannequin!.meshes.every(m => !(m as THREE.SkinnedMesh).isSkinnedMesh)).toBe(true)
+    expect(stage.playback!.duration).toBeCloseTo(1, 5)
+    expect((actions.mock.instances.at(-1) as THREE.AnimationMixer).getRoot()).toBe(parsed.object)
+    expect(actions.mock.calls.at(-1)![0]).toBe(parsed.clips[0])
+    clearContent(stage)
   })
 })
 

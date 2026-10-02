@@ -77,6 +77,11 @@ def test_claude_reset_rejects_trailing_garbage(text):
     assert ul._claude_reset(text, NOW) is None
 
 
+@pytest.mark.parametrize("text", ["Oct 3 at 1am (UTC(foo)", "Oct 3, 1am ((x))"])
+def test_claude_reset_rejects_nested_or_unbalanced_zone(text):
+    assert ul._claude_reset(text, NOW) is None
+
+
 def test_claude_rollover_parse_miss_and_recent_past():
     text = "Current session: 1% used · resets Jan 1, 12am (Local)"
     w = ul.parse_claude_usage(text, now=datetime(2026, 12, 31))["windows"][0]

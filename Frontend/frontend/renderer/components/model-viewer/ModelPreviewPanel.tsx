@@ -18,7 +18,7 @@ import {
 import { createContactShadow, tintContactShadows } from './contactShadow';
 import { detectHumanoidRig, rigBonesOf, type HumanoidMap } from './humanoidRig';
 import { buildMannequin, exceedsMannequinBudget, type MannequinHandle } from './mannequin';
-import { buildRiggedMannequin, loadMannequinTemplate, MANNEQUIN_JOINT_MATERIAL } from './riggedMannequin';
+import { buildRiggedMannequin, loadMannequinTemplate, MANNEQUIN_JOINT_MATERIAL, type RiggedMannequin } from './riggedMannequin';
 import { createPlayback, type Playback } from './playback';
 import { PlaybackControls } from './PlaybackControls';
 import { DEFAULT_SPEED, timeAtFraction, type Speed } from './timeline';
@@ -355,17 +355,22 @@ export const mountParsedModel = (
   let box = bounds.box;
   let follow: THREE.Object3D | null = null;
   if (bounds.skeleton && humanoid) {
+    let rigged: RiggedMannequin | null = null;
     try {
-      const rigged = buildRiggedMannequin(humanoid.template, parsed.object, humanoid.map, clip);
+      rigged = buildRiggedMannequin(humanoid.template, parsed.object, humanoid.map, clip);
       stage.mannequin = rigged.handle;
       stage.content.add(rigged.object);
-      playRoot = rigged.object;
-      clip = rigged.clip;
-      follow = rigged.hips;
       // The mannequin keeps the source's hip height, not its overall size,
       // so its own frame-0 silhouette joins the framing.
       box = bounds.box.clone().union(new THREE.Box3().setFromObject(rigged.object, true));
+      playRoot = rigged.object;
+      clip = rigged.clip;
+      follow = rigged.hips;
     } catch {
+      if (rigged) {
+        stage.content.remove(rigged.object);
+        rigged.handle.dispose();
+      }
       stage.mannequin = null;
     }
   }
