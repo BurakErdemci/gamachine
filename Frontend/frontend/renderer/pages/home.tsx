@@ -874,9 +874,9 @@ export default function Home() {
             awaiting={cardWaiting}
             actions={(
               <>
-                <SideQuestionButton convId={chat.activeConvId} active={side.isOpen} onOpen={toggleSideChat} />
+                <SideQuestionButton convId={chat.activeConvId} active={side.isOpen} onOpen={toggleSideChat} labelled />
                 {!familyHasBranches && (
-                  <BranchButton sourceId={chat.activeConvId} blocked={branchBlocked} onBranch={chat.branchConversation} />
+                  <BranchButton sourceId={chat.activeConvId} blocked={branchBlocked} onBranch={chat.branchConversation} labelled />
                 )}
               </>
             )}

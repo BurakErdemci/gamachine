@@ -9,13 +9,15 @@ interface SideQuestionButtonProps {
   convId: number | null;
   active: boolean;
   onOpen: (convId: number) => void;
+  /** The thread header shows the name next to the icon: a bare 14px icon went unseen (owner, 2 Oct 2026). */
+  labelled?: boolean;
 }
 
 /**
  * Opens the side question panel. Not gated on the branch rules: asking while
  * the main chat's turn runs is the point.
  */
-export const SideQuestionButton: React.FC<SideQuestionButtonProps> = ({ convId, active, onOpen }) => {
+export const SideQuestionButton: React.FC<SideQuestionButtonProps> = ({ convId, active, onOpen, labelled = false }) => {
   const { t } = useLang();
   if (convId == null) return null;
   return (
@@ -26,9 +28,10 @@ export const SideQuestionButton: React.FC<SideQuestionButtonProps> = ({ convId, 
       aria-label={t('side.open')}
       aria-pressed={active}
       onClick={() => onOpen(convId)}
-      className={`p-1 rounded transition-all shrink-0 hover:bg-[color:var(--paper-sunk)] ${active ? 'text-[color:var(--focus)] bg-[color:color-mix(in_srgb,var(--focus)_14%,transparent)]' : 'text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)]'}`}
+      className={labelled ? 'tb-act' : `p-1 rounded transition-all shrink-0 hover:bg-[color:var(--paper-sunk)] ${active ? 'text-[color:var(--focus)] bg-[color:color-mix(in_srgb,var(--focus)_14%,transparent)]' : 'text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)]'}`}
     >
-      <MessageCircleQuestion size={14} />
+      <MessageCircleQuestion size={14} aria-hidden="true" />
+      {labelled && <span>{t('side.open')}</span>}
     </button>
   );
 };

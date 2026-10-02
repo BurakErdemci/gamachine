@@ -49,10 +49,12 @@ interface BranchButtonProps {
   /** The source chat is mid-turn or holds an open card. */
   blocked: boolean;
   onBranch: (sourceId: number) => Promise<unknown>;
+  /** The thread header shows the name next to the icon: a bare 14px icon went unseen (owner, 2 Oct 2026). */
+  labelled?: boolean;
 }
 
 /** "Branch from now" on the chat on screen. */
-export const BranchButton: React.FC<BranchButtonProps> = ({ sourceId, blocked, onBranch }) => {
+export const BranchButton: React.FC<BranchButtonProps> = ({ sourceId, blocked, onBranch, labelled = false }) => {
   const { t } = useLang();
   const [pending, setPending] = useState(false);
   if (sourceId == null) return null;
@@ -68,9 +70,10 @@ export const BranchButton: React.FC<BranchButtonProps> = ({ sourceId, blocked, o
         setPending(true);
         try { await onBranch(sourceId); } finally { setPending(false); }
       }}
-      className="p-1 rounded transition-all shrink-0 text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)] hover:bg-[color:var(--paper-sunk)] disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[color:var(--ink-faint)] disabled:cursor-not-allowed"
+      className={labelled ? 'tb-act' : 'p-1 rounded transition-all shrink-0 text-[color:var(--ink-faint)] hover:text-[color:var(--ink-dim)] hover:bg-[color:var(--paper-sunk)] disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[color:var(--ink-faint)] disabled:cursor-not-allowed'}
     >
-      <GitBranchPlus size={14} />
+      <GitBranchPlus size={14} aria-hidden="true" />
+      {labelled && <span>{t('branch.short')}</span>}
     </button>
   );
 };
