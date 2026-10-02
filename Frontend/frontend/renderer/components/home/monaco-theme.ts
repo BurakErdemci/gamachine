@@ -99,6 +99,17 @@ export const monacoThemeFromTokens = (tk: EditorTokens): Monaco.editor.IStandalo
       'editorHoverWidget.border': tk['--ed-line'],
       'editorSuggestWidget.background': tk['--ed-head-bg'],
       'editorSuggestWidget.border': tk['--ed-line'],
+      // Monaco colours bracket pairs with its own VS Code palette (red / gold / blue) unless told
+      // otherwise; the mockup draws brackets in plain ink, so every level is the editor text.
+      'editorBracketHighlight.foreground1': tk['--ed-text'],
+      'editorBracketHighlight.foreground2': tk['--ed-text'],
+      'editorBracketHighlight.foreground3': tk['--ed-text'],
+      'editorBracketHighlight.foreground4': tk['--ed-text'],
+      'editorBracketHighlight.foreground5': tk['--ed-text'],
+      'editorBracketHighlight.foreground6': tk['--ed-text'],
+      'editorBracketHighlight.unexpectedBracket.foreground': tk['--diff-del-mark'],
+      'editorBracketMatch.background': `${tk['--ed-kw']}26`,
+      'editorBracketMatch.border': tk['--ed-line'],
       'scrollbarSlider.background': `${tk['--ed-dim']}40`,
       'scrollbarSlider.hoverBackground': `${tk['--ed-dim']}66`,
       'diffEditor.insertedLineBackground': tk['--diff-add-bg'],

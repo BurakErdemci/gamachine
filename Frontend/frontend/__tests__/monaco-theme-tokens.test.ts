@@ -38,6 +38,9 @@ describe('Monaco theme from tokens', () => {
     expect(th.colors['editorLineNumber.foreground']).toBe('#59636f')
     expect(th.colors['diffEditor.insertedLineBackground']).toBe('#dce6d8')
     expect(th.rules.find(r => r.token === 'keyword')?.foreground).toBe('2c5b8a')
+    // bracket pairs in the editor ink, not Monaco's own red / gold / blue
+    expect(th.colors['editorBracketHighlight.foreground1']).toBe('#18212c')
+    expect(th.colors['editorBracketHighlight.foreground2']).toBe('#18212c')
   })
 
   it('redefines the theme when the appearance changes', async () => {
