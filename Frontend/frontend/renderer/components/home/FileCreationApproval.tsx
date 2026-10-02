@@ -141,6 +141,7 @@ export const FileCreationApproval = ({
   // THESE handlers (apply / skip the file on screen), through a ref so the strip always calls
   // the current closure; the decision logic is not copied anywhere (lib/pendingChange.ts).
   const decideRef = useRef({ accept: () => {}, reject: () => {} });
+  const withdraw = useRef<(() => void) | null>(null);
   decideRef.current = {
     accept: () => { void handleAccept(currentIdx); },
     reject: () => handleSkip(currentIdx),
@@ -148,7 +149,7 @@ export const FileCreationApproval = ({
   useEffect(() => {
     const file = files[currentIdx];
     if (allDone || !file) return;
-    return publishPendingChange({
+    withdraw.current = publishPendingChange({
       id: `create:${currentIdx}:${file.suggestedPath}`,
       name: file.name,
       path: file.suggestedPath,
@@ -159,6 +160,7 @@ export const FileCreationApproval = ({
       busy: processing,
     });
   }, [currentIdx, allDone, files, processing]);
+  useEffect(() => () => withdraw.current?.(), [currentIdx, allDone, files]);
 
   const handleAcceptAll = async () => {
     if (processing) return;

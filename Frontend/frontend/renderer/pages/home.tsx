@@ -7,6 +7,7 @@ import { LangContext, aktifDilAyarla, ceviriUygula, type Lang, type TValues } fr
 import { sohbetKilitliMi } from '../lib/providerGate';
 import { getUnsavedEditorContext } from '../lib/editor-context';
 import { contentPane } from '../lib/contentPane';
+import { displayName } from '../lib/displayName';
 import { routeForFile } from '../components/model-viewer/extensions';
 
 import { Sidebar } from '../components/home/Sidebar';
@@ -677,7 +678,7 @@ export default function Home() {
       data-side={isSidebarOpen ? undefined : 'closed'}
     >
       <Head>
-        <title>{`Gamachine | ${auth.user?.name || t('home.signIn')}`}</title>
+        <title>{displayName(auth.user?.name) ? `Gamachine | ${displayName(auth.user?.name)}` : 'Gamachine'}</title>
         <style>{globalStyles}</style>
       </Head>
 

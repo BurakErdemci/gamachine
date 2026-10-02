@@ -37,6 +37,7 @@ export const DiffViewer = ({ diffData, filename, filePath, applied, onAccept, on
   const accepting = useRef(false);
   const [busy, setBusy] = useState(false);
   const stopFontWatch = useRef<(() => void) | null>(null);
+  const withdraw = useRef<(() => void) | null>(null);
   useEffect(() => () => stopFontWatch.current?.(), []);
   const accept = useCallback(async () => {
     // The strip and card can call before React has painted the disabled state.
@@ -56,7 +57,7 @@ export const DiffViewer = ({ diffData, filename, filePath, applied, onAccept, on
   }, []);
   useEffect(() => {
     if (applied) return;
-    return publishPendingChange({
+    withdraw.current = publishPendingChange({
       id: `fix:${id}`,
       name: filename || t('diff.fileFallback'),
       path: filePath ?? undefined,
@@ -67,6 +68,8 @@ export const DiffViewer = ({ diffData, filename, filePath, applied, onAccept, on
       busy,
     });
   }, [applied, diffData, filename, filePath, id, t, accept, reject, busy]);
+  // Busy updates replace the entry without withdrawing its position.
+  useEffect(() => () => withdraw.current?.(), [applied, id]);
   // The fix card on the chat's code plate (thread.css `.code`, `--code-*`): head with the file and
   // the old / new legend, the explanation and the Unity hint as lines under it, Monaco's diff, then
   // the decision row with the shared `.btn`s. Applied, it folds to one record line.

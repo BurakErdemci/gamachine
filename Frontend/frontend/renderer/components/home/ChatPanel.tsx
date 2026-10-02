@@ -299,21 +299,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       onAccept={async (fixedCode) => {
         const isOpenTarget = () => currentEditor.current.path === target.path
           && currentEditor.current.workspace === target.workspace;
-        if (isOpenTarget()) setCode(fixedCode);
         if (!ipc || !target.path || !target.workspace) {
-          // Hiçbir yazım denenmedi: diskte değişen bir şey yok.
-          // Eskiden burada da "✅ Dosya güncellendi" basılıyordu.
-          setPendingFix((prev: any) => prev ? { ...prev, applied: true } : null);
-          showToast(t('chat.diffApplied'), 'info');
+          showToast(t('chat.fixNoTarget'), 'warning');
           return;
         }
+        if (isOpenTarget()) setCode(fixedCode);
         const res = await ipc.invoke('write-file', target.path, fixedCode, target.workspace);
         if (!res?.success) {
           showToast(writeErrorText(target.path.split(/[\\/]/).pop() || target.path, res), 'error');
           return;
         }
         if (isOpenTarget()) {
-          setCode(fixedCode);
           setOriginalCode?.(fixedCode);
         }
         setPendingFix((prev: any) => prev ? { ...prev, applied: true } : null);

@@ -154,18 +154,27 @@ const ConnectionsPane: React.FC<{ apiUrl?: string }> = ({ apiUrl }) => {
   const { t } = useLang();
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [mcpOk, setMcpOk] = useState<boolean | null>(null);
+  const alive = useRef(false);
   const check = useCallback(async () => {
+    if (!alive.current) return;
     try {
       await axios.get(`${apiUrl}/health`);
+      if (!alive.current) return;
       setBackendOk(true);
-    } catch { setBackendOk(false); }
+    } catch { if (!alive.current) return; setBackendOk(false); }
+    if (!alive.current) return;
     try {
       await axios.get('http://localhost:8080/health', { timeout: 1000 });
+      if (!alive.current) return;
       setMcpOk(true);
-    } catch { setMcpOk(false); }
+    } catch { if (alive.current) setMcpOk(false); }
   }, [apiUrl]);
   // The historical PortsTab checks on mount and on refresh, without an interval.
-  useEffect(() => { void check(); }, [check]);
+  useEffect(() => {
+    alive.current = true;
+    void check();
+    return () => { alive.current = false; };
+  }, [check]);
   const ports = [
     { name: 'Backend API', port: apiUrl ? new URL(apiUrl).port || '8000' : '8000', ok: backendOk, desc: 'FastAPI · Gamachine' },
     { name: 'Unity MCP', port: '8080', ok: mcpOk, desc: t('terminal.unityMcpDesc') },

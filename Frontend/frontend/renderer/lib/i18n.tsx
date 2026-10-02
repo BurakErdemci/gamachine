@@ -376,6 +376,7 @@ export const tr = {
   'side.quoteAnswer': 'Cevap',
   'chat.renameFailed': 'Sohbet yeniden adlandırılamadı.',
   'chat.diffApplied': 'Değişiklik editöre uygulandı — dosyaya yazılmadı',
+  'chat.fixNoTarget': 'Bu düzeltmenin yazılacağı dosya belli değil; önce dosyayı aç.',
   'chat.fileUpdated': '✅ Dosya güncellendi',
   'chat.writeFailed': '{ad} yazılamadı: {hata}',
   // Canlı aktivite göstergesi
@@ -1288,6 +1289,7 @@ export const en: Record<keyof typeof tr, string> = {
   'side.quoteAnswer': 'Answer',
   'chat.renameFailed': 'Could not rename the chat.',
   'chat.diffApplied': 'Change applied in the editor — not written to disk',
+  'chat.fixNoTarget': 'This fix has no target file; open the file first.',
   'chat.fileUpdated': '✅ File updated',
   'chat.writeFailed': 'Could not write {ad}: {hata}',
   // Live activity indicator

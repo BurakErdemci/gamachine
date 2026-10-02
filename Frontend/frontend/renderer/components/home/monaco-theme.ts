@@ -129,10 +129,14 @@ const applyTheme = (monaco: typeof Monaco) => {
 
 export const codeFontFamily = () => readToken('--font-mono') || "'JetBrains Mono', 'Consolas', monospace";
 const fontEditors = new Set<{ updateOptions: (options: { fontFamily: string }) => void }>();
-export const watchEditorFont = (editor: { updateOptions: (options: { fontFamily: string }) => void }) => {
+export const watchEditorFont = (editor: {
+  updateOptions: (options: { fontFamily: string }) => void;
+  onDidDispose?: (listener: () => void) => { dispose: () => void };
+}) => {
   fontEditors.add(editor);
   editor.updateOptions({ fontFamily: codeFontFamily() });
-  return () => { fontEditors.delete(editor); };
+  const disposed = editor.onDidDispose?.(() => { fontEditors.delete(editor); });
+  return () => { fontEditors.delete(editor); disposed?.dispose(); };
 };
 
 // Monaco's theme is global (one per page), so one watcher is enough however many editors mount.
@@ -149,7 +153,10 @@ export const defineUnityTheme = (monaco: typeof Monaco) => {
   _themeWatched = true;
   onThemeChange(() => {
     applyTheme(monaco);
-    for (const editor of fontEditors) editor.updateOptions({ fontFamily: codeFontFamily() });
+    for (const editor of fontEditors) {
+      // A disposed or broken editor must not prevent other editors from updating.
+      try { editor.updateOptions({ fontFamily: codeFontFamily() }); } catch {}
+    }
     monaco.editor.remeasureFonts();
   });
 };

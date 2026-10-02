@@ -32,11 +32,13 @@ const emit = () => listeners.forEach(l => l());
 
 /**
  * Publish (or replace, by id) a pending change; returns the withdraw function. The most recent
- * publication is the one shown: two cards waiting at once is possible (an unityMCP gate next to
+ * new entry is the one shown: two cards waiting at once is possible (an unityMCP gate next to
  * a chat card) and the newer one is the one the user was just asked about.
  */
 export function publishPendingChange(change: PendingChange): () => void {
-  entries = [...entries.filter(e => e.id !== change.id), change];
+  const index = entries.findIndex(e => e.id === change.id);
+  if (index < 0) entries = [...entries, change];
+  else entries = entries.map((entry, i) => i === index ? change : entry);
   emit();
   return () => {
     const before = entries.length;
