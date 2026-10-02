@@ -20,6 +20,9 @@
   --set-lamp-off: var(--paper-line-strong);
 }
 [data-theme="sade"] .gm-set { --set-warn: var(--sade-err); --set-warn-text: var(--sade-err-text); }
+/* Arena and Sade lay the paper dark: native controls (checkbox, select popup, scrollbar) follow,
+   otherwise the unchecked checkbox renders as a white square on the dark card. */
+[data-theme="arena"] .gm-set, [data-theme="sade"] .gm-set { color-scheme: dark; }
 
 /* ---------- frame ---------- */
 .gm-set-scrim {
