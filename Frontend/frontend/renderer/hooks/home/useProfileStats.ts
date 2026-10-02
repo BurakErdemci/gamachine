@@ -34,31 +34,41 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
   const latestRef = useRef<ProfileStats | null>(null);
   const newIds = useRef(new Set<string>());
   const seq = useRef(0);
+  // Bumped only by a reset: answers issued before it must not write session-new ids, but a
+  // merely superseded answer still may (guide audit, 2 Oct 2026).
+  const epoch = useRef(0);
 
   const load = useCallback(async (r: ProfileRange) => {
     if (!api || !enabled) return;
     const mine = ++seq.current;
+    const myEpoch = epoch.current;
     setLoading(true);
     try {
       const res = await http.get(`${api}/profile/stats`, {
         params: { range: r },
         headers: { 'X-Session-Token': token ?? '' },
       });
-      // Guard every cache and session-new write, including responses issued before reset
-      // (profile screen audit, 2 Oct 2026).
-      if (mine !== seq.current) return;
       const stats = normalizeProfileStats(res?.data);
       if (!stats) throw new Error('not a profile answer');
+      // The backend reports an unlock as `new` exactly once, so a successful answer that a newer
+      // request superseded (range switched mid-refresh) carries the only announcement: record it
+      // before the latest-request guard below. Answers issued before a reset stay dropped
+      // (guide audit, 2 Oct 2026).
+      if (myEpoch === epoch.current) {
+        const fresh = ACHIEVEMENT_IDS.filter(id => !newIds.current.has(id)
+          && stats.achievements.some(a => a.id === id && a.new && a.unlocked === true));
+        if (fresh.length) setUnlocked({ seq: mine, ids: fresh });
+        for (const a of stats.achievements) if (a.new) newIds.current.add(a.id);
+      }
+      // Guard every cache write, including responses issued before reset
+      // (profile screen audit, 2 Oct 2026).
+      if (mine !== seq.current) return;
       // Compare accepted answers, never a partial ledger or the first answer after reset
       // (achievement band audit, 2 Oct 2026).
       const previous = latestRef.current;
       if (previous && !previous.xp_partial && !stats.xp_partial && stats.xp > previous.xp) {
         setGain({ seq: mine, xp: stats.xp - previous.xp });
       }
-      const ids = ACHIEVEMENT_IDS.filter(id => !newIds.current.has(id)
-        && stats.achievements.some(a => a.id === id && a.new && a.unlocked === true));
-      if (ids.length) setUnlocked({ seq: mine, ids });
-      for (const a of stats.achievements) if (a.new) newIds.current.add(a.id);
       const marked: ProfileStats = {
         ...stats,
         achievements: stats.achievements.map(a => (newIds.current.has(a.id) && a.unlocked ? { ...a, new: true } : a)),
@@ -85,6 +95,7 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
   /** After a reset every cached range is stale: drop them and read the one on screen. */
   const afterReset = useCallback(async () => {
     ++seq.current;
+    ++epoch.current;
     newIds.current.clear();
     latestRef.current = null;
     setGain(null);

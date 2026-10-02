@@ -8,6 +8,8 @@ interface Band {
   achievement?: AchievementId;
   xp: number | null;
   gainAfter: number;
+  /** Highest gain seq already added into `xp`, so one gain is never counted twice. */
+  gainSeen: number;
 }
 
 /** Achievements replace turns; queued achievements each keep their own lifetime
@@ -29,10 +31,10 @@ export function useAchievementQueue(
     seenTurn.current = turn?.seq ?? null;
     seenUnlocked.current = unlocked?.seq ?? null;
     const additions: Band[] = newUnlock ? unlocked.ids.map(achievement => ({
-      seq: ++displaySeq.current, achievement, xp: null, gainAfter: 0,
+      seq: ++displaySeq.current, achievement, xp: null, gainAfter: 0, gainSeen: 0,
     })) : [];
     const turnBand: Band | null = newTurn ? {
-      seq: ++displaySeq.current, title, xp: null, gainAfter: gain?.seq ?? 0,
+      seq: ++displaySeq.current, title, xp: null, gainAfter: gain?.seq ?? 0, gainSeen: gain?.seq ?? 0,
     } : null;
     setBands(previous => {
       let next = previous;
@@ -40,8 +42,9 @@ export function useAchievementQueue(
       if (turnBand && !next.some(b => b.achievement)) next = [turnBand];
       if (!turn) next = next.filter(b => b.achievement);
       const active = next[0];
-      if (active && !active.achievement && gain && gain.seq > active.gainAfter && active.xp !== gain.xp) {
-        next = [{ ...active, xp: gain.xp }, ...next.slice(1)];
+      // Gains for the same live turn band add up, each once (guide audit, 2 Oct 2026).
+      if (active && !active.achievement && gain && gain.seq > active.gainAfter && gain.seq > active.gainSeen) {
+        next = [{ ...active, xp: (active.xp ?? 0) + gain.xp, gainSeen: gain.seq }, ...next.slice(1)];
       }
       return next;
     });
