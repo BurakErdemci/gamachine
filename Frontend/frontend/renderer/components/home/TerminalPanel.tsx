@@ -25,6 +25,8 @@ interface TerminalPanelProps {
   /** Show this tab (the guide's `drawer:<tab>` step). A new object each time, so asking for the
    *  tab the user has since left still switches back to it. */
   tabRequest?: { tab: DrawerTab } | null;
+  /** Reports the drawer's active tab, so the guide can put it back when a topic ends. */
+  onTabChange?: (tab: DrawerTab) => void;
 }
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
@@ -208,11 +210,13 @@ const DEFAULT_HEIGHT = 228;
  */
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   id, isOpen, onClose, onOpen, workspacePath, problems = [], problemsKnown = false, onProblemClick,
-  apiUrl, sessionToken, unityConnected, tabRequest
+  apiUrl, sessionToken, unityConnected, tabRequest, onTabChange
 }) => {
   const { t: ceviri } = useLang();
   const [tab, setTab] = useState<DrawerTab>('terminal');
   useEffect(() => { if (tabRequest) setTab(tabRequest.tab); }, [tabRequest]);
+  // guide audit, 2 Oct 2026: the page snapshots this before a tour step moves the drawer.
+  useEffect(() => { onTabChange?.(tab); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   const [isMaximized, setIsMaximized] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(DEFAULT_HEIGHT);
   const [isResizing, setIsResizing] = useState(false);

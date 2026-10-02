@@ -82,7 +82,7 @@ const GUIDE_TABS: Record<Parameters<PrepareHandlers['workspace.tab']>[0], WsTab>
 const GUIDE_WIDTHS: Record<Parameters<PrepareHandlers['workspace.width']>[0], WsWidth> = { narrow: 'dar', half: 'yarim', focus: 'odak' };
 const GUIDE_DRAWER: Record<Parameters<PrepareHandlers['drawer']>[0], DrawerTab> = { terminal: 'terminal', console: 'konsol', problems: 'sorunlar', connections: 'baglantilar' };
 /** What a guide topic changed and gives back when it ends. */
-type GuideSnapshot = { open: boolean; width: WsWidth; tab: WsTab; terminal: boolean; convId: number | null };
+type GuideSnapshot = { open: boolean; width: WsWidth; tab: WsTab; terminal: boolean; drawerTab: DrawerTab; convId: number | null };
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
 // this app needs, and off the server render (it touches WebGL on mount).
@@ -550,6 +550,9 @@ export default function Home() {
     const handleKeyDown = async (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
+        // The tour overlay (or any modal dialog) owns the keyboard: Ctrl+S in its name field must
+        // not save the file behind it (guide audit, 2 Oct 2026).
+        if (document.querySelector('[data-testid="guide-tour"], [aria-modal="true"]')) return;
         await fs.saveFile();
       }
     };
@@ -646,6 +649,8 @@ export default function Home() {
   // The prepare actions run the app's own controls; leaving a topic gives back the panel, the
   // drawer and (for a topic) the chat it started on. See hooks/home/useGuide.ts.
   const [drawerTabRequest, setDrawerTabRequest] = useState<{ tab: DrawerTab } | null>(null);
+  // The drawer's own active tab (reported by TerminalPanel), for the guide snapshot.
+  const drawerTabRef = useRef<DrawerTab>('terminal');
   const guideSnapRef = useRef<GuideSnapshot | null>(null);
   const guidePeekRef = useRef(false);
   // A chat switch the guide makes itself must not close the guide it is about to show again.
@@ -674,7 +679,7 @@ export default function Home() {
     menu: () => { ai.fetchAvailableModels(); setIsModelDropdownOpen(true); },
     showGuideScreen: () => { closeSettings(); setProfileOpen(false); setIsModelDropdownOpen(false); },
     snapshot: () => {
-      const snap: GuideSnapshot = { open: ws.open, width: ws.width, tab: ws.tab, terminal: isTerminalOpen, convId: chat.activeConvId };
+      const snap: GuideSnapshot = { open: ws.open, width: ws.width, tab: ws.tab, terminal: isTerminalOpen, drawerTab: drawerTabRef.current, convId: chat.activeConvId };
       guideSnapRef.current = snap;
       return snap;
     },
@@ -691,6 +696,9 @@ export default function Home() {
       setIsModelDropdownOpen(false);
       if (!snap) return;
       setIsTerminalOpen(snap.terminal);
+      // A step may have left the drawer on another tab (Problems); put the original back
+      // (guide audit, 2 Oct 2026).
+      setDrawerTabRequest({ tab: snap.drawerTab });
       setWsOpen(snap.open);
       ws.setWidth(snap.width);
       setWsTab(snap.tab);
@@ -1216,6 +1224,7 @@ export default function Home() {
               sessionToken={auth.user?.sessionToken}
               unityConnected={ai.unityMcpStatus === 'connected'}
               tabRequest={drawerTabRequest}
+              onTabChange={tab => { drawerTabRef.current = tab; }}
             />
           )}
         />
