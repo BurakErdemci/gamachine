@@ -6,7 +6,9 @@
    The stage no longer clips, so its background reaches past it and fills the window edges. */
 .intro-overlay .ov { inset: auto; left: 50%; top: 50%; overflow: visible; transform-origin: 50% 50%;
   transform: translate(-50%, -50%) scale(var(--intro-fit, 1)); }
-.intro-overlay .ov-bg { inset: -2400px; }
+/* Exactly as far as the window margins (IntroOverlay sets --bg-x/--bg-y): a fixed -2400px made a
+   layer so large that Chromium stopped painting the scene-1 blocks over it (Burak, 2 Oct). */
+.intro-overlay .ov-bg { inset: calc(-1 * var(--bg-y, 0px)) calc(-1 * var(--bg-x, 0px)); }
 
 
 :where(.intro-overlay) .ov { position: absolute; inset: 0; width: 1600px; height: 1000px; z-index: 10; cursor: pointer; overflow: hidden; }

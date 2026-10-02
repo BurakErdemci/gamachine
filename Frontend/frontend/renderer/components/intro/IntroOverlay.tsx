@@ -119,7 +119,11 @@ export function IntroOverlay() {
     // Fit the fixed 1600x1000 stage into the window (see intro.css), and keep it fitted on resize.
     const STAGE_W = 1600, STAGE_H = 1000
     function fit() {
-      wrapper!.style.setProperty('--intro-fit', String(Math.min(window.innerWidth / STAGE_W, window.innerHeight / STAGE_H)))
+      const scale = Math.min(window.innerWidth / STAGE_W, window.innerHeight / STAGE_H)
+      wrapper!.style.setProperty('--intro-fit', String(scale))
+      // The stage background reaches just past the window edges, in stage pixels (+2 for rounding).
+      wrapper!.style.setProperty('--bg-x', `${Math.max(0, (window.innerWidth / scale - STAGE_W) / 2) + 2}px`)
+      wrapper!.style.setProperty('--bg-y', `${Math.max(0, (window.innerHeight / scale - STAGE_H) / 2) + 2}px`)
     }
     fit()
     window.addEventListener('resize', fit)
