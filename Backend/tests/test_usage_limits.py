@@ -47,6 +47,16 @@ def test_claude_fixture_and_local_reset():
         timezone.utc).isoformat()
 
 
+def test_claude_reset_with_at_form_from_the_macos_cli():
+    # Measured 2 Oct 2026 on macOS: the CLI writes "Oct 3 at 1am", not "Oct 3, 1am",
+    # and the unparsed text reached the menu raw (English, overflowing the row).
+    text = ("Current session: 32% used · resets Oct 3 at 1am (Europe/Istanbul)\n"
+            "Current week (all models): 60% used · resets Oct 8 at 12:59am (Europe/Istanbul)")
+    windows = ul.parse_claude_usage(text, now=datetime(2026, 10, 2, 22))["windows"]
+    assert windows[0]["resets_at"] == datetime(2026, 10, 3, 1).astimezone(timezone.utc).isoformat()
+    assert windows[1]["resets_at"] == datetime(2026, 10, 8, 0, 59).astimezone(timezone.utc).isoformat()
+
+
 def test_claude_rollover_parse_miss_and_recent_past():
     text = "Current session: 1% used · resets Jan 1, 12am (Local)"
     w = ul.parse_claude_usage(text, now=datetime(2026, 12, 31))["windows"][0]
