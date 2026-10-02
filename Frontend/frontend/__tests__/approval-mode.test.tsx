@@ -247,7 +247,7 @@ describe('useChat · backend-owned mode', () => {
     const { result } = hook()
     await waitFor(() => expect(result.current.generationMode).toBe('auto'))
     expect(mockedGet.mock.calls[0][0]).toContain('/approval-mode')
-    expect(ipcInvoke).not.toHaveBeenCalled()
+    expect(ipcInvoke).not.toHaveBeenCalledWith('approval-mode-set', expect.anything(), expect.anything())
     expect(window.localStorage.getItem(KEY)).toBeNull()
   })
 
@@ -265,7 +265,7 @@ describe('useChat · backend-owned mode', () => {
     mockedGet.mockResolvedValue({ data: { mode: 'auto', stored: false } })
     const { result } = hook()
     await waitFor(() => expect(result.current.generationMode).toBe('auto'))
-    expect(ipcInvoke).not.toHaveBeenCalled()
+    expect(ipcInvoke).not.toHaveBeenCalledWith('approval-mode-set', expect.anything(), expect.anything())
     expect(window.localStorage.getItem(KEY)).toBeNull()
   })
 
@@ -273,7 +273,7 @@ describe('useChat · backend-owned mode', () => {
     mockedGet.mockResolvedValue({ data: { mode: 'balanced', stored: false } })
     const { result } = hook()
     await waitFor(() => expect(result.current.generationMode).toBe('balanced'))
-    expect(ipcInvoke).not.toHaveBeenCalled()
+    expect(ipcInvoke).not.toHaveBeenCalledWith('approval-mode-set', expect.anything(), expect.anything())
   })
 
   it('an unknown backend mode still falls back to step', async () => {
@@ -319,7 +319,7 @@ describe('useChat · backend-owned mode', () => {
     mockedGet.mockResolvedValue({ data: { mode: 'auto', stored: false } })
     const { result } = hook()
     await waitFor(() => expect(result.current.generationMode).toBe('auto'))
-    expect(ipcInvoke).not.toHaveBeenCalled()
+    expect(ipcInvoke).not.toHaveBeenCalledWith('approval-mode-set', expect.anything(), expect.anything())
   })
 
   it('shows step and writes nothing until the backend answers', async () => {
@@ -327,7 +327,7 @@ describe('useChat · backend-owned mode', () => {
     const { result } = hook()
     await waitFor(() => expect(mockedGet).toHaveBeenCalled())
     expect(result.current.generationMode).toBe('step')
-    expect(ipcInvoke).not.toHaveBeenCalled()
+    expect(ipcInvoke).not.toHaveBeenCalledWith('approval-mode-set', expect.anything(), expect.anything())
   })
 
   it('the selector writes through Electron main, not localStorage', async () => {

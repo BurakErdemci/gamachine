@@ -179,6 +179,20 @@ export const useChat = (
 ) => {
   const onActiveChatModelChangedRef = useRef(onActiveChatModelChanged);
   onActiveChatModelChangedRef.current = onActiveChatModelChanged;
+  const workspaceStampRef = useRef<string | null>(null);
+  const workspacePathRef = useRef(workspacePath);
+  workspacePathRef.current = workspacePath;
+  useEffect(() => {
+    workspaceStampRef.current = null;
+    if (!workspacePath) return;
+    let cancelled = false;
+    void backendWorkspacePath(workspacePath).then(workspace => {
+      if (!cancelled && workspacePathRef.current === workspacePath) {
+        workspaceStampRef.current = workspace;
+      }
+    });
+    return () => { cancelled = true; };
+  }, [workspacePath]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const conversationsRef = useRef<Conversation[]>([]);
   conversationsRef.current = conversations;
@@ -715,7 +729,7 @@ export const useChat = (
     if (!user || !API) return null;
     const selection = selectionRef.current;
     try {
-      const workspace = workspacePath ? await backendWorkspacePath(workspacePath) : null;
+      const workspace = workspaceStampRef.current;
       const res = await axios.post(`${API}/conversations`, {
         user_id: user.id, title: baslik,
         ...(typeof workspace === 'string' && workspace ? { workspace } : {}),
@@ -730,7 +744,7 @@ export const useChat = (
       }
       return res.data.id;
     } catch (err) { console.error("Yeni sohbet hatası:", err); return null; }
-  }, [API, fetchConversations, patchConv, setActiveConvId, user, workspacePath]);
+  }, [API, fetchConversations, patchConv, setActiveConvId, user]);
 
   // "Branch from now": the server copies the source chat's text history into a
   // new chat under the same root. A chat mid-turn or waiting on a card is
