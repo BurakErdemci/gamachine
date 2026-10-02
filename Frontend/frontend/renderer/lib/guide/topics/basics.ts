@@ -1,0 +1,130 @@
+// The parts used every day, plus the two core-only steps of the first-launch tour (name, guide).
+// Copy ported from the approved mockup (round 12b, maket/index.html GUIDE); REHBER-KAYITLARI.md
+// section 8 is generated from the same array. Edit the copy here, not in the guide code.
+import { T, type GuideTopic } from '../types';
+
+export const BASICS: GuideTopic[] = [
+  {
+    id: "name", group: "basics", core_only: true, since_version: "baseline", available_when: "always",
+    title: T("Adın", "Your name"),
+    summary: T("", ""),
+    steps: [
+      { prepare: ["screen:new_chat"], pose: "tag", ui: "name",
+        title: T("Ben Gamachine. Sana nasıl seslenelim?", "I'm Gamachine. What should I call you?"),
+        text: T("Seni sohbette ve profilinde bu adla karşılarım. İstemezsen boş bırak; sonra Ayarlar › Hesap'tan değiştirirsin.", "I'll greet you by this name in chat and on your profile. Leave it empty if you like; you can change it later in Settings › Account."),
+      },
+    ],
+  },
+  {
+    id: "guide", group: "basics", core_only: true, since_version: "baseline", available_when: "always",
+    title: T("Rehber", "The guide"),
+    summary: T("", ""),
+    steps: [
+      { anchor: "guide-entry", side: "right", align: "end",
+        title: T("Gerisini merak ettikçe", "The rest, when you're curious"),
+        text: T("Telefon, önizleme, sesle yazma, dosya ağacının sağ tık menüsü… Hepsi Rehber'de konu konu; merak ettiğini seçip yalnız onu izlersin. F1 de açar.", "Phone, preview, dictation, the file tree's right-click menu… The guide has them topic by topic; pick one and watch only that. F1 opens it too."),
+      },
+    ],
+  },
+  {
+    id: "ask", group: "basics", since_version: "baseline", available_when: "always",
+    title: T("Mesaj kutusu", "The message box"),
+    summary: T("Ne istediğini düz bir cümleyle yaz; Enter gönderir.", "Say what you want in a plain sentence; Enter sends."),
+    keywords: T("yaz gönder sor görev", "write send ask task"),
+    steps: [
+      { anchor: "composer", side: "above", align: "center", prepare: ["screen:new_chat"],
+        title: T("Ne istediğini buraya yaz", "Tell me what you want here"),
+        text: T("Düz bir cümle yeter: “Oyuncuya zıplama ekle” gibi. Dosyaları okurum, kodu yazarım, Unity'de yaparım.", "A plain sentence is enough, like “Add a jump to the player”. I read the files, write the code and do it in Unity."),
+        text_named: T("{name}, düz bir cümle yeter: “Oyuncuya zıplama ekle” gibi. Dosyaları okurum, kodu yazarım, Unity'de yaparım.", "{name}, a plain sentence is enough, like “Add a jump to the player”. I read the files, write the code and do it in Unity."),
+      },
+    ],
+  },
+  {
+    id: "quests", group: "basics", since_version: "baseline", available_when: "always",
+    title: T("Görev panosu", "The quest board"),
+    summary: T("Yeni sohbette hazır işler: tıkla, mesaj kutusuna yazılsın.", "Ready-made jobs on a new chat: click one and it fills the message box."),
+    keywords: T("başlamak öneri hazır iş", "start suggestion starter"),
+    steps: [
+      { anchor: "quest-board", side: "above", align: "center", prepare: ["screen:new_chat"],
+        title: T("Nereden başlayacağını bilmiyorsan", "Not sure where to start?"),
+        text: T("Bunlar hazır işler. Birine tıklarsan mesaj kutusuna yazılır; göndermeden önce değiştirebilirsin. Alttaki satır yalnız okuyup okumayacağımı söyler.", "These are ready-made jobs. Click one and it goes into the message box; change it before you send. The bottom line says whether I only read or also write."),
+      },
+    ],
+  },
+  {
+    id: "approvals", group: "basics", since_version: "baseline", available_when: "always",
+    title: T("Onay modu", "Approval mode"),
+    summary: T("Ne zaman sana soracağımı seç: her işte, yalnız kritikte ya da hiç.", "Choose when I ask you: every time, only for critical work, or never."),
+    keywords: T("onay güvenli otomatik adım adım izin", "approval safe auto step permission"),
+    steps: [
+      { anchor: "mode-chip", side: "below", align: "end", ui: "mode",
+        title: T("Riskli işte önce sana sorarım", "I ask before anything risky"),
+        text: T("Silmek, paket kurmak gibi işlerden önce bir onay kartı çıkarırım; sen onaylamadan yapmam. Ne kadar soracağımı buradan seçersin:", "Before I delete something or install a package I show you an approval card, and I wait for your OK. Choose how often I ask:"),
+      },
+    ],
+  },
+  {
+    id: "approval-card", group: "basics", since_version: "baseline", available_when: "always",
+    title: T("Onay kartları", "Approval cards"),
+    summary: T("Kartta ne yazar, bekleyen kartı nerede bulursun.", "What a card tells you, and where a waiting card shows up."),
+    keywords: T("kart onayla reddet risk kritik", "card approve reject risk critical"),
+    steps: [
+      { anchor: "approval-pending", side: "above", align: "start", prepare: ["screen:chat"],
+        title: T("Bir kartı okumak", "Reading a card"),
+        text: T("Üstte ne yapacağım tek cümle, altında riski ve neden kritik olduğu. Ham komut Ayrıntı'da katlı durur. Onayla ya da Reddet.", "On top, what I will do in one sentence; below, the risk and why it is critical. The raw command is folded under Details. Approve or reject."),
+      },
+      { anchor: "chat-list-active", side: "right", align: "start",
+        title: T("Bekleyen kart kaybolmaz", "A waiting card does not get lost"),
+        text: T("Onayını bekleyen sohbet kenar çubuğunda rozet taşır. Pencere arkadaysa masaüstü bildirimi de gelir.", "A chat waiting for you carries a badge in the sidebar. If the window is in the background you also get a desktop notification."),
+      },
+    ],
+  },
+  {
+    id: "model", group: "basics", since_version: "baseline", available_when: "always",
+    title: T("Model, kota ve düşünme", "Model, quota and thinking"),
+    summary: T("Her sohbet kendi modelini seçer; çipteki iki çizgi kotan.", "Each chat picks its own model; the two lines on the chip are your quota."),
+    keywords: T("ai claude codex gemini ollama kullanım limit efor", "ai claude codex gemini ollama usage limit effort"),
+    steps: [
+      { anchor: "model-chip", side: "below", align: "end", prepare: ["screen:chat"],
+        title: T("Hangi AI çalışsın", "Pick who does the work"),
+        text: T("Claude, Codex, Gemini ya da kendi bilgisayarındaki bir model. Çipteki iki ince çizgi kotan: üstteki 5 saatlik, alttaki haftalık.", "Claude, Codex, Gemini or a model on your own computer. The two thin lines on the chip are your quota: the top one for 5 hours, the bottom one for the week."),
+      },
+      { anchor: "model-menu", side: "left", align: "start", prepare: ["menu:model"],
+        title: T("Seçim bu sohbete ait", "The pick belongs to this chat"),
+        text: T("Solda sağlayıcılar ve kotaları, sağda modeller. Burada seçtiğin yalnız bu sohbeti değiştirir; yeni sohbetlerin varsayılanı Ayarlar › Modeller'de.", "Providers and their quota on the left, models on the right. What you pick here changes only this chat; the default for new chats is in Settings › Models."),
+      },
+      { anchor: "model-effort", side: "left", align: "center", prepare: ["menu:model"],
+        title: T("Düşünme seviyesi", "Thinking level"),
+        text: T("Zor işte daha uzun düşünürüm ama kotadan daha çok yerim. Hangi seviyeler olduğu modele göre değişir.", "On hard work I think longer, but I use more of your quota. Which levels exist depends on the model."),
+      },
+    ],
+  },
+  {
+    id: "chats", group: "basics", since_version: "baseline", available_when: "always",
+    title: T("Sohbetlerin durumu", "Where your chats stand"),
+    summary: T("Çalışan, onay bekleyen, biten: kenar çubuğu söyler.", "Running, waiting, done: the sidebar tells you."),
+    keywords: T("kenar çubuğu liste yeni sohbet", "sidebar list new chat"),
+    steps: [
+      { anchor: "chat-list-active", side: "right", align: "start", prepare: ["screen:chat"],
+        title: T("Şu an süren işler", "Work in progress"),
+        text: T("Çalışan sohbet adımını ve ilerlemesini gösterir. Başka sohbete geçsen de iş sürer.", "A running chat shows its step and progress. The work goes on even if you switch to another chat."),
+      },
+      { anchor: "new-chat", side: "right", align: "start",
+        title: T("Yeni sohbet", "New chat"),
+        text: T("Ctrl N yeni bir sohbet açar. Her sohbetin kendi modeli ve kendi geçmişi olur.", "Ctrl N opens a new chat. Each chat has its own model and its own history."),
+      },
+    ],
+  },
+  {
+    id: "attach", group: "basics", since_version: "baseline", available_when: "always",
+    title: T("Resim, video ve dosya eklemek", "Adding images, video and files"),
+    summary: T("Ataç, yapıştırma, sürükleme: sohbete bir şey göstermenin yolları.", "Clip, paste, drag: the ways to show me something."),
+    keywords: T("ataç resim ekran görüntüsü yapıştır sürükle", "clip image screenshot paste drag"),
+    steps: [
+      { anchor: "composer-attach", side: "above", align: "start", prepare: ["screen:chat"],
+        title: T("Bana bir şey göster", "Show me something"),
+        text: T("Ataçla resim ya da bilgisayarındaki bir videoyu eklersin. Ekran görüntüsünü yapıştırabilir, dosyayı pencereye sürükleyebilirsin.", "Use the clip for an image or a video on your computer. You can also paste a screenshot or drag a file onto the window."),
+      },
+    ],
+  },
+];
