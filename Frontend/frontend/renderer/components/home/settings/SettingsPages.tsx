@@ -53,7 +53,7 @@ export const GeneralPage = ({
         </SetCard>
       </SetGroup>
       {onToggleAutoTitles && (
-        <SetGroup title={t('set.group.chat')}>
+        <SetGroup title={t('set.group.chat')} guide="settings-auto-title">
           <SetCard>
             <SetRow
               name={t('settings.autoTitles')}
@@ -65,7 +65,7 @@ export const GeneralPage = ({
         </SetGroup>
       )}
       {onToggleDictationAutoLang && (
-        <SetGroup title={t('set.group.dictation')}>
+        <SetGroup title={t('set.group.dictation')} guide="settings-dictation-lang">
           <SetCard>
             <SetRow
               name={t('settings.dictationAutoLang')}
@@ -99,7 +99,7 @@ export const AppearancePage = ({ saved }: { saved: () => void }) => {
     <>
       <SetPageHead title={t('set.nav.gorunum')} lede={t('set.lede.gorunum')} />
       <SetGroup title={t('settings.appearance.theme')}>
-        <div className="theme-cards" role="radiogroup" aria-label={t('settings.appearance.theme')}>
+        <div className="theme-cards" data-guide="settings-themes" role="radiogroup" aria-label={t('settings.appearance.theme')}>
           {THEMES.map(theme => (
             <button
               key={theme}
@@ -118,7 +118,7 @@ export const AppearancePage = ({ saved }: { saved: () => void }) => {
           ))}
         </div>
       </SetGroup>
-      <SetGroup title={t('set.group.type')} note={t('set.group.typeNote')}>
+      <SetGroup title={t('set.group.type')} note={t('set.group.typeNote')} guide="settings-fonts">
         <SetCard>
           <SetRow
             name={t('settings.appearance.readingFont')}
@@ -210,7 +210,7 @@ export const UnityPage = ({ status, toggling, onToggle, projectName, saved }: {
       <SetPageHead title="Unity" lede={t('set.lede.unity')} />
       <SetGroup>
         <SetCard>
-          <div className="set-row set-row-hero" data-testid="unity-mcp-row" data-status={status} data-tone={cfg.tone}>
+          <div className="set-row set-row-hero" data-guide="settings-unity-switch" data-testid="unity-mcp-row" data-status={status} data-tone={cfg.tone}>
             <svg className="ic set-hero-ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5l6.5 3.75v7.5L10 17.5l-6.5-3.75v-7.5z" /><path d="M10 10l6.5-3.75M10 10v7.5M10 10L3.5 6.25" /></svg>
             <div className="set-rt">
               <p className="set-name">{t('set.unity.conn')}</p>

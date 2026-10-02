@@ -166,7 +166,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
           <kbd>Esc</kbd>
         </button>
         <p className="set-rail-title">{t('set.title')}</p>
-        <label className="set-find">
+        <label className="set-find" data-guide="settings-search">
           <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5" /><path d="M12.2 12.2L16.5 16.5" /></svg>
           <input
             type="text"

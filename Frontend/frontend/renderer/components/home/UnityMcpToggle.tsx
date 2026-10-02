@@ -127,9 +127,10 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
     .filter(Boolean).join(' ');
 
   return (
-    <div ref={bayRef} className={cls} data-unity={state.visual} data-status={status} data-testid="unity-bay">
+    <div ref={bayRef} className={cls} data-unity={state.visual} data-status={status} data-testid="unity-bay" data-guide="unity-switch">
       <button
         className="unity-switch"
+        data-guide="unity-light"
         type="button"
         role="switch"
         // Checked = clicking turns it off. `blocked` is not: a click there retries the start

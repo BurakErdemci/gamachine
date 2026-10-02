@@ -12,10 +12,12 @@ export const SetPageHead = ({ title, lede }: { title: string; lede: string }) =>
   </header>
 );
 
-export const SetGroup = ({ title, note, action, children, testId }: {
+export const SetGroup = ({ title, note, action, children, testId, guide }: {
   title?: string; note?: string; action?: React.ReactNode; children: React.ReactNode; testId?: string;
+  /** A guide anchor name (lib/guide/anchors.ts). */
+  guide?: string;
 }) => (
-  <section className="set-group" data-testid={testId}>
+  <section className="set-group" data-testid={testId} data-guide={guide}>
     {title && (
       <h2 className="set-gk">
         {title}
@@ -32,11 +34,13 @@ export const SetCard = ({ children, className = '' }: { children: React.ReactNod
 );
 
 /** One row. `lead` = the 28 px mark column of provider / hero rows. */
-export const SetRow = ({ name, hint, lead, control, className = '', testId, nameLang, extra }: {
+export const SetRow = ({ name, hint, lead, control, className = '', testId, nameLang, extra, guide }: {
   name: React.ReactNode; hint?: React.ReactNode; lead?: React.ReactNode; control?: React.ReactNode;
   className?: string; testId?: string; nameLang?: string; extra?: React.ReactNode;
+  /** A guide anchor name (lib/guide/anchors.ts). */
+  guide?: string;
 }) => (
-  <div className={`set-row${lead ? ' set-prov' : ''}${className ? ` ${className}` : ''}`} data-testid={testId}>
+  <div className={`set-row${lead ? ' set-prov' : ''}${className ? ` ${className}` : ''}`} data-testid={testId} data-guide={guide}>
     {lead}
     <div className="set-rt">
       <p className="set-name" lang={nameLang}>{name}</p>

@@ -17,6 +17,9 @@ const WIDTH_ICON: Record<WsWidth, React.ReactNode> = {
 const X_ICON = <path d="M5.5 5.5l9 9M14.5 5.5l-9 9" />;
 
 const TAB_KEY: Record<WsTab, TKey> = { sahne: 'ws.tabScene', dosyalar: 'ws.tabFiles', kod: 'ws.tabCode', onizleme: 'ws.tabPreview' };
+// Guide anchors on the panes (lib/guide/anchors.ts). The file tree is anchored here, not in
+// FileTree, because the sidebar's Files tab draws the same tree and the guide means this one.
+const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosyalar: 'file-tree', kod: 'ws-code', onizleme: 'ws-preview' };
 const WIDTH_KEY: Record<WsWidth, TKey> = { dar: 'ws.widthNarrow', yarim: 'ws.widthHalf', odak: 'ws.widthFocus' };
 
 interface WorkspaceProps {
@@ -69,11 +72,12 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
       data-width={width}
       hidden={!open}
       data-testid="workspace"
+      data-guide="workspace"
     >
       <div className="tex tex-panel" aria-hidden="true" />
       <header className="ws-head">
         <span className="ws-title">{t('ws.title')}</span>
-        <div className="ws-widths" role="group" aria-label={t('ws.widths')}>
+        <div className="ws-widths" data-guide="ws-widths" role="group" aria-label={t('ws.widths')}>
           {WS_WIDTHS.map(w => (
             <button
               key={w}
@@ -93,7 +97,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
           <Ic>{X_ICON}</Ic>
         </button>
       </header>
-      <div className="ws-tabs" role="tablist" aria-label={t('ws.tabs')} onKeyDown={onTabKey}>
+      <div className="ws-tabs" data-guide="ws-tabs" role="tablist" aria-label={t('ws.tabs')} onKeyDown={onTabKey}>
         {WS_TABS.map(id => (
           <button
             key={id}
@@ -119,6 +123,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
             id={`ws-pane-${id}`}
             className={`ws-pane${id === 'kod' ? ' ws-code' : ''}${id === 'onizleme' ? ' ws-preview' : ''}${entering === id ? ' is-entering' : ''}`}
             data-pane={id}
+            data-guide={PANE_ANCHOR[id]}
             role="tabpanel"
             aria-labelledby={`ws-tab-${id}`}
           >
@@ -196,7 +201,7 @@ export const KodPane: React.FC<KodPaneProps> = ({
   return (
     <>
       {(file || diff) && (
-        <div className="ed-tabs" role="tablist" aria-label={t('ws.openFiles')}>
+        <div className="ed-tabs" data-guide="ws-code-tabs" role="tablist" aria-label={t('ws.openFiles')}>
           {file && (
             <div className="ed-tab" role="tab" aria-selected={shown === 'file'} data-file="file">
               <button type="button" className="ed-tab-pick" onClick={() => setView('file')}>
@@ -345,7 +350,7 @@ export const ScenePane: React.FC<ScenePaneProps> = ({ change, changed, changedTo
         <h3 className="ws-label"><span>{t('ws.scene')}</span></h3>
         <p className="ws-note">{t('ws.sceneEmpty')}</p>
       </section>
-      <section className="ws-sec">
+      <section className="ws-sec" data-guide="changed-files">
         <h3 className="ws-label"><span>{t('ws.changed')}</span> <span className="ws-count">{count}</span></h3>
         {count === 0 ? (
           <p className="ws-note">{t(isRepo ? 'ws.changedEmpty' : 'ws.changedNoRepo')}</p>

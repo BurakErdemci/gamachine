@@ -83,7 +83,7 @@ export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onP
         </div>
       </div>
 
-      <div className="empty-board">
+      <div className="empty-board" data-guide="quest-board">
         <p className="empty-board-k lex">
           <span className="lex-d">{t('empty.board')}</span>
           <span className="lex-q">{t('empty.boardQuest')}</span>

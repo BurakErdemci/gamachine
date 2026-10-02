@@ -481,6 +481,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       data-open={isOpen ? 'true' : 'false'}
       data-term={tab}
       data-testid="terminal-drawer"
+      data-guide="drawer"
       style={{ '--term-h': `${terminalHeight}px` } as React.CSSProperties}
     >
       {isOpen && !isMaximized && (

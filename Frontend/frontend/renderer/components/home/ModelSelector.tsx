@@ -483,7 +483,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const measuredMin = minutesSince(activeFam?.measured_at, usage?.now);
 
   return (
-    <div className="model-wrap">
+    <div className="model-wrap" data-guide="model-chip">
       <button
         type="button"
         aria-haspopup="dialog"
@@ -520,6 +520,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               role="dialog"
               aria-label={t('mm.title')}
               data-testid="model-menu"
+              data-guide="model-menu"
             >
               <div className="mm-top">
                 <span className="model-menu-k">{t('mm.title')}</span>
@@ -595,7 +596,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     {pane()}
                   </div>
                   {onThinkingChange && (
-                    <div className="mm-effort" data-testid="mm-effort">
+                    <div className="mm-effort" data-testid="mm-effort" data-guide="model-effort">
                       <span className="mm-effort-k">{t('mm.effort')}</span>
                       <span className="gm-seg gm-seg-sm" role="radiogroup" aria-label={t('mm.effortGroup')}>
                         {levels.map(id => (

@@ -69,6 +69,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
       data-state={state}
       data-kind={kind}
       data-testid={testId}
+      data-guide={pending ? 'approval-pending' : undefined}
       aria-label={pending ? t('card.needed') : undefined}
     >
       <span className="approval-corner" aria-hidden="true" />
@@ -104,7 +105,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
         <div className="approval-actions">
           {actions}
           {phoneHint && pending && (
-            <span className="approval-hint">{typeof phoneHint === 'string' ? phoneHint : t('card.phoneHint')}</span>
+            <span className="approval-hint" data-guide="approval-phone-hint">{typeof phoneHint === 'string' ? phoneHint : t('card.phoneHint')}</span>
           )}
         </div>
       )}

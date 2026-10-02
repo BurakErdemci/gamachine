@@ -162,7 +162,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
   };
 
   return (
-    <div className="h-9 border-b border-[color:var(--paper-line)] flex items-center gap-1 px-2 shrink-0 relative">
+    <div className="h-9 border-b border-[color:var(--paper-line)] flex items-center gap-1 px-2 shrink-0 relative" data-guide="branch-tabs">
       <div role="tablist" aria-label={t('branch.tabs')} className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto no-scrollbar">
         {tabs.map(conv => {
           const active = conv.id === activeConvId;

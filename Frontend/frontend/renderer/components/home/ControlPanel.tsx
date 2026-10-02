@@ -205,6 +205,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   })
                 : t('usage.estimateTitle', { yuzde: contextUsage.percent, sayi: contextUsage.message_count })}
             className="strip-item strip-memory"
+            data-guide="strip-memory"
           >
             {t('strip.memory')}
             <span className="energy" aria-hidden="true">
@@ -235,6 +236,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         <button
           type="button"
           className="strip-item strip-more"
+          data-guide="strip-more"
           aria-expanded={showMore}
           aria-controls="strip-more-pop"
           onClick={() => setShowMore(v => !v)}
@@ -306,7 +308,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           )}
         </div>
       </div>
-      <span className="strip-hint">{t('strip.hint')}</span>
+      <span className="strip-hint" data-guide="strip-hint">{t('strip.hint')}</span>
     </div>
   );
 };

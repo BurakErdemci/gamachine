@@ -845,6 +845,7 @@ export function AnimatedChatInput({
             {/* The mockup composer: one box, the text area flanked by its tools, send at the end. */}
             <div
                 className="composer"
+                data-guide="composer-input"
                 data-focused={inputFocused || undefined}
                 data-disabled={disabled || undefined}
             >
@@ -860,6 +861,7 @@ export function AnimatedChatInput({
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     className="icon-btn"
+                    data-guide="composer-attach"
                     aria-label={t('composer.addImage')}
                     title={t('composer.addImage')}
                 >
@@ -918,6 +920,7 @@ export function AnimatedChatInput({
                             : t('mic.start')
                     }
                     className="icon-btn composer-mic"
+                    data-guide="composer-mic"
                     data-voice={voice.state}
                 >
                     <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="7.5" y="3" width="5" height="9" rx="2.5" /><path d="M5 10a5 5 0 0010 0M10 15v2.5" /></svg>

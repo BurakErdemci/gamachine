@@ -247,7 +247,7 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
       {/* On / off + keep awake */}
       <SetGroup>
         <SetCard>
-          <div className="set-row set-row-hero">
+          <div className="set-row set-row-hero" data-guide="settings-remote">
             {phoneIc}
             <div className="set-rt">
               <p className="set-name">{t("remote.title")}</p>
@@ -306,6 +306,7 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
 
           {!offer && !pending && (
             <SetRow
+              guide="settings-remote-pair"
               name={t("set.uzak.pairNew")}
               hint={expired
                 ? <span data-testid="remote-pair-expired">{t("remote.pairExpired")}</span>
@@ -320,7 +321,7 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
             />
           )}
           {offer && !pending && (
-            <div className="set-row set-pair">
+            <div className="set-row set-pair" data-guide="settings-remote-pair">
               <div className="set-qr"><QrCode text={offer.qr_url} /></div>
               <div className="set-rt">
                 <p className="set-name">{t("set.uzak.pairNew")}</p>

@@ -89,7 +89,7 @@ const CodeBlock = ({ match, codeString, workspacePath, onExportToUnity, onOpenFi
           </button>
         )}
         {match[1] === "csharp" && !isAgentFile && workspacePath && onExportToUnity && (
-          <button type="button" className="code-copy" onClick={() => onExportToUnity(codeString)} title={t('md.exportUnity')} aria-label={t('md.exportUnity')}>
+          <button type="button" className="code-copy" data-guide="code-block-actions" onClick={() => onExportToUnity(codeString)} title={t('md.exportUnity')} aria-label={t('md.exportUnity')}>
             <FileDown size={14} aria-hidden="true" />
           </button>
         )}
@@ -178,6 +178,7 @@ const MarkdownRendererInner = ({
             <a
               href={href}
               className={tur === 'yerel-dosya' ? 'chip-file' : undefined}
+              data-guide={tur === 'yerel-dosya' ? 'file-chip' : undefined}
               onClick={(e) => {
                 // `preventDefault` KOŞULSUZ — üç ayrı sebeple:
                 //   1. `onOpenFile` verilmemiş olabilir (editörsüz bağlamlar,

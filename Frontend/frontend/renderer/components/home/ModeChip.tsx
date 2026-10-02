@@ -30,6 +30,7 @@ export const ModeChip: React.FC<ModeChipProps> = ({ value, onOpen }) => {
       type="button"
       className="pick mode-pick"
       data-testid="mode-chip"
+      data-guide="mode-chip"
       data-mode={current.id}
       data-set-link="onay"
       title={t(current.desc)}

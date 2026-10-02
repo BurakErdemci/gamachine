@@ -70,7 +70,7 @@ export const ThreadHeader: React.FC<ThreadHeaderProps> = ({ conversation, projec
           <span className="tb-v">{date}</span>
         </div>
       )}
-      {actions && <div className="tb-actions" role="group" aria-label={t('tb.actions')}>{actions}</div>}
+      {actions && <div className="tb-actions" data-guide="thread-actions" role="group" aria-label={t('tb.actions')}>{actions}</div>}
     </header>
   );
 };

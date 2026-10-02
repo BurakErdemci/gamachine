@@ -340,7 +340,7 @@ export const ProfileView = ({
           </section>
         </div>
 
-        <section className="pf-card pf-shelf" aria-label={t('pf.shelf.label')}>
+        <section className="pf-card pf-shelf" data-guide="profile-shelf" aria-label={t('pf.shelf.label')}>
           <header className="pf-card-head">
             <h2 className="pf-h">{t('pf.shelf.title')}</h2>
             <span className="pf-card-meta"><Num>{t('pf.shelf.meta', { n: unlocked, total: s.achievements.length })}</Num></span>

@@ -39,6 +39,7 @@ export const RemoteBadge = ({ status, onClick }: { status: RemoteStatus | null; 
     <button
       type="button"
       data-testid="remote-badge"
+      data-guide="phone-status"
       onClick={onClick}
       title={t("remote.badgeTitle", { durum: state })}
       aria-label={t("remote.badgeTitle", { durum: state })}

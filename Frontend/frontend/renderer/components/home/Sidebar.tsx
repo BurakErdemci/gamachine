@@ -173,6 +173,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           aria-current={isActive ? 'page' : undefined}
           onClick={() => selectConversation(conv)}
           className={cls}
+          data-guide={status === 'running' ? 'chat-running' : undefined}
         >
           {status ? (
             <span
@@ -271,7 +272,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
         <div className="side-scroll custom-scrollbar">
           {sidebarTab === 'chats' ? (
             <>
-              <button type="button" className="new-chat" onClick={() => createNewConversation()}>
+              <button type="button" className="new-chat" data-guide="new-chat" onClick={() => createNewConversation()}>
                 <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
                 <span>{t('sidebar.newChat')}</span>
                 <kbd>{t('sidebar.newChatKey')}</kbd>
@@ -286,12 +287,12 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
                     </span>
                     <span className="side-count">{tasks.length}</span>
                   </div>
-                  <ul className="chat-list">{tasks.map(c => row(c, true))}</ul>
+                  <ul className="chat-list" data-guide="chat-list-active">{tasks.map(c => row(c, true))}</ul>
                 </>
               )}
 
               <div className="side-label"><span>{t('sidebar.chats')}</span><span className="side-count">{chats.length}</span></div>
-              <ul className="chat-list">{chats.map(c => row(c, false))}</ul>
+              <ul className="chat-list" data-guide={tasks.length ? undefined : 'chat-list-active'}>{chats.map(c => row(c, false))}</ul>
             </>
           ) : (
             <ProjectFiles {...props} fileTree={fileTree} rootFolderPath={rootFolderPath} openFolder={openFolder}
@@ -309,6 +310,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           aria-current={profileOpen ? 'page' : undefined}
           onClick={onOpenProfile}
           data-testid="sidebar-profile"
+          data-guide="side-profile"
         >
           <span className="lvl level" aria-hidden="true"><span className="lvl-n">{profileLevel ? profileLevel.level : '–'}</span></span>
           <svg className="ic side-profile-ic" viewBox="0 0 20 20" aria-hidden="true">

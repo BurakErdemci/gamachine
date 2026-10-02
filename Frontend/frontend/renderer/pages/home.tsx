@@ -966,7 +966,7 @@ export default function Home() {
           )}
         </div>
 
-        <div className="composer-wrap">
+        <div className="composer-wrap" data-guide="composer">
           <SessionReportPanel
             open={reportsOpen}
             onClose={() => setReportsOpen(false)}
