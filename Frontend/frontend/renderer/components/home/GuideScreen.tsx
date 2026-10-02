@@ -39,8 +39,15 @@ export const GuideScreen: React.FC<GuideScreenProps> = ({
   const words = useMemo(() => searchWords(query, lang), [query, lang]);
 
   // Opening puts the cursor in the search box; coming back from a topic puts it on that topic.
+  // `onFocused` clears focusTopic, which re-runs this effect; that second run (open unchanged,
+  // topic just handled) must not fall through to the search box and steal the card's focus
+  // (guide audit, 2 Oct 2026).
+  const handled = useRef<{ open: boolean; topic: string | null }>({ open: false, topic: null });
   useEffect(() => {
+    const before = handled.current;
+    handled.current = { open, topic: focusTopic };
     if (!open) return;
+    if (focusTopic == null && before.open && before.topic != null) return;
     const id = requestAnimationFrame(() => {
       const tile = focusTopic ? rootRef.current?.querySelector<HTMLElement>(`.gd-topic[data-topic="${focusTopic}"]`) : null;
       if (tile) tile.focus();
