@@ -118,15 +118,46 @@ export function IntroOverlay() {
 
     // Fit the fixed 1600x1000 stage into the window (see intro.css), and keep it fitted on resize.
     const STAGE_W = 1600, STAGE_H = 1000
+    // Where the lockup (stage 350,330, 900 wide, transform-origin 0 0) lands: the real sidebar logo,
+    // mapped from window into stage coordinates. Measured 2 Oct: the sidebar mounts ~70 ms after the
+    // overlay and sits 28 px left under its entrance slide until the handoff, so the target is
+    // measured when the flight starts, from layout offsets (which ignore that transform). Without a
+    // logo the CSS keeps the mockup's numbers.
+    const LOCKUP_X = 350, LOCKUP_Y = 330, LOCKUP_W = 900
+    let scale = 1
     function fit() {
-      const scale = Math.min(window.innerWidth / STAGE_W, window.innerHeight / STAGE_H)
+      scale = Math.min(window.innerWidth / STAGE_W, window.innerHeight / STAGE_H)
       wrapper!.style.setProperty('--intro-fit', String(scale))
       // The stage background reaches just past the window edges, in stage pixels (+2 for rounding).
       wrapper!.style.setProperty('--bg-x', `${Math.max(0, (window.innerWidth / scale - STAGE_W) / 2) + 2}px`)
       wrapper!.style.setProperty('--bg-y', `${Math.max(0, (window.innerHeight / scale - STAGE_H) / 2) + 2}px`)
+      aimHome()
+    }
+    function aimHome() {
+      const brand = document.querySelector<HTMLElement>('.brand')
+      const logo = brand?.querySelector('.brand-logo')
+      if (!brand || !logo) return
+      const logoRect = logo.getBoundingClientRect()
+      const brandRect = brand.getBoundingClientRect()
+      if (!logoRect.width) return
+      let left = 0, top = 0
+      for (let el: HTMLElement | null = brand; el; el = el.offsetParent as HTMLElement | null) {
+        left += el.offsetLeft; top += el.offsetTop
+      }
+      left += logoRect.left - brandRect.left
+      top += logoRect.top - brandRect.top
+      const stageLeft = (window.innerWidth - STAGE_W * scale) / 2
+      const stageTop = (window.innerHeight - STAGE_H * scale) / 2
+      wrapper!.style.setProperty('--home-dx', `${(left - stageLeft) / scale - LOCKUP_X}px`)
+      wrapper!.style.setProperty('--home-dy', `${(top - stageTop) / scale - LOCKUP_Y}px`)
+      wrapper!.style.setProperty('--home-s', String(logoRect.width / scale / LOCKUP_W))
+    }
+    function onAnimationStart(event: AnimationEvent) {
+      if (event.animationName === 'i-home') aimHome()
     }
     fit()
     window.addEventListener('resize', fit)
+    wrapper.addEventListener('animationstart', onAnimationStart)
 
     endRef.current = end
     root.setAttribute('data-intro', '')
@@ -144,6 +175,7 @@ export function IntroOverlay() {
       clearTimeout(offsetTimer)
       detachListeners()
       window.removeEventListener('resize', fit)
+      wrapper.removeEventListener('animationstart', onAnimationStart)
       endRef.current = null
       // An ended scene keeps its root classes for the 1 s handoff (see `end`).
       if (!ended) {

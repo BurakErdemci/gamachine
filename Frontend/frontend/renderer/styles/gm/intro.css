@@ -254,7 +254,10 @@
 /* act 6: the lockup becomes the sidebar logo (20, 10, 152.4 x 32 in index.html) */
 .run :where(.intro-overlay) .lockup { animation: i-home 900ms var(--g-ease-move) 6250ms both, i-fade 80ms linear 7150ms both; }
 
-@keyframes i-home { to { transform: translate(-330px, -320px) scale(.169333); } }
+/* The mockup's numbers are the fallback; IntroOverlay measures the real sidebar logo and sets the
+   three variables, since the fitted stage no longer shares the window's coordinates (Burak, 2 Oct:
+   the lockup flew towards the Unity switch and then jumped into place). */
+@keyframes i-home { to { transform: translate(var(--home-dx, -330px), var(--home-dy, -320px)) scale(var(--home-s, .169333)); } }
 
 .run :where(.intro-overlay) .ov-bg { animation: i-fade 600ms var(--g-ease-exit) 6300ms both; }
 
