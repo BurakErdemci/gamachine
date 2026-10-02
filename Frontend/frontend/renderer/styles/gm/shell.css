@@ -206,6 +206,10 @@
 }
 .foot-btn:hover { background: var(--shell-bg-2); color: var(--shell-text); }
 .foot-user { margin-left: auto; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-meta); color: var(--shell-text-dim); }
+/* remote control: an icon button with a lamp at the foot's end (mockup .foot-phone) */
+.foot-phone { position: relative; padding: 8px; }
+.foot-btn + .foot-phone { margin-left: auto; }
+.foot-phone .status { position: absolute; right: 5px; top: 5px; width: 7px; height: 7px; box-shadow: 0 0 0 2px var(--shell-bg); }
 
 /* ---------- top bar ---------- */
 .topbar {

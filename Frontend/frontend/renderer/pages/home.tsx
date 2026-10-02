@@ -44,7 +44,7 @@ import { McpUnknownTray } from '../components/home/McpUnknownTray';
 import { ChatTabs, BranchButton, hasBranches } from '../components/home/ChatTabs';
 import { SideChatPanel, SideQuestionButton } from '../components/home/SideChatPanel';
 import { SidebarToggle } from '../components/home/AwaitingBadge';
-import { RemoteBadge, useRemoteStatus } from '../components/home/RemoteBadge';
+import { useRemoteStatus } from '../components/home/RemoteBadge';
 import { ModeChip } from '../components/home/ModeChip';
 import { modelFamily } from '../lib/modelFamily';
 import { useRemoteEffort, useRemoteUi } from '../lib/remoteControl';
@@ -722,6 +722,7 @@ export default function Home() {
         treeContextMenu={fs.treeContextMenu} setTreeContextMenu={fs.setTreeContextMenu}
         gitStatus={fs.gitStatus}
         user={auth.user} setShowSettings={ai.setShowSettings} handleLogout={handleLogout}
+        remoteStatus={remote.status}
         unityStatus={ai.unityMcpStatus}
       />
 
@@ -750,7 +751,6 @@ export default function Home() {
           </div>
         </div>
         <div className="topbar-right">
-          <RemoteBadge status={remote.status} onClick={() => ai.setShowSettings(true)} />
           {/* C# analysis (OmniSharp) is starting */}
           {lspStatus?.state === 'starting' && (
             <span className="bar-chip">

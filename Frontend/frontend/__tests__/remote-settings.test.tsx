@@ -259,7 +259,10 @@ describe('remote control · always-visible badge and the settings tab', () => {
     rerender(<RemoteBadge status={{ enabled: false } as any} />)
     expect(screen.queryByTestId('remote-badge')).toBeNull()
     rerender(<RemoteBadge status={{ enabled: true, connected: true } as any} />)
-    expect(screen.getByTestId('remote-badge').textContent).toContain('Uzaktan kontrol açık')
+    expect(screen.getByTestId('remote-badge').getAttribute('title')).toContain('Uzaktan kontrol açık')
+    // icon only: the name lives in the tooltip and the accessible name, not as visible text
+    expect(screen.getByTestId('remote-badge').textContent).toBe('')
+    expect(screen.getByRole('button', { name: /Uzaktan kontrol açık/ })).toBeTruthy()
   })
 
   it('the settings modal has a Remote control tab holding the section', async () => {

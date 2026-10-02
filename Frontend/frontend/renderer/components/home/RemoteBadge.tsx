@@ -23,7 +23,9 @@ export function useRemoteStatus(active: boolean, pollMs = REMOTE_BADGE_POLL_MS) 
   return { status, setStatus };
 }
 
-/** Shown while remote control is on: a phone may be watching and answering. */
+/** Shown while remote control is on: a phone may be watching and answering. It sits in the
+ *  sidebar foot beside Settings as an icon with a lamp (mockup `.foot-phone`); the name and
+ *  state live in the tooltip. A text chip in the top bar read as clutter (Burak, 2 Oct). */
 export const RemoteBadge = ({ status, onClick }: { status: RemoteStatus | null; onClick?: () => void }) => {
   const { t } = useLang();
   if (!status?.enabled) return null;
@@ -39,13 +41,13 @@ export const RemoteBadge = ({ status, onClick }: { status: RemoteStatus | null; 
       data-testid="remote-badge"
       onClick={onClick}
       title={t("remote.badgeTitle", { durum: state })}
-      className="bar-chip"
+      aria-label={t("remote.badgeTitle", { durum: state })}
+      className="foot-btn foot-phone"
     >
-      <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true">
+      <svg className="ic" viewBox="0 0 20 20" aria-hidden="true">
         <rect x="6" y="2.5" width="8" height="15" rx="1.6" />
         <path d="M9 15h2" />
       </svg>
-      <span className="bar-chip-label">{t("remote.badge")}</span>
       <span className={`status ${lamp}`} aria-hidden="true" />
     </button>
   );

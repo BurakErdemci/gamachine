@@ -12,6 +12,8 @@ import { BrandLogo } from './BrandLogo';
 import { useUnityLinkPulse } from './UnityMcpToggle';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { displayName } from '../../lib/displayName';
+import type { RemoteStatus } from '../../lib/remoteControl';
+import { RemoteBadge } from './RemoteBadge';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
@@ -73,6 +75,8 @@ interface SidebarProps {
   handleLogout: () => void;
   /** Drives the brand head's visor blink when Unity connects (mockup round 7). */
   unityStatus?: UnityMCPStatus;
+  /** Remote control state for the phone button in the foot; hidden while remote control is off. */
+  remoteStatus?: RemoteStatus | null;
 }
 
 /** Sidebar width from the mockup (base.css `.app` first track). */
@@ -99,7 +103,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     setEditingId, tempTitle, setTempTitle, saveRename, workspacePath,
     closeWorkspace, rootFolderPath, openFolder, openFilePicker, user,
     setShowSettings, fileTree, treeContextMenu, setTreeContextMenu,
-    convStatus, unityStatus, isDirty,
+    convStatus, unityStatus, isDirty, remoteStatus,
   } = props;
 
   const { t } = useLang();
@@ -315,6 +319,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
             <span>{t('sidebar.settings')}</span>
           </button>
           {name && <span className="foot-user" title={name}>{name}</span>}
+          <RemoteBadge status={remoteStatus ?? null} onClick={() => setShowSettings(true)} />
         </div>
       </div>
     </motion.aside>
