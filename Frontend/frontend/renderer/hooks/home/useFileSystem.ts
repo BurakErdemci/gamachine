@@ -457,16 +457,24 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     refreshGitStatus(workspacePath);
   }, [dirContents, expandedDirs, workspacePath, refreshGitStatus, workspaceRequest]);
 
-  const openFolder = useCallback(async () => {
-    if (!ipc) return;
+  // Returns the chosen folder (null = cancelled or superseded) so the welcome
+  // screen can drop a stale recent entry once its replacement is picked.
+  const openFolder = useCallback(async (defaultPath?: unknown): Promise<string | null> => {
+    if (!ipc) return null;
     const halaGecerli = workspaceRequest.observe();
-    const folderPath = await ipc.invoke('open-folder-dialog');
+    // Toolbar buttons pass this as an onClick handler, so the argument may be a
+    // click event; only a non-empty string is a folder to preselect.
+    const folderPath = typeof defaultPath === 'string' && defaultPath
+      ? await ipc.invoke('open-folder-dialog', defaultPath)
+      : await ipc.invoke('open-folder-dialog');
     // A dialog is dismissed by the OS, not by this hook, so its result can land
     // after an auto-restore or a close has already decided which workspace is
     // open. Watching rather than claiming: choosing a folder is only a decision
     // once the choice comes back.
-    if (!halaGecerli()) return;
-    if (folderPath) await selectWorkspace(folderPath);
+    if (!halaGecerli()) return null;
+    if (!folderPath) return null;
+    await selectWorkspace(folderPath);
+    return folderPath;
   }, [selectWorkspace, workspaceRequest]);
 
   const openFilePicker = useCallback(async () => {
