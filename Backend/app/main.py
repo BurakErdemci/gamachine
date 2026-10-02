@@ -138,6 +138,7 @@ from routes import (
     create_mcp_router,
     create_transcribe_router,
     create_remote_router,
+    create_profile_router,
 )
 
 
@@ -346,6 +347,7 @@ app.include_router(create_workspace_router(db))
 app.include_router(create_lsp_router(db))
 _conversation_router = create_conversation_router(db, PROGRESS_STORE)
 app.include_router(_conversation_router)
+app.include_router(create_profile_router(db))
 app.include_router(create_mcp_router())
 app.include_router(create_transcribe_router(db))
 

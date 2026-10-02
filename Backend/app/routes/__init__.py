@@ -7,6 +7,7 @@ from .lsp_routes import create_lsp_router
 from .mcp_routes import create_mcp_router
 from .transcribe_routes import create_transcribe_router
 from .remote_routes import create_remote_router
+from .profile_routes import create_profile_router
 
 __all__ = [
     "create_analysis_router",
@@ -18,4 +19,5 @@ __all__ = [
     "create_mcp_router",
     "create_transcribe_router",
     "create_remote_router",
+    "create_profile_router",
 ]

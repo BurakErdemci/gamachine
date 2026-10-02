@@ -2043,6 +2043,9 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                     try:
                         db.add_message(request.conversation_id, "assistant", full_response,
                                        provider=_turn_agent, model=model_name)
+                        if ended_normally and not ticketed_wake:
+                            db.record_activity("turn_done", request.conversation_id,
+                                               provider=_turn_agent, model=model_name)
 
                         # İlk mesajsa başlığı otomatik değiştir
                         # Not from a note: its framed text is no title. Not
@@ -3017,6 +3020,9 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                 db.add_message(request.conversation_id, "assistant", full_response,
                                provider=_message_agent(provider_type, model_name),
                                model=model_name)
+                db.record_activity("turn_done", request.conversation_id,
+                                   provider=_message_agent(provider_type, model_name),
+                                   model=model_name)
                 chat_titles.after_reply(db, request.conversation_id,
                                         provider_type, model_name, api_key)
 

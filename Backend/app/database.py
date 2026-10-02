@@ -339,6 +339,19 @@ class DatabaseManager:
                 outcome TEXT NOT NULL)''')
             cursor.execute(
                 'CREATE INDEX IF NOT EXISTS idx_approval_ledger_at ON approval_ledger (at)')
+            # The ledger sees only carded actions; messages lose history on
+            # compaction/delete (maker profile plan, 2 Oct 2026).
+            cursor.execute('''CREATE TABLE IF NOT EXISTS activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                at TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                conversation_id INTEGER,
+                provider TEXT,
+                model TEXT,
+                tool TEXT,
+                detail TEXT)''')
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS idx_activity_kind_at ON activity_events (kind, at)')
             conn.commit()
 
     def _migrate_ai_configs_table(self, conn: sqlite3.Connection):
@@ -1269,6 +1282,44 @@ class DatabaseManager:
                 (conv_id, 'assistant', f'📝 **Sohbet özetlendi.**\n\n{summary}', '[]', now)
             )
             conn.commit()
+
+    def record_activity(self, kind, conversation_id=None, provider=None, model=None,
+                        tool=None, detail=None, at=None) -> bool:
+        """A profile metric must never turn a saved answer into a save warning."""
+        try:
+            with closing(sqlite3.connect(self.db_path)) as conn, conn:
+                conn.execute(
+                    'INSERT INTO activity_events '
+                    '(at, kind, conversation_id, provider, model, tool, detail) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (at or datetime.now().strftime("%Y-%m-%d %H:%M:%S"), kind,
+                     conversation_id, provider, model, tool, detail))
+            return True
+        except Exception:
+            if not getattr(self, '_activity_failure_logged', False):
+                self._activity_failure_logged = True
+                logger.exception('[profile] activity row not written')
+            return False
+
+    def list_activity(self, kinds=None, since=None) -> List[Dict[str, Any]]:
+        clauses, params = [], []
+        if kinds is not None:
+            if not kinds:
+                return []
+            clauses.append('kind IN (' + ', '.join('?' for _ in kinds) + ')')
+            params.extend(kinds)
+        if since is not None:
+            clauses.append('at >= ?')
+            params.append(since)
+        where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(row) for row in conn.execute(
+                'SELECT * FROM activity_events' + where + ' ORDER BY at, id', params)]
+
+    def clear_activity(self) -> int:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            return conn.execute('DELETE FROM activity_events').rowcount
 
     # ===================== APP SETTINGS =====================
     def get_setting(self, key: str) -> Optional[str]:
