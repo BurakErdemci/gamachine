@@ -115,6 +115,12 @@ Copyright (c) Electron contributors / OpenJS Foundation — **MIT License** — 
 Chromium: BSD-3-Clause and others. Node.js: MIT.
 Full notices are included in the Electron distribution.
 
+### Mannequin model (Universal Animation Library) — **[bundled]**
+Models by @Quaternius — **CC0 1.0 (public domain dedication)** — https://quaternius.com
+The Mannequin from the Universal Animation Library [Standard], trimmed to mesh and
+skin, ships as `Frontend/frontend/renderer/public/models/mannequin.glb`; the license
+text is retained beside it in `mannequin-LICENSE.txt`.
+
 ---
 
 ## Application dependencies

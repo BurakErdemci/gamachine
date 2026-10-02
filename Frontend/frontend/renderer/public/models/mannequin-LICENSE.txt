@@ -1,0 +1,13 @@
+mannequin.glb
+
+Models by @Quaternius, Universal Animation Library, https://quaternius.com
+
+Trimmed for this app to the Mannequin's mesh and skin (no animations,
+no textures). The original license text follows.
+
+-------------------------------------------------------
+License:
+CC0 1.0 Universal (CC0 1.0)
+Public Domain Dedication
+https://creativecommons.org/publicdomain/zero/1.0/
+-------------------------------------------------------

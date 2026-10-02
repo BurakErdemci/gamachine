@@ -15,7 +15,10 @@ import {
   playableClip,
   type ParsedModel,
 } from './loaders';
+import { createContactShadow, tintContactShadows } from './contactShadow';
+import { detectHumanoidRig, rigBonesOf, type HumanoidMap } from './humanoidRig';
 import { buildMannequin, exceedsMannequinBudget, type MannequinHandle } from './mannequin';
+import { buildRiggedMannequin, loadMannequinTemplate, MANNEQUIN_JOINT_MATERIAL } from './riggedMannequin';
 import { createPlayback, type Playback } from './playback';
 import { PlaybackControls } from './PlaybackControls';
 import { DEFAULT_SPEED, timeAtFraction, type Speed } from './timeline';
@@ -39,7 +42,9 @@ export interface ModelPreviewPanelProps {
  * mannequin the preview ink, which reads on the paper themes' light ground too (the old fixed
  * #d8d8d8 figure all but disappeared there). Arena's values are the fallback.
  */
-const PREVIEW_TOKEN_DEFAULTS = { '--pv-bg': '#141925', '--pv-grid': '#2b3248', '--pv-ink': '#8c95ab' } as const;
+const PREVIEW_TOKEN_DEFAULTS = {
+  '--pv-bg': '#141925', '--pv-grid': '#2b3248', '--pv-ink': '#8c95ab', '--pv-edge': '#a0a8bc', '--pv-shadow': '#0b0e16',
+} as const;
 
 const mixHex = (a: string, b: string, t: number) => {
   const ca = new THREE.Color(a); const cb = new THREE.Color(b);
@@ -53,13 +58,23 @@ export const previewColors = () => {
     // The mockup's floor line is the preview ink at 45 %: a centre line, not a second grid.
     centerLine: mixHex(tk['--pv-bg'], tk['--pv-ink'], 0.45),
     figure: tk['--pv-ink'],
+    // The bundled mannequin's joint material. Not --ink-dim: in Sade that is
+    // the same colour as --pv-ink, so the joints would vanish into the body.
+    joints: tk['--pv-edge'],
+    shadow: tk['--pv-shadow'],
   };
 };
 
-/** The mannequin's shared material takes the preview ink (it is the app's stand-in, not file art). */
-const tintMannequin = (mannequin: MannequinHandle | null, color: string) => {
-  const material = mannequin?.meshes[0]?.material as THREE.MeshStandardMaterial | undefined;
-  material?.color?.set(color);
+/**
+ * The mannequin takes the preview ink (it is the app's stand-in, not file art).
+ * The bundled model's joint material takes the dimmer ink; the procedural
+ * figure has one unnamed material and takes the body colour.
+ */
+const tintMannequin = (mannequin: MannequinHandle | null, colors: { figure: string; joints: string }) => {
+  for (const mesh of mannequin?.meshes ?? []) {
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    material.color?.set(material.name === MANNEQUIN_JOINT_MATERIAL ? colors.joints : colors.figure);
+  }
 };
 
 // Fraction of the viewport the framed model should occupy. Below 1 the bounding
@@ -294,10 +309,23 @@ export const viewableBounds = (
  * rather than writing React state: the caller owns the component, this owns
  * the scene.
  */
+export interface HumanoidMannequin {
+  /** The parsed bundled glb (`loadMannequinTemplate`). */
+  template: THREE.Object3D;
+  map: HumanoidMap;
+}
+
+/** The rig's humanoid map, or null when the bundled mannequin cannot wear it. */
+export const humanoidMapFor = (parsed: ParsedModel): HumanoidMap | null =>
+  detectHumanoidRig(rigBonesOf(parsed.object));
+
 export const mountParsedModel = (
   stage: MountTarget,
   parsed: ParsedModel,
   bounds: ViewableBounds,
+  // A humanoid rig with no mesh wears the bundled mannequin instead of the
+  // procedural capsules; absent, or failing to build, the capsules it is.
+  humanoid: HumanoidMannequin | null = null,
 ): number => {
   // Volumes only for the bones-without-geometry case: a file that brought its
   // own meshes is already its own silhouette, and capsules over it would be an
@@ -321,18 +349,44 @@ export const mountParsedModel = (
   // rotation plus hips translation, so this is rare in practice — and it is the
   // architecture the feature was specified with.
   stage.mannequin?.dispose();
-  stage.mannequin = bounds.skeleton ? buildMannequin(parsed.object) : null;
+  stage.mannequin = null;
+  let clip = playableClip(parsed.clips);
+  let playRoot: THREE.Object3D = parsed.object;
+  let box = bounds.box;
+  let follow: THREE.Object3D | null = null;
+  if (bounds.skeleton && humanoid) {
+    try {
+      const rigged = buildRiggedMannequin(humanoid.template, parsed.object, humanoid.map, clip);
+      stage.mannequin = rigged.handle;
+      stage.content.add(rigged.object);
+      playRoot = rigged.object;
+      clip = rigged.clip;
+      follow = rigged.hips;
+      // The mannequin keeps the source's hip height, not its overall size,
+      // so its own frame-0 silhouette joins the framing.
+      box = bounds.box.clone().union(new THREE.Box3().setFromObject(rigged.object, true));
+    } catch {
+      stage.mannequin = null;
+    }
+  }
+  if (bounds.skeleton && !stage.mannequin) {
+    stage.mannequin = buildMannequin(parsed.object);
+    parsed.object.traverse(child => { if (!follow && (child as THREE.Bone).isBone) follow = child; });
+  }
   stage.content.add(parsed.object);
-  reseatControls(stage.controls, frameObject(stage.camera, stage.grid, bounds.box));
+  reseatControls(stage.controls, frameObject(stage.camera, stage.grid, box));
+  if (bounds.skeleton) {
+    const height = Math.max(box.max.y - box.min.y, 1e-4);
+    stage.content.add(createContactShadow(height * 0.28, stage.grid.position.y, follow));
+  }
 
-  const clip = playableClip(parsed.clips);
   if (!clip) {
     // Nothing will animate, so the parked loop has to be told once.
     stage.render();
     return 0;
   }
 
-  stage.playback = createPlayback(parsed.object, clip);
+  stage.playback = createPlayback(playRoot, clip);
   stage.playback.setSpeed(DEFAULT_SPEED);
   stage.playing = true;
   stage.wake();
@@ -542,7 +596,8 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
       bestEffort(() => old.geometry.dispose());
       bestEffort(() => (Array.isArray(old.material) ? old.material : [old.material]).forEach(m => m.dispose()));
       stage.grid = fresh;
-      tintMannequin(stage.mannequin, next.figure);
+      tintMannequin(stage.mannequin, next);
+      tintContactShadows(stage.content, next.shadow);
       stage.render();
     });
 
@@ -686,6 +741,13 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
         return;
       }
 
+      // Only a rig the bundled mannequin can wear pays for fetching it; any
+      // failure resolves null and the procedural figure stands in.
+      const map = bounds.skeleton ? humanoidMapFor(parsed) : null;
+      const template = map ? await loadMannequinTemplate() : null;
+      if (cancelled) { disposeObject(parsed.object); return; }
+      const humanoid = map && template ? { template, map } : null;
+
       const stage = stageRef.current;
       if (!stage) { disposeObject(parsed.object); setLoading(false); return; }
 
@@ -695,7 +757,7 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
       // it and no way out but closing the preview.
       let clipDuration: number;
       try {
-        clipDuration = mountParsedModel(stage, parsed, bounds);
+        clipDuration = mountParsedModel(stage, parsed, bounds, humanoid);
       } catch (err) {
         // `clearContent` only reaches what already hangs on the stage, and the
         // throw may have come before the model got there.
@@ -710,7 +772,9 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
         fail('preview.loadError', String(err instanceof Error ? err.message : err).split(/\r?\n/)[0]);
         return;
       }
-      tintMannequin(stage.mannequin, previewColors().figure);
+      const colors = previewColors();
+      tintMannequin(stage.mannequin, colors);
+      tintContactShadows(stage.content, colors.shadow);
       stage.render();
       if (clipDuration > 0) {
         setDuration(clipDuration);
