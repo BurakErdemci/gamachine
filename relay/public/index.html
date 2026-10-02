@@ -62,7 +62,7 @@
 </section>
 
 <section id="screen-main" hidden>
-  <header class="bar">
+  <header class="bar band">
     <span id="status-text" data-i18n="text.21">Bağlanıyor…</span>
   </header>
   <p id="main-note" class="note"></p>
@@ -92,15 +92,18 @@
     <button id="btn-back" type="button" class="secondary small" data-i18n="static.49">‹ Geri</button>
     <span id="chat-title"></span>
   </header>
-  <p id="chat-status" class="note"></p>
-  <h2 data-i18n="static.50">Model (bu sohbet)</h2>
+  <!-- Shell block under the title, like the desktop header: model and effort, then the status band. -->
+  <div class="chat-settings">
+  <h2 class="set-model" data-i18n="static.50">Model (bu sohbet)</h2>
   <select id="model-select" aria-label="Model" disabled data-i18n-attr="aria-label:attr.215"></select>
   <p class="note" data-i18n="static.51">Çalışan bir tur, başladığı modelle biter.</p>
   <p id="model-note" class="note"></p>
-  <h2 data-i18n="static.52">Düşünme seviyesi (bilgisayardaki)</h2>
+  <h2 class="set-effort" data-i18n="static.52">Düşünme seviyesi (bilgisayardaki)</h2>
   <select id="effort-select" aria-label="Düşünme seviyesi" disabled data-i18n-attr="aria-label:attr.216"></select>
   <p id="effort-ultracode" class="note" data-i18n="static.53" hidden>Bilgisayarda Ultracode açık. Bir seviye seçersen Ultracode kapanır; bilgisayarda da böyle.</p>
   <p id="effort-note" class="note"></p>
+  </div>
+  <p id="chat-status" class="note band"></p>
   <button id="btn-stop" type="button" class="danger" data-i18n="text.137" hidden>Durdur</button>
   <div id="log" class="log"></div>
   <div id="chat-cards"></div>
@@ -111,10 +114,12 @@
     <ul id="slash-list" class="list"></ul>
   </div>
   <form id="composer">
+    <div class="composer-box">
     <textarea id="composer-text" rows="3" placeholder="Mesaj yaz…" data-i18n-attr="placeholder:attr.218"></textarea>
     <div class="composer-row">
       <button id="btn-slash" type="button" class="secondary" aria-label="Komutlar" aria-expanded="false" aria-controls="slash-panel" data-i18n="static.55" data-i18n-attr="aria-label:attr.219">/</button>
       <button id="btn-send" type="submit" data-i18n="static.56">Gönder</button>
+    </div>
     </div>
     <p id="composer-note" class="note"></p>
   </form>

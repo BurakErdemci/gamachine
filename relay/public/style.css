@@ -1,81 +1,865 @@
+/* Phone remote page, UI v4 (the "Masaüstünün aynası" phone in gamachine-tasarim/maket).
+   One DOM, four themes: the desktop reports its theme and app.js puts it on
+   <html data-theme>; until it does, the page wears Arena.
+   Token values are copied from Frontend/frontend/renderer/styles/gm/tokens.css (the approved
+   mockup palette); only the tokens this page uses are listed. Components below use tokens only.
+   No url() anywhere except fonts.css: the CSP allows images from 'self' only, so icons are
+   drawn with clip-path and gradients. */
+
+/* ---------------------------------------------------------------- tokens */
+
 :root {
-  color-scheme: dark;
-  --bg: #101214;
-  --surface: #1a1d21;
-  --line: #2a2e34;
-  --text: #e8e6e1;
-  --muted: #9aa0a8;
-  --accent: #d9b36c;
-  --danger: #e07a6a;
+  /* Phone sizes: body text 15px (>= 14 on a phone), meta 13px, labels 12px (the hard floor).
+     Inputs stay at 16px: iOS Safari zooms the page into any field below that. */
+  --fs-body: 15px;
+  --fs-small: 13px;
+  --fs-meta: 12px;
+  --fs-input: 16px;
+  --tap: 44px;
 }
+
+/* Arena, also the default before the desktop reports a theme. */
+:root:not([data-theme]),
+:root[data-theme="arena"] {
+  color-scheme: dark;
+  --shell-bg: #141826;
+  --shell-bg-2: #1B2031;
+  --shell-line: #2C344B;
+  --shell-text: #ECE9E2;
+  --shell-text-dim: #A0A8BC;
+  --shell-tex: linear-gradient(180deg, rgba(160, 175, 215, .045), transparent 220px);
+  --paper-bg: #1F2433;
+  --paper-raised: #272D3F;
+  --paper-sunk: #30374B;
+  --paper-line: #343B50;
+  --paper-line-strong: #5A6380;
+  --ink: #DDDAD2;
+  --ink-dim: #BEC3CF;
+  --ink-faint: #A2A9B9;
+  --code-bg: #141925;
+  --code-text: #E1E3EA;
+  --accent: #FF6B3D;
+  --accent-ink: #141826;
+  --accent-text: #FF946F;
+  --ok: #6FA592;
+  --ok-text: #93C7B3;
+  --ok-soft: #1E312C;
+  --focus: #DDDAD2;
+  --err: var(--accent-text);
+  --btn-bg: #FF6B3D;
+  --btn-text: #141826;
+  --btn-hover: #FF8257;
+  --btn-focus: #141826;
+  --btn-font: "Chakra Petch", "Figtree", sans-serif;
+  --btn-case: uppercase;
+  --btn-track: .1em;
+  --shadow-btn: inset 0 -3px 0 rgba(20, 24, 38, .26);
+  --us-on: #2CC5B4;
+  --us-on-text: #4FD8C8;
+  --us-led-off: #2C344B;
+  --us-alert: #FF6B3D;
+  --us-alert-text: #FF946F;
+  --quest-cut: 12px;
+  --quest-edge: #4C5571;
+  --quest-shadow: #0E111A;
+  --quest-strip: #141826;
+  --font-body: "Figtree", system-ui, sans-serif;
+  --font-label: "Chakra Petch", "Figtree", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Chakra Petch", "Figtree", sans-serif;
+  --font-title: "Chakra Petch", "Figtree", sans-serif;
+  --font-who: "Chakra Petch", "Figtree", sans-serif;
+  --who-case: uppercase;
+  --who-track: .09em;
+  --lh-body: 1.62;
+  --label-case: uppercase;
+  --label-track: .13em;
+  --label-weight: 600;
+  --label-stretch: normal;
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 3px;
+  --clip-sm: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  --shadow-card: 3px 3px 0 #12151F;
+}
+
+/* Sade: flat premium IDE, ink-violet ground (KARAKTER 12 + 14A). Geist/Inter are not bundled
+   for the phone, so text falls to system-ui; code finds the bundled JetBrains Mono. */
+:root[data-theme="sade"] {
+  color-scheme: dark;
+  --shell-bg: #13111B;
+  --shell-bg-2: #1A1725;
+  --shell-line: #272338;
+  --shell-text: #E6E2F0;
+  --shell-text-dim: #9790AE;
+  --shell-tex: none;
+  --paper-bg: #1A1725;
+  --paper-raised: #201C2D;
+  --paper-sunk: #2A2539;
+  --paper-line: #2C273B;
+  --paper-line-strong: #3E3752;
+  --ink: #E6E2F0;
+  --ink-dim: #BAB3CC;
+  --ink-faint: #9890AE;
+  --code-bg: #131119;
+  --code-text: #DCD7E8;
+  --accent: #A68BFA;
+  --accent-ink: #0D0B13;
+  --accent-text: #C2B0FF;
+  --ok: #72CB9B;
+  --ok-text: #8FD9B0;
+  --ok-soft: #263036;
+  --focus: #C2B0FF;
+  --err: var(--sade-err-text);
+  --btn-bg: #7655E3;
+  --btn-text: #FFFFFF;
+  --btn-hover: #6B4AD6;
+  --btn-focus: #FFFFFF;
+  --btn-font: var(--font-body);
+  --btn-case: none;
+  --btn-track: 0;
+  --shadow-btn: none;
+  --us-on: #72CB9B;
+  --us-on-text: #8FD9B0;
+  --us-led-off: #272338;
+  --us-alert: #F0869C;
+  --us-alert-text: #F6A1B2;
+  --sade-card-line: #3E3752;
+  --sade-pending-line: #67579A;
+  --sade-err-text: #F6A1B2;
+  --font-body: "Geist", "Inter", system-ui, sans-serif;
+  --font-label: "Geist", "Inter", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Geist", "Inter", system-ui, sans-serif;
+  --font-title: "Geist", "Inter", system-ui, sans-serif;
+  --font-who: "Geist", "Inter", system-ui, sans-serif;
+  --who-case: none;
+  --who-track: 0;
+  --lh-body: 1.6;
+  --label-case: none;
+  --label-track: 0;
+  --label-weight: 500;
+  --label-stretch: normal;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --clip-sm: none;
+  --shadow-card: none;
+}
+
+/* Pafta: the drafting table, light paper under a navy desk. IBM Plex and Archivo are not
+   bundled for the phone: text and labels fall to the system sans, code to ui-monospace. */
+:root[data-theme="pafta"] {
+  color-scheme: light;
+  --shell-bg: #18202A;
+  --shell-bg-2: #212B36;
+  --shell-line: #2F3B49;
+  --shell-text: #E4E1D9;
+  --shell-text-dim: #A1ACB8;
+  --shell-tex: none;
+  --paper-bg: #E6E1D5;
+  --paper-raised: #EEEAE1;
+  --paper-sunk: #DAD4C6;
+  --paper-line: #B3BAC1;
+  --paper-line-strong: #7E8893;
+  --ink: #18212C;
+  --ink-dim: #434D59;
+  --ink-faint: #535D69;
+  --code-bg: #1A222D;
+  --code-text: #DCE0E4;
+  --accent: #C23B2A;
+  --accent-ink: #FFFAF3;
+  --accent-text: #A1301F;
+  --ok: #3F6B57;
+  --ok-text: #335846;
+  --ok-soft: #D3DED3;
+  --focus: #2E68A0;
+  --err: var(--accent-text);
+  --btn-bg: #18212C;
+  --btn-text: #EEEAE1;
+  --btn-hover: #2A3542;
+  --btn-focus: #2E68A0;
+  --btn-font: var(--font-body);
+  --btn-case: none;
+  --btn-track: 0;
+  --shadow-btn: none;
+  --us-on: #6B9FD1;
+  --us-on-text: #9CC3EA;
+  --us-led-off: #2F3B49;
+  --us-alert: #E0573F;
+  --us-alert-text: #F29A86;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-label: "Archivo", "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-display: "Archivo", "IBM Plex Sans", sans-serif;
+  --font-title: "IBM Plex Sans", system-ui, sans-serif;
+  --font-who: "Archivo", "IBM Plex Sans", sans-serif;
+  --who-case: uppercase;
+  --who-track: .07em;
+  --lh-body: 1.6;
+  --label-case: uppercase;
+  --label-track: .085em;
+  --label-weight: 600;
+  --label-stretch: 87.5%;
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 3px;
+  --clip-sm: none;
+  --shadow-card: 2px 2px 0 rgba(24, 33, 44, .9);
+}
+
+/* Atolye: the workbench, cream bench top under a walnut shell. Source Sans 3 and Bitter are
+   not bundled for the phone: text falls to system-ui, labels to Georgia; code keeps the
+   bundled JetBrains Mono, which is Atolye's own code face. */
+:root[data-theme="atolye"] {
+  color-scheme: light;
+  --shell-bg: #1E1A16;
+  --shell-bg-2: #29231D;
+  --shell-line: #3A3229;
+  --shell-text: #EDE5D8;
+  --shell-text-dim: #B5A997;
+  --shell-tex:
+    repeating-linear-gradient(90.6deg, rgba(255, 228, 190, .022) 0 1px, transparent 1px 9px),
+    repeating-linear-gradient(89.2deg, rgba(0, 0, 0, .07) 0 2px, transparent 2px 31px),
+    repeating-linear-gradient(90deg, rgba(255, 220, 170, .015) 0 14px, transparent 14px 57px);
+  --paper-bg: #E2DCD0;
+  --paper-raised: #EBE6DC;
+  --paper-sunk: #D5CDBE;
+  --paper-line: #C2B8A6;
+  --paper-line-strong: #8A7D69;
+  --ink: #241E18;
+  --ink-dim: #4C4237;
+  --ink-faint: #5F5447;
+  --code-bg: #231E19;
+  --code-text: #E6DDCF;
+  --accent: #BF6E14;
+  --accent-ink: #160F08;
+  --accent-soft: #EBCD9C;
+  --accent-text: #8A3F0A;
+  --ok: #4F6B46;
+  --ok-text: #3E5636;
+  --ok-soft: #D6DDC8;
+  --focus: #9C5A12;
+  --err: var(--accent-text);
+  --btn-bg: #2A231C;
+  --btn-text: #F0E8DA;
+  --btn-hover: #3A3027;
+  --btn-focus: #F0E8DA;
+  --btn-font: var(--font-body);
+  --btn-case: none;
+  --btn-track: 0;
+  --shadow-btn: 2px 2px 0 #8A7D69;
+  --us-on: #8DAF7E;
+  --us-on-text: #A9C79B;
+  --us-led-off: #3A3229;
+  --us-alert: #D98A2B;
+  --us-alert-text: #EBB070;
+  --atolye-metal: #9C8F7B;
+  --atolye-hole: rgba(36, 30, 24, .30);
+  --atolye-void: #2B231C;
+  --font-body: "Source Sans 3", system-ui, sans-serif;
+  --font-label: "Bitter", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Bitter", Georgia, serif;
+  --font-title: "Source Sans 3", system-ui, sans-serif;
+  --font-who: "Source Sans 3", system-ui, sans-serif;
+  --who-case: none;
+  --who-track: 0;
+  --lh-body: 1.6;
+  --label-case: uppercase;
+  --label-track: .07em;
+  --label-weight: 600;
+  --label-stretch: normal;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --clip-sm: none;
+  --shadow-card: 3px 3px 0 #3A2C20;
+}
+
+/* ---------------------------------------------------------------- page */
+
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; background: var(--paper-bg); }
 body {
   margin: 0;
-  padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
-  background: var(--bg);
-  color: var(--text);
-  font: 17px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  min-height: 100vh;
+  background: var(--paper-bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
   overflow-wrap: anywhere;
 }
-h1 { font-size: 22px; margin: 8px 0 12px; }
-h2 { font-size: 15px; color: var(--muted); font-weight: 600; margin: 20px 0 8px; }
+/* Every screen is a column on the paper. The shell strips (.bar, .band, .chat-settings)
+   reach the screen edges with a negative margin. */
+section {
+  padding: max(28px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+#screen-main, #screen-chat { padding-top: 0; }
+#screen-chat { padding-bottom: 0; }
+
+h1 {
+  margin: 12px 0 14px;
+  font-family: var(--font-display);
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 700;
+  font-stretch: var(--label-stretch);
+  color: var(--ink);
+}
+h2 {
+  margin: 24px 0 8px;
+  font-family: var(--font-label);
+  font-size: var(--fs-meta);
+  font-weight: var(--label-weight);
+  text-transform: var(--label-case);
+  letter-spacing: var(--label-track);
+  font-stretch: var(--label-stretch);
+  color: var(--ink-faint);
+}
+p { margin: 8px 0; }
+b { font-weight: 600; color: var(--ink); }
 ol { padding-left: 22px; }
-li { margin-bottom: 8px; }
+li { margin-bottom: 10px; }
+label { display: block; margin-top: 18px; font-size: 14px; color: var(--ink-dim); }
+pre, code { font-family: var(--font-mono); font-variant-ligatures: none; }
+
+.note { color: var(--ink-dim); font-size: 14px; min-height: 1em; }
+.error { color: var(--err); min-height: 1em; }
+.meta { display: block; color: var(--ink-faint); font-size: var(--fs-small); font-weight: 400; }
+.meta.wait { color: var(--accent-text); }
+.footer { margin-top: 32px; }
+/* The pairing code is compared digit by digit with the desktop: mono, large, plain ink. */
+.code {
+  display: inline-block; margin: 8px 0; padding: 6px 14px;
+  font-family: var(--font-mono); font-size: 40px; font-weight: 700; letter-spacing: 6px; line-height: 1.2;
+  color: var(--ink); background: var(--paper-raised);
+  border: 1px solid var(--paper-line-strong); border-radius: var(--radius-md);
+}
+
+/* ---------------------------------------------------------------- controls */
+
 button, input, textarea, select { font: inherit; color: inherit; }
 button {
   display: block;
   width: 100%;
   min-height: 48px;
   margin: 8px 0;
-  padding: 10px 14px;
+  padding: 10px 16px;
   border: 0;
-  border-radius: 10px;
-  background: var(--accent);
-  color: #15120b;
-  font-weight: 600;
+  border-radius: var(--radius-md);
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  font-family: var(--btn-font);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: var(--btn-case);
+  letter-spacing: var(--btn-track);
+  box-shadow: var(--shadow-btn);
+  clip-path: var(--clip-sm);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-button.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--line); }
-button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
-button.small { width: auto; min-height: 40px; margin: 0; padding: 6px 12px; display: inline-block; }
-button:disabled { opacity: 0.45; }
+button:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: none; }
+button:disabled { opacity: .45; cursor: default; }
+/* A ring outside a chamfered button would be clipped away, so the primary one is drawn inside. */
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button:not(.secondary):not(.danger):focus-visible { outline-color: var(--btn-focus); outline-offset: -4px; }
+
+button.secondary {
+  background: transparent;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--paper-line-strong);
+  clip-path: none;
+}
+button.danger {
+  display: inline-block;
+  width: auto;
+  min-height: var(--tap);
+  margin: 12px 0 0;
+  padding: 8px 18px;
+  background: transparent;
+  color: var(--err);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  clip-path: none;
+}
+button.small { display: inline-block; width: auto; min-height: var(--tap); margin: 0; padding: 6px 12px; }
+
 input, textarea, select {
   display: block;
   width: 100%;
+  min-height: 48px;
   margin: 8px 0;
   padding: 12px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--surface);
+  border: 1px solid var(--paper-line-strong);
+  border-radius: var(--radius-md);
+  background: var(--paper-raised);
+  color: var(--ink);
+  font-size: var(--fs-input);
 }
-.bar { display: flex; align-items: center; gap: 12px; min-height: 44px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
-.note { color: var(--muted); font-size: 15px; min-height: 1em; }
-.error { color: var(--danger); min-height: 1em; }
-.code { font-size: 44px; letter-spacing: 8px; font-weight: 700; color: var(--accent); margin: 8px 0; }
+input::placeholder, textarea::placeholder { color: var(--ink-faint); opacity: 1; }
+/* A drawn chevron: two gradient triangles, so the select needs no image. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 38px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-dim) 50%),
+    linear-gradient(135deg, var(--ink-dim) 50%, transparent 50%);
+  background-position: calc(100% - 20px) 50%, calc(100% - 15px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+select:disabled { opacity: .6; }
+
 .list { list-style: none; margin: 0; padding: 0; }
-.list li { margin: 0; border-bottom: 1px solid var(--line); }
+.list li { margin: 0; border-bottom: 1px solid var(--paper-line); }
 .list button {
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  font-weight: 400;
+  min-height: 56px;
   margin: 0;
-  border-radius: 0;
   padding: 12px 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  box-shadow: none;
+  clip-path: none;
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: 16px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
 }
-.meta { display: block; color: var(--muted); font-size: 14px; }
-.meta.wait { color: var(--accent); }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin: 10px 0; }
-.card .detail, .log pre { white-space: pre-wrap; font: 14px/1.4 ui-monospace, Menlo, monospace; margin: 6px 0; }
-.card .row { display: flex; gap: 8px; flex-wrap: wrap; }
-.card .row button { flex: 1 1 40%; }
-.log { margin: 12px 0; }
-.log .msg { padding: 8px 0; border-bottom: 1px solid var(--line); white-space: pre-wrap; }
-.log .who { display: block; color: var(--muted); font-size: 13px; }
-.log .ev { color: var(--muted); font-size: 14px; padding: 4px 0; }
-.log .ev.error { color: var(--danger); }
-.footer { margin-top: 28px; }
-.composer-row { display: flex; gap: 8px; }
-.composer-row button { flex: 1 1 auto; }
-.composer-row #btn-slash { flex: 0 0 56px; width: 56px; font-size: 22px; }
+.list button:active:not(:disabled) { transform: none; background: var(--paper-sunk); }
+.list .meta { margin-top: 2px; }
+
+/* ---------------------------------------------------------------- shell strips */
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: calc(56px + env(safe-area-inset-top));
+  margin: 0 calc(-1 * max(16px, env(safe-area-inset-right))) 0 calc(-1 * max(16px, env(safe-area-inset-left)));
+  padding: env(safe-area-inset-top) 16px 0 8px;
+  background-color: var(--shell-bg);
+  background-image: var(--shell-tex);
+  color: var(--shell-text);
+}
+#chat-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-title);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--shell-text);
+}
+.bar button.secondary {
+  min-width: var(--tap);
+  background: transparent;
+  color: var(--shell-text);
+  box-shadow: none;
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* The mirror band ("Masaüstünde açık · Unity bağlı"): a lamp and one line of state. */
+.band {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin: 0 calc(-1 * max(16px, env(safe-area-inset-right))) 0 calc(-1 * max(16px, env(safe-area-inset-left)));
+  padding: 7px 16px;
+  background: var(--shell-bg);
+  border-top: 1px solid var(--shell-line);
+  color: var(--shell-text-dim);
+  font-size: var(--fs-small);
+  line-height: 1.4;
+}
+.bar.band { min-height: calc(48px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 16px 0; border-top: 0; }
+/* The lamp follows the link (body[data-link], set by setStatus): live, connecting, cut off, refused. */
+.band::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--shell-text-dim);
+}
+body[data-link="ready"] .band::before,
+body[data-link="connecting"] .band::before { background: var(--us-on); box-shadow: none; }
+body[data-link="connecting"] .band::before { opacity: .55; }
+body[data-link="hello_rejected"] .band::before { background: var(--us-alert); box-shadow: none; }
+body[data-link="ready"] #status-text { color: var(--us-on-text); }
+body[data-link="hello_rejected"] #status-text { color: var(--us-alert-text); }
+#main-note:empty { display: none; }
+
+/* Model and effort sit in the shell under the title, as on the desktop header. */
+.chat-settings {
+  display: grid;
+  /* model names are long ("Claude Code · Opus 5.5"), effort words short */
+  grid-template-columns: 3fr 2fr;
+  column-gap: 10px;
+  margin: 0 calc(-1 * max(16px, env(safe-area-inset-right))) 0 calc(-1 * max(16px, env(safe-area-inset-left)));
+  padding: 0 16px 10px;
+  background: var(--shell-bg);
+  color: var(--shell-text);
+}
+.chat-settings > * { grid-column: 1 / -1; }
+.chat-settings > .set-model { grid-column: 1; grid-row: 1; }
+.chat-settings > #model-select { grid-column: 1; grid-row: 2; }
+.chat-settings > .set-effort { grid-column: 2; grid-row: 1; }
+.chat-settings > #effort-select { grid-column: 2; grid-row: 2; }
+.chat-settings h2 { margin: 4px 0 0; color: var(--shell-text-dim); }
+.chat-settings select {
+  min-height: var(--tap);
+  margin: 4px 0;
+  padding: 8px 34px 8px 10px;
+  background-color: var(--shell-bg-2);
+  border-color: var(--shell-line);
+  color: var(--shell-text);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--shell-text-dim) 50%),
+    linear-gradient(135deg, var(--shell-text-dim) 50%, transparent 50%);
+}
+.chat-settings .note { margin: 2px 0 0; min-height: 0; color: var(--shell-text-dim); font-size: var(--fs-meta); line-height: 1.45; }
+.chat-settings .note:empty { display: none; }
+
+/* ---------------------------------------------------------------- thread */
+
+.log { display: flex; flex-direction: column; gap: 14px; margin: 18px 0 12px; }
+.msg { white-space: pre-wrap; color: var(--ink); }
+.msg .who {
+  display: block;
+  margin-bottom: 4px;
+  white-space: normal;
+  font-family: var(--font-who);
+  font-size: var(--fs-small);
+  font-weight: 600;
+  text-transform: var(--who-case);
+  letter-spacing: var(--who-track);
+  color: var(--ink);
+}
+.msg-user {
+  align-self: flex-end;
+  max-width: 88%;
+  padding: 10px 14px;
+  background: var(--paper-raised);
+  border: 1px solid var(--paper-line);
+  border-radius: var(--radius-lg);
+}
+.msg-user .who { color: var(--ink-dim); }
+
+.ev { font-size: var(--fs-small); line-height: 1.45; color: var(--ink-faint); }
+.ev.error { color: var(--err); }
+/* The tool chip: what the agent touched, one quiet bordered line. */
+.ev-tool-call {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--paper-line-strong);
+  border-radius: var(--radius-md);
+  color: var(--ink-dim);
+}
+.ev-card-opened { display: flex; align-items: center; gap: 8px; color: var(--accent-text); }
+.ev-card-opened::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+/* The decided record: the card that closed, with the verdict stamped on its right. The stamp
+   is drawn (a check or a cross cut with clip-path), so it needs no word or icon font.
+   ::before is the stamp plate, ::after the mark. */
+.ev-card-closed {
+  position: relative;
+  min-height: 52px;
+  padding: 13px 68px 13px 16px;
+  background: var(--paper-raised);
+  border: 1px solid var(--paper-line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  color: var(--ink);
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+.ev-card-closed[data-state="approved"]::before,
+.ev-card-closed[data-state="rejected"]::before {
+  content: "";
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  width: 40px;
+  height: 26px;
+  transform: translateY(-50%);
+  border: 2px solid var(--ok);
+  border-radius: var(--radius-sm);
+}
+.ev-card-closed[data-state="approved"]::after,
+.ev-card-closed[data-state="rejected"]::after {
+  content: "";
+  position: absolute;
+  right: 26px;
+  top: 50%;
+  width: 16px;
+  height: 13px;
+  transform: translateY(-50%);
+  background: var(--ok-text);
+  clip-path: polygon(0 52%, 17% 36%, 38% 58%, 83% 0, 100% 16%, 38% 96%);
+}
+.ev-card-closed[data-state="rejected"]::before { border-color: var(--accent); }
+.ev-card-closed[data-state="rejected"]::after {
+  right: 28px;
+  width: 12px;
+  height: 12px;
+  background: var(--accent-text);
+  clip-path: polygon(20% 0, 50% 30%, 80% 0, 100% 20%, 70% 50%, 100% 80%, 80% 100%, 50% 70%, 20% 100%, 0 80%, 30% 50%, 0 20%);
+}
+.ev-card-closed[data-state="rejected"] { color: var(--ink-dim); text-decoration: line-through; text-decoration-color: var(--accent); }
+.ev-card-closed[data-state="closed"] { padding-right: 16px; color: var(--ink-dim); font-weight: 500; }
+
+/* ---------------------------------------------------------------- the pending card */
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 14px 16px 16px;
+  background: var(--paper-raised);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  color: var(--ink);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-label);
+  font-size: var(--fs-meta);
+  font-weight: var(--label-weight);
+  text-transform: var(--label-case);
+  letter-spacing: var(--label-track);
+  font-stretch: var(--label-stretch);
+  color: var(--accent-text);
+  white-space: nowrap;
+}
+.card-mark { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+.card > b { font-family: var(--font-title); font-size: 18px; font-weight: 600; line-height: 1.3; color: var(--ink); }
+.card .detail {
+  max-height: 40vh;
+  overflow: auto;
+  margin: 2px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.card .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
+.card .row button { margin: 0; }
+.card .note { margin: 0; min-height: 0; }
+.card .note:empty { display: none; }
+
+/* ---------------------------------------------------------------- composer */
+
+#slash-panel {
+  margin: 8px 0;
+  padding: 4px 12px 8px;
+  background: var(--paper-raised);
+  border: 1px solid var(--paper-line-strong);
+  border-radius: var(--radius-lg);
+}
 #slash-list { max-height: 45vh; overflow-y: auto; }
+
+/* Pinned to the bottom of the screen; the page itself scrolls, so a loaded chat still
+   rests at its end with the composer under the last line. */
+#composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  margin: 0 calc(-1 * max(16px, env(safe-area-inset-right))) 0 calc(-1 * max(16px, env(safe-area-inset-left)));
+  padding: 8px 12px max(10px, env(safe-area-inset-bottom));
+  background: var(--paper-bg);
+  border-top: 1px solid var(--paper-line);
+}
+.composer-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 5px 5px 5px 6px;
+  background: var(--paper-raised);
+  border: 1px solid var(--paper-line-strong);
+  border-radius: var(--radius-lg);
+}
+.composer-box:focus-within { border-color: var(--ink-dim); }
+.composer-box textarea {
+  flex: 1;
+  height: 62px;
+  min-height: var(--tap);
+  margin: 0;
+  padding: 8px 6px;
+  border: 0;
+  background: transparent;
+  resize: none;
+  line-height: 1.4;
+}
+.composer-box textarea:focus-visible { outline: 0; }
+.composer-row { display: flex; gap: 6px; flex: none; }
+.composer-row button { width: auto; min-width: var(--tap); min-height: var(--tap); margin: 0; padding: 8px 14px; font-size: 14px; }
+#btn-slash { padding: 8px 0; font-family: var(--font-mono); font-size: 18px; font-weight: 600; color: var(--ink-dim); }
+#composer-note { margin: 4px 2px 0; min-height: 0; font-size: var(--fs-small); }
+#composer-note:empty { display: none; }
+
+/* ================================================================ theme signatures
+   KARAKTER 4: each theme adds at most two signature touches on the shared DOM. On the phone
+   they are the pending card and the decided record. */
+
+/* ---------- Arena: the QUEST WINDOW. Two clipped layers draw a chamfered frame
+   (::before = edge, ::after = fill); the hard offset shadow is a zero-blur drop-shadow,
+   which follows the chamfer. The head is the navy title strip with the orange underline. */
+:root:is(:not([data-theme]), [data-theme="arena"]) .card {
+  --c: var(--quest-cut);
+  --chamfer: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
+  padding: 0 16px 16px;
+  row-gap: 9px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  isolation: isolate;
+  filter: drop-shadow(5px 5px 0 var(--quest-shadow));
+}
+:root:is(:not([data-theme]), [data-theme="arena"]) .card::before,
+:root:is(:not([data-theme]), [data-theme="arena"]) .card::after {
+  content: ""; position: absolute; inset: 0; clip-path: var(--chamfer);
+}
+:root:is(:not([data-theme]), [data-theme="arena"]) .card::before { z-index: -2; background: var(--quest-edge); }
+:root:is(:not([data-theme]), [data-theme="arena"]) .card::after { z-index: -1; inset: 1px; background: var(--paper-raised); }
+:root:is(:not([data-theme]), [data-theme="arena"]) .card-head {
+  height: 42px;
+  margin: 0 -16px 4px;
+  padding: 0 14px 0 16px;
+  gap: 12px;
+  background: var(--quest-strip);
+  border-bottom: 2px solid var(--accent);
+  clip-path: polygon(var(--c) 0, 100% 0, 100% 100%, 0 100%, 0 var(--c));
+  color: var(--shell-text);
+  letter-spacing: .14em;
+}
+/* The orange tag of the strip; it carries no word on the phone (see the report). */
+:root:is(:not([data-theme]), [data-theme="arena"]) .card-mark {
+  width: 26px; height: 20px; border-radius: 0; transform: skewX(-12deg);
+}
+:root:is(:not([data-theme]), [data-theme="arena"]) .card > b { font-size: 20px; letter-spacing: .005em; line-height: 1.25; }
+:root:is(:not([data-theme]), [data-theme="arena"]) button.secondary { box-shadow: inset 0 0 0 1.5px var(--ink); }
+:root:is(:not([data-theme]), [data-theme="arena"]) .bar button.secondary { box-shadow: none; }
+:root:is(:not([data-theme]), [data-theme="arena"]) .composer-row #btn-slash { box-shadow: inset 0 0 0 1px var(--paper-line-strong); }
+/* decided: a quiet log entry, 9 px chamfer with a hairline edge (drawn by the two corner
+   gradients, since a border does not follow a clip), and the navy result tag. */
+:root:is(:not([data-theme]), [data-theme="arena"]) .ev-card-closed {
+  --c: 9px;
+  border-color: var(--paper-line);
+  border-radius: 0;
+  box-shadow: none;
+  clip-path: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
+  background:
+    linear-gradient(135deg, transparent 50%, var(--paper-line) 50%, var(--paper-line) calc(50% + 1px), transparent calc(50% + 1px)) left top / var(--c) var(--c) no-repeat border-box,
+    linear-gradient(135deg, transparent calc(50% - 1px), var(--paper-line) calc(50% - 1px), var(--paper-line) 50%, transparent 50%) right bottom / var(--c) var(--c) no-repeat border-box,
+    var(--paper-raised);
+  font-family: var(--font-title);
+  font-size: 15.5px;
+}
+:root:is(:not([data-theme]), [data-theme="arena"]) .ev-card-closed[data-state="approved"]::before {
+  border: 0; border-radius: 0; background: var(--quest-strip); transform: translateY(-50%) skewX(-12deg);
+}
+:root:is(:not([data-theme]), [data-theme="arena"]) .ev-card-closed[data-state="approved"]::after { background: var(--shell-text); }
+:root:is(:not([data-theme]), [data-theme="arena"]) .ev-card-closed[data-state="rejected"] { text-decoration: none; }
+:root:is(:not([data-theme]), [data-theme="arena"]) .ev-card-closed[data-state="rejected"]::before {
+  border: 0; border-radius: 0; box-shadow: inset 0 0 0 1.5px var(--ink-faint); transform: translateY(-50%) skewX(-12deg);
+}
+:root:is(:not([data-theme]), [data-theme="arena"]) .ev-card-closed[data-state="rejected"]::after { background: var(--ink-dim); }
+
+/* ---------- Sade: a plain approval card and a log-line record; no frame games. */
+:root[data-theme="sade"] .card { padding: 16px 18px; border-color: var(--sade-pending-line); border-radius: var(--radius-md); }
+:root[data-theme="sade"] .card-mark { width: 7px; height: 7px; }
+:root[data-theme="sade"] .card-head { font-size: var(--fs-small); }
+:root[data-theme="sade"] .card > b { font-size: 16px; line-height: 1.4; }
+:root[data-theme="sade"] .card .row button { min-height: var(--tap); font-size: 14px; font-weight: 500; border-radius: var(--radius-sm); }
+:root[data-theme="sade"] button.secondary { box-shadow: inset 0 0 0 1px var(--sade-card-line); }
+:root[data-theme="sade"] .bar button.secondary { box-shadow: none; }
+:root[data-theme="sade"] .composer-box { border-color: var(--sade-card-line); }
+:root[data-theme="sade"] .composer-box:focus-within { border-color: var(--accent); }
+:root[data-theme="sade"] .ev-card-closed { background: transparent; border-color: var(--sade-card-line); border-radius: var(--radius-md); font-weight: 500; }
+:root[data-theme="sade"] .ev-card-closed[data-state="approved"]::before { border-color: var(--ok-soft); background: var(--ok-soft); }
+:root[data-theme="sade"] .ev-card-closed[data-state="rejected"]::before { border: 1px solid var(--paper-line-strong); }
+:root[data-theme="sade"] .ev-card-closed[data-state="rejected"]::after { background: var(--ink-dim); }
+:root[data-theme="sade"] .ev-card-closed[data-state="rejected"] { text-decoration-color: var(--ink-faint); }
+
+/* ---------- Pafta: the REVISION REQUEST. The card head is a cell row of the title block;
+   approving presses a double-ruled stamp, slightly askew; rejecting draws one vermilion
+   correction line through the record. */
+:root[data-theme="pafta"] .card { border-radius: var(--radius-sm); }
+:root[data-theme="pafta"] .card-head {
+  height: 38px;
+  margin: -14px -16px 4px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--paper-line-strong);
+}
+:root[data-theme="pafta"] .ev-card-closed[data-state="approved"]::before {
+  width: 44px; height: 28px; border: 3px double var(--ok); border-radius: 3px; opacity: .92;
+  transform: translateY(-50%) rotate(-4deg);
+}
+:root[data-theme="pafta"] .ev-card-closed[data-state="approved"]::after { right: 28px; transform: translateY(-50%) rotate(-4deg); }
+:root[data-theme="pafta"] .ev-card-closed[data-state="rejected"] { padding-right: 16px; text-decoration: line-through 2px var(--accent); text-decoration-skip-ink: none; }
+:root[data-theme="pafta"] .ev-card-closed[data-state="rejected"]::before,
+:root[data-theme="pafta"] .ev-card-closed[data-state="rejected"]::after { display: none; }
+
+/* ---------- Atolye: the WORK-ORDER TAG. A left stub torn along a perforation, with a
+   grommet (a radial gradient on the stub); the decision is cut into the stub: a punched check
+   showing the dark gap under the tag, or the corner clipped off along a brass line. */
+:root[data-theme="atolye"] .card,
+:root[data-theme="atolye"] .ev-card-closed { padding-left: 50px; }
+:root[data-theme="atolye"] .card { border-width: 2px; }
+/* tall enough that the punched check clears the grommet */
+:root[data-theme="atolye"] .ev-card-closed { display: flex; align-items: center; min-height: 72px; }
+:root[data-theme="atolye"] .card::before,
+:root[data-theme="atolye"] .ev-card-closed::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  right: auto;
+  width: 32px;
+  height: auto;
+  transform: none;
+  border: 0;
+  border-right: 1px dashed var(--paper-line-strong);
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  background:
+    radial-gradient(circle at 15px 22px, var(--paper-bg) 0 5px, var(--atolye-hole) 5px 6px, var(--atolye-metal) 6px 8.5px, transparent 9px),
+    var(--paper-sunk);
+}
+:root[data-theme="atolye"] .card::before { background: radial-gradient(circle at 15px 22px, var(--paper-bg) 0 5px, var(--atolye-hole) 5px 6px, var(--atolye-metal) 6px 8.5px, transparent 9px), var(--accent-soft); border-right-color: var(--accent); }
+:root[data-theme="atolye"] .ev-card-closed[data-state="approved"]::after {
+  left: 8px; right: auto; top: auto; bottom: 12px; transform: none; background: var(--atolye-void);
+}
+:root[data-theme="atolye"] .ev-card-closed[data-state="rejected"] { text-decoration: none; }
+:root[data-theme="atolye"] .ev-card-closed[data-state="rejected"]::before { border-right-color: var(--accent); }
+:root[data-theme="atolye"] .ev-card-closed[data-state="rejected"]::after {
+  left: -1px; right: auto; top: auto; bottom: -1px; width: 26px; height: 26px; transform: none; clip-path: none;
+  background: linear-gradient(to top right, var(--paper-bg) calc(50% - 1px), var(--accent) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px));
+}
