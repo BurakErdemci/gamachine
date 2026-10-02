@@ -1,10 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { MascotHead } from './BrandLogo';
-
-// TODO(profile): XP has no data source yet (ENTEGRASYON-PLANI "Later"); the band shows the
-// mockup's constant. Sade hides it (theme-sade.thread.css `.achv .xp`), as in the mockup.
-export const DONE_XP = 120;
+import type { AchievementId } from '../../lib/profileStats';
 
 /** Mockup #15: 240 ms in, 4 s hold, 400 ms out (base.css `achv-in-out`, 4640 ms in all). */
 export const ACHV_LIFE_MS = 4640;
@@ -14,15 +11,15 @@ interface AchievementToastProps {
   event: { seq: number } | null;
   /** The finished chat's title. */
   title?: string | null;
+  xp?: number | null;
+  achievement?: AchievementId | null;
 }
 
 /**
- * The achievement band / "Done" toast (mockup `.achv`). Arena: a chamfered HUD toast with the
- * mascot tile, "Achievement unlocked", the XP and a lifetime fuse; Sade: a quiet notification
- * that reads "Done" without mascot or XP; Pafta / Atolye: their own tag. Same DOM in every theme,
- * the words switch through the `.lex` slot.
+ * Turn completion and earned achievements share the theme slots and lifetime. Only a measured
+ * turn gain earns an XP label (achievement band audit, 2 Oct 2026).
  */
-export const AchievementToast: React.FC<AchievementToastProps> = ({ event, title }) => {
+export const AchievementToast: React.FC<AchievementToastProps> = ({ event, title, xp, achievement }) => {
   const { t } = useLang();
   const [goneSeq, setGoneSeq] = useState<number | null>(null);
 
@@ -30,7 +27,7 @@ export const AchievementToast: React.FC<AchievementToastProps> = ({ event, title
     if (!event) return;
     const id = setTimeout(() => setGoneSeq(event.seq), ACHV_LIFE_MS);
     return () => clearTimeout(id);
-  }, [event]);
+  }, [event?.seq]);
 
   if (!event || goneSeq === event.seq) return null;
   const name = (title || '').trim();
@@ -45,13 +42,18 @@ export const AchievementToast: React.FC<AchievementToastProps> = ({ event, title
       <span className="achv-icon" aria-hidden="true"><MascotHead className="mascot" /></span>
       <span className="achv-text">
         <span className="achv-kicker lex">
-          <span className="lex-d">{t('achv.kicker')}</span>
-          <span className="lex-q">{t('achv.kicker')}</span>
-          <span className="lex-s">{t('achv.done')}</span>
+          <span className="lex-d">{t(achievement ? 'achv.kicker' : 'achv.turnKicker')}</span>
+          <span className="lex-q">{t(achievement ? 'achv.kicker' : 'achv.turnKicker')}</span>
+          <span className="lex-s">{t(achievement ? 'achv.kicker' : 'achv.done')}</span>
         </span>
-        <span className="achv-title">{t('achv.title', { ad: name || t('achv.untitled') })}</span>
+        <span className="achv-title">{achievement
+          ? t(`pf.ach.${achievement}.name`)
+          : t('achv.turnTitle', { ad: name || t('achv.untitled') })}</span>
+        {achievement && <span className="achv-sub">{t(`pf.ach.${achievement}.done`)}</span>}
       </span>
-      <span className="achv-xp xp num">{t('achv.xp', { xp: DONE_XP })}</span>
+      {!achievement && typeof xp === 'number' && Number.isInteger(xp) && xp > 0 && (
+        <span className="achv-xp xp num">{t('achv.xp', { xp })}</span>
+      )}
       <span className="achv-life" aria-hidden="true" />
     </div>
   );

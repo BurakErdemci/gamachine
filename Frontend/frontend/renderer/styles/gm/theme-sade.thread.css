@@ -53,6 +53,7 @@
 }
 [data-theme="sade"] .achv-kicker { font-size: var(--fs-meta); }
 [data-theme="sade"] .achv-title { font-size: 14px; font-weight: 500; }
+[data-theme="sade"] .achv-sub { font-size: var(--fs-meta); color: var(--toast-text); }
 [data-theme="sade"] .achv .xp { display: none; }
 [data-theme="sade"] .achv-life { display: none; }
 /* decided cards recede: the record reads in ink-dim, regular weight */

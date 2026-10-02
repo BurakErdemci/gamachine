@@ -12,6 +12,7 @@ import { BrandLogo } from './BrandLogo';
 import { useUnityLinkPulse } from './UnityMcpToggle';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { displayName } from '../../lib/displayName';
+import type { AchievementId } from '../../lib/profileStats';
 import type { RemoteStatus } from '../../lib/remoteControl';
 import { RemoteBadge } from './RemoteBadge';
 
@@ -81,7 +82,7 @@ interface SidebarProps {
   /** The phone button opens the settings screen on "Uzaktan kontrol" (falls back to Settings). */
   onOpenRemote?: () => void;
   /** Level and XP from GET /profile/stats (all-time whatever the range); null until it answers. */
-  profileLevel?: { level: number; xp: number; levelXp: number; levelNeed: number; xp_partial?: boolean } | null;
+  profileLevel?: { level: number; xp: number; levelXp: number; levelNeed: number; xp_partial?: boolean; lastAch?: AchievementId | null } | null;
   /** The maker profile is on screen (the card is marked active). */
   profileOpen?: boolean;
   /** The card opens the maker profile. */
@@ -303,7 +304,8 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
         <button
           type="button"
           className={`side-profile${profileOpen ? ' is-active' : ''}`}
-          title={profileLevel?.xp_partial ? t('pf.xpPartial') : name || undefined}
+          title={profileLevel?.xp_partial ? t('pf.xpPartial') : profileLevel?.lastAch
+            ? t('pf.lastAchShort', { ad: t(`pf.ach.${profileLevel.lastAch}.name`) }) : name || undefined}
           aria-current={profileOpen ? 'page' : undefined}
           onClick={onOpenProfile}
           data-testid="sidebar-profile"

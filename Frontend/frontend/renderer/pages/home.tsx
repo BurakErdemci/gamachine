@@ -62,6 +62,8 @@ import { EmptyChat, questDraft } from '../components/home/EmptyChat';
 import { AchievementToast } from '../components/home/AchievementToast';
 import { ProfileView } from '../components/home/ProfileView';
 import { useProfileStats } from '../hooks/home/useProfileStats';
+import { latestUnlocked } from '../lib/profileStats';
+import { useAchievementQueue } from '../lib/achievementQueue';
 import { isChatEmpty } from '../components/home/ChatPanel';
 
 // Lazy island: keeps three.js out of the eager bundle, which nothing else in
@@ -509,11 +511,15 @@ export default function Home() {
     screenCardOpen,
     onOpenConversation: (conv) => { chat.selectConversation(conv); },
   });
-  // The on-screen counterpart of the "finished" notification: the achievement band.
+  // The on-screen counterpart of the "finished" notification: the task band.
   const turnDone = useTurnDone(chat.attention, chat.activeConvId, cardOnScreen({
     pendingDelete: fs.pendingDelete, pendingGenFiles: fs.pendingGenFiles,
     pendingFix: chat.pendingFix, activeGate: mcp.activeGate,
   }));
+  const achievementBand = useAchievementQueue(
+    turnDone, chat.conversations.find(c => c.id === chat.activeConvId)?.title,
+    profileStats.gain, profileStats.unlocked,
+  );
   // A finished task moves the sidebar card's XP: re-read the profile numbers.
   useEffect(() => {
     if (turnDone) void refreshProfile();
@@ -800,6 +806,7 @@ export default function Home() {
           level: profileStats.latest.level, xp: profileStats.latest.xp,
           levelXp: profileStats.latest.level_xp, levelNeed: profileStats.latest.level_need,
           xp_partial: profileStats.latest.xp_partial,
+          lastAch: latestUnlocked(profileStats.latest.achievements)?.id,
         } : null}
         profileOpen={profileOpen && !ai.showSettings}
         onOpenProfile={openProfile}
@@ -1106,7 +1113,8 @@ export default function Home() {
       </div>
 
       {/* The achievement band / "Done" toast: the on-screen chat finished a turn. */}
-      <AchievementToast event={turnDone} title={activeConversation?.title} />
+      <AchievementToast event={achievementBand} title={achievementBand?.title}
+        xp={achievementBand?.xp} achievement={achievementBand?.achievement} />
 
       {/* Bildirim kanalının çizen ucu. Bu satır olmadan `showToast` sessiz bir
           state güncellemesinden ibaret: mesaj üretiliyor, kimse görmüyor. */}

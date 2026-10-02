@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 
-import { normalizeProfileStats, type ProfileRange, type ProfileStats } from '../../lib/profileStats';
+import { ACHIEVEMENT_IDS, normalizeProfileStats, type AchievementId, type ProfileRange, type ProfileStats } from '../../lib/profileStats';
 
 interface Options {
   api: string;
@@ -29,6 +29,9 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
   const [latest, setLatest] = useState<ProfileStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [gain, setGain] = useState<{ seq: number; xp: number } | null>(null);
+  const [unlocked, setUnlocked] = useState<{ seq: number; ids: AchievementId[] } | null>(null);
+  const latestRef = useRef<ProfileStats | null>(null);
   const newIds = useRef(new Set<string>());
   const seq = useRef(0);
 
@@ -46,6 +49,15 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
       if (mine !== seq.current) return;
       const stats = normalizeProfileStats(res?.data);
       if (!stats) throw new Error('not a profile answer');
+      // Compare accepted answers, never a partial ledger or the first answer after reset
+      // (achievement band audit, 2 Oct 2026).
+      const previous = latestRef.current;
+      if (previous && !previous.xp_partial && !stats.xp_partial && stats.xp > previous.xp) {
+        setGain({ seq: mine, xp: stats.xp - previous.xp });
+      }
+      const ids = ACHIEVEMENT_IDS.filter(id => !newIds.current.has(id)
+        && stats.achievements.some(a => a.id === id && a.new && a.unlocked === true));
+      if (ids.length) setUnlocked({ seq: mine, ids });
       for (const a of stats.achievements) if (a.new) newIds.current.add(a.id);
       const marked: ProfileStats = {
         ...stats,
@@ -53,6 +65,7 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
       };
       setByRange(prev => ({ ...prev, [r]: marked }));
       setLatest(marked);
+      latestRef.current = marked;
       if (mine === seq.current) setFailed(false);
     } catch {
       if (mine === seq.current) setFailed(true);
@@ -73,6 +86,9 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
   const afterReset = useCallback(async () => {
     ++seq.current;
     newIds.current.clear();
+    latestRef.current = null;
+    setGain(null);
+    setUnlocked(null);
     setByRange({});
     setLatest(null);
     await load(rangeRef.current);
@@ -83,6 +99,8 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
     setRange,
     data: byRange[range] ?? latest,
     latest,
+    gain,
+    unlocked,
     loading,
     failed,
     refresh,

@@ -60,6 +60,23 @@ export interface ProfileStats {
   achievements: ProfileAchievement[];
 }
 
+/** Latest dated unlock; canonical id order breaks timestamp ties (achievement band audit, 2 Oct 2026). */
+export function latestUnlocked(achievements: readonly ProfileAchievement[]): ProfileAchievement | null {
+  let latest: ProfileAchievement | null = null;
+  let timestamp = -Infinity;
+  for (const achievement of achievements) {
+    if (achievement.unlocked !== true || !achievement.unlocked_at) continue;
+    const at = Date.parse(achievement.unlocked_at);
+    if (!Number.isFinite(at)) continue;
+    if (at > timestamp || (at === timestamp && latest
+      && ACHIEVEMENT_IDS.indexOf(achievement.id) > ACHIEVEMENT_IDS.indexOf(latest.id))) {
+      latest = achievement;
+      timestamp = at;
+    }
+  }
+  return latest;
+}
+
 const int = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : fallback);
 const intOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : null);
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);

@@ -94,6 +94,7 @@
 [data-theme="arena"] .achv-icon .mascot { width: 42px; height: 42px; }
 [data-theme="arena"] .achv-kicker { letter-spacing: .18em; font-weight: 700; }
 [data-theme="arena"] .achv-title { font-family: var(--font-display); font-size: 16px; font-weight: 600; letter-spacing: .01em; }
+[data-theme="arena"] .achv-sub { font-size: var(--fs-meta); color: var(--toast-text); }
 [data-theme="arena"] .achv-xp { font-weight: 600; font-size: 13.5px; }
 [data-theme="arena"] .achv-life { left: 1px; right: var(--c); bottom: 1px; width: auto; height: 3px; transform-origin: left center; }
 /* ================= Empty new chat: the mascot is the quest giver =================

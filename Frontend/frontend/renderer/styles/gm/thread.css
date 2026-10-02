@@ -433,6 +433,7 @@
   text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
 }
 .achv-title { font-size: 15px; font-weight: 600; }
+.achv-sub { font-size: var(--fs-meta); color: var(--toast-text); opacity: .75; }
 .achv-xp { font-family: var(--font-mono); font-size: 13px; color: var(--toast-xp); }
 .achv-life { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--toast-xp); transform-origin: left center; transform: scaleX(.62); }
 .achv.is-playing { animation: achv-in-out 4640ms linear both; }

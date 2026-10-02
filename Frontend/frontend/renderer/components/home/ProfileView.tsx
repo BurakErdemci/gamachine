@@ -4,7 +4,7 @@ import { useLang, type Lang, type TKey } from '../../lib/i18n';
 import { displayName } from '../../lib/displayName';
 import {
   PROFILE_RANGES, favouriteView, formatDecimal, formatHour, formatLongDay, formatNumber, formatShortDay,
-  heatModel, mixRows, monthDelta, nextRank, perActiveDay, weekdayName, xpPercent,
+  heatModel, latestUnlocked, mixRows, monthDelta, nextRank, perActiveDay, weekdayName, xpPercent,
   type AchievementId, type ProfileAchievement, type ProfileRange, type ProfileStats,
 } from '../../lib/profileStats';
 import { ModelLogo } from '../ui/ModelLogos';
@@ -173,6 +173,7 @@ export const ProfileView = ({
     ? t('pf.quip.streak', { n: n(s.streak.current), next: n(s.streak.current + 1) })
     : null;
 
+  const lastAch = latestUnlocked(s.achievements);
   const achTile = (a: ProfileAchievement) => {
     const nameKey = `pf.ach.${a.id}.name` as TKey;
     if (a.unlocked === null) {
@@ -241,6 +242,9 @@ export const ProfileView = ({
                   ? <>{t('pf.nextRank')} <b>{t(`pf.rank.${next.rank}` as TKey)}</b> ({t('pf.nextRankAt', { n: next.level })})</>
                   : t('pf.topRank')}
               </span>
+              {lastAch && <span className="pf-last" data-testid="profile-last-achievement">
+                {t('pf.lastAch', { ad: t(`pf.ach.${lastAch.id}.name`), tarih: formatLongDay(lastAch.unlocked_at!, lang) })}
+              </span>}
               {s.xp_partial && <small className="pf-xp-partial" title={t('pf.stat.ledgerTip')}>{t('pf.xpPartial')}</small>}
               <span className="pf-since">{s.since ? t('pf.since', { date: formatLongDay(s.since, lang) }) : t('pf.noRecords')}</span>
             </div>
