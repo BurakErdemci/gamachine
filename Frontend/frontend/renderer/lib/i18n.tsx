@@ -285,6 +285,7 @@ export const tr = {
   'chat.mailUndelivered': 'Teslim edilemeyen not',
   // WorkspaceScreen
   'workspace.welcome': 'Hoş geldin,',
+  'workspace.welcomeNoName': 'Hoş geldin',
   'workspace.subtitle': 'Başlamak için çalışma alanını seç',
   'workspace.selectFolder': 'Klasör Seç',
   'workspace.recentLabel': 'Son Açılan',
@@ -1212,6 +1213,7 @@ export const en: Record<keyof typeof tr, string> = {
   'chat.mailUndelivered': 'Undelivered note',
   // WorkspaceScreen
   'workspace.welcome': 'Welcome,',
+  'workspace.welcomeNoName': 'Welcome',
   'workspace.subtitle': 'Select a workspace to get started',
   'workspace.selectFolder': 'Select Folder',
   'workspace.recentLabel': 'Recently Opened',

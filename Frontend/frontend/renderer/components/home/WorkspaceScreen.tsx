@@ -36,7 +36,10 @@ export const WorkspaceScreen = ({
         </div>
         <div>
           <h1 className="text-xl font-extrabold tracking-tight">
-            {t('workspace.welcome')} <span className="text-[var(--accent)]">{displayName(userName)}</span>
+            {/* No name yet (local login): "Welcome," with nothing after it read as a broken sentence. */}
+            {displayName(userName)
+              ? <>{t('workspace.welcome')} <span className="text-[var(--accent)]">{displayName(userName)}</span></>
+              : t('workspace.welcomeNoName')}
           </h1>
           <p className="text-[var(--shell-text-dim)] text-[11px] font-medium mt-1">
             {t('workspace.subtitle')}
