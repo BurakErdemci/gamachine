@@ -604,29 +604,30 @@
 
 /* ---- pafta: 2 block(s) ---- */
 :root[data-theme="pafta"] {
-  --page-bg: #11171F;
+  --page-bg: #0E1522;
   --page-text: #E4E1D9;
-  --page-text-dim: #A3ADB8;
+  --page-text-dim: #A3B5CB;
 
-  /* shell: ink-navy graphite */
-  --shell-bg: #18202A;
-  --shell-bg-2: #212B36;
-  --shell-bg-active: #2A3542;
-  --shell-line: #2F3B49;
+  /* shell: ink navy, blue enough that it never reads as plain graphite (Burak, 2 Oct) */
+  --shell-bg: #152033;
+  --shell-bg-2: #1C2A40;
+  --shell-bg-active: #25364F;
+  --shell-line: #2C3E57;
   --shell-text: #E4E1D9;
-  --shell-text-dim: #A1ACB8;
+  --shell-text-dim: #A3B5CB;
   --shell-tex: none;
 
-  /* paper: dimmed drafting paper, never white */
-  --paper-bg: #E6E1D5;
-  --paper-bg-2: #DCD9CF;
-  --paper-raised: #EEEAE1;
-  --paper-sunk: #DAD4C6;
-  --paper-line: #B3BAC1;          /* blue-grey drafting line */
-  --paper-line-strong: #7E8893;
-  --ink: #18212C;
-  --ink-dim: #434D59;
-  --ink-faint: #535D69;
+  /* paper: warm cream drafting paper, never white; the grey-beige sheet read as dull (Burak, 2 Oct).
+     Secondary text and labels are blueprint inks (ink-dim navy, ink-faint blueprint blue), not grey. */
+  --paper-bg: #EEE8DA;
+  --paper-bg-2: #E5DECC;
+  --paper-raised: #F7F3E9;
+  --paper-sunk: #E2DAC6;
+  --paper-line: #AFC2D5;          /* pale blueprint drafting line */
+  --paper-line-strong: #6B8AAB;
+  --ink: #172235;
+  --ink-dim: #2F4562;
+  --ink-faint: #345A85;
   --pafta-grid: rgba(70, 98, 128, .06);
   --panel-tex:
     linear-gradient(var(--pafta-grid) 1px, transparent 1px),
@@ -661,9 +662,9 @@
   --trace-bg: #D3DCE4;           /* a changed row: pale blueprint wash */
   --stream-ink: #2F5F8E;         /* streamed words arrive in blueprint ink */
 
-  --btn-bg: #18212C;
-  --btn-text: #EEEAE1;
-  --btn-hover: #2A3542;
+  --btn-bg: #172235;
+  --btn-text: #F7F3E9;
+  --btn-hover: #25364F;
 
   /* M4: the model colours are inks, not signals */
   --model-claude: #A0806A;       /* clay */
@@ -675,48 +676,48 @@
 
   /* HUD hooks in drafting terms: meters are hatched ink, levels are sheet numbers */
   --energy: #3F6A94;
-  --energy-off: #C6C9C8;
-  --pip: #434D59;
-  --pip-off: #C6C9C8;
+  --energy-off: #C9D4DF;
+  --pip: #2F4562;
+  --pip-off: #C9D4DF;
   --seg-skew: 0deg;
-  --label-rule: #2F3B49;
-  --label-rule-paper: #C2C6C8;
-  --row-mark: #A1ACB8;
+  --label-rule: #2C3E57;
+  --label-rule-paper: #B9CADB;
+  --row-mark: #A3B5CB;
   --tb-rule: transparent;
-  --lvl-bg: #2A3542;
-  --lvl-text: #EEEAE1;
-  --lvl-dim: #A1ACB8;
-  --badge-bg: #2A3542;
-  --badge-ink: #EEEAE1;
-  --badge-new-bg: #2A3542;
-  --badge-new-ink: #EEEAE1;
-  --tile-rule: #18212C;
+  --lvl-bg: #25364F;
+  --lvl-text: #F7F3E9;
+  --lvl-dim: #A3B5CB;
+  --badge-bg: #25364F;
+  --badge-ink: #F7F3E9;
+  --badge-new-bg: #25364F;
+  --badge-new-ink: #F7F3E9;
+  --tile-rule: #172235;
   --tile-new-mark: #3F6B57;
-  --toast-bg: #212B36;
-  --toast-line: #3D4A5A;
+  --toast-bg: #1C2A40;
+  --toast-line: #3A4F6B;
   --toast-text: #E4E1D9;
-  --toast-kicker: #A1ACB8;
+  --toast-kicker: #A3B5CB;
   --toast-xp: #8DBBA4;
   /* heat map: ink density on drafting paper */
-  --heat-0: #DAD6CB;
+  --heat-0: #E2DAC6;
   --heat-1: #BCC8D3;
   --heat-2: #8FA6BE;
   --heat-3: #5D7FA2;
   --heat-4: #2F5378;
   --xp: #3F6A94;
-  --xp-off: #C6C9C8;
-  --hero-bg: #EEEAE1;
-  --hero-text: #18212C;
-  --hero-dim: #434D59;
-  --hero-quip-bg: #E6E1D5;
-  --hero-on: #EEEAE1;
+  --xp-off: #C9D4DF;
+  --hero-bg: #F7F3E9;
+  --hero-text: #172235;
+  --hero-dim: #2F4562;
+  --hero-quip-bg: #EEE8DA;
+  --hero-on: #F7F3E9;
   --hero-pad: 22px 26px;
   /* mascot in the shell's inks with the sheet's red-pencil visor: grey alone read as black and white on paper (Burak, 2 Oct) */
-  --mascot-body: #2E3A48;
+  --mascot-body: #2B3C55;
   --mascot-visor: #C23B2A;
-  --mascot-screen: #11171F;
-  --mascot-eye: #E6E1D5;
-  --mascot-tile: #11171F;
+  --mascot-screen: #0E1522;
+  --mascot-eye: #EEE8DA;
+  --mascot-tile: #0E1522;
 
   --font-body: "IBM Plex Sans", system-ui, sans-serif;
   --font-label: "Archivo", "IBM Plex Sans", sans-serif;
@@ -738,7 +739,7 @@
   --radius-lg: 3px;
   --line-w: 1px;
   --card-line-w: 1px;
-  --shadow-card: 2px 2px 0 rgba(24, 33, 44, .9);
+  --shadow-card: 2px 2px 0 rgba(23, 34, 53, .9);
   --shadow-btn: none;
 
   --dur-fast: 110ms;
@@ -753,43 +754,43 @@
   --code-str: #C9D3A0;           /* thread code plate (dark): olive pencil */
   --code-com: #8B97A5;
 
-  --ed-bg: #F0ECE3;              /* the editor sheet: one step lighter than the chat paper */
-  --ed-head-bg: #E2DDD1;
-  --ed-line: #C3C7C6;
-  --ed-text: #18212C;
-  --ed-dim: #59636F;             /* line numbers, crumb: 5.2:1 on the sheet */
+  --ed-bg: #F8F4EA;              /* the editor sheet: one step lighter than the chat paper */
+  --ed-head-bg: #E9E2D1;
+  --ed-line: #C3D0DD;
+  --ed-text: #172235;
+  --ed-dim: #46617F;             /* line numbers, crumb: 5.2:1 on the sheet */
   --ed-kw: #2C5B8A;              /* blueprint */
   --ed-type: #2E6650;            /* ink green */
   --ed-fn: #7A5512;              /* pencil ochre */
   --ed-num: #8C4523;             /* brick, not vermilion */
-  --ed-attr: #4F5B69;
+  --ed-attr: #44566E;
   --ed-str: #5A6618;             /* olive */
-  --ed-com: #535C67;
-  --ed-tab-mark: #18212C;
+  --ed-com: #556579;
+  --ed-tab-mark: #172235;
   --diff-add-bg: #DCE6D8;
   --diff-del-bg: #F2DCD2;
   --diff-add-mark: #2E6650;
   --diff-del-mark: #A1301F;
 
   /* preview stage: a drafting board with a blueprint grid */
-  --pv-bg: #EEEAE0;
-  --pv-grid: #CDD5DB;
-  --pv-ink: #4A5866;
+  --pv-bg: #F6F1E5;
+  --pv-grid: #C8D5E2;
+  --pv-ink: #3F5877;
   --pv-face-1: #C5D0DA;
   --pv-face-2: #9EB0C2;
   --pv-face-3: #7A8FA6;
-  --pv-edge: #18212C;
+  --pv-edge: #172235;
   --pv-shadow: rgba(24, 33, 44, .16);
-  --pv-check-a: #ECE8DF;
-  --pv-check-b: #D7D2C6;
+  --pv-check-a: #F5F0E4;
+  --pv-check-b: #DFD8C6;
 
   /* terminal: the same sheet, ink type */
-  --term-bg: #ECE8DF;
-  --term-text: #18212C;
-  --term-dim: #59636F;
+  --term-bg: #F5F0E4;
+  --term-text: #172235;
+  --term-dim: #46617F;
   --term-prompt: #2C5B8A;
   --term-warn: #7A5512;
-  --tab-mark: #18212C;
+  --tab-mark: #172235;
 
   /* Unity switch: a drafting-table breaker. Round 9: a VERTICAL breaker - an upright housing
      sunk in the navy desk edge, a slot down its middle, a pale paper-coloured lever handle
@@ -807,20 +808,20 @@
   --us-knob-radius: 0;
   --us-knob-clip: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
   --us-knob-cut: 4px;
-  --us-track: #0F151C;
+  --us-track: #0C1320;
   --us-track-on: #17293B;
-  --us-edge: #4A5869;
-  --us-knob: #D9D3C5;
-  --us-knob-ink: #2F3B49;
+  --us-edge: #46597A;
+  --us-knob: #E2DAC6;
+  --us-knob-ink: #2C3E57;
   --us-on: #6B9FD1;
   --us-on-ink: #0F151C;
   --us-on-text: #9CC3EA;
-  --us-led-off: #2F3B49;
+  --us-led-off: #2C3E57;
   --us-alert: #E0573F;
-  --us-bay-bg: #141B24;          /* round 8 bay: the sunk edge of the desk */
-  --us-bay-line: #2F3B49;
+  --us-bay-bg: #111C2D;          /* round 8 bay: the sunk edge of the desk */
+  --us-bay-line: #2C3E57;
   --us-live: #6B9FD1;            /* foot line while connected = the live blueprint blue */
-  --us-hover: #212B36;
+  --us-hover: #1C2A40;
   --us-track-shade: inset 0 2px 0 rgba(0, 0, 0, .35);
   --us-knob-shade: inset 0 -2px 0 rgba(24, 33, 44, .3);   /* the toggle block's lower lip */
   --us-led-h: 6px;
