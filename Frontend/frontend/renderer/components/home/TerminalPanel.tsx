@@ -1,23 +1,23 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Terminal } from '@xterm/xterm';
+import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import axios from 'axios';
-import {
-  X, Maximize2, Minimize2, Trash2,
-  Plus, ChevronRight, AlertCircle, Search,
-  Info, AlertTriangle, WifiOff, RefreshCw
-} from 'lucide-react';
-import { motion } from 'framer-motion';
-import { useLang } from '../../lib/i18n';
+import { useLang, type TKey } from '../../lib/i18n';
 import { useAutoScroll } from '../../hooks/home/useAutoScroll';
+import { isLight, onThemeChange, readColorTokens, readToken } from '../../lib/themeTokens';
 
 interface TerminalPanelProps {
   id: string;
   isOpen: boolean;
+  /** Collapse the drawer to its strip (the PTY keeps running). */
   onClose: () => void;
+  /** Open the drawer; the strip's tabs and toggle call this. Defaults to nothing for old callers. */
+  onOpen?: () => void;
   workspacePath: string | null;
   problems?: any[];
+  /** False until diagnostics have reported once: the strip says nothing rather than "0 errors". */
+  problemsKnown?: boolean;
   onProblemClick?: (problem: any) => void;
   apiUrl?: string;
   sessionToken?: string;
@@ -26,61 +26,65 @@ interface TerminalPanelProps {
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 
-// ── Output Tab ────────────────────────────────────────────────────────────────
-const OutputTab: React.FC<{ apiUrl?: string; sessionToken?: string; unityConnected?: boolean }> = ({ apiUrl, sessionToken, unityConnected }) => {
-  // `t` DEĞİL `ceviri`: bu dosyada yerel yardımcılar `const t = (type||'')…`
-  // diye bir değişken tanımlıyor ve aynı adı kullanmak onu gölgelerdi.
-  const { t: ceviri } = useLang();
-  const [entries, setEntries] = useState<any[]>([]);
-  const autoScroll = useAutoScroll();
+/** Mockup line icons (maket index.html). */
+const Ic = ({ children, className = 'ic' }: { children: React.ReactNode; className?: string }) => (
+  <svg className={className} viewBox="0 0 20 20" aria-hidden="true">{children}</svg>
+);
 
-  useEffect(() => {
-    if (!apiUrl || !sessionToken || !unityConnected) { setEntries([]); return; }
-    const poll = async () => {
-      try {
-        const res = await axios.get(`${apiUrl}/mcp/unity/console`, {
-          headers: { 'X-Session-Token': sessionToken }
-        });
-        if (res.data.connected && Array.isArray(res.data.logs)) {
-          setEntries(res.data.logs.slice(-500));
-        }
-      } catch { /* Unity bağlı değil */ }
-    };
-    poll();
-    const interval = setInterval(poll, 2000);
-    return () => clearInterval(interval);
-  }, [apiUrl, sessionToken, unityConnected]);
+// ── xterm colours from the terminal tokens ───────────────────────────────────
+const TERM_DEFAULTS = {
+  '--term-bg': '#10141e', '--term-text': '#e1e3ea', '--term-dim': '#8c95ab', '--term-prompt': '#8ccfc2',
+  '--term-warn': '#e9c98a', '--ed-kw': '#8fb3f0', '--ed-num': '#f2a585', '--ed-line': '#2b3248',
+  '--diff-del-mark': '#f2937c', '--diff-add-mark': '#4fd8c8',
+} as const;
 
-  useEffect(() => {
-    autoScroll.followIfPinned();
-  }, [entries, autoScroll.followIfPinned]);
-
-  const typeColor = (type: string) => {
-    const t = (type || '').toLowerCase();
-    if (t.includes('error') || t.includes('exception')) return 'text-red-400';
-    if (t.includes('warn')) return 'text-amber-400';
-    return 'text-slate-400';
+/**
+ * xterm draws on a canvas, so it cannot read CSS: the palette is built from the tokens and
+ * rebuilt on a theme switch. The ANSI colours map to the editor's syntax inks, so `git status`
+ * reds and greens stay readable on the paper themes' light terminal too; "black" and "white"
+ * swap on a light ground, or white text would vanish on it.
+ */
+export const xtermThemeFromTokens = (tk: Record<keyof typeof TERM_DEFAULTS, string>): ITheme => {
+  const light = isLight(tk['--term-bg']);
+  return {
+    background: tk['--term-bg'],
+    foreground: tk['--term-text'],
+    cursor: tk['--term-text'],
+    cursorAccent: tk['--term-bg'],
+    selectionBackground: `${tk['--ed-kw']}55`,
+    black: light ? tk['--term-text'] : tk['--ed-line'],
+    brightBlack: tk['--term-dim'],
+    red: tk['--diff-del-mark'],
+    brightRed: tk['--diff-del-mark'],
+    green: tk['--term-prompt'],
+    brightGreen: tk['--diff-add-mark'],
+    yellow: tk['--term-warn'],
+    brightYellow: tk['--term-warn'],
+    blue: tk['--ed-kw'],
+    brightBlue: tk['--ed-kw'],
+    magenta: tk['--ed-num'],
+    brightMagenta: tk['--ed-num'],
+    cyan: tk['--term-prompt'],
+    brightCyan: tk['--term-prompt'],
+    white: light ? tk['--term-dim'] : tk['--term-text'],
+    brightWhite: tk['--term-text'],
   };
+};
+const currentXtermTheme = () => xtermThemeFromTokens(readColorTokens(TERM_DEFAULTS));
 
-  return (
-    <div className="flex-1 overflow-y-auto font-mono text-[11px] bg-[#0a0a0a] p-2 custom-scrollbar"
-      onScroll={autoScroll.onScroll}>
-      {!unityConnected ? (
-        <div className="h-full flex items-center justify-center text-slate-700 text-xs">{ceviri('terminal.unityDisconnected')}</div>
-      ) : entries.length === 0 ? (
-        <div className="h-full flex items-center justify-center text-slate-700 text-xs">{ceviri('terminal.unityWaiting')}</div>
-      ) : entries.map((entry, i) => (
-        <div key={i} className={`flex gap-2 hover:bg-white/3 px-1 py-0.5 rounded leading-relaxed ${typeColor(entry.type || entry.logType || '')}`}>
-          <span className="text-slate-300 break-all">{entry.message || entry.text || JSON.stringify(entry)}</span>
-        </div>
-      ))}
-      <div ref={autoScroll.endRef} />
-    </div>
-  );
+const levelOf = (entry: any): 'error' | 'warning' | 'log' => {
+  const t = String(entry?.type || entry?.logType || '').toLowerCase();
+  if (t.includes('error') || t.includes('exception')) return 'error';
+  if (t.includes('warn')) return 'warning';
+  return 'log';
 };
 
-// ── Debug Console Tab ─────────────────────────────────────────────────────────
-const DebugConsoleTab: React.FC<{ apiUrl?: string; sessionToken?: string; unityConnected?: boolean }> = ({ apiUrl, sessionToken, unityConnected }) => {
+// ── Konsol: the Unity console stream ─────────────────────────────────────────
+const FILTER_KEY: Record<'all' | 'log' | 'warning' | 'error', TKey> = {
+  all: 'terminal.filterAll', log: 'terminal.filterLog', warning: 'terminal.filterWarning', error: 'terminal.filterError',
+};
+
+const ConsolePane: React.FC<{ apiUrl?: string; sessionToken?: string; unityConnected?: boolean }> = ({ apiUrl, sessionToken, unityConnected }) => {
   const { t: ceviri } = useLang();
   const [entries, setEntries] = useState<any[]>([]);
   const [filter, setFilter] = useState<'all' | 'log' | 'warning' | 'error'>('all');
@@ -110,107 +114,31 @@ const DebugConsoleTab: React.FC<{ apiUrl?: string; sessionToken?: string; unityC
     autoScroll.followIfPinned();
   }, [entries, autoScroll.followIfPinned]);
 
-  const filtered = filter === 'all' ? entries : entries.filter(e => {
-    const t = (e.type || e.logType || '').toLowerCase();
-    if (filter === 'error') return t.includes('error') || t.includes('exception');
-    if (filter === 'warning') return t.includes('warn');
-    return t === 'log' || t === 'info' || !t;
-  });
-
-  const iconFor = (type: string) => {
-    const t = (type || '').toLowerCase();
-    if (t.includes('error') || t.includes('exception')) return <AlertCircle size={12} className="text-red-400 shrink-0 mt-0.5" />;
-    if (t.includes('warn')) return <AlertTriangle size={12} className="text-amber-400 shrink-0 mt-0.5" />;
-    return <Info size={12} className="text-blue-400 shrink-0 mt-0.5" />;
-  };
-
+  if (!unityConnected) {
+    return <p className="prob-note">{ceviri('terminal.unityNoConnectionHint')}</p>;
+  }
+  const filtered = filter === 'all' ? entries : entries.filter(e => levelOf(e) === filter);
   return (
-    <div className="flex-1 flex flex-col bg-[#0a0a0a] overflow-hidden">
-      {!unityConnected && (
-        <div className="mx-3 mt-3 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 flex items-start gap-2.5 text-yellow-300">
-          <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[11px] font-bold uppercase tracking-wider">{ceviri('terminal.unityNoConnection')}</span>
-            <span className="text-[10px] text-slate-400">{ceviri('terminal.unityNoConnectionHint')}</span>
-          </div>
-        </div>
-      )}
-      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-white/5 shrink-0">
+    <>
+      <div className="con-filters">
         {(['all', 'log', 'warning', 'error'] as const).map(f => (
-          <button key={f} onClick={() => setFilter(f)}
-            className={`px-2 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider transition-colors ${filter === f ? 'bg-blue-600/20 text-blue-300' : 'text-slate-600 hover:text-slate-400'}`}>
-            {f}
+          <button key={f} type="button" className="con-filter" aria-pressed={filter === f} onClick={() => setFilter(f)}>
+            {ceviri(FILTER_KEY[f])}
           </button>
         ))}
-        <span className="ml-auto text-[9px] text-slate-700">{ceviri('terminal.entries', { sayi: filtered.length })}</span>
+        <span className="con-count">{ceviri('terminal.entries', { sayi: filtered.length })}</span>
       </div>
-      <div className="flex-1 overflow-y-auto font-mono text-[11px] p-2 custom-scrollbar" onScroll={autoScroll.onScroll}>
+      <div className="con-list" onScroll={autoScroll.onScroll} style={{ overflow: 'auto', flex: 1, minHeight: 0 }}>
         {filtered.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-slate-700 text-xs">{ceviri('terminal.unityConsoleEmpty')}</div>
+          <p className="prob-note">{ceviri('terminal.unityConsoleEmpty')}</p>
         ) : filtered.map((entry, i) => (
-          <div key={i} className="flex gap-2 hover:bg-white/3 px-1 py-0.5 rounded leading-relaxed">
-            {iconFor(entry.type || entry.logType || '')}
-            <span className="text-slate-300 break-all">{entry.message || entry.text || JSON.stringify(entry)}</span>
+          <div key={i} className="con-row" data-level={levelOf(entry)}>
+            {entry.message || entry.text || JSON.stringify(entry)}
           </div>
         ))}
         <div ref={autoScroll.endRef} />
       </div>
-    </div>
-  );
-};
-
-// ── Ports Tab ─────────────────────────────────────────────────────────────────
-const PortsTab: React.FC<{ apiUrl?: string; sessionToken?: string; unityConnected?: boolean }> = ({ apiUrl, sessionToken, unityConnected }) => {
-  const { t: ceviri } = useLang();
-  const [backendOk, setBackendOk] = useState<boolean | null>(null);
-  const [mcpOk, setMcpOk] = useState<boolean | null>(null);
-
-  const check = useCallback(async () => {
-    try {
-      await axios.get(`${apiUrl}/health`);
-      setBackendOk(true);
-    } catch { setBackendOk(false); }
-    try {
-      await axios.get('http://localhost:8080/health', { timeout: 1000 });
-      setMcpOk(true);
-    } catch { setMcpOk(false); }
-  }, [apiUrl]);
-
-  useEffect(() => { check(); }, [check]);
-
-  const StatusDot = ({ ok }: { ok: boolean | null }) => (
-    <div className={`w-2 h-2 rounded-full ${ok === null ? 'bg-slate-600' : ok ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]' : 'bg-red-500'}`} />
-  );
-
-  const ports = [
-    { name: 'Backend API', port: apiUrl ? new URL(apiUrl).port || '8000' : '8000', ok: backendOk, desc: 'FastAPI · Gamachine' },
-    { name: 'Unity MCP', port: '8080', ok: mcpOk, desc: ceviri('terminal.unityMcpDesc') },
-  ];
-
-  return (
-    <div className="flex-1 p-4 bg-[#0a0a0a] flex flex-col gap-2">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] text-slate-600 uppercase tracking-widest font-medium">{ceviri('terminal.activePorts')}</span>
-        <button onClick={check} className="text-slate-600 hover:text-slate-400 transition-colors">
-          <RefreshCw size={11} />
-        </button>
-      </div>
-      {ports.map(p => (
-        <div key={p.port} className="flex items-center gap-3 p-2.5 rounded-lg bg-white/3 border border-white/5">
-          <StatusDot ok={p.ok} />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-slate-300">{p.name}</span>
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 font-mono">:{p.port}</span>
-            </div>
-            <span className="text-[9px] text-slate-600">{p.desc}</span>
-          </div>
-          <span className={`text-[9px] font-bold uppercase ${p.ok === null ? 'text-slate-600' : p.ok ? 'text-emerald-500' : 'text-red-500'}`}>
-            {p.ok === null ? 'Kontrol...' : p.ok ? 'Online' : 'Offline'}
-          </span>
-        </div>
-      ))}
-    </div>
+    </>
   );
 };
 
@@ -220,18 +148,30 @@ interface TerminalSession {
   cwd: string | null;
 }
 
-// ── Main TerminalPanel ────────────────────────────────────────────────────────
+type DrawerTab = 'terminal' | 'konsol' | 'sorunlar';
+const DEFAULT_HEIGHT = 228;
+
+/**
+ * The terminal drawer at the foot of the workspace (mockup `.term`, KARAKTER 13B): Terminal /
+ * Konsol / Sorunlar. Closed it is a 34 px strip with the tabs and a one-line status; open it is
+ * 228 px (resizable, or filling the panel).
+ *
+ * PTY lifecycle: a shell is spawned the first time the drawer opens and lives as long as the
+ * panel. Collapsing the drawer, switching tabs or changing the panel width only hides or resizes
+ * its host; xterm is never re-opened. (The old floating panel returned null when closed, which
+ * detached xterm from the page: reopening showed an empty box over a shell still running.)
+ */
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({
-  id, isOpen, onClose, workspacePath, problems = [], onProblemClick,
+  id, isOpen, onClose, onOpen, workspacePath, problems = [], problemsKnown = false, onProblemClick,
   apiUrl, sessionToken, unityConnected
 }) => {
   const { t: ceviri } = useLang();
+  const [tab, setTab] = useState<DrawerTab>('terminal');
   const [isMaximized, setIsMaximized] = useState(false);
-  const [terminalHeight, setTerminalHeight] = useState(320);
-  const [sidebarWidth, setSidebarWidth] = useState(200);
-  const [isResizingH, setIsResizingH] = useState(false);
-  const [isResizingV, setIsResizingV] = useState(false);
-  const [activeTab, setActiveTab] = useState('Terminal');
+  const [terminalHeight, setTerminalHeight] = useState(DEFAULT_HEIGHT);
+  const [isResizing, setIsResizing] = useState(false);
+  // #5 katla: the body folds open once per opening.
+  const [opening, setOpening] = useState(false);
 
   // Multi-session Terminal State
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
@@ -242,26 +182,29 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   const fitAddonsRef = useRef<{ [id: string]: FitAddon }>({});
   const [initializedIds, setInitializedIds] = useState<Set<string>>(new Set());
 
-  const startResizingV = (e: React.MouseEvent) => { e.preventDefault(); setIsResizingV(true); };
-  const startResizingH = (e: React.MouseEvent) => { e.preventDefault(); setIsResizingH(true); };
-  const stopResizing = useCallback(() => { setIsResizingV(false); setIsResizingH(false); }, []);
-
-  const resize = useCallback((e: MouseEvent) => {
-    if (isResizingV) {
-      const h = window.innerHeight - e.clientY;
-      if (h > 100 && h < window.innerHeight * 0.9) setTerminalHeight(h);
-    }
-    if (isResizingH) {
-      const w = window.innerWidth - e.clientX;
-      if (w > 100 && w < 500) setSidebarWidth(w);
-    }
-  }, [isResizingV, isResizingH]);
+  const open = () => { onOpen?.(); };
+  const pickTab = (next: DrawerTab) => { setTab(next); if (!isOpen) open(); };
 
   useEffect(() => {
-    window.addEventListener('mousemove', resize);
-    window.addEventListener('mouseup', stopResizing);
-    return () => { window.removeEventListener('mousemove', resize); window.removeEventListener('mouseup', stopResizing); };
-  }, [resize, stopResizing]);
+    if (!isOpen) return;
+    setOpening(true);
+    const id = setTimeout(() => setOpening(false), 260);
+    return () => clearTimeout(id);
+  }, [isOpen]);
+
+  // Drag the open drawer's top edge. The drawer sits on the window's bottom edge, so its height is
+  // the distance from the pointer to the bottom.
+  useEffect(() => {
+    if (!isResizing) return;
+    const move = (e: MouseEvent) => {
+      const h = window.innerHeight - e.clientY - 34;
+      if (h > 120 && h < window.innerHeight * 0.8) setTerminalHeight(h);
+    };
+    const up = () => setIsResizing(false);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+  }, [isResizing]);
 
   // Default session initialization
   useEffect(() => {
@@ -292,8 +235,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       const term = new Terminal({
         cursorBlink: true,
         fontSize: 13,
-        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-        theme: { background: '#0d0d0d', foreground: '#cccccc', cursor: '#3b82f6', selectionBackground: 'rgba(59,130,246,0.3)' },
+        fontFamily: readToken('--font-mono') || 'Menlo, Monaco, "Courier New", monospace',
+        theme: currentXtermTheme(),
         allowProposedApi: true,
         scrollback: 5000,
       });
@@ -327,16 +270,26 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
       const handleResize = () => {
         try {
+          // A hidden host (drawer collapsed, another tab) measures 0: fitting then would shrink
+          // the shell to one column and reflow its scrollback.
+          const host = terminalRefs.current[sId];
+          if (!host?.offsetWidth || !host.offsetHeight) return;
           fitAddon.fit();
           ipc.invoke('terminal-resize', { id: sId, cols: term.cols, rows: term.rows });
         } catch {}
       };
+
+      // The panel changes width (dar / yarim / odak) and the drawer height without any window
+      // resize, so the host is observed too.
+      const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null;
+      observer?.observe(terminalRefs.current[sId]!);
 
       // Store cleanup routines
       (term as any)._cleanups = [
         unsubscribeData,
         unsubscribeExit,
         () => {
+          observer?.disconnect();
           window.removeEventListener('resize', handleResize);
           term.dispose();
         }
@@ -346,12 +299,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
       setTimeout(() => {
         try {
-          fitAddon.fit();
+          handleResize();
           if (sId === activeSessionId) term.focus();
         } catch {}
       }, 150);
     });
   }, [sessions, initializedIds, isOpen, activeSessionId]);
+
+  // xterm cannot read CSS: recolour every shell when the appearance changes.
+  useEffect(() => onThemeChange(() => {
+    const theme = currentXtermTheme();
+    Object.values(terminalInstancesRef.current).forEach(term => { try { term.options.theme = theme; } catch {} });
+  }), []);
 
   // Cleanup removed sessions
   useEffect(() => {
@@ -393,31 +352,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     };
   }, []);
 
-  // Layout resizing
+  // Back on the Terminal tab (or the drawer opened): fit and focus the shell on screen.
   useEffect(() => {
-    sessions.forEach(session => {
-      const fitAddon = fitAddonsRef.current[session.id];
-      if (fitAddon) {
-        setTimeout(() => {
-          try {
-            fitAddon.fit();
-          } catch {}
-        }, 100);
-      }
-    });
-  }, [terminalHeight, sidebarWidth, isMaximized, sessions]);
-
-  // Active tab switching
-  useEffect(() => {
-    if (activeTab === 'Terminal' && activeSessionId && fitAddonsRef.current[activeSessionId]) {
-      setTimeout(() => {
-        try {
-          fitAddonsRef.current[activeSessionId]?.fit();
-          terminalInstancesRef.current[activeSessionId]?.focus();
-        } catch {}
-      }, 100);
-    }
-  }, [activeTab, activeSessionId]);
+    if (!isOpen || tab !== 'terminal' || !activeSessionId) return;
+    const timer = setTimeout(() => {
+      try {
+        const host = terminalRefs.current[activeSessionId];
+        if (host?.offsetWidth && host.offsetHeight) fitAddonsRef.current[activeSessionId]?.fit();
+        terminalInstancesRef.current[activeSessionId]?.focus();
+      } catch {}
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [isOpen, tab, activeSessionId, terminalHeight, isMaximized]);
 
   const addSession = () => {
     const newId = `term-${Date.now()}`;
@@ -428,7 +374,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     };
     setSessions(prev => [...prev, newSession]);
     setActiveSessionId(newId);
-    setActiveTab('Terminal');
+    setTab('terminal');
   };
 
   const nextSession = () => {
@@ -437,7 +383,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     const nextIndex = (currentIndex + 1) % sessions.length;
     const nextId = sessions[nextIndex].id;
     setActiveSessionId(nextId);
-    setActiveTab('Terminal');
+    setTab('terminal');
   };
 
   const removeSession = (sessionIdToRemove?: string) => {
@@ -469,138 +415,141 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     });
   };
 
-  if (!isOpen) return null;
-
-  const tabs = ['Problems', 'Output', 'Debug Console', 'Terminal', 'Ports'];
+  const errors = problems.filter(p => String(p.severity).toLowerCase() === 'error').length;
+  const warnings = problems.length - errors;
+  const counts = `${ceviri(errors === 1 ? 'terminal.errorOne' : 'terminal.errors', { sayi: errors })} · ${ceviri(warnings === 1 ? 'terminal.warningOne' : 'terminal.warnings', { sayi: warnings })}`;
+  const tabs: { id: DrawerTab; label: TKey }[] = [
+    { id: 'terminal', label: 'terminal.tabTerminal' },
+    { id: 'konsol', label: 'terminal.tabConsole' },
+    { id: 'sorunlar', label: 'terminal.tabProblems' },
+  ];
 
   return (
-    <motion.div
-      initial={{ y: 400, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 400, opacity: 0 }}
-      style={{ height: isMaximized ? '98vh' : `${terminalHeight}px` }}
-      className="fixed bottom-0 left-0 right-0 z-[60] bg-[#0d0d0d] border-t border-white/5 flex flex-col shadow-[0_-20px_50px_-20px_rgba(0,0,0,0.8)]"
+    <div
+      className={`term${opening ? ' is-opening' : ''}${isMaximized && isOpen ? ' is-max' : ''}`}
+      data-open={isOpen ? 'true' : 'false'}
+      data-term={tab}
+      data-testid="terminal-drawer"
+      style={{ '--term-h': `${terminalHeight}px` } as React.CSSProperties}
     >
-      <div onMouseDown={startResizingV} className="absolute -top-1 left-0 right-0 h-2 cursor-ns-resize z-[70] hover:bg-blue-500/20 transition-colors" />
-
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 h-9 bg-[#111111] border-b border-white/5 select-none shrink-0">
-        <div className="flex items-center gap-6 h-full">
-          {tabs.map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className={`h-full text-[11px] font-medium px-1 relative transition-colors ${activeTab === tab ? 'text-slate-200' : 'text-slate-500 hover:text-slate-300'}`}>
-              {tab}
-              {tab === 'Problems' && problems.length > 0 && (
-                <span className="ml-1 text-[9px] px-1 py-0 rounded-full bg-red-500/20 text-red-400 font-bold">{problems.length}</span>
-              )}
-              {activeTab === tab && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500" />}
+      {isOpen && !isMaximized && (
+        <div
+          className="term-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={ceviri('terminal.resize')}
+          onMouseDown={(e) => { e.preventDefault(); setIsResizing(true); }}
+        />
+      )}
+      <div className="term-bar">
+        <div className="term-tabs" role="tablist" aria-label={ceviri('terminal.drawer')}>
+          {tabs.map(({ id: tid, label }) => (
+            <button
+              key={tid}
+              type="button"
+              role="tab"
+              className="term-tab"
+              data-term={tid}
+              aria-selected={tab === tid}
+              onClick={() => pickTab(tid)}
+            >
+              {tid === 'terminal' && <Ic className="ic ic-sm"><path d="M4 6l4 4-4 4M10 14.5h6" /></Ic>}
+              {ceviri(label)}
+              {tid === 'sorunlar' && problems.length > 0 && <span className="term-n num">{problems.length}</span>}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-white/5 rounded-md p-1 mr-2">
-            <Plus size={12} className="text-slate-400 cursor-pointer hover:text-white" onClick={addSession} />
-            <ChevronRight size={12} className="text-slate-400 cursor-pointer hover:text-white" onClick={nextSession} />
-            <Trash2 size={12} className="text-slate-400 cursor-pointer hover:text-white" onClick={() => removeSession()} />
-          </div>
-          <button onClick={() => setIsMaximized(!isMaximized)} className="text-slate-500 hover:text-white">
-            {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        {problemsKnown && (
+          <span className="term-last">
+            <span className="tl-full">{ceviri('terminal.statusFull', { durum: counts })}</span>
+            <span className="tl-short">{counts}</span>
+          </span>
+        )}
+        <span className="term-acts" style={!problemsKnown ? { marginLeft: 'auto' } : undefined}>
+          {tab === 'terminal' && (
+            <>
+              <button type="button" className="icon-btn" onClick={addSession} aria-label={ceviri('terminal.newSession')} title={ceviri('terminal.newSession')}>
+                <Ic><path d="M10 4v12M4 10h12" /></Ic>
+              </button>
+              {sessions.length > 1 && (
+                <button type="button" className="icon-btn" onClick={nextSession} aria-label={ceviri('terminal.nextSession')} title={ceviri('terminal.nextSession')}>
+                  <Ic><path d="M8 6l4 4-4 4" /></Ic>
+                </button>
+              )}
+              <button type="button" className="icon-btn" onClick={() => removeSession()} aria-label={ceviri('terminal.killSession')} title={ceviri('terminal.killSession')}>
+                <Ic><path d="M4.5 6h11M8 6V4.5h4V6M6 6l.7 10h6.6L14 6" /></Ic>
+              </button>
+            </>
+          )}
+          <button type="button" className="icon-btn" onClick={() => setIsMaximized(v => !v)}
+            aria-pressed={isMaximized} aria-label={ceviri(isMaximized ? 'terminal.restore' : 'terminal.maximize')} title={ceviri(isMaximized ? 'terminal.restore' : 'terminal.maximize')}>
+            <Ic>{isMaximized ? <path d="M6 9l4-4 4 4M6 15l4-4 4 4" /> : <path d="M6 11l4 4 4-4M6 5l4 4 4-4" />}</Ic>
           </button>
-          <button onClick={onClose} className="text-slate-500 hover:text-red-400"><X size={16} /></button>
-        </div>
+        </span>
+        <button
+          type="button"
+          className="icon-btn term-toggle"
+          style={!isOpen && !problemsKnown ? { marginLeft: 'auto' } : undefined}
+          aria-expanded={isOpen}
+          aria-controls={`${id}-body`}
+          aria-label={ceviri(isOpen ? 'terminal.close' : 'terminal.open')}
+          title={ceviri(isOpen ? 'terminal.close' : 'terminal.open')}
+          onClick={() => (isOpen ? onClose() : open())}
+        >
+          <Ic className="ic ic-sm"><path d="M6 12l4-4 4 4" /></Ic>
+        </button>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 relative bg-black overflow-hidden flex flex-col">
-          {sessions.map(session => (
-            <div 
-              key={session.id}
-              className="flex-1 p-2 overflow-hidden flex flex-col" 
-              style={{ display: (activeTab === 'Terminal' && activeSessionId === session.id) ? 'flex' : 'none' }}
-              onClick={() => {
-                terminalInstancesRef.current[session.id]?.focus();
-              }}
-            >
-              <div ref={(el) => { terminalRefs.current[session.id] = el; }} className="w-full h-full" />
-            </div>
-          ))}
-
-          {activeTab === 'Problems' && (
-            <div className="flex-1 overflow-y-auto p-3 custom-scrollbar bg-[#0a0a0a]">
-              {problems.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-2">
-                  <Search size={28} strokeWidth={1.5} opacity={0.5} />
-                  <span className="text-xs uppercase tracking-widest font-medium">No problems detected</span>
-                </div>
-              ) : (
-                <div className="space-y-0.5">
-                  {problems.map((prob, i) => (
-                    <div key={i} onClick={() => onProblemClick?.(prob)}
-                      className="flex items-start gap-3 p-2 rounded hover:bg-white/5 cursor-pointer border border-transparent hover:border-white/5 transition-all">
-                      <AlertCircle size={13} className={`${prob.severity === 'error' ? 'text-red-500' : 'text-amber-500'} mt-0.5 shrink-0`} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-[11px] font-semibold text-slate-200">{prob.message}</span>
-                          {prob.file && <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 font-mono">{prob.file}</span>}
-                        </div>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[10px] text-slate-500 font-mono">Ln {prob.line}, Col {prob.column}</span>
-                          <span className="text-[9px] px-1 py-0 rounded bg-white/5 text-slate-600 uppercase tracking-tighter font-bold">C#</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {activeTab === 'Output' && <OutputTab apiUrl={apiUrl} sessionToken={sessionToken} unityConnected={unityConnected} />}
-          {activeTab === 'Debug Console' && <DebugConsoleTab apiUrl={apiUrl} sessionToken={sessionToken} unityConnected={unityConnected} />}
-          {activeTab === 'Ports' && <PortsTab apiUrl={apiUrl} sessionToken={sessionToken} unityConnected={unityConnected} />}
-        </div>
-
-        {/* Right Sidebar */}
-        <div style={{ width: `${sidebarWidth}px` }}
-          className="bg-[#111111] border-l border-white/5 flex flex-col relative shrink-0">
-          <div onMouseDown={startResizingH} className="absolute top-0 bottom-0 -left-1 w-2 cursor-ew-resize z-[70] hover:bg-blue-500/10" />
-          <div className="p-2 space-y-1 overflow-y-auto">
-            {sessions.map((inst) => (
-              <div 
-                key={inst.id}
-                onClick={() => {
-                  setActiveSessionId(inst.id);
-                  setActiveTab('Terminal');
-                }}
-                className={`group flex items-center gap-2 px-2 py-1.5 rounded text-[11px] cursor-pointer transition-colors ${activeSessionId === inst.id ? 'bg-blue-600/20 text-blue-400 border border-blue-500/20' : 'text-slate-500 hover:bg-white/5'}`}
-              >
-                <div className="w-3.5 h-3.5 rounded flex items-center justify-center text-[8px] font-bold bg-slate-700 text-slate-300">&gt;_</div>
-                <span className="truncate flex-1 font-mono">{inst.name}</span>
-                {activeSessionId === inst.id && <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-[0_0_6px_rgba(59,130,246,0.6)]" />}
-                {sessions.length > 1 && (
-                  <X
-                    size={10}
-                    className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 ml-1 transition-opacity cursor-pointer shrink-0"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeSession(inst.id);
-                    }}
-                  />
-                )}
+      <div className="term-body" id={`${id}-body`}>
+        <div className="term-in">
+          {/* Terminal: one host per shell, mounted from the first opening on and only hidden after. */}
+          <div className="term-pane" data-term="terminal">
+            {sessions.length > 1 && (
+              <div className="term-sessions" role="tablist" aria-label={ceviri('terminal.sessions')}>
+                {sessions.map(s => (
+                  <button key={s.id} type="button" role="tab" className="term-sess" aria-selected={activeSessionId === s.id}
+                    onClick={() => { setActiveSessionId(s.id); setTab('terminal'); }}>
+                    {s.name}
+                  </button>
+                ))}
               </div>
+            )}
+            {sessions.map(session => (
+              <div
+                key={session.id}
+                className="term-host"
+                style={{ display: activeSessionId === session.id ? 'block' : 'none' }}
+                onClick={() => terminalInstancesRef.current[session.id]?.focus()}
+                ref={(el) => { terminalRefs.current[session.id] = el; }}
+              />
+            ))}
+          </div>
+
+          <div className="term-pane" data-term="konsol">
+            {/* Polls only while it is on screen, as the old Debug Console tab did. */}
+            {isOpen && tab === 'konsol' && (
+              <ConsolePane apiUrl={apiUrl} sessionToken={sessionToken} unityConnected={unityConnected} />
+            )}
+          </div>
+
+          <div className="term-pane" data-term="sorunlar">
+            {problems.length === 0 ? (
+              <p className="prob-note">{ceviri(problemsKnown ? 'terminal.noProblems' : 'terminal.problemsUnknown')}</p>
+            ) : problems.map((prob, i) => (
+              <button key={i} type="button" className="prob" data-severity={String(prob.severity).toLowerCase() === 'error' ? 'error' : 'warning'} onClick={() => onProblemClick?.(prob)}>
+                <Ic><path d="M10 3l7.5 13h-15z" /><path d="M10 8v3.6M10 13.6v.2" /></Ic>
+                <span className="prob-text">
+                  <b>{prob.message}</b>
+                  <span className="prob-at">
+                    {prob.file && <><span className="prob-file">{String(prob.file).split(/[\\/]/).pop()}</span> · </>}
+                    {ceviri('terminal.line', { satir: prob.line, sutun: prob.column })}
+                  </span>
+                </span>
+              </button>
             ))}
           </div>
         </div>
       </div>
-
-      {/* Footer */}
-      <div className="h-5 bg-[#0d0d0d] border-t border-white/5 flex items-center px-3 justify-between shrink-0">
-        <div className="flex items-center gap-3 text-[9px] text-slate-600 uppercase tracking-widest">
-          <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${unityConnected ? 'bg-emerald-500' : 'bg-slate-700'}`} />
-            <span>{unityConnected ? ceviri('terminal.unityConnected') : ceviri('terminal.unityNotConnected')}</span>
-          </div>
-        </div>
-        <span className="text-[9px] text-slate-700 font-mono">PTY v5.9</span>
-      </div>
-    </motion.div>
+    </div>
   );
 };

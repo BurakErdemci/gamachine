@@ -1007,8 +1007,11 @@ export default function Home() {
               id="main-terminal"
               isOpen={isTerminalOpen}
               onClose={() => setIsTerminalOpen(false)}
+              onOpen={() => setIsTerminalOpen(true)}
               workspacePath={fs.workspacePath}
               problems={flattenedProblems}
+              // The strip's "0 errors · 1 warning" only once C# diagnostics reported at least once.
+              problemsKnown={Object.keys(projectProblems).length > 0}
               onProblemClick={handleProblemClick}
               apiUrl={API}
               sessionToken={auth.user?.sessionToken}

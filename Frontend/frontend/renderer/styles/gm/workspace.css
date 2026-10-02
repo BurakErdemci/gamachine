@@ -322,6 +322,11 @@ button.prob:hover { background: color-mix(in srgb, var(--term-text) 6%, transpar
 .prob-at { font-size: var(--fs-meta); color: var(--term-dim); }
 .prob-at .prob-file { color: var(--term-text); font-family: var(--font-mono); text-decoration: underline dotted; text-underline-offset: 3px; }
 .prob-note { margin: auto 0; align-self: center; font-size: var(--fs-meta); color: var(--term-dim); text-align: center; }
+/* "fill the panel": the drawer takes the whole body (app glue; the old panel had a maximise) */
+.workspace:has(.term.is-max) .ws-body { display: none; }
+.term.is-max { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.term.is-max .term-body { flex: 1; min-height: 0; }
+.term.is-max .term-in { height: auto; min-height: 0; }
 /* drag the open drawer's top edge to resize it (app glue: the old terminal panel was resizable) */
 .term-resize { position: absolute; left: 0; right: 0; top: -3px; height: 6px; z-index: 2; cursor: ns-resize; }
 .term-resize:hover { background: var(--paper-line-strong); }
