@@ -3,8 +3,8 @@ import { flushSync } from 'react-dom';
 import * as THREE from 'three';
 // The `.js` suffix is required by three's exports map under this tsconfig.
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Loader2 } from 'lucide-react';
 import { useLang, type TKey } from '../../lib/i18n';
+import { onThemeChange, readColorTokens } from '../../lib/themeTokens';
 import { extensionOf, routeForFile } from './extensions';
 import {
   boneBounds,
@@ -29,11 +29,38 @@ import { DEFAULT_SPEED, timeAtFraction, type Speed } from './timeline';
 export interface ModelPreviewPanelProps {
   file: { path: string; name: string };
   workspacePath: string | null;
+  /** Drawn over the stage's corner (the workspace passes the orbit hint); nothing by default. */
+  overlay?: React.ReactNode;
 }
 
-// Matches the content area background in home.tsx, so the canvas edges are
-// invisible while the scene is empty.
-const BACKGROUND = 0x0b0d12;
+/**
+ * The stage's colours come from the preview tokens (`--pv-*`): the canvas background is the
+ * stage ground, so its edges vanish into the panel, the grid is the theme's drafting grid and the
+ * mannequin the preview ink, which reads on the paper themes' light ground too (the old fixed
+ * #d8d8d8 figure all but disappeared there). Arena's values are the fallback.
+ */
+const PREVIEW_TOKEN_DEFAULTS = { '--pv-bg': '#141925', '--pv-grid': '#2b3248', '--pv-ink': '#8c95ab' } as const;
+
+const mixHex = (a: string, b: string, t: number) => {
+  const ca = new THREE.Color(a); const cb = new THREE.Color(b);
+  return `#${ca.lerp(cb, t).getHexString()}`;
+};
+export const previewColors = () => {
+  const tk = readColorTokens(PREVIEW_TOKEN_DEFAULTS);
+  return {
+    background: tk['--pv-bg'],
+    grid: tk['--pv-grid'],
+    // The mockup's floor line is the preview ink at 45 %: a centre line, not a second grid.
+    centerLine: mixHex(tk['--pv-bg'], tk['--pv-ink'], 0.45),
+    figure: tk['--pv-ink'],
+  };
+};
+
+/** The mannequin's shared material takes the preview ink (it is the app's stand-in, not file art). */
+const tintMannequin = (mannequin: MannequinHandle | null, color: string) => {
+  const material = mannequin?.meshes[0]?.material as THREE.MeshStandardMaterial | undefined;
+  material?.color?.set(color);
+};
 
 // Fraction of the viewport the framed model should occupy. Below 1 the bounding
 // sphere touches the frustum edge; the margin keeps the silhouette off the rim.
@@ -312,7 +339,7 @@ export const mountParsedModel = (
   return stage.playback.duration;
 };
 
-export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, workspacePath }) => {
+export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, workspacePath, overlay }) => {
   const { t } = useLang();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<Stage | null>(null);
@@ -348,14 +375,15 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
       return;
     }
 
+    const colors = previewColors();
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(BACKGROUND);
+    scene.background = new THREE.Color(colors.background);
 
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
     camera.position.set(3, 2.5, 4);
     camera.lookAt(0, 0.5, 0);
 
-    const grid = new THREE.GridHelper(10, 20, 0x2a2f3a, 0x1a1e26);
+    const grid = new THREE.GridHelper(10, 20, colors.centerLine, colors.grid);
     scene.add(grid);
     scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x20242c, 1.2));
     const key = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -499,6 +527,25 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
     renderer.domElement.addEventListener('webglcontextlost', onContextLost);
     renderer.domElement.addEventListener('webglcontextrestored', onContextRestored);
 
+    // A theme switch recolours the ground, the grid and the mannequin without a reload. A
+    // GridHelper's colours are baked into its geometry, so it is rebuilt in place, keeping the
+    // scale and position the framing gave it.
+    const stopTheme = onThemeChange(() => {
+      const next = previewColors();
+      (scene.background as THREE.Color).set(next.background);
+      const old = stage.grid;
+      const fresh = new THREE.GridHelper(10, 20, next.centerLine, next.grid);
+      fresh.position.copy(old.position);
+      fresh.scale.copy(old.scale);
+      scene.add(fresh);
+      scene.remove(old);
+      bestEffort(() => old.geometry.dispose());
+      bestEffort(() => (Array.isArray(old.material) ? old.material : [old.material]).forEach(m => m.dispose()));
+      stage.grid = fresh;
+      tintMannequin(stage.mannequin, next.figure);
+      stage.render();
+    });
+
     // ResizeObserver, not a window listener: the panel also changes width when
     // the sidebar or chat pane toggles, which fires no window resize.
     const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resize) : null;
@@ -519,6 +566,7 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
     watchRatio();
 
     return () => {
+      stopTheme();
       observer?.disconnect();
       dprQuery?.removeEventListener('change', onRatioChange);
       stopRestoreTimer();
@@ -531,9 +579,10 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
       // is the one step whose omission is cumulative.
       bestEffort(() => clearContent(stage));
       bestEffort(() => controls.dispose());
-      bestEffort(() => grid.geometry.dispose());
+      // stage.grid, not the first grid: a theme switch may have replaced it.
+      bestEffort(() => stage.grid.geometry.dispose());
       bestEffort(() =>
-        (Array.isArray(grid.material) ? grid.material : [grid.material]).forEach(m => m.dispose()));
+        (Array.isArray(stage.grid.material) ? stage.grid.material : [stage.grid.material]).forEach(m => m.dispose()));
       bestEffort(() => scene.clear());
       // `dispose()` frees three's own caches and NOT the GL context (three
       // 0.185.1, WebGLRenderer.js:1074-1097): only the WEBGL_lose_context
@@ -661,6 +710,8 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
         fail('preview.loadError', String(err instanceof Error ? err.message : err).split(/\r?\n/)[0]);
         return;
       }
+      tintMannequin(stage.mannequin, previewColors().figure);
+      stage.render();
       if (clipDuration > 0) {
         setDuration(clipDuration);
         setPlaying(true);
@@ -712,33 +763,36 @@ export const ModelPreviewPanel: React.FC<ModelPreviewPanelProps> = ({ file, work
   const showFault = viewportFault !== null && !errorKey
     && (!loading || viewportFault !== 'unavailable');
 
+  // The mockup's preview view (`.pv-view[data-pv=model]`): the stage, then the transport bar.
+  // Messages are drawn over the stage in the preview's own ink (`.pv-msg`).
   return (
-    <div className="flex-1 min-h-0 w-full relative bg-[#0B0D12]">
-      <div ref={hostRef} className="absolute inset-0" />
-      {loading && !showFault && (
-        <div className="absolute inset-0 flex items-center justify-center gap-2 text-[11px] font-semibold text-slate-400 pointer-events-none">
-          <Loader2 size={14} className="animate-spin" />
-          {t('preview.loading')}
-        </div>
-      )}
-      {errorKey && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-8 text-center">
-          <span className="text-[12px] font-semibold text-slate-300">{t(errorKey)}</span>
-          {errorDetail && (
-            <span className="text-[10px] font-mono text-slate-500 break-all max-w-full">{errorDetail}</span>
-          )}
-        </div>
-      )}
-      {/*
-        Behind the file's own message: what is wrong with the file is more
-        specific than what is wrong with the GPU. See `showFault` for how this
-        composes with a read that is still running.
-      */}
-      {showFault && viewportFault && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-8 text-center">
-          <span className="text-[12px] font-semibold text-slate-300">{t(VIEWPORT_FAULT_KEYS[viewportFault])}</span>
-        </div>
-      )}
+    <div className="pv-view" data-pv="model">
+      <div className="pv-stage pv-model">
+        <div ref={hostRef} className="pv-host" />
+        {!loading && !errorKey && !showFault && overlay}
+        {loading && !showFault && (
+          <div className="pv-msg">
+            <svg className="ic pv-spin" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a7 7 0 1 1-7 7" /></svg>
+            {t('preview.loading')}
+          </div>
+        )}
+        {errorKey && (
+          <div className="pv-msg is-solid">
+            <span>{t(errorKey)}</span>
+            {errorDetail && <span className="pv-msg-detail">{errorDetail}</span>}
+          </div>
+        )}
+        {/*
+          Behind the file's own message: what is wrong with the file is more
+          specific than what is wrong with the GPU. See `showFault` for how this
+          composes with a read that is still running.
+        */}
+        {showFault && viewportFault && (
+          <div className="pv-msg is-solid">
+            <span>{t(VIEWPORT_FAULT_KEYS[viewportFault])}</span>
+          </div>
+        )}
+      </div>
       {duration > 0 && !errorKey && (
         <PlaybackControls
           duration={duration}

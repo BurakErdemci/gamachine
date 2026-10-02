@@ -998,7 +998,18 @@ export default function Home() {
                 onClose={fs.closePreview}
                 viewer={fs.previewFile && (previewRoute === 'image' || previewRoute === 'blocked-image'
                   ? <ImagePreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />
-                  : <ModelPreviewPanel file={fs.previewFile} workspacePath={fs.workspacePath} />)}
+                  : (
+                    <ModelPreviewPanel
+                      file={fs.previewFile}
+                      workspacePath={fs.workspacePath}
+                      overlay={(
+                        <span className="pv-orbit-hint">
+                          <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 10.5c0-2.4 2.9-4.3 6.5-4.3s6.5 1.9 6.5 4.3-2.9 4.3-6.5 4.3" /><path d="M8.6 12.9l1.6 1.9-1.9 1.6" /></svg>
+                          {t('ws.orbitHint')}
+                        </span>
+                      )}
+                    />
+                  ))}
               />
             ),
           }}

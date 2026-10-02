@@ -1,5 +1,4 @@
 import React from 'react';
-import { Pause, Play } from 'lucide-react';
 import { useLang } from '../../lib/i18n';
 import { fractionAtTime, formatTimecode, SPEEDS, type Speed } from './timeline';
 
@@ -31,21 +30,22 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   const { t } = useLang();
   const label = playing ? t('preview.pause') : t('preview.play');
 
+  // The mockup's transport (`.pv-bar`): play / pause, the timeline, the frame counter. The
+  // counter is a timecode pair: the clip's frame rate is not known reliably across formats, and a
+  // made-up frame number would be a wrong number on screen.
   return (
-    <div className="absolute bottom-0 inset-x-0 flex items-center gap-3 px-3 py-2 bg-[#0B0D12]/85 backdrop-blur-sm border-t border-white/5">
+    <div className="pv-bar">
       <button
         type="button"
         onClick={onTogglePlay}
         aria-label={label}
         title={label}
-        className="shrink-0 grid place-items-center w-7 h-7 rounded-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors"
+        className="pv-play"
       >
-        {playing ? <Pause size={14} /> : <Play size={14} />}
+        {playing
+          ? <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path className="fill" d="M6 4.5h2.6v11H6zM11.4 4.5H14v11h-2.6z" /></svg>
+          : <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path className="fill" d="M6.5 4.5l9 5.5-9 5.5z" /></svg>}
       </button>
-
-      <span className="shrink-0 text-[10px] font-mono tabular-nums text-slate-400">
-        {formatTimecode(time)}
-      </span>
 
       <input
         type="range"
@@ -56,11 +56,11 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
         onChange={e => onSeek(Number(e.target.value) / STEPS)}
         aria-label={t('preview.timeline')}
         title={t('preview.timeline')}
-        className="flex-1 min-w-0 h-1 accent-sky-400 cursor-pointer"
+        className="pv-time"
       />
 
-      <span className="shrink-0 text-[10px] font-mono tabular-nums text-slate-500">
-        {formatTimecode(duration)}
+      <span className="pv-frame num">
+        <span>{formatTimecode(time)}</span> / <span>{formatTimecode(duration)}</span>
       </span>
 
       <select
@@ -68,10 +68,10 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
         onChange={e => onSpeedChange(Number(e.target.value) as Speed)}
         aria-label={t('preview.speed')}
         title={t('preview.speed')}
-        className="shrink-0 bg-white/5 border border-white/10 rounded-md text-[10px] font-semibold text-slate-300 px-1.5 py-1 outline-none hover:bg-white/10 cursor-pointer"
+        className="pv-speed"
       >
         {SPEEDS.map(value => (
-          <option key={value} value={value} className="bg-[#0B0D12]">{`${value}×`}</option>
+          <option key={value} value={value}>{`${value}×`}</option>
         ))}
       </select>
     </div>

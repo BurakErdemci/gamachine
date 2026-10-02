@@ -297,6 +297,8 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({ file, kind, onClose, v
         </button>
       </div>
       {viewer}
+      {/* The image panel writes its own meta line (size, bytes, fit); a model gets its name here. */}
+      {kind === 'model' && <p className="pv-meta"><span className="pv-name">{file.name}</span></p>}
     </>
   );
 };

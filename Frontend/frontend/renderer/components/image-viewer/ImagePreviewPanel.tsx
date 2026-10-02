@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Maximize2, Minimize2 } from 'lucide-react';
 import { useLang, type TKey } from '../../lib/i18n';
 import { extensionOf, routeForFile } from '../model-viewer/extensions';
 
@@ -42,19 +41,9 @@ const humanSize = (bytes: number): string =>
     : `${Math.max(1, Math.round(bytes / 1024))} KiB`;
 
 // Transparency has to be visible: a sprite with an alpha channel is
-// indistinguishable from an opaque one against a flat dark panel, and "is this
-// cut out properly" is the question the preview exists to answer. A gradient,
-// so no asset ships with it.
-const CHECKER = {
-  backgroundColor: '#141821',
-  backgroundImage:
-    'linear-gradient(45deg, #1e2430 25%, transparent 25%), '
-    + 'linear-gradient(-45deg, #1e2430 25%, transparent 25%), '
-    + 'linear-gradient(45deg, transparent 75%, #1e2430 75%), '
-    + 'linear-gradient(-45deg, transparent 75%, #1e2430 75%)',
-  backgroundSize: '16px 16px',
-  backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0',
-} as const;
+// indistinguishable from an opaque one against a flat panel, and "is this cut
+// out properly" is the question the preview exists to answer. The checkerboard
+// is the mockup's `.pv-img` ground, drawn from the theme's --pv-check-a/b.
 
 export const ImagePreviewPanel: React.FC<ImagePreviewPanelProps> = ({ file, workspacePath }) => {
   const { t } = useLang();
@@ -141,14 +130,11 @@ export const ImagePreviewPanel: React.FC<ImagePreviewPanelProps> = ({ file, work
   // magnification is at issue — downscaling still wants the smooth filter.
   const magnified = actualSize;
 
+  // The mockup's image view (`.pv-view[data-pv=img]`): the picture on the checkerboard stage
+  // with its size in the corner, then a meta line with the file and the fit / 1:1 switch.
   return (
-    <div className="flex-1 min-h-0 w-full relative flex flex-col bg-[#0B0D12]">
-      <div
-        className={`flex-1 min-h-0 relative flex items-center justify-center ${
-          actualSize ? 'overflow-auto custom-scrollbar' : 'overflow-hidden'
-        }`}
-        style={CHECKER}
-      >
+    <div className="pv-view" data-pv="img">
+      <div className={`pv-stage pv-img${actualSize ? ' is-actual' : ''}`}>
         {url && !errorKey && (
           <img
             src={url}
@@ -163,31 +149,26 @@ export const ImagePreviewPanel: React.FC<ImagePreviewPanelProps> = ({ file, work
           />
         )}
         {loading && !errorKey && (
-          <div className="absolute inset-0 flex items-center justify-center gap-2 text-[11px] font-semibold text-slate-400 pointer-events-none">
-            <Loader2 size={14} className="animate-spin" />
+          <div className="pv-msg">
+            <svg className="ic pv-spin" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3a7 7 0 1 1-7 7" /></svg>
             {t('preview.imageLoading')}
           </div>
         )}
         {errorKey && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-8 text-center bg-[#0B0D12]">
-            <span className="text-[12px] font-semibold text-slate-300">{t(errorKey)}</span>
+          <div className="pv-msg is-solid">
+            <span>{t(errorKey)}</span>
           </div>
         )}
+        {natural && !errorKey && <span className="pv-size num">{natural.w} × {natural.h}</span>}
       </div>
       {natural && !errorKey && (
-        <div className="shrink-0 flex items-center justify-between gap-3 px-3 py-1.5 border-t border-white/[0.06] bg-[#0B0D12]">
-          <span className="text-[10px] font-mono text-slate-500 truncate">
-            {t('preview.imageDimensions', { width: natural.w, height: natural.h })}
-            {byteLength > 0 && ` · ${humanSize(byteLength)}`}
-          </span>
-          <button
-            onClick={() => setActualSize(v => !v)}
-            className="shrink-0 flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-semibold text-slate-400 hover:text-slate-200 hover:bg-white/[0.06] transition-colors"
-          >
-            {magnified ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+        <p className="pv-meta">
+          <span className="pv-name">{file.name}</span>
+          <span>· {t('preview.imageDimensions', { width: natural.w, height: natural.h })}{byteLength > 0 && ` · ${humanSize(byteLength)}`}</span>
+          <button type="button" onClick={() => setActualSize(v => !v)} className="pv-fit">
             {t(magnified ? 'preview.fitToView' : 'preview.actualSize')}
           </button>
-        </div>
+        </p>
       )}
     </div>
   );
