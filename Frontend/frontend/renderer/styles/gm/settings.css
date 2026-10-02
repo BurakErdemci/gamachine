@@ -69,8 +69,9 @@
   display: grid; grid-template-columns: 46px auto auto 1fr; align-items: center; column-gap: 10px;
   font-size: var(--fs-meta); color: var(--shell-text-dim); line-height: 1.4;
 }
-.use-v { color: var(--shell-text); font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
-.use-r { justify-self: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.use-v { color: var(--shell-text); font-weight: 600; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* min-width 0: a long reset text (a raw CLI fallback) shortens instead of widening the box. */
+.use-r { justify-self: end; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* loading = the empty track (a skeleton, never a guess); stale = the last numbers, dimmed */
 .meter.is-loading i { animation: use-wait 1.4s var(--g-ease-move, ease) infinite alternate; }
 @keyframes use-wait { to { opacity: .45; } }
