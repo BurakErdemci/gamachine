@@ -106,6 +106,14 @@ export function IntroOverlay() {
       if (event.target === intro && event.animationName === 'i-end') end(false)
     }
 
+    // Fit the fixed 1600x1000 stage into the window (see intro.css), and keep it fitted on resize.
+    const STAGE_W = 1600, STAGE_H = 1000
+    function fit() {
+      wrapper!.style.setProperty('--intro-fit', String(Math.min(window.innerWidth / STAGE_W, window.innerHeight / STAGE_H)))
+    }
+    fit()
+    window.addEventListener('resize', fit)
+
     root.setAttribute('data-intro', '')
     root.setAttribute('data-scene', String(scene))
     root.classList.add(run)
@@ -121,7 +129,14 @@ export function IntroOverlay() {
       clearTimeout(offsetTimer)
       clearTimeout(cleanupTimer)
       detachListeners()
-      if (!ended) releaseFocus()
+      window.removeEventListener('resize', fit)
+      if (!ended) {
+        releaseFocus()
+        // This cleanup strips the scene classes and the skip listeners. An overlay left up after
+        // it is frozen and cannot be dismissed (measured 2 Oct after a dev hot reload: overlay
+        // present, no run class, no listeners), so it goes with them.
+        setVisible(false)
+      }
       cleanRoot()
     }
   }, [scene])

@@ -1,6 +1,12 @@
 /* The wrapper fills the window; the approved artwork keeps its native canvas coordinates. */
 .intro-overlay { position: fixed; inset: 0; z-index: 10000; overflow: hidden; }
-.intro-overlay .ov { width: 100%; height: 100%; }
+/* The scenes are drawn on a fixed 1600x1000 stage (the mockup's design viewport). The app scales
+   that stage to fit the window and centres it (IntroOverlay sets --intro-fit); stretching .ov to
+   the window instead left every scene pinned to the top-left corner on a large screen (Burak, 2 Oct).
+   The stage no longer clips, so its background reaches past it and fills the window edges. */
+.intro-overlay .ov { inset: auto; left: 50%; top: 50%; overflow: visible; transform-origin: 50% 50%;
+  transform: translate(-50%, -50%) scale(var(--intro-fit, 1)); }
+.intro-overlay .ov-bg { inset: -2400px; }
 
 
 :where(.intro-overlay) .ov { position: absolute; inset: 0; width: 1600px; height: 1000px; z-index: 10; cursor: pointer; overflow: hidden; }
