@@ -123,6 +123,9 @@ if not write_local_app_token(os.environ.get("LOCAL_APP_TOKEN", "")):
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from error_i18n import localized_http_exception_handler
 
 from database import DatabaseManager
 from routes import (
@@ -309,6 +312,7 @@ app = FastAPI(
     redoc_url="/redoc" if _DOCS_ENABLED else None,
     openapi_url="/openapi.json" if _DOCS_ENABLED else None,
 )
+app.add_exception_handler(StarletteHTTPException, localized_http_exception_handler)
 db = DatabaseManager(db_path=db_path)
 PROGRESS_STORE = {}
 
@@ -331,7 +335,7 @@ app.add_middleware(
     allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["Content-Type", "X-Session-Token"],
+    allow_headers=["Content-Type", "X-Session-Token", "X-UI-Lang"],
 )
 
 app.include_router(create_auth_router(db))
