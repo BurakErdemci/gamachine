@@ -835,7 +835,7 @@ export default function Home() {
             never fire). The empty new chat takes the thread's place. */}
         <div className="thread-wrap">
           {chatEmpty ? (
-            <EmptyChat userName={auth.user?.name} projectName={projectName} onPick={pickQuest} />
+            <EmptyChat userName={auth.user?.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} />
           ) : (
             <div className="thread custom-scrollbar" onScroll={chatScroll.onScroll}>
               <ChatPanel

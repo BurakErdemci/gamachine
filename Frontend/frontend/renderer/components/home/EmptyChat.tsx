@@ -3,6 +3,7 @@ import { useLang, type TKey } from '../../lib/i18n';
 import { GamachineMascot } from './GamachineMascot';
 import { MascotHead } from './BrandLogo';
 import { displayName } from '../../lib/displayName';
+import type { GenerationMode } from './types';
 
 // TODO(profile): quest XP has no data source yet; these are the mockup's constants. Only Arena
 // shows them (`.qc-xp` is hidden in the base theme).
@@ -38,7 +39,17 @@ interface EmptyChatProps {
   projectName?: string | null;
   /** Puts a starting prompt into the composer. */
   onPick: (prompt: string) => void;
+  /** The approval mode decides what the greeting promises: "I ask first" was shown in auto mode
+   *  too, where nothing asks (Burak, 2 Oct). Absent means step, the strictest promise. */
+  approvalMode?: GenerationMode;
 }
+
+// Copy per approval mode: what the greeting and the writing cards promise.
+const PROMISE: Record<GenerationMode, { sub: TKey; subQuest: TKey; asks: TKey }> = {
+  step: { sub: 'empty.sub', subQuest: 'empty.subQuest', asks: 'quest.asks' },
+  balanced: { sub: 'empty.subBalanced', subQuest: 'empty.subQuestBalanced', asks: 'quest.asksBalanced' },
+  auto: { sub: 'empty.subAuto', subQuest: 'empty.subQuestAuto', asks: 'quest.asksAuto' },
+};
 
 const check = <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8" /></svg>;
 const shield = (
@@ -48,8 +59,9 @@ const shield = (
 );
 
 /** Mockup "Yeni sohbet (bos)": the mascot greets as the quest giver, the board lists starters. */
-export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onPick }) => {
+export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onPick, approvalMode = 'step' }) => {
   const { t } = useLang();
+  const promise = PROMISE[approvalMode] ?? PROMISE.step;
   const name = displayName(userName);
   const project = (projectName || '').trim() || 'Workspace';
   return (
@@ -65,8 +77,8 @@ export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onP
             {name ? t('empty.title', { ad: name, proje: project }) : t('empty.titleNoName', { proje: project })}
           </h1>
           <p className="empty-sub lex">
-            <span className="lex-d">{t('empty.sub')}</span>
-            <span className="lex-q">{t('empty.subQuest')}</span>
+            <span className="lex-d">{t(promise.sub)}</span>
+            <span className="lex-q">{t(promise.subQuest)}</span>
           </p>
         </div>
       </div>
@@ -90,7 +102,7 @@ export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onP
                 <span className="qc-text">{t(`quest.${q.id}.text` as TKey)}</span>
                 <span className="qc-foot">
                   {q.writes
-                    ? <span className="qc-ask">{shield}{t('quest.asks')}</span>
+                    ? <span className="qc-ask">{shield}{t(promise.asks)}</span>
                     : <span className="qc-safe">{check}{t('quest.safe')}</span>}
                   <span className="qc-xp num">{t('quest.xp', { xp: q.xp })}</span>
                 </span>
