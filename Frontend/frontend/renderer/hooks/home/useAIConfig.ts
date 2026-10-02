@@ -515,9 +515,13 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
   const displayModelName = useMemo(() => {
     if (!aiConfig.model_name) return cevir('models.select');
     const allModels = [...availableModels.cloud, ...(availableModels.subscription || [])];
-    const found = allModels.find(m =>
-      m.id === aiConfig.model_name || (m as any).openrouter_id === aiConfig.model_name
-    );
+    const matches = (m: any) => m.id === aiConfig.model_name || m.openrouter_id === aiConfig.model_name;
+    // The same id can sit in both lists: `claude-sonnet-5-5` is a Claude Code
+    // row and also an Anthropic API row named after OpenRouter ("Anthropic:
+    // Claude Sonnet 5.5"). Take the row of the active provider first, or the
+    // chip shows the API name for a CLI pick (owner report, 2 Oct 2026).
+    const found = allModels.find(m => (m as any).provider === aiConfig.provider_type && matches(m))
+      || allModels.find(matches);
     if (found) return found.name;
     // Dinamik CLI modelleri (cursor/opencode) statik listede yok → prefix'i soy.
     return shortModelId(aiConfig.model_name);
