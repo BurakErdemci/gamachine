@@ -57,6 +57,14 @@ namespace MCPForUnity.Editor.Tools.Gamachine
             return roots;
         }
 
+        internal static HashSet<int> Objects()
+        {
+            var objects = new HashSet<int>();
+            foreach (var go in UnityEngine.Object.FindObjectsByType<GameObject>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                objects.Add(go.GetInstanceIDCompat());
+            return objects;
+        }
+
         internal static object Run(string failureCode, Func<UndoStep, object> command)
         {
             var step = new UndoStep();
@@ -150,19 +158,22 @@ namespace MCPForUnity.Editor.Tools.Gamachine
             }
 
             var rootsBefore = GamachineSceneEditorWriter.Roots();
+            var objectsBefore = GamachineSceneEditorWriter.Objects();
             string label = entry.Value<string>("label");
             string groupName = "Gamachine: Create " + label.Substring(label.LastIndexOf('/') + 1);
             step.Begin(groupName);
             Selection.activeGameObject = parent;
             if (!EditorApplication.ExecuteMenuItem(item)) return step.Fail();
             var created = Selection.activeGameObject;
-            var createdRoots = GamachineSceneEditorWriter.Roots();
-            createdRoots.ExceptWith(rootsBefore);
-            if (created == null || !createdRoots.Contains(created.transform.root.gameObject.GetInstanceIDCompat()))
-                return step.Fail();
+            if (created == null || objectsBefore.Contains(created.GetInstanceIDCompat())) return step.Fail();
 
-            if (parent != null)
+            // UI items already honour a selected Canvas parent (measured 3 Oct); the rest land at a new root.
+            bool placed = parent != null && created.transform.IsChildOf(parent.transform);
+            if (parent != null && !placed)
             {
+                var createdRoots = GamachineSceneEditorWriter.Roots();
+                createdRoots.ExceptWith(rootsBefore);
+                if (!createdRoots.Contains(created.transform.root.gameObject.GetInstanceIDCompat())) return step.Fail();
                 var createdRoot = created.transform.root;
                 bool replaceCanvas = parent.GetComponentInParent<Canvas>(true) != null
                     && createdRoot.GetComponent<Canvas>() != null;
