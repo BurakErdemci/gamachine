@@ -76,7 +76,7 @@ export const LESSER: GuideTopic[] = [
     steps: [
       { anchor: "composer-input", side: "above", align: "start", prepare: ["screen:chat"],
         title: T("Video linki yapıştır", "Paste a video link"),
-        text: T("YouTube, Vimeo, Loom ya da X'ten bir linki mesaja yapıştırırsan videodan kareler ve konuşmanın metnini çıkarıp ona bakarım. Bilgisayarındaki video için ataç.", "Paste a YouTube, Vimeo, Loom or X link into the message and I pull frames and the spoken text from it. For a video on your computer, use the clip."),
+        text: T("YouTube, Vimeo, Loom ya da X'ten bir linki mesaja yapıştırırsan videodan kareler ve konuşmanın metnini çıkarıp ona bakarım. Bilgisayarındaki video için \"Ekle ve sohbet\" menüsünden Video'yu seç.", "Paste a YouTube, Vimeo, Loom or X link into the message and I pull frames and the spoken text from it. For a video on your computer, pick Video in the \"Add & chat\" menu."),
       },
     ],
   },

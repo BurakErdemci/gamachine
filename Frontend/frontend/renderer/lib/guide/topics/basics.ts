@@ -123,7 +123,7 @@ export const BASICS: GuideTopic[] = [
     steps: [
       { anchor: "composer-attach", side: "above", align: "start", prepare: ["screen:chat"],
         title: T("Bana bir şey göster", "Show me something"),
-        text: T("Ataçla resim ya da bilgisayarındaki bir videoyu eklersin. Ekran görüntüsünü yapıştırabilir, dosyayı pencereye sürükleyebilirsin.", "Use the clip for an image or a video on your computer. You can also paste a screenshot or drag a file onto the window."),
+        text: T("Ataçla resim eklersin. Bilgisayarındaki bir video için alttaki \"Ekle ve sohbet\" menüsünden Video'yu seç. Ekran görüntüsünü yapıştırabilir, dosyayı pencereye sürükleyebilirsin.", "Use the clip for an image. For a video on your computer, pick Video in the \"Add & chat\" menu below. You can also paste a screenshot or drag a file onto the window."),
       },
     ],
   },
