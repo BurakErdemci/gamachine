@@ -14,7 +14,20 @@ from services import protection_rules
 from transport import approval_gate, unity_instance_middleware
 
 
+WRITE_COMMANDS = [
+    ("gm_editor_create_menu", {}),
+    ("gm_editor_create", {"item": "GameObject/3D Object/Cube", "parentId": None}),
+    ("gm_editor_rename", {"id": -4, "name": "x.meta"}),
+    ("gm_editor_set_active", {"id": -4, "active": False}),
+    ("gm_editor_duplicate", {"id": -4}),
+    ("gm_editor_delete", {"id": -4}),
+]
+
+
 @pytest.mark.parametrize("name,params", [
+    *WRITE_COMMANDS,
+    *[("batch_execute", {"commands": [{"tool": name, "params": params}]})
+      for name, params in WRITE_COMMANDS],
     ("gm_editor_tree", {}),
     ("GM_EDITOR_VERSION", None),
     ("batch_execute", {"commands": [{"tool": "gm_editor_select", "params": {"id": -4}}]}),
@@ -54,6 +67,7 @@ def test_deep_batch_cannot_escape_refusal():
 
 
 @pytest.mark.parametrize("name,params", [
+    *WRITE_COMMANDS,
     ("gm_editor_tree", {}),
     ("execute_custom_tool", {"tool_name": "gm_editor_inspect"}),
     ("batch_execute", {"commands": [{"tool": "gm_editor_select"}]}),
@@ -68,6 +82,11 @@ def test_middleware_refuses_before_approval(monkeypatch, name, params):
         asyncio.run(middleware.on_call_tool(context, forward))
     approve.assert_not_awaited()
     forward.assert_not_awaited()
+
+
+@pytest.mark.parametrize("name,params", [WRITE_COMMANDS[1], WRITE_COMMANDS[2]])
+def test_write_values_are_not_file_paths(name, params):
+    assert protection_rules.meta_refusal(name, params) is None
 
 
 @pytest.fixture
@@ -109,9 +128,10 @@ def _request(body, maintenance=None):
 
 
 @pytest.mark.parametrize("maintenance", [None, "wrong", ""])
-def test_raw_route_refuses_without_valid_maintenance(raw_route, maintenance):
+@pytest.mark.parametrize("name,params", [("gm_editor_tree", {}), *WRITE_COMMANDS])
+def test_raw_route_refuses_without_valid_maintenance(raw_route, maintenance, name, params):
     route, send, sessions, _ = raw_route
-    response = asyncio.run(route(_request({"type": "gm_editor_tree"}, maintenance)))
+    response = asyncio.run(route(_request({"type": name, "params": params}, maintenance)))
     assert response.status_code == 403
     assert json.loads(response.body) == {"success": False, "error": "user_only"}
     send.assert_not_awaited()
@@ -121,6 +141,7 @@ def test_raw_route_refuses_without_valid_maintenance(raw_route, maintenance):
 @pytest.mark.parametrize("name,params", [
     ("gm_editor_tree", {}), ("gm_editor_inspect", {"id": -3384}),
     ("gm_editor_version", {}), ("gm_editor_select", {"id": None}),
+    *WRITE_COMMANDS,
 ])
 def test_raw_route_forwards_user_calls_unchanged(raw_route, name, params):
     route, send, _, gate = raw_route
@@ -132,6 +153,8 @@ def test_raw_route_forwards_user_calls_unchanged(raw_route, name, params):
 
 
 @pytest.mark.parametrize("name,params", [
+    *[("batch_execute", {"commands": [{"tool": name, "params": params}]})
+      for name, params in WRITE_COMMANDS],
     ("batch_execute", {"commands": [{"tool": "gm_editor_tree"}]}),
     ("batch_execute", {"commands": json.dumps([{ "tool": "gm_editor_tree" }])}),
     ("execute_custom_tool", {"tool_name": "gm_editor_inspect"}),

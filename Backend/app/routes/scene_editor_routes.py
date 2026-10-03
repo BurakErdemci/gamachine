@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel, StrictInt
+from pydantic import BaseModel, StrictBool, StrictInt, StrictStr
 
 from auth_utils import _check_token
 from omnisharp.omnisharp_manager import _unwrap_unity_result
@@ -20,6 +20,23 @@ logger = logging.getLogger(__name__)
 
 class SceneEditorSelection(BaseModel):
     id: StrictInt | None
+
+
+class SceneEditorCreate(BaseModel):
+    item: StrictStr
+    parentId: StrictInt | None
+
+
+class SceneEditorObject(BaseModel):
+    id: StrictInt
+
+
+class SceneEditorRename(SceneEditorObject):
+    name: StrictStr
+
+
+class SceneEditorActive(SceneEditorObject):
+    active: StrictBool
 
 
 def _loggable(text: object) -> str:
@@ -40,6 +57,9 @@ def _raise_unity_error(error: str, status: int = 200) -> None:
         raise HTTPException(status_code=503, detail="unity_unavailable")
     if error == "not_found":
         raise HTTPException(status_code=404, detail="not_found")
+    if error in {"locked", "compiling", "prefab_part", "invalid_name", "invalid_value",
+                 "invalid_item", "create_failed", "write_failed"}:
+        raise HTTPException(status_code=409, detail=error)
     logger.warning("Unity scene editor error: %s", _loggable(error))
     raise HTTPException(status_code=502, detail="unity_error")
 
@@ -117,5 +137,40 @@ def create_scene_editor_router() -> APIRouter:
                      x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
         return await _call_unity("gm_editor_select", {"id": body.id})
+
+    @router.get("/create-menu")
+    async def create_menu(x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_create_menu", {})
+
+    @router.post("/create")
+    async def create(body: SceneEditorCreate,
+                     x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_create", {"item": body.item, "parentId": body.parentId})
+
+    @router.post("/rename")
+    async def rename(body: SceneEditorRename,
+                     x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_rename", {"id": body.id, "name": body.name})
+
+    @router.post("/set-active")
+    async def set_active(body: SceneEditorActive,
+                         x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_set_active", {"id": body.id, "active": body.active})
+
+    @router.post("/duplicate")
+    async def duplicate(body: SceneEditorObject,
+                        x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_duplicate", {"id": body.id})
+
+    @router.post("/delete")
+    async def delete(body: SceneEditorObject,
+                     x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_delete", {"id": body.id})
 
     return router

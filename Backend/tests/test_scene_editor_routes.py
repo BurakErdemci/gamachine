@@ -34,6 +34,17 @@ CASES = [
     ("GET", "/scene-editor/version", None, "gm_editor_version", {}),
     ("POST", "/scene-editor/select", {"id": -3384}, "gm_editor_select", {"id": -3384}),
     ("POST", "/scene-editor/select", {"id": None}, "gm_editor_select", {"id": None}),
+    ("GET", "/scene-editor/create-menu", None, "gm_editor_create_menu", {}),
+    ("POST", "/scene-editor/create", {"item": "GameObject/3D Object/Cube", "parentId": None},
+     "gm_editor_create", {"item": "GameObject/3D Object/Cube", "parentId": None}),
+    ("POST", "/scene-editor/create", {"item": "GameObject/Camera", "parentId": -3384},
+     "gm_editor_create", {"item": "GameObject/Camera", "parentId": -3384}),
+    ("POST", "/scene-editor/rename", {"id": -3384, "name": "x.meta"},
+     "gm_editor_rename", {"id": -3384, "name": "x.meta"}),
+    ("POST", "/scene-editor/set-active", {"id": -3384, "active": False},
+     "gm_editor_set_active", {"id": -3384, "active": False}),
+    ("POST", "/scene-editor/duplicate", {"id": -3384}, "gm_editor_duplicate", {"id": -3384}),
+    ("POST", "/scene-editor/delete", {"id": -3384}, "gm_editor_delete", {"id": -3384}),
 ]
 
 
@@ -70,6 +81,63 @@ def test_all_endpoints_require_session_token(client, monkeypatch, method, path, 
     headers = {} if token is None else {"X-Session-Token": token}
     assert http.request(method, path, json=body, headers=headers).status_code == 401
     post.assert_not_called()
+
+
+@pytest.mark.parametrize("path,body", [
+    ("create", {"item": 123, "parentId": None}),
+    ("create", {"item": "GameObject/Camera", "parentId": True}),
+    ("create", {"item": "GameObject/Camera", "parentId": "1"}),
+    ("create", {"item": "GameObject/Camera", "parentId": 1.5}),
+    ("create", {"parentId": None}),
+    ("rename", {"id": -3384, "name": 123}),
+    ("rename", {"id": -3384}),
+    ("set-active", {"id": -3384, "active": "false"}),
+    ("set-active", {"id": -3384, "active": 0}),
+    ("set-active", {"id": -3384, "active": None}),
+    ("set-active", {"id": -3384}),
+    *[(path, {"id": value, **extra})
+      for path, extra in [("rename", {"name": "test"}), ("set-active", {"active": True}),
+                          ("duplicate", {}), ("delete", {})]
+      for value in [True, "1", 1.5, None]],
+    ("duplicate", {}),
+    ("delete", {}),
+])
+def test_write_bodies_reject_wrong_types(client, monkeypatch, path, body):
+    http, routes = client
+    post = Mock(side_effect=AssertionError("invalid body forwarded"))
+    monkeypatch.setattr(routes.urllib.request, "urlopen", post)
+    response = http.post(f"/scene-editor/{path}", json=body, headers={"X-Session-Token": "app-secret"})
+    assert response.status_code == 422
+    post.assert_not_called()
+
+
+@pytest.mark.parametrize("code", [
+    "locked", "compiling", "prefab_part", "invalid_name", "invalid_value",
+    "invalid_item", "create_failed", "write_failed",
+])
+@pytest.mark.parametrize("status", [200, 409])
+def test_write_error_codes_pass_through(client, monkeypatch, code, status):
+    http, routes = client
+    body = {"status": "success", "result": {"success": False, "message": code}}
+    if status >= 400:
+        post = Mock(side_effect=urllib.error.HTTPError("mock", status, "failure", {}, _reply(body)))
+    else:
+        post = Mock(return_value=_reply(body))
+    monkeypatch.setattr(routes.urllib.request, "urlopen", post)
+    response = http.post("/scene-editor/delete", json={"id": -3384},
+                         headers={"X-Session-Token": "app-secret"})
+    assert response.status_code == 409
+    assert response.json() == {"detail": code}
+
+
+def test_unknown_write_error_stays_private(client, monkeypatch):
+    http, routes = client
+    monkeypatch.setattr(routes.urllib.request, "urlopen", Mock(return_value=_reply({
+        "success": False, "message": "private write failure"})))
+    response = http.post("/scene-editor/delete", json={"id": -3384},
+                         headers={"X-Session-Token": "app-secret"})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "unity_error"}
 
 
 @pytest.mark.parametrize("body,status,expected,detail", [
