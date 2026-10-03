@@ -47,7 +47,7 @@
 }
 /* round 7: the chat shares the row at half width and becomes a strip at focus width */
 @container stage (max-width: 760px) {
-  .title-block .tb-date, .title-block .tb-scene, .strip-hint { display: none; }
+  .title-block .tb-date, .title-block .tb-scene { display: none; }
 }
 @container stage (max-width: 520px) {
   .title-block { padding: 14px 20px 10px; gap: 12px; }
@@ -397,14 +397,12 @@
 .has-error .composer { border-color: var(--accent); }
 .composer-msg { display: none; margin-left: auto; color: var(--accent-text); font-size: var(--fs-meta); }
 .has-error .composer-msg { display: inline; }
-.has-error .strip-hint { display: none; }
 
 .strip { display: flex; align-items: center; gap: 4px; padding: 7px 4px 0; font-size: var(--fs-meta); color: var(--ink-faint); }
 .strip-item { display: inline-flex; align-items: center; gap: 7px; padding: 2px 6px; border-radius: var(--radius-sm); color: var(--ink-faint); font-size: var(--fs-meta); }
 .strip-item b { font-weight: 600; color: var(--ink-dim); }
 .strip-item:hover { background: var(--paper-sunk); color: var(--ink); }
 .strip-sep { width: 3px; height: 3px; border-radius: 50%; background: var(--paper-line-strong); }
-.strip-hint { margin-left: auto; }
 /* effort = level pips (1-3); memory = segmented energy bar */
 .pips, .energy { display: inline-flex; align-items: center; gap: 2px; }
 .pips i { width: 7px; height: 7px; background: var(--pip-off); border-radius: 1px; transform: skewX(var(--seg-skew)); }
@@ -892,7 +890,8 @@
 .stage .queue-btn { width: 26px; height: 26px; color: var(--ink-faint); }
 
 /* ---------- status strip: app glue ---------- */
-.strip { position: relative; flex-wrap: nowrap; }
+/* wrap is the last resort: a piece moves to a second line rather than being cut mid-word */
+.strip { position: relative; flex-wrap: wrap; row-gap: 2px; }
 .strip-anchor { position: relative; display: inline-flex; }
 .strip-item { white-space: nowrap; }
 .strip-item b { display: inline-flex; gap: 4px; }
@@ -901,7 +900,30 @@
 .strip-memory:disabled { opacity: .7; cursor: progress; }
 .strip-alert { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 .strip-busy { color: var(--run-text); }
-.strip-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* plan usage ("Kota"): the Hafıza bar's look; >= 80 % takes the usage hot colour */
+.strip-usage { cursor: default; }
+.strip-usage:hover { background: none; color: var(--ink-faint); }
+.strip-use-part { display: inline-flex; align-items: center; gap: 5px; }
+.strip-use-dot { color: var(--ink-faint); }
+.strip .energy.is-hot i.on { background: var(--use-hot); }
+.strip-use-part[data-hot] b { color: var(--use-hot-text); }
+.strip-usage[data-state="stale"] .strip-use-part { opacity: .6; }
+/* the measured memory's used/window (also in its title) only fits beside an absent usage group */
+.strip:has(.strip-usage) .strip-mem-detail { display: none; }
+/* as the chat column narrows: the usage bars go (numbers stay), then the week, then the group
+   (breakpoints measured in Electron with each theme's font, tr + en; Ozel's mono has its own) */
+@container stage (max-width: 800px) {
+  .strip-mem-detail { display: none; }
+}
+@container stage (max-width: 740px) {
+  .strip-use-meter { display: none; }
+}
+@container stage (max-width: 680px) {
+  .strip-use-week, .strip-use-dot { display: none; }
+}
+@container stage (max-width: 600px) {
+  .strip-usage, .strip-sep-use { display: none; }
+}
 /* popovers above the strip: effort levels, more settings */
 .strip-pop {
   position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 50; width: 300px; padding: 10px;

@@ -960,6 +960,8 @@ export function AnimatedChatInput({
                         className="send is-stop"
                         title={t('composer.stop')}
                         data-stop-button
+                        // Keeps the guide's "composer-send" spot while a turn runs with no draft.
+                        data-guide={hasDraft ? undefined : 'composer-send'}
                     >
                         <Square size={13} className="fill-current" aria-hidden="true" />
                         <span className="sr-only">{t('composer.stop')}</span>
@@ -978,7 +980,8 @@ export function AnimatedChatInput({
                         // 3 Sep 2026).
                         disabled={disabled || sendBlockedByDictation || !hasDraft}
                         data-send-button
-                        title={isLoading ? t('queue.addHint') : undefined}
+                        data-guide="composer-send"
+                        title={isLoading ? t('queue.addHint') : t('composer.sendTitle')}
                         className="send"
                         data-queue={isLoading || undefined}
                     >

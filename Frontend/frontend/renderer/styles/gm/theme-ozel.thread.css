@@ -13,9 +13,20 @@
 [data-theme="ozel"] .composer { border-color: var(--oz-card-line); }
 [data-theme="ozel"] .composer:focus-within { border-color: var(--oz-acc); }
 [data-theme="ozel"] .send { width: 32px; height: 32px; border-radius: var(--radius-sm); }
-/* mono is wider: the composer strip stays one line, its key hint gives way first */
-[data-theme="ozel"] .strip-item, [data-theme="ozel"] .strip-hint { white-space: nowrap; }
-[data-theme="ozel"] .strip-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* mono is wider: the usage group gives way earlier than in the other themes */
+[data-theme="ozel"] .strip-item { white-space: nowrap; }
+@container stage (max-width: 860px) {
+  [data-theme="ozel"] .strip-mem-detail { display: none; }
+}
+@container stage (max-width: 770px) {
+  [data-theme="ozel"] .strip-use-meter { display: none; }
+}
+@container stage (max-width: 690px) {
+  [data-theme="ozel"] .strip-use-week, [data-theme="ozel"] .strip-use-dot { display: none; }
+}
+@container stage (max-width: 600px) {
+  [data-theme="ozel"] .strip-usage, [data-theme="ozel"] .strip-sep-use { display: none; }
+}
 
 /* ================= Signature 1: APPROVAL CARD =================
    Thin lines + the one status colour: a header line (orange dot + "Onayın gerekiyor"), the request in

@@ -146,9 +146,9 @@ export const LESSER: GuideTopic[] = [
     summary: T("Enter, Ctrl N, Ctrl `, F1 ve birkaç tane daha.", "Enter, Ctrl N, Ctrl `, F1 and a few more."),
     keywords: T("kısayol tuş klavye f1 ctrl", "shortcut key keyboard f1 ctrl"),
     steps: [
-      { anchor: "strip-hint", side: "above", align: "end", prepare: ["screen:chat"],
+      { anchor: "composer-send", side: "above", align: "end", prepare: ["screen:chat"],
         title: T("Yazarken", "While writing"),
-        text: T("Enter gönderir, Shift Enter yeni satır. Ctrl N yeni sohbet, Ctrl S açık dosyayı kaydeder.", "Enter sends, Shift Enter adds a line. Ctrl N is a new chat, Ctrl S saves the open file."),
+        text: T("Enter gönderir (bu düğme gibi), Shift Enter yeni satır; üstüne gelince de yazar. Ctrl N yeni sohbet, Ctrl S açık dosyayı kaydeder.", "Enter sends (like this button), Shift Enter adds a line; hover it to see this again. Ctrl N is a new chat, Ctrl S saves the open file."),
       },
       { anchor: "ws-tabs", side: "left", align: "start",
         title: T("Panelde", "In the panel"),

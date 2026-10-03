@@ -10,6 +10,7 @@
   --use-on: var(--run);              /* usage meter on the shell (chip, model menu) */
   --use-off: var(--shell-line);
   --use-hot: var(--accent);          /* >= 80 %: the limit is near; the user may want to switch */
+  --use-hot-text: var(--accent-text); /* the same state as text on paper (composer strip) */
   --use-on-paper: var(--energy);     /* same meter on paper (settings) */
   --use-off-paper: var(--energy-off);
   --meter-h: 9px;                    /* segment height, as the Hafıza meter */

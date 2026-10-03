@@ -41,6 +41,8 @@ import { useChat } from '../hooks/home/useChat';
 import { useAutoChatTitles } from '../hooks/home/useAutoChatTitles';
 import { useDictationSettings } from '../hooks/home/useDictationSettings';
 import { useUsageLimits } from '../hooks/home/useUsageLimits';
+import { GROUP_USAGE_FAMILY } from '../lib/usageLimits';
+import { CLI_GROUPS, activeProviderKey } from '../components/home/providerGroups';
 import { useSideChat, sideQuote } from '../hooks/home/useSideChat';
 import { useAIConfig } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
@@ -238,6 +240,11 @@ export default function Home() {
     api: API, token: auth.user?.sessionToken, menuOpen: ai.isModelDropdownOpen,
     enabled: backendReady && !!auth.user && !auth.tokenError,
   });
+
+  // The strip's "Kota" group follows the chat's own model, as the model chip does.
+  const stripUsageKey = activeProviderKey(ai.aiConfig.provider_type, ai.aiConfig.model_name || '');
+  const stripUsageFamily = stripUsageKey && CLI_GROUPS.some(g => g.key === stripUsageKey)
+    ? GROUP_USAGE_FAMILY[stripUsageKey] ?? null : null;
 
   // Per-chat model: the selector, and everything derived from `ai.aiConfig`
   // (effort caps, slash catalog, Codex/ultracode checks, the gate below), shows
@@ -1149,6 +1156,7 @@ export default function Home() {
             exportMemory={chat.exportMemory} importMemory={chat.importMemory} compactConversation={chat.compactConversation} isCompacting={chat.isCompacting} contextUsage={chat.contextUsage}
             reportsOpen={reportsOpen} onToggleReports={() => setReportsOpen(v => !v)}
             isClaudeSubscription={isClaudeSub} ultracode={ultracode} setUltracode={setUltracode} effortCaps={effortCaps}
+            usage={usage.data} usageFamily={stripUsageFamily} modelId={ai.aiConfig.model_name}
           />
         </div>
       </main>

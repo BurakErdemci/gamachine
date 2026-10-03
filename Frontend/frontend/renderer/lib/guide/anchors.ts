@@ -8,8 +8,8 @@
 //   integration-switch-blender   reserved by announced features
 export const KNOWN_ANCHORS = [
   // composer and the strip under it
-  'composer', 'composer-input', 'composer-attach', 'composer-mic',
-  'strip-memory', 'strip-more', 'strip-hint',
+  'composer', 'composer-input', 'composer-attach', 'composer-mic', 'composer-send',
+  'strip-memory', 'strip-usage', 'strip-more',
   // empty chat, top bar
   'quest-board', 'unity-switch', 'unity-light', 'mode-chip',
   'model-chip', 'model-menu', 'model-effort',

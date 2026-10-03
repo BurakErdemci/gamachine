@@ -263,7 +263,7 @@
   --set-seg-bg: var(--oz-4); --set-seg-ink: var(--u-fg);
   /* danger (auto mode, delete, log out) is red; orange stays "waiting on you" only (owner, 3 Oct) */
   --set-warn: var(--st-err); --set-warn-text: var(--st-err-text);
-  --use-hot: var(--st-warn);
+  --use-hot: var(--st-warn); --use-hot-text: var(--st-warn-text);
   --hier-prefab: color-mix(in oklab, var(--st-run) 70%, var(--u-fg)); --insp-prefab: var(--hier-prefab);
   --hier-sel: var(--oz-3); --hier-selection-edge: var(--oz-acc);
   --f-bg: var(--oz-1); --f-line: var(--oz-4); --f-line-hover: var(--oz-5); --cmp-head-bg: var(--u-bg);

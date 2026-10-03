@@ -4,6 +4,8 @@ import { useLang } from '../../lib/i18n';
 import { Sparkles, ChevronDown, Download, Upload, Gauge, Rocket } from 'lucide-react';
 import { ContextUsage } from './types';
 import { GenerationModeSelector, GenerationMode } from './GenerationModeSelector';
+import { StripUse } from './UsageMeters';
+import type { UsageFamilyId, UsageLimits } from '../../lib/usageLimits';
 
 // Kanonik effort skalası — hangi seviyelerin GÖSTERİLECEĞİ backend kayıtçısından
 // (/effort-capabilities) gelir; provider+model gerçekte neyi destekliyorsa o.
@@ -44,6 +46,10 @@ interface ControlPanelProps {
   isClaudeSubscription?: boolean;
   ultracode?: boolean;
   setUltracode?: (v: boolean) => void;
+  /** Plan usage (`useUsageLimits`) and the current chat's family/model for the "Kota" group. */
+  usage?: UsageLimits | null;
+  usageFamily?: UsageFamilyId | null;
+  modelId?: string | null;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -64,7 +70,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onToggleReports,
   isClaudeSubscription = false,
   ultracode = false,
-  setUltracode
+  setUltracode,
+  usage = null,
+  usageFamily = null,
+  modelId = null,
 }) => {
   const { t } = useLang();
   const [showMemoryMenu, setShowMemoryMenu] = useState(false);
@@ -94,13 +103,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const ultra = isClaudeSubscription && ultracode;
   const shownLabel = ultra ? 'Ultracode' : activeMeta.label;
   const shownPips = ultra ? 3 : activeMeta.pips;
-  // The memory bar: ten segments of the context window (mockup `.energy`).
-  const energyOn = contextUsage ? Math.min(10, Math.max(0, Math.round(yuzde / 10))) : 0;
+  // The memory bar: five segments of the context window (mockup `.energy`), short so the
+  // strip also fits the usage group.
+  const energyOn = contextUsage ? Math.min(5, Math.max(0, Math.round(yuzde / 20))) : 0;
+  const memoryTitle = !contextUsage
+    ? t('usage.noData')
+    : contextUsage.real
+      ? t('usage.realTitle', {
+          yuzde: contextUsage.percent,
+          used: contextUsage.real.used,
+          total: contextUsage.real.total,
+        })
+      : t('usage.estimateTitle', { yuzde: contextUsage.percent, sayi: contextUsage.message_count });
 
   return (
-    // The mockup's status strip under the composer box: thinking, memory, more settings, the
-    // key hint. The less used controls (mode, project memory, usage report) live behind
-    // "More settings"; the popover stays mounted (hidden) so nothing it holds loses state.
+    // The mockup's status strip under the composer box: thinking, memory, plan usage, more
+    // settings (the key hint moved to the send button's tooltip). The less used controls (mode,
+    // project memory, usage report) live behind "More settings"; the popover stays mounted
+    // (hidden) so nothing it holds loses state.
     <div className="strip" data-testid="composer-strip">
       <div className="strip-anchor">
         <button
@@ -195,34 +215,27 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             data-level={!contextUsage ? 'none' : yuzde >= 90 ? 'full' : yuzde >= 75 ? 'high' : 'ok'}
             onClick={() => compactConversation()}
             disabled={isCompacting}
-            title={!contextUsage
-              ? t('usage.noData')
-              : contextUsage.real
-                ? t('usage.realTitle', {
-                    yuzde: contextUsage.percent,
-                    used: contextUsage.real.used,
-                    total: contextUsage.real.total,
-                  })
-                : t('usage.estimateTitle', { yuzde: contextUsage.percent, sayi: contextUsage.message_count })}
+            title={memoryTitle}
+            aria-label={`${t('strip.memory')}: ${memoryTitle}`}
             className="strip-item strip-memory"
             data-guide="strip-memory"
           >
             {t('strip.memory')}
             <span className="energy" aria-hidden="true">
-              {Array.from({ length: 10 }, (_, i) => <i key={i} className={i < energyOn ? 'on' : undefined} />)}
+              {Array.from({ length: 5 }, (_, i) => <i key={i} className={i < energyOn ? 'on' : undefined} />)}
             </span>
             {/* "~" ONLY on an estimate. When the real figure arrives (the `/context` report) the
                 mark goes and used/window is written as is: an estimate mark over a measured
-                number would be a lie too, the other way round. */}
+                number would be a lie too, the other way round. The word "dolu" lives in the
+                title/aria-label; used/window shows only where the strip has room (CSS). */}
             <b>
               <span data-testid="context-percent" className="num">
                 {!contextUsage
                   ? t('usage.noData')
                   : contextUsage.real
-                    ? `%${yuzde} · ${contextUsage.real.used}/${contextUsage.real.total}`
-                    : `~%${yuzde}`}
+                    ? <>{t('strip.pct', { yuzde })}<span className="strip-mem-detail"> · {contextUsage.real.used}/{contextUsage.real.total}</span></>
+                    : `~${t('strip.pct', { yuzde })}`}
               </span>
-              {contextUsage && <> {t('strip.full')}</>}
             </b>
             {/* Past the compaction threshold: one quiet marker, no ping. */}
             {contextUsage?.should_compact && <span className="strip-alert" data-should-compact aria-hidden="true" />}
@@ -230,6 +243,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </button>
         </>
       )}
+
+      {/* Plan usage of the chat's model family; renders nothing without numbers. */}
+      <StripUse limits={usage} family={usageFamily} modelId={modelId} withSep />
 
       <span className="strip-sep strip-sep-last" aria-hidden="true" />
       <div className="strip-anchor">
@@ -308,7 +324,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           )}
         </div>
       </div>
-      <span className="strip-hint" data-guide="strip-hint">{t('strip.hint')}</span>
     </div>
   );
 };
+
