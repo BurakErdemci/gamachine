@@ -324,17 +324,57 @@ describe('applying Özel on <html>', () => {
     consumer.unmount()
   })
 
-  it('keeps one listener until the last useOzel consumer unmounts', () => {
+  // The listener follows "Özel applied in System mode", not the useOzel consumer count: the earlier
+  // expectation (0 listeners after the last consumer unmounted while Özel was applied) encoded a bug.
+  it('keeps the listener after the last useOzel consumer (Settings) unmounts while Özel + System is applied', () => {
     const scheme = stubScheme(false)
+    setOzel(presetSettings('gece', 'system'))
     applyAppearance({ ...DEFAULTS, theme: 'ozel' }, root)
     const first = renderHook(() => useOzel()), second = renderHook(() => useOzel())
     expect(scheme.listeners.size).toBe(1)
     first.unmount()
-    expect(scheme.listeners.size).toBe(1)
     second.unmount()
-    expect(scheme.listeners.size).toBe(0)
+    expect(scheme.listeners.size).toBe(1)
+    // An OS flip after Settings closed still recolours the app.
+    scheme.set(true)
+    expect(root.style.getPropertyValue('--u-bg')).toBe('#0D1117')
+    scheme.set(false)
+    expect(root.style.getPropertyValue('--u-bg')).toBe('#F5F7FA')
+  })
+
+  it('removes the listener on clear and on a fixed mode, adds it back for System', () => {
+    const scheme = stubScheme(false)
+    setOzel(presetSettings('gece', 'system'))
     applyAppearance({ ...DEFAULTS, theme: 'ozel' }, root)
     expect(scheme.listeners.size).toBe(1)
+    setOzel({ ...getOzel(), mode: 'light' })
+    expect(scheme.listeners.size).toBe(0)
+    setOzel({ ...getOzel(), mode: 'system' })
+    expect(scheme.listeners.size).toBe(1)
+    setOzel({ ...getOzel(), mode: 'dark' })
+    expect(scheme.listeners.size).toBe(0)
+    setOzel({ ...getOzel(), mode: 'system' })
+    applyAppearance({ ...DEFAULTS, theme: 'arena' }, root)
+    expect(scheme.listeners.size).toBe(0)
+    // No listener while another theme is shown: an Özel settings change does not add one either.
+    setOzel({ ...getOzel(), mode: 'system' })
+    expect(scheme.listeners.size).toBe(0)
+  })
+
+  it('reads the scheme fresh for Settings while another theme is shown', () => {
+    const scheme = stubScheme(false)
+    setOzel(presetSettings('gece', 'system'))
+    applyAppearance({ ...DEFAULTS, theme: 'arena' }, root)
+    const consumer = renderHook(() => useOzel())
+    expect(consumer.result.current.prefersDark).toBe(false)
+    expect(scheme.listeners.size).toBe(0)
+    scheme.set(true)
+    consumer.rerender()
+    expect(consumer.result.current.prefersDark).toBe(true)
+    const again = consumer.result.current
+    consumer.rerender()
+    expect(consumer.result.current).toBe(again)
+    consumer.unmount()
   })
 })
 

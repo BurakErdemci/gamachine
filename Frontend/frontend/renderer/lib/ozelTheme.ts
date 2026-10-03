@@ -291,7 +291,11 @@ let applied: { root: HTMLElement; fonts: OzelFontPicks } | null = null
 let watched: MediaQueryList | null = null
 
 function current(): Snapshot {
-  if (!snapshot) snapshot = { settings: loadOzel(), prefersDark: systemPrefersDark() }
+  // The scheme listener only lives while Özel is applied in System mode, so the scheme is read on every
+  // access; a new object only when it changed keeps useSyncExternalStore's snapshot stable.
+  const prefersDark = systemPrefersDark()
+  if (!snapshot) snapshot = { settings: loadOzel(), prefersDark }
+  else if (snapshot.prefersDark !== prefersDark) snapshot = { settings: snapshot.settings, prefersDark }
   return snapshot
 }
 export const getOzel = (): OzelSettings => current().settings
@@ -364,10 +368,11 @@ export function clearOzel(root: HTMLElement): void {
   for (const name of U_ATTRS) root.removeAttribute(name)
 }
 
+// The scheme listener follows applyOzel / clearOzel, not the settings UI: closing Settings must not stop
+// System mode from following the OS.
 function subscribe(cb: () => void): () => void {
   listeners.add(cb)
-  if (applied?.root.dataset.theme === 'ozel' && current().settings.mode === 'system') watchScheme()
-  return () => { listeners.delete(cb); if (!listeners.size) unwatchScheme() }
+  return () => { listeners.delete(cb) }
 }
 
 /** The Özel settings for the settings UI, re-rendered on every change and on a system scheme change. */
