@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchCreateMenu, postSceneWrite } from '../../lib/sceneEditor';
-import type { CreateMenuItem, Inspection, SceneTree, SceneVersion, SceneWriteCode } from '../../lib/sceneEditor';
+import { fetchComponentMenu, fetchCreateMenu, inspectorWriteKey, postSceneWrite } from '../../lib/sceneEditor';
+import type { ComponentAction, ComponentMenuItem, CreateMenuItem, Inspection, SceneField, SceneTree, SceneVersion, SceneWriteCode } from '../../lib/sceneEditor';
 import type { UnityMCPStatus } from './useAIConfig';
 
 interface Options {
@@ -9,14 +9,28 @@ interface Options {
 }
 interface Runtime { inspect: (id: number | null) => void; select: (id: number | null) => void; poll: () => void }
 export type CreateMenuState = { state: 'idle' | 'loading' | 'failed' } | { state: 'ready'; items: CreateMenuItem[] };
+export type ComponentMenuState = { state: 'idle' | 'loading' | 'failed'; id: number | null } | { state: 'ready'; id: number; items: ComponentMenuItem[] };
+export interface InspectorWriteState { pending: boolean; value?: unknown; error?: SceneWriteError; seq: number }
+export interface InspectorActions {
+  inspectorWrites: Record<string, InspectorWriteState>;
+  clearInspectorWrite: (key: string) => void;
+  setActive: (id: number, active: boolean) => Promise<{ id: number; active: boolean } | null>;
+  rename: (id: number, name: string, inspector?: boolean) => Promise<{ id: number; name: string } | null>;
+  setField: (componentId: number, path: string, value: unknown) => Promise<{ componentId: number; field: SceneField | null } | null>;
+  setComponentEnabled: (componentId: number, enabled: boolean) => Promise<{ componentId: number; enabled: boolean } | null>;
+  componentAction: (componentId: number, action: ComponentAction) => Promise<{ componentId: number; action: ComponentAction } | null>;
+  addComponent: (id: number, item: string) => Promise<{ componentId: number; type: string; label: string } | null>;
+  componentMenu: ComponentMenuState;
+  loadComponentMenu: (id: number) => void;
+}
 /** `retry` is absent when retrying cannot help or could run the edit twice; `unsure` = it may have happened, the tree was refreshed. */
-export interface SceneWriteError { code: SceneWriteCode | 'busy'; retry?: () => void; unsure?: boolean }
+export interface SceneWriteError { code: SceneWriteCode | 'busy'; retry?: () => void | Promise<unknown>; unsure?: boolean }
 // The create menu changes only with the Unity install or a domain reload, so it is cached per api + token + Unity epoch.
 const createMenuCache = new Map<string, CreateMenuItem[]>();
 // The user has to change something first; `locked` is a hidden or not-editable object.
-const FINAL = new Set<string>(['locked', 'prefab_part', 'invalid_name', 'invalid_value', 'invalid_item', 'not_found']);
+const FINAL = new Set<string>(['locked', 'prefab_part', 'invalid_name', 'invalid_value', 'invalid_item', 'not_found', 'already_present', 'required']);
 // Unity may have run these before the reply was lost; running them again would make a second object.
-const NOT_IDEMPOTENT = new Set(['create', 'duplicate']);
+const NOT_IDEMPOTENT = new Set(['create', 'duplicate', 'add-component', 'component-action']);
 // A 503 or a failed fetch can also come after the request reached Unity (a socket closed after the read).
 const UNSURE = new Set<string>(['unity_timeout', 'unity_error', 'unity_unavailable']);
 // Writes run one at a time in order; more than this many waiting means the user is far ahead of Unity.
@@ -72,6 +86,10 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   const [stale, setStale] = useState(false);
   const [writeError, setWriteError] = useState<SceneWriteError | null>(null);
   const [createMenu, setCreateMenu] = useState<CreateMenuState>({ state: 'idle' });
+  const [componentMenu, setComponentMenu] = useState<ComponentMenuState>({ state: 'idle', id: null });
+  const [inspectorWrites, setInspectorWrites] = useState<Record<string, InspectorWriteState>>({});
+  const componentMenuCache = useRef(new Map<string, ComponentMenuItem[]>());
+  const componentMenuRequest = useRef<{ key: string; generation: number } | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const queued = useRef(0);
   const menuRequest = useRef('');
@@ -119,6 +137,8 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     setTree(null); setInspection(null); setSelectedId(null); setStale(false);
     setError(null); setVersionError(null); setInspectError(null); setWriteError(null);
     setCreateMenu({ state: 'idle' });
+    componentMenuCache.current.clear(); componentMenuRequest.current = null;
+    setComponentMenu({ state: 'idle', id: null }); setInspectorWrites({});
   }, [api, token, editorOn, unityStatus]);
 
   useEffect(() => {
@@ -233,6 +253,8 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
           treeBackoff.current = fresh(); inspectBackoff.current = fresh();
           // Ids from the old epoch mean nothing now: writes still waiting are dropped.
           writeGeneration.current += 1; deleting.current.clear(); setWriteError(null);
+          componentMenuCache.current.clear(); componentMenuRequest.current = null;
+          setComponentMenu({ state: 'idle', id: null }); setInspectorWrites({});
         }
         if (unitySelection.current === null) unitySelection.current = next.selection;
         else if (unitySelection.current !== next.selection && settledAtStart && !selectionPending && !selectSync.busy()
@@ -296,17 +318,43 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     };
     fetchCreateMenu(api, token).then(settle, () => settle(null));
   }, [api, token, dropCreateMenu]);
+  const dropComponentMenu = useCallback(() => {
+    componentMenuCache.current.clear(); componentMenuRequest.current = null;
+    setComponentMenu({ state: 'idle', id: null });
+  }, []);
+  const loadComponentMenu = useCallback((id: number) => {
+    if (!token) return;
+    const key = `${api}|${token}|${version.current?.epoch ?? ''}|${id}`;
+    const cached = componentMenuCache.current.get(key);
+    if (cached) { setComponentMenu({ state: 'ready', id, items: cached }); return; }
+    if (componentMenuRequest.current?.key === key) return;
+    const request = { key, generation: writeGeneration.current };
+    componentMenuRequest.current = request; setComponentMenu({ state: 'loading', id });
+    const settle = (items: ComponentMenuItem[] | null) => {
+      if (componentMenuRequest.current !== request || request.generation !== writeGeneration.current) return;
+      componentMenuRequest.current = null;
+      if (!items?.length) { setComponentMenu({ state: 'failed', id }); return; }
+      componentMenuCache.current.set(key, items); setComponentMenu({ state: 'ready', id, items });
+    };
+    void fetchComponentMenu(api, token, id).then(settle, () => settle(null));
+  }, [api, token]);
   // Writes run in order, one at a time: one pressed while another is in flight waits for it instead of
   // being dropped. A success polls at once instead of waiting for the next tick.
   // `replaces` is the error a retry answers: its success clears that error and no other. A fresh success
   // also clears an older error it supersedes (same route on the same object, or a delete of that object), so
   // that error's Retry cannot replay an outdated edit over it.
-  const write = useCallback(<T,>(route: string, body: unknown, done: (data: T) => void, replaces?: SceneWriteError): Promise<T | null> => {
+  const write = useCallback(<T,>(route: string, body: unknown, done: (data: T) => void, replaces?: SceneWriteError,
+    control?: { key: string; value?: unknown }): Promise<T | null> => {
     if (!token) return Promise.resolve(null);
-    if (queued.current >= MAX_QUEUED) { setWriteError({ code: 'busy' }); return Promise.resolve(null); }
+    if (queued.current >= MAX_QUEUED) {
+      if (control) setInspectorWrites(current => ({ ...current, [control.key]: { pending: false, value: control.value, error: { code: 'busy' }, seq: ++writeSeq.current } }));
+      else setWriteError({ code: 'busy' });
+      return Promise.resolve(null);
+    }
     queued.current += 1;
     const generation = writeGeneration.current;
     const seq = ++writeSeq.current;
+    if (control) setInspectorWrites(current => ({ ...current, [control.key]: { pending: true, value: control.value, seq } }));
     const id = (body as { id?: unknown } | null)?.id;
     const run = async (): Promise<T | null> => {
       try {
@@ -316,17 +364,26 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         if (generation !== writeGeneration.current) return null;
         if ('code' in result) {
           const unsure = NOT_IDEMPOTENT.has(route) && UNSURE.has(result.code);
-          if (result.code === 'invalid_item') { dropCreateMenu(); menuRequest.current = ''; setCreateMenu({ state: 'idle' }); }
+          if (result.code === 'invalid_item') {
+            if (control) dropComponentMenu();
+            else { dropCreateMenu(); menuRequest.current = ''; setCreateMenu({ state: 'idle' }); }
+          }
           if (unsure) runtime.current?.poll();
           const error: SceneWriteError = { code: result.code, unsure };
           // A retry from before a Unity reload would send old-epoch ids to the new scene.
-          if (!FINAL.has(result.code) && !unsure) error.retry = () => { if (generation === writeGeneration.current) void write(route, body, done, error); };
+          if (!FINAL.has(result.code) && !unsure) error.retry = () => { if (generation === writeGeneration.current) return write(route, body, done, error, control); };
           errorSource.current.set(error, { route, id, seq });
-          setWriteError(error);
+          if (control) setInspectorWrites(current => current[control.key]?.seq === seq
+            ? { ...current, [control.key]: { pending: false, value: control.value, error, seq } } : current);
+          else setWriteError(error);
           return null;
         }
-        if (replaces) setWriteError(current => current === replaces ? null : current);
-        else if (id !== undefined) setWriteError(current => {
+        if (control) setInspectorWrites(current => {
+          if (current[control.key]?.seq !== seq) return current;
+          const next = { ...current }; delete next[control.key]; return next;
+        });
+        if (!control && replaces) setWriteError(current => current === replaces ? null : current);
+        else if (!control && id !== undefined) setWriteError(current => {
           const source = current && errorSource.current.get(current);
           return source && source.seq < seq && source.id === id && (source.route === route || route === 'delete') ? null : current;
         });
@@ -341,15 +398,17 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     const next = queue.current.then(run, run);
     queue.current = next.catch(() => null);
     return next;
-  }, [api, token, dropCreateMenu]);
+  }, [api, token, dropCreateMenu, dropComponentMenu]);
   // A late result is selected only if the user has not selected something else since the write was issued.
   const selectResult = useCallback((route: 'create' | 'duplicate', body: unknown) => {
     const moves = selectionMoves.current;
     return write<{ id: number; name: string }>(route, body, data => { if (selectionMoves.current === moves) show(data.id); });
   }, [write, show]);
   const create = useCallback((item: string, parentId: number | null) => selectResult('create', { item, parentId }), [selectResult]);
-  const rename = useCallback((id: number, name: string) =>
-    write<{ id: number; name: string }>('rename', { id, name }, () => {}), [write]);
+  const rename = useCallback((id: number, name: string, inspector = false) =>
+    write<{ id: number; name: string }>('rename', { id, name }, data => {
+      if (inspector) setInspection(current => current?.node.id === id ? { ...current, node: { ...current.node, name: data.name } } : current);
+    }, undefined, inspector ? { key: inspectorWriteKey.name(id), value: name } : undefined), [write]);
   const duplicate = useCallback((id: number) => selectResult('duplicate', { id }), [selectResult]);
   // Only a deleted selection is cleared; another object the user selected meanwhile stays selected.
   // A second Delete of an object whose delete is still waiting adds nothing.
@@ -361,6 +420,31 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       .finally(() => { set.delete(id); });
   }, [write, show]);
   const clearWriteError = useCallback(() => setWriteError(null), []);
+  const clearInspectorWrite = useCallback((key: string) => setInspectorWrites(current => {
+    if (current[key]?.pending) return current;
+    const next = { ...current }; delete next[key]; return next;
+  }), []);
+  const setActive = useCallback((id: number, active: boolean) =>
+    write<{ id: number; active: boolean }>('set-active', { id, active }, data => {
+      setInspection(current => current?.node.id === id ? { ...current, node: { ...current.node, activeSelf: data.active } } : current);
+    }, undefined, { key: inspectorWriteKey.active(id), value: active }), [write]);
+  const setField = useCallback((componentId: number, path: string, value: unknown) =>
+    write<{ componentId: number; field: SceneField | null }>('set-field', { componentId, field: path, value }, data => {
+      if (data.field) setInspection(current => current ? { ...current, groups: current.groups.map(group => group.componentId !== componentId ? group
+        : { ...group, fields: group.fields.map(field => field.path === path ? data.field! : field) }) } : current);
+    }, undefined, { key: inspectorWriteKey.field(componentId, path), value }), [write]);
+  const setComponentEnabled = useCallback((componentId: number, enabled: boolean) =>
+    write<{ componentId: number; enabled: boolean }>('component-enable', { componentId, enabled }, data => {
+      setInspection(current => current ? { ...current, groups: current.groups.map(group => group.componentId === componentId ? { ...group, enabled: data.enabled } : group) } : current);
+    }, undefined, { key: inspectorWriteKey.enabled(componentId), value: enabled }), [write]);
+  const componentAction = useCallback((componentId: number, action: ComponentAction) =>
+    write<{ componentId: number; action: ComponentAction }>('component-action', { componentId, action }, () => {
+      if (action === 'remove') dropComponentMenu();
+    }, undefined, { key: inspectorWriteKey.component(componentId) }), [write, dropComponentMenu]);
+  const addComponent = useCallback((id: number, item: string) =>
+    write<{ componentId: number; type: string; label: string }>('add-component', { id, item }, dropComponentMenu,
+      undefined, { key: inspectorWriteKey.add(id) }), [write, dropComponentMenu]);
   return { tree, inspection, selectedId, select, loading, inspectLoading, error: error ?? versionError, inspectError, stale,
-    createMenu, loadCreateMenu, create, rename, duplicate, remove, writeError, clearWriteError };
+    createMenu, loadCreateMenu, create, rename, duplicate, remove, writeError, clearWriteError,
+    componentMenu, loadComponentMenu, inspectorWrites, clearInspectorWrite, setActive, setField, setComponentEnabled, componentAction, addComponent };
 }

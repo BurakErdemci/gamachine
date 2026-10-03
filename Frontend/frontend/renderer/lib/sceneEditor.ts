@@ -56,12 +56,23 @@ export interface SceneVersion {
 
 /** One entry of Unity's GameObject create menu; `category` is "" for top-level items, `label` may hold "/" levels. */
 export interface CreateMenuItem { item: string; category: string; label: string }
+export interface ComponentMenuItem extends CreateMenuItem { present: boolean }
+export type ComponentAction = 'reset' | 'remove' | 'up' | 'down';
+export const inspectorWriteKey = {
+  field: (id: number, path: string) => `field:${id}:${path}`,
+  active: (id: number) => `active:${id}`,
+  name: (id: number) => `name:${id}`,
+  enabled: (id: number) => `enabled:${id}`,
+  component: (id: number) => `component:${id}`,
+  add: (id: number) => `add:${id}`,
+};
 export type SceneWriteCode =
   | 'locked' | 'compiling' | 'prefab_part' | 'invalid_name' | 'invalid_value' | 'invalid_item' | 'create_failed' | 'write_failed'
+  | 'already_present' | 'required' | 'add_failed'
   | 'not_found' | 'unity_unavailable' | 'unity_timeout' | 'unity_error';
 export type SceneWriteResult<T> = { ok: true; data: T } | { ok: false; code: SceneWriteCode };
 
-const CONFLICTS = new Set(['locked', 'compiling', 'prefab_part', 'invalid_name', 'invalid_value', 'invalid_item', 'create_failed', 'write_failed']);
+const CONFLICTS = new Set(['locked', 'compiling', 'prefab_part', 'invalid_name', 'invalid_value', 'invalid_item', 'create_failed', 'write_failed', 'already_present', 'required', 'add_failed']);
 
 export function writeErrorCode(status: number, detail: unknown): SceneWriteCode {
   if (status === 409) return typeof detail === 'string' && CONFLICTS.has(detail) ? detail as SceneWriteCode : 'write_failed';
@@ -92,4 +103,17 @@ export async function fetchCreateMenu(api: string, token: string): Promise<Creat
   const valid = (entry: unknown): entry is CreateMenuItem => !!entry && typeof entry === 'object'
     && ['item', 'category', 'label'].every(key => typeof (entry as Record<string, unknown>)[key] === 'string');
   return Array.isArray(data?.items) ? data.items.filter(valid) : [];
+}
+
+export async function fetchComponentMenu(api: string, token: string, id: number): Promise<ComponentMenuItem[]> {
+  const response = await fetch(`${api}/scene-editor/component-menu/${id}`, { headers: { 'X-Session-Token': token } });
+  if (!response.ok) throw response.status;
+  const data = await response.json() as { items?: unknown };
+  const valid = (entry: unknown): entry is ComponentMenuItem => !!entry && typeof entry === 'object'
+    && ['item', 'category', 'label'].every(key => typeof (entry as Record<string, unknown>)[key] === 'string')
+    && typeof (entry as Record<string, unknown>).present === 'boolean'
+    && !!(entry as Record<string, unknown>).item && !!(entry as Record<string, unknown>).label;
+  const items = Array.isArray(data?.items) ? data.items.filter(valid) : [];
+  if (!items.length) throw new Error('Empty component menu');
+  return items;
 }

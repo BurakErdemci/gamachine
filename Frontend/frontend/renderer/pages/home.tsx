@@ -1185,7 +1185,7 @@ export default function Home() {
           onClose={() => setWsOpen(false)}
           panes={{
             sahne: editorOn ? <InspectorPane inspection={sceneEditor.inspection} loading={sceneEditor.inspectLoading}
-              error={sceneEditor.inspectError} stale={sceneEditor.stale} /> : (
+              error={sceneEditor.inspectError} stale={sceneEditor.stale} actions={sceneEditor} /> : (
               <ScenePane
                 change={pendingChange}
                 changed={changedFiles.shown}
