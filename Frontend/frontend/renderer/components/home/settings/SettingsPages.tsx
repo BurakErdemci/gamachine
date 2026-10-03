@@ -2,6 +2,7 @@ import React from 'react';
 
 import { useLang, type Lang, type TKey } from '../../../lib/i18n';
 import { displayName } from '../../../lib/displayName';
+import { useSceneEditorSetting } from '../../../lib/sceneEditor';
 import {
   CODE_FONTS, FONT_STACKS, READING_FONTS, TEXT_SIZES, THEMES, useAppearance,
   type CodeFont, type ReadingFont, type TextSize, type Theme,
@@ -221,6 +222,7 @@ export const UnityPage = ({ status, toggling, onToggle, projectName, saved }: {
   status: UnityMCPStatus; toggling: boolean; onToggle: () => Promise<boolean> | void; projectName?: string | null; saved: () => void;
 }) => {
   const { t } = useLang();
+  const [sceneEditor, setSceneEditor] = useSceneEditorSetting();
   // Each Unity state maps to a tone; settings.css turns the tone into colour.
   // The `blocked` entry is load-bearing: the backend has returned that value
   // since `b4065f1`, and a missing key crashed the old modal on open whenever a
@@ -273,6 +275,11 @@ export const UnityPage = ({ status, toggling, onToggle, projectName, saved }: {
           </div>
           <SetRow name={t('set.unity.offTitle')} hint={t('set.unity.offHint')} />
         </SetCard>
+      </SetGroup>
+      <SetGroup>
+        <SetCard><SetRow name={t('sceneEditor.setting')} hint={t('sceneEditor.settingHint')}
+          control={<SetSwitch checked={sceneEditor} label={t('sceneEditor.setting')}
+            onToggle={() => { setSceneEditor(!sceneEditor); saved(); }} />} /></SetCard>
       </SetGroup>
       <SetGroup title={t('set.unity.trouble')}>
         <SetCard>

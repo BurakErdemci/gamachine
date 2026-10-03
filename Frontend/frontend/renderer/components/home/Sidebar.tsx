@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
 import { Edit3, Trash2 } from 'lucide-react';
@@ -14,8 +14,12 @@ import { displayName } from '../../lib/displayName';
 import type { AchievementId } from '../../lib/profileStats';
 import type { RemoteStatus } from '../../lib/remoteControl';
 import { RemoteBadge } from './RemoteBadge';
+import { AwaitingBadge } from './AwaitingBadge';
+import { useSceneEditorSetting } from '../../lib/sceneEditor';
 
 interface SidebarProps {
+  hierarchy?: React.ReactNode;
+  onHierarchyVisible?: (visible: boolean) => void;
   isSidebarOpen: boolean;
   conversations: Conversation[];
   activeConvId: number | null;
@@ -77,6 +81,14 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
 
   const { t, lang } = useLang();
   const linked = useUnityLinkPulse(unityStatus);
+  const [sceneEditorSetting] = useSceneEditorSetting();
+  const editorOn = sceneEditorSetting && unityStatus !== 'off';
+  const [sideTab, setSideTab] = useState<'chats' | 'hierarchy'>('chats');
+  useEffect(() => { if (!editorOn) setSideTab('chats'); }, [editorOn]);
+  useEffect(() => {
+    props.onHierarchyVisible?.(editorOn && isSidebarOpen && sideTab === 'hierarchy');
+    return () => props.onHierarchyVisible?.(false);
+  }, [editorOn, isSidebarOpen, sideTab, props.onHierarchyVisible]);
   // Which list the row being renamed sat in when its input opened (see `inTasks` below).
   const renameListRef = useRef<{ id: number; task: boolean } | null>(null);
 
@@ -198,7 +210,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
       animate={{ width: isSidebarOpen ? SIDEBAR_WIDTH : 0, opacity: isSidebarOpen ? 1 : 0 }}
       transition={{ duration: 0.2 }}
     >
-      <div className="sidebar shell" aria-label={t('sidebar.chats')}>
+      <div className={`sidebar shell${editorOn ? ' has-scene-editor' : ''}`} aria-label={t('sidebar.chats')}>
         <div className="tex tex-shell" aria-hidden="true" />
         <div className={`brand${linked ? ' is-linked' : ''}`}><BrandLogo /></div>
 
@@ -213,7 +225,24 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
         </button>
 
-        <div className="side-scroll custom-scrollbar">
+        {editorOn && <div className="side-tabs" role="tablist" aria-label={t('sceneEditor.sidebarTabs')}>
+          {(['chats', 'hierarchy'] as const).map(tab => <button key={tab} type="button" className="side-tab" role="tab"
+            id={`side-tab-${tab}`} aria-controls={`side-panel-${tab}`} aria-selected={sideTab === tab} tabIndex={sideTab === tab ? 0 : -1}
+            onClick={() => setSideTab(tab)} onKeyDown={event => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+              event.preventDefault();
+              const next = sideTab === 'chats' ? 'hierarchy' : 'chats';
+              setSideTab(next); document.getElementById(`side-tab-${next}`)?.focus();
+            }}>
+            {t(tab === 'chats' ? 'sidebar.chats' : 'sceneEditor.hierarchy')}
+            {tab === 'chats' && sideTab === 'hierarchy' && <AwaitingBadge count={roots.filter(c => statusOf(c.id) === 'awaiting').length}
+              testId="sidebar-tab-awaiting" className="side-tab-mark" />}
+          </button>)}
+        </div>}
+        {editorOn && <div className="side-hierarchy" id="side-panel-hierarchy" role="tabpanel" hidden={sideTab !== 'hierarchy'} aria-labelledby="side-tab-hierarchy">{props.hierarchy}</div>}
+        <div className="side-scroll custom-scrollbar" id={editorOn ? 'side-panel-chats' : undefined}
+          role={editorOn ? 'tabpanel' : undefined} aria-labelledby={editorOn ? 'side-tab-chats' : undefined}
+          hidden={editorOn && sideTab === 'hierarchy'}>
           <button type="button" className="new-chat" data-guide="new-chat" onClick={() => createNewConversation()}>
             <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
             <span>{t('sidebar.newChat')}</span>

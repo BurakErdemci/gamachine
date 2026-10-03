@@ -21,7 +21,11 @@ import type { SettingsPage } from '../components/home/settings/pages';
 import { ExportModal } from '../components/home/ExportModal';
 import { ModelSelector } from '../components/home/ModelSelector';
 import { WorkspaceScreen } from '../components/home/WorkspaceScreen';
-import { Workspace, KodPane, PreviewPane, ScenePane, toggleTerminalDrawer, type WsDiff, type ChangedFile } from '../components/home/Workspace';
+import { Workspace, KodPane, PreviewPane, ScenePane, ChangedFiles, toggleTerminalDrawer, type WsDiff, type ChangedFile } from '../components/home/Workspace';
+import { HierarchyPanel } from '../components/home/HierarchyPanel';
+import { InspectorPane } from '../components/home/InspectorPane';
+import { useSceneEditorSetting } from '../lib/sceneEditor';
+import { useSceneEditor } from '../hooks/home/useSceneEditor';
 import { ProjectFiles } from '../components/home/FileTree';
 import { ControlPanel, ThinkingLevel, EffortCaps } from '../components/home/ControlPanel';
 import { SessionReportPanel } from '../components/home/SessionReportPanel';
@@ -349,6 +353,9 @@ export default function Home() {
   // dar / yarim / odak replace P2's drag handle (lib/workspacePanel.ts).
   const ws = useWorkspacePanel();
   const { reveal: wsReveal, setOpen: setWsOpen, setTab: setWsTab } = ws;
+  const [sceneEditorSetting] = useSceneEditorSetting();
+  const editorOn = sceneEditorSetting && ai.unityMcpStatus !== 'off';
+  const [hierarchyVisible, setHierarchyVisible] = useState(false);
   // The file change a card is waiting on, with that card's own Accept / Reject handlers.
   const pendingChange = usePendingChange();
   const [reportsOpen, setReportsOpen] = useState(false);
@@ -735,6 +742,13 @@ export default function Home() {
     frameReady: !!fs.workspacePath && backendReady && !auth.isLoading,
   });
   const { closeGuide } = guide;
+  const sceneFrameVisible = !!fs.workspacePath && !backendError && !ai.showSettings;
+  const sceneEditor = useSceneEditor({ api: API, token: auth.user?.sessionToken, editorOn,
+    unityStatus: ai.unityMcpStatus, hierarchyVisible: sceneFrameVisible && hierarchyVisible,
+    inspectorVisible: sceneFrameVisible && !profileOpen && !guide.guideOpen && ws.open && ws.tab === 'sahne' });
+  const selectSceneObject = useCallback((id: number) => {
+    sceneEditor.select(id); closeProfile(); closeGuide(); wsReveal('sahne');
+  }, [sceneEditor.select, closeProfile, closeGuide, wsReveal]);
   // Another screen (settings, profile) or another chat replaces the guide.
   useEffect(() => { if (ai.showSettings || profileOpen) closeGuide(); }, [ai.showSettings, profileOpen, closeGuide]);
   useEffect(() => {
@@ -921,6 +935,10 @@ export default function Home() {
         onOpenRemote={() => openSettings('uzak')}
         remoteStatus={remote.status}
         unityStatus={ai.unityMcpStatus}
+        onHierarchyVisible={setHierarchyVisible}
+        hierarchy={<HierarchyPanel unityStatus={ai.unityMcpStatus} tree={sceneEditor.tree} loading={sceneEditor.loading}
+          error={sceneEditor.error} stale={sceneEditor.stale} selectedId={sceneEditor.selectedId}
+          onSelect={selectSceneObject} onConnect={() => { void ai.toggleUnityMcp(); }} />}
         profileLevel={profileStats.latest ? {
           level: profileStats.latest.level, xp: profileStats.latest.xp,
           levelXp: profileStats.latest.level_xp, levelNeed: profileStats.latest.level_need,
@@ -1141,6 +1159,7 @@ export default function Home() {
         {/* Hidden, never unmounted: closing the panel must not kill the terminal session or
             drop the editor buffer (the old closable chat panel stayed mounted the same way). */}
         <Workspace
+          editorOn={editorOn}
           open={ws.open}
           tab={ws.tab}
           onTab={setWsTab}
@@ -1148,7 +1167,8 @@ export default function Home() {
           onWidth={ws.setWidth}
           onClose={() => setWsOpen(false)}
           panes={{
-            sahne: (
+            sahne: editorOn ? <InspectorPane inspection={sceneEditor.inspection} loading={sceneEditor.inspectLoading}
+              error={sceneEditor.inspectError} stale={sceneEditor.stale} /> : (
               <ScenePane
                 change={pendingChange}
                 changed={changedFiles.shown}
@@ -1163,6 +1183,12 @@ export default function Home() {
               />
             ),
             dosyalar: (
+              <>
+              {editorOn && <ChangedFiles
+                change={pendingChange} changed={changedFiles.shown} changedTotal={changedFiles.total}
+                seenHidden={changedFiles.seenHidden} onAck={onAckChanges} onShowAll={onShowAllChanges}
+                isRepo={!!fs.gitStatus?.isRepo} workspacePath={fs.workspacePath}
+                onShowChange={() => setWsTab('kod')} onOpen={openInPanel} />}
               <ProjectFiles
                 {...fs}
                 openFile={openInPanel}
@@ -1170,6 +1196,7 @@ export default function Home() {
                 // The workspace Files tab is the only host for the right-click menu.
                 showMenu
               />
+              </>
             ),
             kod: (
               <KodPane

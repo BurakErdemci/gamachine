@@ -23,6 +23,7 @@ const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosya
 const WIDTH_KEY: Record<WsWidth, TKey> = { dar: 'ws.widthNarrow', yarim: 'ws.widthHalf', odak: 'ws.widthFocus' };
 
 interface WorkspaceProps {
+  editorOn?: boolean;
   open: boolean;
   tab: WsTab;
   onTab: (tab: WsTab) => void;
@@ -41,7 +42,7 @@ interface WorkspaceProps {
  * tabs, one pane at a time, the terminal drawer at the foot. State lives in home.tsx
  * (useWorkspacePanel), so the chat can open things here.
  */
-export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, onWidth, onClose, panes, drawer }) => {
+export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, onWidth, onClose, panes, drawer, editorOn = false }) => {
   const { t } = useLang();
   // #11 pane change: the newly shown pane rises in once (mockup `.ws-pane.is-entering`).
   const [entering, setEntering] = useState<WsTab | null>(null);
@@ -70,6 +71,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
       aria-label={t('ws.title')}
       data-tab={tab}
       data-width={width}
+      data-editor={editorOn ? 'on' : undefined}
       hidden={!open}
       data-testid="workspace"
       data-guide="workspace"
@@ -111,7 +113,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
             tabIndex={tab === id ? 0 : -1}
             onClick={() => onTab(id)}
           >
-            {t(TAB_KEY[id])}
+            {t(id === 'sahne' && editorOn ? 'ws.tabInspector' : TAB_KEY[id])}
             {id === 'kod' && <span className="ws-tab-mark" role="img" aria-label={t('ws.pendingMark')} />}
           </button>
         ))}
@@ -344,15 +346,22 @@ const STATUS_TAG: Record<string, string> = { modified: 'tag-mod', untracked: 'ta
  * changed files come from the git status the file tree already polls, with the change a card is
  * waiting on at the top.
  */
-export const ScenePane: React.FC<ScenePaneProps> = ({ change, changed, changedTotal, seenHidden = 0, onAck, onShowAll, isRepo, workspacePath, onShowChange, onOpen }) => {
+export const ScenePane: React.FC<ScenePaneProps> = (props) => {
+  const { t } = useLang();
+  return <>
+    <section className="ws-sec">
+      <h3 className="ws-label"><span>{t('ws.scene')}</span></h3>
+      <p className="ws-note">{t('ws.sceneEmpty')}</p>
+    </section>
+    <ChangedFiles {...props} />
+  </>;
+};
+
+export const ChangedFiles: React.FC<ScenePaneProps> = ({ change, changed, changedTotal, seenHidden = 0, onAck, onShowAll, isRepo, workspacePath, onShowChange, onOpen }) => {
   const { t } = useLang();
   const count = changedTotal + (change ? 1 : 0);
   return (
     <>
-      <section className="ws-sec">
-        <h3 className="ws-label"><span>{t('ws.scene')}</span></h3>
-        <p className="ws-note">{t('ws.sceneEmpty')}</p>
-      </section>
       <section className="ws-sec" data-guide="changed-files">
         <h3 className="ws-label">
           <span>{t('ws.changed')}</span> <span className="ws-count">{count}</span>
