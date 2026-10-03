@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLang } from '../../lib/i18n';
-import type { SceneNode, SceneTree, SceneWriteCode } from '../../lib/sceneEditor';
+import type { SceneNode, SceneTree } from '../../lib/sceneEditor';
 import type { UnityMCPStatus } from '../../hooks/home/useAIConfig';
 import type { CreateMenuState, SceneWriteError } from '../../hooks/home/useSceneEditor';
 import { SceneContextMenu, createMenuEntries, type MenuEntry } from './SceneContextMenu';
@@ -18,9 +18,7 @@ interface Props {
   selectedId: number | null; onSelect: (id: number) => void; onConnect: () => void; actions?: HierarchyActions;
 }
 type MenuAt = { x: number; y: number; nodeId: number | null };
-// Retrying cannot help these; the user has to change something first.
-const FINAL: SceneWriteCode[] = ['prefab_part', 'invalid_name', 'invalid_value', 'invalid_item', 'not_found'];
-const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+const isMac = () => typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 const icon = (d: string) => <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d={d} /></svg>;
 const ICONS = {
   rename: icon('M4 16h3l8.5-8.5-3-3L4 13v3zM11 6l3 3'),
@@ -115,7 +113,8 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
   const nodeRows = useMemo(() => model.rows.filter((row): row is TreeRow => 'node' in row), [model.rows]);
   // A selection hidden by a filter or a collapsed ancestor cannot anchor the keyboard.
   const selectedRow = selectedId !== null && nodeRows.some(row => row.node.id === selectedId) ? selectedId : null;
-  const currentId = cursor ?? selectedRow ?? nodeRows[0]?.node.id ?? null;
+  // Arrows move the selection (Unity); the cursor only matters while nothing visible is selected.
+  const currentId = selectedRow ?? cursor ?? nodeRows[0]?.node.id ?? null;
   const revealed = useRef<number | null>(null);
   const isOpen = (row: TreeRow) => !!filter || (expanded[row.path]?.[row.node.id] ?? row.depth === 0);
   const toggle = (row: TreeRow, open = !isOpen(row)) => setExpanded(previous => ({
@@ -183,9 +182,13 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
     actions.loadCreateMenu();
     setMenu({ x, y, nodeId });
   };
+  // The row may be virtualised out until the next render, so its place comes from the tree's own box
+  // after move() scrolled it into view, not from the row element.
   const openMenuAtRow = (id: number) => {
-    const rect = document.getElementById(`hier-node-${id}`)?.getBoundingClientRect();
-    openMenu(id, (rect?.left ?? 0) + 60, (rect?.bottom ?? 0) - 4);
+    move(id);
+    const index = model.rows.findIndex(row => 'node' in row && row.node.id === id);
+    const box = (treeElement.current ?? body.current)?.getBoundingClientRect();
+    openMenu(id, (box?.left ?? 0) + 60, (box?.top ?? 0) + Math.max(0, index + 1) * ROW_HEIGHT - 4);
   };
   const create = (item: string, parentId: number | null) => {
     void actions?.create(item, parentId).then(made => { if (made) setRenameNext(made.id); });
@@ -201,8 +204,8 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
     if (!node) return createPart;
     return [
       { kind: 'item', label: t('sceneEditor.rename'), icon: ICONS.rename, shortcut: 'F2', run: () => startRename(node.id) },
-      { kind: 'item', label: t('sceneEditor.duplicate'), icon: ICONS.duplicate, shortcut: isMac ? '⌘D' : 'Ctrl D', run: () => { void actions!.duplicate(node.id); } },
-      { kind: 'item', label: t('sceneEditor.delete'), icon: ICONS.remove, shortcut: isMac ? '⌘⌫' : 'Del', run: () => { void actions!.remove(node.id); } },
+      { kind: 'item', label: t('sceneEditor.duplicate'), icon: ICONS.duplicate, shortcut: isMac() ? '⌘D' : 'Ctrl D', run: () => { void actions!.duplicate(node.id); } },
+      { kind: 'item', label: t('sceneEditor.delete'), icon: ICONS.remove, shortcut: isMac() ? '⌘⌫' : 'Del', run: () => { void actions!.remove(node.id); } },
       { kind: 'sep' }, ...createPart,
     ];
   };
@@ -222,24 +225,33 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
     if (!row) return;
     const children = model.children.get(row.node.id) ?? [];
     const command = event.metaKey || event.ctrlKey;
+    const go = (id: number) => { move(id); if (selectedId !== id) onSelect(id); };
     if (actions && !event.altKey) {
-      if (event.key === 'F2' && !command) { event.preventDefault(); startRename(row.node.id); return; }
-      if ((event.key === 'Delete' && !command) || (event.key === 'Backspace' && command)) { event.preventDefault(); void actions.remove(row.node.id); return; }
-      if (command && !event.shiftKey && event.key.toLowerCase() === 'd') { event.preventDefault(); void actions.duplicate(row.node.id); return; }
+      // Edits act only on the visible selection, never on a bare cursor, and a held key edits once.
+      const target = selectedRow;
+      const deleteKey = (event.key === 'Delete' && !command) || (event.key === 'Backspace' && event.metaKey && !event.ctrlKey && isMac());
+      const duplicateKey = command && !event.shiftKey && event.key.toLowerCase() === 'd';
+      if (event.key === 'F2' && !command) { event.preventDefault(); if (target !== null) startRename(target); return; }
+      if (deleteKey || duplicateKey) {
+        event.preventDefault();
+        if (target === null || event.repeat) return;
+        void (deleteKey ? actions.remove(target) : actions.duplicate(target));
+        return;
+      }
       if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) { event.preventDefault(); openMenuAtRow(row.node.id); return; }
     }
     switch (event.key) {
-      case 'ArrowDown': move(nodeRows[Math.min(index + 1, nodeRows.length - 1)].node.id); break;
-      case 'ArrowUp': move(nodeRows[Math.max(0, index - 1)].node.id); break;
-      case 'Home': move(nodeRows[0].node.id); break;
-      case 'End': move(nodeRows[nodeRows.length - 1].node.id); break;
+      case 'ArrowDown': go(nodeRows[Math.min(index + 1, nodeRows.length - 1)].node.id); break;
+      case 'ArrowUp': go(nodeRows[Math.max(0, index - 1)].node.id); break;
+      case 'Home': go(nodeRows[0].node.id); break;
+      case 'End': go(nodeRows[nodeRows.length - 1].node.id); break;
       case 'ArrowRight':
         if (children.length && !isOpen(row)) toggle(row, true);
-        else if (children.length && nodeRows.some(r => r.node.id === children[0].id)) move(children[0].id);
+        else if (children.length && nodeRows.some(r => r.node.id === children[0].id)) go(children[0].id);
         break;
       case 'ArrowLeft':
         if (children.length && isOpen(row) && !filter) toggle(row, false);
-        else if (row.node.parentId !== null && nodeRows.some(r => r.node.id === row.node.parentId)) move(row.node.parentId);
+        else if (row.node.parentId !== null && nodeRows.some(r => r.node.id === row.node.parentId)) go(row.node.parentId);
         break;
       case 'Enter': onSelect(row.node.id); break;
       default: return;
@@ -276,8 +288,8 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
       {actions?.writeError && (
         <div key={errorCount} className="hier-err" role="alert">
           <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 6v5M10 13.5v.5" /></svg>
-          <span className="hier-err-t">{t(`sceneEditor.write.${actions.writeError.code}`)}</span>
-          {!FINAL.includes(actions.writeError.code) && <button type="button" onClick={actions.writeError.retry}>{t('sceneEditor.retry')}</button>}
+          <span className="hier-err-t">{t(`sceneEditor.write.${actions.writeError.code}`)}{actions.writeError.unsure && ` ${t('sceneEditor.write.unsure')}`}</span>
+          {actions.writeError.retry && <button type="button" onClick={actions.writeError.retry}>{t('sceneEditor.retry')}</button>}
           <button type="button" className="hier-err-x" aria-label={t('sceneEditor.dismiss')} onClick={actions.clearWriteError}>×</button>
         </div>
       )}

@@ -9,9 +9,17 @@ interface Options {
 }
 interface Runtime { inspect: (id: number | null) => void; select: (id: number | null) => void; poll: () => void }
 export type CreateMenuState = { state: 'idle' | 'loading' | 'failed' } | { state: 'ready'; items: CreateMenuItem[] };
-export interface SceneWriteError { code: SceneWriteCode; retry: () => void }
-// The create menu only changes with the Unity install, so one fetch per session (api + token) is enough.
+/** `retry` is absent when retrying cannot help or could run the edit twice; `unsure` = it may have happened, the tree was refreshed. */
+export interface SceneWriteError { code: SceneWriteCode | 'busy'; retry?: () => void; unsure?: boolean }
+// The create menu changes only with the Unity install or a domain reload, so it is cached per api + token + Unity epoch.
 const createMenuCache = new Map<string, CreateMenuItem[]>();
+// The user has to change something first; `locked` is a hidden or not-editable object.
+const FINAL = new Set<string>(['locked', 'prefab_part', 'invalid_name', 'invalid_value', 'invalid_item', 'not_found']);
+// Unity may have run these before the reply was lost; running them again would make a second object.
+const NOT_IDEMPOTENT = new Set(['create', 'duplicate']);
+const UNSURE = new Set<string>(['unity_timeout', 'unity_error']);
+// Writes run one at a time in order; more than this many waiting means the user is far ahead of Unity.
+const MAX_QUEUED = 8;
 type Backoff = { failures: number; until: number };
 
 // A failing endpoint waits 1, 2, 4 ... 30 s between attempts instead of retrying on every poll.
@@ -38,7 +46,9 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   const [stale, setStale] = useState(false);
   const [writeError, setWriteError] = useState<SceneWriteError | null>(null);
   const [createMenu, setCreateMenu] = useState<CreateMenuState>({ state: 'idle' });
-  const writing = useRef(false);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const queued = useRef(0);
+  const menuRequest = useRef('');
   const selected = useRef<number | null>(null);
   const version = useRef<SceneVersion | null>(null);
   const runtime = useRef<Runtime | null>(null);
@@ -66,8 +76,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     treeBackoff.current = fresh(); inspectBackoff.current = fresh();
     setTree(null); setInspection(null); setSelectedId(null); setStale(false);
     setError(null); setVersionError(null); setInspectError(null); setWriteError(null);
-    const cached = createMenuCache.get(`${api}|${token}`);
-    setCreateMenu(cached ? { state: 'ready', items: cached } : { state: 'idle' });
+    setCreateMenu({ state: 'idle' });
   }, [api, token, editorOn, unityStatus]);
 
   useEffect(() => {
@@ -201,41 +210,63 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     setSelectedId(id); setInspection(null); setInspectError(null);
     runtime.current?.select(id); runtime.current?.inspect(id);
   }, []);
+  const dropCreateMenu = useCallback(() => {
+    for (const key of [...createMenuCache.keys()]) if (key.startsWith(`${api}|${token}|`)) createMenuCache.delete(key);
+  }, [api, token]);
   const loadCreateMenu = useCallback(() => {
     if (!token) return;
-    const key = `${api}|${token}`;
+    const key = `${api}|${token}|${version.current?.epoch ?? ''}`;
     const cached = createMenuCache.get(key);
     if (cached) { setCreateMenu({ state: 'ready', items: cached }); return; }
-    setCreateMenu(previous => previous.state === 'loading' ? previous : { state: 'loading' });
-    fetchCreateMenu(api, token).then(items => {
-      createMenuCache.set(key, items);
+    if (menuRequest.current === key) return;
+    menuRequest.current = key;
+    setCreateMenu({ state: 'loading' });
+    const settle = (items: CreateMenuItem[] | null) => {
+      if (menuRequest.current !== key) return;
+      menuRequest.current = '';
+      // An empty or malformed list is never kept, so the next open asks again.
+      if (!items?.length) { setCreateMenu({ state: 'failed' }); return; }
+      dropCreateMenu(); createMenuCache.set(key, items);
       setCreateMenu({ state: 'ready', items });
-    }, () => setCreateMenu({ state: 'failed' }));
-  }, [api, token]);
-  // One write at a time; a success selects its result and polls at once instead of waiting for the next tick.
-  const write = useCallback(async <T,>(route: string, body: unknown, done: (data: T) => void): Promise<T | null> => {
-    if (!token || writing.current) return null;
-    writing.current = true;
-    try {
-      const result = await postSceneWrite<T>(api, token, route, body);
-      if ('code' in result) {
-        const retry = () => { void write(route, body, done); };
-        setWriteError({ code: result.code, retry });
-        return null;
-      }
-      setWriteError(null);
-      done(result.data);
-      runtime.current?.poll();
-      return result.data;
-    } finally { writing.current = false; }
-  }, [api, token]);
+    };
+    fetchCreateMenu(api, token).then(settle, () => settle(null));
+  }, [api, token, dropCreateMenu]);
+  // Writes run in order, one at a time: one pressed while another is in flight waits for it instead of
+  // being dropped. A success selects its result and polls at once instead of waiting for the next tick.
+  const write = useCallback(<T,>(route: string, body: unknown, done: (data: T) => void): Promise<T | null> => {
+    if (!token) return Promise.resolve(null);
+    if (queued.current >= MAX_QUEUED) { setWriteError({ code: 'busy' }); return Promise.resolve(null); }
+    queued.current += 1;
+    const run = async (): Promise<T | null> => {
+      try {
+        const result = await postSceneWrite<T>(api, token, route, body);
+        if ('code' in result) {
+          const unsure = NOT_IDEMPOTENT.has(route) && UNSURE.has(result.code);
+          if (result.code === 'invalid_item') { dropCreateMenu(); menuRequest.current = ''; setCreateMenu({ state: 'idle' }); }
+          if (unsure) runtime.current?.poll();
+          const retry = FINAL.has(result.code) || unsure ? undefined : () => { void write(route, body, done); };
+          setWriteError({ code: result.code, retry, unsure });
+          return null;
+        }
+        setWriteError(null);
+        done(result.data);
+        runtime.current?.poll();
+        return result.data;
+      } finally { queued.current -= 1; }
+    };
+    const next = queue.current.then(run, run);
+    queue.current = next.catch(() => null);
+    return next;
+  }, [api, token, dropCreateMenu]);
   const create = useCallback((item: string, parentId: number | null) =>
     write<{ id: number; name: string }>('create', { item, parentId }, data => select(data.id)), [write, select]);
   const rename = useCallback((id: number, name: string) =>
     write<{ id: number; name: string }>('rename', { id, name }, () => {}), [write]);
   const duplicate = useCallback((id: number) =>
     write<{ id: number; name: string }>('duplicate', { id }, data => select(data.id)), [write, select]);
-  const remove = useCallback((id: number) => write<{ id: number }>('delete', { id }, () => select(null)), [write, select]);
+  // Only a deleted selection is cleared; another object the user selected meanwhile stays selected.
+  const remove = useCallback((id: number) =>
+    write<{ id: number }>('delete', { id }, () => { if (selected.current === id) select(null); }), [write, select]);
   const clearWriteError = useCallback(() => setWriteError(null), []);
   return { tree, inspection, selectedId, select, loading, inspectLoading, error: error ?? versionError, inspectError, stale,
     createMenu, loadCreateMenu, create, rename, duplicate, remove, writeError, clearWriteError };

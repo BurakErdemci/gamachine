@@ -180,6 +180,8 @@ mark.hr-hit { background: none; color: inherit; font-weight: 700; text-decoratio
   position: fixed; z-index: 46; min-width: 214px; max-width: 280px; padding: 5px; transform-origin: top left;
   background: var(--menu-bg); border: var(--line-w) solid var(--menu-line); border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
   color: var(--shell-text); font-size: 13.5px; animation: r13-menu-in var(--g-dur-quick) var(--g-ease-enter);
+  /* a list taller than the window scrolls inside; the script sets the exact cap */
+  max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
 }
 .r13-menu.is-sub { z-index: 47; }
 .r13-menu:focus { outline: none; }

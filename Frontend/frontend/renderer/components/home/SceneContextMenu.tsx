@@ -90,26 +90,53 @@ export const SceneContextMenu: React.FC<Props> = ({ entries, x, y, label, onClos
   useLayoutEffect(() => {
     levels.current[0]?.focus({ preventScroll: true });
   }, []);
-  // Keep every level inside the window; a submenu flips to the left when the right side has no room.
-  useLayoutEffect(() => {
+  // Keep every level inside the window: no taller than it (the list scrolls inside), the root menu flips up or
+  // left at the pointer when it has no room, a submenu flips to the left of its parent.
+  const place = useRef(() => {});
+  place.current = () => {
     const width = window.innerWidth, height = window.innerHeight;
+    const open = state.current.stack;
     levels.current.forEach((element, level) => {
       if (!element) return;
-      const w = element.offsetWidth, h = element.offsetHeight;
+      element.style.maxHeight = `${Math.max(0, height - 2 * MARGIN)}px`;
+      const w = element.offsetWidth, h = Math.min(element.offsetHeight, height - 2 * MARGIN);
       let left = x, top = y;
       if (level > 0) {
         const parent = levels.current[level - 1]?.getBoundingClientRect();
-        const opener = levels.current[level - 1]?.querySelector(`[data-i="${stack[level - 1]}"]`)?.getBoundingClientRect();
+        const opener = levels.current[level - 1]?.querySelector(`[data-i="${open[level - 1]}"]`)?.getBoundingClientRect();
         if (parent && opener) {
           left = parent.right - 4; top = opener.top - 6;
           if (left + w > width - MARGIN) left = parent.left + 4 - w;
         }
-      } else if (left + w > width - MARGIN) left = width - w - MARGIN;
+      } else {
+        if (left + w > width - MARGIN) left = x - w >= MARGIN ? x - w : width - w - MARGIN;
+        if (top + h > height - MARGIN && y - h >= MARGIN) top = y - h;
+      }
       if (top + h > height - MARGIN) top = height - h - MARGIN;
       element.style.left = `${Math.max(MARGIN, left)}px`;
       element.style.top = `${Math.max(MARGIN, top)}px`;
     });
-  }, [x, y, stack]);
+  };
+  // Runs on every render: the list can grow in place (Loading -> the create list) without x, y or the stack changing.
+  useLayoutEffect(() => { place.current(); });
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => place.current());
+    levels.current.forEach(element => { if (element) observer.observe(element); });
+    return () => observer.disconnect();
+  }, [lists.length]);
+  // Keyboard movement keeps the hot item visible inside a scrolled level ("nearest" alignment, done by
+  // hand: auto-scroll.test.tsx keeps the browser call inside the auto-scroll hook).
+  useLayoutEffect(() => {
+    hots.forEach((hot, level) => {
+      const box = levels.current[level];
+      const item = hot < 0 ? null : box?.querySelector<HTMLElement>(`[data-i="${hot}"]`);
+      if (!box || !item) return;
+      const top = item.offsetTop, bottom = top + item.offsetHeight;
+      if (top < box.scrollTop) box.scrollTop = top;
+      else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight;
+    });
+  }, [hots]);
 
   useEffect(() => {
     // Capture phase, so Esc closes only the topmost menu before any other Esc handler sees it.
