@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import React, { useState, useCallback, useRef } from 'react'
 import { X, CheckCircle2, XCircle, AlertTriangle, Info } from 'lucide-react'
+import { useLang } from '../../lib/i18n'
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info'
 
@@ -8,6 +8,8 @@ export interface Toast {
   id: number
   message: string
   type: ToastType
+  /** Lifetime in ms; drives the life bar. */
+  duration?: number
 }
 
 const ICONS: Record<ToastType, React.ReactNode> = {
@@ -17,20 +19,13 @@ const ICONS: Record<ToastType, React.ReactNode> = {
   info:    <Info size={16} />,
 }
 
-const STYLES: Record<ToastType, string> = {
-  success: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
-  error:   'border-red-500/40 bg-red-500/10 text-red-300',
-  warning: 'border-yellow-500/40 bg-yellow-500/10 text-yellow-300',
-  info:    'border-blue-500/40 bg-blue-500/10 text-blue-300',
-}
-
 export function useToast() {
   const [toasts, setToasts] = useState<Toast[]>([])
   const counter = useRef(0)
 
   const showToast = useCallback((message: string, type: ToastType = 'info', duration = 4000) => {
     const id = ++counter.current
-    setToasts(prev => [...prev, { id, message, type }])
+    setToasts(prev => [...prev, { id, message, type, duration }])
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), duration)
   }, [])
 
@@ -46,30 +41,38 @@ interface ToastContainerProps {
   onDismiss: (id: number) => void
 }
 
+/**
+ * The v4 toast: the achievement band's surface (toast.css), with the status carried by an icon,
+ * the kicker word and an accent from the per-theme `--toast-<status>` tokens.
+ */
 export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
+  const { t } = useLang()
   return (
-    <div className="fixed top-4 right-4 z-[200] flex flex-col gap-2 pointer-events-none">
-      <AnimatePresence>
-        {toasts.map(toast => (
-          <motion.div
-            key={toast.id}
-            initial={{ opacity: 0, x: 40, scale: 0.95 }}
-            animate={{ opacity: 1, x: 0, scale: 1 }}
-            exit={{ opacity: 0, x: 40, scale: 0.95 }}
-            transition={{ duration: 0.18 }}
-            className={`pointer-events-auto flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs font-medium shadow-xl max-w-xs backdrop-blur-sm ${STYLES[toast.type]}`}
+    <div className="gm-toasts">
+      {toasts.map(toast => (
+        <div
+          key={toast.id}
+          className="gm-toast"
+          data-status={toast.type}
+          role={toast.type === 'error' ? 'alert' : 'status'}
+          style={{ '--toast-life': `${toast.duration ?? 4000}ms` } as React.CSSProperties}
+        >
+          <span className="gm-toast-ic" aria-hidden="true">{ICONS[toast.type]}</span>
+          <span className="gm-toast-text">
+            <span className="gm-toast-k">{t(`toast.${toast.type}`)}</span>
+            <span className="gm-toast-msg">{toast.message}</span>
+          </span>
+          <button
+            type="button"
+            className="gm-toast-x"
+            aria-label={t('toast.close')}
+            onClick={() => onDismiss(toast.id)}
           >
-            <span className="mt-0.5 shrink-0">{ICONS[toast.type]}</span>
-            <span className="leading-relaxed flex-1">{toast.message}</span>
-            <button
-              onClick={() => onDismiss(toast.id)}
-              className="shrink-0 mt-0.5 opacity-60 hover:opacity-100 transition-opacity"
-            >
-              <X size={13} />
-            </button>
-          </motion.div>
-        ))}
-      </AnimatePresence>
+            <X size={13} aria-hidden="true" />
+          </button>
+          <span className="gm-toast-life" aria-hidden="true" />
+        </div>
+      ))}
     </div>
   )
 }

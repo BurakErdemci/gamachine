@@ -783,8 +783,7 @@ export default function Home() {
             (dış denetim: `approval-card-hidden-by-view-state`).
             Editör yok, o yüzden setDiffFile/onOpenFile/setCode verilmiyor. */}
         {(mcp.activeGate || mcp.unknownGates.length > 0) && (
-          <div className="fixed inset-x-0 bottom-0 z-[250] max-h-[70vh] overflow-y-auto
-                          border-t border-slate-700 bg-slate-900/95 py-3 backdrop-blur">
+          <div className="tray-dock fixed inset-x-0 bottom-0 z-[250] max-h-[70vh] overflow-y-auto py-3">
             <div className="mx-auto max-w-3xl">
               <McpUnknownTray
                 gates={mcp.unknownGates}

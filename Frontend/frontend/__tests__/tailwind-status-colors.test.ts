@@ -67,3 +67,22 @@ describe('every colour family used in the renderer is in the palette', () => {
     expect(Object.fromEntries(missing)).toEqual({})
   })
 })
+
+// The v4 notification family (toast, notices, MCP tray and cards) takes its colours from theme
+// tokens. A raw colour family here is the old UI coming back (owner, 3 Oct 2026: "the warnings
+// are left over from the old UI").
+describe('notice and toast components use theme tokens, not colour families', () => {
+  const families = Object.keys(require_('tailwindcss/colors')).filter(k => /^[a-z]+$/.test(k))
+  const pattern = new RegExp(`-(${families.join('|')})-(?:50|[1-9]00|950)(?![0-9])`)
+  const fs = require_('node:fs') as typeof import('node:fs')
+  const files = [
+    'renderer/components/ui/Toast.tsx',
+    'renderer/components/home/MessageNotices.tsx',
+    'renderer/components/home/McpUnknownTray.tsx',
+    'renderer/components/home/McpApprovalCards.tsx',
+  ]
+  it.each(files)('%s', (f) => {
+    const hit = fs.readFileSync(path.join(root, f), 'utf8').match(pattern)
+    expect(hit?.[0] ?? null).toBeNull()
+  })
+})

@@ -821,6 +821,8 @@
 .tray-facts dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .tray-facts .mono { font-family: var(--font-mono); }
 .tray-facts .is-dim { color: var(--ink-dim); }
+/* the welcome screen has no thread to hang the tray under: it docks to the window bottom */
+.tray-dock { background: var(--paper-bg-2); color: var(--ink); border-top: var(--line-w) solid var(--paper-line-strong); }
 
 /* ---------- composer: app glue ---------- */
 /* the menus, queue and attachments hang off the box; popovers open upwards */

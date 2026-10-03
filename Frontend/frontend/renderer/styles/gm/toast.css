@@ -1,0 +1,70 @@
+/* ======================= PLAIN TOASTS (ui/Toast.tsx) =======================
+   The achievement band's family (thread.css .achv): same surface, line, label font and per-theme
+   shape. Status = icon + kicker word + accent from --toast-<status>; never a filled colour.
+   Stacked top-right under the 52 px top bar, so they never meet the band (bottom-right). */
+.gm-toasts {
+  position: fixed; top: 62px; right: 16px; z-index: 200;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  pointer-events: none;
+}
+.gm-toast {
+  --tone: var(--toast-info);
+  position: relative; width: 344px; max-width: calc(100vw - 32px); pointer-events: auto;
+  display: grid; grid-template-columns: 18px 1fr auto; align-items: start; column-gap: 10px;
+  padding: 10px 10px 12px 12px; overflow: hidden;
+  background: var(--toast-bg); color: var(--toast-text);
+  border: var(--line-w) solid var(--toast-line); border-left: 3px solid var(--tone); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);   /* not an inset stripe here: "inset …, none" is invalid where the card shadow is none */
+  animation: gm-toast-in 240ms var(--g-ease-enter) both,
+             gm-toast-out 400ms var(--g-ease-exit) calc(var(--toast-life, 4000ms) - 400ms) forwards;
+}
+.gm-toast[data-status="success"] { --tone: var(--toast-ok); }
+.gm-toast[data-status="warning"] { --tone: var(--toast-warn); }
+.gm-toast[data-status="error"] { --tone: var(--toast-err); }
+.gm-toast-ic { display: grid; place-items: center; height: 18px; margin-top: 1px; color: var(--tone); }
+.gm-toast-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; line-height: 1.35; }
+.gm-toast-k {
+  color: var(--tone); font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
+}
+.gm-toast-msg { font-size: var(--fs-small); line-height: 1.45; overflow-wrap: anywhere; }
+.gm-toast-x {
+  display: grid; place-items: center; width: 24px; height: 24px; margin: -2px -2px 0 0;
+  border-radius: var(--radius-md); color: var(--toast-text); opacity: .7;
+}
+.gm-toast-x:hover, .gm-toast-x:focus-visible { opacity: 1; background: color-mix(in srgb, var(--toast-text) 12%, transparent); }
+.gm-toast-life {
+  position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--tone);
+  transform-origin: left center; animation: gm-toast-life var(--toast-life, 4000ms) linear both;
+}
+@keyframes gm-toast-in { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+@keyframes gm-toast-out { to { opacity: 0; } }
+@keyframes gm-toast-life { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+/* Arena: the chamfered HUD plate of the band; the accent rides the plate's left edge */
+[data-theme="arena"] .gm-toast {
+  --c: 12px;
+  --chamfer: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
+  background: transparent; border: 0; border-radius: 0; box-shadow: none; overflow: visible; isolation: isolate;
+  padding: 11px 12px 13px 16px;
+}
+[data-theme="arena"] .gm-toast::before,
+[data-theme="arena"] .gm-toast::after { content: ""; position: absolute; inset: 0; clip-path: var(--chamfer); }
+[data-theme="arena"] .gm-toast::before { z-index: -2; background: var(--toast-line); }
+[data-theme="arena"] .gm-toast::after { z-index: -1; inset: 1px; background: linear-gradient(to right, var(--tone) 3px, var(--toast-bg) 3px); }
+[data-theme="arena"] .gm-toast-k { letter-spacing: .18em; font-weight: 700; }
+[data-theme="arena"] .gm-toast-life { left: 1px; right: var(--c); bottom: 1px; width: auto; height: 3px; }
+
+/* Sade: a plain notification, like its band: smaller radius, no fuse */
+[data-theme="sade"] .gm-toast { width: 320px; border-radius: var(--radius-md); }
+[data-theme="sade"] .gm-toast-life { display: none; }
+
+/* Atolye: the paper tag of the done band, heavier kicker */
+[data-theme="atolye"] .gm-toast-k { font-weight: 700; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-toast { animation: none; }
+  .gm-toast-life { display: none; }   /* a frozen fuse would read as a stuck timer */
+}
+:root[data-motion="reduced"] .gm-toast { animation: none; }
+:root[data-motion="reduced"] .gm-toast-life { display: none; }

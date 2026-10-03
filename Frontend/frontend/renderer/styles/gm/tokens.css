@@ -181,6 +181,11 @@
   --toast-text: var(--shell-text);
   --toast-kicker: var(--shell-text-dim);
   --toast-xp: var(--ok-shell);
+  /* plain toasts (ui/Toast.tsx): one status accent per kind, drawn on --toast-bg */
+  --toast-info: var(--shell-text-dim);
+  --toast-ok: var(--ok-shell);
+  --toast-warn: #E9C98A;
+  --toast-err: #F2937C;
   --heat-0: #d0d0d0;
   --heat-1: #b0b0b0;
   --heat-2: #8c8c8c;
@@ -407,6 +412,10 @@
   --toast-text: #ECE9E2;
   --toast-kicker: #2CC5B4;      /* m11: a finished thing is quiet; orange stays for what waits on you */
   --toast-xp: #2CC5B4;
+  --toast-info: #A0A8BC;          /* = --shell-text-dim: info stays neutral, teal is done */
+  --toast-ok: #2CC5B4;
+  --toast-warn: #E9C98A;          /* = --term-warn */
+  --toast-err: #F2937C;           /* = --del-text */
   --heat-0: #2A3043;
   --heat-1: #1B4744;
   --heat-2: #1C766C;
@@ -582,6 +591,7 @@
   --tb-rule: #2C273B; --lvl-bg: #221E30; --lvl-text: #E6E2F0; --lvl-dim: #9790AE;
   --badge-bg: #A68BFA; --badge-ink: #0D0B13; --badge-new-bg: #302A47; --badge-new-ink: #C2B0FF;
   --toast-bg: #201C2D; --toast-line: #3E3752; --toast-text: #E6E2F0; --toast-kicker: #8FD9B0; --toast-xp: #8FD9B0;
+  --toast-info: #8CD0F0; --toast-ok: #8FD9B0; --toast-warn: #E9C77E; --toast-err: #F6A1B2;  /* run-text, ok-text, sade-warn, sade-err-text */
   --heat-0: #2A2539; --heat-1: #493F69; --heat-2: #665696; --heat-3: #836EC4; --heat-4: #A68BFA;
   --xp: #BAB3CC; --xp-off: #2A2539;  /* the XP meter stays muted: the accent only means "your turn" */
   --hero-text: #E6E2F0; --hero-dim: #BAB3CC; --hero-quip-bg: #201C2D; --hero-on: #13111B;
@@ -698,6 +708,10 @@
   --toast-text: #E4E1D9;
   --toast-kicker: #A3B5CB;
   --toast-xp: #8DBBA4;
+  --toast-info: #A3B5CB;          /* = --toast-kicker */
+  --toast-ok: #8DBBA4;
+  --toast-warn: #DFC690;          /* = --code-fn */
+  --toast-err: #F29A86;           /* = --us-alert-text */
   /* heat map: ink density on drafting paper */
   --heat-0: #E2DAC6;
   --heat-1: #BCC8D3;
@@ -932,6 +946,10 @@
   --toast-text: #2A1E14;
   --toast-kicker: #75492A;
   --toast-xp: #3E5636;
+  --toast-info: #3F5A88;          /* = --ed-num */
+  --toast-ok: #3E5636;
+  --toast-warn: #74560F;          /* = --ed-fn */
+  --toast-err: #93391A;           /* = --diff-del-mark */
   /* heat map: sage, the colour of work that ran - never brass */
   --heat-0: #E1D2B7;
   --heat-1: #BCC7A9;
