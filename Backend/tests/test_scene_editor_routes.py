@@ -7,7 +7,7 @@ import urllib.error
 from unittest.mock import Mock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 
@@ -169,7 +169,8 @@ def test_unity_error_mappings(client, monkeypatch, caplog, body, status, expecte
         original = body.get("error") or body.get("detail")
         assert original not in response.text
         assert any(record.name == routes.__name__ and record.levelname == "WARNING"
-                   and original in record.getMessage() for record in caplog.records)
+                   and record.getMessage() == f"Unity scene editor error (HTTP {status})" for record in caplog.records)
+        assert original not in caplog.text
         assert "app-secret" not in caplog.text
         assert "api-secret" not in caplog.text
 
@@ -188,7 +189,8 @@ def test_transport_error_mappings(client, monkeypatch, caplog, error, status, de
     assert response.json() == {"detail": detail}
     if status == 502:
         assert str(error) not in response.text
-        assert str(error) in caplog.text
+        assert str(error) not in caplog.text
+        assert "Unity scene editor error: ValueError" in caplog.text
         assert any(record.name == routes.__name__ and record.levelname == "WARNING"
                    for record in caplog.records)
 
@@ -204,7 +206,8 @@ def test_non_json_http_errors_do_not_echo_body(client, monkeypatch, caplog, stat
     assert response.json() == {"detail": detail}
     assert original not in response.text
     if status == 500:
-        assert original in caplog.text
+        assert original not in caplog.text
+        assert "Unity scene editor error (HTTP 500)" in caplog.text
 
 
 @pytest.mark.parametrize("body", [[], {"success": True, "data": []}])
@@ -214,7 +217,8 @@ def test_invalid_unity_response_is_private(client, monkeypatch, caplog, body):
     response = http.get("/scene-editor/inspect/-3384", headers={"X-Session-Token": "app-secret"})
     assert response.status_code == 502
     assert response.json() == {"detail": "unity_error"}
-    assert "Invalid Unity response" in caplog.text
+    assert "Invalid Unity response" not in caplog.text
+    assert "Unity scene editor error" in caplog.text
     assert "Invalid Unity response" not in response.text
 
 
@@ -232,18 +236,57 @@ def test_http_call_runs_off_event_loop(client, monkeypatch):
     assert worker_threads and worker_threads[0] != loop_thread
 
 
-def test_logged_upstream_error_masks_the_route_secrets(monkeypatch, caplog):
-    """verify-f1: an upstream message that echoes the maintenance token or the API key
-    must not carry them into the log."""
+@pytest.mark.parametrize("message", [
+    "boom maint-secret-123 and api-secret-456",
+    "boom %6Daint-secret-123 and %61pi-secret-456",
+    'boom maint\\u002dsecret-123 and api\\u002dsecret-456',
+    "boom maint- secret-123 and api- secret-456",
+])
+def test_logged_upstream_error_omits_text_and_credentials(monkeypatch, caplog, message):
     import routes.scene_editor_routes as routes_module
     monkeypatch.setenv("LOCAL_APP_TOKEN", "maint-secret-123")
     monkeypatch.setattr(routes_module.unity_mcp_manager, "api_headers", lambda: {"X-API-Key": "api-secret-456"})
     with caplog.at_level("WARNING"):
-        try:
-            routes_module._raise_unity_error("boom maint-secret-123 and api-secret-456 " + "x" * 2000, 500)
-        except Exception:
-            pass
+        with pytest.raises(HTTPException) as caught:
+            routes_module._raise_unity_error(message, 500)
+    assert caught.value.status_code == 502
     logged = " ".join(r.getMessage() for r in caplog.records)
     assert "maint-secret-123" not in logged and "api-secret-456" not in logged
-    assert "<REDACTED>" in logged
-    assert len(logged) < 700
+    assert message not in logged
+    assert logged == "Unity scene editor error (HTTP 500)"
+
+
+@pytest.mark.parametrize("headers", [None, {"X-API-Key": 123}])
+def test_error_logging_does_not_read_headers(client, monkeypatch, caplog, headers):
+    http, routes = client
+    api_headers = Mock(side_effect=[{"X-API-Key": "api-secret"}, headers])
+    monkeypatch.setattr(routes.unity_mcp_manager, "api_headers", api_headers)
+    monkeypatch.setattr(routes.urllib.request, "urlopen", Mock(side_effect=ValueError("private api-secret app-secret")))
+    response = http.get("/scene-editor/tree", headers={"X-Session-Token": "app-secret"})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "unity_error"}
+    api_headers.assert_called_once()
+    assert "private" not in caplog.text and "api-secret" not in caplog.text and "app-secret" not in caplog.text
+
+
+def test_api_headers_raising_during_error_handling_still_returns_502(client, monkeypatch, caplog):
+    http, routes = client
+    api_headers = Mock(side_effect=[{"X-API-Key": "api-secret"}, RuntimeError("private api-secret")])
+    monkeypatch.setattr(routes.unity_mcp_manager, "api_headers", api_headers)
+    monkeypatch.setattr(routes.urllib.request, "urlopen", Mock(return_value=_reply({"success": False, "error": "private app-secret"})))
+    response = http.get("/scene-editor/tree", headers={"X-Session-Token": "app-secret"})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "unity_error"}
+    api_headers.assert_called_once()
+    assert "private" not in caplog.text and "api-secret" not in caplog.text and "app-secret" not in caplog.text
+
+
+@pytest.mark.parametrize("upstream", [False, True])
+def test_logging_failure_cannot_change_error_response(client, monkeypatch, upstream):
+    http, routes = client
+    monkeypatch.setattr(routes.logger, "warning", Mock(side_effect=RuntimeError("broken handler")))
+    post = Mock(return_value=_reply({"success": False, "error": "private"})) if upstream else Mock(side_effect=ValueError("private"))
+    monkeypatch.setattr(routes.urllib.request, "urlopen", post)
+    response = http.get("/scene-editor/tree", headers={"X-Session-Token": "app-secret"})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "unity_error"}

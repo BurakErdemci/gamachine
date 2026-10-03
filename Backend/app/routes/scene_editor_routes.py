@@ -11,7 +11,6 @@ from pydantic import BaseModel, StrictBool, StrictInt, StrictStr
 
 from auth_utils import _check_token
 from omnisharp.omnisharp_manager import _unwrap_unity_result
-from secret_redaction import redact_secrets
 from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 
 
@@ -39,16 +38,6 @@ class SceneEditorActive(SceneEditorObject):
     active: StrictBool
 
 
-def _loggable(text: object) -> str:
-    """Upstream text for the log: the two secrets this route sends are masked by value
-    (a pattern filter would miss a bare token echoed back), then the generic redaction, then a cap."""
-    out = str(text)
-    for secret in (os.environ.get("LOCAL_APP_TOKEN", ""), *unity_mcp_manager.api_headers().values()):
-        if secret:
-            out = out.replace(secret, "<REDACTED>")
-    return redact_secrets(out)[:500]
-
-
 def _raise_unity_error(error: str, status: int = 200) -> None:
     normalized = error.lower()
     if status == 504 or "timeout" in normalized or "timed out" in normalized:
@@ -60,7 +49,10 @@ def _raise_unity_error(error: str, status: int = 200) -> None:
     if error in {"locked", "compiling", "prefab_part", "invalid_name", "invalid_value",
                  "invalid_item", "create_failed", "write_failed"}:
         raise HTTPException(status_code=409, detail=error)
-    logger.warning("Unity scene editor error: %s", _loggable(error))
+    try:
+        logger.warning("Unity scene editor error (HTTP %s)", status)
+    except Exception:
+        pass  # A logging handler must not change the HTTP response.
     raise HTTPException(status_code=502, detail="unity_error")
 
 
@@ -106,7 +98,10 @@ def _post_unity(command: str, params: dict) -> dict:
     except ConnectionError as exc:
         raise HTTPException(status_code=503, detail="unity_unavailable") from exc
     except Exception as exc:
-        logger.warning("Unity scene editor error: %s", _loggable(exc))
+        try:
+            logger.warning("Unity scene editor error: %s", type(exc).__name__)
+        except Exception:
+            pass  # A logging handler must not change the HTTP response.
         raise HTTPException(status_code=502, detail="unity_error") from exc
 
 
