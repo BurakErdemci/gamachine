@@ -29,3 +29,15 @@
 [data-theme="atolye"] .unity[data-unity="connecting"] .us-knob { color: var(--us-connect-ink); }
 /* closed (editor not running): the hollow knob shows its glyph in the shell dim ink */
 [data-theme="atolye"] .unity[data-unity="closed"] .us-knob { color: var(--shell-text-dim); }
+
+/* opening animation (intro.css palette): the theme's own quest colour; lines step up from the shell
+   line toward the dim text, the shadow is the ground darkened, as Arena's are on its navy */
+[data-theme="atolye"] .intro-overlay {
+  --intro-accent: var(--accent); --intro-accent-ink: var(--accent-ink);
+  --intro-line: color-mix(in srgb, var(--shell-line), var(--shell-text-dim) 12%);
+  --intro-line-2: color-mix(in srgb, var(--shell-line), var(--shell-text-dim) 5%);
+  --intro-line-hi: color-mix(in srgb, var(--shell-line), var(--shell-text-dim) 25%);
+  --intro-shadow: color-mix(in srgb, var(--shell-bg) 55%, black);
+  --intro-dust: var(--intro-line); --intro-dust-2: var(--shell-text-dim);
+  --intro-scan: color-mix(in srgb, var(--shell-text-dim) 3.5%, transparent);
+}

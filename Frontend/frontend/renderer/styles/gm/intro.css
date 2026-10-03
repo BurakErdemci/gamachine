@@ -1,5 +1,20 @@
 /* The wrapper fills the window; the approved artwork keeps its native canvas coordinates. */
 .intro-overlay { position: fixed; inset: 0; z-index: 10000; overflow: hidden; }
+/* INTRO PALETTE. Every colour below reads one of these tokens (or a --mascot-* / --shell-* one); the
+   defaults are Arena's, the art's own palette, and each other theme repoints them at the end of this
+   file. Only this block may hold literal colours (__tests__/intro-theme.test.ts). */
+.intro-overlay {
+  --intro-bg: var(--shell-bg);
+  --intro-accent: #FF6B3D;                 /* the quest colour: blocks, tag, star, loading bar */
+  --intro-accent-ink: #141826;
+  --intro-line: #3A4361;                   /* corner marks, dashed outlines, frames */
+  --intro-line-2: #323A53;                 /* the sprite canvas checker's second square */
+  --intro-line-hi: #4C5571;                /* the cartridge slot's rim */
+  --intro-shadow: #0B0E16;                 /* floor shadow, slot, the dark screen */
+  --intro-dust: #3A4361;
+  --intro-dust-2: #A0A8BC;
+  --intro-scan: rgba(160, 175, 215, .035); /* scan lines on the lit screen */
+}
 /* The scenes are drawn on a fixed 1600x1000 stage (the mockup's design viewport). The app scales
    that stage to fit the window and centres it (IntroOverlay sets --intro-fit); stretching .ov to
    the window instead left every scene pinned to the top-left corner on a large screen (Burak, 2 Oct).
@@ -15,11 +30,11 @@
 
 :where(.intro-overlay) .ov > * { position: absolute; }
 
-:where(.intro-overlay) .ov-bg { inset: 0; background: var(--shell-bg); }
+:where(.intro-overlay) .ov-bg { inset: 0; background: var(--intro-bg); }
 
 :where(.intro-overlay) .hud { left: 0; top: 0; width: 1600px; height: 1000px; fill: none; stroke: var(--shell-line); stroke-width: 1.5; }
 
-:where(.intro-overlay) .hud-c { stroke: #3A4361; stroke-width: 2; stroke-dasharray: 1; }
+:where(.intro-overlay) .hud-c { stroke: var(--intro-line); stroke-width: 2; stroke-dasharray: 1; }
 
 :where(.intro-overlay) .hud-floor { transform-box: fill-box; transform-origin: center; }
 
@@ -36,9 +51,9 @@
 
 :where(.intro-overlay) .m-svg { overflow: visible; }
 
-:where(.intro-overlay) .m-shadow { left: 405px; top: 697px; width: 230px; height: 13px; border-radius: 50%; background: #0B0E16; opacity: 0; }
+:where(.intro-overlay) .m-shadow { left: 405px; top: 697px; width: 230px; height: 13px; border-radius: 50%; background: var(--intro-shadow); opacity: 0; }
 
-:where(.intro-overlay) .dust i { position: absolute; left: 517px; top: 694px; width: 7px; height: 7px; background: #3A4361; opacity: 0; transform: rotate(45deg); }
+:where(.intro-overlay) .dust i { position: absolute; left: 517px; top: 694px; width: 7px; height: 7px; background: var(--intro-dust); opacity: 0; transform: rotate(45deg); }
 
 
 /* ---------- blocks ---------- */
@@ -54,9 +69,9 @@
 :where(.intro-overlay) .blk-y,
 :where(.intro-overlay) .blk-face { width: 100%; height: 100%; }
 
-:where(.intro-overlay) .blk-face { position: relative; background: var(--accent); border-radius: 6px; transform-origin: 50% 100%; }
+:where(.intro-overlay) .blk-face { position: relative; background: var(--intro-accent); border-radius: 6px; transform-origin: 50% 100%; }
 
-:where(.intro-overlay) .blk-face::after { content: ""; position: absolute; inset: 13px; border: 3px solid var(--shell-bg); border-radius: 2px; }
+:where(.intro-overlay) .blk-face::after { content: ""; position: absolute; inset: 13px; border: 3px solid var(--intro-bg); border-radius: 2px; }
 
 /* Hidden with visibility, not opacity (the mockup uses opacity 0 -> 1). In the app's Electron the
    opacity switch inside i-bx was never painted: a screencast showed the throw with no blocks, while
@@ -74,20 +89,41 @@
 
 :where(.intro-overlay) .lk-w { clip-path: inset(0 100% 0 0); }
 
+/* The approved art keeps the mascot's Arena colours as attributes (the markup is a verbatim copy, see
+   intro-overlay.test.tsx); like #gamachine in thread.css and .brand-head in shell.css, only the
+   colours are repointed, so every theme draws the lockup, the cartridge, the hero and the sprite in
+   its own mascot colours. Arena's tokens equal the attributes. */
+:where(.intro-overlay) .lk-w { fill: var(--brand-word); }
+:where(.intro-overlay) .lk-head [fill="#2A2F3D"] { fill: var(--mascot-body); }
+:where(.intro-overlay) .lk-head [fill="#FF6B3D"] { fill: var(--mascot-visor); }
+:where(.intro-overlay) .lk-head [fill="#141826"] { fill: var(--mascot-screen); }
+:where(.intro-overlay) .lk-head [stroke="#141826"] { stroke: var(--mascot-line); }
+:where(.intro-overlay) .lk-head [fill="#F1EEE6"] { fill: var(--mascot-eye); }
+:where(.intro-overlay) .lk-head [stroke="#F1EEE6"] { fill: var(--mascot-outline); stroke: var(--mascot-outline); }
+:where(.intro-overlay) :is(.s3-cart-svg, .s2-hero-b) [stroke="#141826"] { stroke: var(--mascot-line); }
+:where(.intro-overlay) .s4-spr [fill="#141826"] { fill: var(--mascot-screen); }
+:where(.intro-overlay) .s4-spr [fill="#2A2F3D"] { fill: var(--mascot-body); }
+:where(.intro-overlay) .s4-spr [fill="#FF6B3D"] { fill: var(--mascot-visor); }
+:where(.intro-overlay) .s4-spr [fill="#F1EEE6"] { fill: var(--mascot-eye); }
+:where(.intro-overlay) :is(.s4-pal, .s4-px) i[style*="--c:#141826"] { background: var(--mascot-screen); }
+:where(.intro-overlay) :is(.s4-pal, .s4-px) i[style*="--c:#2A2F3D"] { background: var(--mascot-body); }
+:where(.intro-overlay) :is(.s4-pal, .s4-px) i[style*="--c:#FF6B3D"] { background: var(--mascot-visor); }
+:where(.intro-overlay) :is(.s4-pal, .s4-px) i[style*="--c:#F1EEE6"] { background: var(--mascot-eye); }
+
 :where(.intro-overlay) .prompt {
   left: 50%; top: 574px; transform: translateX(-50%); opacity: 0;
   display: flex; align-items: center; gap: 16px; height: 52px; padding: 0 8px 0 20px; white-space: nowrap;
   background: var(--shell-bg-2); color: var(--shell-text);
   clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
-  box-shadow: inset 0 0 0 1px #3A4361;
+  box-shadow: inset 0 0 0 1px var(--intro-line);
 }
 
 :where(.intro-overlay) .pr-tag {
-  position: relative; z-index: 0; padding: 0 11px; line-height: 22px; color: var(--accent-ink);
+  position: relative; z-index: 0; padding: 0 11px; line-height: 22px; color: var(--intro-accent-ink);
   font-family: var(--font-display); font-size: 12px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
 }
 
-:where(.intro-overlay) .pr-tag::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--accent); transform: skewX(-12deg); }
+:where(.intro-overlay) .pr-tag::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--intro-accent); transform: skewX(-12deg); }
 
 :where(.intro-overlay) .pr-text { font-size: 15px; color: var(--shell-text); }
 
@@ -134,13 +170,13 @@
 
 :where(.intro-overlay) .dust i:nth-child(1) { --dx: -118px; --dy: -14px; }
 
-:where(.intro-overlay) .dust i:nth-child(2) { --dx: -82px; --dy: -26px; background: #A0A8BC; }
+:where(.intro-overlay) .dust i:nth-child(2) { --dx: -82px; --dy: -26px; background: var(--intro-dust-2); }
 
 :where(.intro-overlay) .dust i:nth-child(3) { --dx: -54px; --dy: -8px; }
 
 :where(.intro-overlay) .dust i:nth-child(4) { --dx: 60px; --dy: -10px; }
 
-:where(.intro-overlay) .dust i:nth-child(5) { --dx: 90px; --dy: -24px; background: #A0A8BC; }
+:where(.intro-overlay) .dust i:nth-child(5) { --dx: 90px; --dy: -24px; background: var(--intro-dust-2); }
 
 :where(.intro-overlay) .dust i:nth-child(6) { --dx: 124px; --dy: -12px; }
 
@@ -382,13 +418,13 @@
 
 :where(.intro-overlay) .s2-floor { stroke: var(--shell-line); stroke-width: 1.5; }
 
-:where(.intro-overlay) .s2-c { stroke: #3A4361; stroke-width: 2; stroke-dasharray: 1; }
+:where(.intro-overlay) .s2-c { stroke: var(--intro-line); stroke-width: 2; stroke-dasharray: 1; }
 
 
 /* blocks: the scene-1 block, at the size the level needs */
 :where(.intro-overlay) .s2b { left: var(--x); top: var(--y); width: 48px; height: 48px; opacity: 0; }
 
-:where(.intro-overlay) .s2b i { position: absolute; inset: 0; background: var(--accent); border-radius: 6px; transform-origin: 50% 100%; }
+:where(.intro-overlay) .s2b i { position: absolute; inset: 0; background: var(--intro-accent); border-radius: 6px; transform-origin: 50% 100%; }
 
 :where(.intro-overlay) .s2b i::after { content: ""; position: absolute; inset: 13px; border: 3px solid var(--mascot-screen); border-radius: 2px; }
 
@@ -398,7 +434,7 @@
 :where(.intro-overlay) .s2-slab { width: 96px; height: 48px; opacity: 0; background: var(--mascot-body);
   clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0 calc(100% - 6px), 0 6px); }
 
-:where(.intro-overlay) .s2-slab::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 9px; background: var(--accent); }
+:where(.intro-overlay) .s2-slab::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 9px; background: var(--intro-accent); }
 
 :where(.intro-overlay) .s2-slab::after { content: ""; position: absolute; left: 18px; right: 18px; top: 26px; height: 3px; background: var(--mascot-screen);
   box-shadow: 0 8px 0 var(--mascot-screen); }
@@ -409,7 +445,7 @@
 
 :where(.intro-overlay) .s2-star { left: 717px; top: 520px; width: 56px; height: 56px; overflow: visible; opacity: 0; }
    /* centre (745, 548) */
-:where(.intro-overlay) .s2-star path { fill: var(--accent); stroke: var(--mascot-screen); stroke-width: 3; stroke-linejoin: round; }
+:where(.intro-overlay) .s2-star path { fill: var(--intro-accent); stroke: var(--mascot-screen); stroke-width: 3; stroke-linejoin: round; }
 
 :where(.intro-overlay) .s2-spark { left: 745px; top: 548px; }
 
@@ -417,13 +453,13 @@
 
 :where(.intro-overlay) .s2-spark i:nth-child(1) { --dx: -24px; --dy: -18px; }
 
-:where(.intro-overlay) .s2-spark i:nth-child(2) { --dx: 24px; --dy: -18px; background: var(--accent); }
+:where(.intro-overlay) .s2-spark i:nth-child(2) { --dx: 24px; --dy: -18px; background: var(--intro-accent); }
 
-:where(.intro-overlay) .s2-spark i:nth-child(3) { --dx: -22px; --dy: 16px; background: var(--accent); }
+:where(.intro-overlay) .s2-spark i:nth-child(3) { --dx: -22px; --dy: 16px; background: var(--intro-accent); }
 
 :where(.intro-overlay) .s2-spark i:nth-child(4) { --dx: 23px; --dy: 15px; }
 
-:where(.intro-overlay) .s2-plus { left: 770px; top: 528px; opacity: 0; color: var(--accent); font-family: var(--font-display); font-weight: 700;
+:where(.intro-overlay) .s2-plus { left: 770px; top: 528px; opacity: 0; color: var(--intro-accent); font-family: var(--font-display); font-weight: 700;
   font-size: 13px; line-height: 1; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
 
 :where(.intro-overlay) .s2-hero { left: 628px; top: 610px; width: 40px; height: 45px; }
@@ -436,7 +472,7 @@
 :where(.intro-overlay) .s2-hero-b .h-body { fill: var(--mascot-eye); }
 
 :where(.intro-overlay) .s2-hero-b .h-ant,
-:where(.intro-overlay) .s2-hero-b .h-eye { fill: var(--accent); }
+:where(.intro-overlay) .s2-hero-b .h-eye { fill: var(--intro-accent); }
 
 :where(.intro-overlay) .s2-hero-b .h-visor { fill: var(--mascot-screen); }
 
@@ -603,7 +639,7 @@
 
 :where(.intro-overlay) .s3-floor { fill: none; stroke: var(--shell-line); stroke-width: 1.5; transform-box: fill-box; transform-origin: center; }
 
-:where(.intro-overlay) .s3-bay { fill: var(--mascot-body); stroke: #3A4361; stroke-width: 1.5; }
+:where(.intro-overlay) .s3-bay { fill: var(--mascot-body); stroke: var(--intro-line); stroke-width: 1.5; }
 
 :where(.intro-overlay) .s3-hud { display: none; left: 0; top: 0; width: 1600px; height: 1000px; overflow: visible; pointer-events: none; }
 
@@ -619,29 +655,29 @@
 
 :where(.intro-overlay) .s3-fill { fill: var(--mascot-body); }
 
-:where(.intro-overlay) .s3-ol { fill: none; stroke: #3A4361; stroke-width: 2; stroke-linejoin: round; stroke-dasharray: 1; }
+:where(.intro-overlay) .s3-ol { fill: none; stroke: var(--intro-line); stroke-width: 2; stroke-linejoin: round; stroke-dasharray: 1; }
 
-:where(.intro-overlay) .s3-slot { fill: #0B0E16; stroke: #4C5571; stroke-width: 1.5; }
+:where(.intro-overlay) .s3-slot { fill: var(--intro-shadow); stroke: var(--intro-line-hi); stroke-width: 1.5; }
 
-:where(.intro-overlay) .s3-vent { fill: none; stroke: #3A4361; stroke-width: 3; stroke-linecap: round; }
+:where(.intro-overlay) .s3-vent { fill: none; stroke: var(--intro-line); stroke-width: 3; stroke-linecap: round; }
 
 :where(.intro-overlay) .s3-led { fill: var(--energy-off); }
 
-:where(.intro-overlay) .s3-cable { fill: none; stroke: #3A4361; stroke-width: 4; stroke-linecap: round; }
+:where(.intro-overlay) .s3-cable { fill: none; stroke: var(--intro-line); stroke-width: 4; stroke-linecap: round; }
 
 :where(.intro-overlay) .s3-pulse { fill: none; stroke: var(--energy); stroke-width: 4; stroke-linecap: round; stroke-dasharray: .14 1.2; stroke-dashoffset: .14; opacity: 0; }
 
-:where(.intro-overlay) .s3-scr { left: 246px; top: 226px; width: 708px; height: 380px; overflow: hidden; background: #0B0E16; }
+:where(.intro-overlay) .s3-scr { left: 246px; top: 226px; width: 708px; height: 380px; overflow: hidden; background: var(--intro-shadow); }
 
 :where(.intro-overlay) .s3-scr > * { position: absolute; }
 
 :where(.intro-overlay) .s3-on { inset: 0; background: var(--shell-bg-2); transform: scaleY(0);
-  background-image: repeating-linear-gradient(180deg, rgba(160, 175, 215, .035) 0 1px, transparent 1px 4px); }
+  background-image: repeating-linear-gradient(180deg, var(--intro-scan) 0 1px, transparent 1px 4px); }
 
 :where(.intro-overlay) .s3-line { left: 0; right: 0; top: 189px; height: 2px; background: var(--mascot-eye); transform: scaleX(0); }
 
 :where(.intro-overlay) .s3-sweep { left: 0; right: 0; top: -70px; height: 70px; opacity: 0;
-  background: linear-gradient(180deg, transparent, rgba(241, 238, 230, .07) 80%, rgba(241, 238, 230, .16) 96%, var(--mascot-eye) 96%); }
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--mascot-eye) 7%, transparent) 80%, color-mix(in srgb, var(--mascot-eye) 16%, transparent) 96%, var(--mascot-eye) 96%); }
 
 /* the loose cartridge: the clip box ends at the slot, so whatever passes y = 564 is inside */
 :where(.intro-overlay) .s3-cart { left: 1060px; top: 380px; width: 110px; height: 184px; overflow: hidden; }
@@ -876,23 +912,23 @@
 
 :where(.intro-overlay) .s4-easel { left: 0; top: 0; width: 1600px; height: 1000px; overflow: visible; fill: none; }
 
-:where(.intro-overlay) .s4-leg { stroke: #3A4361; stroke-width: 6; stroke-linecap: round; }
+:where(.intro-overlay) .s4-leg { stroke: var(--intro-line); stroke-width: 6; stroke-linecap: round; }
 
-:where(.intro-overlay) .s4-ol { stroke: #3A4361; stroke-width: 2; stroke-dasharray: 1; }
+:where(.intro-overlay) .s4-ol { stroke: var(--intro-line); stroke-width: 2; stroke-dasharray: 1; }
 
 :where(.intro-overlay) .s4-tag { left: 766px; top: 218px; font: 700 13px/1 var(--font-display); letter-spacing: .16em; color: var(--shell-text-dim); }
 
 /* palette: five 28 px swatches on a 40 px pitch; the cursor is a cream square bracket */
 :where(.intro-overlay) .s4-pal { left: 712px; top: 262px; width: 40px; height: 200px; }
 
-:where(.intro-overlay) .s4-pal i { display: block; width: 28px; height: 28px; margin: 0 0 12px 6px; background: var(--c); box-shadow: inset 0 0 0 2px #3A4361; }
+:where(.intro-overlay) .s4-pal i { display: block; width: 28px; height: 28px; margin: 0 0 12px 6px; background: var(--c); box-shadow: inset 0 0 0 2px var(--intro-line); }
 
 :where(.intro-overlay) .s4-sel { position: absolute; left: 0; top: -6px; width: 40px; height: 40px; box-sizing: border-box; border: 3px solid var(--mascot-eye); opacity: 0; }
 
 /* the canvas: a 21 x 13 grid of 30 px cells, drawn as an editor's transparency checker (light
    enough that the ink outline and the graphite read, as in a real sprite editor) */
 :where(.intro-overlay) .s4-cv { left: 770px; top: 250px; width: 630px; height: 390px; overflow: hidden; opacity: 0;
-  background: repeating-conic-gradient(#3A4361 0 25%, #323A53 0 50%) 0 0 / 60px 60px; }
+  background: repeating-conic-gradient(var(--intro-line) 0 25%, var(--intro-line-2) 0 50%) 0 0 / 60px 60px; }
 
 :where(.intro-overlay) .s4-walk { position: absolute; left: 30px; top: 30px; width: 420px; height: 360px; }
 
@@ -1033,11 +1069,11 @@
 :where(.intro-overlay) .s5-pct::after { content: counter(p) "%"; }
    /* the counter lives on the element: --p does not inherit */
 :where(.intro-overlay) .s5-bar { left: 380px; top: 544px; width: 940px; height: 56px; border-radius: 4px; transform-origin: 0 0;
-  box-shadow: inset 0 0 0 2px #3A4361; clip-path: inset(0 100% 0 0); }
+  box-shadow: inset 0 0 0 2px var(--intro-line); clip-path: inset(0 100% 0 0); }
 
 /* the retro fill: 29 orange segments on a 32 px pitch, revealed from the left */
 :where(.intro-overlay) .s5-fill { position: absolute; left: 6px; top: 6px; bottom: 6px; width: 928px; clip-path: inset(0 98% 0 0);
-  background: repeating-linear-gradient(90deg, var(--accent) 0 26px, transparent 26px 32px); }
+  background: repeating-linear-gradient(90deg, var(--intro-accent) 0 26px, transparent 26px 32px); }
 
 :where(.intro-overlay) .s5-fill::before { content: ""; position: absolute; inset: 0; opacity: 0;
   background: repeating-linear-gradient(90deg, var(--energy) 0 26px, transparent 26px 32px); }
@@ -1054,7 +1090,7 @@
 
 @keyframes s5-ready { to { box-shadow: inset 0 0 0 2px var(--energy); } }
 
-@keyframes s5-box { to { transform: translate(197px, -159px) scale(.6926, 1.3571); box-shadow: inset 0 0 0 2px #3A4361; } }
+@keyframes s5-box { to { transform: translate(197px, -159px) scale(.6926, 1.3571); box-shadow: inset 0 0 0 2px var(--intro-line); } }
 
 .run5 :where(.intro-overlay) .s5-lbl { animation: gs-on 200ms linear 550ms both, i-fade 200ms linear 4300ms both; }
 

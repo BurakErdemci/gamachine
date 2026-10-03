@@ -442,3 +442,20 @@
   --set-seg-ink: var(--oz-safe); --set-seg-bg: color-mix(in oklab, var(--oz-safe) 30%, var(--u-bg)); --set-sel: var(--oz-safe);
 }
 :root[data-theme="ozel"][data-u-bad] .oz-guard .btn { color: var(--oz-safe); border-color: var(--oz-safe); }
+
+/* opening animation (intro.css palette): the user's colours only. --accent here is the status orange,
+   so the quest colour is the user's accent (the foreground on Mono); the ground is the thread's. */
+:root[data-theme="ozel"] .intro-overlay {
+  --intro-bg: var(--u-bg);
+  --intro-accent: var(--oz-acc); --intro-accent-ink: var(--oz-on-acc);
+  --intro-line: var(--oz-5); --intro-line-2: var(--oz-4); --intro-line-hi: var(--oz-5);
+  --intro-shadow: color-mix(in srgb, var(--u-bg) 85%, black);
+  --intro-dust: var(--oz-faint); --intro-dust-2: var(--oz-dim);
+  --intro-scan: color-mix(in srgb, var(--u-fg) 3.5%, transparent);
+}
+/* the scene-2 slabs are body-coloured (the ground here) with no edge: outline them as the mascot is
+   drawn; a rounded box, since the chamfer clip cut the outline at the corners */
+:root[data-theme="ozel"] .intro-overlay .s2-slab {
+  clip-path: none; overflow: hidden; border-radius: var(--radius-md); box-shadow: inset 0 0 0 3px var(--mascot-line);
+}
+:root[data-theme="ozel"] .intro-overlay .s2-slab::after { background: var(--mascot-line); box-shadow: 0 8px 0 var(--mascot-line); }

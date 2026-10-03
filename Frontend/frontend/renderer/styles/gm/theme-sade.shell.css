@@ -38,3 +38,15 @@
 [data-theme="sade"] .unity[data-unity="closed"] .us-knob { color: var(--sade-warn); box-shadow: inset 0 0 0 1px var(--sade-warn); }
 [data-theme="sade"] .unity[data-unity="closed"] .unity-word { color: var(--sade-warn); }
 [data-theme="sade"] .unity[data-unity="blocked"] .us-track { background: var(--sade-err-soft); }
+
+/* opening animation (intro.css palette): the theme's own quest colour; lines step up from the shell
+   line toward the dim text, the shadow is the ground darkened, as Arena's are on its navy */
+[data-theme="sade"] .intro-overlay {
+  --intro-accent: var(--accent); --intro-accent-ink: var(--accent-ink);
+  --intro-line: color-mix(in srgb, var(--shell-line), var(--shell-text-dim) 12%);
+  --intro-line-2: color-mix(in srgb, var(--shell-line), var(--shell-text-dim) 5%);
+  --intro-line-hi: color-mix(in srgb, var(--shell-line), var(--shell-text-dim) 25%);
+  --intro-shadow: color-mix(in srgb, var(--shell-bg) 55%, black);
+  --intro-dust: var(--intro-line); --intro-dust-2: var(--shell-text-dim);
+  --intro-scan: color-mix(in srgb, var(--shell-text-dim) 3.5%, transparent);
+}
