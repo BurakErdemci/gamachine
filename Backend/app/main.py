@@ -142,6 +142,7 @@ from routes import (
     create_profile_router,
     create_usage_router,
 )
+from routes.scene_editor_routes import create_scene_editor_router
 
 
 # Root logger seviyesini explicit INFO yap
@@ -359,6 +360,7 @@ app.include_router(_conversation_router)
 app.include_router(create_profile_router(db))
 app.include_router(create_usage_router(usage_service))
 app.include_router(create_mcp_router())
+app.include_router(create_scene_editor_router())
 app.include_router(create_transcribe_router(db))
 
 from remote.bridge import RemoteBridge  # noqa: E402
