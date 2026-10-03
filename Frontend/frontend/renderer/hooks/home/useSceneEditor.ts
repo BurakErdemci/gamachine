@@ -25,6 +25,9 @@ type Backoff = { failures: number; until: number };
 // A held arrow key moves the selection on every key event; Unity hears the first at once and then only
 // the latest, once the keys pause this long.
 const SYNC_DELAY = 120;
+// Unity answers a select within a frame or two; a post still open after this is hung (an editor stuck in a
+// modal or a dropped socket), and while it is open no Unity-side selection can be adopted.
+const SELECT_TIMEOUT = 5000;
 function coalesce<A>(send: (arg: A) => void) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let pending: { arg: A } | null = null;
@@ -79,10 +82,17 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   const compiling = useRef(false);
   const needsInspection = useRef(false);
   const localSelection = useRef(0);
+  // Unity's selection counter as last reconciled with ours; a change seen while our own select is unsettled
+  // stays unreconciled so a later poll still adopts it.
+  const unitySelection = useRef<number | null>(null);
+  // The last local selection may not have reached Unity: its post was dropped or aborted by an effect restart.
+  const unsynced = useRef(false);
   // Bumped by a selection the user (here or in Unity) made, not by a write selecting its own result.
   const selectionMoves = useRef(0);
   // Bumped when queued writes must not run any more (new Unity epoch, disconnect, editor off, unmount).
   const writeGeneration = useRef(0);
+  const writeSeq = useRef(0);
+  const errorSource = useRef(new WeakMap<SceneWriteError, { route: string; id: unknown; seq: number }>());
   const deleting = useRef(new Set<number>());
   // The version key each view was last loaded at; null = loaded before any version was known.
   const treeLoaded = useRef<string | null>(null);
@@ -102,6 +112,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   useEffect(() => {
     writeGeneration.current += 1;
     version.current = null; hasTree.current = false; selected.current = null;
+    unitySelection.current = null; unsynced.current = false;
     compiling.current = false; needsInspection.current = false;
     treeLoaded.current = null; inspectLoaded.current = null;
     treeBackoff.current = fresh(); inspectBackoff.current = fresh();
@@ -175,15 +186,23 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     const postSelection = (id: number | null) => {
       const request = controller('select');
       selectionPending = true;
+      const settle = () => { if (requests.get('select') === request) selectionPending = false; };
+      const timeout = setTimeout(() => { request.abort(); settle(); }, SELECT_TIMEOUT);
       void fetch(`${api}/scene-editor/select`, {
         method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }), signal: request.signal,
-      }).catch(() => {}).finally(() => { if (requests.get('select') === request) selectionPending = false; });
+      }).catch(() => {}).finally(() => { clearTimeout(timeout); settle(); });
     };
     const selectSync = coalesce(postSelection);
     const inspectSync = coalesce<number | null>(id => { void getInspection(id); });
     const owner: Runtime = { inspect: inspectSync.call, select: selectSync.call, poll: () => { void poll(); } };
     runtime.current = owner;
+    const adopt = (id: number | null) => {
+      selectionMoves.current += 1;
+      selected.current = id; setSelectedId(id); setInspection(null);
+      inspectBackoff.current = fresh();
+      void getInspection(id);
+    };
     // No load before the first version: a load without a key could be stamped current after Unity changed
     // during it (audit verify-f1). The immediate poll below fetches the tree and the inspection with their keys.
     let polling = false;
@@ -194,6 +213,8 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       polling = true; again = false;
       const request = controller('version');
       const selectionAtStart = localSelection.current;
+      // A version read while our select was unsettled may predate it, so it must not override it.
+      const settledAtStart = !selectionPending && !selectSync.busy();
       try {
         const response = await fetch(`${api}/scene-editor/version`, { headers, signal: request.signal });
         if (!response.ok) throw response.status;
@@ -203,7 +224,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         compiling.current = next.compiling;
         setStale(next.compiling);
         if (next.compiling) {
-          if (version.current === null) version.current = next;
+          if (version.current === null) { version.current = next; unitySelection.current = next.selection; }
           return;
         }
         const previous = version.current;
@@ -211,13 +232,13 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         if (previous && previous.epoch !== next.epoch) {
           treeBackoff.current = fresh(); inspectBackoff.current = fresh();
           // Ids from the old epoch mean nothing now: writes still waiting are dropped.
-          writeGeneration.current += 1; deleting.current.clear();
+          writeGeneration.current += 1; deleting.current.clear(); setWriteError(null);
         }
-        if (previous && previous.selection !== next.selection && !selectionPending && !selectSync.busy() && selectionAtStart === localSelection.current && next.selectedId !== selected.current) {
-          selectionMoves.current += 1;
-          selected.current = next.selectedId; setSelectedId(next.selectedId); setInspection(null);
-          inspectBackoff.current = fresh();
-          void getInspection(next.selectedId);
+        if (unitySelection.current === null) unitySelection.current = next.selection;
+        else if (unitySelection.current !== next.selection && settledAtStart && !selectionPending && !selectSync.busy()
+          && selectionAtStart === localSelection.current) {
+          unitySelection.current = next.selection;
+          if (next.selectedId !== selected.current) adopt(next.selectedId);
         }
         // A view counts as current only after its refetch succeeded; a failed one is retried (after backoff).
         // A load whose key is null (a selection made before the first version) is never stamped current,
@@ -234,10 +255,15 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         if (again && alive) void poll();
       }
     };
+    // Sent before the first poll so that poll cannot adopt Unity's older selection over the user's last one.
+    if (unsynced.current) { unsynced.current = false; selectSync.call(selected.current); }
     void poll();
     const timer = setInterval(() => { void poll(); }, 1000);
     return () => {
-      alive = false; clearInterval(timer); selectSync.cancel(); inspectSync.cancel();
+      alive = false; clearInterval(timer);
+      if (selectionPending || selectSync.waiting()) unsynced.current = true;
+      if (inspectSync.waiting()) needsInspection.current = true;
+      selectSync.cancel(); inspectSync.cancel();
       for (const request of requests.values()) request.abort();
       if (runtime.current === owner) runtime.current = null;
     };
@@ -272,12 +298,16 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   }, [api, token, dropCreateMenu]);
   // Writes run in order, one at a time: one pressed while another is in flight waits for it instead of
   // being dropped. A success polls at once instead of waiting for the next tick.
-  // `replaces` is the error a retry answers: its success clears that error and no other.
+  // `replaces` is the error a retry answers: its success clears that error and no other. A fresh success
+  // also clears an older error it supersedes (same route on the same object, or a delete of that object), so
+  // that error's Retry cannot replay an outdated edit over it.
   const write = useCallback(<T,>(route: string, body: unknown, done: (data: T) => void, replaces?: SceneWriteError): Promise<T | null> => {
     if (!token) return Promise.resolve(null);
     if (queued.current >= MAX_QUEUED) { setWriteError({ code: 'busy' }); return Promise.resolve(null); }
     queued.current += 1;
     const generation = writeGeneration.current;
+    const seq = ++writeSeq.current;
+    const id = (body as { id?: unknown } | null)?.id;
     const run = async (): Promise<T | null> => {
       try {
         if (generation !== writeGeneration.current) return null;
@@ -289,11 +319,17 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
           if (result.code === 'invalid_item') { dropCreateMenu(); menuRequest.current = ''; setCreateMenu({ state: 'idle' }); }
           if (unsure) runtime.current?.poll();
           const error: SceneWriteError = { code: result.code, unsure };
-          if (!FINAL.has(result.code) && !unsure) error.retry = () => { void write(route, body, done, error); };
+          // A retry from before a Unity reload would send old-epoch ids to the new scene.
+          if (!FINAL.has(result.code) && !unsure) error.retry = () => { if (generation === writeGeneration.current) void write(route, body, done, error); };
+          errorSource.current.set(error, { route, id, seq });
           setWriteError(error);
           return null;
         }
         if (replaces) setWriteError(current => current === replaces ? null : current);
+        else if (id !== undefined) setWriteError(current => {
+          const source = current && errorSource.current.get(current);
+          return source && source.seq < seq && source.id === id && (source.route === route || route === 'delete') ? null : current;
+        });
         done(result.data);
         runtime.current?.poll();
         return result.data;
