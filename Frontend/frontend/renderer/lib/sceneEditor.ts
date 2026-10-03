@@ -42,7 +42,7 @@ export interface SceneField {
   range?: { min: number; max: number } | number[]; readonly: boolean; tooltip?: string;
 }
 export interface ComponentGroup {
-  type: string; label: string; componentId: number; enabled: boolean | null; removable: boolean; fields: SceneField[];
+  type: string; label: string; componentId: number | null; enabled: boolean | null; removable: boolean; fields: SceneField[];
 }
 export interface Inspection {
   node: { id: number; name: string; activeSelf: boolean; tag: string; layer: { index: number; name: string }; isStatic: boolean; prefab: PrefabKind; globalId: string };
@@ -50,4 +50,6 @@ export interface Inspection {
 }
 export interface SceneVersion {
   epoch: string | number; scene: number; selection: number; selectedId: number | null; playing: boolean; compiling: boolean;
+  /** Structural and property counters; older Unity packages omit them, then `scene` stands in for both. */
+  hierarchy?: number; props?: number;
 }

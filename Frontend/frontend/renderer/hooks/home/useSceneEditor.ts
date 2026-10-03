@@ -7,6 +7,18 @@ interface Options {
   hierarchyVisible: boolean; inspectorVisible: boolean;
 }
 interface Runtime { inspect: (id: number | null) => void; select: (id: number | null) => void }
+type Backoff = { failures: number; until: number };
+
+// A failing endpoint waits 1, 2, 4 ... 30 s between attempts instead of retrying on every poll.
+const MAX_BACKOFF = 30_000;
+const fresh = (): Backoff => ({ failures: 0, until: 0 });
+const failed = (backoff: Backoff) => {
+  backoff.failures += 1;
+  backoff.until = Date.now() + Math.min(1000 * 2 ** (backoff.failures - 1), MAX_BACKOFF);
+};
+// Older Unity packages send only `scene`, which then stands in for the split counters.
+const treeKey = (v: SceneVersion) => `${v.epoch}|${v.hierarchy ?? v.scene}`;
+const inspectKey = (v: SceneVersion) => `${treeKey(v)}|${v.props ?? v.scene}`;
 
 export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVisible, inspectorVisible }: Options) {
   const [visible, setVisible] = useState(() => typeof document !== 'undefined' && document.visibilityState === 'visible');
@@ -26,6 +38,11 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   const compiling = useRef(false);
   const needsInspection = useRef(false);
   const localSelection = useRef(0);
+  // The version key each view was last loaded at; null = loaded before any version was known.
+  const treeLoaded = useRef<string | null>(null);
+  const inspectLoaded = useRef<string | null>(null);
+  const treeBackoff = useRef(fresh());
+  const inspectBackoff = useRef(fresh());
   const active = editorOn && unityStatus === 'connected' && (hierarchyVisible || inspectorVisible) && visible && !!token;
 
   useEffect(() => {
@@ -37,6 +54,8 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   useEffect(() => {
     version.current = null; hasTree.current = false; selected.current = null;
     compiling.current = false; needsInspection.current = false;
+    treeLoaded.current = null; inspectLoaded.current = null;
+    treeBackoff.current = fresh(); inspectBackoff.current = fresh();
     setTree(null); setInspection(null); setSelectedId(null); setStale(false);
     setError(null); setVersionError(null); setInspectError(null);
   }, [api, token, editorOn, unityStatus]);
@@ -54,7 +73,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       const next = new AbortController(); requests.set(key, next); return next;
     };
     const headers = { 'X-Session-Token': token! };
-    const getTree = async () => {
+    const getTree = async (key: string | null) => {
       const request = controller('tree');
       treePending = true;
       setLoading(!hasTree.current);
@@ -63,15 +82,18 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         if (!response.ok) throw response.status;
         const data: SceneTree = await response.json();
         if (!alive || request.signal.aborted || compiling.current) return;
-        hasTree.current = true; setTree(data); setError(null);
+        hasTree.current = true; treeLoaded.current = key; treeBackoff.current = fresh();
+        setTree(data); setError(null);
       } catch (failure) {
-        if (alive && !request.signal.aborted) setError(typeof failure === 'number' ? failure : 502);
+        if (!alive || request.signal.aborted) return;
+        failed(treeBackoff.current);
+        setError(typeof failure === 'number' ? failure : 502);
       } finally {
         if (requests.get('tree') === request) treePending = false;
         if (alive && !request.signal.aborted) setLoading(false);
       }
     };
-    const getInspection = async (id: number | null) => {
+    const getInspection = async (id: number | null, key = version.current && inspectKey(version.current)) => {
       const request = controller('inspect');
       if (id === null) { needsInspection.current = false; inspectPending = false; setInspection(null); setInspectError(null); setInspectLoading(false); return; }
       needsInspection.current = true;
@@ -83,14 +105,18 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         if (!response.ok) throw response.status;
         const data: Inspection = await response.json();
         if (alive && !request.signal.aborted && !compiling.current && selected.current === id) {
-          needsInspection.current = false; setInspection(data); setInspectError(null);
+          needsInspection.current = false; inspectLoaded.current = key; inspectBackoff.current = fresh();
+          setInspection(data); setInspectError(null);
         }
       } catch (failure) {
         if (!alive || request.signal.aborted || selected.current !== id) return;
         if (failure === 404) {
-          needsInspection.current = false;
+          needsInspection.current = false; inspectBackoff.current = fresh();
           selected.current = null; setSelectedId(null); setInspection(null); setInspectError(null);
-        } else setInspectError(typeof failure === 'number' ? failure : 502);
+        } else {
+          failed(inspectBackoff.current);
+          setInspectError(typeof failure === 'number' ? failure : 502);
+        }
       } finally {
         if (requests.get('inspect') === request) inspectPending = false;
         if (alive && !request.signal.aborted) setInspectLoading(false);
@@ -106,7 +132,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     };
     const owner: Runtime = { inspect: id => { void getInspection(id); }, select: postSelection };
     runtime.current = owner;
-    if (!hasTree.current && !compiling.current) void getTree();
+    if (!hasTree.current && !compiling.current) void getTree(version.current && treeKey(version.current));
     if (selected.current !== null) void getInspection(selected.current);
     let polling = false;
     const poll = async () => {
@@ -127,14 +153,21 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
           return;
         }
         const previous = version.current;
-        const changed = previous !== null && (previous.epoch !== next.epoch || previous.scene !== next.scene);
-        if (changed || (!hasTree.current && !treePending)) void getTree();
-        if (changed || (needsInspection.current && !inspectPending)) void getInspection(selected.current);
+        version.current = next;
+        if (previous && previous.epoch !== next.epoch) { treeBackoff.current = fresh(); inspectBackoff.current = fresh(); }
         if (previous && previous.selection !== next.selection && !selectionPending && selectionAtStart === localSelection.current && next.selectedId !== selected.current) {
           selected.current = next.selectedId; setSelectedId(next.selectedId); setInspection(null);
+          inspectBackoff.current = fresh();
           void getInspection(next.selectedId);
         }
-        version.current = next;
+        // A view counts as current only after its refetch succeeded; a failed one is retried (after backoff).
+        const now = Date.now();
+        const treeAt = treeKey(next), inspectAt = inspectKey(next);
+        if (hasTree.current && treeLoaded.current === null) treeLoaded.current = treeAt;
+        if (!treePending && (!hasTree.current || treeLoaded.current !== treeAt) && now >= treeBackoff.current.until) void getTree(treeAt);
+        if (selected.current !== null && !needsInspection.current && inspectLoaded.current === null) inspectLoaded.current = inspectAt;
+        if (selected.current !== null && !inspectPending && (needsInspection.current || inspectLoaded.current !== inspectAt)
+          && now >= inspectBackoff.current.until) void getInspection(selected.current, inspectAt);
       } catch (failure) {
         if (alive && !request.signal.aborted) setVersionError(typeof failure === 'number' ? failure : 502);
       } finally { polling = false; }
@@ -149,7 +182,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   }, [active, api, token]);
 
   const select = useCallback((id: number | null) => {
-    localSelection.current += 1; selected.current = id;
+    localSelection.current += 1; selected.current = id; inspectBackoff.current = fresh();
     setSelectedId(id); setInspection(null); setInspectError(null);
     runtime.current?.select(id); runtime.current?.inspect(id);
   }, []);

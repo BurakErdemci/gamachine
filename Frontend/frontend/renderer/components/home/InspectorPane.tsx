@@ -7,6 +7,8 @@ const Checkbox = ({ checked, label }: { checked: boolean; label: string }) => (
   <input className="f-bool" type="checkbox" checked={checked} disabled aria-label={label} />
 );
 const optionLabel = (option: NonNullable<SceneField['options']>[number]) => typeof option === 'string' ? option : option.label;
+// Unity sends the full type name (UnityEngine.Transform).
+const isTransform = (type: string) => /^(UnityEngine\.)?(Rect)?Transform$/.test(type);
 
 function Field({ field }: { field: SceneField }) {
   const { t } = useLang();
@@ -18,8 +20,9 @@ function Field({ field }: { field: SceneField }) {
       const input = <input className={`f-in${field.kind !== 'string' ? ' f-num' : ''}`} aria-label={field.label} readOnly
         value={value == null ? '' : String(value)} />;
       const range = field.range;
-      content = range && field.kind !== 'string' ? <span className="f-sl"><input type="range" disabled aria-label={field.label}
-        min={Array.isArray(range) ? range[0] : range.min} max={Array.isArray(range) ? range[1] : range.max} value={Number(value)} />{input}</span> : input;
+      // Unity serialises NaN and Infinity as strings; they stay text, never a NaN slider value.
+      content = range && field.kind !== 'string' && typeof value === 'number' && Number.isFinite(value) ? <span className="f-sl"><input type="range" disabled aria-label={field.label}
+        min={Array.isArray(range) ? range[0] : range.min} max={Array.isArray(range) ? range[1] : range.max} value={value} />{input}</span> : input;
       break;
     }
     case 'vec2': case 'vec3': case 'vec4': {
@@ -59,7 +62,7 @@ function Field({ field }: { field: SceneField }) {
 
 function Group({ group, many }: { group: ComponentGroup; many: boolean }) {
   const { t } = useLang();
-  const [open, setOpen] = useState(!many || group.type === 'Transform' || group.type === 'RectTransform');
+  const [open, setOpen] = useState(!many || isTransform(group.type));
   if (group.type === 'missing') return <section className="cmp cmp-missing" role="note"><span aria-hidden="true">⚠ </span><span>{t('sceneEditor.missingScript')}</span></section>;
   return <section className={`cmp${!open ? ' is-shut' : ''}${group.enabled === false ? ' is-disabled' : ''}`}>
     <header className="cmp-head">
@@ -91,7 +94,7 @@ export const InspectorPane = ({ inspection, loading, error, stale }: {
           <label className="ih-static"><Checkbox checked={node.isStatic} label="Static" />Static</label>
         </div>
       </header>
-      <div className="insp-comps">{inspection.groups.map(group => <Group key={`${node.id}-${group.componentId}`} group={group} many={inspection.groups.length > 6} />)}</div>
+      <div className="insp-comps">{inspection.groups.map((group, index) => <Group key={`${node.id}-${group.componentId ?? 'missing'}-${index}`} group={group} many={inspection.groups.length > 6} />)}</div>
       {inspection.truncated && <p className="ws-note insp-truncated">{t('sceneEditor.inspectTruncated')}</p>}
     </>}
   </div>;

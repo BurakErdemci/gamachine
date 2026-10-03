@@ -45,6 +45,7 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
       }
     }
     const rows: Row[] = [];
+    const paths = new Map<number, string>();
     const visited = new Set<number>();
     const assignedRoots = new Set(tree?.scenes.flatMap(scene => scene.rootIds));
     for (const scene of tree?.scenes ?? []) {
@@ -56,7 +57,7 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
       while (stack.length) {
         const row = stack.pop()!;
         if (visited.has(row.node.id)) continue;
-        visited.add(row.node.id); all.push(row);
+        visited.add(row.node.id); all.push(row); paths.set(row.node.id, row.path);
         const descendants = children.get(row.node.id) ?? [];
         for (let i = descendants.length - 1; i >= 0; i--) stack.push({ node: descendants[i], depth: row.depth + 1, path: scene.path });
       }
@@ -70,10 +71,13 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
         if (!(expanded[row.path]?.[row.node.id] ?? row.depth === 0)) hiddenBelow = row.depth;
       }
     }
-    return { rows, nodes, children };
+    return { rows, nodes, children, paths };
   }, [tree, filter, expanded]);
   const nodeRows = useMemo(() => model.rows.filter((row): row is TreeRow => 'node' in row), [model.rows]);
-  const currentId = cursor ?? selectedId ?? nodeRows[0]?.node.id ?? null;
+  // A selection hidden by a filter or a collapsed ancestor cannot anchor the keyboard.
+  const selectedRow = selectedId !== null && nodeRows.some(row => row.node.id === selectedId) ? selectedId : null;
+  const currentId = cursor ?? selectedRow ?? nodeRows[0]?.node.id ?? null;
+  const revealed = useRef<number | null>(null);
   const isOpen = (row: TreeRow) => !!filter || (expanded[row.path]?.[row.node.id] ?? row.depth === 0);
   const toggle = (row: TreeRow, open = !isOpen(row)) => setExpanded(previous => ({
     ...previous, [row.path]: { ...previous[row.path], [row.node.id]: open },
@@ -104,6 +108,20 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
   useEffect(() => {
     if (cursor !== null && !nodeRows.some(row => row.node.id === cursor)) setCursor(null);
   }, [nodeRows, cursor]);
+  // Open the ancestors of a newly selected object once (selected in Unity or elsewhere in the app);
+  // collapsing one afterwards is left alone.
+  useEffect(() => {
+    if (selectedId === null) { revealed.current = null; return; }
+    const path = model.paths.get(selectedId);
+    if (revealed.current === selectedId || path === undefined) return;
+    revealed.current = selectedId;
+    const open: Record<number, boolean> = {};
+    const seen = new Set<number>();
+    for (let id = model.nodes.get(selectedId)?.parentId ?? null; id !== null && !seen.has(id); id = model.nodes.get(id)?.parentId ?? null) {
+      seen.add(id); open[id] = true;
+    }
+    if (Object.keys(open).length) setExpanded(previous => ({ ...previous, [path]: { ...previous[path], ...open } }));
+  }, [selectedId, model]);
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     const index = nodeRows.findIndex(row => row.node.id === currentId);

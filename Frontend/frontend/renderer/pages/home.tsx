@@ -76,7 +76,7 @@ import { GuideTour } from '../components/home/GuideTour';
 import { useGuide, type GuideHost } from '../hooks/home/useGuide';
 import { capabilities } from '../lib/guide/capabilities';
 import { parseGuideCommand } from '../lib/guide/command';
-import { wants, type PrepareHandlers } from '../lib/guide/prepare';
+import { guideWorkspaceTab, wants, type PrepareHandlers } from '../lib/guide/prepare';
 import type { WsTab, WsWidth } from '../lib/workspacePanel';
 
 // The guide's prepare-action arguments (REHBER-KAYITLARI.md section 4) in this app's own ids.
@@ -696,7 +696,7 @@ export default function Home() {
       if (a === 'new_chat' && !isChatEmpty(chat.activeConvId, chat.messages.length, chat.loading, !!mcp.activeGate)) guideGoTo(null);
     },
     settings: (page) => openSettings(GUIDE_SETTINGS[page]),
-    'workspace.tab': (tab) => { setWsOpen(true); setWsTab(GUIDE_TABS[tab]); },
+    'workspace.tab': (tab) => { setWsOpen(true); setWsTab(GUIDE_TABS[guideWorkspaceTab(tab, editorOn)]); },
     'workspace.width': (w) => { setWsOpen(true); ws.setWidth(GUIDE_WIDTHS[w]); },
     'workspace.peek': () => { if (!ws.open) { guidePeekRef.current = true; setWsOpen(true); } },
     // No "most recent asset" list exists: the Preview tab shows what is open, or its empty state.

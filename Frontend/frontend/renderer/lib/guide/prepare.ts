@@ -51,3 +51,9 @@ export function runPrepare(prep: readonly string[], h: PrepareHandlers): void {
     (h[key as keyof PrepareHandlers] as (a: string | null) => void)(arg);
   }
 }
+
+type WorkspaceTab = Parameters<PrepareHandlers['workspace.tab']>[0];
+/** With the scene editor on, the Scene tab holds the Inspector and the changed-files block
+ *  (the only thing a `workspace.tab:scene` step points at) moves to Files. */
+export const guideWorkspaceTab = (tab: WorkspaceTab, editorOn: boolean): WorkspaceTab =>
+  tab === 'scene' && editorOn ? 'files' : tab;
