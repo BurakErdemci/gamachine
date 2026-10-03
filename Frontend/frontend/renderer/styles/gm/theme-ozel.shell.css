@@ -370,7 +370,8 @@
 [data-theme="ozel"] .gd-list { grid-template-columns: 1fr 1fr; gap: 0 24px; }
 [data-theme="ozel"] .gd-topic { min-height: 0; padding: 11px 64px 11px 0; background: transparent; border: 0; border-bottom: 1px solid var(--paper-line); border-radius: 0; box-shadow: none; }
 [data-theme="ozel"] .gd-topic:hover { background: transparent; }
-[data-theme="ozel"] .gd-topic:hover .gd-t-title { color: var(--accent-text); }
+/* orange means only "waiting on you"; a hovered topic takes the user's accent */
+[data-theme="ozel"] .gd-topic:hover .gd-t-title { color: var(--oz-acc-text); }
 [data-theme="ozel"] .gd-t-title { font-size: 14.5px; font-weight: 600; padding-right: 0; }
 [data-theme="ozel"] .gd-t-meta { position: absolute; right: 0; top: 12px; width: auto; margin: 0; padding: 0; }
 [data-theme="ozel"] .gd-t-play { display: none; }
@@ -378,6 +379,9 @@
 [data-theme="ozel"] .gd-topic .gd-new { position: absolute; right: 0; top: 12px; }
 [data-theme="ozel"] .gd-topic:has(.gd-new) .gd-t-meta { top: 32px; }
 [data-theme="ozel"] .gd-core { background: transparent; border: 1px solid var(--paper-line); border-radius: 8px; }
+/* dark tone: the guide page sits one grey step off black, its card one step above it (owner, 3 Oct) */
+:root[data-theme="ozel"][data-u-tone="dark"] .guide { background: var(--oz-1); }
+:root[data-theme="ozel"][data-u-tone="dark"] .gd-core { background: var(--oz-2); }
 
 /* ================= welcome: one list of projects; the figure waves (round 15b) ================= */
 [data-theme="ozel"] .wl-title { font-size: 34px; font-weight: 600; letter-spacing: -.01em; }
