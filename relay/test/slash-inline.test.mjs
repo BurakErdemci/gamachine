@@ -123,7 +123,7 @@ test('tap selects a command with one trailing space and retains composer focus',
   const p = page();
   await p.input('/re');
   await p.buttons()[0].dispatch('click').done;
-  assert.equal(p.box.value, '/review ');
+  assert.equal(p.box.value, 'Review the current changes. ');
   assert.equal(p.panel.hidden, true);
   assert.equal(p.document.activeElement, p.box);
   assert.equal(p.box.selectionStart, p.box.value.length);
@@ -145,7 +145,7 @@ test('arrow keys wrap the active item; Enter and Tab select without sending', as
   assert.equal(p.calls.some((call) => call.type === 'send_message'), false);
   await p.input('/re');
   assert.equal(p.key('Tab').event.defaultPrevented, true);
-  assert.equal(p.box.value, '/review ');
+  assert.equal(p.box.value, 'Review the current changes. ');
   assert.equal(p.panel.hidden, true);
   await p.input('/unknown');
   assert.equal(p.key('Enter').event.defaultPrevented, false);
@@ -175,8 +175,8 @@ test('the slash shortcut inserts into an empty box and preserves existing text',
   assert.deepEqual(p.names(), ['/compact']);
   await p.input('draft');
   await p.shortcut.dispatch('click').done;
-  assert.equal(p.box.value, 'draft');
-  assert.equal(p.panel.hidden, true);
+  assert.equal(p.box.value, 'draft /');
+  assert.equal(p.panel.hidden, false);
   assert.equal(p.document.activeElement, p.box);
 });
 

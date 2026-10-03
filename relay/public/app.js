@@ -562,6 +562,7 @@ const slashCache = new Map(); // chat id -> { at, items }
 const slashPending = new Map();
 let slashShown = [];
 let slashActive = 0;
+let slashDraftStart = null;
 
 function closeSlash() {
   $('slash-panel').hidden = true;
@@ -569,6 +570,14 @@ function closeSlash() {
   $('composer-text').setAttribute('aria-expanded', 'false');
   $('composer-text').removeAttribute('aria-activedescendant');
   slashShown = [];
+  slashDraftStart = null;
+}
+
+function slashQuery() {
+  const value = $('composer-text').value;
+  if (slashDraftStart === null) return value;
+  const start = value.lastIndexOf(' /');
+  return start === slashDraftStart ? value.slice(start + 1) : '';
 }
 
 function renderSlash() {
@@ -582,7 +591,7 @@ function renderSlash() {
   }
   const cached = slashCache.get(view.shown);
   if (!cached) return;
-  const { shown, total } = filterSlash(cached.items, $('composer-text').value);
+  const { shown, total } = filterSlash(cached.items, slashQuery());
   slashShown = shown;
   slashActive = Math.min(slashActive, Math.max(0, shown.length - 1));
   for (const [index, item] of shown.entries()) {
@@ -600,14 +609,15 @@ function renderSlash() {
 
 function pickSlash(item) {
   const box = $('composer-text');
-  box.value = withCommand('', '/' + item.name + ' ');
+  box.value = slashDraftStart === null ? withCommand(box.value, item.insert)
+    : box.value.slice(0, slashDraftStart) + ' ' + item.insert;
   closeSlash();
   box.focus();
   box.setSelectionRange(box.value.length, box.value.length);
 }
 
 async function updateSlash() {
-  const value = $('composer-text').value;
+  const value = slashQuery();
   const chatId = view.shown;
   if (!chatId || !value.startsWith('/') || /\s/.test(value)) {
     closeSlash();
@@ -640,8 +650,16 @@ async function updateSlash() {
 
 function startSlash() {
   const box = $('composer-text');
-  if (!box.value) box.value = '/';
+  if (!box.value.trim()) {
+    slashDraftStart = null;
+    box.value = '/';
+  } else if (slashDraftStart === null && !/^\/\S*$/.test(box.value)) {
+    box.value = box.value.replace(/\s+$/, '');
+    slashDraftStart = box.value.length;
+    box.value += ' /';
+  }
   box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
   return updateSlash();
 }
 
@@ -956,6 +974,7 @@ function wire() {
       setText(note, () => t('send.tooLong', { max: SEND_TEXT_MAX }));
       return;
     }
+    closeSlash();
     $('btn-send').disabled = true;
     setText(note, () => t('send.sending'));
     try {
