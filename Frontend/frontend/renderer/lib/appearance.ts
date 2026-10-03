@@ -1,6 +1,7 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { applyOzel, clearOzel } from './ozelTheme'
 
-export type Theme = 'arena' | 'sade' | 'pafta' | 'atolye'
+export type Theme = 'arena' | 'sade' | 'pafta' | 'atolye' | 'ozel'
 export type ReadingFont = 'theme' | 'inter' | 'geist' | 'plex-sans' | 'figtree' | 'atkinson'
 export type CodeFont = 'theme' | 'jetbrains' | 'geist-mono' | 'plex-mono' | 'fira' | 'cascadia'
 export type TextSize = 'small' | 'normal' | 'large'
@@ -21,7 +22,7 @@ export const FONT_STACKS = {
 } as const
 export const ZOOM_FACTORS: Record<TextSize, number> = { small: 0.9, normal: 1, large: 1.1 }
 
-export const THEMES: readonly Theme[] = ['arena', 'sade', 'pafta', 'atolye']
+export const THEMES: readonly Theme[] = ['arena', 'sade', 'pafta', 'atolye', 'ozel']
 export const READING_FONTS: readonly ReadingFont[] = ['theme', 'inter', 'geist', 'plex-sans', 'figtree', 'atkinson']
 export const CODE_FONTS: readonly CodeFont[] = ['theme', 'jetbrains', 'geist-mono', 'plex-mono', 'fira', 'cascadia']
 export const TEXT_SIZES: readonly TextSize[] = ['small', 'normal', 'large']
@@ -64,6 +65,15 @@ export function saveAppearance(a: Appearance, storage?: Writer): void {
 
 export function applyAppearance(a: Appearance, root = document.documentElement): void {
   root.dataset.theme = a.theme
+  if (a.theme === 'ozel') {
+    // Özel derives every font role itself (lib/ozelTheme.ts); the picks feed its long-answer and code fonts.
+    applyOzel(root, {
+      reading: a.readingFont === 'theme' ? null : FONT_STACKS[a.readingFont],
+      code: a.codeFont === 'theme' ? null : FONT_STACKS[a.codeFont],
+    })
+    return
+  }
+  clearOzel(root)
   if (a.readingFont === 'theme') root.style.removeProperty('--font-body')
   else root.style.setProperty('--font-body', FONT_STACKS[a.readingFont])
   if (a.codeFont === 'theme') root.style.removeProperty('--font-mono')

@@ -199,7 +199,7 @@ describe('settings mapping · old modal -> new pages', () => {
 
   it('General tab theme / fonts / text size / intro -> Görünüm', () => {
     render(<AppearanceProvider><SettingsScreen {...base({ page: 'gorunum' })} /></AppearanceProvider>)
-    expect(screen.getAllByRole('radio').filter(r => r.classList.contains('theme-card'))).toHaveLength(4)
+    expect(screen.getAllByRole('radio').filter(r => r.classList.contains('theme-card'))).toHaveLength(5)
     expect(screen.getByRole('combobox', { name: cevir('settings.appearance.readingFont') })).toBeTruthy()
     expect(screen.getByRole('combobox', { name: cevir('settings.appearance.codeFont') })).toBeTruthy()
     expect(screen.getByRole('radiogroup', { name: cevir('settings.appearance.textSize') })).toBeTruthy()

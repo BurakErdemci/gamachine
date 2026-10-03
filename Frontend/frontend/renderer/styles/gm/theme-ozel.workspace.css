@@ -1,0 +1,11 @@
+/* Özel on the workspace (theme-sade.workspace.css, renamed): plain tabs, a hairline width control,
+   the pending strip and its buttons in the IDE's own grammar. Tokens only; the scene editor's
+   selection edge is the user's accent (--hier-selection-edge in theme-ozel.shell.css). */
+[data-theme="ozel"] .ws-tab { font-weight: 500; }
+[data-theme="ozel"] .ws-tab[aria-selected="true"]::after { height: 1px; }
+[data-theme="ozel"] .ws-widths { border-color: var(--oz-card-line); }
+[data-theme="ozel"] .ws-w[aria-pressed="true"] { box-shadow: none; background: var(--paper-sunk); }
+[data-theme="ozel"] .ws-pending { border-bottom-width: 1px; }
+[data-theme="ozel"] .ws-pending .btn { height: 28px; font-weight: 500; border-radius: var(--radius-sm); }
+[data-theme="ozel"] .pv-pick[aria-selected="true"] { box-shadow: inset 0 0 0 1px var(--oz-card-line); }
+[data-theme="ozel"] .tag-del { color: var(--oz-err-text); background: var(--oz-err-soft); border-color: var(--oz-err); }

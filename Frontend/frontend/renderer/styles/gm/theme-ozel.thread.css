@@ -1,0 +1,113 @@
+/* Özel thread + profile touches: theme-sade.thread.css and profile.css's Sade block, renamed, with the
+   round 15b mascot back (empty chat figure, achievement band head, profile badge) and Özel's own rules
+   (long-answer font and measure, the quiet approval signature). Tokens live in theme-ozel.shell.css. */
+
+/* ================= game ornaments off (same DOM) ================= */
+/* composer strip: effort and memory become thin lines */
+[data-theme="ozel"] .pips, [data-theme="ozel"] .energy { gap: 0; }
+[data-theme="ozel"] .pips i { width: 8px; height: 2px; border-radius: 0; }
+[data-theme="ozel"] .pips i + i { margin-left: 2px; }
+[data-theme="ozel"] .energy i { width: 4px; height: 2px; }
+[data-theme="ozel"] .energy i:first-child { border-radius: 1px 0 0 1px; }
+[data-theme="ozel"] .energy i:last-child { border-radius: 0 1px 1px 0; }
+[data-theme="ozel"] .composer { border-color: var(--oz-card-line); }
+[data-theme="ozel"] .composer:focus-within { border-color: var(--accent); }
+[data-theme="ozel"] .send { width: 32px; height: 32px; border-radius: var(--radius-sm); }
+/* mono is wider: the composer strip stays one line, its key hint gives way first */
+[data-theme="ozel"] .strip-item, [data-theme="ozel"] .strip-hint { white-space: nowrap; }
+[data-theme="ozel"] .strip-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* ================= Signature 1: APPROVAL CARD =================
+   Thin lines + the one status colour: a header line (orange dot + "Onayın gerekiyor"), the request in
+   plain words, the reason, two buttons. Decided cards collapse to a log line with a text status. */
+[data-theme="ozel"] .approval { border-color: var(--oz-card-line); border-radius: var(--radius-md); }
+[data-theme="ozel"] .approval[data-state="pending"] { border-color: var(--oz-pending-line); padding: 16px 20px; row-gap: 8px; }
+[data-theme="ozel"] .approval-mark { width: 7px; height: 7px; }
+[data-theme="ozel"] .approval-title { font-size: var(--fs-meta); font-weight: 500; }
+[data-theme="ozel"] .approval-name { font-size: 15px; font-weight: 600; line-height: 1.4; }
+[data-theme="ozel"] .approval[data-state="pending"] .approval-sentence { margin-top: -4px; font-size: 14px; }
+[data-theme="ozel"] .approval[data-state="pending"] .approval-why { color: var(--ink-faint); font-size: var(--fs-small); }
+[data-theme="ozel"] .approval[data-state="pending"] .approval-why .ic { color: var(--accent-text); }
+[data-theme="ozel"] .approval[data-state="pending"] .approval-title { color: var(--accent-text); }
+[data-theme="ozel"] .approval[data-state="pending"] .approval-mark { background: var(--accent); }
+[data-theme="ozel"] .approval .btn { height: 32px; padding: 0 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); gap: 6px; }
+[data-theme="ozel"] .approval .btn .ic { width: 15px; height: 15px; }
+[data-theme="ozel"] .btn-ghost { border-color: var(--oz-card-line); }
+/* no nudge: the waiting time is said in words instead */
+[data-theme="ozel"] .approval.is-nudging .approval-mark,
+[data-theme="ozel"] .approval.is-nudging .approval-kicker { animation: none; }
+[data-theme="ozel"] .approval.is-waiting .approval-wait { display: inline; color: var(--ink-faint); }
+/* decided: a log line; the stamp becomes a quiet status word */
+[data-theme="ozel"] .approval:not([data-state="pending"]) { padding: 10px 140px 10px 16px; background: transparent; }
+[data-theme="ozel"] .approval:not([data-state="pending"]) > .approval-sentence { font-size: 14px; }
+[data-theme="ozel"] .approval[data-state="approved"] .stamp,
+[data-theme="ozel"] .approval[data-state="rejected"] .stamp {
+  right: 16px; padding: 2px 8px; border: 1px solid var(--ok-soft); background: var(--ok-soft);
+  font-family: var(--font-body); font-size: var(--fs-meta); font-weight: 500; color: var(--ok-text);
+}
+[data-theme="ozel"] .approval[data-state="rejected"] .stamp { border-color: var(--paper-line-strong); background: transparent; color: var(--ink-dim); }
+[data-theme="ozel"] .approval[data-state="rejected"] .approval-sentence { text-decoration-color: var(--ink-faint); }
+/* decided cards recede: the record reads in ink-dim, regular weight */
+[data-theme="ozel"] .approval:not([data-state="pending"]) > .approval-sentence { color: var(--ink-dim); font-weight: 400; }
+
+/* ================= Signature 2: NOTIFICATION =================
+   The achievement band is a plain toast with the small mascot head (round 15b): no fuse, no XP. */
+[data-theme="ozel"] .achv {
+  grid-template-columns: 40px 1fr; column-gap: 12px; width: 320px; padding: 12px 16px 12px 12px; row-gap: 0;
+  border-radius: var(--radius-md);
+}
+[data-theme="ozel"] .achv-icon { width: 40px; height: 40px; border-radius: var(--radius-sm); }
+[data-theme="ozel"] .achv-icon .mascot { width: 30px; height: 30px; }
+[data-theme="ozel"] .achv-kicker { font-size: var(--fs-meta); }
+[data-theme="ozel"] .achv-title { font-size: 14px; font-weight: 500; }
+[data-theme="ozel"] .achv-sub { font-size: var(--fs-meta); color: var(--toast-text); }
+[data-theme="ozel"] .achv .xp { display: none; }
+[data-theme="ozel"] .achv-life { display: none; }
+
+/* ================= empty chat: the full mascot idles beside the greeting (round 15b) ================= */
+[data-theme="ozel"] .empty-hero { grid-template-columns: 150px 1fr; gap: 24px; }
+[data-theme="ozel"] .empty-head { display: none; }
+[data-theme="ozel"] .empty-mascot { display: block; width: 150px; height: auto; }
+
+[data-theme="ozel"] .has-error .composer { border-color: var(--oz-err); }
+[data-theme="ozel"] .composer-msg { color: var(--oz-err-text); }
+
+/* ================= long answers =================
+   Reading surfaces take --u-font-read: the UI font by default ("Arayüzle aynı", the owner's one-font
+   look), or the reading font when "Okuma yazı tipi" is picked. When answers are set in a monospace the
+   line is capped at 76 characters and the leading opens to 1.7 - a mono line of the full 720 px column
+   is ~85 characters, which is where long prose starts to tire. */
+[data-theme="ozel"] .msg-body { font-family: var(--u-font-read); }
+:root[data-theme="ozel"][data-u-mono] .msg-ai .msg-body { max-width: 76ch; line-height: 1.7; }
+:root[data-theme="ozel"][data-u-mono] .msg-body li + li { margin-top: 2px; }
+
+/* ================= profile: plain and premium; the mascot stays on the badge (round 15b) ================= */
+[data-theme="ozel"] .pf-mascot { right: -12px; bottom: -8px; width: 32px; height: 32px; }
+[data-theme="ozel"] .pf-wrap { gap: 16px; padding-top: 16px; }
+[data-theme="ozel"] .pf-head { grid-template-columns: auto 1fr 360px; gap: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--paper-line); }
+[data-theme="ozel"] .pf-emblem { width: 64px; height: 64px; }
+[data-theme="ozel"] .lvl-lg { width: 64px; height: 64px; border: 1px solid var(--oz-card-line); background: var(--paper-raised); color: var(--ink); clip-path: none; }
+[data-theme="ozel"] .lvl-lg .lvl-k { color: var(--ink-dim); }
+[data-theme="ozel"] .lvl-lg .lvl-n { font-size: 24px; font-weight: 600; }
+[data-theme="ozel"] .pf-name { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
+[data-theme="ozel"] .pf-rank { font-size: 14px; }
+[data-theme="ozel"] .xp-bar, [data-theme="ozel"] .xp-bar span { height: 4px; border-radius: 2px; background: var(--xp-off); transform: none; }
+[data-theme="ozel"] .xp-bar span { background: var(--xp); }
+[data-theme="ozel"] .pf-quip { border-left: 0; border: 1px solid var(--paper-line); border-radius: var(--radius-md); }
+[data-theme="ozel"] .pf-range { border-color: var(--oz-card-line); border-radius: var(--radius-sm); }
+[data-theme="ozel"] .pf-range button + button { border-left-color: var(--oz-card-line); }
+[data-theme="ozel"] .pf-range button[aria-selected="true"] { background: var(--paper-sunk); color: var(--ink); }
+[data-theme="ozel"] .pf-stat { border: 1px solid var(--paper-line); border-radius: var(--radius-md); padding: 12px 16px; clip-path: none; }
+[data-theme="ozel"] .pf-stat-v { font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
+[data-theme="ozel"] .pf-card { border-radius: var(--radius-md); }
+[data-theme="ozel"] .pf-h { font-size: 13px; font-weight: 600; }
+[data-theme="ozel"] .heat-facts dd { font-size: 16px; font-weight: 500; }
+[data-theme="ozel"] .heat-grid i, [data-theme="ozel"] .heat-legend i { border-radius: 3px; }
+[data-theme="ozel"] .mix { height: 6px; border-radius: 3px; overflow: hidden; }
+[data-theme="ozel"] .achv-tile { background: transparent; grid-template-columns: 36px 1fr; }
+[data-theme="ozel"] .achv-badge { width: 36px; height: 36px; border-radius: var(--radius-md); clip-path: none; }
+[data-theme="ozel"] .achv-prog { height: 2px; border-radius: 1px; }
+[data-theme="ozel"] .achv-prog span { border-radius: 1px; }
+@container (max-width: 1080px) {
+  [data-theme="ozel"] .pf-head { grid-template-columns: auto 1fr; }
+}

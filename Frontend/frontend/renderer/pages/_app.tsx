@@ -27,6 +27,11 @@ import '../styles/gm/guide.css'
 import '../styles/gm/welcome.css'
 import '../styles/gm/intro.css'
 import '../styles/gm/toast.css'
+// Last on purpose: Özel's rules (all under [data-theme="ozel"]) override base rules from every file
+// above, the way each Sade override follows its base rule inside the same file.
+import '../styles/gm/theme-ozel.shell.css'
+import '../styles/gm/theme-ozel.thread.css'
+import '../styles/gm/theme-ozel.workspace.css'
 import { IntroOverlay } from '../components/intro/IntroOverlay'
 import { ConfirmDialogHost } from '../components/ui/ConfirmDialog'
 import { ErrorBoundary } from '../components/ui/ErrorBoundary'

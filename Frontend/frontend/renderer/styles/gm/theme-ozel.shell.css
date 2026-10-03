@@ -1,0 +1,403 @@
+/* ÖZEL - the user's own theme (mockup round 15 / 15b, KARAKTER 17; ported from maket/theme-ozel.css).
+   - Skeleton = Sade's flat structure (the app's Sade rules from tokens.css, theme-sade.*.css, guide.css,
+     welcome.css, profile.css, toast.css, settings.css and scene-editor.css, renamed, palette removed).
+     Unlike Sade it keeps the logo and the animated mascot, drawn in the user's colours (round 15b).
+   - THE MODEL: lib/ozelTheme.ts writes exactly three colours (--u-bg, --u-fg, --u-accent) and the fonts
+     inline on :root; every surface, line and dim text below is derived from them with color-mix(in oklab).
+     No surface hex lives in these files. The same script writes data-u-tone / data-u-mid / data-u-acc /
+     data-u-mono / data-u-bad, because CSS cannot compare contrast.
+   - STATUS IS NOT A USER COLOUR: waiting on you = orange, running = blue, done = green, error = red,
+     warning = gold; a light and a dark set, picked by data-u-tone; under data-u-mid the words go to ink.
+   - THE ACCENT (--oz-acc) is the user's "my choice" colour; when it does not stand off the ground
+     (data-u-acc="off", Mono's #000 on #000) the foreground stands in for it.
+   Every rule here is scoped to [data-theme="ozel"]: the four character themes never see it.
+   The three theme-ozel.*.css files are imported last in pages/_app.tsx, so each rule follows the base
+   rule it overrides, as Sade's in-file overrides do. */
+
+/* ================= structure tokens (Sade's) ================= */
+:root[data-theme="ozel"] {
+  --shell-tex: none;
+  --panel-tex: none;
+  --shadow-btn: none;
+  --lamp-size: 60% 200px;
+
+  /* meters: thin lines, never segments */
+  --seg-skew: 0deg;
+  --label-rule: transparent;
+  --label-rule-paper: transparent;
+  --row-mark: transparent;
+  --tile-rule: transparent;
+  --tile-new-mark: transparent;
+  --hero-bg: transparent;
+  --hero-pad: 0;
+
+  /* type */
+  --who-case: none;
+  --who-track: 0;
+  --fs-body: 14px;
+  --lh-body: 1.6;
+  --fs-small: 13px;
+  --fs-meta: 12px;
+  --fs-title: 15px;
+  --label-case: none;
+  --label-track: 0;
+  --label-weight: 500;
+  --label-stretch: normal;
+  --btn-font: inherit;
+  --btn-case: none;
+  --btn-track: 0;
+
+  /* shape */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --clip-sm: none;
+  --clip-md: none;
+  --clip-badge: none;
+  --line-w: 1px;
+  --card-line-w: 1px;
+  --shadow-card: none;
+
+  /* motion: short, quiet, no overshoot */
+  --g-dur-tap: 90ms;
+  --g-dur-quick: 120ms;
+  --g-dur-base: 160ms;
+  --g-dur-slow: 160ms;
+  --g-ease-enter: cubic-bezier(.2, 0, 0, 1);
+  --g-ease-exit: cubic-bezier(.4, 0, 1, 1);
+  --g-ease-move: cubic-bezier(.4, 0, .2, 1);
+  --g-ease-press: cubic-bezier(.2, 0, 0, 1);
+  --dur-fast: 90ms;
+  --ease: cubic-bezier(.2, 0, 0, 1);
+  --dur-stamp: 120ms;
+  --stamp-ease: cubic-bezier(.2, 0, 0, 1);
+  --stamp-rotate: 0deg;
+  --stamp-from: 1;
+
+  /* Unity switch: flat and fully round, fixed bay (Sade round 9 sizes) */
+  --us-w: 72px;
+  --us-h: 36px;
+  --us-ic: 16px;
+  --us-bay-w: 372px;
+  --us-radius: 999px;
+  --us-knob-radius: 50%;
+  --us-knob-w: calc(var(--us-h) - 6px);
+  --us-bay-line: transparent;
+
+  /* settings (round 11): meters are thin lines */
+  --meter-h: 3px;
+  --meter-gap: 0px;
+
+  /* tour = coach marks; welcome = one list (round 12) */
+  --tour-bg: var(--paper-raised);
+  --tour-line: var(--paper-line-strong);
+  --tour-ring: var(--accent);
+  --tour-ring-w: 1.5px;
+  --tour-hole-radius: 8px;
+  --tour-pad: 6px;
+  --tour-gap: 14px;
+  --tour-radius: 8px;
+  --tour-shadow: none;
+  --tour-w: 340px;
+  --tour-dot: var(--paper-line-strong);
+  --tour-dot-on: var(--accent);
+  --wl-side-w: 420px;
+  --wl-card-bg: var(--paper-raised);
+
+  /* round 15b: the figures are on (Sade has none) */
+  --mascot-full: block;
+  --mascot-mini: none;
+  --tour-fig: block;
+  --tour-fig-w: 92px;
+  --tour-fig-toward: 0;     /* the figure stands on the far side: the caret still points at the target */
+  --tour-avatar: none;      /* the figure speaks; no second head in the box */
+
+  /* Faux bold off: a 600 request in a mono UI lands on a real face instead of a smeared one. */
+  font-synthesis-weight: none;
+}
+
+/* ================= the three user values (defaults = the Mono preset; the script overrides inline) ================= */
+:root[data-theme="ozel"] {
+  --u-bg: #000000;
+  --u-fg: #FFFFFF;
+  --u-accent: #000000;
+  --u-font-ui: "Geist Mono", ui-monospace, monospace;
+  --u-font-read: var(--u-font-ui);
+  --u-font-code: var(--u-font-ui);
+}
+
+/* ================= derived: the accent actually used ================= */
+:root[data-theme="ozel"] { --oz-acc: var(--u-accent); --oz-acc-text: var(--u-accent); }
+:root[data-theme="ozel"][data-u-acc="mark"] { --oz-acc-text: var(--u-fg); }
+:root[data-theme="ozel"][data-u-acc="off"] { --oz-acc: var(--u-fg); --oz-acc-text: var(--u-fg); }
+:root[data-theme="ozel"] {
+  /* black or white, whichever reads on the accent: oklab L 0.5636 = luminance 0.179, the point where
+     white and black text have equal contrast */
+  --oz-on-acc: oklch(from var(--oz-acc) clamp(0, (0.5636 - l) * 1000, 1) 0 0);
+  /* the same on the ground: the settings group's safe ink while the readability guard shows */
+  --oz-safe: oklch(from var(--u-bg) clamp(0, (0.5636 - l) * 1000, 1) 0 0);
+}
+
+/* ================= status: fixed pairs, picked by tone (not user colours) ================= */
+:root[data-theme="ozel"] {
+  --st-wait: #FF9D5C; --st-run: #6CB2FF; --st-ok: #5CCF8C; --st-err: #FF7A7A; --st-warn: #E8C35A;
+  --st-claude: #D9A27E; --st-codex: #B7BCC8; --st-gemini: #8DB3FF;
+}
+:root[data-theme="ozel"][data-u-tone="light"] {
+  --st-wait: #B0500C; --st-run: #1760C2; --st-ok: #1D7A42; --st-err: #C02A2A; --st-warn: #8A6400;
+  --st-claude: #A0582F; --st-codex: #5A6070; --st-gemini: #2F5FC4;
+}
+:root[data-theme="ozel"] {
+  --st-wait-text: var(--st-wait); --st-run-text: var(--st-run); --st-ok-text: var(--st-ok);
+  --st-err-text: var(--st-err); --st-warn-text: var(--st-warn);
+}
+/* mid-grey ground: no status hue reaches 4.5:1 as text, so words go to ink; the hue stays in marks */
+:root[data-theme="ozel"][data-u-mid] {
+  --st-wait-text: var(--u-fg); --st-run-text: var(--u-fg); --st-ok-text: var(--u-fg);
+  --st-err-text: var(--u-fg); --st-warn-text: var(--u-fg);
+}
+
+/* ================= derived: surfaces, lines, text ================= */
+:root[data-theme="ozel"] {
+  --oz-1: color-mix(in oklab, var(--u-fg) 3.5%, var(--u-bg));
+  --oz-2: color-mix(in oklab, var(--u-fg) 6%, var(--u-bg));
+  --oz-3: color-mix(in oklab, var(--u-fg) 10%, var(--u-bg));
+  --oz-4: color-mix(in oklab, var(--u-fg) 13%, var(--u-bg));
+  --oz-5: color-mix(in oklab, var(--u-fg) 22%, var(--u-bg));
+  --oz-dim: color-mix(in oklab, var(--u-fg) 84%, var(--u-bg));
+  --oz-faint: color-mix(in oklab, var(--u-fg) 72%, var(--u-bg));
+
+  --page-bg: var(--oz-1); --page-text: var(--u-fg); --page-text-dim: var(--oz-dim);
+  --shell-bg: var(--oz-1); --shell-bg-2: var(--oz-2); --shell-bg-active: var(--oz-3); --shell-line: var(--oz-4);
+  --shell-text: var(--u-fg); --shell-text-dim: var(--oz-faint);
+  --paper-bg: var(--u-bg); --paper-bg-2: var(--oz-1); --paper-raised: var(--oz-2); --paper-sunk: var(--oz-3);
+  --paper-line: var(--oz-4); --paper-line-strong: var(--oz-5);
+  --ink: var(--u-fg); --ink-dim: var(--oz-dim); --ink-faint: var(--oz-faint);
+
+  /* code: a plate one step off the ground; syntax = status hues pulled halfway to the foreground */
+  --code-bg: var(--oz-1); --code-head-bg: var(--oz-2); --code-line: var(--oz-4);
+  --code-text: color-mix(in oklab, var(--u-fg) 92%, var(--u-bg)); --code-dim: var(--oz-faint);
+  --code-kw: color-mix(in oklab, var(--st-run) 55%, var(--u-fg));
+  --code-type: color-mix(in oklab, var(--st-ok) 45%, var(--u-fg));
+  --code-fn: var(--u-fg);
+  --code-num: color-mix(in oklab, var(--st-wait) 50%, var(--u-fg));
+  --code-attr: color-mix(in oklab, var(--st-warn) 50%, var(--u-fg));
+  --code-str: color-mix(in oklab, var(--st-ok) 60%, var(--u-fg));
+  --code-com: var(--oz-faint);
+  --ed-bg: var(--code-bg); --ed-head-bg: var(--oz-1); --ed-line: var(--oz-4); --ed-text: var(--code-text); --ed-dim: var(--oz-faint);
+  --ed-tab-mark: var(--st-wait);
+  --diff-add-bg: color-mix(in oklab, var(--st-ok) 12%, var(--code-bg));
+  --diff-del-bg: color-mix(in oklab, var(--st-err) 12%, var(--code-bg));
+  --diff-add-mark: var(--st-ok-text); --diff-del-mark: var(--st-err-text);
+  /* preview stage (app tokens the mockup's Özel block did not list): Sade's roles, derived */
+  --pv-bg: var(--oz-1); --pv-grid: var(--oz-4); --pv-ink: var(--oz-dim);
+  --pv-face-1: color-mix(in oklab, var(--u-fg) 46%, var(--u-bg));
+  --pv-face-2: color-mix(in oklab, var(--u-fg) 30%, var(--u-bg));
+  --pv-face-3: color-mix(in oklab, var(--u-fg) 22%, var(--u-bg));
+  --pv-shadow: color-mix(in oklab, var(--u-bg) 50%, black);
+  --pv-check-a: var(--oz-4); --pv-check-b: var(--oz-2); --pv-edge: var(--oz-dim);
+  --term-bg: var(--oz-1); --term-text: var(--code-text); --term-dim: var(--oz-faint);
+  --term-prompt: var(--st-ok-text); --term-warn: var(--st-warn-text);
+  --tab-mark: var(--oz-acc);
+  --menu-bg: var(--oz-2); --menu-line: var(--oz-5);
+
+  /* signal budget: --accent is the "waiting on you" slot of the skeleton -> the status orange */
+  --accent: var(--st-wait); --accent-ink: var(--u-bg);
+  --accent-soft: color-mix(in oklab, var(--st-wait) 16%, var(--u-bg)); --accent-text: var(--st-wait-text);
+  --run: var(--st-run); --run-text: var(--st-run-text);
+  --ok: var(--st-ok); --ok-text: var(--st-ok-text); --ok-soft: color-mix(in oklab, var(--st-ok) 14%, var(--u-bg)); --ok-shell: var(--st-ok-text);
+  --focus: var(--oz-acc); --del-text: var(--st-err-text);
+  --trace-bg: var(--oz-3); --stream-ink: var(--oz-dim);
+  --btn-bg: var(--oz-acc); --btn-text: var(--oz-on-acc);
+  --btn-hover: color-mix(in oklab, var(--oz-acc) 84%, var(--u-bg)); --btn-focus: var(--oz-on-acc);
+
+  --model-claude: var(--st-claude); --model-codex: var(--st-codex); --model-gemini: var(--st-gemini); --model-other: var(--oz-faint);
+  --energy: var(--oz-dim); --energy-off: var(--oz-4); --pip: var(--oz-dim); --pip-off: var(--oz-4);
+  --tb-rule: var(--oz-4);
+  --lvl-bg: var(--oz-3); --lvl-text: var(--u-fg); --lvl-dim: var(--oz-faint);
+  --badge-bg: var(--st-wait); --badge-ink: var(--u-bg);
+  --badge-new-bg: color-mix(in oklab, var(--st-wait) 16%, var(--u-bg)); --badge-new-ink: var(--st-wait-text);
+  --toast-bg: var(--oz-2); --toast-line: var(--oz-5); --toast-text: var(--u-fg); --toast-kicker: var(--st-ok-text); --toast-xp: var(--st-ok-text);
+  --toast-info: var(--st-run-text); --toast-ok: var(--st-ok-text); --toast-warn: var(--st-warn-text); --toast-err: var(--st-err-text);
+  --heat-0: var(--oz-3);
+  --heat-1: color-mix(in oklab, var(--u-fg) 28%, var(--u-bg));
+  --heat-2: color-mix(in oklab, var(--u-fg) 46%, var(--u-bg));
+  --heat-3: color-mix(in oklab, var(--u-fg) 66%, var(--u-bg));
+  --heat-4: color-mix(in oklab, var(--u-fg) 88%, var(--u-bg));
+  --xp: var(--oz-dim); --xp-off: var(--oz-4);
+  --hero-text: var(--u-fg); --hero-dim: var(--oz-dim); --hero-quip-bg: var(--oz-2); --hero-on: var(--u-bg);
+
+  /* the mascot + head mark (round 15b): a two-tone line drawing in the user's own colours - body and
+     screen = the ground, every line and the eyes = the foreground, the visor = the accent when it
+     stands off the ground, else the foreground. All var()s, so the drawing follows every change live;
+     the sticker outline is off (on a raised surface it would read as a halo). */
+  --mascot-body: var(--u-bg); --mascot-visor: var(--oz-acc); --mascot-screen: var(--u-bg); --mascot-eye: var(--u-fg);
+  --mascot-line: var(--u-fg); --mascot-tile: var(--oz-3); --mascot-outline: transparent;
+  --brand-word: var(--u-fg);
+
+  /* Unity switch: outline track; the link light is the one green in the top bar */
+  --us-track: var(--u-bg); --us-track-on: color-mix(in oklab, var(--st-ok) 14%, var(--u-bg)); --us-edge: var(--oz-5);
+  --us-knob: var(--oz-faint); --us-knob-ink: var(--u-bg);
+  --us-on: var(--st-ok); --us-on-ink: var(--u-bg); --us-on-text: var(--st-ok-text);
+  --us-alert: var(--st-err); --us-alert-text: var(--st-err-text); --us-hover: var(--oz-2);
+
+  --oz-card-line: var(--oz-5);
+  --oz-pending-line: color-mix(in oklab, var(--st-wait) 62%, var(--u-bg));
+  --oz-run-soft: color-mix(in oklab, var(--st-run) 14%, var(--u-bg));
+  --oz-err: var(--st-err); --oz-err-text: var(--st-err-text); --oz-err-soft: color-mix(in oklab, var(--st-err) 14%, var(--u-bg));
+  --oz-warn: var(--st-warn-text);
+
+  /* settings, scene editor, tour, welcome */
+  --set-on: var(--oz-acc); --set-on-knob: var(--oz-on-acc); --set-sel: var(--oz-acc);
+  --set-seg-bg: var(--oz-4); --set-seg-ink: var(--u-fg);
+  --hier-prefab: color-mix(in oklab, var(--st-run) 70%, var(--u-fg)); --insp-prefab: var(--hier-prefab);
+  --hier-sel: var(--oz-3); --hier-selection-edge: var(--oz-acc);
+  --f-bg: var(--oz-1); --f-line: var(--oz-4); --f-line-hover: var(--oz-5); --cmp-head-bg: var(--u-bg);
+  --f-check: var(--oz-acc); --f-check-ink: var(--oz-on-acc); --f-fill: var(--oz-acc);
+  --tour-dim: color-mix(in oklab, var(--u-bg) 72%, transparent);
+  --r14-scrim: color-mix(in oklab, var(--u-bg) 60%, transparent);
+  /* "Kaldığın yer" is not waiting on you: the user's accent marks it */
+  --wl-last-mark: var(--oz-acc);
+
+  /* type: one UI font everywhere (the owner's mono); reading surfaces take --u-font-read */
+  --font-body: var(--u-font-ui);
+  --font-label: var(--u-font-ui);
+  --font-display: var(--u-font-ui);
+  --font-title: var(--u-font-ui);
+  --font-who: var(--u-font-ui);
+  --font-mono: var(--u-font-code);
+  --lamp-strength: 2%;
+}
+/* mid-grey ground: syntax hues cannot reach 4.5:1 either -> code reads in ink, comments faint */
+:root[data-theme="ozel"][data-u-mid] {
+  --code-kw: var(--u-fg); --code-type: var(--u-fg); --code-num: var(--u-fg); --code-attr: var(--u-fg); --code-str: var(--u-fg);
+}
+
+/* native controls and scrollbars follow the ground */
+:root[data-theme="ozel"] .settings, :root[data-theme="ozel"] .profile { color-scheme: dark; }
+:root[data-theme="ozel"][data-u-tone="light"] .settings, :root[data-theme="ozel"][data-u-tone="light"] .profile { color-scheme: light; }
+
+/* ================= shell (theme-sade.shell.css, renamed) ================= */
+/* sidebar meters: hairline progress */
+[data-theme="ozel"] .xp-mini { height: 2px; border-radius: 1px; }
+[data-theme="ozel"] .xp-mini span { border-radius: 1px; }
+/* sidebar profile entry: a plain person icon + "Usage and history", no level, no XP */
+[data-theme="ozel"] .side-profile .level,
+[data-theme="ozel"] .side-profile .xp { display: none; }
+[data-theme="ozel"] .side-profile-ic { display: block; }
+[data-theme="ozel"] .side-profile-plain { display: inline; }
+[data-theme="ozel"] .lvl { width: 28px; height: 28px; font-size: 13px; font-weight: 600; border-radius: var(--radius-sm); font-family: var(--font-mono); }
+[data-theme="ozel"] .badge { border-radius: var(--radius-sm); height: 18px; line-height: 18px; min-width: 18px; padding: 0 5px; }
+
+/* model "character card" -> plain selector: name + version on one line */
+[data-theme="ozel"] .model-pick { height: 32px; }
+[data-theme="ozel"] .model-text { flex-direction: row; align-items: baseline; gap: 8px; }
+[data-theme="ozel"] .model-name { font-size: 13px; font-weight: 500; }
+[data-theme="ozel"] .model-dot { width: 7px; height: 7px; }
+[data-theme="ozel"] .pick { height: 32px; border-radius: var(--radius-sm); font-size: 13px; }
+[data-theme="ozel"] .model-menu { border-radius: var(--radius-md); }
+[data-theme="ozel"] .mode-menu { padding: 4px; }
+[data-theme="ozel"] .model-opt { padding: 8px; border-radius: var(--radius-sm); }
+[data-theme="ozel"] .model-opt-name { font-size: 13px; font-weight: 500; }
+
+/* Unity switch: no LEDs, a quieter bay */
+[data-theme="ozel"] .us-leds { display: none; }
+[data-theme="ozel"] .unity-switch { padding: 4px; }
+/* the link lands: a quiet 4% settle that keeps the knob where it is */
+[data-theme="ozel"] .unity.is-linked .us-knob { animation: ozel-us-land 160ms var(--g-ease-press); }
+@keyframes ozel-us-land { 50% { transform: translateX(calc(var(--us-w) - var(--us-knob-w) - 6px)) scale(1.04); } }
+
+/* coloured states: connecting = running blue, closed = gold warning, blocked = red */
+[data-theme="ozel"] .unity[data-unity="connecting"] .us-track { box-shadow: inset 0 0 0 1px var(--run); }
+[data-theme="ozel"] .unity[data-unity="connecting"] .us-knob { background: var(--run); color: var(--us-knob-ink); }
+[data-theme="ozel"] .unity[data-unity="connecting"] .unity-word { color: var(--run-text); }
+[data-theme="ozel"] .unity[data-unity="closed"] .us-knob { color: var(--oz-warn); box-shadow: inset 0 0 0 1px var(--oz-warn); }
+[data-theme="ozel"] .unity[data-unity="closed"] .unity-word { color: var(--oz-warn); }
+[data-theme="ozel"] .unity[data-unity="blocked"] .us-track { background: var(--oz-err-soft); }
+
+/* colour only where it means something: "Tam otomatik" is the reference's orange "Tam erişim" */
+[data-theme="ozel"] .mode-pick[data-mode="auto"] { color: var(--accent-text); border-color: var(--oz-pending-line); }
+[data-theme="ozel"] .mode-pick[data-mode="auto"] .ic { color: var(--accent); }
+
+/* plain words (Sade's lexicon: "Bitti", "aşağıdan") */
+[data-theme="ozel"] .lex-s { display: inline; }
+[data-theme="ozel"] .lex:has(> .lex-s) > :not(.lex-s) { display: none; }
+
+/* mono is wider: long placeholders and values end in an ellipsis instead of a hard cut */
+[data-theme="ozel"] input::placeholder { text-overflow: ellipsis; }
+[data-theme="ozel"] input { text-overflow: ellipsis; }
+
+/* ================= plain toasts: like the band, smaller radius, no fuse ================= */
+[data-theme="ozel"] .gm-toast { width: 320px; border-radius: var(--radius-md); }
+[data-theme="ozel"] .gm-toast-life { display: none; }
+
+/* ================= tour = coach marks with the figure; guide = a plain help index ================= */
+/* caret: a rotated square on the edge facing the spotlight, at the target's centre (--caret from JS) */
+[data-theme="ozel"] .tour-box::before { content: ""; position: absolute; width: 10px; height: 10px; background: var(--tour-bg); border: 1px solid var(--tour-line); }
+[data-theme="ozel"] .tour[data-side="below"] .tour-box::before { top: -6px; left: calc(var(--caret) - 5px); border-right: 0; border-bottom: 0; transform: rotate(45deg); }
+[data-theme="ozel"] .tour[data-side="above"] .tour-box::before { bottom: -6px; left: calc(var(--caret) - 5px); border-left: 0; border-top: 0; transform: rotate(45deg); }
+[data-theme="ozel"] .tour[data-side="left"] .tour-box::before { right: -6px; top: calc(var(--caret) - 5px); border-left: 0; border-bottom: 0; transform: rotate(45deg); }
+[data-theme="ozel"] .tour[data-side="right"] .tour-box::before { left: -6px; top: calc(var(--caret) - 5px); border-right: 0; border-top: 0; transform: rotate(45deg); }
+[data-theme="ozel"] .tour[data-side="center"] .tour-box::before { display: none; }
+[data-theme="ozel"] .tour[data-side="center"] .tour-avatar { width: 36px; height: 36px; }
+[data-theme="ozel"] .tour-title { font-size: 16.5px; font-weight: 600; }
+[data-theme="ozel"] .tour[data-side="center"] .tour-title { font-size: 21px; }
+[data-theme="ozel"] .tour-text { font-size: 14px; }
+[data-theme="ozel"] .tour-kicker { font-weight: 500; letter-spacing: 0; text-transform: none; }
+[data-theme="ozel"] .tour-figure { margin-bottom: 0; }
+[data-theme="ozel"] .gd-list { grid-template-columns: 1fr 1fr; gap: 0 24px; }
+[data-theme="ozel"] .gd-topic { min-height: 0; padding: 11px 64px 11px 0; background: transparent; border: 0; border-bottom: 1px solid var(--paper-line); border-radius: 0; box-shadow: none; }
+[data-theme="ozel"] .gd-topic:hover { background: transparent; }
+[data-theme="ozel"] .gd-topic:hover .gd-t-title { color: var(--accent-text); }
+[data-theme="ozel"] .gd-t-title { font-size: 14.5px; font-weight: 600; padding-right: 0; }
+[data-theme="ozel"] .gd-t-meta { position: absolute; right: 0; top: 12px; width: auto; margin: 0; padding: 0; }
+[data-theme="ozel"] .gd-t-play { display: none; }
+[data-theme="ozel"] .gd-new { border: 0; padding: 0; text-transform: none; letter-spacing: 0; font-weight: 600; }
+[data-theme="ozel"] .gd-topic .gd-new { position: absolute; right: 0; top: 12px; }
+[data-theme="ozel"] .gd-topic:has(.gd-new) .gd-t-meta { top: 32px; }
+[data-theme="ozel"] .gd-core { background: transparent; border: 1px solid var(--paper-line); border-radius: 8px; }
+
+/* ================= welcome: one list of projects; the figure waves (round 15b) ================= */
+[data-theme="ozel"] .wl-title { font-size: 34px; font-weight: 600; letter-spacing: -.01em; }
+[data-theme="ozel"] .wl-sub { font-size: 16px; }
+[data-theme="ozel"] .wl-projects { grid-template-columns: 1fr; gap: 0; background: var(--paper-raised); border: 1px solid var(--paper-line); border-radius: 8px; overflow: hidden; }
+[data-theme="ozel"] .wl-proj {
+  min-height: 0; grid-template-columns: 36px minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 14px;
+  padding: 12px 52px 12px 16px; background: transparent; border: 0; border-radius: 0; box-shadow: none;
+}
+[data-theme="ozel"] .wl-projects > li + li { border-top: 1px solid var(--paper-line); }
+[data-theme="ozel"] .wl-proj:hover { background: var(--paper-sunk); }
+[data-theme="ozel"] .wl-proj.is-last { box-shadow: inset 2px 0 0 var(--oz-acc); }
+[data-theme="ozel"] .wl-thumb { grid-row: 1 / 3; width: 36px; height: 36px; align-self: center; border-radius: 6px; }
+[data-theme="ozel"] .wl-thumb-k { font-size: 16px; font-weight: 600; }
+[data-theme="ozel"] .wl-thumb .ic { display: none; }
+[data-theme="ozel"] .wl-proj-name { grid-column: 2; grid-row: 1; padding-right: 0; font-size: 15px; font-weight: 600; }
+[data-theme="ozel"] .wl-proj:not(.is-last) .wl-proj-name { padding-right: 0; }
+[data-theme="ozel"] .wl-proj-path { grid-column: 2; grid-row: 2; }
+[data-theme="ozel"] .wl-proj-tag { position: static; grid-column: 3; grid-row: 1; justify-self: end; color: var(--ink-dim); text-transform: none; letter-spacing: 0; font-weight: 500; }
+[data-theme="ozel"] .wl-proj-meta { grid-column: 3; grid-row: 1 / 3; margin-top: 0; justify-content: flex-end; gap: 4px 12px; }
+[data-theme="ozel"] .wl-proj.is-last .wl-proj-meta { grid-row: 2; }
+[data-theme="ozel"] .wl-proj-foot { display: none; }
+[data-theme="ozel"] .wl-proj.is-missing .wl-proj-foot { display: flex; grid-column: 2 / 4; grid-row: 3; min-height: 0; margin-top: 6px; padding-top: 0; border: 0; }
+[data-theme="ozel"] .wl-proj.is-missing { background: transparent; border: 0; box-shadow: none; }
+[data-theme="ozel"] .wl-proj-more { top: 50%; transform: translateY(-50%); right: 10px; }
+[data-theme="ozel"] .wl-menu { top: calc(50% + 20px); }
+[data-theme="ozel"] .wl-ver { border-radius: 4px; }
+[data-theme="ozel"] .wl-drop { min-height: 0; flex-direction: row; justify-content: flex-start; gap: 12px; padding: 14px 16px; text-align: left; border: 0; border-radius: 0; }
+[data-theme="ozel"] .wl-drop > .ic { width: 20px; height: 20px; }
+[data-theme="ozel"] .wl-drop-t { font-size: 14px; }
+[data-theme="ozel"] .wl-drop-lg { min-height: 200px; flex-direction: column; justify-content: center; text-align: center; border: 1px dashed var(--paper-line-strong); border-radius: 8px; }
+[data-theme="ozel"] .wl-steps li { box-shadow: none; border-radius: 8px; }
+[data-theme="ozel"] .wl-figure { width: 156px; margin-bottom: 14px; }
+
+/* ================= settings: the Özel group itself ================= */
+/* the reading-font sample shows the long-answer font, not the UI font */
+[data-theme="ozel"] .set-sample[data-sample="body"] { font-family: var(--u-font-read); }
+/* Unreadable choice (the guard is showing): the Özel settings group switches to a safe ink - black or
+   white, whichever reads on the ground - so the warning and the fix are always reachable. */
+:root[data-theme="ozel"][data-u-bad] .oz-set {
+  --ink: var(--oz-safe); --ink-dim: var(--oz-safe); --ink-faint: var(--oz-safe);
+  --paper-line: color-mix(in oklab, var(--oz-safe) 30%, var(--u-bg)); --paper-line-strong: color-mix(in oklab, var(--oz-safe) 45%, var(--u-bg));
+  --set-seg-ink: var(--oz-safe); --set-seg-bg: color-mix(in oklab, var(--oz-safe) 30%, var(--u-bg)); --set-sel: var(--oz-safe);
+}
+:root[data-theme="ozel"][data-u-bad] .oz-guard .btn { color: var(--oz-safe); border-color: var(--oz-safe); }
