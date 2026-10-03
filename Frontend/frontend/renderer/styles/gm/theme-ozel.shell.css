@@ -158,6 +158,16 @@
 }
 
 /* ================= derived: surfaces, lines, text ================= */
+/* Dark grounds mix the steps in srgb: oklab L is cubic near black, so 3.5-13% of white landed at
+   #000-#050505 and every surface read as one black (owner, 3 Oct). These land at ~#0a0a0a (shell),
+   #171717 (composer, cards, menus), #212121 (selected row) on Mono's #000, close to Codex. */
+:root[data-theme="ozel"][data-u-tone="dark"] {
+  --oz-1: color-mix(in srgb, var(--u-fg) 4%, var(--u-bg));
+  --oz-2: color-mix(in srgb, var(--u-fg) 9%, var(--u-bg));
+  --oz-3: color-mix(in srgb, var(--u-fg) 13%, var(--u-bg));
+  --oz-4: color-mix(in srgb, var(--u-fg) 16%, var(--u-bg));
+  --oz-5: color-mix(in srgb, var(--u-fg) 26%, var(--u-bg));
+}
 :root[data-theme="ozel"] {
   --oz-1: color-mix(in oklab, var(--u-fg) 3.5%, var(--u-bg));
   --oz-2: color-mix(in oklab, var(--u-fg) 6%, var(--u-bg));
