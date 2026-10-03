@@ -283,7 +283,13 @@ button.file-row:hover { background: var(--paper-sunk); box-shadow: 0 0 0 4px var
 /* ---------- Terminal drawer: closed = a thin strip of tabs + the last line; open = 228 px ---------- */
 .term { flex: none; border-top: var(--line-w) solid var(--paper-line); background: var(--paper-bg-2); position: relative; }
 .term-bar { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px 0 10px; }
-.term-tabs { flex: none; display: flex; gap: 2px; }
+.term-bar > * { flex-shrink: 0; }
+/* a narrow panel shrinks the tab list first (it scrolls sideways); the action buttons stay pinned on the right */
+.term-bar > .term-tabs { flex: 0 1 auto; min-width: 0; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.term-bar > .term-last { flex-shrink: 1; }
+.term-tabs::-webkit-scrollbar { display: none; }
+.term-tab { flex: none; }
+@container ws (max-width: 440px) { .term-tab { padding: 0 5px; gap: 4px; } }
 .term-tab {
   height: 26px; padding: 0 8px; display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-sm);
   font-size: var(--fs-meta); font-weight: 600; color: var(--ink-faint);
@@ -344,6 +350,17 @@ button.prob:hover { background: color-mix(in srgb, var(--term-text) 6%, transpar
   font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--term-dim);
 }
 .term-sess[aria-selected="true"] { color: var(--term-text); background: color-mix(in srgb, var(--term-text) 10%, transparent); }
+.term-sess-wrap { flex: none; position: relative; display: inline-flex; align-items: center; }
+.term-sess-wrap .term-sess { padding-right: 24px; }
+/* the close mark shows on the active chip, on hover and on keyboard focus */
+.term-sess-x {
+  position: absolute; right: 3px; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm); color: var(--term-dim); opacity: 0;
+}
+.term-sess-x .ic { width: 11px; height: 11px; }
+.term-sess-wrap:is(:hover, :focus-within, [data-active]) .term-sess-x { opacity: 1; }
+.term-sess-x:hover { color: var(--term-text); background: color-mix(in srgb, var(--term-text) 12%, transparent); }
+.term-sess-x:focus-visible { opacity: 1; outline: 2px solid var(--focus); outline-offset: -2px; }
 .term-host { flex: 1; min-height: 0; padding: 6px 4px 4px 10px; }
 .term-host .xterm, .term-host .xterm-viewport { background: var(--term-bg) !important; }
 .term-pane[data-term="terminal"] { padding: 0; }

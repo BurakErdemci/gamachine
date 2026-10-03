@@ -567,10 +567,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
             {sessions.length > 1 && (
               <div className="term-sessions" role="tablist" aria-label={ceviri('terminal.sessions')}>
                 {sessions.map(s => (
-                  <button key={s.id} type="button" role="tab" className="term-sess" aria-selected={activeSessionId === s.id}
-                    onClick={() => { setActiveSessionId(s.id); setTab('terminal'); }}>
-                    {s.name}
-                  </button>
+                  <span key={s.id} className="term-sess-wrap" role="presentation" data-active={activeSessionId === s.id || undefined}>
+                    <button type="button" role="tab" className="term-sess" aria-selected={activeSessionId === s.id}
+                      onClick={() => { setActiveSessionId(s.id); setTab('terminal'); }}>
+                      {s.name}
+                    </button>
+                    {/* a sibling, not a child: a button cannot hold another button */}
+                    <button type="button" className="term-sess-x" aria-label={ceviri('terminal.closeSession', { ad: s.name })}
+                      title={ceviri('terminal.closeSession', { ad: s.name })} onClick={() => removeSession(s.id)}>
+                      <Ic className="ic"><path d="M6 6l8 8M14 6l-8 8" /></Ic>
+                    </button>
+                  </span>
                 ))}
               </div>
             )}
