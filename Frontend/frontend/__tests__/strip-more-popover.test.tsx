@@ -64,7 +64,7 @@ describe('Add & chat menu', () => {
     expect(groups.map(g => g.getAttribute('aria-labelledby') && document.getElementById(g.getAttribute('aria-labelledby')!)!.textContent))
       .toEqual(['Sohbete ekle', 'Bu sohbet'])
     const rows: Array<[string, string, number]> = [
-      ['Resim veya dosya', 'Bir görsel ya da dosyayı mesaja ekle.', 0],
+      ['Resim', 'Bir resmi mesaja ekle.', 0],
       ['Video', 'Yerel bir video dosyası ekle; bağlantı için mesaja yapıştır.', 0],
       ['Projeyi öğren', 'Projeyi tarayıp sohbetin hafızasına yazar.', 1],
       ['Hafızayı özetle', 'Sohbeti özetleyip hafızayı boşaltır.', 1],
@@ -80,7 +80,7 @@ describe('Add & chat menu', () => {
 
   it('each row calls its own handler and closes the menu', async () => {
     const cases: Array<[string, string]> = [
-      ['Resim veya dosya', 'onAttachFile'], ['Video', 'onAddVideo'], ['Projeyi öğren', 'analyzeProject'],
+      ['Resim', 'onAttachFile'], ['Video', 'onAddVideo'], ['Projeyi öğren', 'analyzeProject'],
       ['Hafızayı özetle', 'compactConversation'], ['Kullanım raporu', 'onToggleReports'],
     ]
     for (const [name, handler] of cases) {
@@ -158,6 +158,26 @@ describe('Add & chat menu', () => {
     fireEvent.keyDown(pop, { key: 'Escape' })
     expect(pop.hidden).toBe(true)
     expect(document.activeElement).toBe(trigger)
+  })
+
+  it('Tab and Shift+Tab close the menu and leave focus on the trigger for the browser to move on', () => {
+    for (const shiftKey of [false, true]) {
+      const { pop, trigger } = setup()
+      fireEvent.keyDown(pop, { key: 'ArrowDown' })
+      // fireEvent returns false when a handler called preventDefault; Tab must keep its default.
+      expect(fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey })).toBe(true)
+      expect(pop.hidden).toBe(true)
+      expect(trigger.getAttribute('aria-expanded')).toBe('false')
+      expect(document.activeElement).toBe(trigger)
+      cleanup()
+    }
+  })
+
+  it('names the attach row for images only: the composer drops a picked non-image file on send', () => {
+    const { pop } = setup()
+    expect(within(pop).queryByText('Resim veya dosya')).toBeNull()
+    expect(translations.en['more.attach']).toBe('Image')
+    expect(translations.en['more.attachDesc']).not.toMatch(/file/i)
   })
 
   it('is drawn on the menu surface tokens with no hard-coded colour', () => {

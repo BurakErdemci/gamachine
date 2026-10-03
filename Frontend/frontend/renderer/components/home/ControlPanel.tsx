@@ -95,6 +95,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   useEffect(() => { if (showMore) menuItems()[0]?.focus(); }, [showMore]);
   const onMenuKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMore(true); return; }
+    // Tab leaves a menu (WAI-ARIA menu button): close it and hand focus to the trigger without
+    // preventing the default, so the browser's Tab / Shift+Tab then moves on from the trigger.
+    if (e.key === 'Tab') { closeMore(true); return; }
     const items = menuItems();
     if (!items.length) return;
     const i = items.indexOf(document.activeElement as HTMLElement);

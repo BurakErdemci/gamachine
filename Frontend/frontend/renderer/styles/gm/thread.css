@@ -55,7 +55,7 @@
   .thread-col { padding: 14px 18px 18px; }
   .composer-wrap { padding: 2px 18px 12px; }
   .approval-hint, .code-copy:not(.code-open), .code-diff, .strip-sep-last { display: none; }
-  /* m4: "Diğer ayarlar" stays reachable as its chevron at the right end (name kept for screen readers) */
+  /* m4: the "Add & chat" menu stays reachable as its chevron at the right end (name kept for screen readers) */
   .strip-more { margin-left: auto; }
   /* the base .strip rules come later in the file: .stage raises these above them */
   .stage .strip { gap: 2px; padding-left: 0; padding-right: 0; }
