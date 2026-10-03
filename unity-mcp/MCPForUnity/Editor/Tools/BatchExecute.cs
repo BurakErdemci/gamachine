@@ -117,6 +117,21 @@ namespace MCPForUnity.Editor.Tools
                     continue;
                 }
 
+                if (toolName.StartsWith("gm_editor_", StringComparison.OrdinalIgnoreCase))
+                {
+                    invocationFailureCount++;
+                    anyCommandFailed = true;
+                    commandResults.Add(new
+                    {
+                        tool = toolName,
+                        callSucceeded = false,
+                        error = "user_only"
+                    });
+                    serializedResults.Add(null);
+                    if (failFast) break;
+                    continue;
+                }
+
                 string collisionError = StringCaseUtility.FindNormalizedKeyCollision(
                     rawParams.Properties().Select(p => p.Name), ToCamelCase);
                 if (collisionError != null)

@@ -564,12 +564,17 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
 
                 # Same fixed rule as the MCP path (UnityInstanceMiddleware),
                 # ahead of the approval gate and of the maintenance exemption.
-                from services.protection_rules import meta_refusal
+                from services.protection_rules import meta_refusal, user_only_refusal
                 refusal = meta_refusal(command_type, params)
                 if refusal:
                     return JSONResponse({"success": False, "error": refusal}, status_code=403)
 
                 from transport.approval_gate import ApprovalDenied, kapiyi_gec, urun_bakim_cagrisi_mi
+
+                refusal = user_only_refusal(command_type, params)
+                if refusal and (not user_only_refusal(command_type, {})
+                                or not urun_bakim_cagrisi_mi(request)):
+                    return JSONResponse({"success": False, "error": "user_only"}, status_code=403)
 
                 # Get available sessions
                 sessions = await PluginHub.get_sessions()

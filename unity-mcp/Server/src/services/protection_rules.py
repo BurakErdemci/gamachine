@@ -182,3 +182,50 @@ def meta_refusal(tool_name: str, params: Any, *, _depth: int = 0) -> str | None:
         return None
     hit = _find_meta(params, False, object_keys=_OBJECT_KEYS.get(tool_name, frozenset()))
     return META_MESSAGE.format(path=hit) if hit else None
+
+
+def user_only_refusal(tool_name: str, params: Any) -> str | None:
+    """Refuse app-only commands, including every spelling a wrapper can dispatch."""
+    pending = [(tool_name, params)]
+    while pending:
+        name, arguments = pending.pop()
+        folded = _key_folded(name) if isinstance(name, str) else ""
+        if isinstance(name, str) and name.lower().startswith("gm_editor_"):
+            return "user_only: gm_editor_* commands are reserved for the Gamachine app."
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except ValueError:
+                continue
+        if not isinstance(arguments, Mapping):
+            continue
+        entry = tool_entry(name.lower()) if isinstance(name, str) else None
+        if folded == "batchexecute":
+            entry = tool_entry("batch_execute")
+        if entry and entry.get("recursive_field"):
+            for inner_name, inner in _nested_calls(entry, arguments):
+                if inner_name is not None:
+                    pending.append((inner_name, inner))
+                else:
+                    # Malformed/colliding entries must not hide a valid name.
+                    scan = [inner]
+                    while scan:
+                        value = scan.pop()
+                        if isinstance(value, str):
+                            if value.lower().startswith("gm_editor_"):
+                                return "user_only: gm_editor_* commands are reserved for the Gamachine app."
+                            try:
+                                scan.append(json.loads(value))
+                            except ValueError:
+                                pass
+                        elif isinstance(value, Mapping):
+                            scan.extend(value.values())
+                        elif isinstance(value, (list, tuple)):
+                            scan.extend(value)
+        if folded == "executecustomtool":
+            names = [v for k, v in arguments.items()
+                     if isinstance(k, str) and _key_folded(k) in ("toolname", "name")]
+            inners = [v for k, v in arguments.items()
+                      if isinstance(k, str) and _key_folded(k) in ("parameters", "params")]
+            pending.extend((name, inner) for name in names for inner in inners or [{}])
+    return None

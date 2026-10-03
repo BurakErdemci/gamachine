@@ -31,7 +31,7 @@ from core.constants import (
     UNITY_INSTANCE_HEADER,
     UNITY_INSTANCE_QUERY_PARAM,
 )
-from services.protection_rules import meta_refusal
+from services.protection_rules import meta_refusal, user_only_refusal
 from services.registry import get_registered_tools
 from services.registry.tool_actions import READ, classify
 from transport.approval_gate import ApprovalDenied, parse_conversation_id
@@ -504,6 +504,10 @@ class UnityInstanceMiddleware(Middleware):
         mesaj = getattr(context, "message", None)
         refusal = meta_refusal(getattr(mesaj, "name", None) or "",
                                getattr(mesaj, "arguments", None))
+        if refusal:
+            raise ToolError(refusal)
+        refusal = user_only_refusal(getattr(mesaj, "name", None) or "",
+                                    getattr(mesaj, "arguments", None))
         if refusal:
             raise ToolError(refusal)
         try:
