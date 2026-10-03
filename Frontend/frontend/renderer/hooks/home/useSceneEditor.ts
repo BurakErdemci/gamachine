@@ -14,7 +14,7 @@ export interface InspectorWriteState { pending: boolean; value?: unknown; error?
 export interface InspectorActions {
   inspectorWrites: Record<string, InspectorWriteState>;
   clearInspectorWrite: (key: string) => void;
-  setActive: (id: number, active: boolean) => Promise<{ id: number; active: boolean } | null>;
+  setActive: (id: number, active: boolean) => Promise<{ id: number; activeSelf: boolean } | null>;
   rename: (id: number, name: string, inspector?: boolean) => Promise<{ id: number; name: string } | null>;
   setField: (componentId: number, path: string, value: unknown) => Promise<{ componentId: number; field: SceneField | null } | null>;
   setComponentEnabled: (componentId: number, enabled: boolean) => Promise<{ componentId: number; enabled: boolean } | null>;
@@ -425,8 +425,9 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     const next = { ...current }; delete next[key]; return next;
   }), []);
   const setActive = useCallback((id: number, active: boolean) =>
-    write<{ id: number; active: boolean }>('set-active', { id, active }, data => {
-      setInspection(current => current?.node.id === id ? { ...current, node: { ...current.node, activeSelf: data.active } } : current);
+    // Unity replies {id, activeSelf, activeInHierarchy} (gm_editor_set_active).
+    write<{ id: number; activeSelf: boolean }>('set-active', { id, active }, data => {
+      setInspection(current => current?.node.id === id ? { ...current, node: { ...current.node, activeSelf: data.activeSelf } } : current);
     }, undefined, { key: inspectorWriteKey.active(id), value: active }), [write]);
   const setField = useCallback((componentId: number, path: string, value: unknown) =>
     write<{ componentId: number; field: SceneField | null }>('set-field', { componentId, field: path, value }, data => {

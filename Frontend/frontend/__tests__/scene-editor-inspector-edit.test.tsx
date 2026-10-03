@@ -35,6 +35,7 @@ beforeEach(() => {
     calls.push({ route, body });
     if (held) await held;
     if (failure) return reply({ detail: failure }, 409);
+    if (route === 'set-active') return reply({ id: body.id, activeSelf: body.active, activeInHierarchy: body.active });
     if (route === 'set-field') {
       const field = data.groups.flatMap(g => g.fields).find(field => field.path === body.field)!;
       return reply({ componentId: body.componentId, field: { ...field, value: body.value } });
@@ -165,4 +166,12 @@ it('scrubs numeric labels once on release and clamps range inputs', async () => 
   await waitFor(() => expect(posts('set-field')).toEqual([{ componentId: 20, field: 'int', value: 6 }]));
   const box = screen.getByRole('textbox', { name: 'float' }); fireEvent.change(box, { target: { value: '20' } }); fireEvent.blur(box);
   await waitFor(() => expect(posts('set-field')).toContainEqual({ componentId: 20, field: 'float', value: 2 }));
+});
+it('shows the activeSelf Unity replies after turning an inactive object on', async () => {
+  data.node.activeSelf = false;
+  await setup();
+  const box = screen.getByRole('checkbox', { name: 'Etkin' });
+  fireEvent.click(box);
+  await waitFor(() => expect(posts('set-active')).toEqual([{ id: 7, active: true }]));
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Etkin' })).toHaveProperty('checked', true));
 });
