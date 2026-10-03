@@ -41,6 +41,9 @@ CASES = [
 def test_endpoints_forward_typed_payload_and_headers(client, monkeypatch, method, path, body, command, params):
     http, routes = client
     data = {"success": True} if command == "gm_editor_select" else {"epoch": "test", "id": -3384}
+    if command == "gm_editor_version":
+        data = {"epoch": "test", "scene": 11, "hierarchy": 3, "props": 8,
+                "selection": 2, "selectedId": -3384, "playing": False, "compiling": False}
     post = Mock(return_value=_reply({"status": "success", "result": {"success": True, "data": data}}))
     monkeypatch.setattr(routes.urllib.request, "urlopen", post)
     response = http.request(method, path, json=body, headers={"X-Session-Token": "app-secret"})
@@ -74,11 +77,16 @@ def test_all_endpoints_require_session_token(client, monkeypatch, method, path, 
     ({"status": "success", "result": {"success": False, "error": "not_found"}}, 200, 404, "not_found"),
     ({"success": False, "error": "No Unity instances connected"}, 200, 503, "unity_unavailable"),
     ({"success": False, "error": "No Unity instances connected"}, 503, 503, "unity_unavailable"),
-    ({"success": False, "error": "broken"}, 200, 502, "broken"),
-    ({"success": False, "error": "user_only"}, 403, 502, "user_only"),
-    ({"detail": "bad gateway"}, 500, 502, "bad gateway"),
+    ({"success": False, "error": "broken"}, 200, 502, "unity_error"),
+    ({"success": False, "error": "user_only"}, 403, 502, "unity_error"),
+    ({"detail": "bad gateway"}, 500, 502, "unity_error"),
+    ({"detail": "gateway failure"}, 504, 504, "unity_timeout"),
+    ({"status": "success", "result": {"success": True, "data": {}}}, 504, 504, "unity_timeout"),
+    ({"success": False, "error": "timeout"}, 200, 504, "unity_timeout"),
+    ({"status": "error", "error": "Unity TIMEOUT waiting for editor"}, 502, 504, "unity_timeout"),
+    ({"success": False, "message": "Command timeout"}, 200, 504, "unity_timeout"),
 ])
-def test_unity_error_mappings(client, monkeypatch, body, status, expected, detail):
+def test_unity_error_mappings(client, monkeypatch, caplog, body, status, expected, detail):
     http, routes = client
     if status >= 400:
         error = urllib.error.HTTPError("mock", status, "HTTP failure", {}, _reply(body))
@@ -89,20 +97,57 @@ def test_unity_error_mappings(client, monkeypatch, body, status, expected, detai
     response = http.get("/scene-editor/tree", headers={"X-Session-Token": "app-secret"})
     assert response.status_code == expected
     assert response.json() == {"detail": detail}
+    if expected == 502:
+        original = body.get("error") or body.get("detail")
+        assert original not in response.text
+        assert any(record.name == routes.__name__ and record.levelname == "WARNING"
+                   and original in record.getMessage() for record in caplog.records)
+        assert "app-secret" not in caplog.text
+        assert "api-secret" not in caplog.text
 
 
 @pytest.mark.parametrize("error,status,detail", [
     (urllib.error.URLError(ConnectionRefusedError("down")), 503, "unity_unavailable"),
     (TimeoutError("slow"), 504, "unity_timeout"),
     (urllib.error.URLError(TimeoutError("slow")), 504, "unity_timeout"),
-    (ValueError("invalid response"), 502, "invalid response"),
+    (ValueError("invalid response"), 502, "unity_error"),
 ])
-def test_transport_error_mappings(client, monkeypatch, error, status, detail):
+def test_transport_error_mappings(client, monkeypatch, caplog, error, status, detail):
     http, routes = client
     monkeypatch.setattr(routes.urllib.request, "urlopen", Mock(side_effect=error))
     response = http.get("/scene-editor/version", headers={"X-Session-Token": "app-secret"})
     assert response.status_code == status
     assert response.json() == {"detail": detail}
+    if status == 502:
+        assert str(error) not in response.text
+        assert str(error) in caplog.text
+        assert any(record.name == routes.__name__ and record.levelname == "WARNING"
+                   for record in caplog.records)
+
+
+@pytest.mark.parametrize("status,detail", [(500, "unity_error"), (504, "unity_timeout")])
+def test_non_json_http_errors_do_not_echo_body(client, monkeypatch, caplog, status, detail):
+    http, routes = client
+    original = "upstream private failure"
+    error = urllib.error.HTTPError("mock", status, "HTTP failure", {}, io.BytesIO(original.encode()))
+    monkeypatch.setattr(routes.urllib.request, "urlopen", Mock(side_effect=error))
+    response = http.get("/scene-editor/tree", headers={"X-Session-Token": "app-secret"})
+    assert response.status_code == (502 if status == 500 else 504)
+    assert response.json() == {"detail": detail}
+    assert original not in response.text
+    if status == 500:
+        assert original in caplog.text
+
+
+@pytest.mark.parametrize("body", [[], {"success": True, "data": []}])
+def test_invalid_unity_response_is_private(client, monkeypatch, caplog, body):
+    http, routes = client
+    monkeypatch.setattr(routes.urllib.request, "urlopen", Mock(return_value=_reply(body)))
+    response = http.get("/scene-editor/inspect/-3384", headers={"X-Session-Token": "app-secret"})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "unity_error"}
+    assert "Invalid Unity response" in caplog.text
+    assert "Invalid Unity response" not in response.text
 
 
 def test_http_call_runs_off_event_loop(client, monkeypatch):

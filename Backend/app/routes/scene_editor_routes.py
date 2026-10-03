@@ -1,6 +1,7 @@
 """Authenticated app access to Unity's user-only scene editor resources."""
 import asyncio
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
@@ -13,16 +14,23 @@ from omnisharp.omnisharp_manager import _unwrap_unity_result
 from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 
 
+logger = logging.getLogger(__name__)
+
+
 class SceneEditorSelection(BaseModel):
     id: StrictInt | None
 
 
 def _raise_unity_error(error: str, status: int = 200) -> None:
-    if status == 503 or "no unity instances" in error.lower():
+    normalized = error.lower()
+    if status == 504 or "timeout" in normalized or "timed out" in normalized:
+        raise HTTPException(status_code=504, detail="unity_timeout")
+    if status == 503 or "no unity instances" in normalized or normalized in {"unavailable", "unity_unavailable"}:
         raise HTTPException(status_code=503, detail="unity_unavailable")
     if error == "not_found":
         raise HTTPException(status_code=404, detail="not_found")
-    raise HTTPException(status_code=502, detail=error)
+    logger.warning("Unity scene editor error: %s", error)
+    raise HTTPException(status_code=502, detail="unity_error")
 
 
 def _post_unity(command: str, params: dict) -> dict:
@@ -47,7 +55,7 @@ def _post_unity(command: str, params: dict) -> dict:
             except ValueError:
                 _raise_unity_error(text or str(exc), status)
         if not isinstance(body, dict):
-            raise ValueError("Invalid Unity response")
+            _raise_unity_error("Invalid Unity response", status)
         inner = _unwrap_unity_result(body)
         error = inner.get("error") or inner.get("detail") or body.get("error")
         if status >= 400 or inner.get("success") is False or body.get("status") == "error" or error:
@@ -67,7 +75,8 @@ def _post_unity(command: str, params: dict) -> dict:
     except ConnectionError as exc:
         raise HTTPException(status_code=503, detail="unity_unavailable") from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        logger.warning("Unity scene editor error: %s", exc)
+        raise HTTPException(status_code=502, detail="unity_error") from exc
 
 
 async def _call_unity(command: str, params: dict) -> dict:
