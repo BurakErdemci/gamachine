@@ -676,13 +676,16 @@ body[data-link="hello_rejected"] #status-text { color: var(--us-alert-text); }
 /* ---------------------------------------------------------------- composer */
 
 #slash-panel {
-  margin: 8px 0;
+  margin: 0 0 8px;
   padding: 4px 12px 8px;
   background: var(--paper-raised);
   border: 1px solid var(--paper-line-strong);
   border-radius: var(--radius-lg);
 }
-#slash-list { max-height: 45vh; overflow-y: auto; }
+#slash-panel .note:empty { display: none; }
+#slash-list { max-height: min(30vh, 240px); overflow-y: auto; overscroll-behavior: contain; }
+#slash-list button { overflow-wrap: anywhere; }
+#slash-list button[aria-selected="true"] { background: var(--paper-sunk); box-shadow: inset 3px 0 0 var(--accent); }
 
 /* Pinned to the bottom of the screen; the page itself scrolls, so a loaded chat still
    rests at its end with the composer under the last line. */
@@ -707,6 +710,7 @@ body[data-link="hello_rejected"] #status-text { color: var(--us-alert-text); }
 .composer-box:focus-within { border-color: var(--ink-dim); }
 .composer-box textarea {
   flex: 1;
+  min-width: 0;
   height: 62px;
   min-height: var(--tap);
   margin: 0;

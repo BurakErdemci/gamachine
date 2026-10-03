@@ -107,15 +107,13 @@
   <button id="btn-stop" type="button" class="danger" data-i18n="stop.label" hidden>Durdur</button>
   <div id="log" class="log"></div>
   <div id="chat-cards"></div>
-  <!-- Outside the form: Enter in the search box must not send the message. -->
-  <div id="slash-panel" hidden>
-    <input id="slash-filter" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Komut ara…" data-i18n-attr="placeholder:attr.217">
-    <p id="slash-note" class="note"></p>
-    <ul id="slash-list" class="list"></ul>
-  </div>
   <form id="composer">
+    <div id="slash-panel" hidden>
+      <p id="slash-note" class="note" aria-live="polite"></p>
+      <ul id="slash-list" class="list" role="listbox" aria-label="Komutlar" data-i18n-attr="aria-label:attr.219"></ul>
+    </div>
     <div class="composer-box">
-    <textarea id="composer-text" rows="3" placeholder="Mesaj yaz…" data-i18n-attr="placeholder:attr.218"></textarea>
+    <textarea id="composer-text" rows="3" placeholder="Mesaj yaz…" aria-autocomplete="list" aria-controls="slash-list" aria-expanded="false" data-i18n-attr="placeholder:attr.218"></textarea>
     <div class="composer-row">
       <button id="btn-slash" type="button" class="secondary" aria-label="Komutlar" aria-expanded="false" aria-controls="slash-panel" data-i18n="static.55" data-i18n-attr="aria-label:attr.219">/</button>
       <button id="btn-send" type="submit" data-i18n="static.56">Gönder</button>

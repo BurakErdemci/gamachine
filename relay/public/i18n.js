@@ -212,7 +212,6 @@ export const STRINGS = {
     "attr.214": "https://…/p#…",
     "attr.215": "Model",
     "attr.216": "Reasoning level",
-    "attr.217": "Search commands…",
     "attr.218": "Write a message…",
     "attr.219": "Commands"
   },
@@ -428,7 +427,6 @@ export const STRINGS = {
     "attr.214": "https://…/p#…",
     "attr.215": "Model",
     "attr.216": "Düşünme seviyesi",
-    "attr.217": "Komut ara…",
     "attr.218": "Mesaj yaz…",
     "attr.219": "Komutlar"
   }

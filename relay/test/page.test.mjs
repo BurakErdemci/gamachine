@@ -660,12 +660,14 @@ test('every element app.js looks up by id exists in index.html', () => {
   for (const id of ids) assert.ok(html.includes(`id="${id}"`), `index.html has no #${id}`);
 });
 
-test('the mode selector holds exactly the three modes, and Enter in the command search cannot send a message', () => {
+test('the mode selector holds exactly the three modes, and inline commands precede the composer text', () => {
   const select = html.slice(html.indexOf('<select id="mode-select"'), html.indexOf('</select>'));
   assert.deepEqual([...select.matchAll(/value="([a-z]+)"/g)].map((m) => m[1]), APPROVAL_MODES.map((m) => m.id));
   const form = html.slice(html.indexOf('<form id="composer">'), html.indexOf('</form>'));
   assert.ok(form.includes('id="btn-slash"') && form.includes('id="composer-text"'));
-  assert.ok(!form.includes('slash-filter'), 'the search box must stay outside the form');
+  assert.ok(form.includes('id="slash-panel"') && form.includes('id="slash-list"'));
+  assert.ok(form.indexOf('id="slash-list"') < form.indexOf('id="composer-text"'), 'suggestions must be above the textarea');
+  assert.ok(!html.includes('slash-filter'), 'the textarea replaces the separate command search');
 });
 
 // ---------------------------------------------------------------- close races

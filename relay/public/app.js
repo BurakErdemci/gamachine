@@ -559,56 +559,106 @@ function renderChatHeader() {
 
 const SLASH_TTL_MS = 5 * 60 * 1000;
 const slashCache = new Map(); // chat id -> { at, items }
+const slashPending = new Map();
+let slashShown = [];
+let slashActive = 0;
 
 function closeSlash() {
   $('slash-panel').hidden = true;
   $('btn-slash').setAttribute('aria-expanded', 'false');
+  $('composer-text').setAttribute('aria-expanded', 'false');
+  $('composer-text').removeAttribute('aria-activedescendant');
+  slashShown = [];
 }
 
 function renderSlash() {
   const list = $('slash-list');
   list.replaceChildren();
+  slashShown = [];
+  $('composer-text').removeAttribute('aria-activedescendant');
+  if (slashPending.has(view.shown)) {
+    setText($('slash-note'), () => t('slash.loading'));
+    return;
+  }
   const cached = slashCache.get(view.shown);
   if (!cached) return;
-  const { shown, total } = filterSlash(cached.items, $('slash-filter').value);
-  for (const item of shown) {
-    list.append(el('li', {}, el('button', { type: 'button', onclick: () => pickSlash(item) },
+  const { shown, total } = filterSlash(cached.items, $('composer-text').value);
+  slashShown = shown;
+  slashActive = Math.min(slashActive, Math.max(0, shown.length - 1));
+  for (const [index, item] of shown.entries()) {
+    const button = el('button', { id: 'slash-option-' + index, type: 'button', tabIndex: -1, onclick: () => pickSlash(item) },
       '/' + item.name + (item.hint ? ' ' + item.hint : ''),
-      item.description ? el('span', { class: 'meta', textContent: item.description }) : null)));
+      item.description ? el('span', { class: 'meta', textContent: item.description }) : null);
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', String(index === slashActive));
+    list.append(el('li', { role: 'presentation' }, button));
   }
+  if (shown.length) $('composer-text').setAttribute('aria-activedescendant', 'slash-option-' + slashActive);
   setText($('slash-note'), () => !total ? t('slash.noMatches')
     : total > shown.length ? t('slash.results', { total, shown: shown.length }) : '');
 }
 
 function pickSlash(item) {
   const box = $('composer-text');
-  box.value = withCommand(box.value, item.insert);
+  box.value = withCommand('', '/' + item.name + ' ');
   closeSlash();
   box.focus();
   box.setSelectionRange(box.value.length, box.value.length);
 }
 
-async function toggleSlash() {
-  if (!$('slash-panel').hidden) {
+async function updateSlash() {
+  const value = $('composer-text').value;
+  const chatId = view.shown;
+  if (!chatId || !value.startsWith('/') || /\s/.test(value)) {
     closeSlash();
     return;
   }
-  const chatId = view.shown;
-  if (!chatId) return;
   $('slash-panel').hidden = false;
   $('btn-slash').setAttribute('aria-expanded', 'true');
-  $('slash-filter').value = '';
-  renderSlash();
+  $('composer-text').setAttribute('aria-expanded', 'true');
+  slashActive = 0;
   const cached = slashCache.get(chatId);
-  if (cached && Date.now() - cached.at < SLASH_TTL_MS) return;
-  setText($('slash-note'), () => t('slash.loading'));
+  if (cached && Date.now() - cached.at < SLASH_TTL_MS) {
+    renderSlash();
+    return;
+  }
+  if (!slashPending.has(chatId)) {
+    const pending = call('list_slash_commands', { chat_id: chatId })
+      .then((catalog) => slashCache.set(chatId, { at: Date.now(), items: slashItems(catalog) }))
+      .finally(() => slashPending.delete(chatId));
+    slashPending.set(chatId, pending);
+  }
+  renderSlash();
   try {
-    slashCache.set(chatId, { at: Date.now(), items: slashItems(await call('list_slash_commands', { chat_id: chatId })) });
+    await slashPending.get(chatId);
   } catch (err) {
-    if (view.shown === chatId) setText($('slash-note'), () => slashFailureNote(err.message));
+    if (view.shown === chatId && !$('slash-panel').hidden) setText($('slash-note'), () => slashFailureNote(err.message));
     return;
   }
   if (view.shown === chatId && !$('slash-panel').hidden) renderSlash();
+}
+
+function startSlash() {
+  const box = $('composer-text');
+  if (!box.value) box.value = '/';
+  box.focus();
+  return updateSlash();
+}
+
+function slashKeydown(event) {
+  if ($('slash-panel').hidden || event.isComposing) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeSlash();
+  } else if (slashShown.length && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+    event.preventDefault();
+    slashActive = (slashActive + (event.key === 'ArrowDown' ? 1 : -1) + slashShown.length) % slashShown.length;
+    renderSlash();
+    $('slash-list').children[slashActive].firstChild.scrollIntoView({ block: 'nearest' });
+  } else if (slashShown.length && (event.key === 'Enter' || event.key === 'Tab')) {
+    event.preventDefault();
+    pickSlash(slashShown[slashActive]);
+  }
 }
 
 function logMessage(m) {
@@ -874,8 +924,9 @@ function wire() {
   $('mode-select').addEventListener('change', changeMode);
   $('model-select').addEventListener('change', changeModel);
   $('effort-select').addEventListener('change', changeEffort);
-  $('btn-slash').addEventListener('click', toggleSlash);
-  $('slash-filter').addEventListener('input', renderSlash);
+  $('btn-slash').addEventListener('click', startSlash);
+  $('composer-text').addEventListener('input', updateSlash);
+  $('composer-text').addEventListener('keydown', slashKeydown);
 
   let stopArmed = null;
   $('btn-stop').addEventListener('click', async () => {
