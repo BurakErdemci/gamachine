@@ -14,6 +14,10 @@
   --intro-dust: #3A4361;
   --intro-dust-2: #A0A8BC;
   --intro-scan: rgba(160, 175, 215, .035); /* scan lines on the lit screen */
+  /* "power": the INSERTED tag, READY, 100%, cable pulse, slot rim, LED, ready bar. Arena reads its
+     own --energy; a theme whose --energy is a paper-surface colour points this at a lighter one
+     of the same hue, since the text sits on the dark intro ground (WCAG AA, 4.5:1). */
+  --intro-energy: var(--energy);
 }
 /* The scenes are drawn on a fixed 1600x1000 stage (the mockup's design viewport). The app scales
    that stage to fit the window and centres it (IntroOverlay sets --intro-fit); stretching .ov to
@@ -649,7 +653,7 @@
 
 :where(.intro-overlay) .s3-lock path { fill: none; stroke: var(--mascot-eye); stroke-width: 3; stroke-linecap: square; }
 
-:where(.intro-overlay) .s3-tag { fill: var(--energy); font-family: var(--font-display); font-size: 14px; font-weight: 700; letter-spacing: .16em; }
+:where(.intro-overlay) .s3-tag { fill: var(--intro-energy); font-family: var(--font-display); font-size: 14px; font-weight: 700; letter-spacing: .16em; }
    /* x1.45 on screen */
 :where(.intro-overlay) .s3-mach { left: 0; top: 0; width: 1600px; height: 1000px; overflow: visible; }
 
@@ -665,7 +669,7 @@
 
 :where(.intro-overlay) .s3-cable { fill: none; stroke: var(--intro-line); stroke-width: 4; stroke-linecap: round; }
 
-:where(.intro-overlay) .s3-pulse { fill: none; stroke: var(--energy); stroke-width: 4; stroke-linecap: round; stroke-dasharray: .14 1.2; stroke-dashoffset: .14; opacity: 0; }
+:where(.intro-overlay) .s3-pulse { fill: none; stroke: var(--intro-energy); stroke-width: 4; stroke-linecap: round; stroke-dasharray: .14 1.2; stroke-dashoffset: .14; opacity: 0; }
 
 :where(.intro-overlay) .s3-scr { left: 246px; top: 226px; width: 708px; height: 380px; overflow: hidden; background: var(--intro-shadow); }
 
@@ -770,7 +774,7 @@
 
 .run3 :where(.intro-overlay) .s3-slot { animation: s3-slot 450ms linear 2750ms forwards; }
 
-@keyframes s3-slot { 0%, 35% { stroke: var(--energy); stroke-width: 3.5; } 100% { stroke: var(--energy); stroke-width: 1.5; } }
+@keyframes s3-slot { 0%, 35% { stroke: var(--intro-energy); stroke-width: 3.5; } 100% { stroke: var(--intro-energy); stroke-width: 1.5; } }
 
 
 /* --- act 3: power, boot, light --- */
@@ -778,7 +782,7 @@
 
 .run3 :where(.intro-overlay) .s3-led-mon { animation: s3-led 1ms linear 3200ms both; }
 
-@keyframes s3-led { to { fill: var(--energy); } }
+@keyframes s3-led { to { fill: var(--intro-energy); } }
 
 .run3 :where(.intro-overlay) .s3-pulse { animation: s3-pulse 450ms cubic-bezier(.4, 0, .6, 1) 2780ms both; }
 
@@ -1076,10 +1080,10 @@
   background: repeating-linear-gradient(90deg, var(--intro-accent) 0 26px, transparent 26px 32px); }
 
 :where(.intro-overlay) .s5-fill::before { content: ""; position: absolute; inset: 0; opacity: 0;
-  background: repeating-linear-gradient(90deg, var(--energy) 0 26px, transparent 26px 32px); }
+  background: repeating-linear-gradient(90deg, var(--intro-energy) 0 26px, transparent 26px 32px); }
 
 :where(.intro-overlay) .s5-ok { left: 650px; top: 400px; width: 400px; text-align: center; opacity: 0;
-  font: 700 64px/1 var(--font-display); letter-spacing: .14em; color: var(--energy); }
+  font: 700 64px/1 var(--font-display); letter-spacing: .14em; color: var(--intro-energy); }
 
 
 /* --- act 1: the bar, the mascot hops in --- */
@@ -1088,7 +1092,7 @@
 
 @keyframes s5-bar { to { clip-path: inset(0 0 0 0); } }
 
-@keyframes s5-ready { to { box-shadow: inset 0 0 0 2px var(--energy); } }
+@keyframes s5-ready { to { box-shadow: inset 0 0 0 2px var(--intro-energy); } }
 
 @keyframes s5-box { to { transform: translate(197px, -159px) scale(.6926, 1.3571); box-shadow: inset 0 0 0 2px var(--intro-line); } }
 
@@ -1159,7 +1163,7 @@
 
 @keyframes s5-blink { 0%, 24.9%, 50%, 74.9% { opacity: 1; } 25%, 49.9%, 75%, 100% { opacity: .55; } }
    /* .55 keeps 5.2:1 */
-@keyframes s5-hundred { to { --p: 100; color: var(--energy); } }
+@keyframes s5-hundred { to { --p: 100; color: var(--intro-energy); } }
 
 
 /* the push pose: lean in, arm on the bar's edge; stuck; wind back; shove */

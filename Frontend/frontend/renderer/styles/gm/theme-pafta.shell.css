@@ -39,4 +39,7 @@
   --intro-shadow: color-mix(in srgb, var(--shell-bg) 55%, black);
   --intro-dust: var(--intro-line); --intro-dust-2: var(--shell-text-dim);
   --intro-scan: color-mix(in srgb, var(--shell-text-dim) 3.5%, transparent);
+  /* --energy is a paper-surface colour (pafta #3F6A94, 2.88:1 on --shell-bg);
+     the same hue lifted for text on the dark intro ground: 4.86:1 */
+  --intro-energy: #6390BD;
 }

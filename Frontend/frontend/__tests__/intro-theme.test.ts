@@ -40,6 +40,43 @@ describe('intro palette (owner, 3 Oct: the intro followed Arena colours in every
     expect(rule).toContain('--intro-shadow:')
   })
 
+  it('reads the power colour through --intro-energy, which defaults to exactly var(--energy)', () => {
+    // Arena (and any theme that does not set it) keeps its own --energy unchanged.
+    expect(palette).toMatch(/--intro-energy: var\(--energy\);/)
+    expect(css.replace(PALETTE, '$1')).not.toMatch(/var\(--energy\)/)
+  })
+
+  // WCAG relative luminance of a #rrggbb colour.
+  const lum = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map(c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x)
+    return (hi + 0.05) / (lo + 0.05)
+  }
+  // Last literal value of a token across the theme's :root[data-theme] blocks in tokens.css.
+  const themeToken = (theme: string, token: string) => {
+    const tokens = noComments(gm('tokens.css'))
+    const blocks = [...tokens.matchAll(new RegExp(`:root\\[data-theme="${theme}"\\] \\{[^}]*\\}`, 'g'))].map(m => m[0])
+    const values = blocks.flatMap(b => [...b.matchAll(new RegExp(`${token}:\\s*(#[0-9a-fA-F]{6})\\b`, 'g'))].map(m => m[1]))
+    return values.at(-1) ?? ''
+  }
+
+  // Özel is left out: its ground and --energy are both mixed from the user's own two colours.
+  it.each(['arena', 'sade', 'pafta', 'atolye'])('%s draws the intro power text at 4.5:1 or more on its intro ground', theme => {
+    const shell = theme === 'arena' ? '' : noComments(gm(`theme-${theme}.shell.css`))
+    const rule = shell.match(new RegExp(`\\[data-theme="${theme}"\\] \\.intro-overlay \\{[^}]*\\}`))?.[0] ?? ''
+    // These themes leave --intro-bg at its default, var(--shell-bg).
+    expect(rule).not.toContain('--intro-bg:')
+    const ground = themeToken(theme, '--shell-bg')
+    const energy = rule.match(/--intro-energy:\s*(#[0-9a-fA-F]{6})\b/)?.[1] ?? themeToken(theme, '--energy')
+    expect(ground, 'ground').toMatch(/^#[0-9a-fA-F]{6}$/)
+    expect(energy, 'energy').toMatch(/^#[0-9a-fA-F]{6}$/)
+    expect(contrast(energy, ground)).toBeGreaterThanOrEqual(4.5)
+  })
+
   it('Özel draws the intro in the user colours, never the status orange', () => {
     const rule = noComments(gm('theme-ozel.shell.css')).match(/\[data-theme="ozel"\] \.intro-overlay \{[^}]*\}/)?.[0] ?? ''
     expect(rule).toMatch(/--intro-accent: var\(--oz-acc\)/)
