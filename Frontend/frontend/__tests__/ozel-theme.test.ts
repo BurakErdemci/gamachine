@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, renderHook } from '@testing-library/react'
 import { applyAppearance, DEFAULTS, FONT_STACKS, THEMES } from '../renderer/lib/appearance'
 import {
-  OZEL_DEFAULTS, OZEL_PRESETS, OZEL_STORAGE_KEY, contrast, fixReadable, getOzel, isReadable, loadOzel, normHex,
-  ozelFlags, parseThemeText, presetSettings, readability, saveOzel, setOzel, themeText,
+  OZEL_DEFAULTS, OZEL_PRESETS, OZEL_STATUS, OZEL_STORAGE_KEY, clearOzel, contrast, fixReadable, getOzel, isReadable, loadOzel, mixOklab, normHex,
+  ozelFlags, parseThemeText, presetSettings, readability, saveOzel, setOzel, themeText, useOzel,
 } from '../renderer/lib/ozelTheme'
 
 const root = document.documentElement
@@ -29,6 +30,7 @@ beforeEach(() => {
   localStorage.clear()
 })
 afterEach(() => {
+  cleanup()
   applyAppearance(DEFAULTS)
   vi.unstubAllGlobals()
 })
@@ -75,10 +77,45 @@ describe('contrast and flags', () => {
     expect(ozelFlags(OZEL_PRESETS.mono.dark)).toEqual({ tone: 'dark', mid: false, acc: 'off', bad: false })
   })
 
-  it('Kâğıt light: light status set, ink accent reads in full, status words in ink', () => {
-    // The light orange #B0500C reaches only ~4.1:1 on the raised paper, so the words fall back to ink
-    // and the hue stays in the marks - as in the approved shot shots-r15/ozel-kagit-ana.png.
-    expect(ozelFlags(OZEL_PRESETS.kagit.light)).toEqual({ tone: 'light', mid: true, acc: 'full', bad: false })
+  it('Kâğıt light: light status set, ink accent and status words read in full', () => {
+    expect(ozelFlags(OZEL_PRESETS.kagit.light)).toEqual({ tone: 'light', mid: false, acc: 'full', bad: false })
+  })
+
+  it('all six presets retain status hues, readable on every text surface', () => {
+    for (const preset of Object.values(OZEL_PRESETS)) {
+      for (const tone of ['light', 'dark'] as const) {
+        const p = preset[tone]
+        expect(ozelFlags(p)).toMatchObject({ tone, mid: false, bad: false })
+        const srgb = (fraction: number) => '#' + [1, 3, 5].map(i =>
+          Math.round(parseInt(p.fg.slice(i, i + 2), 16) * fraction + parseInt(p.bg.slice(i, i + 2), 16) * (1 - fraction))
+            .toString(16).padStart(2, '0')).join('')
+        const surfaces = [p.bg, ...(tone === 'light'
+          ? [0.035, 0.06, 0.10].map(f => mixOklab(p.fg, p.bg, f))
+          : [0.07, 0.09, 0.13].map(srgb))]
+        expect(readability(p.fg, p.bg)).toEqual({
+          main: Math.min(...surfaces.map(s => contrast(p.fg, s))),
+          faint: Math.min(...surfaces.map(s => contrast(mixOklab(p.fg, p.bg, 0.72), s))),
+        })
+        for (const color of Object.values(OZEL_STATUS[tone])) {
+          for (const surface of surfaces) expect(contrast(color, surface), `${tone}: ${color} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+        }
+      }
+    }
+  })
+
+  it('rejects dark text that passed on the old OKLab surfaces but fails on the srgb active row', () => {
+    const fg = '#BABABA', bg = '#101010', faint = mixOklab(fg, bg, 0.72)
+    expect(Math.min(...[0, 0.06, 0.10].map(f => contrast(faint, mixOklab(fg, bg, f))))).toBeGreaterThanOrEqual(4.5)
+    expect(ozelFlags({ fg, bg, accent: fg }).tone).toBe('dark')
+    expect(readability(fg, bg).faint).toBeLessThan(4.5)
+    expect(isReadable(fg, bg)).toBe(false)
+  })
+
+  it('falls back to ink when a custom light active row makes a status colour unreadable', () => {
+    const p = { bg: '#F0F0F0', fg: '#000000', accent: '#000000' }
+    expect(contrast(OZEL_STATUS.light.wait, mixOklab(p.fg, p.bg, 0.06))).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(OZEL_STATUS.light.wait, mixOklab(p.fg, p.bg, 0.10))).toBeLessThan(4.5)
+    expect(ozelFlags(p)).toMatchObject({ tone: 'light', mid: true })
   })
 
   it('a mid grey ground (#808080 / #FFFFFF) has no readable status set and fails the guard', () => {
@@ -272,9 +309,67 @@ describe('applying Özel on <html>', () => {
     scheme.set(true)
     expect(root.style.getPropertyValue('--u-bg')).toBe('#F5F7FA')
   })
+
+  it('removes the system listener on exit and adds exactly one on re-entry', () => {
+    const scheme = stubScheme(false)
+    setOzel(presetSettings('mono', 'system'))
+    applyAppearance({ ...DEFAULTS, theme: 'ozel' }, root)
+    expect(scheme.listeners.size).toBe(1)
+    const consumer = renderHook(() => useOzel())
+    clearOzel(root)
+    expect(scheme.listeners.size).toBe(0)
+    applyAppearance({ ...DEFAULTS, theme: 'ozel' }, root)
+    applyAppearance({ ...DEFAULTS, theme: 'ozel' }, root)
+    expect(scheme.listeners.size).toBe(1)
+    consumer.unmount()
+  })
+
+  it('keeps one listener until the last useOzel consumer unmounts', () => {
+    const scheme = stubScheme(false)
+    applyAppearance({ ...DEFAULTS, theme: 'ozel' }, root)
+    const first = renderHook(() => useOzel()), second = renderHook(() => useOzel())
+    expect(scheme.listeners.size).toBe(1)
+    first.unmount()
+    expect(scheme.listeners.size).toBe(1)
+    second.unmount()
+    expect(scheme.listeners.size).toBe(0)
+    applyAppearance({ ...DEFAULTS, theme: 'ozel' }, root)
+    expect(scheme.listeners.size).toBe(1)
+  })
 })
 
 describe('theme-ozel CSS stays inside Özel', () => {
+  it('keeps status hexes in CSS and the contrast model in sync', () => {
+    const css = readFileSync(resolve(__dirname, '../renderer/styles/gm/theme-ozel.shell.css'), 'utf8')
+    const light = css.match(/:root\[data-theme="ozel"\]\[data-u-tone="light"\]\s*\{([^}]+)\}/)![1]
+    const dark = css.match(/\/\* ================= status:[\s\S]+?:root\[data-theme="ozel"\]\s*\{([^}]+)\}/)![1]
+    for (const tone of ['light', 'dark'] as const) {
+      for (const [status, color] of Object.entries(OZEL_STATUS[tone])) {
+        expect(tone === 'light' ? light : dark).toContain(`--st-${status}: ${color}`)
+      }
+    }
+  })
+
+  it('uses status red/warning and the user accent for the specified signal roles', () => {
+    const shell = readFileSync(resolve(__dirname, '../renderer/styles/gm/theme-ozel.shell.css'), 'utf8')
+    const thread = readFileSync(resolve(__dirname, '../renderer/styles/gm/theme-ozel.thread.css'), 'utf8')
+    for (const rule of [
+      '.side-menu-item.is-danger { color: var(--st-err-text); }',
+      '.status-err { background: var(--st-err); }',
+      '.oz-guard { border-color: var(--st-warn); }',
+      '.oz-guard > .ic { color: var(--st-warn-text); }',
+      '.oz-st-i[data-st="err"] i { background: var(--oz-err); }',
+    ]) expect(shell).toContain(`[data-theme="ozel"] ${rule}`)
+    expect(shell).toContain('--use-hot: var(--st-warn)')
+    expect(shell).toContain('--tour-ring: var(--oz-acc)')
+    expect(shell).toContain('--tour-dot-on: var(--oz-acc)')
+    expect(thread).toContain('[data-theme="ozel"] .composer:focus-within { border-color: var(--oz-acc); }')
+    expect(shell.match(/:root\[data-theme="ozel"\]\[data-u-tone="dark"\]\s*\{([^}]+)\}/)![1]).toContain('--f-bg: var(--oz-2)')
+    const allToneBlocks = [...shell.matchAll(/:root\[data-theme="ozel"\]\s*\{([^}]+)\}/g)].map(m => m[1]).join('\n')
+    expect(allToneBlocks).toContain('--f-bg: var(--oz-1)')
+    expect(allToneBlocks).not.toContain('--f-bg: var(--oz-2)')
+  })
+
   /** Every style-rule selector (keyframe steps excluded) of a stylesheet. */
   function selectors(css: string): string[] {
     const out: string[] = []

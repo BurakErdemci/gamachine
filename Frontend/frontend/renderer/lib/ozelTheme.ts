@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { luminance } from './themeTokens'
+import { luminance, oklabToHex } from './themeTokens'
 
 /**
  * The fifth theme, "Özel" (mockup round 15 / 15b, KARAKTER 17): the user sets three colours per
@@ -77,8 +77,8 @@ export const ozelFontStack = (font: OzelFont): string => (font === 'default' ? D
 
 /** Status colours are not user colours: fixed pairs, the set that reads on the ground is picked. */
 export const OZEL_STATUS = {
-  dark: { wait: '#FF9D5C', run: '#6CB2FF', ok: '#5CCF8C', err: '#FF7A7A' },
-  light: { wait: '#B0500C', run: '#1760C2', ok: '#1D7A42', err: '#C02A2A' },
+  dark: { wait: '#FF9D5C', run: '#6CB2FF', ok: '#5CCF8C', err: '#FF7A7A', warn: '#E8C35A' },
+  light: { wait: '#A04200', run: '#115BBD', ok: '#056D36', err: '#B82023', warn: '#7D5800' },
 } as const
 
 export function presetSettings(id: OzelPresetId, mode?: OzelMode): OzelSettings {
@@ -104,7 +104,6 @@ export function contrast(a: string, b: string): number {
 
 const rgb = (h: string) => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255] }
 const lin = (v: number) => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }
-const delin = (v: number) => (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055) * 255
 const toHex = (c: number[]) => `#${c.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('').toUpperCase()}`
 function toLab(h: string): number[] {
   const [r, g, b] = rgb(h).map(lin)
@@ -117,28 +116,33 @@ function toLab(h: string): number[] {
     0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
   ]
 }
-function fromLab([L, A, B]: number[]): string {
-  const l = (L + 0.3963377774 * A + 0.2158037573 * B) ** 3
-  const m = (L - 0.1055613458 * A - 0.0638541728 * B) ** 3
-  const s = (L - 0.0894841775 * A - 1.2914855480 * B) ** 3
-  return toHex([
-    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
-    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
-    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
-  ].map(delin))
-}
 /** = CSS `color-mix(in oklab, a p, b)` with p in 0..1. */
 export function mixOklab(a: string, b: string, p: number): string {
   const x = toLab(a), y = toLab(b)
-  return fromLab([0, 1, 2].map(i => x[i] * p + y[i] * (1 - p)))
+  return oklabToHex([0, 1, 2].map(i => x[i] * p + y[i] * (1 - p))).toUpperCase()
 }
 
 /* ---------------- facts derived from a palette ---------------- */
 
+const worstStatus = (set: Record<string, string>, surfaces: string[]) =>
+  Math.min(...Object.values(set).flatMap(c => surfaces.map(bg => contrast(c, bg))))
+
+function paletteTone(fg: string, bg: string): 'light' | 'dark' {
+  // Keep the tone choice on the original ground/raised comparison, independent of the new surface model.
+  const surfaces = [bg, mixOklab(fg, bg, 0.06)]
+  return worstStatus(OZEL_STATUS.light, surfaces) > worstStatus(OZEL_STATUS.dark, surfaces) ? 'light' : 'dark'
+}
+
+function textSurfaces(fg: string, bg: string, tone = paletteTone(fg, bg)): string[] {
+  if (tone === 'light') return [bg, ...[0.035, 0.06, 0.10].map(p => mixOklab(fg, bg, p))]
+  const x = rgb(fg), y = rgb(bg)
+  return [bg, ...[0.07, 0.09, 0.13].map(p => toHex(x.map((v, i) => v * p + y[i] * (1 - p))))]
+}
+
 /** The text pairs the theme actually draws (same percentages as theme-ozel.shell.css). */
 export function readability(fg: string, bg: string): { main: number; faint: number } {
-  const raised = mixOklab(fg, bg, 0.06), active = mixOklab(fg, bg, 0.10), faint = mixOklab(fg, bg, 0.72)
-  return { main: contrast(fg, bg), faint: Math.min(contrast(faint, bg), contrast(faint, raised), contrast(faint, active)) }
+  const surfaces = textSurfaces(fg, bg), faint = mixOklab(fg, bg, 0.72)
+  return { main: Math.min(...surfaces.map(s => contrast(fg, s))), faint: Math.min(...surfaces.map(s => contrast(faint, s))) }
 }
 export const isReadable = (fg: string, bg: string): boolean => {
   const r = readability(fg, bg)
@@ -146,14 +150,11 @@ export const isReadable = (fg: string, bg: string): boolean => {
 }
 
 export function ozelFlags(p: OzelPalette): OzelFlags {
-  const raised = mixOklab(p.fg, p.bg, 0.06)
-  const worst = (set: Record<string, string>) =>
-    Math.min(...Object.values(set).map(c => Math.min(contrast(c, p.bg), contrast(c, raised))))
-  const d = worst(OZEL_STATUS.dark), l = worst(OZEL_STATUS.light)
+  const tone = paletteTone(p.fg, p.bg)
   const ac = Math.min(contrast(p.accent, p.bg), contrast(p.accent, mixOklab(p.fg, p.bg, 0.10)))
   return {
-    tone: l > d ? 'light' : 'dark',
-    mid: Math.max(d, l) < 4.5,
+    tone,
+    mid: worstStatus(OZEL_STATUS[tone], textSurfaces(p.fg, p.bg, tone)) < 4.5,
     acc: ac >= 4.5 ? 'full' : ac >= 3 ? 'mark' : 'off',
     bad: !isReadable(p.fg, p.bg),
   }
@@ -310,6 +311,11 @@ function watchScheme(): void {
   try { mq?.addEventListener?.('change', onSchemeChange) } catch { /* no live updates */ }
 }
 
+function unwatchScheme(): void {
+  try { watched?.removeEventListener?.('change', onSchemeChange) } catch { /* old list gone */ }
+  watched = null
+}
+
 /** Replace the Özel settings: persists, notifies the settings UI and repaints when Özel is shown. */
 export function setOzel(next: OzelSettings): void {
   snapshot = { settings: clone(next), prefersDark: current().prefersDark }
@@ -328,8 +334,9 @@ const toggleAttr = (root: HTMLElement, name: string, on: boolean) => { if (on) r
  */
 export function applyOzel(root: HTMLElement, fonts: OzelFontPicks): void {
   applied = { root, fonts }
-  watchScheme()
   const s = current().settings
+  if (s.mode === 'system') watchScheme()
+  else unwatchScheme()
   const p = activePalette(s)
   const f = ozelFlags(p)
   root.style.setProperty('--u-bg', p.bg)
@@ -352,14 +359,15 @@ export function applyOzel(root: HTMLElement, fonts: OzelFontPicks): void {
 /** Remove every Özel property and attribute (the character themes must not inherit any). */
 export function clearOzel(root: HTMLElement): void {
   if (applied?.root === root) applied = null
+  unwatchScheme()
   for (const name of U_PROPS) root.style.removeProperty(name)
   for (const name of U_ATTRS) root.removeAttribute(name)
 }
 
 function subscribe(cb: () => void): () => void {
   listeners.add(cb)
-  watchScheme()
-  return () => { listeners.delete(cb) }
+  if (applied?.root.dataset.theme === 'ozel' && current().settings.mode === 'system') watchScheme()
+  return () => { listeners.delete(cb); if (!listeners.size) unwatchScheme() }
 }
 
 /** The Özel settings for the settings UI, re-rendered on every change and on a system scheme change. */

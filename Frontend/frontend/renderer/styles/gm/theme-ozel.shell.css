@@ -91,7 +91,7 @@
   /* tour = coach marks; welcome = one list (round 12) */
   --tour-bg: var(--paper-raised);
   --tour-line: var(--paper-line-strong);
-  --tour-ring: var(--accent);
+  --tour-ring: var(--oz-acc);
   --tour-ring-w: 1.5px;
   --tour-hole-radius: 8px;
   --tour-pad: 6px;
@@ -100,7 +100,7 @@
   --tour-shadow: none;
   --tour-w: 340px;
   --tour-dot: var(--paper-line-strong);
-  --tour-dot-on: var(--accent);
+  --tour-dot-on: var(--oz-acc);
   --wl-side-w: 420px;
   --wl-card-bg: var(--paper-raised);
 
@@ -144,7 +144,7 @@
   --st-claude: #D9A27E; --st-codex: #B7BCC8; --st-gemini: #8DB3FF;
 }
 :root[data-theme="ozel"][data-u-tone="light"] {
-  --st-wait: #B0500C; --st-run: #1760C2; --st-ok: #1D7A42; --st-err: #C02A2A; --st-warn: #8A6400;
+  --st-wait: #A04200; --st-run: #115BBD; --st-ok: #056D36; --st-err: #B82023; --st-warn: #7D5800;
   --st-claude: #A0582F; --st-codex: #5A6070; --st-gemini: #2F5FC4;
 }
 :root[data-theme="ozel"] {
@@ -167,6 +167,7 @@
   --oz-3: color-mix(in srgb, var(--u-fg) 13%, var(--u-bg));
   --oz-4: color-mix(in srgb, var(--u-fg) 16%, var(--u-bg));
   --oz-5: color-mix(in srgb, var(--u-fg) 26%, var(--u-bg));
+  --f-bg: var(--oz-2);
 }
 :root[data-theme="ozel"] {
   --oz-1: color-mix(in oklab, var(--u-fg) 3.5%, var(--u-bg));
@@ -262,9 +263,10 @@
   --set-seg-bg: var(--oz-4); --set-seg-ink: var(--u-fg);
   /* danger (auto mode, delete, log out) is red; orange stays "waiting on you" only (owner, 3 Oct) */
   --set-warn: var(--st-err); --set-warn-text: var(--st-err-text);
+  --use-hot: var(--st-warn);
   --hier-prefab: color-mix(in oklab, var(--st-run) 70%, var(--u-fg)); --insp-prefab: var(--hier-prefab);
   --hier-sel: var(--oz-3); --hier-selection-edge: var(--oz-acc);
-  --f-bg: var(--oz-2); --f-line: var(--oz-4); --f-line-hover: var(--oz-5); --cmp-head-bg: var(--u-bg);
+  --f-bg: var(--oz-1); --f-line: var(--oz-4); --f-line-hover: var(--oz-5); --cmp-head-bg: var(--u-bg);
   --f-check: var(--oz-acc); --f-check-ink: var(--oz-on-acc); --f-fill: var(--oz-acc);
   --tour-dim: color-mix(in oklab, var(--u-bg) 72%, transparent);
   --r14-scrim: color-mix(in oklab, var(--u-bg) 60%, transparent);
@@ -290,6 +292,13 @@
 :root[data-theme="ozel"][data-u-tone="light"] .settings, :root[data-theme="ozel"][data-u-tone="light"] .profile { color-scheme: light; }
 
 /* ================= shell (theme-sade.shell.css, renamed) ================= */
+[data-theme="ozel"] .side-menu-item.is-danger { color: var(--st-err-text); }
+[data-theme="ozel"] .status-err { background: var(--st-err); }
+[data-theme="ozel"] .oz-guard { border-color: var(--st-warn); }
+[data-theme="ozel"] .oz-guard > .ic { color: var(--st-warn-text); }
+[data-theme="ozel"] .oz-guard.is-fixed { border-color: var(--paper-line-strong); }
+[data-theme="ozel"] .oz-guard.is-fixed > .ic { color: var(--st-ok-text); }
+[data-theme="ozel"] .oz-st-i[data-st="err"] i { background: var(--oz-err); }
 /* sidebar meters: hairline progress */
 [data-theme="ozel"] .xp-mini { height: 2px; border-radius: 1px; }
 [data-theme="ozel"] .xp-mini span { border-radius: 1px; }

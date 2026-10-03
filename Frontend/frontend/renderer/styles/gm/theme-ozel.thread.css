@@ -11,7 +11,7 @@
 [data-theme="ozel"] .energy i:first-child { border-radius: 1px 0 0 1px; }
 [data-theme="ozel"] .energy i:last-child { border-radius: 0 1px 1px 0; }
 [data-theme="ozel"] .composer { border-color: var(--oz-card-line); }
-[data-theme="ozel"] .composer:focus-within { border-color: var(--accent); }
+[data-theme="ozel"] .composer:focus-within { border-color: var(--oz-acc); }
 [data-theme="ozel"] .send { width: 32px; height: 32px; border-radius: var(--radius-sm); }
 /* mono is wider: the composer strip stays one line, its key hint gives way first */
 [data-theme="ozel"] .strip-item, [data-theme="ozel"] .strip-hint { white-space: nowrap; }

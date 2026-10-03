@@ -203,6 +203,7 @@ const OzelGroup = ({ saved }: { saved: () => void }) => {
   const [drafts, setDrafts] = React.useState<Partial<Record<ColorKey, string>>>({});
   const [fixed, setFixed] = React.useState<{ mode: 'light' | 'dark'; before: OzelPalette; after: OzelPalette } | null>(null);
   const [copied, setCopied] = React.useState(false);
+  const [copyError, setCopyError] = React.useState(false);
   const [impOpen, setImpOpen] = React.useState(false);
   const [impText, setImpText] = React.useState('');
   const focusNext = React.useRef<'undo' | 'fix' | 'imp-in' | 'imp-btn' | null>(null);
@@ -261,11 +262,16 @@ const OzelGroup = ({ saved }: { saved: () => void }) => {
     setImpText('');
     openImport(false);
   };
-  const copy = () => {
-    try { void navigator.clipboard?.writeText(themeText(s, prefersDark)).catch(() => {}); } catch { /* clipboard refused */ }
-    setCopied(true);
+  const copy = async () => {
+    setCopied(false);
+    setCopyError(false);
     clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => setCopied(false), 1600);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(themeText(s, prefersDark));
+      setCopied(true);
+      copyTimer.current = setTimeout(() => setCopied(false), 1600);
+    } catch { setCopyError(true); }
   };
 
   const colorField = (k: ColorKey, label: string) => {
@@ -407,6 +413,7 @@ const OzelGroup = ({ saved }: { saved: () => void }) => {
                   <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="7" width="9" height="9" rx="1.5" /><path d="M13 7V5.5A1.5 1.5 0 0 0 11.5 4h-6A1.5 1.5 0 0 0 4 5.5v6A1.5 1.5 0 0 0 5.5 13H7" /></svg>
                   <span className="oz-copy-t">{copied ? t('set.oz.copied') : t('set.oz.copy')}</span>
                 </button>
+                {copyError && <span className="oz-imp-msg is-err" role="status">{t('set.oz.copyError')}</span>}
                 <button ref={impBtnRef} type="button" className="btn btn-ghost btn-sm" aria-expanded={impOpen} aria-controls="oz-imp"
                   onClick={() => openImport(!impOpen)}>
                   <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v9M6 9.5l4 4 4-4M4.5 16h11" /></svg>

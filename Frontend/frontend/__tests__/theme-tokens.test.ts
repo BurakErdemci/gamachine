@@ -25,6 +25,19 @@ describe('theme token reader', () => {
     expect(luminance('#ffffff')).toBeCloseTo(1)
   })
 
+  it('parses computed OKLab and OKLCH colours, ignoring alpha and clamping gamut', () => {
+    for (const value of ['oklab(0.5 0 0)', 'oklab(50% 0 0 / 0.2)', 'oklch(50% 0 none)', 'oklch(0.5 0 120deg / 50%)']) {
+      const hex = parseComputedColor(value)
+      expect(hex).toMatch(/^#[0-9a-f]{6}$/)
+      for (const channel of [1, 3, 5]) expect(Math.abs(parseInt(hex.slice(channel, channel + 2), 16) - 99)).toBeLessThanOrEqual(1)
+    }
+    expect(parseComputedColor('oklab(0.839694 -0.004317 -0.0153978)')).toBe('#c4cbd5')
+    expect(parseComputedColor('oklch(0 0 0)')).toBe('#000000')
+    expect(parseComputedColor('oklch(0.5 0.4 30)')).toBe('#fd0000')
+    expect(parseComputedColor('oklab(1 0 0)')).toBe('#ffffff')
+    expect(parseComputedColor('oklab(nope 0 0)')).toBe('')
+  })
+
   it('reads a token set on :root and falls back when it is missing', () => {
     document.documentElement.style.setProperty('--ed-bg', '#123456')
     expect(readColorToken('--ed-bg')).toBe('#123456')

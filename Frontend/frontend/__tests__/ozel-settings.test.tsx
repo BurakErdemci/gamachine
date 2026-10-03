@@ -168,14 +168,34 @@ describe('Özel theme settings', () => {
     expect(screen.getByRole('radio', { name: /^Özel/ }).textContent).toContain('Kömür (değiştirildi)')
   })
 
-  it('copies the theme text', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined)
+  it('shows copy success only after the clipboard resolves', async () => {
+    let resolve!: () => void
+    const writeText = vi.fn(() => new Promise<void>(done => { resolve = done }))
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
     settings()
     pickOzel()
     fireEvent.click(screen.getByRole('button', { name: 'Kopyala' }))
     expect(writeText).toHaveBeenCalledWith('gm-tema:1;ad=Mono;bg=#FFFFFF;fg=#000000;vurgu=#FFFFFF;yazi=geist-mono')
+    expect(screen.queryByRole('button', { name: 'Kopyalandı' })).toBeNull()
+    await act(async () => { resolve() })
     expect(screen.getByRole('button', { name: 'Kopyalandı' })).toBeTruthy()
+  })
+
+  it.each(['reject', 'missing'])('shows an inline error when the clipboard is %s', async failure => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: failure === 'missing' ? undefined : { writeText: vi.fn().mockRejectedValue(new Error('denied')) } })
+    settings()
+    pickOzel()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Kopyala' })) })
+    expect(screen.queryByRole('button', { name: 'Kopyalandı' })).toBeNull()
+    expect(screen.getByText('Kopyalanamadı').classList.contains('is-err')).toBe(true)
+  })
+
+  it('shows the clipboard error in English', async () => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: undefined })
+    settings('en')
+    fireEvent.click(screen.getByRole('radio', { name: /^Custom/ }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy' })) })
+    expect(screen.getByText("Couldn't copy")).toBeTruthy()
   })
 
   it('long answers, interface font and the status legend', () => {

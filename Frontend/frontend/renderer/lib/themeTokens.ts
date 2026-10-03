@@ -18,6 +18,22 @@ export type Hex = string;
 const clamp255 = (n: number) => Math.max(0, Math.min(255, Math.round(n)));
 const hex2 = (n: number) => clamp255(n).toString(16).padStart(2, '0');
 
+/** Shared by computed CSS colours and the Özel surface model. */
+export const oklabToHex = ([L, A, B]: number[]): Hex => {
+  const l = (L + 0.3963377774 * A + 0.2158037573 * B) ** 3;
+  const m = (L - 0.1055613458 * A - 0.0638541728 * B) ** 3;
+  const s = (L - 0.0894841775 * A - 1.2914855480 * B) ** 3;
+  const channels = [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+  ].map(v => {
+    const c = Math.max(0, Math.min(1, v));
+    return hex2((c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055) * 255);
+  });
+  return `#${channels.join('')}`;
+};
+
 /**
  * Parse a computed colour into `#rrggbb` (alpha dropped: every consumer here wants an opaque
  * colour). Chromium serialises legacy colours as `rgb()/rgba()` and `color-mix(in srgb …)`
@@ -31,6 +47,17 @@ export const parseComputedColor = (value: string): Hex => {
   if (rgb) return `#${hex2(+rgb[1])}${hex2(+rgb[2])}${hex2(+rgb[3])}`;
   const srgb = v.match(/^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/i);
   if (srgb) return `#${hex2(+srgb[1] * 255)}${hex2(+srgb[2] * 255)}${hex2(+srgb[3] * 255)}`;
+  const lab = v.match(/^ok(lab|lch)\(\s*([^\s]+)\s+([^\s]+)\s+([^\s/)]+)(?:\s*\/\s*[^)]+)?\s*\)$/i);
+  if (lab) {
+    const number = (text: string) => /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(text) ? Number(text) : NaN;
+    const L = lab[2].endsWith('%') ? number(lab[2].slice(0, -1)) / 100 : number(lab[2]);
+    const a = number(lab[3]);
+    const b = lab[1].toLowerCase() === 'lch'
+      ? lab[4].toLowerCase() === 'none' ? 0 : number(lab[4].replace(/deg$/i, '')) * Math.PI / 180
+      : number(lab[4]);
+    if (![L, a, b].every(Number.isFinite)) return '';
+    return oklabToHex(lab[1].toLowerCase() === 'lch' ? [L, a * Math.cos(b), a * Math.sin(b)] : [L, a, b]);
+  }
   return '';
 };
 
