@@ -5,9 +5,10 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel, StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, StrictBool, StrictFloat, StrictInt, StrictStr
 
 from auth_utils import _check_token
 from omnisharp.omnisharp_manager import _unwrap_unity_result
@@ -38,6 +39,27 @@ class SceneEditorActive(SceneEditorObject):
     active: StrictBool
 
 
+class SceneEditorComponent(BaseModel):
+    componentId: StrictInt
+
+
+class SceneEditorField(SceneEditorComponent):
+    field: StrictStr
+    value: StrictBool | StrictInt | StrictFloat | StrictStr | list[StrictInt | StrictFloat]
+
+
+class SceneEditorComponentEnable(SceneEditorComponent):
+    enabled: StrictBool
+
+
+class SceneEditorAddComponent(SceneEditorObject):
+    item: StrictStr
+
+
+class SceneEditorComponentAction(SceneEditorComponent):
+    action: Literal["reset", "remove", "up", "down"]
+
+
 def _raise_unity_error(error: str, status: int = 200) -> None:
     normalized = error.lower()
     if status == 504 or "timeout" in normalized or "timed out" in normalized:
@@ -47,7 +69,7 @@ def _raise_unity_error(error: str, status: int = 200) -> None:
     if error == "not_found":
         raise HTTPException(status_code=404, detail="not_found")
     if error in {"locked", "compiling", "prefab_part", "invalid_name", "invalid_value",
-                 "invalid_item", "create_failed", "write_failed"}:
+                 "invalid_item", "create_failed", "write_failed", "already_present", "required", "add_failed"}:
         raise HTTPException(status_code=409, detail=error)
     try:
         logger.warning("Unity scene editor error (HTTP %s)", status)
@@ -167,5 +189,37 @@ def create_scene_editor_router() -> APIRouter:
                      x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
         return await _call_unity("gm_editor_delete", {"id": body.id})
+
+    @router.post("/set-field")
+    async def set_field(body: SceneEditorField,
+                        x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_set_field", {
+            "componentId": body.componentId, "field": body.field, "value": body.value})
+
+    @router.post("/component-enable")
+    async def component_enable(body: SceneEditorComponentEnable,
+                               x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_component_enable", {
+            "componentId": body.componentId, "enabled": body.enabled})
+
+    @router.get("/component-menu/{id}")
+    async def component_menu(id: int, x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_component_menu", {"id": id})
+
+    @router.post("/add-component")
+    async def add_component(body: SceneEditorAddComponent,
+                            x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_add_component", {"id": body.id, "item": body.item})
+
+    @router.post("/component-action")
+    async def component_action(body: SceneEditorComponentAction,
+                               x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return await _call_unity("gm_editor_component_action", {
+            "componentId": body.componentId, "action": body.action})
 
     return router

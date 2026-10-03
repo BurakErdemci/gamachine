@@ -45,6 +45,17 @@ CASES = [
      "gm_editor_set_active", {"id": -3384, "active": False}),
     ("POST", "/scene-editor/duplicate", {"id": -3384}, "gm_editor_duplicate", {"id": -3384}),
     ("POST", "/scene-editor/delete", {"id": -3384}, "gm_editor_delete", {"id": -3384}),
+    *[("POST", "/scene-editor/set-field", {"componentId": -42, "field": "m_Name", "value": value},
+       "gm_editor_set_field", {"componentId": -42, "field": "m_Name", "value": value})
+      for value in [True, 7, 1.5, "x.meta", [1, 2.5, 3]]],
+    ("POST", "/scene-editor/component-enable", {"componentId": -42, "enabled": False},
+     "gm_editor_component_enable", {"componentId": -42, "enabled": False}),
+    ("GET", "/scene-editor/component-menu/-3384", None, "gm_editor_component_menu", {"id": -3384}),
+    ("POST", "/scene-editor/add-component", {"id": -3384, "item": "Component/Physics/Rigidbody"},
+     "gm_editor_add_component", {"id": -3384, "item": "Component/Physics/Rigidbody"}),
+    *[("POST", "/scene-editor/component-action", {"componentId": -42, "action": action},
+       "gm_editor_component_action", {"componentId": -42, "action": action})
+      for action in ["reset", "remove", "up", "down"]],
 ]
 
 
@@ -55,6 +66,18 @@ def test_endpoints_forward_typed_payload_and_headers(client, monkeypatch, method
     if command == "gm_editor_version":
         data = {"epoch": "test", "scene": 11, "hierarchy": 3, "props": 8,
                 "selection": 2, "selectedId": -3384, "playing": False, "compiling": False}
+    if command == "gm_editor_set_field":
+        data = {"componentId": -42, "field": {"path": "m_Name", "label": "Name", "kind": "string",
+                                              "value": "x.meta", "readonly": False}}
+    elif command == "gm_editor_component_enable":
+        data = {"componentId": -42, "enabled": False}
+    elif command == "gm_editor_component_menu":
+        data = {"items": [{"item": "Component/Physics/Rigidbody", "category": "Physics",
+                           "label": "Rigidbody", "present": False}]}
+    elif command == "gm_editor_add_component":
+        data = {"componentId": -42, "type": "UnityEngine.Rigidbody", "label": "Rigidbody"}
+    elif command == "gm_editor_component_action":
+        data = {"componentId": -42, "action": body["action"]}
     post = Mock(return_value=_reply({"status": "success", "result": {"success": True, "data": data}}))
     monkeypatch.setattr(routes.urllib.request, "urlopen", post)
     response = http.request(method, path, json=body, headers={"X-Session-Token": "app-secret"})
@@ -101,6 +124,25 @@ def test_all_endpoints_require_session_token(client, monkeypatch, method, path, 
       for value in [True, "1", 1.5, None]],
     ("duplicate", {}),
     ("delete", {}),
+    *[(path, {"componentId": value, **extra})
+      for path, extra in [("set-field", {"field": "m_Name", "value": "x"}),
+                          ("component-enable", {"enabled": True}),
+                          ("component-action", {"action": "reset"})]
+      for value in [True, "1", 1.5, None]],
+    ("set-field", {"componentId": -42, "field": 1, "value": "x"}),
+    *[("set-field", {"componentId": -42, "field": "m_Name", "value": value})
+      for value in [{"a": 1}, None, [True], ["1"], [[1]]]],
+    ("set-field", {"componentId": -42, "field": "m_Name"}),
+    *[("component-enable", {"componentId": -42, "enabled": value})
+      for value in [1, "true", None]],
+    ("component-enable", {"componentId": -42}),
+    *[("component-action", {"componentId": -42, "action": value})
+      for value in ["delete", 1, None]],
+    ("component-action", {"componentId": -42}),
+    *[("add-component", {"id": value, "item": "Component/Physics/Rigidbody"})
+      for value in [True, "1", 1.5, None]],
+    ("add-component", {"id": -3384, "item": 1}),
+    ("add-component", {"id": -3384}),
 ])
 def test_write_bodies_reject_wrong_types(client, monkeypatch, path, body):
     http, routes = client
@@ -114,6 +156,7 @@ def test_write_bodies_reject_wrong_types(client, monkeypatch, path, body):
 @pytest.mark.parametrize("code", [
     "locked", "compiling", "prefab_part", "invalid_name", "invalid_value",
     "invalid_item", "create_failed", "write_failed",
+    "already_present", "required", "add_failed",
 ])
 @pytest.mark.parametrize("status", [200, 409])
 def test_write_error_codes_pass_through(client, monkeypatch, code, status):

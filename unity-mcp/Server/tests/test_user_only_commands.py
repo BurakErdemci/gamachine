@@ -21,6 +21,11 @@ WRITE_COMMANDS = [
     ("gm_editor_set_active", {"id": -4, "active": False}),
     ("gm_editor_duplicate", {"id": -4}),
     ("gm_editor_delete", {"id": -4}),
+    ("gm_editor_set_field", {"componentId": -42, "field": "m_Name", "value": "x.meta"}),
+    ("gm_editor_component_enable", {"componentId": -42, "enabled": False}),
+    ("gm_editor_component_menu", {"id": -4}),
+    ("gm_editor_add_component", {"id": -4, "item": "Component/Physics/Rigidbody"}),
+    ("gm_editor_component_action", {"componentId": -42, "action": "reset"}),
 ]
 
 
@@ -84,7 +89,8 @@ def test_middleware_refuses_before_approval(monkeypatch, name, params):
     forward.assert_not_awaited()
 
 
-@pytest.mark.parametrize("name,params", [WRITE_COMMANDS[1], WRITE_COMMANDS[2]])
+@pytest.mark.parametrize("name,params", [WRITE_COMMANDS[1], WRITE_COMMANDS[2],
+                                       WRITE_COMMANDS[6], WRITE_COMMANDS[9]])
 def test_write_values_are_not_file_paths(name, params):
     assert protection_rules.meta_refusal(name, params) is None
 
