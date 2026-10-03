@@ -327,9 +327,10 @@
 [data-theme="ozel"] .unity[data-unity="closed"] .unity-word { color: var(--oz-warn); }
 [data-theme="ozel"] .unity[data-unity="blocked"] .us-track { background: var(--oz-err-soft); }
 
-/* colour only where it means something: "Tam otomatik" is the reference's orange "Tam erişim" */
-[data-theme="ozel"] .mode-pick[data-mode="auto"] { color: var(--accent-text); border-color: var(--oz-pending-line); }
-[data-theme="ozel"] .mode-pick[data-mode="auto"] .ic { color: var(--accent); }
+/* colour only where it means something: auto mode is a risk, so it takes the danger red (owner, 3 Oct);
+   orange stays "waiting on you" */
+[data-theme="ozel"] .mode-pick[data-mode="auto"] { color: var(--oz-err-text); border-color: color-mix(in oklab, var(--st-err) 62%, var(--u-bg)); }
+[data-theme="ozel"] .mode-pick[data-mode="auto"] .ic { color: var(--oz-err); }
 
 /* plain words (Sade's lexicon: "Bitti", "aşağıdan") */
 [data-theme="ozel"] .lex-s { display: inline; }
