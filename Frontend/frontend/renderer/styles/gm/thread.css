@@ -955,6 +955,15 @@
 .strip-pop-pair .strip-pop-row { flex: 1; }
 .strip-pop-pair .icon-btn { width: 30px; height: 30px; color: var(--ink-dim); }
 .strip-pop-sub { display: flex; flex-direction: column; padding-left: 10px; border-left: var(--line-w) solid var(--paper-line); }
+/* "More settings" floats like the other menus (scene context menu, model picker): menu surface, shell ink */
+.strip-more-pop { gap: 2px; padding: 5px; background: var(--menu-bg); border-color: var(--menu-line); color: var(--shell-text); }
+.strip-more-pop .strip-pop-row { min-height: 29px; padding: 0 8px 0 10px; border-radius: var(--radius-md); color: inherit; }
+.strip-more-pop .strip-pop-row:hover:not(:disabled), .strip-more-pop .strip-pop-row[aria-pressed="true"] { background: var(--shell-bg-active); }
+.strip-more-pop .strip-pop-row:focus-visible, .strip-more-pop .icon-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.strip-more-pop .strip-pop-row svg { color: var(--shell-text-dim); }
+.strip-more-pop .strip-pop-pair .icon-btn { height: 29px; border-radius: var(--radius-md); color: var(--shell-text-dim); }
+.strip-more-pop .strip-pop-pair .icon-btn:hover:not(:disabled) { background: var(--shell-bg-active); color: var(--shell-text); }
+.strip-more-pop .strip-pop-sub { margin: 2px 0 2px 10px; padding-left: 4px; border-left-color: var(--menu-line); }
 
 /* ---------- /usage and /context cards (app-only) ---------- */
 .slash { border-radius: var(--radius-lg); background: var(--paper-raised); border: var(--line-w) solid var(--paper-line); overflow: hidden; }

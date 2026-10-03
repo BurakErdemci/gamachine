@@ -262,8 +262,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         </button>
         {showMore && <div className="fixed inset-0 z-40" onClick={() => { setShowMore(false); setShowMemoryMenu(false); }} />}
         <div id="strip-more-pop" className="strip-pop strip-more-pop" hidden={!showMore}>
-          <GenerationModeSelector value={generationMode} onChange={setGenerationMode} />
-
+          {/* No mode list here: the top bar's mode chip and Settings > Onay modu set it (owner, 3 Oct 2026). */}
           {/* Learn the project, and the memory menu */}
           <div className="strip-pop-pair">
             <button
