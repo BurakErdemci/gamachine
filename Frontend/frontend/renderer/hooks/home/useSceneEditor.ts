@@ -132,8 +132,8 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     };
     const owner: Runtime = { inspect: id => { void getInspection(id); }, select: postSelection };
     runtime.current = owner;
-    if (!hasTree.current && !compiling.current) void getTree(version.current && treeKey(version.current));
-    if (selected.current !== null) void getInspection(selected.current);
+    // No load before the first version: a load without a key could be stamped current after Unity changed
+    // during it (audit verify-f1). The immediate poll below fetches the tree and the inspection with their keys.
     let polling = false;
     const poll = async () => {
       if (polling) return;
@@ -161,11 +161,11 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
           void getInspection(next.selectedId);
         }
         // A view counts as current only after its refetch succeeded; a failed one is retried (after backoff).
+        // A load whose key is null (a selection made before the first version) is never stamped current,
+        // so the next poll refetches it once.
         const now = Date.now();
         const treeAt = treeKey(next), inspectAt = inspectKey(next);
-        if (hasTree.current && treeLoaded.current === null) treeLoaded.current = treeAt;
         if (!treePending && (!hasTree.current || treeLoaded.current !== treeAt) && now >= treeBackoff.current.until) void getTree(treeAt);
-        if (selected.current !== null && !needsInspection.current && inspectLoaded.current === null) inspectLoaded.current = inspectAt;
         if (selected.current !== null && !inspectPending && (needsInspection.current || inspectLoaded.current !== inspectAt)
           && now >= inspectBackoff.current.until) void getInspection(selected.current, inspectAt);
       } catch (failure) {

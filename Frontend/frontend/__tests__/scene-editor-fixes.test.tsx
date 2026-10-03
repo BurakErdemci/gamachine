@@ -221,3 +221,23 @@ it('F7: several missing scripts keep unique keys and non-numeric floats render a
   expect(view.container.querySelector('input[type="range"]')).toBeNull()
   expect(errors).not.toHaveBeenCalled()
 })
+
+it('verify-f1: the first tree load waits for a version key, so it cannot be stamped current after a change', async () => {
+  vi.useFakeTimers()
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  const order: string[] = []
+  let releaseVersion: (r: Response) => void = () => {}
+  const fetcher = vi.fn((url: string) => {
+    order.push(url.split('/').pop() as string)
+    if (url.endsWith('version')) return new Promise<Response>(resolve => { releaseVersion = resolve })
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ epoch: 'e', version: 1, scenes: [], nodes: [], total: 0, truncated: false }) } as Response)
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const h = renderHook(() => useSceneEditor({ api: 'api', token: 't', editorOn: true, unityStatus: 'connected', hierarchyVisible: true, inspectorVisible: false }))
+  await act(async () => {})
+  expect(order).toEqual(['version'])
+  await act(async () => { releaseVersion({ ok: true, status: 200, json: async () => ({ epoch: 'e', scene: 1, hierarchy: 1, props: 0, selection: 0, selectedId: null, playing: false, compiling: false }) } as Response) })
+  expect(order).toEqual(['version', 'tree'])
+  h.unmount()
+  vi.useRealTimers()
+})
