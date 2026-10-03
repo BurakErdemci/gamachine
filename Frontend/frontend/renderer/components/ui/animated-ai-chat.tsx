@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useTransition, useMemo, useImperativeHandle } from "react";
+import { useEffect, useLayoutEffect, useRef, useCallback, useTransition, useMemo, useImperativeHandle } from "react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import {
@@ -482,6 +482,9 @@ export function AnimatedChatInput({
             setInternalValue(value);
         }
     }, [value]);
+    // Text set from outside (a welcome card, a reset) never passes through onChange, so the box
+    // is sized here once React has written it; without this a card's prompt stayed one line high.
+    useLayoutEffect(() => { adjustHeight(); }, [internalValue, adjustHeight]);
 
     // Built-in (app) komutu + backend'den gelen Claude Code slash komutları
     const commandSuggestions: CommandSuggestion[] = useMemo(() => {
