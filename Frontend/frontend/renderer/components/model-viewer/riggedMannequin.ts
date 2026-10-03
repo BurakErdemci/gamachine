@@ -200,17 +200,27 @@ export const buildRiggedMannequin = (
       localOffsets[t] = new THREE.Matrix4().makeRotationFromQuaternion(offset);
     }
 
-    // Source units per mannequin unit, from hip height over each rig's floor:
-    // Mixamo FBX arrives in centimetres, the mannequin is in metres.
+    // Mannequin units per source unit (Mixamo FBX arrives in centimetres, the
+    // mannequin is in metres). Both floors are the lowest bone under the hips
+    // (toe tips on Mixamo and on the mannequin), so the ratios compare like
+    // with like; the mannequin's `root` bone sits at the origin.
     const pelvis = target.get('pelvis')!;
     const hips = sourceOf('pelvis')!;
     const sourceFloor = lowestUnder(hips);
+    const targetFloor = lowestUnder(pelvis);
+    const heightRatio = (t: THREE.Object3D, s: THREE.Object3D) => {
+      const sh = worldPos(s).y - sourceFloor;
+      const th = worldPos(t).y - targetFloor;
+      return sh > 1e-6 && th > 1e-6 ? th / sh : null;
+    };
     const sourceHipHeight = worldPos(hips).y - sourceFloor;
-    // Both floors are the lowest bone under the hips (toe tips on Mixamo and on
-    // the mannequin), so the ratio compares like with like; the mannequin's
-    // `root` bone sits at the origin and is not part of the body.
-    const targetHipHeight = worldPos(pelvis).y - lowestUnder(pelvis);
-    const toTarget = sourceHipHeight > 1e-6 && targetHipHeight > 1e-6 ? targetHipHeight / sourceHipHeight : 1;
+    // The hips' travel scales with leg length...
+    const toTarget = heightRatio(pelvis, hips) ?? 1;
+    // ...but the figure's size with standing height: Mixamo hips sit at 68% of
+    // head height, the mannequin's at 58%, and scaling by hips alone drew
+    // Mixamo figures 15% too large.
+    const top = ['Head', 'neck_01'].find(n => target.has(n) && sourceOf(n));
+    const bodyScale = (top ? heightRatio(target.get(top)!, sourceOf(top)!) : null) ?? toTarget;
 
     let retargeted: THREE.AnimationClip | null = null;
     if (clip) {
@@ -245,7 +255,7 @@ export const buildRiggedMannequin = (
     const holderObject = new THREE.Group();
     holderObject.name = 'mannequin:rigged';
     holderObject.add(instance);
-    holderObject.scale.setScalar(1 / toTarget);
+    holderObject.scale.setScalar(1 / bodyScale);
 
     // Ground the figure at frame 0. A source touching its floor (within a tenth
     // of hip height) gets the mannequin's lowest vertex put on the floor, so

@@ -46,10 +46,19 @@ const MIXAMO: [string, string][] = [
 ]
 const PREFIX = 'mixamorig'
 
-/** Mixamo-named T-pose in centimetres, identity rotations, on the mannequin's joint layout. */
-const syntheticMixamo = (template: THREE.Object3D): THREE.Group => {
+/**
+ * Mixamo-named T-pose in centimetres, identity rotations, on the mannequin's
+ * joint layout; `place` moves a joint (given the mannequin's position for it).
+ */
+const syntheticMixamo = (
+  template: THREE.Object3D,
+  place: (mixamo: string, at: THREE.Vector3) => THREE.Vector3 = (_, at) => at,
+): THREE.Group => {
   template.updateMatrixWorld(true)
-  const at = (name: string) => new THREE.Vector3().setFromMatrixPosition(template.getObjectByName(name)!.matrixWorld).multiplyScalar(100)
+  const at = (name: string) => {
+    const p = new THREE.Vector3().setFromMatrixPosition(template.getObjectByName(name)!.matrixWorld).multiplyScalar(100)
+    return place(MIXAMO.find(([, m]) => m === name)![0], p)
+  }
   const parentOf: Record<string, string | null> = {}
   for (const [mixamo, mannequin] of MIXAMO) {
     const parentBone = template.getObjectByName(mannequin)!.parent!
@@ -234,6 +243,37 @@ describe('buildRiggedMannequin', () => {
     template.traverse(o => { if (materials.includes((o as THREE.Mesh).material as THREE.Material)) templateMaterials += 1 })
     expect(templateMaterials).toBe(0)
     expect(materials.map(m => m.name).sort()).toEqual(['M_Main', MANNEQUIN_JOINT_MATERIAL].sort())
+  })
+})
+
+describe('buildRiggedMannequin on Mixamo proportions', () => {
+  let template: THREE.Object3D
+  beforeAll(async () => { template = await parseMannequinTemplate(glb()) })
+
+  // Real Mixamo rest (measured, goalkeeper catch.fbx): about as tall as the
+  // mannequin at the head (156 cm) but with the hips at 105.5 cm, not 91.7,
+  // and a clavicle running straight out sideways where the mannequin's starts
+  // at the front of the sternum.
+  const HIP = 91.7, HEAD = 156.9, MIXAMO_HIP = 105.5
+  const lift = (y: number) => y < HIP
+    ? y * MIXAMO_HIP / HIP
+    : MIXAMO_HIP + (y - HIP) * (HEAD - MIXAMO_HIP) / (HEAD - HIP)
+  const mixamoLike = () => syntheticMixamo(template, (name, p) => {
+    if (!name.endsWith('Shoulder')) return new THREE.Vector3(p.x, lift(p.y), p.z)
+    const arm = template.getObjectByName(name.startsWith('Left') ? 'upperarm_l' : 'upperarm_r')!
+    const shoulder = new THREE.Vector3().setFromMatrixPosition(arm.matrixWorld).multiplyScalar(100)
+    return new THREE.Vector3(shoulder.x - Math.sign(shoulder.x) * 12.5, lift(shoulder.y) + 3.1, shoulder.z)
+  })
+
+  it('stands as tall as the source, not as high at the hips', () => {
+    const source = mixamoLike()
+    const rigged = buildRiggedMannequin(template, source, detectHumanoidRig(rigBonesOf(source))!, null)
+    rigged.object.updateMatrixWorld(true)
+    let floor = Infinity
+    source.traverse(o => { floor = Math.min(floor, worldOf(o).y) })
+    const want = worldOf(source.getObjectByName(`${PREFIX}Head`)!).y - floor
+    const got = worldOf(rigged.object.getObjectByName('Head')!).y - floor
+    expect(Math.abs(got - want) / want).toBeLessThan(0.05)
   })
 })
 

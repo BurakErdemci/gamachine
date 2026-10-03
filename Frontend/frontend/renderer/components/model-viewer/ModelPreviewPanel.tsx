@@ -360,8 +360,8 @@ export const mountParsedModel = (
       rigged = buildRiggedMannequin(humanoid.template, parsed.object, humanoid.map, clip);
       stage.mannequin = rigged.handle;
       stage.content.add(rigged.object);
-      // The mannequin keeps the source's hip height, not its overall size,
-      // so its own frame-0 silhouette joins the framing.
+      // The mannequin matches the source's height, not its proportions, so
+      // its own frame-0 silhouette joins the framing.
       box = bounds.box.clone().union(new THREE.Box3().setFromObject(rigged.object, true));
       playRoot = rigged.object;
       clip = rigged.clip;
