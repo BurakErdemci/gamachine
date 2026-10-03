@@ -1,4 +1,4 @@
-/* Round 13: the user's read-only scene tools. Theme colours stay in tokens. */
+/* Round 13: the user's own scene tools. Theme colours stay in tokens. */
 :root {
   --hier-row-h: 26px;
   --hier-indent: 12px;
@@ -18,6 +18,8 @@
   --f-check: var(--ink-dim);
   --f-check-ink: var(--paper-bg-2);
   --r13-busy-text: var(--run);
+  /* a failed write waits on the user: the one accent, lightened where the theme's accent is too dark on the shell */
+  --hier-err-text: var(--accent-text);
 }
 :root[data-theme="arena"] {
   --f-line: #343B50;
@@ -33,6 +35,7 @@
   --f-check-ink: var(--accent-ink);
 }
 :root[data-theme="pafta"] {
+  --hier-err-text: #F28B7A;
   --hier-prefab: #8CC4F5;
   --insp-prefab: #2F5F8E;
   --f-line: #AFC2D5;
@@ -41,6 +44,7 @@
   --r13-busy-text: #7FAAD8;
 }
 :root[data-theme="atolye"] {
+  --hier-err-text: #E0954A;
   --hier-prefab: #A9C6E0;
   --insp-prefab: #2F5878;
   --f-line: #D3B990;
@@ -155,7 +159,52 @@ mark.hr-hit { background: none; color: inherit; font-weight: 700; text-decoratio
 .insp-truncated { padding: 10px 14px; }
 .workspace[data-editor="on"] .ws-sec[data-guide="changed-files"] { flex: none; }
 [data-theme="pafta"] .workspace[data-editor="on"] .ws-tabs { gap: 0; padding-inline: 8px; }
+.hr-rename {
+  flex: 1; min-width: 0; height: 22px; padding: 0 5px; margin-right: -4px; font: inherit; color: var(--shell-text);
+  background: var(--hier-field); border: var(--line-w) solid var(--focus); border-radius: var(--radius-sm); outline: 0;
+}
+/* a write that failed: one quiet line, no toast; it shakes once (#14) */
+.hier-err {
+  flex: none; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; margin: 6px 12px 0; padding-bottom: 2px;
+  font-size: 12.5px; line-height: 1.4; color: var(--hier-err-text); animation: hier-shake 280ms var(--g-ease-move);
+}
+.hier-err .ic { width: 13px; height: 13px; flex: none; align-self: center; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.hier-err-t { flex: 1 1 0; min-width: 0; }
+.hier-err button { color: var(--shell-text); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.hier-err .hier-err-x { text-decoration: none; color: var(--shell-text-dim); width: 18px; }
+.hier-err button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+@keyframes hier-shake { 25% { transform: translateX(-4px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
+
+/* right-click menu: Unity's GameObject menu plus rename / duplicate / delete; #12 menu motion */
+.r13-menu {
+  position: fixed; z-index: 46; min-width: 214px; max-width: 280px; padding: 5px; transform-origin: top left;
+  background: var(--menu-bg); border: var(--line-w) solid var(--menu-line); border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
+  color: var(--shell-text); font-size: 13.5px; animation: r13-menu-in var(--g-dur-quick) var(--g-ease-enter);
+}
+.r13-menu.is-sub { z-index: 47; }
+.r13-menu:focus { outline: none; }
+@keyframes r13-menu-in { from { opacity: 0; transform: scale(.98); } }
+.r13-menu .mi {
+  width: 100%; display: flex; align-items: center; gap: 10px; height: 29px; padding: 0 8px 0 10px; border-radius: var(--radius-md);
+  text-align: left; white-space: nowrap; color: inherit; background: none;
+}
+.r13-menu .mi:hover, .r13-menu .mi.is-hot { background: var(--shell-bg-active); }
+.r13-menu .mi:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.r13-menu .mi .ic { width: 15px; height: 15px; flex: none; color: var(--shell-text-dim); fill: none; stroke: currentColor; stroke-width: 1.4; }
+.r13-menu .mi .ic-sm { width: 13px; height: 13px; }
+.r13-menu .mi-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.r13-menu .mi-k { flex: none; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--shell-text-dim); }
+.r13-menu .mi-arrow { margin-right: -2px; }
+.r13-menu .mi[aria-disabled="true"] { color: var(--shell-text-dim); cursor: default; }
+.r13-menu .mi[aria-disabled="true"]:hover { background: none; }
+.r13-menu .mi-sep { height: var(--line-w); margin: 5px 6px; background: var(--menu-line); }
+.r13-menu .mi-label {
+  padding: 6px 10px 3px; font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch); color: var(--shell-text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 @media (prefers-reduced-motion: reduce) {
   .cmp-tw .ic { transition: none; }
   .cmp-body { animation: none; }
+  .r13-menu, .hier-err { animation: none; }
 }

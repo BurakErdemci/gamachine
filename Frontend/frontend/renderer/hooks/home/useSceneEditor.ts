@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Inspection, SceneTree, SceneVersion } from '../../lib/sceneEditor';
+import { fetchCreateMenu, postSceneWrite } from '../../lib/sceneEditor';
+import type { CreateMenuItem, Inspection, SceneTree, SceneVersion, SceneWriteCode } from '../../lib/sceneEditor';
 import type { UnityMCPStatus } from './useAIConfig';
 
 interface Options {
   api: string; token?: string; editorOn: boolean; unityStatus: UnityMCPStatus;
   hierarchyVisible: boolean; inspectorVisible: boolean;
 }
-interface Runtime { inspect: (id: number | null) => void; select: (id: number | null) => void }
+interface Runtime { inspect: (id: number | null) => void; select: (id: number | null) => void; poll: () => void }
+export type CreateMenuState = { state: 'idle' | 'loading' | 'failed' } | { state: 'ready'; items: CreateMenuItem[] };
+export interface SceneWriteError { code: SceneWriteCode; retry: () => void }
+// The create menu only changes with the Unity install, so one fetch per session (api + token) is enough.
+const createMenuCache = new Map<string, CreateMenuItem[]>();
 type Backoff = { failures: number; until: number };
 
 // A failing endpoint waits 1, 2, 4 ... 30 s between attempts instead of retrying on every poll.
@@ -31,6 +36,9 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   const [versionError, setVersionError] = useState<number | null>(null);
   const [inspectError, setInspectError] = useState<number | null>(null);
   const [stale, setStale] = useState(false);
+  const [writeError, setWriteError] = useState<SceneWriteError | null>(null);
+  const [createMenu, setCreateMenu] = useState<CreateMenuState>({ state: 'idle' });
+  const writing = useRef(false);
   const selected = useRef<number | null>(null);
   const version = useRef<SceneVersion | null>(null);
   const runtime = useRef<Runtime | null>(null);
@@ -57,7 +65,9 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     treeLoaded.current = null; inspectLoaded.current = null;
     treeBackoff.current = fresh(); inspectBackoff.current = fresh();
     setTree(null); setInspection(null); setSelectedId(null); setStale(false);
-    setError(null); setVersionError(null); setInspectError(null);
+    setError(null); setVersionError(null); setInspectError(null); setWriteError(null);
+    const cached = createMenuCache.get(`${api}|${token}`);
+    setCreateMenu(cached ? { state: 'ready', items: cached } : { state: 'idle' });
   }, [api, token, editorOn, unityStatus]);
 
   useEffect(() => {
@@ -130,14 +140,16 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         body: JSON.stringify({ id }), signal: request.signal,
       }).catch(() => {}).finally(() => { if (requests.get('select') === request) selectionPending = false; });
     };
-    const owner: Runtime = { inspect: id => { void getInspection(id); }, select: postSelection };
+    const owner: Runtime = { inspect: id => { void getInspection(id); }, select: postSelection, poll: () => { void poll(); } };
     runtime.current = owner;
     // No load before the first version: a load without a key could be stamped current after Unity changed
     // during it (audit verify-f1). The immediate poll below fetches the tree and the inspection with their keys.
     let polling = false;
-    const poll = async () => {
-      if (polling) return;
-      polling = true;
+    // A poll asked for while one runs (after a write) runs right after it instead of overlapping it.
+    let again = false;
+    const poll = async (): Promise<void> => {
+      if (polling) { again = true; return; }
+      polling = true; again = false;
       const request = controller('version');
       const selectionAtStart = localSelection.current;
       try {
@@ -170,7 +182,10 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
           && now >= inspectBackoff.current.until) void getInspection(selected.current, inspectAt);
       } catch (failure) {
         if (alive && !request.signal.aborted) setVersionError(typeof failure === 'number' ? failure : 502);
-      } finally { polling = false; }
+      } finally {
+        polling = false;
+        if (again && alive) void poll();
+      }
     };
     void poll();
     const timer = setInterval(() => { void poll(); }, 1000);
@@ -186,5 +201,42 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     setSelectedId(id); setInspection(null); setInspectError(null);
     runtime.current?.select(id); runtime.current?.inspect(id);
   }, []);
-  return { tree, inspection, selectedId, select, loading, inspectLoading, error: error ?? versionError, inspectError, stale };
+  const loadCreateMenu = useCallback(() => {
+    if (!token) return;
+    const key = `${api}|${token}`;
+    const cached = createMenuCache.get(key);
+    if (cached) { setCreateMenu({ state: 'ready', items: cached }); return; }
+    setCreateMenu(previous => previous.state === 'loading' ? previous : { state: 'loading' });
+    fetchCreateMenu(api, token).then(items => {
+      createMenuCache.set(key, items);
+      setCreateMenu({ state: 'ready', items });
+    }, () => setCreateMenu({ state: 'failed' }));
+  }, [api, token]);
+  // One write at a time; a success selects its result and polls at once instead of waiting for the next tick.
+  const write = useCallback(async <T,>(route: string, body: unknown, done: (data: T) => void): Promise<T | null> => {
+    if (!token || writing.current) return null;
+    writing.current = true;
+    try {
+      const result = await postSceneWrite<T>(api, token, route, body);
+      if ('code' in result) {
+        const retry = () => { void write(route, body, done); };
+        setWriteError({ code: result.code, retry });
+        return null;
+      }
+      setWriteError(null);
+      done(result.data);
+      runtime.current?.poll();
+      return result.data;
+    } finally { writing.current = false; }
+  }, [api, token]);
+  const create = useCallback((item: string, parentId: number | null) =>
+    write<{ id: number; name: string }>('create', { item, parentId }, data => select(data.id)), [write, select]);
+  const rename = useCallback((id: number, name: string) =>
+    write<{ id: number; name: string }>('rename', { id, name }, () => {}), [write]);
+  const duplicate = useCallback((id: number) =>
+    write<{ id: number; name: string }>('duplicate', { id }, data => select(data.id)), [write, select]);
+  const remove = useCallback((id: number) => write<{ id: number }>('delete', { id }, () => select(null)), [write, select]);
+  const clearWriteError = useCallback(() => setWriteError(null), []);
+  return { tree, inspection, selectedId, select, loading, inspectLoading, error: error ?? versionError, inspectError, stale,
+    createMenu, loadCreateMenu, create, rename, duplicate, remove, writeError, clearWriteError };
 }

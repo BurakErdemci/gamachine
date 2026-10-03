@@ -938,7 +938,7 @@ export default function Home() {
         onHierarchyVisible={setHierarchyVisible}
         hierarchy={<HierarchyPanel unityStatus={ai.unityMcpStatus} tree={sceneEditor.tree} loading={sceneEditor.loading}
           error={sceneEditor.error} stale={sceneEditor.stale} selectedId={sceneEditor.selectedId}
-          onSelect={selectSceneObject} onConnect={() => { void ai.toggleUnityMcp(); }} />}
+          onSelect={selectSceneObject} onConnect={() => { void ai.toggleUnityMcp(); }} actions={sceneEditor} />}
         profileLevel={profileStats.latest ? {
           level: profileStats.latest.level, xp: profileStats.latest.xp,
           levelXp: profileStats.latest.level_xp, levelNeed: profileStats.latest.level_need,

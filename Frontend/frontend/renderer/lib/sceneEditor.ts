@@ -53,3 +53,40 @@ export interface SceneVersion {
   /** Structural and property counters; older Unity packages omit them, then `scene` stands in for both. */
   hierarchy?: number; props?: number;
 }
+
+/** One entry of Unity's GameObject create menu; `category` is "" for top-level items, `label` may hold "/" levels. */
+export interface CreateMenuItem { item: string; category: string; label: string }
+export type SceneWriteCode =
+  | 'locked' | 'compiling' | 'prefab_part' | 'invalid_name' | 'invalid_value' | 'invalid_item' | 'create_failed' | 'write_failed'
+  | 'not_found' | 'unity_unavailable' | 'unity_timeout' | 'unity_error';
+export type SceneWriteResult<T> = { ok: true; data: T } | { ok: false; code: SceneWriteCode };
+
+const CONFLICTS = new Set(['locked', 'compiling', 'prefab_part', 'invalid_name', 'invalid_value', 'invalid_item', 'create_failed', 'write_failed']);
+
+export function writeErrorCode(status: number, detail: unknown): SceneWriteCode {
+  if (status === 409) return typeof detail === 'string' && CONFLICTS.has(detail) ? detail as SceneWriteCode : 'write_failed';
+  if (status === 404) return 'not_found';
+  if (status === 503) return 'unity_unavailable';
+  if (status === 504) return 'unity_timeout';
+  return 'unity_error';
+}
+
+export async function postSceneWrite<T>(api: string, token: string, route: string, body: unknown): Promise<SceneWriteResult<T>> {
+  let response: Response;
+  try {
+    response = await fetch(`${api}/scene-editor/${route}`, {
+      method: 'POST', headers: { 'X-Session-Token': token, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+  } catch { return { ok: false, code: 'unity_unavailable' }; }
+  let data: unknown = null;
+  try { data = await response.json(); } catch { /* An empty body still carries the status. */ }
+  if (!response.ok) return { ok: false, code: writeErrorCode(response.status, (data as { detail?: unknown } | null)?.detail) };
+  return { ok: true, data: data as T };
+}
+
+export async function fetchCreateMenu(api: string, token: string): Promise<CreateMenuItem[]> {
+  const response = await fetch(`${api}/scene-editor/create-menu`, { headers: { 'X-Session-Token': token } });
+  if (!response.ok) throw response.status;
+  const data = await response.json() as { items?: CreateMenuItem[] };
+  return Array.isArray(data?.items) ? data.items : [];
+}
