@@ -167,18 +167,20 @@ namespace MCPForUnity.Editor.Tools.Gamachine
             var created = Selection.activeGameObject;
             if (created == null || objectsBefore.Contains(created.GetInstanceIDCompat())) return step.Fail();
 
-            // UI items already honour a selected Canvas parent (measured 3 Oct); the rest land at a new root.
+            // UI items already honour a selected Canvas parent (measured 3 Oct); the rest land at a new root,
+            // or, for UI items under a non-Canvas object inside a Canvas, at that Canvas (measured 3 Oct).
             bool placed = parent != null && created.transform.IsChildOf(parent.transform);
             if (parent != null && !placed)
             {
                 var createdRoots = GamachineSceneEditorWriter.Roots();
                 createdRoots.ExceptWith(rootsBefore);
-                if (!createdRoots.Contains(created.transform.root.gameObject.GetInstanceIDCompat())) return step.Fail();
                 var createdRoot = created.transform.root;
-                bool replaceCanvas = parent.GetComponentInParent<Canvas>(true) != null
+                bool newRoot = createdRoots.Contains(createdRoot.gameObject.GetInstanceIDCompat());
+                bool replaceCanvas = newRoot && createdRoot != created.transform
+                    && parent.GetComponentInParent<Canvas>(true) != null
                     && createdRoot.GetComponent<Canvas>() != null;
                 // Menus create scene roots; move that root so UI scaffolding stays intact.
-                var moved = replaceCanvas ? created.transform : createdRoot;
+                var moved = newRoot && !replaceCanvas ? createdRoot : created.transform;
                 Undo.SetTransformParent(moved, parent.transform, false, groupName);
                 Undo.RecordObject(moved, groupName);
                 if (!(moved is RectTransform))
@@ -188,6 +190,12 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                 }
                 moved.SetAsLastSibling();
                 if (replaceCanvas) Undo.DestroyObjectImmediate(createdRoot.gameObject);
+            }
+            // The menu places UI at the Scene view pivot; Unity's own hierarchy context menu centres it in the parent.
+            if (parent != null && created.transform is RectTransform rect && created.GetComponent<Canvas>() == null)
+            {
+                Undo.RecordObject(rect, groupName);
+                rect.anchoredPosition = Vector2.zero;
             }
             Selection.activeGameObject = created;
             var response = new SuccessResponse("Scene object created.", new { id = created.GetInstanceIDCompat(), name = created.name });
