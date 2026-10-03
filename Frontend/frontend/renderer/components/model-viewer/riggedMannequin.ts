@@ -58,7 +58,10 @@ const AIM: Record<string, readonly string[]> = (() => {
     neck_01: ['Head'],
   };
   for (const s of ['l', 'r']) {
-    aim[`clavicle_${s}`] = [`upperarm_${s}`];
+    // No clavicle entry: the mannequin's clavicle runs from the front of the
+    // sternum back to the shoulder (13.6 cm deep), a source's (Mixamo, Meshy)
+    // runs sideways, and swinging one onto the other threw the shoulder joint
+    // ~10 cm forward of the chest. It keeps its own seat on the chest instead.
     aim[`upperarm_${s}`] = [`lowerarm_${s}`];
     aim[`lowerarm_${s}`] = [`hand_${s}`];
     aim[`hand_${s}`] = [`middle_01_${s}`, `index_01_${s}`, `ring_01_${s}`];

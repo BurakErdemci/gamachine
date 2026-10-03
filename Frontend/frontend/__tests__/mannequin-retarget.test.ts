@@ -275,6 +275,29 @@ describe('buildRiggedMannequin on Mixamo proportions', () => {
     const got = worldOf(rigged.object.getObjectByName('Head')!).y - floor
     expect(Math.abs(got - want) / want).toBeLessThan(0.05)
   })
+
+  it.each([0, 0.5, 1])('hangs the arms from the source\'s shoulders at t=%s', time => {
+    const source = mixamoLike()
+    const map = detectHumanoidRig(rigBonesOf(source))!
+    const sourceClip = clip()
+    const rigged = buildRiggedMannequin(template, source, map, sourceClip)
+    const sampleTarget = new THREE.AnimationMixer(rigged.object)
+    sampleTarget.clipAction(rigged.clip!).play()
+    sampleTarget.setTime(time)
+    const sampleSource = new THREE.AnimationMixer(source)
+    sampleSource.clipAction(sourceClip).play()
+    sampleSource.setTime(time)
+    rigged.object.updateMatrixWorld(true)
+    source.updateMatrixWorld(true)
+    // Against the neck: the legs differ in length by design, the torso does not.
+    const neck = worldOf(rigged.object.getObjectByName('neck_01')!)
+    const sourceNeck = worldOf(source.getObjectByName(map.neck_01)!)
+    for (const joint of ['upperarm_l', 'upperarm_r', 'lowerarm_l', 'lowerarm_r', 'hand_l', 'hand_r']) {
+      const got = worldOf(rigged.object.getObjectByName(joint)!).sub(neck)
+      const want = worldOf(source.getObjectByName(map[joint])!).sub(sourceNeck)
+      expect(got.distanceTo(want), joint).toBeLessThan(3)
+    }
+  })
 })
 
 describe('mountParsedModel with the bundled mannequin', () => {
