@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
-import { Sparkles, ChevronDown, Download, Upload, Gauge, Rocket } from 'lucide-react';
+import { Sparkles, ChevronDown, Download, Upload, Gauge, Rocket, Paperclip, Film, Minimize2 } from 'lucide-react';
 import { ContextUsage } from './types';
-import { GenerationModeSelector, GenerationMode } from './GenerationModeSelector';
 import { StripUse } from './UsageMeters';
 import type { UsageFamilyId, UsageLimits } from '../../lib/usageLimits';
 
@@ -25,8 +24,6 @@ interface ControlPanelProps {
   setThinkingLevel: (val: ThinkingLevel) => void;
   // Backend kayıtçısından aktif provider+model'in gerçek seviye listesi.
   effortCaps?: EffortCaps | null;
-  generationMode: GenerationMode;
-  setGenerationMode: (mode: GenerationMode) => void;
   isAnalyzingProject: boolean;
   activeConvId: number | null;
   analyzeProject: (silent?: boolean) => Promise<void>;
@@ -50,14 +47,15 @@ interface ControlPanelProps {
   usage?: UsageLimits | null;
   usageFamily?: UsageFamilyId | null;
   modelId?: string | null;
+  /** The composer's own pickers (its attach button and its video dialog), reached from the menu. */
+  onAttachFile?: () => void;
+  onAddVideo?: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
   thinkingLevel,
   setThinkingLevel,
   effortCaps,
-  generationMode,
-  setGenerationMode,
   isAnalyzingProject,
   activeConvId,
   analyzeProject,
@@ -74,11 +72,71 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   usage = null,
   usageFamily = null,
   modelId = null,
+  onAttachFile,
+  onAddVideo,
 }) => {
   const { t } = useLang();
   const [showMemoryMenu, setShowMemoryMenu] = useState(false);
   const [showThinkingMenu, setShowThinkingMenu] = useState(false);
   const [showMore, setShowMore] = useState(false);
+  const moreBtnRef = useRef<HTMLButtonElement>(null);
+  const morePopRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  const memoryOff = isAnalyzingProject || !activeConvId;
+
+  const closeMore = (returnFocus: boolean) => {
+    setShowMore(false);
+    setShowMemoryMenu(false);
+    if (returnFocus) moreBtnRef.current?.focus();
+  };
+  const menuItems = () =>
+    Array.from(morePopRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? []);
+  // Opening moves focus into the menu so the arrow keys work at once.
+  useEffect(() => { if (showMore) menuItems()[0]?.focus(); }, [showMore]);
+  const onMenuKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMore(true); return; }
+    const items = menuItems();
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    const next = e.key === 'ArrowDown' ? (i + 1) % items.length
+      : e.key === 'ArrowUp' ? (i <= 0 ? items.length - 1 : i - 1)
+      : e.key === 'Home' ? 0
+      : e.key === 'End' ? items.length - 1
+      : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    items[next].focus();
+  };
+  // One labelled row: icon, title, one-line description. A row that does not apply stays
+  // focusable (aria-disabled, not disabled) so the keyboard reaches it and the title says why.
+  const row = (o: {
+    key: string; icon: React.ReactNode; title: string; desc: string;
+    run?: () => void; reason?: string | null; testId?: string; checked?: boolean;
+  }) => {
+    const off = !o.run || !!o.reason;
+    return (
+      <button
+        key={o.key}
+        type="button"
+        role={o.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+        aria-checked={o.checked}
+        className="strip-pop-row menu-row"
+        data-row={o.key}
+        data-testid={o.testId}
+        aria-disabled={off || undefined}
+        aria-labelledby={`${menuId}-${o.key}-t`}
+        aria-describedby={`${menuId}-${o.key}-d`}
+        title={o.reason || undefined}
+        onClick={() => { if (off) return; closeMore(true); o.run!(); }}
+      >
+        <span className="menu-row-ic" aria-hidden="true">{o.icon}</span>
+        <span className="menu-row-txt">
+          <span id={`${menuId}-${o.key}-t`} className="menu-row-t">{o.title}</span>
+          <span id={`${menuId}-${o.key}-d`} className="menu-row-d">{o.desc}</span>
+        </span>
+      </button>
+    );
+  };
 
   const yuzde = contextUsage?.percent ?? 0;
 
@@ -117,10 +175,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       : t('usage.estimateTitle', { yuzde: contextUsage.percent, sayi: contextUsage.message_count });
 
   return (
-    // The mockup's status strip under the composer box: thinking, memory, plan usage, more
-    // settings (the key hint moved to the send button's tooltip). The less used controls (mode,
-    // project memory, usage report) live behind "More settings"; the popover stays mounted
-    // (hidden) so nothing it holds loses state.
+    // The mockup's status strip under the composer box: thinking, memory, plan usage, and the
+    // "Add & chat" menu (the key hint moved to the send button's tooltip). The menu holds the
+    // composer's attach/video pickers, project memory, summarising and the usage report; it stays
+    // mounted (hidden) so nothing it holds loses state.
     <div className="strip" data-testid="composer-strip">
       <div className="strip-anchor">
         <button
@@ -250,80 +308,89 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       <span className="strip-sep strip-sep-last" aria-hidden="true" />
       <div className="strip-anchor">
         <button
+          ref={moreBtnRef}
           type="button"
           className="strip-item strip-more"
           data-guide="strip-more"
+          aria-haspopup="menu"
           aria-expanded={showMore}
           aria-controls="strip-more-pop"
-          onClick={() => setShowMore(v => !v)}
+          onClick={() => (showMore ? closeMore(false) : setShowMore(true))}
         >
           <span className="strip-more-t">{t('strip.more')}</span>
           <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
         </button>
-        {showMore && <div className="fixed inset-0 z-40" onClick={() => { setShowMore(false); setShowMemoryMenu(false); }} />}
-        <div id="strip-more-pop" className="strip-pop strip-more-pop" hidden={!showMore}>
-          {/* No mode list here: the top bar's mode chip and Settings > Onay modu set it (owner, 3 Oct 2026). */}
-          {/* Learn the project, and the memory menu */}
-          <div className="strip-pop-pair">
-            <button
-              type="button"
-              onClick={() => analyzeProject()}
-              disabled={isAnalyzingProject}
-              className="strip-pop-row"
-              title={t('memory.learnTitle')}
-              data-busy={isAnalyzingProject || undefined}
-            >
-              <span className="strip-pop-row-l">
-                <Sparkles size={14} aria-hidden="true" />
-                {isAnalyzingProject ? t('memory.learning') : t('memory.learnProject')}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowMemoryMenu(!showMemoryMenu)}
-              disabled={isAnalyzingProject || !activeConvId}
-              aria-expanded={showMemoryMenu}
-              className="icon-btn"
-            >
-              <ChevronDown size={14} aria-hidden="true" />
-            </button>
+        {showMore && <div className="fixed inset-0 z-40" onClick={() => closeMore(false)} />}
+        {/* No mode list here: the top bar's mode chip and Settings > Onay modu set it (owner, 3 Oct 2026).
+            Every row names itself and says what it does: icons alone were not understood (owner, 3 Oct 2026). */}
+        <div
+          id="strip-more-pop"
+          ref={morePopRef}
+          className="strip-pop strip-more-pop"
+          role="menu"
+          aria-label={t('strip.more')}
+          hidden={!showMore}
+          onKeyDown={onMenuKey}
+        >
+          <div role="group" aria-labelledby={`${menuId}-add`} className="menu-sec">
+            <div id={`${menuId}-add`} className="menu-sec-h">{t('more.addSection')}</div>
+            {row({ key: 'attach', icon: <Paperclip size={15} />, title: t('more.attach'), desc: t('more.attachDesc'), run: onAttachFile })}
+            {row({ key: 'video', icon: <Film size={15} />, title: t('more.video'), desc: t('more.videoDesc'), run: onAddVideo })}
           </div>
-          {showMemoryMenu && (
-            <div className="strip-pop-sub">
-              <button type="button" className="strip-pop-row" onClick={() => { analyzeProject(); setShowMemoryMenu(false); }}>
-                <span className="strip-pop-row-l"><Sparkles size={14} aria-hidden="true" />{t('memory.refresh')}</span>
-              </button>
-              <button type="button" className="strip-pop-row" onClick={async () => { setShowMemoryMenu(false); await exportMemory(); }}>
-                <span className="strip-pop-row-l"><Download size={14} aria-hidden="true" />{t('memory.export')}</span>
-              </button>
-              <button type="button" className="strip-pop-row" onClick={async () => { setShowMemoryMenu(false); await importMemory(); }}>
-                <span className="strip-pop-row-l"><Upload size={14} aria-hidden="true" />{t('memory.import')}</span>
+          <div role="group" aria-labelledby={`${menuId}-chat`} className="menu-sec">
+            <div id={`${menuId}-chat`} className="menu-sec-h">{t('more.chatSection')}</div>
+            {/* Learn the project, and its memory submenu */}
+            <div className="strip-pop-pair">
+              {row({
+                key: 'learn', icon: <Sparkles size={15} />,
+                title: isAnalyzingProject ? t('memory.learning') : t('more.learn'), desc: t('more.learnDesc'),
+                run: () => { void analyzeProject(); }, reason: isAnalyzingProject ? t('more.analyzing') : null,
+              })}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { if (!memoryOff) setShowMemoryMenu(v => !v); }}
+                aria-disabled={memoryOff || undefined}
+                aria-expanded={showMemoryMenu}
+                aria-label={t('more.memoryOptions')}
+                title={memoryOff ? (isAnalyzingProject ? t('more.analyzing') : t('more.noChat')) : t('more.memoryOptions')}
+                className="icon-btn"
+              >
+                <ChevronDown size={14} aria-hidden="true" />
               </button>
             </div>
-          )}
-
-          {/* The per-turn token/cost readout was REMOVED on 5 Sep 2026. The counter only summed
-              SSE `turn_usage` events: 4 of the 8 run paths report no tokens at all, it restarted
-              from zero with the app and reset on every conversation switch, so the number
-              answered none of the questions asked of it. The real figures live in the usage
-              panel, which states their source. */}
-          {/* Opens the usage / context reports WITHOUT writing to the chat (`/usage` used to leave
-              a message pair in the history for every look). */}
-          {activeConvId && onToggleReports && (
-            <button
-              type="button"
-              data-testid="reports-toggle"
-              onClick={onToggleReports}
-              title={t('report.title')}
-              aria-pressed={reportsOpen}
-              className="strip-pop-row"
-            >
-              <span className="strip-pop-row-l"><Gauge size={14} aria-hidden="true" />{t('report.button')}</span>
-            </button>
-          )}
+            {showMemoryMenu && (
+              <div className="strip-pop-sub">
+                <button type="button" role="menuitem" className="strip-pop-row" onClick={() => { closeMore(true); void analyzeProject(); }}>
+                  <span className="strip-pop-row-l"><Sparkles size={14} aria-hidden="true" />{t('memory.refresh')}</span>
+                </button>
+                <button type="button" role="menuitem" className="strip-pop-row" onClick={() => { closeMore(true); void exportMemory(); }}>
+                  <span className="strip-pop-row-l"><Download size={14} aria-hidden="true" />{t('memory.export')}</span>
+                </button>
+                <button type="button" role="menuitem" className="strip-pop-row" onClick={() => { closeMore(true); void importMemory(); }}>
+                  <span className="strip-pop-row-l"><Upload size={14} aria-hidden="true" />{t('memory.import')}</span>
+                </button>
+              </div>
+            )}
+            {/* Same action as a click on the Hafıza meter, which stays. */}
+            {row({
+              key: 'compact', icon: <Minimize2 size={15} />,
+              title: isCompacting ? t('memory.compacting') : t('more.compact'), desc: t('more.compactDesc'),
+              run: () => { void compactConversation(); },
+              reason: !activeConvId ? t('more.noChat') : isCompacting ? t('more.compactingReason') : null,
+              testId: 'compact-row',
+            })}
+            {/* The per-turn token/cost readout was REMOVED on 5 Sep 2026 (it summed SSE `turn_usage`
+                events that half the run paths never send). The usage panel opens WITHOUT writing to
+                the chat (`/usage` used to leave a message pair in the history for every look). */}
+            {row({
+              key: 'reports', icon: <Gauge size={15} />, title: t('more.reports'), desc: t('more.reportsDesc'),
+              run: onToggleReports, reason: !activeConvId ? t('more.noChat') : null,
+              testId: 'reports-toggle', checked: reportsOpen,
+            })}
+          </div>
         </div>
       </div>
     </div>
   );
 };
-

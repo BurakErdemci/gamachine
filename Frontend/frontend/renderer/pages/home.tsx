@@ -30,7 +30,7 @@ import { ProjectFiles } from '../components/home/FileTree';
 import { ControlPanel, ThinkingLevel, EffortCaps } from '../components/home/ControlPanel';
 import { SessionReportPanel } from '../components/home/SessionReportPanel';
 import { UnityMcpToggle } from '../components/home/UnityMcpToggle';
-import { AnimatedChatInput } from '../components/ui/animated-ai-chat';
+import { AnimatedChatInput, type ComposerPickers } from '../components/ui/animated-ai-chat';
 import { ToastContainer } from '../components/ui/Toast';
 
 import { useAppInitialization } from '../hooks/home/useAppInitialization';
@@ -366,6 +366,8 @@ export default function Home() {
   // The file change a card is waiting on, with that card's own Accept / Reject handlers.
   const pendingChange = usePendingChange();
   const [reportsOpen, setReportsOpen] = useState(false);
+  // The composer's attach/video pickers, opened from the strip's "Add & chat" menu.
+  const composerPickers = useRef<ComposerPickers>(null);
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
 
@@ -1134,6 +1136,7 @@ export default function Home() {
             galleryProvider={slashProvider}
             chats={chat.conversations}
             currentChatId={chat.activeConvId}
+            pickersRef={composerPickers}
             onStop={chat.stopMessage}
             queue={{
               items: chat.queue, paused: chat.queuePaused,
@@ -1149,14 +1152,15 @@ export default function Home() {
               return false;
             }}
           />
-          {/* The status strip under the box: thinking, memory, more settings, the key hint. */}
+          {/* The status strip under the box: thinking, memory, plan usage, the Add & chat menu. */}
           <ControlPanel
-            thinkingLevel={thinkingLevel} setThinkingLevel={chooseEffort} generationMode={chat.generationMode} setGenerationMode={chat.setGenerationMode}
+            thinkingLevel={thinkingLevel} setThinkingLevel={chooseEffort}
             isAnalyzingProject={chat.isAnalyzingProject} activeConvId={chat.activeConvId} analyzeProject={chat.analyzeProject}
             exportMemory={chat.exportMemory} importMemory={chat.importMemory} compactConversation={chat.compactConversation} isCompacting={chat.isCompacting} contextUsage={chat.contextUsage}
             reportsOpen={reportsOpen} onToggleReports={() => setReportsOpen(v => !v)}
             isClaudeSubscription={isClaudeSub} ultracode={ultracode} setUltracode={setUltracode} effortCaps={effortCaps}
             usage={usage.data} usageFamily={stripUsageFamily} modelId={ai.aiConfig.model_name}
+            onAttachFile={() => composerPickers.current?.pickImage()} onAddVideo={() => composerPickers.current?.pickVideo()}
           />
         </div>
       </main>

@@ -48,7 +48,7 @@ export const LESSER: GuideTopic[] = [
     steps: [
       { anchor: "strip-more", side: "above", align: "end", prepare: ["screen:chat"],
         title: T("Projeyi öğret", "Teach me the project"),
-        text: T("Diğer ayarlar'daki Projeyi öğren projeni baştan tarar ve hafızaya yazar. Hafızayı .md dosyası olarak dışa aktarır, başka bir sohbete yüklersin.", "Learn project, under More settings, scans the project and writes it to memory. Export the memory as an .md file and load it into another chat."),
+        text: T("Ekle ve sohbet menüsündeki Projeyi öğren projeni baştan tarar ve hafızaya yazar. Hafızayı .md dosyası olarak dışa aktarır, başka bir sohbete yüklersin.", "Learn project, in the Add & chat menu, scans the project and writes it to memory. Export the memory as an .md file and load it into another chat."),
       },
     ],
   },

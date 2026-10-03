@@ -25,7 +25,6 @@ vi.mock('axios', () => {
 
 import axios from 'axios'
 import { SettingsScreen } from '../renderer/components/home/settings/SettingsScreen'
-import { GenerationModeSelector } from '../renderer/components/home/GenerationModeSelector'
 import { useChat } from '../renderer/hooks/home/useChat'
 import { useMCPApproval, gateRisk, MCP_MSG_ID } from '../renderer/hooks/home/useMCPApproval'
 import { CommandApproval } from '../renderer/components/home/CommandApproval'
@@ -153,45 +152,7 @@ describe('Settings screen · Onay modu page', () => {
   })
 })
 
-describe('Auto-mode warning lives on the chat mode selector', () => {
-  it('auto shows the red tone, a red dot and the warning tooltip', () => {
-    render(<GenerationModeSelector value="auto" onChange={vi.fn()} />)
-    const button = screen.getByText(cevir('mode.auto')).closest('button')!
-    expect(button.getAttribute('title')).toBe(cevir('mode.autoWarning'))
-    expect(button.className).toContain('text-red-400')
-    expect(screen.getByTestId('auto-mode-dot')).toBeTruthy()
-  })
-
-  it('step keeps its plain look', () => {
-    render(<GenerationModeSelector value="step" onChange={vi.fn()} />)
-    const button = screen.getByText(cevir('mode.step')).closest('button')!
-    expect(button.getAttribute('title')).toBeNull()
-    expect(button.className).not.toContain('red')
-    expect(screen.queryByTestId('auto-mode-dot')).toBeNull()
-  })
-
-  it('balanced keeps the plain look too: no red, no dot, no tooltip', () => {
-    render(<GenerationModeSelector value="balanced" onChange={vi.fn()} />)
-    const button = screen.getByText(cevir('mode.balanced')).closest('button')!
-    expect(button.getAttribute('title')).toBeNull()
-    expect(button.className).not.toContain('red')
-    expect(screen.queryByTestId('auto-mode-dot')).toBeNull()
-  })
-
-  it('the dropdown lists auto, balanced, step; balanced alone is recommended and selectable', () => {
-    const onChange = vi.fn()
-    const { container } = render(<GenerationModeSelector value="step" onChange={onChange} />)
-    fireEvent.click(screen.getByText(cevir('mode.step')).closest('button')!)
-    const options = Array.from(container.querySelectorAll('[data-mode]')).map(el => el.getAttribute('data-mode'))
-    expect(options).toEqual(['auto', 'balanced', 'step'])
-    const badges = screen.getAllByTestId('mode-recommended-badge')
-    expect(badges).toHaveLength(1)
-    expect(badges[0].closest('[data-mode]')!.getAttribute('data-mode')).toBe('balanced')
-    expect(screen.getByText(cevir('mode.balancedDesc'))).toBeTruthy()
-    fireEvent.click(container.querySelector('[data-mode="balanced"]')!)
-    expect(onChange).toHaveBeenCalledWith('balanced')
-  })
-
+describe('Approval mode wording', () => {
   it('the balanced wording exists in both languages and never says plan', () => {
     expect(translations.tr['mode.balanced']).toBe('Güvenli Otomatik')
     expect(translations.tr['settings.modeBalancedTitle']).toBe('Güvenli Otomatik')
@@ -206,11 +167,6 @@ describe('Auto-mode warning lives on the chat mode selector', () => {
         expect(translations[lang][key]).not.toMatch(/plan/i)
       }
     }
-  })
-
-  it('the tooltip wording exists in both languages', () => {
-    expect(translations.tr['mode.autoWarning']).toBe('Oto mod — onay kartı yok')
-    expect(translations.en['mode.autoWarning']).toBe('Auto mode — no approval cards')
   })
 
   it('the header badge is gone', () => {

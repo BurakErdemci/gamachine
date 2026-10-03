@@ -3,8 +3,8 @@ import React from 'react';
 import { useLang, type TKey } from '../../lib/i18n';
 import type { GenerationMode } from './types';
 
-// Same three modes and labels as GenerationModeSelector (the composer's control), so the
-// top bar and the composer can never name a mode differently.
+// Same three modes and labels (the `mode.*` keys) as the guide tour's mode step, so the two
+// can never name a mode differently.
 const MODES: Array<{ id: GenerationMode; label: TKey; desc: TKey }> = [
   { id: 'auto', label: 'mode.auto', desc: 'mode.autoDesc' },
   { id: 'balanced', label: 'mode.balanced', desc: 'mode.balancedDesc' },

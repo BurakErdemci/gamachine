@@ -205,7 +205,7 @@ describe('thinking level: the menu and the composer show the same value', () => 
         <ModelSelector {...props({ isModelDropdownOpen: true })} thinkingLevel={level} effortLevels={caps.levels} onThinkingChange={setLevel} />
         <ControlPanel
           thinkingLevel={level} setThinkingLevel={setLevel} effortCaps={caps}
-          generationMode="balanced" setGenerationMode={() => {}} isAnalyzingProject={false} activeConvId={null}
+          isAnalyzingProject={false} activeConvId={null}
           analyzeProject={async () => {}} exportMemory={async () => {}} importMemory={async () => {}}
           compactConversation={async () => {}} isCompacting={false}
         />

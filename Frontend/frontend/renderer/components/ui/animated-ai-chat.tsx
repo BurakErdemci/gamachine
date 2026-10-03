@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useTransition, useMemo } from "react";
+import { useEffect, useRef, useCallback, useTransition, useMemo, useImperativeHandle } from "react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import {
@@ -83,6 +83,11 @@ interface CommandSuggestion {
 }
 
 
+export interface ComposerPickers {
+    pickImage: () => void;
+    pickVideo: () => void;
+}
+
 export function AnimatedChatInput({
     value,
     setValue,
@@ -109,6 +114,7 @@ export function AnimatedChatInput({
     chats = [],
     currentChatId = null,
     queue,
+    pickersRef,
 }: {
     value: string;
     setValue: (val: string) => void;
@@ -132,6 +138,8 @@ export function AnimatedChatInput({
     currentChatId?: number | null;
     // Messages sent while this chat's turn runs; drawn above the text box.
     queue?: MessageQueueProps;
+    /** The attach and video pickers, for the strip's "Add & chat" menu (the video button lives only there). */
+    pickersRef?: React.Ref<ComposerPickers>;
 }) {
     // Typing state is INTERNAL — does not propagate to parent on every keystroke.
     const [internalValue, setInternalValue] = useState(value);
@@ -423,6 +431,11 @@ export function AnimatedChatInput({
             }))]);
         }
     };
+
+    useImperativeHandle(pickersRef, () => ({
+        pickImage: () => fileInputRef.current?.click(),
+        pickVideo: () => { void pickVideoFile(); },
+    }));
 
     const handlePaste = (e: React.ClipboardEvent) => {
         const items = Array.from(e.clipboardData.items);
@@ -878,15 +891,6 @@ export function AnimatedChatInput({
                     title={t('composer.addImage')}
                 >
                     <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M14.5 9.5l-5 5a3 3 0 01-4.2-4.2l5.6-5.6a2 2 0 012.8 2.8l-5.4 5.4a1 1 0 01-1.4-1.4l4.8-4.8" /></svg>
-                </button>
-                <button
-                    type="button"
-                    onClick={pickVideoFile}
-                    className="icon-btn"
-                    aria-label={t('composer.addVideo')}
-                    title={t('composer.addVideo')}
-                >
-                    <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1" /><path d="M6.5 4v12M13.5 4v12M3 8h3.5M3 12h3.5M13.5 8H17M13.5 12H17" /></svg>
                 </button>
                 <label className="sr-only" htmlFor={inputId}>{t('chat.placeholder')}</label>
                 <textarea

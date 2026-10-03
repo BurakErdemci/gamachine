@@ -25,8 +25,6 @@ afterEach(() => cleanup())
 const temelProps = {
   thinkingLevel: 'medium' as any,
   setThinkingLevel: () => {},
-  generationMode: 'auto' as any,
-  setGenerationMode: () => {},
   isAnalyzingProject: false,
   analyzeProject: async () => {},
   exportMemory: async () => {},
