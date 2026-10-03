@@ -36,14 +36,15 @@ export const UseRow = ({ label, win, state, nowIso }: { label: string; win: Usag
   const loading = state === 'loading';
   const v = win ? clampPct(win.used_pct) : null;
   const reset = !loading ? resetLabel(win, lang, nowIso) : '';
+  const resetText = reset ? t('use.resets', { zaman: reset }) : '';
   // Spent, not remaining, spelled out: Claude's /usage counts what is used, the Codex app
   // what is left, and a bare "%66" next to the Codex app read as the opposite (owner, 2 Oct 2026).
   return (
-    <div className="use-row" data-testid="use-row">
+    <div className="use-row" data-testid="use-row" title={resetText || undefined}>
       <span className="use-k">{label}</span>
       <Meter value={v} loading={loading || !win} />
       <span className="use-v num">{!loading && v != null ? t('use.used', { yuzde: v }) : ''}</span>
-      <span className="use-r">{reset ? t('use.resets', { zaman: reset }) : ''}</span>
+      <span className="use-r">{resetText}</span>
     </div>
   );
 };

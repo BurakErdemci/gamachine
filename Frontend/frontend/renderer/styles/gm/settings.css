@@ -71,8 +71,8 @@
   font-size: var(--fs-meta); color: var(--shell-text-dim); line-height: 1.4;
 }
 .use-v { color: var(--shell-text); font-weight: 600; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-/* min-width 0: a long reset text (a raw CLI fallback) shortens instead of widening the box. */
-.use-r { justify-self: end; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Long CLI fallback text can wrap without widening the box or losing its reset time. */
+.use-r { justify-self: end; min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 /* loading = the empty track (a skeleton, never a guess); stale = the last numbers, dimmed */
 .meter.is-loading i { animation: use-wait 1.4s var(--g-ease-move, ease) infinite alternate; }
 @keyframes use-wait { to { opacity: .45; } }
@@ -93,7 +93,7 @@
 .chip-use i.is-hot::before { background: var(--use-hot); }
 
 /* ======================= the menu: providers | models ======================= */
-.model-menu { width: 600px; max-width: calc(100vw - 24px); padding: 0; overflow: hidden; }
+.model-menu { width: 600px; max-width: calc(100vw - 24px); padding: 0; overflow: hidden; container-type: inline-size; }
 .model-menu .plogo { flex: none; }
 .mm-top { display: flex; align-items: center; gap: 14px; padding: 10px 10px 10px 16px; border-bottom: var(--line-w) solid var(--menu-line); }
 .mm-top .model-menu-k { padding: 0; flex: none; }
@@ -123,6 +123,8 @@
 .mm-prov.is-off .mm-prov-name { color: var(--shell-text-dim); }
 .mm-pane { grid-column: 2; display: flex; flex-direction: column; gap: 10px; padding: 12px 12px 8px; min-width: 0; overflow-y: auto; }
 .mm-use { display: grid; gap: 7px; padding: 10px 12px; border: var(--line-w) solid var(--shell-line); border-radius: var(--radius-md); background: var(--shell-bg); }
+.mm-use .use-row { grid-template-columns: 46px minmax(0, 1fr) auto; row-gap: 2px; }
+.mm-use .use-r { grid-column: 2 / -1; }
 .mm-note { display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 1.5; color: var(--shell-text-dim); padding: 2px 4px; }
 .mm-note-warn, .mm-warn { color: var(--accent-text-shell, var(--shell-text)); }
 .mm-warn { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: var(--line-w) solid var(--accent); border-radius: var(--radius-md); font-size: 13px; }
@@ -147,7 +149,7 @@
 .mm-result > .model-opt { flex: 1; min-width: 0; }
 .model-menu .btn-ghost { color: var(--shell-text); border-color: var(--menu-line); align-self: flex-start; }
 .model-menu .btn-ghost:hover { background: var(--shell-bg-active); }
-.mm-effort { grid-column: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 10px 16px; border-top: var(--line-w) solid var(--menu-line); }
+.mm-effort { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 12px 10px 16px; border-top: var(--line-w) solid var(--menu-line); }
 .mm-effort-k { font-size: 13px; color: var(--shell-text-dim); }
 .mm-foot { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 8px 8px; border-top: var(--line-w) solid var(--menu-line); }
 .mm-link { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--radius-md); font-size: 13px; color: var(--shell-text); }
@@ -166,6 +168,15 @@
 .model-menu .gm-seg > button { color: var(--shell-text-dim); }
 .model-menu .gm-seg > button:hover { color: var(--shell-text); }
 .model-menu .gm-seg > button[aria-checked="true"] { background: var(--shell-bg-active); color: var(--shell-text); box-shadow: inset 0 0 0 1px var(--menu-line); }
+.mm-effort .gm-seg-sm { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; max-width: 100%; margin-left: auto; }
+.mm-effort .gm-seg-sm > button { flex: 1 0 auto; padding: 0 8px; }
+
+/* Below this menu width the fixed provider column would starve the controls of space. */
+@container (max-width: 520px) {
+  .mm-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .mm-provs { grid-row: auto; max-height: 130px; border-right: 0; border-bottom: var(--line-w) solid var(--menu-line); }
+  .mm-pane, .mm-effort { grid-column: 1; }
+}
 
 /* ======================= the settings screen ======================= */
 .settings { display: none; grid-column: 1 / 4; grid-row: 1 / 3; min-height: 0; grid-template-columns: 240px minmax(0, 1fr); }
