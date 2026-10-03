@@ -335,7 +335,9 @@ namespace MCPForUnity.Editor.Tools.Gamachine
             if (component == null || error != null)
             {
                 step.Revert();
-                return new ErrorResponse("add_failed");
+                // Built-in single-instance types (Rigidbody, ...) carry no DisallowMultipleComponent, so Present()
+                // cannot see them; Unity just refuses the second one.
+                return new ErrorResponse(go.GetComponent(entry.Type) != null ? "already_present" : "add_failed");
             }
             PrefabUtility.RecordPrefabInstancePropertyModifications(component);
             var response = new SuccessResponse("Component added.", new
