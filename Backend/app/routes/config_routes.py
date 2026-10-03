@@ -16,6 +16,7 @@ from providers import model_catalog
 from providers.families import subscription_family
 from providers.oneshot_cli import installed_clis, resolve_general_cli as _resolve_general_cli
 from schemas import AIConfigRequest, APIKeySaveRequest
+from error_i18n import translate_detail
 
 
 logger = logging.getLogger(__name__)
@@ -358,14 +359,15 @@ def create_config_router(db):
         return {"keys": masked, "providers_with_keys": list(keys.keys())}
 
     @router.post("/api-keys/save")
-    async def save_api_key(req: APIKeySaveRequest, x_session_token: str = Header(alias="X-Session-Token")):
+    async def save_api_key(req: APIKeySaveRequest, x_session_token: str = Header(alias="X-Session-Token"),
+                           x_ui_lang: str | None = Header(default=None, alias="X-UI-Lang")):
         user_id, _ = get_current_user(db, x_session_token)
         if not req.provider_type:
             raise HTTPException(400, "provider_type gerekli.")
         if not req.api_key:
             raise HTTPException(400, "API key boş olamaz.")
         db.save_api_key(user_id, req.provider_type, req.api_key)
-        return {"status": "success", "message": f"{req.provider_type} API key kaydedildi."}
+        return {"status": "success", "message": translate_detail(f"{req.provider_type} API key kaydedildi.", x_ui_lang)}
 
     @router.delete("/api-keys/{user_id}/{provider_type}")
     async def delete_api_key(user_id: int, provider_type: str, x_session_token: str = Header(alias="X-Session-Token")):
@@ -780,7 +782,8 @@ def create_config_router(db):
     # ── Tek tık kurulum / giriş: kullanıcının GÖREBİLECEĞİ bir terminal
     #    penceresi açar (kurulum çıktısı + tarayıcı login akışı orada yaşar). ──
     @router.post("/cli-install/{cli}")
-    async def cli_install(cli: str, x_session_token: str = Header(alias="X-Session-Token", default="")):
+    async def cli_install(cli: str, x_session_token: str = Header(alias="X-Session-Token", default=""),
+                          x_ui_lang: str | None = Header(default=None, alias="X-UI-Lang")):
         _check_token(x_session_token)
         import shutil
         install_map = _MAC_INSTALL_CMDS if sys.platform == "darwin" else _WINDOWS_INSTALL_CMDS
@@ -795,10 +798,11 @@ def create_config_router(db):
             raise HTTPException(412, "Bu CLI'ın kurulumu için Node.js gerekiyor. Önce nodejs.org'dan Node.js kurun (npm ile birlikte gelir).")
         _open_visible_terminal(_install_terminal_command(cli, cmd, needs_npm, sys.platform))
         _doctor_cache.clear()
-        return {"status": "started", "message": "Kurulum penceresi açıldı."}
+        return {"status": "started", "message": translate_detail("Kurulum penceresi açıldı.", x_ui_lang)}
 
     @router.post("/cli-login/{cli}")
-    async def cli_login(cli: str, x_session_token: str = Header(alias="X-Session-Token", default="")):
+    async def cli_login(cli: str, x_session_token: str = Header(alias="X-Session-Token", default=""),
+                        x_ui_lang: str | None = Header(default=None, alias="X-UI-Lang")):
         _check_token(x_session_token)
         login_map = _MAC_LOGIN_CMDS if sys.platform == "darwin" else _WINDOWS_LOGIN_CMDS
         cmd = login_map.get(cli)
@@ -816,6 +820,6 @@ def create_config_router(db):
             )
         _open_visible_terminal(visible_cmd)
         _doctor_cache.clear()
-        return {"status": "started", "message": "Giriş penceresi açıldı."}
+        return {"status": "started", "message": translate_detail("Giriş penceresi açıldı.", x_ui_lang)}
 
     return router

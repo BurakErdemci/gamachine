@@ -9,10 +9,65 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from error_i18n import EN, PATTERNS, localized_http_exception_handler, translate_detail
+from error_i18n import EN, PATTERNS, UI_EVENT_TYPES, localized_http_exception_handler, translate_detail
 
 
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
+
+EMITTER_FILES = (
+    "providers/cli_base.py", "providers/claude_sdk_session.py", "providers/codex_session.py",
+    "providers/agy_session.py", "agentic/agent_runner.py", "routes/conversation_routes.py",
+    "routes/config_routes.py", "routes/mcp_routes.py",
+)
+
+
+def _literal_templates(expression):
+    if isinstance(expression, ast.JoinedStr):
+        yield "".join(part.value if isinstance(part, ast.Constant) else "VARIABLE"
+                      for part in expression.values)
+    elif isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        yield expression.value
+    else:
+        for child in ast.iter_child_nodes(expression):
+            yield from _literal_templates(child)
+
+
+def _untranslated_ui_literals():
+    turkish = re.compile(r"[çğıöşüÇĞİÖŞÜâîû]")
+    missing = []
+    for filename in EMITTER_FILES:
+        tree = ast.parse((APP_DIR / filename).read_text(encoding="utf-8-sig"))
+        parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            fields = {key.value: value for key, value in zip(node.keys, node.values)
+                      if isinstance(key, ast.Constant) and isinstance(key.value, str)}
+            event_type = fields.get("type")
+            ui_event = isinstance(event_type, ast.Constant) and event_type.value in UI_EVENT_TYPES
+            parent = parents.get(node)
+            # AgentEvent keeps its type in the first constructor argument.
+            if isinstance(parent, ast.Call) and getattr(parent.func, "id", None) == "AgentEvent":
+                ui_event |= bool(parent.args and isinstance(parent.args[0], ast.Constant)
+                                 and parent.args[0].value in UI_EVENT_TYPES)
+            message_return = filename.startswith("routes/") and isinstance(parent, ast.Return)
+            keys = ("message", "content", "detail", "text") if ui_event else ("message",) if message_return else ()
+            for key in keys:
+                if key not in fields:
+                    continue
+                for literal in _literal_templates(fields[key]):
+                    if turkish.search(literal) and translate_detail(literal, "en") == literal:
+                        missing.append(f"{filename}:{node.lineno}: {literal}")
+    return missing
+
+
+def test_every_turkish_ui_emitter_literal_is_translated():
+    assert not (missing := _untranslated_ui_literals()), "Untranslated UI literals:\n" + "\n".join(missing)
+
+
+def test_ui_guard_detects_a_removed_dictionary_entry(monkeypatch):
+    monkeypatch.delitem(EN, "İşlem durduruldu.")
+    assert any("İşlem durduruldu." in item for item in _untranslated_ui_literals())
 
 
 @pytest.mark.parametrize("exception_type", [HTTPException, StarletteHTTPException])

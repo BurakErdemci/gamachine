@@ -169,7 +169,7 @@ export const useSideChat = (API: string, user: UserData | null) => {
     const post = (id: number) => fetch(`${apiRef.current}/conversations/${id}/side-stream`, {
       method: 'POST',
       signal: controller.signal,
-      headers: headers(true),
+      headers: { ...headers(true), 'X-UI-Lang': opts.lang || 'en' },
       body: JSON.stringify({
         message: q,
         live_context: opts.liveContext || '',

@@ -5,7 +5,7 @@ import { Message, Conversation, UserData, AIConfig, GenerationMode, toGeneration
 import { PendingFile } from '../../components/home/FileCreationApproval';
 import { confirmDialog } from '../../components/ui/ConfirmDialog';
 import { applyCardClosed, deliveryFromFetch, gateFailure } from './gateResponse';
-import { cevir, type TKey } from '../../lib/i18n';
+import { aktifDil, cevir, type TKey } from '../../lib/i18n';
 import { parseContextReport } from '../../lib/contextReport';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { apiHataMesaji } from '../../lib/apiError';
@@ -975,7 +975,7 @@ export const useChat = (
       const response = await fetch(`${API}/chat-stream`, {
         method: 'POST',
         signal: controller.signal,
-        headers: { 'Content-Type': 'application/json', 'X-Session-Token': user.sessionToken },
+        headers: { 'Content-Type': 'application/json', 'X-Session-Token': user.sessionToken, 'X-UI-Lang': lang },
         body: JSON.stringify({
           conversation_id: targetConvId, message: messageContent, language: lang, user_id: user.id,
           editor_code: code || '',
@@ -1411,7 +1411,7 @@ export const useChat = (
         let retryMs = 2000;
         try {
           const res = await fetch(`${API}/wake-stream-all`, {
-            headers: { 'X-Session-Token': sessionToken },
+            headers: { 'X-Session-Token': sessionToken, 'X-UI-Lang': aktifDil() },
             signal: ac.signal,
           });
           // An older backend without this route: do not hammer it.
