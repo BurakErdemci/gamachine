@@ -99,7 +99,8 @@ it('opens from Shift+F10 and the context-menu key on the focused row', async () 
   fireEvent.keyDown(tree, { key: 'ArrowDown' })
   fireEvent.keyDown(tree, { key: 'ContextMenu' })
   expect(screen.getByRole('menu').textContent).toContain('Child içine oluştur')
-  expect(posts('select')).toContainEqual({ id: 2 })
+  // A selection right after another reaches Unity on the trailing edge of the coalescing window.
+  await waitFor(() => expect(posts('select')).toContainEqual({ id: 2 }))
 })
 
 it('creates through nested submenus with the row as parent; Esc closes only the topmost menu', async () => {
@@ -256,7 +257,7 @@ it('M1: arrows move the selection, so Delete deletes the row the arrows landed o
   fireEvent.keyDown(tree, { key: 'ArrowUp' })
   expect(screen.getByRole('treeitem', { name: 'Light' }).getAttribute('aria-selected')).toBe('true')
   expect(screen.getByRole('treeitem', { name: 'Player' }).getAttribute('aria-selected')).toBe('false')
-  expect(posts('select')).toContainEqual({ id: 2 })
+  await waitFor(() => expect(posts('select')).toContainEqual({ id: 2 }))
   fireEvent.keyDown(tree, { key: 'Delete' })
   await waitFor(() => expect(posts('delete')).toEqual([{ id: 2 }]))
   await waitFor(() => expect(screen.queryByRole('treeitem', { name: 'Light' })).toBeNull())
