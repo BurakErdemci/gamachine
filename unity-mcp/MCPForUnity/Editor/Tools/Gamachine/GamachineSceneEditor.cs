@@ -47,6 +47,8 @@ namespace MCPForUnity.Editor.Tools.Gamachine
             SceneChanged();
             bool hierarchyChanged = false;
             bool propsChanged = false;
+            try
+            {
             for (int i = 0; i < stream.length; i++)
             {
                 switch (stream.GetEventType(i))
@@ -76,6 +78,13 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                         propsChanged = true;
                         break;
                 }
+            }
+            }
+            catch (Exception)
+            {
+                // A failed classification must not freeze the counters the app keys on (verify-f1).
+                hierarchyChanged = true;
+                propsChanged = true;
             }
             if (hierarchyChanged) HierarchyVersion = unchecked(HierarchyVersion + 1);
             if (propsChanged) PropsVersion = unchecked(PropsVersion + 1);
