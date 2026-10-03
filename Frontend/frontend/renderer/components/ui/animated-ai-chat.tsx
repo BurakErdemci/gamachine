@@ -86,6 +86,8 @@ interface CommandSuggestion {
 export interface ComposerPickers {
     pickImage: () => void;
     pickVideo: () => void;
+    /** Rewrites the draft from what the box really holds; typing never reaches the parent's copy. */
+    editDraft: (update: (current: string) => string) => void;
 }
 
 export function AnimatedChatInput({
@@ -435,6 +437,15 @@ export function AnimatedChatInput({
     useImperativeHandle(pickersRef, () => ({
         pickImage: () => fileInputRef.current?.click(),
         pickVideo: () => { void pickVideoFile(); },
+        editDraft: (update) => {
+            const next = update(textareaRef.current?.value ?? internalValue);
+            setInternalValue(next);
+            setValue(next);
+            scheduleDeferred(() => {
+                const el = textareaRef.current;
+                if (el) { el.focus(); el.setSelectionRange(next.length, next.length); }
+            });
+        },
     }));
 
     const handlePaste = (e: React.ClipboardEvent) => {

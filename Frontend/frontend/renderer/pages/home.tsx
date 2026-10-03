@@ -859,12 +859,11 @@ export default function Home() {
   const cardWaiting = !!(chat.pendingCommand || chat.pendingQuestion || fs.pendingDelete || fs.pendingGenFiles || chat.pendingFix || mcp.activeGate);
   // A mission-board card fills the composer; nothing is sent until the user presses Enter. A draft
   // already in the box is kept (questDraft).
+  // The composer applies it to the text it really holds: the parent's copy is not updated while
+  // typing, so a card deleted by hand still looked present and a second pick did nothing.
   const pickQuest = (prompt: string) => {
+    if (composerPickers.current) { composerPickers.current.editDraft(current => questDraft(current, prompt)); return; }
     chat.setChatInput(prev => questDraft(prev, prompt));
-    requestAnimationFrame(() => {
-      const box = document.querySelector<HTMLTextAreaElement>('.composer textarea');
-      if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
-    });
   };
 
   return (
