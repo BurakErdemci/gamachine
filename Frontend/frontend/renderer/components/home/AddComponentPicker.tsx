@@ -25,6 +25,9 @@ export function AddComponentPicker({ id, anchor, actions, onClose, onAdded }: {
   const write = actions.inspectorWrites[key];
   const pending = !!write?.pending;
   const menu = actions.componentMenu;
+  useEffect(() => {
+    if (menu.state === 'idle') actions.loadComponentMenu(id);
+  }, [menu.state, id, actions.loadComponentMenu]);
   const items = menu.state === 'ready' && menu.id === id ? menu.items : [];
   const q = query.trim().toLocaleLowerCase();
   const rows: Row[] = q ? items.filter(item => `${item.label} ${item.category}`.toLocaleLowerCase().includes(q)).map(entry => ({ entry }))

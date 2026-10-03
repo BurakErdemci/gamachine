@@ -28,6 +28,17 @@ def _reply(body, status=200):
     return reply
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), [float("inf"), 1, 2]])
+def test_set_field_rejects_non_finite_values(client, monkeypatch, value):
+    http, routes = client
+    post = Mock()
+    monkeypatch.setattr(routes.urllib.request, "urlopen", post)
+    response = http.post("/scene-editor/set-field", content=json.dumps({"componentId": 20, "field": "mass", "value": value}),
+                         headers={"X-Session-Token": "app-secret", "Content-Type": "application/json"})
+    assert response.status_code == 422
+    post.assert_not_called()
+
+
 CASES = [
     ("GET", "/scene-editor/tree", None, "gm_editor_tree", {}),
     ("GET", "/scene-editor/inspect/-3384", None, "gm_editor_inspect", {"id": -3384}),

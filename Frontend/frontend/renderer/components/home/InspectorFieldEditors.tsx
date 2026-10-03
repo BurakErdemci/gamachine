@@ -8,12 +8,14 @@ import type { InspectorActions, SceneWriteError } from '../../hooks/home/useScen
 export const optionLabel = (option: NonNullable<SceneField['options']>[number]) => typeof option === 'string' ? option : option.label;
 const text = (value: unknown) => value == null ? '' : String(value);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const floatText = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? String(Number(value.toPrecision(7))) : text(value);
 
-export function InspectorTextInput({ value, label, disabled, numeric, className = 'f-in', parse, commit, onDone }: {
-  value: unknown; label: string; disabled: boolean; numeric?: boolean; className?: string;
+export function InspectorTextInput({ value, label, disabled, numeric, rounded, className = 'f-in', parse, commit, onDone }: {
+  value: unknown; label: string; disabled: boolean; numeric?: boolean; rounded?: boolean; className?: string;
   parse: (raw: string) => unknown; commit: (value: any) => void; onDone?: () => void;
 }) {
-  const shown = text(value);
+  const display = rounded ? floatText : text;
+  const shown = display(value);
   const [draft, setDraft] = useState(shown);
   const baseline = useRef(shown);
   const raw = useRef(shown);
@@ -24,13 +26,13 @@ export function InspectorTextInput({ value, label, disabled, numeric, className 
       const parsed = parse(raw.current);
       if (parsed === undefined) restore();
       else {
-        baseline.current = text(parsed); raw.current = baseline.current; setDraft(baseline.current);
+        baseline.current = display(parsed); raw.current = baseline.current; setDraft(baseline.current);
         if (!same(parsed, value)) commit(parsed);
       }
     }
     onDone?.();
   };
-  return <input className={className} aria-label={label} inputMode={numeric ? 'decimal' : undefined} readOnly={disabled}
+  return <input className={className} aria-label={label} title={numeric ? text(value) : undefined} inputMode={numeric ? 'decimal' : undefined} readOnly={disabled}
     value={draft} autoFocus={!!onDone} onChange={event => { if (!disabled) { raw.current = event.target.value; setDraft(raw.current); } }}
     onBlur={finish} onKeyDown={event => {
       if (event.key === 'Enter') { event.preventDefault(); finish(); event.currentTarget.blur(); }
@@ -116,6 +118,28 @@ function ColorEditor({ value, field, disabled, commit }: { value: unknown; field
       <span className="f-col-sw" style={{ backgroundColor: text(value) }} /><span className="f-col-hex">{text(value)}</span></button>;
 }
 
+function RangeEditor({ value, field, disabled, parse, commit }: {
+  value: number; field: SceneField; disabled: boolean; parse: (raw: string) => number | undefined; commit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const raw = useRef(value);
+  const dragging = useRef(false);
+  useEffect(() => { if (!dragging.current) { raw.current = value; setDraft(value); } }, [value]);
+  useEffect(() => { if (disabled) { dragging.current = false; raw.current = value; setDraft(value); } }, [disabled, value]);
+  return <input type="range" aria-label={field.label} disabled={disabled}
+    min={Array.isArray(field.range) ? field.range[0] : field.range!.min} max={Array.isArray(field.range) ? field.range[1] : field.range!.max}
+    step={field.kind === 'int' ? 1 : 'any'} value={draft}
+    onPointerDown={event => { if (!disabled) { dragging.current = true; event.currentTarget.setPointerCapture?.(event.pointerId); } }}
+    onChange={event => {
+      if (disabled) return;
+      const next = parse(event.target.value); if (next === undefined) return;
+      raw.current = next; setDraft(next);
+      if (!dragging.current && next !== value) commit(next);
+    }}
+    onPointerUp={() => { if (dragging.current) { dragging.current = false; if (!disabled && raw.current !== value) commit(raw.current); } }}
+    onPointerCancel={() => { dragging.current = false; raw.current = value; setDraft(value); }} />;
+}
+
 export function InspectorField({ field, componentId, disabled, actions }: {
   field: SceneField; componentId: number | null; disabled: boolean; actions?: InspectorActions;
 }) {
@@ -124,7 +148,7 @@ export function InspectorField({ field, componentId, disabled, actions }: {
   const write = actions?.inspectorWrites[key];
   const [scrub, setScrub] = useState<number | null>(null);
   const value = scrub ?? (write && write.value !== undefined ? write.value : field.value);
-  const editable = !disabled && !field.readonly && componentId !== null && !!actions;
+  const editable = !disabled && !field.readonly && !field.truncated && componentId !== null && !!actions;
   const blocked = !editable || !!write?.pending;
   const live = useRef({ blocked, value }); live.current = { blocked, value };
   const cancelScrub = useRef<(() => void) | null>(null);
@@ -135,7 +159,10 @@ export function InspectorField({ field, componentId, disabled, actions }: {
     if (!raw.trim()) return undefined;
     let result = Number(raw.trim().replace(',', '.'));
     if (!Number.isFinite(result)) return undefined;
-    if (field.kind === 'int') result = Math.round(result);
+    if (field.kind === 'int') {
+      result = Math.round(result);
+      if (!Number.isSafeInteger(result)) return undefined;
+    }
     if (field.range) {
       const min = Array.isArray(field.range) ? field.range[0] : field.range.min;
       const max = Array.isArray(field.range) ? field.range[1] : field.range.max;
@@ -147,11 +174,11 @@ export function InspectorField({ field, componentId, disabled, actions }: {
   switch (field.kind) {
     case 'float': case 'int': case 'string': {
       const input = <InspectorTextInput value={value} label={field.label} disabled={blocked} numeric={field.kind !== 'string'}
+        rounded={field.kind === 'float'}
         className={`f-in${field.kind !== 'string' ? ' f-num' : ''}`} parse={field.kind === 'string' ? raw => raw : number} commit={commit} />;
       content = field.range && field.kind !== 'string' && typeof value === 'number' && Number.isFinite(value)
-        ? <span className="f-sl"><input type="range" aria-label={field.label} disabled={blocked}
-          min={Array.isArray(field.range) ? field.range[0] : field.range.min} max={Array.isArray(field.range) ? field.range[1] : field.range.max}
-          step={field.kind === 'int' ? 1 : 'any'} value={value} onChange={event => commit(number(event.target.value))} />{input}</span> : input;
+        ? <span className="f-sl"><RangeEditor value={value} field={field} disabled={!editable} parse={number}
+          commit={next => { if (editable) void actions?.setField(componentId!, field.path, next); }} />{input}</span> : input;
       break;
     }
     case 'bool': content = <input type="checkbox" className="f-bool" aria-label={field.label} checked={value === true} disabled={blocked} onChange={event => commit(event.target.checked)} />; break;
@@ -160,7 +187,7 @@ export function InspectorField({ field, componentId, disabled, actions }: {
       const vector = axes.map((axis, index) => (Array.isArray(value) ? value[index] : (value as Record<string, unknown> | null)?.[axis]) ?? '');
       content = <div className="f-vec" style={{ gridTemplateColumns: `repeat(${axes.length}, minmax(0, 1fr))` }}>
         {axes.map((axis, index) => <label className="f-ax" key={axis}><span>{axis.toUpperCase()}</span>
-          <InspectorTextInput value={vector[index]} label={`${field.label} ${axis.toUpperCase()}`} disabled={blocked} numeric className="f-in f-num" parse={number}
+          <InspectorTextInput value={vector[index]} label={`${field.label} ${axis.toUpperCase()}`} disabled={blocked} numeric rounded className="f-in f-num" parse={number}
             commit={next => commit(vector.map((value, i) => i === index ? next : value))} /></label>)}
       </div>; break;
     }
@@ -209,6 +236,7 @@ export function InspectorField({ field, componentId, disabled, actions }: {
   };
   return <div className={`fr${write?.pending ? ' is-writing' : ''}${write?.error ? ' is-err' : ''}`} title={field.tooltip} aria-busy={write?.pending || undefined}>
     <span className="fr-l" data-scrub={editable && ['float', 'int'].includes(field.kind) ? '' : undefined} onPointerDown={startScrub}>{field.label}</span><div className="fr-c">{content}</div>
+    {field.truncated && <span className="fr-long-text">{t('sceneEditor.textTooLong')}</span>}
     <InspectorWriteError error={write?.error} disabled={blocked} revert={() => actions?.clearInspectorWrite(key)} />
   </div>;
 }

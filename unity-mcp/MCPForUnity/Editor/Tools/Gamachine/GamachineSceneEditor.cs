@@ -193,7 +193,8 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                     bool? enabled = enabledProperty != null
                         && enabledProperty.propertyType == SerializedPropertyType.Boolean
                         ? (bool?)enabledProperty.boolValue : null;
-                    bool locked = (component.hideFlags & HideFlags.NotEditable) != 0;
+                    bool locked = (component.hideFlags & HideFlags.NotEditable) != 0
+                        || (go.hideFlags & HideFlags.NotEditable) != 0;
                     var fields = component is Transform transform
                         ? GamachineSceneEditorReader.TransformFields(transform, locked)
                         : GamachineSceneEditorReader.Fields(serialized, component.GetType(), locked, ref truncated);
@@ -334,6 +335,7 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                 string kind = "unsupported";
                 object value = property.propertyType.ToString();
                 string[] options = null;
+                bool valueTruncated = false;
                 if (property.isArray && property.propertyType != SerializedPropertyType.String)
                 {
                     kind = "list";
@@ -354,7 +356,7 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                         case SerializedPropertyType.String:
                             kind = "string";
                             var text = property.stringValue ?? "";
-                            if (text.Length > 2000) { text = text.Substring(0, 2000); truncated = true; }
+                            if (text.Length > 2000) { text = text.Substring(0, 2000); truncated = true; valueTruncated = true; }
                             value = text;
                             break;
                         case SerializedPropertyType.Vector2:
@@ -391,7 +393,8 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                     }
                 }
                 var field = Field(property.propertyPath, property.displayName, kind, value,
-                    locked || !property.editable || property.propertyPath == "m_Script");
+                    locked || !property.editable || property.propertyPath == "m_Script" || valueTruncated);
+                if (valueTruncated) field["truncated"] = true;
                 if (options != null) field["options"] = JArray.FromObject(options);
                 if (!string.IsNullOrEmpty(property.tooltip)) field["tooltip"] = property.tooltip;
                 var backingField = BackingField(type, property.propertyPath);

@@ -145,9 +145,10 @@ mark.hr-hit { background: none; color: inherit; font-weight: 700; text-decoratio
 .f-sl { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 54px; gap: 8px; align-items: center; }
 .f-sl input[type="range"] { min-width: 0; width: 100%; accent-color: var(--f-check); opacity: 1; }
 .f-vec { flex: 1; min-width: 0; display: grid; gap: 4px; }
-.f-ax { position: relative; min-width: 0; }
-.f-ax > span { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: var(--fs-meta); font-weight: 600; color: var(--f-axis); }
-.f-ax .f-in { padding-left: 17px; }
+.f-ax { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.f-ax > span { font-size: var(--fs-meta); font-weight: 600; color: var(--f-axis); }
+.f-ax .f-in { box-sizing: border-box; width: 100%; padding: 0 3px; text-overflow: clip; }
+.fr-long-text { grid-column: 2; font-size: var(--fs-meta); color: var(--ink-dim); }
 .f-bool { appearance: none; width: 16px; height: 16px; margin: 0; flex: none; border-radius: var(--radius-sm); background: var(--f-bg); border: var(--line-w) solid var(--f-line); opacity: 1; }
 .f-bool:checked { background: var(--f-check); border-color: var(--f-check); }
 .f-bool:checked::after { content: ""; display: block; width: 8px; height: 4px; margin: 3px 2px; border-left: 2px solid var(--f-check-ink); border-bottom: 2px solid var(--f-check-ink); transform: rotate(-45deg); }

@@ -10,7 +10,7 @@ interface Options {
 interface Runtime { inspect: (id: number | null) => void; select: (id: number | null) => void; poll: () => void }
 export type CreateMenuState = { state: 'idle' | 'loading' | 'failed' } | { state: 'ready'; items: CreateMenuItem[] };
 export type ComponentMenuState = { state: 'idle' | 'loading' | 'failed'; id: number | null } | { state: 'ready'; id: number; items: ComponentMenuItem[] };
-export interface InspectorWriteState { pending: boolean; value?: unknown; error?: SceneWriteError; seq: number }
+export interface InspectorWriteState { pending: boolean; value?: unknown; error?: SceneWriteError; seq: number; failedAt?: unknown }
 export interface InspectorActions {
   inspectorWrites: Record<string, InspectorWriteState>;
   clearInspectorWrite: (key: string) => void;
@@ -72,11 +72,26 @@ const failed = (backoff: Backoff) => {
 // Older Unity packages send only `scene`, which then stands in for the split counters.
 const treeKey = (v: SceneVersion) => `${v.epoch}|${v.hierarchy ?? v.scene}`;
 const inspectKey = (v: SceneVersion) => `${treeKey(v)}|${v.props ?? v.scene}`;
+const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+function inspectionValues(data: Inspection | null): Record<string, unknown> {
+  if (!data) return {};
+  const values: Record<string, unknown> = {
+    [inspectorWriteKey.name(data.node.id)]: data.node.name,
+    [inspectorWriteKey.active(data.node.id)]: data.node.activeSelf,
+  };
+  for (const group of data.groups) {
+    if (group.componentId === null) continue;
+    values[inspectorWriteKey.enabled(group.componentId)] = group.enabled;
+    for (const field of group.fields) values[inspectorWriteKey.field(group.componentId, field.path)] = field.value;
+  }
+  return values;
+}
 
 export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVisible, inspectorVisible }: Options) {
   const [visible, setVisible] = useState(() => typeof document !== 'undefined' && document.visibilityState === 'visible');
   const [tree, setTree] = useState<SceneTree | null>(null);
   const [inspection, setInspection] = useState<Inspection | null>(null);
+  const latestInspection = useRef(inspection); latestInspection.current = inspection;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [inspectLoading, setInspectLoading] = useState(false);
@@ -188,6 +203,17 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         if (alive && !request.signal.aborted && !compiling.current && selected.current === id) {
           needsInspection.current = false; inspectLoaded.current = key; inspectBackoff.current = fresh();
           setInspection(data); setInspectError(null);
+          const values = inspectionValues(data);
+          setInspectorWrites(current => {
+            let next = current;
+            for (const [key, state] of Object.entries(current)) {
+              if (!state.pending && state.error && state.value !== undefined && key in values && !sameValue(values[key], state.failedAt)) {
+                if (next === current) next = { ...current };
+                next[key] = { ...state, value: undefined };
+              }
+            }
+            return next;
+          });
         }
       } catch (failure) {
         if (!alive || request.signal.aborted || selected.current !== id) return;
@@ -255,6 +281,9 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
           writeGeneration.current += 1; deleting.current.clear(); setWriteError(null);
           componentMenuCache.current.clear(); componentMenuRequest.current = null;
           setComponentMenu({ state: 'idle', id: null }); setInspectorWrites({});
+        } else if (previous && inspectKey(previous) !== inspectKey(next)) {
+          componentMenuCache.current.clear(); componentMenuRequest.current = null;
+          setComponentMenu({ state: 'idle', id: null });
         }
         if (unitySelection.current === null) unitySelection.current = next.selection;
         else if (unitySelection.current !== next.selection && settledAtStart && !selectionPending && !selectSync.busy()
@@ -318,13 +347,13 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     };
     fetchCreateMenu(api, token).then(settle, () => settle(null));
   }, [api, token, dropCreateMenu]);
-  const dropComponentMenu = useCallback(() => {
+  const dropComponentMenu = useCallback((preserveMenu = false) => {
     componentMenuCache.current.clear(); componentMenuRequest.current = null;
-    setComponentMenu({ state: 'idle', id: null });
+    if (!preserveMenu) setComponentMenu({ state: 'idle', id: null });
   }, []);
   const loadComponentMenu = useCallback((id: number) => {
     if (!token) return;
-    const key = `${api}|${token}|${version.current?.epoch ?? ''}|${id}`;
+    const key = `${api}|${token}|${version.current ? inspectKey(version.current) : ''}|${id}`;
     const cached = componentMenuCache.current.get(key);
     if (cached) { setComponentMenu({ state: 'ready', id, items: cached }); return; }
     if (componentMenuRequest.current?.key === key) return;
@@ -347,7 +376,8 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     control?: { key: string; value?: unknown }): Promise<T | null> => {
     if (!token) return Promise.resolve(null);
     if (queued.current >= MAX_QUEUED) {
-      if (control) setInspectorWrites(current => ({ ...current, [control.key]: { pending: false, value: control.value, error: { code: 'busy' }, seq: ++writeSeq.current } }));
+      if (control) setInspectorWrites(current => ({ ...current, [control.key]: { pending: false, value: control.value,
+        failedAt: inspectionValues(latestInspection.current)[control.key], error: { code: 'busy' }, seq: ++writeSeq.current } }));
       else setWriteError({ code: 'busy' });
       return Promise.resolve(null);
     }
@@ -374,25 +404,32 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
           if (!FINAL.has(result.code) && !unsure) error.retry = () => { if (generation === writeGeneration.current) return write(route, body, done, error, control); };
           errorSource.current.set(error, { route, id, seq });
           if (control) setInspectorWrites(current => current[control.key]?.seq === seq
-            ? { ...current, [control.key]: { pending: false, value: control.value, error, seq } } : current);
+            ? { ...current, [control.key]: { pending: false, value: control.value, failedAt: inspectionValues(latestInspection.current)[control.key], error, seq } } : current);
           else setWriteError(error);
           return null;
         }
         if (control) setInspectorWrites(current => {
-          if (current[control.key]?.seq !== seq) return current;
+          const state = current[control.key];
+          if (state?.seq !== seq) return state?.error && !state.pending
+            ? { ...current, [control.key]: { ...state, value: undefined } } : current;
           const next = { ...current }; delete next[control.key]; return next;
         });
         if (!control && replaces) setWriteError(current => current === replaces ? null : current);
-        else if (!control && id !== undefined) setWriteError(current => {
+        else if ((!control || route === 'rename') && id !== undefined) setWriteError(current => {
           const source = current && errorSource.current.get(current);
-          return source && source.seq < seq && source.id === id && (source.route === route || route === 'delete') ? null : current;
+          return source && source.seq < seq && source.id === id && (source.route === route || (!control && route === 'delete')) ? null : current;
+        });
+        if (!control && route === 'rename' && typeof id === 'number') setInspectorWrites(current => {
+          const key = inspectorWriteKey.name(id), state = current[key];
+          if (!state?.error || state.pending || state.seq >= seq) return current;
+          const next = { ...current }; delete next[key]; return next;
         });
         done(result.data);
         runtime.current?.poll();
         return result.data;
       } finally {
         queued.current -= 1;
-        if (queued.current < MAX_QUEUED) setWriteError(current => current?.code === 'busy' ? null : current);
+        if (!control && queued.current < MAX_QUEUED) setWriteError(current => current?.code === 'busy' ? null : current);
       }
     };
     const next = queue.current.then(run, run);
@@ -407,7 +444,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   const create = useCallback((item: string, parentId: number | null) => selectResult('create', { item, parentId }), [selectResult]);
   const rename = useCallback((id: number, name: string, inspector = false) =>
     write<{ id: number; name: string }>('rename', { id, name }, data => {
-      if (inspector) setInspection(current => current?.node.id === id ? { ...current, node: { ...current.node, name: data.name } } : current);
+      setInspection(current => current?.node.id === id ? { ...current, node: { ...current.node, name: data.name } } : current);
     }, undefined, inspector ? { key: inspectorWriteKey.name(id), value: name } : undefined), [write]);
   const duplicate = useCallback((id: number) => selectResult('duplicate', { id }), [selectResult]);
   // Only a deleted selection is cleared; another object the user selected meanwhile stays selected.
@@ -443,7 +480,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       if (action === 'remove') dropComponentMenu();
     }, undefined, { key: inspectorWriteKey.component(componentId) }), [write, dropComponentMenu]);
   const addComponent = useCallback((id: number, item: string) =>
-    write<{ componentId: number; type: string; label: string }>('add-component', { id, item }, dropComponentMenu,
+    write<{ componentId: number; type: string; label: string }>('add-component', { id, item }, () => dropComponentMenu(true),
       undefined, { key: inspectorWriteKey.add(id) }), [write, dropComponentMenu]);
   return { tree, inspection, selectedId, select, loading, inspectLoading, error: error ?? versionError, inspectError, stale,
     createMenu, loadCreateMenu, create, rename, duplicate, remove, writeError, clearWriteError,

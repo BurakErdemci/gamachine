@@ -39,7 +39,7 @@ export interface SceneField {
   path: string; label: string;
   kind: 'float' | 'int' | 'bool' | 'enum' | 'string' | 'vec2' | 'vec3' | 'vec4' | 'color' | 'ref' | 'mask' | 'list' | 'unsupported';
   value: unknown; options?: (string | { label: string; value: string | number })[];
-  range?: { min: number; max: number } | number[]; readonly: boolean; tooltip?: string;
+  range?: { min: number; max: number } | number[]; readonly: boolean; tooltip?: string; truncated?: boolean;
 }
 export interface ComponentGroup {
   type: string; label: string; componentId: number | null; enabled: boolean | null; removable: boolean; fields: SceneField[];

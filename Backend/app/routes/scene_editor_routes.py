@@ -2,13 +2,14 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import urllib.error
 import urllib.request
 from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel, StrictBool, StrictFloat, StrictInt, StrictStr
+from pydantic import BaseModel, StrictBool, StrictFloat, StrictInt, StrictStr, field_validator
 
 from auth_utils import _check_token
 from omnisharp.omnisharp_manager import _unwrap_unity_result
@@ -46,6 +47,15 @@ class SceneEditorComponent(BaseModel):
 class SceneEditorField(SceneEditorComponent):
     field: StrictStr
     value: StrictBool | StrictInt | StrictFloat | StrictStr | list[StrictInt | StrictFloat]
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def finite_value(cls, value):
+        values = value if isinstance(value, list) else [value]
+        if any(isinstance(item, float) and not math.isfinite(item) for item in values):
+            # FastAPI's validation error response cannot serialize a non-finite input.
+            raise HTTPException(status_code=422, detail="invalid_value")
+        return value
 
 
 class SceneEditorComponentEnable(SceneEditorComponent):

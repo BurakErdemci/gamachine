@@ -70,6 +70,25 @@ namespace MCPForUnity.Editor.Tools.Gamachine
             return true;
         }
 
+        private static bool PropertyInteger(SerializedProperty property, JToken token, out long value)
+        {
+            long min;
+            long max;
+            switch (property.numericType)
+            {
+                case SerializedPropertyNumericType.Int8: min = sbyte.MinValue; max = sbyte.MaxValue; break;
+                case SerializedPropertyNumericType.UInt8: min = 0; max = byte.MaxValue; break;
+                case SerializedPropertyNumericType.Int16: min = short.MinValue; max = short.MaxValue; break;
+                case SerializedPropertyNumericType.UInt16: min = 0; max = ushort.MaxValue; break;
+                case SerializedPropertyNumericType.Int32: min = int.MinValue; max = int.MaxValue; break;
+                case SerializedPropertyNumericType.UInt32: min = 0; max = uint.MaxValue; break;
+                case SerializedPropertyNumericType.Int64: min = long.MinValue; max = long.MaxValue; break;
+                case SerializedPropertyNumericType.UInt64: min = 0; max = long.MaxValue; break;
+                default: value = 0; return false;
+            }
+            return Integer(token, min, max, out value);
+        }
+
         internal static bool Setter(SerializedProperty property, JToken token, out Action apply)
         {
             apply = null;
@@ -82,7 +101,7 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                                     else property.floatValue = (float)number; };
                     break;
                 case SerializedPropertyType.Integer:
-                    if (!Integer(token, long.MinValue, long.MaxValue, out var integer)) return false;
+                    if (!PropertyInteger(property, token, out var integer)) return false;
                     apply = () => property.longValue = integer;
                     break;
                 case SerializedPropertyType.Boolean:
@@ -127,8 +146,8 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                     break;
                 case SerializedPropertyType.LayerMask:
                     if (token?.Type != JTokenType.Integer
-                        || !Integer(token, int.MinValue, int.MaxValue, out var mask)) return false;
-                    apply = () => property.intValue = (int)mask;
+                        || !PropertyInteger(property, token, out var mask)) return false;
+                    apply = () => property.longValue = mask;
                     break;
                 default:
                     return false;
@@ -255,6 +274,8 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                 var property = serialized.FindProperty(field);
                 if (property == null) return new ErrorResponse("not_found");
                 if (!property.editable || field == "m_Script") return new ErrorResponse("locked");
+                if (property.propertyType == SerializedPropertyType.String && property.stringValue.Length > 2000)
+                    return new ErrorResponse("locked");
                 if (!GamachineSceneEditorComponents.Setter(property, value, out var apply))
                     return new ErrorResponse("invalid_value");
                 step.Begin(groupName);
@@ -365,7 +386,7 @@ namespace MCPForUnity.Editor.Tools.Gamachine
             if (action == "remove")
             {
                 if (component is Transform) return new ErrorResponse("locked");
-                if (PrefabUtility.IsPartOfPrefabInstance(component) && !PrefabUtility.IsAddedComponentOverride(component))
+                if (PrefabUtility.GetCorrespondingObjectFromSource(component) != null && !PrefabUtility.IsAddedComponentOverride(component))
                     return new ErrorResponse("prefab_part");
                 if (GamachineSceneEditorComponents.Required(component)) return new ErrorResponse("required");
                 step.Begin("Gamachine: Remove " + title);
