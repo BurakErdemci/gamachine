@@ -190,6 +190,19 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                 }
                 moved.SetAsLastSibling();
                 if (replaceCanvas) Undo.DestroyObjectImmediate(createdRoot.gameObject);
+                // Unity filed the UI item into some other existing Canvas; under a parent with no Canvas it
+                // would render nowhere, so give it a Canvas of its own there, as Unity's hierarchy menu does.
+                if (!newRoot && moved is RectTransform && created.GetComponent<Canvas>() == null
+                    && parent.GetComponentInParent<Canvas>(true) == null)
+                {
+                    var rootsBeforeCanvas = GamachineSceneEditorWriter.Roots();
+                    if (!EditorApplication.ExecuteMenuItem("GameObject/UI (Canvas)/Canvas")) return step.Fail();
+                    var canvas = Selection.activeGameObject;
+                    if (canvas == null || rootsBeforeCanvas.Contains(canvas.GetInstanceIDCompat())) return step.Fail();
+                    Undo.SetTransformParent(canvas.transform, parent.transform, false, groupName);
+                    Undo.SetTransformParent(moved, canvas.transform, false, groupName);
+                }
+                if (!created.transform.IsChildOf(parent.transform)) return step.Fail();
             }
             // The menu places UI at the Scene view pivot; Unity's own hierarchy context menu centres it in the parent.
             if (parent != null && created.transform is RectTransform rect && created.GetComponent<Canvas>() == null)
