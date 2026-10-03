@@ -367,16 +367,31 @@
 [data-theme="ozel"] .tour-text { font-size: 14px; }
 [data-theme="ozel"] .tour-kicker { font-weight: 500; letter-spacing: 0; text-transform: none; }
 [data-theme="ozel"] .tour-figure { margin-bottom: 0; }
-[data-theme="ozel"] .gd-list { grid-template-columns: 1fr 1fr; gap: 0 24px; }
-[data-theme="ozel"] .gd-topic { min-height: 0; padding: 11px 64px 11px 0; background: transparent; border: 0; border-bottom: 1px solid var(--paper-line); border-radius: 0; box-shadow: none; }
-[data-theme="ozel"] .gd-topic:hover { background: transparent; }
+[data-theme="ozel"] .gd-list { grid-template-columns: 1fr 1fr; gap: 10px; }
+/* Topics are cards, not text rows: plain rows read as text until hovered, and with Mono's off accent a
+   title-only hover changed nothing (owner, 3 Oct). Frame + raised step + a resting chevron say "click";
+   hover lifts one more step and swaps the step count for "Göster". */
+[data-theme="ozel"] .gd-topic {
+  min-height: 0; padding: 12px 84px 12px 14px; background: var(--oz-2); border: 1px solid var(--paper-line);
+  border-radius: 8px; box-shadow: none; cursor: pointer;
+  transition: background var(--g-dur-tap) var(--ease), border-color var(--g-dur-tap) var(--ease);
+}
+[data-theme="ozel"] .gd-topic::after {
+  content: "\203A"; position: absolute; right: 14px; bottom: 9px; font-size: 18px; line-height: 1; color: var(--ink-faint);
+}
+[data-theme="ozel"] .gd-topic:hover, [data-theme="ozel"] .gd-topic:focus-visible { background: var(--oz-3); border-color: var(--paper-line-strong); }
+[data-theme="ozel"] .gd-topic:hover::after, [data-theme="ozel"] .gd-topic:focus-visible::after { color: var(--ink); }
+[data-theme="ozel"] .gd-topic:active { transform: none; background: var(--oz-4); }
 /* orange means only "waiting on you"; a hovered topic takes the user's accent */
 [data-theme="ozel"] .gd-topic:hover .gd-t-title { color: var(--oz-acc-text); }
 [data-theme="ozel"] .gd-t-title { font-size: 14.5px; font-weight: 600; padding-right: 0; }
-[data-theme="ozel"] .gd-t-meta { position: absolute; right: 0; top: 12px; width: auto; margin: 0; padding: 0; }
-[data-theme="ozel"] .gd-t-play { display: none; }
+[data-theme="ozel"] .gd-t-meta { position: absolute; right: 14px; top: 13px; width: auto; margin: 0; padding: 0; }
+[data-theme="ozel"] .gd-t-play { display: none; margin: 0; }
+/* on hover the step count gives its place to "Göster" */
+[data-theme="ozel"] .gd-topic:hover .gd-t-meta > :not(.gd-t-play), [data-theme="ozel"] .gd-topic:focus-visible .gd-t-meta > :not(.gd-t-play) { display: none; }
+[data-theme="ozel"] .gd-topic:hover .gd-t-play, [data-theme="ozel"] .gd-topic:focus-visible .gd-t-play { display: inline-flex; opacity: 1; }
 [data-theme="ozel"] .gd-new { border: 0; padding: 0; text-transform: none; letter-spacing: 0; font-weight: 600; }
-[data-theme="ozel"] .gd-topic .gd-new { position: absolute; right: 0; top: 12px; }
+[data-theme="ozel"] .gd-topic .gd-new { position: absolute; right: 14px; top: 13px; }
 [data-theme="ozel"] .gd-topic:has(.gd-new) .gd-t-meta { top: 32px; }
 [data-theme="ozel"] .gd-core { background: transparent; border: 1px solid var(--paper-line); border-radius: 8px; }
 /* dark tone: the guide page sits one grey step off black, its card one step above it (owner, 3 Oct) */
