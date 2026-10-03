@@ -16,18 +16,70 @@ namespace MCPForUnity.Editor.Tools.Gamachine
     {
         internal static readonly string Epoch = Guid.NewGuid().ToString("N");
         internal static int SceneVersion { get; private set; }
+        internal static int HierarchyVersion { get; private set; }
+        internal static int PropsVersion { get; private set; }
         internal static int SelectionVersion { get; private set; }
 
         static GamachineSceneEditorState()
         {
-            EditorApplication.hierarchyChanged += SceneChanged;
-            Undo.undoRedoPerformed += SceneChanged;
+            EditorApplication.hierarchyChanged += HierarchyChanged;
+            Undo.undoRedoPerformed += UndoRedoPerformed;
             ObjectChangeEvents.changesPublished += ObjectsChanged;
             Selection.selectionChanged += () => SelectionVersion = unchecked(SelectionVersion + 1);
         }
 
         private static void SceneChanged() => SceneVersion = unchecked(SceneVersion + 1);
-        private static void ObjectsChanged(ref ObjectChangeEventStream stream) => SceneChanged();
+
+        private static void HierarchyChanged()
+        {
+            SceneChanged();
+            HierarchyVersion = unchecked(HierarchyVersion + 1);
+        }
+
+        private static void UndoRedoPerformed()
+        {
+            HierarchyChanged();
+            PropsVersion = unchecked(PropsVersion + 1);
+        }
+
+        private static void ObjectsChanged(ref ObjectChangeEventStream stream)
+        {
+            SceneChanged();
+            bool hierarchyChanged = false;
+            bool propsChanged = false;
+            for (int i = 0; i < stream.length; i++)
+            {
+                switch (stream.GetEventType(i))
+                {
+                    case ObjectChangeKind.ChangeScene:
+                    case ObjectChangeKind.CreateGameObjectHierarchy:
+                    case ObjectChangeKind.DestroyGameObjectHierarchy:
+                    case ObjectChangeKind.ChangeGameObjectStructure:
+                    case ObjectChangeKind.ChangeGameObjectStructureHierarchy:
+                    case ObjectChangeKind.ChangeGameObjectParent:
+                    case ObjectChangeKind.ChangeChildrenOrder:
+                        hierarchyChanged = true;
+                        break;
+                    case ObjectChangeKind.ChangeGameObjectOrComponentProperties:
+                        propsChanged = true;
+                        stream.GetChangeGameObjectOrComponentPropertiesEvent(i, out var change);
+                        // GameObject properties include the tree's name and activity fields.
+                        if (!(GameObjectLookup.ResolveInstanceID(change.instanceId) is Component))
+                            hierarchyChanged = true;
+                        break;
+                    case ObjectChangeKind.ChangeAssetObjectProperties:
+                        propsChanged = true;
+                        break;
+                    default:
+                        // Prefab updates, other structural kinds, and future kinds are conservative.
+                        hierarchyChanged = true;
+                        propsChanged = true;
+                        break;
+                }
+            }
+            if (hierarchyChanged) HierarchyVersion = unchecked(HierarchyVersion + 1);
+            if (propsChanged) PropsVersion = unchecked(PropsVersion + 1);
+        }
     }
 
     // Resources remain callable by the app without tool advertisement or journal scopes.
@@ -176,6 +228,8 @@ namespace MCPForUnity.Editor.Tools.Gamachine
             {
                 epoch = GamachineSceneEditorState.Epoch,
                 scene = GamachineSceneEditorState.SceneVersion,
+                hierarchy = GamachineSceneEditorState.HierarchyVersion,
+                props = GamachineSceneEditorState.PropsVersion,
                 selection = GamachineSceneEditorState.SelectionVersion,
                 selectedId = selected != null ? (int?)selected.GetInstanceIDCompat() : null,
                 playing = EditorApplication.isPlaying,

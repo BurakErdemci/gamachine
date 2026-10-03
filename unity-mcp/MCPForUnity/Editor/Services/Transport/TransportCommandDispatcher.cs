@@ -362,7 +362,8 @@ namespace MCPForUnity.Editor.Services.Transport
                 }
 
                 var logType = resourceMeta != null ? "resource" : toolMeta != null ? "tool" : "unknown";
-                var sw = McpLogRecord.IsEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
+                bool recordCommand = !command.type.StartsWith("gm_editor_", StringComparison.OrdinalIgnoreCase);
+                var sw = recordCommand && McpLogRecord.IsEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
                 var result = CommandRegistry.ExecuteCommand(command.type, parameters, pending.CompletionSource);
 
                 if (result == null)
@@ -394,8 +395,11 @@ namespace MCPForUnity.Editor.Services.Transport
                             }
                             catch { }
                         }
-                        McpLogRecord.Log(capturedType, capturedParams, capturedLogType,
-                            logStatus, sw?.ElapsedMilliseconds ?? 0, logError);
+                        if (recordCommand)
+                        {
+                            McpLogRecord.Log(capturedType, capturedParams, capturedLogType,
+                                logStatus, sw?.ElapsedMilliseconds ?? 0, logError);
+                        }
                         EditorApplication.delayCall += () => RemovePending(id, pending);
                     }, TaskScheduler.Default);
                     return;
@@ -416,7 +420,10 @@ namespace MCPForUnity.Editor.Services.Transport
                     syncLogStatus = "ERROR";
                     syncLogError = annotated.Value<string>("error");
                 }
-                McpLogRecord.Log(command.type, parameters, logType, syncLogStatus, sw?.ElapsedMilliseconds ?? 0, syncLogError);
+                if (recordCommand)
+                {
+                    McpLogRecord.Log(command.type, parameters, logType, syncLogStatus, sw?.ElapsedMilliseconds ?? 0, syncLogError);
+                }
 
                 var response = new { status = "success", result };
                 pending.TrySetResult(JsonConvert.SerializeObject(response));
