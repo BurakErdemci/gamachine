@@ -325,10 +325,15 @@ it('M5: an empty or malformed list is not cached as ready', async () => {
   menuBody = { nope: true }
   await openAndClose()
   await waitFor(() => expect(menuFetches()).toBe(2))
+  menuBody = { items: [1, { item: 'x' }] }
+  fireEvent.contextMenu(document.querySelector('.hier-body')!)
+  await waitFor(() => expect(menuFetches()).toBe(3))
+  await within(screen.getByRole('menu')).findByText('Oluşturma listesi alınamadı')
+  fireEvent.keyDown(document.body, { key: 'Escape' })
   menuBody = { items: MENU }
   fireEvent.contextMenu(document.querySelector('.hier-body')!)
   await screen.findByRole('menuitem', { name: 'Camera' })
-  expect(menuFetches()).toBe(3)
+  expect(menuFetches()).toBe(4)
 })
 
 it('M6: create or duplicate after 504/502 offers no retry and refreshes the tree; locked is final', async () => {

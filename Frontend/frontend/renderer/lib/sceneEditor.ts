@@ -87,6 +87,9 @@ export async function postSceneWrite<T>(api: string, token: string, route: strin
 export async function fetchCreateMenu(api: string, token: string): Promise<CreateMenuItem[]> {
   const response = await fetch(`${api}/scene-editor/create-menu`, { headers: { 'X-Session-Token': token } });
   if (!response.ok) throw response.status;
-  const data = await response.json() as { items?: CreateMenuItem[] };
-  return Array.isArray(data?.items) ? data.items : [];
+  const data = await response.json() as { items?: unknown };
+  // Entries that are not three strings are dropped; an empty result is treated as a failed load by the caller.
+  const valid = (entry: unknown): entry is CreateMenuItem => !!entry && typeof entry === 'object'
+    && ['item', 'category', 'label'].every(key => typeof (entry as Record<string, unknown>)[key] === 'string');
+  return Array.isArray(data?.items) ? data.items.filter(valid) : [];
 }
