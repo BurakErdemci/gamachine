@@ -11,6 +11,7 @@ from pydantic import BaseModel, StrictInt
 
 from auth_utils import _check_token
 from omnisharp.omnisharp_manager import _unwrap_unity_result
+from secret_redaction import redact_secrets
 from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 
 
@@ -21,6 +22,16 @@ class SceneEditorSelection(BaseModel):
     id: StrictInt | None
 
 
+def _loggable(text: object) -> str:
+    """Upstream text for the log: the two secrets this route sends are masked by value
+    (a pattern filter would miss a bare token echoed back), then the generic redaction, then a cap."""
+    out = str(text)
+    for secret in (os.environ.get("LOCAL_APP_TOKEN", ""), *unity_mcp_manager.api_headers().values()):
+        if secret:
+            out = out.replace(secret, "<REDACTED>")
+    return redact_secrets(out)[:500]
+
+
 def _raise_unity_error(error: str, status: int = 200) -> None:
     normalized = error.lower()
     if status == 504 or "timeout" in normalized or "timed out" in normalized:
@@ -29,7 +40,7 @@ def _raise_unity_error(error: str, status: int = 200) -> None:
         raise HTTPException(status_code=503, detail="unity_unavailable")
     if error == "not_found":
         raise HTTPException(status_code=404, detail="not_found")
-    logger.warning("Unity scene editor error: %s", error)
+    logger.warning("Unity scene editor error: %s", _loggable(error))
     raise HTTPException(status_code=502, detail="unity_error")
 
 
@@ -75,7 +86,7 @@ def _post_unity(command: str, params: dict) -> dict:
     except ConnectionError as exc:
         raise HTTPException(status_code=503, detail="unity_unavailable") from exc
     except Exception as exc:
-        logger.warning("Unity scene editor error: %s", exc)
+        logger.warning("Unity scene editor error: %s", _loggable(exc))
         raise HTTPException(status_code=502, detail="unity_error") from exc
 
 

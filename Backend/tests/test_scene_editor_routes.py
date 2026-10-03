@@ -162,3 +162,20 @@ def test_http_call_runs_off_event_loop(client, monkeypatch):
     monkeypatch.setattr(routes.urllib.request, "urlopen", post)
     assert asyncio.run(routes._call_unity("gm_editor_version", {})) == {"epoch": "test"}
     assert worker_threads and worker_threads[0] != loop_thread
+
+
+def test_logged_upstream_error_masks_the_route_secrets(monkeypatch, caplog):
+    """verify-f1: an upstream message that echoes the maintenance token or the API key
+    must not carry them into the log."""
+    import routes.scene_editor_routes as routes_module
+    monkeypatch.setenv("LOCAL_APP_TOKEN", "maint-secret-123")
+    monkeypatch.setattr(routes_module.unity_mcp_manager, "api_headers", lambda: {"X-API-Key": "api-secret-456"})
+    with caplog.at_level("WARNING"):
+        try:
+            routes_module._raise_unity_error("boom maint-secret-123 and api-secret-456 " + "x" * 2000, 500)
+        except Exception:
+            pass
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "maint-secret-123" not in logged and "api-secret-456" not in logged
+    assert "<REDACTED>" in logged
+    assert len(logged) < 700
