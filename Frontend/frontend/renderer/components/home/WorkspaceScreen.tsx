@@ -3,6 +3,7 @@ import Head from 'next/head';
 
 import { useLang, type Lang } from '../../lib/i18n';
 import { displayName } from '../../lib/displayName';
+import { isMacPlatform } from '../../lib/platformKeys';
 import { useRecentWorkspaces, type RecentWorkspace } from '../../hooks/home/useRecentWorkspaces';
 import type { UserData } from './types';
 import { BrandLogo, MascotHead } from './BrandLogo';
@@ -30,8 +31,6 @@ const Ic = ({ children, className = 'ic' }: { children: React.ReactNode; classNa
 const FolderIc = ({ className }: { className?: string }) => (
   <Ic className={className}><path d="M2.5 5.5a1 1 0 0 1 1-1h4l2 2h7a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z" /></Ic>
 );
-
-const isMac = () => typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
 
 /** Fills `{key}` slots of a translated sentence with elements (code names, inline buttons). */
 const rich = (text: string, parts: Record<string, React.ReactNode>) =>
@@ -83,7 +82,7 @@ export const WorkspaceScreen = ({
   const [drag, setDrag] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const rootRef = useRef<HTMLElement>(null);
-  const mac = useMemo(isMac, []);
+  const mac = useMemo(isMacPlatform, []);
   const name = displayName(userName);
   const first = load === 'ok' && items.length === 0;
 

@@ -2,6 +2,7 @@
 // rules that decide what is listed, what matches a search and what counts as new or watched.
 // Nothing here touches the DOM or storage; engine and screen take the answers from here.
 import type { Lang } from '../i18n';
+import { platformKeys } from '../platformKeys';
 import { flagsOn, type Caps } from './capabilities';
 import { isKnownAnchor } from './anchors';
 import { isSupported, parseAction } from './prepare';
@@ -34,7 +35,7 @@ export const GROUPS: readonly GuideGroup[] = [
 const BY_ID = new Map(GUIDE.map(t => [t.id, t]));
 export const topicById = (id: string): GuideTopic | undefined => BY_ID.get(id);
 
-export const tx = (o: LangPair | undefined, lang: Lang): string => (o ? (o[lang] ?? o.tr) : '');
+export const tx = (o: LangPair | undefined, lang: Lang): string => platformKeys(o ? (o[lang] ?? o.tr) : '');
 
 /** What this build can show: its flags, its anchors and its prepare actions. */
 export interface GuideContext {

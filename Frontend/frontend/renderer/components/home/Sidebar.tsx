@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
 import { Edit3, Trash2 } from 'lucide-react';
 import { Conversation, UserData } from './types';
+import { platformKeys } from '../../lib/platformKeys';
 import type { ConvStatus } from '../../hooks/home/useChat';
 import type { UnityMCPStatus } from '../../hooks/home/useAIConfig';
 import { STATUS_DOT, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
@@ -216,7 +217,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           <button type="button" className="new-chat" data-guide="new-chat" onClick={() => createNewConversation()}>
             <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
             <span>{t('sidebar.newChat')}</span>
-            <kbd>{t('sidebar.newChatKey')}</kbd>
+            <kbd>{platformKeys(t('sidebar.newChatKey'))}</kbd>
           </button>
 
           {tasks.length > 0 && (
