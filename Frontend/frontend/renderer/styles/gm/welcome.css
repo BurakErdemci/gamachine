@@ -241,7 +241,11 @@
 [data-theme="pafta"] .wl-thumb { background: transparent; border: 1px solid var(--ink); }
 [data-theme="pafta"] .wl-steps li { border-color: var(--ink); }
 [data-theme="pafta"] .wl-step-n { border-radius: 0; background: transparent; border: 1px solid var(--ink); }
-[data-theme="pafta"] .wl-proj-tag { color: var(--ink); }
+[data-theme="pafta"] .wl-proj-tag { position: static; grid-column: 2; grid-row: 1; justify-self: start; color: var(--ink); }
+[data-theme="pafta"] .wl-proj-name { padding-right: 28px; }
+[data-theme="pafta"] .wl-proj.is-last { grid-template-rows: auto auto auto auto 1fr; }
+[data-theme="pafta"] .wl-proj.is-last .wl-proj-name { grid-row: 2; }
+[data-theme="pafta"] .wl-proj.is-last .wl-proj-path { grid-row: 3; }
 
 /* ======================= Atölye: work tags ======================= */
 [data-theme="atolye"] .wl-figure { width: 140px; }
