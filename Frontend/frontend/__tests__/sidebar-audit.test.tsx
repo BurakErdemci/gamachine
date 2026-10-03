@@ -21,11 +21,10 @@ const CONVS = [
 function props(over: Record<string, unknown> = {}) {
   return {
     ...({} as any),
-    isSidebarOpen: true, sidebarTab: 'chats', setSidebarTab: noop,
+    isSidebarOpen: true, setSidebarTab: noop,
     conversations: CONVS, activeConvId: 2, convStatus: {},
     selectConversation: noop, createNewConversation: noop, deleteConversation: noop,
     editingId: null, setEditingId: noop, tempTitle: '', setTempTitle: noop, saveRename: noop,
-    fileTree: [], treeContextMenu: null, setTreeContextMenu: noop,
     user: USER, setShowSettings: noop, handleLogout: noop,
     workspacePath: 'C:/p/Arena', closeWorkspace: noop,
     ...over,

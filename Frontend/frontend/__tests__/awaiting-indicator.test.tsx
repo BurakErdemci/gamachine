@@ -64,7 +64,6 @@ let pending: Record<string, any>
 let streams: Record<number, ReturnType<typeof makeStream>>
 let chat: ReturnType<typeof useChat>
 let setOpen: (v: boolean) => void
-let setTab: (v: 'chats' | 'files') => void
 
 const showToast = vi.fn()
 const refreshFileTree = vi.fn()
@@ -73,10 +72,9 @@ const noop = () => {}
 
 const Harness: React.FC = () => {
   const [open, _setOpen] = React.useState(true)
-  const [tab, _setTab] = React.useState<'chats' | 'files'>('chats')
   const [, setGen] = React.useState<any>(null)
   const [, setDel] = React.useState<any>(null)
-  setOpen = _setOpen; setTab = _setTab
+  setOpen = _setOpen
   const c = useChat(API, USER, CONFIG, '/ws', showToast, refreshFileTree, suggest)
   useMCPApproval({
     API, enabled: true, workspacePath: '/ws',
@@ -90,11 +88,10 @@ const Harness: React.FC = () => {
       <SidebarToggle open={open} onToggle={() => _setOpen(!open)} awaiting={awaitingElsewhere(c.convStatus, c.activeConvId, c.conversations)} />
       <Sidebar
         {...({} as any)}
-        isSidebarOpen={open} sidebarTab={tab} setSidebarTab={_setTab}
+        isSidebarOpen={open}
         conversations={c.conversations} activeConvId={c.activeConvId} convStatus={c.convStatus}
         selectConversation={c.selectConversation} createNewConversation={noop} deleteConversation={noop}
         editingId={null} setEditingId={noop} tempTitle="" setTempTitle={noop} saveRename={noop}
-        fileTree={[]} treeContextMenu={null} setTreeContextMenu={noop}
         user={USER} setShowSettings={noop} handleLogout={noop}
       />
       <ChatTabs
@@ -259,19 +256,6 @@ describe('awaiting · places that had no marker', () => {
     expect(screen.queryByTestId('sidebar-toggle-awaiting')).toBeNull()
     await open(1)
     expect(screen.getByTestId('sidebar-toggle-awaiting').querySelector('.badge-n')?.textContent).toBe('1')
-  })
-
-  it('the Chats tab carries the count while the sidebar shows Files', async () => {
-    await mount()
-    await open(1)
-    pending = { g2: unityReq(2) }
-    await poll()
-    expect(screen.queryByTestId('chats-tab-awaiting')).toBeNull()
-    act(() => setTab('files'))
-    expect(screen.getByTestId('chats-tab-awaiting').querySelector('.badge-n')?.textContent).toBe('1')
-    fireEvent.click(screen.getByText(cevir('sidebar.chats')))
-    expect(screen.queryByTestId('chats-tab-awaiting')).toBeNull()
-    expect(title('conv-status-2')).toBe(AWAITING)
   })
 
   it('the count string exists in both languages', () => {

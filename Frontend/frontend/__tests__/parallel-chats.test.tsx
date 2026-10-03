@@ -379,7 +379,7 @@ describe('parallel chats · sidebar status', () => {
     ]
     render(<Sidebar
       {...({} as any)}
-      isSidebarOpen sidebarTab="chats" setSidebarTab={vi.fn()}
+      isSidebarOpen
       conversations={conversations} activeConvId={4} selectConversation={vi.fn()}
       createNewConversation={vi.fn()} deleteConversation={vi.fn()}
       editingId={null} setEditingId={vi.fn()} tempTitle="" setTempTitle={vi.fn()} saveRename={vi.fn()}

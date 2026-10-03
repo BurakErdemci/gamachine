@@ -2,12 +2,10 @@ import React, { useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
 import { Edit3, Trash2 } from 'lucide-react';
-import { Conversation, FileEntry, UserData } from './types';
-import { ProjectFiles } from './FileTree';
+import { Conversation, UserData } from './types';
 import type { ConvStatus } from '../../hooks/home/useChat';
 import type { UnityMCPStatus } from '../../hooks/home/useAIConfig';
-import { STATUS_DOT, awaitingElsewhere, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
-import { AwaitingBadge } from './AwaitingBadge';
+import { STATUS_DOT, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
 import { BrandLogo } from './BrandLogo';
 import { useUnityLinkPulse } from './UnityMcpToggle';
 import { confirmDialog } from '../ui/ConfirmDialog';
@@ -18,8 +16,6 @@ import { RemoteBadge } from './RemoteBadge';
 
 interface SidebarProps {
   isSidebarOpen: boolean;
-  sidebarTab: 'chats' | 'files';
-  setSidebarTab: (tab: 'chats' | 'files') => void;
   conversations: Conversation[];
   activeConvId: number | null;
   convStatus?: Record<number, ConvStatus>;
@@ -35,42 +31,6 @@ interface SidebarProps {
   closeWorkspace: () => void;
   /** The open editor file has unsaved changes: switching project asks first. */
   isDirty?: boolean;
-  rootFolderPath: string | null;
-  openFolder: () => void;
-  openFilePicker: () => void;
-
-  // File System Hooks
-  fileTree: FileEntry[];
-  openedFilePath: string | null;
-  expandedDirs: Set<string>;
-  dirContents: Record<string, FileEntry[]>;
-  toggleDir: (path: string) => void;
-  openFile: (path: string) => void;
-  openPreview: (path: string) => void;
-  treeDragSource: FileEntry | null;
-  treeDragTarget: string | null;
-  renamingPath: string | null;
-  renameValue: string;
-  setRenameValue: (val: string) => void;
-  submitRename: () => void;
-  setRenamingPath: (path: string | null) => void;
-  handleTreeDragStart: (e: React.DragEvent, entry: FileEntry) => void;
-  handleTreeDragOver: (e: React.DragEvent, entry: FileEntry) => void;
-  handleTreeDragLeave: (e: React.DragEvent) => void;
-  handleTreeDrop: (e: React.DragEvent, entry: FileEntry) => void;
-  handleTreeContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
-  startTreeCreate: (parentPath: string, type: 'file' | 'folder') => void;
-  startRename: (entry: FileEntry) => void;
-  handleTreeDelete: (entry: FileEntry) => void;
-  treeCreating: { parentPath: string; type: 'file' | 'folder' } | null;
-  treeCreateValue: string;
-  setTreeCreateValue: (val: string) => void;
-  submitTreeCreate: () => void;
-  setTreeCreating: (val: any) => void;
-  treeContextMenu: { x: number; y: number; entry: FileEntry } | null;
-  setTreeContextMenu: (val: any) => void;
-  gitStatus?: { isRepo: boolean; files: Record<string, string>; dirs: Record<string, string> };
-
   user: UserData | null;
   userName?: string;
   setShowSettings: (val: boolean) => void;
@@ -106,11 +66,10 @@ const baseName = (p: string | null | undefined) => (p ? p.split(/[\\/]/).filter(
 
 export const Sidebar: React.FC<SidebarProps> = (props) => {
   const {
-    isSidebarOpen, sidebarTab, setSidebarTab, conversations, activeConvId,
+    isSidebarOpen, conversations, activeConvId,
     selectConversation, createNewConversation, deleteConversation, editingId,
     setEditingId, tempTitle, setTempTitle, saveRename, workspacePath,
-    closeWorkspace, rootFolderPath, openFolder, openFilePicker, user, userName,
-    setShowSettings, fileTree, treeContextMenu, setTreeContextMenu,
+    closeWorkspace, user, userName, setShowSettings,
     convStatus, unityStatus, isDirty, remoteStatus, onOpenRemote,
     profileLevel, profileOpen, onOpenProfile, guideOpen, onOpenGuide,
   } = props;
@@ -253,54 +212,28 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" /></svg>
         </button>
 
-        <div className="side-tabs" role="tablist">
-          {([['chats', t('sidebar.chats')], ['files', t('sidebar.files')]] as const).map(([tab, label]) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={sidebarTab === tab}
-              onClick={() => setSidebarTab(tab)}
-              className="side-tab"
-            >
-              {label}
-              {/* The rows that carry the status are hidden behind the Files tab. */}
-              {tab === 'chats' && sidebarTab !== 'chats' && (
-                <AwaitingBadge count={awaitingElsewhere(convStatus, activeConvId, conversations)} testId="chats-tab-awaiting" />
-              )}
-            </button>
-          ))}
-        </div>
-
         <div className="side-scroll custom-scrollbar">
-          {sidebarTab === 'chats' ? (
+          <button type="button" className="new-chat" data-guide="new-chat" onClick={() => createNewConversation()}>
+            <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+            <span>{t('sidebar.newChat')}</span>
+            <kbd>{t('sidebar.newChatKey')}</kbd>
+          </button>
+
+          {tasks.length > 0 && (
             <>
-              <button type="button" className="new-chat" data-guide="new-chat" onClick={() => createNewConversation()}>
-                <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
-                <span>{t('sidebar.newChat')}</span>
-                <kbd>{t('sidebar.newChatKey')}</kbd>
-              </button>
-
-              {tasks.length > 0 && (
-                <>
-                  <div className="side-label">
-                    <span className="lex">
-                      <span className="lex-d">{t('sidebar.now')}</span>
-                      <span className="lex-q">{t('sidebar.activeTasks')}</span>
-                    </span>
-                    <span className="side-count">{tasks.length}</span>
-                  </div>
-                  <ul className="chat-list" data-guide="chat-list-active">{tasks.map(c => row(c, true))}</ul>
-                </>
-              )}
-
-              <div className="side-label"><span>{t('sidebar.chats')}</span><span className="side-count">{chats.length}</span></div>
-              <ul className="chat-list" data-guide={tasks.length ? undefined : 'chat-list-active'}>{chats.map(c => row(c, false))}</ul>
+              <div className="side-label">
+                <span className="lex">
+                  <span className="lex-d">{t('sidebar.now')}</span>
+                  <span className="lex-q">{t('sidebar.activeTasks')}</span>
+                </span>
+                <span className="side-count">{tasks.length}</span>
+              </div>
+              <ul className="chat-list" data-guide="chat-list-active">{tasks.map(c => row(c, true))}</ul>
             </>
-          ) : (
-            <ProjectFiles {...props} fileTree={fileTree} rootFolderPath={rootFolderPath} openFolder={openFolder}
-              openFilePicker={openFilePicker} treeContextMenu={treeContextMenu} setTreeContextMenu={setTreeContextMenu} showMenu />
           )}
+
+          <div className="side-label"><span>{t('sidebar.chats')}</span><span className="side-count">{chats.length}</span></div>
+          <ul className="chat-list" data-guide={tasks.length ? undefined : 'chat-list-active'}>{chats.map(c => row(c, false))}</ul>
         </div>
 
         {/* Level and XP are the profile's own numbers (GET /profile/stats); before the first answer

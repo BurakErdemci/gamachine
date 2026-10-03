@@ -28,7 +28,6 @@ export const tr = {
   'intro.brand': 'Gamachine',
   // Sidebar
   'sidebar.chats': 'Sohbetler',
-  'sidebar.files': 'Dosyalar',
   'sidebar.newChat': 'Yeni Sohbet',
   'sidebar.openFolder': 'Klasör Aç',
   'sidebar.openFile': 'Dosya Aç',
@@ -1309,7 +1308,6 @@ export const en: Record<keyof typeof tr, string> = {
   'intro.brand': 'Gamachine',
   // Sidebar
   'sidebar.chats': 'Chats',
-  'sidebar.files': 'Files',
   'sidebar.newChat': 'New Chat',
   'sidebar.openFolder': 'Open Folder',
   'sidebar.openFile': 'Open File',

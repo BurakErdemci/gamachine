@@ -109,7 +109,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); delete (window as any).ipc })
 
 const sidebarProps = {
-  isSidebarOpen: true, sidebarTab: 'chats', setSidebarTab: vi.fn(), selectConversation: vi.fn(),
+  isSidebarOpen: true, selectConversation: vi.fn(),
   createNewConversation: vi.fn(), deleteConversation: vi.fn(), editingId: null, setEditingId: vi.fn(),
   tempTitle: '', setTempTitle: vi.fn(), saveRename: vi.fn(), user: USER, setShowSettings: vi.fn(), handleLogout: vi.fn(),
 }

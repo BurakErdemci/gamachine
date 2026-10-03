@@ -318,10 +318,9 @@ describe('settings entry points', () => {
     const onOpenRemote = vi.fn()
     const noop = () => {}
     render(<Sidebar {...({
-      isSidebarOpen: true, sidebarTab: 'chats', setSidebarTab: noop, conversations: [], activeConvId: null, convStatus: {},
+      isSidebarOpen: true, conversations: [], activeConvId: null, convStatus: {},
       selectConversation: noop, createNewConversation: noop, deleteConversation: noop,
       editingId: null, setEditingId: noop, tempTitle: '', setTempTitle: noop, saveRename: noop,
-      fileTree: [], treeContextMenu: null, setTreeContextMenu: noop,
       user: { id: 1, name: 'Burak', sessionToken: 't' }, setShowSettings, handleLogout: noop,
       workspacePath: null, closeWorkspace: noop,
       remoteStatus: { enabled: true, connected: true }, onOpenRemote,

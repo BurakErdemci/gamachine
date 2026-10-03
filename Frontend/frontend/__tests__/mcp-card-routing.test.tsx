@@ -72,7 +72,7 @@ const Harness: React.FC = () => {
       <McpUnknownTray gates={mcp.unknownGates} apiBase={API} sessionToken="tok" showToast={showToast} />
       <Sidebar
         {...({} as any)}
-        isSidebarOpen sidebarTab="chats" setSidebarTab={vi.fn()}
+        isSidebarOpen
         conversations={CONVS} activeConvId={chat.activeConvId} convStatus={chat.convStatus}
         selectConversation={chat.selectConversation}
         createNewConversation={vi.fn()} deleteConversation={vi.fn()}

@@ -147,17 +147,11 @@ describe('account name field', () => {
 
   it('shows the independent name in Sidebar, including an explicit empty override', () => {
     const p: React.ComponentProps<typeof Sidebar> = {
-      isSidebarOpen: true, sidebarTab: 'chats', setSidebarTab: vi.fn(), conversations: [], activeConvId: null,
+      isSidebarOpen: true, conversations: [], activeConvId: null,
       selectConversation: vi.fn(), createNewConversation: vi.fn(), deleteConversation: vi.fn(),
       editingId: null, setEditingId: vi.fn(), tempTitle: '', setTempTitle: vi.fn(), saveRename: vi.fn(),
-      workspacePath: null, closeWorkspace: vi.fn(), rootFolderPath: null, openFolder: vi.fn(), openFilePicker: vi.fn(),
-      fileTree: [], openedFilePath: null, expandedDirs: new Set(), dirContents: {}, toggleDir: vi.fn(),
-      openFile: vi.fn(), openPreview: vi.fn(), treeDragSource: null, treeDragTarget: null, renamingPath: null,
-      renameValue: '', setRenameValue: vi.fn(), submitRename: vi.fn(), setRenamingPath: vi.fn(),
-      handleTreeDragStart: vi.fn(), handleTreeDragOver: vi.fn(), handleTreeDragLeave: vi.fn(), handleTreeDrop: vi.fn(),
-      handleTreeContextMenu: vi.fn(), startTreeCreate: vi.fn(), startRename: vi.fn(), handleTreeDelete: vi.fn(),
-      treeCreating: null, treeCreateValue: '', setTreeCreateValue: vi.fn(), submitTreeCreate: vi.fn(), setTreeCreating: vi.fn(),
-      treeContextMenu: null, setTreeContextMenu: vi.fn(), user, setShowSettings: vi.fn(), handleLogout: vi.fn(), userName: 'Burak',
+      workspacePath: null, closeWorkspace: vi.fn(),
+      user, setShowSettings: vi.fn(), handleLogout: vi.fn(), userName: 'Burak',
     }
     const { rerender } = render(<Sidebar {...p} />)
     expect(screen.getByText('Burak')).toBeTruthy()

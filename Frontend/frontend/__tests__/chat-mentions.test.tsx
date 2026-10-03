@@ -278,11 +278,10 @@ describe('#<id> on screen', () => {
     render(
       <Sidebar
         {...({} as any)}
-        isSidebarOpen sidebarTab="chats" setSidebarTab={noop}
+        isSidebarOpen
         conversations={[conv(12, 'Selam'), conv(7, 'Selam')] as any} activeConvId={7}
         selectConversation={noop} createNewConversation={noop} deleteConversation={noop}
         editingId={null} setEditingId={noop} tempTitle="" setTempTitle={noop} saveRename={noop}
-        fileTree={[]} treeContextMenu={null} setTreeContextMenu={noop}
         user={{ id: 1, name: 'b', sessionToken: 't' }} setShowSettings={noop} handleLogout={noop}
       />,
     )

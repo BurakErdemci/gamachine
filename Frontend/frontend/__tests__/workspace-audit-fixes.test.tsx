@@ -241,8 +241,8 @@ describe('F7/F8 shared display name', () => {
   it.each([null, undefined, '', '  ', 'local', ' LOCAL '])('treats %s as no name in the greeting and footer', name => {
     expect(displayName(name)).toBe('')
     const sidebar: any = { user: { name }, conversations: [], convStatus: {}, workspacePath: null,
-      fileTree: [], activeConvId: null, editingId: null, tempTitle: '', isSidebarOpen: true,
-      expandedDirs: new Set(), dirContents: {}, setSidebarTab: vi.fn(), setSettingsOpen: vi.fn() }
+      activeConvId: null, editingId: null, tempTitle: '', isSidebarOpen: true,
+      setSettingsOpen: vi.fn() }
     render(<><EmptyChat userName={name} projectName="Project" onPick={vi.fn()} /><Sidebar {...sidebar} /></>)
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(tr['empty.titleNoName'].replace('{proje}', 'Project'))
     expect(document.querySelector('.foot-user')).toBeNull()

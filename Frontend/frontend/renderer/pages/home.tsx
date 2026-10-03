@@ -352,7 +352,6 @@ export default function Home() {
   // The file change a card is waiting on, with that card's own Accept / Reject handlers.
   const pendingChange = usePendingChange();
   const [reportsOpen, setReportsOpen] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'chats' | 'files'>('chats');
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
 
@@ -910,27 +909,14 @@ export default function Home() {
       />
 
       <Sidebar
-        isSidebarOpen={isSidebarOpen} sidebarTab={sidebarTab} setSidebarTab={setSidebarTab}
+        isSidebarOpen={isSidebarOpen}
         conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus}
         // Picking a chat (even the one already open) or starting one leaves the profile.
         selectConversation={(...a: Parameters<typeof chat.selectConversation>) => { setProfileOpen(false); closeGuide(); return chat.selectConversation(...a); }}
         createNewConversation={(...a: Parameters<typeof chat.createNewConversation>) => { setProfileOpen(false); closeGuide(); return chat.createNewConversation(...a); }}
         deleteConversation={chat.deleteConversation}
         editingId={chat.editingId} setEditingId={chat.setEditingId} tempTitle={chat.tempTitle} setTempTitle={chat.setTempTitle} saveRename={chat.saveRename}
-        workspacePath={fs.workspacePath} closeWorkspace={fs.closeWorkspace} isDirty={fs.isDirty} rootFolderPath={fs.rootFolderPath}
-        openFolder={fs.openFolder} openFilePicker={fs.openFilePicker} treeCreating={fs.treeCreating}
-        setTreeCreating={fs.setTreeCreating} treeCreateValue={fs.treeCreateValue} setTreeCreateValue={fs.setTreeCreateValue}
-        submitTreeCreate={fs.submitTreeCreate} fileTree={fs.fileTree}
-        openedFilePath={fs.openedFilePath} expandedDirs={fs.expandedDirs} dirContents={fs.dirContents}
-        toggleDir={fs.toggleDir} openFile={openInPanel} openPreview={previewInPanel} treeDragSource={fs.treeDragSource}
-        treeDragTarget={fs.treeDragTarget} renamingPath={fs.renamingPath} renameValue={fs.renameValue}
-        setRenameValue={fs.setRenameValue} submitRename={fs.submitRename} setRenamingPath={fs.setRenamingPath}
-        handleTreeDragStart={fs.handleTreeDragStart} handleTreeDragOver={fs.handleTreeDragOver}
-        handleTreeDragLeave={fs.handleTreeDragLeave} handleTreeDrop={fs.handleTreeDrop}
-        handleTreeContextMenu={fs.handleTreeContextMenu} startTreeCreate={fs.startTreeCreate}
-        startRename={fs.startRename} handleTreeDelete={fs.handleTreeDelete}
-        treeContextMenu={fs.treeContextMenu} setTreeContextMenu={fs.setTreeContextMenu}
-        gitStatus={fs.gitStatus}
+        workspacePath={fs.workspacePath} closeWorkspace={fs.closeWorkspace} isDirty={fs.isDirty}
         user={auth.user} userName={me.name} setShowSettings={(open: boolean) => (open ? openSettings('genel') : closeSettings())} handleLogout={handleLogout}
         onOpenRemote={() => openSettings('uzak')}
         remoteStatus={remote.status}
@@ -1181,8 +1167,8 @@ export default function Home() {
                 {...fs}
                 openFile={openInPanel}
                 openPreview={previewInPanel}
-                // One host draws the right-click menu: the sidebar while it shows its Files tab.
-                showMenu={!(isSidebarOpen && sidebarTab === 'files')}
+                // The workspace Files tab is the only host for the right-click menu.
+                showMenu
               />
             ),
             kod: (

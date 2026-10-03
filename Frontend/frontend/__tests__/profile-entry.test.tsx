@@ -151,11 +151,10 @@ const noop = () => {}
 function sidebarProps(over: Record<string, unknown> = {}) {
   return {
     ...({} as any),
-    isSidebarOpen: true, sidebarTab: 'chats', setSidebarTab: noop,
+    isSidebarOpen: true, setSidebarTab: noop,
     conversations: [], activeConvId: null, convStatus: {},
     selectConversation: noop, createNewConversation: noop, deleteConversation: noop,
     editingId: null, setEditingId: noop, tempTitle: '', setTempTitle: noop, saveRename: noop,
-    fileTree: [], treeContextMenu: null, setTreeContextMenu: noop,
     user: { id: 1, name: 'Burak', sessionToken: 't' }, setShowSettings: noop, handleLogout: noop,
     workspacePath: null, closeWorkspace: noop,
     ...over,

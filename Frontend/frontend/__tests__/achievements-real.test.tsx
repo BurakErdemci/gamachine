@@ -187,20 +187,11 @@ describe('latest earned achievement', () => {
 
   it.each(['tr', 'en'] as const)('uses the sidebar achievement tooltip unless XP is partial in %s', lang => {
     const props: React.ComponentProps<typeof Sidebar> = {
-      isSidebarOpen: true, sidebarTab: 'chats', setSidebarTab: noop, conversations: [], activeConvId: null,
+      isSidebarOpen: true, conversations: [], activeConvId: null,
       selectConversation: noop, createNewConversation: noop, deleteConversation: noop,
       editingId: null, setEditingId: noop, tempTitle: '', setTempTitle: noop, saveRename: noop,
-      fileTree: [], treeContextMenu: null, setTreeContextMenu: noop,
       user: { id: 1, name: 'Burak', sessionToken: 't' }, setShowSettings: noop, handleLogout: noop,
       workspacePath: null, closeWorkspace: noop,
-      rootFolderPath: null, openFolder: noop, openFilePicker: noop, openedFilePath: null,
-      expandedDirs: new Set(), dirContents: {}, toggleDir: noop, openFile: noop, openPreview: noop,
-      treeDragSource: null, treeDragTarget: null, renamingPath: null, renameValue: '',
-      setRenameValue: noop, submitRename: noop, setRenamingPath: noop,
-      handleTreeDragStart: noop, handleTreeDragOver: noop, handleTreeDragLeave: noop,
-      handleTreeDrop: noop, handleTreeContextMenu: noop, startTreeCreate: noop, startRename: noop,
-      handleTreeDelete: noop, treeCreating: null, treeCreateValue: '', setTreeCreateValue: noop,
-      submitTreeCreate: noop, setTreeCreating: noop,
       profileLevel: { level: 1, xp: 10, levelXp: 10, levelNeed: 100, lastAch: 'night_owl' },
     }
     const view = render(<Sidebar {...props} />, { wrapper: provider(lang) })

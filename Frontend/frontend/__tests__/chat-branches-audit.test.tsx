@@ -103,7 +103,7 @@ describe('audit · orphaned branch', () => {
 
   it('the sidebar lists it and highlights it when it is on screen', () => {
     render(<Sidebar {...({} as any)}
-      isSidebarOpen sidebarTab="chats" setSidebarTab={vi.fn()} selectConversation={vi.fn()}
+      isSidebarOpen selectConversation={vi.fn()}
       createNewConversation={vi.fn()} deleteConversation={vi.fn()} editingId={null} setEditingId={vi.fn()}
       tempTitle="" setTempTitle={vi.fn()} saveRename={vi.fn()} user={USER} setShowSettings={vi.fn()} handleLogout={vi.fn()}
       conversations={[orphan, conv(4)]} activeConvId={2}
