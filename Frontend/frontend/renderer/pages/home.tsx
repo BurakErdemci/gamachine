@@ -613,7 +613,9 @@ export default function Home() {
   };
 
   const handleSendMessage = async (msg?: string, images?: string[], videos?: any[]) => {
-    const draft = msg || chat.chatInput;
+    // `??`, not `||`: an image-only send passes '' and must not pick up the parent's copy, which
+    // typing never updates (a card's deleted prompt went out with the image).
+    const draft = msg ?? chat.chatInput;
     let input = draft.trim();
     if (!input && (!images || images.length === 0) && (!videos || videos.length === 0)) return;
 
@@ -676,7 +678,8 @@ export default function Home() {
     const quote = sideQuote(question, answer, {
       question: t('side.quoteQuestion'), answer: t('side.quoteAnswer'),
     });
-    chat.setChatInput(prev => (prev.trim() ? `${prev}\n\n${quote}` : quote));
+    const add = (prev: string) => (prev.trim() ? `${prev}\n\n${quote}` : quote);
+    if (composerPickers.current) composerPickers.current.editDraft(add); else chat.setChatInput(add);
     showToast(t('side.added'), 'success');
   };
 
@@ -1142,7 +1145,10 @@ export default function Home() {
               onEdit: chat.editQueued, onDelete: chat.deleteQueued,
               onSendNow: (id) => { void chat.sendQueuedNow(id); }, onResume: () => { chat.resumeQueue(); },
             }}
-            onFileDrop={(entry) => chat.setChatInput(prev => prev + ` [File Attached: ${entry.path}]`)}
+            onFileDrop={(entry) => {
+              const add = (prev: string) => prev + ` [File Attached: ${entry.path}]`;
+              if (composerPickers.current) composerPickers.current.editDraft(add); else chat.setChatInput(add);
+            }}
             onCommand={(cmd) => {
               if (cmd === '/compact') { chat.compactConversation(); return true; }
               // "/rehber telefon": the guide opens searching "telefon"; nothing is sent.

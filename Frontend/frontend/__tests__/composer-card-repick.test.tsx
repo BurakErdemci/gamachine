@@ -45,4 +45,13 @@ describe('welcome card picks use the composer text', () => {
     act(() => { handle.current!.editDraft(c => questDraft(c, A)) })
     expect(box.value).toBe(`kendi notum\n${A}`)
   })
+
+  it('keeps typed text when another writer appends to the draft (file drop, side answer)', () => {
+    const handle = { current: null } as React.MutableRefObject<ComposerPickers | null>
+    render(<Host handle={handle} />)
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'yazdığım metin' } })
+    act(() => { handle.current!.editDraft(c => c + ' [File Attached: a.png]') })
+    expect(box.value).toBe('yazdığım metin [File Attached: a.png]')
+  })
 })
