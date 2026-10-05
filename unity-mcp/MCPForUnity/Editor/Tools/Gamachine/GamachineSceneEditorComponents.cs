@@ -146,8 +146,8 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                     break;
                 case SerializedPropertyType.LayerMask:
                     if (token?.Type != JTokenType.Integer
-                        || !PropertyInteger(property, token, out var mask)) return false;
-                    apply = () => property.longValue = mask;
+                        || !Integer(token, int.MinValue, uint.MaxValue, out var mask)) return false;
+                    apply = () => property.intValue = mask > int.MaxValue ? unchecked((int)(uint)mask) : (int)mask;
                     break;
                 default:
                     return false;
