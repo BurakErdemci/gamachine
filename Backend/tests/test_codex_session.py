@@ -84,6 +84,34 @@ class TestCodexCapacityErrors(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(session._out_q.empty())
 
 
+class TestCodexItemDetails(unittest.TestCase):
+    def test_mcp_tool_summary_and_parameters_include_server_and_tool(self):
+        item = {
+            "type": "mcpToolCall",
+            "server": "unityMCP",
+            "tool": "manage_scene",
+            "arguments": {"action": "get_hierarchy"},
+        }
+
+        self.assertEqual(CodexSession._item_summary(item), "unityMCP · manage_scene")
+        args = CodexSession._item_args(item)
+        self.assertEqual(args["server"], "unityMCP")
+        self.assertEqual(args["tool"], "manage_scene")
+        self.assertEqual(args["arguments"], '{"action": "get_hierarchy"}')
+
+    def test_mcp_tool_summary_without_server_uses_tool(self):
+        item = {"type": "mcpToolCall", "tool": "manage_scene"}
+
+        self.assertEqual(CodexSession._item_summary(item), "manage_scene")
+        self.assertEqual(CodexSession._item_args(item), {"tool": "manage_scene"})
+
+    def test_command_execution_keeps_command_summary(self):
+        item = {"type": "commandExecution", "command": "pwd", "cwd": "workspace"}
+
+        self.assertEqual(CodexSession._item_summary(item), "pwd")
+        self.assertEqual(CodexSession._item_args(item), {"command": "pwd", "cwd": "workspace"})
+
+
 class TestProtocolLimits(unittest.TestCase):
     def test_stream_limit_handles_large_unity_tool_schemas(self):
         self.assertGreater(_APP_SERVER_STREAM_LIMIT, 64 * 1024)

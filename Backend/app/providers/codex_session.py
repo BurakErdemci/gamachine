@@ -1416,6 +1416,10 @@ class CodexSession:
 
     @staticmethod
     def _item_summary(item: dict) -> str:
+        tool = item.get("tool")
+        if isinstance(tool, str):
+            server = item.get("server")
+            return f"{server} · {tool}" if server else tool
         for k in ("command", "path", "title", "name"):
             v = item.get(k)
             if v:
@@ -1426,7 +1430,7 @@ class CodexSession:
     def _item_args(item: dict) -> dict:
         """Chip'in PARAMETRELER paneli için item'ın anlamlı girdi alanları (kırpılmış)."""
         out: Dict[str, Any] = {}
-        for k in ("command", "cwd", "path", "name", "arguments", "changes", "title"):
+        for k in ("command", "cwd", "path", "name", "server", "tool", "arguments", "changes", "title"):
             v = item.get(k)
             if v in (None, "", [], {}):
                 continue
