@@ -95,16 +95,32 @@ def message_pair(agent: Any, model: Any) -> Optional[Tuple[str, str]]:
     return "subscription", model
 
 
+_AGY_MODEL_REPLACEMENTS = {
+    "agy-claude-sonnet-4-6": "agy-claude-sonnet-5-5",
+    "agy-claude-opus-4-6": "agy-claude-opus-5-5",
+    "gemini-3.5-flash": "gemini-3.8-flash",
+    "gemini-3.5-flash-medium": "gemini-3.8-flash-medium",
+    "gemini-3.5-flash-low": "gemini-3.8-flash-low",
+}
+
+
+def _normalize_model(provider_type: str, model_name: str) -> Tuple[str, str]:
+    """Migrate removed agy IDs on read, without changing API or other CLI IDs."""
+    if provider_type == "subscription":
+        model_name = _AGY_MODEL_REPLACEMENTS.get(model_name, model_name)
+    return provider_type, model_name
+
+
 def _resolve(db, user_id: int, conversation_id: int) -> Tuple[Tuple[str, str], bool]:
     stored = _pair(db.get_conversation_model(conversation_id))
     if stored:
-        return stored, True
+        return _normalize_model(*stored), True
     latest = _pair(db.get_latest_message_agent(conversation_id))
     fallback = message_pair(*latest) if latest else None
     if fallback:
-        return fallback, False
+        return _normalize_model(*fallback), False
     provider_type, model_name, _, _ = db.get_ai_config(user_id)
-    return (provider_type, model_name), False
+    return _normalize_model(provider_type, model_name), False
 
 
 def chat_model(db, user_id: int, conversation_id: int) -> Dict[str, str]:
@@ -123,7 +139,7 @@ def turn_model(db, user_id: int, conversation_id: int) -> Tuple[str, str]:
             conversation_id, provider_type, model_name, only_if_unset=True):
         winner = _pair(db.get_conversation_model(conversation_id))
         if winner:
-            return winner
+            return _normalize_model(*winner)
     return provider_type, model_name
 
 

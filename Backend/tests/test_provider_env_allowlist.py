@@ -344,7 +344,7 @@ class TestIzinListesiFonksiyonu:
         assert env_family("claude-opus-4-6") == "claude"
         assert env_family("gpt-5.6-codex") == "codex"
         assert env_family("gemini-3.6-flash") == "agy"
-        assert env_family("agy-claude-sonnet-4-6") == "agy"
+        assert env_family("agy-claude-sonnet-5-5") == "agy"
         assert env_family("kimi-k3") == "kimi"
         assert env_family("cursor-gpt-5.2") == "cursor"
         assert env_family("copilot-claude-sonnet-4.6") == "copilot"
@@ -634,7 +634,7 @@ class TestCiplakCliAdlariDogruAileyeDusuyor:
         ("opencode", "opencode"), ("opencode:anthropic/claude", "opencode"),
         ("codex", "codex"), ("gpt-5.6-codex", "codex"),
         ("kimi", "kimi"), ("kimi-k3", "kimi"),
-        ("agy", "agy"), ("agy-claude-sonnet-4-6", "agy"), ("gemini-3.6-flash", "agy"),
+        ("agy", "agy"), ("agy-claude-sonnet-5-5", "agy"), ("gemini-3.6-flash", "agy"),
         ("cursor", "cursor"), ("copilot", "copilot"),
     ])
     def test_the_bare_cli_name_lands_in_its_own_family(self, name, family):

@@ -804,7 +804,7 @@ class TestAnalyzeCodeOneShot:
 
         closed = []
 
-        async def fake_stream(self, message, *, model="x", cwd=None):
+        async def fake_stream(self, message, *, model="x", cwd=None, thinking_level="auto"):
             assert message == "summarize"
             assert model == "gemini-3.8-flash"
             yield {"type": "text", "content": "hel"}
@@ -834,7 +834,7 @@ class TestAnalyzeCodeOneShot:
 
         closed = []
 
-        async def fake_stream(self, message, *, model="x", cwd=None):
+        async def fake_stream(self, message, *, model="x", cwd=None, thinking_level="auto"):
             yield {"type": "error", "message": "boom"}
 
         async def fake_close(self, *, preserve_resume=False):

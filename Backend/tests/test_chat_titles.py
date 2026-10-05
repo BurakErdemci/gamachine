@@ -124,7 +124,7 @@ def test_clis_without_a_measured_tool_less_call_generate_nothing(model):
 
 
 @pytest.mark.parametrize("model", ["gemini-3.8-flash", "gemini-3.1-pro-preview", "agy-gpt-oss-120b",
-                                   "agy-claude-opus-4-6"])
+                                   "agy-claude-opus-5-5"])
 def test_agy_titles_with_flash_low_at_low_effort(model):
     choice = ct.title_model_for("subscription", model)
     assert (choice.runner, choice.model, choice.effort) == ("agy", "gemini-3.8-flash-low", "low")

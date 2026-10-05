@@ -137,17 +137,12 @@ class BaseCLIProvider(AIProvider):
     # akışlarına kontrollü, fakat gerçek MCP sonuçlarını taşıyabilecek ortak tavan ver.
     _CLI_STREAM_LIMIT_BYTES = 32 * 1024 * 1024
 
-    # model ID → agy settings.json "model" değeri (DISPLAY-NAME formatı).
-    # ⚠️ `--model` FLAG'İ KULLANILMAZ — canlı doğrulandı (2026-07-24): agy komut
-    # satırında --model görünce "kullanıcı bu flag'i soruyor" sanıp built-in
-    # antigravity-guide skill'ine düşüyor (derail) → kullanıcının gerçek mesajını
-    # yanıtlamıyor, kendinden/CLI flag'lerinden bahsediyor. Aynı derail --mode,
-    # --print-timeout, --dangerously-skip-permissions'ta da var. Model seçimi bu
-    # yüzden SADECE settings.json "model" key'iyle yapılır (bkz. _set_agy_model);
-    # display-name settings.json'da hem modeli seçer hem kimliğini belirler.
-    # 1.1.5'te OLMAYAN modeller (3.5-flash-lite, 3-flash, 3.1-flash-lite, 2.5-*) çıkarıldı.
+    # Model ID -> agy settings.json display name (agy 1.2.17, 5 Oct 2026).
+    # Do not use --model: measured on 24 Jul 2026, agy treats it as a question
+    # about its CLI and invokes antigravity-guide instead of answering the user.
+    # Selection goes through _set_agy_model; Claude effort adjusts the name.
     _AGY_MODEL_MAP = {
-        # Gemini (effort = display-name son-eki (High/Medium/Low))
+        # Gemini tiers remain separate model IDs (High/Medium/Low).
         # 3.8 needs agy >=1.1.25; installed 1.1.27 (measured 2026-09-05).
         "gemini-3.8-flash":              "Gemini 3.8 Flash (High)",
         "gemini-3.8-flash-medium":       "Gemini 3.8 Flash (Medium)",
@@ -158,16 +153,22 @@ class BaseCLIProvider(AIProvider):
         "gemini-3.6-flash":              "Gemini 3.6 Flash (High)",
         "gemini-3.6-flash-medium":       "Gemini 3.6 Flash (Medium)",
         "gemini-3.6-flash-low":          "Gemini 3.6 Flash (Low)",
-        "gemini-3.5-flash":              "Gemini 3.5 Flash (High)",
-        "gemini-3.5-flash-medium":       "Gemini 3.5 Flash (Medium)",
-        "gemini-3.5-flash-low":          "Gemini 3.5 Flash (Low)",
         "gemini-3.1-pro-preview":        "Gemini 3.1 Pro (High)",
         "gemini-3.1-pro-low":            "Gemini 3.1 Pro (Low)",
-        # Antigravity CLI üzerinden Claude ve GPT-OSS
-        "agy-claude-sonnet-4-6":         "Claude Sonnet 4.6 (Thinking)",
-        "agy-claude-opus-4-6":           "Claude Opus 4.6 (Thinking)",
+        # Claude defaults to High; the effort picker can select Low or Medium.
+        "agy-claude-sonnet-5-5":         "Claude Sonnet 5.5 (High)",
+        "agy-claude-opus-5-5":           "Claude Opus 5.5 (High)",
         "agy-gpt-oss-120b":              "GPT-OSS 120B (Medium)",
     }
+
+    @classmethod
+    def _resolve_agy_model(cls, model: str, thinking_level: Optional[str] = None) -> str:
+        """Resolve agy's display name without encoding Claude effort in IDs."""
+        name = cls._AGY_MODEL_MAP.get(model, "Gemini 3.6 Flash (High)")
+        if model in cls._AGY_MODEL_MAP and model.startswith("agy-claude-"):
+            level = thinking_level if thinking_level in ("low", "medium", "high") else "high"
+            return f"{name.rsplit(' (', 1)[0]} ({level.title()})"
+        return name
 
     # agy CLI'ın kendi yerleşik araçlarının isimleri (onaysız çalışmayı engellemek amacıyla devre dışı bırakılır)
     # agy'nin GERÇEK built-in yazma araçları (agy'nin kendi raporundan doğrulandı).

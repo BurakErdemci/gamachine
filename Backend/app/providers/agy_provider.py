@@ -237,10 +237,9 @@ class AgyProvider(BaseCLIProvider):
                 return cand
         return "agy"  # PATH'e güven (subprocess başlatılınca çözülür)
 
-    def _build_cmd(self, prompt: str = "", thinking_level: str = "medium", workspace: str = None) -> list:
+    def _build_cmd(self, prompt: str = "", thinking_level: str = "auto", workspace: str = None) -> list:
         """Build persistent stream argv; user content is sent only through stdin."""
-        self._pending_agy_model = self._AGY_MODEL_MAP.get(
-            self.binary_name, "Gemini 3.6 Flash (High)")
+        self._pending_agy_model = self._resolve_agy_model(self.binary_name, thinking_level)
         cmd = [self._agy_binary(), "--input-format", "stream-json",
                "--output-format", "stream-json", "-p="]
         if workspace:
@@ -250,7 +249,7 @@ class AgyProvider(BaseCLIProvider):
         return cmd
 
     async def analyze_code(self, prompt: str, max_tokens: int = 4096,
-                           images=None, thinking_level: str = "medium",
+                           images=None, thinking_level: str = "auto",
                            cwd: Optional[str] = None, interactive: bool = False):
         """One-shot path for callers that have no conversation (project analysis,
         compact summary, security check, validator).
@@ -267,7 +266,8 @@ class AgyProvider(BaseCLIProvider):
         session = AgyStreamSession(-(int(time.time() * 1000) & 0x7FFFFFFF), cwd=workspace)
         collected = ""
         try:
-            async for ev in session.stream(prompt, model=self.binary_name, cwd=workspace):
+            async for ev in session.stream(prompt, model=self.binary_name, cwd=workspace,
+                                           thinking_level=thinking_level):
                 kind = ev.get("type")
                 if kind == "text":
                     piece = ev.get("content", "")

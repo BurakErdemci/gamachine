@@ -394,6 +394,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self.cwd = os.path.abspath(cwd)
         self.session_id = resume_id if conversation_id >= 0 else None
         self.model = None
+        self._model_display_name = None
         self._active_process = None
         self._gate_token = None  # this child's key in _GATED_CHILDREN
         self._auto_approve = False
@@ -626,21 +627,24 @@ class AgyStreamSession(SaglayiciSahipligi):
                     and _SESSIONS.get(self.conversation_id) is self):
                 _SESSIONS.pop(self.conversation_id, None)
 
-    async def _start(self, model: str, cwd: str) -> str:
+    async def _start(self, model: str, cwd: str, thinking_level: str = "auto") -> str:
         if self._kapandi:
             raise RuntimeError("agy session was stopped.")
         if not os.path.isdir(cwd):
             raise AgyWorkspaceError("agy workspace directory does not exist.")
         # The process holds ~/.gemini/settings.json state and the workspace
-        # hooks for its life. A model change requires closing and respawning,
+        # hooks for its life. A model or effort-derived display name change
+        # requires closing and respawning,
         # while retaining the UUID. An approval-mode change does not: every
         # process has the hook, and the mode is only in the hook's state file.
         # Every turn start writes the file below (spawn or resync), which is
         # what clears a "side" a crashed side turn may have left behind.
         mode = _effective_gate_mode()
         self._auto_approve = mode == "auto"
+        display_name = AgyProvider._resolve_agy_model(model, thinking_level)
         if self._active_process is not None and (
             not self.is_live or self.model != model or self.cwd != cwd
+            or self._model_display_name != display_name
         ):
             await self._stop_process()
         if self._kapandi:
@@ -671,7 +675,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self.cwd = cwd
         provider = AgyProvider(binary_name=model)
         provider._resume_uuid = self.session_id
-        command = provider._resolve_exec(provider._build_cmd(workspace=cwd))
+        command = provider._resolve_exec(provider._build_cmd(thinking_level=thinking_level, workspace=cwd))
         # Configuration happens under the same global turn lock as execution.
         # These existing helpers are mocked by the fake-process tests.
         provider._write_mcp_config(cwd)
@@ -732,6 +736,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self.active_provider = self
         self._stderr_task = asyncio.create_task(self._drain_stderr(process))
         self.model = model
+        self._model_display_name = provider._pending_agy_model
         if self.conversation_id < 0:
             # Visible to approval_mode's flip propagation while it runs; close()
             # removes it. A one-shot is never looked up by id.
@@ -808,7 +813,7 @@ class AgyStreamSession(SaglayiciSahipligi):
 
     async def stream(self, message: str, *, model: str = "gemini-3.6-flash",
                      cwd: Optional[str] = None, side: bool = False,
-                     language: str = "tr") -> AsyncGenerator[dict, None]:
+                     language: str = "tr", thinking_level: str = "auto") -> AsyncGenerator[dict, None]:
         """One turn. `side`: a read-only side question (Burak, 27 Sep 2026):
         refused unless the turn lock is free, run with the state file on
         SIDE_MODE, stopped after SIDE_TURN_TIMEOUT_S or when another agy turn
@@ -853,7 +858,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                 if queued:
                     yield _redact_event(_STARTED_EVENT)
                 started = loop.time()
-                instructions = await self._start(model, os.path.abspath(cwd or self.cwd))
+                instructions = await self._start(model, os.path.abspath(cwd or self.cwd), thinking_level)
                 process = self._active_process
                 payload = {"event": "user", "message": {"content": instructions + message}}
                 process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))

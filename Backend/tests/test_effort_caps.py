@@ -159,7 +159,7 @@ _MODEL_TABLE = [
     "gpt-5.5", "gpt-5.2", "gpt-5.1-codex-max", "gpt-5.6-sol", "gpt-6-sol", "gpt-oss-120b",
     "copilot-auto", "copilot-gpt-5.5", "copilot-claude-sonnet-5", "opencode:model", "cursor-auto", "kimi-k3",
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.1-pro-preview", "gemini-3-pro", "gemini-2.5-flash",
-    "agy-claude-sonnet-4-6", "nvidia/nemotron-x", "z-ai/glm-5.2", "qwen-3", "kimi-k2", "deepseek-v4", "mistral-large",
+    "agy-claude-sonnet-5-5", "nvidia/nemotron-x", "z-ai/glm-5.2", "qwen-3", "kimi-k2", "deepseek-v4", "mistral-large",
 ]
 
 

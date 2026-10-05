@@ -83,6 +83,8 @@ def get_effort_caps(provider_type: str, model_name: str) -> dict:
     m = (model_name or "").lower()
 
     if p == "subscription":
+        if m.startswith("agy-claude-"):
+            return _caps(["auto", "low", "medium", "high"])
         if m.startswith("claude-"):
             if "haiku" in m:
                 return _caps(["auto"], "Haiku effort desteklemez — model varsayılanıyla çalışır.")
@@ -114,10 +116,7 @@ def get_effort_caps(provider_type: str, model_name: str) -> dict:
             return _caps(["auto"], "Cursor CLI reasoning seçimi upstream bug nedeniyle çalışmıyor.")
         if m.startswith("kimi-"):
             return _caps(["auto"], "Kimi K3 düşünmesi her zaman açık — ayrı effort seviyesi yok.")
-        # gemini/agy-*: chat effort stays in the model pick (High/Medium/Low
-        # ids). agy 1.2.11 does have `--effort`; it was measured only for chat
-        # titles (vault note Teknik/Arastirmalar/Gamachine_Baslik_Modelleri_2026-09-27,
-        # 27 Sep 2026), not for chat turns, so no level is offered here.
+        # Gemini keeps effort in the model pick (High/Medium/Low IDs).
         return _caps(["auto"], "Antigravity'de effort, modelin High/Medium/Low sürümüyle seçilir.")
 
     if p == "google":

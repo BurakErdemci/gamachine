@@ -2350,6 +2350,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             async with contextlib.aclosing(session.stream(
                 message, model=self.model_name, cwd=self.workspace_path or ".",
                 side=side_turn is not None, language=self.language,
+                thinking_level=self.effort_level or self.thinking_level or "auto",
             )) as events:
                 async for event in events:
                     payload = dict(event)

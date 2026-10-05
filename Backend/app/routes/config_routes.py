@@ -517,13 +517,11 @@ def create_config_router(db):
                 {"id": "gemini-3.7-flash-medium",      "name": "Gemini 3.7 Flash (Medium)",   "provider": "subscription"},
                 {"id": "gemini-3.6-flash",             "name": "Gemini 3.6 Flash",            "provider": "subscription"},
                 {"id": "gemini-3.6-flash-medium",      "name": "Gemini 3.6 Flash (Medium)",   "provider": "subscription"},
-                {"id": "gemini-3.5-flash",             "name": "Gemini 3.5 Flash",            "provider": "subscription"},
-                {"id": "gemini-3.5-flash-medium",      "name": "Gemini 3.5 Flash (Medium)",   "provider": "subscription"},
                 {"id": "gemini-3.1-pro-preview",       "name": "Gemini 3.1 Pro (High)",       "provider": "subscription"},
                 {"id": "gemini-3.1-pro-low",           "name": "Gemini 3.1 Pro (Low)",        "provider": "subscription"},
-                # NOT: 3.5 Flash Lite / 3 Flash / 3.1 Flash Lite / 2.5-* agy 1.1.5
-                # `agy models` listesinde YOK — subscription'dan çıkarıldı (Cloud'da geçerli).
-                {"id": "agy-claude-sonnet-4-6",        "name": "Claude Sonnet 4.6 (Thinking)", "provider": "subscription"},
+                # Claude effort is selected separately; Gemini keeps tiered IDs.
+                {"id": "agy-claude-opus-5-5",          "name": "Claude Opus 5.5",            "provider": "subscription"},
+                {"id": "agy-claude-sonnet-5-5",        "name": "Claude Sonnet 5.5",          "provider": "subscription"},
                 {"id": "agy-gpt-oss-120b",             "name": "GPT-OSS 120B (Medium)",       "provider": "subscription"},
                 # GitHub Copilot CLI (statik — copilot'un programatik model listesi yok;
                 # ID'ler CLI'ın kendi model seçicisinden alındı, 2026-07-13)

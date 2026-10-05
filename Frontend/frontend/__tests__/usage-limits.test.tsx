@@ -59,7 +59,7 @@ describe('window picking', () => {
       win('c5', '5h', 70, 'Claude and GPT'), win('cw', 'week', 33, 'Claude and GPT'),
     ] })
     expect(pickPair(f, 'gemini-3.8-flash')).toMatchObject({ five: { id: 'g5' }, week: { id: 'gw' } })
-    expect(pickPair(f, 'agy-claude-sonnet-4-6')).toMatchObject({ five: { id: 'c5' }, week: { id: 'cw' } })
+    expect(pickPair(f, 'agy-claude-sonnet-5-5')).toMatchObject({ five: { id: 'c5' }, week: { id: 'cw' } })
     // A model of another family on screen (or none): the limit that bites first.
     expect(pickPair(f, null)).toMatchObject({ five: { id: 'c5' }, week: { id: 'cw' } })
   })
