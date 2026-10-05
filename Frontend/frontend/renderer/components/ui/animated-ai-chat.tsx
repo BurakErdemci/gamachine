@@ -96,7 +96,6 @@ export function AnimatedChatInput({
     onSendMessage,
     onCommand,
     onStop,
-    onFileDrop,
     isLoading,
     // Varsayılanlar yalnız SON ÇARE: çağrı yerleri metni i18n'den geçiriyor.
     // Eskiden burada "Ask zap a question..." yazıyordu — başka bir ürünün
@@ -123,7 +122,6 @@ export function AnimatedChatInput({
     onSendMessage: (val: string, images?: string[], videos?: any[]) => void;
     onCommand?: (cmd: string) => boolean;
     onStop?: () => void;
-    onFileDrop?: (entry: { path: string, name: string }) => void;
     isLoading: boolean;
     placeholder?: string;
     /** The mockup's short placeholder for the narrow chat strip (<= 520 px). */
@@ -469,7 +467,6 @@ export function AnimatedChatInput({
             try {
                 const entry = JSON.parse(internalData);
                 if (!entry.isDirectory) {
-                    if (onFileDrop) onFileDrop(entry);
                     // Add as attachment immediately
                     setAttachments(prev => {
                         if (prev.some(a => a.path === entry.path)) return prev;
@@ -1189,5 +1186,4 @@ if (typeof document !== 'undefined') {
     style.innerHTML = rippleKeyframes;
     document.head.appendChild(style);
 }
-
 

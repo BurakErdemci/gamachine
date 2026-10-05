@@ -1145,10 +1145,6 @@ export default function Home() {
               onEdit: chat.editQueued, onDelete: chat.deleteQueued,
               onSendNow: (id) => { void chat.sendQueuedNow(id); }, onResume: () => { chat.resumeQueue(); },
             }}
-            onFileDrop={(entry) => {
-              const add = (prev: string) => prev + ` [File Attached: ${entry.path}]`;
-              if (composerPickers.current) composerPickers.current.editDraft(add); else chat.setChatInput(add);
-            }}
             onCommand={(cmd) => {
               if (cmd === '/compact') { chat.compactConversation(); return true; }
               // "/rehber telefon": the guide opens searching "telefon"; nothing is sent.
