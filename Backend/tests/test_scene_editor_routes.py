@@ -117,6 +117,22 @@ def test_all_endpoints_require_session_token(client, monkeypatch, method, path, 
     post.assert_not_called()
 
 
+@pytest.mark.parametrize("path", ["select", "create", "component-action"])
+@pytest.mark.parametrize("token", [None, "wrong"])
+@pytest.mark.parametrize("configured", [False, True])
+def test_token_gate_precedes_invalid_body_validation(client, monkeypatch, path, token, configured):
+    http, routes = client
+    monkeypatch.delenv("UNITYAI_ALLOW_NO_TOKEN", raising=False)
+    if not configured:
+        monkeypatch.delenv("LOCAL_APP_TOKEN", raising=False)
+    post = Mock(side_effect=AssertionError("unauthenticated invalid body forwarded"))
+    monkeypatch.setattr(routes.urllib.request, "urlopen", post)
+    headers = {} if token is None else {"X-Session-Token": token}
+    response = http.post(f"/scene-editor/{path}", json={}, headers=headers)
+    assert response.status_code == (401 if configured else 503)
+    post.assert_not_called()
+
+
 @pytest.mark.parametrize("path,body", [
     ("create", {"item": 123, "parentId": None}),
     ("create", {"item": "GameObject/Camera", "parentId": True}),

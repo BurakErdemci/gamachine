@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from typing import Literal
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, StrictBool, StrictFloat, StrictInt, StrictStr, field_validator
 
 from auth_utils import _check_token
@@ -142,7 +142,10 @@ async def _call_unity(command: str, params: dict) -> dict:
 
 
 def create_scene_editor_router() -> APIRouter:
-    router = APIRouter(prefix="/scene-editor", tags=["scene-editor"])
+    async def check_token(x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+
+    router = APIRouter(prefix="/scene-editor", tags=["scene-editor"], dependencies=[Depends(check_token)])
 
     @router.get("/tree")
     async def tree(x_session_token: str = Header(alias="X-Session-Token", default="")):
