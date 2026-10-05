@@ -100,9 +100,16 @@ def create_analysis_router(db):
             # to_thread bir generator objesi döndürür ve save_analysis'e çöp gider.)
             if inspect.isasyncgenfunction(provider.analyze_code):
                 _parts: list = []
-                async for ev in provider.analyze_code(prompt, 2048):
+                _events = provider.analyze_code(prompt, 2048)
+                async for ev in _events:
                     if isinstance(ev, dict) and ev.get("type") == "delta":
                         _parts.append(ev.get("text", ""))
+                    elif isinstance(ev, dict) and ev.get("type") == "error":
+                        # Same shape as the provider-construction failure above; no history row.
+                        await _events.aclose()
+                        return {"intent": "ERROR",
+                                "ai_suggestion": ev.get("content") or ev.get("message") or "provider error",
+                                "static_results": {"smells": []}}
                 final_suggestion = "".join(_parts)
             else:
                 final_suggestion = await asyncio.to_thread(provider.analyze_code, prompt)
