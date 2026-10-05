@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import React from 'react'
 import { renderHook, render, screen, cleanup, act } from '@testing-library/react'
 import { useTurnDone, cardOnScreen } from '../renderer/lib/turnDone'
-import { AchievementToast, ACHV_LIFE_MS } from '../renderer/components/home/AchievementToast'
+import { AchievementToast } from '../renderer/components/home/AchievementToast'
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
@@ -56,18 +56,16 @@ describe('useTurnDone', () => {
 })
 
 describe('AchievementToast', () => {
-  it('shows the finished chat and leaves after its lifetime', () => {
+  it('shows no band for a finished chat, including after the former lifetime', () => {
     vi.useFakeTimers()
-    render(<AchievementToast event={{ seq: 1 }} title="Score board" />)
-    const band = screen.getByTestId('achievement-toast')
-    expect(band.getAttribute('role')).toBe('status')
-    expect(band.textContent).toContain('Score board')
-    act(() => { vi.advanceTimersByTime(ACHV_LIFE_MS) })
+    render(<AchievementToast event={{ seq: 1 }} />)
+    expect(screen.queryByTestId('achievement-toast')).toBeNull()
+    act(() => { vi.advanceTimersByTime(4640) })
     expect(screen.queryByTestId('achievement-toast')).toBeNull()
   })
 
   it('draws nothing without an event', () => {
-    render(<AchievementToast event={null} title="x" />)
+    render(<AchievementToast event={null} />)
     expect(screen.queryByTestId('achievement-toast')).toBeNull()
   })
 })

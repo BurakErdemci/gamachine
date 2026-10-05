@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 
-import { ACHIEVEMENT_IDS, normalizeProfileStats, type AchievementId, type ProfileRange, type ProfileStats } from '../../lib/profileStats';
+import { ACHIEVEMENT_IDS, normalizeProfileStats, type AchievementId, type ProfileRange, type ProfileRank, type ProfileStats } from '../../lib/profileStats';
+
+export interface LevelUp {
+  seq: number;
+  level: number;
+  rank: ProfileRank;
+  rankChanged: boolean;
+}
 
 interface Options {
   api: string;
@@ -31,6 +38,7 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
   const [failed, setFailed] = useState(false);
   const [gain, setGain] = useState<{ seq: number; xp: number } | null>(null);
   const [unlocked, setUnlocked] = useState<{ seq: number; ids: AchievementId[] } | null>(null);
+  const [levelUp, setLevelUp] = useState<LevelUp | null>(null);
   const latestRef = useRef<ProfileStats | null>(null);
   const newIds = useRef(new Set<string>());
   const seq = useRef(0);
@@ -82,6 +90,9 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
       if (previous && !previous.xp_partial && !stats.xp_partial && stats.xp > previous.xp) {
         setGain({ seq: mine, xp: stats.xp - previous.xp });
       }
+      if (previous && stats.level > previous.level) {
+        setLevelUp({ seq: mine, level: stats.level, rank: stats.rank, rankChanged: stats.rank !== previous.rank });
+      }
       const marked: ProfileStats = {
         ...stats,
         achievements: stats.achievements.map(a => (newIds.current.has(a.id) && a.unlocked ? { ...a, new: true } : a)),
@@ -101,6 +112,19 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
   rangeRef.current = range;
   const refresh = useCallback(() => load(rangeRef.current), [load]);
 
+  // A session token identifies the profile owner; late answers from the old owner are dropped.
+  useEffect(() => {
+    ++seq.current;
+    ++epoch.current;
+    newIds.current.clear();
+    latestRef.current = null;
+    setGain(null);
+    setUnlocked(null);
+    setLevelUp(null);
+    setByRange({});
+    setLatest(null);
+  }, [api, token]);
+
   useEffect(() => {
     if (enabled) void load(range);
   }, [enabled, range, load]);
@@ -113,6 +137,7 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
     latestRef.current = null;
     setGain(null);
     setUnlocked(null);
+    setLevelUp(null);
     setByRange({});
     setLatest(null);
     await load(rangeRef.current);
@@ -125,6 +150,7 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
     latest,
     gain,
     unlocked,
+    levelUp,
     loading,
     failed,
     refresh,

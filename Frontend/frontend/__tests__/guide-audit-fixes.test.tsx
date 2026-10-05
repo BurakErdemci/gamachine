@@ -214,19 +214,19 @@ describe('8 provider key list per user', () => {
   })
 })
 
-describe('9 gains on one live turn band', () => {
-  it('adds each gain once and ignores a repeated one', () => {
+describe('9 gains without a turn band', () => {
+  it('keeps each gain silent, including repeated ones', () => {
     vi.useFakeTimers()
     const turn = { seq: 1 }
-    const h = renderHook(({ gain }) => useAchievementQueue(turn, 'one', gain, null), { initialProps: { gain: { seq: 1, xp: 40 } as { seq: number; xp: number } } })
-    expect(h.result.current?.xp).toBeNull()
+    const h = renderHook(({ gain }) => ({ turn, gain, band: useAchievementQueue(null, null) }), { initialProps: { gain: { seq: 1, xp: 40 } as { seq: number; xp: number } } })
+    expect(h.result.current.band).toBeNull()
     h.rerender({ gain: { seq: 2, xp: 10 } })
-    expect(h.result.current?.xp).toBe(10)
+    expect(h.result.current.band).toBeNull()
     h.rerender({ gain: { seq: 3, xp: 20 } })
-    expect(h.result.current?.xp).toBe(30)
+    expect(h.result.current.band).toBeNull()
     h.rerender({ gain: { seq: 3, xp: 20 } })
-    expect(h.result.current?.xp).toBe(30)
+    expect(h.result.current.band).toBeNull()
     h.rerender({ gain: { seq: 2, xp: 10 } })
-    expect(h.result.current?.xp).toBe(30)
+    expect(h.result.current.band).toBeNull()
   })
 })

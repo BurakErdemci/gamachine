@@ -564,14 +564,13 @@ export default function Home() {
     screenCardOpen,
     onOpenConversation: (conv) => { chat.selectConversation(conv); },
   });
-  // The on-screen counterpart of the "finished" notification: the task band.
+  // Finished on-screen turns refresh the profile to detect unlocks and level-ups.
   const turnDone = useTurnDone(chat.attention, chat.activeConvId, cardOnScreen({
     pendingDelete: fs.pendingDelete, pendingGenFiles: fs.pendingGenFiles,
     pendingFix: chat.pendingFix, activeGate: mcp.activeGate,
   }));
   const achievementBand = useAchievementQueue(
-    turnDone, chat.conversations.find(c => c.id === chat.activeConvId)?.title,
-    profileStats.gain, profileStats.unlocked,
+    profileStats.unlocked, profileStats.levelUp,
   );
   // A finished task moves the sidebar card's XP: re-read the profile numbers.
   useEffect(() => {
@@ -1289,9 +1288,9 @@ export default function Home() {
         />
       )}
 
-      {/* The achievement band / "Done" toast: the on-screen chat finished a turn. */}
-      <AchievementToast event={achievementBand} title={achievementBand?.title}
-        xp={achievementBand?.xp} achievement={achievementBand?.achievement} />
+      {/* Earned achievement and level-up announcements. */}
+      <AchievementToast event={achievementBand} achievement={achievementBand?.achievement}
+        levelUp={achievementBand?.levelUp} />
 
       {/* Bildirim kanalının çizen ucu. Bu satır olmadan `showToast` sessiz bir
           state güncellemesinden ibaret: mesaj üretiliyor, kimse görmüyor. */}

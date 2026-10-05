@@ -19,35 +19,34 @@ const provider = (lang: Lang) => ({ children }: { children: React.ReactNode }) =
 const tr = (key: Parameters<typeof ceviriUygula>[1]) => ceviriUygula('tr', key)
 
 describe('truthful bands', () => {
-  it.each(['tr', 'en'] as const)('uses task words and the chat name alone in %s', lang => {
-    render(<AchievementToast event={{ seq: 1 }} title="Score board" />, { wrapper: provider(lang) })
-    const band = screen.getByTestId('achievement-toast')
-    expect(band.querySelector('.achv-title')?.textContent).toBe('Score board')
-    expect(band.querySelector('.lex-d')?.textContent).toBe(ceviriUygula(lang, 'achv.turnKicker'))
-    expect(band.querySelector('.lex-q')?.textContent).toBe(ceviriUygula(lang, 'achv.turnKicker'))
-    expect(band.querySelector('.lex-s')?.textContent).toBe(ceviriUygula(lang, 'achv.done'))
-    expect(band.textContent).not.toContain(ceviriUygula(lang, 'achv.kicker'))
-    expect(band.querySelector('.achv-xp')).toBeNull()
+  it.each(['tr', 'en'] as const)('shows no finished-turn band or task words in %s', lang => {
+    render(<AchievementToast event={{ seq: 1 }} />, { wrapper: provider(lang) })
+    expect(screen.queryByTestId('achievement-toast')).toBeNull()
   })
 
   it.each([undefined, null, 0, -1, 1.5, NaN, Infinity])('does not invent XP for %s', xp => {
-    render(<AchievementToast event={{ seq: 1 }} xp={xp} />, { wrapper: provider('tr') })
-    expect(screen.getByTestId('achievement-toast').querySelector('.achv-xp')).toBeNull()
-    expect(screen.getByTestId('achievement-toast').querySelector('.achv-title')?.textContent).toBe(tr('achv.untitled'))
+    const { result } = renderHook(() => {
+      const gain = { seq: 1, xp }
+      const band = useAchievementQueue(null, null)
+      return { gain, band }
+    })
+    render(<AchievementToast event={result.current.band} />, { wrapper: provider('tr') })
+    expect(result.current.gain.xp).toBe(xp)
+    expect(screen.queryByTestId('achievement-toast')).toBeNull()
   })
 
-  it('adds real XP without restarting the lifetime', () => {
+  it('keeps finished turns silent when real XP arrives', () => {
     vi.useFakeTimers()
     const view = render(<AchievementToast event={{ seq: 1 }} />, { wrapper: provider('tr') })
     act(() => { vi.advanceTimersByTime(1000) })
-    view.rerender(<AchievementToast event={{ seq: 1 }} xp={37} />)
-    expect(screen.getByTestId('achievement-toast').querySelector('.achv-xp')?.textContent).toBe('+37 XP')
+    view.rerender(<AchievementToast event={{ seq: 1 }} />)
+    expect(screen.queryByTestId('achievement-toast')).toBeNull()
     act(() => { vi.advanceTimersByTime(ACHV_LIFE_MS - 1000) })
     expect(screen.queryByTestId('achievement-toast')).toBeNull()
   })
 
   it.each(['tr', 'en'] as const)('shows a real achievement name and done line in every theme in %s', lang => {
-    render(<AchievementToast event={{ seq: 1 }} achievement="night_owl" xp={120} title="chat" />, { wrapper: provider(lang) })
+    render(<AchievementToast event={{ seq: 1 }} achievement="night_owl" />, { wrapper: provider(lang) })
     const band = screen.getByTestId('achievement-toast')
     for (const slot of ['.lex-d', '.lex-q', '.lex-s']) {
       expect(band.querySelector(slot)?.textContent).toBe(ceviriUygula(lang, 'achv.kicker'))
@@ -115,18 +114,18 @@ type QueueProps = Parameters<typeof useAchievementQueue>
 const queue = (initial: QueueProps) => renderHook(({ args }) => useAchievementQueue(...args), { initialProps: { args: initial } })
 
 describe('band queue', () => {
-  it('replaces a turn, gives each achievement its full lifetime, appends new events and drops intervening turns', () => {
+  it('shows no turn band, gives each achievement its full lifetime and appends new events', () => {
     vi.useFakeTimers()
-    const h = queue([{ seq: 1 }, 'one', null, null])
-    expect(h.result.current?.title).toBe('one')
+    const h = queue([null, null])
+    expect(h.result.current).toBeNull()
     const unlocked = { seq: 1, ids: ['first_task', 'night_owl'] as AchievementId[] }
     act(() => { vi.advanceTimersByTime(1000) })
-    h.rerender({ args: [{ seq: 1 }, 'one', null, unlocked] })
+    h.rerender({ args: [unlocked, null] })
     expect(h.result.current?.achievement).toBe('first_task')
-    h.rerender({ args: [{ seq: 2 }, 'dropped', null, unlocked] })
+    h.rerender({ args: [unlocked, null] })
     act(() => { vi.advanceTimersByTime(ACHV_LIFE_MS - 1) })
     expect(h.result.current?.achievement).toBe('first_task')
-    h.rerender({ args: [{ seq: 2 }, 'dropped', null, { seq: 2, ids: ['polyglot'] }] })
+    h.rerender({ args: [{ seq: 2, ids: ['polyglot'] }, null] })
     act(() => { vi.advanceTimersByTime(1) })
     expect(h.result.current?.achievement).toBe('night_owl')
     act(() => { vi.advanceTimersByTime(ACHV_LIFE_MS) })
@@ -135,23 +134,23 @@ describe('band queue', () => {
     expect(h.result.current).toBeNull()
   })
 
-  it('uses only gains arriving after the current turn and never revives an expired band', () => {
+  it('does not create bands when turns or gains arrive without unlocks or level-ups', () => {
     vi.useFakeTimers()
-    const h = queue([{ seq: 1 }, 'one', { seq: 1, xp: 40 }, null])
-    expect(h.result.current?.xp).toBeNull()
-    const bandSeq = h.result.current!.seq
+    const h = renderHook(({ turn, gain }) => ({ turn, gain, band: useAchievementQueue(null, null) }), {
+      initialProps: { turn: { seq: 1 } as { seq: number } | null, gain: { seq: 1, xp: 40 } },
+    })
+    expect(h.result.current.band).toBeNull()
     act(() => { vi.advanceTimersByTime(1000) })
-    h.rerender({ args: [{ seq: 1 }, 'one', { seq: 2, xp: 10 }, null] })
-    expect(h.result.current?.xp).toBe(10)
-    expect(h.result.current?.seq).toBe(bandSeq)
+    h.rerender({ turn: { seq: 1 }, gain: { seq: 2, xp: 10 } })
+    expect(h.result.current.band).toBeNull()
     act(() => { vi.advanceTimersByTime(ACHV_LIFE_MS - 1000) })
-    expect(h.result.current).toBeNull()
-    h.rerender({ args: [{ seq: 1 }, 'one', { seq: 3, xp: 20 }, null] })
-    expect(h.result.current).toBeNull()
-    h.rerender({ args: [{ seq: 2 }, 'two', { seq: 3, xp: 20 }, null] })
-    expect(h.result.current?.xp).toBeNull()
-    h.rerender({ args: [null, 'other chat', { seq: 3, xp: 20 }, null] })
-    expect(h.result.current).toBeNull()
+    expect(h.result.current.band).toBeNull()
+    h.rerender({ turn: { seq: 1 }, gain: { seq: 3, xp: 20 } })
+    expect(h.result.current.band).toBeNull()
+    h.rerender({ turn: { seq: 2 }, gain: { seq: 3, xp: 20 } })
+    expect(h.result.current.band).toBeNull()
+    h.rerender({ turn: null, gain: { seq: 3, xp: 20 } })
+    expect(h.result.current.band).toBeNull()
   })
 })
 
