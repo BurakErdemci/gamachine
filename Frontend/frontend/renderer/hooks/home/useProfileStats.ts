@@ -90,7 +90,7 @@ export function useProfileStats({ api, token, enabled = true, http = axios }: Op
       if (previous && !previous.xp_partial && !stats.xp_partial && stats.xp > previous.xp) {
         setGain({ seq: mine, xp: stats.xp - previous.xp });
       }
-      if (previous && stats.level > previous.level) {
+      if (previous && !previous.xp_partial && !stats.xp_partial && stats.level > previous.level) {
         setLevelUp({ seq: mine, level: stats.level, rank: stats.rank, rankChanged: stats.rank !== previous.rank });
       }
       const marked: ProfileStats = {

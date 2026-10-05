@@ -61,6 +61,31 @@ const title = () => toast()?.querySelector('.achv-title')?.textContent
 const advance = (ms: number) => act(() => { vi.advanceTimersByTime(ms) })
 
 describe('level-up bands', () => {
+  it('keeps ledger recovery silent and announces the next complete level increase', async () => {
+    const h = await mount()
+    await h.refresh({ ...statsAt(3), ledger_ok: false, xp_partial: true })
+    await h.refresh(statsAt(14))
+    expect(h.current().latest?.level).toBe(14)
+    expect(h.current().gain).toBeNull()
+    expect(h.current().levelUp).toBeNull()
+    expect(toast()).toBeNull()
+
+    await h.refresh(statsAt(15))
+    expect(h.current().levelUp).toMatchObject({ level: 15 })
+    expect(h.current().gain?.xp).toBe(100)
+    expect(title()).toBe('Level 15')
+    expect(screen.getAllByTestId('achievement-toast')).toHaveLength(1)
+  })
+
+  it('does not announce a higher level from a partial ledger answer', async () => {
+    const h = await mount()
+    await h.refresh({ ...statsAt(14), ledger_ok: false, xp_partial: true })
+    expect(h.current().latest?.level).toBe(14)
+    expect(h.current().gain).toBeNull()
+    expect(h.current().levelUp).toBeNull()
+    expect(toast()).toBeNull()
+  })
+
   it.each(['tr', 'en'] as const)('announces 3 to 4 once with translated text in %s', async lang => {
     const h = await mount(lang)
     expect(toast()).toBeNull()
