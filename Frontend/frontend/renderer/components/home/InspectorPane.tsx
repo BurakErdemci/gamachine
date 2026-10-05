@@ -70,8 +70,8 @@ export const InspectorPane = ({ inspection, loading, error, stale, actions }: {
   const [picker, setPicker] = useState(false);
   const [added, setAdded] = useState<number | null>(null);
   const objectId = node?.id;
-  const allFields = inspection?.groups.flatMap(group => group.fields) ?? [];
-  const locked = allFields.length > 0 && allFields.every(field => field.readonly);
+  const groups = inspection?.groups ?? [];
+  const locked = groups.length > 0 && groups.every(group => group.locked === true);
   const disabled = stale || locked || !actions;
   const activeKey = node ? inspectorWriteKey.active(node.id) : '';
   const nameKey = node ? inspectorWriteKey.name(node.id) : '';

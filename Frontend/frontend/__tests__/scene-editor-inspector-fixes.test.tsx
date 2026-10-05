@@ -162,6 +162,48 @@ it.each(['empty', 'readonly', 'truncated'])('%s fields do not lock the component
   fireEvent.click(screen.getByRole('menuitem', { name: 'Sıfırla' })); await flush();
   expect(posts.at(-1)).toEqual({ route: 'component-action', body: { componentId: 20, action: 'reset' } });
 });
+it('readonly fields across every unlocked group leave component and object controls usable', async () => {
+  data.groups.forEach(g => g.fields.forEach(f => { f.readonly = true; }));
+  await setup();
+  const toggle = screen.getByRole('checkbox', { name: 'Behaviour' }); const menu = screen.getByRole('button', { name: 'Behaviour menüsü' });
+  const name = screen.getByRole('textbox', { name: 'Nesne adı' }); const active = screen.getByRole('checkbox', { name: 'Etkin' }); const add = screen.getByRole('button', { name: 'Bileşen ekle' });
+  for (const control of [toggle, menu, active, add]) expect(control).toHaveProperty('disabled', false);
+  expect(name).toHaveProperty('readOnly', false);
+  expect(screen.getByRole('textbox', { name: 'float' })).toHaveProperty('readOnly', true);
+  edit('float', '4'); await flush(); expect(posts).toEqual([]);
+  fireEvent.click(toggle); await flush();
+  expect(posts).toEqual([{ route: 'component-enable', body: { componentId: 20, enabled: false } }]);
+  fireEvent.click(menu); expect(screen.getByRole('menu')).toBeTruthy();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Sıfırla' })); await flush();
+  expect(posts.at(-1)).toEqual({ route: 'component-action', body: { componentId: 20, action: 'reset' } });
+  edit('Nesne adı', 'Renamed'); fireEvent.click(active); await flush();
+  expect(posts.some(p => p.route === 'rename' && p.body.name === 'Renamed')).toBe(true);
+  expect(posts.some(p => p.route === 'set-active' && p.body.active === false)).toBe(true);
+  fireEvent.click(add); await flush(); expect(screen.getByRole('dialog')).toBeTruthy(); expect(menuLoads).toBe(1);
+});
+it('every group locked disables component and object controls without sending requests', async () => {
+  data.groups.forEach(g => { g.locked = true; });
+  await setup();
+  const toggle = screen.getByRole('checkbox', { name: 'Behaviour' }); const menu = screen.getByRole('button', { name: 'Behaviour menüsü' });
+  const name = screen.getByRole('textbox', { name: 'Nesne adı' }); const active = screen.getByRole('checkbox', { name: 'Etkin' }); const add = screen.getByRole('button', { name: 'Bileşen ekle' });
+  for (const control of [toggle, menu, active, add]) expect(control).toHaveProperty('disabled', true);
+  expect(name).toHaveProperty('readOnly', true);
+  fireEvent.click(toggle); fireEvent.click(menu); fireEvent.click(active); fireEvent.click(add); edit('Nesne adı', 'Blocked'); await flush();
+  expect(posts).toEqual([]); expect(menuLoads).toBe(0); expect(screen.queryByRole('menu')).toBeNull(); expect(screen.queryByRole('dialog')).toBeNull();
+});
+it.each([undefined, false])('locked Transform leaves an unlocked readonly component usable (locked: %s)', async locked => {
+  data.groups[0].locked = true; data.groups[1].locked = locked;
+  data.groups.forEach(g => g.fields.forEach(f => { f.readonly = true; }));
+  await setup();
+  expect(screen.getByRole('button', { name: 'Transform menüsü' })).toHaveProperty('disabled', true);
+  const toggle = screen.getByRole('checkbox', { name: 'Behaviour' }); const menu = screen.getByRole('button', { name: 'Behaviour menüsü' });
+  expect(toggle).toHaveProperty('disabled', false); expect(menu).toHaveProperty('disabled', false);
+  fireEvent.click(toggle); await flush();
+  expect(posts).toEqual([{ route: 'component-enable', body: { componentId: 20, enabled: false } }]);
+  fireEvent.click(menu); expect(screen.getByRole('menu')).toBeTruthy();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Sıfırla' })); await flush();
+  expect(posts.at(-1)).toEqual({ route: 'component-action', body: { componentId: 20, action: 'reset' } });
+});
 it.each(['props', 'hierarchy'])('R8: %s changes discard cached present flags and refetch the open picker', async counter => {
   await setup(); fireEvent.click(screen.getByRole('button', { name: 'Bileşen ekle' })); await flush();
   expect(screen.getByRole('option', { name: /Thing/ }).getAttribute('aria-disabled')).toBe('true');
