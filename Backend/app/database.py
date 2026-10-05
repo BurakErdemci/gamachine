@@ -11,6 +11,8 @@ import bcrypt
 from typing import Callable, List, Dict, Any, Optional, Tuple
 from cryptography.fernet import Fernet, InvalidToken
 
+from providers.agy_model_ids import normalize_model
+
 logger = logging.getLogger(__name__)
 
 
@@ -438,7 +440,8 @@ class DatabaseManager:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             res = conn.execute('SELECT provider_type, model_name, api_key, use_multi_agent FROM ai_configs WHERE user_id = ?', (user_id,)).fetchone()
             if res:
-                return (res[0], res[1], res[2], bool(res[3]))
+                provider_type, model_name = normalize_model(res[0], res[1])
+                return (provider_type, model_name, res[2], bool(res[3]))
             return ("subscription", "claude-sonnet-4-6", "", False)
 
     # ===================== API KEY KASASI =====================

@@ -1,6 +1,7 @@
 """Measured agy 1.2.17 catalog, saved-model migration, and effort routing."""
 import asyncio
 import copy
+import sqlite3
 from unittest.mock import Mock, patch
 
 import pytest
@@ -31,6 +32,90 @@ REPLACEMENTS = {
     "gemini-3.5-flash-medium": "gemini-3.8-flash-medium",
     "gemini-3.5-flash-low": "gemini-3.8-flash-low",
 }
+
+
+@pytest.fixture
+def saved_config_db(monkeypatch):
+    from database import DatabaseManager
+
+    uri = "file:agy-model-config?mode=memory&cache=shared"
+    connect = sqlite3.connect
+    keeper = connect(uri, uri=True)
+    keeper.execute(
+        "CREATE TABLE ai_configs (user_id INTEGER PRIMARY KEY, provider_type TEXT, "
+        "model_name TEXT, api_key TEXT, use_multi_agent INTEGER)"
+    )
+    monkeypatch.setattr(sqlite3, "connect", lambda path: connect(path, uri=True))
+    db = DatabaseManager.__new__(DatabaseManager)
+    db.db_path = uri
+    try:
+        yield db, keeper
+    finally:
+        keeper.close()
+
+
+@pytest.mark.parametrize("old,new", REPLACEMENTS.items())
+def test_default_subscription_config_normalizes_on_read_without_rewriting(saved_config_db, old, new):
+    db, stored = saved_config_db
+    db.save_ai_config(1, "subscription", old, "saved-key")
+
+    assert db.get_ai_config(1) == ("subscription", new, "saved-key", True)
+    assert stored.execute("SELECT model_name FROM ai_configs WHERE user_id = 1").fetchone() == (old,)
+
+
+@pytest.mark.parametrize("provider,model", [
+    *[("subscription", model) for model in REPLACEMENTS.values()],
+    *[(provider, model) for provider in ("google", "anthropic", "ollama") for model in REPLACEMENTS],
+    ("subscription", "claude-sonnet-4-6"), ("subscription", ""),
+])
+def test_default_config_preserves_current_and_non_subscription_models(saved_config_db, provider, model):
+    db, _ = saved_config_db
+    db.save_ai_config(1, provider, model, "saved-key")
+
+    assert db.get_ai_config(1) == (provider, model, "saved-key", True)
+
+
+def test_missing_default_config_is_preserved(saved_config_db):
+    db, _ = saved_config_db
+    assert db.get_ai_config(1) == ("subscription", "claude-sonnet-4-6", "", False)
+
+
+@pytest.mark.parametrize("old,new", [
+    (old, new) for old, new in REPLACEMENTS.items() if new in CLAUDE_MODELS
+])
+def test_analysis_uses_the_replacement_claude_display_name(saved_config_db, old, new):
+    from providers.agy_session import AgyStreamSession
+    from routes import analysis_routes
+    from schemas import AnalysisRequest
+
+    saved, _ = saved_config_db
+    saved.save_ai_config(1, "subscription", old, "")
+    db = Mock(wraps=saved)
+    db.get_api_key.return_value = ""
+    db.save_analysis = Mock()
+    selected = []
+
+    async def stream(self, message, *, model, thinking_level="auto", **kwargs):
+        provider = AgyProvider(binary_name=model)
+        provider._build_cmd(thinking_level=thinking_level)
+        selected.append(provider._pending_agy_model)
+        yield {"type": "text", "content": "analysis answer"}
+        yield {"type": "response", "content": "analysis answer"}
+
+    async def close(self, **kwargs):
+        return None
+
+    with patch.object(analysis_routes, "require_user", return_value=(1, {})), \
+            patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"), \
+            patch.object(AgyStreamSession, "stream", stream), \
+            patch.object(AgyStreamSession, "close", close):
+        router = analysis_routes.create_analysis_router(db)
+        analyze = next(route.endpoint for route in router.routes if route.path == "/analyze")
+        result = asyncio.run(analyze(AnalysisRequest(user_id=1, code="public class Example { }"), "test-token"))
+
+    assert selected == [f"{CLAUDE_MODELS[new]} (High)"]
+    assert result["ai_suggestion"] == "analysis answer"
+    db.save_analysis.assert_called_once()
 
 
 def test_picker_and_map_match_the_measured_catalog(monkeypatch):
