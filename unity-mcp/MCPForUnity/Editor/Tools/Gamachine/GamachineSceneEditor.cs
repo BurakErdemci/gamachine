@@ -204,6 +204,7 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                         label = ObjectNames.GetInspectorTitle(component),
                         componentId = component.GetInstanceIDCompat(),
                         enabled,
+                        locked,
                         removable = !(component is Transform) && !locked,
                         fields
                     });

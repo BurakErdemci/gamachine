@@ -25,7 +25,7 @@ function Group({ group, many, index, groups, disabled, actions }: {
   const actionKey = group.componentId === null ? '' : inspectorWriteKey.component(group.componentId);
   const enableWrite = actions?.inspectorWrites[enableKey];
   const actionWrite = actions?.inspectorWrites[actionKey];
-  const locked = group.fields.length > 0 && group.fields.every(field => field.readonly);
+  const locked = group.locked === true;
   const blocked = disabled || locked || !actions || group.componentId === null;
   const close = (focus: boolean) => { setMenu(null); if (focus) more.current?.focus({ preventScroll: true }); };
   useEffect(() => { if (blocked) setMenu(null); }, [blocked]);

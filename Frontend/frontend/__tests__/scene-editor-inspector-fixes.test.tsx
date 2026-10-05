@@ -64,18 +64,39 @@ it('R2: unsafe integers revert without posting', async () => {
 it('R4: range drag commits once on release and remains enabled during its write', async () => {
   data.groups[1].fields[0].range = [0, 10]; await setup();
   const slider = screen.getByRole('slider', { name: 'float' }); hold();
-  fireEvent.pointerDown(slider, { pointerId: 1 });
+  fireEvent.pointerDown(slider, { pointerId: 1, button: 0 });
   fireEvent.change(slider, { target: { value: '2' } }); fireEvent.change(slider, { target: { value: '3' } });
   await flush(); expect(posts).toEqual([]);
   fireEvent.pointerUp(slider, { pointerId: 1 }); await flush();
   expect(posts).toEqual([{ route: 'set-field', body: { componentId: 20, field: 'float', value: 3 } }]);
   expect(slider).toHaveProperty('disabled', false);
-  fireEvent.pointerDown(slider, { pointerId: 2 }); fireEvent.change(slider, { target: { value: '4' } });
+  fireEvent.pointerDown(slider, { pointerId: 2, button: 0 }); fireEvent.change(slider, { target: { value: '4' } });
   await act(async () => release!());
   expect(slider).toHaveProperty('value', '4');
   fireEvent.pointerUp(slider, { pointerId: 2 }); await flush(); expect(posts).toHaveLength(2);
   fireEvent.keyDown(slider, { key: 'ArrowRight' }); fireEvent.change(slider, { target: { value: '5' } }); fireEvent.keyUp(slider, { key: 'ArrowRight' });
   await flush(); expect(posts.at(-1)?.body.value).toBe(5);
+});
+it.each([false, true])('range capture loss commits once (pointerup first: %s)', async pointerUp => {
+  data.groups[1].fields[0].range = [0, 10]; await setup();
+  const slider = screen.getByRole('slider', { name: 'float' });
+  fireEvent.pointerDown(slider, { pointerId: 1, button: 0 });
+  fireEvent.change(slider, { target: { value: '3' } });
+  await flush(); expect(posts).toEqual([]);
+  if (pointerUp) fireEvent.pointerUp(slider, { pointerId: 1 });
+  fireEvent.lostPointerCapture(slider, { pointerId: 1 }); await flush();
+  expect(posts).toEqual([{ route: 'set-field', body: { componentId: 20, field: 'float', value: 3 } }]);
+  fireEvent.change(slider, { target: { value: '4' } }); await flush();
+  expect(posts).toHaveLength(2); expect(posts[1].body.value).toBe(4);
+});
+it('secondary pointerdown leaves range changes committing immediately', async () => {
+  data.groups[1].fields[0].range = [0, 10]; await setup();
+  const slider = screen.getByRole('slider', { name: 'float' });
+  fireEvent.pointerDown(slider, { pointerId: 1, button: 2 });
+  fireEvent.change(slider, { target: { value: '3' } }); await flush();
+  expect(posts).toEqual([{ route: 'set-field', body: { componentId: 20, field: 'float', value: 3 } }]);
+  fireEvent.pointerUp(slider, { pointerId: 1 }); fireEvent.lostPointerCapture(slider, { pointerId: 1 }); await flush();
+  expect(posts).toHaveLength(1);
 });
 it.each(['float', 'name', 'active', 'enabled'])('R5: newer authoritative %s replaces the failed draft but preserves its error', async control => {
   await setup(); failure = 'write_failed';
@@ -123,10 +144,23 @@ it('R5: any successful write to the same control retires a newer failed busy dra
   expect(editor.inspectorWrites['field:20:float']?.error?.code).toBe('busy');
 });
 it('R7: locked component toggle and menu cannot send requests', async () => {
-  data.groups[1].fields.forEach(f => { f.readonly = true; }); data.groups[1].removable = false;
+  data.groups[1].locked = true; data.groups[1].removable = false;
   await setup(); const toggle = screen.getByRole('checkbox', { name: 'Behaviour' }); const menu = screen.getByRole('button', { name: 'Behaviour menüsü' });
   expect(toggle).toHaveProperty('disabled', true); expect(menu).toHaveProperty('disabled', true);
   fireEvent.click(toggle); fireEvent.click(menu); await flush(); expect(posts).toEqual([]); expect(screen.queryByRole('menu')).toBeNull();
+});
+it.each(['empty', 'readonly', 'truncated'])('%s fields do not lock the component toggle or menu', async mode => {
+  if (mode === 'empty') data.groups[1].fields = [];
+  else if (mode === 'truncated') data.groups[1].fields = [field('string', 'x'.repeat(2000), { readonly: true, truncated: true })];
+  else data.groups[1].fields.forEach(f => { f.readonly = true; });
+  await setup();
+  const toggle = screen.getByRole('checkbox', { name: 'Behaviour' }); const menu = screen.getByRole('button', { name: 'Behaviour menüsü' });
+  expect(toggle).toHaveProperty('disabled', false); expect(menu).toHaveProperty('disabled', false);
+  fireEvent.click(toggle); await flush();
+  expect(posts).toEqual([{ route: 'component-enable', body: { componentId: 20, enabled: false } }]);
+  fireEvent.click(menu); expect(screen.getByRole('menu')).toBeTruthy();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Sıfırla' })); await flush();
+  expect(posts.at(-1)).toEqual({ route: 'component-action', body: { componentId: 20, action: 'reset' } });
 });
 it.each(['props', 'hierarchy'])('R8: %s changes discard cached present flags and refetch the open picker', async counter => {
   await setup(); fireEvent.click(screen.getByRole('button', { name: 'Bileşen ekle' })); await flush();

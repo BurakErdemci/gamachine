@@ -92,7 +92,7 @@ it('invalid numbers/colors and Escape revert without writes; blur commits string
 });
 it.each(['readonly', 'stale', 'locked'])('%s controls send no writes', async mode => {
   if (mode === 'readonly') data.groups[1].fields[0].readonly = true;
-  if (mode === 'locked') data.groups.forEach(g => g.fields.forEach(f => { f.readonly = true; }));
+  if (mode === 'locked') data.groups.forEach(g => { g.locked = true; g.fields.forEach(f => { f.readonly = true; }); });
   if (mode === 'stale') stale = true;
   await setup();
   const box = screen.getByRole('textbox', { name: 'float' });

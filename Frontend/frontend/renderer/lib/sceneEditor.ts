@@ -42,7 +42,7 @@ export interface SceneField {
   range?: { min: number; max: number } | number[]; readonly: boolean; tooltip?: string; truncated?: boolean;
 }
 export interface ComponentGroup {
-  type: string; label: string; componentId: number | null; enabled: boolean | null; removable: boolean; fields: SceneField[];
+  type: string; label: string; componentId: number | null; enabled: boolean | null; removable: boolean; locked?: boolean; fields: SceneField[];
 }
 export interface Inspection {
   node: { id: number; name: string; activeSelf: boolean; tag: string; layer: { index: number; name: string }; isStatic: boolean; prefab: PrefabKind; globalId: string };

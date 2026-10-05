@@ -126,17 +126,18 @@ function RangeEditor({ value, field, disabled, parse, commit }: {
   const dragging = useRef(false);
   useEffect(() => { if (!dragging.current) { raw.current = value; setDraft(value); } }, [value]);
   useEffect(() => { if (disabled) { dragging.current = false; raw.current = value; setDraft(value); } }, [disabled, value]);
+  const endDrag = () => { if (dragging.current) { dragging.current = false; if (!disabled && raw.current !== value) commit(raw.current); } };
   return <input type="range" aria-label={field.label} disabled={disabled}
     min={Array.isArray(field.range) ? field.range[0] : field.range!.min} max={Array.isArray(field.range) ? field.range[1] : field.range!.max}
     step={field.kind === 'int' ? 1 : 'any'} value={draft}
-    onPointerDown={event => { if (!disabled) { dragging.current = true; event.currentTarget.setPointerCapture?.(event.pointerId); } }}
+    onPointerDown={event => { if (!disabled && event.button === 0) { dragging.current = true; event.currentTarget.setPointerCapture?.(event.pointerId); } }}
     onChange={event => {
       if (disabled) return;
       const next = parse(event.target.value); if (next === undefined) return;
       raw.current = next; setDraft(next);
       if (!dragging.current && next !== value) commit(next);
     }}
-    onPointerUp={() => { if (dragging.current) { dragging.current = false; if (!disabled && raw.current !== value) commit(raw.current); } }}
+    onPointerUp={endDrag} onLostPointerCapture={endDrag}
     onPointerCancel={() => { dragging.current = false; raw.current = value; setDraft(value); }} />;
 }
 
