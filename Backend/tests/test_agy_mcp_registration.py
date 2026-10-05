@@ -124,7 +124,7 @@ class TestUnusableConfigIsLeftAlone(unittest.TestCase):
                     with open(path, "wb") as f:
                         f.write(raw)
                 AgyProvider()._register_mcp("launcher", self.home, "http://127.0.0.1:1")
-                AgyProvider()._set_agy_model("Gemini 3.8 Flash (High)", self.home)
+                AgyProvider()._register_agy_workspace(self.home)
                 for path in self.paths:
                     with open(path, "rb") as f:
                         self.assertEqual(f.read(), raw, path)
@@ -141,7 +141,7 @@ class TestUnusableConfigIsLeftAlone(unittest.TestCase):
         for path in self.paths[2:]:
             with open(path, "wb") as f:
                 f.write(self.TRUSTED_NOT_LIST)
-        AgyProvider()._set_agy_model("Gemini 3.8 Flash (High)", self.home)
+        AgyProvider()._register_agy_workspace(self.home)
         for path in self.paths[2:]:
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), self.TRUSTED_NOT_LIST, path)
@@ -165,11 +165,11 @@ class TestUnusableConfigIsLeftAlone(unittest.TestCase):
         with open(path, "wb") as f:
             f.write(original)
         with patch.object(agy_provider.os, "replace", side_effect=PermissionError("locked")):
-            AgyProvider()._set_agy_model("Gemini 3.8 Flash (High)", self.home)
+            AgyProvider()._register_agy_workspace(self.home)
         with open(path, "rb") as f:
             self.assertEqual(f.read(), original)
         self.assertEqual(self.leftovers(), [])
-        AgyProvider()._set_agy_model("Gemini 3.8 Flash (High)", self.home)
+        AgyProvider()._register_agy_workspace(self.home)
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         self.assertEqual(data["trustedWorkspaces"], ["C:/mine", self.home])
@@ -184,7 +184,7 @@ class TestUnusableConfigIsLeftAlone(unittest.TestCase):
             os.symlink(real, self.paths[3])
         except (OSError, NotImplementedError):
             self.skipTest("symlinks need developer mode or admin on Windows")
-        AgyProvider()._set_agy_model("Gemini 3.8 Flash (High)", self.home)
+        AgyProvider()._register_agy_workspace(self.home)
         self.assertTrue(os.path.islink(self.paths[3]))
         with open(real, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["own"], 1)
@@ -206,7 +206,7 @@ class TestAgySettingsEncoding(unittest.TestCase):
                 json.dump({"trustedWorkspaces": [workspace]}, f, ensure_ascii=False)
             with patch.object(agy_provider.os.path, "expanduser",
                               side_effect=lambda p: p.replace("~", home, 1) if p.startswith("~") else real_expand(p)):
-                AgyProvider()._set_agy_model("Gemini 3.8 Flash (High)", workspace)
+                AgyProvider()._register_agy_workspace(workspace)
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(json.load(f)["trustedWorkspaces"], [workspace])
 

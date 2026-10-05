@@ -364,7 +364,7 @@ class TestSpawnAndClose(GateStateCase, unittest.IsolatedAsyncioTestCase):
             patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"),
             patch.object(AgyProvider, "_resolve_exec", side_effect=lambda c: c),
             patch.object(AgyProvider, "_write_mcp_config", return_value=""),
-            patch.object(AgyProvider, "_set_agy_model"),
+            patch.object(AgyProvider, "_register_agy_workspace"),
             patch.object(AgyProvider, "_step_gate_command", return_value=__file__),
             patch.object(AgyProvider, "_stream_instructions", return_value=""),
             patch("providers.workspace_config.guvenli_config_yaz", return_value=True),
@@ -502,7 +502,7 @@ class TestSpawnAndClose(GateStateCase, unittest.IsolatedAsyncioTestCase):
         close = await self._close_until_retired(closing)
         self.assertEqual(self.file_mode(), "closed")
         reopened = agy_session.get_session(33, cwd=self.tmp.name)
-        with patch.object(agy_provider.AgyProvider, "_write_mcp_config", return_value=""),                 patch.object(agy_provider.AgyProvider, "_set_agy_model"),                 patch.object(agy_provider.AgyProvider, "_resolve_exec", side_effect=lambda c: c),                 patch.object(agy_provider.AgyProvider, "_agy_binary", return_value="fake-agy"):
+        with patch.object(agy_provider.AgyProvider, "_write_mcp_config", return_value=""),                 patch.object(agy_provider.AgyProvider, "_register_agy_workspace"),                 patch.object(agy_provider.AgyProvider, "_resolve_exec", side_effect=lambda c: c),                 patch.object(agy_provider.AgyProvider, "_agy_binary", return_value="fake-agy"):
             with self.assertRaises(agy_provider.AgyStepGateError) as refused:
                 await reopened._start("gemini-3.6-flash", self.tmp.name)
         self.assertEqual(refused.exception.code, "agy_closed_child_alive")

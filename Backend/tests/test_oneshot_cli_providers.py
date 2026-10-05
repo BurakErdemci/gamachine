@@ -78,13 +78,11 @@ class TestManagerRouting(unittest.TestCase):
         self.assertIsInstance(sonnet_55, ClaudeCodeProvider)
         self.assertEqual(sonnet_55.binary_name, "claude-sonnet-5-5")
         from providers.agy_provider import AgyProvider
-        for mid, gorunen in (("gemini-3.8-flash", "Gemini 3.8 Flash (High)"),
-                             ("gemini-3.7-flash", "Gemini 3.7 Flash (High)")):
+        for mid, slug in (("gemini-3.8-flash", "gemini-3.8-flash-high"),
+                          ("gemini-3.7-flash", "gemini-3.7-flash-high")):
             agy = self._get(mid)
             self.assertIsInstance(agy, AgyProvider)
-            # agy modeli --model flag'iyle DEĞİL settings.json'daki görünen adla
-            # seçiliyor; eşleme yoksa sessizce 3.6'ya düşerdi.
-            self.assertEqual(AgyProvider._AGY_MODEL_MAP.get(mid), gorunen)
+            self.assertEqual(AgyProvider._resolve_agy_model(mid), slug)
 
     def test_nvidia_routing(self):
         """NVIDIA NIM → OpenAI-uyumlu provider, doğru base_url ile."""

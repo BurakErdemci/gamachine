@@ -10,17 +10,9 @@ from agentic.chat_model import chat_model, turn_model
 from providers.agy_provider import AgyProvider
 from providers.cli_base import BaseCLIProvider
 from providers.effort_caps import get_effort_caps
+from tests.test_agy_cli_selection import AGY_SLUGS
 
 
-DISPLAY_NAMES = {
-    "Gemini 3.8 Flash (High)", "Gemini 3.8 Flash (Medium)", "Gemini 3.8 Flash (Low)",
-    "Gemini 3.7 Flash (High)", "Gemini 3.7 Flash (Medium)", "Gemini 3.7 Flash (Low)",
-    "Gemini 3.6 Flash (High)", "Gemini 3.6 Flash (Medium)", "Gemini 3.6 Flash (Low)",
-    "Gemini 3.1 Pro (High)", "Gemini 3.1 Pro (Low)",
-    "Claude Opus 5.5 (Low)", "Claude Opus 5.5 (Medium)", "Claude Opus 5.5 (High)",
-    "Claude Sonnet 5.5 (Low)", "Claude Sonnet 5.5 (Medium)", "Claude Sonnet 5.5 (High)",
-    "GPT-OSS 120B (Medium)",
-}
 CLAUDE_MODELS = {
     "agy-claude-opus-5-5": "Claude Opus 5.5",
     "agy-claude-sonnet-5-5": "Claude Sonnet 5.5",
@@ -83,7 +75,7 @@ def test_missing_default_config_is_preserved(saved_config_db):
 @pytest.mark.parametrize("old,new", [
     (old, new) for old, new in REPLACEMENTS.items() if new in CLAUDE_MODELS
 ])
-def test_analysis_uses_the_replacement_claude_display_name(saved_config_db, old, new):
+def test_analysis_uses_the_replacement_claude_slug(saved_config_db, old, new):
     from providers.agy_session import AgyStreamSession
     from routes import analysis_routes
     from schemas import AnalysisRequest
@@ -98,7 +90,7 @@ def test_analysis_uses_the_replacement_claude_display_name(saved_config_db, old,
     async def stream(self, message, *, model, thinking_level="auto", **kwargs):
         provider = AgyProvider(binary_name=model)
         provider._build_cmd(thinking_level=thinking_level)
-        selected.append(provider._pending_agy_model)
+        selected.append(provider._pending_agy_model_slug)
         yield {"type": "text", "content": "analysis answer"}
         yield {"type": "response", "content": "analysis answer"}
 
@@ -113,7 +105,7 @@ def test_analysis_uses_the_replacement_claude_display_name(saved_config_db, old,
         analyze = next(route.endpoint for route in router.routes if route.path == "/analyze")
         result = asyncio.run(analyze(AnalysisRequest(user_id=1, code="public class Example { }"), "test-token"))
 
-    assert selected == [f"{CLAUDE_MODELS[new]} (High)"]
+    assert selected == [f"{new.removeprefix('agy-')}-high"]
     assert result["ai_suggestion"] == "analysis answer"
     db.save_analysis.assert_called_once()
 
@@ -130,23 +122,23 @@ def test_picker_and_map_match_the_measured_catalog(monkeypatch):
     assert claude == CLAUDE_MODELS
     assert not set(REPLACEMENTS) & {m["id"] for m in models}
     assert not set(REPLACEMENTS) & BaseCLIProvider._AGY_MODEL_MAP.keys()
-    assert set(BaseCLIProvider._AGY_MODEL_MAP.values()) <= DISPLAY_NAMES
+    assert set(BaseCLIProvider._AGY_MODEL_MAP.values()) <= AGY_SLUGS
     for model in agy_models:
-        assert BaseCLIProvider._AGY_MODEL_MAP[model["id"]] in DISPLAY_NAMES
+        assert BaseCLIProvider._resolve_agy_model(model["id"]) in AGY_SLUGS
 
 
 @pytest.mark.parametrize("model,name", CLAUDE_MODELS.items())
 @pytest.mark.parametrize("level,tier", [
-    ("low", "Low"), ("medium", "Medium"), ("high", "High"),
-    ("auto", "High"), (None, "High"), ("none", "High"), ("unknown", "High"),
+    ("low", "low"), ("medium", "medium"), ("high", "high"),
+    ("auto", "high"), (None, "high"), ("none", "high"), ("unknown", "high"),
 ])
-def test_claude_effort_selects_the_display_name(model, name, level, tier):
+def test_claude_effort_selects_the_slug(model, name, level, tier):
     provider = AgyProvider(binary_name=model)
     with patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"):
         command = provider._build_cmd(thinking_level=level)
-    assert provider._pending_agy_model == f"{name} ({tier})"
-    assert provider._pending_agy_model in DISPLAY_NAMES
-    assert "--model" not in command
+    assert provider._pending_agy_model_slug == f"{model.removeprefix('agy-')}-{tier}"
+    assert provider._pending_agy_model_slug in AGY_SLUGS
+    assert command[command.index("--model") + 1] == provider._pending_agy_model_slug
 
 
 @pytest.mark.parametrize("model", CLAUDE_MODELS)
@@ -155,7 +147,7 @@ def test_claude_caps_and_unselected_effort(model):
     provider = AgyProvider(binary_name=model)
     with patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"):
         provider._build_cmd()
-    assert provider._pending_agy_model == f"{CLAUDE_MODELS[model]} (High)"
+    assert provider._pending_agy_model_slug == f"{model.removeprefix('agy-')}-high"
 
 
 @pytest.mark.parametrize("model", ["gemini-3.8-flash", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"])
@@ -164,7 +156,7 @@ def test_gemini_keeps_its_model_tier_without_an_effort_picker(model):
     provider = AgyProvider(binary_name=model)
     with patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"):
         provider._build_cmd(thinking_level="low")
-    assert provider._pending_agy_model == BaseCLIProvider._AGY_MODEL_MAP[model]
+    assert provider._pending_agy_model_slug == BaseCLIProvider._AGY_MODEL_MAP[model]
 
 
 @pytest.mark.parametrize("old,new", REPLACEMENTS.items())
@@ -250,18 +242,18 @@ def test_one_shot_passes_effort_and_closes(monkeypatch):
     assert len(closed) == 1 and closed[0] < 0
 
 
-@pytest.mark.parametrize("model,levels,names,spawn_count", [
+@pytest.mark.parametrize("model,levels,slugs,spawn_count", [
     ("agy-claude-opus-5-5", ["low", "medium", "high", "auto", None, "unknown"],
-     ["Claude Opus 5.5 (Low)", "Claude Opus 5.5 (Medium)", "Claude Opus 5.5 (High)"], 3),
-    ("gemini-3.8-flash-medium", ["low", "high"], ["Gemini 3.8 Flash (Medium)"], 1),
+     ["claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high"], 3),
+    ("gemini-3.8-flash-medium", ["low", "high"], ["gemini-3.8-flash-medium"], 1),
 ])
-def test_session_restarts_only_when_the_effective_display_name_changes(monkeypatch, model, levels, names, spawn_count):
+def test_session_restarts_only_when_the_effective_slug_changes(monkeypatch, model, levels, slugs, spawn_count):
     from providers import agy_provider, agy_session
     from tests.test_agy_stream_session import FakeProcess, SESSION_ID, TURNS
 
     processes = []
     commands = []
-    set_model = Mock()
+    register_workspace = Mock()
 
     async def spawn(*argv, **kwargs):
         commands.append(argv)
@@ -275,7 +267,7 @@ def test_session_restarts_only_when_the_effective_display_name_changes(monkeypat
     monkeypatch.setattr(AgyProvider, "_agy_binary", Mock(return_value="fake-agy"))
     monkeypatch.setattr(AgyProvider, "_resolve_exec", staticmethod(lambda command: command))
     monkeypatch.setattr(AgyProvider, "_write_mcp_config", Mock())
-    monkeypatch.setattr(AgyProvider, "_set_agy_model", set_model)
+    monkeypatch.setattr(AgyProvider, "_register_agy_workspace", register_workspace)
     monkeypatch.setattr(AgyProvider, "_write_step_gate", Mock(return_value=True))
     monkeypatch.setattr(AgyProvider, "_stream_instructions", Mock(return_value=""))
     monkeypatch.setattr(agy_provider, "write_gate_state", Mock())
@@ -296,7 +288,8 @@ def test_session_restarts_only_when_the_effective_display_name_changes(monkeypat
                 assert events[-1]["type"] == "done"
             assert session.model == model
             assert len(processes) == spawn_count
-            assert [call.args[0] for call in set_model.call_args_list] == names
+            assert [cmd[cmd.index("--model") + 1] for cmd in commands] == slugs
+            assert register_workspace.call_count == spawn_count
             for command in commands[1:]:
                 assert command[command.index("--conversation") + 1] == SESSION_ID
             assert all(process.returncode is not None for process in processes[:-1])

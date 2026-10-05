@@ -232,7 +232,7 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
             patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"),
             patch.object(AgyProvider, "_resolve_exec", side_effect=lambda c: c),
             patch.object(AgyProvider, "_write_mcp_config", return_value=""),
-            patch.object(AgyProvider, "_set_agy_model"),
+            patch.object(AgyProvider, "_register_agy_workspace"),
             patch.object(AgyProvider, "_stream_instructions", return_value=""),
             patch.object(AgyProvider, "_step_gate_command", return_value=__file__),
             patch("providers.workspace_config.guvenli_config_yaz", return_value=True),

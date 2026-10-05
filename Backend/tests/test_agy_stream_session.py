@@ -100,7 +100,7 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
             patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"),
             patch.object(AgyProvider, "_resolve_exec", side_effect=lambda command: command),
             patch.object(AgyProvider, "_write_mcp_config", return_value=""),
-            patch.object(AgyProvider, "_set_agy_model"),
+            patch.object(AgyProvider, "_register_agy_workspace"),
             patch.object(AgyProvider, "_write_step_gate", return_value=True),
             patch("providers.agy_provider.write_gate_state"),
             patch.object(AgyProvider, "_stream_instructions", return_value=""),
@@ -255,7 +255,7 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.model, "gemini-3.8-flash")
         argv = self.spawns[1][0]
         self.assertEqual(argv[argv.index("--conversation") + 1], SESSION_ID)
-        self.assertEqual(AgyProvider._set_agy_model.call_args.args[0], "Gemini 3.8 Flash (High)")
+        self.assertEqual(argv[argv.index("--model") + 1], "gemini-3.8-flash-high")
 
     async def test_approval_mode_change_keeps_the_process_and_rewrites_its_state(self):
         # Every process has the hook, so a flip needs no respawn: the next turn

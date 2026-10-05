@@ -260,7 +260,7 @@ class TestSpawnRefusedWithoutGate(unittest.IsolatedAsyncioTestCase):
                 patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"),
                 patch.object(AgyProvider, "_resolve_exec", side_effect=lambda c: c),
                 patch.object(AgyProvider, "_write_mcp_config", return_value=""),
-                patch.object(AgyProvider, "_set_agy_model"),
+                patch.object(AgyProvider, "_register_agy_workspace"),
                 patch.object(AgyProvider, "_stream_instructions", return_value=""),
                 patch.object(agy_session, "_global_auto_mode", return_value=False),
                 patch.object(agy_session.asyncio, "create_subprocess_exec", side_effect=spawn),

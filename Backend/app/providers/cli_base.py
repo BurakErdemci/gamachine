@@ -137,38 +137,37 @@ class BaseCLIProvider(AIProvider):
     # akışlarına kontrollü, fakat gerçek MCP sonuçlarını taşıyabilecek ortak tavan ver.
     _CLI_STREAM_LIMIT_BYTES = 32 * 1024 * 1024
 
-    # Model ID -> agy settings.json display name (agy 1.2.17, 5 Oct 2026).
-    # Do not use --model: measured on 24 Jul 2026, agy treats it as a question
-    # about its CLI and invokes antigravity-guide instead of answering the user.
-    # Selection goes through _set_agy_model; Claude effort adjusts the name.
+    # Model ID -> agy CLI slug (agy 1.2.17, 5 Oct 2026).
     _AGY_MODEL_MAP = {
         # Gemini tiers remain separate model IDs (High/Medium/Low).
         # 3.8 needs agy >=1.1.25; installed 1.1.27 (measured 2026-09-05).
-        "gemini-3.8-flash":              "Gemini 3.8 Flash (High)",
-        "gemini-3.8-flash-medium":       "Gemini 3.8 Flash (Medium)",
-        "gemini-3.8-flash-low":          "Gemini 3.8 Flash (Low)",
-        "gemini-3.7-flash":              "Gemini 3.7 Flash (High)",
-        "gemini-3.7-flash-medium":       "Gemini 3.7 Flash (Medium)",
-        "gemini-3.7-flash-low":          "Gemini 3.7 Flash (Low)",
-        "gemini-3.6-flash":              "Gemini 3.6 Flash (High)",
-        "gemini-3.6-flash-medium":       "Gemini 3.6 Flash (Medium)",
-        "gemini-3.6-flash-low":          "Gemini 3.6 Flash (Low)",
-        "gemini-3.1-pro-preview":        "Gemini 3.1 Pro (High)",
-        "gemini-3.1-pro-low":            "Gemini 3.1 Pro (Low)",
+        "gemini-3.8-flash":              "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium":       "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low":          "gemini-3.8-flash-low",
+        "gemini-3.7-flash":              "gemini-3.7-flash-high",
+        "gemini-3.7-flash-medium":       "gemini-3.7-flash-medium",
+        "gemini-3.7-flash-low":          "gemini-3.7-flash-low",
+        "gemini-3.6-flash":              "gemini-3.6-flash-high",
+        "gemini-3.6-flash-medium":       "gemini-3.6-flash-medium",
+        "gemini-3.6-flash-low":          "gemini-3.6-flash-low",
+        "gemini-3.1-pro-preview":        "gemini-3.1-pro-high",
+        "gemini-3.1-pro-low":            "gemini-3.1-pro-low",
         # Claude defaults to High; the effort picker can select Low or Medium.
-        "agy-claude-sonnet-5-5":         "Claude Sonnet 5.5 (High)",
-        "agy-claude-opus-5-5":           "Claude Opus 5.5 (High)",
-        "agy-gpt-oss-120b":              "GPT-OSS 120B (Medium)",
+        "agy-claude-sonnet-5-5":         "claude-sonnet-5-5-high",
+        "agy-claude-opus-5-5":           "claude-opus-5-5-high",
+        "agy-gpt-oss-120b":              "gpt-oss-120b-medium",
     }
 
     @classmethod
     def _resolve_agy_model(cls, model: str, thinking_level: Optional[str] = None) -> str:
-        """Resolve agy's display name without encoding Claude effort in IDs."""
-        name = cls._AGY_MODEL_MAP.get(model, "Gemini 3.6 Flash (High)")
-        if model in cls._AGY_MODEL_MAP and model.startswith("agy-claude-"):
+        """Resolve the CLI slug without encoding Claude effort in saved IDs."""
+        if model not in cls._AGY_MODEL_MAP:
+            raise ValueError(f"Unknown agy model ID: {model!r}")
+        slug = cls._AGY_MODEL_MAP[model]
+        if model.startswith("agy-claude-"):
             level = thinking_level if thinking_level in ("low", "medium", "high") else "high"
-            return f"{name.rsplit(' (', 1)[0]} ({level.title()})"
-        return name
+            return f"{slug.rsplit('-', 1)[0]}-{level}"
+        return slug
 
     # agy CLI'ın kendi yerleşik araçlarının isimleri (onaysız çalışmayı engellemek amacıyla devre dışı bırakılır)
     # agy'nin GERÇEK built-in yazma araçları (agy'nin kendi raporundan doğrulandı).
@@ -182,7 +181,7 @@ class BaseCLIProvider(AIProvider):
 
     def __init__(self, binary_name: str = "claude"):
         self.binary_name = binary_name
-        self._pending_agy_model = "Gemini 3.6 Flash (High)"
+        self._pending_agy_model_slug = None
         self._active_process = None
         self._cancel_requested = False
 
@@ -1054,11 +1053,6 @@ class BaseCLIProvider(AIProvider):
                                          interactive: bool = False) -> AsyncGenerator[Dict[str, Any], None]:
         async for ev in self.analyze_code(prompt, max_tokens, images, thinking_level, cwd, interactive):
             yield ev
-
-    def _set_agy_model(self, agy_model_name: str, workspace: str = ""):
-        """Subclass'lar agy model ayarını override edebilir. Base'de no-op."""
-        pass
-
 
 # Backward-compat alias
 CLIProvider = BaseCLIProvider

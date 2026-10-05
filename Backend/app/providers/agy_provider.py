@@ -239,9 +239,14 @@ class AgyProvider(BaseCLIProvider):
 
     def _build_cmd(self, prompt: str = "", thinking_level: str = "auto", workspace: str = None) -> list:
         """Build persistent stream argv; user content is sent only through stdin."""
-        self._pending_agy_model = self._resolve_agy_model(self.binary_name, thinking_level)
+        self._pending_agy_model_slug = self._resolve_agy_model(self.binary_name, thinking_level)
+        # Measured on agy 1.2.17 in this stdin chat form: flags select the
+        # model and auto-approve while still enforcing the PreToolUse hook.
+        # Claude effort is encoded in the slug; --effort is unmeasured.
         cmd = [self._agy_binary(), "--input-format", "stream-json",
-               "--output-format", "stream-json", "-p="]
+               "--output-format", "stream-json", "-p=",
+               "--model", self._pending_agy_model_slug,
+               "--dangerously-skip-permissions"]
         if workspace:
             cmd += ["--add-dir", workspace]
         if getattr(self, "_resume_uuid", None):
@@ -421,7 +426,7 @@ class AgyProvider(BaseCLIProvider):
         not spawn.
 
         Why every mode: agy reads hooks.json only when it starts, and it always
-        runs under toolPermission always-proceed. A process spawned without the
+        runs with --dangerously-skip-permissions. A process spawned without the
         entry could never be tightened: a flip to step during its turn, or
         between this call and the spawn, left step mode with an agy whose
         writes and shell commands ran with no card (verification round, 26 Sep
@@ -502,18 +507,8 @@ class AgyProvider(BaseCLIProvider):
             return f"{type(e).__name__}: {e}"
         return None
 
-    def _set_agy_model(self, agy_model_name: str, workspace: str = ""):
-        """~/.gemini/antigravity-cli/settings.json ve global ~/.gemini/settings.json
-        içindeki modeli, trustedWorkspaces, toolPermission ve disabledTools'u günceller.
-
-        Model seçimi SADECE buradan yapılır (komut satırında --model YOK — o derail
-        tetikliyor, bkz. _build_cmd). Her çağrıda "model" key'i GÜNCEL değere yazılır;
-        bu sayede eski stale değer (örn. önceki oturumdan "Gemini 3.5 Flash (High)")
-        üzerine yazılır — canlı doğrulandı (2026-07-24): stale key kalınca model
-        kendini yanlış tanıtıyordu, güncel display-name yazılınca düzeliyor."""
-        # 1. Lokal antigravity-cli settings.json, 2. global ~/.gemini/settings.json.
-        # toolPermission always-proceed: --dangerously-skip-permissions flag'i YERİNE
-        # (canlı doğrulandı: geçerli değer, flag'siz auto-approve → skill-derail'i tetiklemez).
+    def _register_agy_workspace(self, workspace: str = ""):
+        """Register workspace trust and retain the existing disabled tools."""
         for path, default in (
             ("~/.gemini/antigravity-cli/settings.json", {"colorScheme": "dark", "trustedWorkspaces": []}),
             ("~/.gemini/settings.json", {}),
@@ -526,8 +521,6 @@ class AgyProvider(BaseCLIProvider):
             if workspace and not isinstance(trusted, list):
                 logger.warning("[agy] %s trustedWorkspaces is not a list; left untouched", settings_path)
                 continue
-            settings["model"] = agy_model_name
-            settings["toolPermission"] = "always-proceed"
             settings["disabledTools"] = self._AGY_DISABLED_TOOLS
             if workspace:
                 if workspace not in trusted:
@@ -535,7 +528,7 @@ class AgyProvider(BaseCLIProvider):
                 settings["trustedWorkspaces"] = trusted
             _write_json_config(settings_path, settings)
 
-        logger.info(f"[CLIProvider] agy model → {agy_model_name}, trusted → {workspace}")
+        logger.info(f"[CLIProvider] agy trusted → {workspace}")
 
     def _write_cli_env(self, launcher: str, workspace: str, backend_url: str):
         """Backend/.unityai_cli.env yazar — 'unityai' wrapper bu dosyayı source eder.
@@ -670,9 +663,6 @@ class AgyProvider(BaseCLIProvider):
             servers.pop("antigravity", None)
             servers["unityai"] = dict(unityai_entry)
             servers.pop("unityMCP", None)
-            # --dangerously-skip-permissions flag'i YERİNE (canlı doğrulandı: geçerli
-            # değer, flag'siz auto-approve → skill-derail'i tetiklemez)
-            settings["toolPermission"] = "always-proceed"
             settings["disabledTools"] = self._AGY_DISABLED_TOOLS
             if _write_json_config(settings_path, settings):
                 logger.info(f"[CLIProvider] agy {settings_path} güncellendi: {backend_url} → {workspace}")
