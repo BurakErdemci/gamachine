@@ -2854,6 +2854,13 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         from providers.codex_session import get_session, close_session, _SESSIONS
         from providers.effort_caps import map_effort as _map_effort
 
+        desired_unity_mcp = False
+        try:
+            from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+            desired_unity_mcp = unity_mcp_manager.is_running()
+        except Exception as exc:
+            logger.debug("[CodexSession] unityMCP state unavailable: %s", exc)
+
         # Effort kayıtçıdan (auto/desteklenmeyen → None → codex varsayılanı medium).
         # Launch-time config olduğundan effort DEĞİŞİNCE session yeniden kurulur
         # (Claude deseninin aynısı; thread bağlamı sıfırlanır, DB özeti yeniden gider).
@@ -2874,7 +2881,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             _existing is not None
             and bool(getattr(_existing, "read_only", False)) != bool(getattr(self, "read_only", False))
         )
-        if _existing is not None and (_effort_changed or _workspace_changed or _ro_changed):
+        _unity_changed = (
+            _existing is not None
+            and bool(getattr(_existing, "unity_mcp", False)) != desired_unity_mcp
+        )
+        if _existing is not None and (_effort_changed or _workspace_changed or _ro_changed or _unity_changed):
             reasons = []
             if _ro_changed:
                 reasons.append("read_only değişti")
@@ -2882,6 +2893,8 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 reasons.append(f"effort {_existing.effort}→{desired_effort}")
             if _workspace_changed:
                 reasons.append("workspace değişti")
+            if _unity_changed:
+                reasons.append("unityMCP açıldı" if desired_unity_mcp else "unityMCP kapandı")
             logger.info(
                 "[CodexSession] %s; session yeniden kuruluyor",
                 ", ".join(reasons),
@@ -2914,6 +2927,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             cwd=_workspace,
             effort=desired_effort,
             read_only=bool(getattr(self, "read_only", False)),
+            unity_mcp=desired_unity_mcp,
         )
         # Oto mod → onay otomatik accept; Adım/Plan modu → her mutasyonda onay kartı.
         session.auto_approve = (self.generation_mode == "auto")

@@ -880,10 +880,12 @@ class CodexSession:
         auto_approve: bool = False,
         effort: Optional[str] = None,
         read_only: bool = False,
+        unity_mcp: bool = False,
     ):
         self.conversation_id = conversation_id
         # Side chat session: every approval request is declined, in every mode.
         self.read_only = bool(read_only)
+        self.unity_mcp = unity_mcp
         self.model = model
         self.cwd = cwd
         # Reasoning effort (minimal..xhigh; max yalnız gpt-5.6). Launch-time config'tir
