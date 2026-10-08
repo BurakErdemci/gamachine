@@ -285,8 +285,10 @@ class AgyProvider(BaseCLIProvider):
                     yield {"type": "error", "content": ev.get("message", "")}
                     return
         finally:
-            await inner.aclose()
-            await session.close()
+            try:
+                await inner.aclose()
+            finally:
+                await session.close()
 
     @staticmethod
     def _unityai_call_rules(unityai_cli: str, windows: bool = None) -> str:
