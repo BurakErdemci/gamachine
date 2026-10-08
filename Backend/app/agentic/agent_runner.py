@@ -2857,7 +2857,8 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         desired_unity_mcp = False
         try:
             from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
-            desired_unity_mcp = unity_mcp_manager.is_running()
+            # Off the event loop: the identity probe can wait ~1 s on a foreign port owner.
+            desired_unity_mcp = await asyncio.to_thread(unity_mcp_manager.is_running)
         except Exception as exc:
             logger.debug("[CodexSession] unityMCP state unavailable: %s", exc)
 
