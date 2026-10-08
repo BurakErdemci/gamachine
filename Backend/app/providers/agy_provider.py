@@ -270,9 +270,10 @@ class AgyProvider(BaseCLIProvider):
         workspace = cwd or "."
         session = AgyStreamSession(-(int(time.time() * 1000) & 0x7FFFFFFF), cwd=workspace)
         collected = ""
+        inner = session.stream(prompt, model=self.binary_name, cwd=workspace,
+                               thinking_level=thinking_level)
         try:
-            async for ev in session.stream(prompt, model=self.binary_name, cwd=workspace,
-                                           thinking_level=thinking_level):
+            async for ev in inner:
                 kind = ev.get("type")
                 if kind == "text":
                     piece = ev.get("content", "")
@@ -284,6 +285,7 @@ class AgyProvider(BaseCLIProvider):
                     yield {"type": "error", "content": ev.get("message", "")}
                     return
         finally:
+            await inner.aclose()
             await session.close()
 
     @staticmethod
