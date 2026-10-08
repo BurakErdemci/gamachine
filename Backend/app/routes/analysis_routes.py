@@ -100,18 +100,21 @@ def create_analysis_router(db):
             # to_thread bir generator objesi döndürür ve save_analysis'e çöp gider.)
             if inspect.isasyncgenfunction(provider.analyze_code):
                 _parts: list = []
+                _final_text = ""
                 _events = provider.analyze_code(prompt, 2048)
                 try:
                     async for ev in _events:
                         if isinstance(ev, dict) and ev.get("type") == "delta":
                             _parts.append(ev.get("text", ""))
+                        elif isinstance(ev, dict) and ev.get("type") == "final" and ev.get("text"):
+                            _final_text = ev["text"]
                         elif isinstance(ev, dict) and ev.get("type") == "error":
                             return {"intent": "ERROR",
                                     "ai_suggestion": ev.get("content") or ev.get("message") or "provider error",
                                     "static_results": {"smells": []}}
                 finally:
                     await _events.aclose()
-                final_suggestion = "".join(_parts)
+                final_suggestion = _final_text or "".join(_parts)
             else:
                 final_suggestion = await asyncio.to_thread(provider.analyze_code, prompt)
 

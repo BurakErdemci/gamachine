@@ -144,6 +144,50 @@ def test_analyze_success_still_saves_history():
     db.save_analysis.assert_called_once()
 
 
+STREAM_ANSWER_CASES = [
+    ([{"type": "final", "text": "answer"}], "answer"),
+    ([{"type": "delta", "text": "a"}, {"type": "final", "text": "ab"}], "ab"),
+    ([{"type": "final", "text": "answer"}, {"type": "error", "content": "late failure"}], None),
+    ([{"type": "final", "text": ""}], None),
+    ([{"type": "delta", "text": "a"}, {"type": "final", "text": ""}], "a"),
+    ([{"type": "final", "text": "answer"}, {"type": "final", "text": ""}], "answer"),
+    ([{"type": "final", "text": "answer"}, {"type": "delta", "text": "extra"}], "answer"),
+]
+
+
+@pytest.mark.parametrize("events,answer", STREAM_ANSWER_CASES)
+def test_project_analysis_uses_terminal_answer_and_reads_late_errors(events, answer):
+    provider = FakeProvider(events)
+    out, save, db = _run_conv("/conversations/{conv_id}/analyze-project", provider, _analyze, _rag())
+    assert provider.closed
+    if answer is None:
+        assert isinstance(out, HTTPException) and out.status_code == 500
+        error = "late failure" if events[-1]["type"] == "error" else "provider returned an empty answer"
+        assert error in out.detail
+        save.assert_not_called()
+        db.add_message.assert_not_called()
+    else:
+        assert out["status"] == "success" and out["summary"] == answer
+        save.assert_called_once_with("7", answer)
+        db.add_message.assert_called_once()
+        assert db.add_message.call_args.args[2] == f"🧠 **Analiz Raporu**\n\n{answer}"
+
+
+@pytest.mark.parametrize("events,answer", STREAM_ANSWER_CASES)
+def test_analyze_uses_terminal_answer_and_reads_late_errors(events, answer):
+    provider = FakeProvider(events)
+    result, db = _run_analyze(provider)
+    assert provider.closed
+    if answer is None:
+        error = "late failure" if events[-1]["type"] == "error" else "provider returned an empty answer"
+        assert result == {"intent": "ERROR", "ai_suggestion": error, "static_results": {"smells": []}}
+        db.save_analysis.assert_not_called()
+    else:
+        assert result["intent"] != "ERROR" and result["ai_suggestion"] == answer
+        db.save_analysis.assert_called_once()
+        assert db.save_analysis.call_args.args[4] == answer
+
+
 class SyncProvider:
     def __init__(self, answer):
         self.answer = answer
@@ -203,12 +247,16 @@ def test_memory_import_rejects_error_after_final_before_saving():
 
 @pytest.mark.parametrize("verdict,status", [
     ("", 500), ("   ", 500), ("OK", 500), ("UNSAFE", 500),
-    ("NOT SAFE", 500), ("This is not SAFE", 500), ("SAFE? no", 500),
+    ("NOT SAFE", 500), ("Verdict: SAFE", 500), ("This is SAFE", 500),
+    ("This is not SAFE", 500), ("SAFE? no", 500),
     ("Bu metin SAFE degil", 500), ("SAFE degil", 500),
     ("SAFE", 200), ("safe", 200), ("safe.", 200), ("**SAFE**", 200),
     (" SAFE \n", 200), ("`SAFE`", 200),
+    ("SAFE\n\nThe text only has technical notes.", 200), ("**SAFE**\nreason", 200),
+    ("\n \t\n **sAfE** \nreason", 200),
     (" \t*_`.!'\"\u2003SAFE\u2003\"'!.`_*\t ", 200), ("SA*FE", 500),
     ("DANGEROUS: x", 400), ("safe but dangerous", 400),
+    ("SAFE\nDANGEROUS: hidden order", 400),
 ])
 @pytest.mark.parametrize("streaming", [True, False])
 def test_memory_import_requires_explicit_safe_verdict(verdict, status, streaming, caplog):
@@ -263,7 +311,7 @@ def test_analyze_empty_answer_returns_error_without_saving(answer, branch):
         assert provider.closed
 
 
-@pytest.mark.parametrize("exit_kind", ["caller_close", "error", "exhaustion"])
+@pytest.mark.parametrize("exit_kind", ["caller_close", "error", "exhaustion", "cancelled_close"])
 def test_agy_one_shot_closes_inner_stream_before_session(monkeypatch, exit_kind):
     from providers.agy_provider import AgyProvider
     from providers import agy_session
@@ -279,6 +327,8 @@ def test_agy_one_shot_closes_inner_stream_before_session(monkeypatch, exit_kind)
                 yield {"type": "response", "content": "answer"}
         finally:
             closed.append("stream")
+            if exit_kind == "cancelled_close":
+                raise asyncio.CancelledError
 
     async def close(self):
         assert closed == ["stream"]
@@ -291,7 +341,10 @@ def test_agy_one_shot_closes_inner_stream_before_session(monkeypatch, exit_kind)
         provider = AgyProvider(binary_name="agy-claude-sonnet-5-5")
         events = provider.analyze_code("hello", cwd=".")
         assert await anext(events) == {"type": "delta", "text": "part"}
-        if exit_kind == "caller_close":
+        if exit_kind == "cancelled_close":
+            with pytest.raises(asyncio.CancelledError):
+                await events.aclose()
+        elif exit_kind == "caller_close":
             await events.aclose()
         else:
             remaining = [event async for event in events]
