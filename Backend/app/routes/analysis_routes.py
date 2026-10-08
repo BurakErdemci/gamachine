@@ -101,18 +101,23 @@ def create_analysis_router(db):
             if inspect.isasyncgenfunction(provider.analyze_code):
                 _parts: list = []
                 _events = provider.analyze_code(prompt, 2048)
-                async for ev in _events:
-                    if isinstance(ev, dict) and ev.get("type") == "delta":
-                        _parts.append(ev.get("text", ""))
-                    elif isinstance(ev, dict) and ev.get("type") == "error":
-                        # Same shape as the provider-construction failure above; no history row.
-                        await _events.aclose()
-                        return {"intent": "ERROR",
-                                "ai_suggestion": ev.get("content") or ev.get("message") or "provider error",
-                                "static_results": {"smells": []}}
+                try:
+                    async for ev in _events:
+                        if isinstance(ev, dict) and ev.get("type") == "delta":
+                            _parts.append(ev.get("text", ""))
+                        elif isinstance(ev, dict) and ev.get("type") == "error":
+                            return {"intent": "ERROR",
+                                    "ai_suggestion": ev.get("content") or ev.get("message") or "provider error",
+                                    "static_results": {"smells": []}}
+                finally:
+                    await _events.aclose()
                 final_suggestion = "".join(_parts)
             else:
                 final_suggestion = await asyncio.to_thread(provider.analyze_code, prompt)
+
+        if not (final_suggestion or "").strip():
+            return {"intent": "ERROR", "ai_suggestion": "provider returned an empty answer",
+                    "static_results": {"smells": []}}
 
         title = static_results.get("stats", {}).get("class_name", "Analiz")
         db.save_analysis(user_id, title, intent, request.code, final_suggestion, static_results["smells"])
