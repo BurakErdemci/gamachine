@@ -203,7 +203,11 @@ def test_memory_import_rejects_error_after_final_before_saving():
 
 @pytest.mark.parametrize("verdict,status", [
     ("", 500), ("   ", 500), ("OK", 500), ("UNSAFE", 500),
-    ("SAFE", 200), ("safe.", 200), ("**SAFE**", 200),
+    ("NOT SAFE", 500), ("This is not SAFE", 500), ("SAFE? no", 500),
+    ("Bu metin SAFE degil", 500), ("SAFE degil", 500),
+    ("SAFE", 200), ("safe", 200), ("safe.", 200), ("**SAFE**", 200),
+    (" SAFE \n", 200), ("`SAFE`", 200),
+    (" \t*_`.!'\"\u2003SAFE\u2003\"'!.`_*\t ", 200), ("SA*FE", 500),
     ("DANGEROUS: x", 400), ("safe but dangerous", 400),
 ])
 @pytest.mark.parametrize("streaming", [True, False])
