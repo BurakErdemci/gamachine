@@ -807,8 +807,10 @@ LAUNCHER = "C:\\Gamachine\\unityai.cmd"
 
 
 @pytest.fixture
-def agy_ws(ws, tmp_path_factory):
+def agy_ws(ws, tmp_path_factory, monkeypatch):
     import agy_step_gate as gate
+    monkeypatch.setattr(gate.agy_native_approval, "request_native_write",
+                        lambda *args: (False, "native approval denied"))
 
     agents = os.path.join(ws, ".agents")
     os.makedirs(agents)
@@ -821,7 +823,7 @@ def agy_ws(ws, tmp_path_factory):
 def _decide(state, mode, payload, cwd):
     import agy_step_gate as gate
 
-    gate.write_state(state, mode, LAUNCHER)
+    gate.write_state(state, mode, LAUNCHER, workspace=cwd)
     return gate.decide(json.dumps({"toolCall": payload}).encode(), state, windows=True, cwd=cwd)
 
 
@@ -866,7 +868,33 @@ def test_agy_balanced_denies_critical_calls_and_points_to_the_bridge(agy_ws, pay
     ws, state = agy_ws
     out = _decide(state, "balanced", payload, ws)
     assert out["decision"] == "deny"
-    assert "unityai" in out["reason"]
+    if payload["name"] == "write_to_file" and "Refused" not in out["reason"]:
+        assert "native approval" in out["reason"]
+    else:
+        assert "unityai" in out["reason"]
+
+
+def test_agy_balanced_critical_write_obeys_native_approval(agy_ws, monkeypatch):
+    import agy_step_gate as gate
+    from unittest.mock import Mock
+    ws, state = agy_ws
+    payload = _write(".agents/hooks.json")
+    for approved in (True, False):
+        ask = Mock(return_value=(approved, "native approval denied"))
+        monkeypatch.setattr(gate.agy_native_approval, "request_native_write", ask)
+        out = _decide(state, "balanced", payload, ws)
+        assert out["decision"] == ("allow" if approved else "deny")
+        ask.assert_called_once_with("write_to_file", payload["args"], ws)
+
+
+def test_agy_balanced_routine_write_does_not_ask(agy_ws, monkeypatch):
+    import agy_step_gate as gate
+    from unittest.mock import Mock
+    ws, state = agy_ws
+    ask = Mock(side_effect=AssertionError("routine write must not ask"))
+    monkeypatch.setattr(gate.agy_native_approval, "request_native_write", ask)
+    assert _decide(state, "balanced", _write(os.path.join(ws, "Assets", "A.cs")), ws)["decision"] == "allow"
+    ask.assert_not_called()
 
 
 @pytest.mark.parametrize("payload", CRITICAL_AGY_CALLS)
@@ -883,10 +911,15 @@ def test_agy_balanced_still_allows_the_bridge_call_shapes(agy_ws):
     assert _decide(state, "balanced", bridge, ws)["decision"] == "allow"
 
 
-def test_agy_balanced_without_its_hooks_file_allows_nothing_it_must_confine(ws, tmp_path_factory):
+def test_agy_balanced_without_its_hooks_file_requires_approval(ws, tmp_path_factory, monkeypatch):
+    import agy_step_gate as gate
+    from unittest.mock import Mock
+    ask = Mock(return_value=(False, "native approval denied"))
+    monkeypatch.setattr(gate.agy_native_approval, "request_native_write", ask)
     state = str(tmp_path_factory.mktemp("s") / "step-gate.json")
     assert _decide(state, "balanced", _run("npm test", ws), ws)["decision"] == "deny"
     assert _decide(state, "balanced", _write(os.path.join(ws, "Assets", "A.cs")), ws)["decision"] == "deny"
+    ask.assert_called_once()
 
 
 def test_agy_balanced_applies_the_unity_file_rule_first(agy_ws):

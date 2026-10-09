@@ -9,8 +9,9 @@ A fifth state, "side", holds only while a read-only side question runs.
 It is installed in every approval mode: the state file's "mode" decides.
 "auto" allows every call, "step" applies the rules below, and "balanced"
 (Burak, 27 Sep 2026) allows what step allows plus the built-in writes and
-commands action_risk calls routine; a critical one is denied with a pointer
-to the unityai bridge, which raises the card. In all three, the fixed Unity
+commands action_risk calls routine; the two native file writers ask for a
+card in step mode and for critical balanced calls. Other critical calls
+are denied with a pointer to the unityai bridge. In all three, the fixed Unity
 file rule (unity_file_guard: no .meta writes/deletes/moves, no raw writes to
 Unity YAML assets) is checked first and can only deny. A process spawned in
 auto must still be gated after a flip, and agy reads its hooks only at
@@ -61,6 +62,7 @@ import sys
 import tempfile
 
 import unity_file_guard  # stdlib-only, like this file
+import agy_native_approval  # stdlib-only approval bridge
 
 # Built-in agy tools that write files, plus send_command_input (it types
 # into a running process, e.g. a shell a unityai bash call started).
@@ -508,17 +510,28 @@ def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -
         risk = _balanced_risk(name, call.get("args"), cwd)
         if not risk.critical:
             return {"decision": "allow"}
-        return _balanced_deny("file write" if name in _FILE_WRITERS else "call", risk)
+        if name not in ("write_to_file", "replace_file_content"):
+            return _balanced_deny("file write" if name in _FILE_WRITERS else "call", risk)
+    if name in ("write_to_file", "replace_file_content"):
+        workspace = state.get("workspace")
+        if not isinstance(workspace, str) or not workspace:
+            return _deny("Native approval requires a workspace in the gate state.")
+        token = agy_native_approval.state_path.set(state_path)
+        try:
+            allowed, reason = agy_native_approval.request_native_write(name, call.get("args"), workspace)
+            return {"decision": "allow"} if allowed is True else _deny(reason)
+        finally:
+            agy_native_approval.state_path.reset(token)
     return _deny(WRITE_REASON)
 
 
-def write_state(path: str, mode: str, launcher: str) -> None:
+def write_state(path: str, mode: str, launcher: str, workspace=None) -> None:
     """Atomic, so a hook never reads half a file (it would deny, not leak)."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".state-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"mode": mode, "launcher": launcher}, f)
+            json.dump({"mode": mode, "launcher": launcher, "workspace": workspace}, f)
         os.replace(tmp, path)
     except Exception:
         try:

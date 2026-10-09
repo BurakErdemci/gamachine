@@ -186,9 +186,14 @@ def test_module_is_stdlib_only():
     # action_risk (balanced mode) is imported lazily; its own imports are
     # held to stdlib plus two stdlib-only local modules in test_action_risk.
     # unity_tool_policy (side questions, lazy too) is checked just below.
-    assert len(offenders) == 3
-    assert "'unity_file_guard'" in offenders[0] and "'action_risk'" in offenders[1]
-    assert "'unity_tool_policy'" in offenders[2]
+    assert len(offenders) == 4
+    assert "'unity_file_guard'" in offenders[0] and "'agy_native_approval'" in offenders[1]
+    assert "'action_risk'" in offenders[2] and "'unity_tool_policy'" in offenders[3]
+    with open(os.path.join(app, "agy_native_approval.py"), encoding="utf-8") as f:
+        native_offenders = find_non_stdlib_imports(f.read())
+    assert len(native_offenders) == 2
+    assert "'local_token_file'" in native_offenders[0]
+    assert "'unity_file_guard'" in native_offenders[1]
     for module in ("agentic/command_safety.py", "unity_tool_policy.py"):
         with open(os.path.join(app, *module.split("/")), encoding="utf-8") as f:
             assert find_non_stdlib_imports(f.read()) == [], module

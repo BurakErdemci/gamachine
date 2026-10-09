@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 # still lets write_to_file edit the workspace and refuses MCP calls, strict
 # refuses everything. A workspace PreToolUse hook does separate them (measured:
 # writes denied with our reason, call_mcp_tool untouched, even under
-# always-proceed). With the hook, a file write has to go through
-# `unityai save-file`, which raises an approval card.
+# always-proceed). The hook shows approval cards for the two native writers;
+# other writes and shell commands still go through the unityai bridge.
 #
 # run_command is gated too: the hook (`backend agy-hook`, agy_step_gate.py)
 # allows only the exact unityai bridge call shapes and denies every other
@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # is on (auto allows every call, balanced lets routine calls through), so a
 # flip reaches a running agy on its next tool call. See _write_step_gate.
 STEP_GATE_TOOLS = GATED_TOOLS + (RUN_TOOL,)
+HOOK_TIMEOUT_SECONDS = 10
+# 10+150 s bridge budget plus margin; agy waited 165 s at timeout 200 in measurement.
+NATIVE_WRITE_TIMEOUT_SECONDS = 180
 
 
 def step_gate_matchers(mode: Optional[str] = None) -> tuple:
@@ -128,7 +131,8 @@ def gate_mode_name(auto: bool = False, mode: Optional[str] = None) -> str:
     return "auto" if auto else "step"
 
 
-def write_gate_state(auto: bool = False, closed: bool = False, mode: Optional[str] = None) -> None:
+def write_gate_state(auto: bool = False, closed: bool = False, mode: Optional[str] = None,
+                     workspace: Optional[str] = None) -> None:
     """Mode and launcher the hook reads on every call ("auto" allows every
     call, "step" applies agy_step_gate's grammar, "balanced" also lets the
     calls action_risk calls routine through). `mode` wins over `auto`.
@@ -136,11 +140,20 @@ def write_gate_state(auto: bool = False, closed: bool = False, mode: Optional[st
     bites on a running agy's next tool call. `closed` writes CLOSED_MODE,
     which denies every call: a closing session's child never needs a tool
     again (agy_session.close)."""
+    if workspace is None:
+        # Mode flips have no workspace argument; retain the last spawn's path.
+        try:
+            with open(gate_state_path(), encoding="utf-8") as f:
+                workspace = json.load(f).get("workspace")
+        except (OSError, ValueError, AttributeError):
+            workspace = None
+    elif workspace:
+        workspace = os.path.realpath(workspace)
     if closed:
-        write_state(gate_state_path(), CLOSED_MODE, "")
+        write_state(gate_state_path(), CLOSED_MODE, "", workspace=workspace)
         return
     launcher = AgyProvider()._launcher_path("unityai")
-    write_state(gate_state_path(), gate_mode_name(auto, mode), launcher)
+    write_state(gate_state_path(), gate_mode_name(auto, mode), launcher, workspace=workspace)
 
 
 def _read_json_config(path: str, default: dict = None) -> Optional[dict]:
@@ -353,10 +366,12 @@ class AgyProvider(BaseCLIProvider):
             "- Do NOT call list_dir / grep_search / view_file / invoke_subagent / schedule\n"
             "  unless the task genuinely requires it. No self-scheduling, no timers, no\n"
             "  probing the .system_generated / brain / transcript folders. Just do the task.\n\n"
-            "You have a command-line tool 'unityai' for file WRITES, DELETES and shell.\n"
-            "Your own write_to_file/replace_file_content tools are DISABLED on purpose —\n"
-            "the ONLY way to create, edit, delete a file or run shell is via run_command\n"
-            "calling 'unityai' with its ABSOLUTE PATH:\n"
+            "Use write_to_file and replace_file_content to create or edit files: in step\n"
+            "mode they show an approval card and run only after explicit approval.\n"
+            "Safe Auto allows routine writes; critical writes show the same card.\n"
+            "For an unverified replacement use write_to_file with the full content.\n"
+            "For deletes and shell commands use run_command calling 'unityai' with its\n"
+            "ABSOLUTE PATH; the save-file call below remains a supported fallback:\n"
             f"  {unityai_cli}\n\n"
             "CRITICAL RULES — follow exactly:\n"
             + self._unityai_call_rules(unityai_cli) +
@@ -454,7 +469,7 @@ class AgyProvider(BaseCLIProvider):
         path = os.path.join(os.path.realpath(workspace), *STEP_GATE_HOOKS_FILE.split("/"))
         state_path = gate_state_path()
         try:
-            write_gate_state(auto=not step_mode, mode=mode)
+            write_gate_state(auto=not step_mode, mode=mode, workspace=workspace)
         except OSError as e:
             # A stale "auto" state file would make an installed hook allow everything.
             logger.error("[agy] gate state not written (%s)", e)
@@ -475,7 +490,9 @@ class AgyProvider(BaseCLIProvider):
         except OSError as e:
             raise AgyStepGateError(_gate_write_failed(_gate_dir(), e, step_mode)) from e
         hooks[STEP_GATE_KEY] = {"PreToolUse": [
-            {"matcher": tool, "hooks": [{"type": "command", "command": command, "timeout": 10}]}
+            {"matcher": tool, "hooks": [{"type": "command", "command": command,
+                "timeout": NATIVE_WRITE_TIMEOUT_SECONDS if tool in ("write_to_file", "replace_file_content")
+                else HOOK_TIMEOUT_SECONDS}]}
             for tool in step_gate_matchers(mode)
         ]}
         if not guvenli_config_yaz(workspace, STEP_GATE_HOOKS_FILE, json.dumps(hooks, indent=2)):
@@ -501,7 +518,9 @@ class AgyProvider(BaseCLIProvider):
                 return f"{state_path} beklenen modu ({want_mode}) göstermiyor"
             with open(path, encoding="utf-8-sig") as f:
                 entries = json.load(f)[STEP_GATE_KEY]["PreToolUse"]
-            want = [{"matcher": tool, "hooks": [{"type": "command", "command": command, "timeout": 10}]}
+            want = [{"matcher": tool, "hooks": [{"type": "command", "command": command,
+                "timeout": NATIVE_WRITE_TIMEOUT_SECONDS if tool in ("write_to_file", "replace_file_content")
+                else HOOK_TIMEOUT_SECONDS}]}
                     for tool in step_gate_matchers(mode)]
             if entries != want:
                 return f"{path} içindeki {STEP_GATE_KEY} kaydı beklenenden farklı"

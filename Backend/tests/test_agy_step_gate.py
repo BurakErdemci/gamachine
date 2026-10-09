@@ -74,7 +74,7 @@ class TestAgyStepGate(unittest.TestCase):
                   else f'{launcher} delete-file --path "a.txt"')
         write = self.run_shim({"toolCall": {"name": "write_to_file", "args": {}}})
         self.assertEqual(write["decision"], "deny")
-        self.assertIn("unityai save-file", write["reason"])
+        self.assertIn("TargetFile", write["reason"])
         shell = self.run_shim({"toolCall": {"name": "run_command",
                                             "args": {"CommandLine": "python -c \"open('x','w')\""}}})
         self.assertEqual(shell["decision"], "deny")

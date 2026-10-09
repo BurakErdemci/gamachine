@@ -55,7 +55,9 @@ def test_agy_instructions_put_mail_on_unityai_via_call_mcp_tool():
     assert 'NEVER server "unityMCP"' in text
     assert "could not connect" in text and "never say a policy disabled it" in text
     # The write path is unchanged: still the unityai CLI through run_command.
-    assert "the ONLY way to create, edit, delete a file or run shell is via run_command" in text
+    assert "Use write_to_file and replace_file_content to create or edit files" in text
+    assert "mode they show an approval card and run only after explicit approval" in text
+    assert "For deletes and shell commands use run_command calling 'unityai'" in text
 
 
 # ── the mail note, per receiving provider ────────────────────────────────────

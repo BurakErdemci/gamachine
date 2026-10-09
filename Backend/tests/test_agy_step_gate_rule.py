@@ -215,6 +215,18 @@ class TestDecide(unittest.TestCase):
         for name in gate.GATED_TOOLS:
             self.assertEqual(self.decide({"toolCall": {"name": name, "args": {}}}), "deny")
 
+    def test_native_writers_obey_approval_and_use_state_workspace(self):
+        from unittest.mock import patch
+        gate.write_state(self.state, "step", WIN_L, workspace=self.tmp.name)
+        for name in ("write_to_file", "replace_file_content"):
+            args = {"TargetFile": "a.txt", "CodeContent": "new"}
+            for approved in (True, False):
+                with patch.object(gate.agy_native_approval, "request_native_write",
+                                  return_value=(approved, "native refusal")) as ask:
+                    self.assertEqual(self.decide({"toolCall": {"name": name, "args": args}}),
+                                     "allow" if approved else "deny")
+                    ask.assert_called_once_with(name, args, self.tmp.name)
+
     def test_auto_mode_allows_everything(self):
         gate.write_state(self.state, "auto", WIN_L)
         self.assertEqual(self.decide(self.run_call("python -c \"open('x','w')\"")), "allow")

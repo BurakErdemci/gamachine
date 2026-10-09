@@ -164,7 +164,12 @@ class TestOtherModesUnchanged(HookCase):
         bridge = f'& "{LAUNCHER}" delete-file --path "a.txt"'
         gate.write_state(self.state, "step", LAUNCHER)
         for name in gate.GATED_TOOLS:
-            self.assertEqual(self.decide(call(name)), gate._deny(gate.WRITE_REASON))
+            if name in ("write_to_file", "replace_file_content"):
+                out = self.decide(call(name))
+                self.assertEqual(out["decision"], "deny")
+                self.assertIn("workspace", out["reason"])
+            else:
+                self.assertEqual(self.decide(call(name)), gate._deny(gate.WRITE_REASON))
         self.assertEqual(self.decide(call("run_command", {"CommandLine": "whoami"})),
                          gate._deny(gate.RUN_REASON))
         self.assertEqual(self.decide(call("run_command", {"CommandLine": bridge}))["decision"], "allow")
