@@ -1,4 +1,4 @@
-// The link to the Unity Editor. `new-project` waits for the Unity Hub button (a later port): its flag is off and its anchor is not in this build, so it is not listed.
+// The link to the Unity Editor. `new-project` plays on the welcome screen (step 1 names `screen:welcome`), so it is listed only there.
 // Copy ported from the approved mockup (round 12b, maket/index.html GUIDE); REHBER-KAYITLARI.md
 // section 8 is generated from the same array. Edit the copy here, not in the guide code.
 import { T, type GuideTopic } from '../types';
@@ -45,7 +45,7 @@ export const UNITY: GuideTopic[] = [
     ],
   },
   {
-    id: "new-project", group: "unity", since_version: "next", available_when: "feature.unityHubNewProject",
+    id: "new-project", group: "unity", since_version: "baseline", available_when: "feature.unityHubNewProject",
     title: T("Yeni Unity projesi", "A new Unity project"),
     summary: T("Unity Hub'ı açar; projeyi orada oluşturup burada açarsın.", "Opens Unity Hub; create the project there, open it here."),
     keywords: T("hub proje oluştur klasör", "hub project create folder"),

@@ -3,8 +3,9 @@
 // An action this build cannot perform makes its topic unavailable, the same as a missing anchor.
 
 export type PrepareHandlers = {
-  /** chat = the chat on screen; new_chat = the empty new chat; profile = the maker profile. */
-  screen: (arg: 'chat' | 'new_chat' | 'profile') => void;
+  /** chat = the chat on screen; new_chat = the empty new chat; profile = the maker profile;
+   *  welcome = the welcome screen (only listed there: registry `topicScreen`). */
+  screen: (arg: 'chat' | 'new_chat' | 'profile' | 'welcome') => void;
   settings: (page: 'general' | 'models' | 'appearance' | 'unity' | 'approval' | 'remote' | 'account') => void;
   'workspace.tab': (tab: 'scene' | 'files' | 'code' | 'preview') => void;
   'workspace.width': (width: 'narrow' | 'half' | 'focus') => void;
@@ -16,10 +17,10 @@ export type PrepareHandlers = {
   menu: (which: 'model') => void;
 };
 
-/** Every action and argument this build supports. `screen:welcome`, `workspace.tab:browser` and
+/** Every action and argument this build supports. `workspace.tab:browser` and
  *  `preview.open:animation` are named by topics but not built yet. */
 export const SUPPORTED: Record<string, readonly (string | null)[]> = {
-  screen: ['chat', 'new_chat', 'profile'],
+  screen: ['chat', 'new_chat', 'profile', 'welcome'],
   settings: ['general', 'models', 'appearance', 'unity', 'approval', 'remote', 'account'],
   'workspace.tab': ['scene', 'files', 'code', 'preview'],
   'workspace.width': ['narrow', 'half', 'focus'],

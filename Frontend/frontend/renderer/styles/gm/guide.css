@@ -1,7 +1,7 @@
 /* Gamachine guide (Rehber) and first-launch tour: mockup round 12 / 12b (base.css "PRODUCT TOUR" and
-   "ROUND 12b: THE GUIDE" + the ROUND 12 / 12b blocks of each theme file, approved 2 Oct 2026). The
-   welcome-screen rules of those blocks are not here (next port). Colours come only from tokens.css
-   roles; text never goes below --fs-meta (12px). */
+   "ROUND 12b: THE GUIDE" + the ROUND 12 / 12b blocks of each theme file, approved 2 Oct 2026). On the
+   welcome screen the same guide takes the recent-projects column (rules at the end of the guide
+   screen block). Colours come only from tokens.css roles; text never goes below --fs-meta (12px). */
 
 /* ======================= tokens ======================= */
 :root {
@@ -173,6 +173,11 @@
 .app[data-screen="rehber"] .chat.is-active { background: transparent; box-shadow: none; color: var(--shell-text-dim); }
 .foot-help { padding: 8px; }
 .foot-help.is-active { background: var(--shell-bg-active); color: var(--shell-text); }
+/* The welcome screen (no project open): the guide replaces the recent projects beside the shell
+   column, and its footer button is the sidebar's (an icon at the footer's 34px height). */
+.welcome > .guide { grid-column: 2; grid-row: 1; }
+.welcome[data-screen="rehber"] > .wl-main { display: none; }
+.wl-foot-btn.foot-help { width: 34px; padding: 0; justify-content: center; }
 
 .gd-wrap { max-width: 1120px; margin: 0 auto; padding: 30px 48px 40px; display: flex; flex-direction: column; gap: 18px; }
 .gd-head { display: grid; grid-template-columns: auto 1fr auto; gap: 20px; align-items: center; }

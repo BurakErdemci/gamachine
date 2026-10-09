@@ -146,11 +146,12 @@ export const GuideScreen: React.FC<GuideScreenProps> = ({
           <p className="gd-stat" aria-live="polite" data-testid="guide-stat">{stat}</p>
         </div>
 
-        <section className="gd-core" aria-label={t('guide.core')}>
+        {/* No core tour where none of its steps can show (the welcome screen). */}
+        {coreSteps > 0 && <section className="gd-core" aria-label={t('guide.core')}>
           <Ic className="ic gd-core-ic"><path d="M4 10a6 6 0 1 0 1.8-4.3" /><path d="M4 4v3.5h3.5" /></Ic>
           <span className="gd-core-t"><b>{t('guide.core')}</b><span>{t('guide.coreText', { n: coreSteps })}</span></span>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onTour} data-testid="guide-core-replay">{t('guide.coreReplay')}</button>
-        </section>
+        </section>}
 
         <div className="gd-groups">{groups}</div>
         {!shown && <p className="gd-none" data-testid="guide-none">{t('guide.none', { q: query.trim() })}</p>}

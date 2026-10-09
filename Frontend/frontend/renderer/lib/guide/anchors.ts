@@ -3,7 +3,6 @@
 // is declared that way in the renderer source, so the list cannot claim an anchor nobody wrote.
 //
 // Not here, so the topics that name them are not listed:
-//   welcome-new-project   the Unity Hub button (next port)
 //   ws-preview-animation, ws-browser, computer-use-bar, integration-switches,
 //   integration-switch-blender   reserved by announced features
 export const KNOWN_ANCHORS = [
@@ -16,6 +15,8 @@ export const KNOWN_ANCHORS = [
   // chat thread
   'approval-pending', 'approval-phone-hint', 'file-chip',
   'thread-actions', 'branch-tabs', 'code-block-actions',
+  // welcome screen (no project open)
+  'welcome-new-project',
   // sidebar
   'chat-list-active', 'chat-running', 'new-chat', 'side-profile', 'phone-status', 'guide-entry',
   // workspace

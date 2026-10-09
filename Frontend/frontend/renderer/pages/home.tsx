@@ -78,6 +78,7 @@ import { GuideTour } from '../components/home/GuideTour';
 import { useGuide, type GuideHost } from '../hooks/home/useGuide';
 import { capabilities } from '../lib/guide/capabilities';
 import { parseGuideCommand } from '../lib/guide/command';
+import type { GuideContext, GuideScreenId } from '../lib/guide/registry';
 import { guideWorkspaceTab, wants, type PrepareHandlers } from '../lib/guide/prepare';
 import type { WsTab, WsWidth } from '../lib/workspacePanel';
 
@@ -701,6 +702,9 @@ export default function Home() {
   };
   const guideHost: GuideHost = {
     screen: (a) => {
+      // Welcome topics are listed only while the welcome screen shows (registry `topicScreen`):
+      // there is nothing to open, and the guide never closes a project to get there.
+      if (a === 'welcome') return;
       if (a === 'profile') { openProfile(); return; }
       closeSettings();
       setProfileOpen(false);
@@ -747,12 +751,15 @@ export default function Home() {
     },
   };
   const isGitRepo = !!fs.gitStatus?.isRepo;
-  const guideCtx = useMemo(() => ({ caps: capabilities({ isGitRepo }) }), [isGitRepo]);
+  const guideScreenId: GuideScreenId = fs.workspacePath ? 'project' : 'welcome';
+  const guideCtx = useMemo<GuideContext>(() => ({ caps: capabilities({ isGitRepo }), screen: guideScreenId }), [isGitRepo, guideScreenId]);
   const guide = useGuide({
     ctx: guideCtx, host: guideHost, userName: me.name, saveName: me.saveName, appVersion: APP_VERSION,
     frameReady: !!fs.workspacePath && backendReady && !auth.isLoading,
   });
-  const { closeGuide } = guide;
+  const { closeGuide, dismiss: dismissGuide } = guide;
+  // Opening or closing a project swaps the screen under the guide and its topic list.
+  useEffect(() => { dismissGuide(); }, [guideScreenId, dismissGuide]);
   const sceneFrameVisible = !!fs.workspacePath && !backendError && !ai.showSettings;
   const sceneEditor = useSceneEditor({ api: API, token: auth.user?.sessionToken, editorOn,
     unityStatus: ai.unityMcpStatus, hierarchyVisible: sceneFrameVisible && hierarchyVisible,
@@ -795,6 +802,22 @@ export default function Home() {
           api={API} user={auth.user} userName={me.name}
           onOpenFolder={fs.openFolder} onSelectWorkspace={fs.selectWorkspace}
           onLogout={handleLogout} showToast={showToast as any}
+          guideOpen={guide.guideOpen} onOpenGuide={() => guide.openGuide()}
+          guideScreen={
+            <GuideScreen
+              open={guide.guideOpen}
+              topics={guide.topics} query={guide.query} onQuery={guide.setQuery}
+              isSeen={guide.isSeen} isNew={guide.isNew} coreSteps={guide.coreSteps}
+              onPlay={id => guide.playTopic(id)} onTour={() => guide.openTour(1)} onClose={closeGuide}
+              focusTopic={guide.focusTopic} onFocused={guide.clearFocusTopic}
+            />
+          }
+          guideTour={guide.tour && (
+            <GuideTour
+              tour={guide.tour} approvalMode={chat.generationMode}
+              onNext={guide.next} onBack={guide.back} onSkip={guide.skip} onNameDraft={guide.setNameDraft}
+            />
+          )}
         />
         {/* The welcome screen's own messages (drop errors, Unity Hub fallback, a missing folder)
             need the toast host too; it was only mounted in the workspace branch. */}

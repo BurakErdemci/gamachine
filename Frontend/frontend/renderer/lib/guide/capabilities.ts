@@ -5,12 +5,12 @@ import type { Flag } from './types';
 export type Caps = Partial<Record<Flag, boolean>>;
 
 /**
- * Build flags. All off: none of these features exists in the app yet. The Unity Hub button is the
- * next port (welcome screen); the rest are announced. Turning one on is the whole change a
- * shipped feature makes here; its topic then appears in the guide by itself.
+ * Build flags. The welcome screen's Unity Hub button exists (it opens Unity Hub over IPC, or the
+ * Unity download page when no Hub is found); the rest are announced and off. Turning one on is the
+ * whole change a shipped feature makes here; its topic then appears in the guide by itself.
  */
 export const BUILD_FLAGS: Caps = {
-  'feature.unityHubNewProject': false,
+  'feature.unityHubNewProject': true,
   'feature.animationPreview': false,
   'feature.agentBrowser': false,
   'feature.computerUse': false,

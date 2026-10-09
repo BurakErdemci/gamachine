@@ -21,6 +21,13 @@ export interface WorkspaceScreenProps {
   onSelectWorkspace: (hostPath: string) => Promise<void> | void;
   onLogout: () => void;
   showToast: (message: string, type: ToastKind) => void;
+  /** The guide on this screen (home.tsx passes the same GuideScreen / GuideTour the project uses). */
+  guideOpen?: boolean;
+  onOpenGuide?: () => void;
+  /** Drawn in place of the recent projects while `guideOpen`. */
+  guideScreen?: React.ReactNode;
+  /** The tour overlay; a child of the welcome frame, which it makes inert while open. */
+  guideTour?: React.ReactNode;
 }
 
 export const UNITY_DOWNLOAD_URL = 'https://unity.com/download';
@@ -75,6 +82,7 @@ const parentDir = (p: string): string | undefined => {
  */
 export const WorkspaceScreen = ({
   api, user, userName, onOpenFolder, onSelectWorkspace, onLogout, showToast,
+  guideOpen = false, onOpenGuide, guideScreen, guideTour,
 }: WorkspaceScreenProps) => {
   const { t, lang } = useLang();
   const { items, load, refresh, remove } = useRecentWorkspaces(api, user);
@@ -243,6 +251,8 @@ export const WorkspaceScreen = ({
   return (
     <section ref={rootRef} className="welcome" aria-label={t('welcome.aria')} data-testid="welcome"
       data-wl-first={first ? '' : undefined}
+      // As on the project frame: the guide takes the main area, the shell column stays.
+      data-screen={guideOpen ? 'rehber' : undefined}
       // A drop outside the zones must not navigate the window to the dropped file.
       onDragOver={e => e.preventDefault()} onDrop={e => e.preventDefault()}>
       <Head><title>Gamachine | Workspace</title></Head>
@@ -270,7 +280,8 @@ export const WorkspaceScreen = ({
             <button type="button" className="btn btn-primary wl-open" onClick={() => openFolder()}>
               <FolderIc />{t('welcome.open')}<kbd aria-hidden="true">{mac ? '⌘O' : 'Ctrl O'}</kbd>
             </button>
-            <button type="button" className="btn btn-ghost wl-new" aria-describedby="wl-new-hint" onClick={newProject}>
+            <button type="button" className="btn btn-ghost wl-new" aria-describedby="wl-new-hint" onClick={newProject}
+              data-guide="welcome-new-project" data-testid="welcome-new">
               <Ic><path d="M10 4v12M4 10h12" /></Ic>{t('welcome.new')}
               <Ic className="ic ic-sm wl-new-out"><path d="M8 4.5H4.5v11h11V12M11 4.5h4.5V9M15.5 4.5L9 11" /></Ic>
             </button>
@@ -284,6 +295,14 @@ export const WorkspaceScreen = ({
               : <Ic className="ic ic-sm"><circle cx="10" cy="7" r="3" /><path d="M4.5 16.5c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5" /></Ic>}
           </span>
           <span className="wl-me"><span className="wl-me-name">{name || t('welcome.account')}</span></span>
+          {/* The sidebar's guide button (Sidebar.tsx foot-help), at the welcome footer's height. */}
+          {onOpenGuide && (
+            <button type="button" className={`wl-foot-btn foot-help${guideOpen ? ' is-active' : ''}`}
+              data-testid="welcome-guide" aria-label={t('guide.entry')} aria-current={guideOpen ? 'page' : undefined}
+              title={t('guide.entryTitle')} onClick={onOpenGuide}>
+              <Ic><circle cx="10" cy="10" r="7" /><path d="M7.9 8a2.2 2.2 0 114.2.9c-.5 1-2.1 1.3-2.1 2.7" /><path d="M10 14.2v.1" /></Ic>
+            </button>
+          )}
           <button type="button" className="wl-foot-btn wl-logout" onClick={onLogout}>
             <Ic><path d="M8 4.5H4.5v11H8M12 6.5L15.5 10 12 13.5M15.5 10H8" /></Ic><span>{t('welcome.logout')}</span>
           </button>
@@ -339,6 +358,8 @@ export const WorkspaceScreen = ({
         </div>
         {APP_VERSION && <p className="wl-ver-foot">Gamachine <span className="num">{APP_VERSION}</span></p>}
       </div>
+      {guideOpen && guideScreen}
+      {guideTour}
     </section>
   );
 };

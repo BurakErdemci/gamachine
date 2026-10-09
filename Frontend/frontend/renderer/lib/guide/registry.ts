@@ -37,16 +37,29 @@ export const topicById = (id: string): GuideTopic | undefined => BY_ID.get(id);
 
 export const tx = (o: LangPair | undefined, lang: Lang): string => platformKeys(o ? (o[lang] ?? o.tr) : '');
 
+/** Which screen the guide is opened on: the welcome screen (no project open) or the project. */
+export type GuideScreenId = 'welcome' | 'project';
+
 /** What this build can show: its flags, its anchors and its prepare actions. */
 export interface GuideContext {
   caps: Caps;
+  /** Default 'project'. The guide never closes or opens a project to reach a topic's screen. */
+  screen?: GuideScreenId;
   isAnchor?: (name: string) => boolean;
   isAction?: (action: string) => boolean;
 }
 
+/**
+ * The screen a topic plays on: the welcome screen when its step 1 names `screen:welcome` (rule 4:
+ * step 1 names its screen), otherwise the project screen, where every other anchor lives.
+ */
+export const topicScreen = (t: GuideTopic): GuideScreenId =>
+  (t.steps[0]?.prepare ?? []).includes('screen:welcome') ? 'welcome' : 'project';
+
 /** Why a topic is not shown, or null when it is. */
-export function unavailableReason(t: GuideTopic, ctx: GuideContext): 'flag' | 'anchor' | 'prepare' | null {
+export function unavailableReason(t: GuideTopic, ctx: GuideContext): 'flag' | 'screen' | 'anchor' | 'prepare' | null {
   if (!flagsOn(t.available_when, ctx.caps)) return 'flag';
+  if (topicScreen(t) !== (ctx.screen ?? 'project')) return 'screen';
   const anchor = ctx.isAnchor ?? isKnownAnchor;
   const action = ctx.isAction ?? isSupported;
   if (t.steps.some(s => s.anchor && !anchor(s.anchor))) return 'anchor';

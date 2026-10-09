@@ -169,6 +169,12 @@ export function useGuide({ ctx, host, userName, saveName, appVersion, frameReady
     setGuideOpen(true);
   }, [finish]);
   const closeGuide = useCallback(() => setGuideOpen(false), []);
+  /** The screen under the guide went away (a project opened or closed): end any tour without
+   *  reopening the guide, and close the guide. */
+  const dismiss = useCallback(() => {
+    if (live.current.tour) finish({ silent: true });
+    setGuideOpen(false);
+  }, [finish]);
 
   // Keys. While a tour runs: Esc skips (capture, before the app's own Esc handling: settings,
   // menus), arrows step unless the name field is being typed in. Otherwise F1 opens the guide
@@ -244,7 +250,7 @@ export function useGuide({ ctx, host, userName, saveName, appVersion, frameReady
   const coreSteps = useMemo(() => stepsOf(CORE_TOUR, ctx).length, [ctx]);
 
   return {
-    guideOpen, openGuide, closeGuide, query, setQuery, focusTopic, clearFocusTopic: () => setFocusTopic(null),
+    guideOpen, openGuide, closeGuide, dismiss, query, setQuery, focusTopic, clearFocusTopic: () => setFocusTopic(null),
     topics, isSeen, isNew, coreSteps,
     tour, openTour, playTopic, next, back, skip, go, setNameDraft,
     topic: tour?.topicId ? topicById(tour.topicId) ?? null : null,

@@ -36,7 +36,7 @@ describe('registry · anchors are real', () => {
   })
 
   it('the check itself can fail: an unwritten name is not found', () => {
-    expect(declared('welcome-new-project')).toBe(false)
+    expect(declared('computer-use-bar')).toBe(false)
     expect(declared('ws-browser')).toBe(false)
   })
 

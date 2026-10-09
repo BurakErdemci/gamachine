@@ -36,8 +36,10 @@ describe('registry · what this build lists', () => {
     const t = topic({ available_when: 'feature.computerUse' })
     expect(unavailableReason(t, CTX)).toBe('flag')
     expect(unavailableReason(t, { caps: { ...CTX.caps, 'feature.computerUse': true } })).toBeNull()
-    // every announced flag is off in this build
-    expect(Object.values(BUILD_FLAGS).every(v => v === false)).toBe(true)
+    // every announced flag is off in this build; the Unity Hub button is the one shipped feature
+    const { 'feature.unityHubNewProject': hub, ...announced } = BUILD_FLAGS
+    expect(hub).toBe(true)
+    expect(Object.values(announced).every(v => v === false)).toBe(true)
   })
 
   it('a topic naming an anchor this build does not know is not listed', () => {
@@ -47,9 +49,9 @@ describe('registry · what this build lists', () => {
   })
 
   it('a prepare action the app cannot perform makes the topic unavailable too', () => {
-    const t = topic({ steps: [{ anchor: 'composer', prepare: ['screen:welcome'], title: T('a', 'a'), text: T('b', 'b') }] })
+    const t = topic({ steps: [{ anchor: 'composer', prepare: ['workspace.tab:browser'], title: T('a', 'a'), text: T('b', 'b') }] })
     expect(unavailableReason(t, CTX)).toBe('prepare')
-    expect(isSupported('screen:welcome')).toBe(false)
+    expect(isSupported('screen:welcome')).toBe(true)
     expect(isSupported('workspace.tab:browser')).toBe(false)
     expect(isSupported('preview.open:animation')).toBe(false)
     expect(isSupported('settings:remote')).toBe(true)
@@ -175,7 +177,7 @@ describe('registry · prepare chaining', () => {
   it('runPrepare calls the matching handler with its argument, in order, and skips unknown ones', () => {
     const calls: string[] = []
     const h = Object.fromEntries(Object.keys(SUPPORTED).map(k => [k, (a: string | null) => calls.push(`${k}:${a}`)])) as unknown as PrepareHandlers
-    runPrepare(['screen:chat', 'screen:welcome', 'settings:remote', 'workspace.peek'], h)
+    runPrepare(['screen:chat', 'workspace.tab:browser', 'settings:remote', 'workspace.peek'], h)
     expect(calls).toEqual(['screen:chat', 'settings:remote', 'workspace.peek:null'])
   })
 })
