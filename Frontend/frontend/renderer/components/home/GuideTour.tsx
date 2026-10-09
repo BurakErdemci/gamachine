@@ -130,14 +130,23 @@ export const GuideTour: React.FC<GuideTourProps> = ({ tour, approvalMode, onNext
     window.addEventListener('resize', measure);
     // The spotlighted element can vanish mid-step (a pending approval card gets resolved): measure
     // again so the anchor is re-resolved or the card falls back to the centre instead of leaving
-    // the hole on the old spot (guide audit, 2 Oct 2026).
+    // the hole on the old spot (guide audit, 2 Oct 2026). An anchor missing at both measures (a
+    // pane or list still loading) is looked for again once per frame while the DOM changes, so it
+    // is spotlighted when it renders instead of the card staying centred for the whole step.
+    let late = 0;
     const gone = new MutationObserver(() => {
       const t = targetRef.current;
-      if (t && !t.isConnected) measure();
+      if (t) { if (!t.isConnected) measure(); return; }
+      if (!step.anchor || late) return;
+      late = requestAnimationFrame(() => {
+        late = 0;
+        if (!targetRef.current && findAnchor(step.anchor!)) measure();
+      });
     });
     gone.observe(document.body, { childList: true, subtree: true });
     return () => {
       gone.disconnect();
+      cancelAnimationFrame(late);
       cancelAnimationFrame(raf); clearTimeout(again); clearTimeout(focus);
       window.removeEventListener('resize', measure);
       app?.classList.remove('is-init');

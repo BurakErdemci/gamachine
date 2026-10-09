@@ -124,6 +124,19 @@ describe('4 spotlight target removed mid-step', () => {
     await act(async () => { anchor.remove(); await Promise.resolve(); await Promise.resolve() })
     expect(hole()).not.toBe(before)
   })
+  it('spotlights an anchor that renders after both measures', async () => {
+    render(<Harness host={mockHost()} />)
+    act(() => api.playTopic('ask'))
+    await tick(300)
+    const hole = () => (document.querySelector('.tour-hole') as HTMLElement).style.cssText
+    expect(hole()).not.toContain('94px')
+    const anchor = document.createElement('div')
+    anchor.setAttribute('data-guide', 'composer')
+    anchor.getBoundingClientRect = () => ({ left: 100, top: 100, width: 200, height: 50, right: 300, bottom: 150, x: 100, y: 100, toJSON() {} }) as DOMRect
+    await act(async () => { document.body.appendChild(anchor) })
+    await tick()
+    expect(hole()).toContain('94px')
+  })
 })
 
 describe('5 drawer tab in the guide snapshot', () => {
