@@ -19,6 +19,7 @@ namespace MCPForUnity.Editor.Tools.Sprite2D
         public bool Loop;
         public string TriggerName;
         public float BlendValue; // Position on the 1D blend tree: walk=1, run=2.
+        public bool Terminal;    // A death: its one-shot state gets no exit and holds its last frame.
     }
 
     internal static class SpriteNamingDetector
@@ -38,6 +39,10 @@ namespace MCPForUnity.Editor.Tools.Sprite2D
         private static void Categorize(string name, SpriteAnimEntry entry)
         {
             var words = Words(name);
+
+            // Whichever word picks the trigger: 'death_fall' falls on 'Fall' and is still a
+            // death, and an exit back to idle would stand the character up again.
+            entry.Terminal = Has(words, "die", "death");
 
             if (Has(words, "idle", "stand"))
             { entry.Category = SpriteAnimCategory.Idle; return; }

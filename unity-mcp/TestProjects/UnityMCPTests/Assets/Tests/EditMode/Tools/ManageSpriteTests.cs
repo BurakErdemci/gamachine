@@ -143,6 +143,31 @@ namespace MCPForUnityTests.Editor.Tools
                 .OrderBy(s => int.Parse(s.name.Split('_').Last()))
                 .ToArray();
 
+        /// <summary>
+        /// Lowers Max Size until the import is smaller than the file, the case where the
+        /// imported texture size and the source pixels that sprite rects use stop agreeing.
+        /// </summary>
+        private static void ShrinkImport(string path, int maxSize, int expectedImportedWidth)
+        {
+            var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+            importer.maxTextureSize = maxSize;
+            EditorUtility.SetDirty(importer);
+            importer.SaveAndReimport();
+            Assert.AreEqual(expectedImportedWidth, AssetDatabase.LoadAssetAtPath<Texture2D>(path).width,
+                "fixture: Max Size must make the import smaller than the source");
+        }
+
+        /// <summary>Every importer field slice_sheet writes, as one comparable string.</summary>
+        private static string ImportState(string path)
+        {
+            var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+#pragma warning disable CS0618 // same API the tool writes through
+            int slices = importer.spritesheet.Length;
+#pragma warning restore CS0618
+            return $"type={importer.textureType} npot={importer.npotScale} mode={importer.spriteImportMode} " +
+                   $"filter={importer.filterMode} slices={slices}";
+        }
+
         // =====================================================================
         // Dispatch
         // =====================================================================
@@ -199,6 +224,21 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.IsTrue(result.Value<bool>("success"));
             Assert.AreEqual(4 * Cell, result.Value<int>("width"));
             Assert.AreEqual(2 * Cell, result.Value<int>("height"));
+        }
+
+        [Test]
+        public void GetInfo_SheetLargerThanMaxSize_ReportsTheSourceSize()
+        {
+            // A caller sizes its grid from these numbers and slice_sheet cuts in source
+            // pixels, so reporting the shrunken import would hand it the wrong frame size.
+            string path = CreateSheet("maxsize_info", 8, 1);
+            ShrinkImport(path, 32, 32);
+
+            var result = Run(new JObject { ["action"] = "get_info", ["path"] = path });
+
+            Assert.IsTrue(result.Value<bool>("success"));
+            Assert.AreEqual(8 * Cell, result.Value<int>("width"));
+            Assert.AreEqual(Cell, result.Value<int>("height"));
         }
 
         [Test]
@@ -571,8 +611,10 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void SliceSheet_TextureAlreadyConvertedToSprite_KeepsEveryFrame()
         {
-            // Pins the branch where the texture is already a Sprite. A boundary guard, not
-            // evidence for the fix: it survives every mutation of the slicing code.
+            // Pins the branch where the texture is already a Sprite, which used to skip the
+            // conversion block and so never normalised npotScale. On 2021.3.45f2 that made
+            // Unity refuse sprite generation and slice_sheet report six frames over an empty
+            // asset; reverting the npotScale line turns this case red there.
             string path = CreateSheet("npot_preset", 6, 1);
             var importer = (TextureImporter)AssetImporter.GetAtPath(path);
             importer.textureType = TextureImporterType.Sprite;
@@ -583,6 +625,30 @@ namespace MCPForUnityTests.Editor.Tools
             var result = Slice(path, 6, 1);
             Assert.IsTrue(result.Value<bool>("success"));
             Assert.AreEqual(6, SpritesOf(path).Length, "no frame may be dropped");
+        }
+
+        [Test]
+        public void SliceSheet_SheetLargerThanMaxSize_CutsTheGridInSourcePixels()
+        {
+            // A 128x16 sheet imported at Max Size 32 is a 32x4 texture, but Unity reads
+            // sprite rects in source pixels. A grid cut from the imported size gave 4px
+            // cells over the left quarter of the sheet and still reported success.
+            string path = CreateSheet("maxsize", 8, 1);
+            ShrinkImport(path, 32, 32);
+
+            var result = Slice(path, 8, 1);
+
+            Assert.IsTrue(result.Value<bool>("success"), ErrorText(result));
+            Assert.AreEqual(Cell, result.Value<int>("frame_width"));
+            Assert.AreEqual(Cell, result.Value<int>("frame_height"));
+            var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+#pragma warning disable CS0618 // same API the tool writes through
+            var rects = importer.spritesheet.Select(m => m.rect).ToArray();
+#pragma warning restore CS0618
+            for (int i = 0; i < rects.Length; i++)
+                Assert.AreEqual(new Rect(i * Cell, 0, Cell, Cell), rects[i], $"frame {i}");
+            // The frames must cover the whole sheet, read on the imported texture.
+            Assert.AreEqual(32f, SpritesOf(path).Last().rect.xMax, "the last frame must reach the right edge");
         }
 
         [Test]
@@ -631,6 +697,25 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.AreEqual(16, SpritesOf(path).Length);
         }
 
+        [TestCase("slice_sheet", null, FilterMode.Point)]
+        [TestCase("slice_sheet", "bilinear", FilterMode.Bilinear)]
+        // Mixed case, and through full_setup, which hands its own params to the slice step.
+        [TestCase("full_setup", "Trilinear", FilterMode.Trilinear)]
+        public void FilterMode_IsWhatTheSliceSets_PointUnlessAsked(string action, string filterMode, FilterMode expected)
+        {
+            string path = CreateSheet("filter", 4, 1);
+            Assert.AreEqual(FilterMode.Bilinear, ((TextureImporter)AssetImporter.GetAtPath(path)).filterMode,
+                "fixture: a sheet that starts as Point would let the Point case pass without the slice setting it");
+            var request = new JObject { ["action"] = action, ["path"] = path, ["cols"] = 4 };
+            if (filterMode != null)
+                request["filter_mode"] = filterMode;
+
+            var result = Run(request);
+
+            Assert.AreEqual(expected, ((TextureImporter)AssetImporter.GetAtPath(path)).filterMode,
+                result.ToString(Newtonsoft.Json.Formatting.None));
+        }
+
         private static IEnumerable<TestCaseData> RefusedGrids()
         {
             TestCaseData Case(int sheetCols, int sheetRows, JObject grid, string code) =>
@@ -657,6 +742,8 @@ namespace MCPForUnityTests.Editor.Tools
             yield return Case(8, 8, new JObject { ["cols"] = 128, ["rows"] = 128 }, "SLICE_TOO_MANY_FRAMES");
             // A negative alternative used to be silently replaced by the value derived from cols.
             yield return Case(2, 1, new JObject { ["cols"] = 2, ["frame_width"] = -1 }, "BAD_PARAM");
+            // "nearest" is another engine's name for Point: refused like a bad grid value, not mapped.
+            yield return Case(2, 1, new JObject { ["cols"] = 2, ["filter_mode"] = "nearest" }, "BAD_PARAM");
         }
 
         [TestCaseSource(nameof(RefusedGrids))]
@@ -664,7 +751,7 @@ namespace MCPForUnityTests.Editor.Tools
             int sheetCols, int sheetRows, JObject grid, string code)
         {
             string path = CreateSheet("badgrid", sheetCols, sheetRows);
-            var before = ((TextureImporter)AssetImporter.GetAtPath(path)).textureType;
+            string before = ImportState(path);
 
             var request = new JObject { ["action"] = "slice_sheet", ["path"] = path };
             foreach (var p in grid.Properties())
@@ -674,10 +761,67 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.IsFalse(result.Value<bool>("success"));
             Assert.That(result["diagnostics"].ToString(), Does.Contain(code));
             Assert.AreEqual(0, SpritesOf(path).Length, "a refused grid must not write any frame");
-            // Every refusal after the Sprite conversion owes a RestoreTextureType call, an
-            // obligation the code cannot enforce; this assertion makes a forgotten one fail.
-            Assert.AreEqual(before, ((TextureImporter)AssetImporter.GetAtPath(path)).textureType,
-                "a refused request must not leave the texture converted behind it");
+            // Every refusal after the conversion owes a restore call, an obligation the code
+            // cannot enforce; this assertion makes a forgotten one fail.
+            Assert.AreEqual(before, ImportState(path),
+                "a refused request must not leave the importer modified behind it");
+        }
+
+        [Test]
+        public void SliceSheet_RefusedGridOnADefaultNpotSheet_RestoresNpotScaleNotJustTheType()
+        {
+            string path = CreateSheet("npot_default_refused", 6, 1);
+            var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+            Assert.AreEqual(TextureImporterType.Default, importer.textureType, "fixture: expected a Default-type sheet");
+            Assert.AreNotEqual(TextureImporterNPOTScale.None, importer.npotScale,
+                "fixture: the conversion only touches npotScale when it is not None");
+            var npotBefore = importer.npotScale;
+
+            var result = Run(new JObject { ["action"] = "slice_sheet", ["path"] = path,
+                                           ["cols"] = 6, ["frame_width"] = 4096 });
+
+            Assert.That(result["diagnostics"].ToString(), Does.Contain("SLICE_OUT_OF_BOUNDS"));
+            Assert.AreEqual(npotBefore, ((TextureImporter)AssetImporter.GetAtPath(path)).npotScale);
+        }
+
+        /// <summary>
+        /// Turns the slice import of one armed path back into a Default texture, which yields
+        /// no sprites: the only way found to make Unity accept a spritesheet and generate nothing.
+        /// </summary>
+        public class StripSpritesFromSliceImport : AssetPostprocessor
+        {
+            internal static string ArmedPath;
+
+            private void OnPreprocessTexture()
+            {
+                if (assetPath != ArmedPath) return;
+                var importer = (TextureImporter)assetImporter;
+                if (importer.spriteImportMode == SpriteImportMode.Multiple)
+                    importer.textureType = TextureImporterType.Default;
+            }
+        }
+
+        [Test]
+        public void SliceSheet_SpritesNotGenerated_RollsTheImporterBack()
+        {
+            string path = CreateSheet("not_generated", 4, 1);
+            string before = ImportState(path);
+
+            JObject result;
+            StripSpritesFromSliceImport.ArmedPath = path;
+            try
+            {
+                result = Run(new JObject { ["action"] = "slice_sheet", ["path"] = path, ["cols"] = 4 });
+            }
+            finally
+            {
+                StripSpritesFromSliceImport.ArmedPath = null;
+            }
+
+            Assert.That(result["diagnostics"].ToString(), Does.Contain("SLICE_NOT_GENERATED"),
+                "fixture: the postprocessor did not stop sprite generation; " + result.ToString(Newtonsoft.Json.Formatting.None));
+            Assert.AreEqual(before, ImportState(path),
+                "a slice Unity did not generate must not leave its settings on the asset");
         }
 
         [Test]
@@ -687,7 +831,7 @@ namespace MCPForUnityTests.Editor.Tools
             Slice(path, 4, 2);
             Assert.AreEqual(8, SpritesOf(path).Length);
 
-            Slice(path, 2, 1);
+            var smaller = Slice(path, 2, 1);
             var after = SpritesOf(path).Select(s => s.name).ToArray();
 #pragma warning disable CS0618 // same API the tool writes through
             int configured = ((TextureImporter)AssetImporter.GetAtPath(path)).spritesheet.Length;
@@ -695,6 +839,11 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.AreEqual(2, after.Length,
                 $"stale frames must not survive a reslice; importer holds {configured}, " +
                 "project holds: " + string.Join(", ", after));
+            // A clip that played reslice_2..7 loses those frames, so the slice has to name them.
+            Assert.That(smaller["diagnostics"].ToString(),
+                Does.Contain("SLICE_REMOVED_FRAMES").And.Contain("reslice_7").And.Not.Contain("reslice_1"));
+            Assert.That(Slice(path, 2, 1)["diagnostics"].ToString(), Does.Not.Contain("SLICE_REMOVED_FRAMES"),
+                "the same grid again removes nothing");
         }
 
         // =====================================================================
@@ -1088,6 +1237,94 @@ namespace MCPForUnityTests.Editor.Tools
         }
 
         [Test]
+        public void SetupController_OneShotWithoutAnIdleClip_ExitsToLocomotion()
+        {
+            // The exit was built only toward an Idle state, so without one 'attack' had no way out.
+            var result = SetupController(BuildClips("noidle", "walk", "attack"));
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+
+            var sm = AssetDatabase.LoadAssetAtPath<AnimatorController>($"{TempRoot}/Hero.controller").layers[0].stateMachine;
+            var walk = sm.states.Select(s => s.state).Single(s => s.name == "walk");
+            var attack = sm.states.Select(s => s.state).Single(s => s.name == "attack");
+            Assert.That(attack.transitions.Where(t => t.hasExitTime).Select(t => t.destinationState),
+                Contains.Item(walk));
+        }
+
+        [Test]
+        public void SetupController_OneShotsWithoutALoopingState_DoNotExitIntoEachOther()
+        {
+            // With no idle or locomotion the default state is itself a one-shot; exiting
+            // into it would chain jump into attack and leave the Animator stuck there.
+            var result = SetupController(BuildClips("oneshots", "attack", "jump"));
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+
+            var sm = AssetDatabase.LoadAssetAtPath<AnimatorController>($"{TempRoot}/Hero.controller").layers[0].stateMachine;
+            Assert.That(sm.states.Select(s => s.state.name), Is.EquivalentTo(new[] { "attack", "jump" }));
+            foreach (var state in sm.states.Select(s => s.state))
+                Assert.That(state.transitions.Where(t => t.hasExitTime), Is.Empty,
+                    $"'{state.name}' got an exit-time transition");
+        }
+
+        [Test]
+        public void SetupController_TriggersFireFromAnyStateWithoutBlending()
+        {
+            // Trigger transitions used to come only from states that already existed, so
+            // 'attack' could not interrupt 'hurt', which is built after it.
+            var result = SetupController(BuildClips("anystate", "idle", "walk", "attack", "hurt"));
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+
+            var sm = AssetDatabase.LoadAssetAtPath<AnimatorController>($"{TempRoot}/Hero.controller").layers[0].stateMachine;
+            foreach (var (state, trigger) in new[] { ("attack", "Attack"), ("hurt", "Hurt") })
+                Assert.IsTrue(sm.anyStateTransitions.Any(t =>
+                        t.destinationState != null && t.destinationState.name == state &&
+                        t.conditions.Any(c => c.mode == AnimatorConditionMode.If && c.parameter == trigger)),
+                    $"'{state}' needs an Any State transition on '{trigger}'; without one, states built " +
+                    "after it cannot be interrupted by it ('attack' could not interrupt 'hurt')");
+            Assert.That(sm.anyStateTransitions.Where(t => !t.canTransitionToSelf).Select(t => t.destinationState?.name),
+                Is.Empty, "a repeated trigger must restart its clip; with canTransitionToSelf off, Unity keeps " +
+                "the trigger set and replays the state after it ends");
+
+            var blended = sm.states
+                .SelectMany(s => s.state.transitions.Select(t => (source: s.state.name, t)))
+                .Concat(sm.anyStateTransitions.Select(t => (source: "Any State", t)))
+                .Where(x => x.t.duration != 0f)
+                .Select(x => $"{x.source} -> {x.t.destinationState?.name} ({x.t.duration})")
+                .ToArray();
+            Assert.That(blended, Is.Empty,
+                "sprite keys cannot blend, so any blend time only delays the frame change");
+        }
+
+        // Each case leaves one clip that no transition plays, so only a warning tells the caller.
+        // `named`: what the warning must name, the clip it is about first.
+        [TestCase("STATE_UNREACHABLE", "idle,taunt", "'taunt'")]
+        // One Idle state: the second idle clip was dropped without a word.
+        [TestCase("IDLE_CLIP_UNUSED", "idle,idle_blink", "'idle_blink'", "'idle'")]
+        // Both clips got an Any State transition on Attack, and only the first could ever fire.
+        [TestCase("TRIGGER_SHARED", "idle,attack,hero_attack", "'hero_attack'", "'attack'", "'Attack'")]
+        public void SetupController_ClipThatNoTransitionPlays_IsNamedInAWarning(string code, string clips, params string[] named)
+        {
+            var result = SetupController(BuildClips("unplayed", clips.Split(',')));
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+
+            // Not even a transition that can never fire: for a shared trigger the builder used to
+            // add a second Any State transition anyway.
+            string clip = named[0].Trim('\'');
+            var sm = AssetDatabase.LoadAssetAtPath<AnimatorController>($"{TempRoot}/Hero.controller").layers[0].stateMachine;
+            var incoming = sm.anyStateTransitions
+                .Concat(sm.states.SelectMany(s => s.state.transitions))
+                .Where(t => t.destinationState != null && t.destinationState.name == clip);
+            Assert.That(incoming, Is.Empty, $"a transition leads to '{clip}'");
+
+            var warnings = result["diagnostics"]
+                .Where(d => d.Value<string>("code") == code)
+                .Select(d => d.Value<string>("message"))
+                .ToArray();
+            Assert.AreEqual(1, warnings.Length, "diagnostics were " + result["diagnostics"]);
+            foreach (string name in named)
+                Assert.That(warnings[0], Does.Contain(name));
+        }
+
+        [Test]
         public void SetupController_WalkAndRun_BuildsASpeedDrivenBlendTree()
         {
             var result = SetupController(BuildClips("blend", "idle", "walk", "run"));
@@ -1222,8 +1459,13 @@ namespace MCPForUnityTests.Editor.Tools
         // full_setup
         // =====================================================================
 
-        [Test]
-        public void FullSetup_ControllerRefusal_StopsBeforeTouchingTheScene()
+        // A second run without overwrite. Given the same clip, every clip exists: it used to reach
+        // the controller step and fail there with "No valid clips loaded.". Given a new clip, the
+        // clip is written and the existing controller refuses. `fixes`: what the refusal must offer.
+        [TestCase(null, "setup_clips", "ALL_CLIPS_EXIST", "overwrite=true", "setup_controller")]
+        [TestCase("s5_new", "setup_controller", "CONTROLLER_EXISTS", "overwrite=true")]
+        public void FullSetup_RerunWithoutOverwrite_StopsAtTheRefusingStepBeforeTouchingTheScene(
+            string secondClip, string step, string code, params string[] fixes)
         {
             string path = CreateSheet("s5", 4, 1);
             var go = new GameObject("SpriteTest_S5");
@@ -1233,17 +1475,23 @@ namespace MCPForUnityTests.Editor.Tools
                 Run(new JObject { ["action"] = "full_setup", ["path"] = path, ["cols"] = 4,
                                   ["output_dir"] = TempRoot, ["controller_path"] = ctrl });
 
-                // Second run: the controller exists and overwrite is not set, so the
-                // controller step fails - and a failed step must not fall through.
-                var result = Run(new JObject { ["action"] = "full_setup", ["path"] = path, ["cols"] = 4,
-                                  ["output_dir"] = TempRoot, ["controller_path"] = ctrl,
-                                  ["add_to_scene"] = true, ["scene_target"] = "SpriteTest_S5" });
+                var rerun = new JObject { ["action"] = "full_setup", ["path"] = path, ["cols"] = 4,
+                                          ["output_dir"] = TempRoot, ["controller_path"] = ctrl,
+                                          ["add_to_scene"] = true, ["scene_target"] = "SpriteTest_S5" };
+                if (secondClip != null) rerun["animation_name"] = secondClip;
+                var result = Run(rerun);
 
                 Assert.IsFalse(result.Value<bool>("success"));
-                Assert.AreEqual("setup_controller", result.Value<string>("step"),
-                    "the response must name the step that failed");
+                Assert.AreEqual(step, result.Value<string>("step"),
+                    "the response must name the step that refused; it was " + result);
+                var refusal = result["diagnostics"].FirstOrDefault(d => d.Value<string>("code") == code);
+                Assert.IsNotNull(refusal, "diagnostics were " + result["diagnostics"]);
+                Assert.AreEqual("error", refusal.Value<string>("severity"));
+                string offered = string.Join(" ", refusal["fix_options"].Values<string>());
+                foreach (string fix in fixes)
+                    Assert.That(offered, Does.Contain(fix));
                 Assert.IsNull(go.GetComponent<Animator>(),
-                    "a refused controller step must not go on to modify the scene");
+                    "a refused step must not go on to modify the scene");
             }
             finally { Object.DestroyImmediate(go); }
         }
@@ -1259,6 +1507,10 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.IsFalse(result.Value<bool>("success"),
                 "an attachment that was asked for and did not happen is not a success");
             Assert.That(result["diagnostics"].ToString(), Does.Contain("SCENE_TARGET_NOT_FOUND"));
+            // Asserted on the message rather than only the diagnostics array, because reading
+            // the array was what let this refusal keep a shape no other refusal in the tool has.
+            Assert.AreEqual("add_to_scene", result.Value<string>("step"));
+            Assert.That(ErrorText(result), Does.Contain("NoSuchObject"));
         }
 
         [Test]
@@ -1385,6 +1637,35 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.AreEqual(onDisk, result.Value<int>("clip_count"),
                 "clip_count must count the clips that exist, not the ones that were asked for");
             Assert.That(result["diagnostics"].ToString(), Does.Contain("CLIP_BAD_FPS"));
+        }
+
+        // The controller re-derived looping from the clip name, so 'attack' with loop=true
+        // still got a one-shot exit to idle while its .anim looped. A death got that exit too,
+        // and returning to idle stood the dead character back up.
+        [TestCase("attack", true, false)]
+        [TestCase("attack", null, true)]
+        [TestCase("die", null, false)]
+        [TestCase("hero_death", null, false)]
+        public void FullSetup_LoopAndName_DecideTheOneShotExit(string clipName, bool? loop, bool expectExit)
+        {
+            string path = CreateSheet("loopflag", 4, 1);
+            var oneShotDef = new JObject { ["name"] = clipName, ["start_frame"] = 2, ["end_frame"] = 3 };
+            if (loop.HasValue) oneShotDef["loop"] = loop.Value;
+            var result = Run(new JObject
+            {
+                ["action"] = "full_setup", ["path"] = path, ["cols"] = 4,
+                ["output_dir"] = TempRoot, ["controller_path"] = $"{TempRoot}/Loop.controller",
+                ["clips"] = new JArray {
+                    new JObject { ["name"] = "idle", ["start_frame"] = 0, ["end_frame"] = 1 },
+                    oneShotDef,
+                },
+            });
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+
+            var sm = AssetDatabase.LoadAssetAtPath<AnimatorController>($"{TempRoot}/Loop.controller").layers[0].stateMachine;
+            var oneShot = sm.states.Select(s => s.state).Single(s => s.name == clipName);
+            bool exitsToIdle = oneShot.transitions.Any(t => t.destinationState != null && t.destinationState.name == "Idle");
+            Assert.AreEqual(expectExit, exitsToIdle);
         }
 
         [Test]
@@ -1522,6 +1803,40 @@ namespace MCPForUnityTests.Editor.Tools
             else
                 Assert.IsNotEmpty(result.Value<string>("image_omitted_reason") ?? "",
                     "an omitted image must say why");
+        }
+
+        [Test]
+        public void GetInfo_SourceThatIsNotPngOrJpeg_IsNotSentAsAnImage()
+        {
+            // The inline image is the source file's bytes. A TGA used to go out labelled
+            // image/png, which a client that checks the image refuses.
+            var tex = new Texture2D(4 * Cell, 2 * Cell, TextureFormat.RGBA32, false);
+            string path = $"{TempRoot}/targa.tga";
+            File.WriteAllBytes(Path.Combine(Directory.GetParent(Application.dataPath).FullName, path),
+                tex.EncodeToTGA());
+            Object.DestroyImmediate(tex);
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport);
+
+            var result = Run(new JObject { ["action"] = "get_info", ["path"] = path });
+
+            Assert.IsTrue(result.Value<bool>("success"), "the call still answers");
+            Assert.IsNull(result.Value<string>("image_base64"));
+            Assert.That(result.Value<string>("image_omitted_reason"), Does.Contain(".tga"));
+        }
+
+        [Test]
+        public void GetInfo_SourceOver8000PixelsOnASide_IsNotSentAsAnImage()
+        {
+            // Small on disk, so the byte limit lets it through; image inputs commonly refuse
+            // anything over 8000 px on a side, and that refusal fails the whole request.
+            string path = CreateSheetOfSize("wide", 8192, Cell);
+
+            var result = Run(new JObject { ["action"] = "get_info", ["path"] = path });
+
+            Assert.IsTrue(result.Value<bool>("success"), "the call still answers");
+            Assert.IsNull(result.Value<string>("image_base64"));
+            Assert.That(result.Value<string>("image_omitted_reason"), Does.Contain("8000"));
+            Assert.AreEqual(8192, result.Value<int>("width"), "the source width, not the import");
         }
 
         // =====================================================================

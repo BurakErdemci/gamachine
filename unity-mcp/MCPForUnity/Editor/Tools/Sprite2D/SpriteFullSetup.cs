@@ -57,6 +57,13 @@ namespace MCPForUnity.Editor.Tools.Sprite2D
             bool overwrite = ParamCoercion.CoerceBool(@params["overwrite"], false);
 
             var clips = SpriteClipBuilder.CreateClips(path, clipsToken, outputDir, overwrite, diagnostics);
+            // A repeated run skips every clip, and the controller step then failed with "No valid
+            // clips loaded.", which named neither the cause nor the way past it.
+            if (clips.Count == 0 && diagnostics.Build().Count(d => d.code == "CLIP_EXISTS") == clipsToken.Count)
+                diagnostics.AddError("ALL_CLIPS_EXIST",
+                    "Every requested clip already exists, so no clip was written and full_setup stopped before the controller step.",
+                    "Set overwrite=true to replace the clips and the controller.",
+                    "Call setup_controller with the existing .anim paths, which the CLIP_EXISTS warnings name, and overwrite=true if the controller already exists.");
             if (diagnostics.HasErrors)
                 return Stop("setup_clips", diagnostics);
 
@@ -66,7 +73,7 @@ namespace MCPForUnity.Editor.Tools.Sprite2D
                 ?? $"{outputDir}/{Path.GetFileNameWithoutExtension(path)}_Controller.controller";
 
             var controller = SpriteControllerBuilder.BuildController(
-                clips.Select(c => (c.name, c.path)), controllerPath, overwrite, diagnostics);
+                clips.Select(c => (c.name, c.path, (bool?)c.loop)), controllerPath, overwrite, diagnostics);
             if (diagnostics.HasErrors)
                 return Stop("setup_controller", diagnostics);
 
@@ -136,9 +143,27 @@ namespace MCPForUnity.Editor.Tools.Sprite2D
                 }
             }
 
+            // Shaped like the other three steps' refusals rather than like a success with the
+            // flag flipped: a step-4 failure used to be the one refusal in the tool carrying
+            // neither 'step' nor 'message', leaving the reason only inside the diagnostics
+            // array. The asset fields stay on it, because by this point steps 1-3 have written
+            // and the caller needs to know what is already on disk.
+            if (diagnostics.HasErrors)
+                return new
+                {
+                    success           = false,
+                    step              = "add_to_scene",
+                    message           = diagnostics.FirstError,
+                    sprite_path       = path,
+                    controller_path   = controller.path,
+                    state_count       = controller.stateCount,
+                    clip_count        = clips.Count,
+                    diagnostics       = diagnostics.Build(),
+                };
+
             return new
             {
-                success               = !diagnostics.HasErrors,
+                success               = true,
                 sprite_path           = path,
                 controller_path       = controller.path,
                 state_count           = controller.stateCount,
