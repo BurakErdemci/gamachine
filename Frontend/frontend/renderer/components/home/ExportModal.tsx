@@ -1,8 +1,17 @@
 import { AlertTriangle, CheckCircle2, FileCode, FileDown, Folder, X } from "lucide-react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useIsPresent } from "framer-motion";
+import type { HTMLAttributes } from "react";
 
 import { ExportModalState } from "./types";
 import { useLang } from "../../lib/i18n";
+
+
+/** The backdrop dialog. AnimatePresence keeps it through the card's exit animation; aria-modal
+ *  goes once it is leaving, so the window's Ctrl+S guard does not swallow a save meanwhile. */
+const ModalFrame = (props: HTMLAttributes<HTMLDivElement>) => {
+  const present = useIsPresent();
+  return <div role="dialog" aria-modal={present ? "true" : undefined} {...props} />;
+};
 
 
 interface ExportModalProps {
@@ -31,7 +40,7 @@ export const ExportModal = ({
   return (
   <AnimatePresence>
     {exportModal?.isOpen && (
-      <div role="dialog" aria-modal="true" className="fixed inset-0 flex items-center justify-center z-[100]" style={{ background: 'color-mix(in srgb, var(--shell-bg) 70%, transparent)' }} onClick={() => !exportModal.exportResult && onClose()}>
+      <ModalFrame className="fixed inset-0 flex items-center justify-center z-[100]" style={{ background: 'color-mix(in srgb, var(--shell-bg) 70%, transparent)' }} onClick={() => !exportModal.exportResult && onClose()}>
         <motion.div
           initial={{ scale: 0.95, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -188,7 +197,7 @@ export const ExportModal = ({
             </>
           )}
         </motion.div>
-      </div>
+      </ModalFrame>
     )}
   </AnimatePresence>
   );

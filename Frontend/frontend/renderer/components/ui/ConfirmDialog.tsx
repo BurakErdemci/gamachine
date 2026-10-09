@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useIsPresent } from 'framer-motion';
 import { AlertTriangle } from 'lucide-react';
 import { cevir } from '../../lib/i18n';
 
@@ -37,6 +37,27 @@ export function confirmDialog(
   return _trigger({ message, confirmLabel, cancelLabel });
 }
 
+/**
+ * role + aria-modal: screen readers announce it, and window-level shortcuts (Ctrl+S save,
+ * Ctrl+N new chat) can tell a modal owns the keyboard. AnimatePresence keeps the node through
+ * its exit animation, so aria-modal is dropped once it is leaving; otherwise Ctrl+S pressed
+ * right after answering was swallowed without saving.
+ */
+function ConfirmCard({ children }: { children: React.ReactNode }) {
+  const present = useIsPresent();
+  return (
+    <motion.div
+      role="alertdialog"
+      aria-modal={present ? 'true' : undefined}
+      className="bg-[#0a0a0a] border border-slate-700 rounded-2xl shadow-2xl w-[340px] max-w-[90vw] p-5"
+      initial={{ scale: 0.95, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 10 }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
 export function ConfirmDialogHost() {
   const [state, setState] = useState<ConfirmState | null>(null);
 
@@ -68,15 +89,7 @@ export function ConfirmDialogHost() {
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
           onClick={() => resolve(false)}
         >
-          {/* role + aria-modal: screen readers announce it, and window-level shortcuts
-              (Ctrl+N new chat) can tell a modal owns the keyboard. */}
-          <motion.div
-            role="alertdialog"
-            aria-modal="true"
-            className="bg-[#0a0a0a] border border-slate-700 rounded-2xl shadow-2xl w-[340px] max-w-[90vw] p-5"
-            initial={{ scale: 0.95, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 10 }}
-            onClick={(e) => e.stopPropagation()}
-          >
+          <ConfirmCard>
             <div className="flex items-start gap-3 mb-4">
               <div className="shrink-0 w-9 h-9 rounded-full bg-red-500/15 border border-red-500/30 flex items-center justify-center">
                 <AlertTriangle size={16} className="text-red-400" />
@@ -98,7 +111,7 @@ export function ConfirmDialogHost() {
                 {state.confirmLabel}
               </button>
             </div>
-          </motion.div>
+          </ConfirmCard>
         </motion.div>
       )}
     </AnimatePresence>
