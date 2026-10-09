@@ -3,6 +3,7 @@ import os
 import sys
 import logging
 from .cli_base import BaseCLIProvider
+from agent_guide import provider_guide
 from .unityai_tool_text import mail_and_fallback, mcp_double_underscore
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,8 @@ class CodexProvider(BaseCLIProvider):
                 "- Components (add/remove/edit):  unityMCP/manage_components\n"
                 "- UI elements (Button/Text/etc): unityMCP/manage_ui\n"
                 "- Console errors/warnings:       unityMCP/read_console\n"
-                "- Play/Pause/Save scene:         unityMCP/manage_editor\n"
+                "- Play/Pause:                    unityMCP/manage_editor\n"
+                "- Save scene:                    unityMCP/manage_scene\n"
                 "- Materials/shaders:             unityMCP/manage_material\n"
                 "- Physics settings:              unityMCP/manage_physics\n"
                 "C# SCRIPTS (.cs): ALWAYS create/edit with mcp__unityai__save_file (user approval).\n"
@@ -51,7 +53,7 @@ class CodexProvider(BaseCLIProvider):
             "- Read .cs source files:                  mcp__unityai__read_file\n"
             "- List directories:                       mcp__unityai__list_directory\n"
             + mail_and_fallback(mcp_double_underscore) +
-            "\nRESPOND IN TURKISH. Be concise. Never say you cannot do something — use the tools.\n"
+            "\nBe concise. Never say you cannot do something — use the tools.\n"
         )
 
         cmd = [
@@ -103,7 +105,8 @@ class CodexProvider(BaseCLIProvider):
             cmd.extend(["-c", 'mcp_servers.unityMCP.default_tools_approval_mode="approve"'])
         if thinking_level != "off":
             cmd.extend(["-c", f"reasoning.effort={thinking_level}"])
-        yuk = mcp_hint + "\n" + prompt
+        yuk = mcp_hint + "\n" + provider_guide(
+            self, project_open=bool(workspace), unity_running=unity_running) + prompt
         if self.prompt_via_stdin:
             # ⚠️ Pozisyonel PROMPT hiç verilmiyor. Verilseydi codex stdin'i
             # ayrıca bir `<stdin>` bloğu olarak EKLERDİ (kendi yardımında yazıyor)

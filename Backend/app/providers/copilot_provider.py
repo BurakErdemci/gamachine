@@ -72,7 +72,6 @@ class CopilotProvider(BaseCLIProvider):
 
         mcp_hint = (
             "IMPORTANT — follow exactly:\n"
-            "- Respond in Turkish (Türkçe).\n"
             + unity_section +
             "\nFILE & TERMINAL operations — your built-in write and shell tools are\n"
             "DENIED by policy. Use ONLY the tools of the unityai MCP server:\n"
@@ -116,7 +115,9 @@ class CopilotProvider(BaseCLIProvider):
             pass
         # The hint above was built but never sent from the first version on
         # (4b74745), so Copilot never saw the tool list (found 27 Sep 2026).
-        yuk = mcp_hint + prompt
+        from agent_guide import provider_guide
+        yuk = mcp_hint + provider_guide(
+            self, project_open=bool(workspace), unity_running=unity_running) + prompt
         if self.prompt_via_stdin:
             # ⚠️ `-p` BAYRAĞI DA DÜŞÜYOR — diğer üçünden farkı bu. Ölçüldü
             # 2026-08-01: `-p -` stdin anlamına GELMİYOR, copilot "-" dizesini

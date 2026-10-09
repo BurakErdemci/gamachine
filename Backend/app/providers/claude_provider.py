@@ -54,7 +54,7 @@ class ClaudeCodeProvider(BaseCLIProvider):
             "SUBAGENT EXECUTION MODE: You are a subagent dispatched to execute a specific task. "
             "Do NOT invoke any skills, do NOT brainstorm, do NOT offer visual companions or mockups, "
             "do NOT ask clarifying questions. Execute the task IMMEDIATELY using available MCP tools. "
-            "Respond in Turkish (Türkçe).\n"
+            "\n"
             + unity_section +
             "\nFILE & TERMINAL operations — Bash/Write/Edit are disabled; use the unityai tools:\n"
             "- Create/edit files: mcp__unityai__save_file  |  Delete: mcp__unityai__delete_file\n"
@@ -77,7 +77,9 @@ class ClaudeCodeProvider(BaseCLIProvider):
             "--include-partial-messages",
             "--verbose",
         ]
-        yuk = subagent_prefix + prompt
+        from agent_guide import provider_guide
+        yuk = subagent_prefix + provider_guide(
+            self, project_open=bool(workspace), unity_running=unity_running) + prompt
         if self.prompt_via_stdin:
             # `-p` KALIYOR, yalnız DEĞERİ düşüyor: claude'u etkileşimsiz kipe
             # sokan bayrak bu ve metni stdin'den okuyor (canlı ölçüldü).

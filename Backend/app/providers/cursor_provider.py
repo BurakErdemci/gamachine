@@ -50,7 +50,6 @@ class CursorProvider(BaseCLIProvider):
 
         mcp_hint = (
             "IMPORTANT — follow exactly:\n"
-            "- Respond in Turkish (Türkçe).\n"
             + unity_section +
             "\nFILE & TERMINAL operations — use ONLY the tools of the unityai MCP server\n"
             "(your own write/shell tools are sandboxed and will be denied):\n"
@@ -83,7 +82,9 @@ class CursorProvider(BaseCLIProvider):
             cmd += ["--resume", self.resume_session_id]
         # Prompt SON pozisyonel arg (cli_base'in cmd/c stdin-pop fallback'iyle uyumlu;
         # doğrudan node spawn'da çok satırlı argv zaten güvenli).
-        cmd.append(mcp_hint + prompt)
+        from agent_guide import provider_guide
+        cmd.append(mcp_hint + provider_guide(
+            self, project_open=bool(workspace), unity_running=unity_running) + prompt)
         return cmd
 
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):

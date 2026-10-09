@@ -859,9 +859,11 @@ class ClaudeSDKSession:
         effort: Optional[str] = None,
         resume_id: Optional[str] = None,
         read_only: bool = False,
+        agent_guide: str = "",
     ):
         # Side chat session: only reads pass `_can_use_tool`, in every mode.
         self.read_only = bool(read_only)
+        self.agent_guide = agent_guide
         # CLI'ın KENDİ diskindeki oturumu geri çağıran kimlik (DB'de saklanıyor).
         # Uygulama yeniden başladığında tam transcript bu sayede geri geliyor;
         # yoksa yalnız 20.000 karakterlik DB enjeksiyonu kalıyor (%71 kayıp ölçüldü).
@@ -977,7 +979,7 @@ class ClaudeSDKSession:
             include_partial_messages=True,
             # claude_code preset'i korunur (skill/slash bozulmaz); ortam bilgisi eklenir.
             system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": _APP_SYSTEM_APPEND},
+                           "append": _APP_SYSTEM_APPEND + ("\n\n" + self.agent_guide if self.agent_guide else "")},
             # Görsel taşıyan tek bir stdout satırı 1 MiB varsayılanını aşınca oturum
             # komple düşüyordu; gerekçe ve ölçüm _SDK_STDOUT_LIMIT_BYTES'ta.
             max_buffer_size=_SDK_STDOUT_LIMIT_BYTES,

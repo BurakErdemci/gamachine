@@ -42,6 +42,7 @@ from tools.tool_registry import (
     get_openai_tool_declarations, get_gemini_tool_declarations, _all_tool_definitions,
 )
 from prompts import SYSTEM_PROMPT
+from agent_guide import compose as compose_agent_guide, get_addendum
 from providers.unity_script_tools import DISALLOWED_UNITY_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -874,6 +875,7 @@ class AgentRunner:
     Tek bir kullanıcı isteğini agentic loop ile çalıştırır.
     Gemini'nin native function calling özelliğini kullanır.
     """
+    _agent_guide = ""
 
     def __init__(
         self,
@@ -925,6 +927,27 @@ class AgentRunner:
         self.ultracode = ultracode
         self.videos = videos  # [{"kind":"path"|"url", ...}] → _prepare_videos ile kareye çevrilir
         self.use_thinking = thinking_level != "off"
+        self._agent_guide = ""
+
+    async def _prepare_agent_guide(self) -> None:
+        from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+
+        unity_state = "off"
+        if unity_mcp_manager.is_running():
+            unity_state = "not_responding"
+            try:
+                if await asyncio.wait_for(unity_mcp_manager.check_unity_connected(), timeout=2.0):
+                    unity_state = "connected"
+            except Exception:
+                pass
+        try:
+            addendum = get_addendum()
+        except Exception as exc:
+            logger.warning("Agent guide addendum could not be read: %s", exc)
+            addendum = None
+        self._agent_guide = compose_agent_guide(
+            getattr(self, "language", "tr"), project_open=bool(getattr(self, "workspace_path", None)),
+            unity_state=unity_state, addendum=addendum)
 
     def _get_architect_wisdom(self) -> str:
         """
@@ -1304,6 +1327,7 @@ class AgentRunner:
                           getattr(self, "generation_mode", "auto"),
                           getattr(self, "conversation_id", None),
                           getattr(self, "mail_depth", 0)):
+            await self._prepare_agent_guide()
             async for _event in self._run_inner(user_message):
                 yield _event
 
@@ -1411,6 +1435,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 
 [DİL]
 Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş."""
+        system_instruction += "\n\n" + self._agent_guide
 
         # Thinking config — kayıtçıdan (effort_caps): gemini-3.x → thinking_level (enum),
         # gemini-2.5 → thinking_budget (token). İkisi birlikte ASLA gönderilmez (3.x'te 400).
@@ -1730,6 +1755,8 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 [BAĞLAM]
 {self.context or "Yeni sohbet."}"""
         
+        system_instruction += "\n\n" + self._agent_guide
+
         # Tool formatı
         anthropic_tools = []
         for t in self._tool_definitions():
@@ -2011,6 +2038,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 [BAĞLAM]
 {self.context or "Yeni sohbet."}"""
         
+        system_instruction += "\n\n" + self._agent_guide
         openai_tools = get_openai_tool_declarations()
         if getattr(self, "read_only", False):
             openai_tools = [t for t in openai_tools if _read_only_tool_declared(t["function"]["name"])]
@@ -2262,6 +2290,8 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 "api_key": self.api_key,
                 "model_name": self.model_name,
             })
+            provider._agent_guide = self._agent_guide
+            provider._language = getattr(self, "language", "tr")
 
             prompt = f"{SYSTEM_PROMPT}\n\n[BAĞLAM]\n{self.context}\n\n[KULLANICI]\n{user_message}"
 
@@ -2346,6 +2376,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             message += "\n\nAttached images; open these files to inspect them:\n"
             message += "\n".join(f"- {path}" for path in image_paths)
         turn_complete = False
+        session.agent_guide = self._agent_guide
         try:
             async with contextlib.aclosing(session.stream(
                 message, model=self.model_name, cwd=self.workspace_path or ".",
@@ -2404,6 +2435,8 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             # Every process this provider spawns works for this chat only
             # (cli_base turns it into GAMACHINE_CONVERSATION_ID, if valid).
             p._conversation_id = self.conversation_id
+            p._agent_guide = self._agent_guide
+            p._language = getattr(self, "language", "tr")
             return p
 
         # Windows command-line limit (32,767 UTF-16 units) minus room for the
@@ -2697,6 +2730,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 
         _session_kwargs = dict(
             model=model,
+            agent_guide=self._agent_guide,
             cwd=_workspace,
             resume_id=self.resume_id,      # None ise SDK'ya `resume` hiç verilmiyor
             permission_mode="default",
@@ -2882,15 +2916,18 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 
         # İlk turda proje bağlamını ekle; sonraki turlarda thread zaten hatırlıyor.
         message = user_message
+        first_turn = not (session._ctx_injected and getattr(session, "is_live", True))
         if getattr(self, "side_turn", None) is not None:
             # A dead or never-started app-server gets a brand-new thread on
             # this stream (start() only does thread/start), so the flag from
             # an earlier thread says nothing about it (Codex mentionaudit,
             # 27 Sep 2026).
-            message = self.side_turn.text(full=not (session._ctx_injected and session.is_live))
-            session._ctx_injected = True
-        elif self.context and not session._ctx_injected:
+            message = self.side_turn.text(full=first_turn)
+        elif self.context and first_turn:
             message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
+        if first_turn:
+            if self._agent_guide:
+                message = self._agent_guide + "\n\n" + message
             session._ctx_injected = True
         if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False):
             # Native requestApproval zaten otomatik kabul ediliyor (balanced'da

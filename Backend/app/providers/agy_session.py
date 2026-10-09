@@ -663,13 +663,13 @@ class AgyStreamSession(SaglayiciSahipligi):
                 except AgyStepGateError:
                     await self._stop_process(force=True)
                     raise
-                return ""
+                return AgyProvider(binary_name=model)._stream_instructions()
             # Self-healing before each turn on a kept process: a flip whose
             # rewrite failed must not carry into this turn.
             if not _sync_gate_state():
                 await self._stop_process(force=True)
                 raise AgyStepGateError(_gate_write_failed(gate_state_path(), "yazılamadı"))
-            return ""
+            return AgyProvider(binary_name=model)._stream_instructions()
         if self.cwd != cwd:
             self.session_id = (_RESUME_IDS.get((self.conversation_id, cwd))
                                if self.conversation_id >= 0 else None)
@@ -814,11 +814,13 @@ class AgyStreamSession(SaglayiciSahipligi):
 
     async def stream(self, message: str, *, model: str = "gemini-3.6-flash",
                      cwd: Optional[str] = None, side: bool = False,
-                     language: str = "tr", thinking_level: str = "auto") -> AsyncGenerator[dict, None]:
+                     language: str = "tr", thinking_level: str = "auto",
+                     agent_guide: str = "") -> AsyncGenerator[dict, None]:
         """One turn. `side`: a read-only side question (Burak, 27 Sep 2026):
         refused unless the turn lock is free, run with the state file on
         SIDE_MODE, stopped after SIDE_TURN_TIMEOUT_S or when another agy turn
         starts; `language` picks the text of those stop messages."""
+        agent_guide = agent_guide or getattr(self, "agent_guide", "")
         # Global serialization covers the complete turn, not the process life.
         # A queued turn rechecks the closed flag before spawning or writing.
         completed = False
@@ -861,7 +863,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                 started = loop.time()
                 instructions = await self._start(model, os.path.abspath(cwd or self.cwd), thinking_level)
                 process = self._active_process
-                payload = {"event": "user", "message": {"content": instructions + message}}
+                guide_prefix = agent_guide + "\n\n" if agent_guide else ""
+                payload = {"event": "user", "message": {"content": guide_prefix + instructions + message}}
                 process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
                 await process.stdin.drain()
                 while True:

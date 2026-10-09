@@ -8,7 +8,10 @@ import tempfile
 import time
 import urllib.request
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Body, Header, HTTPException, Query
+from typing import Literal
+
+from agent_guide import ADDENDUM_MAX_CHARS, ADDENDUM_SETTING_KEY, bind_settings_store, sections
 
 from agentic import chat_model
 from auth_utils import _check_token, get_current_user, require_conversation_owner, require_user
@@ -248,6 +251,26 @@ def _install_terminal_command(cli: str, install_cmd: str, needs_npm: bool, platf
 
 def create_config_router(db):
     router = APIRouter()
+    bind_settings_store(db)
+
+    @router.get("/agent-guide")
+    async def get_agent_guide(lang: Literal["tr", "en"] = Query(default="tr"),
+                              x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return {"language": lang, "sections": sections(lang),
+                "addendum": db.get_setting(ADDENDUM_SETTING_KEY) or ""}
+
+    @router.put("/agent-guide/addendum")
+    async def put_agent_guide_addendum(body: object = Body(...),
+                                      x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+            raise HTTPException(400, "text must be a string")
+        text = body["text"].strip()
+        if len(text) > ADDENDUM_MAX_CHARS:
+            raise HTTPException(400, "text exceeds the agent guide addendum limit")
+        db.set_setting(ADDENDUM_SETTING_KEY, text)
+        return {"addendum": text}
 
     @router.post("/save-ai-config")
     async def save_config(req: AIConfigRequest, x_session_token: str = Header(alias="X-Session-Token")):

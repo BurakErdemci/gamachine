@@ -334,7 +334,6 @@ class OpenCodeProvider(BaseCLIProvider):
 
         mcp_hint = (
             "IMPORTANT — follow exactly:\n"
-            "- Respond in Turkish (Türkçe).\n"
             + unity_section +
             "\nFILE & TERMINAL operations — your built-in edit and bash tools are\n"
             "DENIED by workspace policy. Use ONLY the unityai MCP tools:\n"
@@ -352,7 +351,9 @@ class OpenCodeProvider(BaseCLIProvider):
         if self.resume_session_id:
             cmd += ["-s", self.resume_session_id]
         # Mesaj son pozisyonel arg (opencode.exe native → çok satırlı argv güvenli)
-        yuk = mcp_hint + prompt
+        from agent_guide import provider_guide
+        yuk = mcp_hint + provider_guide(
+            self, project_open=bool(workspace), unity_running=unity_running) + prompt
         if self.prompt_via_stdin:
             # `[message..]` pozisyoneli hiç verilmiyor; opencode boş kalınca
             # mesajı stdin'den okuyor. Bu yardım metninde YAZMIYOR — canlı

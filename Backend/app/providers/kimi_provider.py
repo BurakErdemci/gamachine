@@ -87,7 +87,6 @@ class KimiProvider(BaseCLIProvider):
                 "  state the cost and get user confirmation first.\n"
             )
         return (
-            "IMPORTANT: You MUST reply in Turkish (Türkçe) at all times.\n\n"
             "TOOL POLICY — follow exactly:\n"
             + unity_section +
             "\nFILE & SHELL operations — your built-in Write, Edit and Bash tools are DENIED.\n"
@@ -101,7 +100,7 @@ class KimiProvider(BaseCLIProvider):
             + mail_and_fallback(mcp_double_underscore) +
             "Do NOT route unityMCP/meshy through unityai — call those as their own MCP tools.\n"
             "SCOPE: only the current workspace. Be concise; never say you cannot do something —\n"
-            "use the tools. For file writes reply with ONE short Turkish sentence (the approval\n"
+            "use the tools. For file writes reply with ONE short sentence (the approval\n"
             "card already shows the code/diff); for questions give a complete, substantive answer.\n\n"
         )
 
@@ -116,6 +115,8 @@ class KimiProvider(BaseCLIProvider):
         self._ensure_exec(self._launcher_path("unityai"))
 
         hint = self._build_hint(unity_running)
+        from agent_guide import provider_guide
+        hint += provider_guide(self, project_open=bool(workspace), unity_running=unity_running)
         # binary_name = kimi model slug'ı (kimi-k3 / kimi-k2.7-code) → -m ile geçer.
         # K3 düşünmesi always-on; kimi CLI ayrı effort knob'u sunmaz → thinking_level yok sayılır.
         cmd = [

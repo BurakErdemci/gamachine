@@ -283,6 +283,10 @@ class AgyProvider(BaseCLIProvider):
         workspace = cwd or "."
         session = AgyStreamSession(-(int(time.time() * 1000) & 0x7FFFFFFF), cwd=workspace)
         collected = ""
+        from agent_guide import provider_guide
+        from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+        session.agent_guide = provider_guide(self, project_open=bool(cwd),
+                                             unity_running=unity_mcp_manager.is_running()).strip()
         inner = session.stream(prompt, model=self.binary_name, cwd=workspace,
                                thinking_level=thinking_level)
         try:
@@ -346,7 +350,6 @@ class AgyProvider(BaseCLIProvider):
         unityai_cli = self._launcher_path("unityai")
         self._ensure_exec(unityai_cli)
         return (
-            "IMPORTANT: You MUST respond in Turkish (Türkçe) at all times.\n\n"
             "AVAILABLE MCP TOOLS — call these DIRECTLY when the task needs them:\n"
             "- unityMCP: Unity editor operations (manage_gameobject, manage_scene,\n"
             "  manage_fbx, manage_animation, manage_material, refresh_unity, read_console,\n"
@@ -384,18 +387,16 @@ class AgyProvider(BaseCLIProvider):
             "Every write, delete and shell command MUST go through unityai so the user can\n"
             "approve it in the IDE. SCOPE: Only the current workspace. No unprompted test files.\n\n"
             "REPLY STYLE — match the reply length to the task:\n"
-            "- For file WRITE / DELETE / shell actions: reply with ONE short Turkish\n"
+            "- For file WRITE / DELETE / shell actions: reply with ONE short\n"
             "  sentence stating what you did (e.g. 'TestScripts.cs oluşturuldu.'). NEVER\n"
             "  paste the file's full content/code block — the IDE approval card already\n"
             "  shows the code and diff. NEVER explain approval mechanics ('onayınızı\n"
             "  bekliyor', 'onay verdikten sonra', 'komutu çalıştırdım'). Don't repeat.\n"
             "- For QUESTIONS, reading/analysis, or reports (e.g. 'read the GDD and tell me\n"
             "  the rules', 'check MCP access', 'what does X do'): give a COMPLETE, substantive\n"
-            "  Turkish answer — actually report the findings, rules, values, or console output\n"
+            "  answer — actually report the findings, rules, values, or console output\n"
             "  you gathered. Do NOT collapse it into a passive one-liner like 'öğrenildi',\n"
             "  'incelendi' or 'test edildi'. Be genuinely informative, not terse.\n"
-            "- LANGUAGE: ALWAYS reply in the language the user writes in (Turkish user →\n"
-            "  Turkish reply), including resumed conversations. Never drift to English.\n\n"
         )
 
     @staticmethod
