@@ -38,6 +38,10 @@
       "description": "Execute multiple Unity operations in a single batch"
     },
     {
+      "name": "compile_status",
+      "description": "Read the live script-compile verdict from the Unity Editor"
+    },
+    {
       "name": "create_script",
       "description": "Create new C# scripts"
     },
