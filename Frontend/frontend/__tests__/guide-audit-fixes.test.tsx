@@ -82,6 +82,18 @@ describe('2 focus after a topic', () => {
     expect(card).toBeTruthy()
     expect(document.activeElement).toBe(card)
   })
+  it('focuses the search box when the topic is cleared before its frame runs', async () => {
+    render(<Harness host={mockHost()} />)
+    act(() => api.openGuide())
+    await tick()
+    act(() => api.playTopic('ask'))
+    await tick()
+    // F1 lands in the same frame the topic ended: focusTopic goes 'ask' -> null before the rAF.
+    act(() => api.skip())
+    act(() => api.openGuide())
+    await tick(); await tick()
+    expect(document.activeElement).toBe(screen.getByTestId('guide-search'))
+  })
   it('opening the guide fresh still focuses the search box', async () => {
     render(<Harness host={mockHost()} />)
     act(() => api.openGuide())

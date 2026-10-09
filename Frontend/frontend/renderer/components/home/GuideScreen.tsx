@@ -41,13 +41,13 @@ export const GuideScreen: React.FC<GuideScreenProps> = ({
   // Opening puts the cursor in the search box; coming back from a topic puts it on that topic.
   // `onFocused` clears focusTopic, which re-runs this effect; that second run (open unchanged,
   // topic just handled) must not fall through to the search box and steal the card's focus
-  // (guide audit, 2 Oct 2026).
-  const handled = useRef<{ open: boolean; topic: string | null }>({ open: false, topic: null });
+  // (guide audit, 2 Oct 2026). A topic counts as handled only once its frame has run: when
+  // focusTopic is cleared before that (F1 in the same frame), the cancelled frame focused nothing,
+  // so this run must still focus the search box.
+  const handled = useRef<string | null>(null);
   useEffect(() => {
-    const before = handled.current;
-    handled.current = { open, topic: focusTopic };
-    if (!open) return;
-    if (focusTopic == null && before.open && before.topic != null) return;
+    if (!open) { handled.current = null; return; }
+    if (focusTopic == null && handled.current != null) { handled.current = null; return; }
     const id = requestAnimationFrame(() => {
       const tile = focusTopic ? rootRef.current?.querySelector<HTMLElement>(`.gd-topic[data-topic="${focusTopic}"]`) : null;
       if (tile) tile.focus();
@@ -55,7 +55,7 @@ export const GuideScreen: React.FC<GuideScreenProps> = ({
         if (rootRef.current && focusTopic == null) rootRef.current.scrollTop = 0;
         searchRef.current?.focus({ preventScroll: true });
       }
-      if (focusTopic != null) onFocused();
+      if (focusTopic != null) { handled.current = focusTopic; onFocused(); }
     });
     return () => cancelAnimationFrame(id);
   }, [open, focusTopic]); // eslint-disable-line react-hooks/exhaustive-deps
