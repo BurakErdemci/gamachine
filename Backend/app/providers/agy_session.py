@@ -663,13 +663,13 @@ class AgyStreamSession(SaglayiciSahipligi):
                 except AgyStepGateError:
                     await self._stop_process(force=True)
                     raise
-                return AgyProvider(binary_name=model)._stream_instructions()
+                return ""
             # Self-healing before each turn on a kept process: a flip whose
             # rewrite failed must not carry into this turn.
             if not _sync_gate_state():
                 await self._stop_process(force=True)
                 raise AgyStepGateError(_gate_write_failed(gate_state_path(), "yazılamadı"))
-            return AgyProvider(binary_name=model)._stream_instructions()
+            return ""
         if self.cwd != cwd:
             self.session_id = (_RESUME_IDS.get((self.conversation_id, cwd))
                                if self.conversation_id >= 0 else None)
@@ -861,9 +861,11 @@ class AgyStreamSession(SaglayiciSahipligi):
                 if queued:
                     yield _redact_event(_STARTED_EVENT)
                 started = loop.time()
+                previous_process = self._active_process
                 instructions = await self._start(model, os.path.abspath(cwd or self.cwd), thinking_level)
                 process = self._active_process
-                guide_prefix = agent_guide + "\n\n" if agent_guide else ""
+                # A kept process already holds the guide and the hint from its first turn.
+                guide_prefix = agent_guide + "\n\n" if agent_guide and process is not previous_process else ""
                 payload = {"event": "user", "message": {"content": guide_prefix + instructions + message}}
                 process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
                 await process.stdin.drain()

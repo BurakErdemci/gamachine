@@ -213,7 +213,7 @@ def test_partial_runner_uses_default_language_and_no_project(monkeypatch):
     assert current._agent_guide == guide.compose("tr", project_open=False, unity_state="off")
 
 
-def test_agy_first_stdin_message_every_turn_precedes_patchable_instructions():
+def test_agy_guide_and_hint_only_on_a_new_process_not_on_a_kept_one():
     from . import test_agy_stream_session as fixture
     from providers.agy_provider import AgyProvider
     async def scenario():
@@ -221,16 +221,17 @@ def test_agy_first_stdin_message_every_turn_precedes_patchable_instructions():
         await harness.asyncSetUp()
         try:
             session = fixture.agy_session.get_session(11)
-            guides = (GUIDE, guide.compose("tr", project_open=False, unity_state="off"))
+            session.agent_guide = GUIDE
             with patch.object(AgyProvider, "_stream_instructions", return_value="PATCHED_HINT\n"):
-                for message, current_guide in zip(("first", "second"), guides):
-                    session.agent_guide = current_guide
+                for message in ("first", "second"):
                     await harness.collect(session=session, message=message)
             assert len(harness.processes) == 1
-            for index, message in enumerate(("first", "second")):
-                payload = json.loads(harness.processes[0].stdin.lines[index])["message"]["content"]
-                assert payload == guides[index] + "\n\nPATCHED_HINT\n" + message
-                assert payload.count(MARKER) == 1
+            lines = harness.processes[0].stdin.lines
+            first = json.loads(lines[0])["message"]["content"]
+            second = json.loads(lines[1])["message"]["content"]
+            assert first == GUIDE + "\n\nPATCHED_HINT\n" + "first"
+            assert first.count(MARKER) == 1 and first.count("PATCHED_HINT") == 1
+            assert second == "second"
         finally:
             await harness.asyncTearDown()
     asyncio.run(scenario())
@@ -366,3 +367,67 @@ def test_settings_endpoints_store_limits_language_and_token_guard(monkeypatch):
         assert guide.get_addendum() == "x" * 4000
     assert client.put("/agent-guide/addendum", json={"text": " \n "}, headers=headers).status_code == 200
     assert client.get("/agent-guide", headers=headers).json()["addendum"] == ""
+
+
+def test_changed_guide_gives_session_rebuild_reason_and_unchanged_does_not():
+    from providers import claude_sdk_session as sdk
+    existing = SimpleNamespace(effort=None, model=None, cwd=".", mcp_servers={}, read_only=False,
+                               agent_guide=GUIDE)
+    common = dict(model=None, effort=None, workspace=".", mcp_servers={}, read_only=False)
+    other = guide.compose("en", project_open=True, unity_state="not_responding", addendum="CUSTOM_RULE")
+    assert ar._oturum_yeniden_kurma_gerekceleri(existing, agent_guide=GUIDE, **common) == []
+    assert ar._oturum_yeniden_kurma_gerekceleri(existing, agent_guide=other, **common)
+    sess = SimpleNamespace(cwd=".", model=None, effort=None, read_only=False, agent_guide=GUIDE)
+    assert sdk._identity_mismatch(sess, {"agent_guide": GUIDE}) is None
+    assert sdk._identity_mismatch(sess, {"agent_guide": other})
+
+
+def _oneshot_argv_units(monkeypatch, cli_key, module_name, class_name, model, current_guide):
+    module = importlib.import_module("providers." + module_name)
+    provider = getattr(module, class_name)(binary_name=model)
+    for resolver in ("resolve_cursor_cmd", "resolve_copilot_cmd", "resolve_opencode_cmd"):
+        if hasattr(module, resolver):
+            monkeypatch.setattr(module, resolver, lambda: ["fake-cli"])
+    monkeypatch.setattr(provider, "_ensure_exec", lambda *args: None)
+    if hasattr(provider, "_write_kimi_permissions"):
+        monkeypatch.setattr(provider, "_write_kimi_permissions", lambda: None)
+    if hasattr(provider, "_product_mcp_servers"):
+        monkeypatch.setattr(provider, "_product_mcp_servers", lambda *args: {})
+    monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: False)
+    provider.resume_session_id = None
+    sizes = []
+    async def analyze_code(prompt, **kwargs):
+        command = provider._build_cmd(prompt, workspace=".")
+        units = lambda text: len(text.encode("utf-16-le")) // 2
+        sizes.append(sum(units(part) + 1 for part in command))
+        yield {"type": "final", "text": "ok"}
+    provider.analyze_code = analyze_code
+    from providers.oneshot_cli import _SESSIONS
+    _SESSIONS.clear()
+    current = runner(context="x" * 100000, model_name=model, conversation_id=991)
+    current._agent_guide = current_guide
+    async def scenario():
+        with patch("ai_providers.AIProviderManager.get_provider", return_value=provider):
+            return await collect(current._run_oneshot_cli_session("short question", cli_key))
+    events = asyncio.run(scenario())
+    _SESSIONS.clear()
+    return sizes, events
+
+
+@pytest.mark.parametrize("cli_key,module_name,class_name,model", [
+    ("kimi", "kimi_provider", "KimiProvider", "kimi-k3"),
+    ("cursor", "cursor_provider", "CursorProvider", "cursor-auto"),
+])
+@pytest.mark.parametrize("language", ["en", "tr"])
+def test_oneshot_argv_stays_within_windows_limit_with_largest_addendum(
+        monkeypatch, cli_key, module_name, class_name, model, language):
+    big = guide.compose(language, project_open=True, unity_state="not_responding", addendum="😀" * 4000)
+    sizes, events = _oneshot_argv_units(monkeypatch, cli_key, module_name, class_name, model, big)
+    assert len(sizes) == 1, events
+    assert sizes[0] <= 32767
+
+
+def test_oneshot_refuses_when_guide_leaves_no_room(monkeypatch):
+    sizes, events = _oneshot_argv_units(monkeypatch, "kimi", "kimi_provider", "KimiProvider", "kimi-k3", "g" * 23500)
+    assert sizes == []
+    assert [event.type for event in events] == ["error"]

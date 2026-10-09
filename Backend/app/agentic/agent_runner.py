@@ -211,8 +211,13 @@ def _urunun_kaydi_mi(ad: str, tanim: object, sir: Optional[str]) -> bool:
     return False
 
 
+# Smallest one-shot prompt budget worth running with; below it the guide leaves no room.
+_MIN_ONESHOT_PROMPT_UNITS = 2000
+
+
 def _oturum_yeniden_kurma_gerekceleri(mevcut, *, model, effort, workspace, mcp_servers,
-                                      read_only: bool = False) -> List[str]:
+                                      read_only: bool = False,
+                                      agent_guide: Optional[str] = None) -> List[str]:
     """Cache'li oturumun CONNECT-TIME kimliği istenenden farklı mı? Farkların listesi.
 
     Modül düzeyinde ve saf, çünkü asıl çağrı yeri yüzlerce satırlık bir async
@@ -251,6 +256,10 @@ def _oturum_yeniden_kurma_gerekceleri(mevcut, *, model, effort, workspace, mcp_s
     # disallowed_tools is connect-time too, and read-only widens it.
     if bool(getattr(mevcut, "read_only", False)) != bool(read_only):
         gerekceler.append(f"read_only {getattr(mevcut, 'read_only', False)}→{read_only}")
+    # The guide is part of the CLI process's system prompt, fixed at start: a
+    # changed editor state, addendum or language only reaches a rebuilt session.
+    if agent_guide is not None and (getattr(mevcut, "agent_guide", "") or "") != agent_guide:
+        gerekceler.append("agent guide changed")
     return gerekceler
 
 
@@ -2441,8 +2450,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 
         # Windows command-line limit (32,767 UTF-16 units) minus room for the
         # mcp hint; a side turn is fitted and refused in those units (fits/text).
-        _prompt_cap = 24000
-        if getattr(self, "side_turn", None) is not None and not self.side_turn.fits(_prompt_cap):
+        # The guide travels in the same argv, so its UTF-16 length comes off the cap.
+        _guide_units = len((self._agent_guide or "").encode("utf-16-le")) // 2
+        _prompt_cap = 24000 - _guide_units
+        if _prompt_cap < _MIN_ONESHOT_PROMPT_UNITS or (
+                getattr(self, "side_turn", None) is not None and not self.side_turn.fits(_prompt_cap)):
             from agentic.side_prompt import side_too_long_message
             yield AgentEvent("error", {"message": side_too_long_message()})
             return
@@ -2478,7 +2490,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             enriched_prompt = self.side_turn.text(
                 full=(cli_key == "kimi" or not sess.ctx_injected), context_cap=_prompt_cap)
         elif self.context and (cli_key == "kimi" or not sess.ctx_injected):
-            _CTX_CAP = 24000  # Windows argv sınırı (~32K) + mcp_hint payı
+            _CTX_CAP = _prompt_cap  # Windows argv sınırı (~32K) − guide − mcp_hint payı
             _ctx = self.context
             if len(_ctx) > _CTX_CAP:
                 _ctx = "…[eski geçmiş kırpıldı — en yeni kısım korundu]\n" + _ctx[-_CTX_CAP:]
@@ -2721,7 +2733,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         _reasons = _oturum_yeniden_kurma_gerekceleri(
             _existing, model=model, effort=desired_effort,
             workspace=_workspace, mcp_servers=mcp_servers_cfg,
-            read_only=_read_only,
+            read_only=_read_only, agent_guide=self._agent_guide,
         )
         if _reasons:
             logger.info(f"[ClaudeSession] {', '.join(_reasons)}; session yeniden kuruluyor "

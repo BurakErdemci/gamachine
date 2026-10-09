@@ -1767,6 +1767,8 @@ def _identity_mismatch(sess: "ClaudeSDKSession", kwargs: dict) -> Optional[str]:
         return f"effort {sess.effort} → {kwargs.get('effort')}"
     if "read_only" in kwargs and bool(kwargs.get("read_only")) != sess.read_only:
         return f"read_only {sess.read_only} → {bool(kwargs.get('read_only'))}"
+    if "agent_guide" in kwargs and (kwargs.get("agent_guide") or "") != (sess.agent_guide or ""):
+        return "agent guide changed"
     return None
 
 
