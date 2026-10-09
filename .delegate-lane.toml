@@ -1,0 +1,6 @@
+# Read by codex-delegate's new-lane.py when it opens a lane (worktree) of this repo.
+# Without it a lane has no Backend venv and the Backend suite fails on imports alone.
+links = ["Backend/venv", "unity-mcp/Server/.venv", "Frontend/frontend/node_modules"]
+
+[tools]
+py = { windows = "Backend/venv/Scripts/python.exe", posix = "Backend/venv/bin/python" }
