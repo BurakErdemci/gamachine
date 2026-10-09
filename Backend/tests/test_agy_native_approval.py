@@ -11,6 +11,9 @@ import agy_step_gate as gate
 
 @pytest.fixture
 def approval(tmp_path, monkeypatch):
+    agents = tmp_path / ".agents"
+    agents.mkdir()
+    (agents / "hooks.json").write_text(json.dumps({gate.STEP_GATE_KEY: {}}), encoding="utf-8")
     state = tmp_path / "state.json"
     gate.write_state(str(state), "step", "unityai", workspace=str(tmp_path))
     token = native.state_path.set(str(state))
@@ -175,12 +178,43 @@ def test_file_changed_before_allow(approval):
     assert not allowed and "file changed since the card was shown" in reason
 
 
-def test_missing_workspace_in_state(approval):
+def test_missing_workspace_in_state_uses_hook_workspace(approval):
     workspace, state, calls, _ = approval
     gate.write_state(str(state), "step", "unityai")
     payload = {"toolCall": {"name": "write_to_file", "args": {
         "TargetFile": "a.txt", "CodeContent": "new"}}}
-    assert gate.decide(json.dumps(payload).encode(), str(state))["decision"] == "deny"
+    assert gate.decide(json.dumps(payload).encode(), str(state),
+                       cwd=str(workspace / ".agents"))["decision"] == "allow"
+    assert json.loads(calls[0].data)["workspace_path"] == str(workspace)
+
+
+def test_state_workspace_from_another_chat_is_ignored(approval):
+    workspace, state, calls, answers = approval
+    gate.write_state(str(state), "step", "unityai", workspace=str(workspace / "another-chat"))
+    def change_workspace():
+        gate.write_state(str(state), "step", "unityai", workspace=None)
+        return {"status": "resolved", "approved": True}
+    answers[:] = [change_workspace]
+    payload = {"toolCall": {"name": "write_to_file", "args": {
+        "TargetFile": "a.txt", "CodeContent": "new"}}}
+    assert gate.decide(json.dumps(payload).encode(), str(state),
+                       cwd=str(workspace / ".agents"))["decision"] == "allow"
+    body = json.loads(calls[0].data)
+    assert body["workspace_path"] == str(workspace)
+    assert body["params"]["path"] == str(workspace / "a.txt")
+
+
+@pytest.mark.parametrize("mode", ["step", "balanced"])
+def test_missing_hook_workspace_denies_without_asking(approval, tmp_path_factory, mode):
+    workspace, state, calls, _ = approval
+    gate.write_state(str(state), mode, "unityai", workspace=str(workspace))
+    payload = {"toolCall": {"name": "write_to_file", "args": {
+        "TargetFile": "a.txt", "CodeContent": "new"}}}
+    elsewhere = tmp_path_factory.mktemp("no-hooks")
+    with patch.object(native, "request_native_write") as ask:
+        result = gate.decide(json.dumps(payload).encode(), str(state), cwd=str(elsewhere))
+    assert result["decision"] == "deny" and "hook workspace" in result["reason"]
+    ask.assert_not_called()
     assert calls == []
 
 
@@ -261,10 +295,107 @@ def test_symlink_outside_workspace_denies(approval, tmp_path_factory):
 
 
 def test_hook_exception_always_prints_deny_json(approval, monkeypatch, capsys):
-    _, state, _, _ = approval
+    workspace, state, _, _ = approval
+    monkeypatch.chdir(workspace / ".agents")
     payload = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": "a.txt"}}}
     monkeypatch.setattr(gate.sys, "stdin", type("Input", (), {
         "buffer": io.BytesIO(json.dumps(payload).encode())})())
-    with patch.object(native, "request_native_write", side_effect=RuntimeError("unexpected")):
+    with patch.object(native, "request_native_write", side_effect=RuntimeError("unexpected")) as ask:
         assert gate.main(["--state", str(state)]) == 0
+    ask.assert_called_once()
     assert json.loads(capsys.readouterr().out)["decision"] == "deny"
+
+
+@pytest.mark.parametrize("bounds", [
+    {"StartLine": 1}, {"EndLine": 1}, {"StartLine": None, "EndLine": 1},
+    {"StartLine": 1, "EndLine": None}, {"StartLine": True, "EndLine": 1},
+    {"StartLine": 1, "EndLine": False}, {"StartLine": "1", "EndLine": 1},
+    {"StartLine": 1, "EndLine": 1.0}, {"StartLine": 0, "EndLine": 1},
+    {"StartLine": 2, "EndLine": 1}, {"StartLine": -1, "EndLine": 1},
+])
+def test_incomplete_or_invalid_line_range_denies(approval, bounds):
+    workspace, _, calls, _ = approval
+    (workspace / "a.txt").write_bytes(b"old\n")
+    args = {"TargetFile": "a.txt", "TargetContent": "old", "ReplacementContent": "new", **bounds}
+    allowed, reason = native.request_native_write("replace_file_content", args, str(workspace))
+    assert not allowed and "write_to_file" in reason
+    assert calls == []
+
+
+@pytest.mark.parametrize("bounds", [{}, {"StartLine": 2, "EndLine": 2}])
+def test_absent_or_valid_line_range_allows_exact_preview(approval, bounds):
+    workspace, _, calls, _ = approval
+    (workspace / "a.txt").write_bytes(b"one\nold\n")
+    args = {"TargetFile": "a.txt", "TargetContent": "old", "ReplacementContent": "new", **bounds}
+    assert native.request_native_write("replace_file_content", args, str(workspace))[0]
+    assert json.loads(calls[0].data)["params"]["content"] == "one\nnew\n"
+
+
+@pytest.mark.parametrize("tool", ["write_to_file", "replace_file_content"])
+def test_invalid_original_utf8_denies_without_request(approval, tool):
+    workspace, _, calls, _ = approval
+    original = b"old\n\xff"
+    (workspace / "a.txt").write_bytes(original)
+    allowed, reason = write(approval) if tool == "write_to_file" else replace(approval)
+    assert not allowed and "decode" in reason
+    assert calls == []
+    assert (workspace / "a.txt").read_bytes() == original
+
+
+@pytest.mark.parametrize("original", [b"old\r\nend\n", b"old\nend\r\n",
+                                      b"old\rend", b"old\r\nend\r"])
+def test_unmeasured_original_line_endings_deny_without_request(approval, original):
+    workspace, _, calls, _ = approval
+    (workspace / "a.txt").write_bytes(original)
+    allowed, reason = replace(approval)
+    assert not allowed and "write_to_file" in reason
+    assert calls == []
+
+
+@pytest.mark.parametrize("tool,args,expected", [
+    ("write_to_file", {"target_file": "a.txt", "CODE_CONTENT": "new\r\n", "over_write": True}, "new\n"),
+    ("replace_file_content", {"TARGET_FILE": "a.txt", "target_content": "old",
+        "replacement_content": "new", "start_line": 1, "END_LINE": 1,
+        "allow_multiple": False}, "new\r\n"),
+])
+def test_folded_argument_spellings_build_exact_preview(approval, tool, args, expected):
+    workspace, _, calls, _ = approval
+    (workspace / "a.txt").write_bytes(b"old\r\n")
+    assert native.request_native_write(tool, args, str(workspace))[0]
+    assert json.loads(calls[0].data)["params"]["content"] == expected
+
+
+@pytest.mark.parametrize("key,alias,value", [
+    ("TargetFile", "target_file", "a.txt"), ("CodeContent", "code_content", "new"),
+    ("Overwrite", "OVER_WRITE", True), ("TargetContent", "target_content", "old"),
+    ("ReplacementContent", "replacement_content", "new"), ("StartLine", "start_line", 1),
+    ("EndLine", "END_LINE", 1), ("AllowMultiple", "allow_multiple", False),
+])
+@pytest.mark.parametrize("equal", [True, False])
+def test_duplicate_argument_spellings_deny_before_approval(approval, key, alias, value, equal):
+    workspace, state, calls, _ = approval
+    (workspace / "a.txt").write_bytes(b"old\n")
+    tool = "write_to_file" if key in ("TargetFile", "CodeContent", "Overwrite") else "replace_file_content"
+    args = {"TargetFile": "a.txt", "CodeContent": "new", "Overwrite": True,
+            "TargetContent": "old", "ReplacementContent": "new", "StartLine": 1, "EndLine": 1,
+            "AllowMultiple": False, key: value, alias: value if equal else "different"}
+    allowed, reason = native.request_native_write(tool, args, str(workspace))
+    assert not allowed and "Duplicate" in reason
+    payload = {"toolCall": {"name": tool, "args": args}}
+    with patch.object(native, "request_native_write", return_value=(True, "approved")) as ask:
+        result = gate.decide(json.dumps(payload).encode(), str(state), cwd=str(workspace / ".agents"))
+    assert result["decision"] == "deny" and "Duplicate" in result["reason"]
+    ask.assert_not_called()
+    assert calls == []
+
+
+@pytest.mark.parametrize("target", ["C:a.txt", "C:", "z:sub/a.txt", "//server/share/a.txt",
+    "\\\\server\\share\\a.txt", "\\\\?\\C:\\a.txt", "\\\\.\\C:\\a.txt", "//?/C:/a.txt"])
+def test_non_plain_target_paths_deny_before_resolving(approval, target, monkeypatch):
+    calls = approval[2]
+    def check_write(*args):
+        raise AssertionError("Non-plain paths must be rejected before the file guard")
+    monkeypatch.setattr(native.unity_file_guard, "check_write", check_write)
+    allowed, reason = write(approval, TargetFile=target)
+    assert not allowed and "plain absolute or relative" in reason
+    assert calls == []

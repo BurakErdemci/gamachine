@@ -911,7 +911,7 @@ def test_agy_balanced_still_allows_the_bridge_call_shapes(agy_ws):
     assert _decide(state, "balanced", bridge, ws)["decision"] == "allow"
 
 
-def test_agy_balanced_without_its_hooks_file_requires_approval(ws, tmp_path_factory, monkeypatch):
+def test_agy_balanced_without_its_hooks_file_denies_without_approval(ws, tmp_path_factory, monkeypatch):
     import agy_step_gate as gate
     from unittest.mock import Mock
     ask = Mock(return_value=(False, "native approval denied"))
@@ -919,7 +919,7 @@ def test_agy_balanced_without_its_hooks_file_requires_approval(ws, tmp_path_fact
     state = str(tmp_path_factory.mktemp("s") / "step-gate.json")
     assert _decide(state, "balanced", _run("npm test", ws), ws)["decision"] == "deny"
     assert _decide(state, "balanced", _write(os.path.join(ws, "Assets", "A.cs")), ws)["decision"] == "deny"
-    ask.assert_called_once()
+    ask.assert_not_called()
 
 
 def test_agy_balanced_applies_the_unity_file_rule_first(agy_ws):

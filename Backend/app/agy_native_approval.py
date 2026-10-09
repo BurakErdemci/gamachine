@@ -2,6 +2,7 @@
 import contextvars
 import hashlib
 import json
+import ntpath
 import os
 import queue
 import threading
@@ -34,13 +35,29 @@ def _read_file(path):
         return False, b""
 
 
-def _state_matches(path, workspace):
+def _state_matches(path):
     with open(path, encoding="utf-8") as stream:
         state = json.load(stream)
-    saved = state.get("workspace")
-    return (state.get("mode") in ("step", "balanced")
-            and isinstance(saved, str) and bool(saved)
-            and os.path.realpath(saved) == workspace)
+    return state.get("mode") in ("step", "balanced")
+
+
+_ARG_NAMES = {name.replace("_", "").lower(): name for name in (
+    "TargetFile", "CodeContent", "Overwrite", "TargetContent", "ReplacementContent",
+    "StartLine", "EndLine", "AllowMultiple")}
+
+
+def _normalized_args(args):
+    """Fold native argument spellings, rejecting even equal duplicates."""
+    if not isinstance(args, dict):
+        raise ValueError("Missing or invalid native write arguments.")
+    normalized = {}
+    for key, value in args.items():
+        name = _ARG_NAMES.get(key.replace("_", "").lower()) if isinstance(key, str) else None
+        if name is not None:
+            if name in normalized:
+                raise ValueError(f"Duplicate spellings of {name}.")
+            normalized[name] = value
+    return normalized
 
 
 def _preview(tool_name, args, original, exists):
@@ -59,9 +76,13 @@ def _preview(tool_name, args, original, exists):
     target, replacement = args.get("TargetContent"), args.get("ReplacementContent")
     if not isinstance(target, str) or not target or not isinstance(replacement, str):
         raise ValueError(REPLACE_REASON)
-    for key in ("StartLine", "EndLine"):
-        if key in args and type(args[key]) is not int:
+    if "StartLine" in args or "EndLine" in args:
+        start, end = args.get("StartLine"), args.get("EndLine")
+        if type(start) is not int or type(end) is not int or not 1 <= start <= end:
             raise ValueError(REPLACE_REASON)
+    without_crlf = original.replace("\r\n", "")
+    if "\r" in without_crlf or ("\r\n" in original and "\n" in without_crlf):
+        raise ValueError(REPLACE_REASON)
     text = original.replace("\r\n", "\n")
     target = target.replace("\r\n", "\n")
     replacement = replacement.replace("\r\n", "\n")
@@ -167,10 +188,16 @@ def request_native_write(tool_name, args, workspace):
         if tool_name not in ("write_to_file", "replace_file_content"):
             return False, "Unsupported native write tool."
         if not isinstance(workspace, str) or not workspace or not os.path.isabs(workspace):
-            return False, "Missing or invalid workspace in gate state."
+            return False, "Missing or invalid hook workspace."
         workspace = os.path.realpath(workspace)
-        if not isinstance(args, dict) or not isinstance(args.get("TargetFile"), str) or not args["TargetFile"]:
+        args = _normalized_args(args)
+        if not isinstance(args.get("TargetFile"), str) or not args["TargetFile"]:
             return False, "Missing or invalid TargetFile."
+        raw_target = args["TargetFile"]
+        drive, tail = ntpath.splitdrive(raw_target)
+        if (raw_target.replace("/", "\\").startswith("\\\\")
+                or (drive and not tail.startswith(("/", "\\")))):
+            return False, "Unverified TargetFile path: use a plain absolute or relative path."
         target = args["TargetFile"].replace("\\", os.sep).replace("/", os.sep)
         target = target if os.path.isabs(target) else os.path.join(workspace, target)
         path = os.path.realpath(target)
@@ -180,17 +207,17 @@ def request_native_write(tool_name, args, workspace):
         if refusal is not None:
             return False, refusal.message
         saved_state_path = state_path.get()
-        if not saved_state_path or not _state_matches(saved_state_path, workspace):
-            return False, "Native approval could not verify the gate state or workspace."
+        if not saved_state_path or not _state_matches(saved_state_path):
+            return False, "Native approval could not verify the gate state."
         exists, data = _read_file(path)
-        original = data.decode("utf-8", errors="replace")
+        original = data.decode("utf-8")
         digest = hashlib.sha256(data).digest()
         content = _preview(tool_name, args, original, exists)
         result = _approval({"path": path, "content": content, "original": original}, workspace, deadline)
         if result.get("approved") is not True:
             return False, "Native file write was not explicitly approved."
-        if not _state_matches(saved_state_path, workspace):
-            return False, "Gate mode or workspace changed while awaiting approval."
+        if not _state_matches(saved_state_path):
+            return False, "Gate mode changed while awaiting approval."
         current_exists, current = _read_file(path)
         if (os.path.realpath(target) != path or exists != current_exists
                 or hashlib.sha256(current).digest() != digest):

@@ -63,7 +63,7 @@ class TestAgyStepGate(unittest.TestCase):
         command = self.shim
         argv = ["cmd", "/c", command] if sys.platform == "win32" else [command]
         out = subprocess.run(argv, input=json.dumps(payload).encode(),
-                             capture_output=True, timeout=60)
+                             capture_output=True, timeout=60, cwd=os.path.dirname(self.hooks_path))
         self.assertEqual(out.returncode, 0, out.stderr)
         return json.loads(out.stdout.decode("utf-8").strip())
 

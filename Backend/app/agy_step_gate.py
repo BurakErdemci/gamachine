@@ -89,7 +89,7 @@ BALANCED_REASON = (
     "instructions (save-file, delete-file or bash) so an approval card is shown; argument "
     "values follow the same character rules as in step mode.")
 # The workspace hook entry (written by agy_provider._write_step_gate). The
-# state file is shared by every agy child, so balanced mode finds the
+# state file is shared by every agy child, so balanced risk and native writes find the
 # workspace a call confines to by walking up from the hook's working
 # directory to the directory whose .agents/hooks.json holds this entry.
 STEP_GATE_KEY = "gamachine-step-gate"
@@ -513,9 +513,13 @@ def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -
         if name not in ("write_to_file", "replace_file_content"):
             return _balanced_deny("file write" if name in _FILE_WRITERS else "call", risk)
     if name in ("write_to_file", "replace_file_content"):
-        workspace = state.get("workspace")
-        if not isinstance(workspace, str) or not workspace:
-            return _deny("Native approval requires a workspace in the gate state.")
+        workspace = _hook_workspace(cwd)
+        if not workspace:
+            return _deny("Native approval requires a hook workspace.")
+        try:
+            agy_native_approval._normalized_args(call.get("args"))
+        except ValueError as error:
+            return _deny(str(error))
         token = agy_native_approval.state_path.set(state_path)
         try:
             allowed, reason = agy_native_approval.request_native_write(name, call.get("args"), workspace)

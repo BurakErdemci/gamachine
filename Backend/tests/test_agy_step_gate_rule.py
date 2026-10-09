@@ -215,15 +215,20 @@ class TestDecide(unittest.TestCase):
         for name in gate.GATED_TOOLS:
             self.assertEqual(self.decide({"toolCall": {"name": name, "args": {}}}), "deny")
 
-    def test_native_writers_obey_approval_and_use_state_workspace(self):
+    def test_native_writers_obey_approval_and_use_hook_workspace(self):
         from unittest.mock import patch
-        gate.write_state(self.state, "step", WIN_L, workspace=self.tmp.name)
+        gate.write_state(self.state, "step", WIN_L, workspace=os.path.join(self.tmp.name, "other-chat"))
+        agents = os.path.join(self.tmp.name, ".agents")
+        os.makedirs(agents)
+        with open(os.path.join(agents, "hooks.json"), "w", encoding="utf-8") as stream:
+            json.dump({gate.STEP_GATE_KEY: {}}, stream)
         for name in ("write_to_file", "replace_file_content"):
             args = {"TargetFile": "a.txt", "CodeContent": "new"}
             for approved in (True, False):
                 with patch.object(gate.agy_native_approval, "request_native_write",
                                   return_value=(approved, "native refusal")) as ask:
-                    self.assertEqual(self.decide({"toolCall": {"name": name, "args": args}}),
+                    payload = json.dumps({"toolCall": {"name": name, "args": args}}).encode()
+                    self.assertEqual(gate.decide(payload, self.state, windows=True, cwd=agents)["decision"],
                                      "allow" if approved else "deny")
                     ask.assert_called_once_with(name, args, self.tmp.name)
 
