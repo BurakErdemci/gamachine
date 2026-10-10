@@ -1,12 +1,12 @@
 """CLI context readings must survive turn boundaries without blocking readers."""
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import providers.claude_sdk_session as claude
 import providers.codex_session as codex
-from routes.conversation_routes import _live_context_reading
+from routes.conversation_routes import _context_usage_payload, _live_context_reading
 
 
 def _claude_session():
@@ -160,17 +160,65 @@ def test_codex_malformed_reading_is_ignored(usage):
 def test_live_lookup_uses_existing_live_sessions_only(monkeypatch, provider):
     monkeypatch.setattr(claude, "_SESSIONS", {})
     monkeypatch.setattr(codex, "_SESSIONS", {})
-    assert _live_context_reading(7003) is None
+    family = "claude" if provider is claude else "codex"
+    assert _live_context_reading(7003, family) is None
     assert not claude._SESSIONS and not codex._SESSIONS
     session = provider.ClaudeSDKSession(7003) if provider is claude else provider.CodexSession(7003)
     session.context_reading = {"used": 10, "window": 100, "percent": 10, "model": ""}
     provider._SESSIONS[7003] = session
-    assert _live_context_reading(7003) is None
+    assert _live_context_reading(7003, family) is None
     session._started = True
-    assert _live_context_reading(7003) is session.context_reading
+    assert _live_context_reading(7003, family) is session.context_reading
 
 
 def test_live_lookup_never_raises(monkeypatch):
     monkeypatch.setattr(claude, "peek_session", MagicMock(side_effect=RuntimeError("unavailable")))
     monkeypatch.setattr(codex, "peek_session", MagicMock(side_effect=RuntimeError("unavailable")))
-    assert _live_context_reading(7003) is None
+    assert _live_context_reading(7003, "claude") is None
+    assert _live_context_reading(7003, "codex") is None
+
+
+def _live(module, cls, conv_id):
+    session = cls(conv_id)
+    session._started = True
+    session.context_reading = {"used": 10, "window": 100, "percent": 10, "model": module.__name__}
+    module._SESSIONS[conv_id] = session
+    return session
+
+
+@pytest.mark.parametrize("family, expected", [
+    ("codex", "codex"), ("claude", "claude"),
+    ("opencode", None), ("copilot", None), ("agy", None), ("cursor", None), ("kimi", None),
+    (None, None), ("", None), ("unknown", None),
+])
+def test_only_the_current_family_answers_while_other_sessions_live(monkeypatch, family, expected):
+    monkeypatch.setattr(claude, "_SESSIONS", {})
+    monkeypatch.setattr(codex, "_SESSIONS", {})
+    live_claude = _live(claude, claude.ClaudeSDKSession, 7010)
+    live_codex = _live(codex, codex.CodexSession, 7010)
+    want = {"claude": live_claude, "codex": live_codex}.get(expected)
+    got = _live_context_reading(7010, family)
+    assert got is (want.context_reading if want else None)
+
+
+def test_a_chat_that_moved_to_codex_never_shows_the_claude_reading(monkeypatch):
+    monkeypatch.setattr(claude, "_SESSIONS", {})
+    monkeypatch.setattr(codex, "_SESSIONS", {})
+    _live(claude, claude.ClaudeSDKSession, 7011)  # old session still alive
+    assert _live_context_reading(7011, "codex") is None
+    db = MagicMock()
+    db.get_conversation_messages.return_value = [{"content": "x" * 400}]
+    payload = _context_usage_payload(db, 7011, reading=_live_context_reading(7011, "codex"))
+    assert payload["estimated"] is True and "real" not in payload
+
+
+def test_current_family_resolves_from_the_chat_model_or_none():
+    from routes.conversation_routes import _current_family
+    with patch("routes.conversation_routes.chat_model.chat_model",
+               return_value={"provider_type": "subscription", "model_name": "gpt-6.1-sol"}):
+        assert _current_family(MagicMock(), 1, 7012) == "codex"
+    with patch("routes.conversation_routes.chat_model.chat_model",
+               return_value={"provider_type": "anthropic", "model_name": "claude-x"}):
+        assert _current_family(MagicMock(), 1, 7012) is None
+    with patch("routes.conversation_routes.chat_model.chat_model", side_effect=RuntimeError("no row")):
+        assert _current_family(MagicMock(), 1, 7012) is None

@@ -130,21 +130,24 @@ def test_window_lookup_reuses_hits_and_never_guesses():
         assert oneshot.opencode_context_window(MODEL) is None
 
 
-def test_gauge_reads_the_oneshot_session_reading():
+def test_gauge_reads_only_the_current_oneshot_cli_session():
     conv_id = 987_001
     reading = {"used": 17_325, "window": 200_000, "percent": 8.66, "model": MODEL}
     sess = oneshot.get_session("opencode", conv_id)
     try:
-        assert _live_context_reading(conv_id) is None
+        assert _live_context_reading(conv_id, "opencode") is None
         sess.context_reading, sess.context_reading_at = reading, 1.0
-        assert _live_context_reading(conv_id) == reading
-        other = oneshot.get_session("cursor", conv_id)
-        other.context_reading = {"used": 1, "window": 10, "percent": 10.0, "model": ""}
-        other.context_reading_at = 2.0
-        assert _live_context_reading(conv_id)["used"] == 1  # newest reading wins
+        assert _live_context_reading(conv_id, "opencode") == reading
+        # The chat moved to another one-shot CLI: OpenCode's reading must not leak.
+        for family in ("copilot", "cursor", "kimi", "agy", None):
+            assert _live_context_reading(conv_id, family) is None
+        assert oneshot.peek_session(conv_id, "copilot") is None
+        db = MagicMock()
+        db.get_conversation_messages.return_value = [{"content": "x"}]
+        payload = _context_usage_payload(db, conv_id, reading=_live_context_reading(conv_id, "copilot"))
+        assert payload["estimated"] is True
     finally:
         oneshot._SESSIONS.pop(("opencode", conv_id), None)
-        oneshot._SESSIONS.pop(("cursor", conv_id), None)
 
 
 def test_estimate_is_unchanged_for_clis_that_report_no_reading():

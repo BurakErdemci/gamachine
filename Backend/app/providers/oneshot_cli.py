@@ -69,14 +69,12 @@ def get_session(cli: str, conversation_id: int) -> OneShotSession:
     return s
 
 
-def peek_session(conversation_id: int) -> Optional[OneShotSession]:
-    """Newest one-shot session of this chat that holds a context reading."""
-    best = None
-    for (_cli, conv_id), sess in _SESSIONS.items():
-        if conv_id == conversation_id and isinstance(sess.context_reading, dict):
-            if best is None or sess.context_reading_at > best.context_reading_at:
-                best = sess
-    return best
+def peek_session(conversation_id: int, cli: str) -> Optional[OneShotSession]:
+    """The chat's session of THIS cli when it holds a context reading, else None."""
+    sess = _SESSIONS.get((cli, conversation_id))
+    if sess is not None and isinstance(sess.context_reading, dict):
+        return sess
+    return None
 
 
 async def close_session(cli: str, conversation_id: int) -> None:
