@@ -11,6 +11,7 @@ from agy_step_gate import SIDE_MODE
 from .agy_provider import AgyProvider, AgyStepGateError, _gate_write_failed, gate_state_path
 from .cli_base import BaseCLIProvider, _CREATE_NO_WINDOW, build_spawn_env
 from .saglayici_sahipligi import SaglayiciSahipligi, oturumu_kapat
+from .text_blocks import block_break
 from secret_redaction import redact_secrets
 from spawn_env import conversation_env
 
@@ -834,6 +835,9 @@ class AgyStreamSession(SaglayiciSahipligi):
         loop = asyncio.get_running_loop()
         tool_calls = set()
         tool_results = set()
+        # Tail of the text streamed so far, and whether a tool step came after it.
+        text_tail = ""
+        tool_since_text = False
         if not side:
             await _preempt_side_turn(self)
         try:
@@ -906,6 +910,10 @@ class AgyStreamSession(SaglayiciSahipligi):
                                              self.conversation_id, repr(event)[:160])
                                 continue
                             if text_delta:
+                                if tool_since_text:
+                                    text_delta = block_break(text_tail) + text_delta
+                                    tool_since_text = False
+                                text_tail = (text_tail + text_delta)[-2:]
                                 yield _redact_event({"type": "text", "content": text_delta})
                         elif step.get("step_type") == "tool":
                             info = step.get("tool_info") or {}
@@ -929,6 +937,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                                         parameters = json.loads(parameters)
                                     except ValueError:
                                          parameters = {"summary": parameters}
+                                tool_since_text = bool(text_tail)
                                 yield _redact_event({"type": "tool_call", "tool": tool_name,
                                                      "arguments": parameters, "iteration": 1})
                             if key not in tool_results and (

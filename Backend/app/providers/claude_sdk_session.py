@@ -53,6 +53,7 @@ from agentic.command_gates import APPROVAL_TIMEOUT_S
 # modül çıplak adla import ediliyor (`backend.spec` `pathex=['app']` taşıyor).
 from unity_tool_policy import is_unity_mcp_read_only
 import unity_file_guard
+from providers.text_blocks import block_break
 
 logger = logging.getLogger(__name__)
 
@@ -906,6 +907,7 @@ class ClaudeSDKSession:
         # empty one means no answer, not "fall back to the whole text".
         self.turn_had_tool_call = False
         self._saw_text_delta = False   # partial delta geldiyse blok metnini tekrar basma
+        self._stream_tail = ""         # last characters streamed this turn (block separator)
         self._saw_thinking_delta = False
         self._txt_buf = ""             # delta birleştirme tamponları (SSE spam azaltma)
         self._think_buf = ""
@@ -1264,6 +1266,7 @@ class ClaudeSDKSession:
         self.turn_had_tool_call = False
         self._saw_text_delta = False
         self._saw_thinking_delta = False
+        self._stream_tail = ""
         self._txt_buf = ""
         self._think_buf = ""
         self._turn_tokens = 0
@@ -1534,10 +1537,11 @@ class ClaudeSDKSession:
             self._cancel_grace()  # asistan aktif → otonom devam başladı, bitirme sayacı dursun
             for b in msg.content:
                 if isinstance(b, TextBlock):
-                    self._final_text += b.text
+                    sep = block_break(self._final_text) if b.text else ""
+                    self._final_text += sep + b.text
                     self.last_reply_text += b.text
                     if not self._saw_text_delta:
-                        await self._emit({"type": "text", "content": b.text})
+                        await self._emit({"type": "text", "content": sep + b.text})
                 elif isinstance(b, ThinkingBlock):
                     if not self._saw_thinking_delta and b.thinking:
                         await self._emit({"type": "thinking", "text": b.thinking})
@@ -1651,10 +1655,18 @@ class ClaudeSDKSession:
                     await self._emit({"type": "thinking", "text": t})
             elif dt == "text_delta":
                 self._saw_text_delta = True
-                self._txt_buf += d.get("text", "")
+                txt = d.get("text", "")
+                self._txt_buf += txt
+                self._stream_tail = (self._stream_tail + txt)[-2:]
                 if len(self._txt_buf) >= _DELTA_FLUSH_CHARS:
                     t, self._txt_buf = self._txt_buf, ""
                     await self._emit({"type": "text", "content": t})
+        elif et == "content_block_start":
+            # A new text block after text already streamed this turn starts a new paragraph.
+            if (e.get("content_block") or {}).get("type") == "text" and self._stream_tail:
+                sep = block_break(self._stream_tail)
+                self._txt_buf += sep
+                self._stream_tail = (self._stream_tail + sep)[-2:]
         elif et in ("content_block_stop", "message_stop"):
             await self._flush_deltas()
         elif et == "message_start":

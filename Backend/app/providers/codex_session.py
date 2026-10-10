@@ -35,6 +35,7 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Set
 
 import unity_file_guard
+from providers.text_blocks import block_break
 from agentic.command_gates import APPROVAL_GATES, APPROVAL_RESULTS, APPROVAL_TIMEOUT_S
 from agentic.command_gates import cancel_gate, mark_timed_out, register_gate, release_gate
 
@@ -892,6 +893,7 @@ class CodexSession:
         self._pending: Dict[int, asyncio.Future] = {}   # bizim istek id → Future
         self._out_q: Optional[asyncio.Queue] = None      # aktif tur event kuyruğu
         self._final_text = ""
+        self._text_item_id = None  # agentMessage item the streamed text belongs to
         self.thread_id: Optional[str] = None
         self._current_turn_id: Optional[str] = None
         self._cancel_event: Optional[asyncio.Event] = None
@@ -1342,6 +1344,11 @@ class CodexSession:
         if method == "item/agentMessage/delta":
             delta = params.get("delta", "")
             if delta:
+                # Each agentMessage item is its own text block; a new one is a new paragraph.
+                item_id = params.get("itemId")
+                if item_id != self._text_item_id:
+                    self._text_item_id = item_id
+                    delta = block_break(self._final_text) + delta
                 self._final_text += delta
                 await out_q.put({"type": "text", "content": delta})
 

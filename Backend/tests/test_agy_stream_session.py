@@ -217,6 +217,21 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[2]["summary"], "file contents")
         self.assertTrue(events[2]["success"])
 
+    async def test_text_after_a_tool_step_starts_a_new_paragraph(self):
+        # Text blocks around a tool used to be glued: "...the doc.The repo is open."
+        tool = {"event": "step_update", "step_update": {
+            "conversation_id": SESSION_ID, "step_index": 9, "state": "DONE",
+            "step_type": "tool", "tool_info": {"name": "view_file", "parameters": {"path": "a.cs"},
+                                               "output": "file contents"},
+        }}
+        turn = [TURNS[0][0], TURNS[0][2], tool, TURNS[0][2], TURNS[0][-1]]
+        self.plans = [{"turns": [turn]}]
+        texts = [e["content"] for e in await self.collect() if e["type"] == "text"]
+        self.assertEqual(len(texts), 2)
+        self.assertFalse(texts[0].startswith("\n"))
+        self.assertTrue(texts[1].startswith("\n"), texts)
+        self.assertTrue((texts[0] + texts[1]).count("\n\n") >= 1)
+
     async def test_synthetic_tool_error_is_reported(self):
         tool = {"event": "step_update", "step_update": {
             "conversation_id": SESSION_ID, "step_index": 7, "state": "DONE",
