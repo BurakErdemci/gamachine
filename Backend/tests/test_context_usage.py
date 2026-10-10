@@ -17,9 +17,11 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
-from routes.conversation_routes import _context_usage_payload, _MAX_CONTEXT_CHARS
+from routes.conversation_routes import _context_usage_payload, _fmt_tokens, _MAX_CONTEXT_CHARS
 
 
 def _db(*contents):
@@ -76,3 +78,42 @@ def test_none_content_rows_do_not_crash_the_count():
     db = MagicMock()
     db.get_conversation_messages.return_value = [{"content": None}, {}, {"content": "abc"}]
     assert _context_usage_payload(db, 1)["total_chars"] == 3
+
+
+@pytest.mark.parametrize("tokens, formatted", [
+    (200_000, "200k"), (1_000_000, "1M"), (112_400, "112.4k"), (999, "999"),
+])
+def test_token_formatting(tokens, formatted):
+    assert _fmt_tokens(tokens) == formatted
+
+
+@pytest.mark.parametrize("percentage, rounded, compact", [
+    (56.2, 56, False), (84.4, 84, False), (84.6, 85, True),
+    (85.0, 85, True), (120.0, 100, True),
+])
+def test_live_reading_overrides_only_the_gauge(percentage, rounded, compact):
+    db = _db("x" * 10_000, "y" * 10_000)
+    usage = {"input_tokens": 10, "output_tokens": 2, "cost_usd": None}
+    estimate = _context_usage_payload(db, 1, usage)
+    payload = _context_usage_payload(db, 1, usage, {
+        "used": 112_400, "window": 200_000, "percent": percentage, "model": "claude-test",
+    })
+    assert payload["estimated"] is False
+    assert payload["percent"] == rounded
+    assert payload["should_compact"] is compact
+    assert payload["real"] == {"used": "112.4k", "total": "200k", "model": "claude-test"}
+    for key in ("type", "total_chars", "max_chars", "message_count", "last_turn"):
+        assert payload[key] == estimate[key]
+
+
+@pytest.mark.parametrize("reading", [None, {"window": 0}, {"window": -1}])
+def test_missing_or_unusable_reading_keeps_the_estimate(reading):
+    db = _db("x" * 50_000)
+    assert _context_usage_payload(db, 1, reading=reading) == _context_usage_payload(db, 1)
+
+
+def test_real_reading_without_model_uses_none():
+    payload = _context_usage_payload(_db("x"), 1, reading={
+        "used": 999, "window": 1_000_000, "percent": 0.1, "model": "",
+    })
+    assert payload["real"] == {"used": "999", "total": "1M", "model": None}

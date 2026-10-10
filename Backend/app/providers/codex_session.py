@@ -895,6 +895,7 @@ class CodexSession:
         self._final_text = ""
         self._text_item_id = None  # agentMessage item the streamed text belongs to
         self.thread_id: Optional[str] = None
+        self.context_reading: Optional[dict] = None
         self._current_turn_id: Optional[str] = None
         self._cancel_event: Optional[asyncio.Event] = None
         # Aktif turun sonlanma olayı gitti mi — bkz. `_emit_terminal`.
@@ -1277,11 +1278,26 @@ class CodexSession:
 
     # ── Notification → event dict eşlemesi ───────────────────────────────
     async def _handle_notification(self, msg: dict):
+        method = msg.get("method", "")
+        params = msg.get("params", {}) or {}
+        if method == "thread/tokenUsage/updated":
+            # Thread context remains relevant even after its turn's output was retired.
+            usage = params.get("tokenUsage") if isinstance(params, dict) else None
+            window = usage.get("modelContextWindow") if isinstance(usage, dict) else None
+            last = usage.get("last") if isinstance(usage, dict) else None
+            used = last.get("totalTokens") if isinstance(last, dict) else None
+            if type(window) is int and window > 0 and type(used) is int:
+                self.context_reading = {
+                    "used": used, "window": window, "percent": 100 * used / window, "model": "",
+                }
+            else:
+                logger.debug("[CodexSession:%s] malformed context reading ignored",
+                             self.conversation_id)
+            return
+
         out_q = self._out_q
         if out_q is None:
             return  # tur dışı bildirim (ör. remoteControl/status) — yok say
-        method = msg.get("method", "")
-        params = msg.get("params", {}) or {}
 
         # ── Bu bildirim ŞU ANKİ tura mı ait? ─────────────────────────────
         # A notification names its turn and the session already tracks the turn

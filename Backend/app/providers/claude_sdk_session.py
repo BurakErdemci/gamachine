@@ -893,6 +893,7 @@ class ClaudeSDKSession:
         self._turn_lock = asyncio.Lock()
         self._out_q: Optional[asyncio.Queue] = None
         self.session_id: Optional[str] = None
+        self.context_reading: Optional[dict] = None
         # İptal (Durdur) için: aktif tur boyunca bekleyen gate'ler + iptal sinyali
         self._cancel_event: Optional[asyncio.Event] = None
         self._active_gate_ids: Set[str] = set()
@@ -1813,12 +1814,27 @@ class ClaudeSDKSession:
                     break
                 yield ev
         finally:
-            # NOT: reader'ı BEKLEMEYİZ/iptal etmeyiz (eski 'await task' kilidi burdaydı).
-            # SSE koptuysa tur CLI'da sürer; reader biten turun metnini DB'ye kaydeder.
-            self._out_q = None
-            self._cancel_event = None
-            self._active_gate_ids.clear()
-            self._turn_lock.release()
+            try:
+                if self.is_live and self._client is not None:
+                    try:
+                        # Query outside the reader: its control response needs that reader to avoid deadlock.
+                        usage = await asyncio.wait_for(self._client.get_context_usage(), 5.0)
+                        self.context_reading = {
+                            "used": int(usage["totalTokens"]),
+                            "window": int(usage.get("rawMaxTokens") or usage["maxTokens"]),
+                            "percent": float(usage["percentage"]),
+                            "model": str(usage.get("model") or ""),
+                        }
+                    except Exception:
+                        logger.debug("[ClaudeSDKSession:%s] context reading unavailable",
+                                     self.conversation_id, exc_info=True)
+            finally:
+                # NOT: reader'ı BEKLEMEYİZ/iptal etmeyiz (eski 'await task' kilidi burdaydı).
+                # SSE koptuysa tur CLI'da sürer; reader biten turun metnini DB'ye kaydeder.
+                self._out_q = None
+                self._cancel_event = None
+                self._active_gate_ids.clear()
+                self._turn_lock.release()
 
 
 def _identity_mismatch(sess: "ClaudeSDKSession", kwargs: dict) -> Optional[str]:

@@ -1188,6 +1188,7 @@ export const useChat = (
                 message_count: data.message_count,
                 estimated: data.estimated !== false,
                 last_turn: data.last_turn,
+                real: data.real,
               } }));
               if (data.type === 'command_approval_needed') {
                 const item: PendingCommand = { command: data.command, gateId: data.gate_id, messageId: aiMsgId };
