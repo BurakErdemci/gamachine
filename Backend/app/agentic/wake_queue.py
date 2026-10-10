@@ -57,6 +57,33 @@ _WAKE_TICKETS: Dict[int, float] = {}
 _TICKET_NOTICES: Dict[int, List[str]] = {}
 
 
+def notice_turn_text(notices) -> str:
+    """The plain sentence a task-completion wake turn runs on, in place of the
+    raw `reason|names` notice strings. Mail notices are not task notices and
+    are skipped; "" when nothing else is left."""
+    from agentic.mailbox import is_mail_notice  # lazy: mailbox imports this package
+    names: List[str] = []
+    saved = False
+    for n in notices or []:
+        if not n or is_mail_notice(n):
+            continue
+        reason, sep, name = n.partition("|")
+        if not sep:
+            name = n
+        elif reason == "tasks_done_saved":
+            saved = True
+        if name and name not in names:
+            names.append(name)
+    if not names:
+        return ""
+    text = (f"[Sistem] Sen yokken başlattığın arka plan işleri bitti: {'; '.join(names)}. "
+            "Bu mesajı kullanıcı yazmadı. Sonuçlarına bakıp kaldığın yerden devam et "
+            "ve işi sonuçlandır.")
+    if saved:
+        text += " Son yanıtın sohbete kaydedildi."
+    return text
+
+
 def _entry(conv_id: int) -> _ConvWake:
     e = _QUEUES.get(conv_id)
     if e is None:

@@ -431,7 +431,8 @@ def test_delivered_rows_are_not_delivered_again(env, auto, monkeypatch):
     wake_queue.issue_ticket(b, ["tasks_done|build"])
     _wake_turn(env.client, b, message="tasks_done|build")
     assert "tek sefer" not in _FakeRunner.messages[-1]
-    assert _FakeRunner.messages[-1] == "tasks_done|build"
+    assert _FakeRunner.messages[-1] == wake_queue.notice_turn_text(["tasks_done|build"])
+    assert "tasks_done|" not in _FakeRunner.messages[-1]
     notes = [m for m in env.db.get_conversation_messages(b) if mailbox.is_mail_message(m["content"])]
     assert len(notes) == 1
 

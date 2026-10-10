@@ -1960,7 +1960,11 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
                 # and turn into a fake user instruction during a CLI handoff
                 # (see `_build_handoff_context`). Mail notes are stored the same
                 # way, inside the claim.
-                db.add_message(request.conversation_id, "system", request.message)
+                _wake_text = wake_queue.notice_turn_text(wake_notices)
+                if _wake_text:
+                    turn_message = _wake_text
+                db.add_message(request.conversation_id, "system",
+                               _wake_text or request.message)
         else:
             # A real user message CANCELS any pending wakes: the human is back
             # in the loop and decides the next step. Queued notes stay in the

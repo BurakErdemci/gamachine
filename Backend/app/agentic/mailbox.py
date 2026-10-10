@@ -261,7 +261,9 @@ def turn_text(rows: Iterable[dict], other_notices: Iterable[str] = (),
     parts.append(stored_text(rows))
     others = [n for n in other_notices if n and not is_mail_notice(n)]
     if others:
-        parts.append("[ARKA PLAN BİLDİRİMİ] " + " · ".join(others))
+        from agentic import wake_queue
+        parts.append(wake_queue.notice_turn_text(others)
+                     or "[ARKA PLAN BİLDİRİMİ] " + " · ".join(others))
     return "\n\n".join(parts)
 
 
