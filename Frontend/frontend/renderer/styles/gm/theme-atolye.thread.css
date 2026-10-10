@@ -72,3 +72,24 @@
 [data-theme="atolye"] .empty-hero { grid-template-columns: 150px 1fr; gap: 24px; }
 [data-theme="atolye"] .empty-head { display: none; }
 [data-theme="atolye"] .empty-mascot { display: block; width: 150px; height: auto; }
+
+/* ================= confirm dialog: a WORK-ORDER TAG =================
+   The approval card's tear-off stub and grommet, in the risk colour; the warning glyph is
+   lettered on the stub instead of a tile on the tag. */
+[data-theme="atolye"] .confirm { padding-left: 52px; border-width: 2px; }
+[data-theme="atolye"] .confirm > .confirm-stub {
+  display: block; position: absolute; left: 0; top: 0; bottom: 0; width: 32px;
+  border-right: 1px dashed var(--cf-risk);
+  background: var(--cf-risk-soft);
+  border-radius: calc(var(--radius-lg) - 2px) 0 0 calc(var(--radius-lg) - 2px);
+}
+[data-theme="atolye"] .confirm-stub::before {
+  content: ""; position: absolute; left: 7px; top: 14px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--paper-bg); border: 3px solid var(--atolye-metal);
+  box-shadow: inset 1px 1px 0 var(--atolye-hole);
+}
+[data-theme="atolye"] .confirm-mark {
+  position: absolute; left: 0; bottom: 14px; width: 32px; height: 18px; margin: 0;
+  background: transparent; color: var(--cf-risk-text); clip-path: none;
+}
+[data-theme="atolye"] .confirm-msg { padding-top: 0; }

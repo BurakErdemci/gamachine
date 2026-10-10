@@ -63,3 +63,14 @@
 [data-theme="sade"] .empty-head { display: none; }
 [data-theme="sade"] .has-error .composer { border-color: var(--sade-err); }
 [data-theme="sade"] .composer-msg { color: var(--sade-err-text); }
+
+/* ================= confirm dialog =================
+   Quiet like the approval card: thin card line, the glyph without a tile, small buttons. The
+   risk colour is Sade's error red, not its violet accent (which means "act", not "danger"). */
+[data-theme="sade"] .confirm {
+  --cf-risk: var(--sade-err); --cf-risk-text: var(--sade-err-text); --cf-risk-soft: var(--sade-err-soft);
+  border-color: var(--sade-card-line); border-radius: var(--radius-md); padding: 18px 20px 16px;
+}
+[data-theme="sade"] .confirm-mark { width: 16px; height: 22px; margin-top: 0; background: transparent; }
+[data-theme="sade"] .confirm-msg { padding-top: 0; font-size: 14px; }
+[data-theme="sade"] .confirm .btn { height: 32px; padding: 0 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); }

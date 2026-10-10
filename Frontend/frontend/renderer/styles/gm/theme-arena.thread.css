@@ -146,3 +146,33 @@
   [data-theme="arena"] .approval .btn { padding: 0 16px; }
   [data-theme="arena"] .thread-col .approval-why { flex-wrap: wrap; row-gap: 2px; }
 }
+
+/* ================= confirm dialog: a small QUEST WINDOW =================
+   Same three clipped layers as the approval card (edge / fill / hard offset shadow, no blur);
+   the fill carries an orange top bar that follows the chamfer, the glyph sits on the skewed tag. */
+[data-theme="arena"] .confirm {
+  --c: var(--quest-cut);
+  --chamfer: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
+  background: transparent; border: 0; border-radius: 0; box-shadow: none; isolation: isolate;
+  padding: 22px 22px 18px;
+}
+[data-theme="arena"] .confirm::before,
+[data-theme="arena"] .confirm::after,
+[data-theme="arena"] .confirm > .confirm-stub {
+  content: ""; display: block; position: absolute; inset: 0; clip-path: var(--chamfer);
+}
+[data-theme="arena"] .confirm::before { z-index: -2; background: var(--quest-edge); }
+[data-theme="arena"] .confirm::after { z-index: -1; inset: 1px; background: var(--paper-raised); box-shadow: inset 0 3px 0 var(--cf-risk); }
+[data-theme="arena"] .confirm > .confirm-stub { z-index: -3; transform: translate(5px, 5px); background: var(--quest-shadow); }
+[data-theme="arena"] .confirm-mark {
+  position: relative; z-index: 0; width: 36px; height: 24px; margin: 0 2px 0 0;
+  background: transparent; color: var(--cf-risk-ink); clip-path: none; border-radius: 0;
+}
+[data-theme="arena"] .confirm-mark::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; background: var(--cf-risk); transform: skewX(-12deg);
+}
+[data-theme="arena"] .confirm-msg { padding-top: 0; font-size: 15px; }
+[data-theme="arena"] .confirm-actions { gap: 10px; }
+[data-theme="arena"] .confirm .btn { height: 38px; padding: 0 20px; font-size: 13px; font-weight: 700; }
+[data-theme="arena"] .confirm .btn-ghost { border: 0; box-shadow: inset 0 0 0 1.5px var(--ink); }
+[data-theme="arena"] .confirm .btn-ghost:focus-visible { outline-offset: -5px; }

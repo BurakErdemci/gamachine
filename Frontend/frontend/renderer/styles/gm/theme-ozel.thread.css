@@ -122,3 +122,15 @@
 @container (max-width: 1080px) {
   [data-theme="ozel"] .pf-head { grid-template-columns: auto 1fr; }
 }
+
+/* ================= confirm dialog =================
+   Sade's quiet card on Ozel's tokens. The risk colour is the user's error status colour, since
+   Ozel's accent is the "waiting" status. */
+[data-theme="ozel"] .confirm {
+  --cf-risk: var(--st-err); --cf-risk-text: var(--st-err-text);
+  --cf-risk-soft: color-mix(in oklab, var(--st-err) 14%, var(--paper-raised));
+  border-color: var(--oz-card-line); border-radius: var(--radius-md); padding: 18px 20px 16px;
+}
+[data-theme="ozel"] .confirm-mark { width: 16px; height: 22px; margin-top: 0; background: transparent; }
+[data-theme="ozel"] .confirm-msg { padding-top: 0; font-size: 14px; }
+[data-theme="ozel"] .confirm .btn { height: 32px; padding: 0 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); }

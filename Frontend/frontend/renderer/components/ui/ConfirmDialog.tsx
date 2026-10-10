@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useId } from 'react';
 import { AnimatePresence, motion, useIsPresent } from 'framer-motion';
 import { AlertTriangle } from 'lucide-react';
 import { cevir } from '../../lib/i18n';
@@ -43,14 +43,16 @@ export function confirmDialog(
  * its exit animation, so aria-modal is dropped once it is leaving; otherwise Ctrl+S pressed
  * right after answering was swallowed without saving.
  */
-function ConfirmCard({ children }: { children: React.ReactNode }) {
+function ConfirmCard({ labelId, children }: { labelId: string; children: React.ReactNode }) {
   const present = useIsPresent();
   return (
     <motion.div
       role="alertdialog"
       aria-modal={present ? 'true' : undefined}
-      className="bg-[#0a0a0a] border border-slate-700 rounded-2xl shadow-2xl w-[340px] max-w-[90vw] p-5"
-      initial={{ scale: 0.95, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 10 }}
+      aria-labelledby={labelId}
+      className="confirm"
+      initial={{ scale: 0.97, y: 8 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.97, y: 8 }}
+      transition={{ duration: 0.16 }}
       onClick={(e) => e.stopPropagation()}
     >
       {children}
@@ -60,6 +62,7 @@ function ConfirmCard({ children }: { children: React.ReactNode }) {
 
 export function ConfirmDialogHost() {
   const [state, setState] = useState<ConfirmState | null>(null);
+  const msgId = useId();
 
   useEffect(() => {
     _trigger = ({ message, confirmLabel, cancelLabel }) =>
@@ -85,29 +88,27 @@ export function ConfirmDialogHost() {
     <AnimatePresence>
       {state && (
         <motion.div
-          className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          className="confirm-veil"
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          transition={{ duration: 0.16 }}
           onClick={() => resolve(false)}
         >
-          <ConfirmCard>
-            <div className="flex items-start gap-3 mb-4">
-              <div className="shrink-0 w-9 h-9 rounded-full bg-red-500/15 border border-red-500/30 flex items-center justify-center">
-                <AlertTriangle size={16} className="text-red-400" />
-              </div>
-              <p className="text-[13px] text-slate-200 leading-relaxed pt-1.5">{state.message}</p>
+          {/* Look lives in thread.css (.confirm) plus each theme's thread file, next to the
+              approval card it is a sibling of. .confirm-stub is a theme hook (Arena's offset
+              shadow, Atolye's tear-off stub); it draws nothing in the base theme. */}
+          <ConfirmCard labelId={msgId}>
+            <span className="confirm-stub" aria-hidden="true" />
+            <div className="confirm-body">
+              <span className="confirm-mark" aria-hidden="true">
+                <AlertTriangle size={16} strokeWidth={2.25} />
+              </span>
+              <p id={msgId} className="confirm-msg">{state.message}</p>
             </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => resolve(false)}
-                className="px-3.5 py-1.5 rounded-lg text-[12px] font-medium text-slate-300 bg-slate-800/60 hover:bg-slate-700/60 transition-colors"
-              >
+            <div className="confirm-actions">
+              <button type="button" className="btn btn-ghost confirm-no" onClick={() => resolve(false)}>
                 {state.cancelLabel}
               </button>
-              <button
-                autoFocus
-                onClick={() => resolve(true)}
-                className="px-3.5 py-1.5 rounded-lg text-[12px] font-semibold text-white bg-red-600 hover:bg-red-500 transition-colors"
-              >
+              <button type="button" autoFocus className="btn btn-primary confirm-go" onClick={() => resolve(true)}>
                 {state.confirmLabel}
               </button>
             </div>
