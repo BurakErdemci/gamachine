@@ -139,6 +139,24 @@ export const watchEditorFont = (editor: {
   return () => { fontEditors.delete(editor); disposed?.dispose(); };
 };
 
+/**
+ * Dispose a DiffEditor's two models only after the editor itself is gone. @monaco-editor/react
+ * 4.7.0 disposes the models first on unmount, and monaco-editor 0.55 throws "TextModel got disposed
+ * before DiffEditorWidget model got reset" (measured 10 Oct 2026: accepting an approval card crashed
+ * the renderer). Pair it with `keepCurrentOriginalModel` / `keepCurrentModifiedModel`, so the
+ * library leaves the models alone and this listener frees them.
+ */
+export const disposeDiffModelsAfterEditor = (editor: {
+  getModel?: () => { original?: { dispose: () => void }; modified?: { dispose: () => void } } | null;
+  onDidDispose?: (listener: () => void) => unknown;
+}) => {
+  const models = editor.getModel?.();
+  editor.onDidDispose?.(() => {
+    models?.original?.dispose();
+    models?.modified?.dispose();
+  });
+};
+
 // Monaco's theme is global (one per page), so one watcher is enough however many editors mount.
 let _themeWatched = false;
 

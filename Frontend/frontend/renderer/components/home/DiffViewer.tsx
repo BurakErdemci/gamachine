@@ -3,7 +3,7 @@ import './monaco-loader';
 import { DiffEditor } from '@monaco-editor/react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, Check, CheckCircle2, FileCode, X } from 'lucide-react';
-import { defineUnityTheme, THEME_NAME, codeFontFamily, watchEditorFont } from './monaco-theme';
+import { defineUnityTheme, THEME_NAME, codeFontFamily, disposeDiffModelsAfterEditor, watchEditorFont } from './monaco-theme';
 import { useLang } from '../../lib/i18n';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { publishPendingChange } from '../../lib/pendingChange';
@@ -125,7 +125,10 @@ export const DiffViewer = ({ diffData, filename, filePath, applied, onAccept, on
             modified={diffData.fixed_code}
             theme={THEME_NAME}
             beforeMount={defineUnityTheme}
+            keepCurrentOriginalModel
+            keepCurrentModifiedModel
             onMount={(editor) => {
+              disposeDiffModelsAfterEditor(editor);
               stopFontWatch.current?.();
               stopFontWatch.current = watchEditorFont(editor);
             }}

@@ -4,7 +4,7 @@
 import './monaco-loader';
 import React from 'react';
 import { Editor, DiffEditor } from '@monaco-editor/react';
-import { defineUnityTheme, THEME_NAME, codeFontFamily, watchEditorFont } from './monaco-theme';
+import { defineUnityTheme, THEME_NAME, codeFontFamily, disposeDiffModelsAfterEditor, watchEditorFont } from './monaco-theme';
 import { hostWorkspacePath } from '../../lib/backendWorkspacePath';
 
 // Açık dosyanın uzantısına göre Monaco dili — .md/.json/.yaml vb. artık editörde
@@ -336,7 +336,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
       theme={THEME_NAME}
       // Defined before the first paint, so the editor never flashes another theme.
       beforeMount={defineUnityTheme}
+      keepCurrentOriginalModel
+      keepCurrentModifiedModel
       onMount={(editor) => {
+        disposeDiffModelsAfterEditor(editor);
         stopFontWatch.current?.();
         stopFontWatch.current = watchEditorFont(editor);
       }}
