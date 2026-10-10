@@ -20,6 +20,7 @@ from core.constants import API_KEY_HEADER
 from core.local_auth import LOCAL_API_TOKEN_FILE_HINT, local_token_matches
 from models.models import MCPResponse
 from transport.plugin_registry import PluginRegistry
+from transport.unity_dialog_probe import find_unity_dialog_titles as _find_unity_dialog_titles
 from services.api_key_service import ApiKeyService
 
 from transport.models import (
@@ -36,6 +37,11 @@ from transport.models import (
 )
 
 logger = logging.getLogger(__name__)
+_DIALOG_POLL_S = 2.0
+
+
+def _dialog_name(titles: list[str]) -> str:
+    return f'a dialog "{titles[0]}"' if titles[0] else "a dialog"
 
 # ---------- MCP session tracking ----------
 # FastMCP does not expose its active client connections, and tools/list_changed
@@ -348,16 +354,51 @@ class PluginHub(WebSocketEndpoint):
                     future.set_exception(exc)
                 raise
             try:
-                result = await asyncio.wait_for(future, timeout=server_wait_s)
-                return result
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + server_wait_s
+                dialog_seen = False
+                while True:
+                    if future.done():
+                        return future.result()
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError
+                    await asyncio.wait({future}, timeout=min(_DIALOG_POLL_S, remaining))
+                    if future.done():
+                        return future.result()
+                    titles = await asyncio.to_thread(_find_unity_dialog_titles)
+                    # A reply or disconnect can arrive while the native probe runs.
+                    if future.done():
+                        return future.result()
+                    if titles and dialog_seen:
+                        return MCPResponse(
+                            success=False,
+                            error=(
+                                f"Unity is showing {_dialog_name(titles)} that blocks the editor, so "
+                                f"'{command_type}' cannot run until it is closed. "
+                                "Ask the user to close it in Unity, then retry."
+                            ),
+                            hint="user_action",
+                        ).model_dump()
+                    dialog_seen = bool(titles)
             except PluginDisconnectedError as exc:
-                return MCPResponse(success=False, error=str(exc), hint="retry").model_dump()
+                titles = await asyncio.to_thread(_find_unity_dialog_titles)
+                error = str(exc)
+                if titles:
+                    error += f" Unity is showing {_dialog_name(titles)} that blocks the editor; ask the user to close it."
+                return MCPResponse(success=False, error=error, hint="user_action" if titles else "retry").model_dump()
             except asyncio.TimeoutError:
-                if command_type in cls._FAST_FAIL_COMMANDS:
+                # Match wait_for's cancellation on total timeout, never on a slice.
+                future.cancel()
+                titles = await asyncio.to_thread(_find_unity_dialog_titles)
+                if command_type in cls._FAST_FAIL_COMMANDS or titles:
+                    error = f"Unity did not respond to '{command_type}' within {server_wait_s:.1f}s; please retry"
+                    if titles:
+                        error += f" Unity is showing {_dialog_name(titles)} that blocks the editor; ask the user to close it."
                     return MCPResponse(
                         success=False,
-                        error=f"Unity did not respond to '{command_type}' within {server_wait_s:.1f}s; please retry",
-                        hint="retry",
+                        error=error,
+                        hint="user_action" if titles else "retry",
                     ).model_dump()
                 raise
         finally:
