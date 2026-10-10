@@ -930,6 +930,8 @@ class ClaudeSDKSession:
         # "completed", the finish is MEASURED.
         self._bg_shells: Dict[str, str] = {}
         self._result_pending = False   # Result geldi ama arka plan görevleri sürüyor
+        self._autonomous_results = 0   # Results owed to an autonomous turn this stream took over
+        self._cli_turn_open = False    # the CLI produced output or got a query since its last Result
         self._nudges = 0               # görevler bitince gönderilen dürtme sayısı (tur başına)
         self._turn_started_at = 0.0
         self._cancel_requested = False
@@ -1294,6 +1296,7 @@ class ClaudeSDKSession:
             return
         self._turn_active = False
         self._result_pending = False
+        self._autonomous_results = 0
         self._cancel_grace()
         await self._flush_deltas()
         final = self._final_text or self._last_result_text
@@ -1529,6 +1532,7 @@ class ClaudeSDKSession:
                 await self._emit({"type": "status",
                                   "detail": f"⚠️ Claude API: {_err_tr} — CLI otomatik yeniden deniyor…",
                                   "tokens": self._turn_tokens})
+            self._cli_turn_open = True
             if not self._turn_active:
                 # Tur kapandıktan SONRA gelen asistan mesajı = otonom devam turu
                 # (watchdog/stop sonrası geciken task bitişi). "Hayalet tur" aç ki
@@ -1622,6 +1626,14 @@ class ClaudeSDKSession:
             return
 
         if isinstance(msg, ResultMessage):
+            self._cli_turn_open = False
+            if (self._autonomous_results > 0 and not self._cancel_requested
+                    and not getattr(msg, "is_error", False)):
+                # This Result closes the autonomous turn the stream took over, not
+                # the user's request, whose own Result is still to come.
+                self._autonomous_results -= 1
+                await self._flush_deltas()
+                return
             self._last_result_text = getattr(msg, "result", "") or ""
             self._usage_event = self._build_usage_event(msg)
             if getattr(msg, "is_error", False) or self._cancel_requested or not self._active_tasks:
@@ -1723,11 +1735,27 @@ class ClaudeSDKSession:
                 raise SessionBusyError("Önceki tur kilidi bırakmadı.")
 
         try:
+            # Read before this stream installs its queue: a turn running with no
+            # queue is an autonomous one.
+            autonomous = self._turn_active and self._out_q is None and self._cli_turn_open
             out_q: asyncio.Queue = asyncio.Queue()
             self._out_q = out_q
             self._cancel_event = asyncio.Event()
             self._active_gate_ids.clear()
+            # An autonomous turn (the CLI continuing after a background task, with no
+            # one listening) may be in progress. Its Result comes before this
+            # request's, and used to end this stream with the old answer while the
+            # real one went nowhere (audit of 35057cf). Take that turn over: its text
+            # is shown here and its Result does not count as this request's answer.
+            carried = self._final_text if autonomous else None
             self._begin_turn()
+            if carried is not None:
+                self._autonomous_results = 1
+                if carried:
+                    self._final_text = carried
+                    self._stream_tail = carried[-2:]
+                    await out_q.put({"type": "text", "content": carried})
+            self._cli_turn_open = True
             await self._client.query(message)
             while True:
                 try:

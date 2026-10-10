@@ -90,3 +90,92 @@ def test_the_next_turn_starts_without_the_stop_flag():
     assert sess._cancel_requested
     sess._begin_turn()
     assert not sess._cancel_requested
+
+
+# ── A new request while an autonomous turn runs (audit of 35057cf) ────────────
+# After such a Stop the CLI may continue on its own when a background task ends.
+# A request sent during that continuation used to be closed by the continuation's
+# Result, with the old answer shown as the new one and the real answer lost.
+def _live_session():
+    sess = cs.ClaudeSDKSession(conversation_id=4343)
+    sess._started = True
+    sess._client = MagicMock()
+    sess._client.query = AsyncMock()
+    return sess
+
+
+def _assistant(text):
+    from claude_agent_sdk import AssistantMessage, TextBlock
+    return AssistantMessage(content=[TextBlock(text)], model="claude-opus-5")
+
+
+def _result(text):
+    from claude_agent_sdk import ResultMessage
+    return ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                         num_turns=1, session_id="s1", result=text)
+
+
+async def _collect(sess, message, feed):
+    events = []
+
+    async def consume():
+        async for ev in sess.stream(message):
+            events.append(ev)
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0)
+    for msg in feed:
+        await sess._on_message(msg)
+        await asyncio.sleep(0)
+    await asyncio.wait_for(task, timeout=5)
+    return events
+
+
+def test_a_request_during_an_autonomous_turn_waits_for_its_own_answer():
+    sess = _live_session()
+
+    async def run():
+        await sess._on_message(_assistant("Bot runs finished, all green."))  # autonomous, nobody listening
+        assert sess._turn_active and sess._out_q is None
+        return await _collect(sess, "what's the status?", [
+            _result("Bot runs finished, all green."),  # the autonomous turn's Result
+            _assistant("Status: done."),
+            _result("Status: done."),
+        ])
+
+    events = asyncio.run(run())
+    types = [e.get("type") for e in events]
+    assert types.count("done") == 1 and "error" not in types, types
+    response = next(e["content"] for e in events if e.get("type") == "response")
+    assert "Status: done." in response, response
+    assert "Bot runs finished" in response, response
+
+
+def test_a_request_after_a_finished_autonomous_turn_is_not_held_open():
+    """The counter-variant: no CLI turn is open, so the first Result is this request's."""
+    sess = _live_session()
+
+    async def run():
+        await sess._on_message(_assistant("Bot runs finished."))
+        await sess._on_message(_result("Bot runs finished."))  # autonomous turn closed
+        return await _collect(sess, "status?", [_assistant("Done."), _result("Done.")])
+
+    events = asyncio.run(run())
+    types = [e.get("type") for e in events]
+    assert types.count("done") == 1, types
+    assert next(e["content"] for e in events if e.get("type") == "response") == "Done."
+
+
+def test_a_request_while_a_listener_less_turn_only_waits_on_tasks_is_not_held_open():
+    """`_result_pending` with no listener: the Result already came, none is owed."""
+    sess = _live_session()
+
+    async def run():
+        sess._begin_turn()
+        sess._result_pending = True  # its Result came; the task has since ended unnoticed
+        return await _collect(sess, "status?", [_assistant("Still here."), _result("Still here.")])
+
+    events = asyncio.run(run())
+    types = [e.get("type") for e in events]
+    assert types.count("done") == 1, types
+    assert next(e["content"] for e in events if e.get("type") == "response") == "Still here."
