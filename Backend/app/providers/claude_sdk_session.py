@@ -345,6 +345,8 @@ _TASKS_DONE_GRACE_S = 20.0
 _NUDGE_FALLBACK_S = 180.0
 # Result geldi + görevler sürüyor: görevler hiç bitmezse turu bitirme emniyeti.
 _TASKS_WATCHDOG_S = 900.0
+# End an idle merged-prompt stream only after an earlier turn's Result was absorbed.
+_OWED_RESULT_IDLE_S = 120.0
 _NUDGE_MESSAGE = (
     "[Sistem] Arka plan görevlerin tamamlandı. Sonuçlarını değerlendirip kaldığın "
     "yerden kısaca devam et ve işi sonuçlandır."
@@ -930,8 +932,8 @@ class ClaudeSDKSession:
         # "completed", the finish is MEASURED.
         self._bg_shells: Dict[str, str] = {}
         self._result_pending = False   # Result geldi ama arka plan görevleri sürüyor
-        self._autonomous_results = 0   # Results owed to an autonomous turn this stream took over
-        self._cli_turn_open = False    # the CLI produced output or got a query since its last Result
+        self._owed_results: int = 0    # CLI turns come from user queries, nudges, or autonomous work.
+        self._absorbed_result_at: float = 0.0
         self._nudges = 0               # görevler bitince gönderilen dürtme sayısı (tur başına)
         self._turn_started_at = 0.0
         self._cancel_requested = False
@@ -1044,6 +1046,7 @@ class ClaudeSDKSession:
         self._client = None
         self._started = False
         self._turn_active = False
+        self._owed_results = 0
 
     # ── can_use_tool: native onay + AskUserQuestion köprüsü ──────────────
     async def _can_use_tool(self, tool_name: str, input_data: dict, context):
@@ -1275,6 +1278,7 @@ class ClaudeSDKSession:
         self._msg_tokens_seen = 0
         self._result_pending = False
         self._nudges = 0
+        self._absorbed_result_at = 0.0
         # The new turn's wake notice must not carry PREVIOUS turn's task names.
         self._done_tasks = []
         self._turn_started_at = time.time()
@@ -1296,7 +1300,6 @@ class ClaudeSDKSession:
             return
         self._turn_active = False
         self._result_pending = False
-        self._autonomous_results = 0
         self._cancel_grace()
         await self._flush_deltas()
         final = self._final_text or self._last_result_text
@@ -1378,7 +1381,12 @@ class ClaudeSDKSession:
             await self._emit({"type": "status", "detail": "🔔 Arka plan görevleri bitti — devam ettiriliyor…",
                               "tokens": self._turn_tokens})
             try:
-                await self._client.query(_NUDGE_MESSAGE)
+                try:
+                    self._owed_results += 1
+                    await self._client.query(_NUDGE_MESSAGE)
+                except BaseException:
+                    self._owed_results = max(0, self._owed_results - 1)
+                    raise
                 self._result_pending = False
                 self._schedule_grace(_NUDGE_FALLBACK_S, "finish")
             except Exception:
@@ -1532,7 +1540,8 @@ class ClaudeSDKSession:
                 await self._emit({"type": "status",
                                   "detail": f"⚠️ Claude API: {_err_tr} — CLI otomatik yeniden deniyor…",
                                   "tokens": self._turn_tokens})
-            self._cli_turn_open = True
+            if self._owed_results == 0:
+                self._owed_results = 1
             if not self._turn_active:
                 # Tur kapandıktan SONRA gelen asistan mesajı = otonom devam turu
                 # (watchdog/stop sonrası geciken task bitişi). "Hayalet tur" aç ki
@@ -1626,12 +1635,17 @@ class ClaudeSDKSession:
             return
 
         if isinstance(msg, ResultMessage):
-            self._cli_turn_open = False
-            if (self._autonomous_results > 0 and not self._cancel_requested
-                    and not getattr(msg, "is_error", False)):
-                # This Result closes the autonomous turn the stream took over, not
-                # the user's request, whose own Result is still to come.
-                self._autonomous_results -= 1
+            if getattr(msg, "parent_tool_use_id", None):
+                return
+            self._owed_results = max(0, self._owed_results - 1)
+            if self._owed_results > 0 and self._out_q is not None and not self._cancel_requested:
+                # An earlier turn ended; this stream still awaits its own Result.
+                self._absorbed_result_at = time.time()
+                if getattr(msg, "is_error", False) and getattr(msg, "result", None):
+                    text = block_break(self._final_text) + msg.result
+                    self._final_text += text
+                    self._stream_tail = (self._stream_tail + text)[-2:]
+                    self._txt_buf += text
                 await self._flush_deltas()
                 return
             self._last_result_text = getattr(msg, "result", "") or ""
@@ -1682,6 +1696,8 @@ class ClaudeSDKSession:
         elif et in ("content_block_stop", "message_stop"):
             await self._flush_deltas()
         elif et == "message_start":
+            if self._owed_results == 0:
+                self._owed_results = 1
             self._msg_tokens_seen = 0
             self._cancel_grace()  # yeni model mesajı başladı → otonom devam geldi
         elif et == "message_delta":
@@ -1737,7 +1753,7 @@ class ClaudeSDKSession:
         try:
             # Read before this stream installs its queue: a turn running with no
             # queue is an autonomous one.
-            autonomous = self._turn_active and self._out_q is None and self._cli_turn_open
+            autonomous = self._turn_active and self._out_q is None
             out_q: asyncio.Queue = asyncio.Queue()
             self._out_q = out_q
             self._cancel_event = asyncio.Event()
@@ -1750,17 +1766,30 @@ class ClaudeSDKSession:
             carried = self._final_text if autonomous else None
             self._begin_turn()
             if carried is not None:
-                self._autonomous_results = 1
                 if carried:
                     self._final_text = carried
                     self._stream_tail = carried[-2:]
                     await out_q.put({"type": "text", "content": carried})
-            self._cli_turn_open = True
-            await self._client.query(message)
+            try:
+                self._owed_results += 1
+                await self._client.query(message)
+            except BaseException:
+                self._owed_results = max(0, self._owed_results - 1)
+                raise
             while True:
                 try:
                     ev = await asyncio.wait_for(out_q.get(), timeout=20.0)
                 except asyncio.TimeoutError:
+                    if (self._turn_active and self._owed_results > 0
+                            and self._absorbed_result_at > 0
+                            and time.time() - max(self._absorbed_result_at, self._last_cli_msg_at) >= _OWED_RESULT_IDLE_S
+                            and not self._active_tasks
+                            and not (self._rate_limit and self._rate_limit.get("status") == "rejected")):
+                        logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] idle CLI still owes "
+                                       f"{self._owed_results} Result(s); finishing the stream")
+                        self._owed_results = 0
+                        await self._finish_turn()
+                        continue
                     # Kalp atışı: SSE'yi canlı tut + kullanıcıya NEDEN beklediğini söyle.
                     hb: Dict[str, Any] = {"type": "status", "heartbeat": True,
                                           "tokens": self._turn_tokens}
