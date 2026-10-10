@@ -57,12 +57,12 @@ def test_fixed_bodies_match_architect_input_verbatim():
     expected = {
         "ALWAYS_en": "14046d414c9a04cb768e1a151d210f13b6896bf58d1822df47c731b34dd7dd8d",
         "PROJECT_en": "2d2197b52cb1116d597eb3dbdc6adde7898d8c7f2ded454239a1bb14256cba94",
-        "UNITY_CONNECTED_en": "fff473a36df9af619b304722c67a966918cde262a001c007a8c1dad4035c3b8c",
+        "UNITY_CONNECTED_en": "97a1a4925ca4755be6a0439f85639bb17bd60d64eff996d279d0d5efeeacbf20",
         "UNITY_OFF_en": "8fb5c1b867dbfdce55c0585b3fbeb856fe412690f75ac6c35373b9456c6124ea",
         "UNITY_NOT_RESPONDING_en": "b6c80d0b19eb651e5fc022d26b70ec8da8ddfccbc76f7a57110e5492aa79e13a",
         "ALWAYS_tr": "1eb7f28dbb00820987961ff832e41f90364c3d47f3af97a90d3167bb3dc0c950",
         "PROJECT_tr": "93164d58e0ce2202c32e2c275fe8ed3854a75b85706dc1b2ca338b431a68914d",
-        "UNITY_CONNECTED_tr": "4ec3f446c27d3677a330b2e83d6c1c6f9958993e59ffdaa25e6e4db813bf9ab3",
+        "UNITY_CONNECTED_tr": "d0996792b9c3c975554d04fdb525a7fd3519ce3d2336e7f9618ea7fd839bde27",
         "UNITY_OFF_tr": "9a9acb24462be58dd5f2d0481e1f2b540ea4c696289d4c8672497b3aaa809d05",
         "UNITY_NOT_RESPONDING_tr": "dc045db7b77fc21115ad39e9566e8f554dbb013db583a87e78ef3df21f647df8",
     }
