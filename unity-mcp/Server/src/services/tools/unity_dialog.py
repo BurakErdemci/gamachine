@@ -7,8 +7,37 @@ from typing import Annotated, Any, Literal
 from fastmcp import Context
 from mcp.types import ToolAnnotations
 
+from core.config import config
 from services.registry import mcp_for_unity_tool
-from transport.unity_dialog_probe import find_unity_dialogs, press_dialog_button
+from services.tools import get_unity_instance_from_context
+from transport.plugin_hub import PluginHub
+from transport.unity_dialog_probe import dialogs_for_project, find_unity_dialogs, press_dialog_button
+
+_NO_PROJECT = (
+    "No Unity project is targeted: pass unity_instance (Name@hash) or connect "
+    "exactly one Unity editor."
+)
+
+
+async def _target_project(ctx: Context) -> str | None:
+    """Project name of the editor this call targets, or None when unknown."""
+    unity_instance = await get_unity_instance_from_context(ctx)
+    user_id = None
+    if config.http_remote_hosted and ctx is not None:
+        user_id = await ctx.get_state("user_id")
+    sessions = (await PluginHub.get_sessions(user_id=user_id)).sessions.values()
+    if not unity_instance:
+        only = list(sessions)
+        return only[0].project if len(only) == 1 and only[0].project else None
+    target_hash = unity_instance.rpartition("@")[2] if "@" in unity_instance else unity_instance
+    for session in sessions:
+        if target_hash and session.hash == target_hash:
+            return session.project or None
+    if "@" not in unity_instance:
+        named = [session for session in sessions if session.project == unity_instance]
+        if len(named) == 1:
+            return named[0].project
+    return None
 
 
 @mcp_for_unity_tool(
@@ -32,10 +61,20 @@ async def unity_dialog(
     if action == "press" and not button:
         return {"success": False, "error": "A button name is required for press."}
 
-    dialogs = await asyncio.to_thread(find_unity_dialogs)
+    project = await _target_project(ctx)
+    if not project:
+        if action == "list":
+            return {"success": True, "data": {"dialogs": [], "note": _NO_PROJECT}}
+        return {"success": False, "error": _NO_PROJECT}
+
+    async def scoped_dialogs() -> list[dict]:
+        return dialogs_for_project(await asyncio.to_thread(find_unity_dialogs), project)
+
+    dialogs = await scoped_dialogs()
     if action == "list":
         return {"success": True, "data": {"dialogs": [
-            {"title": dialog["title"], "buttons": dialog["buttons"]} for dialog in dialogs
+            {"title": dialog["title"], "buttons": dialog["buttons"], "project": dialog["project"]}
+            for dialog in dialogs
         ]}}
     if not dialogs:
         return {"success": False, "error": "No Unity dialogs are open."}
@@ -61,7 +100,7 @@ async def unity_dialog(
     deadline = monotonic() + 3.0
     closed = False
     while True:
-        current = await asyncio.to_thread(find_unity_dialogs)
+        current = await scoped_dialogs()
         if not any(item["hwnd"] == dialog["hwnd"] for item in current):
             closed = True
             break

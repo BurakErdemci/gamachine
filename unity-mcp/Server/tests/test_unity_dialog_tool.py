@@ -2,20 +2,35 @@
 
 import asyncio
 import importlib
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from services.registry import get_registered_tools
 from services.registry.tool_actions import classify
+from transport.models import SessionDetails, SessionList
 
 tool = importlib.import_module("services.tools.unity_dialog")
-FIRST = {"title": "Save scene", "buttons": ["Save", "Don't Save", "Cancel"], "hwnd": 123}
-SECOND = {"title": "Build", "buttons": ["Yes", "No"], "hwnd": 456}
+FIRST = {"title": "Save scene", "buttons": ["Save", "Don't Save", "Cancel"], "hwnd": 123, "project": "ProjA"}
+SECOND = {"title": "Build", "buttons": ["Yes", "No"], "hwnd": 456, "project": "ProjA"}
+OTHER = {"title": "Other project", "buttons": ["OK"], "hwnd": 789, "project": "ProjB"}
+
+
+def _sessions(*names):
+    return SessionList(sessions={
+        f"s{i}": SessionDetails(project=name, hash=f"hash{i}", unity_version="6000", connected_at="now")
+        for i, name in enumerate(names)
+    })
+
+
+def _target(monkeypatch, instance, *names):
+    monkeypatch.setattr(tool.PluginHub, "get_sessions", AsyncMock(return_value=_sessions(*names)))
+    monkeypatch.setattr(tool, "get_unity_instance_from_context", AsyncMock(return_value=instance))
 
 
 @pytest.fixture
 def native_probe(monkeypatch):
+    _target(monkeypatch, None, "ProjA")
     probe = Mock(return_value=[FIRST])
     press = Mock(return_value=True)
     monkeypatch.setattr(tool, "find_unity_dialogs", probe)
@@ -30,7 +45,9 @@ async def test_list_hides_native_handles(native_probe, dialogs):
     probe.return_value = dialogs
     assert await tool.unity_dialog(None, "list") == {
         "success": True,
-        "data": {"dialogs": [{"title": d["title"], "buttons": d["buttons"]} for d in dialogs]},
+        "data": {"dialogs": [
+            {"title": d["title"], "buttons": d["buttons"], "project": d["project"]} for d in dialogs
+        ]},
     }
     press.assert_not_called()
 
@@ -67,6 +84,64 @@ async def test_press_waits_for_selected_handle_to_disappear(native_probe, title,
     }}
     press.assert_called_once_with(selected["hwnd"], listed)
     assert probe.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("instance", ["ProjA@hash0", "hash0", "ProjA"])
+async def test_targeting_proja_sees_only_proja_dialogs(native_probe, monkeypatch, instance):
+    probe, press = native_probe
+    probe.return_value = [FIRST, OTHER]
+    _target(monkeypatch, instance, "ProjA", "ProjB")
+    listed = await tool.unity_dialog(None, "list")
+    assert [d["title"] for d in listed["data"]["dialogs"]] == ["Save scene"]
+    result = await tool.unity_dialog(None, "press", title="Other project", button="OK")
+    assert result["success"] is False
+    assert "not found" in result["error"]
+    press.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_targeting_projb_presses_only_its_own_dialog(native_probe, monkeypatch):
+    probe, press = native_probe
+    probe.side_effect = [[FIRST, OTHER], [FIRST, OTHER], [FIRST]]
+    _target(monkeypatch, "ProjB@hash1", "ProjA", "ProjB")
+    result = await tool.unity_dialog(None, "press", button="OK")
+    assert result["success"] is True
+    press.assert_called_once_with(OTHER["hwnd"], "OK")
+
+
+@pytest.mark.asyncio
+async def test_no_target_with_two_sessions_sees_nothing(native_probe, monkeypatch):
+    probe, press = native_probe
+    probe.return_value = [FIRST, OTHER]
+    _target(monkeypatch, None, "ProjA", "ProjB")
+    listed = await tool.unity_dialog(None, "list")
+    assert listed["success"] is True
+    assert listed["data"]["dialogs"] == []
+    assert "No Unity project is targeted" in listed["data"]["note"]
+    refused = await tool.unity_dialog(None, "press", button="Save")
+    assert refused["success"] is False
+    assert "No Unity project is targeted" in refused["error"]
+    press.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unknown_instance_sees_nothing(native_probe, monkeypatch):
+    probe, press = native_probe
+    probe.return_value = [FIRST]
+    _target(monkeypatch, "Missing@zzz", "ProjA")
+    assert (await tool.unity_dialog(None, "list"))["data"]["dialogs"] == []
+    assert (await tool.unity_dialog(None, "press", button="Save"))["success"] is False
+    press.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_single_session_without_target_resolves_it(native_probe, monkeypatch):
+    probe, _ = native_probe
+    probe.return_value = [FIRST, OTHER]
+    _target(monkeypatch, None, "ProjA")
+    listed = await tool.unity_dialog(None, "list")
+    assert [d["title"] for d in listed["data"]["dialogs"]] == ["Save scene"]
 
 
 @pytest.mark.asyncio

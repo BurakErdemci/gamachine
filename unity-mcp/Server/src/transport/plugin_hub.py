@@ -20,7 +20,7 @@ from core.constants import API_KEY_HEADER
 from core.local_auth import LOCAL_API_TOKEN_FILE_HINT, local_token_matches
 from models.models import MCPResponse
 from transport.plugin_registry import PluginRegistry
-from transport.unity_dialog_probe import find_unity_dialog_titles as _find_unity_dialog_titles
+from transport.unity_dialog_probe import dialogs_for_project as _dialogs_for_project
 from transport.unity_dialog_probe import find_unity_dialogs as _find_unity_dialogs
 from services.api_key_service import ApiKeyService
 
@@ -47,6 +47,11 @@ def _dialog_name(titles: list[str], dialogs: list[dict]) -> str:
     if first and first["buttons"]:
         name += f" (buttons: {', '.join(first['buttons'])})"
     return name
+
+
+def _scoped_dialogs(project_name: str | None) -> list[dict]:
+    return _dialogs_for_project(_find_unity_dialogs(), project_name)
+
 
 # ---------- MCP session tracking ----------
 # FastMCP does not expose its active client connections, and tools/list_changed
@@ -337,6 +342,10 @@ class PluginHub(WebSocketEndpoint):
         if lock is None:
             raise RuntimeError("PluginHub not configured")
 
+        # Only this session's own editor can block this command.
+        session = await cls._registry.get_session(session_id) if cls._registry else None
+        project_name = session.project_name if session else None
+
         async with lock:
             if command_id in cls._pending:
                 raise RuntimeError(
@@ -371,14 +380,12 @@ class PluginHub(WebSocketEndpoint):
                     await asyncio.wait({future}, timeout=min(_DIALOG_POLL_S, remaining))
                     if future.done():
                         return future.result()
-                    titles = await asyncio.to_thread(_find_unity_dialog_titles)
+                    dialogs = await asyncio.to_thread(_scoped_dialogs, project_name)
+                    titles = list(dict.fromkeys(dialog["title"] for dialog in dialogs))
                     # A reply or disconnect can arrive while the native probe runs.
                     if future.done():
                         return future.result()
                     if titles and dialog_seen:
-                        dialogs = await asyncio.to_thread(_find_unity_dialogs)
-                        if future.done():
-                            return future.result()
                         return MCPResponse(
                             success=False,
                             error=(
@@ -390,20 +397,20 @@ class PluginHub(WebSocketEndpoint):
                         ).model_dump()
                     dialog_seen = bool(titles)
             except PluginDisconnectedError as exc:
-                titles = await asyncio.to_thread(_find_unity_dialog_titles)
+                dialogs = await asyncio.to_thread(_scoped_dialogs, project_name)
+                titles = list(dict.fromkeys(dialog["title"] for dialog in dialogs))
                 error = str(exc)
                 if titles:
-                    dialogs = await asyncio.to_thread(_find_unity_dialogs)
                     error += f" Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor; ask the user to close it."
                 return MCPResponse(success=False, error=error, hint="user_action" if titles else "retry").model_dump()
             except asyncio.TimeoutError:
                 # Match wait_for's cancellation on total timeout, never on a slice.
                 future.cancel()
-                titles = await asyncio.to_thread(_find_unity_dialog_titles)
+                dialogs = await asyncio.to_thread(_scoped_dialogs, project_name)
+                titles = list(dict.fromkeys(dialog["title"] for dialog in dialogs))
                 if command_type in cls._FAST_FAIL_COMMANDS or titles:
                     error = f"Unity did not respond to '{command_type}' within {server_wait_s:.1f}s; please retry"
                     if titles:
-                        dialogs = await asyncio.to_thread(_find_unity_dialogs)
                         error += f" Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor; ask the user to close it."
                     return MCPResponse(
                         success=False,

@@ -51,18 +51,23 @@ def test_probe_finds_only_matching_process_dialog():
     assert title not in unity_titles
 
 
+def _dialogs_of(titles, project="ProjA"):
+    return [{"title": t, "buttons": [], "hwnd": i + 1, "project": project} for i, t in enumerate(titles)]
+
+
 @pytest.fixture
 def command_hub(monkeypatch):
     # Match the existing transport fixtures, but restore all shared hub state.
     websocket = AsyncMock()
-    monkeypatch.setattr(PluginHub, "_registry", PluginRegistry())
+    registry = PluginRegistry()
+    asyncio.run(registry.register("dialog-session", "ProjA", "hashA", "6000"))
+    monkeypatch.setattr(PluginHub, "_registry", registry)
     monkeypatch.setattr(PluginHub, "_lock", asyncio.Lock())
     monkeypatch.setattr(PluginHub, "_connections", {"dialog-session": websocket})
     monkeypatch.setattr(PluginHub, "_pending", {})
     monkeypatch.setattr(PluginHub, "COMMAND_TIMEOUT", 1.0)
     monkeypatch.setattr(PluginHub, "FAST_FAIL_TIMEOUT", 0.06)
     monkeypatch.setattr(plugin_hub, "_DIALOG_POLL_S", 0.01)
-    monkeypatch.setattr(plugin_hub, "_find_unity_dialog_titles", lambda: [])
     monkeypatch.setattr(plugin_hub, "_find_unity_dialogs", lambda: [])
     return websocket
 
@@ -76,13 +81,13 @@ async def test_wait_returns_user_action_after_two_dialog_polls(command_hub, monk
 
     def probe():
         polls.append(threading.get_ident())
-        return [title]
+        return _dialogs_of([title])
 
     async def sent(_message):
         futures.append(next(iter(PluginHub._pending.values()))["future"])
 
     command_hub.send_json.side_effect = sent
-    monkeypatch.setattr(plugin_hub, "_find_unity_dialog_titles", probe)
+    monkeypatch.setattr(plugin_hub, "_find_unity_dialogs", probe)
     started = time.monotonic()
     result = await PluginHub.send_command("dialog-session", "manage_scene", {})
     dialog = f'a dialog "{title}"' if title else "a dialog"
@@ -190,10 +195,9 @@ def test_legacy_title_probe_preserves_order_and_deduplicates(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("branch", ["early", "disconnect", "timeout"])
 async def test_blocking_dialog_errors_list_first_dialog_buttons(command_hub, monkeypatch, branch):
-    monkeypatch.setattr(plugin_hub, "_find_unity_dialog_titles", lambda: ["Save scene", "Other"])
     monkeypatch.setattr(plugin_hub, "_find_unity_dialogs", lambda: [
-        {"title": "Save scene", "buttons": ["Save", "Don't Save", "Cancel"], "hwnd": 123},
-        {"title": "Other", "buttons": ["Yes", "No"], "hwnd": 456},
+        {"title": "Save scene", "buttons": ["Save", "Don't Save", "Cancel"], "hwnd": 123, "project": "ProjA"},
+        {"title": "Other", "buttons": ["Yes", "No"], "hwnd": 456, "project": "ProjA"},
     ])
     if branch == "disconnect":
         async def sent(_message):
@@ -226,7 +230,7 @@ async def test_result_survives_several_wait_slices(command_hub, monkeypatch):
         asyncio.get_running_loop().call_later(0.045, future.set_result, result)
 
     command_hub.send_json.side_effect = sent
-    monkeypatch.setattr(plugin_hub, "_find_unity_dialog_titles", probe)
+    monkeypatch.setattr(plugin_hub, "_find_unity_dialogs", probe)
     assert await PluginHub.send_command("dialog-session", "manage_scene", {}) is result
     assert len(polls) >= 2
     assert PluginHub._pending == {}
@@ -242,7 +246,7 @@ async def test_disconnect_preserves_error_and_adds_dialog_hint(command_hub, monk
         future.set_exception(PluginDisconnectedError(original))
 
     command_hub.send_json.side_effect = sent
-    monkeypatch.setattr(plugin_hub, "_find_unity_dialog_titles", lambda: titles)
+    monkeypatch.setattr(plugin_hub, "_find_unity_dialogs", lambda: _dialogs_of(titles))
     error = original
     if titles:
         dialog = f'a dialog "{titles[0]}"' if titles[0] else "a dialog"
@@ -260,7 +264,7 @@ async def test_total_timeout_preserves_outputs_or_adds_dialog_hint(command_hub, 
     monkeypatch.setattr(PluginHub, "COMMAND_TIMEOUT", 0.06)
     # Reach the total timeout before a polling slice can confirm two sightings.
     monkeypatch.setattr(plugin_hub, "_DIALOG_POLL_S", 1.0)
-    monkeypatch.setattr(plugin_hub, "_find_unity_dialog_titles", lambda: titles)
+    monkeypatch.setattr(plugin_hub, "_find_unity_dialogs", lambda: _dialogs_of(titles))
     if command == "manage_scene" and not titles:
         with pytest.raises(asyncio.TimeoutError) as caught:
             await PluginHub.send_command("dialog-session", command, {})
@@ -274,3 +278,72 @@ async def test_total_timeout_preserves_outputs_or_adds_dialog_hint(command_hub, 
             success=False, error=error, hint="user_action" if titles else "retry"
         ).model_dump()
     assert PluginHub._pending == {}
+
+
+DIALOGS = [
+    {"title": "A", "buttons": ["Save"], "hwnd": 1, "project": "ProjA"},
+    {"title": "B", "buttons": ["Save"], "hwnd": 2, "project": "ProjB"},
+]
+
+
+def test_dialogs_for_project_keeps_only_exact_project():
+    assert [d["title"] for d in unity_dialog_probe.dialogs_for_project(DIALOGS, "ProjA")] == ["A"]
+    assert unity_dialog_probe.dialogs_for_project(DIALOGS, "proja") == []
+    assert unity_dialog_probe.dialogs_for_project(DIALOGS, "Proj") == []
+
+
+@pytest.mark.parametrize("project", [None, ""])
+def test_dialogs_for_project_unknown_target_sees_nothing(project):
+    assert unity_dialog_probe.dialogs_for_project(DIALOGS, project) == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 native dialog test")
+def test_ownerless_message_box_has_empty_project():
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
+    user32.MessageBoxW.restype = ctypes.c_int
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowW.restype = wintypes.HWND
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.PostMessageW.restype = wintypes.BOOL
+    title = "Gamachine project test"
+    thread = threading.Thread(
+        target=lambda: user32.MessageBoxW(None, "project body", title, 0), daemon=True
+    )
+    thread.start()
+    dialog = None
+    try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and dialog is None:
+            dialog = next((d for d in unity_dialog_probe.find_unity_dialogs(("python.exe", "pythonw.exe"))
+                           if d["title"] == title), None)
+            time.sleep(0.05)
+    finally:
+        hwnd = user32.FindWindowW(None, title)
+        if hwnd:
+            user32.PostMessageW(hwnd, 0x0010, 0, 0)
+        thread.join(5.0)
+    assert dialog is not None
+    assert dialog["project"] == ""
+
+
+@pytest.mark.asyncio
+async def test_other_project_dialog_does_not_block_command(command_hub, monkeypatch):
+    monkeypatch.setattr(plugin_hub, "_find_unity_dialogs", lambda: _dialogs_of(["Save scene"], "ProjB"))
+    monkeypatch.setattr(PluginHub, "COMMAND_TIMEOUT", 0.1)
+    started = time.monotonic()
+    with pytest.raises(asyncio.TimeoutError):
+        await PluginHub.send_command("dialog-session", "manage_scene", {})
+    assert time.monotonic() - started >= 0.09
+
+
+@pytest.mark.asyncio
+async def test_own_project_dialog_still_blocks_command(command_hub, monkeypatch):
+    monkeypatch.setattr(
+        plugin_hub, "_find_unity_dialogs",
+        lambda: _dialogs_of(["Other"], "ProjB") + _dialogs_of(["Save scene"], "ProjA"),
+    )
+    result = await PluginHub.send_command("dialog-session", "manage_scene", {})
+    assert result["hint"] == "user_action"
+    assert 'a dialog "Save scene"' in result["error"]
+    assert "Other" not in result["error"]

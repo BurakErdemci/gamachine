@@ -78,6 +78,8 @@ def find_unity_dialogs(process_names: tuple[str, ...] = ("unity.exe",)) -> list[
         user32.GetWindowTextLengthW.restype = ctypes.c_int
         user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
         user32.GetWindowTextW.restype = ctypes.c_int
+        user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+        user32.GetWindow.restype = wintypes.HWND
         kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.QueryFullProcessImageNameW.argtypes = [
@@ -118,10 +120,19 @@ def find_unity_dialogs(process_names: tuple[str, ...] = ("unity.exe",)) -> list[
                     length = user32.GetWindowTextLengthW(hwnd)
                     title = ctypes.create_unicode_buffer(length + 1)
                     user32.GetWindowTextW(hwnd, title, len(title))
+                    # The editor's main window owns its native dialogs; its title is
+                    # "<project> - <scene> - ...". Never read a process command line.
+                    project = ""
+                    owner = user32.GetWindow(hwnd, 4)
+                    if owner:
+                        owner_title = ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(owner) + 1)
+                        user32.GetWindowTextW(owner, owner_title, len(owner_title))
+                        project = owner_title.value.split(" - ", 1)[0]
                     dialogs.append({
                         "title": title.value,
                         "buttons": [text for _, text in _dialog_buttons(hwnd)],
                         "hwnd": int(hwnd),
+                        "project": project,
                     })
                 return True
             except Exception:
@@ -135,6 +146,13 @@ def find_unity_dialogs(process_names: tuple[str, ...] = ("unity.exe",)) -> list[
         return dialogs
     except Exception:
         return []
+
+
+def dialogs_for_project(dialogs: list[dict], project_name: str | None) -> list[dict]:
+    """Keep only dialogs of this project's editor; an unknown project sees nothing."""
+    if not project_name:
+        return []
+    return [dialog for dialog in dialogs if dialog.get("project") == project_name]
 
 
 def find_unity_dialog_titles(process_names: tuple[str, ...] = ("unity.exe",)) -> list[str]:
