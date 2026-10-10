@@ -21,6 +21,7 @@ from core.local_auth import LOCAL_API_TOKEN_FILE_HINT, local_token_matches
 from models.models import MCPResponse
 from transport.plugin_registry import PluginRegistry
 from transport.unity_dialog_probe import find_unity_dialog_titles as _find_unity_dialog_titles
+from transport.unity_dialog_probe import find_unity_dialogs as _find_unity_dialogs
 from services.api_key_service import ApiKeyService
 
 from transport.models import (
@@ -40,8 +41,12 @@ logger = logging.getLogger(__name__)
 _DIALOG_POLL_S = 2.0
 
 
-def _dialog_name(titles: list[str]) -> str:
-    return f'a dialog "{titles[0]}"' if titles[0] else "a dialog"
+def _dialog_name(titles: list[str], dialogs: list[dict]) -> str:
+    name = f'a dialog "{titles[0]}"' if titles[0] else "a dialog"
+    first = next((dialog for dialog in dialogs if dialog["title"] == titles[0]), None)
+    if first and first["buttons"]:
+        name += f" (buttons: {', '.join(first['buttons'])})"
+    return name
 
 # ---------- MCP session tracking ----------
 # FastMCP does not expose its active client connections, and tools/list_changed
@@ -371,12 +376,15 @@ class PluginHub(WebSocketEndpoint):
                     if future.done():
                         return future.result()
                     if titles and dialog_seen:
+                        dialogs = await asyncio.to_thread(_find_unity_dialogs)
+                        if future.done():
+                            return future.result()
                         return MCPResponse(
                             success=False,
                             error=(
-                                f"Unity is showing {_dialog_name(titles)} that blocks the editor, so "
+                                f"Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor, so "
                                 f"'{command_type}' cannot run until it is closed. "
-                                "Ask the user to close it in Unity, then retry."
+                                "Answer it with unity_dialog (action press) or ask the user to close it."
                             ),
                             hint="user_action",
                         ).model_dump()
@@ -385,7 +393,8 @@ class PluginHub(WebSocketEndpoint):
                 titles = await asyncio.to_thread(_find_unity_dialog_titles)
                 error = str(exc)
                 if titles:
-                    error += f" Unity is showing {_dialog_name(titles)} that blocks the editor; ask the user to close it."
+                    dialogs = await asyncio.to_thread(_find_unity_dialogs)
+                    error += f" Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor; ask the user to close it."
                 return MCPResponse(success=False, error=error, hint="user_action" if titles else "retry").model_dump()
             except asyncio.TimeoutError:
                 # Match wait_for's cancellation on total timeout, never on a slice.
@@ -394,7 +403,8 @@ class PluginHub(WebSocketEndpoint):
                 if command_type in cls._FAST_FAIL_COMMANDS or titles:
                     error = f"Unity did not respond to '{command_type}' within {server_wait_s:.1f}s; please retry"
                     if titles:
-                        error += f" Unity is showing {_dialog_name(titles)} that blocks the editor; ask the user to close it."
+                        dialogs = await asyncio.to_thread(_find_unity_dialogs)
+                        error += f" Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor; ask the user to close it."
                     return MCPResponse(
                         success=False,
                         error=error,

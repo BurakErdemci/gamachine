@@ -3,6 +3,7 @@
 import asyncio
 import ctypes
 from ctypes import wintypes
+import ntpath
 import sys
 import threading
 import time
@@ -62,6 +63,7 @@ def command_hub(monkeypatch):
     monkeypatch.setattr(PluginHub, "FAST_FAIL_TIMEOUT", 0.06)
     monkeypatch.setattr(plugin_hub, "_DIALOG_POLL_S", 0.01)
     monkeypatch.setattr(plugin_hub, "_find_unity_dialog_titles", lambda: [])
+    monkeypatch.setattr(plugin_hub, "_find_unity_dialogs", lambda: [])
     return websocket
 
 
@@ -86,7 +88,7 @@ async def test_wait_returns_user_action_after_two_dialog_polls(command_hub, monk
     dialog = f'a dialog "{title}"' if title else "a dialog"
     expected = (
         f"Unity is showing {dialog} that blocks the editor, so 'manage_scene' "
-        "cannot run until it is closed. Ask the user to close it in Unity, then retry."
+        "cannot run until it is closed. Answer it with unity_dialog (action press) or ask the user to close it."
     )
     assert result == MCPResponse(success=False, error=expected, hint="user_action").model_dump()
     assert time.monotonic() - started < 0.5
@@ -94,6 +96,120 @@ async def test_wait_returns_user_action_after_two_dialog_polls(command_hub, monk
     assert all(thread_id != loop_thread for thread_id in polls)
     assert not futures[0].done()
     assert PluginHub._pending == {}
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 native dialog test")
+@pytest.mark.parametrize("unknown_button,expected", [(False, 7), (True, 2)])
+def test_probe_lists_buttons_and_posts_only_exact_clicks(unknown_button, expected):
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
+    user32.MessageBoxW.restype = ctypes.c_int
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowW.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    title = "Gamachine press test"
+    result = []
+    # Each test creates at most one window thread and joins it before returning.
+    thread = threading.Thread(
+        target=lambda: result.append(user32.MessageBoxW(None, "press body", title, 0x3)),
+        daemon=True,
+    )
+    thread.start()
+    dialog = None
+    names = ("python.exe", "pythonw.exe", ntpath.basename(sys.executable))
+    try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            dialog = next((d for d in unity_dialog_probe.find_unity_dialogs(names) if d["title"] == title), None)
+            if dialog and len(dialog["buttons"]) == 3:
+                break
+            time.sleep(0.05)
+        assert dialog is not None
+        buttons = dialog["buttons"]
+        assert len(buttons) == 3
+        if unknown_button:
+            button = "Maybe-no-such-button"
+            assert button not in buttons
+            assert unity_dialog_probe.press_dialog_button(dialog["hwnd"], button) is False
+            thread.join(0.2)
+            assert thread.is_alive()
+            assert result == []
+            assert any(d["hwnd"] == dialog["hwnd"] for d in unity_dialog_probe.find_unity_dialogs(names))
+            assert unity_dialog_probe.press_dialog_button(dialog["hwnd"], buttons[2]) is True
+        else:
+            assert unity_dialog_probe.press_dialog_button(dialog["hwnd"], buttons[1]) is True
+        thread.join(5.0)
+        assert not thread.is_alive()
+        assert result == [expected]
+    finally:
+        if thread.is_alive():
+            hwnd = user32.FindWindowW("#32770", title)
+            # Never answer a same-title window belonging to another thread.
+            if hwnd and user32.GetWindowThreadProcessId(hwnd, None) == thread.native_id:
+                own_dialog = next((d for d in unity_dialog_probe.find_unity_dialogs(names) if d["hwnd"] == hwnd), None)
+                if own_dialog and len(own_dialog["buttons"]) == 3:
+                    unity_dialog_probe.press_dialog_button(hwnd, own_dialog["buttons"][2])
+            thread.join(5.0)
+
+
+@pytest.mark.parametrize("raw,cleaned", [
+    ("&Yes", "Yes"), ("  &No  ", "No"), ("Save && Exit", "Save & Exit"),
+    ("&&&Save", "&Save"), ("&", ""), ("Cancel", "Cancel"),
+])
+def test_button_accelerators_are_cleaned(raw, cleaned):
+    assert unity_dialog_probe._clean_button_text(raw) == cleaned
+
+
+def test_non_windows_probe_and_press_are_harmless(monkeypatch):
+    monkeypatch.setattr(unity_dialog_probe.sys, "platform", "linux")
+    assert unity_dialog_probe.find_unity_dialogs() == []
+    assert unity_dialog_probe.find_unity_dialog_titles() == []
+    assert unity_dialog_probe.press_dialog_button(123, "Save") is False
+
+
+def test_probe_and_press_fail_closed_on_native_exceptions(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("Native API unavailable")
+
+    monkeypatch.setattr(unity_dialog_probe.sys, "platform", "win32")
+    monkeypatch.setattr(unity_dialog_probe.ctypes, "WinDLL", unavailable, raising=False)
+    assert unity_dialog_probe.find_unity_dialogs() == []
+    assert unity_dialog_probe.press_dialog_button(123, "Save") is False
+
+
+def test_legacy_title_probe_preserves_order_and_deduplicates(monkeypatch):
+    monkeypatch.setattr(unity_dialog_probe, "find_unity_dialogs", lambda names: [
+        {"title": "X", "buttons": [], "hwnd": 1},
+        {"title": "", "buttons": [], "hwnd": 2},
+        {"title": "X", "buttons": [], "hwnd": 3},
+    ])
+    assert unity_dialog_probe.find_unity_dialog_titles() == ["X", ""]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("branch", ["early", "disconnect", "timeout"])
+async def test_blocking_dialog_errors_list_first_dialog_buttons(command_hub, monkeypatch, branch):
+    monkeypatch.setattr(plugin_hub, "_find_unity_dialog_titles", lambda: ["Save scene", "Other"])
+    monkeypatch.setattr(plugin_hub, "_find_unity_dialogs", lambda: [
+        {"title": "Save scene", "buttons": ["Save", "Don't Save", "Cancel"], "hwnd": 123},
+        {"title": "Other", "buttons": ["Yes", "No"], "hwnd": 456},
+    ])
+    if branch == "disconnect":
+        async def sent(_message):
+            future = next(iter(PluginHub._pending.values()))["future"]
+            future.set_exception(PluginDisconnectedError("Disconnected"))
+        command_hub.send_json.side_effect = sent
+    elif branch == "timeout":
+        monkeypatch.setattr(PluginHub, "COMMAND_TIMEOUT", 0.02)
+        monkeypatch.setattr(plugin_hub, "_DIALOG_POLL_S", 1.0)
+    result = await PluginHub.send_command("dialog-session", "manage_scene", {})
+    assert result["success"] is False
+    assert result["hint"] == "user_action"
+    assert 'Unity is showing a dialog "Save scene" (buttons: Save, Don\'t Save, Cancel) that blocks the editor' in result["error"]
+    assert "Other" not in result["error"]
+    if branch == "early":
+        assert result["error"].endswith("Answer it with unity_dialog (action press) or ask the user to close it.")
 
 
 @pytest.mark.asyncio

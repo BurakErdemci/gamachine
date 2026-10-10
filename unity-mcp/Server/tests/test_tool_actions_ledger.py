@@ -163,6 +163,7 @@ PINNED_READ_SURFACE: frozenset[str] = frozenset({
     # Owner decision 25 Sep 2026: status only reports the last playtest job.
     "run_playtest:status",
     "set_active_instance:*",
+    "unity_dialog:list",
     "unity_docs:get_doc",
     "unity_docs:get_manual",
     "unity_docs:get_package_doc",

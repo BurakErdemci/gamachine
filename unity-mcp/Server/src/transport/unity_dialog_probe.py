@@ -6,11 +6,60 @@ an in-editor probe, so the separate server must inspect native windows.
 import ctypes
 from ctypes import wintypes
 import ntpath
+import re
 import sys
 
 
-def find_unity_dialog_titles(process_names: tuple[str, ...] = ("unity.exe",)) -> list[str]:
-    """Return visible native dialog titles owned by the requested processes."""
+def _clean_button_text(text: str) -> str:
+    return re.sub(r"&&|&", lambda match: "&" if match.group() == "&&" else "", text).strip()
+
+
+def _dialog_buttons(hwnd: int) -> list[tuple[int, str]]:
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumChildWindows.argtypes = [wintypes.HWND, callback_type, wintypes.LPARAM]
+    user32.EnumChildWindows.restype = wintypes.BOOL
+    for name in ("IsWindowVisible", "IsWindowEnabled"):
+        function = getattr(user32, name)
+        function.argtypes = [wintypes.HWND]
+        function.restype = wintypes.BOOL
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetClassNameW.restype = ctypes.c_int
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    buttons: list[tuple[int, str]] = []
+    callback_failed = False
+
+    def visit(child, _lparam):
+        nonlocal callback_failed
+        try:
+            if not user32.IsWindowVisible(child) or not user32.IsWindowEnabled(child):
+                return True
+            class_name = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(child, class_name, len(class_name))
+            if class_name.value != "Button":
+                return True
+            text = ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(child) + 1)
+            user32.GetWindowTextW(child, text, len(text))
+            cleaned = _clean_button_text(text.value)
+            if cleaned:
+                buttons.append((int(child), cleaned))
+            return True
+        except Exception:
+            callback_failed = True
+            return False
+
+    # EnumChildWindows has no defined success return; callback exceptions matter.
+    user32.EnumChildWindows(hwnd, callback_type(visit), 0)
+    if callback_failed:
+        raise RuntimeError("Unable to enumerate dialog buttons")
+    return buttons
+
+
+def find_unity_dialogs(process_names: tuple[str, ...] = ("unity.exe",)) -> list[dict]:
+    """Return visible native dialogs and enabled buttons owned by these processes."""
     if sys.platform != "win32":
         return []
     try:
@@ -40,7 +89,7 @@ def find_unity_dialog_titles(process_names: tuple[str, ...] = ("unity.exe",)) ->
 
         requested_names = {name.casefold() for name in process_names}
         process_matches: dict[int, bool] = {}
-        titles: list[str] = []
+        dialogs: list[dict] = []
         callback_failed = False
 
         def visit(hwnd, _lparam):
@@ -69,8 +118,11 @@ def find_unity_dialog_titles(process_names: tuple[str, ...] = ("unity.exe",)) ->
                     length = user32.GetWindowTextLengthW(hwnd)
                     title = ctypes.create_unicode_buffer(length + 1)
                     user32.GetWindowTextW(hwnd, title, len(title))
-                    if title.value not in titles:
-                        titles.append(title.value)
+                    dialogs.append({
+                        "title": title.value,
+                        "buttons": [text for _, text in _dialog_buttons(hwnd)],
+                        "hwnd": int(hwnd),
+                    })
                 return True
             except Exception:
                 # ctypes otherwise swallows callback exceptions and keeps enumerating.
@@ -80,6 +132,27 @@ def find_unity_dialog_titles(process_names: tuple[str, ...] = ("unity.exe",)) ->
         callback = callback_type(visit)
         if not user32.EnumWindows(callback, 0) or callback_failed:
             return []
-        return titles
+        return dialogs
     except Exception:
         return []
+
+
+def find_unity_dialog_titles(process_names: tuple[str, ...] = ("unity.exe",)) -> list[str]:
+    """Return unique visible native dialog titles owned by the requested processes."""
+    return list(dict.fromkeys(dialog["title"] for dialog in find_unity_dialogs(process_names)))
+
+
+def press_dialog_button(hwnd: int, button: str) -> bool:
+    """Post a click only to a visible, enabled button with this exact cleaned name."""
+    if sys.platform != "win32":
+        return False
+    try:
+        for button_hwnd, text in _dialog_buttons(hwnd):
+            if text.casefold() == button.casefold():
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+                user32.PostMessageW.restype = wintypes.BOOL
+                return bool(user32.PostMessageW(button_hwnd, 0x00F5, 0, 0))
+        return False
+    except Exception:
+        return False

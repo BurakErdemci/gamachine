@@ -939,6 +939,22 @@
       "evidence": "unity-mcp/Server/src/services/tools/set_active_instance.py:14",
       "note": "unity_target=None -- the Unity project is never touched; it only discovers instances and resolves the identifier. It no longer stores a selection (routing is per call: unity_instance argument, ?instance= / X-Unity-Instance on the connection, or the sole instance), so it cannot redirect later writes; it always answers success=false with the resolved Name@hash and how to route to it."
     },
+    "unity_dialog": {
+      "action_param": "action",
+      "tool_level": null,
+      "read_actions": [
+        "list"
+      ],
+      "write_actions": [
+        "press"
+      ],
+      "param_dependent": [],
+      "critical_actions": [
+        "press"
+      ],
+      "evidence": "unity-mcp/Server/src/services/tools/unity_dialog.py:24",
+      "note": "list inspects native Unity dialogs without changing them. press clicks a native dialog button and can save or discard user work, so it is a critical write."
+    },
     "unity_docs": {
       "action_param": "action",
       "tool_level": null,

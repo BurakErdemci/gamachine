@@ -46,7 +46,7 @@ PINNED_DEFAULT_LIST = [
     "delete_script", "validate_script", "manage_script",
     "manage_script_capabilities", "get_sha", "manage_tools", "play_capture",
     "play_session", "play_step", "read_console", "run_playtest",
-    "script_apply_edits", "set_active_instance",
+    "script_apply_edits", "set_active_instance", "unity_dialog",
 ]
 
 # Backend/app/tools/unity_mcp_tools.py: EXPORTED_GROUPS and _select_exported.
@@ -89,7 +89,7 @@ def test_gamachine_profile_equals_the_backend_export(report):
     gamachine = report["old_era"]["/mcp/gamachine"]
     assert gamachine["status"] == 200, gamachine
     assert gamachine["names"] == exported
-    assert len(exported) == 32
+    assert len(exported) == 33
 
 
 def test_full_profile_lists_every_group(report):
@@ -252,8 +252,8 @@ def test_stdio_transport_starts_and_lists_every_group(report):
     enabled there until Unity reports its toggles."""
     stdio = report["stdio"]
     assert stdio.get("protocol") == "2025-06-18", stdio
-    # 52 tools minus execute_custom_tool (not project-scoped in this run)
-    assert stdio.get("tool_count") == 51, stdio
+    # 53 tools minus execute_custom_tool (not project-scoped in this run)
+    assert stdio.get("tool_count") == 52, stdio
 
 
 def test_probe_servers_are_gone_and_their_files_removed(report):

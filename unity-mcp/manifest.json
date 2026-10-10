@@ -226,6 +226,10 @@
       "description": "Check a Unity instance identifier and report how to route calls to it (does not pin; pass unity_instance per call)"
     },
     {
+      "name": "unity_dialog",
+      "description": "List or answer native Unity editor dialogs; pressing a button can save or discard user work"
+    },
+    {
       "name": "unity_docs",
       "description": "Fetch Unity documentation (ScriptReference, Manual, package docs)"
     },
