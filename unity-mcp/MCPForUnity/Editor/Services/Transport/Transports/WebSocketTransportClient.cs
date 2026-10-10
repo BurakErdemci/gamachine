@@ -660,10 +660,17 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
             catch (OperationCanceledException)
             {
+                var message = $"Command '{commandName}' timed out after {timeoutSeconds} seconds";
+                var dialogTitle = UnityModalDialogProbe.FindOpenDialogTitle();
+                if (dialogTitle != null)
+                {
+                    var titlePart = dialogTitle.Length > 0 ? $" \"{dialogTitle}\"" : "";
+                    message += $" Unity is showing a dialog{titlePart} that may be blocking the editor; ask the user to close it.";
+                }
                 responseJson = JsonConvert.SerializeObject(new
                 {
                     status = "error",
-                    error = $"Command '{commandName}' timed out after {timeoutSeconds} seconds"
+                    error = message
                 });
             }
             catch (Exception ex)

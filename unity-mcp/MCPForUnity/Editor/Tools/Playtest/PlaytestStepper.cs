@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Runtime.Playtest;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
@@ -47,6 +48,8 @@ namespace MCPForUnity.Editor.Tools.Playtest
             public int F0;
             public int Target;
             public int SegmentStart;
+            public double SegmentStartedAtS;
+            public double LastDialogCheckS;
             public HashSet<int> CaptureAt = new HashSet<int>();
             public JArray Captures = new JArray();
             public Stopwatch Clock;
@@ -141,6 +144,9 @@ namespace MCPForUnity.Editor.Tools.Playtest
             if (readErr == null && spec.Watch != null) readErr = spec.Watch.Select(ReadableError).FirstOrDefault(e => e != null);
             if (readErr != null) { tcs.SetResult(Error(readErr)); return tcs.Task; }
 
+            var dialogTitle = UnityModalDialogProbe.FindOpenDialogTitle();
+            if (dialogTitle != null) { tcs.SetResult(Error(DialogBlockedError(dialogTitle))); return tcs.Task; }
+
             s_Run = new Run { Spec = spec, Tcs = tcs, Clock = Stopwatch.StartNew() };
             if (!EditorApplication.isPaused) EditorApplication.isPaused = true;
             EditorApplication.update += Tick;
@@ -161,6 +167,12 @@ namespace MCPForUnity.Editor.Tools.Playtest
         }
 
         private static JObject Error(string message) => new JObject { ["error"] = message };
+
+        private static string DialogBlockedError(string title)
+        {
+            var titlePart = title.Length > 0 ? $" \"{title}\"" : "";
+            return $"Unity is showing a dialog{titlePart} that blocks play mode; no frame can advance until it is closed. Ask the user to close it in Unity, then call play_step again.";
+        }
 
         private static void Begin(Run r)
         {
@@ -196,6 +208,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             int stop = r.Target;
             foreach (var f in r.CaptureAt) if (f > now && f < stop) stop = f;
             r.SegmentStart = now;
+            r.SegmentStartedAtS = r.Clock.Elapsed.TotalSeconds;
             PlaytestDriver.Arm(stop, r.Spec.UntilHook, r.Spec.UntilOp, r.Spec.UntilValue);
             EditorApplication.isPaused = false;
         }
@@ -210,13 +223,33 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 if (r.Clock.Elapsed.TotalSeconds > r.Spec.TimeoutS)
                 {
                     EditorApplication.isPaused = true;
-                    Complete("error", $"timed out after {r.Spec.TimeoutS:0.#}s at frame {Time.frameCount - r.F0}/{r.Spec.Frames} (pass timeout_seconds for long steps)");
+                    var message = $"timed out after {r.Spec.TimeoutS:0.#}s at frame {Time.frameCount - r.F0}/{r.Spec.Frames} (the step budget grows with frames; split very long runs into several play_step calls)";
+                    var dialogTitle = UnityModalDialogProbe.FindOpenDialogTitle();
+                    if (dialogTitle != null)
+                    {
+                        var titlePart = dialogTitle.Length > 0 ? $" \"{dialogTitle}\"" : "";
+                        message += $" Unity is showing a dialog{titlePart} that blocks play mode; ask the user to close it.";
+                    }
+                    Complete("error", message);
                     return;
                 }
                 if (r.Phase == "pausing")
                 {
                     if (EditorApplication.isPaused) Begin(r);
                     return;
+                }
+                double elapsedS = r.Clock.Elapsed.TotalSeconds;
+                if (!EditorApplication.isPaused && Time.frameCount <= r.SegmentStart && elapsedS - r.SegmentStartedAtS >= 2.0
+                    && elapsedS - r.LastDialogCheckS >= 0.5)
+                {
+                    r.LastDialogCheckS = elapsedS;
+                    var dialogTitle = UnityModalDialogProbe.FindOpenDialogTitle();
+                    if (dialogTitle != null)
+                    {
+                        EditorApplication.isPaused = true;
+                        Complete("error", DialogBlockedError(dialogTitle));
+                        return;
+                    }
                 }
                 if (!EditorApplication.isPaused || PlaytestDriver.Armed || Time.frameCount <= r.SegmentStart) return;
 
