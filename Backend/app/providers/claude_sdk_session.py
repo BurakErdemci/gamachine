@@ -1196,6 +1196,17 @@ class ClaudeSDKSession:
         if self._cancel_event is not None:
             self._cancel_event.set()
 
+        # The model already answered and only background tasks hold the turn open.
+        # There is nothing for interrupt() to stop, so no Result follows it, and the
+        # wait below ran out into the hard reset: closing the CLI orphaned its
+        # background shells, and the next turn opened on "Background shell command
+        # didn't finish before the previous session ended" (measured 10 Oct 2026,
+        # "send now" during a long bot run). End the turn and keep the session.
+        if self._turn_active and self._result_pending:
+            logger.info(f"[ClaudeSDKSession:{self.conversation_id}] tur kapatildi; arka plan gorevleri ve session korunuyor")
+            await self._finish_turn()
+            return
+
         interrupted = False
         try:
             if self._client is not None:
