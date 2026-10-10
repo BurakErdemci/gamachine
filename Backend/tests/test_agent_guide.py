@@ -57,12 +57,12 @@ def test_fixed_bodies_match_architect_input_verbatim():
     expected = {
         "ALWAYS_en": "14046d414c9a04cb768e1a151d210f13b6896bf58d1822df47c731b34dd7dd8d",
         "PROJECT_en": "2d2197b52cb1116d597eb3dbdc6adde7898d8c7f2ded454239a1bb14256cba94",
-        "UNITY_CONNECTED_en": "092d3651464b5ccf880f6eb1eb536ff0c4f6beafcd87fa918d6eee51e74434f4",
+        "UNITY_CONNECTED_en": "fff473a36df9af619b304722c67a966918cde262a001c007a8c1dad4035c3b8c",
         "UNITY_OFF_en": "8fb5c1b867dbfdce55c0585b3fbeb856fe412690f75ac6c35373b9456c6124ea",
         "UNITY_NOT_RESPONDING_en": "b6c80d0b19eb651e5fc022d26b70ec8da8ddfccbc76f7a57110e5492aa79e13a",
         "ALWAYS_tr": "1eb7f28dbb00820987961ff832e41f90364c3d47f3af97a90d3167bb3dc0c950",
         "PROJECT_tr": "93164d58e0ce2202c32e2c275fe8ed3854a75b85706dc1b2ca338b431a68914d",
-        "UNITY_CONNECTED_tr": "f219e9ff87ad8e84c8b12cc22795c2e64a1a6a90f487853d694464dfcf785ac3",
+        "UNITY_CONNECTED_tr": "4ec3f446c27d3677a330b2e83d6c1c6f9958993e59ffdaa25e6e4db813bf9ab3",
         "UNITY_OFF_tr": "9a9acb24462be58dd5f2d0481e1f2b540ea4c696289d4c8672497b3aaa809d05",
         "UNITY_NOT_RESPONDING_tr": "dc045db7b77fc21115ad39e9566e8f554dbb013db583a87e78ef3df21f647df8",
     }
@@ -99,7 +99,7 @@ def test_mentioned_unity_tools_exist_in_manifest():
     names = {tool["name"] for tool in manifest["tools"]}
     required = {"find_gameobjects", "read_console", "manage_gameobject", "manage_components",
                 "manage_scene", "manage_prefabs", "manage_asset", "batch_execute", "refresh_unity",
-                "compile_status", "execute_code", "play_session", "play_step", "play_capture", "manage_build"}
+                "compile_status", "execute_code", "play_session", "play_step", "play_capture", "manage_build", "unity_dialog"}
     assert required <= names
     for language in ("tr", "en"):
         text = guide.compose(language, project_open=True, unity_state="connected")
