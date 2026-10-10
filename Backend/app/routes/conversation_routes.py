@@ -268,7 +268,8 @@ def _fmt_tokens(n: int) -> str:
 
 def _live_context_reading(conv_id: int) -> dict | None:
     """Read existing live sessions without starting a CLI or failing the request."""
-    for module_name in ("providers.claude_sdk_session", "providers.codex_session"):
+    for module_name in ("providers.claude_sdk_session", "providers.codex_session",
+                        "providers.oneshot_cli"):
         try:
             from importlib import import_module
 

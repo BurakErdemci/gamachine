@@ -2533,6 +2533,10 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                     interactive=True,
                 ):
                     etype = event.get("type")
+                    _reading = getattr(provider, "context_reading", None)
+                    if isinstance(_reading, dict) and _reading is not sess.context_reading:
+                        sess.context_reading = _reading
+                        sess.context_reading_at = time.monotonic()
                     if etype == "session_meta":
                         _sid = event.get("session_id")
                         if _sid and not sess.session_id:

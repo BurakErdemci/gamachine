@@ -24,6 +24,8 @@ doğrudan taranır.
 """
 import os
 import sys
+import json
+import subprocess
 import glob
 import shutil
 import logging
@@ -46,6 +48,10 @@ class OneShotSession(SaglayiciSahipligi):
         self.session_id: Optional[str] = None  # CLI'in resume anahtari
         self.ctx_injected: bool = False        # transcript ilk turda enjekte edildi mi
         self.auto_approve: bool = False
+        # Last real context reading of this chat (same shape as the Claude and
+        # Codex sessions'), set only by providers that report one.
+        self.context_reading: Optional[dict] = None
+        self.context_reading_at: float = 0.0
         # Durdur icin calisan subprocess sahipleri - tek yuva DEGIL kume.
         # Gerekce ve olcum: `saglayici_sahipligi.py`.
         self._sahiplik_kur()
@@ -61,6 +67,16 @@ def get_session(cli: str, conversation_id: int) -> OneShotSession:
         s = OneShotSession(cli, conversation_id)
         _SESSIONS[key] = s
     return s
+
+
+def peek_session(conversation_id: int) -> Optional[OneShotSession]:
+    """Newest one-shot session of this chat that holds a context reading."""
+    best = None
+    for (_cli, conv_id), sess in _SESSIONS.items():
+        if conv_id == conversation_id and isinstance(sess.context_reading, dict):
+            if best is None or sess.context_reading_at > best.context_reading_at:
+                best = sess
+    return best
 
 
 async def close_session(cli: str, conversation_id: int) -> None:
@@ -452,3 +468,61 @@ def split_model_id(our_id: str) -> Tuple[Optional[str], str]:
     if our_id.startswith("opencode:"):
         return "opencode", our_id.split(":", 1)[1]
     return None, our_id
+
+
+# ─────────────────────────────────────────────────────────────────
+# OpenCode context window (local catalog, no model call)
+# ─────────────────────────────────────────────────────────────────
+# `opencode models <provider> --verbose` prints "provider/model" followed by a
+# JSON block whose limit.context is the window OpenCode itself uses (measured on
+# 1.18.25: opencode/big-pickle -> 200000). Only successes are cached.
+_OPENCODE_WINDOWS: Dict[str, int] = {}
+
+
+def parse_opencode_windows(text: str) -> Dict[str, int]:
+    """{"provider/model": limit.context} from `opencode models --verbose` output."""
+    out: Dict[str, int] = {}
+    decoder = json.JSONDecoder()
+    pos = 0
+    for m in _re.finditer(r'^([^\s{}"]+/[^\s{}"]+)[ \t]*\r?\n(?=\{)', text, _re.M):
+        if m.start() < pos:
+            continue
+        try:
+            obj, pos = decoder.raw_decode(text, m.end())
+        except ValueError:
+            continue
+        limit = obj.get("limit") if isinstance(obj, dict) else None
+        window = limit.get("context") if isinstance(limit, dict) else None
+        if type(window) is int and window > 0:
+            out[m.group(1)] = window
+    return out
+
+
+def opencode_context_window(model: str) -> Optional[int]:
+    """Window of "provider/model" from the local catalog, else None (blocking)."""
+    if model in _OPENCODE_WINDOWS:
+        return _OPENCODE_WINDOWS[model]
+    provider, _, _ = model.partition("/")
+    base = resolve_opencode_cmd()
+    if not provider or not base or "/" not in model:
+        return None
+    try:
+        proc = subprocess.run([*base, "models", provider, "--verbose"], capture_output=True,
+                              stdin=subprocess.DEVNULL, timeout=20, check=False)
+        text = proc.stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    _OPENCODE_WINDOWS.update(parse_opencode_windows(text))
+    return _OPENCODE_WINDOWS.get(model)
+
+
+def opencode_context_tokens(event: dict) -> Optional[int]:
+    """Context tokens of one model call from a step_finish event, else None.
+
+    `part.tokens.total` is input + output + reasoning + cache of THAT call, so
+    the last step_finish of a turn is the current context size.
+    """
+    part = event.get("part") if isinstance(event, dict) else None
+    tokens = part.get("tokens") if isinstance(part, dict) else None
+    total = tokens.get("total") if isinstance(tokens, dict) else None
+    return total if type(total) is int and total > 0 else None

@@ -1,12 +1,15 @@
 import os
 import re
+import asyncio
 import json
 import uuid
 import logging
 import subprocess
 from typing import Optional, Tuple
 from .cli_base import BaseCLIProvider, build_spawn_env, env_family
-from .oneshot_cli import resolve_opencode_cmd, split_model_id
+from .oneshot_cli import (
+    opencode_context_tokens, opencode_context_window, resolve_opencode_cmd, split_model_id,
+)
 from .unityai_tool_text import mail_and_fallback
 from .workspace_config import ensure_gitignored, guvenli_config_yaz
 
@@ -309,6 +312,27 @@ class OpenCodeProvider(BaseCLIProvider):
     # CANLI ÖLÇÜLDÜ 2026-08-01 (yardım metninde YOK): mesaj argümanı boşken
     # `opencode run` prompt'u stdin'den okuyor.
     prompt_via_stdin = True
+
+    async def _on_step_finish(self, ev: dict) -> None:
+        """Every step_finish is one model call; the last one of the turn wins.
+
+        The window comes from OpenCode's own model catalog and is never guessed:
+        no "provider/model" id, or a catalog without the model, leaves the
+        reading as it was.
+        """
+        used = opencode_context_tokens(ev)
+        _, model = split_model_id(self.binary_name)
+        if used is None or "/" not in (model or ""):
+            return
+        try:
+            window = await asyncio.to_thread(opencode_context_window, model)
+        except Exception:
+            logger.debug("[OpenCodeProvider] context window lookup failed", exc_info=True)
+            return
+        if window:
+            self.context_reading = {
+                "used": used, "window": window, "percent": 100 * used / window, "model": model,
+            }
 
     def _build_cmd(self, prompt: str, thinking_level: str = "medium", workspace: str = None) -> list:
         base = resolve_opencode_cmd()

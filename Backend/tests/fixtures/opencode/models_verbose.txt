@@ -1,0 +1,29 @@
+opencode/big-pickle
+{
+  "id": "big-pickle",
+  "providerID": "opencode",
+  "name": "Big Pickle",
+  "limit": {
+    "context": 200000,
+    "input": 160000,
+    "output": 32000
+  },
+  "release_date": "2025-10-17"
+}
+opencode/no-limit
+{
+  "id": "no-limit",
+  "providerID": "opencode",
+  "limit": {
+    "output": 1000
+  }
+}
+opencode/exo-free
+{
+  "id": "exo-free",
+  "providerID": "opencode",
+  "limit": {
+    "context": 1048576,
+    "output": 131072
+  }
+}

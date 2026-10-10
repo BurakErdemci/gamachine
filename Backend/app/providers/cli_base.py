@@ -125,6 +125,14 @@ class BaseCLIProvider(AIProvider):
     # yazdığı her şey aynı kullanıcının çalıştırdığı her programa açıktı.
     prompt_via_stdin = False
 
+    # Real context reading of the last model call, same shape as the Claude and
+    # Codex sessions' ({used, window, percent, model}); only providers whose CLI
+    # reports both tokens and window set it.
+    context_reading = None
+
+    async def _on_step_finish(self, ev: dict) -> None:
+        """Hook for CLIs whose stream reports per-call token counts."""
+
     # Cursor/Copilot/OpenCode gibi one-shot CLI'larda uzun MCP çağrıları dakikalarca
     # stdout üretmeyebilir. Yalnız GERÇEK hareketsizliği sınırla; toplam çalışma
     # süresini ayrıca geniş bir güvenlik tavanıyla koru.
@@ -793,7 +801,8 @@ class BaseCLIProvider(AIProvider):
                             if _out:
                                 yield {"type": "thinking", "text": f"↩ {_out}"}
                         elif ev_type in ("step_start", "step_finish"):
-                            pass  # akış iskeleti; step_finish token sayılarını taşır (gerekirse logla)
+                            if ev_type == "step_finish":
+                                await self._on_step_finish(ev)
 
                         # ── Yapılandırılmış CLI hatası ─────────────────────
                         elif ev_type == "error":
