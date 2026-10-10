@@ -295,6 +295,11 @@
 .set-input-mono { font-family: var(--font-mono); font-size: 13px; }
 .set-input::placeholder { color: var(--ink-dim); opacity: 1; }
 .set-input:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
+.set-agent-section { padding: 16px 20px; }
+.set-agent-label { margin-bottom: 8px; font-size: 13px; font-weight: 600; color: var(--ink-dim); }
+.set-agent-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.6; color: var(--ink); }
+.set-input.set-agent-addendum { display: block; width: 100%; height: auto; padding: 10px; line-height: 1.5; resize: vertical; }
+.set-agent-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 13px; color: var(--ink-dim); }
 .set-prov-edit .set-input { width: 300px; border-color: var(--ink-dim); }
 .set-acts { display: flex; gap: 16px; align-items: center; }
 .set-link { font-size: 13px; color: var(--ink-dim); text-decoration: underline; text-decoration-color: var(--paper-line-strong); text-underline-offset: 3px; white-space: nowrap; }

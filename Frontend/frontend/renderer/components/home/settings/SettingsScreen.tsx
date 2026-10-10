@@ -8,6 +8,7 @@ import type { AvailableModelsState, UnityMCPStatus } from '../../../hooks/home/u
 import type { AIConfig, GenerationMode, UserData } from '../types';
 import { RemoteControlSection } from '../RemoteControlSection';
 import { ModelsPage } from './ModelsPage';
+import { AgentGuidePage } from './AgentGuidePage';
 import { APP_VERSION, AccountPage, AppearancePage, ApprovalPage, GeneralPage, UnityPage } from './SettingsPages';
 import { SetPageHead } from './controls';
 import { SETTINGS_PAGES, type SettingsPage } from './pages';
@@ -50,7 +51,7 @@ export interface SettingsScreenProps {
   userName?: string;
   onSaveName?: (name: string) => Promise<boolean>;
   API?: string;
-  http?: { get: (...a: any[]) => Promise<any>; post: (...a: any[]) => Promise<any> };
+  http?: { get: (...a: any[]) => Promise<any>; post: (...a: any[]) => Promise<any>; put?: (...a: any[]) => Promise<any> };
   showToast?: Toast;
   /** Account page: the "Yapımcı profili" button. */
   onOpenProfile?: () => void;
@@ -68,6 +69,7 @@ const NAV_ICON: Record<SettingsPage, React.ReactNode> = {
   gorunum: <><path d="M10 3a7 7 0 100 14c1 0 1.4-.7 1.1-1.5-.4-1 .2-2 1.3-2H14a3 3 0 003-3C17 6 14 3 10 3z" /><circle cx="6.8" cy="9" r=".9" /><circle cx="9.5" cy="6.3" r=".9" /><circle cx="13" cy="7.2" r=".9" /></>,
   unity: <><path d="M10 2.5l6.5 3.75v7.5L10 17.5l-6.5-3.75v-7.5z" /><path d="M10 10l6.5-3.75M10 10v7.5M10 10L3.5 6.25" /></>,
   onay: <><path d="M10 2.8l5.6 2.2v4.4c0 3.6-2.4 6.2-5.6 7.6-3.2-1.4-5.6-4-5.6-7.6V5z" /><path d="M7.6 10l1.7 1.7 3.2-3.4" /></>,
+  ajan: <><rect x="4.5" y="2.5" width="11" height="15" rx="1.5" /><path d="M7.5 7h5M7.5 10h5M7.5 13h3" /></>,
   uzak: <><rect x="6" y="2.5" width="8" height="15" rx="1.6" /><path d="M9 15h2" /></>,
   hesap: <><circle cx="10" cy="7" r="3" /><path d="M4 17c.8-3.2 3.3-5 6-5s5.2 1.8 6 5" /></>,
 };
@@ -82,10 +84,12 @@ const SEARCH_KEYS: Record<SettingsPage, TKey[]> = {
   gorunum: ['set.nav.gorunum', 'settings.appearance.theme', 'settings.appearance.readingFont', 'settings.appearance.codeFont', 'settings.appearance.textSize', 'settings.appearance.intro'],
   unity: ['set.unity.conn', 'set.unity.trouble'],
   onay: ['set.nav.onay', 'set.mode.stepTitle', 'set.mode.balancedTitle', 'set.mode.autoTitle'],
+  ajan: ['set.nav.ajan', 'set.ajan.base', 'set.ajan.addendum'],
   uzak: ['set.nav.uzak', 'set.uzak.phones', 'set.uzak.pairNew', 'remote.relay', 'remote.keepAwake', 'remote.forget'],
   hesap: ['set.nav.hesap', 'set.hesap.logout', 'set.hesap.version', 'set.hesap.profile', 'set.hesap.reset'],
 };
 const EXTRA_TERMS: Partial<Record<SettingsPage, string[]>> = {
+  ajan: ['agent', 'guide', 'kılavuz', 'brief', 'prompt'],
   unity: ['unity', 'mcp'], modeller: ['api', 'claude', 'codex', 'antigravity', 'ollama', 'openrouter'], uzak: ['qr', 'relay'],
 };
 
@@ -233,6 +237,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
               projectName={props.unityProjectName} saved={saved} />
           )}
           {page === 'onay' && <ApprovalPage mode={props.approvalMode} onChange={props.onApprovalModeChange} saved={saved} />}
+          {page === 'ajan' && <AgentGuidePage lang={lang} API={props.API} http={props.http} token={user?.sessionToken} saved={saved} />}
           {page === 'uzak' && (
             <>
               <SetPageHead title={t('set.nav.uzak')} lede={t('remote.hint')} />
