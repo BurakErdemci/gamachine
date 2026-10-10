@@ -390,8 +390,9 @@ class PluginHub(WebSocketEndpoint):
                             success=False,
                             error=(
                                 f"Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor, so "
-                                f"'{command_type}' cannot run until it is closed. "
-                                "Answer it with unity_dialog (action press) or ask the user to close it."
+                                f"'{command_type}' is waiting in Unity's queue and will run as soon as the dialog closes. "
+                                "Answer it with unity_dialog (action press) or ask the user to close it; "
+                                f"do not resend '{command_type}', check its effect after the dialog is closed."
                             ),
                             hint="user_action",
                         ).model_dump()
@@ -401,7 +402,11 @@ class PluginHub(WebSocketEndpoint):
                 titles = list(dict.fromkeys(dialog["title"] for dialog in dialogs))
                 error = str(exc)
                 if titles:
-                    error += f" Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor; ask the user to close it."
+                    error += (
+                        f" Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor; "
+                        f"'{command_type}' may still run once it closes, so check its effect before resending. "
+                        "Answer it with unity_dialog (action press) or ask the user to close it."
+                    )
                 return MCPResponse(success=False, error=error, hint="user_action" if titles else "retry").model_dump()
             except asyncio.TimeoutError:
                 # Match wait_for's cancellation on total timeout, never on a slice.
@@ -411,7 +416,11 @@ class PluginHub(WebSocketEndpoint):
                 if command_type in cls._FAST_FAIL_COMMANDS or titles:
                     error = f"Unity did not respond to '{command_type}' within {server_wait_s:.1f}s; please retry"
                     if titles:
-                        error += f" Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor; ask the user to close it."
+                        error += (
+                            f" Unity is showing {_dialog_name(titles, dialogs)} that blocks the editor; "
+                            f"'{command_type}' may still run once it closes, so check its effect before resending. "
+                            "Answer it with unity_dialog (action press) or ask the user to close it."
+                        )
                     return MCPResponse(
                         success=False,
                         error=error,

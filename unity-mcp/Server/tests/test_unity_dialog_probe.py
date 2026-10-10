@@ -93,8 +93,11 @@ async def test_wait_returns_user_action_after_two_dialog_polls(command_hub, monk
     dialog = f'a dialog "{title}"' if title else "a dialog"
     expected = (
         f"Unity is showing {dialog} that blocks the editor, so 'manage_scene' "
-        "cannot run until it is closed. Answer it with unity_dialog (action press) or ask the user to close it."
+        "is waiting in Unity's queue and will run as soon as the dialog closes. "
+        "Answer it with unity_dialog (action press) or ask the user to close it; "
+        "do not resend 'manage_scene', check its effect after the dialog is closed."
     )
+    assert "do not resend" in result["error"]
     assert result == MCPResponse(success=False, error=expected, hint="user_action").model_dump()
     assert time.monotonic() - started < 0.5
     assert len(polls) == 2
@@ -213,6 +216,10 @@ async def test_blocking_dialog_errors_list_first_dialog_buttons(command_hub, mon
     assert 'Unity is showing a dialog "Save scene" (buttons: Save, Don\'t Save, Cancel) that blocks the editor' in result["error"]
     assert "Other" not in result["error"]
     if branch == "early":
+        assert "do not resend" in result["error"]
+        assert result["error"].endswith("check its effect after the dialog is closed.")
+    else:
+        assert "may still run" in result["error"]
         assert result["error"].endswith("Answer it with unity_dialog (action press) or ask the user to close it.")
 
 
@@ -250,7 +257,12 @@ async def test_disconnect_preserves_error_and_adds_dialog_hint(command_hub, monk
     error = original
     if titles:
         dialog = f'a dialog "{titles[0]}"' if titles[0] else "a dialog"
-        error += f" Unity is showing {dialog} that blocks the editor; ask the user to close it."
+        error += (
+            f" Unity is showing {dialog} that blocks the editor; "
+            "'manage_scene' may still run once it closes, so check its effect before resending. "
+            "Answer it with unity_dialog (action press) or ask the user to close it."
+        )
+        assert "may still run" in error
     assert await PluginHub.send_command("dialog-session", "manage_scene", {}) == MCPResponse(
         success=False, error=error, hint="user_action" if titles else "retry"
     ).model_dump()
@@ -273,7 +285,11 @@ async def test_total_timeout_preserves_outputs_or_adds_dialog_hint(command_hub, 
         error = f"Unity did not respond to '{command}' within 0.1s; please retry"
         if titles:
             dialog = f'a dialog "{titles[0]}"' if titles[0] else "a dialog"
-            error += f" Unity is showing {dialog} that blocks the editor; ask the user to close it."
+            error += (
+                f" Unity is showing {dialog} that blocks the editor; "
+                f"'{command}' may still run once it closes, so check its effect before resending. "
+                "Answer it with unity_dialog (action press) or ask the user to close it."
+            )
         assert await PluginHub.send_command("dialog-session", command, {}) == MCPResponse(
             success=False, error=error, hint="user_action" if titles else "retry"
         ).model_dump()
