@@ -60,7 +60,7 @@ namespace MCPForUnity.Editor.Tools.Gamachine
         internal static HashSet<int> Objects()
         {
             var objects = new HashSet<int>();
-            foreach (var go in UnityEngine.Object.FindObjectsByType<GameObject>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            foreach (var go in UnityFindObjectsCompat.FindAll<GameObject>(true))
                 objects.Add(go.GetInstanceIDCompat());
             return objects;
         }
