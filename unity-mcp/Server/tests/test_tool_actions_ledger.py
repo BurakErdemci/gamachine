@@ -165,6 +165,7 @@ PINNED_READ_SURFACE: frozenset[str] = frozenset({
     "run_playtest:status",
     "set_active_instance:*",
     "unity_dialog:list",
+    "unity_window_capture:*",
     "unity_docs:get_doc",
     "unity_docs:get_manual",
     "unity_docs:get_package_doc",

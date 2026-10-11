@@ -956,6 +956,15 @@
       "evidence": "unity-mcp/Server/src/services/tools/unity_dialog.py:24",
       "note": "list inspects native Unity dialogs without changing them. press clicks a native dialog button and can save or discard user work, so it is a critical write."
     },
+    "unity_window_capture": {
+      "action_param": null,
+      "tool_level": "read",
+      "read_actions": [],
+      "write_actions": [],
+      "param_dependent": [],
+      "evidence": "unity-mcp/Server/src/services/tools/unity_window_capture.py:18",
+      "note": "Captures the editor window into memory and returns it; writes no file and changes nothing."
+    },
     "unity_docs": {
       "action_param": "action",
       "tool_level": null,

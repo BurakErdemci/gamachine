@@ -230,6 +230,10 @@
       "description": "List or answer native Unity editor dialogs; pressing a button can save or discard user work"
     },
     {
+      "name": "unity_window_capture",
+      "description": "Capture an image of the Unity editor window from outside Unity, with the project's open dialogs"
+    },
+    {
       "name": "unity_docs",
       "description": "Fetch Unity documentation (ScriptReference, Manual, package docs)"
     },
