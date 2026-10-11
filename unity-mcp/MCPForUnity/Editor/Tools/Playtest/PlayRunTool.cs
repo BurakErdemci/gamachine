@@ -250,7 +250,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             var spec = job.Spec;
             int? seed = spec.Seeds == null ? (int?)null : spec.Seeds[index];
             var clock = Stopwatch.StartNew();
-            long memory = Profiler.GetTotalAllocatedMemoryLong();
+            long memory = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong();
             var result = job.Current = new JObject { ["index"] = index, ["seed"] = seed.HasValue ? new JValue(seed.Value) : JValue.CreateNull(),
                 ["errors"] = 0, ["warnings"] = 0, ["timeline"] = new JArray(), ["captures"] = new JArray(), ["first_errors"] = new JArray() };
             var errors = new Dictionary<string, JObject>();
@@ -339,8 +339,8 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 result["speed_x"] = clock.Elapsed.TotalSeconds > 0 ? frames * spec.Dt / clock.Elapsed.TotalSeconds : 0;
                 result["editor_ms_per_frame"] = frames > 0 ? clock.Elapsed.TotalMilliseconds / frames : 0;
                 result["timing_source"] = "editor-side wall clock, including samples and captures";
-                result["gc_alloc_mb"] = (Profiler.GetTotalAllocatedMemoryLong() - memory) / (1024.0 * 1024.0);
-                result["memory_source"] = "Profiler.GetTotalAllocatedMemoryLong delta (allocated memory, not cumulative GC allocations)";
+                result["gc_alloc_mb"] = (UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() - memory) / (1024.0 * 1024.0);
+                result["memory_source"] = "UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong delta (allocated memory, not cumulative GC allocations)";
                 job.Results.Add(result);
             }
         }
