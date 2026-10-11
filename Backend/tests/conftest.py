@@ -38,6 +38,18 @@ def _allow_tokenless_local_api(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _local_token_file_off_real_home(monkeypatch, tmp_path_factory):
+    # local_token_file keeps its token under the real home; the reader and the
+    # ACL repair would otherwise touch that file from any test. Tests that
+    # need their own location patch the constants again (monkeypatch stacks).
+    import local_token_file
+    token_dir = str(tmp_path_factory.mktemp("local-token"))
+    monkeypatch.setattr(local_token_file, "_TOKEN_DIR", token_dir)
+    monkeypatch.setattr(local_token_file, "_TOKEN_PATH", os.path.join(token_dir, "local-app-token"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _opencode_shadow_off(monkeypatch, tmp_path_factory):
     # OpenCodeProvider._register_mcp writes its bash shadow under the real
     # home and runs `opencode --version`; several tests call it directly.
