@@ -28,13 +28,6 @@
   container: ws / inline-size;
   transition: width 300ms var(--g-ease-move);
 }
-/* Narrow window (< 1100 px, WS_DRAWER_QUERY in lib/workspacePanel.ts): the open panel floats over
-   the chat as a drawer anchored right, under the top bar (z 5, so its menus stay above), instead
-   of taking a grid track. Its widths are capped to the window; the chat keeps the whole row. */
-@media (max-width: 1099px) {
-  .app-right { position: absolute; top: 52px; right: 0; bottom: 0; z-index: 4; }
-  .workspace { width: min(var(--ws-w), calc(100vw - 48px)); box-shadow: -8px 0 28px rgb(0 0 0 / .28); }
-}
 /* hidden, never unmounted (home.tsx): the class's display would otherwise beat [hidden] */
 .workspace[hidden] { display: none; }
 .workspace > *:not(.tex) { position: relative; z-index: 1; }

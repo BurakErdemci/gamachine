@@ -62,7 +62,7 @@ import { useAppearance } from '../lib/appearance';
 import { awaitingElsewhere } from '../lib/convFamily';
 import { useNewChatShortcut } from '../lib/newChatShortcut';
 import { useTurnDone, cardOnScreen } from '../lib/turnDone';
-import { useWorkspacePanel, useNarrowWindow, tabForPath } from '../lib/workspacePanel';
+import { useWorkspacePanel, useNarrowWindow, useOneSideColumnWhenNarrow, tabForPath } from '../lib/workspacePanel';
 import { usePendingChange } from '../lib/pendingChange';
 import { clearSeen, isUnseen, loadSeen, saveSeen, type Seen } from '../lib/changesSeen';
 import { ThreadHeader } from '../components/home/ThreadHeader';
@@ -360,8 +360,11 @@ export default function Home() {
   // since the v4 column swap; the chat is the main stage and is never hidden. Width modes
   // dar / yarim / odak replace P2's drag handle (lib/workspacePanel.ts).
   const ws = useWorkspacePanel();
-  const wsOverlay = useNarrowWindow();
   const { reveal: wsReveal, setOpen: setWsOpen, setTab: setWsTab } = ws;
+  // Below 1100 px the sidebar and the panel take turns beside the chat (lib/workspacePanel.ts).
+  const narrowWindow = useNarrowWindow();
+  useOneSideColumnWhenNarrow(narrowWindow,
+    { open: isSidebarOpen, setOpen: setIsSidebarOpen }, { open: ws.open, setOpen: setWsOpen });
   const [sceneEditorSetting] = useSceneEditorSetting();
   const editorOn = sceneEditorSetting && ai.unityMcpStatus !== 'off';
   const [hierarchyVisible, setHierarchyVisible] = useState(false);
@@ -1202,7 +1205,6 @@ export default function Home() {
           width={ws.width}
           onWidth={ws.setWidth}
           onClose={() => setWsOpen(false)}
-          overlay={wsOverlay}
           panes={{
             sahne: editorOn ? <InspectorPane inspection={sceneEditor.inspection} loading={sceneEditor.inspectLoading}
               error={sceneEditor.inspectError} stale={sceneEditor.stale} actions={sceneEditor} /> : (

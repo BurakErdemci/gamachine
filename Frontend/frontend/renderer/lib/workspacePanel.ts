@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { routeForFile } from '../components/model-viewer/extensions';
 
 /** The workspace tabs (mockup `.ws-tab[data-tab]`): scene, files, code, preview. */
@@ -38,15 +38,15 @@ export function useWorkspacePanel(initial: { tab?: WsTab; width?: WsWidth } = {}
   return { open, setOpen, tab, setTab, width, setWidth, reveal };
 }
 
-/** Below this window width the open panel is an overlay drawer over the chat (workspace.css repeats the number). */
-export const WS_DRAWER_QUERY = '(max-width: 1099px)';
-
 /**
- * Whether the window is narrow enough for the panel to overlay the chat. The layout itself is a
- * CSS media query; this mirrors it so the panel can mark itself and close on Escape. Without
- * matchMedia (jsdom, old shells) the window is treated as wide.
+ * Below this window width only one side column (sidebar or panel) sits beside the chat. At 1100
+ * the sidebar (240) and the narrow panel (360) leave the chat 500 px; any narrower and the chat's
+ * greeting, cards and composer were squeezed under the panel (owner screenshots, 11 Oct 2026).
  */
-export function useNarrowWindow(query: string = WS_DRAWER_QUERY): boolean {
+export const WS_NARROW_QUERY = '(max-width: 1099px)';
+
+/** Whether the window is below WS_NARROW_QUERY. Without matchMedia (jsdom, old shells) it is wide. */
+export function useNarrowWindow(query: string = WS_NARROW_QUERY): boolean {
   const read = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && !!window.matchMedia(query)?.matches;
   const [narrow, setNarrow] = useState(read);
   useEffect(() => {
@@ -59,4 +59,61 @@ export function useNarrowWindow(query: string = WS_DRAWER_QUERY): boolean {
     return () => mq.removeEventListener('change', onChange);
   }, [query]);
   return narrow;
+}
+
+/**
+ * In a narrow window the sidebar and the panel take turns beside the chat, both staying columns
+ * (an overlay drawer covered the chat card that asks about the change the panel shows):
+ * - the window turns narrow (or the app starts narrow) with both open: the panel folds away;
+ * - the panel opens (toggle, a file or change arriving, the terminal): the sidebar folds away,
+ *   and comes back when the panel closes;
+ * - the sidebar opens: the panel closes;
+ * - the window turns wide again: whatever was folded comes back.
+ * It reacts to the open states rather than wrapping the setters, because the panel is opened
+ * from many places (reveal, arrivals, the guide, the terminal).
+ */
+export function useOneSideColumnWhenNarrow(
+  narrow: boolean,
+  side: { open: boolean; setOpen: (open: boolean) => void },
+  panel: { open: boolean; setOpen: (open: boolean) => void },
+): void {
+  const { open: sideOpen, setOpen: setSideOpen } = side;
+  const { open: panelOpen, setOpen: setPanelOpen } = panel;
+  // `narrow: false` first, so an app that starts narrow goes through the "turned narrow" step.
+  const prev = useRef({ narrow: false, side: sideOpen, panel: panelOpen });
+  const panelFolded = useRef(false);
+  const sideFolded = useRef(false);
+
+  useEffect(() => {
+    const was = prev.current;
+    prev.current = { narrow, side: sideOpen, panel: panelOpen };
+
+    if (narrow !== was.narrow) {
+      if (narrow) {
+        if (sideOpen && panelOpen) { panelFolded.current = true; setPanelOpen(false); }
+      } else {
+        if (panelFolded.current && !panelOpen) setPanelOpen(true);
+        if (sideFolded.current && !sideOpen) setSideOpen(true);
+        panelFolded.current = false;
+        sideFolded.current = false;
+      }
+      return;
+    }
+    if (!narrow) return;
+
+    if (panelOpen && !was.panel) panelFolded.current = false;
+    if (sideOpen && !was.side) sideFolded.current = false;
+
+    if (sideOpen && panelOpen) {
+      // The one opened just now stays; when both opened at once the sidebar wins, as on start.
+      if (was.side && !was.panel) { sideFolded.current = true; setSideOpen(false); return; }
+      panelFolded.current = true;
+      setPanelOpen(false);
+      return;
+    }
+    if (!panelOpen && was.panel && sideFolded.current && !sideOpen) {
+      sideFolded.current = false;
+      setSideOpen(true);
+    }
+  }, [narrow, sideOpen, panelOpen, setSideOpen, setPanelOpen]);
 }
