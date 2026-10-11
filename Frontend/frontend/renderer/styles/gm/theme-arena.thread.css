@@ -104,6 +104,11 @@
 [data-theme="arena"] .empty-hero { grid-template-columns: 236px minmax(0, 1fr); align-items: end; gap: 4px; }
 [data-theme="arena"] .empty-head { display: none; }
 [data-theme="arena"] .empty-mascot { display: block; width: 236px; height: auto; margin-bottom: -6px; }
+/* a narrow chat: the same mascot at the other themes' 150 px, so the dialogue box keeps its width */
+@container stage (max-width: 640px) {
+  [data-theme="arena"] .empty-hero { grid-template-columns: 150px minmax(0, 1fr); }
+  [data-theme="arena"] .empty-mascot { width: 150px; }
+}
 [data-theme="arena"] .empty-say {
   --c: 14px;
   position: relative; margin-bottom: 34px; padding: 26px 26px 20px;

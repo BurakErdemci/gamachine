@@ -452,7 +452,8 @@
 .stage[data-empty] .composer-wrap { max-width: 880px; }
 .empty {
   position: relative; z-index: 1; flex: 1; min-height: 0; overflow-y: auto;
-  display: flex; flex-direction: column; justify-content: center; gap: 30px;
+  /* safe: a greeting taller than a narrow chat starts at the top instead of being cut above it */
+  display: flex; flex-direction: column; justify-content: safe center; gap: 30px;
   width: 100%; max-width: 880px; min-width: 0; margin: 0 auto; padding: 32px 40px 28px; overflow-x: hidden;
 }
 .empty-hero { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 20px; }
@@ -462,7 +463,8 @@
   color: var(--ink-faint); font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
   text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
 }
-.empty-say { min-width: 0; overflow-wrap: anywhere; }
+/* break-word, not anywhere: a project name breaks only when it cannot fit on a line of its own */
+.empty-say { min-width: 0; overflow-wrap: break-word; }
 .empty-title { margin-top: 2px; font-family: var(--font-title); font-size: 24px; line-height: 1.25; font-weight: 600; color: var(--ink); }
 .empty-sub { margin-top: 6px; font-size: 15px; color: var(--ink-dim); }
 .empty-board-k {
@@ -471,10 +473,11 @@
   text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
 }
 .empty-board-k::after { content: ""; flex: 1; height: var(--line-w); background: var(--label-rule-paper); }
-.quests { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; margin-top: 10px; }
+/* two columns while each card gets 220 px, one below that; never three (a 3 + 1 board) */
+.quests { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, max(220px, calc(50% - 6px))), 1fr)); gap: 12px; margin-top: 10px; }
 .quests li { display: flex; min-width: 0; }
 .qc {
-  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; text-align: left; position: relative; overflow-wrap: anywhere;
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; text-align: left; position: relative; overflow-wrap: break-word;
   padding: 14px 16px 12px; color: var(--ink);
   background: var(--paper-raised); border: var(--line-w) solid var(--paper-line); border-radius: var(--radius-lg);
   transition: border-color var(--g-dur-tap) var(--ease), transform var(--g-dur-tap) var(--ease);
@@ -490,13 +493,17 @@
 .qc-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 8px; font-size: var(--fs-meta); color: var(--ink-faint); }
 .qc-safe, .qc-ask { display: inline-flex; align-items: center; gap: 6px; }
 .qc-safe .ic { color: var(--ok-text); }
-.qc-xp { display: none; margin-left: auto; font-family: var(--font-mono); color: var(--run-text); }
+.qc-xp { display: none; flex: none; margin-left: auto; white-space: nowrap; font-family: var(--font-mono); color: var(--run-text); }
 /* the full mascot (when a theme shows it) idles: 1.5 px breath + a blink every ~5.6 s
    (maskot-demo "idle" state). It says "I'm here, listening" and nothing else moves. */
 .empty-mascot #upper { animation: gm-breathe 4.8s ease-in-out infinite; }
 .empty-mascot #eyes { animation: gm-blink 5.6s 1.2s infinite; }
 @keyframes gm-breathe { 50% { transform: translateY(1.5px); } }
 @keyframes gm-blink { 0%, 94%, 100% { transform: none; } 96% { transform: scaleY(.08); } }
+/* a narrow chat (the panel open beside it below 1100 px, lib/workspacePanel.ts): less air */
+@container stage (max-width: 640px) {
+  .empty { gap: 22px; padding-top: 24px; padding-bottom: 20px; }
+}
 
 
 /* the proposed-fix card (DiffViewer): the code plate with an explanation row and the decision */
