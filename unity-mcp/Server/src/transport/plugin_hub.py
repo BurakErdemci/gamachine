@@ -454,6 +454,25 @@ class PluginHub(WebSocketEndpoint):
         )
 
     @classmethod
+    async def get_project_path(
+        cls,
+        project_hash: str | None,
+        user_id: str | None = None,
+    ) -> str | None:
+        """Return the registered project root for a hash or the sole session."""
+        if cls._registry is None:
+            return None
+        sessions = await cls._registry.list_sessions(user_id=user_id)
+        if project_hash is None:
+            if len(sessions) == 1:
+                return next(iter(sessions.values())).project_path or None
+            return None
+        for session in sessions.values():
+            if session.project_hash == project_hash:
+                return session.project_path or None
+        return None
+
+    @classmethod
     async def get_tools_for_project(
         cls,
         project_hash: str,

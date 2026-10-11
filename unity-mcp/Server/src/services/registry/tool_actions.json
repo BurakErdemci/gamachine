@@ -160,7 +160,8 @@
       "action_param": "action",
       "tool_level": null,
       "read_actions": [
-        "status"
+        "status",
+        "wait"
       ],
       "write_actions": [
         "build",

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using Newtonsoft.Json;
 using UnityEditor;
 using UnityEditor.Build.Reporting;
 using UnityEditor.Build;
@@ -14,6 +16,7 @@ namespace MCPForUnity.Editor.Tools.Build
         {
             job.State = BuildJobState.Pending;
             BuildJobStore.AddBuildJob(job);
+            WriteBuildStatus(job);
 
             ScheduleOnNextUpdate(() =>
                 RunBuildCore(job, () => BuildPipeline.BuildPlayer(options)));
@@ -30,6 +33,7 @@ namespace MCPForUnity.Editor.Tools.Build
         {
             job.State = BuildJobState.Pending;
             BuildJobStore.AddBuildJob(job);
+            WriteBuildStatus(job);
 
             ScheduleOnNextUpdate(() =>
                 RunBuildCore(job, () => BuildPipeline.BuildPlayer(options)));
@@ -92,6 +96,7 @@ namespace MCPForUnity.Editor.Tools.Build
         {
             job.State = BuildJobState.Building;
             job.StartedAt = DateTime.UtcNow;
+            WriteBuildStatus(job);
 
             try
             {
@@ -126,6 +131,7 @@ namespace MCPForUnity.Editor.Tools.Build
             }
 
             BuildJobStore.SetLastCompleted(job);
+            WriteBuildStatus(job);
 
             // Emit console signal so the build result is visible in Unity's Console
             if (job.State == BuildJobState.Succeeded)
@@ -138,6 +144,47 @@ namespace MCPForUnity.Editor.Tools.Build
             {
                 UnityEngine.Debug.LogError(
                     $"[MCP Build] ✗ Build failed: {job.Target} — {job.ErrorMessage}");
+            }
+        }
+
+        private static void WriteBuildStatus(BuildJob job)
+        {
+            try
+            {
+                string projectRoot = Directory.GetParent(UnityEngine.Application.dataPath).FullName;
+                string directory = Path.Combine(projectRoot, "Library", "GamachineBuilds");
+                Directory.CreateDirectory(directory);
+                string json = JsonConvert.SerializeObject(new
+                {
+                    job_id = job.JobId,
+                    state = job.State.ToString().ToLowerInvariant(),
+                    target = job.Target.ToString(),
+                    output_path = job.OutputPath,
+                    started_at = job.StartedAt == default ? null : job.StartedAt.ToUniversalTime().ToString("O"),
+                    completed_at = job.CompletedAt?.ToUniversalTime().ToString("O"),
+                    duration_seconds = job.CompletedAt.HasValue && job.StartedAt != default
+                        ? (double?)(job.CompletedAt.Value - job.StartedAt).TotalSeconds : null,
+                    total_size_mb = job.TotalSizeMb,
+                    errors = job.TotalErrors,
+                    warnings = job.TotalWarnings,
+                    error_message = job.ErrorMessage,
+                    editor_pid = System.Diagnostics.Process.GetCurrentProcess().Id
+                });
+
+                foreach (string name in new[] { job.JobId + ".json", "latest.json" })
+                {
+                    string path = Path.Combine(directory, name);
+                    string temporaryPath = path + ".tmp";
+                    File.WriteAllText(temporaryPath, json);
+                    if (File.Exists(path))
+                        File.Replace(temporaryPath, path, null);
+                    else
+                        File.Move(temporaryPath, path);
+                }
+            }
+            catch (Exception ex)
+            {
+                McpLog.Warn($"[MCP Build] Could not write build status: {ex.Message}");
             }
         }
 

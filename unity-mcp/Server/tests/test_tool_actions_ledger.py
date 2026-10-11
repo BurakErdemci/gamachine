@@ -152,6 +152,7 @@ PINNED_READ_SURFACE: frozenset[str] = frozenset({
     "manage_ui:ping",
     "manage_ui:read",
     "manage_vfx:line_get_info",
+    "manage_build:wait",
     "manage_vfx:particle_get_info",
     "manage_vfx:ping",
     "manage_vfx:trail_get_info",
