@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using MCPForUnity.Runtime.Helpers;
@@ -25,6 +26,18 @@ namespace MCPForUnity.Runtime.Playtest
             public string Mime;
             public string Camera;
             public double RenderMs;
+            public int HudCanvases;
+            public string HudNote;
+        }
+
+        private sealed class CanvasState
+        {
+            public Canvas Canvas;
+            public RenderMode RenderMode;
+            public Camera WorldCamera;
+            public float PlaneDistance;
+            public int SortingLayerID;
+            public int SortingOrder;
         }
 
         public static Camera FindCamera(string name, out string error)
@@ -55,9 +68,59 @@ namespace MCPForUnity.Runtime.Playtest
             var rt = RenderTexture.GetTemporary(w, h, 24, RenderTextureFormat.ARGB32);
             var prevTarget = cam.targetTexture;
             var prevActive = RenderTexture.active;
+            int prevCullingMask = cam.cullingMask;
+            var canvasStates = new List<CanvasState>();
             Texture2D tex = null, small = null;
             try
             {
+                // Overlay UI is composited after cameras and never reaches their target textures, so retarget it while paused.
+#if UNITY_2023_1_OR_NEWER
+                var canvases = UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#else
+                var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
+#endif
+                var sortingLayers = SortingLayer.layers;
+                int hudSortingLayerID = sortingLayers[sortingLayers.Length - 1].id;
+                foreach (var canvas in canvases)
+                {
+                    if (!canvas.isRootCanvas || !canvas.isActiveAndEnabled) continue;
+                    if (canvas.renderMode != RenderMode.ScreenSpaceOverlay
+                        && (canvas.renderMode != RenderMode.ScreenSpaceCamera || canvas.worldCamera == cam)) continue;
+                    canvasStates.Add(new CanvasState
+                    {
+                        Canvas = canvas,
+                        RenderMode = canvas.renderMode,
+                        WorldCamera = canvas.worldCamera,
+                        PlaneDistance = canvas.planeDistance,
+                        SortingLayerID = canvas.sortingLayerID,
+                        SortingOrder = canvas.sortingOrder,
+                    });
+                    canvas.renderMode = RenderMode.ScreenSpaceCamera;
+                    canvas.worldCamera = cam;
+                    canvas.planeDistance = cam.nearClipPlane + 0.05f;
+                    canvas.sortingLayerID = hudSortingLayerID;
+                    cam.cullingMask |= 1 << canvas.gameObject.layer;
+                }
+                Canvas.ForceUpdateCanvases();
+
+                string hudNote = null;
+                var uiDocumentType = Type.GetType("UnityEngine.UIElements.UIDocument, UnityEngine.UIElementsModule");
+                if (uiDocumentType != null)
+                {
+#if UNITY_2023_1_OR_NEWER
+                    var documents = UnityEngine.Object.FindObjectsByType(uiDocumentType, FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#else
+                    var documents = UnityEngine.Object.FindObjectsOfType(uiDocumentType);
+#endif
+                    foreach (var document in documents)
+                    {
+                        if (document is Behaviour behaviour && behaviour.enabled && behaviour.isActiveAndEnabled)
+                        {
+                            hudNote = "UI Toolkit panels are not included in captures.";
+                            break;
+                        }
+                    }
+                }
                 Render(cam, rt);
                 RenderTexture.active = rt;
                 tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
@@ -71,7 +134,8 @@ namespace MCPForUnity.Runtime.Playtest
                 string path = System.IO.Path.GetFullPath(System.IO.Path.Combine(directory, $"{safe}_f{frame}.png"));
                 File.WriteAllBytes(path, tex.EncodeToPNG());
 
-                var result = new Result { Frame = frame, Path = path, Width = w, Height = h, Camera = cam.name, RenderMs = renderMs };
+                var result = new Result { Frame = frame, Path = path, Width = w, Height = h, Camera = cam.name, RenderMs = renderMs,
+                    HudCanvases = canvasStates.Count, HudNote = hudNote };
                 if (inlineMaxSize > 0)
                 {
                     var source = tex;
@@ -89,8 +153,20 @@ namespace MCPForUnity.Runtime.Playtest
             }
             finally
             {
+                for (int i = canvasStates.Count - 1; i >= 0; i--)
+                {
+                    var state = canvasStates[i];
+                    if (state.Canvas == null) continue;
+                    state.Canvas.renderMode = state.RenderMode;
+                    state.Canvas.worldCamera = state.WorldCamera;
+                    state.Canvas.planeDistance = state.PlaneDistance;
+                    state.Canvas.sortingLayerID = state.SortingLayerID;
+                    state.Canvas.sortingOrder = state.SortingOrder;
+                }
+                cam.cullingMask = prevCullingMask;
                 cam.targetTexture = prevTarget;
                 RenderTexture.active = prevActive;
+                Canvas.ForceUpdateCanvases();
                 RenderTexture.ReleaseTemporary(rt);
                 if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
                 if (small != null) UnityEngine.Object.DestroyImmediate(small);

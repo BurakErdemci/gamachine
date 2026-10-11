@@ -29,7 +29,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             try
             {
                 var c = PlaytestCapture.Capture(cam, PlaytestStepper.CaptureDir, "capture", maxSize, format == "jpeg");
-                return new SuccessResponse($"Captured frame {c.Frame} from camera '{c.Camera}'.", new JObject
+                var o = new JObject
                 {
                     ["frame"] = c.Frame,
                     ["path"] = c.Path,
@@ -38,11 +38,14 @@ namespace MCPForUnity.Editor.Tools.Playtest
                     ["full_width"] = c.Width,
                     ["full_height"] = c.Height,
                     ["camera"] = c.Camera,
+                    ["hud_canvases"] = c.HudCanvases,
                     ["paused"] = EditorApplication.isPaused,
                     ["render_ms"] = Math.Round(c.RenderMs, 2),
                     ["image_base64"] = c.ImageBase64,
                     ["mime"] = c.Mime,
-                });
+                };
+                if (c.HudNote != null) o["hud_note"] = c.HudNote;
+                return new SuccessResponse($"Captured frame {c.Frame} from camera '{c.Camera}'.", o);
             }
             catch (Exception e)
             {

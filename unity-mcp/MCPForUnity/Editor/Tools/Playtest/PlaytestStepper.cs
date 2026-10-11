@@ -271,7 +271,8 @@ namespace MCPForUnity.Editor.Tools.Playtest
             var cam = PlaytestCapture.FindCamera(r.Spec.Camera, out var err);
             if (cam == null) return new JObject { ["frame"] = Time.frameCount, ["error"] = err };
             var c = PlaytestCapture.Capture(cam, CaptureDir, r.Spec.CaptureLabel, inlineSize, r.Spec.Jpeg);
-            var o = new JObject { ["frame"] = c.Frame, ["path"] = c.Path };
+            var o = new JObject { ["frame"] = c.Frame, ["path"] = c.Path, ["hud_canvases"] = c.HudCanvases };
+            if (c.HudNote != null) o["hud_note"] = c.HudNote;
             if (inlineSize > 0)
             {
                 o["width"] = c.ImageWidth;
