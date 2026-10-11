@@ -8,6 +8,7 @@ from fastmcp import Context
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from core.config import config
 from services.registry import mcp_for_unity_tool
 from services.tools._playtest_common import shape_image_result
 from services.tools.unity_dialog import _NO_PROJECT, _target_project
@@ -30,6 +31,9 @@ async def unity_window_capture(
     ctx: Context,
     max_size: Annotated[int, Field(ge=256, le=1920, description="Longest side of the returned image, in pixels")] = 1280,
 ) -> Any:
+    # In remote-hosted mode, the server machine is not the caller's machine.
+    if config.http_remote_hosted:
+        return {"success": False, "error": "unity_window_capture is disabled when the server is remote-hosted: it would read the server machine's desktop, not yours."}
     if sys.platform != "win32":
         return {"success": False, "error": "unity_window_capture is only implemented on Windows so far."}
     if isinstance(max_size, bool) or not isinstance(max_size, int) or not 256 <= max_size <= 1920:

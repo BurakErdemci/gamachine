@@ -216,7 +216,12 @@ async def manage_build(
     ):
         return {"success": False, "message": "Invalid job_id."}
 
-    if action_lower in ("status", "wait"):
+    # In remote-hosted mode, the server machine is not the caller's machine.
+    if action_lower == "wait" and config.http_remote_hosted:
+        return {"success": False, "message": "manage_build wait is unavailable when the server is remote-hosted; poll action=status instead."}
+
+    # In remote-hosted mode, the server machine is not the caller's machine.
+    if action_lower in ("status", "wait") and not config.http_remote_hosted:
         project_path = await _target_project_path(ctx)
         if action_lower == "wait":
             if not project_path:

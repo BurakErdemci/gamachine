@@ -50,6 +50,9 @@ def _dialog_name(titles: list[str], dialogs: list[dict]) -> str:
 
 
 def _scoped_dialogs(project_name: str | None) -> list[dict]:
+    # In remote-hosted mode, the server machine is not the caller's machine.
+    if config.http_remote_hosted:
+        return []
     return _dialogs_for_project(_find_unity_dialogs(), project_name)
 
 

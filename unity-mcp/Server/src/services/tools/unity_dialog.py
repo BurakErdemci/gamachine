@@ -61,6 +61,10 @@ async def unity_dialog(
     if action == "press" and not button:
         return {"success": False, "error": "A button name is required for press."}
 
+    # In remote-hosted mode, the server machine is not the caller's machine.
+    if config.http_remote_hosted:
+        return {"success": False, "error": "unity_dialog is disabled when the server is remote-hosted: it would read or press dialogs on the server machine, not yours. Ask the user to answer the dialog."}
+
     project = await _target_project(ctx)
     if not project:
         if action == "list":
