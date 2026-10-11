@@ -65,6 +65,8 @@ namespace MCPForUnity.Editor.Tools.Playtest
         private static Run s_Run;
 
         public static bool Running => s_Run != null;
+        public static readonly object LogLock = new object();
+        public static bool CountingLogs { get; private set; }
 
         /// <summary>Parses play_step params (also used for scenario steps). Returns an error or null.</summary>
         public static string Parse(JObject p, out StepSpec spec)
@@ -202,7 +204,11 @@ namespace MCPForUnity.Editor.Tools.Playtest
             PlaytestDriver.Autopilot = r.Spec.Autopilot;
             PlaytestDriver.ClearErrorFlag();
             PlaytestDriver.ClearAutopilotError();
-            Application.logMessageReceivedThreaded += OnLog;
+            lock (LogLock)
+            {
+                Application.logMessageReceivedThreaded += OnLog;
+                CountingLogs = true;
+            }
             r.Phase = "running";
             NextSegment(r);
         }
@@ -293,31 +299,39 @@ namespace MCPForUnity.Editor.Tools.Playtest
 
         private static void OnLog(string condition, string stackTrace, LogType type)
         {
-            var r = s_Run;
-            if (r == null) return;
-            lock (r.Lock)
+            lock (LogLock)
             {
-                if (type == LogType.Warning) r.Warnings++;
-                else if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
+                var r = s_Run;
+                if (!CountingLogs || r == null) return;
+                lock (r.Lock)
                 {
-                    r.Errors++;
-                    if (r.FirstErrors.Count < 3) r.FirstErrors.Add($"{type}: {condition}");
-                    if (r.Spec.ErrorObserver != null)
+                    if (type == LogType.Warning) r.Warnings++;
+                    else if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
                     {
-                        bool mainThread = System.Threading.Thread.CurrentThread.ManagedThreadId == r.MainThreadId;
-                        r.Spec.ErrorObserver(condition, mainThread ? Time.frameCount : r.LastObservedFrame, mainThread);
+                        r.Errors++;
+                        if (r.FirstErrors.Count < 3) r.FirstErrors.Add($"{type}: {condition}");
+                        if (r.Spec.ErrorObserver != null)
+                        {
+                            bool mainThread = System.Threading.Thread.CurrentThread.ManagedThreadId == r.MainThreadId;
+                            r.Spec.ErrorObserver(condition, mainThread ? Time.frameCount : r.LastObservedFrame, mainThread);
+                        }
+                        PlaytestDriver.NotifyErrorLogged();
                     }
-                    PlaytestDriver.NotifyErrorLogged();
                 }
             }
         }
 
         private static void Complete(string stoppedBy, string error)
         {
-            var r = s_Run;
-            s_Run = null;
+            Run r;
+            lock (LogLock)
+            {
+                r = s_Run;
+                s_Run = null;
+                CountingLogs = false;
+                Application.logMessageReceivedThreaded -= OnLog;
+            }
             EditorApplication.update -= Tick;
-            Application.logMessageReceivedThreaded -= OnLog;
             PlaytestDriver.Disarm();
             PlaytestDriver.Autopilot = false;
             if (r == null) return;

@@ -129,7 +129,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             spec.SampleFrames = (int)Math.Min(int.MaxValue, Math.Max(1, Math.Ceiling(spec.SampleSeconds / spec.Dt)));
             spec.CaptureFrames = (int)Math.Min(int.MaxValue, Math.Max(1, Math.Ceiling(spec.CaptureSeconds / spec.Dt)));
             int firstFrames = Math.Min(600, Math.Min(spec.Frames, spec.SampleFrames));
-            if (spec.Seeds == null) firstFrames = Math.Min(firstFrames, spec.CaptureFrames);
+            if (spec.Runs == 1) firstFrames = Math.Min(firstFrames, spec.CaptureFrames);
             if (Present(p["input"]))
             {
                 if (!(p["input"] is JArray inputs)) return "input must be a list.";
@@ -182,7 +182,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             // Starting on the next editor update lets the command return before any game hook runs.
             EditorApplication.delayCall += () => { _ = Execute(job); };
             data = new JObject { ["job_id"] = job.Id, ["runs"] = spec.Runs, ["seconds"] = spec.Seconds,
-                ["capture_every_seconds"] = spec.CaptureSeconds, ["status"] = "running" };
+                ["capture_every_seconds"] = spec.Runs == 1 ? new JValue(spec.CaptureSeconds) : JValue.CreateNull(), ["status"] = "running" };
             return null;
         }
 
@@ -229,16 +229,19 @@ namespace MCPForUnity.Editor.Tools.Playtest
         {
             var job = s_Job;
             if (job == null) return;
-            lock (job.LogLock)
+            lock (PlaytestStepper.LogLock)
             {
-                // The stepper reports its own segment totals and calls the same error observer.
-                if (job.Done || PlaytestStepper.Running) return;
-                if (type == LogType.Warning) job.WarningCount++;
-                else if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
+                lock (job.LogLock)
                 {
-                    job.ErrorCount++;
-                    bool exact = System.Threading.Thread.CurrentThread.ManagedThreadId == job.MainThreadId;
-                    RecordError(job, condition, exact ? Time.frameCount : job.LastObservedFrame, exact);
+                    // The stepper reports its own segment totals while its log handler is subscribed.
+                    if (job.Done || PlaytestStepper.CountingLogs) return;
+                    if (type == LogType.Warning) job.WarningCount++;
+                    else if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
+                    {
+                        job.ErrorCount++;
+                        bool exact = System.Threading.Thread.CurrentThread.ManagedThreadId == job.MainThreadId;
+                        RecordError(job, condition, exact ? Time.frameCount : job.LastObservedFrame, exact);
+                    }
                 }
             }
         }
@@ -338,7 +341,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             var clock = Stopwatch.StartNew();
             long memory = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong();
             var result = new JObject { ["index"] = index, ["seed"] = seed.HasValue ? new JValue(seed.Value) : JValue.CreateNull(),
-                ["capture_every_seconds"] = spec.CaptureSeconds,
+                ["capture_every_seconds"] = spec.Runs == 1 ? new JValue(spec.CaptureSeconds) : JValue.CreateNull(),
                 ["errors"] = 0, ["warnings"] = 0, ["timeline"] = new JArray(), ["captures"] = new JArray(), ["first_errors"] = new JArray() };
             lock (job.LogLock)
             {
@@ -371,7 +374,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
                     if (StopForErrors(job, ref stoppedBy, ref reason)) break;
                     if (!PlaytestSession.Active) { End(job, "aborted", "Play session ended."); break; }
                     int segment = Math.Min(600, Math.Min(spec.Frames - frames, nextSample - frames));
-                    if (spec.Seeds == null && timed < 8) segment = (int)Math.Min(segment, nextCapture - frames);
+                    if (spec.Runs == 1 && timed < 8) segment = (int)Math.Min(segment, nextCapture - frames);
                     var step = new StepSpec { Frames = segment, Autopilot = spec.Step.Autopilot,
                         Input = frames == 0 ? spec.Step.Input : null, UntilHook = spec.Step.UntilHook,
                         UntilOp = spec.Step.UntilOp, UntilValue = spec.Step.UntilValue, Watch = new List<string>(),
@@ -410,7 +413,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
                         nextSample = (int)Math.Min(int.MaxValue, (long)frames + spec.SampleFrames);
                     }
                     if (StopForErrors(job, ref stoppedBy, ref reason)) break;
-                    if (spec.Seeds == null && timed < 8 && frames >= nextCapture)
+                    if (spec.Runs == 1 && timed < 8 && frames >= nextCapture)
                     {
                         Capture(job, result, frames, "timed");
                         timed++;
@@ -488,9 +491,9 @@ namespace MCPForUnity.Editor.Tools.Playtest
         private static void BuildImages(Job job)
         {
             var captures = job.Results.OfType<JObject>().SelectMany(r => ((JArray)r["captures"]).OfType<JObject>())
-                .Where(c => c["path"] != null && (job.Spec.Seeds == null || c["why"].ToString() == "end")).ToList();
+                .Where(c => c["path"] != null && (job.Spec.Runs == 1 || c["why"].ToString() == "end")).ToList();
             // In batch mode the run order is also the chronological frame order, even if a restart resets game time.
-            if (job.Spec.Seeds == null) captures = captures.OrderBy(c => c["frame"].Value<int>()).ToList();
+            if (job.Spec.Runs == 1) captures = captures.OrderBy(c => c["frame"].Value<int>()).ToList();
             var selected = captures.Take(12).ToList();
             if (selected.Count > 0)
             {
@@ -544,7 +547,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             if (!job.Done && job.Current != null) frames = Math.Max(frames, Math.Max(0, Time.frameCount - job.StartFrame));
             var data = new JObject { ["job_id"] = job.Id, ["status"] = job.Done ? "done" : "running",
                 ["run_index"] = job.RunIndex, ["runs"] = job.Spec.Runs, ["elapsed_wall_s"] = job.Clock.Elapsed.TotalSeconds,
-                ["capture_every_seconds"] = job.Spec.CaptureSeconds,
+                ["capture_every_seconds"] = job.Spec.Runs == 1 ? new JValue(job.Spec.CaptureSeconds) : JValue.CreateNull(),
                 ["progress"] = new JObject { ["run"] = job.RunIndex, ["game_seconds"] = frames * job.Spec.Dt } };
             if (job.Done)
             {

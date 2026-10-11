@@ -45,6 +45,9 @@ namespace MCPForUnity.Runtime.Playtest
         private static Keyboard s_Keyboard;
         private static Mouse s_Mouse;
         private static Gamepad s_Gamepad;
+        private static readonly Dictionary<InputControl<float>, float> s_HeldControls = new Dictionary<InputControl<float>, float>();
+        private static readonly HashSet<InputControl<float>> s_PendingReleases = new HashSet<InputControl<float>>();
+        private static bool s_WarnedUnsupportedRelease;
 
         /// <summary>True when frame prologues come from the Input System before-update hook (then the early Update skips).</summary>
         public static bool DrivesPrologue => s_Subscribed && InputSystem.settings.updateMode == InputSettings.UpdateMode.ProcessEventsInDynamicUpdate;
@@ -53,6 +56,9 @@ namespace MCPForUnity.Runtime.Playtest
 
         public static JObject BeginSession()
         {
+            s_HeldControls.Clear();
+            s_PendingReleases.Clear();
+            s_WarnedUnsupportedRelease = false;
             var settings = InputSystem.settings;
             if (!s_SessionActive && !LoadOriginals())
             {
@@ -68,6 +74,7 @@ namespace MCPForUnity.Runtime.Playtest
             if (!s_Subscribed)
             {
                 InputSystem.onBeforeUpdate += OnBeforeUpdate;
+                InputSystem.onAfterUpdate += OnAfterUpdate;
                 s_Subscribed = true;
             }
             return new JObject
@@ -80,9 +87,15 @@ namespace MCPForUnity.Runtime.Playtest
 
         public static void EndSession()
         {
-            if (s_Subscribed) InputSystem.onBeforeUpdate -= OnBeforeUpdate;
+            if (s_Subscribed)
+            {
+                InputSystem.onBeforeUpdate -= OnBeforeUpdate;
+                InputSystem.onAfterUpdate -= OnAfterUpdate;
+            }
             s_Subscribed = false;
             s_Queue.Clear();
+            s_HeldControls.Clear();
+            s_PendingReleases.Clear();
             RemoveDevice(ref s_Keyboard);
             RemoveDevice(ref s_Mouse);
             RemoveDevice(ref s_Gamepad);
@@ -235,6 +248,29 @@ namespace MCPForUnity.Runtime.Playtest
             FramePrologue();
         }
 
+        private static void OnAfterUpdate()
+        {
+            if (InputState.currentUpdateType == InputUpdateType.Dynamic) s_PendingReleases.Clear();
+        }
+
+        private static bool TryWriteRelease(InputControl<float> control, InputEventPtr eventPtr)
+        {
+            try
+            {
+                control.WriteValueIntoEvent(0f, eventPtr);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                if (!s_WarnedUnsupportedRelease)
+                {
+                    s_WarnedUnsupportedRelease = true;
+                    Debug.LogWarning($"[Playtest] Skipping unsupported release for '{control.path}' ({control.GetType().Name}): {ex.Message}");
+                }
+                return false;
+            }
+        }
+
         private static void Dispatch(List<Change> changes)
         {
             var byDevice = new Dictionary<InputDevice, List<(InputControl<float> control, float value)>>();
@@ -254,7 +290,18 @@ namespace MCPForUnity.Runtime.Playtest
             {
                 using (StateEvent.From(kv.Key, out var eventPtr))
                 {
-                    foreach (var (control, value) in kv.Value) control.WriteValueIntoEvent(value, eventPtr);
+                    // Before-update dispatch can run before queued releases have reached the device state.
+                    foreach (var control in s_PendingReleases)
+                        if (control.device == kv.Key) TryWriteRelease(control, eventPtr);
+                    foreach (var (control, value) in kv.Value)
+                    {
+                        control.WriteValueIntoEvent(value, eventPtr);
+                        if (control is ButtonControl || control.device is Gamepad)
+                        {
+                            if (value == 0f) s_HeldControls.Remove(control);
+                            else s_HeldControls[control] = value;
+                        }
+                    }
                     InputSystem.QueueEvent(eventPtr);
                 }
             }
@@ -288,9 +335,30 @@ namespace MCPForUnity.Runtime.Playtest
         public static void ReleaseAll()
         {
 #if MCP_FOR_UNITY_INPUT_SYSTEM
-            if (s_Keyboard != null && s_Keyboard.added) InputSystem.ResetDevice(s_Keyboard, true);
-            if (s_Mouse != null && s_Mouse.added) InputSystem.ResetDevice(s_Mouse, true);
-            if (s_Gamepad != null && s_Gamepad.added) InputSystem.ResetDevice(s_Gamepad, true);
+            var byDevice = new Dictionary<InputDevice, List<InputControl<float>>>();
+            foreach (var control in s_HeldControls.Keys)
+            {
+                if (!control.device.added) continue;
+                if (!byDevice.TryGetValue(control.device, out var list)) byDevice[control.device] = list = new List<InputControl<float>>();
+                list.Add(control);
+            }
+            foreach (var kv in byDevice)
+            {
+                using (StateEvent.From(kv.Key, out var eventPtr))
+                {
+                    bool written = false;
+                    foreach (var control in s_PendingReleases)
+                        if (control.device == kv.Key) written |= TryWriteRelease(control, eventPtr);
+                    foreach (var control in kv.Value)
+                    {
+                        if (!TryWriteRelease(control, eventPtr)) continue;
+                        s_PendingReleases.Add(control);
+                        written = true;
+                    }
+                    if (written) InputSystem.QueueEvent(eventPtr);
+                }
+            }
+            s_HeldControls.Clear();
 #endif
         }
 
