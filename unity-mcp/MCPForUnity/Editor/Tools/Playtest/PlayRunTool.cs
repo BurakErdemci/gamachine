@@ -229,19 +229,16 @@ namespace MCPForUnity.Editor.Tools.Playtest
         {
             var job = s_Job;
             if (job == null) return;
-            lock (PlaytestStepper.LogLock)
+            lock (job.LogLock)
             {
-                lock (job.LogLock)
+                // This handler is the only owner of the job totals; segment results are not added to them.
+                if (job.Done) return;
+                if (type == LogType.Warning) job.WarningCount++;
+                else if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
                 {
-                    // The stepper reports its own segment totals while its log handler is subscribed.
-                    if (job.Done || PlaytestStepper.CountingLogs) return;
-                    if (type == LogType.Warning) job.WarningCount++;
-                    else if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
-                    {
-                        job.ErrorCount++;
-                        bool exact = System.Threading.Thread.CurrentThread.ManagedThreadId == job.MainThreadId;
-                        RecordError(job, condition, exact ? Time.frameCount : job.LastObservedFrame, exact);
-                    }
+                    job.ErrorCount++;
+                    bool exact = System.Threading.Thread.CurrentThread.ManagedThreadId == job.MainThreadId;
+                    RecordError(job, condition, exact ? Time.frameCount : job.LastObservedFrame, exact);
                 }
             }
         }
@@ -378,16 +375,13 @@ namespace MCPForUnity.Editor.Tools.Playtest
                     var step = new StepSpec { Frames = segment, Autopilot = spec.Step.Autopilot,
                         Input = frames == 0 ? spec.Step.Input : null, UntilHook = spec.Step.UntilHook,
                         UntilOp = spec.Step.UntilOp, UntilValue = spec.Step.UntilValue, Watch = new List<string>(),
-                        TimeoutS = Math.Min(25 + segment / 30.0, Math.Max(0.1, 3600 - job.Clock.Elapsed.TotalSeconds)),
-                        ErrorObserver = (message, frame, exact) => RecordError(job, message, frame, exact) };
+                        TimeoutS = Math.Min(25 + segment / 30.0, Math.Max(0.1, 3600 - job.Clock.Elapsed.TotalSeconds)) };
                     int before = Time.frameCount;
                     var data = await PlaytestStepper.Start(step);
                     frames += Math.Max(0, Time.frameCount - before);
                     result["frames"] = frames;
                     lock (job.LogLock)
                     {
-                        job.ErrorCount += data["errors"]?.Value<int>() ?? 0;
-                        job.WarningCount += data["warnings"]?.Value<int>() ?? 0;
                         job.LastObservedFrame = Time.frameCount;
                     }
                     UpdateErrors(job);
