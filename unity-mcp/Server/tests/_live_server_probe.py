@@ -211,7 +211,7 @@ class FakeEditors:
 
     EDITORS = (("ProbeA", "aaaa1111"), ("ProbeB", "bbbb2222"))
     TOOLS = ["read_console", "manage_scene", "manage_gameobject", "manage_editor",
-             "play_step", "play_session", "play_capture", "game_hooks", "run_playtest"]
+             "play_step", "play_session", "play_capture", "game_hooks", "run_playtest", "play_run"]
 
     def __init__(self, port: int):
         self.url = f"ws://127.0.0.1:{port}/hub/plugin"

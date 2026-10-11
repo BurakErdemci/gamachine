@@ -27,7 +27,7 @@ from services.tools.play_step import MAX_FRAMES, play_step, step_timeout_s
 from services.tools.run_playtest import run_playtest
 from utils.module_discovery import discover_modules
 
-PLAYTEST_TOOLS = {"game_hooks", "play_session", "play_step", "play_capture", "run_playtest"}
+PLAYTEST_TOOLS = {"game_hooks", "play_session", "play_step", "play_capture", "run_playtest", "play_run"}
 
 JPEG_B64 = base64.b64encode(b"\xff\xd8\xff\xe0fakejpeg").decode()
 PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nfakepng").decode()
@@ -138,6 +138,11 @@ def test_http_startup_leaves_playtest_visible(monkeypatch):
         ("run_playtest", {}, WRITE),
         ("run_playtest", {"action": "start"}, WRITE),
         ("run_playtest", {"action": "status"}, READ),
+        ("play_run", {}, WRITE),
+        ("play_run", {"action": "start"}, WRITE),
+        ("play_run", {"action": "stop"}, WRITE),
+        ("play_run", {"action": "status"}, READ),
+        ("play_run", {"action": "wait"}, READ),
     ],
 )
 def test_classification(tool, params, expected):

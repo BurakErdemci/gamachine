@@ -1041,6 +1041,17 @@
       "evidence": "unity-mcp/Server/src/services/tools/play_capture.py:16",
       "note": "Writes a full-resolution PNG under <project>/Library/GamachineCaptures/ on every call (same reasoning as manage_camera screenshot: a file on disk is a write even though the call looks passive)."
     },
+    "play_run": {
+      "action_param": "action",
+      "tool_level": null,
+      "default_action": "start",
+      "read_actions": ["status", "wait"],
+      "write_actions": ["start", "stop"],
+      "critical_actions": [],
+      "param_dependent": [],
+      "evidence": "unity-mcp/Server/src/services/tools/play_run.py",
+      "note": "start advances the active play session with input and autopilot; seeded runs call level.restart. start writes capture files under Library/GamachineCaptures. stop aborts the segment and finalizes the job; status and wait only read progress and results."
+    },
     "run_playtest": {
       "action_param": "action",
       "tool_level": null,

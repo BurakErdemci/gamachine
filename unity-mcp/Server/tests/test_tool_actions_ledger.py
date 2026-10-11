@@ -160,6 +160,8 @@ PINNED_READ_SURFACE: frozenset[str] = frozenset({
     "manage_vfx:vfx_list_assets",
     "manage_vfx:vfx_list_templates",
     "play_session:status",
+    "play_run:status",
+    "play_run:wait",
     "read_console:get",
     # Owner decision 25 Sep 2026: status only reports the last playtest job.
     "run_playtest:status",

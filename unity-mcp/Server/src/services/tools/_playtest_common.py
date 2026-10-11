@@ -39,9 +39,10 @@ TRANSPORT_GAP_S = 60.0
 RESENDABLE = frozenset({
     ("play_session", "status"),
     ("run_playtest", "status"),
+    ("play_run", "status"),
     ("game_hooks", "list"),
 })
-PLAYTEST_COMMANDS = frozenset({"game_hooks", "play_session", "play_step", "play_capture", "run_playtest"})
+PLAYTEST_COMMANDS = frozenset({"game_hooks", "play_session", "play_step", "play_capture", "run_playtest", "play_run"})
 
 # Module-level aliases so tests can fake the clock without patching asyncio's own.
 monotonic = time.monotonic
@@ -249,7 +250,8 @@ def _sniff_mime(b64: str) -> str:
     return "image/jpeg"
 
 
-def shape_image_result(response: dict[str, Any], image_key: str | None = None) -> Any:
+def shape_image_result(response: dict[str, Any], image_key: str | None = None,
+                       *, extra_image_keys: tuple[str, ...] = ()) -> Any:
     """Turn image_base64 into one MCP ImageContent plus compact JSON text.
 
     The image fields sit in `data` (play_capture) or in `data[image_key]`
@@ -259,24 +261,32 @@ def shape_image_result(response: dict[str, Any], image_key: str | None = None) -
     data = response.get("data")
     if not isinstance(data, dict):
         return response
-    fields = data.get(image_key) if image_key else data
-    if not isinstance(fields, dict) or not fields.get("image_base64"):
-        return response
-
     from fastmcp.tools import ToolResult
     from mcp.types import ImageContent, TextContent
 
-    image_b64 = fields["image_base64"]
-    mime = fields.get("mime")
-    if not isinstance(mime, str) or not mime:
-        mime = _sniff_mime(image_b64)
-    stripped = {k: v for k, v in fields.items() if k != "image_base64"}
-    text_data = {**data, image_key: stripped} if image_key else stripped
+    text_data = dict(data)
+    images = []
+    for key in (image_key, *extra_image_keys):
+        fields = data.get(key) if key else data
+        if not isinstance(fields, dict) or not fields.get("image_base64"):
+            continue
+        image_b64 = fields["image_base64"]
+        mime = fields.get("mime")
+        if not isinstance(mime, str) or not mime:
+            mime = _sniff_mime(image_b64)
+        images.append(ImageContent(type="image", data=image_b64, mimeType=mime))
+        stripped = {k: v for k, v in fields.items() if k != "image_base64"}
+        if key:
+            text_data[key] = stripped
+        else:
+            text_data.pop("image_base64", None)
+    if not images:
+        return response
     text = {k: v for k, v in response.items() if k != "data"}
     text["data"] = text_data
     return ToolResult(
         content=[
             TextContent(type="text", text=json.dumps(text, separators=(",", ":"), ensure_ascii=False)),
-            ImageContent(type="image", data=image_b64, mimeType=mime),
+            *images,
         ],
     )

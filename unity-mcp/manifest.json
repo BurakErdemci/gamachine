@@ -194,6 +194,10 @@
       "description": "Capture the game camera at the current paused play-session frame (playtest group)"
     },
     {
+      "name": "play_run",
+      "description": "Run background single or seeded batch plays of the current session, with timelines and a contact sheet (playtest group)"
+    },
+    {
       "name": "play_session",
       "description": "Start, inspect, and stop a deterministic paused play session (playtest group)"
     },

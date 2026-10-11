@@ -180,6 +180,76 @@ namespace MCPForUnity.Runtime.Playtest
             }
         }
 
+        /// <summary>Composes at most twelve captures in caller order, with four 320-pixel columns.</summary>
+        public static Result ComposeContactSheet(IReadOnlyList<string> paths, string path)
+        {
+            var sources = new List<Texture2D>();
+            Texture2D sheet = null;
+            try
+            {
+                int cellHeight = 1;
+                for (int i = 0; i < Math.Min(12, paths.Count); i++)
+                {
+                    var source = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                    sources.Add(source);
+                    if (!source.LoadImage(File.ReadAllBytes(paths[i])))
+                        throw new IOException($"Could not load capture '{paths[i]}'.");
+                    cellHeight = Math.Max(cellHeight, Math.Max(1, Mathf.RoundToInt(320f * source.height / source.width)));
+                }
+                if (sources.Count == 0) return null;
+                int rows = (sources.Count + 3) / 4;
+                sheet = new Texture2D(1280, rows * cellHeight, TextureFormat.RGB24, false);
+                var background = new Color32[sheet.width * sheet.height];
+                for (int i = 0; i < background.Length; i++) background[i] = new Color32(24, 24, 28, 255);
+                sheet.SetPixels32(background);
+                for (int i = 0; i < sources.Count; i++)
+                {
+                    var source = sources[i];
+                    int height = Math.Max(1, Mathf.RoundToInt(320f * source.height / source.width));
+                    int x0 = (i % 4) * 320;
+                    int y0 = (rows - 1 - i / 4) * cellHeight + (cellHeight - height) / 2;
+                    for (int y = 0; y < height; y++)
+                        for (int x = 0; x < 320; x++)
+                            sheet.SetPixel(x0 + x, y0 + y, source.GetPixelBilinear((x + 0.5f) / 320, (y + 0.5f) / height));
+                }
+                sheet.Apply();
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+                File.WriteAllBytes(path, sheet.EncodeToJPG(85));
+                return InlineImage(sheet, path, 1280);
+            }
+            finally
+            {
+                if (sheet != null) UnityEngine.Object.DestroyImmediate(sheet);
+                foreach (var source in sources) UnityEngine.Object.DestroyImmediate(source);
+            }
+        }
+
+        public static Result LoadInlineImage(string path, int maxSize)
+        {
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            try
+            {
+                if (!texture.LoadImage(File.ReadAllBytes(path))) throw new IOException($"Could not load capture '{path}'.");
+                return InlineImage(texture, path, maxSize);
+            }
+            finally { UnityEngine.Object.DestroyImmediate(texture); }
+        }
+
+        private static Result InlineImage(Texture2D texture, string path, int maxSize)
+        {
+            Texture2D small = null;
+            try
+            {
+                var source = texture;
+                if (texture.width > maxSize || texture.height > maxSize)
+                    source = small = ScreenshotUtility.DownscaleTexture(texture, maxSize);
+                return new Result { Path = path, Width = texture.width, Height = texture.height,
+                    ImageWidth = source.width, ImageHeight = source.height,
+                    ImageBase64 = Convert.ToBase64String(source.EncodeToJPG(85)), Mime = "image/jpeg" };
+            }
+            finally { if (small != null) UnityEngine.Object.DestroyImmediate(small); }
+        }
+
         private static void Render(Camera cam, RenderTexture rt)
         {
 #if UNITY_2023_1_OR_NEWER

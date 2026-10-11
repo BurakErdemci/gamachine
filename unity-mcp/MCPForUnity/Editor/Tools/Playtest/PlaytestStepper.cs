@@ -29,6 +29,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
         public string Camera;
         public string CaptureLabel = "step";
         public double TimeoutS = 25;
+        public Action<string, int, bool> ErrorObserver;
     }
 
     /// <summary>
@@ -56,6 +57,8 @@ namespace MCPForUnity.Editor.Tools.Playtest
             public int Errors;
             public int Warnings;
             public List<string> FirstErrors = new List<string>();
+            public int LastObservedFrame;
+            public int MainThreadId;
             public readonly object Lock = new object();
         }
 
@@ -147,7 +150,8 @@ namespace MCPForUnity.Editor.Tools.Playtest
             var dialogTitle = UnityModalDialogProbe.FindOpenDialogTitle();
             if (dialogTitle != null) { tcs.SetResult(Error(DialogBlockedError(dialogTitle))); return tcs.Task; }
 
-            s_Run = new Run { Spec = spec, Tcs = tcs, Clock = Stopwatch.StartNew() };
+            s_Run = new Run { Spec = spec, Tcs = tcs, Clock = Stopwatch.StartNew(), LastObservedFrame = Time.frameCount,
+                MainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId };
             if (!EditorApplication.isPaused) EditorApplication.isPaused = true;
             EditorApplication.update += Tick;
             return tcs.Task;
@@ -177,6 +181,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
         private static void Begin(Run r)
         {
             r.F0 = Time.frameCount;
+            r.LastObservedFrame = r.F0;
             r.Target = r.F0 + r.Spec.Frames;
             if (r.Spec.Input != null)
             {
@@ -219,6 +224,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             if (r == null) { EditorApplication.update -= Tick; return; }
             try
             {
+                lock (r.Lock) r.LastObservedFrame = Time.frameCount;
                 if (!EditorApplication.isPlaying || !PlaytestDriver.Installed) { Complete("error", "play mode ended while stepping"); return; }
                 if (r.Clock.Elapsed.TotalSeconds > r.Spec.TimeoutS)
                 {
@@ -296,6 +302,11 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 {
                     r.Errors++;
                     if (r.FirstErrors.Count < 3) r.FirstErrors.Add($"{type}: {condition}");
+                    if (r.Spec.ErrorObserver != null)
+                    {
+                        bool mainThread = System.Threading.Thread.CurrentThread.ManagedThreadId == r.MainThreadId;
+                        r.Spec.ErrorObserver(condition, mainThread ? Time.frameCount : r.LastObservedFrame, mainThread);
+                    }
                     PlaytestDriver.NotifyErrorLogged();
                 }
             }
