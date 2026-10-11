@@ -74,11 +74,7 @@ namespace MCPForUnity.Runtime.Playtest
             try
             {
                 // Overlay UI is composited after cameras and never reaches their target textures, so retarget it while paused.
-#if UNITY_2023_1_OR_NEWER
-                var canvases = UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-#else
-                var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
-#endif
+                var canvases = UnityFindObjectsCompat.FindAll<Canvas>();
                 var sortingLayers = SortingLayer.layers;
                 int hudSortingLayerID = sortingLayers[sortingLayers.Length - 1].id;
                 foreach (var canvas in canvases)
@@ -107,11 +103,7 @@ namespace MCPForUnity.Runtime.Playtest
                 var uiDocumentType = Type.GetType("UnityEngine.UIElements.UIDocument, UnityEngine.UIElementsModule");
                 if (uiDocumentType != null)
                 {
-#if UNITY_2023_1_OR_NEWER
-                    var documents = UnityEngine.Object.FindObjectsByType(uiDocumentType, FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-#else
-                    var documents = UnityEngine.Object.FindObjectsOfType(uiDocumentType);
-#endif
+                    var documents = UnityFindObjectsCompat.FindAll(uiDocumentType);
                     foreach (var document in documents)
                     {
                         if (document is Behaviour behaviour && behaviour.enabled && behaviour.isActiveAndEnabled)
