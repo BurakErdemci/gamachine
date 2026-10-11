@@ -288,7 +288,8 @@
 .unity-path, .unity-hint, .unity-why-btn, .unity-why { display: none; }
 .unity-path { color: var(--shell-text-dim); font-family: var(--font-mono); font-size: 13px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .unity-path::before, .unity-hint::before { content: "·"; margin: 0 8px; font-family: var(--font-body); }
-.unity-hint { color: var(--shell-text-dim); font-size: var(--fs-small); white-space: nowrap; }
+/* the hint gives way like the project name: in a narrow window it ran past the bay into the sidebar toggle */
+.unity-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--shell-text-dim); font-size: var(--fs-small); white-space: nowrap; }
 .unity-why-btn { margin-left: 10px; color: var(--shell-text-dim); font-size: var(--fs-small); text-decoration: underline dotted; text-underline-offset: 3px; }
 .unity-why-btn:hover { color: var(--shell-text); }
 .unity-why {
