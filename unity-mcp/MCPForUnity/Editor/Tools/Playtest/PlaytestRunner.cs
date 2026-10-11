@@ -74,6 +74,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
         public static string Start(string path, string glob, int? seedOverride, out string jobId)
         {
             jobId = null;
+            if (PlaytestRun.Running) return "a play_run job is running; stop it or wait for it first.";
             if (Running) return $"run_playtest job {s_Job.jobId} is still running; poll status.";
             if (PlaytestSession.Busy || PlaytestSession.Active || EditorApplication.isPlaying)
                 return "Unity is in play mode or a play session is open; stop it before run_playtest.";

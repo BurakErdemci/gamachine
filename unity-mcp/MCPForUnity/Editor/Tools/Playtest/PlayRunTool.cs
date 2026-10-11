@@ -61,6 +61,10 @@ namespace MCPForUnity.Editor.Tools.Playtest
             public bool Done;
             public string EndBy, EndReason;
             public JObject Images = new JObject();
+            public readonly object LogLock = new object();
+            public readonly Dictionary<string, JObject> Errors = new Dictionary<string, JObject>();
+            public int ErrorCount, WarningCount, LastObservedFrame;
+            public int MainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
         }
 
         private static Job s_Job;
@@ -80,8 +84,10 @@ namespace MCPForUnity.Editor.Tools.Playtest
             spec = new Spec();
             if (!Number(p["seconds"] ?? new JValue(120), 1, 1800, out spec.Seconds)) return "seconds must be a finite number in 1..1800.";
             if (!Number(p["sample_seconds"] ?? new JValue(5), 0.5, 60, out spec.SampleSeconds)) return "sample_seconds must be a finite number in 0.5..60.";
-            if (!Number(p["capture_every_seconds"] ?? new JValue(Math.Max(1, spec.Seconds / 8)), 1, double.MaxValue, out spec.CaptureSeconds))
+            double seconds = spec.Seconds;
+            if (!Number(p["capture_every_seconds"] ?? new JValue(Math.Max(1, seconds / 8)), 1, double.MaxValue, out spec.CaptureSeconds))
                 return "capture_every_seconds must be a finite number >= 1.";
+            spec.CaptureSeconds = Math.Max(spec.CaptureSeconds, seconds / 8);
             foreach (string name in new[] { "autopilot", "stop_on_error" })
                 if (p[name] != null && p[name].Type != JTokenType.Boolean) return name + " must be a boolean.";
             spec.StopOnError = p["stop_on_error"]?.Value<bool>() ?? true;
@@ -162,18 +168,21 @@ namespace MCPForUnity.Editor.Tools.Playtest
         public static string Start(JObject p, out JObject data)
         {
             data = null;
+            if (PlaytestRunner.Running) return "a run_playtest job is running; wait for it to finish.";
             if (!PlaytestSession.Active) return "no active play session; call play_session start first.";
             if (PlaytestSession.Busy || PlaytestStepper.Running || Running) return "a play session operation, step or play_run job is already running.";
             PlaytestHookDiscovery.Ensure();
             string error = Parse(p, out var spec);
             if (error != null) return error;
-            var job = s_Job = new Job { Spec = spec };
+            var job = s_Job = new Job { Spec = spec, LastObservedFrame = Time.frameCount };
+            Application.logMessageReceivedThreaded += OnLog;
             EditorApplication.update += Tick;
             EditorApplication.playModeStateChanged += OnPlayMode;
             AssemblyReloadEvents.beforeAssemblyReload += OnReload;
             // Starting on the next editor update lets the command return before any game hook runs.
             EditorApplication.delayCall += () => { _ = Execute(job); };
-            data = new JObject { ["job_id"] = job.Id, ["runs"] = spec.Runs, ["seconds"] = spec.Seconds, ["status"] = "running" };
+            data = new JObject { ["job_id"] = job.Id, ["runs"] = spec.Runs, ["seconds"] = spec.Seconds,
+                ["capture_every_seconds"] = spec.CaptureSeconds, ["status"] = "running" };
             return null;
         }
 
@@ -190,6 +199,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
         private static void Tick()
         {
             if (!Running) return;
+            lock (s_Job.LogLock) s_Job.LastObservedFrame = Time.frameCount;
             if (s_Job.Clock.Elapsed.TotalSeconds >= 3600) End(s_Job, "wall_clock", "Job reached the 3600 s wall clock limit.");
             else if (!PlaytestSession.Active) End(s_Job, "aborted", "Play session ended while play_run was running.");
         }
@@ -198,7 +208,68 @@ namespace MCPForUnity.Editor.Tools.Playtest
             if (state == PlayModeStateChange.ExitingPlayMode || state == PlayModeStateChange.EnteredEditMode)
                 End(s_Job, "aborted", "Play mode exited while play_run was running.");
         }
-        private static void OnReload() => End(s_Job, "aborted", "Scripts reloaded while play_run was running.");
+        private static void OnReload()
+        {
+            try { End(s_Job, "aborted", "Scripts reloaded while play_run was running."); }
+            finally { Application.logMessageReceivedThreaded -= OnLog; }
+        }
+
+        private static void RecordError(Job job, string message, int frame, bool exact)
+        {
+            lock (job.LogLock)
+            {
+                if (job.Errors.TryGetValue(message, out var known)) known["count"] = known["count"].Value<int>() + 1;
+                else if (job.Errors.Count < 20) job.Errors[message] = new JObject { ["message"] = message,
+                    ["frame"] = frame, ["count"] = 1,
+                    ["frame_source"] = exact ? "game frame" : "last editor-observed frame (background-thread log)" };
+            }
+        }
+
+        private static void OnLog(string condition, string stackTrace, LogType type)
+        {
+            var job = s_Job;
+            if (job == null) return;
+            lock (job.LogLock)
+            {
+                // The stepper reports its own segment totals and calls the same error observer.
+                if (job.Done || PlaytestStepper.Running) return;
+                if (type == LogType.Warning) job.WarningCount++;
+                else if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
+                {
+                    job.ErrorCount++;
+                    bool exact = System.Threading.Thread.CurrentThread.ManagedThreadId == job.MainThreadId;
+                    RecordError(job, condition, exact ? Time.frameCount : job.LastObservedFrame, exact);
+                }
+            }
+        }
+
+        private static bool StopForErrors(Job job, ref string stoppedBy, ref string reason)
+        {
+            lock (job.LogLock)
+            {
+                if (!job.Spec.StopOnError || job.ErrorCount == 0) return false;
+                stoppedBy = "error";
+                reason = reason ?? job.Errors.Keys.FirstOrDefault() ?? "An error was logged during the run.";
+                return true;
+            }
+        }
+
+        private static void UpdateErrors(Job job)
+        {
+            lock (job.LogLock)
+            {
+                if (job.Current == null) return;
+                job.Current["errors"] = job.ErrorCount;
+                job.Current["warnings"] = job.WarningCount;
+                job.Current["first_errors"] = new JArray(job.Errors.Values.Select(e => e.DeepClone()));
+                if (job.Spec.StopOnError && job.ErrorCount > 0 && job.EndBy == null)
+                {
+                    job.Current["stopped_by"] = "error";
+                    if (job.Current["stop_reason"] == null)
+                        job.Current["stop_reason"] = job.Errors.Keys.FirstOrDefault() ?? "An error was logged during the run.";
+                }
+            }
+        }
 
         public static async Task Stop()
         {
@@ -227,21 +298,36 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 job.Images["result_error"] = ex.GetType().Name + ": " + ex.Message;
                 if (job.Current != null && !job.Results.Contains(job.Current))
                 {
-                    job.Current["stopped_by"] = "aborted";
-                    job.Current["stop_reason"] = ex.Message;
+                    string stoppedBy = "aborted", reason = ex.Message;
+                    StopForErrors(job, ref stoppedBy, ref reason);
+                    job.Current["stopped_by"] = job.EndBy ?? stoppedBy;
+                    job.Current["stop_reason"] = job.EndReason ?? reason;
                     job.Results.Add(job.Current);
                 }
             }
             finally
             {
-                PlaytestDriver.StopOnError = previousStopOnError;
-                PlaytestDriver.Autopilot = false;
-                EditorApplication.update -= Tick;
-                EditorApplication.playModeStateChanged -= OnPlayMode;
-                AssemblyReloadEvents.beforeAssemblyReload -= OnReload;
-                job.Clock.Stop();
-                job.Done = true;
-                job.Completion.TrySetResult(true);
+                try
+                {
+                    PlaytestDriver.StopOnError = previousStopOnError;
+                    PlaytestDriver.Autopilot = false;
+                    try { PlaytestInput.ReleaseAll(); }
+                    finally { PlaytestInput.ClearQueue(); }
+                }
+                finally
+                {
+                    Application.logMessageReceivedThreaded -= OnLog;
+                    EditorApplication.update -= Tick;
+                    EditorApplication.playModeStateChanged -= OnPlayMode;
+                    AssemblyReloadEvents.beforeAssemblyReload -= OnReload;
+                    lock (job.LogLock)
+                    {
+                        UpdateErrors(job);
+                        job.Done = true;
+                    }
+                    job.Clock.Stop();
+                    job.Completion.TrySetResult(true);
+                }
             }
         }
 
@@ -251,24 +337,38 @@ namespace MCPForUnity.Editor.Tools.Playtest
             int? seed = spec.Seeds == null ? (int?)null : spec.Seeds[index];
             var clock = Stopwatch.StartNew();
             long memory = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong();
-            var result = job.Current = new JObject { ["index"] = index, ["seed"] = seed.HasValue ? new JValue(seed.Value) : JValue.CreateNull(),
+            var result = new JObject { ["index"] = index, ["seed"] = seed.HasValue ? new JValue(seed.Value) : JValue.CreateNull(),
+                ["capture_every_seconds"] = spec.CaptureSeconds,
                 ["errors"] = 0, ["warnings"] = 0, ["timeline"] = new JArray(), ["captures"] = new JArray(), ["first_errors"] = new JArray() };
-            var errors = new Dictionary<string, JObject>();
+            lock (job.LogLock)
+            {
+                // Preserve logs from job startup for the first run; later runs begin with fresh counters.
+                if (index > 0)
+                {
+                    job.ErrorCount = job.WarningCount = 0;
+                    job.Errors.Clear();
+                }
+                job.Current = result;
+                job.LastObservedFrame = Time.frameCount;
+            }
             job.StartFrame = Time.frameCount;
             int frames = 0, nextSample = spec.SampleFrames, timed = 0;
             long nextCapture = spec.CaptureFrames;
             string stoppedBy = "seconds", reason = null;
             try
             {
+                try { PlaytestInput.ReleaseAll(); }
+                finally { PlaytestInput.ClearQueue(); }
                 if (seed.HasValue && job.EndBy == null)
                 {
                     UnityEngine.Random.InitState(seed.Value);
                     if (!GameHooks.TryCall("level.restart", new JObject { ["seed"] = seed.Value }, out _, out string restartError))
                         throw new InvalidOperationException("level.restart: " + restartError);
                 }
-                Sample(result, spec, 0);
+                if (!StopForErrors(job, ref stoppedBy, ref reason)) Sample(result, spec, 0);
                 while (frames < spec.Frames && job.EndBy == null)
                 {
+                    if (StopForErrors(job, ref stoppedBy, ref reason)) break;
                     if (!PlaytestSession.Active) { End(job, "aborted", "Play session ended."); break; }
                     int segment = Math.Min(600, Math.Min(spec.Frames - frames, nextSample - frames));
                     if (spec.Seeds == null && timed < 8) segment = (int)Math.Min(segment, nextCapture - frames);
@@ -276,27 +376,23 @@ namespace MCPForUnity.Editor.Tools.Playtest
                         Input = frames == 0 ? spec.Step.Input : null, UntilHook = spec.Step.UntilHook,
                         UntilOp = spec.Step.UntilOp, UntilValue = spec.Step.UntilValue, Watch = new List<string>(),
                         TimeoutS = Math.Min(25 + segment / 30.0, Math.Max(0.1, 3600 - job.Clock.Elapsed.TotalSeconds)),
-                        ErrorObserver = (message, frame, exact) =>
-                        {
-                            lock (errors)
-                            {
-                                if (errors.TryGetValue(message, out var known)) known["count"] = known["count"].Value<int>() + 1;
-                                else if (errors.Count < 20) errors[message] = new JObject { ["message"] = message,
-                                    ["frame"] = frame, ["count"] = 1, ["frame_source"] = exact ? "game frame" : "last editor-observed frame (background-thread log)" };
-                            }
-                        } };
+                        ErrorObserver = (message, frame, exact) => RecordError(job, message, frame, exact) };
                     int before = Time.frameCount;
                     var data = await PlaytestStepper.Start(step);
                     frames += Math.Max(0, Time.frameCount - before);
                     result["frames"] = frames;
-                    result["errors"] = result["errors"].Value<int>() + (data["errors"]?.Value<int>() ?? 0);
-                    result["warnings"] = result["warnings"].Value<int>() + (data["warnings"]?.Value<int>() ?? 0);
+                    lock (job.LogLock)
+                    {
+                        job.ErrorCount += data["errors"]?.Value<int>() ?? 0;
+                        job.WarningCount += data["warnings"]?.Value<int>() ?? 0;
+                        job.LastObservedFrame = Time.frameCount;
+                    }
+                    UpdateErrors(job);
                     if (data["autopilot_error"] != null) result["autopilot_error"] = data["autopilot_error"].DeepClone();
                     if (job.EndBy != null) break;
-                    if (spec.StopOnError && (data["errors"]?.Value<int>() ?? 0) > 0)
+                    if (StopForErrors(job, ref stoppedBy, ref reason))
                     {
-                        stoppedBy = "error";
-                        reason = data["stop_reason"]?.ToString();
+                        reason = data["stop_reason"]?.ToString() ?? reason;
                         Capture(job, result, frames, "error");
                         break;
                     }
@@ -313,6 +409,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
                         Sample(result, spec, frames);
                         nextSample = (int)Math.Min(int.MaxValue, (long)frames + spec.SampleFrames);
                     }
+                    if (StopForErrors(job, ref stoppedBy, ref reason)) break;
                     if (spec.Seeds == null && timed < 8 && frames >= nextCapture)
                     {
                         Capture(job, result, frames, "timed");
@@ -322,16 +419,33 @@ namespace MCPForUnity.Editor.Tools.Playtest
                     if (frames == 0) throw new InvalidOperationException("Segment advanced no frames.");
                 }
             }
-            catch (Exception ex) { stoppedBy = "aborted"; reason = ex.GetType().Name + ": " + ex.Message; End(job, stoppedBy, reason); }
+            catch (Exception ex)
+            {
+                stoppedBy = "aborted";
+                reason = ex.GetType().Name + ": " + ex.Message;
+                StopForErrors(job, ref stoppedBy, ref reason);
+                End(job, stoppedBy, reason);
+            }
             finally
             {
                 frames = Math.Max(frames, Math.Max(0, Time.frameCount - job.StartFrame));
                 result["stopped_by"] = job.EndBy ?? stoppedBy;
                 if ((job.EndReason ?? reason) != null) result["stop_reason"] = job.EndReason ?? reason;
-                lock (errors) result["first_errors"] = new JArray(errors.Values.Select(e => e.DeepClone()));
-                Sample(result, spec, frames);
-                result["final_state"] = PlaytestStepper.ReadState(spec.Watch);
-                Capture(job, result, frames, "end");
+                try
+                {
+                    Sample(result, spec, frames);
+                    result["final_state"] = PlaytestStepper.ReadState(spec.Watch);
+                    Capture(job, result, frames, "end");
+                }
+                finally
+                {
+                    try { PlaytestInput.ReleaseAll(); }
+                    finally
+                    {
+                        PlaytestInput.ClearQueue();
+                        UpdateErrors(job);
+                    }
+                }
                 clock.Stop();
                 result["frames"] = frames;
                 result["game_seconds"] = frames * spec.Dt;
@@ -430,6 +544,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
             if (!job.Done && job.Current != null) frames = Math.Max(frames, Math.Max(0, Time.frameCount - job.StartFrame));
             var data = new JObject { ["job_id"] = job.Id, ["status"] = job.Done ? "done" : "running",
                 ["run_index"] = job.RunIndex, ["runs"] = job.Spec.Runs, ["elapsed_wall_s"] = job.Clock.Elapsed.TotalSeconds,
+                ["capture_every_seconds"] = job.Spec.CaptureSeconds,
                 ["progress"] = new JObject { ["run"] = job.RunIndex, ["game_seconds"] = frames * job.Spec.Dt } };
             if (job.Done)
             {

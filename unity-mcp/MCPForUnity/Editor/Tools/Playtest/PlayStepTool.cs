@@ -13,6 +13,7 @@ namespace MCPForUnity.Editor.Tools.Playtest
     {
         public static async Task<object> HandleCommand(JObject @params)
         {
+            if (PlaytestRun.Running) return new ErrorResponse("a play_run job is running; call play_run stop or wait first.");
             @params ??= new JObject();
             var err = PlaytestStepper.Parse(@params, out var spec);
             if (err != null) return new ErrorResponse(err);

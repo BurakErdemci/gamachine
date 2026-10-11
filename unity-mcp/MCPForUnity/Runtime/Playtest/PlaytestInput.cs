@@ -284,6 +284,16 @@ namespace MCPForUnity.Runtime.Playtest
 
         public static void ClearQueue() => s_Queue.Clear();
 
+        /// <summary>Releases held controls on session-owned devices without ending the session.</summary>
+        public static void ReleaseAll()
+        {
+#if MCP_FOR_UNITY_INPUT_SYSTEM
+            if (s_Keyboard != null && s_Keyboard.added) InputSystem.ResetDevice(s_Keyboard, true);
+            if (s_Mouse != null && s_Mouse.added) InputSystem.ResetDevice(s_Mouse, true);
+            if (s_Gamepad != null && s_Gamepad.added) InputSystem.ResetDevice(s_Gamepad, true);
+#endif
+        }
+
         /// <summary>
         /// Schedules one input entry ({key|button|axis, do: press|release|tap, value?}) for absolute frame
         /// <paramref name="frame"/>; tap = press at frame, release at frame + 1. Returns an error or null.
