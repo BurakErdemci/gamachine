@@ -250,7 +250,10 @@ namespace MCPForUnity.Runtime.Playtest
 
         private static void OnAfterUpdate()
         {
-            if (InputState.currentUpdateType == InputUpdateType.Dynamic) s_PendingReleases.Clear();
+            // Any update that processes events (Dynamic, Fixed or Manual) has applied the queued releases;
+            // clearing only after Dynamic left them pending forever in Fixed update mode.
+            var update = InputState.currentUpdateType;
+            if (update != InputUpdateType.Editor && update != InputUpdateType.BeforeRender) s_PendingReleases.Clear();
         }
 
         private static bool TryWriteRelease(InputControl<float> control, InputEventPtr eventPtr)
