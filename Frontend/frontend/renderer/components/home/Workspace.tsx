@@ -35,6 +35,8 @@ interface WorkspaceProps {
   panes: Record<WsTab, React.ReactNode>;
   /** The terminal drawer under the panes. */
   drawer: React.ReactNode;
+  /** Narrow window: the panel floats over the chat as a drawer (workspace.css) and Escape closes it. */
+  overlay?: boolean;
 }
 
 /**
@@ -42,7 +44,7 @@ interface WorkspaceProps {
  * tabs, one pane at a time, the terminal drawer at the foot. State lives in home.tsx
  * (useWorkspacePanel), so the chat can open things here.
  */
-export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, onWidth, onClose, panes, drawer, editorOn = false }) => {
+export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, onWidth, onClose, panes, drawer, editorOn = false, overlay = false }) => {
   const { t } = useLang();
   // #11 pane change: the newly shown pane rises in once (mockup `.ws-pane.is-entering`).
   const [entering, setEntering] = useState<WsTab | null>(null);
@@ -53,6 +55,14 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
     const id = setTimeout(() => setEntering(null), 260);
     return () => clearTimeout(id);
   }, [tab]);
+
+  // A drawer closes on Escape; a key a widget inside (Monaco, a menu) already used is left alone.
+  useEffect(() => {
+    if (!overlay || !open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [overlay, open, onClose]);
 
   // Arrow keys move between the tabs (the tablist pattern), as the mockup's tabs are buttons in a row.
   const onTabKey = (e: React.KeyboardEvent) => {
@@ -67,11 +77,12 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
 
   return (
     <aside
-      className="workspace is-entering"
+      className={`workspace is-entering${overlay ? ' is-drawer' : ''}`}
       aria-label={t('ws.title')}
       data-tab={tab}
       data-width={width}
       data-editor={editorOn ? 'on' : undefined}
+      data-overlay={overlay ? 'true' : undefined}
       hidden={!open}
       data-testid="workspace"
       data-guide="workspace"

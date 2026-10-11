@@ -66,7 +66,7 @@
 [data-theme="pafta"] .approval.is-fresh[data-state="rejected"] .approval-sentence { animation: pafta-strike var(--dur-stamp) var(--ease) both; }
 @keyframes pafta-strike { from { text-decoration-color: transparent; } }
 /* empty chat: the full mascot drawn in the sheet's inks, smaller than Arena's, beside the text */
-[data-theme="pafta"] .empty-hero { grid-template-columns: 150px 1fr; gap: 24px; }
+[data-theme="pafta"] .empty-hero { grid-template-columns: 150px minmax(0, 1fr); gap: 24px; }
 [data-theme="pafta"] .empty-head { display: none; }
 [data-theme="pafta"] .empty-mascot { display: block; width: 150px; height: auto; }
 /* narrow chat (focus width): the revision head keeps two cells - the source cell

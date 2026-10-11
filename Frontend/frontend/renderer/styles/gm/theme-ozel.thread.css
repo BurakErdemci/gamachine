@@ -76,7 +76,7 @@
 [data-theme="ozel"] .achv-life { display: none; }
 
 /* ================= empty chat: the full mascot idles beside the greeting (round 15b) ================= */
-[data-theme="ozel"] .empty-hero { grid-template-columns: 150px 1fr; gap: 24px; }
+[data-theme="ozel"] .empty-hero { grid-template-columns: 150px minmax(0, 1fr); gap: 24px; }
 [data-theme="ozel"] .empty-head { display: none; }
 [data-theme="ozel"] .empty-mascot { display: block; width: 150px; height: auto; }
 

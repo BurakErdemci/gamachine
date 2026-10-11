@@ -101,7 +101,7 @@
    Same hooks as the base fallback; Arena shows the full mascot (idle) beside a game
    dialogue box with an orange name plate, and the starter tasks read as a quest board. */
 [data-theme="arena"] .empty { gap: 34px; }
-[data-theme="arena"] .empty-hero { grid-template-columns: 236px 1fr; align-items: end; gap: 4px; }
+[data-theme="arena"] .empty-hero { grid-template-columns: 236px minmax(0, 1fr); align-items: end; gap: 4px; }
 [data-theme="arena"] .empty-head { display: none; }
 [data-theme="arena"] .empty-mascot { display: block; width: 236px; height: auto; margin-bottom: -6px; }
 [data-theme="arena"] .empty-say {

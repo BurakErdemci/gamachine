@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { routeForFile } from '../components/model-viewer/extensions';
 
 /** The workspace tabs (mockup `.ws-tab[data-tab]`): scene, files, code, preview. */
@@ -36,4 +36,27 @@ export function useWorkspacePanel(initial: { tab?: WsTab; width?: WsWidth } = {}
   }, []);
 
   return { open, setOpen, tab, setTab, width, setWidth, reveal };
+}
+
+/** Below this window width the open panel is an overlay drawer over the chat (workspace.css repeats the number). */
+export const WS_DRAWER_QUERY = '(max-width: 1099px)';
+
+/**
+ * Whether the window is narrow enough for the panel to overlay the chat. The layout itself is a
+ * CSS media query; this mirrors it so the panel can mark itself and close on Escape. Without
+ * matchMedia (jsdom, old shells) the window is treated as wide.
+ */
+export function useNarrowWindow(query: string = WS_DRAWER_QUERY): boolean {
+  const read = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && !!window.matchMedia(query)?.matches;
+  const [narrow, setNarrow] = useState(read);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia(query);
+    if (!mq || typeof mq.addEventListener !== 'function') return;
+    const onChange = () => setNarrow(!!mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [query]);
+  return narrow;
 }

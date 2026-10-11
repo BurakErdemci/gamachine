@@ -69,7 +69,7 @@
 [data-theme="atolye"] .achv-title { font-size: 15.5px; }
 [data-theme="atolye"] .achv-sub { font-size: var(--fs-meta); color: var(--toast-text); }
 /* empty chat: the full mascot in walnut and brass-steel, standing beside the greeting */
-[data-theme="atolye"] .empty-hero { grid-template-columns: 150px 1fr; gap: 24px; }
+[data-theme="atolye"] .empty-hero { grid-template-columns: 150px minmax(0, 1fr); gap: 24px; }
 [data-theme="atolye"] .empty-head { display: none; }
 [data-theme="atolye"] .empty-mascot { display: block; width: 150px; height: auto; }
 

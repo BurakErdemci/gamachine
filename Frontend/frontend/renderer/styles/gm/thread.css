@@ -453,15 +453,16 @@
 .empty {
   position: relative; z-index: 1; flex: 1; min-height: 0; overflow-y: auto;
   display: flex; flex-direction: column; justify-content: center; gap: 30px;
-  width: 100%; max-width: 880px; margin: 0 auto; padding: 32px 40px 28px;
+  width: 100%; max-width: 880px; min-width: 0; margin: 0 auto; padding: 32px 40px 28px; overflow-x: hidden;
 }
-.empty-hero { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 20px; }
+.empty-hero { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 20px; }
 .empty-mascot { display: none; }
 .empty-head { width: 64px; height: 64px; }
 .empty-kicker {
   color: var(--ink-faint); font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
   text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
 }
+.empty-say { min-width: 0; overflow-wrap: anywhere; }
 .empty-title { margin-top: 2px; font-family: var(--font-title); font-size: 24px; line-height: 1.25; font-weight: 600; color: var(--ink); }
 .empty-sub { margin-top: 6px; font-size: 15px; color: var(--ink-dim); }
 .empty-board-k {
@@ -470,10 +471,10 @@
   text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
 }
 .empty-board-k::after { content: ""; flex: 1; height: var(--line-w); background: var(--label-rule-paper); }
-.quests { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
-.quests li { display: flex; }
+.quests { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; margin-top: 10px; }
+.quests li { display: flex; min-width: 0; }
 .qc {
-  flex: 1; display: flex; flex-direction: column; gap: 3px; text-align: left; position: relative;
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; text-align: left; position: relative; overflow-wrap: anywhere;
   padding: 14px 16px 12px; color: var(--ink);
   background: var(--paper-raised); border: var(--line-w) solid var(--paper-line); border-radius: var(--radius-lg);
   transition: border-color var(--g-dur-tap) var(--ease), transform var(--g-dur-tap) var(--ease);
