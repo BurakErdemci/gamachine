@@ -504,9 +504,11 @@ def opencode_context_window(model: str) -> Optional[int]:
     base = resolve_opencode_cmd()
     if not provider or not base or "/" not in model:
         return None
+    from .cli_base import build_spawn_env, env_family
     try:
         proc = subprocess.run([*base, "models", provider, "--verbose"], capture_output=True,
-                              stdin=subprocess.DEVNULL, timeout=20, check=False)
+                              stdin=subprocess.DEVNULL, timeout=20, check=False,
+                              env=build_spawn_env(env_family("opencode")))
         text = proc.stdout.decode("utf-8", "replace")
     except (OSError, subprocess.SubprocessError):
         return None
