@@ -207,6 +207,15 @@ async def manage_build(
             "message": f"Unknown action '{action}'. Valid actions: {', '.join(ALL_ACTIONS)}",
         }
 
+    if isinstance(job_id, str) and not job_id.strip():
+        job_id = None
+    if (
+        action_lower in ("status", "wait", "cancel")
+        and isinstance(job_id, str)
+        and (any(part in job_id for part in ("/", "\\", "..", ":")) or any(ord(c) < 32 for c in job_id))
+    ):
+        return {"success": False, "message": "Invalid job_id."}
+
     if action_lower in ("status", "wait"):
         project_path = await _target_project_path(ctx)
         if action_lower == "wait":

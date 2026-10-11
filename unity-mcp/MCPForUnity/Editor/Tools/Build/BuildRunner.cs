@@ -188,10 +188,19 @@ namespace MCPForUnity.Editor.Tools.Build
         {
             string temporaryPath = path + ".tmp";
             File.WriteAllText(temporaryPath, json);
-            if (File.Exists(path))
-                File.Replace(temporaryPath, path, null);
-            else
-                File.Move(temporaryPath, path);
+            try
+            {
+                if (File.Exists(path))
+                    File.Replace(temporaryPath, path, null);
+                else
+                    File.Move(temporaryPath, path);
+            }
+            catch
+            {
+                try { File.Delete(temporaryPath); }
+                catch { }
+                throw;
+            }
         }
 
         public static void ScheduleNextBatchBuild(BatchJob batch, Func<int, BuildJob> createChildBuild)

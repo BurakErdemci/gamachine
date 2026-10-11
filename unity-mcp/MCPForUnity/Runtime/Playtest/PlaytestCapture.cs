@@ -149,19 +149,34 @@ namespace MCPForUnity.Runtime.Playtest
                 {
                     var state = canvasStates[i];
                     if (state.Canvas == null) continue;
-                    state.Canvas.renderMode = state.RenderMode;
-                    state.Canvas.worldCamera = state.WorldCamera;
-                    state.Canvas.planeDistance = state.PlaneDistance;
-                    state.Canvas.sortingLayerID = state.SortingLayerID;
-                    state.Canvas.sortingOrder = state.SortingOrder;
+                    try
+                    {
+                        state.Canvas.renderMode = state.RenderMode;
+                        state.Canvas.worldCamera = state.WorldCamera;
+                        state.Canvas.planeDistance = state.PlaneDistance;
+                        state.Canvas.sortingLayerID = state.SortingLayerID;
+                        state.Canvas.sortingOrder = state.SortingOrder;
+                    }
+                    catch (Exception ex)
+                    {
+                        UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not restore canvas '{state.Canvas.name}': {ex.Message}");
+                    }
                 }
-                cam.cullingMask = prevCullingMask;
-                cam.targetTexture = prevTarget;
-                RenderTexture.active = prevActive;
-                Canvas.ForceUpdateCanvases();
-                RenderTexture.ReleaseTemporary(rt);
-                if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
-                if (small != null) UnityEngine.Object.DestroyImmediate(small);
+                // Each step runs even if an earlier one threw.
+                try { cam.cullingMask = prevCullingMask; }
+                catch (Exception ex) { UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not restore cullingMask: {ex.Message}"); }
+                try { cam.targetTexture = prevTarget; }
+                catch (Exception ex) { UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not restore targetTexture: {ex.Message}"); }
+                try { RenderTexture.active = prevActive; }
+                catch (Exception ex) { UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not restore RenderTexture.active: {ex.Message}"); }
+                try { Canvas.ForceUpdateCanvases(); }
+                catch (Exception ex) { UnityEngine.Debug.LogWarning($"[PlaytestCapture] ForceUpdateCanvases failed: {ex.Message}"); }
+                try { RenderTexture.ReleaseTemporary(rt); }
+                catch (Exception ex) { UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not release the temporary RenderTexture: {ex.Message}"); }
+                try { if (tex != null) UnityEngine.Object.DestroyImmediate(tex); }
+                catch (Exception ex) { UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not destroy the capture texture: {ex.Message}"); }
+                try { if (small != null) UnityEngine.Object.DestroyImmediate(small); }
+                catch (Exception ex) { UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not destroy the downscaled texture: {ex.Message}"); }
             }
         }
 

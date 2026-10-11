@@ -198,6 +198,29 @@ def test_read_rejects_traversal(project, job_id):
     assert mb._read_status_file(str(project), job_id) is None
 
 
+@pytest.mark.parametrize("action", ["status", "wait", "cancel"])
+@pytest.mark.parametrize("job_id", ["..", "../latest", "sub/job", "sub" + chr(92) + "job", "sub:job", "a" + chr(8)])
+def test_invalid_job_id_refused(project, send, action, job_id):
+    write_status(project, "building")
+    result = asyncio.run(mb.manage_build(SimpleNamespace(), action=action, job_id=job_id))
+    assert result == {"success": False, "message": "Invalid job_id."}
+    send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("job_id", ["", "   "])
+def test_empty_job_id_reads_latest(project, send, job_id):
+    record = write_status(project, "building")
+    result = asyncio.run(mb.manage_build(SimpleNamespace(), action="status", job_id=job_id))
+    assert result["success"] is True
+    assert result["data"] == record
+    send.assert_not_awaited()
+
+
+def test_empty_job_id_not_forwarded(project, send):
+    asyncio.run(mb.manage_build(SimpleNamespace(), action="status", job_id=""))
+    assert send.await_args.args[1] == {"action": "status"}
+
+
 @pytest.mark.parametrize("payload", ["{", "[]", "null"])
 def test_invalid_status_file(project, payload):
     write_status(project, "building")
