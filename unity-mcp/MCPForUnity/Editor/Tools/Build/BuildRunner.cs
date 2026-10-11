@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditor.Build.Reporting;
 using UnityEditor.Build;
@@ -174,18 +175,23 @@ namespace MCPForUnity.Editor.Tools.Build
                 foreach (string name in new[] { job.JobId + ".json", "latest.json" })
                 {
                     string path = Path.Combine(directory, name);
-                    string temporaryPath = path + ".tmp";
-                    File.WriteAllText(temporaryPath, json);
-                    if (File.Exists(path))
-                        File.Replace(temporaryPath, path, null);
-                    else
-                        File.Move(temporaryPath, path);
+                    WriteStatusFile(path, json);
                 }
             }
             catch (Exception ex)
             {
                 McpLog.Warn($"[MCP Build] Could not write build status: {ex.Message}");
             }
+        }
+
+        internal static void WriteStatusFile(string path, string json)
+        {
+            string temporaryPath = path + ".tmp";
+            File.WriteAllText(temporaryPath, json);
+            if (File.Exists(path))
+                File.Replace(temporaryPath, path, null);
+            else
+                File.Move(temporaryPath, path);
         }
 
         public static void ScheduleNextBatchBuild(BatchJob batch, Func<int, BuildJob> createChildBuild)
@@ -261,6 +267,48 @@ namespace MCPForUnity.Editor.Tools.Build
                 .Where(s => s.enabled)
                 .Select(s => s.path)
                 .ToArray();
+        }
+    }
+
+    [InitializeOnLoad]
+    internal static class BuildStatusReloadRecovery
+    {
+        static BuildStatusReloadRecovery()
+        {
+            try
+            {
+                string projectRoot = Directory.GetParent(UnityEngine.Application.dataPath).FullName;
+                string directory = Path.Combine(projectRoot, "Library", "GamachineBuilds");
+                if (!Directory.Exists(directory)) return;
+                int editorPid = System.Diagnostics.Process.GetCurrentProcess().Id;
+
+                // Only final JSON files are scanned; atomic-write .tmp files are excluded.
+                foreach (string path in Directory.GetFiles(directory, "*.json"))
+                {
+                    try
+                    {
+                        JObject status = JObject.Parse(File.ReadAllText(path));
+                        string state = (string)status["state"];
+                        if (state != "pending" && state != "building") continue;
+                        JToken pid = status["editor_pid"];
+                        if (pid == null || pid.Type != JTokenType.Integer || pid.Value<int>() != editorPid)
+                            continue;
+
+                        status["state"] = "interrupted";
+                        status["error_message"] = "Unity reloaded scripts before the build finished; start the build again.";
+                        status["completed_at"] = DateTime.UtcNow.ToString("O");
+                        BuildRunner.WriteStatusFile(path, status.ToString(Formatting.None));
+                    }
+                    catch (Exception ex)
+                    {
+                        McpLog.Warn($"[MCP Build] Could not recover build status '{path}': {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                McpLog.Warn($"[MCP Build] Could not scan build status after script reload: {ex.Message}");
+            }
         }
     }
 }

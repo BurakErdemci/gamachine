@@ -72,6 +72,58 @@ def test_interrupted_file(project, send, monkeypatch):
     send.assert_not_awaited()
 
 
+def test_literal_interrupted_file(project, send):
+    record = write_status(project, "interrupted")
+    record["error_message"] = "Unity reloaded scripts before the build finished; start the build again."
+    (project / "Library" / "GamachineBuilds" / "latest.json").write_text(json.dumps(record))
+    result = asyncio.run(mb.manage_build(SimpleNamespace(), action="status"))
+    assert result == {"success": False, "message": record["error_message"], "data": record}
+    result = asyncio.run(mb.manage_build(SimpleNamespace(), action="wait"))
+    assert result == {"success": False, "message": "Build interrupted.", "data": record}
+    send.assert_not_awaited()
+
+
+def test_wait_stays_with_initial_job_when_latest_moves(project, send, monkeypatch):
+    write_status(project, "building")
+    write_status(project, "building", "build-one")
+
+    async def transition(_seconds):
+        write_status(project, "failed", "build-one")
+        directory = project / "Library" / "GamachineBuilds"
+        other = {"job_id": "build-two", "state": "succeeded", "editor_pid": os.getpid()}
+        for name in ("build-two.json", "latest.json"):
+            (directory / name).write_text(json.dumps(other))
+
+    sleep = AsyncMock(side_effect=transition)
+    monkeypatch.setattr(mb.asyncio, "sleep", sleep)
+    result = asyncio.run(mb.manage_build(SimpleNamespace(), action="wait"))
+    assert result["success"] is False
+    assert result["message"] == "Build failed."
+    assert result["data"]["job_id"] == "build-one"
+    assert result["data"]["state"] == "failed"
+    sleep.assert_awaited_once()
+    send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("job_id", [None, "", 0, [], "..", "sub/job", "sub" + chr(92) + "job", "sub:job"])
+def test_wait_keeps_latest_for_unusable_initial_id(project, send, monkeypatch, job_id):
+    directory = project / "Library" / "GamachineBuilds"
+    record = write_status(project, "building")
+    record["job_id"] = job_id
+    (directory / "latest.json").write_text(json.dumps(record))
+
+    async def transition(_seconds):
+        write_status(project, "succeeded")
+
+    sleep = AsyncMock(side_effect=transition)
+    monkeypatch.setattr(mb.asyncio, "sleep", sleep)
+    result = asyncio.run(mb.manage_build(SimpleNamespace(), action="wait"))
+    assert result["success"] is True
+    assert result["data"]["state"] == "succeeded"
+    sleep.assert_awaited_once()
+    send.assert_not_awaited()
+
+
 def test_wait_observes_transition(project, send):
     write_status(project, "building", "build-one")
 

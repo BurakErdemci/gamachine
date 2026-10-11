@@ -12,7 +12,7 @@ from services.registry import mcp_for_unity_tool
 from services.tools._playtest_common import shape_image_result
 from services.tools.unity_dialog import _NO_PROJECT, _target_project
 from transport.unity_dialog_probe import dialogs_for_project, find_unity_dialogs
-from transport.unity_window_capture import CaptureError, capture_window, find_unity_main_window
+from transport.unity_window_capture import CaptureError, capture_window, find_unity_main_windows
 
 
 @mcp_for_unity_tool(
@@ -37,9 +37,15 @@ async def unity_window_capture(
     project = await _target_project(ctx)
     if not project:
         return {"success": False, "error": _NO_PROJECT}
-    window = await asyncio.to_thread(find_unity_main_window, project)
-    if window is None:
+    windows = await asyncio.to_thread(find_unity_main_windows, project)
+    if len(windows) > 1:
+        return {
+            "success": False,
+            "error": f"Several Unity editor windows show project '{project}'; close the other editor or rename one project before capturing.",
+        }
+    if not windows:
         return {"success": False, "error": f"No Unity editor window found for project '{project}'."}
+    window = windows[0]
     dialogs = [
         {"title": dialog["title"], "buttons": dialog["buttons"]}
         for dialog in dialogs_for_project(await asyncio.to_thread(find_unity_dialogs), project)

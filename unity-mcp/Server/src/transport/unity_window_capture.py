@@ -31,9 +31,15 @@ def encode_png(width: int, height: int, rgb: bytes) -> bytes:
 
 
 def find_unity_main_window(project: str) -> dict | None:
-    """Find the largest visible, ownerless editor window for this exact project."""
+    """Find the editor window only when this exact project has one match."""
+    windows = find_unity_main_windows(project)
+    return windows[0] if len(windows) == 1 else None
+
+
+def find_unity_main_windows(project: str) -> list[dict]:
+    """Find every visible, ownerless editor window for this exact project."""
     if sys.platform != "win32":
-        return None
+        return []
     try:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -65,7 +71,7 @@ def find_unity_main_window(project: str) -> dict | None:
         kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel32.CloseHandle.restype = wintypes.BOOL
         processes: dict[int, bool] = {}
-        windows: list[tuple[int, dict]] = []
+        windows: list[dict] = []
         callback_failed = False
 
         def visit(hwnd, _lparam):
@@ -97,11 +103,10 @@ def find_unity_main_window(project: str) -> dict | None:
                 if processes[pid.value]:
                     rect = wintypes.RECT()
                     if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-                        area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
-                        windows.append((area, {
+                        windows.append({
                             "hwnd": int(hwnd), "title": title.value,
                             "minimized": bool(user32.IsIconic(hwnd)),
-                        }))
+                        })
                 return True
             except Exception:
                 # ctypes swallows exceptions crossing a native callback boundary.
@@ -109,10 +114,10 @@ def find_unity_main_window(project: str) -> dict | None:
                 return False
 
         if not user32.EnumWindows(callback_type(visit), 0) or callback_failed:
-            return None
-        return max(windows, key=lambda item: item[0])[1] if windows else None
+            return []
+        return windows
     except Exception:
-        return None
+        return []
 
 
 class _BitmapInfoHeader(ctypes.Structure):

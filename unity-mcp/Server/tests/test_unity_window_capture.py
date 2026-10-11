@@ -18,6 +18,16 @@ import pytest
 from transport.unity_window_capture import CaptureError, capture_window, encode_png
 
 tool = importlib.import_module("services.tools.unity_window_capture")
+native = importlib.import_module("transport.unity_window_capture")
+
+
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_single_window_compatibility_rejects_ambiguity(monkeypatch, count):
+    windows = [{"hwnd": index, "title": "ProjA - Scene - Unity", "minimized": False} for index in range(count)]
+    enumerate_windows = Mock(return_value=windows)
+    monkeypatch.setattr(native, "find_unity_main_windows", enumerate_windows)
+    assert native.find_unity_main_window("ProjA") == (windows[0] if count == 1 else None)
+    enumerate_windows.assert_called_once_with("ProjA")
 
 
 def _decode_png(png):
@@ -69,7 +79,7 @@ async def test_non_windows_error(monkeypatch):
 def native_capture(monkeypatch):
     monkeypatch.setattr(tool.sys, "platform", "win32")
     target = AsyncMock(return_value="ProjA")
-    window = Mock(return_value={"hwnd": 123, "title": "ProjA - Scene - Unity", "minimized": False})
+    window = Mock(return_value=[{"hwnd": 123, "title": "ProjA - Scene - Unity", "minimized": False}])
     dialogs = Mock(return_value=[
         {"title": "Save scene", "buttons": ["Save", "Cancel"], "project": "ProjA", "hwnd": 7},
         {"title": "Other project", "buttons": ["Yes"], "project": "ProjB", "hwnd": 8},
@@ -78,7 +88,7 @@ def native_capture(monkeypatch):
         "image_base64": base64.b64encode(encode_png(1, 1, b"\x10\x20\x30")).decode("ascii"),
         "mime": "image/png", "width": 1, "height": 1, "full_width": 2, "full_height": 2,
     })
-    for name, value in [("_target_project", target), ("find_unity_main_window", window),
+    for name, value in [("_target_project", target), ("find_unity_main_windows", window),
                         ("find_unity_dialogs", dialogs), ("capture_window", capture)]:
         monkeypatch.setattr(tool, name, value)
     return target, window, dialogs, capture
@@ -97,11 +107,24 @@ async def test_no_project(native_capture):
 @pytest.mark.asyncio
 async def test_no_window(native_capture):
     _, window, _, capture = native_capture
-    window.return_value = None
+    window.return_value = []
     assert await tool.unity_window_capture(None) == {
         "success": False, "error": "No Unity editor window found for project 'ProjA'.",
     }
     window.assert_called_once_with("ProjA")
+    capture.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multiple_windows_refuses_capture(native_capture):
+    _, window, dialogs, capture = native_capture
+    window.return_value.append({"hwnd": 456, "title": "ProjA - Other Scene - Unity", "minimized": False})
+    assert await tool.unity_window_capture(None) == {
+        "success": False,
+        "error": "Several Unity editor windows show project 'ProjA'; close the other editor or rename one project before capturing.",
+    }
+    window.assert_called_once_with("ProjA")
+    dialogs.assert_not_called()
     capture.assert_not_called()
 
 

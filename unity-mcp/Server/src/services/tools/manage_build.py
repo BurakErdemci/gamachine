@@ -123,6 +123,12 @@ async def _wait_for_build(ctx: Context, project_path: str, job_id: str | None, t
     status = _read_status_file(project_path, job_id)
     if status is None:
         return {"success": False, "message": "No build status file found. Start the build with manage_build action=build first."}
+    if job_id is None:
+        initial_job_id = status.get("job_id")
+        if isinstance(initial_job_id, str) and initial_job_id and not any(
+            part in initial_job_id for part in ("/", "\\", "..", ":")
+        ):
+            job_id = initial_job_id
     timeout = 600 if timeout_seconds is None else max(1, min(1800, timeout_seconds))
     deadline = monotonic() + timeout
     project_name = await _target_project_name(ctx)
