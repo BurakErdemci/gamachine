@@ -123,7 +123,9 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
     };
   }, [whyOpen]);
 
-  const cls = ['unity', linked ? 'is-linked' : '', whyOpen && status === 'blocked' ? 'why-open' : '']
+  // `!shrink !min-w-0`: shell.css gives `.unity` `flex: none` and a fixed min-width, so the pill
+  // could never give way and ran over the model selector in a narrow window.
+  const cls = ['unity', '!shrink !min-w-0', linked ? 'is-linked' : '', whyOpen && status === 'blocked' ? 'why-open' : '']
     .filter(Boolean).join(' ');
 
   return (
@@ -149,12 +151,14 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
         </span>
         <span className="us-leds" aria-hidden="true"><i /><i /><i /></span>
       </button>
-      <span className="unity-read">
+      <span className="unity-read min-w-0">
         <span className="unity-text" id={stateId} aria-live="polite">
           <span className="unity-k" lang="en">{t('unity.kicker')}</span>{' '}
           <span className="unity-word">{t(state.word)}</span>
         </span>
-        {state.visual === 'on' && projectName && <span className="unity-path">{projectName}</span>}
+        {state.visual === 'on' && projectName && (
+          <span className="unity-path min-w-0 max-w-[220px] truncate" title={projectName}>{projectName}</span>
+        )}
         {state.hint && <span className="unity-hint">{t(state.hint)}</span>}
         {status === 'blocked' && (
           <button
