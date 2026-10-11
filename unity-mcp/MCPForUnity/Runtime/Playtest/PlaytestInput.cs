@@ -300,7 +300,11 @@ namespace MCPForUnity.Runtime.Playtest
             float value = 1f;
             if (entry["value"] != null && entry["value"].Type != JTokenType.Null)
             {
-                if (!float.TryParse(entry["value"].ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+                // JValue.ToString() formats with the current culture ("161,2237" on a Turkish OS),
+                // so numeric tokens are read directly and only strings go through the invariant parse.
+                var v = entry["value"];
+                if (v.Type == JTokenType.Float || v.Type == JTokenType.Integer) value = v.Value<float>();
+                else if (!float.TryParse(v.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out value))
                     return $"input value '{entry["value"]}' is not a number";
             }
 #if MCP_FOR_UNITY_INPUT_SYSTEM
