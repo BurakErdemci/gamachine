@@ -838,6 +838,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         # Tail of the text streamed so far, and whether a tool step came after it.
         text_tail = ""
         tool_since_text = False
+        streamed_text = []
         if not side:
             await _preempt_side_turn(self)
         try:
@@ -914,6 +915,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                                     text_delta = block_break(text_tail) + text_delta
                                     tool_since_text = False
                                 text_tail = (text_tail + text_delta)[-2:]
+                                streamed_text.append(text_delta)
                                 yield _redact_event({"type": "text", "content": text_delta})
                         elif step.get("step_type") == "tool":
                             info = step.get("tool_info") or {}
@@ -987,7 +989,12 @@ class AgyStreamSession(SaglayiciSahipligi):
                                                or "agy reported an error."))
                 # The turn timer ends at result, before delivering terminal events.
             yield _redact_event(usage)
-            yield _redact_event({"type": "response", "content": result.get("response") or ""})
+            # Store what the user saw streaming (blocks separated); the CLI's
+            # own result glues the blocks together.
+            stored_answer = "".join(streamed_text)
+            if not stored_answer.strip():
+                stored_answer = result.get("response") or ""
+            yield _redact_event({"type": "response", "content": stored_answer})
             yield _redact_event({"type": "done", "iterations": 1,
                                  "session_id": self.session_id})
         except (asyncio.CancelledError, GeneratorExit):
