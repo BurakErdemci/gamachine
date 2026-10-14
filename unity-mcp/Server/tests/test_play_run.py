@@ -43,9 +43,27 @@ def test_start_forwards_parameters_once(sender):
     params = dict(seconds=60, seeds=[7, 9], autopilot=False,
                   input=[{"frame": 0, "key": "space", "do": "tap"}],
                   until={"hook": "hp", "op": "<=", "value": 0}, stop_on_error=False,
-                  watch=["hp"], sample_seconds=2, capture_every_seconds=10, camera="Main Camera")
+                  watch=["hp"], sample_seconds=2, camera="Main Camera")
     asyncio.run(tool.play_run(CTX, **params))
     sender.assert_awaited_once_with(CTX, "play_run", {"action": "start", **params})
+
+
+def test_batch_with_capture_interval_never_sends(sender):
+    result = asyncio.run(tool.play_run(CTX, seeds=[1, 2], capture_every_seconds=10))
+    assert result["success"] is False
+    assert result["error"] == (
+        "capture_every_seconds applies to a single run; a batch of seeds captures only each run's final frame. "
+        "Remove capture_every_seconds or run one seed."
+    )
+    sender.assert_not_called()
+
+
+def test_single_seed_with_capture_interval_is_forwarded(sender):
+    asyncio.run(tool.play_run(CTX, seeds=[1], capture_every_seconds=10))
+    sender.assert_awaited_once_with(CTX, "play_run", {
+        "action": "start", "seconds": 120, "seeds": [1], "autopilot": True,
+        "stop_on_error": True, "sample_seconds": 5, "capture_every_seconds": 10,
+    })
 
 
 def test_wait_polls_to_done(sender, monkeypatch):

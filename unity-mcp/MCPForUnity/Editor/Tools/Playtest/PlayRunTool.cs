@@ -105,6 +105,8 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 if (GameHooks.KindOf("level.restart") != GameHooks.KindAction)
                     return "Batch runs need a level.restart action hook (GameHooks.Action(\"level.restart\", args => ...)) so each seed restarts without leaving play mode.";
             }
+            if (spec.Runs > 1 && Present(p["capture_every_seconds"]))
+                return "capture_every_seconds applies to a single run; a batch of seeds captures only each run's final frame. Remove capture_every_seconds or run one seed.";
             if ((p["autopilot"]?.Value<bool>() ?? true) && GameHooks.KindOf("autopilot") != GameHooks.KindAction)
                 return "autopilot requires an 'autopilot' action hook before starting.";
             spec.Watch = GameHooks.StateNames();

@@ -39,7 +39,8 @@ def _images(response):
         "level.restart, with a 3600 game-second batch limit. Returns timelines, errors, "
         "editor-side timing, final state, a contact sheet and the final frame. "
         "Input is applied only in each run's first segment (at most 600 frames, "
-        "possibly shorter at the first sample or capture)."
+        "possibly shorter at the first sample or capture). "
+        "capture_every_seconds applies to a single run; a batch captures each run's final frame."
     ),
     annotations=ToolAnnotations(title="Play Run", destructiveHint=True),
 )
@@ -97,6 +98,11 @@ async def play_run(
             return error("seeds must contain 1..50 signed 32-bit integers.")
         if seconds * len(batch) > 3600:
             return error("seconds * number of seeds must be <= 3600.")
+    if batch is not None and len(batch) > 1 and capture_every_seconds is not None:
+        return error(
+            "capture_every_seconds applies to a single run; a batch of seeds captures only each run's final frame. "
+            "Remove capture_every_seconds or run one seed."
+        )
     if not isinstance(autopilot, bool) or not isinstance(stop_on_error, bool):
         return error("autopilot and stop_on_error must be booleans.")
     if not _number(sample_seconds, 0.5, 60):
