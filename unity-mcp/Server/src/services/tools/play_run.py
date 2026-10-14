@@ -40,7 +40,9 @@ def _images(response):
         "editor-side timing, final state, a contact sheet and the final frame. "
         "Input is applied only in each run's first segment (at most 600 frames, "
         "possibly shorter at the first sample or capture). "
-        "capture_every_seconds applies to a single run; a batch captures each run's final frame."
+        "capture_every_seconds applies to a single run; a batch captures each run's final frame. "
+        "While a batch runs, status and wait also return completed_results: each finished run's "
+        "result without its timeline, including its final-frame capture path."
     ),
     annotations=ToolAnnotations(title="Play Run", destructiveHint=True),
 )

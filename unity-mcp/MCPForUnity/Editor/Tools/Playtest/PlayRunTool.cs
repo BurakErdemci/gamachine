@@ -551,6 +551,17 @@ namespace MCPForUnity.Editor.Tools.Playtest
                 if (job.Spec.Runs > 1) data["summary"] = Summary(job);
                 foreach (var property in job.Images.Properties()) data[property.Name] = property.Value.DeepClone();
             }
+            else if (job.Results.Count > 0)
+            {
+                var completed = new JArray();
+                foreach (var finished in job.Results.OfType<JObject>())
+                {
+                    var copy = (JObject)finished.DeepClone();
+                    copy.Remove("timeline");
+                    completed.Add(copy);
+                }
+                data["completed_results"] = completed;
+            }
             return data;
         }
     }

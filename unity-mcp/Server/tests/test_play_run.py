@@ -116,6 +116,12 @@ def test_done_shapes_both_images_without_base64_in_text(sender):
     assert "image_base64" in sender.return_value["data"]["last_frame"]
 
 
+def test_description_mentions_completed_results():
+    from services.registry import get_registered_tools
+    description = next(t["description"] for t in get_registered_tools() if t["name"] == "play_run")
+    assert "completed_results" in description
+
+
 @pytest.mark.parametrize("action", ["stop", "status"])
 def test_single_send_actions(sender, action):
     asyncio.run(tool.play_run(CTX, action=action))
