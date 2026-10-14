@@ -30,6 +30,7 @@ import os
 import posixpath
 import re
 import sys
+import time
 import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Set
@@ -231,6 +232,14 @@ _RETIRED_TURN_IDS_MAX = 8
 # fileChange items whose paths wait for their approval request. Codex asks for
 # approval of one patch at a time, so a handful covers it.
 _FILE_CHANGES_MAX = 64
+# Codex starts its MCP servers after thread/start replies; if no Unity server reports
+# "starting" within this window it is not starting them (measured: events arrive with the reply).
+MCP_STARTING_GRACE_S = 1.0
+# unityMCP was ready 4.27 s after thread/start (unityai 1.57 s) on Codex 0.159.3, 14 Oct 2026;
+# a broken server failed at 7.78 s, so 20 s bounds the wait with wide margin.
+MCP_READY_TIMEOUT_S = 20.0
+# The two Unity servers whose tools the first turn needs (names from _configured_codex_mcp_names).
+_UNITY_MCP_NAMES = ("unityMCP", "unityai")
 
 
 def _change_refusal(path, kind, move_path, base: str):
@@ -888,6 +897,9 @@ class CodexSession:
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._read_task: Optional[asyncio.Task] = None
         self._started = False
+        # MCP server name -> last startup status seen ("starting" / "ready" / "failed").
+        self._mcp_status: Dict[str, str] = {}
+        self._mcp_status_changed = asyncio.Event()
         self._turn_lock = asyncio.Lock()
         self._req_id = 0
         self._pending: Dict[int, asyncio.Future] = {}   # bizim istek id → Future
@@ -925,6 +937,8 @@ class CodexSession:
     async def start(self):
         if self._started:
             return
+        # A restart after the process died must not reuse the old process's "ready".
+        self._mcp_status.clear()
         spawn = _resolve_codex_appserver_cmd()
         if self.effort:
             # Global -c override subcommand'dan sonra da geçerli (codex exec ile aynı desen)
@@ -1005,8 +1019,12 @@ class CodexSession:
         # tekrar ödediği bedel: bir bayrağı GÖNDERDİĞİNİ doğrulayan test,
         # bayrağın IŞIRDIĞINI doğrulamıyor.
         dogrula_onay_hakemi(_result, self.conversation_id)
+        # The thread/start reply does not wait for MCP servers; without this the
+        # first turn races their startup and misses the Unity tools.
+        _mcp_t0 = time.monotonic()
+        await self._wait_for_unity_mcp()
         self._started = True
-        logger.info(f"[CodexSession:{self.conversation_id}] başlatıldı (model={self.model or 'default'}, thread={self.thread_id})")
+        logger.info(f"[CodexSession:{self.conversation_id}] başlatıldı (model={self.model or 'default'}, thread={self.thread_id}, mcp_wait={time.monotonic() - _mcp_t0:.2f}s)")
 
     async def close(self):
         # Önce okuma görevini durdur (kill'DEN ÖNCE — Windows Proactor'da kill + bekleyen
@@ -1104,7 +1122,75 @@ class CodexSession:
         elif has_method:
             # notification (stream)
             self._remember_file_change(msg)
+            self._remember_mcp_status(msg)
             await self._handle_notification(msg)
+
+    def _remember_mcp_status(self, msg: dict) -> None:
+        """Record MCP server startup status for `_wait_for_unity_mcp`.
+
+        Runs in `_dispatch` beside `_remember_file_change`, before
+        `_handle_notification` can return early for lack of a turn queue.
+        """
+        if msg.get("method") != "mcpServer/startupStatus/updated":
+            return
+        params = msg.get("params") or {}
+        if not isinstance(params, dict):
+            return
+        name, status = params.get("name"), params.get("status")
+        if not isinstance(name, str) or not isinstance(status, str):
+            return
+        self._mcp_status[name] = status
+        self._mcp_status_changed.set()
+        if status == "failed":
+            logger.warning(
+                f"[CodexSession:{self.conversation_id}] MCP server {name} failed to start: {params.get('error')}"
+            )
+
+    async def _wait_for_unity_mcp(self) -> None:
+        """Wait (bounded) until the Unity MCP servers Codex is starting are ready or failed.
+
+        Never raises and never fails start(): on timeout it logs and returns.
+        """
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+
+        async def _wait_change(deadline: float) -> bool:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            self._mcp_status_changed.clear()
+            try:
+                await asyncio.wait_for(self._mcp_status_changed.wait(), remaining)
+            except asyncio.TimeoutError:
+                return False
+            return True
+
+        try:
+            grace_deadline = start + MCP_STARTING_GRACE_S
+            while not any(n in self._mcp_status for n in _UNITY_MCP_NAMES):
+                if not await _wait_change(grace_deadline):
+                    return  # Codex is not starting them (or predates the event)
+            deadline = start + MCP_STARTING_GRACE_S + MCP_READY_TIMEOUT_S
+            while True:
+                pending = [
+                    n for n in _UNITY_MCP_NAMES
+                    if n in self._mcp_status and self._mcp_status[n] not in ("ready", "failed")
+                ]
+                if not pending:
+                    return
+                if not await _wait_change(deadline):
+                    pending = [
+                        n for n in _UNITY_MCP_NAMES
+                        if n in self._mcp_status and self._mcp_status[n] not in ("ready", "failed")
+                    ]
+                    if pending:
+                        logger.warning(
+                            f"[CodexSession:{self.conversation_id}] MCP servers not ready after "
+                            f"{loop.time() - start:.1f}s: {', '.join(pending)}"
+                        )
+                    return
+        except Exception as e:  # the wait is best-effort; never fail start()
+            logger.warning(f"[CodexSession:{self.conversation_id}] MCP ready wait aborted: {e}")
 
     def _remember_file_change(self, msg: dict) -> None:
         """Keep a fileChange item's paths for its approval request.

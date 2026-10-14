@@ -195,6 +195,12 @@ class TestCodexSessionNamesItsChat(unittest.IsolatedAsyncioTestCase):
     (measured, 0.157.0), so the id must be in the app-server's env AND named in
     the thread config, or neither bridge sees it."""
 
+    def setUp(self):
+        # These fakes emit no MCP status events; skip the real 1 s grace wait.
+        p = patch("providers.codex_session.MCP_STARTING_GRACE_S", 0.0)
+        p.start()
+        self.addCleanup(p.stop)
+
     async def _start(self, conversation_id, **session_kwargs):
         from providers import codex_session as cs
 
@@ -259,6 +265,86 @@ class TestCodexSessionNamesItsChat(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.thread_start["approvalPolicy"], "on-request")
         self.assertEqual(self.thread_start["sandbox"], "read-only")
         self.assertEqual(self.thread_start["approvalsReviewer"], "user")
+
+
+class TestUnityMcpReadyWait(unittest.IsolatedAsyncioTestCase):
+    """start() must not return while a Unity MCP server Codex is starting is still "starting"."""
+
+    def setUp(self):
+        import providers.codex_session as cs
+
+        self._cs = cs
+        patches = [
+            patch.object(cs, "MCP_STARTING_GRACE_S", 0.05),
+            patch.object(cs, "MCP_READY_TIMEOUT_S", 0.3),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    @staticmethod
+    def _note(name, status, error=None):
+        return {
+            "method": "mcpServer/startupStatus/updated",
+            "params": {"threadId": "t", "name": name, "status": status, "error": error, "failureReason": None},
+        }
+
+    async def test_waits_until_ready(self):
+        import asyncio
+
+        session = CodexSession(0)
+        await session._dispatch(self._note("unityMCP", "starting"))
+        task = asyncio.create_task(session._wait_for_unity_mcp())
+        await asyncio.sleep(0.1)
+        self.assertFalse(task.done())
+        await session._dispatch(self._note("unityMCP", "ready"))
+        await asyncio.wait_for(task, 0.2)
+
+    async def test_failed_returns_without_waiting_for_timeout(self):
+        import asyncio
+
+        session = CodexSession(0)
+        await session._dispatch(self._note("unityMCP", "starting"))
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        task = asyncio.create_task(session._wait_for_unity_mcp())
+        await asyncio.sleep(0.05)
+        with self.assertLogs("providers.codex_session", level="WARNING") as logs:
+            await session._dispatch(self._note("unityMCP", "failed", "boom"))
+            await asyncio.wait_for(task, 0.2)
+        self.assertLess(loop.time() - t0, 0.25)
+        self.assertTrue(any("boom" in line for line in logs.output))
+
+    async def test_no_unity_notification_returns_within_grace(self):
+        import asyncio
+
+        session = CodexSession(0)
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await asyncio.wait_for(session._wait_for_unity_mcp(), 0.2)
+        self.assertLess(loop.time() - t0, 0.2)
+
+    async def test_starting_without_terminal_status_times_out_with_warning(self):
+        import asyncio
+
+        session = CodexSession(0)
+        await session._dispatch(self._note("unityai", "starting"))
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        with self.assertLogs("providers.codex_session", level="WARNING") as logs:
+            await asyncio.wait_for(session._wait_for_unity_mcp(), 1.0)
+        self.assertGreaterEqual(loop.time() - t0, 0.3)
+        self.assertTrue(any("unityai" in line for line in logs.output))
+
+    async def test_non_unity_servers_are_ignored(self):
+        import asyncio
+
+        session = CodexSession(0)
+        await session._dispatch(self._note("nwiro", "starting"))
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await asyncio.wait_for(session._wait_for_unity_mcp(), 0.2)
+        self.assertLess(loop.time() - t0, 0.2)
 
 
 class TestCodexApprovalResponses(unittest.IsolatedAsyncioTestCase):
