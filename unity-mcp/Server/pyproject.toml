@@ -107,3 +107,9 @@ show_missing = true
 
 [tool.coverage.html]
 directory = "htmlcov"
+
+[tool.uv]
+# uv rebuilds a local package only when a cache key changes, and by default the
+# key is pyproject.toml alone: `uvx --from` kept serving a 25 Sep build after
+# src/ had changed for three weeks (measured 14 Oct 2026, uv 0.11.23).
+cache-keys = [{ file = "pyproject.toml" }, { file = "uv.lock" }, { file = "src/**/*.py" }]
