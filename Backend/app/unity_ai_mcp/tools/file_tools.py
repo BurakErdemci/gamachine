@@ -15,8 +15,20 @@ logger = logging.getLogger(__name__)
 def register_file_tools(mcp: MCPServer, get_workspace: callable):
 
     @mcp.tool()
-    async def read_file(path: str) -> str:
-        """Bir dosyayı okur."""
+    async def read_file(path: str, start_line: int = 1, max_lines: int = 500) -> str:
+        """Reads a text file. Long files: pass start_line (1-based) and max_lines (1..2000, default 500) to read any range; the footer says where to continue."""
+        if (
+            not isinstance(start_line, int)
+            or isinstance(start_line, bool)
+            or start_line < 1
+        ):
+            return "Hata: start_line 1 veya daha büyük bir tam sayı olmalı."
+        if (
+            not isinstance(max_lines, int)
+            or isinstance(max_lines, bool)
+            or not 1 <= max_lines <= 2000
+        ):
+            return "Hata: max_lines 1 ile 2000 arasında bir tam sayı olmalı."
         workspace = get_workspace()
         abs_path = _resolve(path, workspace)
         if not os.path.exists(abs_path):
@@ -24,9 +36,17 @@ def register_file_tools(mcp: MCPServer, get_workspace: callable):
         with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
         total = len(lines)
-        content = "".join(lines[:500])
-        suffix = f"\n... ({total - 500} satır daha)" if total > 500 else ""
-        return content + suffix
+        if total > 0 and start_line > total:
+            return f"Hata: start_line {start_line} dosyanın {total} satırını aşıyor."
+        first = start_line
+        last = min(total, start_line - 1 + max_lines)
+        content = "".join(lines[first - 1:last])
+        if last < total:
+            return content + (
+                f"\n... ({first}-{last} / {total} satır gösterildi; "
+                f"devamı için start_line={last + 1})"
+            )
+        return content
 
     @mcp.tool()
     async def list_directory(path: str = ".") -> str:
