@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using MCPForUnity.Runtime.Helpers;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -14,6 +15,8 @@ namespace MCPForUnity.Runtime.Playtest
     /// </summary>
     public static class PlaytestCapture
     {
+        private static readonly Type s_GraphicType = Type.GetType("UnityEngine.UI.Graphic, UnityEngine.UI");
+
         public sealed class Result
         {
             public int Frame;
@@ -97,6 +100,10 @@ namespace MCPForUnity.Runtime.Playtest
                     canvas.sortingLayerID = hudSortingLayerID;
                     cam.cullingMask |= 1 << canvas.gameObject.layer;
                 }
+                var orderedStates = canvasStates.OrderBy(state => state.SortingOrder).ToList();
+                for (int i = 0; i < orderedStates.Count; i++)
+                    orderedStates[i].Canvas.sortingOrder = Math.Max(-32768, 32767 - (orderedStates.Count - 1 - i));
+                foreach (var state in canvasStates) RebuildGraphics(state.Canvas);
                 Canvas.ForceUpdateCanvases();
 
                 string hudNote = null;
@@ -161,6 +168,8 @@ namespace MCPForUnity.Runtime.Playtest
                     {
                         UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not restore canvas '{state.Canvas.name}': {ex.Message}");
                     }
+                    try { RebuildGraphics(state.Canvas); }
+                    catch (Exception ex) { UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not rebuild restored canvas '{state.Canvas.name}': {ex.Message}"); }
                 }
                 // Each step runs even if an earlier one threw.
                 try { cam.cullingMask = prevCullingMask; }
@@ -248,6 +257,20 @@ namespace MCPForUnity.Runtime.Playtest
                     ImageBase64 = Convert.ToBase64String(source.EncodeToJPG(85)), Mime = "image/jpeg" };
             }
             finally { if (small != null) UnityEngine.Object.DestroyImmediate(small); }
+        }
+
+        private static void RebuildGraphics(Canvas canvas)
+        {
+            if (s_GraphicType == null) return;
+            var setAllDirty = s_GraphicType.GetMethod("SetAllDirty",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+                null, Type.EmptyTypes, null);
+            if (setAllDirty == null) return;
+            foreach (var graphic in canvas.GetComponentsInChildren(s_GraphicType, true))
+            {
+                try { setAllDirty.Invoke(graphic, null); }
+                catch (Exception ex) { UnityEngine.Debug.LogWarning($"[PlaytestCapture] Could not rebuild graphic: {ex.Message}"); }
+            }
         }
 
         private static void Render(Camera cam, RenderTexture rt)
