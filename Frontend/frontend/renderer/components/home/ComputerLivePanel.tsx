@@ -151,11 +151,17 @@ export function ComputerLivePanel({ visible }: { visible: boolean }) {
   }, []);
   useEffect(() => { setStopping(false); setStopFailed(false); }, [state.active, state.conversationId]);
 
+  const current = useRef(state.conversationId);
+  current.current = state.conversationId;
   const stop = async () => {
-    if (state.conversationId === null || stopping) return;
+    const conversationId = state.conversationId;
+    if (conversationId === null || stopping) return;
     setStopping(true);
     setStopFailed(false);
-    if (!(await haltFromRenderer())) {
+    const halted = await haltFromRenderer();
+    // A result for a run that is no longer shown must not touch the new run's Stop.
+    if (current.current !== conversationId) return;
+    if (!halted) {
       setStopping(false);
       setStopFailed(true);
     }
