@@ -141,7 +141,7 @@ describe('computer-use-live: active', () => {
     expect(f.indicators).toHaveLength(1)
     expect(f.indicators[0].options).toMatchObject({
       frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, show: false, type: 'panel',
-      x: 1440 - 360 - 16, y: 25 + 16, webPreferences: { preload: '/app/preload.js' },
+      x: 1440 - 400 - 16, y: 25 + 16, webPreferences: { preload: '/app/preload.js' },
     })
     expect(f.indicators[0].setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
     f.indicators[0].emit('ready-to-show')
@@ -366,7 +366,7 @@ describe('computer-use-live: indicator position', () => {
     f.state.activity = activeBody()
     f.live.beginPolling()
     await vi.advanceTimersByTimeAsync(10)
-    expect(f.indicators[0].options).toMatchObject({ x: 1064, y: 41 })
+    expect(f.indicators[0].options).toMatchObject({ x: 1024, y: 41 })
     expect(f.indicators[0].options).not.toHaveProperty('type')
     f.live.shutdown()
   })
