@@ -4,6 +4,7 @@ Each tool takes a single ``args`` dictionary. This preserves every allowed
 driver argument without default injection; policy validates it before any I/O.
 """
 from contextlib import asynccontextmanager
+import asyncio
 import os
 
 from mcp.server.mcpserver import MCPServer
@@ -73,14 +74,16 @@ def _safe_launch_targets(urls):
 class ComputerServer:
     def __init__(self, driver=None):
         self.driver = driver
+        self._driver_lock = asyncio.Lock()
 
     async def _runtime_driver(self):
-        binary, socket = await fetch_runtime()
-        if self.driver is None or (self.driver.binary, self.driver.socket) != (binary, socket):
-            if self.driver is not None:
-                await self.driver.close()
-            self.driver = DriverClient(binary, socket)
-        return self.driver
+        async with self._driver_lock:
+            binary, socket = await fetch_runtime()
+            if self.driver is None or (self.driver.binary, self.driver.socket) != (binary, socket):
+                if self.driver is not None:
+                    await self.driver.close()
+                self.driver = DriverClient(binary, socket)
+            return self.driver
 
     async def call(self, tool, args):
         validated = policy.validate_call(tool, args)
@@ -134,8 +137,9 @@ class ComputerServer:
             return _text("Bilgisayar kullanımı sürücüsüyle bağlantı kesildi; işlem yinelenmedi.", True)
 
     async def close(self):
-        if self.driver is not None:
-            await self.driver.close()
+        async with self._driver_lock:
+            if self.driver is not None:
+                await self.driver.close()
 
 
 def create_server(driver=None):

@@ -371,3 +371,58 @@ def test_driver_session_timeout_covers_maximum_window_read(fake, monkeypatch):
             await driver.close()
     asyncio.run(run())
     assert observed == [130]
+
+
+def test_public_close_permanently_prevents_transport_restart(fake, monkeypatch):
+    from unittest.mock import MagicMock
+    from computer_use import driver_client
+
+    driver, log, _ = fake
+
+    async def run():
+        try:
+            await driver.list_running_apps()
+            await driver.close()
+            transport = MagicMock(side_effect=AssertionError("closed client started a transport"))
+            monkeypatch.setattr(driver_client, "_transport", transport)
+            for operation in (driver.list_running_apps, lambda: driver.call("click", {"pid": 4242})):
+                with pytest.raises(DriverUnavailable):
+                    await operation()
+            transport.assert_not_called()
+        finally:
+            await driver.close()
+
+    asyncio.run(run())
+    assert len({row["process"] for row in calls(log)}) == 1
+
+
+def test_caller_cancellation_keeps_client_reusable(fake, monkeypatch):
+    from computer_use import driver_client
+
+    driver, log, _ = fake
+
+    async def run():
+        entered = asyncio.Event()
+        original = driver_client.DriverClient._serve
+
+        async def pending(queue):
+            entered.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(driver, "_serve", pending)
+        # One cancelled owner task, then at most one fake driver process.
+        task = asyncio.create_task(driver.call("list_apps", {}))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            monkeypatch.setattr(driver, "_serve", original.__get__(driver))
+            assert 4242 in await driver.list_running_apps()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await driver.close()
+
+    asyncio.run(run())
+    assert len({row["process"] for row in calls(log)}) == 1

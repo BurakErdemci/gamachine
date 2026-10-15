@@ -113,6 +113,7 @@ class DriverClient:
         self.env.update(CUA_DRIVER_EMBEDDED="1", DO_NOT_TRACK="1",
                         CUA_DRIVER_RS_TELEMETRY_ENABLED="0", CUA_DRIVER_RS_UPDATE_CHECK="0")
         self._lock = asyncio.Lock()
+        self._closed = False
         self._task = None
         self._queue = None
 
@@ -142,6 +143,8 @@ class DriverClient:
 
     async def call(self, tool, args) -> CallToolResult:
         async with self._lock:
+            if self._closed:
+                raise DriverUnavailable("Computer-use driver client is closed")
             if self._task is None or self._task.done():
                 self._queue = asyncio.Queue(maxsize=1)
                 self._task = asyncio.create_task(self._serve(self._queue))
@@ -168,6 +171,7 @@ class DriverClient:
 
     async def close(self):
         async with self._lock:
+            self._closed = True
             if self._task is not None and not self._task.done():
                 await self._queue.put(None)
                 await self._task
