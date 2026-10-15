@@ -150,7 +150,8 @@ export class ComputerUseHost {
   private async startChild() {
     if (this.stopped || this.child || !this.available) return
     const home = this.preparePaths()
-    const env: NodeJS.ProcessEnv = {}
+    // Next's global types make NODE_ENV required; the driver deliberately gets none.
+    const env = {} as NodeJS.ProcessEnv
     for (const key of ['PATH', 'HOME', 'TMPDIR']) {
       if (process.env[key] !== undefined) env[key] = process.env[key]
     }
