@@ -157,7 +157,8 @@ def test_auto_drain_leaves_computer_card_pending(env):
 def test_settings_writes_require_secret_and_auto_only_for_enabling(env):
     client = env.client
     assert client.get("/computer-use/settings").json() == {
-        "enabled": True, "mode": "auto", "active": True, "grants": []}
+        "enabled": True, "mode": "auto", "active": True, "grants": [],
+        "runtime": {"running": False, "driver_path": None, "socket_path": None}}
     assert client.post("/computer-use/settings", json={"enabled": True}).status_code == 403
     headers = {"X-Gamachine-UI-Secret": SECRET}
     assert client.post("/computer-use/settings", json={"enabled": True}, headers=headers).status_code == 200

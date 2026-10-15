@@ -96,6 +96,12 @@ extraResources:
       - "bin/**/*"
       - "models/**/*"
 mac:
+  extraResources:
+    - from: ../../Backend/vendor/cua
+      to: cua
+      filter:
+        - cua-driver
+        - LICENSE
   category: public.app-category.developer-tools
   # Measured 3 Sep 2026: `grep -rn NSMicrophone Frontend/frontend` → 0 hits, the key
   # existed nowhere. macOS KILLS an app whose Info.plist lacks this description the

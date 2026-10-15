@@ -8,6 +8,10 @@ from starlette.requests import Request
 
 
 EN: dict[str, str] = {
+    "Bilgisayar kullanımı çalışma durumu yalnız uygulama arayüzünden bildirilebilir.":
+        "Computer-use runtime can only be reported from the app interface.",
+    "Bilgisayar kullanımı çalışma durumu geçersiz.": "Invalid computer-use runtime state.",
+    "Bilgisayar kullanımı sürücü ve soket yolları geçersiz.": "Invalid computer-use driver and socket paths.",
     "Bilgisayar kullanımı yalnız uygulama arayüzünden onaylanabilir.":
         "Computer use can only be approved from the app interface.",
     "Bu kanaldan bilgisayar kullanımı değiştirilemez.":

@@ -18,6 +18,12 @@
     "          Bu satırlarda güven kökü hesaplayan kişidir, vendor değil."
   ],
   "assets": {
+    "cua-driver/macos-universal2": {
+      "url": "https://files.pythonhosted.org/packages/e0/7e/b219a2605c6139cef149652b72864ecabcf125db16b7b9b2c77d368e1586/cua_driver-0.35.4-py3-none-macosx_13_0_universal2.whl",
+      "digest": "sha256:23dc0a4f2ce16f6dd068a1781cba3cd4c6d5954180a64ee27e9c01a0d84ae857",
+      "size": 49233277,
+      "kaynak": "pypi"
+    },
     "omnisharp/win-x64": {
       "url": "https://github.com/OmniSharp/omnisharp-roslyn/releases/download/v1.39.15/omnisharp-win-x64-net6.0.zip",
       "digest": "sha256:b03eb6b9ac6446fce803b87c0965e94cef5570cc86f47bfefe2f60933d8658e8",

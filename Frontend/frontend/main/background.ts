@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import net from 'net'
 import { randomUUID, createHash } from 'crypto'
-import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker } from 'electron'
+import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences } from 'electron'
 import serve from 'electron-serve'
 import { createWindow } from './helpers'
 import { spawn, ChildProcess } from 'child_process'
@@ -42,6 +42,7 @@ import {
 } from './helpers/workspace-fingerprint'
 import { createNotifier } from './helpers/notify'
 import { createRemoteControl } from './helpers/remote-control'
+import { ComputerUseHost } from './helpers/computer-use'
 import { createProfileReset } from './helpers/profile-reset'
 import { collectMtimes } from './helpers/stat-mtimes'
 
@@ -761,6 +762,7 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
       },
     )
     console.log(`[approval-mode] ${response.data?.previous} -> ${response.data?.mode} (source=${src})`)
+    await computerUse.reconcile()
     return response.data
   } catch (error) {
     const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
@@ -803,6 +805,23 @@ const remoteControl = createRemoteControl({
   log: (...args) => console.log(...args),
 })
 handleSecure('remote-control', (_event, action: unknown, arg: unknown) => remoteControl.invoke(action, arg))
+
+const computerUse = new ComputerUseHost({
+  platform: process.platform, spawn, connect: (socket, connected) => net.createConnection(socket, connected),
+  fs, http: axios, baseUrl: getBackendBaseUrl, appToken: localAppToken, uiSecret,
+  paths: {
+    resourcesPath: app.isPackaged ? process.resourcesPath : undefined,
+    repoRoot: path.resolve(app.getAppPath?.() ?? process.cwd(), '..', '..'),
+    userData: app.getPath('userData'), tmpdir: os.tmpdir(),
+  },
+  systemPreferences: {
+    isTrustedAccessibilityClient: prompt => systemPreferences.isTrustedAccessibilityClient(prompt),
+    getMediaAccessStatus: media => systemPreferences.getMediaAccessStatus(media),
+  },
+  shell: { openExternal: url => shell.openExternal(url) },
+  log: (...args) => console.log(...args),
+})
+handleSecure('computer-use', (_event, req: unknown) => computerUse.invoke(req))
 
 // The renderer picks a folder with a HOST path, but in Docker mode the backend
 // is a different filesystem namespace where that path does not exist — only the
@@ -1210,6 +1229,7 @@ if (!gotTheLock) {
       try {
         await startPythonBackend()
         remoteControl.start()
+        computerUse.beginPolling()
       } catch (err) {
         console.error('--- BACKEND BAŞLATILAMADI ---', err)
         backendPort = null
@@ -1416,16 +1436,25 @@ if (!gotTheLock) {
 
   app.on('window-all-closed', () => {
     remoteControl.shutdown()
-    killBackend()
-    app.quit()
+    void computerUse.shutdown().finally(() => { killBackend(); app.quit() })
   })
 
-  app.on('before-quit', () => {
+  let quitReady = false
+  app.on('before-quit', (event) => {
     remoteControl.shutdown()
-    killBackend()
+    if (quitReady) { killBackend(); return }
+    event.preventDefault()
+    void computerUse.shutdown().finally(() => {
+      quitReady = true
+      killBackend()
+      app.quit()
+    })
   })
 
   // Beklenmedik çıkışlarda da temizle
-  process.on('exit', killBackend)
-  process.on('SIGTERM', () => { killBackend(); process.exit(0) })
+  process.on('exit', () => { remoteControl.shutdown(); void computerUse.shutdown(true); killBackend() })
+  process.on('SIGTERM', () => {
+    remoteControl.shutdown()
+    void computerUse.shutdown().finally(() => { killBackend(); process.exit(0) })
+  })
 }

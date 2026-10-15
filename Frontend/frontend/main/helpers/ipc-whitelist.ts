@@ -31,6 +31,7 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'terminal-resize',
   'notify',
   'remote-control',
+  'computer-use',
   'profile-reset',
   'workspace-info',
   'open-unity-hub',

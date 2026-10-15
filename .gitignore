@@ -39,6 +39,8 @@ Backend/build/
 # uv araç zinciri — installer'a gömülür ama repoya konmaz (~66MB).
 # Tekrar build için: pwsh Backend/vendor/fetch_uv.ps1
 Backend/vendor/uv/
+# Rebuild: node Frontend/frontend/scripts/fetch-cua-driver.js (macOS only).
+Backend/vendor/cua/
 # Video araçları (~126MB, ffmpeg+yt-dlp) — repoda tutulmaz.
 # Tekrar: pwsh Backend/vendor/fetch_video_bins.ps1  (mac/linux: bash fetch_video_bins.sh)
 Backend/vendor/bin/win/*.exe

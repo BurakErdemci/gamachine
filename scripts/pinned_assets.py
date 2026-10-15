@@ -519,10 +519,31 @@ def _resolve_roslyn(key: str, entry: dict, ctx: dict) -> dict:
     return {"kind": "guncel", "surum": pinli}
 
 
+def _resolve_cua_driver(key: str, entry: dict, ctx: dict) -> dict:
+    """Verify the pinned wheel against PyPI's version-specific metadata."""
+    filename = _basename(entry["url"])
+    match = re.fullmatch(r"cua_driver-([0-9.]+)-.+\.whl", filename)
+    if not match:
+        raise RefreshError("invalid cua-driver wheel filename")
+    version = match.group(1)
+    metadata = _http_json(f"https://pypi.org/pypi/cua-driver/{version}/json")
+    wheel = next((item for item in metadata["urls"] if item["filename"] == filename), None)
+    if not wheel:
+        raise RefreshError(f"cua-driver {version}: pinned wheel missing on PyPI")
+    digest = wheel["digests"]["sha256"]
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise RefreshError("invalid PyPI sha256")
+    return {"kind": "pin", "url": wheel["url"], "surum": version, "finalize": lambda: {
+        "url": wheel["url"], "digest": f"sha256:{digest}", "size": int(wheel["size"]), "kaynak": "pypi",
+    }}
+
+
 def _resolver_for(key: str):
     """Anahtar → çözümleyici. Sözlük değil zincir: anahtarlar önek taşıyor
     (`omnisharp/win-x64`) ve yeni bir platform eklendiğinde burada değişiklik
     gerekmemesi isteniyor."""
+    if key == "cua-driver/macos-universal2":
+        return _resolve_cua_driver
     if key.startswith("omnisharp/"):
         return lambda k, e, c: _github_pin("OmniSharp/omnisharp-roslyn", e, c, "api", "github-api")
     if key.startswith("uv/"):

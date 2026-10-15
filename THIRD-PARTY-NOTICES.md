@@ -22,6 +22,12 @@ the project history.
 
 ## Bundled runtime components
 
+### cua-driver 0.35.4 — **[bundled] [fetched]** (macOS)
+**MIT License** — https://github.com/trycua/cua
+
+The universal macOS daemon is extracted unmodified from the pinned PyPI wheel.
+Its license is included alongside the executable at `cua/LICENSE` in the app resources.
+
 ### FFmpeg — **[bundled] [fetched]** — ⚠️ the license differs per platform
 The bundled FFmpeg build is **not under the same license on every platform**. The
 exact builds are pinned in `scripts/pinned_assets.json`; the table reflects those

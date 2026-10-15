@@ -94,8 +94,10 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // like 'approval-mode-set'; the handler takes no argument from the renderer.
   // 33 -> 35, 2 Oct 2026: 'workspace-info' inspects trusted project folders;
   // 'open-unity-hub' opens only a locally discovered Unity Hub installation.
-  it('contains exactly 35 channels', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(35)
+  // 35 -> 36: computer-use keeps daemon ownership and approval secrets in main.
+  it('contains exactly 36 channels', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(36)
+    expect(ALLOWED_INVOKE_CHANNELS.has('computer-use')).toBe(true)
   })
 
   it('allows welcome screen project information and Unity Hub actions', () => {
