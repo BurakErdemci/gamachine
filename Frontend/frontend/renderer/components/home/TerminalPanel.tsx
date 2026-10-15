@@ -7,6 +7,7 @@ import { useLang, type TKey } from '../../lib/i18n';
 import { useAutoScroll } from '../../hooks/home/useAutoScroll';
 import { isLight, onThemeChange, readColorTokens, readToken } from '../../lib/themeTokens';
 import { useAppearance } from '../../lib/appearance';
+import { announceCopied } from '../../lib/copyOnSelect';
 
 interface TerminalPanelProps {
   id: string;
@@ -297,14 +298,20 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
 
       const fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
-      term.open(terminalRefs.current[sId]!);
+      const terminalElement = terminalRefs.current[sId]!;
+      term.open(terminalElement);
 
-      const selectionSubscription = term.onSelectionChange(() => {
+      // Copy on mouse release instead of selection changes to avoid copying every drag step.
+      const onSelectionMouseUp = (event: MouseEvent) => {
         if (!copyOnSelect.current || !term.hasSelection()) return;
         const text = term.getSelection();
         if (!text.trim()) return;
-        try { void Promise.resolve(navigator.clipboard?.writeText(text)).catch(() => {}); } catch {}
-      });
+        const { clientX: x, clientY: y } = event;
+        try {
+          void Promise.resolve(navigator.clipboard.writeText(text)).then(() => announceCopied(x, y)).catch(() => {});
+        } catch {}
+      };
+      terminalElement.addEventListener('mouseup', onSelectionMouseUp);
 
       terminalInstancesRef.current[sId] = term;
       fitAddonsRef.current[sId] = fitAddon;
@@ -352,7 +359,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         () => {
           observer?.disconnect();
           window.removeEventListener('resize', handleResize);
-          selectionSubscription.dispose();
+          terminalElement.removeEventListener('mouseup', onSelectionMouseUp);
           term.dispose();
         }
       ];

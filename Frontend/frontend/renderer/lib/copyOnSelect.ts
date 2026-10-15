@@ -1,3 +1,9 @@
+export const COPIED_EVENT = 'gm:copied'
+
+export function announceCopied(x: number, y: number): void {
+  window.dispatchEvent(new CustomEvent(COPIED_EVENT, { detail: { x, y } }))
+}
+
 function isEditable(node: Node | null): boolean {
   const element = node instanceof Element ? node : node?.parentElement
   return !!element?.closest('input, textarea, [contenteditable]:not([contenteditable="false" i]), .monaco-editor')
@@ -12,18 +18,21 @@ export function selectedTextToCopy(selection: Selection | null, active: Element 
 
 export function installCopyOnSelect(
   isEnabled: () => boolean,
-  write: (text: string) => void | Promise<void> = text => navigator.clipboard?.writeText(text),
+  write: (text: string) => void | Promise<void> = text => navigator.clipboard.writeText(text),
 ): () => void {
   let pending: ReturnType<typeof setTimeout> | undefined
-  const onMouseUp = () => {
+  const onMouseUp = (event: MouseEvent) => {
     if (!isEnabled()) return
+    const { clientX: x, clientY: y } = event
     clearTimeout(pending)
     pending = setTimeout(() => {
       pending = undefined
       if (!isEnabled()) return
       const text = selectedTextToCopy(document.getSelection(), document.activeElement)
       if (text !== null) {
-        try { void Promise.resolve(write(text)).catch(() => {}) } catch { /* Clipboard may be unavailable. */ }
+        try {
+          void Promise.resolve(write(text)).then(() => announceCopied(x, y)).catch(() => {})
+        } catch { /* Clipboard may be unavailable. */ }
       }
     }, 0)
   }

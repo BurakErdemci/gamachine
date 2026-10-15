@@ -62,9 +62,25 @@
 /* Atolye: the paper tag of the done band, heavier kicker */
 [data-theme="atolye"] .gm-toast-k { font-weight: 700; }
 
+.gm-copied {
+  position: fixed; z-index: 201; pointer-events: none;
+  width: max-content; max-width: calc(100vw - 16px); padding: 5px 10px;
+  background: var(--toast-bg); color: var(--toast-text);
+  border: 1px solid var(--toast-line); border-left: 3px solid var(--toast-ok); border-radius: 999px;
+  box-shadow: var(--shadow-card); overflow-wrap: anywhere;
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight);
+  animation: gm-copied-in 120ms ease-out both, gm-copied-out 200ms ease-in 1000ms forwards;
+}
+@keyframes gm-copied-in { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
+@keyframes gm-copied-out { to { opacity: 0; transform: scale(.96); } }
+@keyframes gm-copied-opacity-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gm-copied-opacity-out { to { opacity: 0; } }
+
 @media (prefers-reduced-motion: reduce) {
+  .gm-copied { animation: gm-copied-opacity-in 120ms ease-out both, gm-copied-opacity-out 200ms ease-in 1000ms forwards; }
   .gm-toast { animation: none; }
   .gm-toast-life { display: none; }   /* a frozen fuse would read as a stuck timer */
 }
 :root[data-motion="reduced"] .gm-toast { animation: none; }
 :root[data-motion="reduced"] .gm-toast-life { display: none; }
+:root[data-motion="reduced"] .gm-copied { animation: gm-copied-opacity-in 120ms ease-out both, gm-copied-opacity-out 200ms ease-in 1000ms forwards; }

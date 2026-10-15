@@ -28,7 +28,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}))
 
-import { selectedTextToCopy, installCopyOnSelect } from '../renderer/lib/copyOnSelect'
+import { COPIED_EVENT, announceCopied, selectedTextToCopy, installCopyOnSelect } from '../renderer/lib/copyOnSelect'
 import { CopyOnSelect } from '../renderer/components/ui/CopyOnSelect'
 import { TerminalPanel } from '../renderer/components/home/TerminalPanel'
 import { AppearancePage } from '../renderer/components/home/settings/SettingsPages'
@@ -68,8 +68,8 @@ function selectText(start: Node, end = start) {
   return selection
 }
 
-function releaseMouse() {
-  fireEvent.mouseUp(document)
+function releaseMouse(target: Document | Element = document, clientX = 100, clientY = 200) {
+  fireEvent.mouseUp(target, { clientX, clientY })
   act(() => { vi.runOnlyPendingTimers() })
 }
 
@@ -202,36 +202,146 @@ describe('document copy on select', () => {
 describe('terminal copy on select', () => {
   it('copies xterm selection, reads toggles without recreating the terminal and disposes the listener', () => {
     const view = render(<AppearanceProvider><Harness terminal /></AppearanceProvider>)
+    const host = view.container.querySelector('.term-host')!
     expect(terms).toHaveLength(1)
     const term = terms[0]
     term.selectionChanged()
+    expect(writeText).not.toHaveBeenCalled()
+    releaseMouse(host)
     expect(writeText).toHaveBeenCalledExactlyOnceWith('terminal output')
     fireEvent.click(screen.getByText('toggle copy'))
     term.selectionChanged()
+    releaseMouse(host)
     expect(writeText).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByText('toggle copy'))
     term.selectionChanged()
+    releaseMouse(host)
     expect(writeText).toHaveBeenCalledTimes(2)
     expect(terms).toHaveLength(1)
     term.selection = ' \n '
     term.selectionChanged()
+    releaseMouse(host)
     term.selection = 'text'
     term.selected = false
     term.selectionChanged()
+    releaseMouse(host)
     expect(writeText).toHaveBeenCalledTimes(2)
     view.unmount()
-    expect(term.disposeSelection).toHaveBeenCalledTimes(1)
+    releaseMouse(host)
+    expect(writeText).toHaveBeenCalledTimes(2)
   })
 
   it('silently handles clipboard failures and missing clipboard', async () => {
-    render(<AppearanceProvider><Harness terminal /></AppearanceProvider>)
+    const view = render(<AppearanceProvider><Harness terminal /></AppearanceProvider>)
+    const host = view.container.querySelector('.term-host')!
     writeText.mockRejectedValueOnce(new Error('denied'))
-    terms[0].selectionChanged()
+    releaseMouse(host)
     await act(async () => { await Promise.resolve() })
+    expect(view.container.querySelector('.gm-copied')).toBeNull()
     writeText.mockImplementationOnce(() => { throw new Error('unavailable') })
-    expect(() => terms[0].selectionChanged()).not.toThrow()
+    expect(() => releaseMouse(host)).not.toThrow()
     vi.stubGlobal('navigator', {})
-    expect(() => terms[0].selectionChanged()).not.toThrow()
+    expect(() => releaseMouse(host)).not.toThrow()
+    await act(async () => { await Promise.resolve() })
+    expect(view.container.querySelector('.gm-copied')).toBeNull()
+  })
+
+  it('announces once at release after a successful write, never while dragging', async () => {
+    let finish!: () => void
+    writeText.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+    const announced = vi.fn()
+    window.addEventListener(COPIED_EVENT, announced)
+    try {
+      const view = render(<AppearanceProvider><Harness terminal /></AppearanceProvider>)
+      const host = view.container.querySelector('.term-host')!
+      terms[0].selectionChanged()
+      terms[0].selectionChanged()
+      expect(writeText).not.toHaveBeenCalled()
+      expect(announced).not.toHaveBeenCalled()
+      releaseMouse(host, 40, 60)
+      expect(writeText).toHaveBeenCalledTimes(1)
+      expect(announced).not.toHaveBeenCalled()
+      await act(async () => { finish() })
+      expect(announced).toHaveBeenCalledTimes(1)
+      expect(announced.mock.calls[0][0].detail).toEqual({ x: 40, y: 60 })
+      expect(screen.getByRole('status').style.left).toBe('52px')
+      expect(screen.getByRole('status').style.top).toBe('72px')
+    } finally {
+      window.removeEventListener(COPIED_EVENT, announced)
+    }
+  })
+})
+
+describe('copied chip', () => {
+  it('appears after the write resolves at the release position and expires at 1200 ms', async () => {
+    let finish!: () => void
+    writeText.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+    render(<AppearanceProvider><Harness /></AppearanceProvider>)
+    selectText(screen.getByTestId('plain').firstChild!)
+    releaseMouse(document, 25, 35)
+    expect(screen.queryByRole('status')).toBeNull()
+    await act(async () => { finish() })
+    const chip = screen.getByRole('status')
+    expect(chip.textContent).toBe('Kopyalandı')
+    expect(chip.className).toBe('gm-copied')
+    expect(chip.getAttribute('aria-live')).toBe('polite')
+    expect(chip.style.left).toBe('37px')
+    expect(chip.style.top).toBe('47px')
+    act(() => { vi.advanceTimersByTime(1199) })
+    expect(screen.getByRole('status')).toBe(chip)
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('replaces the chip and restarts its lifetime for a second copy', () => {
+    render(<AppearanceProvider><Harness /></AppearanceProvider>)
+    act(() => { announceCopied(10, 20) })
+    act(() => { vi.advanceTimersByTime(1000) })
+    act(() => { announceCopied(30, 40) })
+    expect(screen.getAllByRole('status')).toHaveLength(1)
+    expect(screen.getByRole('status').style.left).toBe('42px')
+    act(() => { vi.advanceTimersByTime(1199) })
+    expect(screen.getAllByRole('status')).toHaveLength(1)
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('clamps the measured chip to an eight-pixel viewport margin', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(90)
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(28)
+    render(<AppearanceProvider><Harness /></AppearanceProvider>)
+    act(() => { announceCopied(window.innerWidth, window.innerHeight) })
+    expect(screen.getByRole('status').style.left).toBe(`${window.innerWidth - 98}px`)
+    expect(screen.getByRole('status').style.top).toBe(`${window.innerHeight - 36}px`)
+    act(() => { announceCopied(-20, -20) })
+    expect(screen.getByRole('status').style.left).toBe('8px')
+    expect(screen.getByRole('status').style.top).toBe('8px')
+  })
+
+  it.each(['rejected', 'throws', 'missing', 'blank', 'editable', 'disabled'])('stays hidden for %s copies', async kind => {
+    render(<AppearanceProvider><Harness /><div data-testid="blank">{'   '}</div><input /></AppearanceProvider>)
+    selectText(screen.getByTestId(kind === 'blank' ? 'blank' : 'plain').firstChild!)
+    if (kind === 'rejected') writeText.mockRejectedValueOnce(new Error('denied'))
+    if (kind === 'throws') writeText.mockImplementationOnce(() => { throw new Error('unavailable') })
+    if (kind === 'missing') vi.stubGlobal('navigator', {})
+    if (kind === 'editable') screen.getByRole('textbox').focus()
+    if (kind === 'disabled') fireEvent.click(screen.getByText('toggle copy'))
+    releaseMouse()
+    await act(async () => { await Promise.resolve() })
+    expect(screen.queryByRole('status')).toBeNull()
+    if (['blank', 'editable', 'disabled'].includes(kind)) expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('uses the English translation and removes its event listener on unmount', () => {
+    const view = render(<LangContext.Provider value={{ lang: 'en', setLang: () => {}, t: (key, values) => ceviriUygula('en', key, values) }}>
+      <AppearanceProvider><Harness /></AppearanceProvider>
+    </LangContext.Provider>)
+    act(() => { announceCopied(10, 20) })
+    expect(screen.getByRole('status').textContent).toBe('Copied')
+    view.unmount()
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => { announceCopied(10, 20) })
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 
