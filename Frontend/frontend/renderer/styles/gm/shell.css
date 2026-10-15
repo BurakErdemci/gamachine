@@ -71,8 +71,17 @@
 .app[data-model="codex"] { --model: var(--model-codex); }
 .app[data-model="gemini"] { --model: var(--model-gemini); }
 .app[data-model="other"] { --model: var(--model-other); }
-.app-main { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.app-right { grid-column: 3; grid-row: 2; min-height: 0; display: flex; }
+/* Query the area actually left by the sidebar, including its collapse animation. */
+.app-body {
+  grid-column: 2 / -1; grid-row: 2; min-width: 0; min-height: 0;
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr); container: app-body / inline-size;
+}
+.app-main { grid-column: 1; grid-row: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.app-right { grid-column: 2; grid-row: 1; min-width: 0; min-height: 0; display: flex; }
+.app[data-screen="ayarlar"] > .app-body,
+.app[data-screen="profil"] > .app-body,
+.app[data-screen="rehber"] > .app-body { display: none; }
 
 .shell { background: var(--shell-bg); color: var(--shell-text); position: relative; }
 .shell > *:not(.tex) { position: relative; z-index: 1; }

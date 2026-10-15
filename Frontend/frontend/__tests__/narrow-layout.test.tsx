@@ -141,10 +141,11 @@ describe('sidebar and panel in a narrow window', () => {
 describe('narrow-layout css', () => {
   const css = (f: string) => fs.readFileSync(path.join(__dirname, '..', 'renderer', 'styles', 'gm', f), 'utf-8')
 
-  it('breaks at 1100 px and keeps the panel a column (no overlay drawer)', () => {
+  it('keeps the sidebar handoff at 1100px and overlays only when the main area cannot fit both columns', () => {
     expect(WS_NARROW_QUERY).toBe('(max-width: 1099px)')
     expect(css('workspace.css')).not.toContain('@media (max-width: 1099px)')
-    expect(css('workspace.css')).not.toMatch(/\.app-right\s*\{[^}]*position:\s*absolute/)
+    expect(css('workspace.css')).toContain('@container app-body (width < 720px)')
+    expect(css('workspace.css')).toMatch(/\.app-right\s*\{[^}]*position:\s*absolute/)
   })
 
   it('starts a greeting taller than the chat at the top instead of cutting it', () => {

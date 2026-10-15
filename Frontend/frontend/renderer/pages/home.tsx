@@ -1052,6 +1052,7 @@ export default function Home() {
       </header>
 
       {/* ===== Chat stage (mockup `main.stage.paper`): the main column since the v4 swap. ===== */}
+      <div className="app-body">
       <main
         className={`app-main stage paper${chat.loading ? ' is-working' : ''}`}
         aria-label={t('sidebar.chats')}
@@ -1313,6 +1314,8 @@ export default function Home() {
             />
           )}
         />
+      </div>
+
       </div>
 
       {/* The tour overlay (core tour or one guide topic) over the whole frame. */}

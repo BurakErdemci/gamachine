@@ -7,12 +7,7 @@
    rules in theme-*.workspace.css. App glue (the Monaco / xterm / three.js hosts, the empty
    states, the file tree's row actions) is at the end, on tokens only. */
 
-/* ======================= WIDTHS (#11 panel) =======================
-   The mockup sets the grid tracks; here the side tracks stay `auto` (the sidebar slot animates its
-   own width), so the panel carries the track as its width. Same px as the mockup: dar 360,
-   yarim = half of what the sidebar leaves, odak = all but a 400 px chat strip. At 1280 with the
-   sidebar that is 360 / 520 / 640, the mockup's round-8 numbers. Length <-> length interpolates,
-   so the width change itself is motion #11. */
+/* The chosen width is capped below against the actual area left by the sidebar. */
 .app { --side-w: 240px; --ws-w: 360px; }
 .app[data-side="closed"] { --side-w: 0px; }
 .app[data-ws="yarim"] { --ws-w: calc((100vw - var(--side-w)) / 2); }
@@ -30,6 +25,19 @@
 }
 /* hidden, never unmounted (home.tsx): the class's display would otherwise beat [hidden] */
 .workspace[hidden] { display: none; }
+/* Standalone workspace hosts keep their chosen width; the app reserves 420px for chat. */
+.app-body > .app-right > .workspace {
+  width: clamp(300px, var(--ws-w), calc(100cqi - 420px));
+}
+@container app-body (width < 720px) {
+  .app-right {
+    position: absolute; grid-column: 1 / -1; grid-row: 1;
+    top: 0; right: 0; bottom: 0; max-width: 100%; z-index: 4;
+    box-shadow: -12px 0 28px rgb(0 0 0 / .2);
+  }
+  .app-right:has(> .workspace[hidden]) { box-shadow: none; }
+  .app-body > .app-right > .workspace { width: min(max(300px, var(--ws-w)), 100cqi); }
+}
 .workspace > *:not(.tex) { position: relative; z-index: 1; }
 .tex-panel { background-image: var(--panel-tex); background-size: var(--panel-tex-size); }
 .workspace.is-entering { animation: panel-in var(--g-dur-base) var(--g-ease-enter); }
