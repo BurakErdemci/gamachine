@@ -42,9 +42,6 @@ class UnityMCPManager:
         # MCP sunucusunun yerel REST uçlarının (/api/*) paylaşımlı sırrı. Her
         # start_server'da yenilenir; sunucu bizim değilse None kalır.
         self.local_api_token: Optional[str] = None
-        # Bu açılışta cache baypas edilerek kurulan kaynağın özeti; yalnız
-        # sunucu sağlıklı görülünce diske yazılır (bkz. _record_server_source_hash).
-        self._pending_source_hash: Optional[str] = None
         # start_server'ın başarısızlık SEBEBİ. Port çakışmasında kullanıcıya
         # gösterilecek metin buradan geliyor; sadece "başlatılamadı" demek
         # kullanıcıyı çözümsüz bırakıyordu.
@@ -62,94 +59,6 @@ class UnityMCPManager:
         self.server_dir = os.path.join(self.project_root, "unity-mcp", "Server")
         self.local_mcp_source = os.path.join(self.project_root, "unity-mcp", "MCPForUnity")
         self.unity_mcp_repo = f"file:{self.local_mcp_source}"
-
-    def _source_hash_path(self) -> str:
-        return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "mcp_server_src.hash")
-
-    def _compute_server_source_hash(self) -> str:
-        """Server/ kaynağının içerik özeti. Okunamazsa boş döner (→ cache baypas edilir)."""
-        import hashlib
-        h = hashlib.sha256()
-        try:
-            # uv.lock is hashed because the launch is pinned to it: a cached
-            # tool env built from the previous lock would keep old versions.
-            for root in (os.path.join(self.server_dir, "src"),
-                         os.path.join(self.server_dir, "pyproject.toml"),
-                         os.path.join(self.server_dir, "uv.lock")):
-                if os.path.isfile(root):
-                    h.update(os.path.basename(root).encode())
-                    with open(root, "rb") as fh:
-                        h.update(fh.read())
-                    continue
-                for dirpath, dirnames, filenames in os.walk(root):
-                    dirnames[:] = [d for d in dirnames if d not in ("__pycache__", ".venv")]
-                    for name in sorted(filenames):
-                        if name.endswith((".pyc", ".pyo")):
-                            continue
-                        full = os.path.join(dirpath, name)
-                        h.update(os.path.relpath(full, self.server_dir).encode())
-                        with open(full, "rb") as fh:
-                            h.update(fh.read())
-            return h.hexdigest()
-        except Exception as e:
-            logger.warning(f"[UnityMCP] Kaynak özeti hesaplanamadı: {e}")
-            return ""
-
-    def _server_source_changed(self) -> bool:
-        """uvx cache'i baypas edilmeli mi?
-
-        Neden bayrak gerekli: ``uvx --from <yerel dizin>`` cache'i, o dizindeki
-        kaynak değişince KENDİLİĞİNDEN geçersizleşmiyor — ölçüldü (2026-07-27):
-        kaynağa eklenen bir belirteç cache'li koşumda görünmedi, ``--no-cache``
-        ile görünüyordu; ``--refresh`` de yakalamadı. Yani onsuz sunucu sessizce
-        eski kodu çalıştırır.
-
-        Neden HER ZAMAN kullanılmıyor: ``--no-cache`` bağımlılıkları her açılışta
-        PyPI'dan çekiyor, yani yerel bir özelliği **internet zorunlu** hale
-        getiriyor. Aynı ölçüm: ``--no-cache --offline`` BAŞARISIZ, cache'li
-        ``--offline`` 1 saniyede çalıştı. Sahada yaşandı — kısıtlı bir public
-        ağda sunucu ancak 2 dk 26 sn'de ayağa kalktı, Unity o sırada yeniden
-        bağlanmaktan vazgeçti ve toggle 20 dakika sarıda kaldı; hiçbir katman
-        sebebin ağ olduğunu söylemedi.
-
-        Karar bu yüzden içerik özetine bağlı: son kullanıcıda kaynak hiç
-        değişmez → hep cache → hızlı ve çevrimdışı çalışır. Geliştiricide kaynak
-        değişince bir kez yavaş koşum olur, sonrası yine hızlıdır.
-        """
-        current = self._compute_server_source_hash()
-        if not current:
-            return True  # özet alınamadı → güvenli taraf: bayat kod çalıştırma
-        try:
-            with open(self._source_hash_path(), "r", encoding="utf-8") as fh:
-                return fh.read().strip() != current
-        except Exception:
-            return True
-
-    def _record_server_source_hash(self) -> None:
-        """Sunucunun AYAKTA olduğu doğrulandıktan sonra çağrılır.
-
-        İKİ koşul birden gerekiyor, ve ikincisi bir saha arızasından geldi:
-
-        1. Sunucu gerçekten ayakta (health 200). Erken yazılırsa yarıda kalmış
-           bir kurulum 'güncel' işaretlenir.
-        2. Bu süreç `--no-cache` ile başlatılmış olmalı — yani çalışan build
-           GERÇEKTEN bu kaynaktan derlendi. Aksi halde cache'ten gelen eski bir
-           build'in sağlıklı yanıtı, güncel kaynağı "kurulmuş" saydırıyordu.
-
-        Özet burada yeniden HESAPLANMIYOR, başlatma anında yakalanan değer
-        yazılıyor: başlatmadan sonra kaynağa dokunulmuşsa o değişiklik çalışan
-        sürece girmemiştir ve 'kurulu' sayılmamalıdır.
-        """
-        current = getattr(self, "_pending_source_hash", None)
-        if not current:
-            return
-        try:
-            path = self._source_hash_path()
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(current)
-        except Exception as e:
-            logger.warning(f"[UnityMCP] Kaynak özeti yazılamadı: {e}")
 
     def _ensure_writable_resources(self) -> None:
         """Frozen build: bundled Server/MCPForUnity Program Files altında (yazılamaz).
@@ -433,17 +342,8 @@ class UnityMCPManager:
         self._ensure_writable_resources()  # frozen: Server'ı yazılabilir dizine taşı
         uvx = self._get_uvx()
         cmd = [uvx]
-        # Özet BAŞLATMA ANINDA yakalanıyor ve yalnız cache baypas edildiyse
-        # kaydedilecek (bkz. _record_server_source_hash). Sebep ölçüldü
-        # 2026-07-27: özet health anında yeniden hesaplanıyordu ve başarılı bir
-        # /health, çalışan sürecin O KAYNAKTAN doğduğunu kanıtlamıyor — cache'ten
-        # gelen eski bir build de 200 döner. Sonuç, eski bir build'in "güncel"
-        # damgalanması ve sonraki açılışların cache'e düşmesiydi: sunucu aylarca
-        # bayat kod çalıştırabilirdi ve her şey sağlıklı görünürdü.
-        self._pending_source_hash = None
-        if self._server_source_changed():
-            cmd.append("--no-cache")
-            self._pending_source_hash = self._compute_server_source_hash()
+        # Freshness comes from [tool.uv] cache-keys in unity-mcp/Server/pyproject.toml;
+        # --no-cache is not used because it re-downloads every dependency on each launch.
         cmd += [
             "--from", self.server_dir,
             "mcp-for-unity",
@@ -635,11 +535,6 @@ class UnityMCPManager:
                     f"http://localhost:{self.mcp_port}/health", timeout=2.0
                 )
                 healthy = res.status_code == 200
-                if healthy:
-                    # Kaynak özetini ancak sunucunun GERÇEKTEN ayakta olduğunu
-                    # gördükten sonra yaz; yarıda kalan bir kurulumu 'güncel'
-                    # işaretlemek sonraki açılışı eksik cache'e mahkûm eder.
-                    self._record_server_source_hash()
                 return healthy
         except Exception:
             return False

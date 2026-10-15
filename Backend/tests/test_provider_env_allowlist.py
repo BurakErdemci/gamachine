@@ -258,9 +258,6 @@ class TestUnityMcpSpawnOrtami:
             um.UnityMCPManager, "_ensure_writable_resources", lambda self: None
         )
         monkeypatch.setattr(um.UnityMCPManager, "_get_uvx", lambda self: "/bin/true")
-        monkeypatch.setattr(
-            um.UnityMCPManager, "_server_source_changed", lambda self: False
-        )
 
         box = {}
 

@@ -25,7 +25,6 @@ def launch(monkeypatch, tmp_path):
     monkeypatch.setattr(um.UnityMCPManager, "is_running", lambda self: False)
     monkeypatch.setattr(um.UnityMCPManager, "_ensure_writable_resources", lambda self: None)
     monkeypatch.setattr(um.UnityMCPManager, "_get_uvx", lambda self: "uvx")
-    monkeypatch.setattr(um.UnityMCPManager, "_server_source_changed", lambda self: False)
     box = {}
 
     class _FakePopen:
@@ -108,14 +107,11 @@ def test_the_exported_constraints_equal_the_lock(monkeypatch, tmp_path):
     assert "mcpforunityserver" not in pins  # the project itself is not a constraint
 
 
-def test_a_lock_change_invalidates_the_cached_server(monkeypatch, tmp_path):
-    server = tmp_path / "Server"
-    (server / "src").mkdir(parents=True)
-    (server / "src" / "main.py").write_text("x = 1\n")
-    (server / "pyproject.toml").write_text("[project]\nname = 't'\n")
-    (server / "uv.lock").write_text("version = 1\n")
-    manager = um.UnityMCPManager()
-    monkeypatch.setattr(manager, "server_dir", str(server))
-    before = manager._compute_server_source_hash()
-    (server / "uv.lock").write_text("version = 1\n# fastmcp 4\n")
-    assert manager._compute_server_source_hash() != before
+def test_a_lock_change_invalidates_the_cached_server(launch):
+    manager, box, mp = launch
+    mp.setattr(um.UnityMCPManager, "_lock_constraints", lambda self, uvx: None)
+    with open(os.path.join(manager.server_dir, "pyproject.toml"), "rb") as fh:
+        config = tomllib.load(fh)
+    assert {"file": "uv.lock"} in config["tool"]["uv"]["cache-keys"]
+    assert manager.start_server() is True
+    assert "--no-cache" not in box["cmd"]
