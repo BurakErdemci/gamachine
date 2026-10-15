@@ -21,7 +21,7 @@ class Decision:
 def decide(tool, params, *, enabled, mode, granted):
     if not (enabled and mode == "auto"):
         return Decision("deny", INACTIVE_REASON)
-    if tool in ("computer_list_apps", "computer_clipboard_read", "computer_clipboard_write"):
+    if tool in ("computer_list_apps", "computer_clipboard_write"):
         return Decision("allow")
     if tool not in TOOLS:
         return Decision("deny", "Bilinmeyen bilgisayar kullanımı aracı.")

@@ -4,6 +4,7 @@ import re
 from urllib.parse import urlsplit
 
 
+CLIPBOARD_BUNDLE_ID = "com.gamachine.clipboard"
 HARD_DENY_BUNDLE_IDS = frozenset({
     "com.gamachine.app", "com.github.Electron", "com.trycua.driver",
     "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable",
@@ -191,14 +192,22 @@ def validate_call(tool, args) -> Validated | Refusal:
             if not isinstance(urls, list) or not 1 <= len(urls) <= 16:
                 return Refusal("urls must be a list of 1..16 strings")
             for url in urls:
-                if not isinstance(url, str):
-                    return Refusal("urls must contain strings")
+                if (not isinstance(url, str) or not 1 <= len(url) <= 2048
+                        or any(not "!" <= char <= "~" for char in url)):
+                    return Refusal("urls must contain 1..2048 printable ASCII characters without whitespace")
                 try:
-                    allowed = url.startswith("/") or urlsplit(url).scheme.casefold() in {"http", "https", "file"}
+                    parsed = urlsplit(url)
+                    scheme = parsed.scheme.casefold()
+                    allowed = (url.startswith("/")
+                               or (scheme in {"http", "https"} and url.lower().startswith(scheme + "://")
+                                   and bool(parsed.hostname))
+                               or (url.lower().startswith("file://") and parsed.path.startswith("/")))
                 except ValueError:
                     allowed = False
                 if not allowed:
                     return Refusal("urls must contain absolute paths or http, https, file URLs")
+    if tool == "computer_clipboard_read" and "include_text" in args and type(args["include_text"]) is not bool:
+        return Refusal("include_text must be a boolean")
     if tool == "computer_clipboard_write" and not isinstance(args["text"], str):
         return Refusal("text must be a string")
     if tool == "computer_confirm_risky_step":

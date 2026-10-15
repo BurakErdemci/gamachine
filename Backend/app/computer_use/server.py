@@ -4,6 +4,8 @@ Each tool takes a single ``args`` dictionary. This preserves every allowed
 driver argument without default injection; policy validates it before any I/O.
 """
 from contextlib import asynccontextmanager
+import os
+from urllib.parse import unquote, urlsplit
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
@@ -26,6 +28,29 @@ def _foreground(args):
     return False
 
 
+_EXECUTABLE_SUFFIXES = (".app", ".bundle", ".framework", ".plugin", ".appex", ".prefpane",
+                        ".workflow", ".action", ".shortcut", ".scptd", ".pkg", ".mpkg",
+                        ".kext", ".xpc", ".terminal", ".command", ".tool")
+
+
+def _safe_launch_targets(urls):
+    for url in urls:
+        if url.startswith("/"):
+            path = url
+        elif url.lower().startswith("file://"):
+            path = unquote(urlsplit(url).path)
+        else:
+            continue
+        try:
+            real_path = os.path.realpath(path)
+            if (not os.path.isdir(real_path)
+                    or any(part.casefold().endswith(_EXECUTABLE_SUFFIXES) for part in real_path.split(os.sep))):
+                return False
+        except (OSError, ValueError):
+            return False
+    return True
+
+
 class ComputerServer:
     def __init__(self, driver=None):
         self.driver = driver
@@ -35,6 +60,8 @@ class ComputerServer:
         if isinstance(validated, policy.Refusal):
             return _text(validated.reason, True)
         try:
+            if tool == "computer_launch_app" and not _safe_launch_targets(args.get("urls", [])):
+                return _text("urls must target existing directories outside executable bundles", True)
             bundle_id = app_name = pid = None
             if "pid" in args:
                 pid = args["pid"]
@@ -43,6 +70,8 @@ class ComputerServer:
                 bundle_id, app_name = (await self.driver.list_running_apps()).get(pid, (None, None))
             elif tool == "computer_launch_app":
                 bundle_id = args["bundle_id"]
+            elif tool == "computer_clipboard_read":
+                bundle_id, app_name = policy.CLIPBOARD_BUNDLE_ID, "Clipboard"
             risk = policy.risky_reason(tool, args)
             params = {"bundle_id": bundle_id, "app_name": app_name, "pid": pid,
                       "risky": bool(risk), "risk_reason": risk,

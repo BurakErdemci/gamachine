@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from agentic import approval_mode, cards, approval_policy
 from agentic.command_gates import GATE_OWNERS
-from computer_use import gate, settings
+from computer_use import gate, policy, settings
 from routes.conversation_routes import create_conversation_router
 
 SECRET = "computer-use-test-secret"
@@ -54,6 +54,7 @@ def request(env, gate_id="cu-first", tool="computer_click", conversation_id=1, *
 
 def answer(env, approved, gate_id="cu-first", **extra):
     return env.client.post("/mcp-approval-respond/" + gate_id,
+                           headers={"X-Gamachine-UI-Secret": SECRET},
                            json={"approved": approved, **extra}).json()
 
 
@@ -243,10 +244,11 @@ def test_desktop_once_grants_only_verified_conversation(env, remember):
 
 
 @pytest.mark.parametrize("conversation_id", [None, 3, "1", True])
-def test_unowned_once_approval_grants_only_that_call(env, conversation_id):
+@pytest.mark.parametrize("remember", [False, True])
+def test_unowned_once_approval_grants_only_that_call(env, conversation_id, remember):
     request(env, conversation_id=conversation_id)
     assert pending(env)["cu-first"]["conversation_id"] is None
-    answer(env, True)
+    answer(env, True, remember=remember)
     assert result(env)["approved"] is True
     assert request(env, "again", conversation_id=conversation_id)["status"] == "ok"
     assert settings.grants(env.db) == []
@@ -278,7 +280,7 @@ def test_session_grants_are_cleared_when_inactive(env, transition):
     assert settings.grants(env.db) == []
 
 
-@pytest.mark.parametrize("tool", ["computer_list_apps", "computer_clipboard_read", "computer_clipboard_write"])
+@pytest.mark.parametrize("tool", ["computer_list_apps", "computer_clipboard_write"])
 def test_pidless_tools_are_active_only_and_logged(env, tool):
     assert request(env, tool=tool, bundle_id=None, pid=None)["approved"] is True
     assert pending(env) == {}
@@ -332,3 +334,83 @@ def test_one_bad_row_preserves_valid_grants(env, caplog):
 def test_grant_name_falls_back_to_bundle(env, app_name):
     settings.add_grant(env.db, PARAMS["bundle_id"], app_name)
     assert settings.grants(env.db)[0]["app_name"] == PARAMS["bundle_id"]
+
+
+@pytest.mark.parametrize("secret", [None, "wrong"])
+@pytest.mark.parametrize("remember", [False, True])
+def test_computer_approval_requires_ui_secret_without_resolving_card(env, secret, remember):
+    request(env)
+    headers = {} if secret is None else {"X-Gamachine-UI-Secret": secret}
+    response = env.client.post("/mcp-approval-respond/cu-first",
+                               json={"approved": True, "remember": remember}, headers=headers)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Bilgisayar kullanımı yalnız uygulama arayüzünden onaylanabilir."
+    assert "cu-first" in pending(env)
+    assert cards.get("cu-first").open
+    assert result(env)["status"] == "pending"
+    assert settings.grants(env.db) == []
+    assert len(env.log.read_text().splitlines()) == 1
+    assert env.client.post("/mcp-approval-respond/cu-first", json={"approved": False}).json() == {"status": "ok"}
+    assert result(env)["approved"] is False
+    assert not cards.get("cu-first").open
+
+
+def test_noncomputer_approval_does_not_require_ui_secret(env):
+    approval_mode.set_mode("step", source="test")
+    assert request(env, tool="read_file")["status"] == "ok"
+    response = env.client.post("/mcp-approval-respond/cu-first", json={"approved": True})
+    assert response.status_code == 200
+    assert result(env)["approved"] is True
+
+
+@pytest.mark.parametrize("remember", [False, True])
+@pytest.mark.parametrize("device", ["desktop", "phone"])
+def test_clipboard_read_requires_first_use_card_and_respects_grant_scope(env, remember, device):
+    params = {"tool": "computer_clipboard_read", "bundle_id": policy.CLIPBOARD_BUNDLE_ID,
+              "app_name": "Clipboard", "pid": None}
+    assert request(env, **params)["status"] == "ok"
+    assert pending(env)["cu-first"]["summary"] == "Click OK"
+    if device == "desktop":
+        assert answer(env, True, remember=remember)["status"] == "ok"
+    else:
+        cards.answer_card("cu-first", "approve", device="authenticated-phone")
+    assert result(env)["approved"] is True
+    assert settings.is_granted(env.db, policy.CLIPBOARD_BUNDLE_ID) is (remember and device == "desktop")
+    assert request(env, "again", **params)["approved"] is True
+    other = request(env, "other-chat", conversation_id=2, **params)
+    assert (other.get("approved") is True) is (remember and device == "desktop")
+
+
+def test_clipboard_read_reject_does_not_grant_and_inactive_denies(env):
+    params = {"tool": "computer_clipboard_read", "bundle_id": policy.CLIPBOARD_BUNDLE_ID,
+              "app_name": "Clipboard", "pid": None}
+    assert request(env, **params)["status"] == "ok"
+    answer(env, False, remember=True)
+    assert not settings.is_granted(env.db, policy.CLIPBOARD_BUNDLE_ID)
+    assert request(env, "again", **params)["status"] == "ok"
+    settings.set_enabled(env.db, False)
+    assert request(env, "inactive", **params)["approved"] is False
+
+
+@pytest.mark.parametrize("raw", ["broken", "{}", "null"])
+def test_corrupt_backup_failure_is_readable_but_never_overwritten(env, caplog, raw):
+    env.rows[settings.GRANTS_KEY] = raw
+
+    def write(key, value):
+        if key == settings.CORRUPT_GRANTS_KEY:
+            raise OSError("backup write failed")
+        env.rows[key] = value
+
+    env.db.set_setting.side_effect = write
+    assert settings.grants(env.db) == []
+    assert not settings.is_granted(env.db, PARAMS["bundle_id"])
+    assert env.client.get("/computer-use/settings").json()["grants"] == []
+    with pytest.raises(ValueError):
+        settings.add_grant(env.db, PARAMS["bundle_id"], "TextEdit")
+    assert request(env)["status"] == "ok"
+    assert answer(env, True, remember=True)["status"] == "ok"
+    assert result(env)["approved"] is True
+    assert request(env, "again")["status"] == "ok"
+    assert env.rows[settings.GRANTS_KEY] == raw
+    assert settings.CORRUPT_GRANTS_KEY not in env.rows
+    assert "backup" in caplog.text.lower()

@@ -711,7 +711,8 @@ def create_conversation_router(db, progress_store):
 
         def resolve(result):
             base_resolver(result)
-            if result is True and decision.grant and not params.get("risky"):
+            if (result is True and decision.grant and not params.get("risky")
+                    and owner is not _UNKNOWN_OWNER):
                 card = _cards.get(gate_id)
                 if entry.get("remember") is True and card is not None and card.by == "desktop":
                     try:
@@ -2686,7 +2687,11 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         return result
 
     @router.post("/mcp-approval-respond/{gate_id}")
-    async def mcp_approval_respond(gate_id: str, body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
+    async def mcp_approval_respond(
+        gate_id: str, body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+        x_ui_secret: str = Header(alias="X-Gamachine-UI-Secret", default=""),
+    ):
         """Frontend'in onay/red kararını bildirdiği endpoint."""
         _check_token(x_session_token)
         # `bool()` DEĞİL kimlik karşılaştırması: ölçüldü (31 Tem 2026),
@@ -2717,6 +2722,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         if gate_id in _mcp_results:
             entry = _mcp_pending.get(gate_id, {})
             if entry.get("computer_use"):
+                if approved and not approval_mode.check_ui_secret(x_ui_secret):
+                    raise HTTPException(status_code=403, detail="Bilgisayar kullanımı yalnız uygulama arayüzünden onaylanabilir.")
                 entry["remember"] = body.get("remember") is True
             try:
                 res = _desktop_answer(gate_id, decision)

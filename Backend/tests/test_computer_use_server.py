@@ -226,7 +226,7 @@ def test_missing_or_changed_pid_after_approval_refuses(fake, remapped):
 
 @pytest.mark.parametrize("tool,args,forwarded", [
     ("computer_list_windows", {"pid": 4242}, "list_windows"),
-    ("computer_launch_app", {"bundle_id": "com.apple.finder", "urls": ["file:///document"]}, "launch_app"),
+    ("computer_launch_app", {"bundle_id": "com.apple.finder", "urls": ["https://example.com"]}, "launch_app"),
     ("computer_clipboard_read", {"include_text": True}, "clipboard_read"),
     ("computer_clipboard_write", {"text": "hello"}, "clipboard_write"),
 ])
@@ -251,6 +251,84 @@ def test_opened_tools_forward_after_approval(fake, tool, args, forwarded):
         assert approval.call_args.kwargs["params"]["pid"] is None
     for key, value in args.items():
         assert rows[-1]["args"][key] == value
+    if tool == "computer_clipboard_read":
+        params = approval.call_args.kwargs["params"]
+        assert params["bundle_id"] == server.policy.CLIPBOARD_BUNDLE_ID
+        assert params["app_name"] == "Clipboard"
+    elif tool == "computer_clipboard_write":
+        assert approval.call_args.kwargs["params"]["bundle_id"] is None
+
+
+@pytest.mark.parametrize("suffix", [".app", ".bundle", ".framework", ".plugin", ".appex",
+                                   ".prefpane", ".workflow", ".action", ".shortcut", ".scptd",
+                                   ".pkg", ".mpkg", ".kext", ".xpc", ".terminal", ".command", ".tool"])
+@pytest.mark.parametrize("form", ["path", "file-url", "inside", "symlink"])
+def test_launch_refuses_executable_directory_components_before_approval(fake, tmp_path, suffix, form):
+    driver, log, approval = fake
+    blocked = tmp_path / ("Target" + suffix.upper())
+    blocked.mkdir()
+    target = blocked
+    if form == "inside":
+        target = blocked / "documents"
+        target.mkdir()
+    elif form == "symlink":
+        target = tmp_path / "innocent"
+        target.symlink_to(blocked, target_is_directory=True)
+    url = target.as_uri() if form == "file-url" else str(target)
+    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
+        "bundle_id": "com.apple.finder", "urls": [url]}))
+    assert result.is_error
+    approval.assert_not_called()
+    assert calls(log) == []
+
+
+@pytest.mark.parametrize("kind", ["file", "command", "missing"])
+@pytest.mark.parametrize("file_url", [False, True])
+def test_launch_refuses_files_and_missing_paths(fake, tmp_path, kind, file_url):
+    driver, log, approval = fake
+    target = tmp_path / ("script.command" if kind == "command" else "document")
+    if kind != "missing":
+        target.write_text("data")
+    url = target.as_uri() if file_url else str(target)
+    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
+        "bundle_id": "com.apple.finder", "urls": [url]}))
+    assert result.is_error
+    approval.assert_not_called()
+    assert calls(log) == []
+
+
+@pytest.mark.parametrize("file_url", [False, True])
+def test_launch_plain_directory_forwards_original_target(fake, tmp_path, file_url):
+    driver, log, approval = fake
+    target = tmp_path / ("plain directory" if file_url else "plain-directory")
+    target.mkdir()
+    url = target.as_uri() if file_url else str(target)
+    args = {"bundle_id": "com.apple.finder", "urls": [url]}
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            result = await handler.call("computer_launch_app", args)
+            assert not result.is_error
+        finally:
+            await handler.close()
+
+    asyncio.run(run())
+    approval.assert_awaited_once()
+    assert calls(log)[0]["args"]["urls"] == [url]
+
+
+def test_launch_decodes_file_url_before_resolving_symlinks(fake, tmp_path):
+    driver, log, approval = fake
+    app = tmp_path / "Hidden.app"
+    app.mkdir()
+    alias = tmp_path / "plain alias"
+    alias.symlink_to(app, target_is_directory=True)
+    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
+        "bundle_id": "com.apple.finder", "urls": [alias.as_uri()]}))
+    assert result.is_error
+    approval.assert_not_called()
+    assert calls(log) == []
 
 
 def test_driver_session_timeout_covers_maximum_window_read(fake, monkeypatch):

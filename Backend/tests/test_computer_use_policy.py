@@ -143,6 +143,38 @@ def test_launch_refuses_bad_urls(urls):
     refused("computer_launch_app", {"bundle_id": "com.apple.finder", "urls": urls}, "urls")
 
 
+@pytest.mark.parametrize("url", [
+    " https://x.com", "ht\ntps://x.com", "http\r://x.com", "http:", "file:",
+    "https://", "https://x.com/\x00", "https://x.com/a b", "https://x.com/é",
+    "https://x.com/\x7f", "file:relative", "file://host", "", "x" * 2049,
+    "https://x.com/" + "a" * 2035, "~/Documents", "relative/path",
+    "javascript:alert(1)", "x-apple.systempreferences:a",
+])
+def test_launch_url_syntax_rejects_ambiguous_or_nonprintable_targets(url):
+    refused("computer_launch_app", {"bundle_id": "com.apple.finder", "urls": [url]}, "urls")
+
+
+@pytest.mark.parametrize("url", ["https://example.com/a?b=c", "http://example.com",
+                                "/Users/me/Documents", "file:///Users/me/Documents",
+                                "https://x.com/" + "a" * 2034])
+def test_launch_url_syntax_accepts_documented_forms(url):
+    assert isinstance(p.validate_call("computer_launch_app", {
+        "bundle_id": "com.apple.finder", "urls": [url]}), p.Validated)
+
+
+@pytest.mark.parametrize("value", [1, 0, None, "yes", [], {}])
+def test_clipboard_read_include_text_requires_boolean(value):
+    refused("computer_clipboard_read", {"include_text": value}, "include_text")
+
+
+def test_clipboard_identifier_and_boolean_flags():
+    assert p.CLIPBOARD_BUNDLE_ID == "com.gamachine.clipboard"
+    assert p.valid_bundle_id(p.CLIPBOARD_BUNDLE_ID)
+    assert not p.is_hard_denied(p.CLIPBOARD_BUNDLE_ID)
+    for flag in (True, False):
+        assert isinstance(p.validate_call("computer_clipboard_read", {"include_text": flag}), p.Validated)
+
+
 def test_clipboard_is_text_only():
     assert isinstance(p.validate_call("computer_clipboard_read", {"include_text": True}), p.Validated)
     assert isinstance(p.validate_call("computer_clipboard_write", {"text": ""}), p.Validated)

@@ -8,6 +8,8 @@ from starlette.requests import Request
 
 
 EN: dict[str, str] = {
+    "Bilgisayar kullanımı yalnız uygulama arayüzünden onaylanabilir.":
+        "Computer use can only be approved from the app interface.",
     "Bu kanaldan bilgisayar kullanımı değiştirilemez.":
         "Computer use cannot be changed through this channel.",
     "Bilgisayar kullanımı yalnız uygulama arayüzünden açılabilir.":

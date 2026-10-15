@@ -19,7 +19,7 @@ def set_enabled(db, on):
     db.set_setting(ENABLED_KEY, "1" if on else "0")
 
 
-def grants(db):
+def _load_grants(db, *, require_backup=False):
     raw = db.get_setting(GRANTS_KEY)
     if raw is None:
         return []
@@ -29,8 +29,13 @@ def grants(db):
             raise ValueError("invalid grants list")
     except (ValueError, TypeError):
         logger.warning("Invalid computer_use_app_grants setting; using an empty list")
-        if db.get_setting(CORRUPT_GRANTS_KEY) is None:
-            db.set_setting(CORRUPT_GRANTS_KEY, raw)
+        try:
+            if db.get_setting(CORRUPT_GRANTS_KEY) is None:
+                db.set_setting(CORRUPT_GRANTS_KEY, raw)
+        except Exception as exc:
+            logger.exception("Could not preserve corrupt computer-use grants backup")
+            if require_backup:
+                raise ValueError("Corrupt grants backup must be preserved before overwrite") from exc
         return []
     valid = []
     for row in result:
@@ -47,6 +52,10 @@ def grants(db):
     return valid
 
 
+def grants(db):
+    return _load_grants(db)
+
+
 def is_granted(db, bundle_id):
     return valid_bundle_id(bundle_id) and any(row["bundle_id"].casefold() == bundle_id.casefold() for row in grants(db))
 
@@ -54,7 +63,7 @@ def is_granted(db, bundle_id):
 def add_grant(db, bundle_id, app_name):
     if not valid_bundle_id(bundle_id) or is_hard_denied(bundle_id):
         raise ValueError("bundle_id cannot be granted")
-    rows = grants(db)
+    rows = _load_grants(db, require_backup=True)
     if any(row["bundle_id"].casefold() == bundle_id.casefold() for row in rows):
         return
     rows.append({"bundle_id": bundle_id,
