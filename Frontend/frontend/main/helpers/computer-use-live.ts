@@ -95,7 +95,7 @@ export const IDLE_MS = 10_000
 export const MAX_DIMENSION = 480
 const REQUEST_MS = 3000
 const WINDOW_LOOKUP_MS = 5000
-export const INDICATOR_SIZE = { width: 320, height: 64 }
+export const INDICATOR_SIZE = { width: 360, height: 64 }
 const INDICATOR_MARGIN = 16
 const POSITION_FILE = 'computer-live-indicator.json'
 
