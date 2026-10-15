@@ -20,6 +20,13 @@ EN: dict[str, str] = {
         "Computer use can only be enabled from the app interface.",
     "Bilgisayar kullanımı için çalışma modu Otomatik olmalı.":
         "The operating mode must be Automatic to enable computer use.",
+    "Bilgisayar kullanımı yalnız uygulama arayüzünden durdurulabilir.":
+        "Computer use can only be stopped from the app interface.",
+    "Sohbet kimliği pozitif bir tam sayı olmalı.": "The conversation id must be a positive integer.",
+    "Bilgisayar kullanımı kapalı; Ayarlar > Bilgisayar sayfasından açılabilir.":
+        "Computer use is off; it can be turned on in Settings > Computer.",
+    "Kullanıcı bilgisayar kullanımını bu tur için durdurdu; bu turda bilgisayar araçlarını yeniden deneme.":
+        "The user stopped computer use for this turn; do not retry the computer tools in this turn.",
     "Uygulama izni yalnız uygulama arayüzünden kaldırılabilir.":
         "Application access can only be revoked from the app interface.",
     "İşlem durduruldu.": "Operation stopped.",

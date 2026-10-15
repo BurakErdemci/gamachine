@@ -66,14 +66,40 @@ def result(env, gate_id="cu-first"):
     return env.client.get("/mcp-approval-result/" + gate_id).json()
 
 
-@pytest.mark.parametrize("on,mode", [(False, "auto"), (True, "step"), (True, "balanced")])
-def test_inactive_refuses_before_opening_cards(env, on, mode):
-    settings.set_enabled(env.db, on)
+@pytest.mark.parametrize("mode", ["auto", "balanced", "step"])
+def test_disabled_refuses_before_opening_cards_in_every_mode(env, mode):
+    settings.set_enabled(env.db, False)
     approval_mode.set_mode(mode, source="test")
     response = request(env)
     assert response["approved"] is False
     assert response["error"] == gate.INACTIVE_REASON
     assert pending(env) == {}
+
+
+def test_inactive_reason_names_only_the_switch():
+    assert "otomatik" not in gate.INACTIVE_REASON.casefold()
+    assert "mod" not in gate.INACTIVE_REASON.casefold()
+
+
+@pytest.mark.parametrize("mode", ["auto", "balanced", "step"])
+def test_enabled_behaves_the_same_in_every_mode(env, mode):
+    approval_mode.set_mode(mode, source="test")
+    assert request(env)["status"] == "ok"
+    assert pending(env)["cu-first"]["computer_use"] is True
+    assert answer(env, True)["status"] == "ok"
+    assert request(env, "cu-next")["approved"] is True
+    assert request(env, "cu-risky", risky=True, risk_reason="Delete files")["status"] == "ok"
+    assert "Delete files" in pending(env)["cu-risky"]["risk_reason"]
+    assert request(env, "cu-list", tool="computer_list_apps", bundle_id=None, pid=None)["approved"] is True
+
+
+@pytest.mark.parametrize("mode", ["auto", "balanced", "step"])
+@pytest.mark.parametrize("granted", [False, True])
+def test_gate_decision_is_mode_free(granted, mode):
+    approval_mode.set_mode(mode, source="test")
+    decision = gate.decide("computer_click", PARAMS, enabled=True, granted=granted)
+    assert decision.kind == ("allow" if granted else "card")
+    assert gate.decide("computer_click", PARAMS, enabled=False, granted=granted).kind == "deny"
 
 
 @pytest.mark.parametrize("bundle", ["com.apple.Terminal", "COM.GAMACHINE.APP", "", None])
@@ -133,15 +159,15 @@ def test_risky_card_in_auto_carries_reason(env, granted):
 
 
 @pytest.mark.parametrize("mode", ["step", "balanced"])
-def test_mode_switch_rejects_computer_cards_without_grant(env, mode):
+def test_mode_switch_leaves_computer_cards_pending(env, mode):
     request(env)
     changed = env.client.post("/approval-mode", json={"mode": mode},
                               headers={"X-Gamachine-UI-Secret": SECRET}).json()
-    assert changed["rejected_computer_use"] == 1
+    assert "rejected_computer_use" not in changed
     assert changed["approved_pending"] == 0
-    assert pending(env) == {}
-    assert result(env)["approved"] is False
-    assert cards.get("cu-first").decision == "mode_switch"
+    assert "cu-first" in pending(env)
+    assert result(env)["status"] == "pending"
+    assert cards.get("cu-first").open
     assert settings.grants(env.db) == []
 
 
@@ -154,11 +180,11 @@ def test_auto_drain_leaves_computer_card_pending(env):
     assert result(env)["status"] == "pending"
 
 
-def test_settings_writes_require_secret_and_auto_only_for_enabling(env):
+def test_settings_writes_require_secret_and_enabling_works_in_every_mode(env):
     client = env.client
     assert client.get("/computer-use/settings").json() == {
         "enabled": True, "mode": "auto", "active": True, "grants": [],
-        "runtime": {"running": False, "driver_path": None, "socket_path": None}}
+        "runtime": {"running": False, "driver_path": None, "socket_path": None}, "halted": []}
     assert client.post("/computer-use/settings", json={"enabled": True}).status_code == 403
     headers = {"X-Gamachine-UI-Secret": SECRET}
     assert client.post("/computer-use/settings", json={"enabled": True}, headers=headers).status_code == 200
@@ -170,8 +196,13 @@ def test_settings_writes_require_secret_and_auto_only_for_enabling(env):
     assert response.status_code == 200 and response.json()["rejected_computer_use"] == 1
     assert result(env)["approved"] is False
     assert not settings.enabled(env.db)
-    approval_mode.set_mode("balanced", source="test")
-    assert client.post("/computer-use/settings", json={"enabled": True}, headers=headers).status_code == 409
+    for mode in ("balanced", "step", "auto"):
+        approval_mode.set_mode(mode, source="test")
+        assert client.post("/computer-use/settings", json={"enabled": False}).status_code == 200
+        assert client.get("/computer-use/settings").json()["active"] is False
+        response = client.post("/computer-use/settings", json={"enabled": True}, headers=headers)
+        assert response.status_code == 200
+        assert response.json()["active"] is True and response.json()["mode"] == mode
 
 
 def test_settings_and_grant_routes_require_app_token(env, monkeypatch):
@@ -265,20 +296,25 @@ def test_other_desktop_answer_path_defaults_to_once(env):
     assert request(env, "again")["approved"] is True
 
 
-@pytest.mark.parametrize("transition", ["disable", "step", "balanced"])
-def test_session_grants_are_cleared_when_inactive(env, transition):
+def test_session_grants_are_cleared_when_disabled(env):
     request(env)
     answer(env, True)
     assert request(env, "before")["approved"] is True
     headers = {"X-Gamachine-UI-Secret": SECRET}
-    if transition == "disable":
-        assert env.client.post("/computer-use/settings", json={"enabled": False}).status_code == 200
-        assert env.client.post("/computer-use/settings", json={"enabled": True}, headers=headers).status_code == 200
-    else:
-        env.router.apply_approval_mode(transition, source="test")
-        env.router.apply_approval_mode("auto", source="test")
+    assert env.client.post("/computer-use/settings", json={"enabled": False}).status_code == 200
+    assert env.client.post("/computer-use/settings", json={"enabled": True}, headers=headers).status_code == 200
     assert request(env, "after")["status"] == "ok"
     assert settings.grants(env.db) == []
+
+
+@pytest.mark.parametrize("transition", ["step", "balanced"])
+def test_session_grants_survive_a_mode_switch(env, transition):
+    request(env)
+    answer(env, True)
+    env.router.apply_approval_mode(transition, source="test")
+    assert request(env, "during")["approved"] is True
+    env.router.apply_approval_mode("auto", source="test")
+    assert request(env, "after")["approved"] is True
 
 
 @pytest.mark.parametrize("tool", ["computer_list_apps", "computer_clipboard_write"])
@@ -422,13 +458,13 @@ def test_corrupt_backup_failure_is_readable_but_never_overwritten(env, caplog, r
 @pytest.mark.parametrize("bundle", [policy.CLIPBOARD_BUNDLE_ID, policy.CLIPBOARD_BUNDLE_ID.upper()])
 def test_clipboard_id_is_reserved_for_the_clipboard_tool(env, tool, bundle):
     params = {**PARAMS, "bundle_id": bundle, "app_name": "Clipboard"}
-    decision = gate.decide(tool, params, enabled=True, mode="auto", granted=True)
+    decision = gate.decide(tool, params, enabled=True, granted=True)
     assert decision.kind == "deny"
     response = request(env, tool=tool, bundle_id=bundle, app_name="Clipboard")
     assert response["approved"] is False
     assert pending(env) == {}
     assert not settings.is_granted(env.db, policy.CLIPBOARD_BUNDLE_ID)
-    read = gate.decide("computer_clipboard_read", params, enabled=True, mode="auto", granted=False)
+    read = gate.decide("computer_clipboard_read", params, enabled=True, granted=False)
     assert read.kind == "card" and read.grant is True
 
 

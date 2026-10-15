@@ -8,7 +8,11 @@ from datetime import datetime, timezone
 from .policy import CLIPBOARD_BUNDLE_ID, TOOLS, is_hard_denied, valid_bundle_id
 
 logger = logging.getLogger(__name__)
-INACTIVE_REASON = "Bilgisayar kullanımı kapalı ya da çalışma modu Otomatik değil."
+# Computer use is independent of the approval modes (owner decision, 15 Oct
+# 2026): only the master switch turns it off, so the reason names only that.
+INACTIVE_REASON = "Bilgisayar kullanımı kapalı; Ayarlar > Bilgisayar sayfasından açılabilir."
+HALTED_REASON = ("Kullanıcı bilgisayar kullanımını bu tur için durdurdu; "
+                 "bu turda bilgisayar araçlarını yeniden deneme.")
 
 
 @dataclass(frozen=True)
@@ -18,8 +22,8 @@ class Decision:
     grant: bool = False
 
 
-def decide(tool, params, *, enabled, mode, granted):
-    if not (enabled and mode == "auto"):
+def decide(tool, params, *, enabled, granted):
+    if not enabled:
         return Decision("deny", INACTIVE_REASON)
     if tool in ("computer_list_apps", "computer_clipboard_write"):
         return Decision("allow")

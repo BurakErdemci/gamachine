@@ -99,6 +99,7 @@ describe('computer-use registered channel', () => {
     [{ op: 'remove-grant', bundleId: 'com.apple.TextEdit' }, 'delete', '/computer-use/grants/com.apple.TextEdit', undefined],
     [{ op: 'answer-card', gateId: 'cu-123', approved: true, remember: true }, 'post', '/mcp-approval-respond/cu-123', { approved: true, remember: true }],
     [{ op: 'answer-card', gateId: 'cu-123', approved: false, remember: false }, 'post', '/mcp-approval-respond/cu-123', { approved: false, remember: false }],
+    [{ op: 'halt', conversationId: 42 }, 'post', '/computer-use/halt/42', undefined],
   ])('dispatches the fixed backend route for %j', async (req, method, route, data) => {
     expect(await call(req)).toEqual({ ok: true })
     expect(mocks.request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ method,
@@ -111,6 +112,9 @@ describe('computer-use registered channel', () => {
     { op: 'answer-card', gateId: 'g', approved: 'true', remember: true },
     { op: 'answer-card', gateId: 'g', approved: true },
     { op: 'answer-card', gateId: '../g', approved: true, remember: true },
+    { op: 'halt' }, { op: 'halt', conversationId: 0 }, { op: 'halt', conversationId: -1 },
+    { op: 'halt', conversationId: 1.5 }, { op: 'halt', conversationId: '7' },
+    { op: 'halt', conversationId: Number.MAX_SAFE_INTEGER + 1 }, { op: 'halt', conversationId: NaN },
   ])('rejects malformed arguments %j', async req => {
     expect(await call(req)).toHaveProperty('error')
     expect(mocks.request).not.toHaveBeenCalled()

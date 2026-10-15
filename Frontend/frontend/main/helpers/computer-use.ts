@@ -234,7 +234,8 @@ export class ComputerUseHost {
       const { data: settings } = await this.request('get', '/computer-use/settings')
       if (this.stopped) return
       let transitioned = false
-      if (this.available && settings.enabled === true && settings.mode === 'auto') {
+      // Independent of the approval mode (owner decision, 15 Oct 2026): the switch alone decides.
+      if (this.available && settings.enabled === true) {
         if (!this.child && (!this.crashed || this.now() - this.lastAutoRestart >= 60_000)) {
           if (this.crashed) this.lastAutoRestart = this.now()
           await this.startChild()
@@ -285,7 +286,7 @@ export class ComputerUseHost {
 
   async invoke(req: unknown): Promise<unknown> {
     if (!req || typeof req !== 'object' || Array.isArray(req)) return { error: 'Invalid computer-use request.' }
-    const { op, bundleId, gateId, approved, remember } = req as Record<string, unknown>
+    const { op, bundleId, gateId, approved, remember, conversationId } = req as Record<string, unknown>
     try {
       switch (op) {
         case 'status': {
@@ -319,6 +320,9 @@ export class ComputerUseHost {
           if (typeof gateId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(gateId)
             || typeof approved !== 'boolean' || typeof remember !== 'boolean') break
           return (await this.request('post', `/mcp-approval-respond/${encodeURIComponent(gateId)}`, { approved, remember }, true)).data
+        case 'halt':
+          if (typeof conversationId !== 'number' || !Number.isSafeInteger(conversationId) || conversationId <= 0) break
+          return (await this.request('post', `/computer-use/halt/${conversationId}`, undefined, true)).data
         default: break
       }
       return { error: 'Unknown operation or malformed computer-use arguments.' }

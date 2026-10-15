@@ -629,6 +629,10 @@ def create_conversation_router(db, progress_store):
     _mcp_pending: dict = {}   # gate_id → {tool, params, workspace_path}
     _computer_session_grants: set[tuple[int, str]] = set()
     _computer_runtime = {"running": False, "driver_path": None, "socket_path": None}
+    # Conversations whose user pressed Stop on computer use: every computer_*
+    # call they make is denied until the user's next message starts a turn.
+    # In memory on purpose: a restart ends every turn anyway.
+    _computer_halted: set[int] = set()
     _mcp_results: dict = {}   # gate_id → {approved, ...}
     _mcp_result_ts: dict = {}  # gate_id → oluşturulma zamanı (TTL süpürmesi için)
 
@@ -679,11 +683,16 @@ def create_conversation_router(db, progress_store):
         bundle_id = params.get("bundle_id")
         session_key = ((owner, bundle_id.casefold()) if owner is not _UNKNOWN_OWNER
                        and valid_bundle_id(bundle_id) else None)
-        decision = computer_gate.decide(
-            tool, params, enabled=computer_settings.enabled(db),
-            mode=approval_mode.current_mode(),
-            granted=computer_settings.is_granted(db, bundle_id)
-            or (session_key is not None and session_key in _computer_session_grants))
+        claimed = body.get("conversation_id")
+        if ((owner is not _UNKNOWN_OWNER and owner in _computer_halted)
+                or (type(claimed) is int and claimed in _computer_halted)):
+            # A claimed id is honoured even unverified: it can only deny more.
+            decision = computer_gate.Decision("deny", computer_gate.HALTED_REASON)
+        else:
+            decision = computer_gate.decide(
+                tool, params, enabled=computer_settings.enabled(db),
+                granted=computer_settings.is_granted(db, bundle_id)
+                or (session_key is not None and session_key in _computer_session_grants))
         log_path = os.path.join(os.path.dirname(db.db_path), "computer_use_actions.jsonl")
 
         def log(outcome, reason):
@@ -735,16 +744,21 @@ def create_conversation_router(db, progress_store):
             logger.warning("[computer-use] gate %s is unowned (%s)", gate_id, why_unowned)
         return {"status": "ok", "gate_id": gate_id}
 
-    def _reject_computer_use_pending():
+    def _reject_computer_use_pending(conversation_id: Optional[int] = None,
+                                     reason: str = computer_gate.INACTIVE_REASON,
+                                     decision: str = "mode_switch"):
+        """Reject open computer cards: all of them, or one conversation's."""
         rejected = 0
         for gate_id, entry in list(_mcp_pending.items()):
             if not entry.get("computer_use"):
                 continue
-            if not _cards.close_card(gate_id, "rejected", decision="mode_switch",
+            if conversation_id is not None and entry.get("conversation_id") != conversation_id:
+                continue
+            if not _cards.close_card(gate_id, "rejected", decision=decision,
                                      device="desktop", resolve=False) and _cards.get(gate_id) is not None:
                 continue
             _mcp_results[gate_id] = {
-                "status": "resolved", "approved": False, "error": computer_gate.INACTIVE_REASON,
+                "status": "resolved", "approved": False, "error": reason,
             }
             _mcp_result_ts[gate_id] = time()
             _mcp_pending.pop(gate_id, None)
@@ -2104,6 +2118,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
             # DB and are re-armed once this turn is over.
             wake_queue.drain(request.conversation_id)
             wake_queue.reset_chain(request.conversation_id)
+            # The user's next message ends a computer-use Stop.
+            _computer_halted.discard(request.conversation_id)
             db.add_message(request.conversation_id, "user", request.message)
             turn_message = _with_mentions(request.conversation_id, user_id, request.message)
 
@@ -2811,9 +2827,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         event loop: the drains resolve gates that set asyncio events.
         """
         previous = approval_mode.set_mode(mode, source=source)
-        if mode != "auto":
-            _computer_session_grants.clear()
-        rejected_computer_use = _reject_computer_use_pending() if mode != "auto" else 0
+        # Computer use is independent of the mode (owner decision, 15 Oct
+        # 2026): a switch leaves its cards and session grants alone.
         if mode == "auto":
             drained = _approve_all_pending()
         elif mode == "balanced":
@@ -2823,12 +2838,7 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         if drained:
             logger.warning("[approval-mode] %d pending card(s) approved by the switch to %s",
                            drained, mode)
-        result = {"mode": mode, "previous": previous, "approved_pending": drained}
-        # Only when something was rejected: the renderer and older tests read
-        # this response as exactly the three fields above.
-        if rejected_computer_use:
-            result["rejected_computer_use"] = rejected_computer_use
-        return result
+        return {"mode": mode, "previous": previous, "approved_pending": drained}
 
     router.apply_approval_mode = apply_approval_mode
 
@@ -2837,10 +2847,11 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         x_session_token: str = Header(alias="X-Session-Token", default=""),
     ):
         _check_token(x_session_token)
-        mode = approval_mode.current_mode()
         on = computer_settings.enabled(db)
-        return {"enabled": on, "mode": mode, "active": on and mode == "auto",
-                "grants": computer_settings.grants(db), "runtime": dict(_computer_runtime)}
+        # `mode` stays for older readers; it no longer affects `active`.
+        return {"enabled": on, "mode": approval_mode.current_mode(), "active": on,
+                "grants": computer_settings.grants(db), "runtime": dict(_computer_runtime),
+                "halted": sorted(_computer_halted)}
 
     @router.post("/computer-use/runtime")
     async def set_computer_use_runtime(
@@ -2884,14 +2895,34 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         if on:
             if not approval_mode.check_ui_secret(x_ui_secret):
                 raise HTTPException(status_code=403, detail="Bilgisayar kullanımı yalnız uygulama arayüzünden açılabilir.")
-            if approval_mode.current_mode() != "auto":
-                raise HTTPException(status_code=409, detail="Bilgisayar kullanımı için çalışma modu Otomatik olmalı.")
         computer_settings.set_enabled(db, on)
         if not on:
             _computer_session_grants.clear()
         rejected = _reject_computer_use_pending() if not on else 0
         result = await get_computer_use_settings(x_session_token=x_session_token)
         return {**result, "rejected_computer_use": rejected}
+
+    @router.post("/computer-use/halt/{conversation_id}")
+    async def halt_computer_use(
+        conversation_id: int,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+        x_ui_secret: str = Header(alias="X-Gamachine-UI-Secret", default=""),
+        x_maintenance: str = Header(alias="X-UnityAI-Maintenance", default=""),
+    ):
+        """Stop computer use for the rest of this conversation's turn.
+
+        The turn itself keeps running; the user's next message lifts the halt.
+        """
+        _check_token(x_session_token)
+        if x_maintenance:
+            raise HTTPException(status_code=403, detail="Bu kanaldan bilgisayar kullanımı değiştirilemez.")
+        if not approval_mode.check_ui_secret(x_ui_secret):
+            raise HTTPException(status_code=403, detail="Bilgisayar kullanımı yalnız uygulama arayüzünden durdurulabilir.")
+        if conversation_id <= 0:
+            raise HTTPException(status_code=400, detail="Sohbet kimliği pozitif bir tam sayı olmalı.")
+        _computer_halted.add(conversation_id)
+        _reject_computer_use_pending(conversation_id, computer_gate.HALTED_REASON, "computer_halt")
+        return {"halted": True, "conversation_id": conversation_id}
 
     @router.delete("/computer-use/grants/{bundle_id}")
     async def delete_computer_use_grant(
@@ -3242,7 +3273,8 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         _refuse_side_chat(request.conversation_id)
         _check_chat_rate_limit(user_id)
 
-        # 1. Save user message
+        # 1. Save user message; it also ends a computer-use Stop.
+        _computer_halted.discard(request.conversation_id)
         db.add_message(request.conversation_id, "user", request.message)
         
         # 2. Setup context & provider
