@@ -131,6 +131,19 @@ def test_halt_rejects_only_that_conversations_pending_cards(env):
     assert settings.grants(env.db) == []
 
 
+def test_halt_rejects_an_unverified_card_that_claimed_the_conversation(env):
+    # Conversation 7 has no turn in flight, so the card is unowned but names chat 7.
+    assert request(env, "cu-claimed", conversation_id=7)["status"] == "ok"
+    assert request(env, "cu-other", conversation_id=2)["status"] == "ok"
+    assert request(env, "cu-unclaimed", conversation_id=8)["status"] == "ok"
+    halt(env, 7)
+    result = env.client.get("/mcp-approval-result/cu-claimed").json()
+    assert result["approved"] is False and result["error"] == gate.HALTED_REASON
+    pending = env.client.get("/mcp-pending").json()["pending"]
+    assert "cu-claimed" not in pending
+    assert "cu-other" in pending and "cu-unclaimed" in pending
+
+
 def test_halt_leaves_the_setting_on(env):
     halt(env, 1)
     assert settings.enabled(env.db)

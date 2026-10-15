@@ -715,6 +715,8 @@ def create_conversation_router(db, progress_store):
         _mcp_pending[gate_id] = {
             "tool": tool, "params": params, "workspace_path": body.get("workspace_path", ""),
             "conversation_id": None if owner is _UNKNOWN_OWNER else owner,
+            # An unverified card still names the chat it claims; Stop of that chat must reject it.
+            "claimed_conversation_id": claimed if type(claimed) is int and claimed > 0 else None,
             "computer_use": True, "risk_reason": decision.reason, "summary": summary,
         }
         _mcp_results[gate_id] = {"status": "pending"}
@@ -756,7 +758,8 @@ def create_conversation_router(db, progress_store):
         for gate_id, entry in list(_mcp_pending.items()):
             if not entry.get("computer_use"):
                 continue
-            if conversation_id is not None and entry.get("conversation_id") != conversation_id:
+            if (conversation_id is not None and entry.get("conversation_id") != conversation_id
+                    and entry.get("claimed_conversation_id") != conversation_id):
                 continue
             if not _cards.close_card(gate_id, "rejected", decision=decision,
                                      device="desktop", resolve=False) and _cards.get(gate_id) is not None:

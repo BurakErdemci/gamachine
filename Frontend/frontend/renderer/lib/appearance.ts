@@ -96,7 +96,7 @@ export const AppearanceContext = createContext<{
 
 export const useAppearance = () => useContext(AppearanceContext)
 
-export function AppearanceProvider({ children }: { children: ReactNode }) {
+export function AppearanceProvider({ children, applyZoom: zoomWindow = true }: { children: ReactNode; applyZoom?: boolean }) {
   // SSR and the first client render must agree before storage is available.
   const [appearance, setState] = useState<Appearance>({ ...DEFAULTS })
   const current = useRef(appearance)
@@ -107,7 +107,7 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     applyAppearance(stored)
     // 'normal' is the window's own zoom; resetting it on every launch would
     // undo a zoom the user set with the View menu (Ctrl+/-).
-    if (stored.textSize !== 'normal') applyZoom(stored.textSize)
+    if (zoomWindow && stored.textSize !== 'normal') applyZoom(stored.textSize)
   }, [])
 
   const setAppearance = useCallback((partial: Partial<Appearance>) => {
@@ -117,8 +117,8 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     setState(next)
     saveAppearance(next)
     applyAppearance(next)
-    if (next.textSize !== previous.textSize) applyZoom(next.textSize)
-  }, [])
+    if (zoomWindow && next.textSize !== previous.textSize) applyZoom(next.textSize)
+  }, [zoomWindow])
 
   return createElement(AppearanceContext.Provider, { value: { appearance, setAppearance } }, children)
 }

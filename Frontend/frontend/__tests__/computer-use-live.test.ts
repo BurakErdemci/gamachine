@@ -17,11 +17,11 @@ function activeBody(over: Record<string, unknown> = {}, target: Record<string, u
 const INACTIVE = { active: false, conversation_id: null, started_at: null, last: null, target: null }
 
 function fixture(options: { platform?: string; saved?: string; panel?: boolean } = {}) {
-  const state = { activity: INACTIVE as any, windows: null as any }
+  const state = { activity: INACTIVE as any, windows: null as any, hold: false, held: [] as Array<() => void> }
   const rpc: any[] = []
   const children: any[] = []
   const host = { running: true, socketPath: SOCKET as string | null, driverPath: () => '/app/cua/cua-driver',
-    invoke: vi.fn(async (_req: unknown) => ({ halted: true })) }
+    invoke: vi.fn(async (_req: unknown): Promise<unknown> => ({ halted: true })) }
   const http = { request: vi.fn(async (_config: any) => ({ data: state.activity })) }
   const reply = (msg: any) => {
     if (msg.method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: {} }
@@ -43,7 +43,9 @@ function fixture(options: { platform?: string; saved?: string; panel?: boolean }
         const msg = JSON.parse(line)
         rpc.push(msg)
         if (msg.id !== undefined) {
-          queueMicrotask(() => child.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: reply(msg) }) + '\n')))
+          const respond = () => child.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: reply(msg) }) + '\n'))
+          if (state.hold && msg.params?.name === 'get_window_state') state.held.push(respond)
+          else queueMicrotask(respond)
         }
         return true
       }),
@@ -73,20 +75,21 @@ function fixture(options: { platform?: string; saved?: string; panel?: boolean }
     readFileSync: vi.fn(() => { if (options.saved === undefined) throw new Error('ENOENT'); return options.saved }),
     writeFileSync: vi.fn(),
   }
+  const log = vi.fn()
   const deps: ComputerLiveDeps = {
     host, http, baseUrl: () => 'http://127.0.0.1:9', appToken: 'app-token-secret', platform: options.platform ?? 'darwin',
     userData: '/user', spawn: spawn as any,
     windows: () => [main, ...indicators.filter(w => !w.destroyed)],
     newIndicator, loadIndicator: vi.fn(async () => {}), preload: '/app/preload.js',
     workAreas: () => ({ primary: { x: 0, y: 25, width: 1440, height: 875 }, all: [{ x: 0, y: 25, width: 1440, height: 875 }] }),
-    shortcut, fs, focusMain: vi.fn(), now: () => Date.now(), setTimeout, clearTimeout,
+    shortcut, fs, focusMain: vi.fn(), now: () => Date.now(), setTimeout, clearTimeout, log,
   }
   const live = new ComputerLive(deps)
   // Frames are only captured for a visible Computer tab; most cases watch it.
   if (options.panel !== false) void live.invoke({ op: 'panel-visible', visible: true })
   const frames = () => main.webContents.send.mock.calls.filter(([, p]: any) => typeof p.frame === 'string')
   const windowCalls = () => rpc.filter(m => m.method === 'tools/call')
-  return { live, deps, state, rpc, children, host, http, spawn, main, indicators, shortcut, fs, frames, windowCalls }
+  return { live, deps, log, state, rpc, children, host, http, spawn, main, indicators, shortcut, fs, frames, windowCalls }
 }
 
 beforeEach(() => { vi.useFakeTimers() })
@@ -393,5 +396,103 @@ describe('frame capture follows the Computer tab', () => {
     await f.live.invoke({ op: 'panel-visible', visible: true })
     await vi.advanceTimersByTimeAsync(1000)
     expect(f.frames().length).toBeGreaterThanOrEqual(7)
+  })
+})
+
+describe('computer-use-live: halt failure', () => {
+  const liveFixture = async () => {
+    const f = fixture({ panel: false })
+    f.state.activity = activeBody()
+    f.live.beginPolling()
+    await vi.advanceTimersByTimeAsync(500)
+    return f
+  }
+  const lastPayload = (win: any) => win.webContents.send.mock.calls.at(-1)[1]
+
+  it('keeps the run live, surfaces the error and succeeds on retry', async () => {
+    const f = await liveFixture()
+    f.host.invoke.mockResolvedValueOnce({ error: 'Computer-use request failed.' })
+    expect(await f.live.invoke({ op: 'halt' })).toEqual({ error: 'Computer-use request failed.' })
+    expect(f.live.status()).toMatchObject({ active: true, haltError: true, conversationId: 7 })
+    expect(f.indicators[0].close).not.toHaveBeenCalled()
+    expect(f.shortcut.unregister).not.toHaveBeenCalled()
+    expect(lastPayload(f.indicators[0])).toMatchObject({ active: true, haltError: true })
+    expect(lastPayload(f.main)).toMatchObject({ active: true, haltError: true })
+    expect(f.log).toHaveBeenCalledWith('[cua-live] halt failed')
+    // Polls of the same action are not filtered out after a failed halt.
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(f.live.status().active).toBe(true)
+
+    expect(await f.live.invoke({ op: 'halt' })).toEqual({ halted: true })
+    expect(f.live.status()).toMatchObject({ active: false, haltError: false })
+    expect(f.indicators[0].close).toHaveBeenCalled()
+    expect(f.shortcut.unregister).toHaveBeenCalledWith(HALT_SHORTCUT)
+    f.live.shutdown()
+  })
+
+  it('a throwing host counts as a failed halt', async () => {
+    const f = await liveFixture()
+    f.host.invoke.mockRejectedValueOnce(new Error('socket closed'))
+    expect(await f.live.invoke({ op: 'halt' })).toHaveProperty('error')
+    expect(f.live.status()).toMatchObject({ active: true, haltError: true })
+    f.live.shutdown()
+  })
+
+  it('the shortcut halt logs a failure and keeps the run live', async () => {
+    const f = await liveFixture()
+    f.host.invoke.mockResolvedValueOnce({ error: 'Computer-use request failed.' })
+    f.shortcut.register.mock.calls[0][1]()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.log).toHaveBeenCalledWith('[cua-live] halt failed')
+    expect(f.live.status().active).toBe(true)
+    expect(f.shortcut.unregister).not.toHaveBeenCalled()
+    f.live.shutdown()
+  })
+
+  it('presses while a halt is in flight are coalesced', async () => {
+    const f = await liveFixture()
+    let finish: (value: unknown) => void = () => {}
+    f.host.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const callback = f.shortcut.register.mock.calls[0][1]
+    callback()
+    callback()
+    const third = f.live.halt()
+    finish({ halted: true })
+    expect(await third).toEqual({ halted: true })
+    expect(f.host.invoke).toHaveBeenCalledTimes(1)
+    expect(f.live.status().active).toBe(false)
+    f.live.shutdown()
+  })
+})
+
+describe('computer-use-live: stale capture reply', () => {
+  const holdFirstFrame = async () => {
+    const f = fixture()
+    f.state.hold = true
+    f.state.activity = activeBody({}, { pid: 42, window_id: 9 })
+    f.live.beginPolling()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(f.state.held).toHaveLength(1)
+    return f
+  }
+
+  it('drops a reply for the old target after the target changes', async () => {
+    const f = await holdFirstFrame()
+    f.state.activity = activeBody({}, { pid: 43, window_id: 10 })
+    await vi.advanceTimersByTimeAsync(1000)
+    f.state.held.shift()!()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.frames().filter(([, p]: any) => p.target?.pid === 43)).toHaveLength(0)
+    f.live.shutdown()
+  })
+
+  it('drops a reply for the old conversation after the conversation changes', async () => {
+    const f = await holdFirstFrame()
+    f.state.activity = activeBody({ conversation_id: 8 }, { pid: 42, window_id: 9 })
+    await vi.advanceTimersByTimeAsync(1000)
+    f.state.held.shift()!()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.frames().filter(([, p]: any) => p.conversationId === 8)).toHaveLength(0)
+    f.live.shutdown()
   })
 })

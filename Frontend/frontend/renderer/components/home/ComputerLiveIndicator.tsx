@@ -35,7 +35,9 @@ export function ComputerLiveIndicator() {
         title={t('cu.live.open')}>
         <span className="cul-dot" aria-hidden="true" />
         <span className="cul-tag-text">
-          <span className="cul-tag-title">{t('cu.live.using')}</span>
+          {state.haltError
+            ? <span className="cul-tag-title cul-error" role="alert">{t('cu.live.stopFailed')}</span>
+            : <span className="cul-tag-title">{t('cu.live.using')}</span>}
           <span className="cul-tag-meta">
             <span className="cul-app">{app}</span>
             <span className="cul-sep" aria-hidden="true">·</span>

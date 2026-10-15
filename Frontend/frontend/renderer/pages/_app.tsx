@@ -45,7 +45,8 @@ function MyApp({ Component, pageProps, router }: AppProps) {
   // confirm hosts belong to the main window and must not appear over the user's apps.
   if (router?.pathname === '/computer-live') {
     return (
-      <AppearanceProvider>
+      // The 320x64 window must keep its own zoom: text size would clip it.
+      <AppearanceProvider applyZoom={false}>
         <ErrorBoundary>
           <Component {...pageProps} />
         </ErrorBoundary>

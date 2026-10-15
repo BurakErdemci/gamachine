@@ -21,9 +21,11 @@ export interface LiveState {
   startedAt: number | null;
   last: LiveAction | null;
   appName: string | null;
+  /** Main's Stop did not reach the backend (indicator button or shortcut); the run is still live. */
+  haltError: boolean;
 }
 
-const EMPTY: LiveState = { active: false, running: false, conversationId: null, startedAt: null, last: null, appName: null };
+const EMPTY: LiveState = { active: false, running: false, conversationId: null, startedAt: null, last: null, appName: null, haltError: false };
 
 const ipcOf = (): any => (typeof window !== 'undefined' ? (window as any).ipc : null);
 
@@ -41,6 +43,7 @@ function toState(raw: any): LiveState {
     conversationId: Number.isInteger(raw.conversationId) ? raw.conversationId : null,
     startedAt: typeof raw.startedAt === 'number' ? raw.startedAt : null,
     last,
+    haltError: raw.haltError === true,
     appName: name(target?.app_name) ?? name(last?.app_name) ?? name(target?.bundle_id) ?? name(last?.bundle_id),
   };
 }
@@ -201,7 +204,7 @@ export function ComputerLivePanel({ visible }: { visible: boolean }) {
           <span className="cul-last-v">{t(actionKey(state.last.tool))}</span>
         </p>
       )}
-      {stopFailed && <p className="cul-error" role="alert">{t('cu.live.stopFailed')}</p>}
+      {(stopFailed || state.haltError) && <p className="cul-error" role="alert">{t('cu.live.stopFailed')}</p>}
       <p className="cul-note">{t('cu.live.stopNote')}</p>
     </section>
   );

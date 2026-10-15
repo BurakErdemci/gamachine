@@ -30,6 +30,8 @@ export interface LivePayload {
   target: LiveTarget | null
   /** A PNG data URL, or null on a state-only update (keep showing the previous frame). */
   frame: string | null
+  /** The last Stop did not reach the backend; the run is still live and Stop can be retried. */
+  haltError: boolean
   at: number
 }
 
@@ -181,6 +183,8 @@ export class ComputerLive {
   private target: LiveTarget | null = null
   private lastActiveSeen = 0
   private haltedAt: number | null = null
+  private haltError = false
+  private haltInFlight: Promise<unknown> | null = null
   private panelVisible = false
   private indicator: IndicatorWindow | null = null
   private shortcutOn = false
@@ -244,13 +248,23 @@ export class ComputerLive {
     // After a halt, only an action newer than the halt (the user's next turn) counts.
     if (this.haltedAt !== null && last.at <= this.haltedAt) return
     this.lastActiveSeen = this.now()
+    // A capture in flight belongs to the old conversation/target; its reply must never wear the new labels.
+    let identityChanged = false
     if (conversationId !== this.conversationId) {
+      identityChanged = true
       this.conversationId = conversationId
       this.startedAt = isInt(data.started_at) ? data.started_at : this.now()
     }
     this.last = last
     const target = parseTarget(data.target)
-    if (target?.pid !== this.target?.pid || target?.window_id !== this.target?.window_id) this.windowCache = null
+    if (target?.pid !== this.target?.pid || target?.window_id !== this.target?.window_id) {
+      this.windowCache = null
+      identityChanged = true
+    }
+    if (identityChanged) {
+      this.captureToken++
+      this.capturing = false
+    }
     this.target = target
     if (!this.live) {
       this.live = true
@@ -268,6 +282,7 @@ export class ComputerLive {
     this.last = null
     this.target = null
     this.windowCache = null
+    this.haltError = false
     this.unregisterShortcut()
     this.closeIndicator()
     this.stopCapture()
@@ -277,7 +292,7 @@ export class ComputerLive {
   private payload(frame: string | null): LivePayload {
     return {
       active: this.live, running: this.deps.host.running, conversationId: this.conversationId,
-      startedAt: this.startedAt, last: this.last, target: this.target, frame, at: this.now(),
+      startedAt: this.startedAt, last: this.last, target: this.target, frame, haltError: this.haltError, at: this.now(),
     }
   }
 
@@ -325,16 +340,39 @@ export class ComputerLive {
   }
 
   /** Stop: the host's halt contract removes the computer tools for the rest of the turn. */
-  async halt(): Promise<unknown> {
+  halt(): Promise<unknown> {
+    // Presses while one halt is in flight share its answer.
+    if (this.haltInFlight) return this.haltInFlight
+    const run = this.runHalt().finally(() => { this.haltInFlight = null })
+    this.haltInFlight = run
+    return run
+  }
+
+  private async runHalt(): Promise<unknown> {
     const conversationId = this.conversationId
     if (conversationId === null) return { error: 'Computer use is not active.' }
-    this.haltedAt = this.now()
-    this.goIdle()
+    let result: unknown
     try {
-      return await this.deps.host.invoke({ op: 'halt', conversationId })
+      result = await this.deps.host.invoke({ op: 'halt', conversationId })
     } catch {
-      return { error: 'Computer-use halt failed.' }
+      result = { error: 'Computer-use halt failed.' }
     }
+    const failed = !result || typeof result !== 'object' || (result as Record<string, unknown>).error !== undefined
+    if (failed) {
+      // Nothing was halted: keep the run visible and the shortcut armed so Stop can be retried.
+      this.log('[cua-live] halt failed')
+      if (this.live && this.conversationId === conversationId) {
+        this.haltError = true
+        this.emit(null)
+      }
+      return result && typeof result === 'object' ? result : { error: 'Computer-use halt failed.' }
+    }
+    // A newer run that started while the halt was in flight is not the one the host stopped.
+    if (this.conversationId === conversationId) {
+      this.haltedAt = this.now()
+      this.goIdle()
+    }
+    return result
   }
 
   // --- shortcut ---------------------------------------------------------
@@ -342,7 +380,7 @@ export class ComputerLive {
   private registerShortcut() {
     if (this.shortcutOn) return
     try {
-      this.shortcutOn = this.deps.shortcut.register(HALT_SHORTCUT, () => { void this.halt() })
+      this.shortcutOn = this.deps.shortcut.register(HALT_SHORTCUT, () => { void this.halt().catch(() => {}) })
       if (!this.shortcutOn) this.log('[cua-live] halt shortcut is taken by another app')
     } catch (error) {
       this.log('[cua-live] halt shortcut failed', error instanceof Error ? error.message : String(error))

@@ -152,6 +152,17 @@ describe('ComputerLiveIndicator', () => {
     expect(invoke).not.toHaveBeenCalledWith('computer-use', expect.anything())
   })
 
+  it('a failed halt shows the error line and keeps Stop enabled', async () => {
+    status = { ...active(), panelVisible: false }
+    render(<ComputerLiveIndicator />)
+    await screen.findByText(tr['cu.live.using'])
+    push(active({ haltError: true }))
+    expect(screen.getByRole('alert')).toHaveProperty('textContent', tr['cu.live.stopFailed'])
+    expect(screen.getByText(tr['cu.live.stop']).closest('button')).toHaveProperty('disabled', false)
+    push(active({ haltError: false }))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('the indicator page renders the tag on a transparent window', async () => {
     status = { ...active(), panelVisible: false }
     render(<ComputerLivePage />)
