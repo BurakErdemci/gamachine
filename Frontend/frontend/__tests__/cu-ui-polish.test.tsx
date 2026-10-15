@@ -71,7 +71,10 @@ describe('D2 · workspace tabs', () => {
     }
     const tab = rules(css('workspace.css'), '.ws-tab').join(' ')
     expect(tab).toMatch(/white-space:\s*nowrap/)
-    expect(tab).toMatch(/flex:\s*none/)
+    expect(tab).toMatch(/flex:\s*1 1 auto/)
+    expect(tab).toMatch(/min-width:\s*0/)
+    expect(tab).toMatch(/font-size:\s*clamp\(10\.5px,[^)]*cqi/)
+    expect(rules(css('workspace.css'), '.ws-tabs').join(' ')).toMatch(/container-type:\s*inline-size/)
   })
 })
 
@@ -134,7 +137,9 @@ describe('D5 · live indicator title', () => {
     expect(col).toMatch(/flex:\s*1/)
     expect(col).toMatch(/min-width:\s*0/)
     expect(rules(text, '.cul-stop').join(' ')).toMatch(/flex:\s*none/)
-    expect(text).toMatch(/width:\s*388px/)
+    expect(text).toMatch(/width:\s*428px/)
+    expect(col).toMatch(/container-type:\s*inline-size/)
+    expect(title).toMatch(/font-size:\s*clamp\(11px,[^)]*cqi/)
   })
 })
 
@@ -155,6 +160,6 @@ describe('F2 · workspace tab strip in tracked uppercase themes', () => {
     const m = text.match(/:is\(\[data-theme="arena"\], \[data-theme="pafta"\]\) \.ws-tab \{([^}]*)\}/)
     expect(m).not.toBeNull()
     expect(m![1]).not.toMatch(/text-overflow/)
-    expect(parseFloat(/font-size:\s*([\d.]+)px/.exec(m![1])![1])).toBeGreaterThanOrEqual(10.5)
+    expect(parseFloat(/--ws-tab-fs:\s*([\d.]+)px/.exec(m![1])![1])).toBeGreaterThanOrEqual(10.5)
   })
 })
