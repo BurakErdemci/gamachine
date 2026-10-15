@@ -99,7 +99,7 @@
 
 .title-block {
   position: relative; z-index: 1; flex: none;
-  display: flex; align-items: baseline; gap: 18px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 18px;
   width: 100%; max-width: 800px; margin: 0 auto; padding: 18px 40px 12px;
   border-bottom: var(--line-w) solid var(--tb-rule);
 }
@@ -109,9 +109,13 @@
   text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
 }
 .tb-v { font-size: var(--fs-small); color: var(--ink-dim); }
-.tb-title { order: -1; margin-right: auto; }
+.tb-title { order: -1; margin-right: auto; min-width: 0; }
+/* a narrow chat gives the subject its own row, so squeezing never breaks it word by word */
+@container stage (max-width: 640px) {
+  .tb-title { flex: 1 0 100%; }
+}
 .tb-title .tb-k { display: none; }
-.tb-title .tb-v { font-family: var(--font-title); font-size: var(--fs-title); font-weight: 600; color: var(--ink); }
+.tb-title .tb-v { font-family: var(--font-title); font-size: var(--fs-title); font-weight: 600; color: var(--ink); word-break: normal; overflow-wrap: break-word; min-width: 0; }
 .tb-no .tb-v, .tb-rev .tb-v, .tb-date .tb-v { font-family: var(--font-mono); }
 
 /* M3: room under the header; content scrolling up fades out instead of touching it */
@@ -376,16 +380,16 @@
 /* ---------- composer ---------- */
 .composer-wrap { position: relative; z-index: 1; flex: none; width: 100%; max-width: 800px; margin: 0 auto; padding: 2px 40px 12px; }
 .composer {
-  display: flex; align-items: center; gap: 4px; padding: 6px 6px 6px 8px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 6px 6px 8px;
   background: var(--paper-raised); border: var(--line-w) solid var(--paper-line-strong);
   border-radius: var(--radius-lg); box-shadow: var(--shadow-card); color: var(--ink-dim);
 }
 .composer:focus-within { border-color: var(--ink-dim); }
 .composer textarea {
-  flex: 1; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink);
+  flex: 1; min-width: min(100%, 220px); resize: none; border: 0; outline: 0; background: transparent; color: var(--ink);
   font-size: var(--fs-body); line-height: 1.5; padding: 7px 6px; min-height: 36px; max-height: 160px;
 }
-.composer textarea::placeholder { color: var(--ink-faint); }
+.composer textarea::placeholder { color: var(--ink-faint); white-space: nowrap; }
 .send {
   width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--radius-md);
   background: var(--btn-bg); color: var(--btn-text); clip-path: var(--clip-sm);
@@ -542,7 +546,7 @@
 /* the thread and the overlays drawn over it (new-messages pill, side question panel) */
 .thread-wrap { position: relative; z-index: 1; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* the chat's own tools at the end of the title block (side question, branch) */
-.tb-actions { display: flex; align-items: center; gap: 2px; align-self: center; margin-left: 4px; color: var(--ink-faint); }
+.tb-actions { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; gap: 2px; align-self: center; margin-left: auto; color: var(--ink-faint); }
 .tb-actions button { color: inherit; }
 .tb-actions button:hover:not(:disabled) { color: var(--ink); background: var(--paper-sunk); }
 /* labelled header actions: a bare 14px icon went unseen (owner, 2 Oct 2026) */
