@@ -39,10 +39,9 @@ async function fetchCuaDriver(options = {}) {
   if (!pin || !/^sha256:[a-f0-9]{64}$/.test(pin.digest)) throw new Error('Missing or invalid cua-driver pin')
   const destination = path.join(root, 'Backend/vendor/cua')
   const binary = path.join(destination, 'cua-driver')
-  const license = path.join(destination, 'LICENSE')
   const stamp = path.join(destination, '.fetched')
   if (io.existsSync(stamp) && io.readFileSync(stamp, 'utf8').trim() === pin.digest
-    && io.existsSync(binary) && io.existsSync(license)) {
+    && io.existsSync(binary)) {
     io.chmodSync(binary, 0o755)
     log('[cua] pinned driver already fetched')
     return
@@ -53,23 +52,19 @@ async function fetchCuaDriver(options = {}) {
     await fetch(pin.url, wheel)
     exec('python3', [path.join(root, 'scripts/pinned_assets.py'), 'verify', KEY, wheel], { stdio: 'inherit' })
     const members = exec('unzip', ['-Z1', wheel], { encoding: 'utf8' }).trim().split(/\r?\n/)
-    const licenses = members.filter(name => /^cua_driver-[^/]+\.dist-info\/(?:licenses\/)?LICENSE$/.test(name))
-    if (licenses.length !== 1 || !members.includes('cua_driver/bin/cua-driver')) {
-      throw new Error('cua-driver wheel is missing the binary or a unique LICENSE')
+    if (!members.includes('cua_driver/bin/cua-driver')) {
+      throw new Error('cua-driver wheel is missing the binary')
     }
-    for (const [member, name] of [['cua_driver/bin/cua-driver', 'cua-driver'], [licenses[0], 'LICENSE']]) {
-      const data = exec('unzip', ['-p', wheel, member], { maxBuffer: 128 * 1024 * 1024 })
-      io.writeFileSync(path.join(scratch, name), data)
-    }
-    io.chmodSync(path.join(scratch, 'cua-driver'), 0o755)
+    const data = exec('unzip', ['-p', wheel, 'cua_driver/bin/cua-driver'], { maxBuffer: 128 * 1024 * 1024 })
+    const extracted = path.join(scratch, 'cua-driver')
+    io.writeFileSync(extracted, data)
+    io.chmodSync(extracted, 0o755)
     io.mkdirSync(destination, { recursive: true })
     // copyFile works even when the system temp directory is on another volume.
-    for (const name of ['cua-driver', 'LICENSE']) {
-      const staged = path.join(destination, `${name}.new`)
-      io.copyFileSync(path.join(scratch, name), staged)
-      if (name === 'cua-driver') io.chmodSync(staged, 0o755)
-      io.renameSync(staged, path.join(destination, name))
-    }
+    const staged = path.join(destination, 'cua-driver.new')
+    io.copyFileSync(extracted, staged)
+    io.chmodSync(staged, 0o755)
+    io.renameSync(staged, binary)
     io.writeFileSync(stamp, `${pin.digest}\n`)
     log('[cua] verified and installed pinned driver')
   } finally {

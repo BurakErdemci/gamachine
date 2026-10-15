@@ -101,7 +101,8 @@ mac:
       to: cua
       filter:
         - cua-driver
-        - LICENSE
+    - from: resources/licenses/cua-driver-LICENSE.md
+      to: cua/LICENSE
   category: public.app-category.developer-tools
   # Measured 3 Sep 2026: `grep -rn NSMicrophone Frontend/frontend` → 0 hits, the key
   # existed nowhere. macOS KILLS an app whose Info.plist lacks this description the

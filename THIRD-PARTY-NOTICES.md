@@ -26,7 +26,9 @@ the project history.
 **MIT License** — https://github.com/trycua/cua
 
 The universal macOS daemon is extracted unmodified from the pinned PyPI wheel.
-Its license is included alongside the executable at `cua/LICENSE` in the app resources.
+The wheel ships no license text. The license text is taken from the upstream
+repository at tag `cua-driver-rs-v0.35.4` and installed at `cua/LICENSE` in the app
+resources.
 
 ### FFmpeg — **[bundled] [fetched]** — ⚠️ the license differs per platform
 The bundled FFmpeg build is **not under the same license on every platform**. The
