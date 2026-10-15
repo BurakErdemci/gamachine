@@ -432,7 +432,8 @@ export class ComputerLive {
 
   private wantsFrames() {
     return this.live && this.deps.host.running && !!this.deps.host.socketPath && !!this.target?.pid
-      && (this.panelVisible || this.indicator !== null)
+      // The indicator draws no frames; only a visible Computer tab needs them.
+      && this.panelVisible
   }
 
   private updateCapture() {
