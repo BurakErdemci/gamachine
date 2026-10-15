@@ -96,7 +96,7 @@ export const MAX_DIMENSION = 480
 const REQUEST_MS = 3000
 const WINDOW_LOOKUP_MS = 5000
 // The Turkish title "Gamachine bilgisayarınızı kullanıyor" needs this width to fit unclipped in every theme.
-export const INDICATOR_SIZE = { width: 400, height: 64 }
+export const INDICATOR_SIZE = { width: 440, height: 64 }
 const INDICATOR_MARGIN = 16
 const POSITION_FILE = 'computer-live-indicator.json'
 
