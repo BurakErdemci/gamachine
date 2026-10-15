@@ -123,9 +123,9 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
     };
   }, [whyOpen]);
 
-  // `!shrink !min-w-0`: shell.css gives `.unity` `flex: none` and a fixed min-width, so the pill
-  // could never give way and ran over the model selector in a narrow window.
-  const cls = ['unity', '!shrink !min-w-0', linked ? 'is-linked' : '', whyOpen && status === 'blocked' ? 'why-open' : '']
+  // The bay may shrink, but `.unity { min-width: min-content }` in shell.css keeps its
+  // own content minimum; its labels give way through the `topbar` container queries.
+  const cls = ['unity', '!shrink', linked ? 'is-linked' : '', whyOpen && status === 'blocked' ? 'why-open' : '']
     .filter(Boolean).join(' ');
 
   return (
