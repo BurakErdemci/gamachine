@@ -327,3 +327,137 @@ def test_driver_failure_never_retries_a_mutating_call(runtime, monkeypatch):
     constructor.assert_called_once_with(state["driver_path"], state["socket_path"])
     client.call.assert_awaited_once_with("type_text", {"pid": 4242, "text": "hello"})
     assert len(observed) == 1
+
+
+def test_concurrent_runtime_change_constructs_one_owned_replacement(runtime, monkeypatch, tmp_path):
+    state, _ = runtime
+    clients = []
+    live = set()
+
+    class Client:
+        def __init__(self, binary, socket):
+            self.binary, self.socket = binary, socket
+            clients.append(self)
+            live.add(self)
+
+        async def call(self, tool, args):
+            return CallToolResult(content=[TextContent(type="text", text="ok")])
+
+        async def close(self):
+            await asyncio.sleep(0)
+            live.discard(self)
+
+    monkeypatch.setattr(server, "DriverClient", Client)
+    monkeypatch.setattr(server.approval_bridge, "request_approval", AsyncMock(return_value={"approved": True}))
+
+    async def run():
+        handler = server.ComputerServer()
+        try:
+            assert not (await handler.call("computer_list_apps", {})).is_error
+            state["socket_path"] = str(tmp_path / "restarted.sock")
+            # Exactly two concurrent requests; close yields to expose double replacement.
+            results = await asyncio.gather(
+                handler.call("computer_list_apps", {}), handler.call("computer_list_apps", {}))
+            assert all(not result.is_error for result in results)
+            assert len(clients) == 2
+            assert live == {handler.driver}
+        finally:
+            await handler.close()
+        assert live == set()
+
+    asyncio.run(run())
+
+
+def test_old_client_held_across_replacement_cannot_spawn_or_retry(runtime, monkeypatch, tmp_path):
+    state, _ = runtime
+    old = driver_client.DriverClient(state["driver_path"], state["socket_path"])
+    old.list_running_apps = AsyncMock(return_value={4242: ("com.apple.TextEdit", "TextEdit")})
+    transport = MagicMock(side_effect=AssertionError("closed client started a transport"))
+    monkeypatch.setattr(driver_client, "_transport", transport)
+    replacement = MagicMock(binary=state["driver_path"], socket=str(tmp_path / "restarted.sock"))
+    replacement.call = AsyncMock(return_value=CallToolResult(content=[]))
+    replacement.close = AsyncMock()
+    monkeypatch.setattr(server, "DriverClient", MagicMock(return_value=replacement))
+
+    async def run():
+        awaiting_approval, release = asyncio.Event(), asyncio.Event()
+
+        async def approve(*args, **kwargs):
+            awaiting_approval.set()
+            await release.wait()
+            return {"approved": True}
+
+        monkeypatch.setattr(server.approval_bridge, "request_approval", approve)
+        handler = server.ComputerServer(old)
+        # One held mutation and one runtime replacement; no child may start.
+        task = asyncio.create_task(handler.call("computer_type_text", {"pid": 4242, "text": "hello"}))
+        try:
+            await asyncio.wait_for(awaiting_approval.wait(), 2)
+            state["socket_path"] = replacement.socket
+            assert await handler._runtime_driver() is replacement
+            release.set()
+            result = await asyncio.wait_for(task, 2)
+            assert result.is_error
+            assert result.content[0].text == "Bilgisayar kullanımı sürücüsü kullanılamıyor."
+            transport.assert_not_called()
+            replacement.call.assert_not_called()
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await handler.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("initial,following", [(True, False), (False, True), (True, True), (False, False)])
+@pytest.mark.parametrize("read_only", [False, True])
+def test_codex_chat_rebuilds_only_when_effective_computer_flag_changes(
+        monkeypatch, tmp_path, caplog, initial, following, read_only):
+    from providers import codex_session
+    from providers.codex_provider import CodexProvider
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+
+    db = bind_flag(initial)
+    monkeypatch.setattr(codex_session, "_SESSIONS", {})
+    monkeypatch.setattr(codex_session, "_configured_codex_mcp_names", lambda: set())
+    monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: False)
+    write_config = MagicMock()
+    monkeypatch.setattr(CodexProvider, "_write_mcp_config", write_config)
+    monkeypatch.setattr(codex_session.CodexSession, "close", AsyncMock())
+    close_session = AsyncMock(side_effect=codex_session.close_session)
+    monkeypatch.setattr(codex_session, "close_session", close_session)
+    started = []
+
+    async def stream(session, message, **kwargs):
+        if not session._started:
+            session._started = True
+            started.append((session, codex_session._trusted_mcp_config(read_only=session.read_only)))
+        yield {"type": "text", "content": "ok"}
+
+    monkeypatch.setattr(codex_session.CodexSession, "stream", stream)
+    runner = ar.AgentRunner(provider_type="subscription", api_key="", model_name="gpt-test",
+                            workspace_path=str(tmp_path), conversation_id=17,
+                            generation_mode="auto", read_only=read_only)
+
+    async def run():
+        sessions = []
+        for on in (initial, following, following):
+            settings.set_enabled(db, on)
+            async for _ in runner._run_codex_session("hi"):
+                pass
+            current = codex_session._SESSIONS[17]
+            assert current.computer_use is (on and not read_only)
+            sessions.append(current)
+        changed = initial != following and not read_only
+        assert (sessions[0] is not sessions[1]) is changed
+        assert sessions[1] is sessions[2]
+        assert close_session.await_count == int(changed)
+        assert write_config.call_count == 1 + int(changed)
+        assert len(started) == 1 + int(changed)
+        for session, config in started:
+            assert (registration.SERVER_NAME in config["mcp_servers"]) is session.computer_use
+        if changed:
+            assert ("bilgisayar kullanımı açıldı" if following else "bilgisayar kullanımı kapandı") in caplog.text
+
+    with caplog.at_level("INFO"):
+        asyncio.run(run())

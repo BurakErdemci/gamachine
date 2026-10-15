@@ -886,11 +886,13 @@ class CodexSession:
         effort: Optional[str] = None,
         read_only: bool = False,
         unity_mcp: bool = False,
+        computer_use: bool = False,
     ):
         self.conversation_id = conversation_id
         # Side chat session: every approval request is declined, in every mode.
         self.read_only = bool(read_only)
         self.unity_mcp = unity_mcp
+        self.computer_use = computer_use
         self.model = model
         self.cwd = cwd
         # Reasoning effort (minimal..xhigh; max yalnız gpt-5.6). Launch-time config'tir
@@ -1707,11 +1709,11 @@ class CodexSession:
                 self._active_gate_ids.clear()
 
 
-def get_session(conversation_id: int, **kwargs) -> CodexSession:
+def get_session(conversation_id: int, *, computer_use: bool = False, **kwargs) -> CodexSession:
     """conversation_id için canlı session'ı getir; yoksa oluştur."""
     sess = _SESSIONS.get(conversation_id)
     if sess is None:
-        sess = CodexSession(conversation_id, **kwargs)
+        sess = CodexSession(conversation_id, computer_use=computer_use, **kwargs)
         _SESSIONS[conversation_id] = sess
     return sess
 

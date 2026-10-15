@@ -2857,6 +2857,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         """
         from providers.codex_session import get_session, close_session, _SESSIONS
         from providers.effort_caps import map_effort as _map_effort
+        from computer_use import settings as computer_use_settings
+
+        desired_computer_use = (
+            not bool(getattr(self, "read_only", False)) and computer_use_settings.enabled_now()
+        )
 
         desired_unity_mcp = False
         try:
@@ -2890,7 +2895,13 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             _existing is not None
             and bool(getattr(_existing, "unity_mcp", False)) != desired_unity_mcp
         )
-        if _existing is not None and (_effort_changed or _workspace_changed or _ro_changed or _unity_changed):
+        _computer_changed = (
+            _existing is not None
+            and bool(getattr(_existing, "computer_use", False)) != desired_computer_use
+        )
+        if _existing is not None and (
+            _effort_changed or _workspace_changed or _ro_changed or _unity_changed or _computer_changed
+        ):
             reasons = []
             if _ro_changed:
                 reasons.append("read_only değişti")
@@ -2900,6 +2911,8 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                 reasons.append("workspace değişti")
             if _unity_changed:
                 reasons.append("unityMCP açıldı" if desired_unity_mcp else "unityMCP kapandı")
+            if _computer_changed:
+                reasons.append("bilgisayar kullanımı açıldı" if desired_computer_use else "bilgisayar kullanımı kapandı")
             logger.info(
                 "[CodexSession] %s; session yeniden kuruluyor",
                 ", ".join(reasons),
@@ -2933,6 +2946,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             effort=desired_effort,
             read_only=bool(getattr(self, "read_only", False)),
             unity_mcp=desired_unity_mcp,
+            computer_use=desired_computer_use,
         )
         # Oto mod → onay otomatik accept; Adım/Plan modu → her mutasyonda onay kartı.
         session.auto_approve = (self.generation_mode == "auto")
