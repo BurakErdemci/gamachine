@@ -56,10 +56,7 @@ interface ComputerUseApprovalProps {
 export const ComputerUseApproval: React.FC<ComputerUseApprovalProps> = ({ info, onAnswer, phonePaired }) => {
   const { t } = useLang();
   const risky = isRiskyComputerCard(info);
-  // launch_app carries only a bundle id: show its last segment (com.apple.TextEdit -> TextEdit)
-  // as the name and keep the full id as the small secondary text.
-  const shortId = info.bundleId ? info.bundleId.split('.').filter(Boolean).pop() ?? null : null;
-  const app = stripBidi(info.appName ?? shortId ?? info.bundleId ?? t('cu.card.unknownApp'));
+  const app = stripBidi(info.appName ?? info.bundleId ?? t('cu.card.unknownApp'));
   const editor = isCodeEditorBundle(info.bundleId);
   const summary = stripBidi(info.summary);
 
@@ -84,7 +81,7 @@ export const ComputerUseApproval: React.FC<ComputerUseApprovalProps> = ({ info, 
             {summary && <p className="cu-card-summary" data-testid="cu-card-summary">{summary}</p>}
             <dl className="cu-card-app" data-testid="cu-card-app">
               <dt>{t('cu.card.app')}</dt>
-              <dd>{app}{info.bundleId && app !== stripBidi(info.bundleId) ? <> <span className="set-key">{stripBidi(info.bundleId)}</span></> : null}</dd>
+              <dd>{app}{info.bundleId && info.appName ? <> <span className="set-key">{stripBidi(info.bundleId)}</span></> : null}</dd>
               <dt>{t('cu.card.tool')}</dt>
               <dd><code>{stripBidi(info.tool)}</code></dd>
             </dl>
