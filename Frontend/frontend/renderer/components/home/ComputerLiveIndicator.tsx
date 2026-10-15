@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { LIVE_CHANNEL, formatElapsed, haltKeys, useComputerLive, useNow } from './ComputerLivePanel';
 
@@ -18,12 +18,15 @@ export function ComputerLiveIndicator() {
   const now = useNow(state.active);
   const [stopping, setStopping] = useState(false);
 
+  // A new run is a new Stop; the previous run's pending state must not disable it.
+  useEffect(() => { setStopping(false); }, [state.conversationId]);
+
   const stop = async () => {
     if (stopping) return;
     setStopping(true);
-    const result = await invoke({ op: 'halt' });
-    // On success main closes this window; a failure leaves the button usable again.
-    if (!result || result.error) setStopping(false);
+    await invoke({ op: 'halt' });
+    // Success idles the run (main closes this window) and a failure leaves the run live: either way Stop is usable again.
+    setStopping(false);
   };
 
   const app = state.appName ?? t('cu.live.unknownApp');

@@ -184,7 +184,7 @@ export class ComputerLive {
   private lastActiveSeen = 0
   private haltedAt: number | null = null
   private haltError = false
-  private haltInFlight: Promise<unknown> | null = null
+  private readonly haltInFlight = new Map<number, Promise<unknown>>()
   private panelVisible = false
   private indicator: IndicatorWindow | null = null
   private shortcutOn = false
@@ -253,6 +253,8 @@ export class ComputerLive {
     if (conversationId !== this.conversationId) {
       identityChanged = true
       this.conversationId = conversationId
+      // A failed Stop belonged to the previous conversation.
+      this.haltError = false
       this.startedAt = isInt(data.started_at) ? data.started_at : this.now()
     }
     this.last = last
@@ -341,23 +343,28 @@ export class ComputerLive {
 
   /** Stop: the host's halt contract removes the computer tools for the rest of the turn. */
   halt(): Promise<unknown> {
-    // Presses while one halt is in flight share its answer.
-    if (this.haltInFlight) return this.haltInFlight
-    const run = this.runHalt().finally(() => { this.haltInFlight = null })
-    this.haltInFlight = run
+    const conversationId = this.conversationId
+    if (conversationId === null) return Promise.resolve({ error: 'Computer use is not active.' })
+    // Presses for the same conversation while its halt is in flight share one answer.
+    const existing = this.haltInFlight.get(conversationId)
+    if (existing) return existing
+    const run = this.runHalt(conversationId).finally(() => {
+      if (this.haltInFlight.get(conversationId) === run) this.haltInFlight.delete(conversationId)
+    })
+    this.haltInFlight.set(conversationId, run)
     return run
   }
 
-  private async runHalt(): Promise<unknown> {
-    const conversationId = this.conversationId
-    if (conversationId === null) return { error: 'Computer use is not active.' }
+  private async runHalt(conversationId: number): Promise<unknown> {
     let result: unknown
     try {
       result = await this.deps.host.invoke({ op: 'halt', conversationId })
     } catch {
       result = { error: 'Computer-use halt failed.' }
     }
-    const failed = !result || typeof result !== 'object' || (result as Record<string, unknown>).error !== undefined
+    // Only the halt contract's own reply counts; anything else did not stop the run.
+    const failed = !result || typeof result !== 'object' || Array.isArray(result)
+      || (result as Record<string, unknown>).error !== undefined || (result as Record<string, unknown>).halted !== true
     if (failed) {
       // Nothing was halted: keep the run visible and the shortcut armed so Stop can be retried.
       this.log('[cua-live] halt failed')
@@ -365,7 +372,9 @@ export class ComputerLive {
         this.haltError = true
         this.emit(null)
       }
-      return result && typeof result === 'object' ? result : { error: 'Computer-use halt failed.' }
+      const reply = result as Record<string, unknown> | null
+      return reply && typeof reply === 'object' && !Array.isArray(reply) && reply.error !== undefined
+        ? result : { error: 'Computer-use halt failed.' }
     }
     // A newer run that started while the halt was in flight is not the one the host stopped.
     if (this.conversationId === conversationId) {
@@ -502,7 +511,7 @@ export class ComputerLive {
     while (token === this.captureToken && !this.stopped) {
       const started = this.now()
       try {
-        const frame = await this.captureOnce()
+        const frame = await this.captureOnce(token)
         if (token !== this.captureToken) break
         if (frame) this.emit(frame)
       } catch (error) {
@@ -516,7 +525,7 @@ export class ComputerLive {
     }
   }
 
-  private async captureOnce(): Promise<string | null> {
+  private async captureOnce(token: number): Promise<string | null> {
     const target = this.target
     if (!target?.pid) return null
     const proxy = await this.ensureProxy()
@@ -527,6 +536,8 @@ export class ComputerLive {
         windowId = cached.windowId
       } else {
         const listing = await this.call(proxy, 'list_windows', { pid: target.pid })
+        // A listing issued before a target/conversation change must not seed the new target's cache.
+        if (token !== this.captureToken) return null
         windowId = pickWindow(listing, target.pid)
         this.windowCache = { pid: target.pid, windowId, at: this.now() }
       }
@@ -535,6 +546,7 @@ export class ComputerLive {
     const result = await this.call(proxy, 'get_window_state', {
       pid: target.pid, window_id: windowId, include_accessibility_tree: false, max_dimension: MAX_DIMENSION,
     })
+    if (token !== this.captureToken) return null
     const frame = frameOf(result)
     // The window may have closed; look it up again next time.
     if (!frame) this.windowCache = null

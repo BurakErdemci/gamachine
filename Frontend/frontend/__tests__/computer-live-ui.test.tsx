@@ -34,7 +34,7 @@ beforeEach(() => {
   status = { active: false, running: true, conversationId: null, startedAt: null, last: null, target: null, panelVisible: false }
   invoke = vi.fn(async (channel: string, req: any) => {
     if (channel === 'computer-use-live' && req?.op === 'status') return status
-    if (channel === 'computer-use') return { halted: true }
+    if (channel === 'computer-use-live' && req?.op === 'halt') return { halted: true }
     return { ok: true }
   })
   vi.stubGlobal('ipc', {
@@ -101,22 +101,19 @@ describe('ComputerLivePanel', () => {
     expect(screen.queryByRole('img', { name: /TextEdit/ })).toBeNull()
   })
 
-  it('Stop calls the halt contract for the conversation, then tells main the run is over', async () => {
+  it('Stop goes through main\'s halt coordinator, never the host directly', async () => {
     render(<ComputerLivePanel visible />)
     await screen.findByText(tr['cu.live.idle'])
     push(active())
     fireEvent.click(screen.getByRole('button', { name: new RegExp(tr['cu.live.stop']) }))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('computer-use-live', { op: 'halted', conversationId: 7 }))
-    const haltCall = invoke.mock.calls.findIndex(([channel]) => channel === 'computer-use')
-    expect(invoke.mock.calls[haltCall]).toEqual(['computer-use', { op: 'halt', conversationId: 7 }])
-    const haltedCall = invoke.mock.calls.findIndex(([, req]) => req?.op === 'halted')
-    expect(haltCall).toBeLessThan(haltedCall)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('computer-use-live', { op: 'halt' }))
+    expect(invoke.mock.calls.some(([channel]) => channel === 'computer-use')).toBe(false)
     expect(screen.getByRole('button', { name: new RegExp(tr['cu.live.stopping']) })).toHaveProperty('disabled', true)
   })
 
   it('a refused halt re-enables Stop and says so', async () => {
     invoke.mockImplementation(async (channel: string, req: any) => {
-      if (channel === 'computer-use') return { error: 'nope' }
+      if (channel === 'computer-use-live' && req?.op === 'halt') return { error: 'nope' }
       if (req?.op === 'status') return status
       return { ok: true }
     })
@@ -125,7 +122,6 @@ describe('ComputerLivePanel', () => {
     push(active())
     fireEvent.click(screen.getByRole('button', { name: new RegExp(tr['cu.live.stop']) }))
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', tr['cu.live.stopFailed'])
-    expect(invoke).not.toHaveBeenCalledWith('computer-use-live', { op: 'halted', conversationId: 7 })
     expect(screen.getByRole('button', { name: new RegExp(tr['cu.live.stop']) })).toHaveProperty('disabled', false)
   })
 })

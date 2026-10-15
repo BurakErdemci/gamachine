@@ -120,15 +120,13 @@ export function useComputerLive({ frames = false }: { frames?: boolean } = {}) {
   return { state, frame };
 }
 
-/** Stop from the panel: the host's halt op, then main forgets the run so the indicator closes. */
-async function haltFromRenderer(conversationId: number): Promise<boolean> {
+/** Stop from the panel: main's single halt coordinator, shared with the indicator and the shortcut. */
+async function haltFromRenderer(): Promise<boolean> {
   const ipc = ipcOf();
   if (!ipc) return false;
   try {
-    const result: any = await ipc.invoke('computer-use', { op: 'halt', conversationId });
-    if (result && typeof result === 'object' && result.error) return false;
-    await ipc.invoke(LIVE_CHANNEL, { op: 'halted', conversationId });
-    return true;
+    const result: any = await ipc.invoke(LIVE_CHANNEL, { op: 'halt' });
+    return !!result && typeof result === 'object' && !result.error && result.halted === true;
   } catch {
     return false;
   }
@@ -157,7 +155,7 @@ export function ComputerLivePanel({ visible }: { visible: boolean }) {
     if (state.conversationId === null || stopping) return;
     setStopping(true);
     setStopFailed(false);
-    if (!(await haltFromRenderer(state.conversationId))) {
+    if (!(await haltFromRenderer())) {
       setStopping(false);
       setStopFailed(true);
     }

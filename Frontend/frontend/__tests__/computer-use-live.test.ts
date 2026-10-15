@@ -17,7 +17,7 @@ function activeBody(over: Record<string, unknown> = {}, target: Record<string, u
 const INACTIVE = { active: false, conversation_id: null, started_at: null, last: null, target: null }
 
 function fixture(options: { platform?: string; saved?: string; panel?: boolean } = {}) {
-  const state = { activity: INACTIVE as any, windows: null as any, hold: false, held: [] as Array<() => void> }
+  const state = { activity: INACTIVE as any, windows: null as any, hold: false, holdList: false, held: [] as Array<() => void> }
   const rpc: any[] = []
   const children: any[] = []
   const host = { running: true, socketPath: SOCKET as string | null, driverPath: () => '/app/cua/cua-driver',
@@ -44,7 +44,7 @@ function fixture(options: { platform?: string; saved?: string; panel?: boolean }
         rpc.push(msg)
         if (msg.id !== undefined) {
           const respond = () => child.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: reply(msg) }) + '\n'))
-          if (state.hold && msg.params?.name === 'get_window_state') state.held.push(respond)
+          if ((state.hold && msg.params?.name === 'get_window_state') || (state.holdList && msg.params?.name === 'list_windows')) state.held.push(respond)
           else queueMicrotask(respond)
         }
         return true
@@ -461,6 +461,80 @@ describe('computer-use-live: halt failure', () => {
     expect(await third).toEqual({ halted: true })
     expect(f.host.invoke).toHaveBeenCalledTimes(1)
     expect(f.live.status().active).toBe(false)
+    f.live.shutdown()
+  })
+})
+
+describe('computer-use-live: halt per conversation', () => {
+  const start = async () => {
+    const f = fixture({ panel: false })
+    f.state.activity = activeBody()
+    f.live.beginPolling()
+    await vi.advanceTimersByTimeAsync(500)
+    return f
+  }
+
+  it('a halt error does not carry into the next conversation', async () => {
+    const f = await start()
+    f.host.invoke.mockResolvedValueOnce({ error: 'down' })
+    await f.live.halt()
+    expect(f.live.status().haltError).toBe(true)
+    f.state.activity = activeBody({ conversation_id: 8 })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.live.status()).toMatchObject({ conversationId: 8, haltError: false })
+    f.live.shutdown()
+  })
+
+  it('a Stop for another conversation issues its own host halt while the first is in flight', async () => {
+    const f = await start()
+    let finish: (value: unknown) => void = () => {}
+    f.host.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const first = f.live.halt()
+    expect(f.live.halt()).toBe(first)
+    f.state.activity = activeBody({ conversation_id: 8 })
+    await vi.advanceTimersByTimeAsync(1000)
+    await f.live.halt()
+    expect(f.host.invoke).toHaveBeenCalledTimes(2)
+    expect(f.host.invoke).toHaveBeenLastCalledWith({ op: 'halt', conversationId: 8 })
+    finish({ halted: true })
+    await first
+    f.live.shutdown()
+  })
+
+  it.each([[{}], [[]], [{ halted: false }], [null], ['ok'], [{ error: 'x' }]])(
+    'host answer %j is not a successful halt', async answer => {
+      const f = await start()
+      f.host.invoke.mockResolvedValueOnce(answer)
+      expect(await f.live.halt()).toHaveProperty('error')
+      expect(f.live.status()).toMatchObject({ active: true, haltError: true })
+      f.live.shutdown()
+    })
+})
+
+describe('computer-use-live: stale window listing', () => {
+  it('a list_windows reply from before a conversation change does not seed the new window cache', async () => {
+    const f = fixture()
+    f.state.holdList = true
+    f.state.windows = { structuredContent: { windows: [{ window_id: 77, pid: 42 }] } }
+    f.state.activity = activeBody({}, { pid: 42, window_id: null })
+    f.live.beginPolling()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(f.state.held).toHaveLength(1)
+    const old = f.state.held.shift()!
+    f.state.activity = activeBody({ conversation_id: 8 }, { pid: 42, window_id: null })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.state.held).toHaveLength(1)
+    const current = f.state.held.shift()!
+    f.state.holdList = false
+    f.state.windows = { structuredContent: { windows: [{ window_id: 88, pid: 42 }] } }
+    current()
+    await vi.advanceTimersByTimeAsync(0)
+    f.state.windows = { structuredContent: { windows: [{ window_id: 77, pid: 42 }] } }
+    old()
+    await vi.advanceTimersByTimeAsync(300)
+    const states = f.windowCalls().filter(m => m.params.name === 'get_window_state')
+    expect(states.length).toBeGreaterThan(0)
+    expect(states.every(m => m.params.arguments.window_id === 88)).toBe(true)
     f.live.shutdown()
   })
 })
