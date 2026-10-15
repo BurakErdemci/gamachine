@@ -23,6 +23,14 @@ UNITY_OFF_TR = "Gamachine'de Unity araçları kapalı; editörü, konsolunu ve d
 
 UNITY_NOT_RESPONDING_TR = "Unity araçları açık ama editör cevap vermiyor (kapalı, derliyor ya da bir diyalog açık). Editör durumunu tahmin etme. Kullanıcıdan Unity'yi açmasını ya da diyaloğu kapatmasını iste veya yalnız dosyalarla devam et ve neyin kontrol edilmediğini söyle."
 
+DESKTOP_LINE_EN = "- Do not send synthetic keyboard or mouse input to the user's desktop."
+DESKTOP_LINE_TR = "- Kullanıcının masaüstüne yapay klavye ya da fare girdisi gönderme."
+COMPUTER_USE_LINE_EN = "- Touch the user's desktop only through the gamachineComputer tools; never send keyboard or mouse input any other way (shell, scripts, other tools)."
+COMPUTER_USE_LINE_TR = "- Kullanıcının masaüstüne yalnız gamachineComputer araçlarıyla dokun; klavye ya da fare girdisini başka hiçbir yoldan (kabuk, betik, başka araç) gönderme."
+
+assert ALWAYS_EN.count(DESKTOP_LINE_EN) == 1
+assert ALWAYS_TR.count(DESKTOP_LINE_TR) == 1
+
 _SECTIONS = {
     "en": (ALWAYS_EN, PROJECT_EN, UNITY_CONNECTED_EN, UNITY_OFF_EN, UNITY_NOT_RESPONDING_EN),
     "tr": (ALWAYS_TR, PROJECT_TR, UNITY_CONNECTED_TR, UNITY_OFF_TR, UNITY_NOT_RESPONDING_TR),
@@ -30,6 +38,12 @@ _SECTIONS = {
 _IDS = ("ALWAYS", "PROJECT", "UNITY_CONNECTED", "UNITY_OFF", "UNITY_NOT_RESPONDING")
 _WHEN = ("always", "project_open", "connected", "off", "not_responding")
 _settings_store = None
+
+
+def with_computer_use(guide: str) -> str:
+    """Allow desktop input only through the computer tools supplied to a chat."""
+    return guide.replace(DESKTOP_LINE_EN, COMPUTER_USE_LINE_EN, 1).replace(
+        DESKTOP_LINE_TR, COMPUTER_USE_LINE_TR, 1)
 
 
 def bind_settings_store(store) -> None:

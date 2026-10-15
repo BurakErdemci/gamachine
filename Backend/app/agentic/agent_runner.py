@@ -42,6 +42,7 @@ from tools.tool_registry import (
     get_openai_tool_declarations, get_gemini_tool_declarations, _all_tool_definitions,
 )
 from prompts import SYSTEM_PROMPT
+import agent_guide
 from agent_guide import compose as compose_agent_guide, get_addendum
 from providers.unity_script_tools import DISALLOWED_UNITY_TOOLS
 
@@ -2708,16 +2709,20 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             logger.warning(f"[ClaudeSession] MCP temizleme/yazma hatası: {e}")
         # Chat mailbox: a separate server with the two mail tools only. A side
         # chat never mails, so its read-only session does not get it.
+        from computer_use import registration
         if not getattr(self, "read_only", False):
             from agentic import mailbox as _mailbox
             _mail_entry = _mailbox.claude_server_entry(self.conversation_id)
             if _mail_entry is not None:
                 mcp_servers_cfg[_mailbox.CLAUDE_SERVER_NAME] = _mail_entry
-            from computer_use import registration
             _computer_entry = registration.claude_server_entry(self.conversation_id)
             if _computer_entry is not None:
                 mcp_servers_cfg[registration.SERVER_NAME] = _computer_entry
 
+        _session_guide = (
+            agent_guide.with_computer_use(self._agent_guide)
+            if registration.SERVER_NAME in mcp_servers_cfg else self._agent_guide
+        )
         model = self.model_name if (self.model_name or "").startswith("claude-") else None
 
         # Effort: kayıtçıdan (effort_caps) eşlenir — "auto" veya desteklenmeyen seviye →
@@ -2741,7 +2746,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         _reasons = _oturum_yeniden_kurma_gerekceleri(
             _existing, model=model, effort=desired_effort,
             workspace=_workspace, mcp_servers=mcp_servers_cfg,
-            read_only=_read_only, agent_guide=self._agent_guide,
+            read_only=_read_only, agent_guide=_session_guide,
         )
         if _reasons:
             logger.info(f"[ClaudeSession] {', '.join(_reasons)}; session yeniden kuruluyor "
@@ -2750,7 +2755,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 
         _session_kwargs = dict(
             model=model,
-            agent_guide=self._agent_guide,
+            agent_guide=_session_guide,
             cwd=_workspace,
             resume_id=self.resume_id,      # None ise SDK'ya `resume` hiç verilmiyor
             permission_mode="default",
@@ -2976,7 +2981,11 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
         if first_turn:
             if self._agent_guide:
-                message = self._agent_guide + "\n\n" + message
+                _session_guide = (
+                    agent_guide.with_computer_use(self._agent_guide)
+                    if desired_computer_use else self._agent_guide
+                )
+                message = _session_guide + "\n\n" + message
             session._ctx_injected = True
         if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False):
             # Native requestApproval zaten otomatik kabul ediliyor (balanced'da
