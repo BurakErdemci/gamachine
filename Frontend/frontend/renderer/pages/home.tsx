@@ -22,6 +22,7 @@ import { ExportModal } from '../components/home/ExportModal';
 import { ModelSelector } from '../components/home/ModelSelector';
 import { WorkspaceScreen } from '../components/home/WorkspaceScreen';
 import { Workspace, KodPane, PreviewPane, ScenePane, ChangedFiles, toggleTerminalDrawer, type WsDiff, type ChangedFile } from '../components/home/Workspace';
+import { ComputerLivePanel } from '../components/home/ComputerLivePanel';
 import { HierarchyPanel } from '../components/home/HierarchyPanel';
 import { InspectorPane } from '../components/home/InspectorPane';
 import { useSceneEditorSetting } from '../lib/sceneEditor';
@@ -392,6 +393,12 @@ export default function Home() {
       if (typeof off3 === 'function') off3();
     };
   }, [ipc, ws.open, isTerminalOpen, setWsOpen, showToast, t]);
+  // The floating computer-use indicator's body opens the live tab here (main/helpers/computer-use-live.ts).
+  useEffect(() => {
+    if (!ipc) return;
+    const off = ipc.on('computer-use-live-open', () => wsReveal('bilgisayar'));
+    return () => { if (typeof off === 'function') off(); };
+  }, [ipc, wsReveal]);
   const [projectProblems, setProjectProblems] = useState<Record<string, any[]>>({});
   // Chat'te '/' autocomplete için Claude Code slash komutları + skill'ler (backend'den)
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
@@ -1285,6 +1292,7 @@ export default function Home() {
                   ))}
               />
             ),
+            bilgisayar: <ComputerLivePanel visible={ws.open && ws.tab === 'bilgisayar'} />,
           }}
           drawer={(
             <TerminalPanel

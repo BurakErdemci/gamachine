@@ -1,0 +1,153 @@
+/* Computer use, live presence: the right panel's "Bilgisayar" tab and the floating tag
+   (pages/computer-live.tsx). Built from the toast plate's tokens (--toast-*), so every theme,
+   Özel included, paints it with values it already defines. Calm by design: one slow dot,
+   no blur, nothing that moves except the mirrored window itself. */
+
+/* workspace.css shows one pane per data-tab; the fifth tab lives here. */
+.workspace[data-tab="bilgisayar"] .ws-pane[data-pane="bilgisayar"] { display: flex; }
+
+/* ---------- shared pieces ---------- */
+
+.cul-dot {
+  --dot: var(--toast-ok);
+  position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--dot);
+}
+/* A slow breath, not a blink: the ring says "still working" without asking for attention. */
+.cul-dot::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%;
+  border: 1.5px solid var(--dot); opacity: 0;
+  animation: cul-breath 2.4s var(--g-ease-exit, ease-out) infinite;
+}
+@keyframes cul-breath { 0% { opacity: .55; transform: scale(.55); } 70%, 100% { opacity: 0; transform: scale(1.15); } }
+
+.cul-time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.cul-stop {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 10px;
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight, 600);
+  text-transform: var(--label-case); letter-spacing: var(--label-track);
+  color: var(--toast-text); background: transparent;
+  border: var(--line-w, 1px) solid var(--toast-err); border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.cul-stop:hover:not(:disabled) { background: var(--toast-err); color: var(--toast-bg); }
+.cul-stop:focus-visible { outline: 2px solid var(--toast-err); outline-offset: 2px; }
+.cul-stop:disabled { opacity: .6; cursor: default; }
+.cul-stop-ic { width: 10px; height: 10px; fill: currentColor; }
+
+/* ---------- the floating tag (its own transparent window) ---------- */
+
+:root.cul-window, :root.cul-window body,
+html:has(.cul-tag), html:has(.cul-tag) body { background: transparent !important; overflow: hidden; }
+:root.cul-window body, html:has(.cul-tag) body { margin: 0; user-select: none; }
+
+.cul-tag {
+  /* The window is 320 x 64; the plate leaves room for its hard shadow. */
+  position: fixed; left: 2px; top: 2px; width: 308px; height: 52px; box-sizing: border-box;
+  display: flex; align-items: center; gap: 8px; padding: 0 8px 0 0;
+  background: var(--toast-bg); color: var(--toast-text);
+  border: var(--line-w, 1px) solid var(--toast-line); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  font-family: var(--font-body);
+}
+/* The grip is the only drag region: a drag region swallows clicks, so the body stays a button. */
+.cul-grip {
+  -webkit-app-region: drag; align-self: stretch; flex: none; width: 14px; cursor: grab;
+  background: radial-gradient(circle, var(--toast-line) 1.2px, transparent 1.6px) center / 6px 6px;
+  background-clip: content-box; padding: 10px 0 10px 5px;
+}
+.cul-tag-body, .cul-stop { -webkit-app-region: no-drag; }
+.cul-tag-body {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; height: 100%;
+  padding: 0; background: none; border: 0; color: inherit; text-align: left; cursor: pointer;
+}
+.cul-tag-body:focus-visible { outline: 2px solid var(--toast-ok); outline-offset: -2px; }
+.cul-tag-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cul-tag-title { font-size: 12.5px; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cul-tag-meta {
+  display: flex; align-items: baseline; gap: 5px; min-width: 0;
+  font-size: 11px; color: var(--toast-info); white-space: nowrap;
+}
+.cul-tag-meta .cul-app {
+  overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--font-label); text-transform: var(--label-case); letter-spacing: var(--label-track);
+}
+.cul-tag .cul-stop { height: 30px; }
+
+/* ---------- the right-panel tab ---------- */
+
+.cul-panel { display: flex; flex-direction: column; gap: 10px; padding: 14px 14px 16px; min-height: 100%; box-sizing: border-box; color: var(--ink); }
+.cul-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cul-kicker {
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight, 600);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); color: var(--toast-ok);
+}
+.cul-head .cul-app { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cul-head .cul-time { font-size: 12px; color: var(--ink-dim); }
+.cul-panel .cul-stop { color: var(--ink); }
+
+/* The monitor: the frame keeps its aspect (object-fit) and sits on a sunk ground. */
+.cul-screen {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  min-height: 160px; aspect-ratio: 16 / 10; max-height: 62vh;
+  background: var(--paper-sunk, var(--paper-bg-2)); border: var(--line-w, 1px) solid var(--paper-line-strong, var(--paper-line));
+  border-radius: var(--radius-md); box-shadow: var(--shadow-card); overflow: hidden;
+}
+.cul-frame { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: auto; }
+.cul-waiting { font-size: 12px; color: var(--ink-faint); }
+.cul-last { margin: 0; display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
+.cul-last-k {
+  font-family: var(--font-label); font-size: var(--fs-meta); text-transform: var(--label-case);
+  letter-spacing: var(--label-track); color: var(--ink-faint);
+}
+.cul-error { margin: 0; font-size: 12px; color: var(--toast-err); }
+.cul-note { margin: auto 0 0; font-size: 11.5px; line-height: 1.45; color: var(--ink-faint); }
+
+.cul-panel[data-state="idle"], .cul-panel[data-state="off"] { align-items: center; justify-content: center; text-align: center; gap: 6px; }
+.cul-screen-empty { width: min(220px, 70%); min-height: 0; box-shadow: none; border-style: dashed; margin-bottom: 8px; }
+.cul-empty-ic { width: 44px; height: 36px; fill: none; stroke: var(--ink-faint); stroke-width: 1.5; stroke-linecap: round; }
+.cul-empty-title { margin: 0; font-weight: 600; font-size: 13.5px; }
+.cul-empty-hint { margin: 0; max-width: 300px; font-size: 12px; line-height: 1.45; color: var(--ink-dim); }
+.cul-panel[data-state="off"] .cul-empty-title { color: var(--ink-dim); }
+
+/* ---------- themes ---------- */
+
+/* Arena: the cut-corner plate of the toast (border = outer layer, fill = inset layer). */
+[data-theme="arena"] .cul-tag {
+  --c: 10px;
+  --chamfer: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
+  background: transparent; border: 0; border-radius: 0; box-shadow: none; isolation: isolate;
+  filter: drop-shadow(3px 3px 0 #12151F);
+}
+[data-theme="arena"] .cul-tag::before,
+[data-theme="arena"] .cul-tag::after { content: ""; position: absolute; inset: 0; clip-path: var(--chamfer); pointer-events: none; }
+[data-theme="arena"] .cul-tag::before { z-index: -2; background: var(--toast-line); }
+[data-theme="arena"] .cul-tag::after { z-index: -1; inset: 1px; background: linear-gradient(to right, var(--toast-ok) 3px, var(--toast-bg) 3px); }
+[data-theme="arena"] .cul-stop { clip-path: var(--clip-sm); border-radius: 0; }
+[data-theme="arena"] .cul-screen { clip-path: var(--clip-md); border-radius: 0; }
+[data-theme="arena"] .cul-dot, [data-theme="arena"] .cul-dot::after { border-radius: 0; transform: rotate(45deg); }
+[data-theme="arena"] .cul-dot::after { animation-name: cul-breath-diamond; }
+@keyframes cul-breath-diamond { 0% { opacity: .55; transform: rotate(45deg) scale(.55); } 70%, 100% { opacity: 0; transform: rotate(45deg) scale(1.15); } }
+
+/* Sade: soft and rounded, no hard shadow, a pill Stop. */
+[data-theme="sade"] .cul-tag { border-radius: 14px; }
+[data-theme="sade"] .cul-stop { border-radius: 999px; }
+[data-theme="sade"] .cul-screen { border-radius: 10px; }
+
+/* Pafta: the drawing sheet; a ruled hairline frames the monitor. */
+[data-theme="pafta"] .cul-screen { outline: 1px solid var(--paper-line); outline-offset: 3px; }
+[data-theme="pafta"] .cul-tag { border-left: 3px solid var(--toast-ok); }
+
+/* Atölye: the paper tag, heavier kicker, as on the toast. */
+[data-theme="atolye"] .cul-kicker, [data-theme="atolye"] .cul-tag-title { font-weight: 700; }
+[data-theme="atolye"] .cul-tag { border-left: 3px solid var(--toast-ok); }
+
+/* Reduced motion: the ring stands still; the dot alone says "live". */
+@media (prefers-reduced-motion: reduce) {
+  .cul-dot::after { animation: none; opacity: .35; transform: scale(1); }
+  [data-theme="arena"] .cul-dot::after { transform: rotate(45deg); }
+}
+:root[data-motion="reduced"] .cul-dot::after { animation: none; opacity: .35; transform: scale(1); }
+:root[data-motion="reduced"][data-theme="arena"] .cul-dot::after { transform: rotate(45deg); }

@@ -16,36 +16,40 @@ const WIDTH_ICON: Record<WsWidth, React.ReactNode> = {
 };
 const X_ICON = <path d="M5.5 5.5l9 9M14.5 5.5l-9 9" />;
 
-const TAB_KEY: Record<WsTab, TKey> = { sahne: 'ws.tabScene', dosyalar: 'ws.tabFiles', kod: 'ws.tabCode', onizleme: 'ws.tabPreview' };
+const TAB_KEY: Record<WsTab, TKey> = { sahne: 'ws.tabScene', dosyalar: 'ws.tabFiles', kod: 'ws.tabCode', onizleme: 'ws.tabPreview', bilgisayar: 'ws.tabComputer' };
 // Guide anchors on the panes (lib/guide/anchors.ts). The file tree is anchored here, not in
 // FileTree, because the sidebar's Files tab draws the same tree and the guide means this one.
-const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosyalar: 'file-tree', kod: 'ws-code', onizleme: 'ws-preview' };
+const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosyalar: 'file-tree', kod: 'ws-code', onizleme: 'ws-preview', bilgisayar: undefined };
 const WIDTH_KEY: Record<WsWidth, TKey> = { dar: 'ws.widthNarrow', yarim: 'ws.widthHalf', odak: 'ws.widthFocus' };
 
-interface WorkspaceProps {
+interface WorkspaceProps<T extends WsTab> {
   editorOn?: boolean;
   open: boolean;
-  tab: WsTab;
-  onTab: (tab: WsTab) => void;
+  // The tab set comes from `panes` alone (NoInfer), so a caller's narrower tab state still fits.
+  tab: NoInfer<T>;
+  onTab: (tab: NoInfer<T>) => void;
   width: WsWidth;
   onWidth: (width: WsWidth) => void;
   onClose: () => void;
   /** Every pane stays mounted: Monaco's buffer and undo, the 3D stage and the file tree
    *  survive a tab switch. Only the visible one is laid out (workspace.css `.ws-pane`). */
-  panes: Record<WsTab, React.ReactNode>;
+  panes: Record<T, React.ReactNode>;
   /** The terminal drawer under the panes. */
   drawer: React.ReactNode;
 }
 
 /**
- * The right panel (mockup `aside.workspace`, KARAKTER 13B): head with the three widths, the four
+ * The right panel (mockup `aside.workspace`, KARAKTER 13B): head with the three widths, the
  * tabs, one pane at a time, the terminal drawer at the foot. State lives in home.tsx
  * (useWorkspacePanel), so the chat can open things here.
  */
-export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, onWidth, onClose, panes, drawer, editorOn = false }) => {
+export function Workspace<T extends WsTab = WsTab>({ open, tab, onTab, width, onWidth, onClose, panes, drawer, editorOn = false }: WorkspaceProps<T>) {
   const { t } = useLang();
+  // A tab is drawn only when its pane is supplied: callers that predate the Bilgisayar tab
+  // pass the four original panes and keep the four original tabs.
+  const tabs = WS_TABS.filter((id): id is T => id in panes);
   // #11 pane change: the newly shown pane rises in once (mockup `.ws-pane.is-entering`).
-  const [entering, setEntering] = useState<WsTab | null>(null);
+  const [entering, setEntering] = useState<T | null>(null);
   const first = useRef(true);
   useEffect(() => {
     if (first.current) { first.current = false; return; }
@@ -56,9 +60,9 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
 
   // Arrow keys move between the tabs (the tablist pattern), as the mockup's tabs are buttons in a row.
   const onTabKey = (e: React.KeyboardEvent) => {
-    const i = WS_TABS.indexOf(tab);
-    const next = e.key === 'ArrowRight' ? WS_TABS[(i + 1) % WS_TABS.length]
-      : e.key === 'ArrowLeft' ? WS_TABS[(i + WS_TABS.length - 1) % WS_TABS.length] : null;
+    const i = tabs.indexOf(tab);
+    const next = e.key === 'ArrowRight' ? tabs[(i + 1) % tabs.length]
+      : e.key === 'ArrowLeft' ? tabs[(i + tabs.length - 1) % tabs.length] : null;
     if (!next) return;
     e.preventDefault();
     onTab(next);
@@ -100,7 +104,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
         </button>
       </header>
       <div className="ws-tabs" data-guide="ws-tabs" role="tablist" aria-label={t('ws.tabs')} onKeyDown={onTabKey}>
-        {WS_TABS.map(id => (
+        {tabs.map(id => (
           <button
             key={id}
             id={`ws-tab-${id}`}
@@ -119,7 +123,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ open, tab, onTab, width, o
         ))}
       </div>
       <div className="ws-body">
-        {WS_TABS.map(id => (
+        {tabs.map(id => (
           <div
             key={id}
             id={`ws-pane-${id}`}

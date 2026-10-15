@@ -3,9 +3,9 @@ import fs from 'fs'
 import os from 'os'
 import net from 'net'
 import { randomUUID, createHash } from 'crypto'
-import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences } from 'electron'
+import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen } from 'electron'
 import serve from 'electron-serve'
-import { createWindow } from './helpers'
+import { createWindow, applyNavigationPolicy } from './helpers'
 import { spawn, ChildProcess } from 'child_process'
 import axios from 'axios'
 import { autoUpdater } from 'electron-updater'
@@ -43,6 +43,7 @@ import {
 import { createNotifier } from './helpers/notify'
 import { createRemoteControl } from './helpers/remote-control'
 import { ComputerUseHost } from './helpers/computer-use'
+import { ComputerLive, LIVE_OPEN_EVENT } from './helpers/computer-use-live'
 import { createProfileReset } from './helpers/profile-reset'
 import { collectMtimes } from './helpers/stat-mtimes'
 
@@ -828,6 +829,41 @@ const computerUse = new ComputerUseHost({
 })
 handleSecure('computer-use', (_event, req: unknown) => computerUse.invoke(req))
 
+// Live presence: the mirrored window, the floating indicator and the halt
+// shortcut (helpers/computer-use-live.ts). Stop goes through the host's halt op.
+let mainWindowRef: BrowserWindow | null = null
+const computerLive = new ComputerLive({
+  host: computerUse, http: axios, baseUrl: getBackendBaseUrl, appToken: localAppToken,
+  platform: process.platform, userData: app.getPath('userData'), spawn,
+  // Read on use: tests load this module with electron mocks that lack these.
+  windows: () => BrowserWindow.getAllWindows(),
+  newIndicator: options => {
+    const win = new BrowserWindow(options as Electron.BrowserWindowConstructorOptions)
+    applyNavigationPolicy(win)
+    return win
+  },
+  loadIndicator: win => (isProd
+    ? (win as BrowserWindow).loadURL('app://./computer-live')
+    : (win as BrowserWindow).loadURL(`http://localhost:${process.argv[2]}/computer-live`)),
+  preload: path.join(__dirname, 'preload.js'),
+  workAreas: () => ({ primary: screen.getPrimaryDisplay().workArea, all: screen.getAllDisplays().map(d => d.workArea) }),
+  shortcut: {
+    register: (accelerator, callback) => globalShortcut.register(accelerator, callback),
+    unregister: accelerator => globalShortcut.unregister(accelerator),
+  },
+  fs,
+  focusMain: () => {
+    const win = mainWindowRef
+    if (!win || win.isDestroyed()) return
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+    win.webContents.send(LIVE_OPEN_EVENT)
+  },
+  log: (...args) => console.log(...args),
+})
+handleSecure('computer-use-live', (_event, req: unknown) => computerLive.invoke(req))
+
 // The renderer picks a folder with a HOST path, but in Docker mode the backend
 // is a different filesystem namespace where that path does not exist — only the
 // mount does. Sending the host path unchanged is what an audit caught on
@@ -1235,6 +1271,7 @@ if (!gotTheLock) {
         await startPythonBackend()
         remoteControl.start()
         computerUse.beginPolling()
+        computerLive.beginPolling()
       } catch (err) {
         console.error('--- BACKEND BAŞLATILAMADI ---', err)
         backendPort = null
@@ -1277,6 +1314,9 @@ if (!gotTheLock) {
           preload: path.join(__dirname, 'preload.js'),
         },
       })
+      mainWindowRef = mainWindow
+      // The indicator alone must not keep the app alive once the main window is gone.
+      mainWindow.on('closed', () => { mainWindowRef = null; computerLive.shutdown() })
 
       if (isProd) {
         await mainWindow.loadURL('app://./home')
@@ -1441,12 +1481,14 @@ if (!gotTheLock) {
 
   app.on('window-all-closed', () => {
     remoteControl.shutdown()
+    computerLive.shutdown()
     void computerUse.shutdown().finally(() => { killBackend(); app.quit() })
   })
 
   let quitReady = false
   app.on('before-quit', (event) => {
     remoteControl.shutdown()
+    computerLive.shutdown()
     if (quitReady) { killBackend(); return }
     event.preventDefault()
     void computerUse.shutdown().finally(() => {
@@ -1457,9 +1499,10 @@ if (!gotTheLock) {
   })
 
   // Beklenmedik çıkışlarda da temizle
-  process.on('exit', () => { remoteControl.shutdown(); void computerUse.shutdown(true); killBackend() })
+  process.on('exit', () => { remoteControl.shutdown(); computerLive.shutdown(true); void computerUse.shutdown(true); killBackend() })
   process.on('SIGTERM', () => {
     remoteControl.shutdown()
+    computerLive.shutdown()
     void computerUse.shutdown().finally(() => { killBackend(); process.exit(0) })
   })
 }

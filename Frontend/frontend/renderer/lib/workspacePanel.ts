@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { routeForFile } from '../components/model-viewer/extensions';
 
-/** The workspace tabs (mockup `.ws-tab[data-tab]`): scene, files, code, preview. */
-export type WsTab = 'sahne' | 'dosyalar' | 'kod' | 'onizleme';
+/** The workspace tabs (mockup `.ws-tab[data-tab]`): scene, files, code, preview, and the live computer view. */
+export type WsTab = 'sahne' | 'dosyalar' | 'kod' | 'onizleme' | 'bilgisayar';
 /** The three widths (mockup `.app[data-ws]`): narrow beside the chat, half, focus. */
 export type WsWidth = 'dar' | 'yarim' | 'odak';
 
-export const WS_TABS: WsTab[] = ['sahne', 'dosyalar', 'kod', 'onizleme'];
+export const WS_TABS: WsTab[] = ['sahne', 'dosyalar', 'kod', 'onizleme', 'bilgisayar'];
 export const WS_WIDTHS: WsWidth[] = ['dar', 'yarim', 'odak'];
 
 /** Which tab shows a path: text opens in Kod, everything the preview panels take in Önizleme. */

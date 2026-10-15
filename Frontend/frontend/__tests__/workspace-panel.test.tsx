@@ -58,7 +58,7 @@ describe('useWorkspacePanel.reveal', () => {
 })
 
 describe('Workspace frame', () => {
-  const panes = { sahne: <p>scene</p>, dosyalar: <p>files</p>, kod: <p>code</p>, onizleme: <p>preview</p> }
+  const panes = { sahne: <p>scene</p>, dosyalar: <p>files</p>, kod: <p>code</p>, onizleme: <p>preview</p>, bilgisayar: <p>computer</p> }
 
   it('marks the selected tab and width, keeps every pane mounted', () => {
     const onTab = vi.fn(); const onWidth = vi.fn()

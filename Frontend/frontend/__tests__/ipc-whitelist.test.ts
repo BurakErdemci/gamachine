@@ -95,9 +95,11 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // 33 -> 35, 2 Oct 2026: 'workspace-info' inspects trusted project folders;
   // 'open-unity-hub' opens only a locally discovered Unity Hub installation.
   // 35 -> 36: computer-use keeps daemon ownership and approval secrets in main.
-  it('contains exactly 36 channels', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(36)
+  // 36 -> 37: computer-use-live carries the live view, the indicator and Stop.
+  it('contains exactly 37 channels', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(37)
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use')).toBe(true)
+    expect(ALLOWED_INVOKE_CHANNELS.has('computer-use-live')).toBe(true)
   })
 
   it('allows welcome screen project information and Unity Hub actions', () => {

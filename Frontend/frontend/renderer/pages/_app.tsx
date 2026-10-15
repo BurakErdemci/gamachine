@@ -28,6 +28,7 @@ import '../styles/gm/guide.css'
 import '../styles/gm/welcome.css'
 import '../styles/gm/intro.css'
 import '../styles/gm/toast.css'
+import '../styles/gm/computer-live.css'
 // Last on purpose: Özel's rules (all under [data-theme="ozel"]) override base rules from every file
 // above, the way each Sade override follows its base rule inside the same file.
 import '../styles/gm/theme-ozel.shell.css'
@@ -39,7 +40,18 @@ import { ConfirmDialogHost } from '../components/ui/ConfirmDialog'
 import { ErrorBoundary } from '../components/ui/ErrorBoundary'
 import { AppearanceProvider } from '../lib/appearance'
 
-function MyApp({ Component, pageProps }: AppProps) {
+function MyApp({ Component, pageProps, router }: AppProps) {
+  // The computer-use indicator is its own tiny always-on-top window: the intro, copy and
+  // confirm hosts belong to the main window and must not appear over the user's apps.
+  if (router?.pathname === '/computer-live') {
+    return (
+      <AppearanceProvider>
+        <ErrorBoundary>
+          <Component {...pageProps} />
+        </ErrorBoundary>
+      </AppearanceProvider>
+    )
+  }
   return (
     <AppearanceProvider>
       {/* Sayfa ağacındaki bir render hatası eskiden TÜM pencereyi boşaltıyordu

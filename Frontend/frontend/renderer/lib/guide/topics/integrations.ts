@@ -1,4 +1,6 @@
 // Announced integrations (computer use, connectors, Blender). No flag is on, so the group is not drawn.
+// Computer use already points at the live tab and the floating indicator; its flag stays off until
+// guide-flow.test.tsx and guide-registry.test.ts are updated to list the integrations group.
 // Copy ported from the approved mockup (round 12b, maket/index.html GUIDE); REHBER-KAYITLARI.md
 // section 8 is generated from the same array. Edit the copy here, not in the guide code.
 import { T, type GuideTopic } from '../types';
@@ -9,9 +11,10 @@ export const INTEGRATIONS: GuideTopic[] = [
     title: T("Bilgisayarı kullanmak", "Computer use"),
     summary: T("Fareyi ve klavyeyi senin iznine göre ben kullanırım.", "I use the mouse and keyboard, with your permission."),
     steps: [
-      { anchor: "computer-use-bar", side: "below", align: "center",
+      { anchor: "ws-tabs", side: "below", align: "end",
         title: T("Ekranında çalışırken", "While I work on your screen"),
-        text: T("Bu şerit çalıştığımı gösterir; Esc ile her an durdurursun.", "This bar shows I am at work; Esc stops me at any time."),
+        text: T("Çalışırken ekranın köşesinde küçük bir etiket süreyi gösterir; sürdüğüm pencereyi Bilgisayar sekmesinde canlı izlersin. Durdur ya da ⌘⇧Esc beni bu tur için durdurur.",
+          "While I work, a small tag in a corner of the screen shows the time; you watch the window I drive, live, in the Computer tab. Stop or ⌘⇧Esc halts me for this turn."),
       },
     ],
   },
