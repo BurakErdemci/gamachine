@@ -33,7 +33,7 @@ def _load_grants(db, *, require_backup=False):
         result = json.loads(raw)
         if not isinstance(result, list):
             raise ValueError("invalid grants list")
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         logger.warning("Invalid computer_use_app_grants setting; using an empty list")
         try:
             db.set_setting(CORRUPT_GRANTS_KEY, raw)
