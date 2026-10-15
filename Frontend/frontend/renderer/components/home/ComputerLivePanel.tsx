@@ -107,6 +107,7 @@ export function useComputerLive({ frames = false }: { frames?: boolean } = {}) {
       img.src = src;
       img.decode().then(() => { if (alive && n === latest.current) setFrame(src); }, () => {});
     };
+    let heard = false;
     const receive = (raw: any) => {
       if (!alive || !raw || typeof raw !== 'object') return;
       const next = toState(raw);
@@ -123,9 +124,10 @@ export function useComputerLive({ frames = false }: { frames?: boolean } = {}) {
       if (next.active && frames && typeof raw.frame === 'string' && raw.frame.startsWith('data:image/')) present(raw.frame);
     };
     Promise.resolve(ipc.invoke?.(LIVE_CHANNEL, { op: 'status' }))
-      .then((raw: any) => { if (raw && !raw.error) receive(raw); })
+      // An event that beat this reply is newer than it; a late status must not roll the panel back.
+      .then((raw: any) => { if (!heard && raw && !raw.error) receive(raw); })
       .catch(() => {});
-    const off = ipc.on?.(LIVE_CHANNEL, receive);
+    const off = ipc.on?.(LIVE_CHANNEL, (raw: any) => { heard = true; receive(raw); });
     return () => { alive = false; if (typeof off === 'function') off(); };
   }, [frames]);
 
