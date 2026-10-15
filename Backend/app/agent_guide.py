@@ -41,9 +41,19 @@ _settings_store = None
 
 
 def with_computer_use(guide: str) -> str:
-    """Allow desktop input only through the computer tools supplied to a chat."""
-    return guide.replace(DESKTOP_LINE_EN, COMPUTER_USE_LINE_EN, 1).replace(
-        DESKTOP_LINE_TR, COMPUTER_USE_LINE_TR, 1)
+    """Allow desktop input only through the computer tools supplied to a chat.
+
+    Only the first desktop line is swapped: it belongs to the ALWAYS section,
+    which precedes the user addendum, so a restriction the user typed (in
+    either language) keeps its meaning.
+    """
+    hits = [(guide.find(old), old, new) for old, new in (
+        (DESKTOP_LINE_EN, COMPUTER_USE_LINE_EN), (DESKTOP_LINE_TR, COMPUTER_USE_LINE_TR))]
+    hits = [hit for hit in hits if hit[0] >= 0]
+    if not hits:
+        return guide
+    position, old, new = min(hits)
+    return guide[:position] + new + guide[position + len(old):]
 
 
 def bind_settings_store(store) -> None:

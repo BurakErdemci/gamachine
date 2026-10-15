@@ -59,9 +59,10 @@ def test_guide_without_desktop_line_is_unchanged(text):
     assert guide.with_computer_use(text) == text
 
 
-def test_each_language_replaces_only_one_occurrence():
+def test_only_the_first_desktop_line_is_replaced():
+    # Later lines (a user addendum, in either language) keep their meaning.
     original = "\n".join([guide.DESKTOP_LINE_EN, guide.DESKTOP_LINE_TR] * 2)
-    expected = "\n".join([guide.COMPUTER_USE_LINE_EN, guide.COMPUTER_USE_LINE_TR,
+    expected = "\n".join([guide.COMPUTER_USE_LINE_EN, guide.DESKTOP_LINE_TR,
                            guide.DESKTOP_LINE_EN, guide.DESKTOP_LINE_TR])
     assert guide.with_computer_use(original) == expected
 
