@@ -30,6 +30,9 @@ def harness(monkeypatch):
         yield {"type": "text", "content": "fake reply"}
 
     monkeypatch.setattr(codex_session.CodexSession, "stream", stream)
+    # The fake stream never starts the app-server, so report it live or the
+    # runner treats every turn as a dead session's first and re-sends context.
+    monkeypatch.setattr(codex_session.CodexSession, "is_live", property(lambda self: True))
     write_config = Mock(return_value="")
     monkeypatch.setattr(CodexProvider, "_write_mcp_config", write_config)
     runner = AgentRunner(
