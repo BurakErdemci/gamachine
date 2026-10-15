@@ -29,6 +29,7 @@ vi.mock('../main/helpers/ipc-trust', () => ({
 describe('computer-use registered channel', () => {
   beforeAll(async () => {
     vi.spyOn(fs, 'appendFileSync').mockImplementation(() => {})
+    vi.spyOn(ComputerUseHost.prototype, 'available', 'get').mockReturnValue(false)
     // Resolve only the backend origin seam; the registered handler and host
     // dispatch remain real, including route selection and injected headers.
     const realRequest = ComputerUseHost.prototype['request']
@@ -132,6 +133,13 @@ describe('computer-use registered channel', () => {
       const handler = source.slice(source.indexOf("handleSecure('approval-mode-set'"), source.indexOf('// Maker profile reset'))
       expect(handler.indexOf('await computerUse.reconcile()')).toBeGreaterThan(handler.indexOf('await axios.post('))
       expect(handler.indexOf('await computerUse.reconcile()')).toBeLessThan(handler.indexOf('return response.data'))
+      const writeCatch = handler.indexOf('} catch (error)')
+      const writeFailure = handler.indexOf("throw new Error(text || 'Çalışma modu backend’e iletilemedi.')")
+      const reconcileCall = handler.indexOf('await computerUse.reconcile()')
+      expect(writeCatch).toBeGreaterThan(handler.indexOf('await axios.post('))
+      expect(writeFailure).toBeGreaterThan(writeCatch)
+      expect(handler.slice(writeFailure, reconcileCall)).toMatch(/\n  }\n  try {\s*$/)
+      expect(handler.slice(reconcileCall)).toContain("console.error('[cua] reconcile after mode change failed', (error as Error)?.message)")
     } finally { reconcile.mockRestore() }
   })
 })

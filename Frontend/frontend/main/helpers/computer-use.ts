@@ -74,9 +74,13 @@ export class ComputerUseHost {
     return this.deps.http.request({ method, url: `${this.deps.baseUrl()}${route}`, data, headers, timeout: 10_000 })
   }
 
-  private report() {
-    const data = { running: this.running, driver_path: this.running ? this.driverPath() : null,
+  private runtime() {
+    return { running: this.running, driver_path: this.running ? this.driverPath() : null,
       socket_path: this.running ? this.socketPath : null }
+  }
+
+  private report() {
+    const data = this.runtime()
     // An exit's stopped report must settle before a replacement's running report.
     this.reports = this.reports.then(() => this.request('post', '/computer-use/runtime', data, true))
       .catch(error => { this.log('[cua] runtime report failed', error) })
@@ -193,9 +197,13 @@ export class ComputerUseHost {
     }
   }
 
-  stop(): Promise<void> { return this.enqueue(() => this.stopChild()) }
+  stop(): Promise<void> { return this.enqueue(() => this.stopChild(true)) }
 
-  private async stopChild() {
+  private async stopChild(resetRestart = false) {
+    if (resetRestart) {
+      this.crashed = false
+      this.lastAutoRestart = -Infinity
+    }
     const child = this.child
     this.intentionalStop = true
     this.running = false
@@ -220,6 +228,11 @@ export class ComputerUseHost {
       if (this.stopped) return
       const { data: settings } = await this.request('get', '/computer-use/settings')
       if (this.stopped) return
+      const runtime = this.runtime()
+      if (!settings.runtime || settings.runtime.running !== runtime.running
+        || settings.runtime.driver_path !== runtime.driver_path || settings.runtime.socket_path !== runtime.socket_path) {
+        await this.report()
+      }
       if (this.available && settings.enabled === true && settings.mode === 'auto') {
         if (this.child) return
         if (this.crashed) {
@@ -227,7 +240,7 @@ export class ComputerUseHost {
           this.lastAutoRestart = this.now()
         }
         await this.startChild()
-      } else await this.stopChild()
+      } else if (this.child || this.socketPath || this.crashed) await this.stopChild(true)
     })
   }
 
@@ -249,6 +262,8 @@ export class ComputerUseHost {
     // The process exit hook cannot wait for timers or backend requests.
     if (force) {
       this.intentionalStop = true
+      this.crashed = false
+      this.lastAutoRestart = -Infinity
       this.child?.kill('SIGKILL')
       this.child = null
       this.running = false

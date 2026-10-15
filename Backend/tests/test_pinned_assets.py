@@ -131,6 +131,7 @@ class TestIndirmeKaynagiAllowlistDisinaCikamaz:
     # baytlar son kullanıcıda çalıştırılıyor.
     _IZINLI_HOSTLAR = frozenset({
         "github.com",                    # omnisharp, uv, yt-dlp, ffmpeg/win (BtbN)
+        "files.pythonhosted.org",
         "api.nuget.org",                 # roslyn/* paketleri
         "builds.dotnet.microsoft.com",   # dotnet-sdk/*
         "evermeet.cx",                   # ffmpeg/macos (statik, checksum yayınlamıyor)

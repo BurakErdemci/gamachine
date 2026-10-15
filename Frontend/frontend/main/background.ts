@@ -752,8 +752,9 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
     throw new Error('Geçersiz çalışma modu.')
   }
   const src = source === 'settings' || source === 'chat' || source === 'migrate' ? source : 'ui'
+  let response
   try {
-    const response = await axios.post(
+    response = await axios.post(
       `${getBackendBaseUrl()}/approval-mode`,
       { mode, source: src },
       {
@@ -762,8 +763,6 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
       },
     )
     console.log(`[approval-mode] ${response.data?.previous} -> ${response.data?.mode} (source=${src})`)
-    await computerUse.reconcile()
-    return response.data
   } catch (error) {
     const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
     if (detail && typeof detail === 'object' && typeof (detail as { code?: unknown }).code === 'string') {
@@ -777,6 +776,12 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
     console.error('[approval-mode] write failed:', text || (error as Error)?.message)
     throw new Error(text || 'Çalışma modu backend’e iletilemedi.')
   }
+  try {
+    await computerUse.reconcile()
+  } catch (error) {
+    console.error('[cua] reconcile after mode change failed', (error as Error)?.message)
+  }
+  return response.data
 })
 
 // Maker profile reset (Settings > Account): the UI secret stays here (helpers/profile-reset.ts).

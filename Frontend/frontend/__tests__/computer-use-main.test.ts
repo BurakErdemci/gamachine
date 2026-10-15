@@ -4,12 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ComputerUseHost, type ComputerUseDeps } from '../main/helpers/computer-use'
 
 const shortUserData = path.join(path.parse(process.cwd()).root, 'gm-d')
+const stoppedRuntime = { running: false, driver_path: null, socket_path: null }
+type Runtime = { running: boolean; driver_path: string | null; socket_path: string | null }
 
 function fixture(options: { platform?: string; userData?: string; available?: boolean } = {}) {
   const children: any[] = []
   const sockets: any[] = []
   let ready = true
-  let settings = { enabled: true, mode: 'auto' }
+  let settings: { enabled: boolean; mode: string; runtime?: Runtime } = {
+    enabled: true, mode: 'auto', runtime: { ...stoppedRuntime },
+  }
   const fs = {
     existsSync: vi.fn(() => options.available !== false),
     mkdirSync: vi.fn(), chmodSync: vi.fn(), unlinkSync: vi.fn(), rmdirSync: vi.fn(),
@@ -35,7 +39,12 @@ function fixture(options: { platform?: string; userData?: string; available?: bo
     queueMicrotask(() => ready ? cb() : socket.emit('error', new Error('not ready')))
     return socket
   })
-  const http = { request: vi.fn(async (config: any) => ({ data: config.method === 'get' ? settings : {} })) }
+  const http = { request: vi.fn(async (config: any) => {
+    if (config.method === 'get') return { data: settings }
+    if (config.url.endsWith('/computer-use/runtime')) settings.runtime = { ...config.data }
+    if (config.url.endsWith('/computer-use/settings')) Object.assign(settings, config.data)
+    return { data: {} }
+  }) }
   const log = vi.fn()
   const host = new ComputerUseHost({
     platform: options.platform ?? 'darwin', spawn, connect, fs: fs as unknown as ComputerUseDeps['fs'], http,
@@ -122,6 +131,86 @@ describe('ComputerUseHost', () => {
     expect(f.http.request.mock.calls.filter(([c]) => c.data?.running === false)).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(60_000)
     await f.host.reconcile()
+    expect(f.spawn).toHaveBeenCalledTimes(3)
+  })
+
+  it('retries a failed running report on the next reconcile', async () => {
+    const f = fixture()
+    const request = f.http.request.getMockImplementation()!
+    f.http.request.mockImplementation(async config => {
+      if (config.data?.running === true) throw new Error('backend unavailable')
+      return request(config)
+    })
+    await f.host.reconcile()
+    expect(f.host.running).toBe(true)
+    expect(f.log).toHaveBeenCalledWith('[cua] runtime report failed', expect.any(Error))
+    f.http.request.mockClear().mockImplementation(request)
+    await f.host.reconcile()
+    expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toEqual([
+      [expect.objectContaining({ url: 'http://localhost:9/computer-use/runtime',
+        data: { running: true, driver_path: f.host.driverPath(), socket_path: f.host.socketPath } })],
+    ])
+    expect(f.spawn).toHaveBeenCalledTimes(1)
+    f.http.request.mockClear()
+    await f.host.reconcile()
+    expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toHaveLength(0)
+  })
+
+  it.each(['missing', 'running', 'driver_path', 'socket_path'])('repairs backend runtime drift in %s exactly once', async field => {
+    const f = fixture()
+    await f.host.start()
+    const runtime: Runtime = { running: true, driver_path: f.host.driverPath(), socket_path: f.host.socketPath }
+    f.settings({ enabled: true, mode: 'auto', runtime: field === 'missing' ? undefined
+      : field === 'running' ? { ...stoppedRuntime } : { ...runtime, [field]: null } })
+    f.http.request.mockClear()
+    await f.host.reconcile()
+    expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toEqual([
+      [expect.objectContaining({ url: 'http://localhost:9/computer-use/runtime', data: runtime })],
+    ])
+    f.http.request.mockClear()
+    await f.host.reconcile()
+    expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toHaveLength(0)
+    expect(f.spawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('repairs a stopped runtime and sends no reports once the backend agrees', async () => {
+    const f = fixture()
+    f.settings({ enabled: false, mode: 'auto' })
+    await f.host.reconcile()
+    expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toEqual([
+      [expect.objectContaining({ url: 'http://localhost:9/computer-use/runtime', data: stoppedRuntime })],
+    ])
+    f.http.request.mockClear()
+    await f.host.reconcile()
+    expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toHaveLength(0)
+    expect(f.spawn).not.toHaveBeenCalled()
+  })
+
+  it('allows enable immediately after crash, auto-restart, crash and intentional disable', async () => {
+    const f = fixture()
+    await f.host.reconcile()
+    f.children[0].emit('exit', 1)
+    await f.host.reconcile()
+    expect(f.spawn).toHaveBeenCalledTimes(2)
+    f.children[1].emit('exit', 1)
+    await f.host.reconcile()
+    expect(f.spawn).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1000)
+    await f.host.invoke({ op: 'disable' })
+    await f.host.invoke({ op: 'enable' })
+    expect(f.spawn).toHaveBeenCalledTimes(3)
+    expect(f.host.running).toBe(true)
+  })
+
+  it('allows an explicit restart to clear the crash throttle', async () => {
+    const f = fixture()
+    await f.host.reconcile()
+    f.children[0].emit('exit', 1)
+    await f.host.reconcile()
+    f.children[1].emit('exit', 1)
+    await f.host.reconcile()
+    expect(f.spawn).toHaveBeenCalledTimes(2)
+    expect(await f.host.invoke({ op: 'restart' })).toEqual({ running: true })
     expect(f.spawn).toHaveBeenCalledTimes(3)
   })
 
