@@ -187,7 +187,6 @@ mark.hr-hit { background: none; color: inherit; font-weight: 700; text-decoratio
 .insp-picker .fr-err { padding: 8px 10px; }
 .insp-field-menu { min-width: 180px; }
 .workspace[data-editor="on"] .ws-sec[data-guide="changed-files"] { flex: none; }
-[data-theme="pafta"] .workspace[data-editor="on"] .ws-tabs { gap: 0; padding-inline: 8px; }
 .hr-rename {
   flex: 1; min-width: 0; height: 22px; padding: 0 5px; margin-right: -4px; font: inherit; color: var(--shell-text);
   background: var(--hier-field); border: var(--line-w) solid var(--focus); border-radius: var(--radius-sm); outline: 0;
