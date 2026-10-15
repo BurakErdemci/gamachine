@@ -50,6 +50,9 @@
   font-family: var(--font-who); text-transform: var(--who-case); letter-spacing: var(--who-track);
   font-size: 12.5px; font-weight: 600; color: var(--ink-faint);
 }
+/* Uppercase themes with wide tracking need a tighter strip so all five tabs fit the 360px panel */
+:is([data-theme="arena"], [data-theme="pafta"]) .ws-tabs { padding: 0 4px; }
+:is([data-theme="arena"], [data-theme="pafta"]) .ws-tab { padding: 0 5px; gap: 4px; font-size: 11px; letter-spacing: .02em; }
 .ws-tab:hover { color: var(--ink); }
 .ws-tab[aria-selected="true"] { color: var(--ink); }
 .ws-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; background: var(--tab-mark); }
