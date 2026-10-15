@@ -6,10 +6,13 @@ import os
 from contextlib import asynccontextmanager
 
 import anyio
+import httpx
 from mcp import ClientSession
 from mcp.shared.message import SessionMessage
 from mcp.types import CallToolResult, JSONRPCMessage
 from pydantic import TypeAdapter
+
+from unity_ai_mcp import approval_bridge
 
 logger = logging.getLogger(__name__)
 _MESSAGE = TypeAdapter(JSONRPCMessage)
@@ -21,6 +24,28 @@ class DriverUnavailable(RuntimeError):
 
 class DriverError(RuntimeError):
     pass
+
+
+async def fetch_runtime() -> tuple[str, str]:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                f"{approval_bridge.BACKEND_URL}/computer-use/settings",
+                headers=approval_bridge._get_headers(),
+            )
+            response.raise_for_status()
+            data = response.json()
+        runtime = data.get("runtime") if isinstance(data, dict) else None
+        if not isinstance(runtime, dict) or runtime.get("running") is not True:
+            raise DriverUnavailable("Embedded computer-use driver is not running")
+        binary, socket = runtime.get("driver_path"), runtime.get("socket_path")
+        if (not isinstance(binary, str) or not os.path.isabs(binary)
+                or os.path.basename(binary) != "cua-driver" or not os.path.isfile(binary)
+                or not isinstance(socket, str) or not os.path.isabs(socket)):
+            raise DriverUnavailable("Embedded computer-use driver runtime is invalid")
+        return binary, socket
+    except (httpx.HTTPError, OSError, ValueError, TypeError) as exc:
+        raise DriverUnavailable("Embedded computer-use driver runtime is unavailable") from exc
 
 
 @asynccontextmanager
@@ -78,11 +103,11 @@ async def _transport(command, env):
 
 
 class DriverClient:
-    def __init__(self):
-        binary = os.environ.get("GAMACHINE_CUA_DRIVER", "")
-        socket = os.environ.get("GAMACHINE_CUA_SOCKET", "")
+    def __init__(self, binary, socket):
         if not binary or not socket or not os.path.isfile(binary):
             raise DriverUnavailable("Embedded computer-use driver is not configured")
+        self.binary = binary
+        self.socket = socket
         self.command = [binary, "mcp", "--embedded", "--socket", socket]
         self.env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
         self.env.update(CUA_DRIVER_EMBEDDED="1", DO_NOT_TRACK="1",

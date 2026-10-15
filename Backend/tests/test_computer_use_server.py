@@ -18,15 +18,15 @@ from computer_use import server
 def fake(tmp_path, monkeypatch):
     # At most two child processes in the reconnect test, one in all others.
     fixture = Path(__file__).parent / "fixtures" / "fake_cua_driver.py"
-    executable = tmp_path / "fake-cua"
+    executable = tmp_path / "cua-driver"
     executable.write_text(
         "#!" + sys.executable + "\nimport sys, runpy\nsys.dont_write_bytecode = True\n"
         + "runpy.run_path(" + repr(str(fixture)) + ", run_name='__main__')\n")
     executable.chmod(0o700)
     log = tmp_path / "calls.jsonl"
-    monkeypatch.setenv("GAMACHINE_CUA_DRIVER", str(executable))
-    monkeypatch.setenv("GAMACHINE_CUA_SOCKET", "fake-private-socket")
-    driver = DriverClient()
+    socket = str(tmp_path / "fake-private-socket")
+    driver = DriverClient(str(executable), socket)
+    monkeypatch.setattr(server, "fetch_runtime", AsyncMock(return_value=(str(executable), socket)))
     # Test-only instrumentation is not inherited by the production client.
     driver.env["FAKE_CUA_LOG"] = str(log)
     approval = AsyncMock(return_value={"approved": True})
@@ -150,18 +150,22 @@ def test_mcp_registration_preserves_error_results(fake):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("missing", ["GAMACHINE_CUA_DRIVER", "GAMACHINE_CUA_SOCKET"])
-def test_missing_configuration_returns_error(monkeypatch, missing):
-    monkeypatch.delenv(missing, raising=False)
+@pytest.mark.parametrize("missing", ["binary", "socket"])
+def test_missing_configuration_returns_error(monkeypatch, tmp_path, missing):
+    binary = tmp_path / "cua-driver"
+    binary.write_text("test driver")
+    config = {"binary": str(binary), "socket": str(tmp_path / "driver.sock")}
+    config[missing] = ""
     with pytest.raises(DriverUnavailable):
-        DriverClient()
+        DriverClient(**config)
+    monkeypatch.setattr(server, "fetch_runtime", AsyncMock(side_effect=DriverUnavailable("not running")))
     result = asyncio.run(ComputerServer().call("computer_click", {"pid": 4242}))
     assert result.is_error and "kullanılamıyor" in result.content[0].text
 
 
 def test_environment_and_command_are_minimal(fake):
     driver, log, approval = fake
-    assert driver.command[1:] == ["mcp", "--embedded", "--socket", "fake-private-socket"]
+    assert driver.command[1:] == ["mcp", "--embedded", "--socket", str(log.parent / "fake-private-socket")]
     assert set(driver.env) <= {"PATH", "HOME", "TMPDIR", "CUA_DRIVER_EMBEDDED", "DO_NOT_TRACK",
                                "CUA_DRIVER_RS_TELEMETRY_ENABLED", "CUA_DRIVER_RS_UPDATE_CHECK", "FAKE_CUA_LOG"}
     assert driver.env["DO_NOT_TRACK"] == "1"

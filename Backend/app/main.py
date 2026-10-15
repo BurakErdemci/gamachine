@@ -333,8 +333,10 @@ usage_service = UsageService()
 PROGRESS_STORE = {}
 
 from agentic import approval_mode  # noqa: E402
+from computer_use import settings as computer_use_settings  # noqa: E402
 
 approval_mode.bind_store(db)
+computer_use_settings.bind_store(db)
 
 _ALLOWED_ORIGINS = [
     "http://localhost:8888",    # Nextron dev renderer

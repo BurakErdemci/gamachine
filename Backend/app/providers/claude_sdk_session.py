@@ -241,6 +241,7 @@ _AUTO_ALLOW_TOOLS = {
 }
 # The chat-mailbox server's tools, allowed without a card (see `_can_use_tool`).
 from agentic.mailbox import CLAUDE_TOOL_NAMES as _MAIL_TOOLS  # noqa: E402
+from computer_use import registration  # noqa: E402
 
 # Chat'te gösterilmeyecek düşük-değerli iç araçlar (görünürlük; onay akışını etkilemez).
 # NOT: "Task" artık BURADA DEĞİL — subagent çağrıları "Subagent" chip'i olarak görünür.
@@ -1107,6 +1108,9 @@ class ClaudeSDKSession:
         # step mode, so a second card here would ask twice. After the
         # read-only branch on purpose, unlike `_AUTO_ALLOW_TOOLS`.
         if tool_name in _MAIL_TOOLS:
+            return PermissionResultAllow(updated_input=input_data)
+        # The computer-use backend owns approval cards and denies outside auto mode.
+        if tool_name.startswith(registration.CLAUDE_TOOL_PREFIX):
             return PermissionResultAllow(updated_input=input_data)
 
         # AskUserQuestion → A/B/C seçim kartı

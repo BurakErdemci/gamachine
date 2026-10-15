@@ -9,6 +9,21 @@ logger = logging.getLogger(__name__)
 ENABLED_KEY = "computer_use_enabled"
 GRANTS_KEY = "computer_use_app_grants"
 CORRUPT_GRANTS_KEY = "computer_use_app_grants_corrupt"
+_store = None
+
+
+def bind_store(db):
+    global _store
+    _store = db
+
+
+def enabled_now() -> bool:
+    if _store is None:
+        return False
+    try:
+        return enabled(_store)
+    except Exception:
+        return False
 
 
 def enabled(db):

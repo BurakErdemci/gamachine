@@ -2713,6 +2713,10 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
             _mail_entry = _mailbox.claude_server_entry(self.conversation_id)
             if _mail_entry is not None:
                 mcp_servers_cfg[_mailbox.CLAUDE_SERVER_NAME] = _mail_entry
+            from computer_use import registration
+            _computer_entry = registration.claude_server_entry(self.conversation_id)
+            if _computer_entry is not None:
+                mcp_servers_cfg[registration.SERVER_NAME] = _computer_entry
 
         model = self.model_name if (self.model_name or "").startswith("claude-") else None
 

@@ -36,6 +36,7 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Set
 
 import unity_file_guard
+from computer_use import registration
 from providers.text_blocks import block_break
 from agentic.command_gates import APPROVAL_GATES, APPROVAL_RESULTS, APPROVAL_TIMEOUT_S
 from agentic.command_gates import cancel_gate, mark_timed_out, register_gate, release_gate
@@ -790,7 +791,7 @@ def dogrula_onay_hakemi(sonuc, conversation_id="?") -> "str | None":
     return hakem
 
 
-def _trusted_mcp_config(forward_env: Sequence[str] = ()) -> dict:
+def _trusted_mcp_config(forward_env: Sequence[str] = (), read_only: bool = False) -> dict:
     """IDE'nin kendi MCP'leri için Codex-katmanı onay politikasını üret.
 
     unityai içindeki kalıcı dosya/terminal mutasyonları kendi ``approval_bridge``
@@ -821,6 +822,10 @@ def _trusted_mcp_config(forward_env: Sequence[str] = ()) -> dict:
         for name in ("unityai", "unityMCP"):
             if name in configured:
                 servers.setdefault(name, {})["env_vars"] = list(forward_env)
+    if not read_only:
+        entry = registration.codex_thread_entry(forward_env)
+        if entry is not None:
+            servers[registration.SERVER_NAME] = entry
     return {"mcp_servers": servers}
 
 
@@ -1000,7 +1005,7 @@ class CodexSession:
             # geçiriyordu. Kalıcı app-server yolu da aynı güven modelini thread
             # config'i üzerinden taşımalı; aksi halde salt-okunur MCP araçları
             # bile "user rejected MCP tool call" ile düşer.
-            "config": _trusted_mcp_config(forward_env=tuple(owner_env)),
+            "config": _trusted_mcp_config(forward_env=tuple(owner_env), read_only=self.read_only),
         }
         if self.model:
             params["model"] = self.model

@@ -11,7 +11,7 @@ from mcp.types import CallToolResult, TextContent
 
 from unity_ai_mcp import approval_bridge
 from . import policy
-from .driver_client import DriverClient, DriverError, DriverUnavailable
+from .driver_client import DriverClient, DriverError, DriverUnavailable, fetch_runtime
 
 
 def _text(value, error=False):
@@ -74,11 +74,20 @@ class ComputerServer:
     def __init__(self, driver=None):
         self.driver = driver
 
+    async def _runtime_driver(self):
+        binary, socket = await fetch_runtime()
+        if self.driver is None or (self.driver.binary, self.driver.socket) != (binary, socket):
+            if self.driver is not None:
+                await self.driver.close()
+            self.driver = DriverClient(binary, socket)
+        return self.driver
+
     async def call(self, tool, args):
         validated = policy.validate_call(tool, args)
         if isinstance(validated, policy.Refusal):
             return _text(validated.reason, True)
         try:
+            driver = None
             forward_args = validated.args
             if tool == "computer_launch_app" and "urls" in args:
                 resolved = _resolve_launch_targets(args["urls"])
@@ -88,9 +97,8 @@ class ComputerServer:
             bundle_id = app_name = pid = None
             if "pid" in args:
                 pid = args["pid"]
-                if self.driver is None:
-                    self.driver = DriverClient()
-                bundle_id, app_name = (await self.driver.list_running_apps()).get(pid, (None, None))
+                driver = await self._runtime_driver()
+                bundle_id, app_name = (await driver.list_running_apps()).get(pid, (None, None))
             elif tool == "computer_launch_app":
                 bundle_id = args["bundle_id"]
             elif tool == "computer_clipboard_read":
@@ -113,13 +121,13 @@ class ComputerServer:
             if not approved:
                 return _text(str(reason), True)
             if pid is not None:
-                current_bundle, _ = (await self.driver.list_running_apps()).get(pid, (None, None))
+                current_bundle, _ = (await driver.list_running_apps()).get(pid, (None, None))
                 if (not policy.valid_bundle_id(bundle_id) or not policy.valid_bundle_id(current_bundle)
                         or current_bundle.casefold() != bundle_id.casefold()):
                     return _text("Hedef uygulama onaydan sonra değişti; işlem reddedildi.", True)
-            if self.driver is None:
-                self.driver = DriverClient()
-            return await self.driver.call(validated.driver_tool, forward_args)
+            if driver is None:
+                driver = await self._runtime_driver()
+            return await driver.call(validated.driver_tool, forward_args)
         except DriverUnavailable:
             return _text("Bilgisayar kullanımı sürücüsü kullanılamıyor.", True)
         except DriverError:
