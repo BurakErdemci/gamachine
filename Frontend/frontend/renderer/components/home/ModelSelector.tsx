@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, Check, AlertTriangle, Loader2, Download, LogIn, RefreshCw, LayoutGrid } from 'lucide-react';
 
@@ -82,6 +82,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [selProv, setSelProv] = useState<string | null>(activeKey);
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Inline right offset (px, relative to .model-wrap) that keeps the menu 8px inside the window.
+  const [menuPos, setMenuPos] = useState<{ right: number; originX: number }>({ right: 0, originX: 0 });
 
   const goSettings = (page: SettingsPage) => {
     if (openSettings) openSettings(page); else setShowSettings(true);
@@ -477,13 +481,33 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   };
 
+  // Right-aligned under the chip when it fits; otherwise clamped to an 8px window margin.
+  // Layout effect so the first painted frame is already placed. No inline transform: framer owns it.
+  useLayoutEffect(() => {
+    if (!isModelDropdownOpen) return;
+    const place = () => {
+      const wrap = wrapRef.current;
+      const menu = menuRef.current;
+      if (!wrap || !menu) return;
+      const wrapRight = wrap.getBoundingClientRect().right;
+      const w = menu.offsetWidth;
+      const left = Math.max(8, Math.min(wrapRight - w, window.innerWidth - w - 8));
+      const right = wrapRight - (left + w);
+      setMenuPos(prev => (prev.right === right && prev.originX === wrapRight - left
+        ? prev : { right, originX: wrapRight - left }));
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [isModelDropdownOpen]);
+
   const levels = (effortLevels && effortLevels.length ? effortLevels : ['auto']);
   const effLevel = thinkingLevel && levels.includes(thinkingLevel) ? thinkingLevel : 'auto';
   const activeFam = familyFor(usage, activeFamily);
   const measuredMin = minutesSince(activeFam?.measured_at, usage?.now);
 
   return (
-    <div className="model-wrap" data-guide="model-chip">
+    <div className="model-wrap" data-guide="model-chip" ref={wrapRef}>
       <button
         type="button"
         aria-haspopup="dialog"
@@ -516,6 +540,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -8, scale: 0.98 }}
               transition={{ duration: 0.16, ease: 'easeOut' }}
+              ref={menuRef}
+              style={{ right: menuPos.right, transformOrigin: `${menuPos.originX}px 0` }}
               className="model-menu"
               role="dialog"
               aria-label={t('mm.title')}

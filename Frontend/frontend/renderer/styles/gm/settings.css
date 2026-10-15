@@ -93,7 +93,7 @@
 .chip-use i.is-hot::before { background: var(--use-hot); }
 
 /* ======================= the menu: providers | models ======================= */
-.model-menu { width: 600px; max-width: calc(100vw - 24px); padding: 0; overflow: hidden; container-type: inline-size; }
+.model-menu { width: 600px; max-width: calc(100vw - 16px); padding: 0; overflow: hidden; container-type: inline-size; }
 .model-menu .plogo { flex: none; }
 .mm-top { display: flex; align-items: center; gap: 14px; padding: 10px 10px 10px 16px; border-bottom: var(--line-w) solid var(--menu-line); }
 .mm-top .model-menu-k { padding: 0; flex: none; }
