@@ -306,13 +306,13 @@ def test_window_listing_checks_bundle_but_never_cards(env, bundle, approved):
 
 
 @pytest.mark.parametrize("raw", ["broken", "{}", "null"])
-def test_corrupt_blob_is_preserved_once_before_overwrite(env, raw):
+def test_newest_corrupt_blob_is_preserved_before_overwrite(env, raw):
     env.rows[settings.GRANTS_KEY] = raw
     settings.add_grant(env.db, "com.apple.TextEdit", "TextEdit")
     assert env.rows[settings.CORRUPT_GRANTS_KEY] == raw
     env.rows[settings.GRANTS_KEY] = "different corruption"
     settings.add_grant(env.db, "com.apple.Notes", "Notes")
-    assert env.rows[settings.CORRUPT_GRANTS_KEY] == raw
+    assert env.rows[settings.CORRUPT_GRANTS_KEY] == "different corruption"
 
 
 def test_one_bad_row_preserves_valid_grants(env, caplog):
@@ -414,3 +414,27 @@ def test_corrupt_backup_failure_is_readable_but_never_overwritten(env, caplog, r
     assert env.rows[settings.GRANTS_KEY] == raw
     assert settings.CORRUPT_GRANTS_KEY not in env.rows
     assert "backup" in caplog.text.lower()
+
+
+@pytest.mark.parametrize("tool", ["computer_launch_app", "computer_click", "computer_list_windows",
+                                  "computer_window_state", "computer_confirm_risky_step"])
+@pytest.mark.parametrize("bundle", [policy.CLIPBOARD_BUNDLE_ID, policy.CLIPBOARD_BUNDLE_ID.upper()])
+def test_clipboard_id_is_reserved_for_the_clipboard_tool(env, tool, bundle):
+    params = {**PARAMS, "bundle_id": bundle, "app_name": "Clipboard"}
+    decision = gate.decide(tool, params, enabled=True, mode="auto", granted=True)
+    assert decision.kind == "deny"
+    response = request(env, tool=tool, bundle_id=bundle, app_name="Clipboard")
+    assert response["approved"] is False
+    assert pending(env) == {}
+    assert not settings.is_granted(env.db, policy.CLIPBOARD_BUNDLE_ID)
+    read = gate.decide("computer_clipboard_read", params, enabled=True, mode="auto", granted=False)
+    assert read.kind == "card" and read.grant is True
+
+
+def test_grants_survive_a_raising_get_setting(env, caplog):
+    env.db.get_setting.side_effect = OSError("db unavailable")
+    assert settings.grants(env.db) == []
+    assert not settings.is_granted(env.db, PARAMS["bundle_id"])
+    with pytest.raises(ValueError):
+        settings.add_grant(env.db, PARAMS["bundle_id"], "TextEdit")
+    assert caplog.text

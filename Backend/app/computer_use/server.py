@@ -5,7 +5,6 @@ driver argument without default injection; policy validates it before any I/O.
 """
 from contextlib import asynccontextmanager
 import os
-from urllib.parse import unquote, urlsplit
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
@@ -28,27 +27,47 @@ def _foreground(args):
     return False
 
 
-_EXECUTABLE_SUFFIXES = (".app", ".bundle", ".framework", ".plugin", ".appex", ".prefpane",
-                        ".workflow", ".action", ".shortcut", ".scptd", ".pkg", ".mpkg",
-                        ".kext", ".xpc", ".terminal", ".command", ".tool")
+_BUNDLE_SUFFIXES = (".app", ".bundle", ".framework", ".plugin", ".appex", ".prefpane",
+                    ".workflow", ".action", ".shortcut", ".scptd", ".pkg", ".mpkg",
+                    ".kext", ".xpc", ".terminal", ".command", ".tool",
+                    ".saver", ".service", ".systemextension", ".wdgt", ".dext",
+                    ".qlgenerator", ".mdimporter", ".component", ".colorpicker",
+                    ".osax", ".menu", ".vst", ".vst3", ".au", ".clap")
+
+
+def _is_bundle_dir(path):
+    return (os.path.basename(path).casefold().endswith(_BUNDLE_SUFFIXES)
+            or os.path.exists(os.path.join(path, "Contents", "Info.plist"))
+            or os.path.exists(os.path.join(path, "Contents", "MacOS")))
+
+
+def _resolve_launch_targets(urls):
+    """Return the urls with every path replaced by its checked real path, or None."""
+    resolved = []
+    for url in urls:
+        if not url.startswith("/"):
+            resolved.append(url)
+            continue
+        try:
+            real_path = os.path.realpath(url)
+            if not os.path.isdir(real_path):
+                return None
+            current = real_path
+            while True:
+                if _is_bundle_dir(current):
+                    return None
+                parent = os.path.dirname(current)
+                if parent == current:
+                    break
+                current = parent
+        except (OSError, ValueError):
+            return None
+        resolved.append(real_path)
+    return resolved
 
 
 def _safe_launch_targets(urls):
-    for url in urls:
-        if url.startswith("/"):
-            path = url
-        elif url.lower().startswith("file://"):
-            path = unquote(urlsplit(url).path)
-        else:
-            continue
-        try:
-            real_path = os.path.realpath(path)
-            if (not os.path.isdir(real_path)
-                    or any(part.casefold().endswith(_EXECUTABLE_SUFFIXES) for part in real_path.split(os.sep))):
-                return False
-        except (OSError, ValueError):
-            return False
-    return True
+    return _resolve_launch_targets(urls) is not None
 
 
 class ComputerServer:
@@ -60,8 +79,12 @@ class ComputerServer:
         if isinstance(validated, policy.Refusal):
             return _text(validated.reason, True)
         try:
-            if tool == "computer_launch_app" and not _safe_launch_targets(args.get("urls", [])):
-                return _text("urls must target existing directories outside executable bundles", True)
+            forward_args = validated.args
+            if tool == "computer_launch_app" and "urls" in args:
+                resolved = _resolve_launch_targets(args["urls"])
+                if resolved is None:
+                    return _text("urls must target existing directories outside executable bundles", True)
+                forward_args = {**validated.args, "urls": resolved}
             bundle_id = app_name = pid = None
             if "pid" in args:
                 pid = args["pid"]
@@ -96,7 +119,7 @@ class ComputerServer:
                     return _text("Hedef uygulama onaydan sonra değişti; işlem reddedildi.", True)
             if self.driver is None:
                 self.driver = DriverClient()
-            return await self.driver.call(validated.driver_tool, validated.args)
+            return await self.driver.call(validated.driver_tool, forward_args)
         except DriverUnavailable:
             return _text("Bilgisayar kullanımı sürücüsü kullanılamıyor.", True)
         except DriverError:

@@ -129,7 +129,7 @@ def test_window_listing_requires_pid():
     assert isinstance(p.validate_call("computer_list_windows", {"pid": 4}), p.Validated)
 
 
-@pytest.mark.parametrize("urls", [["https://example.com", "http://example.com", "file:///document"],
+@pytest.mark.parametrize("urls", [["https://example.com", "http://example.com", "/Users/me/Unity Projeleri"],
                                  ["/Users/me/Documents"], ["https://example.com"] * 16])
 def test_launch_accepts_only_opened_url_capabilities(urls):
     args = {"bundle_id": "com.apple.finder", "urls": urls}
@@ -147,7 +147,10 @@ def test_launch_refuses_bad_urls(urls):
     " https://x.com", "ht\ntps://x.com", "http\r://x.com", "http:", "file:",
     "https://", "https://x.com/\x00", "https://x.com/a b", "https://x.com/é",
     "https://x.com/\x7f", "file:relative", "file://host", "", "x" * 2049,
-    "https://x.com/" + "a" * 2035, "~/Documents", "relative/path",
+    "https://x.com/" + "a" * 1020, "/" + "a" * 1024,
+    "file:///Users/me", "file:///Users/me/Documents", "FILE:///x", "/Users/me/../../etc",
+    "/Users/me/./x", "/Users/me/..", " /Users/me", "/Users/me ", "/Users/me\n", "/a\x00b",
+    "/a\u200bb", "/a\u202eb", "/a\tb", "~/Documents", "relative/path",
     "javascript:alert(1)", "x-apple.systempreferences:a",
 ])
 def test_launch_url_syntax_rejects_ambiguous_or_nonprintable_targets(url):
@@ -155,8 +158,8 @@ def test_launch_url_syntax_rejects_ambiguous_or_nonprintable_targets(url):
 
 
 @pytest.mark.parametrize("url", ["https://example.com/a?b=c", "http://example.com",
-                                "/Users/me/Documents", "file:///Users/me/Documents",
-                                "https://x.com/" + "a" * 2034])
+                                "/Users/me/Documents", "/Users/me/Unity Projeleri",
+                                "/Users/me/Documents/unityaıPython", "https://x.com/" + "a" * 1000])
 def test_launch_url_syntax_accepts_documented_forms(url):
     assert isinstance(p.validate_call("computer_launch_app", {
         "bundle_id": "com.apple.finder", "urls": [url]}), p.Validated)
@@ -217,3 +220,8 @@ def test_booleans_refused_for_all_numeric_arguments(tool, key, value):
                                  {"expect": {"timeout_ms": True}}])
 def test_named_target_and_check_numbers_refuse_booleans(step):
     refused("computer_run_steps", {"pid": 4, "steps": [step]})
+
+
+def test_launch_refuses_reserved_clipboard_bundle_id_case_insensitively():
+    for bundle in (p.CLIPBOARD_BUNDLE_ID, p.CLIPBOARD_BUNDLE_ID.upper()):
+        refused("computer_launch_app", {"bundle_id": bundle}, "bundle_id")

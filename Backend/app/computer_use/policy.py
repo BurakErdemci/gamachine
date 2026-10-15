@@ -1,6 +1,7 @@
 """Pure validation of the curated cua-driver 0.35.4 surface."""
 from dataclasses import dataclass
 import re
+import unicodedata
 from urllib.parse import urlsplit
 
 
@@ -175,6 +176,23 @@ def _steps(args):
             return refusal
 
 
+def _valid_launch_url(url):
+    if not isinstance(url, str) or not 1 <= len(url) <= 1024:
+        return False
+    if any(unicodedata.category(char) in ("Cc", "Cf") for char in url):
+        return False
+    if url.startswith("/"):
+        return url == url.strip() and not any(part in (".", "..") for part in url.split("/"))
+    if any(not "!" <= char <= "~" for char in url):
+        return False
+    try:
+        parsed = urlsplit(url)
+        return parsed.scheme.casefold() in {"http", "https"} and url.casefold().startswith(
+            parsed.scheme.casefold() + "://") and bool(parsed.hostname)
+    except ValueError:
+        return False
+
+
 def validate_call(tool, args) -> Validated | Refusal:
     if not isinstance(tool, str) or tool not in TOOLS:
         return Refusal("Unknown tool")
@@ -187,25 +205,15 @@ def validate_call(tool, args) -> Validated | Refusal:
     if tool == "computer_launch_app":
         if not valid_bundle_id(args["bundle_id"]):
             return Refusal("bundle_id must be a valid application identifier")
+        if args["bundle_id"].casefold() == CLIPBOARD_BUNDLE_ID.casefold():
+            return Refusal("bundle_id is reserved for the clipboard tool")
         if "urls" in args:
             urls = args["urls"]
             if not isinstance(urls, list) or not 1 <= len(urls) <= 16:
                 return Refusal("urls must be a list of 1..16 strings")
             for url in urls:
-                if (not isinstance(url, str) or not 1 <= len(url) <= 2048
-                        or any(not "!" <= char <= "~" for char in url)):
-                    return Refusal("urls must contain 1..2048 printable ASCII characters without whitespace")
-                try:
-                    parsed = urlsplit(url)
-                    scheme = parsed.scheme.casefold()
-                    allowed = (url.startswith("/")
-                               or (scheme in {"http", "https"} and url.lower().startswith(scheme + "://")
-                                   and bool(parsed.hostname))
-                               or (url.lower().startswith("file://") and parsed.path.startswith("/")))
-                except ValueError:
-                    allowed = False
-                if not allowed:
-                    return Refusal("urls must contain absolute paths or http, https, file URLs")
+                if not _valid_launch_url(url):
+                    return Refusal("urls must be http(s) URLs with a host or absolute paths without control characters or dot segments")
     if tool == "computer_clipboard_read" and "include_text" in args and type(args["include_text"]) is not bool:
         return Refusal("include_text must be a boolean")
     if tool == "computer_clipboard_write" and not isinstance(args["text"], str):

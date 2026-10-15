@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from .policy import TOOLS, is_hard_denied, valid_bundle_id
+from .policy import CLIPBOARD_BUNDLE_ID, TOOLS, is_hard_denied, valid_bundle_id
 
 logger = logging.getLogger(__name__)
 INACTIVE_REASON = "Bilgisayar kullanımı kapalı ya da çalışma modu Otomatik değil."
@@ -28,6 +28,8 @@ def decide(tool, params, *, enabled, mode, granted):
     bundle_id = params.get("bundle_id")
     if not valid_bundle_id(bundle_id):
         return Decision("deny", "Hedef uygulama tanınamadı.")
+    if bundle_id.casefold() == CLIPBOARD_BUNDLE_ID.casefold() and tool != "computer_clipboard_read":
+        return Decision("deny", "Bu uygulama bilgisayar kullanımına kapalı.")
     if is_hard_denied(bundle_id):
         return Decision("deny", "Bu uygulama bilgisayar kullanımına kapalı.")
     if tool == "computer_list_windows":

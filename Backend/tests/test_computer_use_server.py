@@ -261,8 +261,11 @@ def test_opened_tools_forward_after_approval(fake, tool, args, forwarded):
 
 @pytest.mark.parametrize("suffix", [".app", ".bundle", ".framework", ".plugin", ".appex",
                                    ".prefpane", ".workflow", ".action", ".shortcut", ".scptd",
-                                   ".pkg", ".mpkg", ".kext", ".xpc", ".terminal", ".command", ".tool"])
-@pytest.mark.parametrize("form", ["path", "file-url", "inside", "symlink"])
+                                   ".pkg", ".mpkg", ".kext", ".xpc", ".terminal", ".command", ".tool",
+                                   ".saver", ".service", ".systemextension", ".wdgt", ".dext",
+                                   ".qlgenerator", ".mdimporter", ".component", ".colorpicker",
+                                   ".osax", ".menu", ".vst", ".vst3", ".au", ".clap"])
+@pytest.mark.parametrize("form", ["path", "inside", "symlink"])
 def test_launch_refuses_executable_directory_components_before_approval(fake, tmp_path, suffix, form):
     driver, log, approval = fake
     blocked = tmp_path / ("Target" + suffix.upper())
@@ -274,22 +277,48 @@ def test_launch_refuses_executable_directory_components_before_approval(fake, tm
     elif form == "symlink":
         target = tmp_path / "innocent"
         target.symlink_to(blocked, target_is_directory=True)
-    url = target.as_uri() if form == "file-url" else str(target)
     result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
-        "bundle_id": "com.apple.finder", "urls": [url]}))
+        "bundle_id": "com.apple.finder", "urls": [str(target)]}))
+    assert result.is_error
+    approval.assert_not_called()
+    assert calls(log) == []
+
+
+@pytest.mark.parametrize("marker", [("Contents", "Info.plist"), ("Contents", "MacOS")])
+@pytest.mark.parametrize("form", ["path", "inside"])
+def test_launch_refuses_disguised_bundles_including_ancestors(fake, tmp_path, marker, form):
+    driver, log, approval = fake
+    bundle = tmp_path / "Innocent"
+    path = bundle.joinpath(*marker)
+    if marker[1] == "MacOS":
+        path.mkdir(parents=True)
+    else:
+        path.parent.mkdir(parents=True)
+        path.write_text("x")
+    target = bundle if form == "path" else bundle / "Contents"
+    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
+        "bundle_id": "com.apple.finder", "urls": [str(target)]}))
+    assert result.is_error
+    approval.assert_not_called()
+    assert calls(log) == []
+
+
+def test_launch_refuses_file_urls_before_approval(fake, tmp_path):
+    driver, log, approval = fake
+    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
+        "bundle_id": "com.apple.finder", "urls": [tmp_path.as_uri()]}))
     assert result.is_error
     approval.assert_not_called()
     assert calls(log) == []
 
 
 @pytest.mark.parametrize("kind", ["file", "command", "missing"])
-@pytest.mark.parametrize("file_url", [False, True])
-def test_launch_refuses_files_and_missing_paths(fake, tmp_path, kind, file_url):
+def test_launch_refuses_files_and_missing_paths(fake, tmp_path, kind):
     driver, log, approval = fake
     target = tmp_path / ("script.command" if kind == "command" else "document")
     if kind != "missing":
         target.write_text("data")
-    url = target.as_uri() if file_url else str(target)
+    url = str(target)
     result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
         "bundle_id": "com.apple.finder", "urls": [url]}))
     assert result.is_error
@@ -297,13 +326,14 @@ def test_launch_refuses_files_and_missing_paths(fake, tmp_path, kind, file_url):
     assert calls(log) == []
 
 
-@pytest.mark.parametrize("file_url", [False, True])
-def test_launch_plain_directory_forwards_original_target(fake, tmp_path, file_url):
+@pytest.mark.parametrize("name", ["plain-directory", "Unity Projeleri", "unityaıPython"])
+def test_launch_plain_directory_forwards_resolved_real_path(fake, tmp_path, name):
     driver, log, approval = fake
-    target = tmp_path / ("plain directory" if file_url else "plain-directory")
+    target = tmp_path / name
     target.mkdir()
-    url = target.as_uri() if file_url else str(target)
-    args = {"bundle_id": "com.apple.finder", "urls": [url]}
+    link = tmp_path / "link to folder"
+    link.symlink_to(target, target_is_directory=True)
+    args = {"bundle_id": "com.apple.finder", "urls": [str(link), "https://example.com/a"]}
 
     async def run():
         handler = ComputerServer(driver)
@@ -315,20 +345,7 @@ def test_launch_plain_directory_forwards_original_target(fake, tmp_path, file_ur
 
     asyncio.run(run())
     approval.assert_awaited_once()
-    assert calls(log)[0]["args"]["urls"] == [url]
-
-
-def test_launch_decodes_file_url_before_resolving_symlinks(fake, tmp_path):
-    driver, log, approval = fake
-    app = tmp_path / "Hidden.app"
-    app.mkdir()
-    alias = tmp_path / "plain alias"
-    alias.symlink_to(app, target_is_directory=True)
-    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
-        "bundle_id": "com.apple.finder", "urls": [alias.as_uri()]}))
-    assert result.is_error
-    approval.assert_not_called()
-    assert calls(log) == []
+    assert calls(log)[0]["args"]["urls"] == [os.path.realpath(target), "https://example.com/a"]
 
 
 def test_driver_session_timeout_covers_maximum_window_read(fake, monkeypatch):

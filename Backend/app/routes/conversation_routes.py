@@ -30,6 +30,7 @@ from agentic import chat_titles
 from agentic import mailbox
 from agentic import turn_events
 from computer_use import gate as computer_gate
+from computer_use import policy as computer_policy
 from computer_use import settings as computer_settings
 from computer_use.policy import valid_bundle_id
 from providers.agy_provider import AgyStepGateError
@@ -716,6 +717,9 @@ def create_conversation_router(db, progress_store):
                 card = _cards.get(gate_id)
                 if entry.get("remember") is True and card is not None and card.by == "desktop":
                     try:
+                        if (str(bundle_id).casefold() == computer_policy.CLIPBOARD_BUNDLE_ID.casefold()
+                                and tool != "computer_clipboard_read"):
+                            raise ValueError("clipboard id is reserved")
                         computer_settings.add_grant(db, bundle_id, params.get("app_name"))
                     except ValueError:
                         logger.warning("Computer-use application grant refused")

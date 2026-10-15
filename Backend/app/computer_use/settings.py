@@ -20,7 +20,13 @@ def set_enabled(db, on):
 
 
 def _load_grants(db, *, require_backup=False):
-    raw = db.get_setting(GRANTS_KEY)
+    try:
+        raw = db.get_setting(GRANTS_KEY)
+    except Exception:
+        logger.exception("Could not read computer-use grants; using an empty list")
+        if require_backup:
+            raise ValueError("Grants cannot be read; refusing to overwrite them")
+        return []
     if raw is None:
         return []
     try:
@@ -30,8 +36,7 @@ def _load_grants(db, *, require_backup=False):
     except (ValueError, TypeError):
         logger.warning("Invalid computer_use_app_grants setting; using an empty list")
         try:
-            if db.get_setting(CORRUPT_GRANTS_KEY) is None:
-                db.set_setting(CORRUPT_GRANTS_KEY, raw)
+            db.set_setting(CORRUPT_GRANTS_KEY, raw)
         except Exception as exc:
             logger.exception("Could not preserve corrupt computer-use grants backup")
             if require_backup:
