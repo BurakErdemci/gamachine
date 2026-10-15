@@ -1244,6 +1244,9 @@ if (!gotTheLock) {
       const mainWindow = createWindow('main', {
         width: 1280,
         height: 850,
+        // Below ~600 CSS px the top bar cannot fit its controls even with every label hidden
+        // (measured 15 Oct 2026); 680 keeps 618 CSS px at the largest text size (zoom 1.1).
+        minWidth: 680,
         icon: iconPath,
         webPreferences: {
           preload: path.join(__dirname, 'preload.js'),
