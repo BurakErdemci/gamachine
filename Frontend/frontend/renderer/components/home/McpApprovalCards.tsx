@@ -23,10 +23,12 @@ import { DiffViewer } from './DiffViewer';
 import { FileCreationApproval, PendingFile } from './FileCreationApproval';
 import { FileDeleteApproval } from './FileDeleteApproval';
 import { CommandApproval } from './CommandApproval';
+import { ComputerUseApproval } from './ComputerUseApproval';
 import { RiskReasonLine } from './RiskReasonLine';
-import { GateFailure, postMcpDecision, decisionToast } from '../../hooks/home/gateResponse';
+import { GateFailure, postMcpDecision, postComputerDecision, decisionToast } from '../../hooks/home/gateResponse';
 import { MCP_MSG_ID, McpActiveGate } from '../../hooks/home/useMCPApproval';
 import { useLang, type TKey } from '../../lib/i18n';
+import { stripBidi } from '../../lib/modelText';
 
 /**
  * Bir karar denemesinin sonucu — ÜÇ durum, iki değil.
@@ -224,13 +226,16 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
   const gateId = gate.gateId;
 
   /** Kararı gönderir; uçuşta ya da sonuçlanmış bir karar varsa GÖNDERMEZ ve bunu söyler. */
-  const decide = async (approved: boolean): Promise<DecisionResult> => {
+  const decide = async (approved: boolean, remember = false): Promise<DecisionResult> => {
     if (inFlightRef.current === gateId) return { sent: false, reason: 'in-flight' };
     if (decidedRef.current === gateId) return { sent: false, reason: 'already-decided' };
     inFlightRef.current = gateId;
     setBusy(true);
     try {
-      const failure = await postMcpDecision(apiBase, gateId, approved, sessionToken);
+      // computer_* cards answer through Electron with the UI secret and "Always".
+      const failure = gate.computer
+        ? await postComputerDecision(apiBase, gateId, approved, remember, sessionToken)
+        : await postMcpDecision(apiBase, gateId, approved, sessionToken);
       decidedRef.current = gateId;
       return { sent: true, failure };
     } finally {
@@ -331,8 +336,28 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
   );
   const risk = { riskReason: gate.riskReason, riskDetail: gate.riskDetail, phonePaired };
 
+  const computer = gate.computer;
+
   return (
     <>
+      {computer && (
+        // No workspace strip: a computer_* request comes from no project.
+        <div className="approval-slot">
+          {lock(
+          <ComputerUseApproval
+            info={computer}
+            phonePaired={phonePaired}
+            onAnswer={async (approved, remember) => {
+              const result = await decide(approved, remember);
+              onResolved();
+              const app = stripBidi(computer.appName ?? computer.bundleId ?? t('cu.card.unknownApp'));
+              reportDecision(result, !approved ? t('cu.card.rejected')
+                : remember ? t('cu.card.sentAlways', { ad: app }) : t('cu.card.sent'));
+            }}
+          />)}
+        </div>
+      )}
+
       {pendingGenFiles?.messageId === MCP_MSG_ID && (
         <div className="approval-slot">
           {banner(false)}

@@ -23,6 +23,7 @@
 
 import { cevir, type TKey } from '../../lib/i18n';
 import { closeAnsweredCard, parseCardClosed, phoneDeviceName } from '../../lib/remoteControl';
+import { answerComputerCard, hasComputerUseIpc } from '../../lib/computerUse';
 
 export type GateAction = 'command' | 'question' | 'mcp';
 
@@ -327,6 +328,36 @@ export async function postMcpDecision(
  * fonksiyondan geçmiyor; onlar `showToast(..., 'success')`'ı doğrudan çağırıyor
  * ve yeşil kalmayı hak ediyor.
  */
+/**
+ * A computer_* card's answer. Approving one needs the UI secret, which only the
+ * main process holds, so it goes through the `computer-use` channel with
+ * `remember` ("Always"). Outside Electron there is no secret to send: the plain
+ * MCP answer is posted with `approved` only (the backend refuses an approval
+ * without the secret and that refusal is shown; a rejection still lands).
+ */
+export async function postComputerDecision(
+  apiBase: string,
+  gateId: string,
+  approved: boolean,
+  remember: boolean,
+  sessionToken: string,
+): Promise<GateFailure | null> {
+  if (!hasComputerUseIpc()) return postMcpDecision(apiBase, gateId, approved, sessionToken);
+  if (!gateId) {
+    return {
+      message: cevir('gate.deliver.noGateId', { etiket: cevir(ACTION_LABEL_KEYS.mcp) }),
+      type: 'error',
+    };
+  }
+  const res = await answerComputerCard(gateId, approved, remember);
+  // The host answers with the backend body, or `{ error }` without any HTTP
+  // detail (it never serialises the request, which carries both secrets), so
+  // a failed call cannot tell "refused" from "lost": it is reported uncertain.
+  if (readStatus(res) !== null) return gateFailure('mcp', { httpOk: true, body: res });
+  const error = res && typeof res === 'object' && 'error' in res ? (res as { error: unknown }).error : 'no answer';
+  return gateFailure('mcp', { httpOk: false, error: error ?? 'no answer' });
+}
+
 export function decisionToast(
   failure: GateFailure | null,
   deliveredMessage: string,

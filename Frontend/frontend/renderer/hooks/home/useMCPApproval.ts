@@ -27,6 +27,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import axios from 'axios';
 import { PendingFile } from '../../components/home/FileCreationApproval';
+import { computerCardInfo, type ComputerCardInfo } from '../../components/home/ComputerUseApproval';
 import { cevir } from '../../lib/i18n';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { onCardClosed } from '../../lib/remoteControl';
@@ -54,6 +55,11 @@ export interface McpActiveGate {
   /** Why balanced mode raised this card (`risk_reason`); absent otherwise. */
   riskReason?: string;
   riskDetail?: string;
+  /**
+   * Set for computer_* tools only: their own card keeps the structured params
+   * (app, summary, risk) and answers through Electron with the UI secret.
+   */
+  computer?: ComputerCardInfo;
 }
 
 /** A request whose source chat the backend could not name (tray entry). */
@@ -514,6 +520,12 @@ export const useMCPApproval = ({
       } else if (tool === 'bash' && eskiKartCizilebilir) {
         clearActiveCardRef.current = () => setPendingCommand(null);
         setPendingCommand({ command: params.command, gateId, messageId: MCP_MSG_ID });
+      } else if (typeof tool === 'string' && tool.startsWith('computer_')) {
+        // Drawn from `activeGate.computer` by McpApprovalCards; no shared slot to clear.
+        const withComputer: McpActiveGate = { ...gate, computer: computerCardInfo(tool, params, req) };
+        activeGateRef.current = withComputer;
+        setActiveGate(withComputer);
+        clearActiveCardRef.current = null;
       } else if (tool === MAIL_TOOL && typeof yuk.body === 'string') {
         // A note between chats: its own card, so the user reads "which chat
         // to which chat, saying what" rather than a tool dump.
