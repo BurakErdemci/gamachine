@@ -79,11 +79,15 @@ export class ComputerUseHost {
       socket_path: this.running ? this.socketPath : null }
   }
 
+  private logError(message: string, error: unknown) {
+    this.log(message, error instanceof Error ? error.message : String(error))
+  }
+
   private report() {
     const data = this.runtime()
     // An exit's stopped report must settle before a replacement's running report.
     this.reports = this.reports.then(() => this.request('post', '/computer-use/runtime', data, true))
-      .catch(error => { this.log('[cua] runtime report failed', error) })
+      .catch(error => { this.logError('[cua] runtime report failed', error) })
     return this.reports
   }
 
@@ -174,7 +178,7 @@ export class ComputerUseHost {
         }
       }
       child.once('exit', exited)
-      child.once('error', error => { this.log('[cua] child error', error); exited() })
+      child.once('error', error => { this.logError('[cua] child error', error); exited() })
       child.stdout?.on('data', chunk => this.log(`[cua] ${chunk.toString().trim()}`))
       child.stderr?.on('data', chunk => this.log(`[cua] ${chunk.toString().trim()}`))
       const deadline = this.now() + 10_000
@@ -228,26 +232,31 @@ export class ComputerUseHost {
       if (this.stopped) return
       const { data: settings } = await this.request('get', '/computer-use/settings')
       if (this.stopped) return
-      const runtime = this.runtime()
-      if (!settings.runtime || settings.runtime.running !== runtime.running
-        || settings.runtime.driver_path !== runtime.driver_path || settings.runtime.socket_path !== runtime.socket_path) {
-        await this.report()
-      }
+      let transitioned = false
       if (this.available && settings.enabled === true && settings.mode === 'auto') {
-        if (this.child) return
-        if (this.crashed) {
-          if (this.now() - this.lastAutoRestart < 60_000) return
-          this.lastAutoRestart = this.now()
+        if (!this.child && (!this.crashed || this.now() - this.lastAutoRestart >= 60_000)) {
+          if (this.crashed) this.lastAutoRestart = this.now()
+          await this.startChild()
+          transitioned = true
         }
-        await this.startChild()
-      } else if (this.child || this.socketPath || this.crashed) await this.stopChild(true)
+      } else if (this.child || this.socketPath || this.crashed) {
+        await this.stopChild(true)
+        transitioned = true
+      }
+      if (!transitioned) {
+        const runtime = this.runtime()
+        if (!settings.runtime || settings.runtime.running !== runtime.running
+          || settings.runtime.driver_path !== runtime.driver_path || settings.runtime.socket_path !== runtime.socket_path) {
+          await this.report()
+        }
+      }
     })
   }
 
   beginPolling() {
     if (this.stopped || this.pollTimer) return
     const poll = async () => {
-      try { await this.reconcile() } catch (error) { this.log('[cua] reconcile failed', error) }
+      try { await this.reconcile() } catch (error) { this.logError('[cua] reconcile failed', error) }
       if (!this.stopped) this.pollTimer = this.later(() => { void poll() }, 5000)
     }
     // Reserve the timer before the first request, making repeated calls idempotent.

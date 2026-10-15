@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events'
 import path from 'path'
+import { AxiosError, AxiosHeaders } from 'axios'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ComputerUseHost, type ComputerUseDeps } from '../main/helpers/computer-use'
 
@@ -143,7 +144,7 @@ describe('ComputerUseHost', () => {
     })
     await f.host.reconcile()
     expect(f.host.running).toBe(true)
-    expect(f.log).toHaveBeenCalledWith('[cua] runtime report failed', expect.any(Error))
+    expect(f.log).toHaveBeenCalledWith('[cua] runtime report failed', 'backend unavailable')
     f.http.request.mockClear().mockImplementation(request)
     await f.host.reconcile()
     expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toEqual([
@@ -184,6 +185,96 @@ describe('ComputerUseHost', () => {
     await f.host.reconcile()
     expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toHaveLength(0)
     expect(f.spawn).not.toHaveBeenCalled()
+  })
+
+  it.each(['transition', 'drift', 'poll', 'child'])('logs only error messages for %s failures', async source => {
+    const f = fixture()
+    const error = new AxiosError('backend unavailable', undefined, {
+      headers: new AxiosHeaders({ 'X-Session-Token': 'token', 'X-Gamachine-UI-Secret': 'ui-secret' }),
+    })
+    if (source === 'drift' || source === 'child') await f.host.start()
+    f.log.mockClear()
+    f.http.request.mockRejectedValue(error)
+    if (source === 'transition') await f.host.start()
+    else if (source === 'drift') {
+      f.http.request.mockImplementation(async config => {
+        if (config.method === 'get') return { data: { enabled: true, mode: 'auto', runtime: stoppedRuntime } }
+        throw error
+      })
+      await f.host.reconcile()
+    } else if (source === 'poll') {
+      f.host.beginPolling()
+      await vi.advanceTimersByTimeAsync(0)
+    } else {
+      f.children[0].emit('error', error)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    const prefix = source === 'poll' ? '[cua] reconcile failed'
+      : source === 'child' ? '[cua] child error' : '[cua] runtime report failed'
+    expect(f.log).toHaveBeenCalledWith(prefix, 'backend unavailable')
+    for (const args of f.log.mock.calls) {
+      for (const arg of args) {
+        expect(JSON.stringify(arg)).not.toContain('token')
+        expect(JSON.stringify(arg)).not.toContain('ui-secret')
+      }
+    }
+  })
+
+  it('sends SIGTERM before a stale runtime report can hang a disable', async () => {
+    const f = fixture()
+    await f.host.start()
+    f.settings({ enabled: false, mode: 'auto', runtime: { ...stoppedRuntime } })
+    f.http.request.mockClear()
+    const request = f.http.request.getMockImplementation()!
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    f.http.request.mockImplementation(async config => {
+      if (config.url.endsWith('/computer-use/runtime')) await pending
+      return request(config)
+    })
+    let settled = false
+    const disabling = f.host.reconcile().then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.children[0].kill.mock.calls).toEqual([['SIGTERM']])
+    expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toHaveLength(0)
+    f.children[0].emit('exit', 0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.http.request).toHaveBeenLastCalledWith(expect.objectContaining({ data: stoppedRuntime }))
+    expect(settled).toBe(false)
+    release()
+    await disabling
+    expect(f.host.running).toBe(false)
+  })
+
+  it.each([false, true])('checks drift during restart throttling with backend running=%s and an exit report in flight', async backendRunning => {
+    const f = fixture()
+    await f.host.start()
+    f.children[0].emit('exit', 1)
+    await f.host.reconcile()
+    const runningRuntime = { running: true, driver_path: f.host.driverPath(), socket_path: f.host.socketPath }
+    f.http.request.mockClear()
+    const request = f.http.request.getMockImplementation()!
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    let reports = 0
+    f.http.request.mockImplementation(async config => {
+      if (config.method === 'post' && ++reports === 1) await pending
+      return request(config)
+    })
+    f.children[1].emit('exit', 1)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(reports).toBe(1)
+    f.settings({ enabled: true, mode: 'auto', runtime: backendRunning ? runningRuntime : { ...stoppedRuntime } })
+    let settled = false
+    const reconciling = f.host.reconcile().then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toBe(!backendRunning)
+    release()
+    await reconciling
+    expect(f.http.request.mock.calls.filter(([c]) => c.method === 'post')).toEqual(
+      Array.from({ length: backendRunning ? 2 : 1 }, () => [expect.objectContaining({ data: stoppedRuntime })]),
+    )
+    expect(f.spawn).toHaveBeenCalledTimes(2)
   })
 
   it('allows enable immediately after crash, auto-restart, crash and intentional disable', async () => {
