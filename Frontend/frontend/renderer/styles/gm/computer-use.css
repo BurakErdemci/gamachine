@@ -8,6 +8,12 @@
  */
 
 /* ── settings page ─────────────────────────────────────────────── */
+/* The master row has no lead icon, so the 3-column hero grid put its text in the 28px column
+   and the status wrapped one letter per line; a flex row gives the text the remaining width. */
+.cu-master-row { display: flex; align-items: center; gap: 16px; }
+.cu-master-row .set-rt { flex: 1 1 0; min-width: 0; }
+.cu-master-row .set-switch { flex: none; }
+.cu-master-row .set-hint { word-break: normal; overflow-wrap: break-word; }
 .cu-notice { padding: 14px 20px 16px; box-shadow: inset 3px 0 0 var(--set-warn), var(--shadow-card); }
 .cu-notice-h { display: flex; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 600; color: var(--ink); }
 .cu-notice-h > .ic { flex: none; color: var(--set-warn-text); }

@@ -134,7 +134,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
       <SetGroup>
         <SetCard>
           <SetRow
-            className="set-row-hero"
+            className="set-row-hero cu-master-row"
             testId="cu-master-row"
             name={t('cu.set.master')}
             hint={<><Lamp tone={masterTone} /><span data-testid="cu-master-state">{masterHint}</span></>}
