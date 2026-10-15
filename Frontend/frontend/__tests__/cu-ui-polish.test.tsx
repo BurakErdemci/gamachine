@@ -1,6 +1,6 @@
 /**
  * Computer-use UI polish (15 Oct live test): D1 settings status layout, D2 workspace tab strip,
- * D3 tool-group kind, D4 launch_app card name, D5 live indicator title. jsdom cannot measure
+ * D3 tool-group kind, D4 launch_app card keeps the full bundle id, D5 live indicator title. jsdom cannot measure
  * widths, so the layout checks read the stylesheet text and the class the markup relies on.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
@@ -106,10 +106,13 @@ describe('D3 · computer tools are their own kind', () => {
 })
 
 describe('D4 · launch_app card with only a bundle id', () => {
-  it('shows the last bundle segment as the name and the full id as secondary text', () => {
+  // Any app can claim a bundle id ending in ".TextEdit"; a name cut from the id would let it pose
+  // as the real app on a trust card, so the card names it by the full id until the backend
+  // resolves the installed app's real name.
+  it('names the app by its full bundle id, never by a segment of it', () => {
     aktifDilAyarla('tr')
     const gate = { gateId: 'cu-1', tool: 'computer_launch_app', workspacePath: '', conversationId: 5,
-      computer: computerCardInfo('computer_launch_app', { bundle_id: 'com.apple.TextEdit', risky: false, summary: 'Open it' }) }
+      computer: computerCardInfo('computer_launch_app', { bundle_id: 'com.evil.TextEdit', risky: false, summary: 'Open it' }) }
     render(<McpApprovalCards {...({
       gate, workspaceMismatch: false, openWorkspacePath: '/ws', onResolved: vi.fn(),
       apiBase: 'http://127.0.0.1:8000', sessionToken: 'tok', showToast: vi.fn(), refreshFileTree: vi.fn(),
@@ -117,11 +120,8 @@ describe('D4 · launch_app card with only a bundle id', () => {
       pendingCommand: null, setPendingCommand: vi.fn(), pendingFix: null, setPendingFix: vi.fn(),
     } as any)} />)
     const card = screen.getByTestId('computer-approval')
-    expect(card.textContent).toContain(cevir('cu.card.nameFirst', { ad: 'TextEdit' }))
-    expect(card.textContent).not.toContain(cevir('cu.card.nameFirst', { ad: 'com.apple.TextEdit' }))
-    const app = screen.getByTestId('cu-card-app')
-    expect(app.querySelector('dd')!.textContent).toContain('TextEdit')
-    expect(app.querySelector('.set-key')!.textContent).toBe('com.apple.TextEdit')
+    expect(card.textContent).toContain(cevir('cu.card.nameFirst', { ad: 'com.evil.TextEdit' }))
+    expect(screen.getByTestId('cu-card-app').querySelector('dd')!.textContent!.trim()).toBe('com.evil.TextEdit')
   })
 })
 
