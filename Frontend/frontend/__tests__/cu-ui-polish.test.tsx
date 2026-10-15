@@ -14,7 +14,7 @@ import { Workspace } from '../renderer/components/home/Workspace'
 import { McpApprovalCards } from '../renderer/components/home/McpApprovalCards'
 import { computerCardInfo } from '../renderer/components/home/ComputerUseApproval'
 import { summarizeTools } from '../renderer/components/home/ToolGroup'
-import { toolKind } from '../renderer/components/home/ToolBlock'
+import { toolKind, ToolBlock } from '../renderer/components/home/ToolBlock'
 import { aktifDilAyarla, cevir, translations } from '../renderer/lib/i18n'
 
 const STYLES = path.resolve(__dirname, '../renderer/styles/gm')
@@ -134,6 +134,27 @@ describe('D5 · live indicator title', () => {
     expect(col).toMatch(/flex:\s*1/)
     expect(col).toMatch(/min-width:\s*0/)
     expect(rules(text, '.cul-stop').join(' ')).toMatch(/flex:\s*none/)
-    expect(text).toMatch(/width:\s*348px/)
+    expect(text).toMatch(/width:\s*388px/)
+  })
+})
+
+describe('F1 · computer step verb', () => {
+  it('renders a translated verb, never the raw key', () => {
+    aktifDilAyarla('tr')
+    render(<ul><ToolBlock tool="mcp__gamachineComputer__computer_click" args={{ x: 1 }} /></ul>)
+    const verb = document.querySelector('.tool-verb')!.textContent!
+    expect(verb).toBe('bilgisayar')
+    expect(verb).not.toContain('tool.verb')
+    expect(translations.en['tool.verb.computer' as any]).toBe('computer')
+  })
+})
+
+describe('F2 · workspace tab strip in tracked uppercase themes', () => {
+  it('tightens arena and pafta tabs without ellipsis and keeps 10.5px or more', () => {
+    const text = css('workspace.css').replace(/\/\*[\s\S]*?\*\//g, '')
+    const m = text.match(/:is\(\[data-theme="arena"\], \[data-theme="pafta"\]\) \.ws-tab \{([^}]*)\}/)
+    expect(m).not.toBeNull()
+    expect(m![1]).not.toMatch(/text-overflow/)
+    expect(parseFloat(/font-size:\s*([\d.]+)px/.exec(m![1])![1])).toBeGreaterThanOrEqual(10.5)
   })
 })
