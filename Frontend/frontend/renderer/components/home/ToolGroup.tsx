@@ -17,7 +17,7 @@ export interface ToolSummaryPart { key: string; values: Record<string, string | 
  * Exported for tests; the order is the reading order of the line.
  */
 export function summarizeTools(tools: ToolItem[]): ToolSummaryPart[] {
-  const by: Record<ToolKind, ToolItem[]> = { read: [], wrote: [], edited: [], searched: [], ran: [], unity: [], planned: [], web: [], other: [] };
+  const by: Record<ToolKind, ToolItem[]> = { read: [], wrote: [], edited: [], searched: [], ran: [], unity: [], computer: [], planned: [], web: [], other: [] };
   for (const tc of tools) by[toolKind(tc.tool)].push(tc);
   const parts: ToolSummaryPart[] = [];
   const named = (list: ToolItem[], one: string, many: string) => {
@@ -31,6 +31,7 @@ export function summarizeTools(tools: ToolItem[]): ToolSummaryPart[] {
   if (by.searched.length) parts.push({ key: 'tool.sum.searched', values: { sayi: by.searched.length } });
   if (by.ran.length) parts.push({ key: 'tool.sum.ran', values: { sayi: by.ran.length } });
   if (by.unity.length) parts.push({ key: 'tool.sum.unity', values: { sayi: by.unity.length } });
+  if (by.computer.length) parts.push({ key: 'tool.sum.computer', values: { sayi: by.computer.length } });
   const rest = by.planned.length + by.web.length + by.other.length;
   if (rest) parts.push({ key: 'tool.sum.other', values: { sayi: rest } });
   const failed = tools.filter(tc => tc.success === false).length;

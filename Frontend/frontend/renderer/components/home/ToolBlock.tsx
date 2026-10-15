@@ -10,7 +10,7 @@ interface ToolBlockProps {
   output?: string;
 }
 
-export type ToolKind = 'read' | 'wrote' | 'edited' | 'searched' | 'ran' | 'unity' | 'planned' | 'web' | 'other';
+export type ToolKind = 'read' | 'wrote' | 'edited' | 'searched' | 'ran' | 'unity' | 'computer' | 'planned' | 'web' | 'other';
 
 // Claude Code built-ins plus the old MCP names still found in stored chats.
 const KIND: Record<string, ToolKind> = {
@@ -24,7 +24,7 @@ const KIND: Record<string, ToolKind> = {
 };
 
 export const toolKind = (tool: string): ToolKind =>
-  KIND[tool] ?? (tool.startsWith('mcp__') ? 'unity' : 'other');
+  KIND[tool] ?? (tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_') ? 'computer' : tool.startsWith('mcp__') ? 'unity' : 'other');
 
 /** The file or thing a step acted on: its path argument first, then the stream's summary. */
 export const toolTarget = (tc: { args?: any; summary?: string }): string | null => {
