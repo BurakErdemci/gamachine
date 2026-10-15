@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from .policy import TOOLS, is_hard_denied
+from .policy import TOOLS, is_hard_denied, valid_bundle_id
 
 logger = logging.getLogger(__name__)
 INACTIVE_REASON = "Bilgisayar kullanımı kapalı ya da çalışma modu Otomatik değil."
@@ -21,15 +21,17 @@ class Decision:
 def decide(tool, params, *, enabled, mode, granted):
     if not (enabled and mode == "auto"):
         return Decision("deny", INACTIVE_REASON)
-    if tool in ("computer_list_apps", "computer_list_windows"):
+    if tool in ("computer_list_apps", "computer_clipboard_read", "computer_clipboard_write"):
         return Decision("allow")
     if tool not in TOOLS:
         return Decision("deny", "Bilinmeyen bilgisayar kullanımı aracı.")
     bundle_id = params.get("bundle_id")
-    if not isinstance(bundle_id, str) or not bundle_id.strip():
+    if not valid_bundle_id(bundle_id):
         return Decision("deny", "Hedef uygulama tanınamadı.")
     if is_hard_denied(bundle_id):
         return Decision("deny", "Bu uygulama bilgisayar kullanımına kapalı.")
+    if tool == "computer_list_windows":
+        return Decision("allow")
     risk = str(params.get("risk_reason") or "Riskli adım için onay gerekiyor.") if params.get("risky") else ""
     if not granted:
         return Decision("card", "Bu uygulamaya ilk erişim için onay gerekiyor." + (" " + risk if risk else ""), True)

@@ -48,13 +48,23 @@ class ComputerServer:
                       "risky": bool(risk), "risk_reason": risk,
                       "summary": args.get("summary") or app_name or bundle_id or tool,
                       "foreground": _foreground(args)}
-            result = await approval_bridge.request_approval(tool, params=params, workspace_path="")
+            try:
+                result = await approval_bridge.request_approval(tool, params=params, workspace_path="")
+            except Exception:
+                result = {"approved": False, "error": "İşlem onayı doğrulanamadı."}
+            if not isinstance(result, dict):
+                result = {"approved": False, "error": "İşlem onayı doğrulanamadı."}
             approved = result.get("approved") is True
             reason = result.get("error") or "İşlem için onay verilmedi."
             if tool == "computer_confirm_risky_step":
                 return _text("approved" if approved else "rejected: " + str(reason), not approved)
             if not approved:
                 return _text(str(reason), True)
+            if pid is not None:
+                current_bundle, _ = (await self.driver.list_running_apps()).get(pid, (None, None))
+                if (not policy.valid_bundle_id(bundle_id) or not policy.valid_bundle_id(current_bundle)
+                        or current_bundle.casefold() != bundle_id.casefold()):
+                    return _text("Hedef uygulama onaydan sonra değişti; işlem reddedildi.", True)
             if self.driver is None:
                 self.driver = DriverClient()
             return await self.driver.call(validated.driver_tool, validated.args)

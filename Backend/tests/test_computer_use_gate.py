@@ -2,13 +2,14 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from inspect import getclosurevars
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agentic import approval_mode, cards
+from agentic import approval_mode, cards, approval_policy
 from agentic.command_gates import GATE_OWNERS
 from computer_use import gate, settings
 from routes.conversation_routes import create_conversation_router
@@ -19,7 +20,8 @@ PARAMS = {"pid": 4242, "bundle_id": "com.apple.TextEdit", "app_name": "TextEdit"
 
 
 @pytest.fixture
-def env(tmp_path):
+def env(tmp_path, monkeypatch):
+    monkeypatch.setattr(approval_policy, "conversation_turn_in_flight", lambda cid: cid in (1, 2))
     rows = {}
     db = MagicMock()
     db.db_path = str(tmp_path / "db.sqlite")
@@ -43,14 +45,16 @@ def env(tmp_path):
     cards.reset()
 
 
-def request(env, gate_id="cu-first", tool="computer_click", **params):
+def request(env, gate_id="cu-first", tool="computer_click", conversation_id=1, **params):
     return env.client.post("/mcp-approval-request", json={
-        "gate_id": gate_id, "tool": tool, "params": {**PARAMS, **params},
+        "gate_id": gate_id, "tool": tool, "conversation_id": conversation_id,
+        "params": {**PARAMS, **params},
     }).json()
 
 
-def answer(env, approved, gate_id="cu-first"):
-    return env.client.post("/mcp-approval-respond/" + gate_id, json={"approved": approved}).json()
+def answer(env, approved, gate_id="cu-first", **extra):
+    return env.client.post("/mcp-approval-respond/" + gate_id,
+                           json={"approved": approved, **extra}).json()
 
 
 def pending(env):
@@ -85,7 +89,7 @@ def test_first_use_approval_persists_grant_and_next_call_is_immediate(env):
     assert entry["computer_use"] is True
     assert entry["summary"] == "Click OK"
     assert not settings.is_granted(env.db, PARAMS["bundle_id"])
-    assert answer(env, True)["status"] == "ok"
+    assert answer(env, True, remember=True)["status"] == "ok"
     assert result(env)["approved"] is True
     assert settings.is_granted(env.db, PARAMS["bundle_id"].upper())
     assert request(env, "cu-next")["approved"] is True
@@ -104,13 +108,15 @@ def test_rejection_never_persists_grant(env, value):
     assert settings.grants(env.db) == []
 
 
-def test_phone_answer_wins_once_and_grants(env):
+def test_phone_answer_wins_once_and_grants_only_the_session(env):
     request(env)
     cards.answer_card("cu-first", "approve", device="phone")
-    answer(env, False)
+    answer(env, True, remember=True)
     assert result(env)["approved"] is True
-    assert settings.is_granted(env.db, PARAMS["bundle_id"])
+    assert not settings.is_granted(env.db, PARAMS["bundle_id"])
     assert len(env.log.read_text().splitlines()) == 2
+    assert request(env, "cu-next")["approved"] is True
+    assert request(env, "cu-other", conversation_id=2)["status"] == "ok"
 
 
 @pytest.mark.parametrize("granted", [False, True])
@@ -119,8 +125,10 @@ def test_risky_card_in_auto_carries_reason(env, granted):
         settings.add_grant(env.db, PARAMS["bundle_id"], "TextEdit")
     assert request(env, risky=True, risk_reason="Delete files")["status"] == "ok"
     assert "Delete files" in pending(env)["cu-first"]["risk_reason"]
-    answer(env, True)
-    assert len(settings.grants(env.db)) == 1
+    answer(env, True, remember=True)
+    assert len(settings.grants(env.db)) == int(granted)
+    if not granted:
+        assert request(env, "cu-next")["status"] == "ok"
 
 
 @pytest.mark.parametrize("mode", ["step", "balanced"])
@@ -221,3 +229,106 @@ def test_abort_all_rejects_pending_without_grant(env):
     env.client.post("/mcp-abort-all")
     assert result(env)["approved"] is False
     assert settings.grants(env.db) == []
+
+
+@pytest.mark.parametrize("remember", [False, None, "true", 1])
+def test_desktop_once_grants_only_verified_conversation(env, remember):
+    request(env)
+    assert pending(env)["cu-first"]["conversation_id"] == 1
+    answer(env, True, remember=remember)
+    assert settings.grants(env.db) == []
+    assert request(env, "same", bundle_id=PARAMS["bundle_id"].upper())["approved"] is True
+    assert request(env, "other", conversation_id=2)["status"] == "ok"
+    assert request(env, "different-app", bundle_id="com.apple.Notes")["status"] == "ok"
+
+
+@pytest.mark.parametrize("conversation_id", [None, 3, "1", True])
+def test_unowned_once_approval_grants_only_that_call(env, conversation_id):
+    request(env, conversation_id=conversation_id)
+    assert pending(env)["cu-first"]["conversation_id"] is None
+    answer(env, True)
+    assert result(env)["approved"] is True
+    assert request(env, "again", conversation_id=conversation_id)["status"] == "ok"
+    assert settings.grants(env.db) == []
+
+
+def test_other_desktop_answer_path_defaults_to_once(env):
+    request(env)
+    endpoint = next(route.endpoint for route in env.router.routes
+                    if route.path == "/mcp-approval-respond/{gate_id}")
+    desktop_answer = getclosurevars(endpoint).nonlocals["_desktop_answer"]
+    desktop_answer("cu-first", "approve")
+    assert settings.grants(env.db) == []
+    assert request(env, "again")["approved"] is True
+
+
+@pytest.mark.parametrize("transition", ["disable", "step", "balanced"])
+def test_session_grants_are_cleared_when_inactive(env, transition):
+    request(env)
+    answer(env, True)
+    assert request(env, "before")["approved"] is True
+    headers = {"X-Gamachine-UI-Secret": SECRET}
+    if transition == "disable":
+        assert env.client.post("/computer-use/settings", json={"enabled": False}).status_code == 200
+        assert env.client.post("/computer-use/settings", json={"enabled": True}, headers=headers).status_code == 200
+    else:
+        env.router.apply_approval_mode(transition, source="test")
+        env.router.apply_approval_mode("auto", source="test")
+    assert request(env, "after")["status"] == "ok"
+    assert settings.grants(env.db) == []
+
+
+@pytest.mark.parametrize("tool", ["computer_list_apps", "computer_clipboard_read", "computer_clipboard_write"])
+def test_pidless_tools_are_active_only_and_logged(env, tool):
+    assert request(env, tool=tool, bundle_id=None, pid=None)["approved"] is True
+    assert pending(env) == {}
+    assert json.loads(env.log.read_text())["decision"] == "allow"
+    settings.set_enabled(env.db, False)
+    assert request(env, "off", tool=tool)["approved"] is False
+
+
+@pytest.mark.parametrize("bundle", [" com.apple.Terminal", "com.apple.Terminal\n", "com.apple.\u200bTerminal", 7])
+def test_malformed_ids_deny_without_cards_or_grants(env, bundle):
+    assert request(env, bundle_id=bundle)["error"] == "Hedef uygulama tanınamadı."
+    assert pending(env) == {}
+    with pytest.raises(ValueError):
+        settings.add_grant(env.db, bundle, "App")
+    assert not settings.is_granted(env.db, bundle)
+
+
+@pytest.mark.parametrize("bundle,approved", [("com.apple.TextEdit", True), ("com.apple.Terminal", False),
+                                           (None, False), (" com.apple.TextEdit", False)])
+def test_window_listing_checks_bundle_but_never_cards(env, bundle, approved):
+    assert request(env, tool="computer_list_windows", bundle_id=bundle)["approved"] is approved
+    assert pending(env) == {}
+
+
+@pytest.mark.parametrize("raw", ["broken", "{}", "null"])
+def test_corrupt_blob_is_preserved_once_before_overwrite(env, raw):
+    env.rows[settings.GRANTS_KEY] = raw
+    settings.add_grant(env.db, "com.apple.TextEdit", "TextEdit")
+    assert env.rows[settings.CORRUPT_GRANTS_KEY] == raw
+    env.rows[settings.GRANTS_KEY] = "different corruption"
+    settings.add_grant(env.db, "com.apple.Notes", "Notes")
+    assert env.rows[settings.CORRUPT_GRANTS_KEY] == raw
+
+
+def test_one_bad_row_preserves_valid_grants(env, caplog):
+    good = {"bundle_id": "com.apple.TextEdit", "app_name": "TextEdit",
+            "granted_at": "2026-10-15T00:00:00+00:00"}
+    bad_rows = [None, 1, {}, {**good, "bundle_id": " bad"}, {**good, "app_name": 7},
+                {**good, "app_name": ""}, {**good, "granted_at": "bad"}]
+    env.rows[settings.GRANTS_KEY] = json.dumps([good, *bad_rows])
+    assert settings.grants(env.db) == [good]
+    assert "skipping" in caplog.text
+    settings.add_grant(env.db, "com.apple.Notes", 7)
+    rows = settings.grants(env.db)
+    assert rows[0] == good
+    assert rows[1]["app_name"] == "com.apple.Notes"
+    assert settings.CORRUPT_GRANTS_KEY not in env.rows
+
+
+@pytest.mark.parametrize("app_name", [None, 7, "", "   "])
+def test_grant_name_falls_back_to_bundle(env, app_name):
+    settings.add_grant(env.db, PARAMS["bundle_id"], app_name)
+    assert settings.grants(env.db)[0]["app_name"] == PARAMS["bundle_id"]

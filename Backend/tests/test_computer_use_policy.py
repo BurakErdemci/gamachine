@@ -27,7 +27,7 @@ def test_refusals(tool, args, key):
 
 
 def test_schema_table_matches_pinned_surface():
-    assert len(p.TOOLS) == 17
+    assert len(p.TOOLS) == 19
     assert "capture_id" in p.TOOLS["computer_click"].allowed
     assert "capture_id" not in p.TOOLS["computer_double_click"].allowed
     assert "capture_id" not in p.TOOLS["computer_right_click"].allowed
@@ -99,3 +99,89 @@ def test_risk_is_exact_key_set():
     for keys in (["cmd", "s"], ["cmd", "delete", "ctrl"], ["delete"]):
         assert p.risky_reason("computer_hotkey", {"keys": keys}) == ""
     assert p.risky_reason("computer_confirm_risky_step", {"summary": "Send message"}) == "Send message"
+
+
+@pytest.mark.parametrize("value", [None, 7, "", " com.apple.Terminal", "com.apple.Terminal ",
+                                  "com.apple.Terminal\n", "com.apple.\u200bTerminal", "a b", "a" * 256])
+def test_malformed_bundle_ids(value):
+    assert not p.valid_bundle_id(value)
+    refused("computer_launch_app", {"bundle_id": value}, "bundle_id")
+
+
+@pytest.mark.parametrize("value", ["a", "com.apple.TextEdit", "A-0." + "a" * 251])
+def test_valid_bundle_id_boundaries(value):
+    assert p.valid_bundle_id(value)
+
+
+@pytest.mark.parametrize("bundle", [
+    "com.1password.1password", "com.bitwarden.desktop", "com.dashlane.dashlanephonefinal",
+    "com.lastpass.LastPass", "com.nordsec.nordpass", "com.apple.Passwords",
+    "com.apple.keychainaccess", "com.apple.ScriptEditor2", "com.apple.Automator",
+    "com.apple.shortcuts", "com.apple.ScreenContinuity", "com.apple.SecurityAgent",
+    "com.apple.LocalAuthentication.UIAgent",
+])
+def test_sensitive_and_scripting_apps_are_hard_denied(bundle):
+    assert p.is_hard_denied(bundle.upper())
+
+
+def test_window_listing_requires_pid():
+    refused("computer_list_windows", {}, "pid")
+    assert isinstance(p.validate_call("computer_list_windows", {"pid": 4}), p.Validated)
+
+
+@pytest.mark.parametrize("urls", [["https://example.com", "http://example.com", "file:///document"],
+                                 ["/Users/me/Documents"], ["https://example.com"] * 16])
+def test_launch_accepts_only_opened_url_capabilities(urls):
+    args = {"bundle_id": "com.apple.finder", "urls": urls}
+    assert p.validate_call("computer_launch_app", args).args is args
+
+
+@pytest.mark.parametrize("urls", [[], ["https://example.com"] * 17, "https://example.com", [7],
+                                 ["relative/path"], ["javascript:alert(1)"],
+                                 ["x-apple.systempreferences:settings"], ["https://[bad"]])
+def test_launch_refuses_bad_urls(urls):
+    refused("computer_launch_app", {"bundle_id": "com.apple.finder", "urls": urls}, "urls")
+
+
+def test_clipboard_is_text_only():
+    assert isinstance(p.validate_call("computer_clipboard_read", {"include_text": True}), p.Validated)
+    assert isinstance(p.validate_call("computer_clipboard_write", {"text": ""}), p.Validated)
+    refused("computer_clipboard_write", {}, "text")
+    refused("computer_clipboard_write", {"text": 7}, "text")
+    for key in ("file_path", "image_path", "session", "pid"):
+        refused("computer_clipboard_write", {"text": "hello", key: "value"}, key)
+
+
+# Independently pinned numeric fields. Exercise every exposed occurrence, plus
+# the same fields in action steps and window-state observations.
+NUMERIC_FIELDS = "pid window_id count x y x1 y1 x2 y2 from_x from_y to_x to_y duration_ms amount delay_ms max_depth max_elements max_image_dimension max_dimension timeout_ms".split()
+NUMERIC_CASES = [(tool, key) for tool, spec in p.TOOLS.items()
+                 for key in NUMERIC_FIELDS if key in spec.allowed]
+NUMERIC_CASES.append(("computer_drag", "steps"))
+
+
+@pytest.mark.parametrize("tool,key", NUMERIC_CASES)
+@pytest.mark.parametrize("value", [True, False])
+def test_booleans_refused_for_all_numeric_arguments(tool, key, value):
+    args = {name: 1 for name in p.TOOLS[tool].required}
+    args.update(pid=4)
+    if tool == "computer_run_steps":
+        args["steps"] = [{"click": {}}]
+    if tool == "computer_hotkey":
+        args["keys"] = ["cmd", "s"]
+    args[key] = value
+    refused(tool, args, key)
+    driver_tool = p.TOOLS[tool].driver_tool
+    if driver_tool in p.STEP_TOOLS:
+        refused("computer_run_steps", {"pid": 4, "window_id": 7,
+                                       "steps": [{driver_tool: args}]}, key)
+    if tool == "computer_window_state":
+        refused("computer_run_steps", {"pid": 4, "window_id": 7,
+                                       "steps": [{"click": {}}], "observe": args}, key)
+
+
+@pytest.mark.parametrize("step", [{"click": {"nth": True}}, {"click": {"timeout_ms": False}},
+                                 {"click": {}, "timeout_ms": True},
+                                 {"expect": {"timeout_ms": True}}])
+def test_named_target_and_check_numbers_refuse_booleans(step):
+    refused("computer_run_steps", {"pid": 4, "steps": [step]})

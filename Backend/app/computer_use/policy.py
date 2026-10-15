@@ -1,5 +1,7 @@
 """Pure validation of the curated cua-driver 0.35.4 surface."""
 from dataclasses import dataclass
+import re
+from urllib.parse import urlsplit
 
 
 HARD_DENY_BUNDLE_IDS = frozenset({
@@ -8,8 +10,17 @@ HARD_DENY_BUNDLE_IDS = frozenset({
     "com.mitchellh.ghostty", "net.kovidgoyal.kitty", "org.alacritty",
     "com.github.wez.wezterm", "dev.commandline.waveterm", "com.raphaelamorim.rio",
     "com.apple.systempreferences", "com.apple.Settings",
+    "com.1password.1password", "com.bitwarden.desktop", "com.dashlane.dashlanephonefinal",
+    "com.lastpass.LastPass", "com.nordsec.nordpass", "com.apple.Passwords",
+    "com.apple.keychainaccess", "com.apple.ScriptEditor2", "com.apple.Automator",
+    "com.apple.shortcuts", "com.apple.ScreenContinuity", "com.apple.SecurityAgent",
+    "com.apple.LocalAuthentication.UIAgent",
 })
 _DENIED = frozenset(b.casefold() for b in HARD_DENY_BUNDLE_IDS)
+
+
+def valid_bundle_id(value) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,254}", value) is not None
 
 
 def is_hard_denied(bundle_id) -> bool:
@@ -31,7 +42,7 @@ def _tool(driver, allowed, required=""):
 # dynamically, since a driver upgrade must not expand this permission boundary.
 TOOLS = {
     "computer_list_apps": _tool("list_apps", ""),
-    "computer_list_windows": _tool("list_windows", "pid on_screen_only"),
+    "computer_list_windows": _tool("list_windows", "pid on_screen_only", "pid"),
     "computer_window_state": _tool("get_window_state", "pid window_id include_accessibility_tree include_screenshot max_depth max_elements max_image_dimension max_dimension query since timeout_ms tree_format full_output verbose", "pid window_id"),
     "computer_zoom": _tool("zoom", "pid window_id x1 y1 x2 y2", "pid window_id x1 y1 x2 y2"),
     "computer_click": _tool("click", "action button capture_id count delivery_mode element_token from_zoom modifier pid window_id x y", "pid"),
@@ -44,7 +55,9 @@ TOOLS = {
     "computer_press_key": _tool("press_key", "delivery_mode element_token key modifiers pid window_id x y", "pid key"),
     "computer_hotkey": _tool("hotkey", "delivery_mode element_token keys pid window_id x y", "pid keys"),
     "computer_invoke_menu": _tool("invoke_menu", "path pid window_id", "pid window_id path"),
-    "computer_launch_app": _tool("launch_app", "bundle_id creates_new_application_instance", "bundle_id"),
+    "computer_launch_app": _tool("launch_app", "bundle_id creates_new_application_instance urls", "bundle_id"),
+    "computer_clipboard_read": _tool("clipboard_read", "include_text"),
+    "computer_clipboard_write": _tool("clipboard_write", "text", "text"),
     "computer_run_steps": _tool("run_steps", "pid window_id steps observe delay_ms delivery_mode foreground_fallback", "pid steps"),
     "computer_confirm_risky_step": _tool(None, "pid summary", "pid summary"),
 }
@@ -64,6 +77,9 @@ class Validated:
 STEP_TOOLS = frozenset("click double_click right_click set_value type_text press_key hotkey scroll drag".split())
 _TARGET_KEYS = frozenset("role name nth timeout_ms".split())
 _CHECK_KEYS = frozenset("role name text gone value value_contains enabled selected timeout_ms pid window_id".split())
+# Numeric property names in the pinned schemas, including named step targets.
+# `steps` is numeric only for drag, but a boolean is invalid for batches too.
+_NUMERIC_KEYS = frozenset("pid window_id count x y x1 y1 x2 y2 from_x from_y to_x to_y duration_ms steps amount delay_ms max_depth max_elements max_image_dimension max_dimension timeout_ms nth".split())
 
 
 def _keys(args, allowed, required):
@@ -75,6 +91,9 @@ def _keys(args, allowed, required):
             return Refusal(f"Missing required argument: {key}")
     if "pid" in args and (type(args["pid"]) is not int or args["pid"] <= 0):
         return Refusal("pid must be a positive integer")
+    for key in _NUMERIC_KEYS.intersection(args):
+        if isinstance(args[key], bool):
+            return Refusal(f"{key} must not be a boolean")
     for key in ("keys", "modifiers"):
         if key in args and (not isinstance(args[key], list) or not all(isinstance(value, str) for value in args[key])):
             return Refusal(f"{key} must be a list of strings")
@@ -164,8 +183,24 @@ def validate_call(tool, args) -> Validated | Refusal:
     refusal = _keys(args, spec.allowed, spec.required)
     if refusal:
         return refusal
-    if tool == "computer_launch_app" and (not isinstance(args["bundle_id"], str) or not args["bundle_id"].strip()):
-        return Refusal("bundle_id must be a non-empty string")
+    if tool == "computer_launch_app":
+        if not valid_bundle_id(args["bundle_id"]):
+            return Refusal("bundle_id must be a valid application identifier")
+        if "urls" in args:
+            urls = args["urls"]
+            if not isinstance(urls, list) or not 1 <= len(urls) <= 16:
+                return Refusal("urls must be a list of 1..16 strings")
+            for url in urls:
+                if not isinstance(url, str):
+                    return Refusal("urls must contain strings")
+                try:
+                    allowed = url.startswith("/") or urlsplit(url).scheme.casefold() in {"http", "https", "file"}
+                except ValueError:
+                    allowed = False
+                if not allowed:
+                    return Refusal("urls must contain absolute paths or http, https, file URLs")
+    if tool == "computer_clipboard_write" and not isinstance(args["text"], str):
+        return Refusal("text must be a string")
     if tool == "computer_confirm_risky_step":
         summary = args["summary"]
         if not isinstance(summary, str) or not 1 <= len(summary) <= 500:

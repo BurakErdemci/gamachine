@@ -8,6 +8,14 @@ from starlette.requests import Request
 
 
 EN: dict[str, str] = {
+    "Bu kanaldan bilgisayar kullanımı değiştirilemez.":
+        "Computer use cannot be changed through this channel.",
+    "Bilgisayar kullanımı yalnız uygulama arayüzünden açılabilir.":
+        "Computer use can only be enabled from the app interface.",
+    "Bilgisayar kullanımı için çalışma modu Otomatik olmalı.":
+        "The operating mode must be Automatic to enable computer use.",
+    "Uygulama izni yalnız uygulama arayüzünden kaldırılabilir.":
+        "Application access can only be revoked from the app interface.",
     "İşlem durduruldu.": "Operation stopped.",
     "🛑 İşlem kullanıcı tarafından durduruldu.": "🛑 Operation stopped by the user.",
     "Sırada — başka bir agy sohbetinin turu bitince başlayacak":

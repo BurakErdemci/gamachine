@@ -54,7 +54,8 @@ def test_image_is_forwarded_and_window_snapshot_survives_later_call(fake):
             await handler.close()
     asyncio.run(run())
     assert len({row["process"] for row in calls(log)}) == 1
-    assert [row["tool"] for row in calls(log)] == ["list_apps", "get_window_state", "list_apps", "click"]
+    assert [row["tool"] for row in calls(log)] == ["list_apps", "list_apps", "get_window_state",
+                                                 "list_apps", "list_apps", "click"]
     params = approval.call_args.kwargs["params"]
     assert params["bundle_id"] == "com.apple.TextEdit" and params["app_name"] == "TextEdit"
 
@@ -175,3 +176,99 @@ def test_app_parser_supports_text_and_structured_results(fake, structured):
                             **({"structured_content": data} if structured else {}))
     driver.call = AsyncMock(return_value=result)
     assert asyncio.run(driver.list_running_apps()) == {7: ("com.test.App", "App"), 9: (None, None)}
+
+
+@pytest.mark.parametrize("reply", [None, True, [], "approved", 1, RuntimeError("offline")])
+def test_malformed_or_failed_approval_never_forwards(fake, reply):
+    driver, log, approval = fake
+    if isinstance(reply, Exception):
+        approval.side_effect = reply
+    else:
+        approval.return_value = reply
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            denied = await handler.call("computer_click", {"pid": 4242})
+            assert denied.is_error
+            confirmation = await handler.call("computer_confirm_risky_step", {"pid": 4242, "summary": "Send"})
+            assert confirmation.is_error and confirmation.content[0].text.startswith("rejected:")
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    assert all(row["tool"] == "list_apps" for row in calls(log))
+
+
+def test_pid_remapped_during_approval_is_not_acted_on(fake):
+    driver, log, approval = fake
+    driver.env["FAKE_CUA_REMAP"] = "1"
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            denied = await handler.call("computer_click", {"pid": 4242})
+            assert denied.is_error and "değişti" in denied.content[0].text
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    assert approval.call_args.kwargs["params"]["bundle_id"] == "com.apple.TextEdit"
+    assert [row["tool"] for row in calls(log)] == ["list_apps", "list_apps"]
+
+
+@pytest.mark.parametrize("remapped", [{}, {4242: (None, None)}, {4242: ("com.apple.Terminal", "Terminal")}])
+def test_missing_or_changed_pid_after_approval_refuses(fake, remapped):
+    driver, log, approval = fake
+    driver.list_running_apps = AsyncMock(side_effect=[{4242: ("com.apple.TextEdit", "TextEdit")}, remapped])
+    result = asyncio.run(ComputerServer(driver).call("computer_click", {"pid": 4242}))
+    assert result.is_error
+    assert calls(log) == []
+
+
+@pytest.mark.parametrize("tool,args,forwarded", [
+    ("computer_list_windows", {"pid": 4242}, "list_windows"),
+    ("computer_launch_app", {"bundle_id": "com.apple.finder", "urls": ["file:///document"]}, "launch_app"),
+    ("computer_clipboard_read", {"include_text": True}, "clipboard_read"),
+    ("computer_clipboard_write", {"text": "hello"}, "clipboard_write"),
+])
+def test_opened_tools_forward_after_approval(fake, tool, args, forwarded):
+    driver, log, approval = fake
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            result = await handler.call(tool, args)
+            assert not result.is_error
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    rows = calls(log)
+    assert rows[-1]["tool"] == forwarded
+    if "pid" in args:
+        assert [row["tool"] for row in rows[:-1]] == ["list_apps", "list_apps"]
+        assert approval.call_args.kwargs["params"]["bundle_id"] == "com.apple.TextEdit"
+    else:
+        assert len(rows) == 1
+        assert approval.call_args.kwargs["params"]["pid"] is None
+    for key, value in args.items():
+        assert rows[-1]["args"][key] == value
+
+
+def test_driver_session_timeout_covers_maximum_window_read(fake, monkeypatch):
+    from computer_use import driver_client
+    original = driver_client.ClientSession
+    observed = []
+
+    def session(*streams, **kwargs):
+        observed.append(kwargs["read_timeout_seconds"])
+        return original(*streams, **kwargs)
+
+    monkeypatch.setattr(driver_client, "ClientSession", session)
+    driver, log, approval = fake
+
+    async def run():
+        try:
+            await driver.list_running_apps()
+        finally:
+            await driver.close()
+    asyncio.run(run())
+    assert observed == [130]

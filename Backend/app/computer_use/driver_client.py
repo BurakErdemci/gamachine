@@ -98,7 +98,7 @@ class DriverClient:
         error = None
         try:
             async with _transport(self.command, self.env) as streams:
-                async with ClientSession(*streams, read_timeout_seconds=30) as session:
+                async with ClientSession(*streams, read_timeout_seconds=130) as session:
                     await session.initialize()
                     while current is not None:
                         tool, args, future = current

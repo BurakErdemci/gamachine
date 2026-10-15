@@ -308,6 +308,9 @@ def _scan_app() -> Tuple[List[_Site], List[_Site]]:
 # ⚠️ Buraya bir satır eklemek "bu sızıntı kabul edildi" demektir. Gerekçesi
 # ölçüme ya da somut bir arıza yönüne dayanmayan satır eklenmeyecek.
 _EXEMPT: Dict[Tuple[str, str], Tuple[int, str]] = {
+    ("app/computer_use/driver_client.py", "_transport"): (
+        1, "Embedded driver receives an exact minimal environment with telemetry disabled; "
+           "parent secrets are intentionally not inherited."),
     # ── Sistem ikilileri: sabit argv, üçüncü taraf kod DEĞİL, vendor sırrı
     #    okuyacak bir yüzeyleri yok. Ortamı kısmak güvenlik satın almadan
     #    kullanılabilirlik satardı (git'in proxy/askpass ayarları, ekran

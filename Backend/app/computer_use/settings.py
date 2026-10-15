@@ -3,11 +3,12 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .policy import is_hard_denied
+from .policy import is_hard_denied, valid_bundle_id
 
 logger = logging.getLogger(__name__)
 ENABLED_KEY = "computer_use_enabled"
 GRANTS_KEY = "computer_use_app_grants"
+CORRUPT_GRANTS_KEY = "computer_use_app_grants_corrupt"
 
 
 def enabled(db):
@@ -24,29 +25,40 @@ def grants(db):
         return []
     try:
         result = json.loads(raw)
-        if not isinstance(result, list) or any(
-            not isinstance(row, dict) or not isinstance(row.get("bundle_id"), str)
-            or not row["bundle_id"].strip() or not isinstance(row.get("app_name"), str)
-            or not isinstance(row.get("granted_at"), str) for row in result
-        ):
+        if not isinstance(result, list):
             raise ValueError("invalid grants list")
-        return result
     except (ValueError, TypeError):
         logger.warning("Invalid computer_use_app_grants setting; using an empty list")
+        if db.get_setting(CORRUPT_GRANTS_KEY) is None:
+            db.set_setting(CORRUPT_GRANTS_KEY, raw)
         return []
+    valid = []
+    for row in result:
+        try:
+            if (not isinstance(row, dict) or not valid_bundle_id(row.get("bundle_id"))
+                    or not isinstance(row.get("app_name"), str) or not row["app_name"].strip()
+                    or not isinstance(row.get("granted_at"), str)):
+                raise ValueError("invalid grant row")
+            datetime.fromisoformat(row["granted_at"])
+        except ValueError:
+            logger.warning("Invalid computer_use_app_grants row; skipping it")
+            continue
+        valid.append(row)
+    return valid
 
 
 def is_granted(db, bundle_id):
-    return isinstance(bundle_id, str) and any(row["bundle_id"].casefold() == bundle_id.casefold() for row in grants(db))
+    return valid_bundle_id(bundle_id) and any(row["bundle_id"].casefold() == bundle_id.casefold() for row in grants(db))
 
 
 def add_grant(db, bundle_id, app_name):
-    if not isinstance(bundle_id, str) or not bundle_id.strip() or is_hard_denied(bundle_id):
+    if not valid_bundle_id(bundle_id) or is_hard_denied(bundle_id):
         raise ValueError("bundle_id cannot be granted")
     rows = grants(db)
     if any(row["bundle_id"].casefold() == bundle_id.casefold() for row in rows):
         return
-    rows.append({"bundle_id": bundle_id, "app_name": app_name or bundle_id,
+    rows.append({"bundle_id": bundle_id,
+                 "app_name": app_name if isinstance(app_name, str) and app_name.strip() else bundle_id,
                  "granted_at": datetime.now(timezone.utc).isoformat()})
     db.set_setting(GRANTS_KEY, json.dumps(rows))
 
