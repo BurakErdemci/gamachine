@@ -47,11 +47,13 @@ beforeEach(() => {
   }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+// The first test pays the cold render and menu fetch; under the full CI run that
+// passed the default 1 s find timeout in open() (CI run of 14 Oct 2026).
 async function setup(strict = false) {
-  render(strict ? <React.StrictMode><Harness /></React.StrictMode> : <Harness />); await act(async () => {}); act(() => editor.select(7)); await screen.findByRole('button', { name: 'Bileşen ekle' });
+  render(strict ? <React.StrictMode><Harness /></React.StrictMode> : <Harness />); await act(async () => {}); act(() => editor.select(7)); await screen.findByRole('button', { name: 'Bileşen ekle' }, { timeout: 5000 });
 }
 async function open() {
-  fireEvent.click(screen.getByRole('button', { name: 'Bileşen ekle' })); await screen.findByRole('option', { name: 'Physics' });
+  fireEvent.click(screen.getByRole('button', { name: 'Bileşen ekle' })); await screen.findByRole('option', { name: 'Physics' }, { timeout: 5000 });
 }
 it('keeps Unity category order, drills in, goes back and searches label/category with result counts', async () => {
   await setup(); await open();
