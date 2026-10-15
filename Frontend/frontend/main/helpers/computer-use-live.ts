@@ -395,7 +395,9 @@ export class ComputerLive {
         title: 'Gamachine',
         // A non-activating panel: clicking Stop or dragging never pulls focus from the user's app.
         ...(this.deps.platform === 'darwin' ? { type: 'panel' } : {}),
-        webPreferences: { preload: this.deps.preload },
+        // A window shown without focus counts as hidden to Chromium, which then stops painting it
+        // (measured live: the tag stayed grey until clicked).
+        webPreferences: { preload: this.deps.preload, backgroundThrottling: false },
       })
     } catch (error) {
       this.log('[cua-live] indicator failed', error instanceof Error ? error.message : String(error))
