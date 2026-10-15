@@ -426,3 +426,24 @@ def test_caller_cancellation_keeps_client_reusable(fake, monkeypatch):
 
     asyncio.run(run())
     assert len({row["process"] for row in calls(log)}) == 1
+
+
+@pytest.mark.parametrize("window_id,expected", [(7, 7), (None, None), (True, None), ("7", None)])
+def test_gate_params_carry_only_an_integer_window_id(fake, window_id, expected):
+    driver, log, approval = fake
+    args = {"pid": 4242, "x": 1, "y": 2}
+    if window_id is not None:
+        args["window_id"] = window_id
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            await handler.call("computer_click", args)
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    if approval.call_args is not None:
+        assert approval.call_args.kwargs["params"]["window_id"] == expected
+    else:
+        # The policy refused the malformed id before any gate was asked.
+        assert expected is None

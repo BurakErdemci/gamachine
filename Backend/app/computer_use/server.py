@@ -110,7 +110,9 @@ class ComputerServer:
             params = {"bundle_id": bundle_id, "app_name": app_name, "pid": pid,
                       "risky": bool(risk), "risk_reason": risk,
                       "summary": args.get("summary") or app_name or bundle_id or tool,
-                      "foreground": _foreground(args)}
+                      "foreground": _foreground(args),
+                      # bool is an int subclass; a window id is never True/False.
+                      "window_id": args.get("window_id") if type(args.get("window_id")) is int else None}
             try:
                 result = await approval_bridge.request_approval(tool, params=params, workspace_path="")
             except Exception:
