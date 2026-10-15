@@ -44,11 +44,11 @@
 .ws-w:hover { color: var(--ink); background: var(--paper-sunk); }
 .ws-w[aria-pressed="true"] { color: var(--ink); background: var(--paper-sunk); box-shadow: inset 0 0 0 1px var(--paper-line-strong); }
 
-.ws-tabs { flex: none; display: flex; gap: 2px; padding: 0 12px; border-bottom: var(--line-w) solid var(--paper-line); }
+.ws-tabs { flex: none; display: flex; gap: 0; padding: 0 8px; border-bottom: var(--line-w) solid var(--paper-line); }
 .ws-tab {
-  position: relative; height: 36px; padding: 0 10px; display: inline-flex; align-items: center; gap: 7px;
+  position: relative; height: 36px; padding: 0 8px; flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 7px;
   font-family: var(--font-who); text-transform: var(--who-case); letter-spacing: var(--who-track);
-  font-size: 13px; font-weight: 600; color: var(--ink-faint);
+  font-size: 12.5px; font-weight: 600; color: var(--ink-faint);
 }
 .ws-tab:hover { color: var(--ink); }
 .ws-tab[aria-selected="true"] { color: var(--ink); }
