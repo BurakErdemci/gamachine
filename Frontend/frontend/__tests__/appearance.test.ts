@@ -9,7 +9,7 @@ afterEach(() => {
 
 describe('appearance preferences', () => {
   it('defaults with empty storage', () => {
-    expect(loadAppearance(localStorage)).toEqual({ theme: 'arena', readingFont: 'theme', codeFont: 'theme', textSize: 'normal', intro: true })
+    expect(loadAppearance(localStorage)).toEqual({ theme: 'arena', readingFont: 'theme', codeFont: 'theme', textSize: 'normal', intro: true, copyOnSelect: true })
   })
 
   it('invalid values fall back per key while valid values survive', () => {
@@ -25,7 +25,7 @@ describe('appearance preferences', () => {
     const storage = { getItem: vi.fn(() => { throw new Error('denied') }), setItem: vi.fn(() => { throw new Error('denied') }) }
     expect(loadAppearance(storage)).toEqual(DEFAULTS)
     expect(() => saveAppearance(DEFAULTS, storage)).not.toThrow()
-    expect(storage.setItem).toHaveBeenCalledTimes(5)
+    expect(storage.setItem).toHaveBeenCalledTimes(6)
   })
 
   it('discards partial reads when a later storage access throws', () => {
@@ -34,7 +34,7 @@ describe('appearance preferences', () => {
   })
 
   it('round trips every preference', () => {
-    const appearance = { theme: 'pafta', readingFont: 'plex-sans', codeFont: 'geist-mono', textSize: 'small', intro: false } as const
+    const appearance = { theme: 'pafta', readingFont: 'plex-sans', codeFont: 'geist-mono', textSize: 'small', intro: false, copyOnSelect: false } as const
     saveAppearance(appearance, localStorage)
     expect(localStorage.getItem('app-intro')).toBe('off')
     expect(loadAppearance(localStorage)).toEqual(appearance)

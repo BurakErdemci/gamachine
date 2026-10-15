@@ -5,9 +5,9 @@ export type Theme = 'arena' | 'sade' | 'pafta' | 'atolye' | 'ozel'
 export type ReadingFont = 'theme' | 'inter' | 'geist' | 'plex-sans' | 'figtree' | 'atkinson'
 export type CodeFont = 'theme' | 'jetbrains' | 'geist-mono' | 'plex-mono' | 'fira' | 'cascadia'
 export type TextSize = 'small' | 'normal' | 'large'
-export type Appearance = { theme: Theme; readingFont: ReadingFont; codeFont: CodeFont; textSize: TextSize; intro: boolean }
+export type Appearance = { theme: Theme; readingFont: ReadingFont; codeFont: CodeFont; textSize: TextSize; intro: boolean; copyOnSelect: boolean }
 
-export const DEFAULTS: Appearance = { theme: 'arena', readingFont: 'theme', codeFont: 'theme', textSize: 'normal', intro: true }
+export const DEFAULTS: Appearance = { theme: 'arena', readingFont: 'theme', codeFont: 'theme', textSize: 'normal', intro: true, copyOnSelect: true }
 export const FONT_STACKS = {
   inter: '"Inter", system-ui, sans-serif',
   geist: '"Geist", system-ui, sans-serif',
@@ -41,12 +41,14 @@ export function loadAppearance(storage?: Reader): Appearance {
     const codeFont = source.getItem('app-font-code')
     const textSize = source.getItem('app-text-size')
     const intro = source.getItem('app-intro')
+    const copyOnSelect = source.getItem('app-copy-on-select')
     return {
       theme: validValue(theme, THEMES, DEFAULTS.theme),
       readingFont: validValue(readingFont, READING_FONTS, DEFAULTS.readingFont),
       codeFont: validValue(codeFont, CODE_FONTS, DEFAULTS.codeFont),
       textSize: validValue(textSize, TEXT_SIZES, DEFAULTS.textSize),
       intro: intro === 'off' ? false : DEFAULTS.intro,
+      copyOnSelect: copyOnSelect === 'off' ? false : DEFAULTS.copyOnSelect,
     }
   } catch {
     return { ...DEFAULTS }
@@ -57,6 +59,7 @@ export function saveAppearance(a: Appearance, storage?: Writer): void {
   const entries = [
     ['app-theme', a.theme], ['app-font-reading', a.readingFont],
     ['app-font-code', a.codeFont], ['app-text-size', a.textSize], ['app-intro', a.intro ? 'on' : 'off'],
+    ['app-copy-on-select', a.copyOnSelect ? 'on' : 'off'],
   ]
   for (const [key, value] of entries) {
     try { (storage ?? localStorage).setItem(key, value) } catch { /* A denied key must not prevent saving the others. */ }

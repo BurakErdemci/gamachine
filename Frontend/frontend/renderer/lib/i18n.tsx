@@ -307,6 +307,7 @@ export const tr = {
   'settings.appearance.normal': 'Normal',
   'settings.appearance.large': 'Büyük',
   'settings.appearance.intro': 'Açılış animasyonu',
+  'settings.appearance.copyOnSelect': 'Seçince kopyala',
   'settings.autoTitles': 'Otomatik sohbet adı',
   'settings.autoTitlesHint': 'İlk ve üçüncü yanıttan sonra sohbete içeriğinden kısa bir ad verilir. Claude Code, Codex, Antigravity, OpenCode ve API modellerinde çalışır; diğer CLI\'larda ad ilk mesajdan kalır. Elle verdiğin ada dokunulmaz.',
   'settings.autoTitlesFailed': 'Otomatik sohbet adı ayarı kaydedilemedi.',
@@ -1322,6 +1323,8 @@ export const tr = {
   'set.sampleBody': 'Skor tablosu ekle, oyuncu düşmanı yenince skor artsın.',
   'set.textSizeHint': 'Bütün pencereyi büyütür ya da küçültür.',
   'set.group.opening': 'Açılış',
+  'set.group.text': 'Metin',
+  'set.copyOnSelectHint': 'Fareyle seçtiğin metin bırakınca panoya kopyalanır, terminaldeki gibi. Yazdığın alanlardaki seçimler kopyalanmaz.',
   'set.introHint': 'Her açılışta kısa bir açılış sahnesi oynar. Kapalıyken uygulama doğrudan açılır.',
   // Guide (Rehber) and the first-launch tour (round 12b). Topic copy lives in lib/guide/topics,
   // with the feature it explains; only the guide's own frame is here.
@@ -1752,6 +1755,7 @@ export const en: Record<keyof typeof tr, string> = {
   'settings.appearance.normal': 'Normal',
   'settings.appearance.large': 'Large',
   'settings.appearance.intro': 'Opening animation',
+  'settings.appearance.copyOnSelect': 'Copy on select',
   'settings.autoTitles': 'Auto chat titles',
   'settings.autoTitlesHint': 'After the first and third reply the chat gets a short name from its content. Available for Claude Code, Codex, Antigravity, OpenCode and API models; other CLIs keep the first-message title. A name you gave by hand is never changed.',
   'settings.autoTitlesFailed': 'The auto chat titles setting could not be saved.',
@@ -2749,6 +2753,8 @@ export const en: Record<keyof typeof tr, string> = {
   'set.sampleBody': 'Add a scoreboard; the score goes up when the player beats an enemy.',
   'set.textSizeHint': 'Makes the whole window larger or smaller.',
   'set.group.opening': 'Opening',
+  'set.group.text': 'Text',
+  'set.copyOnSelectHint': 'Text you select with the mouse is copied to the clipboard when you release it, like in a terminal. Selections in fields you are typing in are not copied.',
   'set.introHint': 'A short opening scene plays on every launch. When off, the app opens straight away.',
   // Guide and the first-launch tour (round 12b)
   'guide.entry': 'Guide',

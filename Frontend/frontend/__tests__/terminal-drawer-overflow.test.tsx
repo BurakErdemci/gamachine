@@ -19,6 +19,7 @@ vi.mock('@xterm/xterm', () => ({
     constructor(opts: any) { this.options = opts }
     loadAddon() {} open() {} write() {} focus() {} clear() {} dispose() {}
     onData() { return { dispose() {} } }
+    onSelectionChange() { return { dispose() {} } }
   },
 }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))

@@ -524,6 +524,16 @@ export const AppearancePage = ({ saved }: { saved: () => void }) => {
           />
         </SetCard>
       </SetGroup>
+      <SetGroup title={t('set.group.text')}>
+        <SetCard>
+          <SetRow
+            name={t('settings.appearance.copyOnSelect')}
+            hint={t('set.copyOnSelectHint')}
+            control={<SetSwitch checked={appearance.copyOnSelect} label={t('settings.appearance.copyOnSelect')}
+              onToggle={() => { setAppearance({ copyOnSelect: !appearance.copyOnSelect }); saved(); }} />}
+          />
+        </SetCard>
+      </SetGroup>
       <SetGroup title={t('set.group.opening')}>
         <SetCard>
           <SetRow

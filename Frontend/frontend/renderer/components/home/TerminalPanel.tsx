@@ -6,6 +6,7 @@ import axios from 'axios';
 import { useLang, type TKey } from '../../lib/i18n';
 import { useAutoScroll } from '../../hooks/home/useAutoScroll';
 import { isLight, onThemeChange, readColorTokens, readToken } from '../../lib/themeTokens';
+import { useAppearance } from '../../lib/appearance';
 
 interface TerminalPanelProps {
   id: string;
@@ -213,6 +214,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   apiUrl, sessionToken, unityConnected, tabRequest, onTabChange
 }) => {
   const { t: ceviri } = useLang();
+  const { appearance } = useAppearance();
+  const copyOnSelect = useRef(appearance.copyOnSelect);
+  copyOnSelect.current = appearance.copyOnSelect;
   const [tab, setTab] = useState<DrawerTab>('terminal');
   useEffect(() => { if (tabRequest) setTab(tabRequest.tab); }, [tabRequest]);
   // guide audit, 2 Oct 2026: the page snapshots this before a tour step moves the drawer.
@@ -295,6 +299,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       term.loadAddon(fitAddon);
       term.open(terminalRefs.current[sId]!);
 
+      const selectionSubscription = term.onSelectionChange(() => {
+        if (!copyOnSelect.current || !term.hasSelection()) return;
+        const text = term.getSelection();
+        if (!text.trim()) return;
+        try { void Promise.resolve(navigator.clipboard?.writeText(text)).catch(() => {}); } catch {}
+      });
+
       terminalInstancesRef.current[sId] = term;
       fitAddonsRef.current[sId] = fitAddon;
 
@@ -341,6 +352,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         () => {
           observer?.disconnect();
           window.removeEventListener('resize', handleResize);
+          selectionSubscription.dispose();
           term.dispose();
         }
       ];
