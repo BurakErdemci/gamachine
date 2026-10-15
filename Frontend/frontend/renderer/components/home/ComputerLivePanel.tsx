@@ -20,12 +20,13 @@ export interface LiveState {
   conversationId: number | null;
   startedAt: number | null;
   last: LiveAction | null;
+  target: Pick<LiveAction, 'bundle_id' | 'app_name' | 'pid' | 'window_id'> | null;
   appName: string | null;
   /** Main's Stop did not reach the backend (indicator button or shortcut); the run is still live. */
   haltError: boolean;
 }
 
-const EMPTY: LiveState = { active: false, running: false, conversationId: null, startedAt: null, last: null, appName: null, haltError: false };
+const EMPTY: LiveState = { active: false, running: false, conversationId: null, startedAt: null, last: null, target: null, appName: null, haltError: false };
 
 const ipcOf = (): any => (typeof window !== 'undefined' ? (window as any).ipc : null);
 
@@ -43,6 +44,7 @@ function toState(raw: any): LiveState {
     conversationId: Number.isInteger(raw.conversationId) ? raw.conversationId : null,
     startedAt: typeof raw.startedAt === 'number' ? raw.startedAt : null,
     last,
+    target,
     haltError: raw.haltError === true,
     appName: name(target?.app_name) ?? name(last?.app_name) ?? name(target?.bundle_id) ?? name(last?.bundle_id),
   };
@@ -86,7 +88,7 @@ export function useNow(running: boolean): number {
 /**
  * Live state from main: one status read on mount, then the event stream. With `frames`, each
  * new frame is decoded off-screen first and swapped in only once it is ready, so the picture
- * never blanks between frames.
+ * never blanks between frames for the same conversation and target.
  */
 export function useComputerLive({ frames = false }: { frames?: boolean } = {}) {
   const [state, setState] = useState<LiveState>(EMPTY);
@@ -97,6 +99,7 @@ export function useComputerLive({ frames = false }: { frames?: boolean } = {}) {
     const ipc = ipcOf();
     if (!ipc) return;
     let alive = true;
+    let current = EMPTY;
     const present = (src: string) => {
       const n = ++latest.current;
       const img = typeof Image !== 'undefined' ? new Image() : null;
@@ -104,16 +107,25 @@ export function useComputerLive({ frames = false }: { frames?: boolean } = {}) {
       img.src = src;
       img.decode().then(() => { if (alive && n === latest.current) setFrame(src); }, () => {});
     };
-    Promise.resolve(ipc.invoke?.(LIVE_CHANNEL, { op: 'status' }))
-      .then((raw: any) => { if (alive && raw && !raw.error) setState(toState(raw)); })
-      .catch(() => {});
-    const off = ipc.on?.(LIVE_CHANNEL, (raw: any) => {
+    const receive = (raw: any) => {
       if (!alive || !raw || typeof raw !== 'object') return;
       const next = toState(raw);
+      const changed = next.conversationId !== current.conversationId
+        || next.target?.pid !== current.target?.pid
+        || next.target?.window_id !== current.target?.window_id
+        || next.target?.app_name !== current.target?.app_name
+        || next.target?.bundle_id !== current.target?.bundle_id
+        || next.appName !== current.appName;
+      current = next;
       setState(next);
-      if (!next.active) { latest.current++; setFrame(null); }
-      else if (frames && typeof raw.frame === 'string' && raw.frame.startsWith('data:image/')) present(raw.frame);
-    });
+      // Clear the old picture and invalidate its pending decode before accepting a new identity's frame.
+      if (!next.active || changed) { latest.current++; setFrame(null); }
+      if (next.active && frames && typeof raw.frame === 'string' && raw.frame.startsWith('data:image/')) present(raw.frame);
+    };
+    Promise.resolve(ipc.invoke?.(LIVE_CHANNEL, { op: 'status' }))
+      .then((raw: any) => { if (raw && !raw.error) receive(raw); })
+      .catch(() => {});
+    const off = ipc.on?.(LIVE_CHANNEL, receive);
     return () => { alive = false; if (typeof off === 'function') off(); };
   }, [frames]);
 

@@ -101,6 +101,63 @@ describe('ComputerLivePanel', () => {
     expect(screen.queryByRole('img', { name: /TextEdit/ })).toBeNull()
   })
 
+  const identityChanges = [
+    { name: 'conversation', over: { conversationId: 8 } },
+    ...[
+      { name: 'process', target: { pid: 4343 } },
+      { name: 'window', target: { window_id: 66 } },
+      { name: 'app name', target: { app_name: 'Preview' } },
+      { name: 'app bundle', target: { bundle_id: 'com.apple.Preview' } },
+    ].map(({ name, target }) => ({ name, over: { target: { ...active().target, ...target } } })),
+  ]
+
+  it.each(identityChanges)('clears the displayed frame on an active $name switch', async ({ over }) => {
+    render(<ComputerLivePanel visible />)
+    await screen.findByText(tr['cu.live.idle'])
+    push(active({ frame: FRAME }))
+    expect(await screen.findByRole('img')).toHaveProperty('src', FRAME)
+
+    push(active(over))
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(screen.getByText(tr['cu.live.waiting'])).toBeTruthy()
+  })
+
+  it.each(identityChanges)('discards a pending frame decode on an active $name switch', async ({ over }) => {
+    let finishDecode!: () => void
+    vi.stubGlobal('Image', class {
+      src = ''
+      decode() { return new Promise<void>(resolve => { finishDecode = resolve }) }
+    })
+    render(<ComputerLivePanel visible />)
+    await screen.findByText(tr['cu.live.idle'])
+    push(active({ frame: FRAME }))
+    push(active(over))
+
+    await act(async () => { finishDecode() })
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(screen.getByText(tr['cu.live.waiting'])).toBeTruthy()
+  })
+
+  it('keeps the current frame while decoding the next frame for the same live identity', async () => {
+    const decodes: (() => void)[] = []
+    vi.stubGlobal('Image', class {
+      src = ''
+      decode() { return new Promise<void>(resolve => { decodes.push(resolve) }) }
+    })
+    render(<ComputerLivePanel visible />)
+    await screen.findByText(tr['cu.live.idle'])
+    push(active({ frame: FRAME }))
+    await act(async () => { decodes[0]() })
+    expect(screen.getByRole('img')).toHaveProperty('src', FRAME)
+
+    const nextFrame = 'data:image/png;base64,bmV4dA=='
+    push(active({ frame: nextFrame }))
+    push(active())
+    expect(screen.getByRole('img')).toHaveProperty('src', FRAME)
+    await act(async () => { decodes[1]() })
+    expect(screen.getByRole('img')).toHaveProperty('src', nextFrame)
+  })
+
   it('Stop goes through main\'s halt coordinator, never the host directly', async () => {
     render(<ComputerLivePanel visible />)
     await screen.findByText(tr['cu.live.idle'])
