@@ -16,6 +16,7 @@ appId: com.gamachine.app
 # boşluk üründen değil NSIS şablonundan (`${productName} Setup ${version}`)
 # geliyor. Kalıcı çözüm aşağıdaki `nsis.artifactName` (v3.0.3'te eklendi).
 productName: Gamachine
+afterPack: scripts/adhoc-sign-mac.js
 copyright: Copyright © 2026 Burak Emre Erdemci
 directories:
   output: build
@@ -110,8 +111,9 @@ mac:
   # crash, not as "permission denied".
   extendInfo:
     NSMicrophoneUsageDescription: "Gamachine uses the microphone only to dictate text into the chat box. Audio is transcribed on this computer and never uploaded."
-  # identity: null → imzasız build (test dağıtımı için)
-  # Developer ID sertifikan olduğunda bu satırı kaldır
+  # identity: null means no certificate; afterPack ad-hoc signs as com.gamachine.app
+  # so macOS permissions reach the embedded computer-use driver.
+  # Remove both afterPack and identity: null once a Developer ID certificate exists.
   identity: null
   hardenedRuntime: false
   target:
