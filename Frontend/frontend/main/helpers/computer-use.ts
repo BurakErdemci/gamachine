@@ -18,6 +18,8 @@ export interface ComputerUseDeps {
     isTrustedAccessibilityClient(prompt: boolean): boolean
     getMediaAccessStatus(media: 'screen'): string
   }
+  // macOS lists an app under Screen Recording only after it attempts a capture; measured 16 Oct 2026.
+  requestScreenCapture?: () => Promise<unknown>
   shell: { openExternal(url: string): Promise<void> }
   paths: { resourcesPath?: string; repoRoot: string; userData: string; tmpdir: string }
   now?: () => number
@@ -306,6 +308,19 @@ export class ComputerUseHost {
           return { accessibility: this.deps.platform === 'darwin' && this.deps.systemPreferences.isTrustedAccessibilityClient(true) }
         case 'open-screen-settings':
           if (this.deps.platform === 'darwin') {
+            if (this.deps.systemPreferences.getMediaAccessStatus('screen') !== 'granted' && this.deps.requestScreenCapture) {
+              let timer: ReturnType<typeof setTimeout> | undefined
+              try {
+                const timeout = new Promise<never>((_resolve, reject) => {
+                  timer = this.later(() => reject(new Error('Screen capture request timed out')), 3000)
+                })
+                await Promise.race([this.deps.requestScreenCapture(), timeout])
+              } catch (error) {
+                this.logError('[cua] screen capture request failed', error)
+              } finally {
+                if (timer !== undefined) this.clear(timer)
+              }
+            }
             await this.deps.shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
           }
           return { opened: this.deps.platform === 'darwin' }

@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import net from 'net'
 import { randomUUID, createHash } from 'crypto'
-import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen } from 'electron'
+import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer } from 'electron'
 import serve from 'electron-serve'
 import { createWindow, applyNavigationPolicy } from './helpers'
 import { spawn, ChildProcess } from 'child_process'
@@ -826,6 +826,7 @@ const computerUse = new ComputerUseHost({
     isTrustedAccessibilityClient: prompt => systemPreferences.isTrustedAccessibilityClient(prompt),
     getMediaAccessStatus: media => systemPreferences.getMediaAccessStatus(media),
   },
+  requestScreenCapture: () => desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } }),
   shell: { openExternal: url => shell.openExternal(url) },
   log: (...args) => console.log(...args),
 })
