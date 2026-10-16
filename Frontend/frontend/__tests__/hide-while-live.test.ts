@@ -32,6 +32,16 @@ describe('hideOrMinimize', () => {
     expect(hideApp).toHaveBeenCalledOnce()
   })
 
+  it('falls back to hiding when minimizing throws during a live macOS run', () => {
+    const hideApp = vi.fn()
+    const minimizeMain = vi.fn(() => { throw new Error('unavailable') })
+    expect(() => hideOrMinimize({
+      platform: 'darwin', live: () => true, hideApp, minimizeMain,
+    })).not.toThrow()
+    expect(minimizeMain).toHaveBeenCalledOnce()
+    expect(hideApp).toHaveBeenCalledOnce()
+  })
+
   it('hides when the live check throws', () => {
     const hideApp = vi.fn()
     const minimizeMain = vi.fn(() => true)
@@ -72,12 +82,12 @@ function fixture() {
     fs: { readFileSync: vi.fn(() => { throw new Error('ENOENT') }), writeFileSync: vi.fn() },
     focusMain: vi.fn(), now: () => state.now, mainVisible: () => true,
   }
-  return new ComputerLive(deps)
+  return { live: new ComputerLive(deps), deps }
 }
 
 describe('ComputerLive.isLive', () => {
   it('tracks active activity and shutdown', async () => {
-    const live = fixture()
+    const { live } = fixture()
     try {
       expect(live.isLive()).toBe(false)
       await live.tick()
@@ -86,5 +96,21 @@ describe('ComputerLive.isLive', () => {
       live.shutdown()
     }
     expect(live.isLive()).toBe(false)
+  })
+
+  it('becomes idle when the host stops without shutting down', async () => {
+    const { live, deps } = fixture()
+    try {
+      await live.tick()
+      expect(live.isLive()).toBe(true)
+      deps.host.running = false
+      await live.tick()
+      expect(live.isLive()).toBe(false)
+      deps.host.running = true
+      await live.tick()
+      expect(live.isLive()).toBe(true)
+    } finally {
+      live.shutdown()
+    }
   })
 })

@@ -10,6 +10,8 @@ export function hideOrMinimize(deps: {
   if (deps.platform === 'darwin') {
     try { live = deps.live() } catch { /* Treat an unavailable live state as idle. */ }
   }
-  if (live && deps.minimizeMain()) return
+  if (live) {
+    try { if (deps.minimizeMain()) return } catch { /* Fall back to hiding if minimizing fails. */ }
+  }
   deps.hideApp()
 }
