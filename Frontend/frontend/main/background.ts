@@ -44,6 +44,7 @@ import { createNotifier } from './helpers/notify'
 import { createRemoteControl } from './helpers/remote-control'
 import { ComputerUseHost } from './helpers/computer-use'
 import { ComputerLive, LIVE_OPEN_EVENT } from './helpers/computer-use-live'
+import { hideOrMinimize } from './helpers/hide-while-live'
 import { createProfileReset } from './helpers/profile-reset'
 import { collectMtimes } from './helpers/stat-mtimes'
 
@@ -1354,7 +1355,20 @@ if (!gotTheLock) {
             { type: 'separator' },
             { role: 'services' },
             { type: 'separator' },
-            { role: 'hide' },
+            {
+              label: `Hide ${app.name}`,
+              accelerator: 'Command+H',
+              click: () => hideOrMinimize({
+                platform: process.platform,
+                live: () => computerLive.isLive(),
+                hideApp: () => app.hide(),
+                minimizeMain: () => {
+                  if (!mainWindowRef || mainWindowRef.isDestroyed()) return false
+                  mainWindowRef.minimize()
+                  return true
+                },
+              }),
+            },
             { role: 'hideOthers' },
             { role: 'unhide' },
             { type: 'separator' },

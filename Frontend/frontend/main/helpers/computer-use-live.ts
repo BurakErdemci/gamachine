@@ -214,6 +214,10 @@ export class ComputerLive {
     return win != null && win === this.indicator
   }
 
+  isLive(): boolean {
+    return this.live && !this.stopped
+  }
+
   mainVisibilityChanged() {
     if (!this.stopped) this.syncIndicator()
   }
