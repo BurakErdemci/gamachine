@@ -65,6 +65,8 @@ extraResources:
     to: unity-mcp/Server
     filter:
       - "**/*"
+      # A developer's local venv (gitignored) links to their Homebrew Python; never ship it.
+      - "!.venv{,/**}"
   - from: ../../unity-mcp/MCPForUnity
     to: unity-mcp/MCPForUnity
     filter:
