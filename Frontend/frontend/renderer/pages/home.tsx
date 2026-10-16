@@ -64,6 +64,7 @@ import { awaitingElsewhere } from '../lib/convFamily';
 import { useNewChatShortcut } from '../lib/newChatShortcut';
 import { useTurnDone, cardOnScreen } from '../lib/turnDone';
 import { useWorkspacePanel, useNarrowWindow, useOneSideColumnWhenNarrow, tabForPath } from '../lib/workspacePanel';
+import { createLiveRevealTracker } from '../lib/computerLiveReveal';
 import { usePendingChange } from '../lib/pendingChange';
 import { clearSeen, isUnseen, loadSeen, saveSeen, type Seen } from '../lib/changesSeen';
 import { ThreadHeader } from '../components/home/ThreadHeader';
@@ -397,6 +398,13 @@ export default function Home() {
   useEffect(() => {
     if (!ipc) return;
     const off = ipc.on('computer-use-live-open', () => wsReveal('bilgisayar'));
+    return () => { if (typeof off === 'function') off(); };
+  }, [ipc, wsReveal]);
+  // Open the tab once per run without focusing the window so the agent's target app keeps focus.
+  useEffect(() => {
+    if (!ipc) return;
+    const tracker = createLiveRevealTracker(() => wsReveal('bilgisayar'));
+    const off = ipc.on('computer-use-live', tracker);
     return () => { if (typeof off === 'function') off(); };
   }, [ipc, wsReveal]);
   const [projectProblems, setProjectProblems] = useState<Record<string, any[]>>({});
