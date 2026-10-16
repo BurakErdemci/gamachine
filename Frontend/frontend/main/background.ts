@@ -852,6 +852,10 @@ const computerLive = new ComputerLive({
     unregister: accelerator => globalShortcut.unregister(accelerator),
   },
   fs,
+  mainVisible: () => {
+    const w = mainWindowRef
+    return !!w && !w.isDestroyed() && w.isVisible() && !w.isMinimized()
+  },
   focusMain: () => {
     const win = mainWindowRef
     if (!win || win.isDestroyed()) return
@@ -1315,6 +1319,9 @@ if (!gotTheLock) {
         },
       })
       mainWindowRef = mainWindow
+      for (const ev of ['minimize', 'restore', 'hide', 'show'] as const) {
+        mainWindow.on(ev as any, () => computerLive.mainVisibilityChanged())
+      }
       // The indicator alone must not keep the app alive once the main window is gone.
       mainWindow.on('closed', () => { mainWindowRef = null; computerLive.shutdown() })
 

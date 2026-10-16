@@ -44,8 +44,8 @@ html:has(.cul-tag), html:has(.cul-tag) body { background: transparent !important
 :root.cul-window body, html:has(.cul-tag) body { margin: 0; user-select: none; }
 
 .cul-tag {
-  /* The window is 440 x 64; the plate leaves room for its hard shadow. */
-  position: fixed; left: 2px; top: 2px; width: 428px; height: 52px; box-sizing: border-box;
+  /* The plate follows the window so app text-size zoom cannot push it past the window edge. */
+  position: fixed; left: 2px; top: 2px; width: calc(100vw - 12px); height: calc(100vh - 12px); box-sizing: border-box;
   display: flex; align-items: center; gap: 8px; padding: 0 8px 0 0;
   background: var(--toast-bg); color: var(--toast-text);
   border: var(--line-w, 1px) solid var(--toast-line); border-radius: var(--radius-lg);

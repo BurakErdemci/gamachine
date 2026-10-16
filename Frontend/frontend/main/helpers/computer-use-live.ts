@@ -78,6 +78,8 @@ export interface ComputerLiveDeps {
   fs: { readFileSync(file: string, encoding: 'utf8'): string; writeFileSync(file: string, data: string, options?: unknown): void }
   /** Bring the main window forward on the right-panel computer tab. */
   focusMain: () => void
+  /** True while the main window is shown and not minimized. */
+  mainVisible?: () => boolean
   now?: () => number
   setTimeout?: typeof setTimeout
   clearTimeout?: typeof clearTimeout
@@ -197,17 +199,23 @@ export class ComputerLive {
   private readonly later: typeof setTimeout
   private readonly clear: typeof clearTimeout
   private readonly log: (...args: unknown[]) => void
+  private readonly mainVisible: () => boolean
 
   constructor(private readonly deps: ComputerLiveDeps) {
     this.now = deps.now ?? Date.now
     this.later = deps.setTimeout ?? setTimeout
     this.clear = deps.clearTimeout ?? clearTimeout
     this.log = deps.log ?? (() => {})
+    this.mainVisible = deps.mainVisible ?? (() => false)
   }
 
   /** True for the indicator window, so the caller can tell it from the main window. */
   isIndicator(win: unknown): boolean {
     return win != null && win === this.indicator
+  }
+
+  mainVisibilityChanged() {
+    if (!this.stopped) this.syncIndicator()
   }
 
   beginPolling() {
@@ -272,7 +280,7 @@ export class ComputerLive {
     if (!this.live) {
       this.live = true
       this.registerShortcut()
-      this.openIndicator()
+      this.syncIndicator()
     }
     this.updateCapture()
   }
@@ -404,6 +412,15 @@ export class ComputerLive {
   }
 
   // --- indicator --------------------------------------------------------
+
+  private syncIndicator() {
+    let visible = false
+    if (this.live) {
+      try { visible = this.mainVisible() } catch { /* a closing window counts as hidden */ }
+    }
+    if (this.live && !visible) this.openIndicator()
+    else this.closeIndicator()
+  }
 
   private positionFile() { return path.join(this.deps.userData, POSITION_FILE) }
 
