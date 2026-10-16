@@ -24,6 +24,8 @@ def test_opus_5_and_4_8_keep_distinct_api_model_ids(anthropic_client):
     assert AnthropicProvider("test-key", "claude-sonnet-5-5").model_name == "claude-sonnet-5-5"
     assert AnthropicProvider("test-key", "claude-sonnet-5").model_name == "claude-sonnet-5"
     assert AnthropicProvider("test-key", "claude-opus-4-8").model_name == "claude-opus-4-8"
+    assert AnthropicProvider("test-key", "claude-haiku-5-5").model_name == "claude-haiku-5-5"
+    assert AnthropicProvider("test-key", "claude-haiku-4-5").model_name == "claude-haiku-4-5"
 
 
 # Owner decision 25 Sep 2026: on the API path every Opus generation is a
