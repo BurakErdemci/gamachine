@@ -244,17 +244,32 @@ def create_server(driver=None):
         "Read a window with computer_window_state before acting. Prefer element_token over x,y. "
         "Batch known steps with computer_run_steps. Call computer_confirm_risky_step before "
         "deleting, purchasing, sending/publishing, overwriting or downloading with the user's account. "
-        "Terminals, System Settings and Gamachine are off limits. Each tool accepts an args object."
+        "Terminals, System Settings and Gamachine are off limits. "
+        "Every tool takes exactly one parameter named args; put all arguments inside it, "
+        'e.g. {"args": {"pid": 123, "window_id": 45}}.'
     ))
 
     def register(name):
         async def invoke(args: dict) -> CallToolResult:
             return await handler.call(name, args)
         spec = policy.TOOLS[name]
-        mcp.tool(name=name, description=(
+        description = (
             "Computer-use operation. Allowed args: " + ", ".join(sorted(spec.allowed))
             + ". Required: " + ", ".join(sorted(spec.required)) + "."
-        ))(invoke)
+        )
+        if name == "computer_run_steps":
+            description += (
+                '\n\nEach step is {"tool": NAME, "args": {...}} or the shorthand {NAME: {...}}, '
+                "where NAME is one of: " + ", ".join(sorted(policy.STEP_TOOLS))
+                + " (no computer_ prefix). A step may add wait_for, expect (a check object "
+                "or a list of up to 4: " + ", ".join(sorted(policy._CHECK_KEYS - {"pid", "window_id"}))
+                + ") and timeout_ms. Step args use the same names as the matching tool "
+                "and inherit pid/window_id from the batch. 1-64 steps; delay_ms 0-2000 between steps. "
+                'Example: {"args": {"pid": 123, "window_id": 45, "steps": '
+                '[{"tool": "type_text", "args": {"text": "hello "}}, '
+                '{"tool": "press_key", "args": {"key": "return"}}]}}'
+            )
+        mcp.tool(name=name, description=description)(invoke)
 
     for name in policy.TOOLS:
         register(name)

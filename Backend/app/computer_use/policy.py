@@ -123,6 +123,15 @@ def _checks(value, batch, key):
             return refusal
 
 
+def _step_keys(step, allowed):
+    for key in step:
+        if key not in allowed:
+            return Refusal(
+                f'Forbidden step key: {key}. A step is {{"tool": "type_text", "args": {{...}}}} '
+                'or {"type_text": {...}}; tools: ' + ", ".join(sorted(STEP_TOOLS)))
+    return _keys(step, allowed, ())
+
+
 def _steps(args):
     if "delay_ms" in args and (type(args["delay_ms"]) is not int or not 0 <= args["delay_ms"] <= 2000):
         return Refusal("delay_ms must be an integer from 0 to 2000")
@@ -136,7 +145,13 @@ def _steps(args):
         if "tool" in step:
             tool = step["tool"]
             if not isinstance(tool, str) or tool not in STEP_TOOLS:
-                return Refusal("Unsupported step tool")
+                value = tool if isinstance(tool, str) else repr(tool)[:40]
+                reason = (
+                    f"Unsupported step tool: {value}. Use one of: "
+                    + ", ".join(sorted(STEP_TOOLS)) + " (no computer_ prefix)")
+                if isinstance(tool, str) and tool.startswith("computer_") and tool[len("computer_"):] in STEP_TOOLS:
+                    reason += f'. Did you mean "{tool[len("computer_"):]}"?'
+                return Refusal(reason)
             if shorthand:
                 return Refusal("Step must contain exactly one tool")
             step_args = step.get("args", {})
@@ -148,15 +163,16 @@ def _steps(args):
         else:
             tool = None
             step_args = {}
-            refusal = _keys(step, {"wait_for", "expect", "timeout_ms"}, ())
+            refusal = _step_keys(step, {"wait_for", "expect", "timeout_ms"})
             if refusal:
                 return refusal
             if not ("wait_for" in step or "expect" in step):
-                return Refusal("Step requires a tool, wait_for or expect")
+                return Refusal(
+                    'Step requires a tool, wait_for or expect. A step is {"tool": "type_text", "args": {...}}')
         allowed = {"wait_for", "expect", "timeout_ms"}
         if tool:
             allowed.update({"tool", "args"} if "tool" in step else {tool})
-        refusal = _keys(step, allowed, ())
+        refusal = _step_keys(step, allowed)
         if refusal:
             return refusal
         if not isinstance(step_args, dict):
