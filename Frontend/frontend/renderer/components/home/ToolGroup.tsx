@@ -2,6 +2,7 @@ import React from 'react';
 import { ToolBlock, toolKind, toolTarget, type ToolKind } from './ToolBlock';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
+import { userStopped } from '../../lib/computerStep';
 
 interface ToolItem { tool: string; args?: any; summary?: string; success?: boolean; output?: string; id?: string; }
 
@@ -34,7 +35,9 @@ export function summarizeTools(tools: ToolItem[]): ToolSummaryPart[] {
   if (by.computer.length) parts.push({ key: 'tool.sum.computer', values: { sayi: by.computer.length } });
   const rest = by.planned.length + by.web.length + by.other.length;
   if (rest) parts.push({ key: 'tool.sum.other', values: { sayi: rest } });
-  const failed = tools.filter(tc => tc.success === false).length;
+  const stopped = tools.filter(tc => tc.success === false && userStopped(tc.tool, tc.output)).length;
+  if (stopped) parts.push({ key: 'tool.sum.stopped', values: { sayi: stopped } });
+  const failed = tools.filter(tc => tc.success === false && !userStopped(tc.tool, tc.output)).length;
   if (failed) parts.push({ key: 'tool.sum.failed', values: { sayi: failed } });
   return parts;
 }

@@ -705,6 +705,7 @@
 .tool-verb { flex: none; }
 .tool-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; border-radius: var(--radius-sm); background: var(--paper-sunk); color: var(--ink); }
 .tool-fail { flex: none; color: var(--accent-text); font-weight: 600; }
+.tool-stopped { flex: none; color: var(--ink-dim, inherit); font-weight: 600; }
 .tool-out { margin: 6px 0 4px; max-height: 300px; overflow: auto; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--code-bg); color: var(--code-text); }
 .tool-out-k { margin: 4px 0 2px; font-size: var(--fs-meta); color: var(--code-dim); }
 .tool-out pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-meta); line-height: 1.55; }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
+import { userStopped } from '../../lib/computerStep';
 
 interface ToolBlockProps {
   tool: string;
@@ -44,17 +45,20 @@ export const ToolBlock = ({ tool, args, summary, success, output }: ToolBlockPro
   const { t } = useLang();
   const kind = toolKind(tool);
   const isSuccess = success ?? true;
+  const stopped = success === false && userStopped(tool, output);
   const unityName = tool.replace('mcp__unityMCP__', '').replace('mcp__', '');
   const target = toolTarget({ args, summary }) || summary || (kind === 'unity' ? unityName : tool);
   const hasArgs = args != null && (typeof args !== 'object' || Object.keys(args).length > 0);
   const hasOutput = !!(output && output.trim());
 
   return (
-    <li className="tool-step" data-failed={!isSuccess || undefined}>
+    <li className="tool-step" data-failed={(!isSuccess && !stopped) || undefined} data-stopped={stopped || undefined}>
       <button type="button" className="tool-step-btn" aria-expanded={open} onClick={() => setOpen(v => !v)}>
         <span className="tool-verb">{t(`tool.verb.${kind}` as any)}</span>
         <code className="tool-target">{stripBidi(String(target))}</code>
-        {!isSuccess && <span className="tool-fail">{t('tool.verb.failed')}</span>}
+        {stopped
+          ? <span className="tool-stopped">{t('tool.verb.stopped')}</span>
+          : !isSuccess && <span className="tool-fail">{t('tool.verb.failed')}</span>}
       </button>
       {open && (
         <div className="tool-out custom-scrollbar">

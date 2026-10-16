@@ -219,7 +219,8 @@ class ComputerServer:
                 "unverified": (
                     f"Durdurma durumu doğrulanamadı; {executed}/{total} adım çalıştı, kalanlar çalıştırılmadı."),
             }
-            report.update(halted=True, stop_reason=stop_reason, halt_reason=reasons[stop_reason])
+            report = {"halted": True, "stop_reason": stop_reason,
+                      "halt_reason": reasons[stop_reason], **report}
         return CallToolResult(content=[TextContent(type="text", text=json.dumps(report, ensure_ascii=False))]
                               + non_text, is_error=not report["ok"])
 
