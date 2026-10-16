@@ -110,7 +110,8 @@ describe('adhoc-sign-mac (offline, no real subprocesses)', () => {
 
   it('rejects an empty helper identifier before signing the helper or main app', () => {
     const f = fixture()
-    f.deps.execFileSync.mockImplementation(() => ' \n\t')
+    // The fixture types the mock to its two real identifiers; a blank one is the case under test.
+    f.deps.execFileSync.mockImplementation(() => ' \n\t' as never)
     expect(() => adhocSignMac(f.context, f.deps)).toThrow('Alpha Helper.app')
     expect(f.deps.execFileSync.mock.calls).toEqual(f.expectedCalls.slice(0, 3))
   })
