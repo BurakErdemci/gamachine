@@ -21,24 +21,26 @@ def _text(value, error=False):
     return CallToolResult(content=[TextContent(type="text", text=value)], is_error=error)
 
 
-async def _turn_halted() -> bool:
+async def _batch_stop(params) -> str | None:
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            response = await client.get(
-                f"{approval_bridge.BACKEND_URL}/computer-use/settings",
-                headers=approval_bridge._get_headers())
-        if not 200 <= response.status_code < 300:
-            return True
-        settings = response.json()
-        if (not isinstance(settings, dict) or settings.get("enabled") is not True
-                or not isinstance(settings.get("halted"), list)):
-            return True
-        halted = settings["halted"]
+        body = {"params": {key: params.get(key) for key in ("bundle_id", "app_name", "pid", "window_id")}}
         conversation_id = approval_bridge._conversation_id_from_env()
-        return (conversation_id in halted if isinstance(conversation_id, int)
-                else conversation_id is None and bool(halted))
+        if type(conversation_id) is int:
+            body["conversation_id"] = conversation_id
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.post(
+                f"{approval_bridge.BACKEND_URL}/computer-use/batch-step",
+                headers=approval_bridge._get_headers(), json=body)
+        if not 200 <= response.status_code < 300:
+            return "unverified"
+        result = response.json()
+        if isinstance(result, dict) and "stop" in result:
+            stop = result["stop"]
+            if stop is None or stop in ("halted", "disabled"):
+                return stop
+        return "unverified"
     except Exception:
-        return True
+        return "unverified"
 
 
 def _foreground(args):
@@ -155,14 +157,14 @@ class ComputerServer:
             if driver is None:
                 driver = await self._runtime_driver()
             if tool == "computer_run_steps" and len(args["steps"]) >= 2:
-                return await self._run_steps_split(driver, forward_args)
+                return await self._run_steps_split(driver, forward_args, params)
             return await driver.call(validated.driver_tool, forward_args)
         except DriverUnavailable:
             return _text("Bilgisayar kullanımı sürücüsü kullanılamıyor.", True)
         except DriverError:
             return _text("Bilgisayar kullanımı sürücüsüyle bağlantı kesildi; işlem yinelenmedi.", True)
 
-    async def _run_steps_split(self, driver, forward_args):
+    async def _run_steps_split(self, driver, forward_args, params):
         steps = forward_args["steps"]
         total = len(steps)
         base = {key: forward_args[key] for key in (
@@ -170,16 +172,16 @@ class ComputerServer:
         delay_ms = forward_args.get("delay_ms")
         entries = []
         failed_step = None
-        halted = False
+        stop_reason = None
         observation = {}
         non_text = []
         for i, step in enumerate(steps):
             if i > 0:
                 if isinstance(delay_ms, int) and delay_ms > 0:
                     await asyncio.sleep(delay_ms / 1000)
-                if await _turn_halted():
-                    halted = True
-                    break
+            stop_reason = await _batch_stop(params)
+            if stop_reason is not None:
+                break
             call_args = {**base, "steps": [step]}
             if "observe" in forward_args and i == total - 1:
                 call_args["observe"] = forward_args["observe"]
@@ -205,12 +207,19 @@ class ComputerServer:
                 break
         executed = len(entries)
         report = {"executed": executed, "failed_step": failed_step,
-                  "ok": executed == total and failed_step is None and not halted,
+                  "ok": executed == total and failed_step is None and stop_reason is None,
                   "steps": entries, "total": total, **observation}
-        if halted:
-            report.update(halted=True, halt_reason=(
-                f"Kullanıcı bilgisayar kullanımını bu tur için durdurdu; {executed}/{total} adım çalıştı, "
-                "kalanlar çalıştırılmadı. Bu turda bilgisayar araçlarını yeniden deneme."))
+        if stop_reason is not None:
+            reasons = {
+                "halted": (
+                    f"Kullanıcı bilgisayar kullanımını bu tur için durdurdu; {executed}/{total} adım çalıştı, "
+                    "kalanlar çalıştırılmadı. Bu turda bilgisayar araçlarını yeniden deneme."),
+                "disabled": (
+                    f"Bilgisayar kullanımı kapatıldı; {executed}/{total} adım çalıştı, kalanlar çalıştırılmadı."),
+                "unverified": (
+                    f"Durdurma durumu doğrulanamadı; {executed}/{total} adım çalıştı, kalanlar çalıştırılmadı."),
+            }
+            report.update(halted=True, stop_reason=stop_reason, halt_reason=reasons[stop_reason])
         return CallToolResult(content=[TextContent(type="text", text=json.dumps(report, ensure_ascii=False))]
                               + non_text, is_error=not report["ok"])
 

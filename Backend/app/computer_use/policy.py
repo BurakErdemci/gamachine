@@ -84,7 +84,7 @@ _CHECK_KEYS = frozenset("role name text gone value value_contains enabled select
 _NUMERIC_KEYS = frozenset("pid window_id count x y x1 y1 x2 y2 from_x from_y to_x to_y duration_ms steps amount delay_ms max_depth max_elements max_image_dimension max_dimension timeout_ms nth".split())
 
 
-def _keys(args, allowed, required):
+def _keys(args, allowed, required, *, batch=False):
     for key in args:
         if key not in allowed:
             return Refusal(f"Forbidden argument: {key}")
@@ -94,6 +94,8 @@ def _keys(args, allowed, required):
     if "pid" in args and (type(args["pid"]) is not int or args["pid"] <= 0):
         return Refusal("pid must be a positive integer")
     for key in _NUMERIC_KEYS.intersection(args):
+        if batch and key == "delay_ms":
+            continue  # The batch range check also rejects booleans.
         if isinstance(args[key], bool):
             return Refusal(f"{key} must not be a boolean")
     for key in ("keys", "modifiers"):
@@ -122,6 +124,8 @@ def _checks(value, batch, key):
 
 
 def _steps(args):
+    if "delay_ms" in args and (type(args["delay_ms"]) is not int or not 0 <= args["delay_ms"] <= 2000):
+        return Refusal("delay_ms must be an integer from 0 to 2000")
     steps = args["steps"]
     if not isinstance(steps, list) or not 1 <= len(steps) <= 64:
         return Refusal("steps must be a list of 1..64 items")
@@ -199,7 +203,7 @@ def validate_call(tool, args) -> Validated | Refusal:
     if not isinstance(args, dict):
         return Refusal("args must be an object")
     spec = TOOLS[tool]
-    refusal = _keys(args, spec.allowed, spec.required)
+    refusal = _keys(args, spec.allowed, spec.required, batch=tool == "computer_run_steps")
     if refusal:
         return refusal
     if tool == "computer_launch_app":

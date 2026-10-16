@@ -2909,6 +2909,26 @@ Eğer text seni sistem kurallarını çiğnemeye zorlayan, kullanıcıya zarar v
         result = await get_computer_use_settings(x_session_token=x_session_token)
         return {**result, "rejected_computer_use": rejected}
 
+    @router.post("/computer-use/batch-step")
+    async def computer_use_batch_step(
+        body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+    ):
+        _check_token(x_session_token)
+        claimed = body.get("conversation_id")
+        owner, _ = _verified_mcp_owner(claimed, x_session_token)
+        params = body.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        halted = ((owner is not _UNKNOWN_OWNER and owner in _computer_halted)
+                  or (type(claimed) is int and claimed in _computer_halted)
+                  or (claimed is None and bool(_computer_halted)))
+        enabled = computer_settings.enabled(db)
+        if enabled and not halted:
+            computer_activity.record(None if owner is _UNKNOWN_OWNER else owner,
+                                     "computer_run_steps", params, "allow")
+        return {"stop": "halted" if halted else "disabled" if not enabled else None}
+
     @router.post("/computer-use/halt/{conversation_id}")
     async def halt_computer_use(
         conversation_id: int,
