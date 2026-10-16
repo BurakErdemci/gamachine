@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
-import { describeComputerArgs, describeComputerOutput, userStopped } from '../../lib/computerStep';
+import { describeComputerArgs, describeComputerOutput, unwrapComputerArgs, userStopped } from '../../lib/computerStep';
 
 interface ToolBlockProps {
   tool: string;
@@ -47,7 +47,12 @@ export const ToolBlock = ({ tool, args, summary, success, output }: ToolBlockPro
   const isSuccess = success ?? true;
   const stopped = success === false && userStopped(tool, output);
   const unityName = tool.replace('mcp__unityMCP__', '').replace('mcp__', '');
-  const target = toolTarget({ args, summary }) || summary || (kind === 'unity' ? unityName : tool);
+  const unwrappedArgs = kind === 'computer' ? unwrapComputerArgs(args) : null;
+  const computerName = tool.replace(/^mcp__gamachineComputer__/, '').replace(/^computer_/, '');
+  const steps = unwrappedArgs && typeof unwrappedArgs === 'object' && 'steps' in unwrappedArgs ? unwrappedArgs.steps : null;
+  const target = kind === 'computer'
+    ? computerName + (computerName === 'run_steps' && Array.isArray(steps) ? ' · ' + t('tool.cu.stepsCount', { n: steps.length }) : '')
+    : toolTarget({ args, summary }) || summary || (kind === 'unity' ? unityName : tool);
   const hasArgs = args != null && (typeof args !== 'object' || Object.keys(args).length > 0);
   const hasOutput = !!(output && output.trim());
   const computerArgs = kind === 'computer' && hasArgs ? describeComputerArgs(tool, args) : null;
@@ -56,13 +61,13 @@ export const ToolBlock = ({ tool, args, summary, success, output }: ToolBlockPro
     {hasArgs && (
       <div>
         <p className="tool-out-k">{t('tool.params')}</p>
-        <pre>{JSON.stringify(args, null, 2)}</pre>
+        <pre>{stripBidi(JSON.stringify(args, null, 2) ?? '')}</pre>
       </div>
     )}
     {hasOutput && (
       <div>
         <p className="tool-out-k">{t('tool.output')}</p>
-        <pre>{output}</pre>
+        <pre>{stripBidi(output ?? '')}</pre>
       </div>
     )}
   </>;
@@ -108,6 +113,12 @@ export const ToolBlock = ({ tool, args, summary, success, output }: ToolBlockPro
                       ))}
                     </ol>
                   )}
+                </div>
+              )}
+              {!computerOutput && hasOutput && (
+                <div>
+                  <p className="tool-out-k">{t('tool.output')}</p>
+                  <pre>{stripBidi(output ?? '')}</pre>
                 </div>
               )}
               <details className="tool-raw">

@@ -27,14 +27,16 @@ describe('userStopped', () => {
     ['computer_run_steps', '{"halted":true}'],
     ['computer_run_steps', undefined],
     ['computer_run_steps', ''],
-    ['computer_run_steps', ' '.repeat(400) + '{"stop_reason":"halted"}'],
-    ['computer_run_steps', ' '.repeat(390) + '{"stop_reason":"halted"}'],
     ['Bash', halted],
     ['mcp__unityMCP__computer_run_steps', halted],
     ['other_computer_run_steps', halted],
     ['other_mcp__gamachineComputer__run_steps', halted],
   ])('rejects output without an early computer halt marker (%s, %s)', (tool, output) => {
     expect(userStopped(tool, output)).toBe(false)
+  })
+
+  it.each([390, 400])('recognizes parsed top-level stop reasons after %s spaces', length => {
+    expect(userStopped('computer_run_steps', ' '.repeat(length) + '{"stop_reason":"halted"}')).toBe(true)
   })
 })
 

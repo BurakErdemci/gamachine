@@ -1,6 +1,11 @@
 export function userStopped(tool: string, output?: string): boolean {
-  return (tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_'))
-    && /"stop_reason"\s*:\s*"halted"/.test(output?.slice(0, 400) ?? '');
+  if (!(tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_')) || !output) return false;
+  try {
+    const report: unknown = JSON.parse(output);
+    return plainObject(report) && report.stop_reason === 'halted';
+  } catch {
+    return /^\s*\{\s*"halted"\s*:\s*true\s*,\s*"stop_reason"\s*:\s*"halted"/.test(output);
+  }
 }
 
 function plainObject(value: unknown): value is Record<string, unknown> {
@@ -13,45 +18,67 @@ function truncate(text: string, limit: number): string {
   return text.length > limit ? text.slice(0, limit - 1) + '…' : text;
 }
 
+export function unwrapComputerArgs(args: unknown): unknown {
+  if (!plainObject(args)) return args;
+  const keys = Reflect.ownKeys(args);
+  return keys.length === 1 && keys[0] === 'args' && plainObject(args.args) ? args.args : args;
+}
+
+function formatValue(value: unknown): string {
+  try {
+    const text = value === null || typeof value === 'number' || typeof value === 'boolean'
+      ? String(value) : JSON.stringify(value);
+    return truncate(text ?? '?', 80);
+  } catch {
+    return '?';
+  }
+}
+
+// Key names, roles and tokens read better bare; free text (typed text, names) stays quoted.
+function bare(value: unknown): string {
+  return typeof value === 'string' ? truncate(value, 80) : formatValue(value);
+}
+
 function describeStep(step: unknown): string {
-  if (!plainObject(step)) return String(step);
+  if (!plainObject(step)) return formatValue(step);
   const shorthand = Object.keys(step).find(key => !['wait_for', 'expect', 'timeout_ms'].includes(key));
   const tool = typeof step.tool === 'string' ? step.tool : shorthand;
   if (!tool) {
     return ['wait_for', 'expect']
       .filter(key => step[key] !== undefined)
-      .map(key => `${key} ${truncate(JSON.stringify(step[key]), 80)}`).join(' ');
+      .map(key => `${key} ${formatValue(step[key])}`).join(' ');
   }
   const args = (typeof step.tool === 'string' ? step.args : step[tool]);
   if (!plainObject(args)) return tool;
   const parts = [tool];
   const text = args.text ?? args.value;
-  if (text !== undefined) parts.push(truncate(JSON.stringify(text), 60));
+  if (text !== undefined) parts.push(formatValue(text));
   if (args.key !== undefined) {
-    parts.push([...(Array.isArray(args.modifiers) ? args.modifiers : []), args.key].join('+'));
+    parts.push([...(Array.isArray(args.modifiers) ? args.modifiers : []), args.key].map(bare).join('+'));
   } else if (Array.isArray(args.keys)) {
-    parts.push(args.keys.join('+'));
+    parts.push(args.keys.map(bare).join('+'));
   }
   if (args.role != null || args.name != null) {
-    const target = [args.role == null ? '' : String(args.role)];
-    if (args.name != null) target.push(JSON.stringify(args.name));
-    if (args.nth != null) target.push(`#${args.nth}`);
+    const target = [args.role == null ? '' : bare(args.role)];
+    if (args.name != null) target.push(formatValue(args.name));
+    if (args.nth != null) target.push(`#${bare(args.nth)}`);
     parts.push(`→ ${target.filter(Boolean).join(' ')}`);
   } else if (typeof args.element_token === 'string') {
-    parts.push(`→ token ${args.element_token.slice(0, 8)}`);
+    parts.push(`→ token ${bare(args.element_token.slice(0, 8))}`);
   } else if (args.x != null && args.y != null) {
-    parts.push(`→ (${args.x}, ${args.y})`);
+    parts.push(`→ (${formatValue(args.x)}, ${formatValue(args.y)})`);
   }
   return parts.join(' ');
 }
 
 export function describeComputerArgs(tool: string, args: unknown): { meta: string[]; steps: string[] } | null {
+  args = unwrapComputerArgs(args);
   if (!(tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_')) || !plainObject(args)) {
     return null;
   }
   return {
     meta: Object.entries(args).filter(([key]) => key !== 'steps' && key !== 'observe')
-      .map(([key, value]) => `${key}: ${typeof value === 'string' ? JSON.stringify(value) : String(value)}`),
+      .map(([key, value]) => `${key}: ${formatValue(value)}`),
     steps: tool.endsWith('run_steps') && Array.isArray(args.steps) ? args.steps.map(describeStep) : [],
   };
 }
@@ -75,7 +102,13 @@ export function describeComputerOutput(output?: string): ComputerOutput | null {
     const header: Record<string, unknown> = {};
     for (const key of ['executed', 'total', 'failed_step', 'stop_reason', 'halt_reason']) {
       const match = new RegExp(`"${key}"\\s*:\\s*("(?:\\\\.|[^"\\\\])*"|null|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`).exec(output);
-      if (match) header[key] = JSON.parse(match[1]);
+      if (!match) continue;
+      if (/^-?\d/.test(match[1]) && !/^\s*[,}]/.test(output.slice(match.index + match[0].length))) continue;
+      try {
+        header[key] = JSON.parse(match[1]);
+      } catch {
+        // Malformed captures are missing fields, not rendering errors.
+      }
     }
     report = header;
   }

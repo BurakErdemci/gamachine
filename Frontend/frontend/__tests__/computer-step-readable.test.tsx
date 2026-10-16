@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { describeComputerArgs, describeComputerOutput } from '../renderer/lib/computerStep'
 import { ToolBlock } from '../renderer/components/home/ToolBlock'
 import { aktifDilAyarla } from '../renderer/lib/i18n'
+import { stripBidi } from '../renderer/lib/modelText'
 
 afterEach(() => { cleanup(); aktifDilAyarla(null) })
 
@@ -46,7 +47,7 @@ describe('describeComputerArgs', () => {
       { type_text: { text: 'a'.repeat(100) } },
       { expect: { name: 'b'.repeat(100) } },
     ] })!
-    expect(result.steps[0]).toBe('type_text ' + ('"' + 'a'.repeat(58) + '…'))
+    expect(result.steps[0]).toBe('type_text ' + ('"' + 'a'.repeat(78) + '…'))
     expect(result.steps[1]).toBe('expect ' + JSON.stringify({ name: 'b'.repeat(100) }).slice(0, 79) + '…')
   })
 
@@ -132,8 +133,8 @@ describe('ToolBlock readable computer steps', () => {
     const raw = screen.getByText('Ham veri').closest('details')!
     expect(raw.open).toBe(false)
     expect(raw.querySelectorAll('pre')).toHaveLength(2)
-    expect(raw.querySelectorAll('pre')[0].textContent).toBe(JSON.stringify(args, null, 2))
-    expect(raw.querySelectorAll('pre')[1].textContent).toBe(output)
+    expect(raw.querySelectorAll('pre')[0].textContent).toBe(stripBidi(JSON.stringify(args, null, 2)))
+    expect(raw.querySelectorAll('pre')[1].textContent).toBe(stripBidi(output))
     fireEvent.click(screen.getByText('Ham veri'))
     expect(raw.open).toBe(true)
   })
@@ -146,13 +147,16 @@ describe('ToolBlock readable computer steps', () => {
     expect(screen.getByText('Raw data')).toBeTruthy()
   })
 
-  it('strips bidi controls from meta and keeps unparseable output under raw data', () => {
+  it('strips bidi controls from meta and shows unparseable output above raw data', () => {
     aktifDilAyarla('tr')
     const { container } = render(<ToolBlock tool="computer_click" args={{ name: 'Sa\u202eve' }} output="unreadable" />)
     fireEvent.click(screen.getByRole('button'))
     expect(screen.getByText('name: "Save"')).toBeTruthy()
     expect(container.querySelector('.tool-cu-result')).toBeNull()
-    expect(screen.getByText('unreadable').closest('details')).toBeTruthy()
+    const outputs = screen.getAllByText('unreadable')
+    expect(outputs).toHaveLength(2)
+    expect(outputs[0].closest('details')).toBeNull()
+    expect(outputs[1].closest('details')).toBeTruthy()
   })
 
   it('leaves non-computer raw parameter and output blocks unchanged', () => {

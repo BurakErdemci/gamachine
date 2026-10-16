@@ -51,7 +51,7 @@ export const ToolGroup = ({ tools, onOpenFile }: { tools?: ToolItem[]; onOpenFil
   const { t } = useLang();
   if (!tools || tools.length === 0) return null;
   const parts = summarizeTools(tools);
-  const failed = tools.some(tc => tc.success === false);
+  const failed = tools.some(tc => tc.success === false && !userStopped(tc.tool, tc.output));
   const fileTargets = tools
     .filter(tc => ['wrote', 'edited', 'read'].includes(toolKind(tc.tool)))
     .map(toolTarget)
