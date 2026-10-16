@@ -86,7 +86,8 @@ def get_effort_caps(provider_type: str, model_name: str) -> dict:
         if m.startswith("agy-claude-"):
             return _caps(["auto", "low", "medium", "high"])
         if m.startswith("claude-"):
-            if "haiku" in m:
+            # Haiku 4.5 and older reject effort; Haiku 5.5 takes low..max.
+            if "haiku" in m and (claude_version(m) or (0, 0)) < (5, 0):
                 return _caps(["auto"], "Haiku effort desteklemez — model varsayılanıyla çalışır.")
             if "4-6" in m or "4.6" in m:
                 return _caps(["auto", "low", "medium", "high", "max"], "Bu modelde xhigh yok.")

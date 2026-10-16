@@ -21,6 +21,9 @@ def test_claude_model_gating():
     assert "xhigh" in get_effort_caps("subscription", "claude-fable-5")["levels"]
     assert "xhigh" not in get_effort_caps("subscription", "claude-sonnet-4-6")["levels"]
     assert get_effort_caps("subscription", "claude-haiku-4-5")["levels"] == ["auto"]
+    assert get_effort_caps("subscription", "claude-haiku-5-5")["levels"] == [
+        "auto", "low", "medium", "high", "xhigh", "max"]
+    assert map_effort("subscription", "claude-haiku-5-5", "max") == {"sdk_effort": "max"}
     assert map_effort("subscription", "claude-opus-5", "max") == {"sdk_effort": "max"}
     assert map_effort("subscription", "claude-opus-4-8", "max") == {"sdk_effort": "max"}
     # Desteklenmeyen seviye → sessizce auto (haiku'ya max istenirse hiçbir şey gitmez)

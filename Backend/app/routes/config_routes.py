@@ -528,6 +528,7 @@ def create_config_router(db):
                 {"id": "claude-fable-5",       "name": "Claude Fable 5 (CLI)",          "provider": "subscription"},
                 {"id": "claude-opus-5-5",      "name": "Claude Opus 5.5 (CLI)",         "provider": "subscription"},
                 {"id": "claude-opus-5",        "name": "Claude Opus 5 (CLI)",           "provider": "subscription"},
+                {"id": "claude-haiku-5-5",     "name": "Claude Haiku 5.5 (CLI)",        "provider": "subscription"},
                 {"id": "claude-opus-4-8",      "name": "Claude 4.8 Opus (CLI)",         "provider": "subscription"},
                 {"id": "claude-sonnet-4-6",    "name": "Claude 4.6 Sonnet (CLI)",       "provider": "subscription"},
                 {"id": "claude-haiku-4-5",     "name": "Claude 4.5 Haiku (CLI)",        "provider": "subscription"},
