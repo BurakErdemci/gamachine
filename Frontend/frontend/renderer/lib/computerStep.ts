@@ -98,6 +98,7 @@ export function describeComputerOutput(output?: string): ComputerOutput | null {
   try {
     report = JSON.parse(output);
   } catch {
+    if (!/^\s*\{\s*"(?:executed|halted)"/.test(output)) return null;
     // Batch headers precede the step list, so they survive output truncation.
     const header: Record<string, unknown> = {};
     for (const key of ['executed', 'total', 'failed_step', 'stop_reason', 'halt_reason']) {

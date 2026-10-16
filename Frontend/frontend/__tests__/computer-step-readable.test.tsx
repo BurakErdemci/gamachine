@@ -98,7 +98,7 @@ describe('describeComputerOutput', () => {
 
   it('recovers header fields from truncated JSON without guessing partial steps', () => {
     expect(describeComputerOutput(
-      '{"stop_reason":"halted","halt_reason":"User said \\"stop\\"","executed":9,"total":40,"failed_step":8,"steps":[{"index":0',
+      '{"halted":true,"stop_reason":"halted","halt_reason":"User said \\"stop\\"","executed":9,"total":40,"failed_step":8,"steps":[{"index":0',
     )).toEqual({
       executed: 9, total: 40, stopped: true, reason: 'User said "stop"', failedStep: 8, steps: [],
     })
