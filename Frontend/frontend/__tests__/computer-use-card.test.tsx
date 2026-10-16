@@ -168,7 +168,7 @@ describe('computer card · first use', () => {
 describe('computer card · risky step', () => {
   it.each([
     ['computer_confirm_risky_step', { ...PARAMS, risky: true, risk_reason: 'Send the email to 40 people' }],
-    ['computer_hotkey', { ...PARAMS, risky: true, risk_reason: 'Risky keyboard shortcut: cmd+q' }],
+    ['computer_hotkey', { ...PARAMS, risky: true, risk_reason: 'Riskli klavye kısayolu: cmd+q' }],
   ])('%s offers Approve / Deny only, with the reason up front', async (tool, params) => {
     render(<McpApprovalCards {...cardProps(gateFor(tool, params))} />)
     expect(screen.getByTestId('cu-card-risk').textContent).toContain(params.risk_reason)

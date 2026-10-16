@@ -260,4 +260,4 @@ def risky_reason(tool, args) -> str:
     if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
         return ""
     normalized = frozenset(_ALIASES.get(k.casefold(), k.casefold()) for k in keys)
-    return "Risky keyboard shortcut: " + "+".join(sorted(normalized)) if normalized in _RISKY else ""
+    return "Riskli klavye kısayolu: " + "+".join(sorted(normalized)) if normalized in _RISKY else ""
