@@ -120,8 +120,8 @@ mac:
   hardenedRuntime: false
   target:
     - target: dmg
+      # Apple silicon only: Intel Macs are not supported (owner decision, 16 Oct 2026).
       arch:
-        - x64
         - arm64
 win:
   target:
