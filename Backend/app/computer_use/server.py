@@ -5,8 +5,10 @@ driver argument without default injection; policy validates it before any I/O.
 """
 from contextlib import asynccontextmanager
 import asyncio
+import json
 import os
 
+import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
@@ -17,6 +19,26 @@ from .driver_client import DriverClient, DriverError, DriverUnavailable, fetch_r
 
 def _text(value, error=False):
     return CallToolResult(content=[TextContent(type="text", text=value)], is_error=error)
+
+
+async def _turn_halted() -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(
+                f"{approval_bridge.BACKEND_URL}/computer-use/settings",
+                headers=approval_bridge._get_headers())
+        if not 200 <= response.status_code < 300:
+            return True
+        settings = response.json()
+        if (not isinstance(settings, dict) or settings.get("enabled") is not True
+                or not isinstance(settings.get("halted"), list)):
+            return True
+        halted = settings["halted"]
+        conversation_id = approval_bridge._conversation_id_from_env()
+        return (conversation_id in halted if isinstance(conversation_id, int)
+                else conversation_id is None and bool(halted))
+    except Exception:
+        return True
 
 
 def _foreground(args):
@@ -132,11 +154,65 @@ class ComputerServer:
                     return _text("Hedef uygulama onaydan sonra değişti; işlem reddedildi.", True)
             if driver is None:
                 driver = await self._runtime_driver()
+            if tool == "computer_run_steps" and len(args["steps"]) >= 2:
+                return await self._run_steps_split(driver, forward_args)
             return await driver.call(validated.driver_tool, forward_args)
         except DriverUnavailable:
             return _text("Bilgisayar kullanımı sürücüsü kullanılamıyor.", True)
         except DriverError:
             return _text("Bilgisayar kullanımı sürücüsüyle bağlantı kesildi; işlem yinelenmedi.", True)
+
+    async def _run_steps_split(self, driver, forward_args):
+        steps = forward_args["steps"]
+        total = len(steps)
+        base = {key: forward_args[key] for key in (
+            "pid", "window_id", "delivery_mode", "foreground_fallback") if key in forward_args}
+        delay_ms = forward_args.get("delay_ms")
+        entries = []
+        failed_step = None
+        halted = False
+        observation = {}
+        non_text = []
+        for i, step in enumerate(steps):
+            if i > 0:
+                if isinstance(delay_ms, int) and delay_ms > 0:
+                    await asyncio.sleep(delay_ms / 1000)
+                if await _turn_halted():
+                    halted = True
+                    break
+            call_args = {**base, "steps": [step]}
+            if "observe" in forward_args and i == total - 1:
+                call_args["observe"] = forward_args["observe"]
+            result = await driver.call("run_steps", call_args)
+            report = result.structured_content
+            try:
+                if not (isinstance(report, dict) and isinstance(report.get("steps"), list)):
+                    report = json.loads(next(block.text for block in result.content
+                                             if isinstance(block, TextContent)))
+                if (not isinstance(report, dict) or not isinstance(report.get("steps"), list)
+                        or len(report["steps"]) != 1 or not isinstance(report["steps"][0], dict)):
+                    raise ValueError("invalid step report")
+            except (ValueError, TypeError, StopIteration):
+                return CallToolResult(content=[TextContent(
+                    type="text", text=f"Adım {i+1}/{total} sonucu okunamadı; kalan adımlar çalıştırılmadı.")]
+                    + result.content, is_error=True)
+            entry = {**report["steps"][0], "index": i}
+            entries.append(entry)
+            observation = {"observation": report["observation"]} if "observation" in report else {}
+            non_text = [block for block in result.content if not isinstance(block, TextContent)]
+            if result.is_error is True or report.get("ok") is not True or entry.get("ok") is not True:
+                failed_step = i
+                break
+        executed = len(entries)
+        report = {"executed": executed, "failed_step": failed_step,
+                  "ok": executed == total and failed_step is None and not halted,
+                  "steps": entries, "total": total, **observation}
+        if halted:
+            report.update(halted=True, halt_reason=(
+                f"Kullanıcı bilgisayar kullanımını bu tur için durdurdu; {executed}/{total} adım çalıştı, "
+                "kalanlar çalıştırılmadı. Bu turda bilgisayar araçlarını yeniden deneme."))
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps(report, ensure_ascii=False))]
+                              + non_text, is_error=not report["ok"])
 
     async def close(self):
         async with self._driver_lock:

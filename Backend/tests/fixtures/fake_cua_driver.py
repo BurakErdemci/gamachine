@@ -64,9 +64,33 @@ def hotkey(pid: int, keys: list[str]) -> str:
 
 
 @mcp.tool()
-def run_steps(pid: int, steps: list[dict], foreground_fallback: bool = False) -> str:
-    log("run_steps", {"pid": pid, "steps": steps, "foreground_fallback": foreground_fallback})
-    return "done"
+def run_steps(pid: int, steps: list[dict], foreground_fallback: bool | None = None,
+              window_id: int | None = None, delivery_mode: str | None = None,
+              observe: dict | None = None) -> CallToolResult:
+    args = {"pid": pid, "steps": steps}
+    args.update({key: value for key, value in {
+        "foreground_fallback": foreground_fallback, "window_id": window_id,
+        "delivery_mode": delivery_mode, "observe": observe}.items() if value is not None})
+    log("run_steps", args)
+    entries = []
+    failed_step = None
+    for i, step in enumerate(steps):
+        tool = step.get("tool") or next((key for key in step if key != "expect"), "expect")
+        failed = any(isinstance(value, dict) and value.get("text") == "fail-step"
+                     for value in step.values())
+        entries.append({"index": i, "ok": not failed, "tool": tool,
+                        "message": "failed" if failed else "ok"})
+        if failed:
+            failed_step = i
+            break
+    report = {"executed": len(entries), "failed_step": failed_step, "ok": failed_step is None,
+              "steps": entries, "total": len(steps)}
+    if observe is not None:
+        report["observation"] = {"ok": True, "tool": "get_window_state"}
+    content = [TextContent(type="text", text=json.dumps(report))]
+    if observe is not None and observe.get("include_screenshot") is True:
+        content.append(ImageContent(type="image", data=IMAGE, mime_type="image/png"))
+    return CallToolResult(content=content, is_error=not report["ok"])
 
 
 @mcp.tool()
