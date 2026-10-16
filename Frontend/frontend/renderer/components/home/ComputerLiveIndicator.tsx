@@ -14,7 +14,7 @@ const invoke = (req: Record<string, unknown>): Promise<any> => {
  */
 export function ComputerLiveIndicator() {
   const { t } = useLang();
-  const { state } = useComputerLive();
+  const { state, frame } = useComputerLive({ frames: true });
   const now = useNow(state.active);
   const [stopping, setStopping] = useState(false);
 
@@ -36,26 +36,34 @@ export function ComputerLiveIndicator() {
   const app = state.appName ?? t('cu.live.unknownApp');
   const elapsed = state.startedAt !== null ? formatElapsed(now - state.startedAt) : '00:00';
   return (
-    <div className="cul-tag" data-state={state.active ? 'active' : 'idle'}>
-      <span className="cul-grip" title={t('cu.live.drag')} aria-hidden="true" />
-      <button type="button" className="cul-tag-body" onClick={() => { void invoke({ op: 'open-panel' }); }}
-        title={t('cu.live.open')}>
-        <span className="cul-dot" aria-hidden="true" />
-        <span className="cul-tag-text">
-          {state.haltError
-            ? <span className="cul-tag-title cul-error" role="alert">{t('cu.live.stopFailed')}</span>
-            : <span className="cul-tag-title">{t('cu.live.using')}</span>}
-          <span className="cul-tag-meta">
-            <span className="cul-app">{app}</span>
-            <span className="cul-sep" aria-hidden="true">·</span>
-            <span className="cul-time" aria-label={t('cu.live.elapsed')}>{elapsed}</span>
+    <div className="cul-ind">
+      <div className="cul-tag" data-state={state.active ? 'active' : 'idle'}>
+        <span className="cul-grip" title={t('cu.live.drag')} aria-hidden="true" />
+        <button type="button" className="cul-tag-body" onClick={() => { void invoke({ op: 'open-panel' }); }}
+          title={t('cu.live.open')}>
+          <span className="cul-dot" aria-hidden="true" />
+          <span className="cul-tag-text">
+            {state.haltError
+              ? <span className="cul-tag-title cul-error" role="alert">{t('cu.live.stopFailed')}</span>
+              : <span className="cul-tag-title">{t('cu.live.using')}</span>}
+            <span className="cul-tag-meta">
+              <span className="cul-app">{app}</span>
+              <span className="cul-sep" aria-hidden="true">·</span>
+              <span className="cul-time" aria-label={t('cu.live.elapsed')}>{elapsed}</span>
+            </span>
           </span>
-        </span>
-      </button>
-      <button type="button" className="cul-stop" onClick={stop} disabled={stopping}
-        title={t('cu.live.stopTitle', { keys: haltKeys() })}>
-        <svg className="cul-stop-ic" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1" /></svg>
-        <span>{t(stopping ? 'cu.live.stopping' : 'cu.live.stop')}</span>
+        </button>
+        <button type="button" className="cul-stop" onClick={stop} disabled={stopping}
+          title={t('cu.live.stopTitle', { keys: haltKeys() })}>
+          <svg className="cul-stop-ic" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1" /></svg>
+          <span>{t(stopping ? 'cu.live.stopping' : 'cu.live.stop')}</span>
+        </button>
+      </div>
+      <button type="button" className="cul-ind-preview" onClick={() => { void invoke({ op: 'open-panel' }); }}
+        title={t('cu.live.open')}>
+        {frame
+          ? <img className="cul-ind-frame" src={frame} alt={t('cu.live.frameAlt', { app })} draggable={false} />
+          : <span className="cul-waiting">{t('cu.live.waiting')}</span>}
       </button>
     </div>
   );

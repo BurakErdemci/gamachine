@@ -17,7 +17,7 @@ function activeBody(over: Record<string, unknown> = {}, target: Record<string, u
 const INACTIVE = { active: false, conversation_id: null, started_at: null, last: null, target: null }
 
 function fixture(options: { platform?: string; saved?: string; panel?: boolean } = {}) {
-  const state = { activity: INACTIVE as any, windows: null as any, hold: false, holdList: false, held: [] as Array<() => void> }
+  const state = { activity: INACTIVE as any, windows: null as any, mainVisible: false, hold: false, holdList: false, held: [] as Array<() => void> }
   const rpc: any[] = []
   const children: any[] = []
   const host = { running: true, socketPath: SOCKET as string | null, driverPath: () => '/app/cua/cua-driver',
@@ -82,10 +82,10 @@ function fixture(options: { platform?: string; saved?: string; panel?: boolean }
     windows: () => [main, ...indicators.filter(w => !w.destroyed)],
     newIndicator, loadIndicator: vi.fn(async () => {}), preload: '/app/preload.js',
     workAreas: () => ({ primary: { x: 0, y: 25, width: 1440, height: 875 }, all: [{ x: 0, y: 25, width: 1440, height: 875 }] }),
-    shortcut, fs, focusMain: vi.fn(), now: () => Date.now(), setTimeout, clearTimeout, log,
+    shortcut, fs, focusMain: vi.fn(), mainVisible: () => state.mainVisible, now: () => Date.now(), setTimeout, clearTimeout, log,
   }
   const live = new ComputerLive(deps)
-  // Frames are only captured for a visible Computer tab; most cases watch it.
+  // Most cases watch the Computer tab at its higher frame rate.
   if (options.panel !== false) void live.invoke({ op: 'panel-visible', visible: true })
   const frames = () => main.webContents.send.mock.calls.filter(([, p]: any) => typeof p.frame === 'string')
   const windowCalls = () => rpc.filter(m => m.method === 'tools/call')
@@ -141,7 +141,7 @@ describe('computer-use-live: active', () => {
     expect(f.indicators).toHaveLength(1)
     expect(f.indicators[0].options).toMatchObject({
       frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, show: false, type: 'panel',
-      x: 1440 - 440 - 16, y: 25 + 16, webPreferences: { preload: '/app/preload.js' },
+      x: 1440 - 440 - 16, y: 25 + 16, width: 440, height: 320, webPreferences: { preload: '/app/preload.js' },
     })
     expect(f.indicators[0].setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
     f.indicators[0].emit('ready-to-show')
@@ -160,8 +160,7 @@ describe('computer-use-live: active', () => {
       last: { tool: 'computer_click', app_name: 'TextEdit' } })
     expect(typeof payload.startedAt).toBe('number')
     expect(typeof payload.at).toBe('number')
-    // Frames go to the main window only; the indicator gets state updates without pictures.
-    for (const [, p] of f.indicators[0].webContents.send.mock.calls) expect(p.frame).toBeNull()
+    expect(f.indicators[0].webContents.send.mock.calls.filter(([, p]: any) => typeof p.frame === 'string')).toEqual(f.frames())
     expect(f.spawn).toHaveBeenCalledTimes(1)
     f.live.shutdown()
   })
@@ -350,6 +349,14 @@ describe('computer-use-live: halt and ops', () => {
 })
 
 describe('computer-use-live: indicator position', () => {
+  it('falls back when the old tag fits but the preview would extend below the display', async () => {
+    const f = fixture({ saved: JSON.stringify({ x: 100, y: 700 }) })
+    f.state.activity = activeBody()
+    await f.live.tick()
+    expect(f.indicators[0].options).toMatchObject({ x: 984, y: 41, height: 320 })
+    f.live.shutdown()
+  })
+
   it('reuses a saved spot that is still on a display and saves where it is moved', async () => {
     const f = fixture({ saved: JSON.stringify({ x: 100, y: 200 }) })
     f.state.activity = activeBody()
@@ -383,19 +390,51 @@ describe('pickWindow', () => {
   })
 })
 
-describe('frame capture follows the Computer tab', () => {
-  it('captures nothing while live with only the indicator showing, then starts with the tab', async () => {
+describe('frame capture follows the Computer tab and indicator', () => {
+  it('captures ~2 fps for the indicator alone, then ~8 fps for the visible tab', async () => {
     const f = fixture({ panel: false })
     f.state.activity = activeBody()
     f.live.beginPolling()
     await vi.advanceTimersByTimeAsync(10)
     expect(f.indicators).toHaveLength(1)
+    const before = f.frames().length
     await vi.advanceTimersByTimeAsync(1000)
-    expect(f.frames()).toHaveLength(0)
-    expect(f.spawn).not.toHaveBeenCalled()
+    const indicatorRate = f.frames().length - before
+    expect(indicatorRate).toBeGreaterThanOrEqual(1)
+    expect(indicatorRate).toBeLessThanOrEqual(3)
+    expect(f.indicators[0].webContents.send.mock.calls.filter(([, p]: any) => typeof p.frame === 'string')).toEqual(f.frames())
     await f.live.invoke({ op: 'panel-visible', visible: true })
+    // Allow the last indicator-only interval to finish before measuring the tab rate.
+    await vi.advanceTimersByTimeAsync(500)
+    const beforePanel = f.frames().length
     await vi.advanceTimersByTimeAsync(1000)
-    expect(f.frames().length).toBeGreaterThanOrEqual(7)
+    expect(f.frames().length - beforePanel).toBeGreaterThanOrEqual(7)
+    expect(f.frames().length - beforePanel).toBeLessThanOrEqual(9)
+    f.live.shutdown()
+  })
+
+  it('starts capture when the indicator opens and stops when main becomes visible without the tab', async () => {
+    const f = fixture({ panel: false })
+    f.state.mainVisible = true
+    f.state.activity = activeBody()
+    await f.live.tick()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.spawn).not.toHaveBeenCalled()
+
+    f.state.mainVisible = false
+    f.live.mainVisibilityChanged()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.frames().length).toBeGreaterThan(0)
+    f.state.mainVisible = true
+    f.live.mainVisibilityChanged()
+    expect(f.indicators[0].close).toHaveBeenCalledOnce()
+    expect(f.children[0].kill).toHaveBeenCalledWith('SIGTERM')
+    const before = f.frames().length
+    const calls = f.windowCalls().length
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(f.frames()).toHaveLength(before)
+    expect(f.windowCalls()).toHaveLength(calls)
+    f.live.shutdown()
   })
 })
 

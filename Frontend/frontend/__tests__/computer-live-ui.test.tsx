@@ -184,6 +184,31 @@ describe('ComputerLivePanel', () => {
 })
 
 describe('ComputerLiveIndicator', () => {
+  it('shows waiting text before the first frame and opens the Computer tab from the preview', async () => {
+    status = { ...active(), panelVisible: false }
+    const { container } = render(<ComputerLiveIndicator />)
+    await screen.findByText(tr['cu.live.using'])
+    const preview = container.querySelector<HTMLButtonElement>('button.cul-ind-preview')!
+    expect(preview).toBeTruthy()
+    expect(preview.title).toBe(tr['cu.live.open'])
+    expect(preview.textContent).toBe(tr['cu.live.waiting'])
+    expect(preview.querySelector('img')).toBeNull()
+    fireEvent.click(preview)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('computer-use-live', { op: 'open-panel' }))
+  })
+
+  it('renders a frame event in the preview with the target app alt text', async () => {
+    status = { ...active(), panelVisible: false }
+    const { container } = render(<ComputerLiveIndicator />)
+    await screen.findByText(tr['cu.live.using'])
+    push(active({ frame: FRAME }))
+    const img = await screen.findByRole('img', { name: 'TextEdit penceresinin canlı görüntüsü' })
+    expect(img).toBe(container.querySelector('img.cul-ind-frame'))
+    expect(img.getAttribute('src')).toBe(FRAME)
+    expect(img).toHaveProperty('draggable', false)
+    expect(screen.queryByText(tr['cu.live.waiting'])).toBeNull()
+  })
+
   it('shows the calm tag: who, which app, how long, and Stop', async () => {
     status = { ...active(), panelVisible: false }
     const { container } = render(<ComputerLiveIndicator />)

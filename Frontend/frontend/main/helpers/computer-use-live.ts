@@ -93,12 +93,15 @@ export const POLL_MS = 1000
 // ~8 fps: a 480 px frame took a median 66 ms on the real driver (15 Oct 2026),
 // so 125 ms leaves the driver idle half the time.
 export const FRAME_MS = 125
+export const INDICATOR_FRAME_MS = 500
 export const IDLE_MS = 10_000
 export const MAX_DIMENSION = 480
 const REQUEST_MS = 3000
 const WINDOW_LOOKUP_MS = 5000
 // The Turkish title "Gamachine bilgisayarınızı kullanıyor" needs this width to fit unclipped in every theme.
-export const INDICATOR_SIZE = { width: 440, height: 64 }
+export const PREVIEW_SIZE = { width: 440, height: 248 }
+const PREVIEW_GAP = 8
+export const INDICATOR_SIZE = { width: 440, height: 64 + PREVIEW_GAP + PREVIEW_SIZE.height }
 const INDICATOR_MARGIN = 16
 const POSITION_FILE = 'computer-live-indicator.json'
 
@@ -314,8 +317,7 @@ export class ComputerLive {
   private emit(frame: string | null) {
     const payload = this.payload(frame)
     for (const win of this.deps.windows()) {
-      // Frames are ~100 KB each; the indicator never draws them.
-      if (win.isDestroyed() || (frame !== null && win === this.indicator)) continue
+      if (win.isDestroyed()) continue
       try { win.webContents.send(LIVE_CHANNEL, payload) } catch { /* window closing */ }
     }
   }
@@ -452,7 +454,7 @@ export class ComputerLive {
   }
 
   private openIndicator() {
-    if (this.indicator && !this.indicator.isDestroyed()) return
+    if (this.indicatorOpen()) return
     const { x, y } = this.indicatorPosition()
     let win: IndicatorWindow
     try {
@@ -480,7 +482,12 @@ export class ComputerLive {
     } catch { /* platform without workspaces */ }
     win.once('ready-to-show', () => { if (!win.isDestroyed() && this.indicator === win) win.showInactive() })
     win.on('moved', () => this.savePosition(win))
-    win.on('closed', () => { if (this.indicator === win) this.indicator = null })
+    win.on('closed', () => {
+      if (this.indicator === win) {
+        this.indicator = null
+        this.updateCapture()
+      }
+    })
     try {
       const loading = this.deps.loadIndicator(win)
       if (loading && typeof (loading as Promise<unknown>).catch === 'function') {
@@ -489,6 +496,7 @@ export class ComputerLive {
     } catch (error) {
       this.log('[cua-live] indicator page failed', String(error))
     }
+    this.updateCapture()
   }
 
   private closeIndicator() {
@@ -497,14 +505,19 @@ export class ComputerLive {
     if (win && !win.isDestroyed()) {
       try { win.close() } catch { /* already closing */ }
     }
+    this.updateCapture()
+  }
+
+  private indicatorOpen() {
+    return this.indicator !== null && !this.indicator.isDestroyed()
   }
 
   // --- frames -----------------------------------------------------------
 
   private wantsFrames() {
     return this.live && this.deps.host.running && !!this.deps.host.socketPath && !!this.target?.pid
-      // The indicator draws no frames; only a visible Computer tab needs them.
-      && this.panelVisible
+      // Either the Computer tab or the floating preview needs live frames.
+      && (this.panelVisible || this.indicatorOpen())
   }
 
   private updateCapture() {
@@ -543,7 +556,8 @@ export class ComputerLive {
         await this.sleep(POLL_MS)
         continue
       }
-      await this.sleep(Math.max(0, FRAME_MS - (this.now() - started)))
+      const interval = this.panelVisible ? FRAME_MS : INDICATOR_FRAME_MS
+      await this.sleep(Math.max(0, interval - (this.now() - started)))
     }
   }
 
@@ -687,7 +701,7 @@ export class ComputerLive {
     this.capturing = false
     this.live = false
     this.unregisterShortcut()
-    this.closeIndicator()
     this.killProxy(force)
+    this.closeIndicator()
   }
 }
