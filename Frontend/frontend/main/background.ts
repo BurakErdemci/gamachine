@@ -45,6 +45,7 @@ import { createRemoteControl } from './helpers/remote-control'
 import { ComputerUseHost } from './helpers/computer-use'
 import { ComputerLive, LIVE_OPEN_EVENT } from './helpers/computer-use-live'
 import { hideOrMinimize } from './helpers/hide-while-live'
+import { reopenMain } from './helpers/reopen-main'
 import { createProfileReset } from './helpers/profile-reset'
 import { collectMtimes } from './helpers/stat-mtimes'
 
@@ -1250,7 +1251,13 @@ if (!gotTheLock) {
   console.log('--- BAŞKA BİR INSTANCE ZATEN ÇALIŞIYOR, ÇIKILIYOR ---')
   app.quit()
 } else {
+  app.on('activate', () => { reopenMain(mainWindowRef) })
+
   app.on('second-instance', () => {
+    if (mainWindowRef) {
+      reopenMain(mainWindowRef)
+      return
+    }
     const allWindows = require('electron').BrowserWindow.getAllWindows()
     if (allWindows.length > 0) {
       const win = allWindows[0]
