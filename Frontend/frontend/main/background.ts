@@ -6,7 +6,8 @@ import { randomUUID, createHash } from 'crypto'
 import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer } from 'electron'
 import serve from 'electron-serve'
 import { createWindow, applyNavigationPolicy } from './helpers'
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, ChildProcess, execFile } from 'child_process'
+import { promisify } from 'util'
 import axios from 'axios'
 import { autoUpdater } from 'electron-updater'
 import {
@@ -816,6 +817,8 @@ handleSecure('remote-control', (_event, action: unknown, arg: unknown) => remote
 
 const computerUse = new ComputerUseHost({
   platform: process.platform, spawn, connect: (socket, connected) => net.createConnection(socket, connected),
+  isPackaged: app.isPackaged,
+  execFile: (cmd, args, opts) => promisify(execFile)(cmd, args, { ...opts, encoding: 'utf8' }) as Promise<{ stdout: string }>,
   fs, http: axios, baseUrl: getBackendBaseUrl, appToken: localAppToken, uiSecret,
   paths: {
     resourcesPath: app.isPackaged ? process.resourcesPath : undefined,

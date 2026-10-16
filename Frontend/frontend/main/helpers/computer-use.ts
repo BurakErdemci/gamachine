@@ -5,8 +5,12 @@ import type { ChildProcess, SpawnOptions } from 'child_process'
 import type { Socket } from 'net'
 import type { HttpClient } from './remote-control'
 
+const HOST_BUNDLE_ID = 'com.gamachine.app'
+
 export interface ComputerUseDeps {
   platform: string
+  execFile?: (command: string, args: string[], options: { timeout: number }) => Promise<{ stdout: string }>
+  isPackaged?: boolean
   spawn: (command: string, args: string[], options: SpawnOptions) => ChildProcess
   connect: (socket: string, connected: () => void) => Socket
   fs: Pick<typeof fs, 'existsSync' | 'mkdirSync' | 'chmodSync' | 'mkdtempSync' | 'unlinkSync' | 'rmdirSync'>
@@ -85,6 +89,29 @@ export class ComputerUseHost {
     this.log(message, error instanceof Error ? error.message : String(error))
   }
 
+  private async driverPermissions(): Promise<{ accessibility: boolean; screen: boolean } | null> {
+    if (this.deps.platform !== 'darwin' || !this.running || !this.socketPath || !this.deps.execFile) return null
+    try {
+      const { stdout } = await this.deps.execFile(this.driverPath(),
+        ['call', 'check_permissions', '{"prompt":false}', '--socket', this.socketPath], { timeout: 3000 })
+      const permissions = JSON.parse(stdout)
+      if (typeof permissions?.accessibility !== 'boolean' || typeof permissions?.screen_recording !== 'boolean') return null
+      return { accessibility: permissions.accessibility === true, screen: permissions.screen_recording === true }
+    } catch (error) {
+      this.logError('[cua] driver permission check failed', error)
+      return null
+    }
+  }
+
+  private async resetPermission(service: 'Accessibility' | 'ScreenCapture') {
+    if (this.deps.platform !== 'darwin' || this.deps.isPackaged !== true || !this.deps.execFile) return
+    try {
+      await this.deps.execFile('tccutil', ['reset', service, HOST_BUNDLE_ID], { timeout: 5000 })
+    } catch (error) {
+      this.logError('[cua] permission reset failed', error)
+    }
+  }
+
   private report() {
     const data = this.runtime()
     // An exit's stopped report must settle before a replacement's running report.
@@ -160,13 +187,13 @@ export class ComputerUseHost {
     Object.assign(env, {
       CUA_DRIVER_EMBEDDED: '1', DO_NOT_TRACK: '1', CUA_DRIVER_RS_TELEMETRY_ENABLED: '0',
       CUA_DRIVER_RS_UPDATE_CHECK: '0', CUA_DRIVER_DISABLE_RUN_SCRIPT: '1',
-      CUA_DRIVER_HOST_BUNDLE_ID: 'com.gamachine.app',
+      CUA_DRIVER_HOST_BUNDLE_ID: HOST_BUNDLE_ID,
       CUA_DRIVER_RS_HOME: home, CUA_DRIVER_TELEMETRY_HOME: home,
     })
     this.intentionalStop = false
     try {
       const child = this.deps.spawn(this.driverPath(), ['serve', '--embedded', '--socket', this.socketPath!,
-        '--permission-mode', 'standard', '--host-bundle-id', 'com.gamachine.app', '--no-permissions-gate'],
+        '--permission-mode', 'standard', '--host-bundle-id', HOST_BUNDLE_ID, '--no-permissions-gate'],
       { env, stdio: ['ignore', 'pipe', 'pipe'] })
       this.child = child
       const exited = () => {
@@ -293,9 +320,12 @@ export class ComputerUseHost {
       switch (op) {
         case 'status': {
           const { data: settings } = await this.request('get', '/computer-use/settings')
+          const appAx = this.deps.platform === 'darwin' && this.deps.systemPreferences.isTrustedAccessibilityClient(false)
+          const appScreen = this.deps.platform === 'darwin' ? this.deps.systemPreferences.getMediaAccessStatus('screen') : 'not-determined'
+          const drv = await this.driverPermissions()
           return { available: this.available, running: this.running, settings, permissions: {
-            accessibility: this.deps.platform === 'darwin' && this.deps.systemPreferences.isTrustedAccessibilityClient(false),
-            screen: this.deps.platform === 'darwin' ? this.deps.systemPreferences.getMediaAccessStatus('screen') : 'not-determined',
+            accessibility: drv === null ? appAx : drv.accessibility,
+            screen: drv === null ? appScreen : (drv.screen ? 'granted' : (appScreen === 'granted' ? 'denied' : appScreen)),
           } }
         }
         case 'enable':
@@ -305,12 +335,15 @@ export class ComputerUseHost {
           return data
         }
         case 'request-accessibility':
+          if (this.deps.platform === 'darwin') await this.resetPermission('Accessibility')
           return { accessibility: this.deps.platform === 'darwin' && this.deps.systemPreferences.isTrustedAccessibilityClient(true) }
         case 'open-screen-settings':
           if (this.deps.platform === 'darwin') {
+            const resetAttempted = this.deps.isPackaged === true && !!this.deps.execFile
+            await this.resetPermission('ScreenCapture')
             let screenStatus = 'unknown'
             try { screenStatus = this.deps.systemPreferences.getMediaAccessStatus('screen') } catch { /* unreadable counts as not granted */ }
-            if (screenStatus !== 'granted' && this.deps.requestScreenCapture) {
+            if ((resetAttempted || screenStatus !== 'granted') && this.deps.requestScreenCapture) {
               let timer: ReturnType<typeof setTimeout> | undefined
               try {
                 const timeout = new Promise<never>((_resolve, reject) => {
