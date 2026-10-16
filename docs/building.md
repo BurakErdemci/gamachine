@@ -77,9 +77,9 @@ Outputs land under `Frontend/frontend/build/`:
 - macOS: `Gamachine-<version>-arm64.dmg` (Apple Silicon)
 - Windows: NSIS installer (`.exe`)
 
-> ⚠️ **The x64 dmg trap:** electron-builder produces dmgs for both architectures, but the backend binary is only compiled for the host architecture — an x64 dmg built on Apple Silicon **won't work on Intel Macs**. Proper Intel support requires compiling the backend with an x64 Python separately.
+> ℹ️ **Apple Silicon only:** the macOS package is built for arm64 only; Intel Macs are not supported (the backend binary is compiled for the host architecture).
 
-> 🍎 **macOS quarantine note:** the dmg is unsigned; if macOS reports it as "damaged" after downloading, clear the quarantine flag with `xattr -cr "/Applications/Gamachine.app"`.
+> 🍎 **macOS quarantine note:** the app is only ad-hoc signed (no Developer ID); if macOS reports it as "damaged" after downloading, clear the quarantine flag with `xattr -cr "/Applications/Gamachine.app"`.
 
 The packaged app does **not** require Python or .NET — the backend is a single frozen binary; the `mcp-server` and `unityai` subcommands are invoked through that same binary. `uvx`, OmniSharp (+.NET), ffmpeg/yt-dlp and the dictation engine are all embedded.
 
