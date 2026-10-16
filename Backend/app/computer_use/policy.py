@@ -243,11 +243,13 @@ def risky_reason(tool, args) -> str:
     if tool == "computer_confirm_risky_step":
         return args.get("summary", "")
     if tool == "computer_run_steps":
+        reasons = []
         for step in args.get("steps", []):
             name = step.get("tool") or next((k for k in STEP_TOOLS if k in step), "")
             reason = risky_reason("computer_" + name, step.get("args", {}) if "tool" in step else step.get(name, {}))
-            if reason:
-                return reason
+            if reason and reason not in reasons:
+                reasons.append(reason)
+        return " · ".join(reasons)
     if tool not in ("computer_hotkey", "computer_press_key"):
         return ""
     if tool == "computer_hotkey":
