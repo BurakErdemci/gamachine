@@ -92,6 +92,14 @@ describe('computer-use screen recording prompt', () => {
     expect(f.openExternal).toHaveBeenCalledExactlyOnceWith(screenSettingsUrl)
   })
 
+  it('still captures and opens settings when the permission status cannot be read', async () => {
+    const f = fixture()
+    f.getMediaAccessStatus.mockImplementation(() => { throw new Error('unavailable') })
+    expect(await f.host.invoke({ op: 'open-screen-settings' })).toEqual({ opened: true })
+    expect(f.requestScreenCapture).toHaveBeenCalledTimes(1)
+    expect(f.openExternal).toHaveBeenCalledExactlyOnceWith(screenSettingsUrl)
+  })
+
   it('does not capture or open settings on win32', async () => {
     const f = fixture('denied', 'win32')
     expect(await f.host.invoke({ op: 'open-screen-settings' })).toEqual({ opened: false })

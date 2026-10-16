@@ -308,7 +308,9 @@ export class ComputerUseHost {
           return { accessibility: this.deps.platform === 'darwin' && this.deps.systemPreferences.isTrustedAccessibilityClient(true) }
         case 'open-screen-settings':
           if (this.deps.platform === 'darwin') {
-            if (this.deps.systemPreferences.getMediaAccessStatus('screen') !== 'granted' && this.deps.requestScreenCapture) {
+            let screenStatus = 'unknown'
+            try { screenStatus = this.deps.systemPreferences.getMediaAccessStatus('screen') } catch { /* unreadable counts as not granted */ }
+            if (screenStatus !== 'granted' && this.deps.requestScreenCapture) {
               let timer: ReturnType<typeof setTimeout> | undefined
               try {
                 const timeout = new Promise<never>((_resolve, reject) => {
