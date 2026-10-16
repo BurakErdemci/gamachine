@@ -206,9 +206,9 @@ class ComputerServer:
                 failed_step = i
                 break
         executed = len(entries)
-        report = {"executed": executed, "failed_step": failed_step,
+        report = {"executed": executed, "total": total, "failed_step": failed_step,
                   "ok": executed == total and failed_step is None and stop_reason is None,
-                  "steps": entries, "total": total, **observation}
+                  "steps": entries, **observation}
         if stop_reason is not None:
             reasons = {
                 "halted": (

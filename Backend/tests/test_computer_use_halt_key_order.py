@@ -49,7 +49,7 @@ def test_batch_report_key_order(fake, monkeypatch, reason):
     result = asyncio.run(run())
     approval.assert_awaited_once()
     report = json.loads(result.content[0].text)
-    existing_keys = ["executed", "failed_step", "ok", "steps", "total"]
+    existing_keys = ["executed", "total", "failed_step", "ok", "steps"]
     if reason is not None:
         assert list(report)[:3] == ["halted", "stop_reason", "halt_reason"]
         assert list(report)[3:] == existing_keys

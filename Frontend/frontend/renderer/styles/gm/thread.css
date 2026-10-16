@@ -709,6 +709,10 @@
 .tool-out { margin: 6px 0 4px; max-height: 300px; overflow: auto; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--code-bg); color: var(--code-text); }
 .tool-out-k { margin: 4px 0 2px; font-size: var(--fs-meta); color: var(--code-dim); }
 .tool-out pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-meta); line-height: 1.55; }
+.tool-cu-meta, .tool-cu-result { margin: 2px 0 4px; font-size: var(--fs-meta); }
+.tool-cu-steps { margin: 0 0 4px; padding-left: 22px; font-size: var(--fs-meta); line-height: 1.55; overflow-wrap: anywhere; }
+.tool-cu-steps li[data-ok="false"] { color: var(--accent-text); }
+.tool-raw summary { cursor: pointer; font-size: var(--fs-meta); color: var(--code-dim); }
 .tool-open { white-space: nowrap; }
 .thinking-text {
   margin-top: 6px; padding: 8px 12px; max-height: 320px; overflow-y: auto;

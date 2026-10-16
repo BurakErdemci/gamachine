@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
-import { userStopped } from '../../lib/computerStep';
+import { describeComputerArgs, describeComputerOutput, userStopped } from '../../lib/computerStep';
 
 interface ToolBlockProps {
   tool: string;
@@ -50,6 +50,22 @@ export const ToolBlock = ({ tool, args, summary, success, output }: ToolBlockPro
   const target = toolTarget({ args, summary }) || summary || (kind === 'unity' ? unityName : tool);
   const hasArgs = args != null && (typeof args !== 'object' || Object.keys(args).length > 0);
   const hasOutput = !!(output && output.trim());
+  const computerArgs = kind === 'computer' && hasArgs ? describeComputerArgs(tool, args) : null;
+  const computerOutput = kind === 'computer' && hasOutput ? describeComputerOutput(output) : null;
+  const rawBlocks = open && <>
+    {hasArgs && (
+      <div>
+        <p className="tool-out-k">{t('tool.params')}</p>
+        <pre>{JSON.stringify(args, null, 2)}</pre>
+      </div>
+    )}
+    {hasOutput && (
+      <div>
+        <p className="tool-out-k">{t('tool.output')}</p>
+        <pre>{output}</pre>
+      </div>
+    )}
+  </>;
 
   return (
     <li className="tool-step" data-failed={(!isSuccess && !stopped) || undefined} data-stopped={stopped || undefined}>
@@ -64,22 +80,42 @@ export const ToolBlock = ({ tool, args, summary, success, output }: ToolBlockPro
         <div className="tool-out custom-scrollbar">
           {!hasArgs && !hasOutput ? (
             <p className="tool-out-k">{t('tool.noDetail')}</p>
-          ) : (
+          ) : kind === 'computer' ? (
             <>
-              {hasArgs && (
+              {computerArgs && (
                 <div>
                   <p className="tool-out-k">{t('tool.params')}</p>
-                  <pre>{JSON.stringify(args, null, 2)}</pre>
+                  <p className="tool-cu-meta">{stripBidi(computerArgs.meta.join(' · '))}</p>
+                  {!!computerArgs.steps.length && (
+                    <ol className="tool-cu-steps">
+                      {computerArgs.steps.map((step, index) => <li key={index}>{stripBidi(step)}</li>)}
+                    </ol>
+                  )}
                 </div>
               )}
-              {hasOutput && (
+              {computerOutput && (
                 <div>
                   <p className="tool-out-k">{t('tool.output')}</p>
-                  <pre>{output}</pre>
+                  <p className="tool-cu-result">
+                    {t('tool.cu.ran', { n: computerOutput.executed, t: computerOutput.total })}
+                    {computerOutput.stopped ? ' · ' + t('tool.cu.stopped')
+                      : computerOutput.failedStep != null ? ' · ' + t('tool.cu.failedAt', { n: computerOutput.failedStep + 1 }) : ''}
+                  </p>
+                  {!!computerOutput.steps.length && (
+                    <ol className="tool-cu-steps">
+                      {computerOutput.steps.map((step, index) => (
+                        <li key={index} data-ok={step.ok}>{step.ok ? '✓ ' : '✗ '}{stripBidi(step.message)}</li>
+                      ))}
+                    </ol>
+                  )}
                 </div>
               )}
+              <details className="tool-raw">
+                <summary>{t('tool.raw')}</summary>
+                {rawBlocks}
+              </details>
             </>
-          )}
+          ) : rawBlocks}
         </div>
       )}
     </li>

@@ -738,6 +738,10 @@ export const tr = {
   'tool.noDetail': 'Bu adım için detay kaydedilmedi.',
   'tool.params': 'PARAMETRELER:',
   'tool.output': 'ÇIKTI:',
+  'tool.cu.ran': '{n}/{t} adım çalıştı',
+  'tool.cu.stopped': 'kullanıcı durdurdu',
+  'tool.cu.failedAt': '{n}. adımda hata',
+  'tool.raw': 'Ham veri',
   // --- Effort seçici (ControlPanel) ---
   'effort.label.auto': 'Auto',
   'effort.label.off': 'Kapalı',
@@ -2267,6 +2271,10 @@ export const en: Record<keyof typeof tr, string> = {
   'tool.noDetail': 'No details were recorded for this step.',
   'tool.params': 'PARAMETERS:',
   'tool.output': 'OUTPUT:',
+  'tool.cu.ran': '{n}/{t} steps ran',
+  'tool.cu.stopped': 'stopped by you',
+  'tool.cu.failedAt': 'failed at step {n}',
+  'tool.raw': 'Raw data',
   // --- Effort selector (ControlPanel) ---
   'effort.label.auto': 'Auto',
   'effort.label.off': 'Off',
