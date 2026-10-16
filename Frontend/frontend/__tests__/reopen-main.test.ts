@@ -46,4 +46,18 @@ describe('reopenMain', () => {
     expect(reopenMain(win)).toBe(true)
     expect(calls).toEqual(['show', 'focus'])
   })
+
+  it('still shows and focuses when restore throws', () => {
+    const { win, calls } = fixture({ minimized: true, visible: false })
+    win.restore.mockImplementation(() => { throw new Error('restore failed') })
+    expect(reopenMain(win)).toBe(true)
+    expect(calls).toEqual(['show', 'focus'])
+  })
+
+  it('still focuses when show throws', () => {
+    const { win, calls } = fixture({ minimized: true, visible: false })
+    win.show.mockImplementation(() => { throw new Error('show failed') })
+    expect(reopenMain(win)).toBe(true)
+    expect(calls).toEqual(['restore', 'focus'])
+  })
 })
