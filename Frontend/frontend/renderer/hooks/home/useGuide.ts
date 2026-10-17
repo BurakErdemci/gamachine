@@ -184,7 +184,9 @@ export function useGuide({ ctx, host, userName, saveName, appVersion, frameReady
       const st = live.current.tour;
       if (st) {
         if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); skip(); return; }
-        const typing = e.target instanceof HTMLElement && e.target.matches('input, textarea');
+        // The language radios use their own arrows.
+        const typing = e.target instanceof HTMLElement
+          && (e.target.matches('input, textarea') || e.target.closest('[role="radiogroup"]') != null);
         if (typing) return;
         // Alt/Ctrl/Meta + arrow is the browser's or OS's (history, word jump): never a tour step
         // (guide audit, 2 Oct 2026).

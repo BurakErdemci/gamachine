@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-import { useLang } from '../../lib/i18n';
+import { useLang, type Lang } from '../../lib/i18n';
 import { findAnchor } from '../../lib/guide/anchors';
 import { place, type PlaceOutput } from '../../lib/guide/engine';
 import { tx } from '../../lib/guide/registry';
 import type { TourState } from '../../hooks/home/useGuide';
 import type { GenerationMode } from './types';
+import { SetSeg } from './settings/controls';
 import { MascotHead } from './BrandLogo';
 import { GamachineFigure } from './GamachineMascot';
 
@@ -59,7 +60,7 @@ function revealInPane(el: HTMLElement) {
  * and for a single guide topic. The rest of the frame is `inert` while it is open.
  */
 export const GuideTour: React.FC<GuideTourProps> = ({ tour, approvalMode, onNext, onBack, onSkip, onNameDraft }) => {
-  const { t, lang } = useLang();
+  const { t, lang, setLang } = useLang();
   const rootRef = useRef<HTMLDivElement>(null);
   const holeRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -153,6 +154,9 @@ export const GuideTour: React.FC<GuideTourProps> = ({ tour, approvalMode, onNext
     };
   }, [cur, seq, measure, onName]);
 
+  // A language switch changes every text length on the card; kept apart from the step effect, which would refocus.
+  useLayoutEffect(() => { measure(); }, [lang, measure]);
+
   // Open: the rest of the frame goes inert (no focus, no clicks); closing gives it back and puts
   // the focus where the page decides (useGuide's finish).
   useEffect(() => {
@@ -181,6 +185,21 @@ export const GuideTour: React.FC<GuideTourProps> = ({ tour, approvalMode, onNext
   const nextLabel = last
     ? (mode === 'core' && !tour.toGuide ? t('tour.last') : t('tour.toGuide'))
     : onName ? t('tour.cont') : t('tour.next');
+
+  // Arrows / Home / End move the language choice; useGuide leaves keys aimed at a radiogroup alone.
+  const langKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.getAttribute('role') !== 'radio') return;
+    if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]'));
+    const i = items.indexOf(target);
+    e.preventDefault();
+    e.stopPropagation();
+    const n = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1
+      : (i + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[n].focus();
+    items[n].click();
+  };
 
   return (
     <div
@@ -233,6 +252,17 @@ export const GuideTour: React.FC<GuideTourProps> = ({ tour, approvalMode, onNext
                 onChange={e => onNameDraft(e.target.value)}
               />
             </form>
+          )}
+          {onName && (
+            <div className="tour-lang" onKeyDown={langKey}>
+              <span className="tour-lang-k" aria-hidden="true">{t('tour.langLabel')}</span>
+              <SetSeg<Lang>
+                label={t('tour.langLabel')}
+                value={lang}
+                onChange={setLang}
+                options={[{ id: 'en', label: 'English', lang: 'en' }, { id: 'tr', label: 'Türkçe', lang: 'tr' }]}
+              />
+            </div>
           )}
           {step.ui === 'mode' && (
             <div className="tour-modes" aria-hidden="true">
