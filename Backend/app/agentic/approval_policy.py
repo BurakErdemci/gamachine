@@ -7,9 +7,13 @@ geçerlidir; tur bittiğinde anahtar iptal edilir.
 """
 
 from dataclasses import dataclass
+import logging
 import os
 import secrets
 import threading
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,14 @@ _AMBIENT_TOPLAM = 0
 _TURNS_BY_CONVERSATION: dict[int, list[int]] = {}
 
 
+def _end_computer_activity(conversation_id: int) -> None:
+    try:
+        from computer_use import activity
+        activity.end(conversation_id)
+    except Exception:
+        logger.exception("Failed to end computer activity for conversation %s", conversation_id)
+
+
 class ambient_turn:
     """Koşan turun modunu kaydeder; çıkışta MUTLAKA bırakır.
 
@@ -121,6 +133,7 @@ class ambient_turn:
 
     def __exit__(self, *_exc) -> None:
         global _AMBIENT_AUTO, _AMBIENT_TOPLAM
+        last_turn_exited = False
         with _LOCK:
             _AMBIENT_TOPLAM = max(0, _AMBIENT_TOPLAM - 1)
             if self._auto:
@@ -130,7 +143,12 @@ class ambient_turn:
                 if self._mail_depth in depths:
                     depths.remove(self._mail_depth)
                 if not depths:
-                    _TURNS_BY_CONVERSATION.pop(self._conversation, None)
+                    last_turn_exited = (
+                        _TURNS_BY_CONVERSATION.pop(self._conversation, None) is not None
+                    )
+        # Presence ends with the last turn, even if an early-closed stream's runner exits later.
+        if last_turn_exited:
+            _end_computer_activity(self._conversation)
         return None
 
 
