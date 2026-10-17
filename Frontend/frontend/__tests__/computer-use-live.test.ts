@@ -229,6 +229,42 @@ describe('computer-use-live: active', () => {
     f.live.shutdown()
   })
 
+  it('ends live presence on the next poll when the backend explicitly ends the turn', async () => {
+    const f = fixture()
+    f.state.activity = activeBody()
+    f.live.beginPolling()
+    await vi.advanceTimersByTimeAsync(500)
+    expect(f.children).toHaveLength(1)
+    expect(f.indicators).toHaveLength(1)
+    f.state.activity = { ...INACTIVE, ended: true }
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.children[0].kill).toHaveBeenCalledWith('SIGTERM')
+    expect(f.indicators[0].close).toHaveBeenCalledOnce()
+    expect(f.shortcut.unregister).toHaveBeenCalledWith(HALT_SHORTCUT)
+    expect(f.main.webContents.send.mock.calls.at(-1)![1]).toMatchObject({ active: false, frame: null })
+    const calls = f.windowCalls().length
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.windowCalls()).toHaveLength(calls)
+    f.live.shutdown()
+  })
+
+  it('keeps the idle timeout for an inactive poll without an explicit turn end', async () => {
+    const f = fixture()
+    f.state.activity = activeBody()
+    f.live.beginPolling()
+    await vi.advanceTimersByTimeAsync(500)
+    f.state.activity = { ...INACTIVE, ended: false }
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(f.children[0].kill).not.toHaveBeenCalled()
+    expect(f.indicators[0].close).not.toHaveBeenCalled()
+    expect(f.shortcut.unregister).not.toHaveBeenCalled()
+    expect(f.live.status().active).toBe(true)
+    await vi.advanceTimersByTimeAsync(IDLE_MS + 1000)
+    expect(f.children[0].kill).toHaveBeenCalledWith('SIGTERM')
+    expect(f.indicators[0].close).toHaveBeenCalledOnce()
+    f.live.shutdown()
+  })
+
   it('goes idle at once when the driver stops', async () => {
     const f = fixture()
     f.state.activity = activeBody()

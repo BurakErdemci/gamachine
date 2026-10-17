@@ -61,7 +61,55 @@ def grant(env, bundle_id="com.apple.TextEdit"):
 
 def test_nothing_recorded_is_inactive():
     assert activity.snapshot() == {"active": False, "conversation_id": None, "started_at": None,
-                                   "last": None, "target": None}
+                                   "last": None, "target": None, "ended": False}
+
+
+def test_end_makes_activity_explicitly_inactive():
+    activity.record(5, "computer_click", PARAMS, "allow", now=100.0)
+    activity.end(5, now=101.0)
+    assert activity.snapshot(now=102.0) == {
+        "active": False, "conversation_id": None, "started_at": None,
+        "last": None, "target": None, "ended": True,
+    }
+
+
+def test_ended_flag_expires_after_active_window():
+    activity.record(5, "computer_click", PARAMS, "allow", now=100.0)
+    activity.end(5, now=101.0)
+    assert activity.snapshot(now=101.0 + activity.ACTIVE_SECONDS)["ended"] is True
+    snap = activity.snapshot(now=101.1 + activity.ACTIVE_SECONDS)
+    assert snap["active"] is False and snap["ended"] is False
+
+
+def test_record_after_end_starts_a_fresh_streak_and_target():
+    activity.record(5, "computer_click", PARAMS, "allow", now=100.0)
+    activity.end(5, now=101.0)
+    activity.record(5, "computer_clipboard_write", {}, "allow", now=102.0)
+    snap = activity.snapshot(now=102.0)
+    assert snap["active"] is True and snap["ended"] is False
+    assert snap["started_at"] == 102_000
+    assert snap["target"] is None
+
+
+def test_ending_one_conversation_leaves_another_active():
+    activity.record(5, "computer_click", PARAMS, "allow", now=100.0)
+    activity.record(6, "computer_click", PARAMS, "allow", now=101.0)
+    activity.end(6, now=102.0)
+    snap = activity.snapshot(now=103.0)
+    assert snap["active"] is True and snap["conversation_id"] == 5
+    assert snap["ended"] is False
+
+
+@pytest.mark.parametrize("conversation_id", [99, None, 0, -1, "5", True, 1.5])
+def test_ending_unknown_or_invalid_conversation_is_a_noop(conversation_id):
+    activity.end(conversation_id, now=100.0)
+    assert activity._conversations == {}
+    activity.record(1, "computer_click", PARAMS, "allow", now=100.0)
+    activity.record(5, "computer_click", PARAMS, "allow", now=101.0)
+    before = activity.snapshot(now=102.0)
+    activity.end(conversation_id, now=102.0)
+    assert activity.snapshot(now=102.0) == before
+    assert all("ended_at" not in entry for entry in activity._conversations.values())
 
 
 def test_allowed_call_is_active_for_fifteen_seconds():
@@ -138,7 +186,7 @@ def test_granted_call_through_the_gate_becomes_active(env):
     snap = env.client.get("/computer-use/activity").json()
     assert snap["active"] is True and snap["conversation_id"] == 1
     assert snap["last"]["decision"] == "allow" and snap["last"]["window_id"] == 77
-    assert set(snap) == {"active", "conversation_id", "started_at", "last", "target"}
+    assert set(snap) == {"active", "conversation_id", "started_at", "last", "target", "ended"}
     assert "secret" not in json.dumps(snap).lower()
 
 

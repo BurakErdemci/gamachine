@@ -5,6 +5,7 @@ the live indicator and which window to mirror. Only calls that were let
 through (allowed outright or approved on a card) count: a denied or pending
 call drove nothing, and mirroring a refused app's window would show the user
 something the agent was never allowed to touch.
+A finished turn is ended explicitly so the desktop drops the live presence at once.
 """
 import threading
 import time
@@ -49,7 +50,7 @@ def record(conversation_id, tool, params, decision, now=None):
             if now - entry["last_at"] > FORGET_SECONDS:
                 del _conversations[cid]
         entry = _conversations.get(conversation_id)
-        if entry is None or now - entry["last_at"] > ACTIVE_SECONDS:
+        if entry is None or "ended_at" in entry or now - entry["last_at"] > ACTIVE_SECONDS:
             entry = {"started_at": now, "target": None}
             _conversations[conversation_id] = entry
         entry["last_at"] = now
@@ -57,6 +58,17 @@ def record(conversation_id, tool, params, decision, now=None):
         # Pid-less tools (app list, clipboard) keep mirroring the last window.
         if action["pid"] is not None:
             entry["target"] = {key: action[key] for key in ("bundle_id", "app_name", "pid", "window_id")}
+
+
+def end(conversation_id, now=None):
+    """End an existing conversation's live presence when its turn finishes."""
+    if type(conversation_id) is not int or conversation_id <= 0:
+        return
+    now = time.time() if now is None else now
+    with _lock:
+        entry = _conversations.get(conversation_id)
+        if entry is not None:
+            entry["ended_at"] = now
 
 
 def snapshot(now=None):
@@ -68,13 +80,18 @@ def snapshot(now=None):
     with _lock:
         best = None
         for cid, entry in _conversations.items():
-            if now - entry["last_at"] <= ACTIVE_SECONDS and (best is None or entry["last_at"] > best[1]["last_at"]):
+            if ("ended_at" not in entry and now - entry["last_at"] <= ACTIVE_SECONDS
+                    and (best is None or entry["last_at"] > best[1]["last_at"])):
                 best = (cid, entry)
         if best is None:
-            return {"active": False, "conversation_id": None, "started_at": None, "last": None, "target": None}
+            ended = any("ended_at" in entry and now - entry["ended_at"] <= ACTIVE_SECONDS
+                        for entry in _conversations.values())
+            return {"active": False, "conversation_id": None, "started_at": None,
+                    "last": None, "target": None, "ended": ended}
         cid, entry = best
         return {
             "active": True,
+            "ended": False,
             "conversation_id": cid,
             "started_at": int(entry["started_at"] * 1000),
             "last": dict(entry["last"]),

@@ -253,6 +253,11 @@ export class ComputerLive {
     }
     if (this.stopped) return
     if (data) this.apply(data)
+    // The backend explicitly ends finished turns; the timer covers missed polls or old backends.
+    if (this.live && data && data.active !== true && data.ended === true) {
+      this.goIdle()
+      return
+    }
     if (this.live && this.now() - this.lastActiveSeen > IDLE_MS) this.goIdle()
     else if (this.live) this.emit(null)
   }
