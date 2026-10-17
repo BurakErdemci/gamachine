@@ -3,6 +3,7 @@ import asyncio
 
 import pytest
 
+from agentic import approval_policy
 from computer_use import activity
 from routes.conversation_routes import _tag_sse_stream
 
@@ -86,3 +87,65 @@ def test_end_failure_is_logged_without_masking_stream_exit(monkeypatch, caplog, 
         assert len(asyncio.run(consume())) == 1
     assert "activity unavailable" in caplog.text
     assert any(record.exc_info for record in caplog.records)
+
+
+def test_stream_keeps_activity_until_other_turn_exits():
+    async def frames():
+        yield "data: {}\n\n"
+
+    async def consume():
+        return [frame async for frame in _tag_sse_stream(frames(), 7)]
+
+    with approval_policy.ambient_turn(".", "auto", 7, 0):
+        activity.record(7, "computer_click", {}, "allow", now=100.0)
+        assert len(asyncio.run(consume())) == 1
+        snap = activity.snapshot()
+        assert snap["active"] is True and snap["ended"] is False
+
+    assert len(asyncio.run(consume())) == 1
+    snap = activity.snapshot()
+    assert snap["active"] is False and snap["ended"] is True
+
+
+@pytest.mark.parametrize("close_early", [False, True])
+def test_stream_ends_activity_after_own_ambient_turn_exits(close_early):
+    async def frames():
+        with approval_policy.ambient_turn(".", "auto", 7, 0):
+            activity.record(7, "computer_click", {}, "allow", now=100.0)
+            yield "data: {}\n\n"
+            yield "data: {}\n\n"
+
+    async def consume():
+        stream = _tag_sse_stream(frames(), 7)
+        if close_early:
+            await anext(stream)
+            assert approval_policy.conversation_turn_in_flight(7)
+            await stream.aclose()
+        else:
+            assert len([frame async for frame in stream]) == 2
+
+    asyncio.run(consume())
+    assert not approval_policy.conversation_turn_in_flight(7)
+    snap = activity.snapshot()
+    assert snap["active"] is False and snap["ended"] is True
+
+
+def test_in_flight_check_failure_is_logged_without_breaking_stream(monkeypatch, caplog):
+    def broken_check(conversation_id):
+        assert conversation_id == 7
+        raise RuntimeError("turn registry unavailable")
+
+    monkeypatch.setattr(approval_policy, "conversation_turn_in_flight", broken_check)
+    activity.record(7, "computer_click", {}, "allow", now=100.0)
+
+    async def frames():
+        yield "data: {}\n\n"
+
+    async def consume():
+        return [frame async for frame in _tag_sse_stream(frames(), 7)]
+
+    assert len(asyncio.run(consume())) == 1
+    assert "turn registry unavailable" in caplog.text
+    assert any(record.exc_info for record in caplog.records)
+    snap = activity.snapshot()
+    assert snap["active"] is True and snap["ended"] is False
