@@ -813,7 +813,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         return {"type": "turn_usage", **usage, "cost_usd": None,
                 "duration_ms": int(elapsed * 1000)}
 
-    async def stream(self, message: str, *, model: str = "gemini-3.6-flash",
+    async def stream(self, message: str, *, model: str = "gemini-3.8-flash",
                      cwd: Optional[str] = None, side: bool = False,
                      language: str = "tr", thinking_level: str = "auto",
                      agent_guide: str = "") -> AsyncGenerator[dict, None]:

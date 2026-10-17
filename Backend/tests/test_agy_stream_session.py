@@ -262,7 +262,7 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
 
     async def test_model_change_respawns_and_preserves_uuid(self):
         session = agy_session.get_session(11)
-        await self.collect(session, model="gemini-3.6-flash")
+        await self.collect(session, model="gemini-4-argon")
         first = self.processes[0]
         await self.collect(session, model="gemini-3.8-flash")
         self.assertEqual(len(self.processes), 2)

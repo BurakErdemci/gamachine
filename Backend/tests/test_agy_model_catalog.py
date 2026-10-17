@@ -1,4 +1,4 @@
-"""Measured agy 1.2.17 catalog, saved-model migration, and effort routing."""
+"""Measured agy 1.4.0 catalog, saved-model migration, and effort routing."""
 import asyncio
 import copy
 import sqlite3
@@ -23,6 +23,14 @@ REPLACEMENTS = {
     "gemini-3.5-flash": "gemini-3.8-flash",
     "gemini-3.5-flash-medium": "gemini-3.8-flash-medium",
     "gemini-3.5-flash-low": "gemini-3.8-flash-low",
+    "gemini-3.7-flash": "gemini-3.8-flash",
+    "gemini-3.7-flash-medium": "gemini-3.8-flash-medium",
+    "gemini-3.7-flash-low": "gemini-3.8-flash-low",
+    "gemini-3.6-flash": "gemini-3.8-flash",
+    "gemini-3.6-flash-medium": "gemini-3.8-flash-medium",
+    "gemini-3.6-flash-low": "gemini-3.8-flash-low",
+    "gemini-3.1-pro-preview": "gemini-4-argon",
+    "gemini-3.1-pro-low": "gemini-4-argon-low",
 }
 
 
@@ -150,7 +158,10 @@ def test_claude_caps_and_unselected_effort(model):
     assert provider._pending_agy_model_slug == f"{model.removeprefix('agy-')}-high"
 
 
-@pytest.mark.parametrize("model", ["gemini-3.8-flash", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"])
+@pytest.mark.parametrize("model", [
+    "gemini-3.8-flash", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    "gemini-4-argon", "gemini-4-argon-medium", "gemini-4-argon-low",
+])
 def test_gemini_keeps_its_model_tier_without_an_effort_picker(model):
     assert get_effort_caps("subscription", model)["levels"] == ["auto"]
     provider = AgyProvider(binary_name=model)

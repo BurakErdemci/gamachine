@@ -1,4 +1,4 @@
-"""Offline checks for the flag behavior measured by the architect on agy 1.2.17."""
+"""Offline checks for the flag behavior measured by the architect on agy 1.4.0."""
 import asyncio
 import copy
 import os
@@ -7,32 +7,26 @@ from unittest.mock import Mock
 import pytest
 
 from providers import agy_provider, agy_session
+from providers.agy_model_ids import AGY_MODEL_REPLACEMENTS
 from providers.agy_provider import AgyProvider
 from providers.cli_base import BaseCLIProvider
 
 
-# Literal slugs from .delegate-runs/agy-a/agy-models.txt (5 Oct 2026).
+# Literal slugs from inputs/agy-models-1.4.0.txt (agy 1.4.0, 17 Oct 2026).
 AGY_SLUGS = {
+    "gemini-4-argon-high", "gemini-4-argon-medium", "gemini-4-argon-low",
     "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
-    "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
-    "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
-    "gemini-3.1-pro-high", "gemini-3.1-pro-low",
     "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
     "claude-sonnet-5-5-low", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high",
     "gpt-oss-120b-medium",
 }
 APP_SLUGS = {
+    "gemini-4-argon": "gemini-4-argon-high",
+    "gemini-4-argon-medium": "gemini-4-argon-medium",
+    "gemini-4-argon-low": "gemini-4-argon-low",
     "gemini-3.8-flash": "gemini-3.8-flash-high",
     "gemini-3.8-flash-medium": "gemini-3.8-flash-medium",
     "gemini-3.8-flash-low": "gemini-3.8-flash-low",
-    "gemini-3.7-flash": "gemini-3.7-flash-high",
-    "gemini-3.7-flash-medium": "gemini-3.7-flash-medium",
-    "gemini-3.7-flash-low": "gemini-3.7-flash-low",
-    "gemini-3.6-flash": "gemini-3.6-flash-high",
-    "gemini-3.6-flash-medium": "gemini-3.6-flash-medium",
-    "gemini-3.6-flash-low": "gemini-3.6-flash-low",
-    "gemini-3.1-pro-preview": "gemini-3.1-pro-high",
-    "gemini-3.1-pro-low": "gemini-3.1-pro-low",
     "agy-claude-opus-5-5": "claude-opus-5-5-high",
     "agy-claude-sonnet-5-5": "claude-sonnet-5-5-high",
     "agy-gpt-oss-120b": "gpt-oss-120b-medium",
@@ -48,8 +42,8 @@ def test_every_picker_id_and_effort_selects_a_listed_slug(monkeypatch, effort):
     router = config_routes.create_config_router(Mock())
     models = asyncio.run(router.list_models(None))["subscription"]
     picker_ids = {m["id"] for m in models if m["id"].startswith(("gemini-", "agy-"))}
-    # Low Flash IDs remain supported saved IDs but are absent from the picker.
-    saved_only = {f"gemini-{version}-flash-low" for version in ("3.8", "3.7", "3.6")}
+    # Flash Low remains a supported saved ID but is absent from the picker.
+    saved_only = {"gemini-3.8-flash-low"}
     assert picker_ids == set(APP_SLUGS) - saved_only
     for model in APP_SLUGS:
         expected = APP_SLUGS[model]
@@ -61,10 +55,24 @@ def test_every_picker_id_and_effort_selects_a_listed_slug(monkeypatch, effort):
         assert slug in AGY_SLUGS
 
 
-@pytest.mark.parametrize("model", ["unknown-model", "gemini-3.5-flash", "agy-claude-opus-4-6", ""])
+@pytest.mark.parametrize("model", ["unknown-model", "gemini-9-nope", ""])
 def test_unknown_app_id_errors_instead_of_falling_back(model):
     with pytest.raises(ValueError, match="Unknown agy model ID"):
         AgyProvider(binary_name=model)._build_cmd("private prompt")
+
+
+@pytest.mark.parametrize("old,new", [
+    (old, new) for old, new in AGY_MODEL_REPLACEMENTS.items() if old.startswith("gemini-")
+])
+def test_removed_gemini_ids_resolve_to_their_listed_replacement(old, new):
+    slug = BaseCLIProvider._resolve_agy_model(old)
+    assert slug in AGY_SLUGS
+    assert slug == BaseCLIProvider._resolve_agy_model(new)
+
+
+def test_unknown_id_still_raises_in_the_resolver():
+    with pytest.raises(ValueError, match="Unknown agy model ID"):
+        BaseCLIProvider._resolve_agy_model("gemini-9-nope")
 
 
 @pytest.mark.parametrize("model,slug", APP_SLUGS.items())

@@ -8,6 +8,7 @@ import subprocess
 import json
 from typing import Dict, Any, Optional, List, AsyncGenerator
 
+from providers.agy_model_ids import AGY_MODEL_REPLACEMENTS
 from .base import AIProvider, ThinkingResult, _strip_ansi
 
 logger = logging.getLogger(__name__)
@@ -145,21 +146,16 @@ class BaseCLIProvider(AIProvider):
     # akışlarına kontrollü, fakat gerçek MCP sonuçlarını taşıyabilecek ortak tavan ver.
     _CLI_STREAM_LIMIT_BYTES = 32 * 1024 * 1024
 
-    # Model ID -> agy CLI slug (agy 1.2.17, 5 Oct 2026).
+    # Model ID -> agy CLI slug (agy 1.4.0, 17 Oct 2026).
     _AGY_MODEL_MAP = {
         # Gemini tiers remain separate model IDs (High/Medium/Low).
+        "gemini-4-argon":                "gemini-4-argon-high",
+        "gemini-4-argon-medium":         "gemini-4-argon-medium",
+        "gemini-4-argon-low":            "gemini-4-argon-low",
         # 3.8 needs agy >=1.1.25; installed 1.1.27 (measured 2026-09-05).
         "gemini-3.8-flash":              "gemini-3.8-flash-high",
         "gemini-3.8-flash-medium":       "gemini-3.8-flash-medium",
         "gemini-3.8-flash-low":          "gemini-3.8-flash-low",
-        "gemini-3.7-flash":              "gemini-3.7-flash-high",
-        "gemini-3.7-flash-medium":       "gemini-3.7-flash-medium",
-        "gemini-3.7-flash-low":          "gemini-3.7-flash-low",
-        "gemini-3.6-flash":              "gemini-3.6-flash-high",
-        "gemini-3.6-flash-medium":       "gemini-3.6-flash-medium",
-        "gemini-3.6-flash-low":          "gemini-3.6-flash-low",
-        "gemini-3.1-pro-preview":        "gemini-3.1-pro-high",
-        "gemini-3.1-pro-low":            "gemini-3.1-pro-low",
         # Claude defaults to High; the effort picker can select Low or Medium.
         "agy-claude-sonnet-5-5":         "claude-sonnet-5-5-high",
         "agy-claude-opus-5-5":           "claude-opus-5-5-high",
@@ -169,6 +165,7 @@ class BaseCLIProvider(AIProvider):
     @classmethod
     def _resolve_agy_model(cls, model: str, thinking_level: Optional[str] = None) -> str:
         """Resolve the CLI slug without encoding Claude effort in saved IDs."""
+        model = AGY_MODEL_REPLACEMENTS.get(model, model)
         if model not in cls._AGY_MODEL_MAP:
             raise ValueError(f"Unknown agy model ID: {model!r}")
         slug = cls._AGY_MODEL_MAP[model]

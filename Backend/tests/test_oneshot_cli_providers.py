@@ -79,7 +79,7 @@ class TestManagerRouting(unittest.TestCase):
         self.assertEqual(sonnet_55.binary_name, "claude-sonnet-5-5")
         from providers.agy_provider import AgyProvider
         for mid, slug in (("gemini-3.8-flash", "gemini-3.8-flash-high"),
-                          ("gemini-3.7-flash", "gemini-3.7-flash-high")):
+                          ("gemini-3.7-flash", "gemini-3.8-flash-high")):
             agy = self._get(mid)
             self.assertIsInstance(agy, AgyProvider)
             self.assertEqual(AgyProvider._resolve_agy_model(mid), slug)
