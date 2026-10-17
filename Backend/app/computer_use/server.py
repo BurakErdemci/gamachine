@@ -66,6 +66,9 @@ def _is_bundle_dir(path):
             or os.path.exists(os.path.join(path, "Contents", "MacOS")))
 
 
+LAUNCH_NAME_TIMEOUT = 3.0
+
+
 def _resolve_launch_targets(urls):
     """Return the urls with every path replaced by its checked real path, or None."""
     resolved = []
@@ -128,6 +131,12 @@ class ComputerServer:
                 bundle_id, app_name = (await driver.list_running_apps()).get(pid, (None, None))
             elif tool == "computer_launch_app":
                 bundle_id = args["bundle_id"]
+                try:
+                    driver = await self._runtime_driver()
+                    app_name = await asyncio.wait_for(driver.installed_app_name(bundle_id), LAUNCH_NAME_TIMEOUT)
+                except Exception:
+                    # Name lookup is cosmetic; never block or refuse the launch.
+                    app_name = None
             elif tool == "computer_clipboard_read":
                 bundle_id, app_name = policy.CLIPBOARD_BUNDLE_ID, "Clipboard"
             risk = policy.risky_reason(tool, args)

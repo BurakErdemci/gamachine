@@ -250,6 +250,9 @@ def test_opened_tools_forward_after_approval(fake, tool, args, forwarded):
     if "pid" in args:
         assert [row["tool"] for row in rows[:-1]] == ["list_apps", "list_apps"]
         assert approval.call_args.kwargs["params"]["bundle_id"] == "com.apple.TextEdit"
+    elif tool == "computer_launch_app":
+        assert [row["tool"] for row in rows[:-1]] == ["list_apps"]
+        assert approval.call_args.kwargs["params"]["pid"] is None
     else:
         assert len(rows) == 1
         assert approval.call_args.kwargs["params"]["pid"] is None
@@ -349,7 +352,7 @@ def test_launch_plain_directory_forwards_resolved_real_path(fake, tmp_path, name
 
     asyncio.run(run())
     approval.assert_awaited_once()
-    assert calls(log)[0]["args"]["urls"] == [os.path.realpath(target), "https://example.com/a"]
+    assert calls(log)[-1]["args"]["urls"] == [os.path.realpath(target), "https://example.com/a"]
 
 
 def test_driver_session_timeout_covers_maximum_window_read(fake, monkeypatch):
@@ -447,3 +450,64 @@ def test_gate_params_carry_only_an_integer_window_id(fake, window_id, expected):
     else:
         # The policy refused the malformed id before any gate was asked.
         assert expected is None
+
+
+def _launch_params(driver, approval, bundle_id, **extra):
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            return await handler.call("computer_launch_app", {"bundle_id": bundle_id, **extra})
+        finally:
+            await handler.close()
+    result = asyncio.run(run())
+    return result, approval.call_args.kwargs["params"]
+
+
+def test_launch_approval_names_not_running_app_case_insensitively(fake):
+    driver, log, approval = fake
+    result, params = _launch_params(driver, approval, "COM.example.sleeper")
+    assert not result.is_error
+    assert params["bundle_id"] == "COM.example.sleeper"
+    assert params["app_name"] == "Sleeper App"
+    assert params["summary"] == "Sleeper App"
+    assert [row["tool"] for row in calls(log)] == ["list_apps", "launch_app"]
+
+
+@pytest.mark.parametrize("bundle_id", ["com.example.Unknown", "com.example.Offline"])
+def test_launch_approval_name_is_none_without_a_usable_row(fake, bundle_id):
+    driver, log, approval = fake
+    result, params = _launch_params(driver, approval, bundle_id)
+    assert not result.is_error
+    assert params["app_name"] is None
+    assert calls(log)[-1]["tool"] == "launch_app"
+
+
+def test_launch_name_lookup_failure_still_launches(fake, monkeypatch):
+    driver, log, approval = fake
+    monkeypatch.setattr(driver, "installed_app_name", AsyncMock(side_effect=RuntimeError("boom")))
+    result, params = _launch_params(driver, approval, "com.example.Sleeper")
+    assert not result.is_error
+    assert params["app_name"] is None
+    assert [row["tool"] for row in calls(log)] == ["launch_app"]
+
+
+def test_launch_name_lookup_timeout_still_launches(fake, monkeypatch):
+    driver, log, approval = fake
+
+    async def slow(_bundle_id):
+        await asyncio.sleep(10)
+    monkeypatch.setattr(driver, "installed_app_name", slow)
+    monkeypatch.setattr(server, "LAUNCH_NAME_TIMEOUT", 0.05)
+    result, params = _launch_params(driver, approval, "com.example.Sleeper")
+    assert not result.is_error
+    assert params["app_name"] is None
+    assert calls(log)[-1]["tool"] == "launch_app"
+
+
+def test_launch_url_refusal_makes_no_driver_call_for_the_name(fake, tmp_path):
+    driver, log, approval = fake
+    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
+        "bundle_id": "com.example.Sleeper", "urls": [str(tmp_path / "missing")]}))
+    assert result.is_error
+    approval.assert_not_awaited()
+    assert calls(log) == []

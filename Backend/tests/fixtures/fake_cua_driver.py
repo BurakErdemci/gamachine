@@ -30,6 +30,7 @@ def list_apps() -> CallToolResult:
         {"pid": 4242, "bundle_id": bundle, "name": "TextEdit", "running": True},
         {"pid": 44, "bundle_id": "com.apple.Terminal", "name": "Terminal", "running": True},
         {"pid": 0, "bundle_id": "com.example.Offline", "running": False},
+        {"pid": 0, "bundle_id": "com.example.Sleeper", "name": "  Sleeper App ", "running": False},
     ]}))])
 
 

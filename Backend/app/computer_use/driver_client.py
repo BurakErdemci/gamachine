@@ -177,10 +177,7 @@ class DriverClient:
                 await self._task
             self._task = None
 
-    async def list_running_apps(self):
-        result = await self.call("list_apps", {})
-        if result.is_error:
-            raise DriverError("Could not resolve running applications")
+    def _app_rows(self, result):
         sources = []
         structured = result.structured_content
         if structured is not None:
@@ -191,19 +188,39 @@ class DriverClient:
                     sources.append(json.loads(block.text))
                 except (ValueError, TypeError):
                     continue
-        apps = {}
+        rows_out = []
         for source in sources:
             rows = source.get("apps", []) if isinstance(source, dict) else source
             if not isinstance(rows, list):
                 continue
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                pid = row.get("pid")
-                if type(pid) is not int or pid <= 0 or row.get("running") is False:
-                    continue
-                bundle = row.get("bundle_id")
-                name = row.get("name")
-                apps[pid] = (bundle if isinstance(bundle, str) else None,
-                             name if isinstance(name, str) else None)
+            rows_out.extend(row for row in rows if isinstance(row, dict))
+        return rows_out
+
+    async def list_running_apps(self):
+        result = await self.call("list_apps", {})
+        if result.is_error:
+            raise DriverError("Could not resolve running applications")
+        apps = {}
+        for row in self._app_rows(result):
+            pid = row.get("pid")
+            if type(pid) is not int or pid <= 0 or row.get("running") is False:
+                continue
+            bundle = row.get("bundle_id")
+            name = row.get("name")
+            apps[pid] = (bundle if isinstance(bundle, str) else None,
+                         name if isinstance(name, str) else None)
         return apps
+
+    async def installed_app_name(self, bundle_id):
+        """Real name of an installed app (running or not) from list_apps, or None."""
+        result = await self.call("list_apps", {})
+        if result.is_error:
+            return None
+        wanted = bundle_id.casefold()
+        for row in self._app_rows(result):
+            bundle = row.get("bundle_id")
+            name = row.get("name")
+            if (isinstance(bundle, str) and bundle.casefold() == wanted
+                    and isinstance(name, str) and name.strip()):
+                return name.strip()
+        return None
