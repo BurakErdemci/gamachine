@@ -11,6 +11,7 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 mcp = MCPServer(name="fake-cua")
 snapshot = False
 app_reads = 0
+front_calls = 0
 IMAGE = "aGVsbG8="
 
 
@@ -59,9 +60,16 @@ def type_text(pid: int, text: str) -> str:
 
 
 @mcp.tool()
-def bring_to_front(pid: int, window_id: int = 0) -> str:
+def bring_to_front(pid: int, window_id: int = 0) -> CallToolResult:
+    global front_calls
+    front_calls += 1
     log("bring_to_front", {"pid": pid, "window_id": window_id})
-    return "brought to front"
+    unverified = os.environ.get("FAKE_CUA_FRONT_UNVERIFIED")
+    if unverified == "1" or (unverified == "once" and front_calls == 1):
+        return CallToolResult(content=[TextContent(type="text", text="not verified")], is_error=True)
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps({
+        "activated": True, "code": "bring_to_front_exact_window_verified",
+        "exact_window_effect": {"verified": True}}))])
 
 
 @mcp.tool()

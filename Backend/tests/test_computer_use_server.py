@@ -127,6 +127,158 @@ def test_bring_to_front_requires_foreground_approval_before_forwarding(fake, app
         assert [row["tool"] for row in rows] == ["list_apps"]
 
 
+@pytest.mark.parametrize("front,window_id,expected_tools,refusal", [
+    (None, 7, ["bring_to_front", "click"], None),
+    ("1", 7, ["bring_to_front", "bring_to_front"], "could not be verified as the front window"),
+    ("once", 7, ["bring_to_front", "bring_to_front", "click"], None),
+    (None, None, [], "Foreground input needs window_id; nothing was sent."),
+])
+def test_foreground_click_verifies_window_before_input(fake, front, window_id, expected_tools, refusal):
+    driver, log, approval = fake
+    if front is not None:
+        driver.env["FAKE_CUA_FRONT_UNVERIFIED"] = front
+    args = {"pid": 4242, "element_token": "s0000002a:1", "delivery_mode": "foreground"}
+    if window_id is not None:
+        args["window_id"] = window_id
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            result = await handler.call("computer_click", args)
+            assert bool(result.is_error) is (refusal is not None)
+            if refusal:
+                assert refusal in result.content[0].text
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    rows = calls(log)
+    assert [row["tool"] for row in rows] == ["list_apps", "list_apps", *expected_tools]
+    assert all(row["args"] == {"pid": 4242, "window_id": 7}
+               for row in rows if row["tool"] == "bring_to_front")
+
+
+def test_background_click_never_fronts_window(fake):
+    driver, log, approval = fake
+    driver.env["FAKE_CUA_FRONT_UNVERIFIED"] = "1"
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            result = await handler.call("computer_click", {
+                "pid": 4242, "window_id": 7, "element_token": "s0000002a:1",
+                "delivery_mode": "background"})
+            assert not result.is_error
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    assert [row["tool"] for row in calls(log)] == ["list_apps", "list_apps", "click"]
+
+
+@pytest.mark.parametrize("shorthand", [False, True])
+def test_split_steps_stop_before_unverified_foreground_step(fake, monkeypatch, shorthand):
+    driver, log, approval = fake
+    driver.env["FAKE_CUA_FRONT_UNVERIFIED"] = "1"
+    monkeypatch.setattr(server, "_batch_stop", AsyncMock(return_value=None))
+    foreground = {"window_id": 7, "delivery_mode": "foreground"}
+    step = {"click": foreground} if shorthand else {"tool": "click", "args": foreground}
+    steps = [{"type_text": {"text": "hello"}}, step]
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            result = await handler.call("computer_run_steps", {"pid": 4242, "window_id": 7, "steps": steps})
+            assert result.is_error
+            report = json.loads(result.content[0].text)
+            assert report["failed_step"] == 1 and report["ok"] is False
+            assert report["steps"][1] == {
+                "index": 1, "ok": False, "code": "foreground_unverified",
+                "message": "Foreground input not sent: window 7 could not be verified as the front window "
+                           "(another window, for example Gamachine, may be on top). Ask the user to bring "
+                           "the app to the front, or use background delivery with element_token."}
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    rows = calls(log)
+    assert [row["tool"] for row in rows] == [
+        "list_apps", "list_apps", "run_steps", "bring_to_front", "bring_to_front"]
+    assert rows[2]["args"]["steps"] == steps[:1]
+    assert all(row["args"] == {"pid": 4242, "window_id": 7}
+               for row in rows if row["tool"] == "bring_to_front")
+
+
+def test_split_steps_verify_each_inherited_foreground_window(fake, monkeypatch):
+    driver, log, approval = fake
+    monkeypatch.setattr(server, "_batch_stop", AsyncMock(return_value=None))
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            result = await handler.call("computer_run_steps", {
+                "pid": 4242, "window_id": 7, "delivery_mode": "foreground",
+                "steps": [{"click": {}}, {"type_text": {"text": "hello"}}]})
+            assert not result.is_error
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    assert [row["tool"] for row in calls(log)] == [
+        "list_apps", "list_apps", "bring_to_front", "run_steps", "bring_to_front", "run_steps"]
+
+
+@pytest.mark.parametrize("unverified", [False, True])
+def test_single_step_foreground_fallback_is_guarded(fake, unverified):
+    driver, log, approval = fake
+    if unverified:
+        driver.env["FAKE_CUA_FRONT_UNVERIFIED"] = "1"
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            result = await handler.call("computer_run_steps", {
+                "pid": 4242, "window_id": 7, "foreground_fallback": True,
+                "steps": [{"click": {}}]})
+            assert bool(result.is_error) is unverified
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    expected = ["bring_to_front"] if unverified else ["run_steps"]
+    assert [row["tool"] for row in calls(log)] == ["list_apps", "list_apps", "bring_to_front", *expected]
+
+
+@pytest.mark.parametrize("window_id", [None, True, False, "7", 7.0])
+def test_front_guard_requires_integer_window_without_driver_call(window_id):
+    driver = AsyncMock()
+    assert asyncio.run(server._front_guard(driver, 4242, window_id)) == (
+        "Foreground input needs window_id; nothing was sent.")
+    driver.call.assert_not_awaited()
+
+
+@pytest.mark.parametrize("body,structured,error,verified", [
+    ('{"exact_window_effect": {"verified": true}}', None, False, True),
+    ("invalid", {"exact_window_effect": {"verified": True}}, False, True),
+    ('{"exact_window_effect": {"verified": true}}', {}, False, False),
+    ('{"exact_window_effect": {"verified": true}}', None, True, False),
+    ("invalid", None, False, False),
+    ("[]", None, False, False),
+    ('{"exact_window_effect": null}', None, False, False),
+    ('{"exact_window_effect": {"verified": 1}}', None, False, False),
+])
+def test_front_guard_accepts_only_explicit_verified_result(monkeypatch, body, structured, error, verified):
+    driver = AsyncMock()
+    driver.call.return_value = CallToolResult(
+        content=[TextContent(type="text", text=body)], structured_content=structured, is_error=error)
+    sleep = AsyncMock()
+    monkeypatch.setattr(server.asyncio, "sleep", sleep)
+    result = asyncio.run(server._front_guard(driver, 4242, 7))
+    assert (result is None) is verified
+    assert driver.call.await_count == (1 if verified else 2)
+    for call in driver.call.await_args_list:
+        assert call.args == ("bring_to_front", {"pid": 4242, "window_id": 7})
+    if verified:
+        sleep.assert_not_awaited()
+    else:
+        sleep.assert_awaited_once_with(0.3)
+
+
 def test_exit_is_not_retried_and_next_call_reconnects(fake):
     driver, log, approval = fake
 

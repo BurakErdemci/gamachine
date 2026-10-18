@@ -69,6 +69,30 @@ def _foreground(args):
     return False
 
 
+async def _front_guard(driver, pid, window_id) -> str | None:
+    if type(window_id) is not int:
+        return "Foreground input needs window_id; nothing was sent."
+    for attempt in range(2):
+        result = await driver.call("bring_to_front", {"pid": pid, "window_id": window_id})
+        if result.is_error is not True:
+            report = result.structured_content
+            try:
+                if not isinstance(report, dict):
+                    report = json.loads(next(block.text for block in result.content
+                                             if isinstance(block, TextContent)))
+                effect = report.get("exact_window_effect") if isinstance(report, dict) else None
+                if isinstance(effect, dict) and effect.get("verified") is True:
+                    return None
+            except (ValueError, TypeError, StopIteration):
+                pass
+        if attempt == 0:
+            await asyncio.sleep(0.3)
+    return (
+        f"Foreground input not sent: window {window_id} could not be verified as the front window "
+        "(another window, for example Gamachine, may be on top). Ask the user to bring the app "
+        "to the front, or use background delivery with element_token.")
+
+
 _BUNDLE_SUFFIXES = (".app", ".bundle", ".framework", ".plugin", ".appex", ".prefpane",
                     ".workflow", ".action", ".shortcut", ".scptd", ".pkg", ".mpkg",
                     ".kext", ".xpc", ".terminal", ".command", ".tool",
@@ -184,6 +208,10 @@ class ComputerServer:
                 driver = await self._runtime_driver()
             if tool == "computer_run_steps" and len(args["steps"]) >= 2:
                 return await self._run_steps_split(driver, forward_args, params)
+            if tool != "computer_bring_to_front" and _foreground(forward_args):
+                refusal = await _front_guard(driver, pid, forward_args.get("window_id"))
+                if refusal is not None:
+                    return _text(refusal, True)
             return await driver.call(validated.driver_tool, forward_args)
         except DriverUnavailable:
             return _text("Bilgisayar kullanımı sürücüsü kullanılamıyor.", True)
@@ -208,6 +236,18 @@ class ComputerServer:
             stop_reason = await _batch_stop(params)
             if stop_reason is not None:
                 break
+            if _foreground({**base, **step}):
+                step_args = step.get("args", {}) if "tool" in step else next(
+                    (step[key] for key in step if key in policy.STEP_TOOLS), {})
+                window_id = step_args.get("window_id")
+                if type(window_id) is not int:
+                    window_id = base.get("window_id")
+                refusal = await _front_guard(driver, base["pid"], window_id)
+                if refusal is not None:
+                    entries.append({"index": i, "ok": False, "code": "foreground_unverified",
+                                    "message": refusal})
+                    failed_step = i
+                    break
             call_args = {**base, "steps": [step]}
             if "observe" in forward_args and i == total - 1:
                 call_args["observe"] = forward_args["observe"]
