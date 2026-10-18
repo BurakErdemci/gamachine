@@ -263,7 +263,8 @@ class ComputerServer:
             if type(previous) is int and previous != pid:
                 try:
                     await driver.call("bring_to_front", {"pid": previous})
-                except DriverError:
+                except Exception:
+                    # The action already ran; an error here must not make the agent repeat it.
                     pass
             return None, result
 

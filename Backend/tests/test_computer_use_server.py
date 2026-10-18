@@ -182,7 +182,7 @@ def test_foreground_click_skips_restore_without_a_different_frontmost_app(fake, 
 
 
 @pytest.mark.parametrize("action_error", [False, True])
-@pytest.mark.parametrize("restore_error", ["none", "result", "exception"])
+@pytest.mark.parametrize("restore_error", ["none", "result", "exception", "unexpected"])
 def test_fronted_call_preserves_action_result_when_restore_fails(action_error, restore_error):
     driver = AsyncMock()
     action = CallToolResult(content=[TextContent(type="text", text="action result")], is_error=action_error)
@@ -196,6 +196,8 @@ def test_fronted_call_preserves_action_result_when_restore_fails(action_error, r
         if args == {"pid": 77}:
             if restore_error == "exception":
                 raise DriverError("restore failed")
+            if restore_error == "unexpected":
+                raise TimeoutError("restore timed out")
             return CallToolResult(content=[], is_error=restore_error == "result")
         return guard
 
@@ -437,7 +439,7 @@ def test_app_parser_supports_text_and_structured_results(fake, structured):
     assert asyncio.run(driver.list_running_apps()) == {7: ("com.test.App", "App"), 9: (None, None)}
 
 
-@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("channels", ["text", "structured", "both"])
 @pytest.mark.parametrize("rows,expected", [
     ([{"pid": 77, "active": True, "running": True}], 77),
     ([{"pid": 77, "active": True}], 77),
@@ -451,11 +453,12 @@ def test_app_parser_supports_text_and_structured_results(fake, structured):
     ([{"pid": 77, "active": True}, {"pid": 4242, "active": True}], None),
     ([], None),
 ])
-def test_frontmost_pid_requires_one_active_running_app(fake, structured, rows, expected):
+def test_frontmost_pid_requires_one_active_running_app(fake, channels, rows, expected):
     driver, _, _ = fake
     data = {"apps": rows}
-    result = CallToolResult(content=[] if structured else [TextContent(type="text", text=json.dumps(data))],
-                            **({"structured_content": data} if structured else {}))
+    result = CallToolResult(
+        content=[] if channels == "structured" else [TextContent(type="text", text=json.dumps(data))],
+        **({} if channels == "text" else {"structured_content": data}))
     driver.call = AsyncMock(return_value=result)
     assert asyncio.run(driver.frontmost_pid()) == expected
     driver.call.assert_awaited_once_with("list_apps", {})
