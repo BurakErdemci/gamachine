@@ -13,6 +13,10 @@ def test_instructions_explain_args_envelope():
         'Every tool takes exactly one parameter named args; put all arguments inside it, '
         'e.g. {"args": {"pid": 123, "window_id": 45}}.'
     ) in mcp.instructions
+    assert (
+        "To check a file the task created, look only in the folder the task names; "
+        "never search the whole home folder, macOS blocks other apps' data and warns the user."
+    ) in mcp.instructions
 
 
 def test_run_steps_description_has_valid_example_and_policy_names():
@@ -24,11 +28,30 @@ def test_run_steps_description_has_valid_example_and_policy_names():
             "Computer-use operation. Allowed args: " + ", ".join(sorted(spec.allowed))
             + ". Required: " + ", ".join(sorted(spec.required)) + "."
         )
-        if tool.name != "computer_run_steps":
-            assert tool.description == prefix
-            continue
         description = tool.description
         assert description.startswith(prefix)
+        element_hint = (
+            ' element_token is `<snapshot_id>:N` from the latest computer_window_state of that window '
+            '(e.g. "s00000003:18"); never a bare number.'
+        )
+        hints = {
+            "computer_invoke_menu": (
+                " If the item is disabled because the app is in the background (common for File > Save), "
+                "call computer_bring_to_front for that window, then retry."
+            ),
+            "computer_bring_to_front": (
+                " Brings the app's window to the front and leaves it there. Use it only when an action "
+                "needs the app frontmost (a menu item disabled in the background, a Save dialog); "
+                "most input works in the background. Pass window_id to verify that window is in front."
+            ),
+        }
+        assert (element_hint in description) == ("element_token" in spec.allowed)
+        for name, hint in hints.items():
+            assert (hint in description) == (tool.name == name)
+        if tool.name != "computer_run_steps":
+            expected_hint = element_hint if "element_token" in spec.allowed else hints.get(tool.name, "")
+            assert description == prefix + expected_hint
+            continue
         assert 'Each step is {"tool": NAME, "args": {...}}' in description
         assert 'shorthand {NAME: {...}}' in description
         assert ", ".join(sorted(policy.STEP_TOOLS)) in description

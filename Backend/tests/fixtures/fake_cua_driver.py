@@ -59,6 +59,12 @@ def type_text(pid: int, text: str) -> str:
 
 
 @mcp.tool()
+def bring_to_front(pid: int, window_id: int = 0) -> str:
+    log("bring_to_front", {"pid": pid, "window_id": window_id})
+    return "brought to front"
+
+
+@mcp.tool()
 def hotkey(pid: int, keys: list[str]) -> str:
     log("hotkey", {"pid": pid, "keys": keys})
     return "pressed"

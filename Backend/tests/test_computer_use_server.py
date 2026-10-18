@@ -97,6 +97,36 @@ def test_denied_discovery_never_connects(fake):
     assert calls(log) == []
 
 
+@pytest.mark.parametrize("approved", [True, False])
+def test_bring_to_front_requires_foreground_approval_before_forwarding(fake, approved):
+    driver, log, approval = fake
+    approval.return_value = {"approved": approved, "error": "denied"}
+    args = {"pid": 4242, "window_id": 7}
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            result = await handler.call("computer_bring_to_front", args)
+            assert bool(result.is_error) is not approved
+            if not approved:
+                assert result.content[0].text == "denied"
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    approval.assert_awaited_once()
+    assert approval.call_args.args == ("computer_bring_to_front",)
+    params = approval.call_args.kwargs["params"]
+    assert params["foreground"] is True
+    assert params["bundle_id"] == "com.apple.TextEdit"
+    assert params["pid"] == 4242 and params["window_id"] == 7
+    rows = calls(log)
+    if approved:
+        assert [row["tool"] for row in rows] == ["list_apps", "list_apps", "bring_to_front"]
+        assert rows[-1]["args"] == args
+    else:
+        assert [row["tool"] for row in rows] == ["list_apps"]
+
+
 def test_exit_is_not_retried_and_next_call_reconnects(fake):
     driver, log, approval = fake
 

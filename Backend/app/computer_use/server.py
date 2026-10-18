@@ -17,6 +17,23 @@ from . import policy
 from .driver_client import DriverClient, DriverError, DriverUnavailable, fetch_runtime
 
 
+_TOOL_HINTS = {
+    "computer_invoke_menu": (
+        " If the item is disabled because the app is in the background (common for File > Save), "
+        "call computer_bring_to_front for that window, then retry."
+    ),
+    "computer_bring_to_front": (
+        " Brings the app's window to the front and leaves it there. Use it only when an action "
+        "needs the app frontmost (a menu item disabled in the background, a Save dialog); "
+        "most input works in the background. Pass window_id to verify that window is in front."
+    ),
+}
+_ELEMENT_TOKEN_HINT = (
+    ' element_token is `<snapshot_id>:N` from the latest computer_window_state of that window '
+    '(e.g. "s00000003:18"); never a bare number.'
+)
+
+
 def _text(value, error=False):
     return CallToolResult(content=[TextContent(type="text", text=value)], is_error=error)
 
@@ -143,7 +160,7 @@ class ComputerServer:
             params = {"bundle_id": bundle_id, "app_name": app_name, "pid": pid,
                       "risky": bool(risk), "risk_reason": risk,
                       "summary": args.get("summary") or app_name or bundle_id or tool,
-                      "foreground": _foreground(args),
+                      "foreground": _foreground(args) or tool == "computer_bring_to_front",
                       # bool is an int subclass; a window id is never True/False.
                       "window_id": args.get("window_id") if type(args.get("window_id")) is int else None}
             try:
@@ -255,7 +272,9 @@ def create_server(driver=None):
         "deleting, purchasing, sending/publishing, overwriting or downloading with the user's account. "
         "Terminals, System Settings and Gamachine are off limits. "
         "Every tool takes exactly one parameter named args; put all arguments inside it, "
-        'e.g. {"args": {"pid": 123, "window_id": 45}}.'
+        'e.g. {"args": {"pid": 123, "window_id": 45}}. '
+        "To check a file the task created, look only in the folder the task names; "
+        "never search the whole home folder, macOS blocks other apps' data and warns the user."
     ))
 
     def register(name):
@@ -266,6 +285,9 @@ def create_server(driver=None):
             "Computer-use operation. Allowed args: " + ", ".join(sorted(spec.allowed))
             + ". Required: " + ", ".join(sorted(spec.required)) + "."
         )
+        description += _TOOL_HINTS.get(name, "")
+        if "element_token" in spec.allowed:
+            description += _ELEMENT_TOKEN_HINT
         if name == "computer_run_steps":
             description += (
                 '\n\nEach step is {"tool": NAME, "args": {...}} or the shorthand {NAME: {...}}, '

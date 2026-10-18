@@ -57,6 +57,7 @@ TOOLS = {
     "computer_press_key": _tool("press_key", "delivery_mode element_token key modifiers pid window_id x y", "pid key"),
     "computer_hotkey": _tool("hotkey", "delivery_mode element_token keys pid window_id x y", "pid keys"),
     "computer_invoke_menu": _tool("invoke_menu", "path pid window_id", "pid window_id path"),
+    "computer_bring_to_front": _tool("bring_to_front", "pid window_id", "pid"),
     "computer_launch_app": _tool("launch_app", "bundle_id creates_new_application_instance urls", "bundle_id"),
     "computer_clipboard_read": _tool("clipboard_read", "include_text"),
     "computer_clipboard_write": _tool("clipboard_write", "text", "text"),

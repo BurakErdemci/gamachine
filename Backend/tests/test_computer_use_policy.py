@@ -18,6 +18,8 @@ def refused(tool, args, key=None):
     *[("computer_click", {"pid": 4, key: "x"}, key) for key in ("session", "scope", "target", "debug_image_out", "app", "bundle_id")],
     ("computer_window_state", {"pid": 4, "window_id": 1, "screenshot_out_file": "output"}, "screenshot_out_file"),
     ("computer_window_state", {"pid": 4}, "window_id"),
+    ("computer_bring_to_front", {}, "pid"),
+    ("computer_bring_to_front", {"pid": 4, "session": "x"}, "session"),
     *[("computer_launch_app", {"bundle_id": "com.apple.TextEdit", key: "x"}, key) for key in ("name", "urls", "additional_arguments", "webkit_inspector_port", "session")],
     ("computer_launch_app", {"bundle_id": ""}, "bundle_id"),
     *[("computer_confirm_risky_step", {"pid": 4, "summary": value}, "summary") for value in ("", "x" * 501, 4, None)],
@@ -27,7 +29,7 @@ def test_refusals(tool, args, key):
 
 
 def test_schema_table_matches_pinned_surface():
-    assert len(p.TOOLS) == 19
+    assert len(p.TOOLS) == 20
     assert "capture_id" in p.TOOLS["computer_click"].allowed
     assert "capture_id" not in p.TOOLS["computer_double_click"].allowed
     assert "capture_id" not in p.TOOLS["computer_right_click"].allowed
@@ -37,6 +39,14 @@ def test_schema_table_matches_pinned_surface():
     for bundle_id in p.HARD_DENY_BUNDLE_IDS:
         assert p.is_hard_denied(bundle_id.upper())
     assert not p.is_hard_denied("com.apple.TextEdit")
+
+
+@pytest.mark.parametrize("args", [{"pid": 4}, {"pid": 4, "window_id": 9}])
+def test_bring_to_front_accepts_pid_and_optional_window(args):
+    result = p.validate_call("computer_bring_to_front", args)
+    assert isinstance(result, p.Validated)
+    assert result.driver_tool == "bring_to_front"
+    assert result.args == args
 
 
 @pytest.mark.parametrize("step", [
@@ -55,6 +65,7 @@ def test_schema_table_matches_pinned_surface():
     {"tool": []}, {"click": []}, {"app": "x", "expect": {}},
     {"args": {"app": "Terminal"}, "expect": {}}, {}, "bad", None,
     {"tool": "type_text", "args": {}},
+    {"tool": "bring_to_front"},
 ])
 def test_nested_step_refusals(step):
     refused("computer_run_steps", {"pid": 4, "window_id": 7, "steps": [step]})
