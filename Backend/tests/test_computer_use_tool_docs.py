@@ -22,8 +22,9 @@ def test_instructions_explain_args_envelope():
         "including their Open/Save panels. To open a file: computer_launch_app with the app's bundle_id "
         "and urls set to the file's absolute path; only if that is refused, cmd+o, then type the full path starting with / "
         "(the panel opens its own go-to field; do not press cmd+shift+g), return, return. To save: cmd+s. "
-        "Use delivery_mode foreground or computer_bring_to_front only after "
-        "a background attempt was refused."
+        "If a hotkey or click is refused in the background (e.g. Find/Replace cmd+alt+f, background_unavailable), "
+        "send the same call again with delivery_mode foreground and window_id: it fronts the window briefly "
+        "and returns the previous app. Use computer_bring_to_front only if that is refused too."
     ) in mcp.instructions
 
 
@@ -46,12 +47,12 @@ def test_run_steps_description_has_valid_example_and_policy_names():
             "computer_invoke_menu": (
                 " Menu items are often disabled while the app is in the background; prefer the item's "
                 "keyboard shortcut with computer_hotkey (cmd+s to save, cmd+o to open), which works in the "
-                "background. Use computer_bring_to_front only if the shortcut is refused."
+                "background. If the shortcut is refused, send it again with delivery_mode foreground and window_id."
             ),
             "computer_bring_to_front": (
-                " Brings the app's window to the front and leaves it there. Last resort: hotkeys, typing "
-                "and element_token clicks reach background apps and their Open/Save panels, so use it "
-                "only after a background attempt was refused. Pass window_id to verify that window is in front."
+                " Brings the app's window to the front and leaves it there. Last resort: macOS may refuse to "
+                "activate the app; a refused background hotkey or click works when sent again with delivery_mode "
+                "foreground and window_id, so use this only if that is refused too. Pass window_id to verify that window is in front."
             ),
         }
         assert (element_hint in description) == ("element_token" in spec.allowed)
