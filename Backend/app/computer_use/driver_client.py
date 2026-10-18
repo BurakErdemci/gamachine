@@ -3,6 +3,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import sys
 from contextlib import asynccontextmanager
 
 import anyio
@@ -13,6 +15,7 @@ from mcp.types import CallToolResult, JSONRPCMessage
 from pydantic import TypeAdapter
 
 from unity_ai_mcp import approval_bridge
+from . import policy
 
 logger = logging.getLogger(__name__)
 _MESSAGE = TypeAdapter(JSONRPCMessage)
@@ -24,6 +27,60 @@ class DriverUnavailable(RuntimeError):
 
 class DriverError(RuntimeError):
     pass
+
+
+async def _lsappinfo_text(pid) -> str | None:
+    if type(pid) is not int or pid <= 0 or sys.platform != "darwin":
+        return None
+    try:
+        executable = os.path.join(os.sep, "usr", "bin", "lsappinfo")
+        if not os.path.isfile(executable):
+            return None
+        # At most one child per lookup; reap it before returning on timeout.
+        process = await asyncio.create_subprocess_exec(
+            executable, "info", "-only", "bundleid", "-only", "name",
+            "-only", "applicationtype", f"pid:{pid}",
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), 2.0)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            return None
+        return stdout.decode("utf-8", errors="replace") if process.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _parse_lsappinfo(text) -> tuple[str, str | None] | None:
+    bundles = re.findall(r'bundleID="([^"\n]+)"', text)
+    if (len(bundles) != 1 or not policy.valid_bundle_id(bundles[0])
+            or re.search(r'type="Foreground"', text) is None
+            or len(re.findall(r'\bASN:', text)) > 1):
+        return None
+    name = re.search(r'^"([^"\n]*)" ASN', text, re.MULTILINE)
+    return bundles[0], (name.group(1) or None) if name else None
+
+
+async def identify_running_app(driver, pid) -> tuple[str | None, str | None]:
+    bundle_id, name = (await driver.list_running_apps()).get(pid, (None, None))
+    if policy.valid_bundle_id(bundle_id):
+        return bundle_id, name
+    if type(pid) is not int or pid <= 0:
+        return None, None
+    try:
+        text = await _lsappinfo_text(pid)
+        identity = _parse_lsappinfo(text) if text is not None else None
+        if identity is not None:
+            return identity[0], name or identity[1]
+    except Exception:
+        pass
+    return None, None
 
 
 async def fetch_runtime() -> tuple[str, str]:

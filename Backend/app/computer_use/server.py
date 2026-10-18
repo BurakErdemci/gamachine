@@ -14,7 +14,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
 from unity_ai_mcp import approval_bridge
-from . import policy
+from . import driver_client, policy
 from .driver_client import DriverClient, DriverError, DriverUnavailable, fetch_runtime
 
 
@@ -278,7 +278,7 @@ class ComputerServer:
             if "pid" in args:
                 pid = args["pid"]
                 driver = await self._runtime_driver()
-                bundle_id, app_name = (await driver.list_running_apps()).get(pid, (None, None))
+                bundle_id, app_name = await driver_client.identify_running_app(driver, pid)
             elif tool == "computer_launch_app":
                 bundle_id = args["bundle_id"]
                 try:
@@ -309,7 +309,7 @@ class ComputerServer:
             if not approved:
                 return _text(str(reason), True)
             if pid is not None:
-                current_bundle, _ = (await driver.list_running_apps()).get(pid, (None, None))
+                current_bundle, _ = await driver_client.identify_running_app(driver, pid)
                 if (not policy.valid_bundle_id(bundle_id) or not policy.valid_bundle_id(current_bundle)
                         or current_bundle.casefold() != bundle_id.casefold()):
                     return _text("Hedef uygulama onaydan sonra değişti; işlem reddedildi.", True)

@@ -11,11 +11,12 @@ from mcp.types import CallToolResult, TextContent
 
 from computer_use.driver_client import DriverClient, DriverError, DriverUnavailable
 from computer_use.server import ComputerServer, create_server
-from computer_use import server
+from computer_use import driver_client, server
 
 
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
+    monkeypatch.setattr(driver_client, "_lsappinfo_text", AsyncMock(return_value=None))
     # At most two child processes in the reconnect test, one in all others.
     fixture = Path(__file__).parent / "fixtures" / "fake_cua_driver.py"
     executable = tmp_path / "cua-driver"
