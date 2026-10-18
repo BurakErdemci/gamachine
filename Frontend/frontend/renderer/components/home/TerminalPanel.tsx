@@ -301,9 +301,20 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
       const terminalElement = terminalRefs.current[sId]!;
       term.open(terminalElement);
 
-      // Copy on mouse release instead of selection changes to avoid copying every drag step.
+      let selectionPressed = false;
+      let selectionChanged = false;
+      const onSelectionMouseDown = () => {
+        selectionPressed = true;
+        selectionChanged = false;
+      };
+      const selectionSubscription = term.onSelectionChange(() => {
+        if (selectionPressed) selectionChanged = true;
+      });
+      // Copy only when this press changed the selection so activation clicks cannot re-copy stale text.
       const onSelectionMouseUp = (event: MouseEvent) => {
-        if (!copyOnSelect.current || !term.hasSelection()) return;
+        const shouldCopy = selectionPressed && selectionChanged;
+        selectionPressed = false;
+        if (!shouldCopy || !copyOnSelect.current || !term.hasSelection()) return;
         const text = term.getSelection();
         if (!text.trim()) return;
         const { clientX: x, clientY: y } = event;
@@ -311,6 +322,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
           void Promise.resolve(navigator.clipboard.writeText(text)).then(() => announceCopied(x, y)).catch(() => {});
         } catch {}
       };
+      terminalElement.addEventListener('mousedown', onSelectionMouseDown, true);
       terminalElement.addEventListener('mouseup', onSelectionMouseUp);
 
       terminalInstancesRef.current[sId] = term;
@@ -359,7 +371,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         () => {
           observer?.disconnect();
           window.removeEventListener('resize', handleResize);
+          terminalElement.removeEventListener('mousedown', onSelectionMouseDown, true);
           terminalElement.removeEventListener('mouseup', onSelectionMouseUp);
+          selectionSubscription.dispose();
           term.dispose();
         }
       ];

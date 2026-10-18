@@ -21,8 +21,19 @@ export function installCopyOnSelect(
   write: (text: string) => void | Promise<void> = text => navigator.clipboard.writeText(text),
 ): () => void {
   let pending: ReturnType<typeof setTimeout> | undefined
+  let pressed = false
+  let changed = false
+  const onMouseDown = () => {
+    pressed = true
+    changed = false
+  }
+  const onSelectionChange = () => {
+    if (pressed) changed = true
+  }
   const onMouseUp = (event: MouseEvent) => {
-    if (!isEnabled()) return
+    const shouldCopy = pressed && changed
+    pressed = false
+    if (!shouldCopy || !isEnabled()) return
     const { clientX: x, clientY: y } = event
     clearTimeout(pending)
     pending = setTimeout(() => {
@@ -36,8 +47,12 @@ export function installCopyOnSelect(
       }
     }, 0)
   }
+  document.addEventListener('mousedown', onMouseDown, true)
+  document.addEventListener('selectionchange', onSelectionChange)
   document.addEventListener('mouseup', onMouseUp, true)
   return () => {
+    document.removeEventListener('mousedown', onMouseDown, true)
+    document.removeEventListener('selectionchange', onSelectionChange)
     document.removeEventListener('mouseup', onMouseUp, true)
     clearTimeout(pending)
   }

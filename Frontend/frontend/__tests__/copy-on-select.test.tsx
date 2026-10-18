@@ -65,7 +65,18 @@ function selectText(start: Node, end = start) {
   const selection = document.getSelection()!
   selection.removeAllRanges()
   selection.addRange(range)
+  document.dispatchEvent(new Event('selectionchange'))
   return selection
+}
+
+function selectDuringPress(start: Node, end = start) {
+  fireEvent.mouseDown(document)
+  return selectText(start, end)
+}
+
+function changeTerminalSelection(host: Element, term = terms[0]) {
+  fireEvent.mouseDown(host)
+  term.selectionChanged()
 }
 
 function releaseMouse(target: Document | Element = document, clientX = 100, clientY = 200) {
@@ -85,12 +96,37 @@ function Harness({ terminal = false }) {
 
 describe('document copy on select', () => {
   it('copies the settled selection on mouse release, preserving its text', () => {
-    render(<AppearanceProvider><Harness /></AppearanceProvider>)
+    render(<AppearanceProvider><Harness /><div data-testid="initial">initial text</div></AppearanceProvider>)
+    selectDuringPress(screen.getByTestId('initial').firstChild!)
     fireEvent.mouseUp(document)
     expect(writeText).not.toHaveBeenCalled()
     selectText(screen.getByTestId('plain').firstChild!)
     act(() => { vi.runOnlyPendingTimers() })
     expect(writeText).toHaveBeenCalledExactlyOnceWith(' selected text ')
+  })
+
+  it('does not copy a stale selection on a second press, but copies a new selection again', () => {
+    render(<AppearanceProvider><Harness /></AppearanceProvider>)
+    const text = screen.getByTestId('plain').firstChild!
+    selectDuringPress(text)
+    releaseMouse()
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(' selected text ')
+    fireEvent.mouseDown(document)
+    releaseMouse()
+    expect(writeText).toHaveBeenCalledTimes(1)
+    selectDuringPress(text)
+    releaseMouse()
+    expect(writeText).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not copy on mouseup without a press or for changes outside a press', () => {
+    render(<AppearanceProvider><Harness /></AppearanceProvider>)
+    selectText(screen.getByTestId('plain').firstChild!)
+    releaseMouse()
+    expect(writeText).not.toHaveBeenCalled()
+    fireEvent.mouseDown(document)
+    releaseMouse()
+    expect(writeText).not.toHaveBeenCalled()
   })
 
   it('ignores null, collapsed and whitespace-only selections', () => {
@@ -101,6 +137,11 @@ describe('document copy on select', () => {
     selection.collapseToStart()
     expect(selectedTextToCopy(selection, null)).toBeNull()
     removeListener = installCopyOnSelect(() => true)
+    selectDuringPress(screen.getByTestId('blank').firstChild!)
+    releaseMouse()
+    fireEvent.mouseDown(document)
+    selection.collapseToStart()
+    document.dispatchEvent(new Event('selectionchange'))
     releaseMouse()
     expect(writeText).not.toHaveBeenCalled()
   })
@@ -116,8 +157,8 @@ describe('document copy on select', () => {
     </>)
     const editor = container.querySelector('input, textarea, span') as HTMLElement
     editor.focus()
-    selectText(screen.getByTestId('plain').firstChild!)
     removeListener = installCopyOnSelect(() => true)
+    selectDuringPress(screen.getByTestId('plain').firstChild!)
     releaseMouse()
     expect(writeText).not.toHaveBeenCalled()
   })
@@ -133,9 +174,9 @@ describe('document copy on select', () => {
       <div data-testid="after">after</div>
     </>)
     removeListener = installCopyOnSelect(() => true)
-    selectText(screen.getByTestId('before').firstChild!, screen.getByTestId('editor').firstChild!)
+    selectDuringPress(screen.getByTestId('before').firstChild!, screen.getByTestId('editor').firstChild!)
     releaseMouse()
-    selectText(screen.getByTestId('editor').firstChild!, screen.getByTestId('after').firstChild!)
+    selectDuringPress(screen.getByTestId('editor').firstChild!, screen.getByTestId('after').firstChild!)
     releaseMouse()
     expect(writeText).not.toHaveBeenCalled()
   })
@@ -151,8 +192,8 @@ describe('document copy on select', () => {
 
   it('allows contenteditable=false text', () => {
     render(<div contentEditable={false}><span data-testid="text">read only</span></div>)
-    selectText(screen.getByTestId('text').firstChild!)
     removeListener = installCopyOnSelect(() => true)
+    selectDuringPress(screen.getByTestId('text').firstChild!)
     releaseMouse()
     expect(writeText).toHaveBeenCalledWith('read only')
   })
@@ -162,23 +203,42 @@ describe('document copy on select', () => {
     const view = render(<AppearanceProvider><Harness /></AppearanceProvider>)
     const installs = () => add.mock.calls.filter(([event]) => event === 'mouseup').length
     expect(installs()).toBe(1)
-    selectText(screen.getByTestId('plain').firstChild!)
     fireEvent.click(screen.getByText('toggle copy'))
+    selectDuringPress(screen.getByTestId('plain').firstChild!)
     releaseMouse()
     expect(writeText).not.toHaveBeenCalled()
     fireEvent.click(screen.getByText('toggle copy'))
+    selectDuringPress(screen.getByTestId('plain').firstChild!)
     releaseMouse()
     expect(writeText).toHaveBeenCalledTimes(1)
     expect(installs()).toBe(1)
+    selectDuringPress(screen.getByTestId('plain').firstChild!)
     fireEvent.mouseUp(document)
     view.unmount()
     releaseMouse()
     expect(writeText).toHaveBeenCalledTimes(1)
   })
 
+  it('removes all document listeners on unmount', () => {
+    const add = vi.spyOn(document, 'addEventListener')
+    const remove = vi.spyOn(document, 'removeEventListener')
+    const view = render(<AppearanceProvider><Harness /></AppearanceProvider>)
+    const listeners = add.mock.calls.filter(([event]) => ['mousedown', 'mouseup', 'selectionchange'].includes(event))
+    expect(listeners.map(([event]) => event).sort()).toEqual(['mousedown', 'mouseup', 'selectionchange'])
+    selectDuringPress(screen.getByTestId('plain').firstChild!)
+    view.unmount()
+    for (const args of listeners) {
+      expect(remove).toHaveBeenCalledWith(...args)
+    }
+    render(<div data-testid="after">after unmount</div>)
+    selectDuringPress(screen.getByTestId('after').firstChild!)
+    releaseMouse()
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
   it('does not copy when disabled between release and the deferred read', () => {
     render(<AppearanceProvider><Harness /></AppearanceProvider>)
-    selectText(screen.getByTestId('plain').firstChild!)
+    selectDuringPress(screen.getByTestId('plain').firstChild!)
     fireEvent.mouseUp(document)
     fireEvent.click(screen.getByText('toggle copy'))
     act(() => { vi.runOnlyPendingTimers() })
@@ -187,14 +247,18 @@ describe('document copy on select', () => {
 
   it('silently handles clipboard rejection, synchronous failure and missing clipboard', async () => {
     render(<div data-testid="text">copy</div>)
-    selectText(screen.getByTestId('text').firstChild!)
     removeListener = installCopyOnSelect(() => true)
+    selectDuringPress(screen.getByTestId('text').firstChild!)
     writeText.mockRejectedValueOnce(new Error('denied'))
     releaseMouse()
     await act(async () => { await Promise.resolve() })
+    expect(writeText).toHaveBeenCalledTimes(1)
     writeText.mockImplementationOnce(() => { throw new Error('unavailable') })
+    selectDuringPress(screen.getByTestId('text').firstChild!)
     expect(releaseMouse).not.toThrow()
+    expect(writeText).toHaveBeenCalledTimes(2)
     vi.stubGlobal('navigator', {})
+    selectDuringPress(screen.getByTestId('text').firstChild!)
     expect(releaseMouse).not.toThrow()
   })
 })
@@ -203,30 +267,44 @@ describe('terminal copy on select', () => {
   it('copies xterm selection, reads toggles without recreating the terminal and disposes the listener', () => {
     const view = render(<AppearanceProvider><Harness terminal /></AppearanceProvider>)
     const host = view.container.querySelector('.term-host')!
+    const remove = vi.spyOn(host, 'removeEventListener')
     expect(terms).toHaveLength(1)
     const term = terms[0]
     term.selectionChanged()
+    releaseMouse(host)
+    fireEvent.mouseDown(host)
+    releaseMouse(host)
+    expect(writeText).not.toHaveBeenCalled()
+    changeTerminalSelection(host, term)
     expect(writeText).not.toHaveBeenCalled()
     releaseMouse(host)
     expect(writeText).toHaveBeenCalledExactlyOnceWith('terminal output')
-    fireEvent.click(screen.getByText('toggle copy'))
-    term.selectionChanged()
+    fireEvent.mouseDown(host)
     releaseMouse(host)
     expect(writeText).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByText('toggle copy'))
-    term.selectionChanged()
+    changeTerminalSelection(host, term)
+    releaseMouse(host)
+    expect(writeText).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByText('toggle copy'))
+    changeTerminalSelection(host, term)
     releaseMouse(host)
     expect(writeText).toHaveBeenCalledTimes(2)
     expect(terms).toHaveLength(1)
     term.selection = ' \n '
-    term.selectionChanged()
+    changeTerminalSelection(host, term)
     releaseMouse(host)
     term.selection = 'text'
     term.selected = false
-    term.selectionChanged()
+    changeTerminalSelection(host, term)
     releaseMouse(host)
     expect(writeText).toHaveBeenCalledTimes(2)
     view.unmount()
+    expect(remove).toHaveBeenCalledWith('mousedown', expect.any(Function), true)
+    expect(remove).toHaveBeenCalledWith('mouseup', expect.any(Function))
+    expect(term.disposeSelection).toHaveBeenCalledTimes(1)
+    term.selected = true
+    changeTerminalSelection(host, term)
     releaseMouse(host)
     expect(writeText).toHaveBeenCalledTimes(2)
   })
@@ -235,12 +313,17 @@ describe('terminal copy on select', () => {
     const view = render(<AppearanceProvider><Harness terminal /></AppearanceProvider>)
     const host = view.container.querySelector('.term-host')!
     writeText.mockRejectedValueOnce(new Error('denied'))
+    changeTerminalSelection(host)
     releaseMouse(host)
     await act(async () => { await Promise.resolve() })
     expect(view.container.querySelector('.gm-copied')).toBeNull()
+    expect(writeText).toHaveBeenCalledTimes(1)
     writeText.mockImplementationOnce(() => { throw new Error('unavailable') })
+    changeTerminalSelection(host)
     expect(() => releaseMouse(host)).not.toThrow()
+    expect(writeText).toHaveBeenCalledTimes(2)
     vi.stubGlobal('navigator', {})
+    changeTerminalSelection(host)
     expect(() => releaseMouse(host)).not.toThrow()
     await act(async () => { await Promise.resolve() })
     expect(view.container.querySelector('.gm-copied')).toBeNull()
@@ -254,7 +337,7 @@ describe('terminal copy on select', () => {
     try {
       const view = render(<AppearanceProvider><Harness terminal /></AppearanceProvider>)
       const host = view.container.querySelector('.term-host')!
-      terms[0].selectionChanged()
+      changeTerminalSelection(host)
       terms[0].selectionChanged()
       expect(writeText).not.toHaveBeenCalled()
       expect(announced).not.toHaveBeenCalled()
@@ -277,7 +360,7 @@ describe('copied chip', () => {
     let finish!: () => void
     writeText.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
     render(<AppearanceProvider><Harness /></AppearanceProvider>)
-    selectText(screen.getByTestId('plain').firstChild!)
+    selectDuringPress(screen.getByTestId('plain').firstChild!)
     releaseMouse(document, 25, 35)
     expect(screen.queryByRole('status')).toBeNull()
     await act(async () => { finish() })
@@ -320,7 +403,7 @@ describe('copied chip', () => {
 
   it.each(['rejected', 'throws', 'missing', 'blank', 'editable', 'disabled'])('stays hidden for %s copies', async kind => {
     render(<AppearanceProvider><Harness /><div data-testid="blank">{'   '}</div><input /></AppearanceProvider>)
-    selectText(screen.getByTestId(kind === 'blank' ? 'blank' : 'plain').firstChild!)
+    selectDuringPress(screen.getByTestId(kind === 'blank' ? 'blank' : 'plain').firstChild!)
     if (kind === 'rejected') writeText.mockRejectedValueOnce(new Error('denied'))
     if (kind === 'throws') writeText.mockImplementationOnce(() => { throw new Error('unavailable') })
     if (kind === 'missing') vi.stubGlobal('navigator', {})
