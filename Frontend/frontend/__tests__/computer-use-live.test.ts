@@ -192,7 +192,7 @@ describe('computer-use-live: active', () => {
     expect(f.windowCalls().length).toBeGreaterThan(5)
     for (const call of f.windowCalls()) expect(READ_ONLY.has(call.params.name)).toBe(true)
     expect(f.windowCalls()[0].params).toEqual({ name: 'get_window_state',
-      arguments: { pid: 4242, window_id: 55, include_accessibility_tree: false, max_dimension: 480 } })
+      arguments: { pid: 4242, window_id: 55, include_accessibility_tree: false, display_only: true, max_dimension: 480 } })
     f.live.shutdown()
   })
 

@@ -585,7 +585,8 @@ export class ComputerLive {
       if (windowId === null) return null
     }
     const result = await this.call(proxy, 'get_window_state', {
-      pid: target.pid, window_id: windowId, include_accessibility_tree: false, max_dimension: MAX_DIMENSION,
+      // Otherwise a preview replaces the agent's action screenshot and pixel clicks fail with screenshot_context_missing.
+      pid: target.pid, window_id: windowId, include_accessibility_tree: false, display_only: true, max_dimension: MAX_DIMENSION,
     })
     if (token !== this.captureToken) return null
     const frame = frameOf(result)
