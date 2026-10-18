@@ -17,6 +17,12 @@ def test_instructions_explain_args_envelope():
         "To check a file the task created, look only in the folder the task names; "
         "never search the whole home folder, macOS blocks other apps' data and warns the user."
     ) in mcp.instructions
+    assert (
+        "Work in the background: hotkeys, typing and element_token clicks reach background apps, "
+        "including their Open/Save panels. To open a file: cmd+o, cmd+shift+g, type the full path, "
+        "return. To save: cmd+s. Use delivery_mode foreground or computer_bring_to_front only after "
+        "a background attempt was refused."
+    ) in mcp.instructions
 
 
 def test_run_steps_description_has_valid_example_and_policy_names():
@@ -36,13 +42,14 @@ def test_run_steps_description_has_valid_example_and_policy_names():
         )
         hints = {
             "computer_invoke_menu": (
-                " If the item is disabled because the app is in the background (common for File > Save), "
-                "call computer_bring_to_front for that window, then retry."
+                " Menu items are often disabled while the app is in the background; prefer the item's "
+                "keyboard shortcut with computer_hotkey (cmd+s to save, cmd+o to open), which works in the "
+                "background. Use computer_bring_to_front only if the shortcut is refused."
             ),
             "computer_bring_to_front": (
-                " Brings the app's window to the front and leaves it there. Use it only when an action "
-                "needs the app frontmost (a menu item disabled in the background, a Save dialog); "
-                "most input works in the background. Pass window_id to verify that window is in front."
+                " Brings the app's window to the front and leaves it there. Last resort: hotkeys, typing "
+                "and element_token clicks reach background apps and their Open/Save panels, so use it "
+                "only after a background attempt was refused. Pass window_id to verify that window is in front."
             ),
         }
         assert (element_hint in description) == ("element_token" in spec.allowed)
