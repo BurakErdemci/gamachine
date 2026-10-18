@@ -27,11 +27,13 @@ def list_apps() -> CallToolResult:
     log("list_apps", {})
     bundle = ("com.apple.Notes" if os.environ.get("FAKE_CUA_REMAP") and app_reads > 1
               else "com.apple.TextEdit")
+    active = os.environ.get("FAKE_CUA_ACTIVE", "77")
     return CallToolResult(content=[TextContent(type="text", text=json.dumps({"apps": [
-        {"pid": 4242, "bundle_id": bundle, "name": "TextEdit", "running": True},
-        {"pid": 44, "bundle_id": "com.apple.Terminal", "name": "Terminal", "running": True},
-        {"pid": 0, "bundle_id": "com.example.Offline", "running": False},
-        {"pid": 0, "bundle_id": "com.example.Sleeper", "name": "  Sleeper App ", "running": False},
+        {"pid": 4242, "bundle_id": bundle, "name": "TextEdit", "running": True, "active": active == "4242"},
+        {"pid": 77, "bundle_id": "com.example.Front", "name": "Front", "running": True, "active": active == "77"},
+        {"pid": 44, "bundle_id": "com.apple.Terminal", "name": "Terminal", "running": True, "active": False},
+        {"pid": 0, "bundle_id": "com.example.Offline", "running": False, "active": False},
+        {"pid": 0, "bundle_id": "com.example.Sleeper", "name": "  Sleeper App ", "running": False, "active": False},
     ]}))])
 
 
@@ -60,10 +62,10 @@ def type_text(pid: int, text: str) -> str:
 
 
 @mcp.tool()
-def bring_to_front(pid: int, window_id: int = 0) -> CallToolResult:
+def bring_to_front(pid: int, window_id: int | None = None) -> CallToolResult:
     global front_calls
     front_calls += 1
-    log("bring_to_front", {"pid": pid, "window_id": window_id})
+    log("bring_to_front", {"pid": pid, **({"window_id": window_id} if window_id is not None else {})})
     unverified = os.environ.get("FAKE_CUA_FRONT_UNVERIFIED")
     if unverified == "1" or (unverified == "once" and front_calls == 1):
         return CallToolResult(content=[TextContent(type="text", text="not verified")], is_error=True)

@@ -226,10 +226,21 @@ class ComputerServer:
 
     async def _fronted_call(self, driver, pid, window_id, tool, args):
         async with self._front_lock:
+            try:
+                previous = await driver.frontmost_pid()
+            except Exception:
+                previous = None
             refusal = await _front_guard(driver, pid, window_id)
             if refusal is not None:
                 return refusal, None
-            return None, await driver.call(tool, args)
+            result = await driver.call(tool, args)
+            # The guard fronts persistently, unlike the driver's brief fronting.
+            if type(previous) is int and previous != pid:
+                try:
+                    await driver.call("bring_to_front", {"pid": previous})
+                except DriverError:
+                    pass
+            return None, result
 
     async def _run_steps_split(self, driver, forward_args, params):
         steps = forward_args["steps"]

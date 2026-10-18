@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from mcp.types import CallToolResult, TextContent
 
-from computer_use.driver_client import DriverClient, DriverUnavailable
+from computer_use.driver_client import DriverClient, DriverError, DriverUnavailable
 from computer_use.server import ComputerServer, create_server
 from computer_use import server
 
@@ -128,9 +128,9 @@ def test_bring_to_front_requires_foreground_approval_before_forwarding(fake, app
 
 
 @pytest.mark.parametrize("front,window_id,expected_tools,refusal", [
-    (None, 7, ["bring_to_front", "click"], None),
+    (None, 7, ["bring_to_front", "click", "bring_to_front"], None),
     ("1", 7, ["bring_to_front", "bring_to_front"], "could not be verified as the front window"),
-    ("once", 7, ["bring_to_front", "bring_to_front", "click"], None),
+    ("once", 7, ["bring_to_front", "bring_to_front", "click", "bring_to_front"], None),
     (None, None, [], "Foreground input needs window_id; nothing was sent."),
 ])
 def test_foreground_click_verifies_window_before_input(fake, front, window_id, expected_tools, refusal):
@@ -152,9 +152,76 @@ def test_foreground_click_verifies_window_before_input(fake, front, window_id, e
             await handler.close()
     asyncio.run(run())
     rows = calls(log)
-    assert [row["tool"] for row in rows] == ["list_apps", "list_apps", *expected_tools]
+    assert [row["tool"] for row in rows] == ["list_apps", "list_apps", "list_apps", *expected_tools]
+    if refusal is None:
+        assert rows[-1]["args"] == {"pid": 77}
+        rows = rows[:-1]
     assert all(row["args"] == {"pid": 4242, "window_id": 7}
                for row in rows if row["tool"] == "bring_to_front")
+
+
+@pytest.mark.parametrize("active", ["4242", "none"])
+def test_foreground_click_skips_restore_without_a_different_frontmost_app(fake, active):
+    driver, log, _ = fake
+    driver.env["FAKE_CUA_ACTIVE"] = active
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            result = await handler.call("computer_click", {
+                "pid": 4242, "window_id": 7, "element_token": "s0000002a:1",
+                "delivery_mode": "foreground"})
+            assert not result.is_error
+        finally:
+            await handler.close()
+    asyncio.run(run())
+    rows = calls(log)
+    assert [row["tool"] for row in rows] == [
+        "list_apps", "list_apps", "list_apps", "bring_to_front", "click"]
+    assert rows[3]["args"] == {"pid": 4242, "window_id": 7}
+
+
+@pytest.mark.parametrize("action_error", [False, True])
+@pytest.mark.parametrize("restore_error", ["none", "result", "exception"])
+def test_fronted_call_preserves_action_result_when_restore_fails(action_error, restore_error):
+    driver = AsyncMock()
+    action = CallToolResult(content=[TextContent(type="text", text="action result")], is_error=action_error)
+    guard = CallToolResult(content=[], structured_content={"exact_window_effect": {"verified": True}})
+    handler = ComputerServer(driver)
+
+    async def call(tool, args):
+        assert handler._front_lock.locked()
+        if tool == "click":
+            return action
+        if args == {"pid": 77}:
+            if restore_error == "exception":
+                raise DriverError("restore failed")
+            return CallToolResult(content=[], is_error=restore_error == "result")
+        return guard
+
+    async def frontmost():
+        assert handler._front_lock.locked()
+        return 77
+
+    driver.frontmost_pid.side_effect = frontmost
+    driver.call.side_effect = call
+    refusal, result = asyncio.run(handler._fronted_call(driver, 4242, 7, "click", {"pid": 4242}))
+    assert refusal is None and result is action
+    assert [entry.args for entry in driver.call.await_args_list] == [
+        ("bring_to_front", {"pid": 4242, "window_id": 7}),
+        ("click", {"pid": 4242}), ("bring_to_front", {"pid": 77})]
+
+
+def test_fronted_call_still_forwards_when_frontmost_lookup_raises():
+    driver = AsyncMock()
+    driver.frontmost_pid.side_effect = RuntimeError("lookup failed")
+    guard = CallToolResult(content=[], structured_content={"exact_window_effect": {"verified": True}})
+    action = CallToolResult(content=[TextContent(type="text", text="clicked")])
+    driver.call.side_effect = [guard, action]
+    refusal, result = asyncio.run(ComputerServer(driver)._fronted_call(driver, 4242, 7, "click", {"pid": 4242}))
+    assert refusal is None and result is action
+    assert [entry.args for entry in driver.call.await_args_list] == [
+        ("bring_to_front", {"pid": 4242, "window_id": 7}), ("click", {"pid": 4242})]
 
 
 def test_background_click_never_fronts_window(fake):
@@ -200,7 +267,7 @@ def test_split_steps_stop_before_unverified_foreground_step(fake, monkeypatch, s
     asyncio.run(run())
     rows = calls(log)
     assert [row["tool"] for row in rows] == [
-        "list_apps", "list_apps", "run_steps", "bring_to_front", "bring_to_front"]
+        "list_apps", "list_apps", "run_steps", "list_apps", "bring_to_front", "bring_to_front"]
     assert rows[2]["args"]["steps"] == steps[:1]
     assert all(row["args"] == {"pid": 4242, "window_id": 7}
                for row in rows if row["tool"] == "bring_to_front")
@@ -220,8 +287,13 @@ def test_split_steps_verify_each_inherited_foreground_window(fake, monkeypatch):
         finally:
             await handler.close()
     asyncio.run(run())
-    assert [row["tool"] for row in calls(log)] == [
-        "list_apps", "list_apps", "bring_to_front", "run_steps", "bring_to_front", "run_steps"]
+    rows = calls(log)
+    assert [row["tool"] for row in rows] == [
+        "list_apps", "list_apps", "list_apps", "bring_to_front", "run_steps", "bring_to_front",
+        "list_apps", "bring_to_front", "run_steps", "bring_to_front"]
+    assert [row["args"] for row in rows if row["tool"] == "bring_to_front"] == [
+        {"pid": 4242, "window_id": 7}, {"pid": 77},
+        {"pid": 4242, "window_id": 7}, {"pid": 77}]
 
 
 @pytest.mark.parametrize("unverified", [False, True])
@@ -240,8 +312,9 @@ def test_single_step_foreground_fallback_is_guarded(fake, unverified):
         finally:
             await handler.close()
     asyncio.run(run())
-    expected = ["bring_to_front"] if unverified else ["run_steps"]
-    assert [row["tool"] for row in calls(log)] == ["list_apps", "list_apps", "bring_to_front", *expected]
+    expected = ["bring_to_front"] if unverified else ["run_steps", "bring_to_front"]
+    assert [row["tool"] for row in calls(log)] == [
+        "list_apps", "list_apps", "list_apps", "bring_to_front", *expected]
 
 
 @pytest.mark.parametrize("window_id", [None, True, False, "7", 7.0])
@@ -362,6 +435,38 @@ def test_app_parser_supports_text_and_structured_results(fake, structured):
                             **({"structured_content": data} if structured else {}))
     driver.call = AsyncMock(return_value=result)
     assert asyncio.run(driver.list_running_apps()) == {7: ("com.test.App", "App"), 9: (None, None)}
+
+
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("rows,expected", [
+    ([{"pid": 77, "active": True, "running": True}], 77),
+    ([{"pid": 77, "active": True}], 77),
+    ([{"pid": 77, "active": False}], None),
+    ([{"pid": 77, "active": 1}], None),
+    ([{"pid": 77, "active": True, "running": False}], None),
+    ([{"pid": True, "active": True}], None),
+    ([{"pid": "77", "active": True}], None),
+    ([{"pid": 0, "active": True}], None),
+    ([{"pid": -1, "active": True}], None),
+    ([{"pid": 77, "active": True}, {"pid": 4242, "active": True}], None),
+    ([], None),
+])
+def test_frontmost_pid_requires_one_active_running_app(fake, structured, rows, expected):
+    driver, _, _ = fake
+    data = {"apps": rows}
+    result = CallToolResult(content=[] if structured else [TextContent(type="text", text=json.dumps(data))],
+                            **({"structured_content": data} if structured else {}))
+    driver.call = AsyncMock(return_value=result)
+    assert asyncio.run(driver.frontmost_pid()) == expected
+    driver.call.assert_awaited_once_with("list_apps", {})
+
+
+@pytest.mark.parametrize("error", [None, DriverError("offline"), RuntimeError("unexpected")])
+def test_frontmost_pid_returns_none_on_driver_error(fake, error):
+    driver, _, _ = fake
+    driver.call = AsyncMock(return_value=CallToolResult(content=[], is_error=True), side_effect=error)
+    assert asyncio.run(driver.frontmost_pid()) is None
+    driver.call.assert_awaited_once_with("list_apps", {})
 
 
 @pytest.mark.parametrize("reply", [None, True, [], "approved", 1, RuntimeError("offline")])

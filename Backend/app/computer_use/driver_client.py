@@ -211,6 +211,20 @@ class DriverClient:
                          name if isinstance(name, str) else None)
         return apps
 
+    async def frontmost_pid(self) -> int | None:
+        try:
+            result = await self.call("list_apps", {})
+            if result.is_error:
+                return None
+            active = [row for row in self._app_rows(result)
+                      if row.get("active") is True and row.get("running") is not False]
+            if len(active) != 1:
+                return None
+            pid = active[0].get("pid")
+            return pid if type(pid) is int and pid > 0 else None
+        except Exception:
+            return None
+
     async def installed_app_name(self, bundle_id):
         """Real name of an installed app (running or not) from list_apps, or None."""
         result = await self.call("list_apps", {})
