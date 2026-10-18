@@ -330,8 +330,9 @@ def create_server(driver=None):
         "To check a file the task created, look only in the folder the task names; "
         "never search the whole home folder, macOS blocks other apps' data and warns the user. "
         "Work in the background: hotkeys, typing and element_token clicks reach background apps, "
-        "including their Open/Save panels. To open a file: cmd+o, cmd+shift+g, type the full path, "
-        "return. To save: cmd+s. Use delivery_mode foreground or computer_bring_to_front only after "
+        "including their Open/Save panels. To open a file: cmd+o, then type the full path starting with / "
+        "(the panel opens its own go-to field; do not press cmd+shift+g), return, return. To save: cmd+s. "
+        "Use delivery_mode foreground or computer_bring_to_front only after "
         "a background attempt was refused."
     ))
 

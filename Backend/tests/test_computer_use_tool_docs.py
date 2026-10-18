@@ -19,8 +19,9 @@ def test_instructions_explain_args_envelope():
     ) in mcp.instructions
     assert (
         "Work in the background: hotkeys, typing and element_token clicks reach background apps, "
-        "including their Open/Save panels. To open a file: cmd+o, cmd+shift+g, type the full path, "
-        "return. To save: cmd+s. Use delivery_mode foreground or computer_bring_to_front only after "
+        "including their Open/Save panels. To open a file: cmd+o, then type the full path starting with / "
+        "(the panel opens its own go-to field; do not press cmd+shift+g), return, return. To save: cmd+s. "
+        "Use delivery_mode foreground or computer_bring_to_front only after "
         "a background attempt was refused."
     ) in mcp.instructions
 
