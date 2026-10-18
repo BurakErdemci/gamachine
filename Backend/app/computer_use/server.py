@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager, nullcontext
 import asyncio
 import json
 import os
+import re
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -70,6 +71,65 @@ def _foreground(args):
     return False
 
 
+def _front_flags(result):
+    flags = {"process_activated": None, "focused": None}
+
+    def collect(value):
+        if isinstance(value, dict):
+            for key in flags:
+                if flags[key] is None and type(value.get(key)) is bool:
+                    flags[key] = value[key]
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    try:
+        collect(result.structured_content)
+        texts = [block.text for block in result.content if isinstance(block, TextContent)]
+        for text in texts:
+            try:
+                collect(json.loads(text))
+            except (ValueError, TypeError):
+                pass
+        for key, pattern in (("process_activated", r"process_activated=(true|false)"),
+                             ("focused", r"\bfocused=(true|false)")):
+            if flags[key] is None:
+                for text in texts:
+                    match = re.search(pattern, text)
+                    if match:
+                        flags[key] = match.group(1) == "true"
+                        break
+    except Exception:
+        pass
+    return flags["process_activated"], flags["focused"]
+
+
+def _window_rows(result):
+    payloads = [result.structured_content]
+    for block in result.content:
+        if isinstance(block, TextContent):
+            try:
+                payloads.append(json.loads(block.text))
+            except (ValueError, TypeError):
+                pass
+    rows = []
+    seen = set()
+    for payload in payloads:
+        values = payload.get("windows") if isinstance(payload, dict) else payload
+        if not isinstance(values, list):
+            continue
+        for row in values:
+            if not isinstance(row, dict):
+                continue
+            window_id = row.get("window_id")
+            if type(window_id) is int and window_id not in seen:
+                seen.add(window_id)
+                rows.append(row)
+    return rows
+
+
 async def _front_guard(driver, pid, window_id) -> str | None:
     if type(window_id) is not int:
         return "Foreground input needs window_id; nothing was sent."
@@ -88,6 +148,27 @@ async def _front_guard(driver, pid, window_id) -> str | None:
                 pass
         if attempt == 0:
             await asyncio.sleep(0.3)
+    if _front_flags(result) == (True, False):
+        try:
+            windows = _window_rows(await driver.call("list_windows", {"pid": pid}))
+        except Exception:
+            windows = []
+        candidates = [row for row in windows if row["window_id"] != window_id
+                      and row.get("pid", pid) == pid and row.get("on_current_space") is not False
+                      and type(row.get("z_index")) is int]
+        if candidates:
+            other = max(candidates, key=lambda row: row["z_index"])
+            other_id = other["window_id"]
+            title = other.get("title")
+            title = title[:80] if isinstance(title, str) and title else "untitled"
+            return (
+                f'Foreground input not sent: the app is in front, but its window {other_id} ("{title}") '
+                f'has focus, not window {window_id}. This is usually a dialog or panel such as '
+                f'Go to Folder, Open or Save. Send the input to window_id {other_id} instead.')
+        return (
+            f"Foreground input not sent: the app is in front, but another of its windows has focus, "
+            f"not window {window_id} (usually a dialog or panel such as Go to Folder, Open or Save). "
+            "Call computer_list_windows for this pid and send the input to that window_id.")
     return (
         f"Foreground input not sent: window {window_id} could not be verified as the front window "
         "(another window, for example Gamachine, may be on top). Ask the user to bring the app "

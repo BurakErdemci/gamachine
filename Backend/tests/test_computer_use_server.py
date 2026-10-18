@@ -554,6 +554,129 @@ def test_front_guard_accepts_only_explicit_verified_result(monkeypatch, body, st
         sleep.assert_awaited_once_with(0.3)
 
 
+@pytest.mark.parametrize("structured,text,expected", [
+    ({"nested": [{"process_activated": True, "focused": False}]}, "", (True, False)),
+    (None, '{"nested": [{"process_activated": true, "focused": false}]}', (True, False)),
+    (None, "process_activated=true, focused=false", (True, False)),
+    ({"process_activated": False}, "process_activated=true, focused=false", (False, False)),
+    ({"process_activated": "true", "focused": 0}, "not_focused=false", (None, None)),
+    (None, "invalid", (None, None)),
+])
+def test_front_flags_read_boolean_values_before_text(structured, text, expected):
+    result = CallToolResult(content=[TextContent(type="text", text="invalid"),
+                                     TextContent(type="text", text=text)], structured_content=structured)
+    assert server._front_flags(result) == expected
+
+
+@pytest.fixture
+def dialog_driver(monkeypatch):
+    driver = AsyncMock(binary="bin", socket="sock")
+    driver.list_running_apps.return_value = {4242: ("com.apple.finder", "Finder")}
+    driver.frontmost_pid.return_value = 77
+    monkeypatch.setattr(server, "fetch_runtime", AsyncMock(return_value=("bin", "sock")))
+    monkeypatch.setattr(server.approval_bridge, "request_approval", AsyncMock(return_value={"approved": True}))
+    monkeypatch.setattr(server, "_batch_stop", AsyncMock(return_value=None))
+    monkeypatch.setattr(server.asyncio, "sleep", AsyncMock())
+    return driver
+
+
+def dialog_refusal(title="Go to Folder"):
+    return (
+        f'Foreground input not sent: the app is in front, but its window 8 ("{title}") has focus, '
+        'not window 7. This is usually a dialog or panel such as Go to Folder, Open or Save. '
+        'Send the input to window_id 8 instead.')
+
+
+@pytest.mark.parametrize("flags_source", ["text", "structured", "json"])
+@pytest.mark.parametrize("rows_source", ["text", "structured", "both"])
+def test_dialog_refusal_names_highest_eligible_window(dialog_driver, flags_source, rows_source):
+    driver = dialog_driver
+    flags = {"effect": [{"process_activated": True, "focused": False}]}
+    guard = CallToolResult(content=[TextContent(type="text", text=(
+        json.dumps(flags) if flags_source == "json" else "process_activated=true, focused=false"))],
+        structured_content=flags if flags_source == "structured" else None, is_error=True)
+    rows = [None, {"window_id": 7, "z_index": 100},
+            {"window_id": 9, "pid": 4242, "z_index": 2},
+            {"window_id": 8, "pid": 4242, "title": "Go to Folder", "z_index": 5},
+            {"window_id": 10, "pid": 99, "z_index": 100},
+            {"window_id": 11, "on_current_space": False, "z_index": 100},
+            {"window_id": 12, "z_index": None}, {"window_id": True, "z_index": 100},
+            {"window_id": "13", "z_index": 100}, {"window_id": 14, "z_index": True}]
+    windows = CallToolResult(
+        content=[TextContent(type="text", text="invalid"), TextContent(type="text", text=json.dumps(
+            [{"window_id": 8, "title": "duplicate", "z_index": 200}] if rows_source == "both" else rows))]
+        if rows_source != "structured" else [],
+        structured_content={"windows": rows} if rows_source != "text" else None)
+    driver.call.side_effect = [guard, guard, windows]
+    result = asyncio.run(ComputerServer(driver).call("computer_press_key", {
+        "pid": 4242, "window_id": 7, "key": "return", "delivery_mode": "foreground"}))
+    assert result.is_error and result.content[0].text == dialog_refusal()
+    assert [call.args for call in driver.call.await_args_list] == [
+        ("bring_to_front", {"pid": 4242, "window_id": 7}),
+        ("bring_to_front", {"pid": 4242, "window_id": 7}), ("list_windows", {"pid": 4242})]
+
+
+@pytest.mark.parametrize("windows", [
+    RuntimeError("lookup failed"), CallToolResult(content=[]),
+    CallToolResult(content=[], structured_content={"windows": [{"window_id": 7, "z_index": 4}]}),
+    CallToolResult(content=[TextContent(type="text", text='[{"window_id": 8, "z_index": null}]')]),
+    CallToolResult(content=[], structured_content={"windows": [
+        {"window_id": 8, "pid": 99, "z_index": 9},
+        {"window_id": 9, "on_current_space": False, "z_index": 10}]}),
+])
+def test_dialog_refusal_handles_unavailable_windows(dialog_driver, windows):
+    guard = CallToolResult(content=[TextContent(type="text", text="process_activated=true, focused=false")])
+    dialog_driver.call.side_effect = [guard, guard, windows]
+    refusal, result = asyncio.run(ComputerServer(dialog_driver)._fronted_call(
+        dialog_driver, 4242, 7, "press_key", {"key": "return"}))
+    assert result is None
+    assert refusal == (
+        "Foreground input not sent: the app is in front, but another of its windows has focus, "
+        "not window 7 (usually a dialog or panel such as Go to Folder, Open or Save). "
+        "Call computer_list_windows for this pid and send the input to that window_id.")
+    assert [call.args[0] for call in dialog_driver.call.await_args_list] == [
+        "bring_to_front", "bring_to_front", "list_windows"]
+
+
+@pytest.mark.parametrize("title,expected", [(None, "untitled"), ("", "untitled"), (12, "untitled"),
+                                           ("x" * 90, "x" * 80)])
+def test_dialog_refusal_normalizes_title(dialog_driver, title, expected):
+    guard = CallToolResult(content=[], structured_content={"process_activated": True, "focused": False})
+    windows = CallToolResult(content=[TextContent(type="text", text=json.dumps(
+        {"windows": [{"window_id": 8, "title": title, "z_index": 1}]}))])
+    dialog_driver.call.side_effect = [guard, guard, windows]
+    assert asyncio.run(server._front_guard(dialog_driver, 4242, 7)) == dialog_refusal(expected)
+
+
+@pytest.mark.parametrize("last_flags", ["process_activated=false, focused=false",
+                                        "process_activated=true, focused=true", "unknown"])
+def test_front_guard_uses_only_last_attempt_flags(dialog_driver, last_flags):
+    dialog_driver.call.side_effect = [
+        CallToolResult(content=[TextContent(type="text", text="process_activated=true, focused=false")]),
+        CallToolResult(content=[TextContent(type="text", text=last_flags)])]
+    assert asyncio.run(server._front_guard(dialog_driver, 4242, 7)) == (
+        "Foreground input not sent: window 7 could not be verified as the front window "
+        "(another window, for example Gamachine, may be on top). Ask the user to bring the app "
+        "to the front, or use background delivery with element_token.")
+    assert [call.args[0] for call in dialog_driver.call.await_args_list] == ["bring_to_front"] * 2
+
+
+def test_split_steps_stops_at_dialog_refusal(dialog_driver):
+    guard = CallToolResult(content=[], structured_content={"process_activated": True, "focused": False})
+    windows = CallToolResult(content=[], structured_content={"windows": [
+        {"window_id": 8, "title": "Go to Folder", "z_index": 2}]})
+    dialog_driver.call.side_effect = [guard, guard, windows]
+    result = asyncio.run(ComputerServer(dialog_driver).call("computer_run_steps", {
+        "pid": 4242, "window_id": 7, "delivery_mode": "foreground",
+        "steps": [{"press_key": {"key": "return"}}, {"type_text": {"text": "hello"}}]}))
+    report = json.loads(result.content[0].text)
+    assert result.is_error and report["failed_step"] == 0
+    assert report["steps"] == [{"index": 0, "ok": False, "code": "foreground_unverified",
+                                "message": dialog_refusal()}]
+    assert [call.args[0] for call in dialog_driver.call.await_args_list] == [
+        "bring_to_front", "bring_to_front", "list_windows"]
+
+
 def test_exit_is_not_retried_and_next_call_reconnects(fake):
     driver, log, approval = fake
 
