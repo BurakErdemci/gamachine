@@ -143,6 +143,8 @@ class ComputerServer:
     def __init__(self, driver=None):
         self.driver = driver
         self._driver_lock = asyncio.Lock()
+        # Fronting and the input it guards must not interleave with another call's fronting.
+        self._front_lock = asyncio.Lock()
 
     async def _runtime_driver(self):
         async with self._driver_lock:
@@ -208,15 +210,25 @@ class ComputerServer:
                 driver = await self._runtime_driver()
             if tool == "computer_run_steps" and len(args["steps"]) >= 2:
                 return await self._run_steps_split(driver, forward_args, params)
-            if tool != "computer_bring_to_front" and _foreground(forward_args):
-                refusal = await _front_guard(driver, pid, forward_args.get("window_id"))
-                if refusal is not None:
-                    return _text(refusal, True)
+            if tool == "computer_bring_to_front":
+                async with self._front_lock:
+                    return await driver.call(validated.driver_tool, forward_args)
+            if _foreground(forward_args):
+                refusal, result = await self._fronted_call(
+                    driver, pid, forward_args.get("window_id"), validated.driver_tool, forward_args)
+                return _text(refusal, True) if refusal is not None else result
             return await driver.call(validated.driver_tool, forward_args)
         except DriverUnavailable:
             return _text("Bilgisayar kullanımı sürücüsü kullanılamıyor.", True)
         except DriverError:
             return _text("Bilgisayar kullanımı sürücüsüyle bağlantı kesildi; işlem yinelenmedi.", True)
+
+    async def _fronted_call(self, driver, pid, window_id, tool, args):
+        async with self._front_lock:
+            refusal = await _front_guard(driver, pid, window_id)
+            if refusal is not None:
+                return refusal, None
+            return None, await driver.call(tool, args)
 
     async def _run_steps_split(self, driver, forward_args, params):
         steps = forward_args["steps"]
@@ -236,22 +248,23 @@ class ComputerServer:
             stop_reason = await _batch_stop(params)
             if stop_reason is not None:
                 break
+            call_args = {**base, "steps": [step]}
+            if "observe" in forward_args and i == total - 1:
+                call_args["observe"] = forward_args["observe"]
             if _foreground({**base, **step}):
                 step_args = step.get("args", {}) if "tool" in step else next(
                     (step[key] for key in step if key in policy.STEP_TOOLS), {})
                 window_id = step_args.get("window_id")
                 if type(window_id) is not int:
                     window_id = base.get("window_id")
-                refusal = await _front_guard(driver, base["pid"], window_id)
+                refusal, result = await self._fronted_call(driver, base["pid"], window_id, "run_steps", call_args)
                 if refusal is not None:
                     entries.append({"index": i, "ok": False, "code": "foreground_unverified",
                                     "message": refusal})
                     failed_step = i
                     break
-            call_args = {**base, "steps": [step]}
-            if "observe" in forward_args and i == total - 1:
-                call_args["observe"] = forward_args["observe"]
-            result = await driver.call("run_steps", call_args)
+            else:
+                result = await driver.call("run_steps", call_args)
             report = result.structured_content
             try:
                 if not (isinstance(report, dict) and isinstance(report.get("steps"), list)):
