@@ -216,11 +216,14 @@ class DriverClient:
             result = await self.call("list_apps", {})
             if result.is_error:
                 return None
-            active = [row for row in self._app_rows(result)
-                      if row.get("active") is True and row.get("running") is not False]
+            # A reply may carry the same rows as structured content and as text.
+            active = []
+            for row in self._app_rows(result):
+                if row.get("active") is True and row.get("running") is not False and row.get("pid") not in active:
+                    active.append(row.get("pid"))
             if len(active) != 1:
                 return None
-            pid = active[0].get("pid")
+            pid = active[0]
             return pid if type(pid) is int and pid > 0 else None
         except Exception:
             return None
