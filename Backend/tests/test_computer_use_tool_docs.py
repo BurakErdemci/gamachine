@@ -25,6 +25,10 @@ def test_instructions_explain_args_envelope():
         "If a hotkey or click is refused in the background (e.g. Find/Replace cmd+alt+f, background_unavailable), "
         "send the same call again with delivery_mode foreground and window_id: it fronts the window briefly "
         "and returns the previous app. Use computer_bring_to_front only if that is refused too."
+        " Send multi-step foreground work (for example renaming: return, type the name, return) as ONE "
+        "computer_run_steps with delivery_mode foreground: the window stays in front for the whole batch "
+        "and the previous app returns once at the end; separate calls each return the previous app, "
+        "which closes inline edit fields."
     ) in mcp.instructions
 
 

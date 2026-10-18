@@ -3,7 +3,7 @@
 Each tool takes a single ``args`` dictionary. This preserves every allowed
 driver argument without default injection; policy validates it before any I/O.
 """
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 import asyncio
 import json
 import os
@@ -279,49 +279,68 @@ class ComputerServer:
         stop_reason = None
         observation = {}
         non_text = []
-        for i, step in enumerate(steps):
-            if i > 0:
-                if isinstance(delay_ms, int) and delay_ms > 0:
-                    await asyncio.sleep(delay_ms / 1000)
-            stop_reason = await _batch_stop(params)
-            if stop_reason is not None:
-                break
-            call_args = {**base, "steps": [step]}
-            if "observe" in forward_args and i == total - 1:
-                call_args["observe"] = forward_args["observe"]
-            if _foreground({**base, **step}):
-                step_args = step.get("args", {}) if "tool" in step else next(
-                    (step[key] for key in step if key in policy.STEP_TOOLS), {})
-                window_id = step_args.get("window_id")
-                if type(window_id) is not int:
-                    window_id = base.get("window_id")
-                refusal, result = await self._fronted_call(driver, base["pid"], window_id, "run_steps", call_args)
-                if refusal is not None:
-                    entries.append({"index": i, "ok": False, "code": "foreground_unverified",
-                                    "message": refusal})
-                    failed_step = i
-                    break
-            else:
-                result = await driver.call("run_steps", call_args)
-            report = result.structured_content
+        has_foreground = any(_foreground({**base, **step}) for step in steps)
+        previous = None
+        previous_read = False
+        fronted = False
+        async with self._front_lock if has_foreground else nullcontext():
             try:
-                if not (isinstance(report, dict) and isinstance(report.get("steps"), list)):
-                    report = json.loads(next(block.text for block in result.content
-                                             if isinstance(block, TextContent)))
-                if (not isinstance(report, dict) or not isinstance(report.get("steps"), list)
-                        or len(report["steps"]) != 1 or not isinstance(report["steps"][0], dict)):
-                    raise ValueError("invalid step report")
-            except (ValueError, TypeError, StopIteration):
-                return CallToolResult(content=[TextContent(
-                    type="text", text=f"Adım {i+1}/{total} sonucu okunamadı; kalan adımlar çalıştırılmadı.")]
-                    + result.content, is_error=True)
-            entry = {**report["steps"][0], "index": i}
-            entries.append(entry)
-            observation = {"observation": report["observation"]} if "observation" in report else {}
-            non_text = [block for block in result.content if not isinstance(block, TextContent)]
-            if result.is_error is True or report.get("ok") is not True or entry.get("ok") is not True:
-                failed_step = i
-                break
+                for i, step in enumerate(steps):
+                    if i > 0:
+                        if isinstance(delay_ms, int) and delay_ms > 0:
+                            await asyncio.sleep(delay_ms / 1000)
+                    stop_reason = await _batch_stop(params)
+                    if stop_reason is not None:
+                        break
+                    call_args = {**base, "steps": [step]}
+                    if "observe" in forward_args and i == total - 1:
+                        call_args["observe"] = forward_args["observe"]
+                    if _foreground({**base, **step}):
+                        if not previous_read:
+                            try:
+                                previous = await driver.frontmost_pid()
+                            except Exception:
+                                previous = None
+                            previous_read = True
+                        step_args = step.get("args", {}) if "tool" in step else next(
+                            (step[key] for key in step if key in policy.STEP_TOOLS), {})
+                        window_id = step_args.get("window_id")
+                        if type(window_id) is not int:
+                            window_id = base.get("window_id")
+                        refusal = await _front_guard(driver, base["pid"], window_id)
+                        if refusal is not None:
+                            entries.append({"index": i, "ok": False, "code": "foreground_unverified",
+                                            "message": refusal})
+                            failed_step = i
+                            break
+                        fronted = True
+                    result = await driver.call("run_steps", call_args)
+                    report = result.structured_content
+                    try:
+                        if not (isinstance(report, dict) and isinstance(report.get("steps"), list)):
+                            report = json.loads(next(block.text for block in result.content
+                                                     if isinstance(block, TextContent)))
+                        if (not isinstance(report, dict) or not isinstance(report.get("steps"), list)
+                                or len(report["steps"]) != 1 or not isinstance(report["steps"][0], dict)):
+                            raise ValueError("invalid step report")
+                    except (ValueError, TypeError, StopIteration):
+                        return CallToolResult(content=[TextContent(
+                            type="text", text=f"Adım {i+1}/{total} sonucu okunamadı; kalan adımlar çalıştırılmadı.")]
+                            + result.content, is_error=True)
+                    entry = {**report["steps"][0], "index": i}
+                    entries.append(entry)
+                    observation = {"observation": report["observation"]} if "observation" in report else {}
+                    non_text = [block for block in result.content if not isinstance(block, TextContent)]
+                    if result.is_error is True or report.get("ok") is not True or entry.get("ok") is not True:
+                        failed_step = i
+                        break
+            finally:
+                if fronted and type(previous) is int and previous != base["pid"]:
+                    try:
+                        await driver.call("bring_to_front", {"pid": previous})
+                    except Exception:
+                        # Restoring focus must not change the batch's result or error.
+                        pass
         executed = len(entries)
         report = {"executed": executed, "total": total, "failed_step": failed_step,
                   "ok": executed == total and failed_step is None and stop_reason is None,
@@ -373,6 +392,10 @@ def create_server(driver=None):
         "If a hotkey or click is refused in the background (e.g. Find/Replace cmd+alt+f, background_unavailable), "
         "send the same call again with delivery_mode foreground and window_id: it fronts the window briefly "
         "and returns the previous app. Use computer_bring_to_front only if that is refused too."
+        " Send multi-step foreground work (for example renaming: return, type the name, return) as ONE "
+        "computer_run_steps with delivery_mode foreground: the window stays in front for the whole batch "
+        "and the previous app returns once at the end; separate calls each return the previous app, "
+        "which closes inline edit fields."
     ))
 
     def register(name):
