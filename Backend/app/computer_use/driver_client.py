@@ -1,11 +1,15 @@
 """One serialized MCP session, owned by a single task until disconnected."""
 import asyncio
+import ctypes
 import json
 import logging
+import math
 import os
 import re
 import sys
+import threading
 from contextlib import asynccontextmanager
+from functools import cache
 
 import anyio
 import httpx
@@ -128,6 +132,162 @@ def _parse_lsappinfo_list(text) -> list[dict]:
 async def running_apps_from_os() -> list[dict]:
     try:
         return _parse_lsappinfo_list(await _lsappinfo_list_text())
+    except Exception:
+        return []
+
+
+class _CGPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+class _CGSize(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+
+class _CGRect(ctypes.Structure):
+    _fields_ = [("origin", _CGPoint), ("size", _CGSize)]
+
+
+_CG_LOAD_LOCK = threading.Lock()
+
+
+@cache
+def _cg_libraries():
+    try:
+        frameworks = os.path.join(os.sep, "System", "Library", "Frameworks")
+        cg = ctypes.CDLL(os.path.join(frameworks, "CoreGraphics.framework", "CoreGraphics"))
+        cf = ctypes.CDLL(os.path.join(frameworks, "CoreFoundation.framework", "CoreFoundation"))
+        pointer = ctypes.c_void_p
+        signatures = [
+            (cg.CGWindowListCopyWindowInfo, [ctypes.c_uint32, ctypes.c_uint32], pointer),
+            (cg.CGRectMakeWithDictionaryRepresentation, [pointer, ctypes.POINTER(_CGRect)], ctypes.c_bool),
+            (cf.CFArrayGetCount, [pointer], ctypes.c_long),
+            (cf.CFArrayGetValueAtIndex, [pointer, ctypes.c_long], pointer),
+            (cf.CFDictionaryGetValue, [pointer, pointer], pointer),
+            (cf.CFGetTypeID, [pointer], ctypes.c_ulong),
+            (cf.CFNumberGetTypeID, [], ctypes.c_ulong),
+            (cf.CFBooleanGetTypeID, [], ctypes.c_ulong),
+            (cf.CFStringGetTypeID, [], ctypes.c_ulong),
+            (cf.CFDictionaryGetTypeID, [], ctypes.c_ulong),
+            (cf.CFNumberGetValue, [pointer, ctypes.c_int, pointer], ctypes.c_bool),
+            (cf.CFBooleanGetValue, [pointer], ctypes.c_bool),
+            (cf.CFStringGetLength, [pointer], ctypes.c_long),
+            (cf.CFStringGetMaximumSizeForEncoding, [ctypes.c_long, ctypes.c_uint32], ctypes.c_long),
+            (cf.CFStringGetCString, [pointer, pointer, ctypes.c_long, ctypes.c_uint32], ctypes.c_bool),
+            (cf.CFRelease, [pointer], None),
+        ]
+        for function, args, result in signatures:
+            function.argtypes = args
+            function.restype = result
+        keys = {name: pointer.in_dll(cg, name).value for name in (
+            "kCGWindowNumber", "kCGWindowOwnerPID", "kCGWindowLayer", "kCGWindowName",
+            "kCGWindowOwnerName", "kCGWindowIsOnscreen", "kCGWindowAlpha", "kCGWindowBounds",
+        )}
+        return cg, cf, keys
+    except Exception:
+        return None
+
+
+def _cg_window_list() -> list[dict] | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+        # Serialize the first load, including concurrent worker-thread calls.
+        with _CG_LOAD_LOCK:
+            libraries = _cg_libraries()
+        if libraries is None:
+            return None
+        cg, cf, keys = libraries
+        array = cg.CGWindowListCopyWindowInfo(1 | 16, 0)
+        if not array:
+            return None
+        try:
+            rows = []
+            number_type = cf.CFNumberGetTypeID()
+            string_type = cf.CFStringGetTypeID()
+            boolean_type = cf.CFBooleanGetTypeID()
+            dictionary_type = cf.CFDictionaryGetTypeID()
+            utf8 = 0x08000100
+            for index in range(cf.CFArrayGetCount(array)):
+                dictionary = cf.CFArrayGetValueAtIndex(array, index)
+                if not dictionary or cf.CFGetTypeID(dictionary) != dictionary_type:
+                    continue
+                row = {}
+                for name, key in keys.items():
+                    value = cf.CFDictionaryGetValue(dictionary, key)
+                    if not value:
+                        continue
+                    kind = cf.CFGetTypeID(value)
+                    if name in ("kCGWindowName", "kCGWindowOwnerName") and kind == string_type:
+                        size = cf.CFStringGetMaximumSizeForEncoding(cf.CFStringGetLength(value), utf8) + 1
+                        buffer = ctypes.create_string_buffer(size)
+                        if cf.CFStringGetCString(value, buffer, size, utf8):
+                            row[name] = buffer.value.decode("utf-8")
+                    elif name == "kCGWindowIsOnscreen" and kind == boolean_type:
+                        row[name] = bool(cf.CFBooleanGetValue(value))
+                    elif name == "kCGWindowBounds" and kind == dictionary_type:
+                        rect = _CGRect()
+                        if cg.CGRectMakeWithDictionaryRepresentation(value, ctypes.byref(rect)):
+                            row[name] = {"X": rect.origin.x, "Y": rect.origin.y,
+                                         "Width": rect.size.width, "Height": rect.size.height}
+                    elif name in ("kCGWindowNumber", "kCGWindowOwnerPID", "kCGWindowLayer",
+                                  "kCGWindowAlpha") and kind == number_type:
+                        # CFNumber types: kCFNumberFloat64Type=6, kCFNumberSInt64Type=4.
+                        numeric = ctypes.c_double() if name == "kCGWindowAlpha" else ctypes.c_int64()
+                        if cf.CFNumberGetValue(value, 6 if name == "kCGWindowAlpha" else 4,
+                                               ctypes.byref(numeric)):
+                            row[name] = numeric.value
+                rows.append(row)
+            return rows
+        finally:
+            cf.CFRelease(array)
+    except Exception:
+        return None
+
+
+def _panel_rows(raw, pid, base_z) -> list[dict]:
+    if not isinstance(raw, list) or type(pid) is not int:
+        return []
+    rows = []
+    for item in raw:
+        try:
+            if not isinstance(item, dict):
+                continue
+            owner, number, layer = (item.get(key) for key in (
+                "kCGWindowOwnerPID", "kCGWindowNumber", "kCGWindowLayer"))
+            if (type(owner) is not int or owner != pid or type(number) is not int or number <= 0
+                    or type(layer) is not int or not 1 <= layer <= 23
+                    or item.get("kCGWindowIsOnscreen") is not True):
+                continue
+            alpha = item.get("kCGWindowAlpha", 1.0)
+            if type(alpha) not in (int, float) or not alpha > 0:
+                continue
+            bounds = item["kCGWindowBounds"]
+            values = [bounds[key] for key in ("X", "Y", "Width", "Height")]
+            if (any(type(value) not in (int, float) or not math.isfinite(value) for value in values)
+                    or values[2] < 40 or values[3] < 40):
+                continue
+            name, title = item.get("kCGWindowOwnerName"), item.get("kCGWindowName")
+            rows.append({
+                "window_id": number, "pid": owner,
+                "app_name": name if isinstance(name, str) else None,
+                "title": title if isinstance(title, str) else "", "layer": layer,
+                "bounds": dict(zip(("x", "y", "width", "height"), map(int, values))),
+                "is_on_screen": True, "on_current_space": True,
+            })
+            if len(rows) == 64:
+                break
+        except Exception:
+            continue
+    for position, row in enumerate(rows):
+        row["z_index"] = base_z + len(rows) - position
+    return rows
+
+
+async def panel_windows_from_os(pid, base_z) -> list[dict]:
+    try:
+        raw = await asyncio.wait_for(asyncio.to_thread(_cg_window_list), 2.0)
+        return _panel_rows(raw, pid, base_z)
     except Exception:
         return []
 

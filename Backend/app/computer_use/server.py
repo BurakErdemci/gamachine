@@ -19,6 +19,11 @@ from .driver_client import DriverClient, DriverError, DriverUnavailable, fetch_r
 
 
 _TOOL_HINTS = {
+    "computer_list_windows": (
+        " Also lists the app's open panels and dialogs (layer above 0, e.g. Unity's New Scene window); "
+        "the one with the highest z_index is in front. Read it with computer_window_state by its "
+        "window_id: the main window's screenshot does not show it."
+    ),
     "computer_invoke_menu": (
         " Menu items are often disabled while the app is in the background; prefer the item's "
         "keyboard shortcut with computer_hotkey (cmd+s to save, cmd+o to open), which works in the "
@@ -76,6 +81,49 @@ async def _merge_running_apps(result):
         ]
         if isinstance(structured, dict) and isinstance(structured.get("apps"), list):
             structured = {**structured, "apps": structured["apps"] + extra}
+        return result.model_copy(update={"content": content, "structured_content": structured})
+    except Exception:
+        return result
+
+
+async def _merge_panel_windows(result, pid):
+    try:
+        if result.is_error:
+            return result
+        structured = result.structured_content
+        payloads = []
+        texts = {}
+        if isinstance(structured, dict) and isinstance(structured.get("windows"), list):
+            payloads.append(structured)
+        for index, block in enumerate(result.content):
+            if not isinstance(block, TextContent):
+                continue
+            try:
+                payload = json.loads(block.text)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(payload, dict) and isinstance(payload.get("windows"), list):
+                texts[index] = payload
+                payloads.append(payload)
+        if not payloads:
+            return result
+        rows = [row for payload in payloads for row in payload["windows"] if isinstance(row, dict)]
+        base_z = max((row["z_index"] for row in rows if type(row.get("z_index")) is int), default=0)
+        seen = {row.get("window_id") for row in rows}
+        extra = []
+        for row in await driver_client.panel_windows_from_os(pid, base_z):
+            if row["window_id"] not in seen:
+                extra.append(row)
+                seen.add(row["window_id"])
+        if not extra:
+            return result
+        content = [
+            block.model_copy(update={"text": json.dumps({**texts[index], "windows": texts[index]["windows"] + extra})})
+            if index in texts else block
+            for index, block in enumerate(result.content)
+        ]
+        if isinstance(structured, dict) and isinstance(structured.get("windows"), list):
+            structured = {**structured, "windows": structured["windows"] + extra}
         return result.model_copy(update={"content": content, "structured_content": structured})
     except Exception:
         return result
@@ -366,6 +414,8 @@ class ComputerServer:
                     driver, pid, forward_args.get("window_id"), validated.driver_tool, forward_args)
                 return _text(refusal, True) if refusal is not None else result
             result = await driver.call(validated.driver_tool, forward_args)
+            if tool == "computer_list_windows":
+                return await _merge_panel_windows(result, pid)
             return await _merge_running_apps(result) if tool == "computer_list_apps" else result
         except DriverUnavailable:
             return _text("Bilgisayar kullanımı sürücüsü kullanılamıyor.", True)

@@ -48,6 +48,11 @@ def test_run_steps_description_has_valid_example_and_policy_names():
             '(e.g. "s00000003:18"); never a bare number.'
         )
         hints = {
+            "computer_list_windows": (
+                " Also lists the app's open panels and dialogs (layer above 0, e.g. Unity's New Scene window); "
+                "the one with the highest z_index is in front. Read it with computer_window_state by its "
+                "window_id: the main window's screenshot does not show it."
+            ),
             "computer_invoke_menu": (
                 " Menu items are often disabled while the app is in the background; prefer the item's "
                 "keyboard shortcut with computer_hotkey (cmd+s to save, cmd+o to open), which works in the "
