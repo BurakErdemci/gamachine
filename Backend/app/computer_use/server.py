@@ -40,6 +40,47 @@ def _text(value, error=False):
     return CallToolResult(content=[TextContent(type="text", text=value)], is_error=error)
 
 
+async def _merge_running_apps(result):
+    try:
+        if result.is_error:
+            return result
+        structured = result.structured_content
+        payloads = []
+        texts = {}
+        if isinstance(structured, dict) and isinstance(structured.get("apps"), list):
+            payloads.append(structured)
+        for index, block in enumerate(result.content):
+            if not isinstance(block, TextContent):
+                continue
+            try:
+                payload = json.loads(block.text)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(payload, dict) and isinstance(payload.get("apps"), list):
+                texts[index] = payload
+                payloads.append(payload)
+        if not payloads:
+            return result
+        seen = {row.get("pid") for payload in payloads for row in payload["apps"] if isinstance(row, dict)}
+        extra = []
+        for row in await driver_client.running_apps_from_os():
+            if row["pid"] not in seen:
+                extra.append(row)
+                seen.add(row["pid"])
+        if not extra:
+            return result
+        content = [
+            block.model_copy(update={"text": json.dumps({**texts[index], "apps": texts[index]["apps"] + extra})})
+            if index in texts else block
+            for index, block in enumerate(result.content)
+        ]
+        if isinstance(structured, dict) and isinstance(structured.get("apps"), list):
+            structured = {**structured, "apps": structured["apps"] + extra}
+        return result.model_copy(update={"content": content, "structured_content": structured})
+    except Exception:
+        return result
+
+
 async def _batch_stop(params) -> str | None:
     try:
         body = {"params": {key: params.get(key) for key in ("bundle_id", "app_name", "pid", "window_id")}}
@@ -324,7 +365,8 @@ class ComputerServer:
                 refusal, result = await self._fronted_call(
                     driver, pid, forward_args.get("window_id"), validated.driver_tool, forward_args)
                 return _text(refusal, True) if refusal is not None else result
-            return await driver.call(validated.driver_tool, forward_args)
+            result = await driver.call(validated.driver_tool, forward_args)
+            return await _merge_running_apps(result) if tool == "computer_list_apps" else result
         except DriverUnavailable:
             return _text("Bilgisayar kullanımı sürücüsü kullanılamıyor.", True)
         except DriverError:

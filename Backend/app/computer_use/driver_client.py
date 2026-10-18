@@ -67,6 +67,71 @@ def _parse_lsappinfo(text) -> tuple[str, str | None] | None:
     return bundles[0], (name.group(1) or None) if name else None
 
 
+async def _lsappinfo_list_text() -> str | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+        executable = os.path.join(os.sep, "usr", "bin", "lsappinfo")
+        if not os.path.isfile(executable):
+            return None
+        # At most one child per listing; reap it on timeout and cancellation.
+        process = await asyncio.create_subprocess_exec(
+            executable, "list", stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), 2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return None
+        return stdout.decode("utf-8", errors="replace") if process.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _parse_lsappinfo_list(text) -> list[dict]:
+    if not isinstance(text, str):
+        return []
+    headers = list(re.finditer(r'^\s*\d+\) "([^\n]*)" ASN:[^\n]*(?:\n|$)', text, re.MULTILINE))
+    rows = []
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        # Fields in a quoted app name are not part of the record body.
+        body = text[header.end():end]
+        bundles = re.findall(r'\bbundleID="([^"\n]*)"', body)
+        # The token also contains pid=N; only the separate pid = N field counts.
+        pids = re.findall(r'\bpid\s+=\s+(-?[0-9]+)\b', body)
+        types = re.findall(r'\btype="([^"\n]*)"', body)
+        if (len(bundles) != 1 or not policy.valid_bundle_id(bundles[0])
+                or len(pids) != 1 or types != ["Foreground"]):
+            continue
+        pid = int(pids[0])
+        if pid <= 0:
+            continue
+        row = {"bundle_id": bundles[0], "kind": "desktop", "name": header.group(1) or None,
+               "pid": pid, "running": True}
+        path = re.search(r'\bbundle path="([^"\n]*)"', body)
+        if path and os.path.isabs(path.group(1)):
+            row["launch_path"] = path.group(1)
+        rows.append(row)
+        if len(rows) == 256:
+            break
+    return rows
+
+
+async def running_apps_from_os() -> list[dict]:
+    try:
+        return _parse_lsappinfo_list(await _lsappinfo_list_text())
+    except Exception:
+        return []
+
+
 async def identify_running_app(driver, pid) -> tuple[str | None, str | None]:
     bundle_id, name = (await driver.list_running_apps()).get(pid, (None, None))
     if policy.valid_bundle_id(bundle_id):
