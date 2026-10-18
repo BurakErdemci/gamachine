@@ -101,6 +101,23 @@ _BUNDLE_SUFFIXES = (".app", ".bundle", ".framework", ".plugin", ".appex", ".pref
                     ".qlgenerator", ".mdimporter", ".component", ".colorpicker",
                     ".osax", ".menu", ".vst", ".vst3", ".au", ".clap")
 
+_DOCUMENT_HANDLER_DENY = frozenset({
+    "com.apple.finder", "com.apple.terminal", "com.googlecode.iterm2", "org.python.pythonlauncher",
+    "dev.warp.warp-stable", "com.mitchellh.ghostty", "net.kovidgoyal.kitty", "org.alacritty",
+    "co.zeit.hyper", "com.github.wez.wezterm", "com.apple.installer", "com.apple.archiveutility",
+    "com.apple.scripteditor2", "com.apple.automator", "com.apple.shortcuts",
+})
+
+_RUNNABLE_FILE_SUFFIXES = (
+    ".sh", ".bash", ".zsh", ".csh", ".ksh", ".fish", ".command", ".tool", ".py", ".pyw", ".pyc",
+    ".rb", ".pl", ".php", ".scpt", ".applescript", ".jxa", ".workflow", ".shortcut", ".action",
+    ".terminal", ".webloc", ".inetloc", ".fileloc", ".url", ".desktop", ".jar", ".pkg", ".mpkg",
+    ".dmg", ".iso", ".img", ".sparseimage", ".sparsebundle", ".mobileconfig", ".provisionprofile",
+    ".docm", ".xlsm", ".pptm", ".dotm", ".xltm", ".potm", ".lnk", ".exe", ".msi", ".bat", ".cmd",
+    ".ps1", ".vbs", ".wsf", ".reg", ".so", ".dylib", ".bundle", ".kext", ".plugin", ".prefpane",
+    ".saver", ".qlgenerator", ".app",
+)
+
 
 def _is_bundle_dir(path):
     return (os.path.basename(path).casefold().endswith(_BUNDLE_SUFFIXES)
@@ -111,7 +128,7 @@ def _is_bundle_dir(path):
 LAUNCH_NAME_TIMEOUT = 3.0
 
 
-def _resolve_launch_targets(urls):
+def _resolve_launch_targets(urls, bundle_id):
     """Return the urls with every path replaced by its checked real path, or None."""
     resolved = []
     for url in urls:
@@ -120,7 +137,12 @@ def _resolve_launch_targets(urls):
             continue
         try:
             real_path = os.path.realpath(url)
-            if not os.path.isdir(real_path):
+            if not (os.path.isdir(real_path) or (
+                    os.path.isfile(real_path)
+                    and bundle_id.casefold() not in _DOCUMENT_HANDLER_DENY
+                    and not os.path.basename(real_path).casefold().endswith(_RUNNABLE_FILE_SUFFIXES)
+                    and not os.path.basename(real_path).casefold().endswith(_BUNDLE_SUFFIXES)
+                    and os.stat(real_path).st_mode & 0o111 == 0)):
                 return None
             current = real_path
             while True:
@@ -136,8 +158,8 @@ def _resolve_launch_targets(urls):
     return resolved
 
 
-def _safe_launch_targets(urls):
-    return _resolve_launch_targets(urls) is not None
+def _safe_launch_targets(urls, bundle_id):
+    return _resolve_launch_targets(urls, bundle_id) is not None
 
 
 class ComputerServer:
@@ -164,9 +186,12 @@ class ComputerServer:
             driver = None
             forward_args = validated.args
             if tool == "computer_launch_app" and "urls" in args:
-                resolved = _resolve_launch_targets(args["urls"])
+                resolved = _resolve_launch_targets(args["urls"], args["bundle_id"])
                 if resolved is None:
-                    return _text("urls must target existing directories outside executable bundles", True)
+                    return _text(
+                        "urls must target existing directories, or plain document files the app opens "
+                        "(not scripts, executables, installers or files inside app bundles; "
+                        "not with Finder or a terminal)", True)
                 forward_args = {**validated.args, "urls": resolved}
             bundle_id = app_name = pid = None
             if "pid" in args:
@@ -341,7 +366,8 @@ def create_server(driver=None):
         "To check a file the task created, look only in the folder the task names; "
         "never search the whole home folder, macOS blocks other apps' data and warns the user. "
         "Work in the background: hotkeys, typing and element_token clicks reach background apps, "
-        "including their Open/Save panels. To open a file: cmd+o, then type the full path starting with / "
+        "including their Open/Save panels. To open a file: computer_launch_app with the app's bundle_id "
+        "and urls set to the file's absolute path; only if that is refused, cmd+o, then type the full path starting with / "
         "(the panel opens its own go-to field; do not press cmd+shift+g), return, return. To save: cmd+s. "
         "Use delivery_mode foreground or computer_bring_to_front only after "
         "a background attempt was refused."

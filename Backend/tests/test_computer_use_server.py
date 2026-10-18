@@ -642,6 +642,134 @@ def test_launch_plain_directory_forwards_resolved_real_path(fake, tmp_path, name
     assert calls(log)[-1]["args"]["urls"] == [os.path.realpath(target), "https://example.com/a"]
 
 
+@pytest.fixture
+def document_launch(monkeypatch):
+    driver = AsyncMock(spec=DriverClient)
+    driver.binary, driver.socket = "fake-binary", "fake-socket"
+    driver.installed_app_name.return_value = "TextEdit"
+    driver.call.return_value = CallToolResult(content=[TextContent(type="text", text="opened")])
+    runtime = AsyncMock(return_value=(driver.binary, driver.socket))
+    approval = AsyncMock(return_value={"approved": True})
+    monkeypatch.setattr(server, "fetch_runtime", runtime)
+    monkeypatch.setattr(server.approval_bridge, "request_approval", approval)
+    return driver, approval, runtime
+
+
+def _assert_document_refused(document_launch, target, bundle_id="com.apple.TextEdit"):
+    driver, approval, runtime = document_launch
+    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", {
+        "bundle_id": bundle_id, "urls": [str(target)]}))
+    assert result.is_error
+    assert result.content[0].text == (
+        "urls must target existing directories, or plain document files the app opens "
+        "(not scripts, executables, installers or files inside app bundles; not with Finder or a terminal)"
+    )
+    approval.assert_not_called()
+    runtime.assert_not_called()
+    assert driver.mock_calls == []
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_document_launch_forwards_plain_file_real_path_after_approval(document_launch, tmp_path, symlink):
+    driver, approval, _ = document_launch
+    target = tmp_path / "notes.txt"
+    target.write_text("hello")
+    target.chmod(0o644)
+    path = target
+    if symlink:
+        path = tmp_path / "alias.txt"
+        path.symlink_to(target)
+    args = {"bundle_id": "com.apple.TextEdit", "urls": [str(path)]}
+
+    async def opened(tool, forwarded):
+        approval.assert_awaited_once()
+        assert approval.call_args.kwargs["params"]["bundle_id"] == args["bundle_id"]
+        return CallToolResult(content=[TextContent(type="text", text="opened")])
+
+    driver.call.side_effect = opened
+    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", args))
+    assert not result.is_error
+    driver.call.assert_awaited_once_with("launch_app", {
+        **args, "urls": [os.path.realpath(target)]})
+    assert server._safe_launch_targets(args["urls"], args["bundle_id"])
+
+
+def test_document_launch_refuses_symlink_to_runnable(document_launch, tmp_path):
+    target = tmp_path / "run.command"
+    target.write_text("echo hello")
+    target.chmod(0o644)
+    link = tmp_path / "notes.txt"
+    link.symlink_to(target)
+    _assert_document_refused(document_launch, link)
+
+
+@pytest.mark.parametrize("suffix", [".sh", ".command", ".py", ".scpt", ".webloc", ".pkg",
+                                   ".dmg", ".docm", ".SH", ".framework"])
+def test_document_launch_refuses_runnable_suffixes(document_launch, tmp_path, suffix):
+    target = tmp_path / ("document" + suffix)
+    target.write_text("data")
+    target.chmod(0o644)
+    _assert_document_refused(document_launch, target)
+
+
+@pytest.mark.parametrize("mode", [0o744, 0o654, 0o645])
+def test_document_launch_refuses_any_execute_bit(document_launch, tmp_path, mode):
+    target = tmp_path / "notes.txt"
+    target.write_text("data")
+    target.chmod(mode)
+    _assert_document_refused(document_launch, target)
+
+
+@pytest.mark.parametrize("bundle_id", [
+    "com.apple.finder", "COM.APPLE.TERMINAL", "com.googlecode.iterm2", "org.python.PythonLauncher",
+    "dev.warp.warp-stable", "com.mitchellh.ghostty", "net.kovidgoyal.kitty", "org.alacritty",
+    "co.zeit.hyper", "com.github.wez.wezterm", "com.apple.installer", "com.apple.archiveutility",
+    "com.apple.scripteditor2", "com.apple.automator", "com.apple.shortcuts",
+])
+def test_document_launch_refuses_unsafe_handlers(document_launch, tmp_path, bundle_id):
+    target = tmp_path / "notes.txt"
+    target.write_text("hello")
+    target.chmod(0o644)
+    _assert_document_refused(document_launch, target, bundle_id)
+
+
+@pytest.mark.parametrize("bundle_name,marker", [
+    ("Thing.app", None), ("Plain", "MacOS"), ("Plain", "Info.plist"),
+])
+def test_document_launch_refuses_files_inside_bundles(document_launch, tmp_path, bundle_name, marker):
+    bundle = tmp_path / bundle_name
+    resources = bundle / "Contents" / "Resources"
+    resources.mkdir(parents=True)
+    if marker == "MacOS":
+        (bundle / "Contents" / marker).mkdir()
+    elif marker:
+        (bundle / "Contents" / marker).write_text("plist")
+    target = resources / "notes.txt"
+    target.write_text("hello")
+    target.chmod(0o644)
+    _assert_document_refused(document_launch, target)
+
+
+def test_document_launch_refuses_fifo(document_launch, tmp_path):
+    target = tmp_path / "notes.txt"
+    os.mkfifo(target, 0o644)
+    _assert_document_refused(document_launch, target)
+
+
+def test_document_launch_keeps_directory_and_https_targets(document_launch, tmp_path):
+    driver, approval, _ = document_launch
+    target = tmp_path / "documents"
+    target.mkdir()
+    link = tmp_path / "alias"
+    link.symlink_to(target, target_is_directory=True)
+    args = {"bundle_id": "com.apple.finder", "urls": [str(link), "https://example.com/a"]}
+    result = asyncio.run(ComputerServer(driver).call("computer_launch_app", args))
+    assert not result.is_error
+    approval.assert_awaited_once()
+    driver.call.assert_awaited_once_with("launch_app", {
+        **args, "urls": [os.path.realpath(target), "https://example.com/a"]})
+
+
 def test_driver_session_timeout_covers_maximum_window_read(fake, monkeypatch):
     from computer_use import driver_client
     original = driver_client.ClientSession
