@@ -34,6 +34,7 @@ class UnityMCPManager:
         self.process: Optional[subprocess.Popen] = None
         self.mcp_port = 8080
         self._starting = False  # Çift başlatmayı önler
+        self._autoconnect_workspaces: set[str] = set()
         # port_occupant() kimlik probe'u cache'i (perf). Değer artık bool DEĞİL:
         # "biri dinliyor mu" ile "o biri BİZ miyiz" ayrı sorular ve ikincisi
         # cevaplanmadan toggle yeşile dönüyordu.
@@ -482,6 +483,13 @@ class UnityMCPManager:
         self.invalidate_identity_cache()
         logger.info("[UnityMCP] Sunucu durduruldu.")
 
+        try:
+            for workspace_path in tuple(self._autoconnect_workspaces):
+                self.reset_autoconnect_off(workspace_path)
+            self._autoconnect_workspaces.clear()
+        except Exception as e:
+            logger.debug("[UnityMCP] Autoconnect cleanup skipped: %s", e)
+
     # ─── Health & Status ─────────────────────────────────────────────────────
 
     def api_headers(self) -> dict:
@@ -678,6 +686,22 @@ class UnityMCPManager:
             logger.error(f"[UnityMCP] Paket kurulumu hatası: {e}")
             return False
 
+    def reset_autoconnect_off(self, workspace_path) -> bool:
+        try:
+            if not isinstance(workspace_path, str) or not workspace_path or not os.path.isdir(workspace_path):
+                return False
+            script_path = os.path.join(workspace_path, "Assets", "Editor", "UnityArchitectAIMCPSetup.cs")
+            if not os.path.isfile(script_path):
+                return False
+            with open(script_path, "r", encoding="utf-8") as f:
+                if '"MCPForUnity.AutoStartOnLoad", true' not in f.read():
+                    return False
+            self._write_autoconnect_script(workspace_path, auto_start=False)
+            return True
+        except Exception as e:
+            logger.debug("[UnityMCP] Autoconnect reset skipped: %s", e)
+            return False
+
     def _write_autoconnect_script(self, workspace_path: str, auto_start: bool = False):
         """
         Unity projesi Assets/Editor/ altına [InitializeOnLoad] C# scripti yazar.
@@ -735,6 +759,10 @@ namespace UnityArchitectAI
 """
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(script)
+        if auto_start:
+            self._autoconnect_workspaces.add(workspace_path)
+        else:
+            self._autoconnect_workspaces.discard(workspace_path)
         logger.info(f"[UnityMCP] Auto-connect scripti yazıldı (auto_start={auto_start}): {script_path}")
 
 

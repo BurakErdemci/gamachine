@@ -204,6 +204,15 @@ async def _side_sweep_loop() -> None:
             logger.warning(f"[side] idle sweep failed: {e}")
 
 
+def _reset_unity_autoconnect_on_startup() -> None:
+    try:
+        from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+        if not unity_mcp_manager.is_running():
+            unity_mcp_manager.reset_autoconnect_off(db.get_last_workspace(1))
+    except Exception as e:
+        logger.debug("[Startup] Autoconnect reset skipped: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Backend başlarken: 8080'de geçen oturumdan kalmış KENDİ MCP sunucumuz varsa
@@ -220,6 +229,8 @@ async def lifespan(app: FastAPI):
             logger.warning(f"[Startup] {cleanup.message}")
     except Exception as e:
         logger.debug(f"[Startup] Port temizleme atlandı: {e}")
+
+    _reset_unity_autoconnect_on_startup()
 
     # Side chats are throwaway panels: none survives a restart, and no
     # provider session of one can exist yet, so the rows alone are dropped.

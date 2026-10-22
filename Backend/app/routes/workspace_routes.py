@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -5,6 +6,8 @@ from fastapi import APIRouter, Header, HTTPException
 
 from auth_utils import get_current_user, is_allowed_unity_script_path, require_user
 from schemas import WorkspaceRequest, WriteFileRequest
+
+logger = logging.getLogger(__name__)
 
 
 def create_workspace_router(db):
@@ -14,6 +17,12 @@ def create_workspace_router(db):
     async def save_workspace(req: WorkspaceRequest, x_session_token: str = Header(alias="X-Session-Token")):
         user_id, _ = require_user(db, x_session_token, req.user_id)
         db.save_workspace(user_id, req.path)
+        try:
+            from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+            if not unity_mcp_manager.is_running():
+                unity_mcp_manager.reset_autoconnect_off(req.path)
+        except Exception as e:
+            logger.debug("[Workspace] Autoconnect reset skipped: %s", e)
         return {"status": "success"}
 
     @router.get("/last-workspace/{user_id}")
