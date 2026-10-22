@@ -77,24 +77,12 @@ namespace MCPForUnity.Editor.Services
 
                 if (isLocal)
                 {
-                    // For HTTP Local: launch the server process first, then connect the bridge.
-                    // This mirrors what the UI "Start Server" button does.
+                    // For HTTP Local: wait for Gamachine's server, then connect the bridge.
                     if (!HttpEndpointUtility.IsHttpLocalUrlAllowedForLaunch(
                             HttpEndpointUtility.GetLocalBaseUrl(), out string policyError))
                     {
                         McpLog.Debug($"[HTTP Auto-Start] Local URL blocked by security policy: {policyError}");
                         return;
-                    }
-
-                    // Check if server is already reachable (e.g. user started it externally).
-                    if (!MCPServiceLocator.Server.IsLocalHttpServerReachable())
-                    {
-                        bool serverStarted = MCPServiceLocator.Server.StartLocalHttpServer(quiet: true);
-                        if (!serverStarted)
-                        {
-                            McpLog.Warn("[HTTP Auto-Start] Failed to start local HTTP server");
-                            return;
-                        }
                     }
 
                     // Wait for the server to become reachable, then connect.
@@ -133,7 +121,7 @@ namespace MCPForUnity.Editor.Services
 
                 if (reachable)
                 {
-                    bool started = await MCPServiceLocator.Bridge.StartAsync();
+                    bool started = await MCPServiceLocator.Bridge.StartAsync(quiet: true);
                     if (started)
                     {
                         McpLog.Info("[HTTP Auto-Start] Bridge started successfully");
@@ -144,7 +132,7 @@ namespace MCPForUnity.Editor.Services
                 else if (attempt >= 20 && (attempt - 20) % 3 == 0)
                 {
                     // Last-resort: try connecting even if not detected (process detection may fail).
-                    bool started = await MCPServiceLocator.Bridge.StartAsync();
+                    bool started = await MCPServiceLocator.Bridge.StartAsync(quiet: true);
                     if (started)
                     {
                         McpLog.Info("[HTTP Auto-Start] Bridge started successfully (late connect)");
@@ -158,7 +146,10 @@ namespace MCPForUnity.Editor.Services
                 catch { return; }
             }
 
-            McpLog.Warn("[HTTP Auto-Start] Server did not become reachable after launch");
+            if (EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false))
+            {
+                McpLog.Warn("Unity MCP is on in Gamachine but Unity could not connect to it. Turn Unity MCP off and on in Gamachine to retry.");
+            }
         }
 
         /// <summary>

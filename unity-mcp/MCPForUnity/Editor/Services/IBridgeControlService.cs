@@ -32,7 +32,7 @@ namespace MCPForUnity.Editor.Services
         /// Starts the MCP for Unity Bridge asynchronously
         /// </summary>
         /// <returns>True if the bridge started successfully</returns>
-        Task<bool> StartAsync();
+        Task<bool> StartAsync(bool quiet = false);
 
         /// <summary>
         /// Stops the MCP for Unity Bridge asynchronously

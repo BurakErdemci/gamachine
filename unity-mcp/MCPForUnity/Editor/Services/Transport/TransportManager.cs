@@ -42,11 +42,11 @@ namespace MCPForUnity.Editor.Services.Transport
             };
         }
 
-        public async Task<bool> StartAsync(TransportMode mode)
+        public async Task<bool> StartAsync(TransportMode mode, bool quiet = false)
         {
             IMcpTransportClient client = GetOrCreateClient(mode);
 
-            bool started = await client.StartAsync();
+            bool started = await client.StartAsync(quiet: quiet);
             if (!started)
             {
                 try

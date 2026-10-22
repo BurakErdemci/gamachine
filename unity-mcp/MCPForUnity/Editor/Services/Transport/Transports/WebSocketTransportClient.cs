@@ -89,7 +89,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 token);
         }
 
-        public async Task<bool> StartAsync()
+        public async Task<bool> StartAsync(bool quiet = false)
         {
             // Capture identity values on the main thread before any async context switching
             _projectName = ProjectIdentityUtility.GetProjectName();
@@ -130,7 +130,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             _endpointUri = BuildWebSocketUri(HttpEndpointUtility.GetBaseUrl());
             _sessionId = null;
 
-            if (!await EstablishConnectionAsync(_lifecycleCts.Token))
+            if (!await EstablishConnectionAsync(_lifecycleCts.Token, quiet: quiet))
             {
                 await StopAsync();
                 return false;

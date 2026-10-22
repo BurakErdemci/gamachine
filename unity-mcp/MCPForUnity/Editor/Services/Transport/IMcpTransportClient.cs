@@ -11,7 +11,7 @@ namespace MCPForUnity.Editor.Services.Transport
         string TransportName { get; }
         TransportState State { get; }
 
-        Task<bool> StartAsync();
+        Task<bool> StartAsync(bool quiet = false);
         Task StopAsync();
         Task<bool> VerifyAsync();
         Task ReregisterToolsAsync();

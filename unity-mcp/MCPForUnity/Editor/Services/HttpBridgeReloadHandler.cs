@@ -80,6 +80,12 @@ namespace MCPForUnity.Editor.Services
             bool resume = false;
             try
             {
+                if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false))
+                {
+                    EditorPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload);
+                    return;
+                }
+
                 // Only resume HTTP if it is still the selected transport.
                 bool useHttp = EditorConfigurationCache.Instance.UseHttpTransport;
                 resume = useHttp && EditorPrefs.GetBool(EditorPrefKeys.ResumeHttpAfterReload, false);
@@ -124,10 +130,10 @@ namespace MCPForUnity.Editor.Services
 
         private static async Task ResumeHttpWithRetriesAsync()
         {
-            Exception lastException = null;
-
             for (int i = 0; i < ResumeRetrySchedule.Length; i++)
             {
+                if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
+
                 int attempt = i + 1;
                 McpLog.Debug($"[HTTP Reload] Resume attempt {attempt}/{ResumeRetrySchedule.Length}");
 
@@ -139,7 +145,8 @@ namespace MCPForUnity.Editor.Services
                     catch { return; }
                 }
 
-                // Abort retries if the user switched transports while we were waiting.
+                // Abort retries if the user disabled MCP or switched transports while waiting.
+                if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
                 if (!EditorConfigurationCache.Instance.UseHttpTransport)
                 {
                     return;
@@ -147,7 +154,7 @@ namespace MCPForUnity.Editor.Services
 
                 try
                 {
-                    bool started = await MCPServiceLocator.TransportManager.StartAsync(TransportMode.Http);
+                    bool started = await MCPServiceLocator.TransportManager.StartAsync(TransportMode.Http, quiet: true);
                     if (started)
                     {
                         McpLog.Debug($"[HTTP Reload] Resume succeeded on attempt {attempt}");
@@ -161,16 +168,12 @@ namespace MCPForUnity.Editor.Services
                 }
                 catch (Exception ex)
                 {
-                    lastException = ex;
                     McpLog.Debug($"[HTTP Reload] Resume attempt {attempt} threw: {ex.Message}");
                 }
             }
 
-            string detail = lastException != null ? $": {lastException.Message}" : string.Empty;
-            McpLog.Warn(
-                $"Failed to resume HTTP MCP bridge after domain reload{detail} — "
-                + $"retrying every {ResumeTailInterval.TotalSeconds:0} s for up to "
-                + $"{ResumeTailBudget.TotalMinutes:0} min in the background.");
+            if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
+            McpLog.Warn("Unity MCP is on in Gamachine but Unity could not connect to it. Turn Unity MCP off and on in Gamachine to retry.");
 
             await ResumeTailLoopAsync();
         }
@@ -216,9 +219,11 @@ namespace MCPForUnity.Editor.Services
                 DateTime deadline = DateTime.UtcNow + ResumeTailBudget;
                 while (true)
                 {
+                    if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
+
                     if (DateTime.UtcNow >= deadline)
                     {
-                        McpLog.Warn(
+                        McpLog.Debug(
                             $"Stopped retrying the HTTP MCP bridge after {ResumeTailBudget.TotalMinutes:0} min. "
                             + "Turn Unity MCP off and on in Gamachine to reconnect.");
                         return;
@@ -227,7 +232,8 @@ namespace MCPForUnity.Editor.Services
                     try { await Task.Delay(ResumeTailInterval); }
                     catch { return; }
 
-                    // The user may have switched transports while we were waiting.
+                    // The user may have disabled MCP or switched transports while waiting.
+                    if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
                     if (!EditorConfigurationCache.Instance.UseHttpTransport)
                     {
                         return;
@@ -235,7 +241,7 @@ namespace MCPForUnity.Editor.Services
 
                     try
                     {
-                        if (await MCPServiceLocator.TransportManager.StartAsync(TransportMode.Http))
+                        if (await MCPServiceLocator.TransportManager.StartAsync(TransportMode.Http, quiet: true))
                         {
                             McpLog.Info("[HTTP Reload] Bridge resumed after extended retry", false);
                             MCPForUnityEditorWindow.RequestHealthVerification();

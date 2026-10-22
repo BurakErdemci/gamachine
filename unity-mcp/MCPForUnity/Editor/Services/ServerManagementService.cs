@@ -237,7 +237,6 @@ namespace MCPForUnity.Editor.Services
         /// </summary>
         public bool StartLocalHttpServer(bool quiet = false)
         {
-            McpLog.Warn("[MCP] Sunucu Unity içinden başlatılamaz — Gamachine uygulamasındaki MCP toggle'ını kullanın.");
             if (!quiet)
             {
                 EditorUtility.DisplayDialog(

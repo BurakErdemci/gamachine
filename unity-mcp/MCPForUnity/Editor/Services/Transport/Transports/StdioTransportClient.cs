@@ -15,7 +15,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         public string TransportName => "stdio";
         public TransportState State => _state;
 
-        public Task<bool> StartAsync()
+        public Task<bool> StartAsync(bool quiet = false)
         {
             try
             {
