@@ -129,9 +129,9 @@ def test_bring_to_front_requires_foreground_approval_before_forwarding(fake, app
 
 
 @pytest.mark.parametrize("front,window_id,expected_tools,refusal", [
-    (None, 7, ["bring_to_front", "click", "bring_to_front"], None),
+    (None, 7, ["bring_to_front", "click"], None),
     ("1", 7, ["bring_to_front", "bring_to_front"], "could not be verified as the front window"),
-    ("once", 7, ["bring_to_front", "bring_to_front", "click", "bring_to_front"], None),
+    ("once", 7, ["bring_to_front", "bring_to_front", "click"], None),
     (None, None, [], "Foreground input needs window_id; nothing was sent."),
 ])
 def test_foreground_click_verifies_window_before_input(fake, front, window_id, expected_tools, refusal):
@@ -153,18 +153,16 @@ def test_foreground_click_verifies_window_before_input(fake, front, window_id, e
             await handler.close()
     asyncio.run(run())
     rows = calls(log)
-    assert [row["tool"] for row in rows] == ["list_apps", "list_apps", "list_apps", *expected_tools]
-    if refusal is None:
-        assert rows[-1]["args"] == {"pid": 77}
-        rows = rows[:-1]
+    assert [row["tool"] for row in rows] == ["list_apps", "list_apps", *expected_tools]
     assert all(row["args"] == {"pid": 4242, "window_id": 7}
                for row in rows if row["tool"] == "bring_to_front")
 
 
-@pytest.mark.parametrize("active", ["4242", "none"])
-def test_foreground_click_skips_restore_without_a_different_frontmost_app(fake, active):
+def test_foreground_click_only_fronts_target_without_frontmost_lookup(fake, monkeypatch):
     driver, log, _ = fake
-    driver.env["FAKE_CUA_ACTIVE"] = active
+    driver.env["FAKE_CUA_ACTIVE"] = "77"
+    frontmost = AsyncMock(return_value=77)
+    monkeypatch.setattr(driver, "frontmost_pid", frontmost)
 
     async def run():
         handler = ComputerServer(driver)
@@ -178,13 +176,14 @@ def test_foreground_click_skips_restore_without_a_different_frontmost_app(fake, 
     asyncio.run(run())
     rows = calls(log)
     assert [row["tool"] for row in rows] == [
-        "list_apps", "list_apps", "list_apps", "bring_to_front", "click"]
-    assert rows[3]["args"] == {"pid": 4242, "window_id": 7}
+        "list_apps", "list_apps", "bring_to_front", "click"]
+    assert [row["args"] for row in rows if row["tool"] == "bring_to_front"] == [
+        {"pid": 4242, "window_id": 7}]
+    frontmost.assert_not_called()
 
 
 @pytest.mark.parametrize("action_error", [False, True])
-@pytest.mark.parametrize("restore_error", ["none", "result", "exception", "unexpected"])
-def test_fronted_call_preserves_action_result_when_restore_fails(action_error, restore_error):
+def test_fronted_call_preserves_action_result_and_holds_lock(action_error):
     driver = AsyncMock()
     action = CallToolResult(content=[TextContent(type="text", text="action result")], is_error=action_error)
     guard = CallToolResult(content=[], structured_content={"exact_window_effect": {"verified": True}})
@@ -194,37 +193,17 @@ def test_fronted_call_preserves_action_result_when_restore_fails(action_error, r
         assert handler._front_lock.locked()
         if tool == "click":
             return action
-        if args == {"pid": 77}:
-            if restore_error == "exception":
-                raise DriverError("restore failed")
-            if restore_error == "unexpected":
-                raise TimeoutError("restore timed out")
-            return CallToolResult(content=[], is_error=restore_error == "result")
+        assert tool == "bring_to_front" and args == {"pid": 4242, "window_id": 7}
         return guard
 
-    async def frontmost():
-        assert handler._front_lock.locked()
-        return 77
-
-    driver.frontmost_pid.side_effect = frontmost
     driver.call.side_effect = call
     refusal, result = asyncio.run(handler._fronted_call(driver, 4242, 7, "click", {"pid": 4242}))
     assert refusal is None and result is action
     assert [entry.args for entry in driver.call.await_args_list] == [
         ("bring_to_front", {"pid": 4242, "window_id": 7}),
-        ("click", {"pid": 4242}), ("bring_to_front", {"pid": 77})]
-
-
-def test_fronted_call_still_forwards_when_frontmost_lookup_raises():
-    driver = AsyncMock()
-    driver.frontmost_pid.side_effect = RuntimeError("lookup failed")
-    guard = CallToolResult(content=[], structured_content={"exact_window_effect": {"verified": True}})
-    action = CallToolResult(content=[TextContent(type="text", text="clicked")])
-    driver.call.side_effect = [guard, action]
-    refusal, result = asyncio.run(ComputerServer(driver)._fronted_call(driver, 4242, 7, "click", {"pid": 4242}))
-    assert refusal is None and result is action
-    assert [entry.args for entry in driver.call.await_args_list] == [
-        ("bring_to_front", {"pid": 4242, "window_id": 7}), ("click", {"pid": 4242})]
+        ("click", {"pid": 4242})]
+    driver.frontmost_pid.assert_not_called()
+    assert not handler._front_lock.locked()
 
 
 def test_background_click_never_fronts_window(fake):
@@ -270,7 +249,7 @@ def test_split_steps_stop_before_unverified_foreground_step(fake, monkeypatch, s
     asyncio.run(run())
     rows = calls(log)
     assert [row["tool"] for row in rows] == [
-        "list_apps", "list_apps", "run_steps", "list_apps", "bring_to_front", "bring_to_front"]
+        "list_apps", "list_apps", "run_steps", "bring_to_front", "bring_to_front"]
     assert rows[2]["args"]["steps"] == steps[:1]
     assert all(row["args"] == {"pid": 4242, "window_id": 7}
                for row in rows if row["tool"] == "bring_to_front")
@@ -292,11 +271,11 @@ def test_split_steps_verify_each_inherited_foreground_window(fake, monkeypatch):
     asyncio.run(run())
     rows = calls(log)
     assert [row["tool"] for row in rows] == [
-        "list_apps", "list_apps", "list_apps", "bring_to_front", "run_steps",
-        "bring_to_front", "run_steps", "bring_to_front"]
+        "list_apps", "list_apps", "bring_to_front", "run_steps",
+        "bring_to_front", "run_steps"]
     assert [row["args"] for row in rows if row["tool"] == "bring_to_front"] == [
         {"pid": 4242, "window_id": 7},
-        {"pid": 4242, "window_id": 7}, {"pid": 77}]
+        {"pid": 4242, "window_id": 7}]
 
 
 @pytest.fixture
@@ -306,25 +285,19 @@ def batch_driver(monkeypatch):
     handler = ComputerServer(driver)
     state = {"active": 77, "steps": 0, "guards": 0, "refuse": None,
              "error": None, "unreadable": False, "failed": False,
-             "lookup_error": False, "restore_error": False, "locked": True}
+             "locked": True}
     events = []
 
     async def frontmost():
         assert handler._front_lock.locked()
         events.append(("frontmost", state["active"]))
-        if state["lookup_error"]:
-            raise RuntimeError("lookup failed")
         return state["active"]
 
     async def call(tool, args):
         assert handler._front_lock.locked() is state["locked"]
         events.append((tool, args))
         if tool == "bring_to_front":
-            if "window_id" not in args:
-                if state["restore_error"]:
-                    raise TimeoutError("restore failed")
-                state["active"] = args["pid"]
-                return CallToolResult(content=[])
+            assert args["pid"] == 4242 and "window_id" in args
             state["guards"] += 1
             verified = state["guards"] < state["refuse"] if state["refuse"] else True
             if verified:
@@ -367,24 +340,24 @@ def test_batch_holds_foreground_until_all_three_steps_finish(batch_driver):
         "ok": True, "executed": 3, "total": 3, "failed_step": None,
         "steps": [{"ok": True, "index": i} for i in range(3)]}
     assert [tool for tool, _ in events] == [
-        "frontmost", "bring_to_front", "run_steps", "bring_to_front", "run_steps",
-        "bring_to_front", "run_steps", "bring_to_front"]
+        "bring_to_front", "run_steps", "bring_to_front", "run_steps",
+        "bring_to_front", "run_steps"]
     assert [args for tool, args in events if tool == "bring_to_front"] == [
-        {"pid": 4242, "window_id": 7}] * 3 + [{"pid": 77}]
-    driver.frontmost_pid.assert_awaited_once()
-    assert state["active"] == 77
+        {"pid": 4242, "window_id": 7}] * 3
+    driver.frontmost_pid.assert_not_called()
+    assert state["active"] == 4242
     assert not handler._front_lock.locked()
 
 
-@pytest.mark.parametrize("ending,steps,guards,restores", [
-    ("error", 2, 2, 1),
-    ("refused_second", 1, 3, 1),
-    ("refused_first", 0, 2, 0),
-    ("halted", 1, 1, 1),
-    ("unreadable", 1, 1, 1),
-    ("failed", 1, 1, 1),
+@pytest.mark.parametrize("ending,steps,guards", [
+    ("error", 2, 2),
+    ("refused_second", 1, 3),
+    ("refused_first", 0, 2),
+    ("halted", 1, 1),
+    ("unreadable", 1, 1),
+    ("failed", 1, 1),
 ])
-def test_batch_restores_on_early_exit(batch_driver, monkeypatch, ending, steps, guards, restores):
+def test_batch_preserves_early_exit_without_fronting_another_app(batch_driver, monkeypatch, ending, steps, guards):
     handler, driver, state, events = batch_driver
     if ending == "error":
         state["error"] = 2
@@ -397,10 +370,8 @@ def test_batch_restores_on_early_exit(batch_driver, monkeypatch, ending, steps, 
     result = asyncio.run(handler.call("computer_run_steps", foreground_batch()))
     assert result.is_error
     assert state["steps"] == steps and state["guards"] == guards
-    assert events.count(("bring_to_front", {"pid": 77})) == restores
-    if restores:
-        assert events[-1] == ("bring_to_front", {"pid": 77})
-        assert state["active"] == 77
+    assert [args for tool, args in events if tool == "bring_to_front"] == [
+        {"pid": 4242, "window_id": 7}] * guards
     if ending == "error":
         assert result.content[0].text == "Bilgisayar kullanımı sürücüsüyle bağlantı kesildi; işlem yinelenmedi."
     elif ending.startswith("refused"):
@@ -411,33 +382,18 @@ def test_batch_restores_on_early_exit(batch_driver, monkeypatch, ending, steps, 
         assert json.loads(result.content[0].text)["stop_reason"] == "halted"
     elif ending == "unreadable":
         assert result.content[0].text == "Adım 1/3 sonucu okunamadı; kalan adımlar çalıştırılmadı."
-    driver.frontmost_pid.assert_awaited_once()
+    driver.frontmost_pid.assert_not_called()
     assert not handler._front_lock.locked()
 
 
-@pytest.mark.parametrize("previous", [None, 4242, "lookup_error"])
-def test_batch_skips_restore_without_previous_app(batch_driver, previous):
-    handler, driver, state, events = batch_driver
-    if previous == "lookup_error":
-        state["lookup_error"] = True
-    else:
-        state["active"] = previous
-    result = asyncio.run(handler.call("computer_run_steps", foreground_batch()))
-    assert not result.is_error
-    assert state["steps"] == 3
-    driver.frontmost_pid.assert_awaited_once()
-    assert all("window_id" in args for tool, args in events if tool == "bring_to_front")
-    assert not handler._front_lock.locked()
-
-
-def test_batch_restore_exception_preserves_report(batch_driver):
+def test_batch_preserves_report_and_leaves_target_in_front(batch_driver):
     handler, _, state, events = batch_driver
-    state["restore_error"] = True
     result = asyncio.run(handler.call("computer_run_steps", foreground_batch()))
     assert not result.is_error
     assert json.loads(result.content[0].text)["executed"] == 3
-    assert events[-1] == ("bring_to_front", {"pid": 77})
-    assert events.count(("bring_to_front", {"pid": 77})) == 1
+    assert [args for tool, args in events if tool == "bring_to_front"] == [
+        {"pid": 4242, "window_id": 7}] * 3
+    assert state["active"] == 4242
     assert not handler._front_lock.locked()
 
 
@@ -464,7 +420,7 @@ def test_batch_background_avoids_front_lock_and_lookup(batch_driver):
     assert [tool for tool, _ in events] == ["run_steps"] * 3
 
 
-def test_mixed_batch_holds_lock_and_restores_after_last_background_step(batch_driver):
+def test_mixed_batch_holds_lock_through_last_background_step(batch_driver):
     handler, driver, state, events = batch_driver
     args = foreground_batch()
     del args["delivery_mode"]
@@ -474,28 +430,28 @@ def test_mixed_batch_holds_lock_and_restores_after_last_background_step(batch_dr
     result = asyncio.run(handler.call("computer_run_steps", args))
     assert not result.is_error
     assert [tool for tool, _ in events] == [
-        "run_steps", "frontmost", "bring_to_front", "run_steps", "run_steps", "bring_to_front"]
-    assert events[2][1] == {"pid": 4242, "window_id": 9}
-    assert events[-1] == ("bring_to_front", {"pid": 77})
+        "run_steps", "bring_to_front", "run_steps", "run_steps"]
+    assert [args for tool, args in events if tool == "bring_to_front"] == [
+        {"pid": 4242, "window_id": 9}]
     step_calls = [args for tool, args in events if tool == "run_steps"]
     assert "observe" not in step_calls[0] and "observe" not in step_calls[1]
     assert step_calls[2]["observe"] == {"include_screenshot": True}
     assert server.asyncio.sleep.await_count == 2
     server.asyncio.sleep.assert_awaited_with(0.02)
-    driver.frontmost_pid.assert_awaited_once()
-    assert state["active"] == 77
+    driver.frontmost_pid.assert_not_called()
+    assert state["active"] == 4242
     assert not handler._front_lock.locked()
 
 
-def test_single_foreground_click_still_restores_immediately(batch_driver):
+def test_single_foreground_click_preserves_result_and_leaves_target_in_front(batch_driver):
     handler, driver, state, events = batch_driver
     result = asyncio.run(handler.call("computer_click", {
         "pid": 4242, "window_id": 7, "delivery_mode": "foreground", "x": 1, "y": 2}))
     assert not result.is_error and result.content[0].text == "clicked"
-    assert [tool for tool, _ in events] == ["frontmost", "bring_to_front", "click", "bring_to_front"]
-    assert events[-1] == ("bring_to_front", {"pid": 77})
-    assert state["active"] == 77
-    driver.frontmost_pid.assert_awaited_once()
+    assert [tool for tool, _ in events] == ["bring_to_front", "click"]
+    assert events[0] == ("bring_to_front", {"pid": 4242, "window_id": 7})
+    assert state["active"] == 4242
+    driver.frontmost_pid.assert_not_called()
     assert not handler._front_lock.locked()
 
 
@@ -515,9 +471,9 @@ def test_single_step_foreground_fallback_is_guarded(fake, unverified):
         finally:
             await handler.close()
     asyncio.run(run())
-    expected = ["bring_to_front"] if unverified else ["run_steps", "bring_to_front"]
+    expected = ["bring_to_front"] if unverified else ["run_steps"]
     assert [row["tool"] for row in calls(log)] == [
-        "list_apps", "list_apps", "list_apps", "bring_to_front", *expected]
+        "list_apps", "list_apps", "bring_to_front", *expected]
 
 
 @pytest.mark.parametrize("window_id", [None, True, False, "7", 7.0])
