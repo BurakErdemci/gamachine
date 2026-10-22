@@ -648,6 +648,9 @@ class UnityMCPManager:
             await asyncio.sleep(0.5)
             if self.is_running():
                 await asyncio.sleep(1)  # Port açık ama HTTP handler tam init olmamış olabilir
+                # A disable during that second already wrote the off script; do not overwrite it.
+                if not self.is_running():
+                    return False
                 self._write_autoconnect_script(workspace_path, auto_start=True)
                 logger.info("[UnityMCP] Server hazır — autoconnect scripti yazıldı.")
                 return True
