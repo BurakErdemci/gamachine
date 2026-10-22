@@ -232,7 +232,8 @@ def _normalized_keyboard_args(tool, args):
             if isinstance(modifiers, str):
                 modifiers = _split_keys(modifiers)
             if isinstance(modifiers, list) and all(isinstance(value, str) for value in modifiers):
-                normalized = {**args, "keys": modifiers + [args["key"]]}
+                # "key": "cmd+q" is one chord, so it gets the same risky-shortcut card; a lone "+" stays a key.
+                normalized = {**args, "keys": modifiers + (_split_keys(args["key"]) or [args["key"]])}
                 normalized.pop("key")
                 normalized.pop("modifiers", None)
                 return normalized

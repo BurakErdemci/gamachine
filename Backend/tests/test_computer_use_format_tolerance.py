@@ -15,6 +15,7 @@ KEYBOARD_CASES = [
     ("hotkey", {"key": "s", "modifiers": " + command + shift + "},
      {"keys": ["command", "shift", "s"]}),
     ("hotkey", {"key": "s"}, {"keys": ["s"]}),
+    ("hotkey", {"key": "+", "modifiers": ["cmd"]}, {"keys": ["cmd", "+"]}),
     ("hotkey", {"keys": "s"}, {"keys": ["s"]}),
     ("hotkey", {"keys": "+ +"}, {"keys": []}),
     ("press_key", {"key": "s", "modifiers": " + control + option + "},
@@ -148,6 +149,7 @@ def proxy(monkeypatch):
     ({"keys": "cmd+q"}, {"keys": ["cmd", "q"]}),
     ({"keys": "cmd+delete"}, {"keys": ["cmd", "delete"]}),
     ({"key": "q", "modifiers": "cmd"}, {"keys": ["cmd", "q"]}),
+    ({"key": "cmd+q"}, {"keys": ["cmd", "q"]}),
 ])
 @pytest.mark.parametrize("form", ["top", "explicit", "shorthand"])
 def test_risky_hotkey_formats_require_identical_approval(proxy, near, canonical, form):
