@@ -352,6 +352,7 @@ class ComputerServer:
         validated = policy.validate_call(tool, args)
         if isinstance(validated, policy.Refusal):
             return _text(validated.reason, True)
+        args = validated.args
         try:
             driver = None
             forward_args = validated.args

@@ -1,4 +1,5 @@
 """Pure validation of the curated cua-driver 0.35.4 surface."""
+from copy import deepcopy
 from dataclasses import dataclass
 import re
 import unicodedata
@@ -88,6 +89,10 @@ _NUMERIC_KEYS = frozenset("pid window_id count x y x1 y1 x2 y2 from_x from_y to_
 def _keys(args, allowed, required, *, batch=False):
     for key in args:
         if key not in allowed:
+            if "element_token" in allowed and key in {"element", "element_index", "element_id", "element_ref", "index"}:
+                return Refusal(
+                    f'Forbidden argument: {key}. Use element_token: "<snapshot_id>:<row>" '
+                    'from computer_window_state, e.g. row [39] of snapshot s00000029 is "s00000029:39".')
             return Refusal(f"Forbidden argument: {key}")
     for key in sorted(required):
         if key not in args:
@@ -214,11 +219,76 @@ def _valid_launch_url(url):
         return False
 
 
+def _split_keys(value):
+    return [part.strip() for part in value.split("+") if part.strip()]
+
+
+def _normalized_keyboard_args(tool, args):
+    if tool == "hotkey":
+        if isinstance(args.get("keys"), str):
+            return {**args, "keys": _split_keys(args["keys"])}
+        if "keys" not in args and isinstance(args.get("key"), str):
+            modifiers = args.get("modifiers", [])
+            if isinstance(modifiers, str):
+                modifiers = _split_keys(modifiers)
+            if isinstance(modifiers, list) and all(isinstance(value, str) for value in modifiers):
+                normalized = {**args, "keys": modifiers + [args["key"]]}
+                normalized.pop("key")
+                normalized.pop("modifiers", None)
+                return normalized
+    elif tool == "press_key" and isinstance(args.get("modifiers"), str):
+        return {**args, "modifiers": _split_keys(args["modifiers"])}
+    return args
+
+
+def _keyboard_targets(tool, args):
+    if tool in ("computer_hotkey", "computer_press_key"):
+        yield tool[len("computer_"):], args
+    elif tool == "computer_run_steps" and isinstance(args.get("steps"), list):
+        for step in args["steps"]:
+            if not isinstance(step, dict):
+                continue
+            shorthand = STEP_TOOLS.intersection(step)
+            if "tool" in step:
+                name = step["tool"]
+                step_args = step.get("args")
+                if shorthand:
+                    continue
+            elif len(shorthand) == 1:
+                name = next(iter(shorthand))
+                step_args = step[name]
+            else:
+                continue
+            if name in ("hotkey", "press_key") and isinstance(step_args, dict):
+                yield name, step_args
+
+
+def _normalize_args(tool, args):
+    observe_boolean = tool == "computer_run_steps" and type(args.get("observe")) is bool
+    if not observe_boolean and not any(
+            _normalized_keyboard_args(name, target) is not target
+            for name, target in _keyboard_targets(tool, args)):
+        return args
+    args = deepcopy(args)
+    for name, target in _keyboard_targets(tool, args):
+        normalized = _normalized_keyboard_args(name, target)
+        if normalized is not target:
+            target.clear()
+            target.update(normalized)
+    if observe_boolean:
+        if args["observe"]:
+            args["observe"] = {}
+        else:
+            args.pop("observe")
+    return args
+
+
 def validate_call(tool, args) -> Validated | Refusal:
     if not isinstance(tool, str) or tool not in TOOLS:
         return Refusal("Unknown tool")
     if not isinstance(args, dict):
         return Refusal("args must be an object")
+    args = _normalize_args(tool, args)
     spec = TOOLS[tool]
     refusal = _keys(args, spec.allowed, spec.required, batch=tool == "computer_run_steps")
     if refusal:
