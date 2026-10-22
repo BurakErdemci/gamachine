@@ -246,8 +246,10 @@ async def _front_guard(driver, pid, window_id) -> str | None:
         try:
             await driver.call("bring_to_front", {"pid": pid})
             for attempt in range(2):
-                frontmost = await driver.frontmost_pid()
                 raw = await asyncio.wait_for(asyncio.to_thread(driver_client._cg_window_list), 2.0)
+                # Frontmost is read after the window list, right before input, so an app switch
+                # during the list read is caught instead of trusting an earlier answer.
+                frontmost = await driver.frontmost_pid()
                 if not isinstance(raw, list):
                     break
                 top = next((row for row in raw if isinstance(row, dict)
