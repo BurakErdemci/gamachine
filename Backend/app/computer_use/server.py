@@ -237,6 +237,36 @@ async def _front_guard(driver, pid, window_id) -> str | None:
                 pass
         if attempt == 0:
             await asyncio.sleep(0.3)
+    try:
+        raw = await asyncio.wait_for(asyncio.to_thread(driver_client._cg_window_list), 2.0)
+        is_panel = any(row["window_id"] == window_id for row in driver_client._panel_rows(raw, pid, 0))
+    except Exception:
+        is_panel = False
+    if is_panel:
+        try:
+            await driver.call("bring_to_front", {"pid": pid})
+            for attempt in range(2):
+                frontmost = await driver.frontmost_pid()
+                raw = await asyncio.wait_for(asyncio.to_thread(driver_client._cg_window_list), 2.0)
+                if not isinstance(raw, list):
+                    break
+                top = next((row for row in raw if isinstance(row, dict)
+                            and row.get("kCGWindowOwnerPID") == pid
+                            and row.get("kCGWindowIsOnscreen") is True
+                            and type(row.get("kCGWindowLayer")) is int
+                            and 0 <= row["kCGWindowLayer"] <= 23
+                            and type(row.get("kCGWindowAlpha", 1.0)) in (int, float)
+                            and row.get("kCGWindowAlpha", 1.0) > 0), None)
+                if frontmost == pid and top is not None and top.get("kCGWindowNumber") == window_id:
+                    return None
+                if attempt == 0:
+                    await asyncio.sleep(0.3)
+        except Exception:
+            pass
+        return (
+            f"Foreground input not sent: panel window {window_id} could not be verified as the top window "
+            "of the frontmost app (another window or app may be on top). Read the app's windows "
+            "again with computer_list_windows.")
     if _front_flags(result) == (True, False):
         try:
             windows = _window_rows(await driver.call("list_windows", {"pid": pid}))
@@ -534,6 +564,9 @@ def create_server(driver=None):
         "including their Open/Save panels. To open a file: computer_launch_app with the app's bundle_id "
         "and urls set to the file's absolute path; only if that is refused, cmd+o, then type the full path starting with / "
         "(the panel opens its own go-to field; do not press cmd+shift+g), return, return. To save: cmd+s. "
+        "In an Open or Save panel, set the file name with computer_set_value on the name field's element_token; "
+        "typed text often does not reach these panels. In Unity, open a scene by double-clicking it in the "
+        "Project window or with File > Open Recent Scene rather than the Open panel. "
         "If a hotkey or click is refused in the background (e.g. Find/Replace cmd+alt+f, background_unavailable), "
         "send the same call again with delivery_mode foreground and window_id: it brings the window to the front "
         "and leaves it there. Use computer_bring_to_front only if that is refused too."

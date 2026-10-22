@@ -14,6 +14,11 @@ from computer_use.server import ComputerServer, create_server
 from computer_use import driver_client, server
 
 
+@pytest.fixture(autouse=True)
+def no_real_cg_windows(monkeypatch):
+    monkeypatch.setattr(driver_client, "_cg_window_list", lambda: [])
+
+
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     monkeypatch.setattr(driver_client, "_lsappinfo_text", AsyncMock(return_value=None))
