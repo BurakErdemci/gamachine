@@ -387,13 +387,11 @@ export default function Home() {
       setWsOpen(true);
       setIsTerminalOpen(true);
     });
-    const off3 = ipc.on('menu-clear-terminal', () => showToast(t('home.terminalCleared'), 'info'));
     return () => {
       if (typeof off1 === 'function') off1();
       if (typeof off2 === 'function') off2();
-      if (typeof off3 === 'function') off3();
     };
-  }, [ipc, ws.open, isTerminalOpen, setWsOpen, showToast, t]);
+  }, [ipc, ws.open, isTerminalOpen, setWsOpen]);
   // The floating computer-use indicator's body opens the live tab here (main/helpers/computer-use-live.ts).
   useEffect(() => {
     if (!ipc) return;

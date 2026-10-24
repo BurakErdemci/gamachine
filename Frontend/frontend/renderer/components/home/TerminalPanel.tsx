@@ -426,6 +426,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
     });
   }, [sessions, initializedIds]);
 
+  // Terminal > Clear Terminal in the app menu clears the active shell's screen only (nothing goes to the PTY).
+  // The active id is read through a ref so the subscription is not re-created on every tab switch.
+  const activeSessionIdRef = useRef('');
+  activeSessionIdRef.current = activeSessionId;
+  useEffect(() => {
+    if (!ipc) return;
+    const off = ipc.on('menu-clear-terminal', () => {
+      terminalInstancesRef.current[activeSessionIdRef.current]?.clear();
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, []);
+
   // Clean up all on unmount
   useEffect(() => {
     return () => {
