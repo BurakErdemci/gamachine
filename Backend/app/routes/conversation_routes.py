@@ -437,16 +437,24 @@ async def _cli_bagalamini_sifirla(db, conv_id: int) -> None:
     try:
         from providers.claude_sdk_session import close_session as _close_claude
         await _close_claude(conv_id)
+    except Exception as e:
+        # A failed close must not prevent the remaining providers from resetting.
+        logger.warning(f"[Compact] session reset hatası (kritik değil) [Claude close]: {e}")
+    try:
         from providers.codex_session import close_session as _close_codex
         await _close_codex(conv_id)
+    except Exception as e:
+        logger.warning(f"[Compact] session reset hatası (kritik değil) [Codex close]: {e}")
+    try:
         from providers.agy_session import close_session as _close_agy
         await _close_agy(conv_id)
+    except Exception as e:
+        logger.warning(f"[Compact] session reset hatası (kritik değil) [agy close]: {e}")
+    try:
         from agentic.agent_runner import _LAST_SUB_PROVIDER
         _LAST_SUB_PROVIDER.pop(conv_id, None)
     except Exception as e:
-        # Canlı session kapanmasa bile kimlik düştüğü için sonraki tur temiz
-        # açılır; bu yüzden ölümcül değil.
-        logger.warning(f"[Compact] session reset hatası (kritik değil): {e}")
+        logger.warning(f"[Compact] session reset hatası (kritik değil) [_LAST_SUB_PROVIDER.pop]: {e}")
     from agentic import wake_queue
     wake_queue.reset(conv_id)
 
