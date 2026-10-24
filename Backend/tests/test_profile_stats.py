@@ -15,7 +15,6 @@ import agentic.agent_runner as ar
 from agentic import approval_mode, cards, turn_events, wake_queue
 from database import DatabaseManager, LedgerNotCaughtUp
 import profile_stats as ps
-from rag.memory_manager import memory_manager
 import routes.conversation_routes as cr
 from routes.profile_routes import create_profile_router
 from tests.test_terminal_contract import _NormalRunner
@@ -33,9 +32,6 @@ def db(tmp_path, monkeypatch):
         monkeypatch.setenv(var, str(home))
     monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
-    memories = tmp_path / "memories"
-    memories.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", memories)
     cards.reset()
     wake_queue.reset_all()
     turn_events.RING.reset()
@@ -403,7 +399,7 @@ def test_backfill_error_does_not_crash_router_creation(db, monkeypatch, caplog):
     assert "backfill failed" in caplog.text
 
 
-@pytest.mark.parametrize("mode", ["normal", "error", "stopped", "wake", "metric_failure", "save_failure", "chat"])
+@pytest.mark.parametrize("mode", ["normal", "error", "stopped", "wake", "metric_failure", "save_failure"])
 def test_turn_record_real_routes_with_fake_runner(db, monkeypatch, mode):
     class Runner(_NormalRunner):
         async def run(self, message):
@@ -431,12 +427,12 @@ def test_turn_record_real_routes_with_fake_runner(db, monkeypatch, mode):
             return add_message(conversation_id, role, content, **kwargs)
         monkeypatch.setattr(db, "add_message", fail_assistant)
     with _client(db, chat=True) as client:
-        response = client.post("/chat" if mode == "chat" else "/chat-stream", headers=H,
+        response = client.post("/chat-stream", headers=H,
                                json={"conversation_id": conv, "user_id": 1, "message": "hello",
                                      "origin": "wake" if mode == "wake" else "user"})
     assert response.status_code == 200
     rows = db.list_activity(["turn_done"])
-    if mode in ("normal", "chat"):
+    if mode == "normal":
         assert len(rows) == 1
         assert (rows[0]["conversation_id"], rows[0]["provider"], rows[0]["model"]) == (
             conv, "claude", "claude-sonnet-5")

@@ -17,7 +17,6 @@ import agentic.agent_runner as ar
 import routes.conversation_routes as cr
 from agentic import chat_titles as ct
 from database import DatabaseManager
-from rag.memory_manager import memory_manager
 
 H = {"X-Session-Token": ""}
 
@@ -963,9 +962,6 @@ class _FakeRunner:
 @pytest.fixture
 def app(db, tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
-    mem_dir = tmp_path / "memories"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
     db.save_ai_config(1, "subscription", "claude-opus-5", "")
     fast = FastAPI()

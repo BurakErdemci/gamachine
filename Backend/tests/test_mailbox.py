@@ -28,7 +28,6 @@ from agentic import approval_mode, approval_policy, mailbox, wake_queue
 from agentic.approval_policy import ambient_turn
 from agentic.command_gates import GATE_OWNERS
 from database import DatabaseManager
-from rag.memory_manager import memory_manager
 from schemas import ChatRequest
 
 H = {"X-Session-Token": ""}
@@ -44,9 +43,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
     monkeypatch.setattr(cr, "WAKE_ALL_POLL_S", 0.02)
-    mem_dir = tmp_path / "memories"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     wake_queue.reset_all()
     approval_policy._TURNS_BY_CONVERSATION.clear()
     db = DatabaseManager(str(tmp_path / "mail.db"))
@@ -568,7 +564,7 @@ def _user_turn(client, path, conv_id):
     return client.post(path, json=body, headers=H)
 
 
-@pytest.mark.parametrize("path", ["/chat-stream", "/chat"])
+@pytest.mark.parametrize("path", ["/chat-stream"])
 def test_a_user_message_does_not_lower_the_depth_of_a_running_mail_turn(env, auto, monkeypatch, path):
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
     a, b = _wake_b_at_depth_2(env)
@@ -580,7 +576,7 @@ def test_a_user_message_does_not_lower_the_depth_of_a_running_mail_turn(env, aut
     assert _rows(env.db, "SELECT COUNT(*) FROM mailbox WHERE from_conv = ?", (b,)) == [(0,)]
 
 
-@pytest.mark.parametrize("path", ["/chat-stream", "/chat"])
+@pytest.mark.parametrize("path", ["/chat-stream"])
 def test_a_user_message_with_no_turn_running_resets_the_depth(env, auto, monkeypatch, path):
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
     a, b = _wake_b_at_depth_2(env)

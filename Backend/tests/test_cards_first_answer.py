@@ -21,7 +21,6 @@ from agentic.command_gates import (
     cancel_gate, register_gate, release_gate,
 )
 from database import DatabaseManager
-from rag.memory_manager import memory_manager
 
 H = {"X-Session-Token": ""}
 UI_SECRET = "ui-secret-for-card-tests"
@@ -35,9 +34,6 @@ def env(tmp_path, monkeypatch):
         monkeypatch.setenv(var, str(home))
     monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
-    mem_dir = tmp_path / "memories"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     cards.reset()
     turn_events.RING.reset()
     db = DatabaseManager(str(tmp_path / "cards.db"))

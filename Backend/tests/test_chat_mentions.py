@@ -110,7 +110,7 @@ def _user_turn(client, path, conv_id, message):
     return client.post(path, json=body, headers=H)
 
 
-@pytest.mark.parametrize("path", ["/chat-stream", "/chat"])
+@pytest.mark.parametrize("path", ["/chat-stream"])
 def test_mentions_resolve_in_the_turn_but_not_in_the_stored_message(env, monkeypatch, path):
     _FakeRunner.messages = []
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
@@ -140,7 +140,7 @@ def test_mentions_resolve_in_the_turn_but_not_in_the_stored_message(env, monkeyp
     assert users == [typed]
 
 
-@pytest.mark.parametrize("path", ["/chat-stream", "/chat"])
+@pytest.mark.parametrize("path", ["/chat-stream"])
 def test_a_message_without_mentions_runs_unchanged(env, monkeypatch, path):
     _FakeRunner.messages = []
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)

@@ -47,7 +47,6 @@ EN: dict[str, str] = {
         "An error occurred while streaming the response. See the server logs for details.",
     "Sohbet zaten kısaydı; özet üretilmedi ama bağlam sıfırlandı.":
         "The chat was already short; no summary was produced, but the context was reset.",
-    "Projede analiz edilecek dosya bulunamadı.": "No files to analyze were found in the project.",
     "Bu yanıt sohbet geçmişine kaydedilemedi; pencereyi kapatırsan kaybolur.":
         "This response could not be saved to chat history; it will be lost if you close the window.",
     "aşama: kayıt": "stage: saving",
@@ -85,16 +84,9 @@ EN: dict[str, str] = {
     "Yan sohbet bulunamadı.": "Side chat not found.",
     "Bu sohbette yanıt hâlâ sürüyor; dal açmak için turun bitmesini bekle.":
         "A response is still running in this chat. Wait for the turn to finish before branching.",
-    "Sohbetin hafıza dosyası okunamadı; dal açılmadı.":
-        "The chat memory file could not be read. No branch was created.",
-    "Dalın hafıza kopyası yazılamadı; dal geri alındı.":
-        "The branch memory copy could not be saved. The branch was rolled back.",
     "Ana sohbet gizlenemez; yalnız dallar kapatılıp yeniden açılabilir.":
         "The main chat cannot be hidden. Only branches can be closed and reopened.",
-    "Workspace yolu bulunamadı.": "Workspace path not found.",
     "AI sağlayıcısına ulaşılamadı.": "Could not reach the AI provider.",
-    "İçerik boş olamaz.": "Content cannot be empty.",
-    "Hafıza güvenlik denetimi yapılamadı.": "The memory security check could not be completed.",
     "gate_id gerekli": "gate_id is required",
     "enabled true ya da false olmalı.": "enabled must be true or false.",
     "Mod bu kanaldan değiştirilemez.": "The mode cannot be changed through this channel.",
@@ -179,7 +171,7 @@ PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"'(?P<cli>.+)' için otomatik kurulum desteklenmiyor\.", re.DOTALL),
      "Automatic installation is not supported for '{cli}'."),
     (re.compile(r"'(?P<cli>.+)' için giriş akışı desteklenmiyor\.", re.DOTALL),
-     "Sign-in is not supported for '{cli}'."),
+    "Sign-in is not supported for '{cli}'."),
     (re.compile(r"Analiz sırasında bir hata oluştu: (?P<error>.*)", re.DOTALL),
      "An error occurred during analysis: {error}"),
     (re.compile(r"Güvenlik Riski: Yüklemeye çalıştığınız dosya şüpheli talimatlar içeriyor ve engellendi\. \((?P<audit_result>.*)\)", re.DOTALL),

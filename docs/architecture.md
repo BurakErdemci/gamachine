@@ -42,14 +42,14 @@ for a project `.opencode` folder is prevented.
 │  │              AgentRunner (Agentic Loop)          │  │
 │  │   Request → Think → Tool Call → Result → … → Ans │  │
 │  └────────────────────┬────────────────────────────┘  │
-│         ┌─────────────┼─────────────┐                  │
-│         ▼             ▼             ▼                   │
-│  ┌────────────┐ ┌──────────┐ ┌──────────────┐          │
-│  │ToolRegistry│ │ProjectRAG│ │MemoryManager │          │
-│  │read/write  │ │.cs scan  │ │/compact      │          │
-│  │run_command │ │+ keyword │ │memories/*.md │          │
-│  │search_proj │ │+ arch map│ └──────────────┘          │
-│  └────────────┘ └──────────┘                           │
+│         ┌─────────────┘                              │
+│         ▼                                            │
+│  ┌────────────┐                                      │
+│  │ToolRegistry│                                      │
+│  │read/write  │                                      │
+│  │run_command │                                      │
+│  │search_proj │                                      │
+│  └────────────┘                                      │
 │  ┌──────────────────────────────────────────────────┐ │
 │  │                  AI Providers                     │ │
 │  │  Claude │ OpenAI │ Gemini │ Groq │ … │ Ollama     │ │
@@ -103,7 +103,6 @@ gamachine/
 │   │   │   └── server.py
 │   │   ├── unityai_cli.py       # run_command bridge for agy (same approval gate)
 │   │   ├── tools/               # Function-calling ToolRegistry (cloud API path)
-│   │   ├── rag/                 # ProjectRAG (scan+keyword), MemoryManager
 │   │   ├── routes/              # FastAPI routers (auth/chat/config/…)
 │   │   ├── omnisharp/           # OmniSharp LSP sidecar (manager + client, with bundled .NET)
 │   │   ├── auth_utils.py        # LOCAL_APP_TOKEN validation
@@ -160,7 +159,6 @@ list_directory(dir_path)             # List a directory
 search_in_project(query, exts)       # In-project search
 find_files(pattern)                  # File-name pattern
 run_command(command)                 # Terminal (approval if dangerous)
-save_to_memory(content) / recall_memory()   # Persistent memory
 capture_unity_screenshot()           # Editor screenshot (visual verification)
 ```
 

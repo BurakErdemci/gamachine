@@ -93,7 +93,6 @@ Unity ekosistemindeki AI araçları genelde iki uçtan birine düşer: ya sadece
 | Dosya sistemine erişemez | Dosya oku/yaz/sil — hepsi workspace'e kilitli; silme ve tehlikeli komutlar onay kartıyla |
 | Unity Editor'den habersiz | MCP ile sahneye GameObject ekler, bileşen bağlar, konsolu okur |
 | Terminal çalıştıramaz | Güvenli terminal katmanı; tehlikeli komutlar onay ister |
-| Her sohbet sıfırdan başlar | Kalıcı hafıza + proje analizi ile bağlamı korur |
 | Arka plan işi bitince ortada kalır | Sohbet kendi kendine uyanır, neyin bittiğini söyler |
 | Kurulum derdi | `uv`, OmniSharp + .NET SDK, ffmpeg/yt-dlp, çevrimdışı konuşma modelleri — hepsi **uygulamaya gömülü**, sıfır ek kurulum |
 

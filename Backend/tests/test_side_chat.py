@@ -21,7 +21,6 @@ import routes.conversation_routes as cr
 from agentic import approval_mode
 from agentic.approval_policy import ambient_turn
 from database import DatabaseManager
-from rag.memory_manager import memory_manager
 
 H = {"X-Session-Token": ""}
 
@@ -35,9 +34,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(home / "AppData"))
     monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
-    mem_dir = tmp_path / "memories"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     db = DatabaseManager(str(tmp_path / "side.db"))
     db.save_ai_config(1, "subscription", "claude-opus-5", "")
     closed = []
@@ -51,7 +47,7 @@ def env(tmp_path, monkeypatch):
     router = cr.create_conversation_router(db, {})
     app.include_router(router)
     with TestClient(app) as client:
-        yield db, client, router, mem_dir, closed
+        yield db, client, router, None, closed
 
 
 def _seed(db, n=4, title="Ana sohbet"):
@@ -142,12 +138,10 @@ def test_ordinary_routes_refuse_a_side_id(env, monkeypatch):
     monkeypatch.setattr(cr, "AgentRunner", _MustNotRun)
     body = {"conversation_id": side, "message": "x", "user_id": 1}
     assert client.post("/chat-stream", json=body, headers=H).status_code == 400
-    assert client.post("/chat", json=body, headers=H).status_code == 400
     assert client.post(f"/conversations/{side}/branch", headers=H).status_code == 400
     assert client.put(f"/conversations/{side}/hidden", json={"hidden": False}, headers=H).status_code == 400
     assert client.put(f"/conversations/{side}", json={"title": "x"}, headers=H).status_code == 400
     assert client.post(f"/conversations/{side}/compact", headers=H).status_code == 400
-    assert client.post(f"/conversations/{side}/import-memory", json={"content": "x"}, headers=H).status_code == 400
     assert client.delete(f"/conversations/{side}", headers=H).status_code == 400
     assert db.get_conversation_messages(side) == []
     assert db.get_side_of(side) is not None
@@ -295,7 +289,6 @@ def test_side_stream_writes_nothing_about_the_main_chat(env, monkeypatch):
     assert db.get_conversation_messages(main) == before_msgs
     assert _rows(db, "SELECT title, updated_at, memory_summary FROM conversations WHERE id = ?", (main,)) == before_row
     assert _rows(db, "SELECT * FROM cli_sessions WHERE conversation_id = ?", (main,)) == []
-    assert not (mem_dir / f"memory_{main}.md").exists()
     # The side row keeps its own question, answer and CLI session.
     assert [(m["role"], m["content"]) for m in db.get_conversation_messages(side)] == [
         ("user", "Bu neden böyle?"), ("assistant", "yan cevap")]
@@ -484,10 +477,7 @@ def _api_runner(ws, read_only=True):
                           workspace_path=ws, conversation_id=81, read_only=read_only)
 
 
-def test_api_loop_read_only_refuses_writes_and_memory(tmp_path, monkeypatch):
-    mem_dir = tmp_path / "mem"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
+def test_api_loop_read_only_refuses_writes(tmp_path):
     approval_mode.set_mode("auto", source="test")
     ws = str(tmp_path / "ws")
     os.makedirs(ws)
@@ -495,8 +485,6 @@ def test_api_loop_read_only_refuses_writes_and_memory(tmp_path, monkeypatch):
 
     res, _ = _run(runner._execute_tool_with_approval("write_file", {"file_path": "a.txt", "content": "x"}))
     assert res["success"] is False and not os.path.exists(os.path.join(ws, "a.txt"))
-    res, _ = _run(runner._execute_tool_with_approval("save_to_memory", {"content": "gizli"}))
-    assert res["success"] is False and list(mem_dir.iterdir()) == []
     for tool, args in (("delete_file", {"file_path": "a.txt"}), ("run_command", {"command": "echo x"}),
                        ("manage_gameobject", {"action": "create"})):
         assert _run(runner._execute_tool_with_approval(tool, args))[0]["success"] is False, tool
@@ -510,11 +498,11 @@ def test_api_loop_read_only_refuses_writes_and_memory(tmp_path, monkeypatch):
 def test_api_loop_read_only_declares_no_write_tool_and_shows_no_card(tmp_path):
     runner = _api_runner(str(tmp_path))
     names = {t["name"] for t in runner._tool_definitions()}
-    assert names.isdisjoint({"write_file", "delete_file", "run_command", "save_to_memory"})
+    assert names.isdisjoint({"write_file", "delete_file", "run_command"})
     assert "read_file" in names
     assert runner._approval_prompt("run_command", {"command": "rm -rf /"}) is None
     normal = _api_runner(str(tmp_path), read_only=False)
-    assert {"write_file", "save_to_memory"} <= {t["name"] for t in normal._tool_definitions()}
+    assert {"write_file"} <= {t["name"] for t in normal._tool_definitions()}
     assert normal._approval_prompt("delete_file", {"file_path": "x"}) is not None
 
 

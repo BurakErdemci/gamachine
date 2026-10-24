@@ -92,7 +92,6 @@ AI tools in the Unity ecosystem usually land at one of two extremes: they either
 | Can't touch the file system | Read/write/delete files — every dangerous op behind an approval card |
 | Unaware of the Unity Editor | Adds GameObjects, binds components, reads the console via MCP |
 | Can't run terminal | Secure terminal layer; dangerous commands require approval |
-| Every chat starts from zero | Persistent memory + project analysis keep the context |
 | Walks away when a background job finishes | The conversation wakes itself up and reports what completed |
 | Setup hassle | `uv`, OmniSharp + .NET SDK, ffmpeg/yt-dlp, an offline speech recogniser — all **bundled into the app**, zero extra install |
 

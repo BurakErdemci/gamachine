@@ -16,7 +16,6 @@ import agentic.agent_runner as ar
 import routes.conversation_routes as cr
 from agentic.approval_policy import ambient_turn
 from database import DatabaseManager
-from rag.memory_manager import memory_manager
 
 H = {"X-Session-Token": ""}
 
@@ -29,16 +28,12 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
-    mem_dir = tmp_path / "memories"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     db = DatabaseManager(str(tmp_path / "branch.db"))
     db.save_ai_config(1, "subscription", "claude-opus-5", "")
-    progress = {}
     app = FastAPI()
-    app.include_router(cr.create_conversation_router(db, progress))
+    app.include_router(cr.create_conversation_router(db))
     with TestClient(app) as client:
-        yield db, client, progress, mem_dir
+        yield db, client
 
 
 def _seed(db, n=4, title="Asıl sohbet"):
@@ -54,11 +49,10 @@ def _rows(db, sql, args=()):
         return conn.execute(sql, args).fetchall()
 
 
-def test_branch_copies_messages_memory_summary_and_memory_file(env):
-    db, client, _, mem_dir = env
+def test_branch_copies_messages_and_memory_summary(env):
+    db, client = env
     src = _seed(db)
     db.save_memory(src, "özet: kararlar")
-    memory_manager.save_memory(str(src), "teknik hafıza")
     db.save_cli_session(src, "claude", "sess-src", "")
 
     r = client.post(f"/conversations/{src}/branch", headers=H)
@@ -75,7 +69,6 @@ def test_branch_copies_messages_memory_summary_and_memory_file(env):
     assert [m["id"] for m in new_msgs] == sorted(m["id"] for m in new_msgs)
 
     assert db.get_memory(b["id"]) == "özet: kararlar"
-    assert (mem_dir / f"memory_{b['id']}.md").read_text(encoding="utf-8") == "teknik hafıza"
     # No CLI session: the branch's first turn must take the handoff path.
     assert _rows(db, "SELECT * FROM cli_sessions WHERE conversation_id = ?", (b["id"],)) == []
     fork_at = _rows(db, "SELECT fork_at FROM conversations WHERE id = ?", (b["id"],))[0][0]
@@ -86,17 +79,16 @@ def test_branch_copies_messages_memory_summary_and_memory_file(env):
     assert len(db.get_conversation_messages(src)) == len(src_msgs)
 
 
-def test_branch_of_empty_chat_has_null_fork_and_no_memory_file(env):
-    db, client, _, mem_dir = env
+def test_branch_of_empty_chat_has_null_fork(env):
+    db, client = env
     src = db.create_conversation(1, "boş")
     b = client.post(f"/conversations/{src}/branch", headers=H).json()
     assert db.get_conversation_messages(b["id"]) == []
     assert _rows(db, "SELECT fork_at FROM conversations WHERE id = ?", (b["id"],))[0][0] is None
-    assert not (mem_dir / f"memory_{b['id']}.md").exists()
 
 
 def test_branch_of_branch_flattens_to_root_and_keeps_title(env):
-    db, client, _, _ = env
+    db, client = env
     root = _seed(db)
     b1 = client.post(f"/conversations/{root}/branch", headers=H).json()
     db.add_message(b1["id"], "user", "b1'e özel")
@@ -107,7 +99,7 @@ def test_branch_of_branch_flattens_to_root_and_keeps_title(env):
 
 
 def test_branch_refused_while_source_turn_in_flight(env):
-    db, client, _, _ = env
+    db, client = env
     src = _seed(db)
     with ambient_turn(".", "step", src):
         r = client.post(f"/conversations/{src}/branch", headers=H)
@@ -120,7 +112,7 @@ def test_branch_refused_while_source_turn_in_flight(env):
 
 
 def test_hidden_toggle_and_root_refused(env):
-    db, client, _, _ = env
+    db, client = env
     root = _seed(db)
     b = client.post(f"/conversations/{root}/branch", headers=H).json()
 
@@ -139,7 +131,7 @@ def test_hidden_toggle_and_root_refused(env):
 
 
 def test_list_carries_parent_id_and_hidden(env):
-    db, client, _, _ = env
+    db, client = env
     root = _seed(db)
     b = client.post(f"/conversations/{root}/branch", headers=H).json()
     listed = {c["id"]: c for c in client.get("/conversations/1", headers=H).json()}
@@ -149,7 +141,7 @@ def test_list_carries_parent_id_and_hidden(env):
 
 
 def test_branch_activity_bumps_root_updated_at(env):
-    db, client, _, _ = env
+    db, client = env
     root = _seed(db, title="aile")
     other = _seed(db, title="başka")
     b = client.post(f"/conversations/{root}/branch", headers=H).json()
@@ -170,15 +162,13 @@ def test_branch_activity_bumps_root_updated_at(env):
 
 
 def test_root_delete_removes_branches_with_full_cleanup(env, monkeypatch):
-    db, client, progress, mem_dir = env
+    db, client = env
     root = _seed(db)
     b1 = client.post(f"/conversations/{root}/branch", headers=H).json()["id"]
     b2 = client.post(f"/conversations/{root}/branch", headers=H).json()["id"]
     unrelated = _seed(db, title="dokunma")
     for cid in (root, b1, b2, unrelated):
         db.save_cli_session(cid, "claude", f"s{cid}", "")
-        memory_manager.save_memory(str(cid), f"mem {cid}")
-        progress[cid] = ["x"]
         cr.scope_plan_store[cid] = {}
         cr.continuation_store[cid] = {}
 
@@ -205,21 +195,18 @@ def test_root_delete_removes_branches_with_full_cleanup(env, monkeypatch):
         assert db.get_conversation_owner(cid) is None
         assert db.get_conversation_messages(cid) == []
         assert _rows(db, "SELECT * FROM cli_sessions WHERE conversation_id = ?", (cid,)) == []
-        assert not (mem_dir / f"memory_{cid}.md").exists()
-        assert cid not in progress
         assert cid not in cr.scope_plan_store and cid not in cr.continuation_store
     for fam in ("claude", "codex", "agy"):
         assert sorted(closed[fam]) == sorted(gone), (fam, closed)
     assert sorted(resets) == sorted(gone)
 
     assert db.get_conversation_owner(unrelated) == 1
-    assert (mem_dir / f"memory_{unrelated}.md").exists()
     cr.scope_plan_store.pop(unrelated, None)
     cr.continuation_store.pop(unrelated, None)
 
 
 def test_branch_delete_removes_only_the_branch(env):
-    db, client, _, _ = env
+    db, client = env
     root = _seed(db)
     b1 = client.post(f"/conversations/{root}/branch", headers=H).json()["id"]
     b2 = client.post(f"/conversations/{root}/branch", headers=H).json()["id"]
@@ -230,7 +217,7 @@ def test_branch_delete_removes_only_the_branch(env):
 
 
 def test_first_chat_stream_turn_of_branch_gets_handoff_context(env, monkeypatch):
-    db, client, _, _ = env
+    db, client = env
     src = _seed(db)
     db.save_cli_session(src, "claude", "sess-src", "")
     b = client.post(f"/conversations/{src}/branch", headers=H).json()

@@ -17,7 +17,6 @@ import routes.conversation_routes as cr
 from agentic import chat_model as cm
 from agentic import wake_queue
 from database import DatabaseManager
-from rag.memory_manager import memory_manager
 from routes.config_routes import create_config_router
 
 H = {"X-Session-Token": ""}
@@ -56,9 +55,6 @@ class _FakeRunner:
 def client(db, tmp_path, monkeypatch):
     _FakeRunner.runs = []
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
-    mem_dir = tmp_path / "memories"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
     from providers import claude_sdk_session
 

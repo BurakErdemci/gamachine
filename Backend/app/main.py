@@ -135,7 +135,6 @@ from error_i18n import localized_http_exception_handler
 from database import DatabaseManager
 from usage_limits import UsageService
 from routes import (
-    create_analysis_router,
     create_auth_router,
     create_config_router,
     create_conversation_router,
@@ -341,7 +340,6 @@ app = FastAPI(
 app.add_exception_handler(StarletteHTTPException, localized_http_exception_handler)
 db = DatabaseManager(db_path=db_path)
 usage_service = UsageService()
-PROGRESS_STORE = {}
 
 from agentic import approval_mode  # noqa: E402
 from computer_use import settings as computer_use_settings  # noqa: E402
@@ -370,10 +368,9 @@ app.add_middleware(
 app.include_router(create_auth_router(db))
 _config_router = create_config_router(db)
 app.include_router(_config_router)
-app.include_router(create_analysis_router(db))
 app.include_router(create_workspace_router(db))
 app.include_router(create_lsp_router(db))
-_conversation_router = create_conversation_router(db, PROGRESS_STORE)
+_conversation_router = create_conversation_router(db)
 app.include_router(_conversation_router)
 app.include_router(create_profile_router(db))
 app.include_router(create_usage_router(usage_service))

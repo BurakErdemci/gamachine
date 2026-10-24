@@ -18,7 +18,6 @@ import routes.conversation_routes as cr
 from agentic import cards, turn_events, wake_queue
 from agentic.turn_events import TurnEventRing, TurnTap
 from database import DatabaseManager
-from rag.memory_manager import memory_manager
 
 H = {"X-Session-Token": ""}
 
@@ -265,9 +264,6 @@ def env(tmp_path, monkeypatch):
         monkeypatch.setenv(var, str(home))
     monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
-    mem_dir = tmp_path / "memories"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     ran = []
 
     def _fake(name):

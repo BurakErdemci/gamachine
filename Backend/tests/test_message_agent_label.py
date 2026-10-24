@@ -16,7 +16,6 @@ import agentic.agent_runner as ar
 import routes.conversation_routes as cr
 from agentic import wake_queue
 from database import DatabaseManager
-from rag.memory_manager import memory_manager
 
 H = {"X-Session-Token": ""}
 OPENCODE = "opencode:opencode/big-pickle"
@@ -49,9 +48,6 @@ class _FakeRunner:
 @pytest.fixture
 def client(db, tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
-    mem_dir = tmp_path / "memories"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
     from providers import claude_sdk_session
 
@@ -167,14 +163,6 @@ def test_wake_turn_answer_is_labelled(db, client):
     assert _assistant_labels(db, cid) == [("agy", "gemini-3.8-flash")]
 
 
-def test_non_streaming_chat_labels_the_answer(db, client):
-    cid = db.create_conversation(1, "Yeni Sohbet")
-    db.save_ai_config(1, "openai", "gpt-5.5", "")
-    r = client.post("/chat", json={"conversation_id": cid, "message": "soru", "user_id": 1}, headers=H)
-    assert r.status_code == 200
-    assert _assistant_labels(db, cid) == [("api-openai", "gpt-5.5")]
-
-
 def test_side_chat_answer_is_labelled(db, client):
     main = db.create_conversation(1, "Ana")
     db.add_message(main, "user", "m0")
@@ -192,28 +180,3 @@ def test_detached_claude_session_turn_is_labelled_with_the_sessions_model(db, cl
     cid = db.create_conversation(1, "Yeni Sohbet")
     claude_sdk_session._DB_SAVE_CB(cid, "otonom cevap", "claude-opus-5")
     assert _assistant_labels(db, cid) == [("claude", "claude-opus-5")]
-
-
-def test_project_analysis_summary_is_labelled(db, client, monkeypatch, tmp_path):
-    class _Rag:
-        def __init__(self, path):
-            self.documents = ["a.cs"]
-
-        def scan_project(self):
-            pass
-
-        def generate_project_report(self):
-            return "rapor"
-
-    class _Provider:
-        def analyze_code(self, prompt, max_tokens):
-            return "[USER_SUMMARY] özet [TECHNICAL_WISDOM] teknik"
-
-    monkeypatch.setattr(cr, "ProjectRAG", _Rag)
-    monkeypatch.setattr(cr.AIProviderManager, "get_provider", staticmethod(lambda cfg: _Provider()))
-    cid = db.create_conversation(1, "Yeni Sohbet")
-    db.save_ai_config(1, "google", "gemini-3.8-flash", "")
-    db.save_workspace(1, str(tmp_path))
-    r = client.post(f"/conversations/{cid}/analyze-project", headers=H)
-    assert r.status_code == 200, r.text
-    assert _assistant_labels(db, cid) == [("api-google", "gemini-3.8-flash")]

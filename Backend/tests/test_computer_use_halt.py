@@ -159,7 +159,7 @@ def _send(env, path, conversation_id=1):
                                            "user_id": 1}, headers={"X-Session-Token": ""})
 
 
-@pytest.mark.parametrize("path", ["/chat-stream", "/chat"])
+@pytest.mark.parametrize("path", ["/chat-stream"])
 def test_next_user_message_lifts_the_halt(env, path):
     halt(env, 1)
     halt(env, 2)

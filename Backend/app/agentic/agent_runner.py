@@ -835,10 +835,10 @@ _HANDOFF_HEADER = (
 )
 
 # Built-in API-loop tools a read-only (side chat) runner may call. Everything
-# else built in writes a file, runs a shell or writes memory.
+# else built in writes a file or runs a shell.
 _READ_ONLY_BUILTIN_TOOLS = frozenset({
     "read_file", "search_in_project", "find_files", "list_directory",
-    "recall_memory", "capture_unity_screenshot",
+    "capture_unity_screenshot",
     # Lists chat titles only; `send_chat_message` stays out (a side row never mails).
     "list_chats",
 })
@@ -2521,14 +2521,6 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         final_text = ""
         got_error = False
         reset_session = False
-        approval_turn_token = None
-        if cli_key == "opencode":
-            from agentic.approval_policy import begin_opencode_turn
-            approval_turn_token = begin_opencode_turn(
-                self.workspace_path or ".",
-                getattr(self, "generation_mode", "auto"),
-            )
-            provider._approval_turn_token = approval_turn_token
         try:
             for attempt in (1, 2):
                 got_error = False
@@ -2619,9 +2611,6 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
         finally:
             if sess.active_provider is provider:
                 sess.active_provider = None
-            if approval_turn_token:
-                from agentic.approval_policy import end_opencode_turn
-                end_opencode_turn(approval_turn_token)
             cleanup_dir(_att_dir)
 
         if reset_session:

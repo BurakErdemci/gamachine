@@ -14,7 +14,6 @@ from agentic import approval_mode
 from agentic.approval_policy import ambient_turn
 from agentic.command_gates import APPROVAL_GATES, APPROVAL_RESULTS, register_gate, release_gate
 from database import DatabaseManager
-from rag.memory_manager import memory_manager
 
 H = {"X-Session-Token": ""}
 
@@ -27,15 +26,12 @@ def env(tmp_path, monkeypatch):
         monkeypatch.setenv(var, str(home))
     monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(cr, "CHAT_RATE_LIMIT", defaultdict(list))
-    mem_dir = tmp_path / "memories"
-    mem_dir.mkdir()
-    monkeypatch.setattr(memory_manager, "base_dir", mem_dir)
     db = DatabaseManager(str(tmp_path / "audit.db"))
     router = cr.create_conversation_router(db, {})
     app = FastAPI()
     app.include_router(router)
     with TestClient(app) as client:
-        yield db, client, router, mem_dir, tmp_path
+        yield db, client, router, tmp_path
 
 
 def _endpoint(router, path, method):
@@ -54,7 +50,7 @@ def _message_conv_ids(db):
 
 
 def test_deleting_a_family_denies_its_pending_cards_so_auto_cannot_approve_them(env):
-    db, client, _, _, tmp_path = env
+    db, client, _, tmp_path = env
     approval_mode.set_ui_secret("test-secret")
     root = db.create_conversation(1, "root")
     branch = db.create_branch(root)["id"]
@@ -91,7 +87,7 @@ def test_deleting_a_family_denies_its_pending_cards_so_auto_cannot_approve_them(
 
 
 def test_branch_requested_mid_delete_leaves_no_orphan_under_the_deleted_root(env, monkeypatch):
-    db, _, router, _, _ = env
+    db, _, router, _ = env
     root = db.create_conversation(1, "root")
     db.add_message(root, "user", "hi")
     branch = db.create_branch(root)["id"]
@@ -122,7 +118,7 @@ def test_branch_requested_mid_delete_leaves_no_orphan_under_the_deleted_root(env
 
 
 def test_create_branch_refuses_when_the_root_row_is_gone(env):
-    db, _, _, _, _ = env
+    db, _, _, _ = env
     root = db.create_conversation(1, "root")
     branch = db.create_branch(root)["id"]
     with sqlite3.connect(db.db_path) as conn:
@@ -131,50 +127,8 @@ def test_create_branch_refuses_when_the_root_row_is_gone(env):
     assert _conversation_ids(db) == [branch]
 
 
-def test_unreadable_source_memory_fails_before_any_branch_is_created(env):
-    db, client, _, mem_dir, _ = env
-    src = db.create_conversation(1, "source")
-    db.add_message(src, "user", "saved text")
-    (mem_dir / f"memory_{src}.md").write_bytes(b"\xff")
-
-    r = client.post(f"/conversations/{src}/branch", headers=H)
-
-    assert r.status_code == 500
-    assert "hafıza" in r.json()["detail"]
-    assert db.get_branch_ids(src) == []
-    assert _conversation_ids(db) == [src]
-    assert _message_conv_ids(db) == [src]
-
-
-def test_failed_memory_copy_rolls_the_branch_back(env, monkeypatch):
-    db, client, _, mem_dir, _ = env
-    src = db.create_conversation(1, "source")
-    db.add_message(src, "user", "saved text")
-    memory_manager.save_memory(str(src), "saved memory")
-    real_path = memory_manager._get_path
-
-    def path_for(chat_id):
-        if chat_id == str(src):
-            return real_path(chat_id)
-        # A directory where the branch's file should go: the write fails.
-        blocked = mem_dir / f"blocked_{chat_id}"
-        blocked.mkdir(exist_ok=True)
-        return blocked
-
-    monkeypatch.setattr(memory_manager, "_get_path", path_for)
-
-    r = client.post(f"/conversations/{src}/branch", headers=H)
-
-    assert r.status_code == 500
-    assert "hafıza" in r.json()["detail"]
-    assert db.get_branch_ids(src) == []
-    assert _conversation_ids(db) == [src]
-    assert _message_conv_ids(db) == [src]
-    assert (mem_dir / f"memory_{src}.md").read_text(encoding="utf-8") == "saved memory"
-
-
 def test_deleting_a_chat_closes_its_one_shot_cli_sessions(env):
-    db, client, _, _, _ = env
+    db, client, _, _ = env
     from providers import oneshot_cli
     cid = db.create_conversation(1, "copilot chat")
     other = db.create_conversation(1, "other")
@@ -193,7 +147,7 @@ def test_deleting_a_chat_closes_its_one_shot_cli_sessions(env):
 def test_one_failing_session_close_does_not_skip_the_others(env, monkeypatch):
     """Codex verifyb: a raising Claude close used to skip Codex, agy and the
     one-shot CLIs, leaving a deleted chat's child running."""
-    db, client, _, _, _ = env
+    db, client, _, _ = env
     from providers import claude_sdk_session, oneshot_cli
 
     async def boom(_cid):

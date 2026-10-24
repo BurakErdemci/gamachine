@@ -7,7 +7,6 @@ from typing import Any, Dict, Callable
 
 from tools.file_tools import read_file, write_file, list_directory, delete_file, run_command
 from tools.search_tools import search_in_project, find_files
-from tools.memory_tools import save_to_memory, recall_memory
 from tools.screenshot_tool import capture_unity_screenshot
 from tools.unity_mcp_tools import (
     call_unity_tool_with_arguments, get_unity_tool_definitions, get_unity_tool_functions,
@@ -104,28 +103,6 @@ TOOL_DEFINITIONS = [
                 }
             },
             "required": ["file_path", "content"]
-        }
-    },
-    {
-        "name": "save_to_memory",
-        "description": "Önemli proje bilgilerini, mimari kararları veya kullanıcı talimatlarını hafızaya kaydeder. Sadece gerçekten kritik bilgileri kaydet.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "Hafızaya kaydedilecek markdown formatında içerik"
-                }
-            },
-            "required": ["content"]
-        }
-    },
-    {
-        "name": "recall_memory",
-        "description": "Bu sohbet için daha önce kaydedilmiş olan proje hafızasını geri çağırır.",
-        "parameters": {
-            "type": "object",
-            "properties": {}
         }
     },
     {
@@ -228,13 +205,11 @@ _TOOL_FUNCTIONS: Dict[str, Callable] = {
     "write_file": write_file,
     "delete_file": delete_file,
     "run_command": run_command,
-    "save_to_memory": save_to_memory,
-    "recall_memory": recall_memory,
     "capture_unity_screenshot": capture_unity_screenshot,
 }
 
 # Hangi tool'lar conversation_id parametresi alıyor
-_TOOLS_NEEDING_CONV_ID = {"save_to_memory", "recall_memory", "list_chats", "send_chat_message"}
+_TOOLS_NEEDING_CONV_ID = {"list_chats", "send_chat_message"}
 
 
 async def _list_chats(conversation_id=None) -> Dict[str, Any]:

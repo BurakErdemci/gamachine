@@ -18,13 +18,13 @@ SIDE_INSTRUCTION = (
     "doğrudan cevapla. Dosya okuma gibi salt okunur araçları yalnız soru konuşmada "
     "olmayan bir bilgiyi gerçekten gerektiriyorsa kullan. \"Bakayım\", \"şunlara "
     "bakayım\" gibi girişler yapma; bilmiyorsan bilmediğini söyle. Dosya "
-    "yazma/düzenleme/silme, komut çalıştırma, Unity'de değişiklik ve hafızaya "
-    "kaydetme YASAK ve reddedilir; deneme.\n"
+    "yazma/düzenleme/silme, komut çalıştırma, Unity'de değişiklik "
+    "YASAK ve reddedilir; deneme.\n"
     "[SIDE QUESTION — READ-ONLY] Answer only the final side question, directly and "
     "in one response, from what the conversation shows. Use read-only tools only "
     "if the question truly needs information the conversation lacks. No \"let me "
     "look\" preambles; if you do not know, say so. Never write or edit files, run "
-    "commands, change Unity or save memory."
+    "commands or change Unity."
 )
 
 MAIN_HISTORY_HEADER = (
