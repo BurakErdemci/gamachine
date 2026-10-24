@@ -358,11 +358,7 @@ _EXEMPT: Dict[Tuple[str, str], Tuple[int, str]] = {
     #    GÖSTERİLİYOR ve çocuk zaten aynı kullanıcı olarak koşuyor.
     #    ⚠️ Bu, kapatılmış bir sızıntı değil KABUL EDİLMİŞ bir taviz: onaylanan
     #    bir komut `echo $ANTHROPIC_API_KEY` de olabilir.
-    ("app/tools/file_tools.py", "run_command"): (
-        1, "kullanıcı onaylı kabuk komutu — ortam devralması kasıtlı (taviz)"),
-    ("app/unity_ai_mcp/tools/bash_tool.py", "register_bash_tool._run_command"): (
-        1, "kullanıcı onaylı kabuk komutu — ortam devralması kasıtlı (taviz)"),
-    ("app/unityai_cli.py", "cmd_bash"): (
+    ("app/agentic/shell_exec.py", "run"): (
         1, "kullanıcı onaylı kabuk komutu — ortam devralması kasıtlı (taviz)"),
 
     # ── Ortamı ÇAĞIRAN veriyor (kapı burada kurulamaz, çağrı yerinde kurulu).

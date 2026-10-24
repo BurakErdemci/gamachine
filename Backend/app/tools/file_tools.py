@@ -141,7 +141,7 @@ def delete_file(file_path: str, workspace_path: str) -> dict:
 
 import subprocess
 
-from agentic.command_safety import auto_safe_argv as _auto_safe_argv
+from agentic import shell_exec
 
 
 def run_command(command: str, workspace_path: str) -> dict:
@@ -157,32 +157,12 @@ def run_command(command: str, workspace_path: str) -> dict:
     yolu üç ayrı yerdeydi ve bu üçüncüsü `shell=True` ile kalmıştı. Yani
     ayrıştırıcı/çalıştırıcı uyuşmazlığı sınıfı bu yoldan hâlâ açıktı.
     """
-    refusal = unity_file_guard.check_shell(command, workspace_path)
-    if refusal is not None:
-        return {"success": False, "error": refusal.message}
+    refused = shell_exec.shell_refusal(command, workspace_path)
+    if refused is not None:
+        return {"success": False, "error": refused}
     try:
-        # Git ve diğer araçların interaktif soru sormasını engelle
-        env = os.environ.copy()
-        env["GIT_TERMINAL_PROMPT"] = "0"
+        process = shell_exec.run(command, shell_exec.plan(command, workspace_path), workspace_path)
 
-        # Onaysız geçebilen komut kabuğa HİÇ verilmiyor: denetlenen token listesi
-        # doğrudan çalışıyor. `None` dönmesi komutun onay gerektirdiği (ve
-        # çağıran tarafından zaten onaylandığı) anlamına gelir — kullanıcı ham
-        # dizgeyi gördüğü için orada kabuk kullanmak güvenli.
-        argv = _auto_safe_argv(command, workspace_path)
-        hedef, kabuk_kullan = (command, True) if argv is None else (argv, False)
-
-        # Arka planda sessizce çalıştır
-        process = subprocess.run(
-            hedef,
-            shell=kabuk_kullan,
-            cwd=workspace_path,
-            text=True,
-            capture_output=True,
-            timeout=300,
-            env=env
-        )
-        
         output = process.stdout if process.stdout else ""
         error = process.stderr if process.stderr else ""
         

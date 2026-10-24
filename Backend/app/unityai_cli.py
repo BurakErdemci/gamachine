@@ -35,7 +35,7 @@ import subprocess
 # Bu importlar unity_ai_mcp/tools/ içindeki dosyaları DEĞİŞTİRMEZ, sadece kullanır.
 from unity_ai_mcp.approval_bridge import request_approval
 from unity_ai_mcp.tools.file_tools import _resolve
-from unity_ai_mcp.tools.bash_tool import _auto_safe_argv, _is_safe, _parse_file_write
+from agentic import shell_exec
 import unity_file_guard
 
 
@@ -142,33 +142,25 @@ def cmd_delete_file(args) -> int:
 def cmd_bash(args) -> int:
     workspace = _workspace()
     command = args.command
-    refusal = unity_file_guard.check_shell(command, workspace)
-    if refusal is not None:
-        print(f"❌ {refusal.message}")
+    refused = shell_exec.shell_refusal(command, workspace)
+    if refused is not None:
+        print(f"❌ {refused}")
         return 1
 
     # Terminalle dosya yazma girişimi → DiffViewer'a yönlendir (MCP bash_tool ile aynı)
-    file_write = _parse_file_write(command)
+    file_write = shell_exec.prepare_file_write(command, workspace)
     if file_write:
-        path, new_content = file_write
+        path, new_content = file_write.path, file_write.content
         if not new_content.strip():
             print("❌ Boş dosya oluşturma reddedildi. İçerikle birlikte 'unityai save-file' kullan.")
             return 1
-        abs_path = _resolve(path, workspace)
-        refusal = unity_file_guard.check_write(abs_path, workspace)
-        if refusal is not None:
-            print(f"❌ {refusal.message}")
+        if file_write.refusal is not None:
+            print(f"❌ {file_write.refusal}")
             return 1
-        original = ""
-        if os.path.exists(abs_path):
-            try:
-                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-                    original = f.read()
-            except Exception:
-                pass
+        abs_path = file_write.abs_path
         result = asyncio.run(request_approval(
             tool_name="write_file",
-            params={"path": path, "content": new_content, "original": original},
+            params={"path": path, "content": new_content, "original": file_write.original},
             workspace_path=workspace,
         ))
         if result.get("approved") is not True:
@@ -180,9 +172,7 @@ def cmd_bash(args) -> int:
         print(f"✅ Yazıldı: {path}")
         return 0
 
-    # Gerekçe bash_tool.py'deki ikiziyle aynı: karar ile token tek çağrıdan
-    # geliyor, böylece denetlenen metin ile çalıştırılan metin ayrışamıyor.
-    argv = _auto_safe_argv(command, workspace)
+    argv = shell_exec.plan(command, workspace)
     if argv is None:
         result = asyncio.run(request_approval(
             tool_name="bash",
@@ -193,18 +183,8 @@ def cmd_bash(args) -> int:
             print(f"❌ Komut reddedildi: {command}")
             return 1
 
-    hedef, kabuk_kullan = (command, True) if argv is None else (argv, False)
-
     try:
-        proc = subprocess.run(
-            hedef,
-            shell=kabuk_kullan,
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-        )
+        proc = shell_exec.run(command, argv, workspace)
         output = (proc.stdout or "") + (proc.stderr or "")
         if len(output) > 8000:
             output = output[:8000] + "\n... (kısaltıldı)"

@@ -481,6 +481,9 @@ def test_hicbir_calistirma_yolu_ham_dizgeyi_kabuga_vermiyor():
     from pathlib import Path as _Path
 
     kok = _Path(__file__).resolve().parent.parent / "app"
+    ortak = (kok / "agentic" / "shell_exec.py").read_text(encoding="utf-8")
+    assert "auto_safe_argv" in ortak, "shell_exec argv kapısını kullanmıyor"
+    assert "shell=argv is None" in ortak, "kabuk yalnız argv yoksa açılmalı"
     yollar = [
         kok / "tools" / "file_tools.py",
         kok / "unityai_cli.py",
@@ -488,7 +491,5 @@ def test_hicbir_calistirma_yolu_ham_dizgeyi_kabuga_vermiyor():
     ]
     for yol in yollar:
         kaynak = yol.read_text(encoding="utf-8")
-        assert "auto_safe_argv" in kaynak, f"{yol.name} argv kapısını kullanmıyor"
-        # Ham `command` değişkenini doğrudan kabuğa veren çağrı kalmamalı.
-        assert "\n            command,\n            shell=True," not in kaynak, yol.name
-        assert "\n                command,\n                shell=True," not in kaynak, yol.name
+        assert "shell_exec" in kaynak, f"{yol.name} ortak çalıştırma yolunu kullanmıyor"
+        assert "subprocess.run(" not in kaynak, f"{yol.name} kendi başına spawn ediyor"
