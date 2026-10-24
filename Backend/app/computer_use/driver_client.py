@@ -34,31 +34,10 @@ class DriverError(RuntimeError):
 
 
 async def _lsappinfo_text(pid) -> str | None:
-    if type(pid) is not int or pid <= 0 or sys.platform != "darwin":
+    if type(pid) is not int or pid <= 0:
         return None
-    try:
-        executable = os.path.join(os.sep, "usr", "bin", "lsappinfo")
-        if not os.path.isfile(executable):
-            return None
-        # At most one child per lookup; reap it before returning on timeout.
-        process = await asyncio.create_subprocess_exec(
-            executable, "info", "-only", "bundleid", "-only", "name",
-            "-only", "applicationtype", f"pid:{pid}",
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(process.communicate(), 2.0)
-        except asyncio.TimeoutError:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-            await process.wait()
-            return None
-        return stdout.decode("utf-8", errors="replace") if process.returncode == 0 else None
-    except Exception:
-        return None
+    return await _run_lsappinfo("info", "-only", "bundleid", "-only", "name",
+                                "-only", "applicationtype", f"pid:{pid}")
 
 
 def _parse_lsappinfo(text) -> tuple[str, str | None] | None:
@@ -72,31 +51,7 @@ def _parse_lsappinfo(text) -> tuple[str, str | None] | None:
 
 
 async def _lsappinfo_list_text() -> str | None:
-    if sys.platform != "darwin":
-        return None
-    try:
-        executable = os.path.join(os.sep, "usr", "bin", "lsappinfo")
-        if not os.path.isfile(executable):
-            return None
-        # At most one child per listing; reap it on timeout and cancellation.
-        process = await asyncio.create_subprocess_exec(
-            executable, "list", stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(process.communicate(), 2.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-            await process.wait()
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-            return None
-        return stdout.decode("utf-8", errors="replace") if process.returncode == 0 else None
-    except Exception:
-        return None
+    return await _run_lsappinfo("list")
 
 
 async def _run_lsappinfo(*args) -> str | None:
