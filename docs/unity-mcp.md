@@ -48,7 +48,7 @@ header; an unknown profile answers 404.
 | URL | Tools |
 |---|---|
 | `/mcp` | Groups enabled in the Unity Editor's Tools tab (core + playtest by default) plus five server meta-tools (`manage_tools`, `set_active_instance`, `debug_request_context`, `execute_custom_tool`, `manage_script_capabilities`): 37 tools before an Editor has reported its toggles |
-| `/mcp/gamachine` | core + playtest, no meta-tools, minus a group the Editor turned off: 32 tools with both on (the default), 27 with playtest off; the set the backend exports to API models |
+| `/mcp/gamachine` | core + playtest + scripting_ext, no meta-tools, minus a group the Editor turned off: 37 tools with all three on (the default), 31 with playtest off; the set the backend exports to API models |
 | `/mcp/full` | Every group, regardless of the Editor's toggles: 52 tools |
 
 The URL fixes the profile, not a frozen list. Only `/mcp/full` lists the same tools

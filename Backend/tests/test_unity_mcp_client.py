@@ -3,7 +3,7 @@
 No Unity and no MCP server: the transport is replaced by a fake session
 factory, so these tests pin the client's own contract - one reused session,
 bounded calls, readable connection errors, image content forwarded, and the
-exported tool set (core + playtest, stable order) refreshed on list_changed.
+exported tool set (core + playtest + scripting_ext, stable order) refreshed on list_changed.
 """
 import asyncio
 import contextlib

@@ -45,7 +45,7 @@ MCP for Unity 将工具组织为**分组**（Core、Playtest、Docs、VFX & Shad
 | URL | 工具 |
 |-----|------|
 | `/mcp` | Unity Editor 中启用的分组（默认 core + playtest）加上服务器 meta-tools；Editor 未连接时共 36 个工具 |
-| `/mcp/gamachine` | 仅 core + playtest，不含 meta-tools（31 个工具）；即 Gamachine 后端导出的集合 |
+| `/mcp/gamachine` | 仅 core + playtest + scripting_ext，不含 meta-tools（37 个工具）；即 Gamachine 后端导出的集合 |
 | `/mcp/full` | 所有分组，不受 Editor 开关影响（51 个工具） |
 
 下文的 Editor 开关只影响 `/mcp` 和 `/mcp/gamachine`。

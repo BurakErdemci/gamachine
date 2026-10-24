@@ -133,7 +133,7 @@ Tool usage is a layer **independent** of the provider. When a model wants to rea
 ### MCP servers the backend runs
 
 1. **unityai MCP** (`Backend/app/unity_ai_mcp/server.py`) — `save_file`, `delete_file`, `read_file`, `list_directory`, `bash`/`run_terminal_command`/`execute_shell_command`. Write/delete/command operations are routed to the approval panel via `approval_bridge`.
-2. **Unity MCP** (CoplayDev/unity-mcp) — 52 tools for the Unity Editor (scene, GameObject, prefab, input, playtest…), over HTTP at `127.0.0.1:8080`. The URL fixes the profile: `/mcp` (groups currently enabled in the Editor plus meta-tools, so its list follows the Editor's toggles; 37 with no Editor), `/mcp/gamachine` (core + playtest: 32 with both on, 27 with playtest off), `/mcp/full` (every group, 52); all need `X-API-Key`. See [unity-mcp.md](unity-mcp.md).
+2. **Unity MCP** (CoplayDev/unity-mcp) — 52 tools for the Unity Editor (scene, GameObject, prefab, input, playtest…), over HTTP at `127.0.0.1:8080`. The URL fixes the profile: `/mcp` (groups currently enabled in the Editor plus meta-tools, so its list follows the Editor's toggles; 37 with no Editor), `/mcp/gamachine` (core + playtest + scripting_ext: 37 with all three on, 31 with playtest off), `/mcp/full` (every group, 52); all need `X-API-Key`. See [unity-mcp.md](unity-mcp.md).
 
 ### When are MCP configs written?
 

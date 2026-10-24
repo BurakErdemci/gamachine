@@ -35,7 +35,7 @@ namespace MCPForUnity.Editor.Tools
         /// core and playtest are enabled by default; other groups start hidden
         /// on the /mcp URL until enabled in the Editor's tool settings. The
         /// server's tool list is fixed per URL (/mcp, /mcp/gamachine for
-        /// core + playtest, /mcp/full for every group); manage_tools cannot
+        /// core + playtest + scripting_ext, /mcp/full for every group); manage_tools cannot
         /// activate a group per session.
         /// Valid groups: core, playtest, docs, vfx, animation, ui, scripting_ext,
         /// testing, probuilder, profiling.
