@@ -144,10 +144,6 @@ DELIBERATELY_OPEN: dict = {
         "Sabit {\"google\": false, \"github\": false}. Yerel modda kimlik "
         "sağlayıcı yok; makineye özel hiçbir bilgi sızdırmıyor.",
 
-    ("POST", "/update-file"):
-        "Mezar taşı: gövdesi yalnızca 410 GONE fırlatıyor. Kapı koymak, "
-        "kaldırılmış bir ucun kaldırıldığını söylemek için kimlik istemek olurdu.",
-
     # FastAPI'nin gömülü dokümantasyon yüzeyi. Dördü de yalnız şema servis
     # ediyor; veri okumuyor, yan etki üretmiyor.
     #

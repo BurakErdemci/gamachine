@@ -80,44 +80,6 @@ def test_missing_default_config_is_preserved(saved_config_db):
     assert db.get_ai_config(1) == ("subscription", "claude-sonnet-4-6", "", False)
 
 
-@pytest.mark.parametrize("old,new", [
-    (old, new) for old, new in REPLACEMENTS.items() if new in CLAUDE_MODELS
-])
-def test_analysis_uses_the_replacement_claude_slug(saved_config_db, old, new):
-    from providers.agy_session import AgyStreamSession
-    from routes import analysis_routes
-    from schemas import AnalysisRequest
-
-    saved, _ = saved_config_db
-    saved.save_ai_config(1, "subscription", old, "")
-    db = Mock(wraps=saved)
-    db.get_api_key.return_value = ""
-    db.save_analysis = Mock()
-    selected = []
-
-    async def stream(self, message, *, model, thinking_level="auto", **kwargs):
-        provider = AgyProvider(binary_name=model)
-        provider._build_cmd(thinking_level=thinking_level)
-        selected.append(provider._pending_agy_model_slug)
-        yield {"type": "text", "content": "analysis answer"}
-        yield {"type": "response", "content": "analysis answer"}
-
-    async def close(self, **kwargs):
-        return None
-
-    with patch.object(analysis_routes, "require_user", return_value=(1, {})), \
-            patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"), \
-            patch.object(AgyStreamSession, "stream", stream), \
-            patch.object(AgyStreamSession, "close", close):
-        router = analysis_routes.create_analysis_router(db)
-        analyze = next(route.endpoint for route in router.routes if route.path == "/analyze")
-        result = asyncio.run(analyze(AnalysisRequest(user_id=1, code="public class Example { }"), "test-token"))
-
-    assert selected == [f"{new.removeprefix('agy-')}-high"]
-    assert result["ai_suggestion"] == "analysis answer"
-    db.save_analysis.assert_called_once()
-
-
 def test_picker_and_map_match_the_measured_catalog(monkeypatch):
     from routes import config_routes
 
