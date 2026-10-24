@@ -1061,7 +1061,7 @@ class AgentRunner:
                       "workspace": workspace}
             text = f"write_file {tool_args.get('file_path', '?')}"
         else:
-            # The tools step mode never asks about (reads, memory, screenshot,
+            # The tools step mode never asks about (reads, screenshot,
             # mail) stay free here too.
             return None
         decision = approval_mode.needs_card(action, mode=mode)

@@ -419,11 +419,9 @@ class OpenCodeProvider(BaseCLIProvider):
             unityai_env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace}
             # Token config dosyasına yazılmıyor — 0600 dosyadan okunuyor
             # (bkz. local_token_file). Bu dosya model tarafından okunabilir.
-            # The per-turn approval token is NOT written here: this file is
-            # shared by every chat of the workspace, so concurrent turns
-            # overwrote each other's token. It rides in the process env
-            # (_turn_spawn_env). Rewriting the entry also drops a stale token
-            # an older build left in the file.
+            # No approval token or auto-approve flag is written here: this file
+            # is shared by every chat of the workspace. Rewriting the whole
+            # entry also drops any such key an older build left in the file.
 
             mcp = {
                 "unityai": {

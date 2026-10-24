@@ -10,10 +10,10 @@ Kaynağı ürünün kendisiydi: `load_unity_tools_async` bağlantı kurulunca Un
 konsoluna dekoratif bir afiş basıyordu ve bunu `execute_code` ile yapıyordu —
 yani kütükteki en tehlikeli araçla (keyfi C# derleyip çalıştırma).
 
-Kapı yanlış davranmadı: `ambient_auto_approve` koşan bir tur olmasını şart
-koşar (`_AMBIENT_TOPLAM > 0`) ve afiş herhangi bir turun DIŞINDA gönderiliyor,
-dolayısıyla oto modda bile oto-onaya giremez. Doğrusu da bu — bir tura
-bağlanamayan çağrı, o turun iznini miras alamaz.
+Kapı yanlış davranmadı: oto-onay koşan bir tur olmasını şart koşar ve afiş
+herhangi bir turun DIŞINDA gönderiliyor, dolayısıyla oto modda bile oto-onaya
+giremez. Doğrusu da bu — bir tura bağlanamayan çağrı, o turun iznini miras
+alamaz.
 
 Bu test dizeyi değil SINIFI koruyor: araç yükleme yolu hiçbir araç çağrısı
 yapmamalı. Yarın afiş yerine "sahneyi bir tazeleyelim" gibi bir çağrı eklenirse
