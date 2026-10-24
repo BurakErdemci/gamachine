@@ -329,6 +329,20 @@ _EXEMPT: Dict[Tuple[str, str], Tuple[int, str]] = {
         1, "lsof/pgrep/netstat — port sahibi sorgusu; DISPLAY'siz sistem aracı"),
     ("app/unity_ai_mcp/unity_mcp_manager.py", "UnityMCPManager.is_unity_running"): (
         2, "tasklist / pgrep — Unity Editor süreci var mı; sabit argv"),
+    ("app/unity_ai_mcp/unity_project_presence.py", "_process_command"): (
+        1, "ps -o command= / tasklist — tek PID'in komut satırı; sabit argv, sır tüketmiyor"),
+    ("app/unity_ai_mcp/unity_project_presence.py", "_process_executable"): (
+        1, "ps -o comm= — tek PID'in yürütülebilir yolu; sabit argv"),
+    ("app/unity_ai_mcp/unity_project_presence.py", "open_project_names"): (
+        1, "ps -axo pid=,comm= — Unity süreçlerini listeler; sabit argv"),
+    ("app/computer_use/driver_client.py", "_lsappinfo_text"): (
+        1, "/usr/bin/lsappinfo — macOS yerleşiği, mutlak yol, sabit argv; "
+           "LaunchServices oturumuna bağlı, sır tüketmiyor"),
+    ("app/computer_use/driver_client.py", "_lsappinfo_list_text"): (
+        1, "/usr/bin/lsappinfo list — macOS yerleşiği, mutlak yol, sabit argv"),
+    ("app/computer_use/driver_client.py", "_run_lsappinfo"): (
+        1, "/usr/bin/lsappinfo front/info — macOS yerleşiği, mutlak yol; argv "
+           "yalnız sabit alt komut ve lsappinfo'nun kendi döndürdüğü ASN"),
     ("app/tools/screenshot_tool.py", "_capture_mac"): (
         2, "screencapture — macOS sistem aracı; ekran yakalama oturum "
            "ortamına bağlı ve kısmak yakalamayı sessizce boş dosyaya düşürür"),
