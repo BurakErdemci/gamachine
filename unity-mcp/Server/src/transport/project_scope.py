@@ -27,6 +27,7 @@ _cache: dict[tuple[int, str], tuple[float, str | None]] = {}
 
 
 _RELOAD_POLL_S = 0.25
+_AMBIGUOUS_TARGET = "Birden fazla Unity editörü bağlı ve hedef seçilmedi; istek gönderilmedi."
 
 
 def is_server_only_tool(tool_name: str | None) -> bool:
@@ -78,6 +79,14 @@ async def _resolve_project_path(ctx) -> str:
 async def project_scope_refusal(ctx, conversation_id: int | None) -> str | None:
     if conversation_id is None or not os.environ.get("LOCAL_APP_TOKEN", ""):
         return None
+    try:
+        # Two editors and no named target never resolve into one, so no reload wait.
+        from services.tools import get_unity_instance_from_context
+
+        if not await get_unity_instance_from_context(ctx) and len(await PluginHub.session_project_paths()) >= 2:
+            return _AMBIGUOUS_TARGET
+    except Exception:
+        return _UNREACHABLE
     project_path = await _resolve_project_path(ctx)
     key = (conversation_id, project_path)
     cached = _cache.get(key)

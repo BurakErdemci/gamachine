@@ -286,3 +286,36 @@ def test_select_session_by_path_several_open(tmp_path):
     sessions = _sessions(("s1", p), ("s2", p))
     assert project_scope.select_session_by_path(sessions, p) == (
         None, "Bu proje Unity'de birden fazla kez açık: GameA; hangisine gönderileceği belirsiz.")
+
+
+def test_two_editors_and_no_target_is_refused_without_waiting(scope, monkeypatch):
+    monkeypatch.setattr(PluginHub, "session_project_paths",
+                        AsyncMock(return_value={"s1": "/p/A", "s2": "/p/B"}))
+    monkeypatch.setattr(PluginHub, "session_wait_budget", classmethod(lambda cls: 20.0))
+    monkeypatch.setattr(mb, "_target_project_path", AsyncMock(return_value=""))
+    slept = []
+
+    async def no_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(project_scope.asyncio, "sleep", no_sleep)
+    refusal = _run(project_scope.project_scope_refusal(CTX, 5))
+    assert refusal == "Birden fazla Unity editörü bağlı ve hedef seçilmedi; istek gönderilmedi."
+    assert slept == [] and scope.posts == [] and project_scope._cache == {}
+
+
+def test_two_editors_with_a_named_target_is_still_checked(scope, monkeypatch):
+    monkeypatch.setattr(PluginHub, "session_project_paths",
+                        AsyncMock(return_value={"s1": "/p/A", "s2": "/p/B"}))
+    monkeypatch.setattr(project_scope, "_resolve_project_path", AsyncMock(return_value="/p/A"))
+    import services.tools as tools
+
+    monkeypatch.setattr(tools, "get_unity_instance_from_context", AsyncMock(return_value="A@hash"))
+    assert _run(project_scope.project_scope_refusal(CTX, 5)) is None
+    assert len(scope.posts) == 1
+
+
+def test_counting_failure_is_a_refusal(scope, monkeypatch):
+    monkeypatch.setattr(PluginHub, "session_project_paths", AsyncMock(side_effect=RuntimeError("boom")))
+    assert _run(project_scope.project_scope_refusal(CTX, 5)) == UNREACHABLE
+    assert scope.posts == []
