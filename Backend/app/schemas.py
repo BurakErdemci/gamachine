@@ -2,17 +2,6 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-class AuthRequest(BaseModel):
-    username: str
-    password: str
-
-
-class AnalysisRequest(BaseModel):
-    code: str
-    language: str = "tr"
-    user_id: int
-
-
 class AIConfigRequest(BaseModel):
     user_id: int
     provider_type: str
@@ -20,11 +9,6 @@ class AIConfigRequest(BaseModel):
     api_key: str
     # The chat on screen when the model was picked: it gets the model too.
     conversation_id: Optional[int] = None
-
-
-class UpdateFileRequest(BaseModel):
-    file_path: str
-    new_code: str
 
 
 class RenameRequest(BaseModel):
