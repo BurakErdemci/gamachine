@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Literal
@@ -11,8 +12,9 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, StrictBool, StrictFloat, StrictInt, StrictStr, field_validator
 
-from auth_utils import _check_token
+from auth_utils import _check_token, get_current_user
 from omnisharp.omnisharp_manager import _unwrap_unity_result
+from unity_ai_mcp import unity_project_presence
 from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 
 
@@ -141,9 +143,35 @@ async def _call_unity(command: str, params: dict) -> dict:
     return await asyncio.to_thread(_post_unity, command, params)
 
 
-def create_scene_editor_router() -> APIRouter:
+# workspace -> monotonic time of the last "project is open" answer; the tree is
+# polled and each presence check runs `ps`. A refusal is never cached, so
+# opening the project in Unity takes effect on the next request.
+_PRESENCE_TTL = 2.0
+_presence_cache: dict[str, float] = {}
+
+
+def _project_refusal(workspace: str) -> str | None:
+    if not workspace:
+        return "Gamachine'de açık bir Unity projesi yok; Unity'ye istek gönderilmedi."
+    now = time.monotonic()
+    checked = _presence_cache.get(workspace)
+    if checked is not None and now - checked < _PRESENCE_TTL:
+        return None
+    refusal = unity_project_presence.mcp_mismatch_detail(workspace)
+    if refusal is None:
+        _presence_cache[workspace] = now
+    return refusal
+
+
+def create_scene_editor_router(db) -> APIRouter:
     async def check_token(x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
+        # Every route is gated here, before any of them can reach Unity: the
+        # editor on the other end must have Gamachine's open project loaded.
+        workspace = db.get_last_workspace(get_current_user(db, x_session_token)[0]) or ""
+        refusal = await asyncio.to_thread(_project_refusal, workspace)
+        if refusal is not None:
+            raise HTTPException(status_code=409, detail=refusal)
 
     router = APIRouter(prefix="/scene-editor", tags=["scene-editor"], dependencies=[Depends(check_token)])
 

@@ -16,8 +16,12 @@ def client(monkeypatch):
     from routes import scene_editor_routes as routes
     monkeypatch.setenv("LOCAL_APP_TOKEN", "app-secret")
     monkeypatch.setattr(routes.unity_mcp_manager, "api_headers", lambda: {"X-API-Key": "api-secret"})
+    monkeypatch.setattr(routes.unity_project_presence, "editor_pid", lambda workspace: 4242)
+    routes._presence_cache.clear()
+    db = Mock()
+    db.get_last_workspace.return_value = "/projects/Game"
     app = FastAPI()
-    app.include_router(routes.create_scene_editor_router())
+    app.include_router(routes.create_scene_editor_router(db))
     with TestClient(app) as client:
         yield client, routes
 
