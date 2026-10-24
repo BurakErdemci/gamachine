@@ -941,6 +941,7 @@ class AgentRunner:
 
     async def _prepare_agent_guide(self) -> None:
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+        from unity_ai_mcp import unity_project_presence
 
         unity_state = "off"
         if unity_mcp_manager.is_running():
@@ -955,9 +956,15 @@ class AgentRunner:
         except Exception as exc:
             logger.warning("Agent guide addendum could not be read: %s", exc)
             addendum = None
+        scene = None
+        if getattr(self, "workspace_path", None):
+            try:
+                scene = await asyncio.to_thread(unity_project_presence.active_scene, self.workspace_path)
+            except Exception as exc:
+                logger.debug("Unity active scene could not be read: %s", exc)
         self._agent_guide = compose_agent_guide(
             getattr(self, "language", "tr"), project_open=bool(getattr(self, "workspace_path", None)),
-            unity_state=unity_state, addendum=addendum)
+            unity_state=unity_state, addendum=addendum, unity_scene=scene)
 
     def _get_architect_wisdom(self) -> str:
         """

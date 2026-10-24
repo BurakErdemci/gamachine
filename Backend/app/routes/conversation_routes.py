@@ -34,6 +34,7 @@ from computer_use import gate as computer_gate
 from computer_use import policy as computer_policy
 from computer_use import settings as computer_settings
 from computer_use.policy import valid_bundle_id
+from unity_ai_mcp import unity_project_presence
 from providers.agy_provider import AgyStepGateError
 from rag.memory_manager import memory_manager
 from rag.project_rag import ProjectRAG
@@ -690,10 +691,25 @@ def create_conversation_router(db, progress_store):
             # A claimed id is honoured even unverified: it can only deny more.
             decision = computer_gate.Decision("deny", computer_gate.HALTED_REASON)
         else:
-            decision = computer_gate.decide(
-                tool, params, enabled=computer_settings.enabled(db),
-                granted=computer_settings.is_granted(db, bundle_id)
-                or (session_key is not None and session_key in _computer_session_grants))
+            reason = None
+            if (isinstance(bundle_id, str)
+                    and bundle_id.casefold().startswith("com.unity3d.unityeditor")
+                    and type(params.get("pid")) is int):
+                try:
+                    user_id = db.get_conversation_owner(owner) if owner is not _UNKNOWN_OWNER else 1
+                except Exception:
+                    user_id = 1
+                if user_id is None:
+                    user_id = 1
+                workspace = db.get_last_workspace(user_id)
+                reason = unity_project_presence.project_mismatch_reason(workspace or "", params["pid"])
+            if reason is not None:
+                decision = computer_gate.Decision("deny", reason)
+            else:
+                decision = computer_gate.decide(
+                    tool, params, enabled=computer_settings.enabled(db),
+                    granted=computer_settings.is_granted(db, bundle_id)
+                    or (session_key is not None and session_key in _computer_session_grants))
         log_path = os.path.join(os.path.dirname(db.db_path), "computer_use_actions.jsonl")
 
         def log(outcome, reason):

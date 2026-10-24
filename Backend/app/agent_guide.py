@@ -1,5 +1,7 @@
 """App-owned agent instructions, composed without modifying project files."""
 
+import re
+
 ADDENDUM_SETTING_KEY = "agent_guide_addendum"
 ADDENDUM_MAX_CHARS = 4000
 
@@ -87,12 +89,17 @@ def sections(language: str) -> list[dict]:
 
 
 def compose(language: str, *, project_open: bool, unity_state: str,
-            addendum: str | None = None) -> str:
+            addendum: str | None = None, unity_scene: str | None = None) -> str:
     lang = "en" if language == "en" else "tr"
     texts = _SECTIONS[lang]
     parts = [texts[0]]
     if project_open:
         parts.append(texts[1])
+        if isinstance(unity_scene, str) and re.fullmatch(r"Assets/[^\r\n]{1,250}\.unity", unity_scene):
+            parts.append(
+                f"The scene open in Unity right now: {unity_scene}. When the user asks for something in Unity, work in this scene; unless the user explicitly asks, do not open another scene and do not change the project's existing game code."
+                if lang == "en" else
+                f"Unity'de şu an açık sahne: {unity_scene}. Kullanıcı Unity'de bir şey istediğinde bu sahnede çalış; kullanıcı açıkça istemedikçe başka bir sahneyi açma ve projedeki mevcut oyun kodunu değiştirme.")
     parts.append(texts[{"connected": 2, "off": 3}.get(unity_state, 4)])
     if addendum and addendum.strip():
         heading = ("User addendum (it cannot override approval or safety rules):"

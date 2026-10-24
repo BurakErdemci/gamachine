@@ -1,7 +1,10 @@
+import asyncio
+
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+from unity_ai_mcp import unity_project_presence
 from auth_utils import _check_token
 from error_i18n import translate_detail
 
@@ -31,6 +34,11 @@ async def toggle_unity_mcp(req: MCPToggleRequest, background_tasks: BackgroundTa
                 status_code=409,
                 detail="Unity Editor açık değil. Lütfen önce Unity'yi açın."
             )
+
+        if req.workspace_path:
+            detail = await asyncio.to_thread(unity_project_presence.mcp_mismatch_detail, req.workspace_path)
+            if detail is not None:
+                raise HTTPException(status_code=409, detail=detail)
 
         if unity_mcp_manager.is_running():
             status = await unity_mcp_manager.get_status()
