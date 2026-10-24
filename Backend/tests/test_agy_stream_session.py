@@ -432,8 +432,17 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_closes_process_and_emits_one_error(self):
         self.plans = [{"turns": [[TURNS[0][0]]]}]
-        with patch.object(BaseCLIProvider, "_AGY_MAX_TOTAL", 0.02):
-            events = await self.collect()
+        turn_timeout = asyncio.timeout(None)
+        original_drain = FakeStdin.drain
+
+        async def drain_then_expire(stdin):
+            await original_drain(stdin)
+            # Expire the real timeout only after the child has received its prompt.
+            turn_timeout.reschedule(asyncio.get_running_loop().time())
+
+        with patch.object(agy_session.asyncio, "timeout", return_value=turn_timeout), \
+                patch.object(FakeStdin, "drain", drain_then_expire):
+            events = await asyncio.wait_for(self.collect(), 5)
         self.assertEqual([e["type"] for e in events], ["error"])
         self.assertIn("timed out", events[0]["message"])
         self.assertIsNotNone(self.processes[0].returncode)
