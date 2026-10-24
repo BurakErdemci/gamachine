@@ -88,7 +88,7 @@ AI tools in the Unity ecosystem usually land at one of two extremes: they either
 | Traditional AI Assistants | Gamachine |
 |---|---|
 | Locked to a single provider | 7 CLI agents (Claude Code, Codex, agy, Copilot, Cursor, OpenCode, Kimi Code), 8+ cloud APIs (incl. the free NVIDIA NIM pool), Ollama — one menu |
-| Writes code, doesn't see the project | Scans every `.cs` file in the workspace, extracts an architecture map |
+| Writes code, doesn't see the project | Reads, searches and lists the project's files on demand; reads the open scene and the Console through Unity MCP |
 | Can't touch the file system | Read/write/delete files — every dangerous op behind an approval card |
 | Unaware of the Unity Editor | Adds GameObjects, binds components, reads the console via MCP |
 | Can't run terminal | Secure terminal layer; dangerous commands require approval |
@@ -203,7 +203,7 @@ kept as it was and gets no new features.
 
 ## 💡 Usage
 
-1. **Pick a workspace** — choose your Unity project folder; the backend scans the `.cs` files.
+1. **Pick a workspace** — choose your Unity project folder; the agents work inside it.
 2. **Pick a model** — choose a provider/model in Settings. For a cloud API, enter your key (stored encrypted); for a CLI, just having it installed is enough. Each chat remembers its own model; a new chat starts on the last one you picked.
 3. **Talk** —
 

@@ -89,7 +89,7 @@ Unity ekosistemindeki AI araçları genelde iki uçtan birine düşer: ya sadece
 | Geleneksel AI Asistanlar | Gamachine |
 |---|---|
 | Tek sağlayıcıya kilitli | 7 CLI ajanı (Claude Code, Codex, agy, Copilot, Cursor, OpenCode, Kimi Code), 8+ bulut API (NVIDIA NIM ücretsiz havuz dahil), Ollama — tek menüden |
-| Kod yazar, projeyi görmez | Workspace'teki tüm `.cs` dosyalarını tarar, mimari haritasını çıkarır |
+| Kod yazar, projeyi görmez | Projenin dosyalarını gerektiğinde okur, arar ve listeler; açık sahneyi ve Console'u Unity MCP üzerinden okur |
 | Dosya sistemine erişemez | Dosya oku/yaz/sil — hepsi workspace'e kilitli; silme ve tehlikeli komutlar onay kartıyla |
 | Unity Editor'den habersiz | MCP ile sahneye GameObject ekler, bileşen bağlar, konsolu okur |
 | Terminal çalıştıramaz | Güvenli terminal katmanı; tehlikeli komutlar onay ister |
@@ -207,7 +207,7 @@ Olduğu gibi korunuyor, yeni özellik almıyor.
 
 ## 💡 Kullanım
 
-1. **Workspace seç** — Unity projenin klasörünü seç; backend `.cs` dosyalarını tarar.
+1. **Workspace seç** — Unity projenin klasörünü seç; ajanlar onun içinde çalışır.
 2. **Model seç** — Ayarlar'dan sağlayıcı/model seç. Bulut API ise anahtarını gir (şifreli saklanır); CLI ise makinende kurulu olması yeter. Her sohbet kendi modelini hatırlar; yeni sohbet en son seçtiğin modelle başlar.
 3. **Konuş** —
 
