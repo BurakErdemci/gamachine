@@ -25,8 +25,8 @@ const topic = (over: Partial<GuideTopic> = {}): GuideTopic => ({
 })
 
 describe('registry · what this build lists', () => {
-  it('ports the mockup registry whole: 44 topics in 7 groups, a 6-step core tour', () => {
-    expect(GUIDE).toHaveLength(44)
+  it('ports the mockup registry whole: 43 topics in 7 groups, a 6-step core tour', () => {
+    expect(GUIDE).toHaveLength(43)
     expect(GROUPS.map(g => g.id)).toEqual(['basics', 'unity', 'workspace', 'phone', 'integrations', 'lesser', 'you'])
     expect(stepsOf(CORE_TOUR, CTX)).toHaveLength(6)
     expect(new Set(GUIDE.map(t => t.id)).size).toBe(GUIDE.length)
@@ -63,7 +63,7 @@ describe('registry · what this build lists', () => {
       expect(listed).not.toContain(hidden)
     }
     for (const shown of ['ask', 'branches', 'side-chat', 'code-export', 'changed-files', 'preview', 'themes']) expect(listed).toContain(shown)
-    expect(listed).toHaveLength(36)
+    expect(listed).toHaveLength(35)
     // the "Diğer araçlar" group has nothing listed, so the guide does not draw it
     expect(listedTopics(CTX).some(t => t.group === 'integrations')).toBe(false)
   })

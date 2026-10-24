@@ -72,7 +72,6 @@ describe('app-zoom-set registration and validation', () => {
  * - Dosya ağacı okuma (klasör gezintisi)
  * - Dosya açma
  * - Tek dosya export (write-file)
- * - Çoklu dosya export (write-multiple-files)
  * - Dosya varlık kontrolü (file-exists)
  */
 
@@ -88,7 +87,6 @@ const BACKGROUND_CHANNELS = [
   'read-file',
   'write-file',
   'file-exists',
-  'write-multiple-files',
 ] as const
 
 describe('Regresyon — background.ts kanalları whitelist\'te', () => {
@@ -155,11 +153,7 @@ describe('Regresyon — Tek dosya export (write-file + isAllowedUnityScriptPath)
   })
 })
 
-describe('Regresyon — Çoklu dosya export (write-multiple-files)', () => {
-  it('write-multiple-files kanalı whitelist\'te', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.has('write-multiple-files')).toBe(true)
-  })
-
+describe('Workspace script path validation', () => {
   it('batch\'teki her dosya güvenlik kontrolünden geçer', () => {
     const files = [
       `${SCRIPTS}/Player.cs`,

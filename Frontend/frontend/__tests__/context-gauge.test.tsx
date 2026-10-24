@@ -25,10 +25,6 @@ afterEach(() => cleanup())
 const temelProps = {
   thinkingLevel: 'medium' as any,
   setThinkingLevel: () => {},
-  isAnalyzingProject: false,
-  analyzeProject: async () => {},
-  exportMemory: async () => {},
-  importMemory: async () => {},
   compactConversation: async () => {},
   isCompacting: false,
 }

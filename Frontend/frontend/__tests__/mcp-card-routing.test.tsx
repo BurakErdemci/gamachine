@@ -88,7 +88,7 @@ const Harness: React.FC = () => {
           pendingFix: chat.pendingFix, setPendingFix: chat.setPendingFix,
           pendingDelete: del, setPendingDelete: setDel,
           pendingCommand: chat.pendingCommand, setPendingCommand: chat.setPendingCommand,
-          openedFilePath: null, setCode: vi.fn(), refreshFileTree, analyzeProject: vi.fn(),
+          openedFilePath: null, setCode: vi.fn(), refreshFileTree,
           openFile: vi.fn(), sendMessage: vi.fn(), messagesEndRef: React.createRef<HTMLDivElement>(),
           ipc: { invoke: vi.fn() }, showToast, diffFile: null, setDiffFile: vi.fn(),
           onApproveCommand: chat.approveCommand, pendingQuestion: chat.pendingQuestion,

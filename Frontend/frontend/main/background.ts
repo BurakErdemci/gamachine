@@ -338,45 +338,6 @@ handleSecure('register-dropped-folder', (_event, p: unknown) => {
   }
 })
 
-handleSecure('save-file-dialog', async (_event, options) => {
-  const result = await dialog.showSaveDialog(options)
-  if (result.canceled) return null
-  return result.filePath
-})
-
-// Hafıza export/import gibi kullanıcı-tetikli akışlar için atomik dialog+yazma/okuma.
-// write-file kasıtlı olarak workspace .cs dosyalarına kısıtlı; bu handler kullanıcı
-// dialog'dan onayladığı path'i doğrudan kullandığı için ayrı kanaldan gidiyor.
-handleSecure('export-text-file', async (_event, defaultName: string, content: string) => {
-  const result = await dialog.showSaveDialog({
-    title: 'Hafıza Kaydet',
-    defaultPath: defaultName,
-    filters: [{ name: 'Markdown', extensions: ['md'] }, { name: 'Text', extensions: ['txt'] }],
-  })
-  if (result.canceled || !result.filePath) return { success: false, canceled: true }
-  try {
-    fs.writeFileSync(result.filePath, content, 'utf-8')
-    return { success: true, path: result.filePath }
-  } catch (err: any) {
-    return { success: false, error: err.message }
-  }
-})
-
-handleSecure('import-text-file', async (_event, options?: { filters?: { name: string; extensions: string[] }[] }) => {
-  const result = await dialog.showOpenDialog({
-    title: 'Hafıza Yükle',
-    properties: ['openFile'],
-    filters: options?.filters ?? [{ name: 'Markdown', extensions: ['md'] }, { name: 'Text', extensions: ['txt'] }],
-  })
-  if (result.canceled || !result.filePaths[0]) return { canceled: true, content: '' }
-  try {
-    const content = fs.readFileSync(result.filePaths[0], 'utf-8')
-    return { canceled: false, content, path: result.filePaths[0] }
-  } catch (err: any) {
-    return { canceled: false, content: '', error: err.message }
-  }
-})
-
 handleSecure('read-directory', async (_event, dirPath: string, workspacePath?: string) => {
   try {
     if (!workspacePath) return [];
@@ -607,31 +568,6 @@ handleSecure('file-exists', async (_event, filePath: string, workspacePath?: str
     return false
   }
   return fs.existsSync(fullPath)
-})
-
-handleSecure('write-multiple-files', async (_event, files: { path: string; content: string }[], workspacePath?: string) => {
-  const results: { path: string; success: boolean; error?: string }[] = []
-  if (!workspacePath) return results;
-  const _ws = untrustedWorkspace(workspacePath); if (_ws) return results;
-
-  for (const file of files) {
-    try {
-      const fullPath = path.isAbsolute(file.path) ? file.path : path.join(workspacePath, file.path);
-      if (!isAllowedWorkspaceWriteFile(fullPath, workspacePath)) {
-        results.push({ path: fullPath, success: false, error: 'Dosya yalnızca seçili workspace içindeki kod/metin dosyalarına yazılabilir (.cs için Assets/Scripts altı).' })
-        continue
-      }
-      const dir = path.dirname(fullPath)
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true })
-      }
-      fs.writeFileSync(fullPath, file.content, 'utf-8')
-      results.push({ path: fullPath, success: true })
-    } catch (err: any) {
-      results.push({ path: file.path, success: false, error: err.message })
-    }
-  }
-  return results
 })
 
 // --- IPC: DOSYA YÖNETİMİ ---

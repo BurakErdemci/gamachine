@@ -52,7 +52,7 @@ const panel = (messages: any[], extra: Record<string, any> = {}) => render(<Chat
   messages, activeConvId: 7, user: USER, loading: false, clearHistory: vi.fn(), lang: 'tr',
   thinkingLevel: 'auto', workspacePath: '/ws', handleExportToUnity: vi.fn(),
   pendingGenFiles: null, setPendingGenFiles: vi.fn(), pendingFix: null, setPendingFix: vi.fn(),
-  openedFilePath: null, setCode: vi.fn(), refreshFileTree: vi.fn(), analyzeProject: vi.fn(),
+  openedFilePath: null, setCode: vi.fn(), refreshFileTree: vi.fn(),
   openFile: vi.fn(), sendMessage: vi.fn(), messagesEndRef: React.createRef<HTMLDivElement>(),
   ipc: { invoke: vi.fn() }, showToast: vi.fn(), diffFile: null, setDiffFile: vi.fn(),
   pendingDelete: null, setPendingDelete: vi.fn(), pendingCommand: null, setPendingCommand: vi.fn(),

@@ -58,7 +58,7 @@ const panelProps = () => ({
   user: { name: 'local' }, loading: false, clearHistory: vi.fn(), lang: 'tr', thinkingLevel: 'auto',
   workspacePath: 'project', handleExportToUnity: vi.fn(), pendingGenFiles: null,
   setPendingGenFiles: vi.fn(), pendingFix, setPendingFix: vi.fn(), openedFilePath: 'Assets/A.cs',
-  setCode: vi.fn(), setOriginalCode: vi.fn(), refreshFileTree: vi.fn(), analyzeProject: vi.fn(),
+  setCode: vi.fn(), setOriginalCode: vi.fn(), refreshFileTree: vi.fn(),
   openFile: vi.fn(), sendMessage: vi.fn(), messagesEndRef: React.createRef(), ipc: window.ipc,
   showToast: vi.fn(), diffFile: null, setDiffFile: vi.fn(), pendingDelete: null,
   setPendingDelete: vi.fn(), pendingCommand: null, setPendingCommand: vi.fn(), onApproveCommand: vi.fn(),

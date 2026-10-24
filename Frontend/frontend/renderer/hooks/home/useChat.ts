@@ -309,7 +309,6 @@ export const useChat = (
 
   const [chatInput, setChatInput] = useState('');
   const [isCompacting, setIsCompacting] = useState(false);
-  const [isAnalyzingProject, setIsAnalyzingProject] = useState(false);
   const [pendingFix, setPendingFix] = useState<{ data: any; messageId?: number; applied?: boolean } | null>(null);
   // The approval mode is global and lives in the backend (closed-loop.md §5):
   // external MCP clients carry no request, so a per-request field could never
@@ -1497,57 +1496,6 @@ export const useChat = (
     } catch (err) { showToast(cevir('chat.historyClearFailed'), 'error'); }
   }, [activeConvId, setMessages, showToast]);
 
-  const analyzeProject = useCallback(async (silent = false) => {
-    if (!user || !API) return;
-
-    // Aktif sohbet yoksa Projeyi Öğren tek tıkla çalışsın diye yenisini açıyoruz.
-    let targetConvId = activeConvId;
-    if (!targetConvId) {
-      targetConvId = await createNewConversation(cevir('chat.projectAnalysisTitle'));
-      if (!targetConvId) return;
-    }
-
-    setIsAnalyzingProject(true);
-    try {
-      const res = await axios.post(`${API}/conversations/${targetConvId}/analyze-project`, {}, {
-        headers: { 'X-Session-Token': user.sessionToken }, timeout: 120000
-      });
-      if (res.data.status === 'success') {
-        if (!silent) {
-          showToast(cevir('memory.learned', { sayi: res.data.file_count }), 'success');
-          const convId = targetConvId;
-          patchConv(convId, r => ({ messages: [...r.messages, { id: nextClientMsgId(), role: 'assistant', content: `${cevir('memory.analysisReport')}\n\n${res.data.summary}`, timestamp: new Date().toISOString(), smells: [] }] }));
-        }
-      }
-    } catch (err: any) { if (!silent) showToast(cevir('memory.analysisError'), 'error'); }
-    finally { setIsAnalyzingProject(false); }
-  }, [API, activeConvId, createNewConversation, patchConv, showToast, user]);
-
-  const exportMemory = useCallback(async () => {
-    if (!activeConvId || !user || !API) return;
-    try {
-      const res = await axios.get(`${API}/conversations/${activeConvId}/export-memory`, { headers: { 'X-Session-Token': user.sessionToken } });
-      if (!res.data.content) { showToast(cevir('memory.none'), 'error'); return; }
-      const out = await ipc?.invoke('export-text-file', `wisdom_${activeConvId}.md`, res.data.content);
-      if (out?.canceled) return;
-      if (out?.success) showToast(cevir('memory.saved'), 'success');
-      else showToast(cevir('memory.saveFailed', { hata: out?.error || cevir('common.unknownError') }), 'error');
-    } catch { showToast(cevir('memory.exportError'), 'error'); }
-  }, [API, activeConvId, showToast, user]);
-
-  const importMemory = useCallback(async () => {
-    if (!activeConvId || !user || !API) return;
-    try {
-      const res = await ipc?.invoke('import-text-file', { filters: [{ name: 'Markdown', extensions: ['md'] }] });
-      if (res?.canceled) return;
-      if (res?.content) {
-        await axios.post(`${API}/conversations/${activeConvId}/import-memory`, { content: res.content }, { headers: { 'X-Session-Token': user.sessionToken } });
-        showToast(cevir('memory.imported'), 'success');
-        patchConv(activeConvId, r => ({ messages: [...r.messages, { id: nextClientMsgId(), role: 'assistant', content: cevir('memory.importedHeading'), timestamp: new Date().toISOString(), smells: [] }] }));
-      }
-    } catch { showToast(cevir('memory.importError'), 'error'); }
-  }, [API, activeConvId, patchConv, showToast, user]);
-
   // `convId` is a phone's `/compact` naming its chat; the desktop button and
   // composer pass nothing and mean the chat on screen.
   const compactConversation = useCallback(async (convId?: number) => {
@@ -1709,7 +1657,6 @@ export const useChat = (
     chatInput, setChatInput,
     contextUsage, setContextUsage, applyContextReport,
     isCompacting, setIsCompacting,
-    isAnalyzingProject, setIsAnalyzingProject,
     pendingFix, setPendingFix,
     pendingCommand, setPendingCommand, setBridgeGates,
     pendingQuestion, setPendingQuestion,
@@ -1724,7 +1671,7 @@ export const useChat = (
     sendMessage, stopMessage, setWakeDefaults,
     queue: screen.queue, queuePaused: screen.queuePaused,
     deleteQueued, editQueued, resumeQueue, sendQueuedNow,
-    clearHistory, analyzeProject, exportMemory, importMemory, compactConversation,
+    clearHistory, compactConversation,
     // Kararı backend'e iletir ve İLETİLDİĞİNİ DOĞRULAR. Yanıt gövdesi eskiden
     // hiç okunmuyordu: gate düşmüşse backend {"status":"gate_not_found"} dönüyor,
     // kart yine de kapanıyor ve kullanıcı onayladığını sanıyordu (sessiz veri

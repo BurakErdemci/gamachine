@@ -41,18 +41,6 @@ export const LESSER: GuideTopic[] = [
     ],
   },
   {
-    id: "project-memory", group: "lesser", since_version: "baseline", available_when: "always",
-    title: T("Proje hafızası", "Project memory"),
-    summary: T("Projeni bir kez öğret; hafızayı dosya olarak taşı.", "Teach me your project once; carry the memory as a file."),
-    keywords: T("öğren tara dışa aktar içe aktar md", "learn scan export import md"),
-    steps: [
-      { anchor: "strip-more", side: "above", align: "end", prepare: ["screen:chat"],
-        title: T("Projeyi öğret", "Teach me the project"),
-        text: T("Ekle ve sohbet menüsündeki Projeyi öğren projeni baştan tarar ve hafızaya yazar. Hafızayı .md dosyası olarak dışa aktarır, başka bir sohbete yüklersin.", "Learn project, in the Add & chat menu, scans the project and writes it to memory. Export the memory as an .md file and load it into another chat."),
-      },
-    ],
-  },
-  {
     id: "dictation", group: "lesser", since_version: "baseline", available_when: "always",
     title: T("Sesle yazma ve dil", "Dictation and language"),
     summary: T("Konuş, yazıya dökülsün; hangi dili konuştuğunu kendisi bulsun.", "Speak and it is typed; it can find your language by itself."),

@@ -36,8 +36,6 @@ const limits = (...families: UsageFamily[]): UsageLimits => ({ now: NOW, familie
 
 const base = {
   thinkingLevel: 'auto' as any, setThinkingLevel: () => {},
-  isAnalyzingProject: false, analyzeProject: async () => {},
-  exportMemory: async () => {}, importMemory: async () => {},
   compactConversation: async () => {}, isCompacting: false,
   activeConvId: 7,
   contextUsage: { percent: 5, should_compact: false, message_count: 2, estimated: true },

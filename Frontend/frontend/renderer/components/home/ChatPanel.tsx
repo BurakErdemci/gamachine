@@ -112,7 +112,6 @@ interface ChatPanelProps {
   setCode: (code: string) => void;
   setOriginalCode?: (code: string) => void;
   refreshFileTree: () => void;
-  analyzeProject: (silent?: boolean) => void;
   openFile: (path: string) => void;
   sendMessage: (msg: string) => void;
   messagesEndRef: React.RefObject<HTMLDivElement>;
@@ -168,7 +167,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   setCode,
   setOriginalCode,
   refreshFileTree,
-  analyzeProject,
   openFile,
   sendMessage,
   messagesEndRef,
@@ -314,7 +312,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         }
         setPendingFix((prev: any) => prev ? { ...prev, applied: true } : null);
         refreshFileTree();
-        setTimeout(() => analyzeProject(true), 1500);
         showToast(t('chat.fileUpdated'), 'success');
       }}
       onReject={() => setPendingFix(null)}
@@ -522,7 +519,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                           if (file.suggestedPath === openedFilePath) setCode(file.code);
                         }
                         refreshFileTree();
-                        setTimeout(() => analyzeProject(true), 1500);
                         return allWritten;
                       }}
                       onDone={() => {

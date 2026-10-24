@@ -968,19 +968,12 @@
 .strip-pop-row-l { display: inline-flex; align-items: center; gap: 8px; }
 .strip-pop-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--paper-line-strong); }
 .strip-pop-dot[data-on] { background: var(--run); }
-.strip-pop-pair { display: flex; align-items: center; gap: 2px; }
-.strip-pop-pair .strip-pop-row { flex: 1; }
-.strip-pop-pair .icon-btn { width: 30px; height: 30px; color: var(--ink-dim); }
-.strip-pop-sub { display: flex; flex-direction: column; padding-left: 10px; border-left: var(--line-w) solid var(--paper-line); }
 /* "More settings" floats like the other menus (scene context menu, model picker): menu surface, shell ink */
 .strip-more-pop { gap: 2px; padding: 5px; background: var(--menu-bg); border-color: var(--menu-line); color: var(--shell-text); }
 .strip-more-pop .strip-pop-row { min-height: 29px; padding: 0 8px 0 10px; border-radius: var(--radius-md); color: inherit; }
 .strip-more-pop .strip-pop-row:hover:not(:disabled), .strip-more-pop .strip-pop-row[aria-pressed="true"] { background: var(--shell-bg-active); }
 .strip-more-pop .strip-pop-row:focus-visible, .strip-more-pop .icon-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .strip-more-pop .strip-pop-row svg { color: var(--shell-text-dim); }
-.strip-more-pop .strip-pop-pair .icon-btn { height: 29px; border-radius: var(--radius-md); color: var(--shell-text-dim); }
-.strip-more-pop .strip-pop-pair .icon-btn:hover:not(:disabled) { background: var(--shell-bg-active); color: var(--shell-text); }
-.strip-more-pop .strip-pop-sub { margin: 2px 0 2px 10px; padding-left: 4px; border-left-color: var(--menu-line); }
 /* Labelled rows in two sections: icon, title (ink), one dim line saying what the row does */
 .strip-more-pop { width: 300px; gap: 6px; }
 .strip-more-pop .menu-sec { display: flex; flex-direction: column; gap: 1px; }
@@ -992,10 +985,8 @@
 .strip-more-pop .menu-row-t { color: var(--shell-text); font-size: var(--fs-small); font-weight: 600; }
 .strip-more-pop .menu-row-d { color: var(--shell-text-dim); font-size: var(--fs-meta); line-height: 1.35; }
 .strip-more-pop .strip-pop-row[aria-disabled="true"], .strip-more-pop .icon-btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
-.strip-more-pop .strip-pop-row[aria-disabled="true"]:hover, .strip-more-pop .strip-pop-pair .icon-btn[aria-disabled="true"]:hover { background: transparent; color: var(--shell-text-dim); }
+.strip-more-pop .strip-pop-row[aria-disabled="true"]:hover { background: transparent; color: var(--shell-text-dim); }
 .strip-more-pop .strip-pop-row[aria-checked="true"] { background: var(--shell-bg-active); }
-.strip-more-pop .strip-pop-pair { align-items: stretch; }
-.strip-more-pop .strip-pop-pair .icon-btn { height: auto; }
 
 /* ---------- /usage and /context cards (app-only) ---------- */
 .slash { border-radius: var(--radius-lg); background: var(--paper-raised); border: var(--line-w) solid var(--paper-line); overflow: hidden; }

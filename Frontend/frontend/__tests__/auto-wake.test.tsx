@@ -68,7 +68,6 @@ const renderPanel = (messages: any[]) => {
     openedFilePath: null,
     setCode: vi.fn(),
     refreshFileTree: vi.fn(),
-    analyzeProject: vi.fn(),
     openFile: vi.fn(),
     sendMessage: vi.fn(),
     messagesEndRef: React.createRef<HTMLDivElement>(),

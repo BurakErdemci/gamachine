@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
-import { Sparkles, ChevronDown, Download, Upload, Gauge, Rocket, Paperclip, Film, Minimize2 } from 'lucide-react';
+import { Gauge, Rocket, Paperclip, Film, Minimize2 } from 'lucide-react';
 import { ContextUsage } from './types';
 import { StripUse } from './UsageMeters';
 import type { UsageFamilyId, UsageLimits } from '../../lib/usageLimits';
@@ -24,11 +24,7 @@ interface ControlPanelProps {
   setThinkingLevel: (val: ThinkingLevel) => void;
   // Backend kayıtçısından aktif provider+model'in gerçek seviye listesi.
   effortCaps?: EffortCaps | null;
-  isAnalyzingProject: boolean;
   activeConvId: number | null;
-  analyzeProject: (silent?: boolean) => Promise<void>;
-  exportMemory: () => Promise<void>;
-  importMemory: () => Promise<void>;
   compactConversation: () => Promise<void>;
   isCompacting: boolean;
   // `null` = ÖLÇÜM YOK (istek başarısız ya da hiç yapılmadı), sıfır tahmin
@@ -56,11 +52,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   thinkingLevel,
   setThinkingLevel,
   effortCaps,
-  isAnalyzingProject,
   activeConvId,
-  analyzeProject,
-  exportMemory,
-  importMemory,
   compactConversation,
   isCompacting,
   contextUsage,
@@ -76,17 +68,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onAddVideo,
 }) => {
   const { t } = useLang();
-  const [showMemoryMenu, setShowMemoryMenu] = useState(false);
   const [showThinkingMenu, setShowThinkingMenu] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
   const morePopRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
-  const memoryOff = isAnalyzingProject || !activeConvId;
 
   const closeMore = (returnFocus: boolean) => {
     setShowMore(false);
-    setShowMemoryMenu(false);
     if (returnFocus) moreBtnRef.current?.focus();
   };
   const menuItems = () =>
@@ -180,7 +169,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   return (
     // The mockup's status strip under the composer box: thinking, memory, plan usage, and the
     // "Add & chat" menu (the key hint moved to the send button's tooltip). The menu holds the
-    // composer's attach/video pickers, project memory, summarising and the usage report; it stays
+    // composer's attach/video pickers, summarising and the usage report; it stays
     // mounted (hidden) so nothing it holds loses state.
     <div className="strip" data-testid="composer-strip">
       <div className="strip-anchor">
@@ -342,39 +331,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
           <div role="group" aria-labelledby={`${menuId}-chat`} className="menu-sec">
             <div id={`${menuId}-chat`} className="menu-sec-h">{t('more.chatSection')}</div>
-            {/* Learn the project, and its memory submenu */}
-            <div className="strip-pop-pair">
-              {row({
-                key: 'learn', icon: <Sparkles size={15} />,
-                title: isAnalyzingProject ? t('memory.learning') : t('more.learn'), desc: t('more.learnDesc'),
-                run: () => { void analyzeProject(); }, reason: isAnalyzingProject ? t('more.analyzing') : null,
-              })}
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => { if (!memoryOff) setShowMemoryMenu(v => !v); }}
-                aria-disabled={memoryOff || undefined}
-                aria-expanded={showMemoryMenu}
-                aria-label={t('more.memoryOptions')}
-                title={memoryOff ? (isAnalyzingProject ? t('more.analyzing') : t('more.noChat')) : t('more.memoryOptions')}
-                className="icon-btn"
-              >
-                <ChevronDown size={14} aria-hidden="true" />
-              </button>
-            </div>
-            {showMemoryMenu && (
-              <div className="strip-pop-sub">
-                <button type="button" role="menuitem" className="strip-pop-row" onClick={() => { closeMore(true); void analyzeProject(); }}>
-                  <span className="strip-pop-row-l"><Sparkles size={14} aria-hidden="true" />{t('memory.refresh')}</span>
-                </button>
-                <button type="button" role="menuitem" className="strip-pop-row" onClick={() => { closeMore(true); void exportMemory(); }}>
-                  <span className="strip-pop-row-l"><Download size={14} aria-hidden="true" />{t('memory.export')}</span>
-                </button>
-                <button type="button" role="menuitem" className="strip-pop-row" onClick={() => { closeMore(true); void importMemory(); }}>
-                  <span className="strip-pop-row-l"><Upload size={14} aria-hidden="true" />{t('memory.import')}</span>
-                </button>
-              </div>
-            )}
             {/* Same action as a click on the Hafıza meter, which stays. */}
             {row({
               key: 'compact', icon: <Minimize2 size={15} />,

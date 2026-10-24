@@ -21,8 +21,7 @@ afterEach(() => cleanup())
 function setup(over: Record<string, unknown> = {}) {
   const props = {
     thinkingLevel: 'medium' as const, setThinkingLevel: () => {},
-    isAnalyzingProject: false, activeConvId: 7 as number | null,
-    analyzeProject: vi.fn(async () => {}), exportMemory: vi.fn(async () => {}), importMemory: vi.fn(async () => {}),
+    activeConvId: 7 as number | null,
     compactConversation: vi.fn(async () => {}), isCompacting: false,
     onToggleReports: vi.fn(), reportsOpen: false,
     onAttachFile: vi.fn(), onAddVideo: vi.fn(),
@@ -66,7 +65,6 @@ describe('Add & chat menu', () => {
     const rows: Array<[string, string, number]> = [
       ['Resim', 'Bir resmi mesaja ekle.', 0],
       ['Video', 'Yerel bir video dosyası ekle; bağlantı için mesaja yapıştır.', 0],
-      ['Projeyi öğren', 'Projeyi tarayıp sohbetin hafızasına yazar.', 1],
       ['Hafızayı özetle', 'Sohbeti özetleyip hafızayı boşaltır.', 1],
       ['Kullanım raporu', 'Bu sohbetin model ve maliyet özeti.', 1],
     ]
@@ -80,7 +78,7 @@ describe('Add & chat menu', () => {
 
   it('each row calls its own handler and closes the menu', async () => {
     const cases: Array<[string, string]> = [
-      ['Resim', 'onAttachFile'], ['Video', 'onAddVideo'], ['Projeyi öğren', 'analyzeProject'],
+      ['Resim', 'onAttachFile'], ['Video', 'onAddVideo'],
       ['Hafızayı özetle', 'compactConversation'], ['Kullanım raporu', 'onToggleReports'],
     ]
     for (const [name, handler] of cases) {
@@ -91,13 +89,6 @@ describe('Add & chat menu', () => {
       expect(pop.hidden).toBe(true)
       cleanup()
     }
-  })
-
-  it('the memory submenu still works', async () => {
-    const { props, pop } = setup()
-    fireEvent.click(item(pop, 'Hafıza seçenekleri'))
-    fireEvent.click(item(pop, 'Hafızayı Dışarı Aktar'))
-    await waitFor(() => expect(props.exportMemory).toHaveBeenCalledTimes(1))
   })
 
   it('the usage report row shows whether the panel is open', () => {
@@ -116,22 +107,15 @@ describe('Add & chat menu', () => {
     expect(props.compactConversation).not.toHaveBeenCalled()
     expect(props.onToggleReports).not.toHaveBeenCalled()
     expect(pop.hidden).toBe(false)
-    // Learn project opens a chat itself, so it needs none.
-    expect(item(pop, 'Projeyi öğren').getAttribute('aria-disabled')).toBeNull()
   })
 
-  it('a running summary and a running analysis disable their rows', () => {
-    const { props, pop } = setup({ isCompacting: true, isAnalyzingProject: true })
+  it('a running summary disables its row', () => {
+    const { props, pop } = setup({ isCompacting: true })
     const compact = item(pop, 'Özetleniyor...')
     expect(compact.getAttribute('aria-disabled')).toBe('true')
     expect(compact.getAttribute('title')).toBe('Özetleme sürüyor.')
-    const learn = item(pop, 'Öğreniyorum...')
-    expect(learn.getAttribute('aria-disabled')).toBe('true')
-    expect(learn.getAttribute('title')).toBe('Proje analizi sürüyor.')
     fireEvent.click(compact)
-    fireEvent.click(learn)
     expect(props.compactConversation).not.toHaveBeenCalled()
-    expect(props.analyzeProject).not.toHaveBeenCalled()
   })
 
   it('keyboard: focus enters on open, arrows move and wrap, Enter activates, Esc returns to the trigger', () => {

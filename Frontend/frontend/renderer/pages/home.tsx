@@ -1122,7 +1122,7 @@ export default function Home() {
                 messages={chat.messages} activeConvId={chat.activeConvId} conversations={chat.conversations} user={auth.user} loading={chat.loading} clearHistory={chat.clearHistory} lang={lang}
                 thinkingLevel={thinkingLevel} workspacePath={fs.workspacePath} handleExportToUnity={fs.handleExportToUnity}
                 pendingGenFiles={fs.pendingGenFiles} setPendingGenFiles={fs.setPendingGenFiles} pendingFix={chat.pendingFix} setPendingFix={chat.setPendingFix} openedFilePath={fs.openedFilePath}
-                setCode={fs.setCode} setOriginalCode={fs.setOriginalCode} refreshFileTree={fs.refreshFileTree} analyzeProject={chat.analyzeProject} openFile={openInPanel} sendMessage={handleSendMessage}
+                setCode={fs.setCode} setOriginalCode={fs.setOriginalCode} refreshFileTree={fs.refreshFileTree} openFile={openInPanel} sendMessage={handleSendMessage}
                 messagesEndRef={chatEndRef} ipc={ipc} showToast={showToast as any} diffFile={diffFile} setDiffFile={setDiffFile}
                 pendingDelete={fs.pendingDelete} setPendingDelete={fs.setPendingDelete} pendingCommand={chat.pendingCommand} setPendingCommand={chat.setPendingCommand} onApproveCommand={chat.approveCommand} pendingQuestion={chat.pendingQuestion} setPendingQuestion={chat.setPendingQuestion} onAnswerQuestion={chat.answerQuestion} deleteFile={fs.deleteFile} setIsTerminalOpen={setIsTerminalOpen}
                 activity={chat.activity}
@@ -1198,8 +1198,8 @@ export default function Home() {
           {/* The status strip under the box: thinking, memory, plan usage, the Add & chat menu. */}
           <ControlPanel
             thinkingLevel={thinkingLevel} setThinkingLevel={chooseEffort}
-            isAnalyzingProject={chat.isAnalyzingProject} activeConvId={chat.activeConvId} analyzeProject={chat.analyzeProject}
-            exportMemory={chat.exportMemory} importMemory={chat.importMemory} compactConversation={chat.compactConversation} isCompacting={chat.isCompacting} contextUsage={chat.contextUsage}
+            activeConvId={chat.activeConvId}
+            compactConversation={chat.compactConversation} isCompacting={chat.isCompacting} contextUsage={chat.contextUsage}
             reportsOpen={reportsOpen} onToggleReports={() => setReportsOpen(v => !v)}
             isClaudeSubscription={isClaudeSub} ultracode={ultracode} setUltracode={setUltracode} effortCaps={effortCaps}
             usage={usage.data} usageFamily={stripUsageFamily} modelId={ai.aiConfig.model_name}

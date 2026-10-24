@@ -13,7 +13,6 @@ describe('IPC Whitelist — izinli kanallar', () => {
     'read-file',
     'write-file',
     'file-exists',
-    'write-multiple-files',
   ]
 
   for (const ch of fileChannels) {
@@ -96,8 +95,9 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // 'open-unity-hub' opens only a locally discovered Unity Hub installation.
   // 35 -> 36: computer-use keeps daemon ownership and approval secrets in main.
   // 36 -> 37: computer-use-live carries the live view, the indicator and Stop.
-  it('contains exactly 37 channels', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(37)
+  // 37 -> 33: project memory import/export and two unused file channels removed.
+  it('contains exactly 33 channels', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(33)
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use')).toBe(true)
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use-live')).toBe(true)
   })
@@ -150,9 +150,9 @@ describe('IPC Whitelist — Set doğruluğu', () => {
 
   it('dosya kanallarının hepsi whitelist\'te', () => {
     const expected = ['get-backend-base-url', 'open-file-dialog', 'open-folder-dialog', 'read-directory',
-      'read-file', 'write-file', 'file-exists', 'write-multiple-files',
+      'read-file', 'write-file', 'file-exists',
       'create-file', 'create-folder', 'rename-entry', 'delete-entry', 'move-entry',
-      'save-file-dialog', 'export-text-file', 'import-text-file', 'delete-file']
+      'delete-file']
     for (const ch of expected) {
       expect(ALLOWED_INVOKE_CHANNELS.has(ch)).toBe(true)
     }
