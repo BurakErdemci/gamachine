@@ -2,7 +2,6 @@ import asyncio
 import inspect
 import json
 import os
-import re
 import threading
 import types
 import uuid
@@ -483,7 +482,7 @@ def _message_agent(provider_type: str, model_name: str) -> str:
 
 
 def _check_chat_rate_limit(user_id: int):
-    """Kullanıcı başına /chat ve /analyze rate limit kontrolü."""
+    """Per-user rate limit check shared by /chat-stream and the side-stream route."""
     now = time()
     attempts = CHAT_RATE_LIMIT[user_id]
     # Eski kayıtları temizle
@@ -613,15 +612,6 @@ async def _tag_sse_stream(frames, conversation_id: int):
             yield _tag_sse_frame(frame, conversation_id)
     finally:
         await frames.aclose()
-
-
-def _is_batch_continuation_msg(msg: str) -> bool:
-    """Kullanıcının batch devam isteği gönderip göndermediğini kontrol eder."""
-    msg_lower = msg.strip().lower()
-    if len(msg_lower) > 150:
-        return False
-    triggers = ["devam et", "continue", "kalan dosyaları", "sonraki dosyaları", "next batch"]
-    return any(t in msg_lower for t in triggers)
 
 
 def _stream_language(body, header):
