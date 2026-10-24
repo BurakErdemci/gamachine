@@ -677,7 +677,10 @@ class OmniSharpManager:
             from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
             req = urllib.request.Request(
                 "http://localhost:8080/api/command", method="POST",
-                data=b'{"type": "manage_editor", "params": {"action": "sync_csproj"}}',
+                # project_path pins the editor: without it /api/command takes the
+                # first connected session, which may hold another project.
+                data=json.dumps({"type": "manage_editor", "params": {"action": "sync_csproj"},
+                                 "project_path": workspace}).encode("utf-8"),
                 headers={"Content-Type": "application/json",
                          # Köken işareti: bu çağrı MODELDEN değil ürünün kendi
                          # bakımından geliyor, yani onay kartı çıkarmamalı

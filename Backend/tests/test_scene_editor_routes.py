@@ -102,7 +102,7 @@ def test_endpoints_forward_typed_payload_and_headers(client, monkeypatch, method
     request = post.call_args.args[0]
     assert request.full_url == "http://localhost:8080/api/command"
     assert request.method == "POST"
-    assert json.loads(request.data) == {"type": command, "params": params}
+    assert json.loads(request.data) == {"type": command, "params": params, "project_path": "/projects/Game"}
     headers = {key.lower(): value for key, value in request.header_items()}
     assert headers["x-unityai-maintenance"] == "app-secret"
     assert headers["x-api-key"] == "api-secret"

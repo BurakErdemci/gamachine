@@ -197,9 +197,12 @@ def mcp_mismatch_detail(workspace_path) -> str | None:
             + " Unity'de ve Gamachine'de aynı projeyi açıp tekrar dene.")
 
 
+NO_WORKSPACE_DETAIL = "Gamachine'de açık bir Unity projesi yok; Unity'ye istek gönderilmedi."
+
+
 def project_scope_detail(workspace_path, project_path) -> str | None:
     if not workspace_path:
-        return "Gamachine'de açık bir Unity projesi yok; Unity'ye istek gönderilmedi."
+        return NO_WORKSPACE_DETAIL
     if not project_path:
         return "Hedef Unity editörü proje yolunu bildirmedi; istek gönderilmedi."
     if _same_dir(project_path, workspace_path):

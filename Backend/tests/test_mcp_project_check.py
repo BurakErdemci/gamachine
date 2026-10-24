@@ -1,4 +1,5 @@
 """/mcp-project-check and the scene editor's project guard; process queries are patched."""
+import json
 import os
 
 import pytest
@@ -108,7 +109,9 @@ def test_scene_editor_refuses_without_calling_unity(scene):
     client, sent, _, _ = scene
     response = client.post("/scene-editor/rename", json={"id": 1, "name": "x"}, headers=HEADERS)
     assert response.status_code == 409
-    assert "GameA" in response.json()["detail"] and "GameB" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert detail["code"] == "project_mismatch"
+    assert "GameA" in detail["message"] and "GameB" in detail["message"]
     assert client.get("/scene-editor/tree", headers=HEADERS).status_code == 409
     assert sent == []
 
@@ -138,3 +141,48 @@ def test_scene_editor_does_not_cache_a_refusal(scene):
     assert client.get("/scene-editor/tree", headers=HEADERS).status_code == 409
     state["pid"] = 4242
     assert client.get("/scene-editor/tree", headers=HEADERS).status_code == 200
+
+
+def test_scene_editor_names_gamachines_project_to_the_mcp_server(env, monkeypatch):
+    _, _, game, _, db = env
+    bodies = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"status": "success", "result": {"ok": true}}'
+
+    def fake_urlopen(request, timeout=None):
+        bodies.append(json.loads(request.data.decode("utf-8")))
+        return Response()
+
+    se._presence_cache.clear()
+    monkeypatch.setattr(presence, "editor_pid", lambda workspace: 4242)
+    monkeypatch.setattr(se.urllib.request, "urlopen", fake_urlopen)
+    app = FastAPI()
+    app.include_router(se.create_scene_editor_router(db))
+    assert TestClient(app).get("/scene-editor/tree", headers=HEADERS).status_code == 200
+    assert bodies[0]["project_path"] == game
+
+
+def test_csproj_sync_names_the_workspace_to_the_mcp_server(monkeypatch, tmp_path):
+    import urllib.request
+    from omnisharp import omnisharp_manager as om
+
+    sent = []
+
+    def fake_urlopen(request, timeout=None):
+        sent.append(json.loads(request.data.decode("utf-8")))
+        raise OSError("stop after the request is built")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert om.OmniSharpManager()._maybe_sync_csproj(str(tmp_path), reason="forced") is not None
+    assert sent[0]["project_path"] == str(tmp_path)
+    assert sent[0]["type"] == "manage_editor"

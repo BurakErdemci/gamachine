@@ -1,5 +1,6 @@
 """Authenticated app access to Unity's user-only scene editor resources."""
 import asyncio
+import contextvars
 import json
 import logging
 import math
@@ -90,10 +91,14 @@ def _raise_unity_error(error: str, status: int = 200) -> None:
     raise HTTPException(status_code=502, detail="unity_error")
 
 
-def _post_unity(command: str, params: dict) -> dict:
+def _post_unity(command: str, params: dict, project_path: str = "") -> dict:
+    body = {"type": command, "params": params}
+    if project_path:
+        # Names the editor: /api/command otherwise takes the first connected session.
+        body["project_path"] = project_path
     request = urllib.request.Request(
         "http://localhost:8080/api/command", method="POST",
-        data=json.dumps({"type": command, "params": params}).encode("utf-8"),
+        data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json",
                  **unity_mcp_manager.api_headers(),
                  "X-UnityAI-Maintenance": os.environ.get("LOCAL_APP_TOKEN", "")},
@@ -139,8 +144,12 @@ def _post_unity(command: str, params: dict) -> dict:
         raise HTTPException(status_code=502, detail="unity_error") from exc
 
 
+# Gamachine's open project, set by the router guard for the request being served.
+_request_workspace: contextvars.ContextVar[str] = contextvars.ContextVar("scene_editor_workspace", default="")
+
+
 async def _call_unity(command: str, params: dict) -> dict:
-    return await asyncio.to_thread(_post_unity, command, params)
+    return await asyncio.to_thread(_post_unity, command, params, _request_workspace.get())
 
 
 # workspace -> monotonic time of the last "project is open" answer; the tree is
@@ -152,7 +161,7 @@ _presence_cache: dict[str, float] = {}
 
 def _project_refusal(workspace: str) -> str | None:
     if not workspace:
-        return "Gamachine'de açık bir Unity projesi yok; Unity'ye istek gönderilmedi."
+        return unity_project_presence.NO_WORKSPACE_DETAIL
     now = time.monotonic()
     checked = _presence_cache.get(workspace)
     if checked is not None and now - checked < _PRESENCE_TTL:
@@ -164,16 +173,18 @@ def _project_refusal(workspace: str) -> str | None:
 
 
 def create_scene_editor_router(db) -> APIRouter:
-    async def check_token(x_session_token: str = Header(alias="X-Session-Token", default="")):
+    async def require_token_and_open_project(
+            x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
         # Every route is gated here, before any of them can reach Unity: the
         # editor on the other end must have Gamachine's open project loaded.
         workspace = db.get_last_workspace(get_current_user(db, x_session_token)[0]) or ""
         refusal = await asyncio.to_thread(_project_refusal, workspace)
         if refusal is not None:
-            raise HTTPException(status_code=409, detail=refusal)
+            raise HTTPException(status_code=409, detail={"code": "project_mismatch", "message": refusal})
+        _request_workspace.set(workspace)
 
-    router = APIRouter(prefix="/scene-editor", tags=["scene-editor"], dependencies=[Depends(check_token)])
+    router = APIRouter(prefix="/scene-editor", tags=["scene-editor"], dependencies=[Depends(require_token_and_open_project)])
 
     @router.get("/tree")
     async def tree(x_session_token: str = Header(alias="X-Session-Token", default="")):
