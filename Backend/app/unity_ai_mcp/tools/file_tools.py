@@ -3,11 +3,11 @@ MCP Dosya Araçları — save_file/delete_file direkt yazar, bash onay gerektiri
 """
 import logging
 import os
-from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 
 from unity_ai_mcp.approval_bridge import request_approval
 import unity_file_guard
+from path_containment import resolve_within
 
 logger = logging.getLogger(__name__)
 
@@ -128,13 +128,7 @@ def register_file_tools(mcp: MCPServer, get_workspace: callable):
 
 
 def _resolve(path: str, workspace: str) -> str:
-    workspace_resolved = Path(workspace).expanduser().resolve(strict=False)
-    p = Path(path).expanduser()
-    if not p.is_absolute():
-        p = workspace_resolved / p
-    resolved = p.resolve(strict=False)
-    try:
-        resolved.relative_to(workspace_resolved)
-    except ValueError:
+    resolved = resolve_within(path, workspace)
+    if resolved is None:
         raise PermissionError(f"Güvenlik: {path} workspace dışında.")
-    return str(resolved)
+    return resolved

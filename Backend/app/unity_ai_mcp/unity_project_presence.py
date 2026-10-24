@@ -7,6 +7,8 @@ import re
 import subprocess
 import sys
 
+from path_containment import is_within
+
 
 _MAX_FILE_BYTES = 64 * 1024
 
@@ -164,8 +166,7 @@ def active_scene(workspace_path) -> str | None:
                         or any(char in scene for char in "[]`<>")):
                     return None
                 path = os.path.join(workspace_path, scene)
-                root = os.path.realpath(workspace_path)
-                if os.path.isfile(path) and os.path.commonpath((root, os.path.realpath(path))) == root:
+                if os.path.isfile(path) and is_within(path, workspace_path):
                     return scene
                 return None
     except Exception:

@@ -5,6 +5,8 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from path_containment import is_within, resolve_within
+
 _LOCAL_USER = (1, "local", "local@localhost", None, None)
 
 
@@ -96,22 +98,16 @@ def require_conversation_owner(db: Any, token: str, conv_id: int) -> tuple[int, 
 
 
 def is_path_within_workspace(file_path: str, workspace_path: str) -> bool:
-    try:
-        resolved_file = Path(file_path).resolve(strict=False)
-        resolved_workspace = Path(workspace_path).resolve(strict=False)
-        return resolved_workspace == resolved_file or resolved_workspace in resolved_file.parents
-    except Exception:
-        return False
+    return is_within(file_path, workspace_path)
 
 
 def is_allowed_unity_script_path(file_path: str, workspace_path: str) -> bool:
-    if not is_path_within_workspace(file_path, workspace_path):
+    resolved = resolve_within(file_path, workspace_path)
+    if resolved is None:
         return False
 
-    resolved_file = Path(file_path).resolve(strict=False)
-    resolved_workspace = Path(workspace_path).resolve(strict=False)
     try:
-        rel_parts = resolved_file.relative_to(resolved_workspace).parts
+        rel_parts = Path(resolved).relative_to(os.path.realpath(os.path.expanduser(workspace_path))).parts
     except ValueError:
         return False
 

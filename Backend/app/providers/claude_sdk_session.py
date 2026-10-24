@@ -53,6 +53,7 @@ from agentic.command_gates import APPROVAL_TIMEOUT_S
 # modül çıplak adla import ediliyor (`backend.spec` `pathex=['app']` taşıyor).
 from unity_tool_policy import is_unity_mcp_read_only
 import unity_file_guard
+from path_containment import is_within
 from providers.text_blocks import block_break
 
 logger = logging.getLogger(__name__)
@@ -381,17 +382,11 @@ def _path_in_workspace(path: str, workspace: str) -> bool:
     ölçüldü (2026-07-28): `ws/link → /disari` kurulumunda
     `_path_in_workspace(ws/link/escape.cs, ws)` True dönüyordu, yani "workspace
     dışına yazımı kullanıcıya SORMADAN reddet" dalı %100 atlatılıyordu.
+
+    Workspace tanımsızsa (boş) cevap False: kök yoksa hiçbir yol "içeride" değil
+    (eskiden True dönüp kısıtlamayı kapatıyordu).
     """
-    if not workspace:
-        return True  # workspace tanımsızsa kısıtlama yok
-    try:
-        ws = _canonical(workspace)
-        target = _canonical(path, workspace)
-        if target == ws:
-            return True
-        return ws in target.parents
-    except Exception:
-        return False
+    return is_within(path, workspace)
 
 
 # Yol tabanlı salt-okuma araçları: hedefleri workspace dışına düşebilir, o yüzden

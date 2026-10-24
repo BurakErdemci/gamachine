@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from path_containment import is_within
 from .lsp_client import LspClient, LspError
 
 logger = logging.getLogger("OmniSharp")
@@ -197,12 +198,7 @@ def _contained(root: str, path: str) -> bool:
     `realpath` iki tarafta: kurulum meşru olarak bir bağın altında olabilir
     (macOS `/tmp` → `/private/tmp`). Reddedilen, kökün altından DIŞARI çıkan yol.
     """
-    try:
-        r = os.path.realpath(root)
-        p = os.path.realpath(path)
-    except OSError:
-        return False
-    return p == r or p.startswith(r + os.sep)
+    return is_within(path, root)
 
 
 def _resolve_binary() -> str | None:

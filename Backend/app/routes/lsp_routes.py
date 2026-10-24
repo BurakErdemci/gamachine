@@ -1,13 +1,12 @@
 """OmniSharp sidecar'a köprü: canlı diagnostics + IntelliSense uçları.
 Eski /lint'in yerini alır — problems formatı birebir korunur:
 {file, line, column, endColumn, message, severity} (1 tabanlı)."""
-import os
-
 from fastapi import APIRouter, Header
 from pydantic import BaseModel
 
 from database import DatabaseManager
 from auth_utils import _check_token
+from path_containment import resolve_within
 from omnisharp.omnisharp_manager import get_omnisharp_manager
 
 router = APIRouter()
@@ -36,15 +35,7 @@ def create_lsp_router(db: DatabaseManager):
         ws = db.get_last_workspace(1) or ""
         if not ws:
             return None
-        try:
-            ws_real = os.path.realpath(ws)
-            candidate = path if os.path.isabs(path) else os.path.join(ws, path)
-            real = os.path.realpath(candidate)
-        except OSError:
-            return None
-        if real != ws_real and not real.startswith(ws_real + os.sep):
-            return None
-        return real
+        return resolve_within(path, ws)
 
     async def _mgr():
         m = get_omnisharp_manager()

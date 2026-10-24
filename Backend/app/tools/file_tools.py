@@ -3,26 +3,20 @@ Unity Proje Dosya Araçları — Agentic AI'ın projede dosya okuma, yazma ve li
 """
 import os
 import logging
-from pathlib import Path
 from typing import Optional
 
 import unity_file_guard
+from path_containment import resolve_within
 
 logger = logging.getLogger(__name__)
 
 # Güvenlik: Sadece workspace içinde çalış
 def _validate_path(file_path: str, workspace_path: str) -> str:
     """Dosya yolunun workspace içinde olduğunu doğrular."""
-    workspace = Path(workspace_path).expanduser().resolve(strict=False)
-    target = Path(file_path).expanduser()
-    if not target.is_absolute():
-        target = workspace / target
-    resolved = target.resolve(strict=False)
-    try:
-        resolved.relative_to(workspace)
-    except ValueError:
+    resolved = resolve_within(file_path, workspace_path)
+    if resolved is None:
         raise PermissionError(f"Güvenlik: {file_path} workspace dışında.")
-    return str(resolved)
+    return resolved
 
 
 def read_file(file_path: str, workspace_path: str) -> dict:

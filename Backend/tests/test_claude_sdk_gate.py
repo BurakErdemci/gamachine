@@ -157,8 +157,8 @@ def test_sibling_prefix_still_rejected():
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_empty_workspace_means_no_restriction():
-    assert _path_in_workspace("/etc/passwd", "") is True
+def test_empty_workspace_is_never_inside():
+    assert _path_in_workspace("/etc/passwd", "") is False
 
 
 # ── DÜZELTME 2: okuma araçları workspace kontrolünden önce auto-allow ────────

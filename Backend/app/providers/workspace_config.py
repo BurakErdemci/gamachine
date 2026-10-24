@@ -25,6 +25,8 @@ import subprocess
 import tempfile
 from typing import Iterable, List, Optional, Set
 
+from path_containment import is_within
+
 logger = logging.getLogger(__name__)
 
 # Etiketli blok: kullanıcı `git diff`'inde ne olduğunu görsün ve tek parça
@@ -459,10 +461,7 @@ def _icinde_mi(yol: str, kok: str) -> bool:
     `/a/bc` düz dize olarak `/a/b` ile başlıyor ama onun altında değil;
     `os.path.commonpath` bunu bileşen bazında doğru cevaplıyor.
     """
-    try:
-        return os.path.commonpath([os.path.normcase(yol), os.path.normcase(kok)]) == os.path.normcase(kok)
-    except ValueError:
-        return False  # farklı sürücüler → ortak yol yok
+    return is_within(yol, kok)
 
 
 def ensure_gitignored(workspace: str, entries: Iterable[str]) -> None:

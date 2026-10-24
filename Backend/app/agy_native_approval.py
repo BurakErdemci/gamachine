@@ -12,6 +12,7 @@ import urllib.request
 import uuid
 
 import local_token_file
+from path_containment import is_within
 import unity_file_guard
 
 # The hook supplies its actual state file without adding a model-controlled argument.
@@ -200,7 +201,7 @@ def request_native_write(tool_name, args, workspace):
         target = args["TargetFile"].replace("\\", os.sep).replace("/", os.sep)
         target = target if os.path.isabs(target) else os.path.join(workspace, target)
         path = os.path.realpath(target)
-        if os.path.commonpath((workspace, path)) != workspace:
+        if not is_within(path, workspace):
             return False, "TargetFile is outside the workspace."
         refusal = unity_file_guard.check_write(path, workspace)
         if refusal is not None:

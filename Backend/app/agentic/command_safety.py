@@ -41,6 +41,8 @@ import posixpath
 import re
 import shlex
 
+from path_containment import is_within
+
 # Zincirleme (; | &), komut ikamesi (` $), alt kabuk ( ), yönlendirme (> <) ve
 # satır sonu. Bunlardan biri varsa komut artık tek bir program çağrısı değildir.
 _CONTROL_CHARS = (";", "|", "&", "`", "$", ">", "<", "(", ")", "\n", "\r")
@@ -274,10 +276,9 @@ def _stays_in_workspace(tokens: list[str], workspace: str | None,
             ):
                 return False
             continue
-        resolved = os.path.realpath(os.path.join(root, expanded))
         # Sembolik bağ realpath ile çözüldüğü için workspace içindeki bir link de
         # dışarı işaret ediyorsa burada yakalanır.
-        if resolved != root and not resolved.startswith(root + os.sep):
+        if not is_within(os.path.join(root, expanded), root):
             return False
     return True
 
