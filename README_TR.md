@@ -134,9 +134,7 @@ temiz derleme demek değil. Ajanın her eylemi Unity'de adı konmuş tek bir ger
 adımı; ajan yalnızca son eylemini, senin sonradan yaptığın düzenlemelere dokunmadan
 geri alabiliyor. `uv` araç zinciri uygulamanın içinde geliyor.
 
-**Proje farkındalığı** — workspace'teki bütün `.cs` dosyaları taranıp parçalanıyor;
-"Projeyi Öğren" sınıfları, kalıtım ilişkilerini ve kilit metotları bir mimari
-haritaya çıkarıyor. `/compact` uzun sohbetleri token sınırına çarpmadan özetliyor;
+**Bağlam farkındalığı** — `/compact` uzun sohbetleri token sınırına çarpmadan özetliyor;
 kullanım/bağlam paneli nerede olduğunu gösteriyor — canlı sayıya ulaşılamıyorsa
 "bayat" ya da "tahmin" rozetiyle, dürüstçe.
 

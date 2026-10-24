@@ -132,11 +132,9 @@ compile. Each agent action is one named Unity undo step, and the agent can rever
 exactly its last one without touching edits you made after it. The `uv` toolchain
 ships inside the app.
 
-**Project awareness** — every `.cs` file in the workspace is scanned and chunked;
-"Learn Project" extracts classes, inheritance and key methods into an architecture
-map. `/compact` summarises long conversations before they hit the token limit, and a
-usage/context panel shows where you stand — with an honest "stale" or "estimate"
-badge when the live number is not reachable.
+**Context awareness** — `/compact` summarises long conversations before they hit the
+token limit, and a usage/context panel shows where you stand — with an honest
+"stale" or "estimate" badge when the live number is not reachable.
 
 **The conversation resumes itself** — a subagent or background command that finishes
 after you stopped watching used to leave the chat idle until you typed. Now the
