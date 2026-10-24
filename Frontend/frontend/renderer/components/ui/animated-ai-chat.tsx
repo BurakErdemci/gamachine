@@ -1045,91 +1045,6 @@ export function AnimatedChatInput({
     );
 }
 
-export function ThinkingIndicator() {
-    return (
-        <motion.div 
-            className="fixed bottom-6 right-6 backdrop-blur-2xl bg-black rounded-full px-4 py-2 shadow-lg border border-white/[0.08] z-50"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-        >
-            <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 text-xs text-white/70">
-                    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                    <span>Thinking</span>
-                    <TypingDots />
-                </div>
-            </div>
-        </motion.div>
-    );
-}
-
-export function AnimatedAIChat({ 
-    onSendMessage, 
-    onStop,
-    isLoading 
-}: { 
-    onSendMessage: (val: string) => void;
-    onStop?: () => void;
-    isLoading: boolean;
-}) {
-    const [value, setValue] = useState("");
-    const [inputFocused, setInputFocused] = useState(false);
-
-    return (
-        <div className="min-h-screen flex flex-col w-full items-center justify-center bg-transparent text-white p-6 relative overflow-hidden">
-            <div className="absolute inset-0 w-full h-full overflow-hidden">
-                <div className="absolute top-0 left-1/4 w-96 h-96 bg-violet-500/10 rounded-full filter blur-[128px] animate-pulse" />
-                <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-indigo-500/10 rounded-full filter blur-[128px] animate-pulse delay-700" />
-            </div>
-            <div className="w-full max-w-2xl mx-auto relative">
-                <div className="text-center space-y-3 mb-12">
-                    <h1 className="text-3xl font-medium tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white/90 to-white/40 pb-1">
-                        How can I help today?
-                    </h1>
-                    <p className="text-sm text-white/40">Type a command or ask a question</p>
-                </div>
-
-                <AnimatedChatInput 
-                    value={value} 
-                    setValue={setValue} 
-                    onSendMessage={onSendMessage} 
-                    onStop={onStop}
-                    isLoading={isLoading} 
-                />
-            </div>
-            <AnimatePresence>{isLoading && <ThinkingIndicator />}</AnimatePresence>
-        </div>
-    );
-}
-
-function TypingDots() {
-    return (
-        <div className="flex items-center ml-1">
-            {[1, 2, 3].map((dot) => (
-                <motion.div
-                    key={dot}
-                    className="w-1.5 h-1.5 bg-white/90 rounded-full mx-0.5"
-                    initial={{ opacity: 0.3 }}
-                    animate={{ 
-                        opacity: [0.3, 0.9, 0.3],
-                        scale: [0.85, 1.1, 0.85]
-                    }}
-                    transition={{
-                        duration: 1.2,
-                        repeat: Infinity,
-                        delay: dot * 0.15,
-                        ease: "easeInOut",
-                    }}
-                    style={{
-                        boxShadow: "0 0 4px rgba(255, 255, 255, 0.3)"
-                    }}
-                />
-            ))}
-        </div>
-    );
-}
-
 interface ActionButtonProps {
     icon: React.ReactNode;
     label: string;
@@ -1186,4 +1101,3 @@ if (typeof document !== 'undefined') {
     style.innerHTML = rippleKeyframes;
     document.head.appendChild(style);
 }
-
