@@ -905,6 +905,25 @@ class PluginHub(WebSocketEndpoint):
     # Session resolution helpers
     # ------------------------------------------------------------------
     @classmethod
+    def session_wait_budget(cls) -> float:
+        """Seconds to wait for a plugin session to (re)connect.
+
+        Configurable via UNITY_MCP_SESSION_RESOLVE_MAX_WAIT_S (default 20.0),
+        clamped to [0, 20] so a misconfiguration cannot cause excessive waits.
+        """
+        try:
+            max_wait_s = float(
+                os.environ.get("UNITY_MCP_SESSION_RESOLVE_MAX_WAIT_S", "20.0"))
+        except ValueError as e:
+            raw_val = os.environ.get(
+                "UNITY_MCP_SESSION_RESOLVE_MAX_WAIT_S", "20.0")
+            logger.warning(
+                "Invalid UNITY_MCP_SESSION_RESOLVE_MAX_WAIT_S=%r, using default 20.0: %s",
+                raw_val, e)
+            max_wait_s = 20.0
+        return max(0.0, min(max_wait_s, 20.0))
+
+    @classmethod
     async def _resolve_session_id(
         cls,
         unity_instance: str | None,
@@ -936,20 +955,7 @@ class PluginHub(WebSocketEndpoint):
         # TODO: Make this more deterministic by detecting Unity's actual reload state
         # (e.g., via status file, heartbeat, or explicit "reloading" signal from Unity)
         # rather than blindly waiting up to 20s. See Issue #657.
-        #
-        # Configurable via: UNITY_MCP_SESSION_RESOLVE_MAX_WAIT_S (default: 20.0, max: 20.0)
-        try:
-            max_wait_s = float(
-                os.environ.get("UNITY_MCP_SESSION_RESOLVE_MAX_WAIT_S", "20.0"))
-        except ValueError as e:
-            raw_val = os.environ.get(
-                "UNITY_MCP_SESSION_RESOLVE_MAX_WAIT_S", "20.0")
-            logger.warning(
-                "Invalid UNITY_MCP_SESSION_RESOLVE_MAX_WAIT_S=%r, using default 20.0: %s",
-                raw_val, e)
-            max_wait_s = 20.0
-        # Clamp to [0, 20] to prevent misconfiguration from causing excessive waits
-        max_wait_s = max(0.0, min(max_wait_s, 20.0))
+        max_wait_s = cls.session_wait_budget()
         if not retry_on_reload:
             max_wait_s = 0.0
         retry_ms = float(getattr(config, "reload_retry_ms", 250))

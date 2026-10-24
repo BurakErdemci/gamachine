@@ -20,7 +20,7 @@ import logging
 import time
 import weakref
 
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ResourceError, ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 from core.config import config
@@ -36,7 +36,7 @@ from services.registry import get_registered_tools
 from services.registry.tool_actions import READ, classify
 from transport.approval_gate import ApprovalDenied, parse_conversation_id
 from transport.plugin_hub import PluginHub
-from transport.project_scope import project_scope_refusal
+from transport.project_scope import is_server_only_tool, project_scope_refusal
 
 logger = logging.getLogger("mcp-for-unity-server")
 # Separate logger that propagates to root -> stderr so diagnostics show in console
@@ -502,12 +502,14 @@ class UnityInstanceMiddleware(Middleware):
             raise ToolError(str(exc)) from exc
         # Reads too: a read from the wrong project misleads the model as much
         # as a write damages it.
-        refusal = await project_scope_refusal(getattr(context, "fastmcp_context", None), self._request_conversation_id())
-        if refusal:
-            raise ToolError(refusal)
+        mesaj = getattr(context, "message", None)
+        if not is_server_only_tool(getattr(mesaj, "name", None)):
+            refusal = await project_scope_refusal(
+                getattr(context, "fastmcp_context", None), self._request_conversation_id())
+            if refusal:
+                raise ToolError(refusal)
         # A fixed rule, not a card: before the gate, so it holds in auto mode
         # and step mode shows no card for a call that would be refused anyway.
-        mesaj = getattr(context, "message", None)
         refusal = meta_refusal(getattr(mesaj, "name", None) or "",
                                getattr(mesaj, "arguments", None))
         if refusal:
@@ -643,6 +645,10 @@ class UnityInstanceMiddleware(Middleware):
     async def on_read_resource(self, context: MiddlewareContext, call_next):
         """Inject active Unity instance into resource context if available."""
         await self._inject_unity_instance(context)
+        refusal = await project_scope_refusal(
+            getattr(context, "fastmcp_context", None), self._request_conversation_id())
+        if refusal:
+            raise ResourceError(refusal)
         return await call_next(context)
 
     async def on_list_tools(self, context: MiddlewareContext, call_next):

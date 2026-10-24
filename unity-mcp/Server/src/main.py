@@ -608,6 +608,22 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
                         status_code=404,
                     )
 
+                # A caller that names the project (Gamachine's scene editor, the
+                # OmniSharp sync) is routed by it alone, never to the first session.
+                project_path = body.get("project_path")
+                if isinstance(project_path, str) and project_path:
+                    from transport.project_scope import select_session_by_path
+                    path_sid, path_error = select_session_by_path(sessions.sessions, project_path)
+                    if path_error:
+                        return JSONResponse({"success": False, "error": path_error}, status_code=409)
+                    if session_id and session_id != path_sid:
+                        return JSONResponse({
+                            "success": False,
+                            "error": "unity_instance başka bir Unity projesini gösteriyor; istek gönderilmedi.",
+                        }, status_code=409)
+                    session_id = path_sid
+                    session_details = sessions.sessions.get(session_id)
+
                 # If no specific unity_instance requested, use first available session
                 # (Must be done before execute_custom_tool check so all command types benefit)
                 if not session_id:
