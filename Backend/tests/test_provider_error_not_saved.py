@@ -53,8 +53,9 @@ def _patched(provider):
 def test_compact_falls_back_on_error_and_closes_before_return(events, expected):
     provider = FakeProvider(events)
     db = _conv_db()
-    messages = [{"role": "user", "content": f"message {i}"} for i in range(8)]
+    messages = [{"id": i + 1, "role": "user", "content": f"message {i}"} for i in range(8)]
     db.get_conversation_messages.return_value = messages
+    db.get_memory.return_value = ""
     ep = _endpoint(routes.create_conversation_router(db, {}), "/conversations/{conv_id}/compact")
     patches = _patched(provider)
     for p in patches:
@@ -73,7 +74,7 @@ def test_compact_falls_back_on_error_and_closes_before_return(events, expected):
         expected = ("(Otomatik kayıt — AI özeti alınamadı)\nSohbetin son mesajları:\n"
                     + "\n".join(f"- Kullanıcı: message {i}" for i in range(8)))
     assert out == {"status": "success", "summary": expected}
-    db.compact_conversation.assert_called_once_with(7, expected)
+    db.compact_conversation.assert_called_once_with(7, expected, through_id=8)
 
 
 @pytest.mark.parametrize("exit_kind", ["caller_close", "error", "exhaustion", "cancelled_close"])

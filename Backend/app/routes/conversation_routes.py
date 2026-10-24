@@ -1762,6 +1762,11 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             return {"status": "success",
                     "message": translate_detail("Sohbet zaten kısaydı; özet üretilmedi ama bağlam sıfırlandı.", x_ui_lang)}
 
+        through_id = messages[-1]["id"]
+        prior = db.get_memory(conv_id) or ""
+        if not isinstance(prior, str):
+            prior = ""
+
         _chat = chat_model.chat_model(db, user_id, conv_id)
         provider_type, model_name = _chat["provider_type"], _chat["model_name"]
         api_key = (db.get_api_key(user_id, provider_type) or "")
@@ -1773,11 +1778,13 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             for m in messages[-20:]
         )
 
+        prior_block = (f"ÖNCEKİ ÖZET (kararlarını ve önemli detaylarını yeni özete taşı):\n{prior}\n\n"
+                       if prior else "")
         compact_prompt = f"""Aşağıdaki sohbeti kısa ve öz bir şekilde özetle.
 Kullanıcının ne istediğini, hangi konularda konuşulduğunu, alınan kararları ve önemli teknik detayları belirt.
 Max 300 kelime. Türkçe yaz.
 
-SOHBET:
+{prior_block}SOHBET:
 {history_text}
 
 ÖZET:"""
@@ -1818,10 +1825,12 @@ SOHBET:
                 f"- {'Kullanıcı' if m['role'] == 'user' else 'AI'}: {(m.get('content') or '')[:220]}"
                 for m in messages[-12:] if (m.get("content") or "").strip()
             ]
-            summary = ("(Otomatik kayıt — AI özeti alınamadı)\nSohbetin son mesajları:\n"
+            summary = ("(Otomatik kayıt — AI özeti alınamadı)\n"
+                       + (f"Önceki özet:\n{prior}\n" if prior else "")
+                       + "Sohbetin son mesajları:\n"
                        + "\n".join(tail))
 
-        db.compact_conversation(conv_id, summary)
+        db.compact_conversation(conv_id, summary, through_id=through_id)
 
         # Sonraki tur, özetlenmiş küçük bağlamla ve TEMİZ bir CLI oturumuyla başlar.
         await _cli_bagalamini_sifirla(db, conv_id)
