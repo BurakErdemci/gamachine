@@ -67,10 +67,15 @@ extraResources:
       - "**/*"
       # A developer's local venv (gitignored) links to their Homebrew Python; never ship it.
       - "!.venv{,/**}"
+      - "!tests{,/**}"
+      - "!build{,/**}"
+      - "!**/__pycache__{,/**}"
+      - "!**/*.pyc"
   - from: ../../unity-mcp/MCPForUnity
     to: unity-mcp/MCPForUnity
     filter:
       - "**/*"
+      - "!**/__pycache__{,/**}"
   # uv araç zinciri gömülü — kullanıcının PC'sinde uv kurulu olmasa da MCP çalışsın
   - from: ../../Backend/vendor/uv
     to: uv
