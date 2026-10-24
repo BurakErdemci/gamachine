@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
@@ -178,6 +179,38 @@ def test_computer_use_matching_unity_pid_uses_normal_decision(computer, monkeypa
     monkeypatch.setattr(gate, "decide", decide)
     assert request(computer, pid=123)["approved"] is True
     decide.assert_called_once()
+
+
+def test_computer_use_nonexistent_project_path_value_is_denied(computer, tmp_path, monkeypatch):
+    project = tmp_path / "Our Game"
+    (project / "Library").mkdir(parents=True)
+    (project / "Library" / "EditorInstance.json").write_text('{"process_id": 123}', encoding="utf-8")
+    binary = "/".join(("", "Applications", "Unity.app", "Contents", "MacOS", "Unity"))
+    computer.db.get_last_workspace.return_value = str(project)
+    monkeypatch.setattr(presence.sys, "platform", "darwin")
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        assert kwargs == {"capture_output": True, "text": True, "timeout": 2}
+        if args == ["ps", "-o", "comm=", "-p", "123"]:
+            output = binary
+        elif args == ["ps", "-o", "command=", "-p", "123"]:
+            output = f"{binary} -projectPath {tmp_path / 'Missing Game'}"
+        else:
+            raise AssertionError(f"Unexpected process query: {args}")
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+    monkeypatch.setattr(presence.subprocess, "run", run)
+    decide = Mock(side_effect=AssertionError("unverified project must bypass normal decision"))
+    monkeypatch.setattr(gate, "decide", decide)
+    response = request(computer, pid=123)
+    assert response["approved"] is False
+    assert response["error"] == (
+        "Unity'de Gamachine'deki proje (Our Game) açık değil; Unity'ye girdi gönderilmedi. "
+        "Unity'de ve Gamachine'de aynı projeyi aç.")
+    assert len(calls) == 2
+    decide.assert_not_called()
 
 
 def test_computer_use_empty_workspace_is_denied(computer, monkeypatch):

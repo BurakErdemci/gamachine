@@ -16,13 +16,17 @@ LINUX_UNITY = "/".join(("", "opt", "Editor", "Unity"))
 def fake_processes(monkeypatch):
     commands = {}
     calls = []
+    executables = {}
     monkeypatch.setattr(presence.sys, "platform", "darwin")
 
     def run(args, **kwargs):
         calls.append(args)
         assert kwargs == {"capture_output": True, "text": True, "timeout": 2}
-        if args == ["ps", "-axo", "command="]:
-            output = "\n".join(commands.values())
+        if args == ["ps", "-axo", "pid=,comm="]:
+            output = "\n".join(f"  {pid} {executables.get(pid, UNITY)}" for pid in commands)
+        elif args[:4] == ["ps", "-o", "comm=", "-p"]:
+            pid = int(args[4])
+            output = executables.get(pid, UNITY) if pid in commands else ""
         elif args[:4] == ["ps", "-o", "command=", "-p"]:
             output = commands.get(int(args[4]), "")
         else:
@@ -30,7 +34,7 @@ def fake_processes(monkeypatch):
         return subprocess.CompletedProcess(args, 0, output, "")
 
     monkeypatch.setattr(presence.subprocess, "run", run)
-    return commands, calls
+    return commands, calls, executables
 
 
 @pytest.fixture
@@ -82,12 +86,15 @@ def test_oversized_metadata_is_refused(workspace, fake_processes):
                                       UNITY + " -batchmode"])
 def test_non_editor_and_import_worker_are_refused(workspace, fake_processes, command):
     fake_processes[0][123] = command
+    if command == "unrelated-process":
+        fake_processes[2][123] = command
     assert presence.editor_pid(str(workspace)) is None
 
 
 @pytest.mark.parametrize("binary", [UNITY, LINUX_UNITY])
 @pytest.mark.parametrize("suffix", ["", " -logFile editor.log"])
 def test_project_path_with_spaces_and_following_options(workspace, fake_processes, binary, suffix):
+    fake_processes[2][123] = binary
     fake_processes[0][123] = f"{binary} -PROJECTPATH {workspace}{suffix}"
     assert presence.editor_pid(str(workspace)) == 123
     fake_processes[0][123] = f"{binary} -projectPath {workspace.parent / 'Other Game'}{suffix}"
@@ -104,6 +111,9 @@ def test_case_alias_uses_filesystem_identity(workspace, fake_processes, monkeypa
     fake_processes[0][123] = f"{UNITY} -projectPath {alias}"
     original_isdir = presence.os.path.isdir
     original_exists = presence.os.path.exists
+    original_read = presence._read_library_file
+    monkeypatch.setattr(presence, "_read_library_file", lambda path, filename: original_read(
+        str(workspace) if path == alias else path, filename))
     monkeypatch.setattr(presence.os.path, "isdir", lambda path: path == alias or original_isdir(path))
     monkeypatch.setattr(presence.os.path, "exists", lambda path: path == alias or original_exists(path))
     comparisons = []
@@ -131,24 +141,24 @@ def test_same_directory_falls_back_when_identity_unavailable(workspace, monkeypa
 
 
 @pytest.mark.parametrize("suffix", ["", " -logFile editor.log"])
-def test_dash_project_selects_longest_existing_candidate(workspace, fake_processes, suffix):
+def test_dash_project_selects_candidate_recording_editor_pid(workspace, fake_processes, suffix):
     prefix = workspace.parent / "My"
     dashed = workspace.parent / "My -Game"
     prefix.mkdir()
     (dashed / "Library").mkdir(parents=True)
     (dashed / "Library" / "EditorInstance.json").write_text('{"process_id": 123}', encoding="utf-8")
     (prefix / "Library").mkdir()
-    (prefix / "Library" / "EditorInstance.json").write_text('{"process_id": 123}', encoding="utf-8")
+    (prefix / "Library" / "EditorInstance.json").write_text('{"process_id": 456}', encoding="utf-8")
     fake_processes[0][123] = f"{UNITY} -projectPath {dashed}{suffix}"
     assert presence.editor_pid(str(dashed)) == 123
     assert presence.editor_pid(str(prefix)) is None
     assert presence.open_project_names() == ["My -Game"]
 
 
-def test_project_selection_falls_back_to_nonexistent_rest(workspace, fake_processes):
+def test_nonempty_project_value_without_existing_candidate_is_refused(workspace, fake_processes):
     missing = workspace.parent / "Missing -Game"
     fake_processes[0][123] = f"{UNITY} -projectPath {missing} -logFile log"
-    assert presence._project_path_from_command(fake_processes[0][123]) == f"{missing} -logFile log"
+    assert presence._project_candidates(fake_processes[0][123]) == []
     assert presence.editor_pid(str(workspace)) is None
     assert presence.open_project_names() == []
 
@@ -157,6 +167,7 @@ def test_project_selection_falls_back_to_nonexistent_rest(workspace, fake_proces
 @pytest.mark.parametrize("binary", [UNITY, LINUX_UNITY])
 def test_unity_binary_in_another_programs_arguments_is_refused(workspace, fake_processes, prefix, binary):
     fake_processes[0][123] = f"{prefix}{binary} -projectPath {workspace}"
+    fake_processes[2][123] = prefix.split()[0]
     assert presence.editor_pid(str(workspace)) is None
     assert presence.open_project_names() == []
 
@@ -164,6 +175,7 @@ def test_unity_binary_in_another_programs_arguments_is_refused(workspace, fake_p
 @pytest.mark.parametrize("binary", [UNITY + "Extra", LINUX_UNITY + "Extra"])
 def test_binary_name_requires_a_boundary(workspace, fake_processes, binary):
     fake_processes[0][123] = f"{binary} -projectPath {workspace}"
+    fake_processes[2][123] = binary
     assert presence.editor_pid(str(workspace)) is None
     assert presence.open_project_names() == []
 
@@ -177,6 +189,79 @@ def test_editor_without_nonempty_project_option_uses_instance_metadata(workspace
 def test_project_option_without_a_path_does_not_use_following_options(workspace, fake_processes):
     fake_processes[0][123] = UNITY + " -projectPath -logFile editor.log"
     assert presence.editor_pid(str(workspace)) is None
+
+
+def test_hub_options_do_not_select_option_shaped_sibling(workspace, fake_processes):
+    sibling = workspace.with_name(workspace.name + " -useHub")
+    (sibling / "Library").mkdir(parents=True)
+    (sibling / "Library" / "EditorInstance.json").write_text('{"process_id": 456}', encoding="utf-8")
+    fake_processes[0][123] = f"{UNITY} -projectPath {workspace} -useHub -hubIPC -cloudEnvironment production"
+    assert presence.editor_pid(str(workspace)) == 123
+    assert presence.editor_pid(str(sibling)) is None
+    assert presence.open_project_names() == [workspace.name]
+
+
+def test_ambiguous_candidates_recording_same_pid_are_refused(workspace, fake_processes):
+    sibling = workspace.with_name(workspace.name + " -useHub")
+    (sibling / "Library").mkdir(parents=True)
+    (sibling / "Library" / "EditorInstance.json").write_text('{"process_id": 123}', encoding="utf-8")
+    fake_processes[0][123] = f"{UNITY} -projectPath {workspace} -useHub"
+    assert presence.editor_pid(str(workspace)) is None
+    assert presence.editor_pid(str(sibling)) is None
+    assert presence.open_project_names() == []
+
+
+@pytest.mark.parametrize("content", ["{", "[]", '{"process_id": true}',
+                                     '{"process_id": 123.0}', '{"process_id": 456}',
+                                     '{"process_id": 123}' + " " * 65536])
+def test_project_candidate_requires_bounded_integer_pid_metadata(workspace, content):
+    (workspace / "Library" / "EditorInstance.json").write_text(content, encoding="utf-8")
+    assert presence._project_of(123, f"{UNITY} -projectPath {workspace}") is None
+    assert presence.open_project_names() == []
+
+
+@pytest.mark.parametrize("binary", ["foo/Editor/Unity", "foo/Unity.app/Contents/MacOS/Unity"])
+def test_relative_unity_argument_in_python_process_is_refused(workspace, fake_processes, binary):
+    python = "/".join(("", "usr", "bin", "python3"))
+    fake_processes[2][123] = python
+    fake_processes[0][123] = f"{python} {binary} -projectPath {workspace}"
+    assert presence.editor_pid(str(workspace)) is None
+    assert presence.open_project_names() == []
+
+
+def test_dashed_install_directory_is_valid(workspace, fake_processes):
+    binary = "/".join(("", "Applications", "Unity -beta", "Unity.app", "Contents", "MacOS", "Unity"))
+    fake_processes[2][123] = binary
+    fake_processes[0][123] = f"{binary} -projectPath {workspace}"
+    assert presence.editor_pid(str(workspace)) == 123
+    assert presence.open_project_names() == [workspace.name]
+
+
+def test_batchmode_in_project_name_is_not_an_import_worker(workspace, fake_processes):
+    project = workspace.parent / "my-batchmode-game"
+    (project / "Library").mkdir(parents=True)
+    (project / "Library" / "EditorInstance.json").write_text('{"process_id": 123}', encoding="utf-8")
+    fake_processes[0][123] = f"{UNITY} -projectPath {project}"
+    assert presence.editor_pid(str(project)) == 123
+    assert presence.open_project_names() == [project.name]
+
+
+@pytest.mark.parametrize("query", ["comm=", "command="])
+@pytest.mark.parametrize("failure", ["exit", "exception"])
+def test_missing_process_details_fail_closed(workspace, fake_processes, monkeypatch, query, failure):
+    original_run = presence.subprocess.run
+
+    def run(args, **kwargs):
+        if args[:3] == ["ps", "-o", query]:
+            if failure == "exception":
+                raise OSError("process exited")
+            return subprocess.CompletedProcess(args, 1, "", "")
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(presence.subprocess, "run", run)
+    assert presence.editor_pid(str(workspace)) is None
+    # The listing supplies executable paths independently of the per-pid query.
+    assert presence.open_project_names() == ([workspace.name] if query == "comm=" else [])
 
 
 @pytest.mark.parametrize("image,expected", [("Unity.exe", 123), ("UNITY.EXE", 123),
@@ -211,7 +296,9 @@ def test_process_failures_fail_closed(workspace, monkeypatch, failure):
 
 
 def test_open_project_names_are_filtered_sorted_and_unique(workspace, fake_processes):
-    (workspace.parent / "Another Game").mkdir()
+    other = workspace.parent / "Another Game" / "Library"
+    other.mkdir(parents=True)
+    (other / "EditorInstance.json").write_text('{"process_id": 124}', encoding="utf-8")
     fake_processes[0].update({
         124: f"{LINUX_UNITY} -projectPath {workspace.parent / 'Another Game'} -logFile log",
         125: f"{UNITY} -projectPath {workspace}",
@@ -222,6 +309,8 @@ def test_open_project_names_are_filtered_sorted_and_unique(workspace, fake_proce
         130: f"{UNITY} -batchmode -projectPath {workspace}",
         131: f"{UNITY} -projectPath {workspace.parent / 'Missing'}",
     })
+    fake_processes[2][124] = LINUX_UNITY
+    fake_processes[2][127] = "other-process"
     assert presence.open_project_names() == ["Another Game", "Our Game"]
 
 
@@ -253,6 +342,16 @@ def test_active_scene_rejects_invalid_or_injected_paths(workspace, scene):
 def test_active_scene_requires_existing_file(workspace):
     (workspace / "Library" / "LastSceneManagerSetup.txt").write_text(
         "- path: Assets/Missing.unity\n  isActive: 1\n", encoding="utf-8")
+    assert presence.active_scene(str(workspace)) is None
+
+
+@pytest.mark.parametrize("empty_entry", ["- path:", "- path:   "])
+def test_empty_active_scene_does_not_reuse_previous_entry(workspace, empty_entry):
+    (workspace / "Assets").mkdir()
+    (workspace / "Assets" / "First.unity").write_text("scene", encoding="utf-8")
+    (workspace / "Library" / "LastSceneManagerSetup.txt").write_text(
+        "sceneSetups:\n- path: Assets/First.unity\n  isActive: 0\n"
+        f"{empty_entry}\n  isActive: 1\n", encoding="utf-8")
     assert presence.active_scene(str(workspace)) is None
 
 
@@ -292,7 +391,9 @@ def test_refusal_texts_and_matching_project(workspace, fake_processes):
         "Unity'de ve Gamachine'de aynı projeyi aç.")
     ending = " Unity'de ve Gamachine'de aynı projeyi açıp tekrar dene."
     assert presence.mcp_mismatch_detail(str(workspace)) == "Unity'de bu proje açık değil: Our Game." + ending
-    (workspace.parent / "Another Game").mkdir()
+    other = workspace.parent / "Another Game" / "Library"
+    other.mkdir(parents=True)
+    (other / "EditorInstance.json").write_text('{"process_id": 456}', encoding="utf-8")
     fake_processes[0][456] = f"{UNITY} -projectPath {workspace.parent / 'Another Game'}"
     fake_processes[0][789] = f"{UNITY} -projectPath {workspace}"
     assert presence.mcp_mismatch_detail(str(workspace)) == (

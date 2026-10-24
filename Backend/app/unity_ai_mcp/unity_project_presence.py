@@ -59,53 +59,88 @@ def _same_dir(a, b) -> bool:
     return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
 
 
-def _unity_binary_prefix(command) -> bool:
-    match = re.match(r"^\S.*?/(?:Unity\.app/Contents/MacOS/Unity|Editor/Unity)(?=\s|$)", command)
-    if match is None:
-        return False
-    prefix = command[:match.end()]
-    # Spaces within an installation folder are valid; a separate absolute
-    # argument or option before the Unity path identifies another executable.
-    return " -" not in prefix and re.search(r"\s/", prefix) is None
+def _process_executable(pid) -> str | None:
+    try:
+        result = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+    except Exception:
+        pass
+    return None
 
 
-def _project_path_from_command(command) -> str | None:
+def _is_unity_editor_executable(path) -> bool:
+    return isinstance(path, str) and path.endswith(("/Unity.app/Contents/MacOS/Unity", "/Editor/Unity"))
+
+
+def _is_import_worker(command) -> bool:
+    return re.search(r"(?<!\S)-batchmode(?=\s|$)", command, re.IGNORECASE) is not None
+
+
+def _project_value(command) -> str | None:
     flag = re.search(r"(?<!\S)-projectPath(?=\s|$)", command, re.IGNORECASE)
-    if flag is None:
-        return None
-    rest = command[flag.end():].strip()
+    return command[flag.end():].strip() if flag is not None else None
+
+
+def _project_candidates(command) -> list[str]:
+    rest = _project_value(command)
+    if not rest:
+        return []
     candidates = [rest] + [rest[:option.start()].strip() for option in re.finditer(r" -[a-zA-Z]", rest)]
-    existing = [path for path in candidates if path and os.path.isdir(path)]
-    return max(existing, key=len) if existing else rest
+    return [path for path in candidates if path and os.path.isdir(path)]
+
+
+def _project_of(pid, command) -> str | None:
+    matches = []
+    for candidate in _project_candidates(command):
+        try:
+            content = _read_library_file(candidate, "EditorInstance.json")
+            if content is None:
+                continue
+            recorded_pid = json.loads(content).get("process_id")
+            if type(recorded_pid) is int and recorded_pid == pid:
+                matches.append(candidate)
+        except Exception:
+            continue
+    return matches[0] if len(matches) == 1 else None
 
 
 def _is_editor_for(pid, workspace_path) -> bool:
+    if sys.platform != "win32" and not _is_unity_editor_executable(_process_executable(pid)):
+        return False
     command = _process_command(pid)
     if command is None:
         return False
     if sys.platform == "win32":
         return command.casefold() == "unity.exe"
-    if not _unity_binary_prefix(command) or "-batchmode" in command.casefold():
+    if _is_import_worker(command):
         return False
-    project = _project_path_from_command(command)
-    if project:
-        return _same_dir(project, workspace_path)
-    return True
+    if not _project_value(command):
+        return True
+    project = _project_of(pid, command)
+    return project is not None and _same_dir(project, workspace_path)
 
 
 def open_project_names() -> list[str]:
     if sys.platform == "win32":
         return []
     try:
-        result = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True, timeout=2)
+        result = subprocess.run(["ps", "-axo", "pid=,comm="], capture_output=True, text=True, timeout=2)
         if result.returncode != 0:
             return []
         names = set()
         for line in result.stdout.splitlines():
-            if _unity_binary_prefix(line) and "-batchmode" not in line.casefold():
-                project = _project_path_from_command(line)
-                if project and os.path.isdir(project):
-                    names.add(os.path.basename(project))
+            process = re.match(r"^\s*(\d+)\s+(.+?)\s*$", line)
+            if process is None or not _is_unity_editor_executable(process.group(2)):
+                continue
+            pid = int(process.group(1))
+            command = _process_command(pid)
+            if command is None or _is_import_worker(command):
+                continue
+            project = _project_of(pid, command)
+            if project is not None:
+                names.add(os.path.basename(project))
         return sorted(names)
     except Exception:
         return []
@@ -120,7 +155,7 @@ def active_scene(workspace_path) -> str | None:
             return None
         scene = None
         for line in content.splitlines():
-            entry = re.match(r"^\s*-\s*path:\s*(.+?)\s*$", line)
+            entry = re.match(r"^\s*-\s*path:\s*(.*?)\s*$", line)
             if entry:
                 scene = entry.group(1)
             elif scene is not None and re.match(r"^\s*isActive:\s*1\s*$", line):
