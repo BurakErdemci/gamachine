@@ -1,10 +1,10 @@
 import logging
 import os
-from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException
 
 from auth_utils import get_current_user, is_allowed_unity_script_path, require_user
+from path_containment import resolve_within
 from schemas import WorkspaceRequest, WriteFileRequest
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,8 @@ def create_workspace_router(db):
             raise HTTPException(403, "Dosya yalnızca workspace içindeki Assets/Scripts altına yazılabilir.")
 
         try:
-            abs_file = str(Path(req.file_path).resolve(strict=False))
+            # The same resolution the check used: a relative path is relative to the workspace.
+            abs_file = resolve_within(req.file_path, req.workspace_path)
             os.makedirs(os.path.dirname(abs_file), exist_ok=True)
             with open(abs_file, "w", encoding="utf-8") as file:
                 file.write(req.content)
