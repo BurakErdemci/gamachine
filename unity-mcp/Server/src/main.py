@@ -308,7 +308,7 @@ This server provides tools to interact with the Unity Game Engine Editor.
 {custom_tools_note}
 
 Tool lists (HTTP transport):
-- The tools you see are fixed by the URL this client connected to: /mcp (the groups enabled in the Unity Editor, core + playtest by default, plus server meta-tools), /mcp/gamachine (core + playtest only), /mcp/full (every group).
+- The tools you see are fixed by the URL this client connected to: /mcp (the groups enabled in the Unity Editor, core + playtest by default, plus server meta-tools), /mcp/gamachine (core + playtest + scripting_ext only), /mcp/full (every group).
 - manage_tools(action="list_groups") shows which profile you are on and which groups it includes. To use a group that is not listed, reconnect with another URL; manage_tools activate/deactivate do not change the list.
 
 Targeting Unity instances:
@@ -909,7 +909,7 @@ Environment Variables:
 
 MCP transport URLs (HTTP):
   /mcp             tools of the enabled groups plus meta-tools
-  /mcp/gamachine   core + playtest only
+  /mcp/gamachine   core + playtest + scripting_ext only
   /mcp/full        every tool group
   ?instance=<Name@hash> on any of them (or an X-Unity-Instance header) routes
   every call on that connection to one Unity instance.

@@ -3,7 +3,7 @@
     /mcp            the default list: enabled groups plus server meta-tools
                     (byte-identical in names and order to the list served
                     before profiles existed; pinned by a test)
-    /mcp/gamachine  the core + playtest tools the Gamachine backend exports
+    /mcp/gamachine  the core + playtest + scripting_ext tools the Gamachine backend exports
     /mcp/full       every tool of every group, regardless of group state
 
 Why profiles instead of per-session toggles: the MCP 2026-07-28 protocol has
@@ -93,11 +93,11 @@ PROFILES: dict[str, ToolProfile] = {
     "gamachine": ToolProfile(
         name="gamachine",
         description=(
-            "core + playtest, no meta-tools: exactly what the Gamachine backend "
+            "core + playtest + scripting_ext, no meta-tools: exactly what the Gamachine backend "
             "exports to its models (Backend/app/tools/unity_mcp_tools.py "
             "EXPORTED_GROUPS / _select_exported)."
         ),
-        groups=frozenset({"core", "playtest"}),
+        groups=frozenset({"core", "playtest", "scripting_ext"}),
         include_ungrouped=False,
         follows_unity=True,
     ),

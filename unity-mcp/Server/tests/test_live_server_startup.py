@@ -52,7 +52,7 @@ PINNED_DEFAULT_LIST = [
 # Backend/app/tools/unity_mcp_tools.py: EXPORTED_GROUPS and _select_exported.
 # Restated rather than imported: the backend package cannot be imported from
 # the server's environment.
-BACKEND_EXPORTED_GROUPS = {"core", "playtest"}
+BACKEND_EXPORTED_GROUPS = {"core", "playtest", "scripting_ext"}
 
 
 @pytest.fixture(scope="module")
@@ -89,7 +89,7 @@ def test_gamachine_profile_equals_the_backend_export(report):
     gamachine = report["old_era"]["/mcp/gamachine"]
     assert gamachine["status"] == 200, gamachine
     assert gamachine["names"] == exported
-    assert len(exported) == 35
+    assert len(exported) == 37
 
 
 def test_full_profile_lists_every_group(report):

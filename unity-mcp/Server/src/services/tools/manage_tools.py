@@ -30,7 +30,7 @@ from transport import tool_profiles
         "on the URL this client connected to, and the other profile URLs), "
         "sync (refresh group state from the Unity Editor's tool toggles). "
         "The tool list is fixed per URL: /mcp (enabled groups), "
-        "/mcp/gamachine (core + playtest), /mcp/full (every group). "
+        "/mcp/gamachine (core + playtest + scripting_ext), /mcp/full (every group). "
         "activate / deactivate / reset no longer change anything; they return "
         "an error explaining which URL to connect to instead."
     ),

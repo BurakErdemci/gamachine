@@ -45,7 +45,7 @@ Over HTTP, the tool list a client sees is fixed by the URL it connects to, and d
 | URL | Tools |
 |-----|-------|
 | `/mcp` | Groups enabled in the Unity Editor (core + playtest by default) plus the server meta-tools; 36 tools when no Editor has connected |
-| `/mcp/gamachine` | core + playtest only, no meta-tools (31 tools); what the Gamachine backend exports |
+| `/mcp/gamachine` | core + playtest + scripting_ext, no meta-tools (37 tools); what the Gamachine backend exports |
 | `/mcp/full` | Every group, regardless of the Editor's toggles (51 tools) |
 
 The Editor toggles below only affect `/mcp` and `/mcp/gamachine`.

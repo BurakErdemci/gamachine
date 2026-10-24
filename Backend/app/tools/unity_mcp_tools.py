@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # Tool groups sent to function-calling providers. `playtest` (game_hooks,
 # play_session, play_step, play_capture, run_playtest) is enabled by default on
 # the server next to `core` (tool_registry.DEFAULT_ENABLED_GROUPS).
-EXPORTED_GROUPS = ("core", "playtest")
+EXPORTED_GROUPS = ("core", "playtest", "scripting_ext")
 # The _meta key the unity-mcp server reads a call's owning chat from
 # (GAMACHINE_CONVERSATION_META_KEY in unity-mcp/Server/src/core/constants.py).
 CONVERSATION_META_KEY = "gamachine_conversation"

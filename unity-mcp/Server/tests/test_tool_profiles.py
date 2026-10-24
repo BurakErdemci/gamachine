@@ -117,11 +117,12 @@ def test_no_profile_is_named_hub():
 
 def test_gamachine_profile_is_exactly_the_backend_export_rule():
     """Backend/app/tools/unity_mcp_tools.py exports tools tagged with an
-    EXPORTED_GROUPS group ("core", "playtest") and nothing ungrouped."""
-    set_server_enabled_groups(DEFAULT_ENABLED_GROUPS)
+    EXPORTED_GROUPS group ("core", "playtest", "scripting_ext") and nothing ungrouped."""
+    set_server_enabled_groups(DEFAULT_ENABLED_GROUPS | {"scripting_ext"})
     gamachine = PROFILES["gamachine"]
-    assert gamachine.groups == frozenset({"core", "playtest"})
+    assert gamachine.groups == frozenset({"core", "playtest", "scripting_ext"})
     assert gamachine.allows({"core"}) and gamachine.allows({"playtest"})
+    assert gamachine.allows({"scripting_ext"})
     assert not gamachine.allows(set())
     assert not gamachine.allows({"vfx"})
 
@@ -131,6 +132,7 @@ def test_gamachine_follows_a_group_the_editor_turned_off():
     profile must hide it too or the two lists diverge."""
     set_server_enabled_groups({"core"})
     assert not PROFILES["gamachine"].allows({"playtest"})
+    assert not PROFILES["gamachine"].allows({"scripting_ext"})
 
 
 def test_default_profile_follows_server_group_state():
