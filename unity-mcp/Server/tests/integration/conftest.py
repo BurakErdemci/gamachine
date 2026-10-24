@@ -87,12 +87,17 @@ class _DummyToolError(Exception):
     """Stub for fastmcp.exceptions.ToolError"""
 
 
+class _DummyResourceError(Exception):
+    """Stub for fastmcp.exceptions.ResourceError"""
+
+
 fastmcp.FastMCP = _DummyFastMCP
 fastmcp.Context = _DummyContext
 sys.modules.setdefault("fastmcp", fastmcp)
 
 fastmcp_exceptions = types.ModuleType("fastmcp.exceptions")
 fastmcp_exceptions.ToolError = _DummyToolError
+fastmcp_exceptions.ResourceError = _DummyResourceError
 fastmcp.exceptions = fastmcp_exceptions
 sys.modules.setdefault("fastmcp.exceptions", fastmcp_exceptions)
 
