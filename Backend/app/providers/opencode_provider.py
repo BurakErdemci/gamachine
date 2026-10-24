@@ -395,10 +395,7 @@ class OpenCodeProvider(BaseCLIProvider):
         return super()._write_mcp_config(workspace)
 
     def _turn_spawn_env(self) -> dict:
-        # opencode 1.18.25 hands its whole env to local MCP children
-        # (measured 26 Sep 2026), so the unityai bridge reads the token there.
-        token = getattr(self, "_approval_turn_token", "")
-        env = {"UNITYAI_APPROVAL_TURN_TOKEN": token} if token else {}
+        env = {}
         shadow = getattr(self, "_bash_shadow_dir", None)
         if shadow and shadow_intact(shadow):
             env["OPENCODE_CONFIG_DIR"] = shadow

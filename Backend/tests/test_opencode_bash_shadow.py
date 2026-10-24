@@ -226,7 +226,6 @@ def test_spawn_command_never_skips_permissions(monkeypatch, shadow_root, unity_r
     monkeypatch.setattr(um.unity_mcp_manager, "is_running", lambda: unity_running)
     p = op.OpenCodeProvider(MODEL)
     p.resume_session_id = "ses_abc"
-    p._approval_turn_token = "tok"
     _register(tmp_path / "ws", provider=p)
     cmd = p._build_cmd("prompt", workspace=str(tmp_path / "ws"))
 
@@ -235,7 +234,7 @@ def test_spawn_command_never_skips_permissions(monkeypatch, shadow_root, unity_r
     for banned in BANNED_FLAGS:
         assert not any(a == banned or a.startswith(banned + "=") for a in cmd)
     env = p._turn_spawn_env()
-    assert set(env) <= {"UNITYAI_APPROVAL_TURN_TOKEN", "OPENCODE_CONFIG_DIR"}
+    assert set(env) <= {"OPENCODE_CONFIG_DIR"}
 
 
 def test_provider_source_names_no_permission_skipping_flag():

@@ -167,54 +167,6 @@ class TestBuildCmd(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-s") + 1], "ses_abc")
         self.assertIn("--format", cmd)
 
-    def test_opencode_turn_token_rides_the_process_env_not_the_shared_file(self):
-        """opencode.json is shared by every chat of a workspace; two concurrent
-        turns overwrote each other's token there. The token goes to this turn's
-        process env, and a stale one left in the file by an older build is gone."""
-        from providers.opencode_provider import OpenCodeProvider
-
-        p = OpenCodeProvider(binary_name="opencode:opencode-go/kimi-k3")
-        p._approval_turn_token = "one-turn-secret"
-        with tempfile.TemporaryDirectory() as workspace, _mock_unity_mcp():
-            with open(os.path.join(workspace, "opencode.json"), "w", encoding="utf-8") as f:
-                json.dump({"mcp": {"unityai": {"type": "local", "command": ["old"],
-                           "environment": {"UNITYAI_APPROVAL_TURN_TOKEN": "stale"}}}}, f)
-            p._register_mcp("unityai-launcher", workspace, "http://localhost:8000")
-            with open(os.path.join(workspace, "opencode.json"), encoding="utf-8") as f:
-                cfg = json.load(f)
-
-        env = cfg["mcp"]["unityai"]["environment"]
-        self.assertNotIn("UNITYAI_APPROVAL_TURN_TOKEN", env)
-        self.assertNotIn("UNITYAI_AUTO_APPROVE", env)
-        self.assertEqual(p._turn_spawn_env(), {"UNITYAI_APPROVAL_TURN_TOKEN": "one-turn-secret"})
-        p._approval_turn_token = ""
-        self.assertEqual(p._turn_spawn_env(), {})
-
-    def test_opencode_spawn_env_carries_the_turn_token(self):
-        from providers import cli_base
-        from providers.opencode_provider import OpenCodeProvider
-
-        p = OpenCodeProvider(binary_name="opencode:opencode-go/kimi-k3")
-        p._approval_turn_token = "one-turn-secret"
-        seen = {}
-
-        def fake_build(family=None, overrides=None):
-            seen.update(overrides or {})
-            raise RuntimeError("stop after env")
-
-        async def run():
-            with patch.object(cli_base, "build_spawn_env", side_effect=fake_build), \
-                 patch.object(OpenCodeProvider, "_write_mcp_config", lambda self, ws: ""), \
-                 patch.object(OpenCodeProvider, "_build_cmd", lambda self, *a, **k: ["opencode"]):
-                try:
-                    async for _ in p.analyze_code("x", cwd="."):
-                        pass
-                except RuntimeError:
-                    pass
-
-        asyncio.run(run())
-        self.assertEqual(seen.get("UNITYAI_APPROVAL_TURN_TOKEN"), "one-turn-secret")
-
 
 class TestEventParsing(unittest.TestCase):
     """cli_base.analyze_code'un JSON satırlarını doğru event'lere çevirdiğini,
@@ -779,89 +731,9 @@ class TestOneShotSessionRecovery(unittest.TestCase):
 
 
 class TestOpenCodeApprovalPolicy(unittest.TestCase):
-    def test_auto_turn_requires_active_token_and_exact_workspace(self):
-        from agentic.approval_policy import (
-            begin_opencode_turn,
-            end_opencode_turn,
-            should_auto_approve,
-        )
-
-        with tempfile.TemporaryDirectory() as workspace, \
-             tempfile.TemporaryDirectory() as other_workspace:
-            token = begin_opencode_turn(workspace, "auto")
-            self.assertTrue(should_auto_approve(token, workspace))
-            self.assertFalse(should_auto_approve(token, other_workspace))
-            self.assertFalse(should_auto_approve("wrong-token", workspace))
-            end_opencode_turn(token)
-            self.assertFalse(should_auto_approve(token, workspace))
-
-    def test_step_turn_never_auto_approves(self):
-        from agentic.approval_policy import (
-            begin_opencode_turn,
-            end_opencode_turn,
-            should_auto_approve,
-        )
-
-        with tempfile.TemporaryDirectory() as workspace:
-            token = begin_opencode_turn(workspace, "step")
-            try:
-                self.assertFalse(should_auto_approve(token, workspace))
-            finally:
-                end_opencode_turn(token)
-
-    def test_agent_runner_limits_auto_policy_to_running_opencode_turn(self):
-        from agentic.agent_runner import AgentRunner
-        from agentic.approval_policy import should_auto_approve
-        from providers.oneshot_cli import _SESSIONS
-
-        class FakeOpenCodeProvider:
-            resume_session_id = None
-            auto_was_active = False
-            captured_token = None
-
-            async def analyze_code(self, *args, **kwargs):
-                self.captured_token = self._approval_turn_token
-                self.auto_was_active = should_auto_approve(
-                    self.captured_token, kwargs["cwd"]
-                )
-                yield {"type": "final", "text": "tamam"}
-
-        _SESSIONS.clear()
-        provider = FakeOpenCodeProvider()
-        with tempfile.TemporaryDirectory() as workspace:
-            runner = AgentRunner(
-                provider_type="subscription",
-                api_key="",
-                model_name="opencode:opencode-go/kimi-k3",
-                workspace_path=workspace,
-                conversation_id=992,
-                generation_mode="auto",
-            )
-
-            async def collect():
-                return [
-                    event
-                    async for event in runner._run_oneshot_cli_session(
-                        "devam et", "opencode"
-                    )
-                ]
-
-            with patch(
-                "ai_providers.AIProviderManager.get_provider",
-                return_value=provider,
-            ):
-                asyncio.run(collect())
-
-            self.assertTrue(provider.auto_was_active)
-            self.assertFalse(
-                should_auto_approve(provider.captured_token, workspace)
-            )
-        _SESSIONS.clear()
-
     def test_auto_request_skips_pending_card_but_step_request_does_not(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from agentic.approval_policy import begin_opencode_turn, end_opencode_turn
         from routes.conversation_routes import create_conversation_router
 
         app = FastAPI()
@@ -870,46 +742,35 @@ class TestOpenCodeApprovalPolicy(unittest.TestCase):
         from agentic import approval_mode
 
         with tempfile.TemporaryDirectory() as workspace, TestClient(app) as client:
-            # The decision now follows the global approval mode (25 Sep 2026);
-            # the turn token no longer grants anything on its own.
+            # Approval follows the global mode.
             approval_mode.set_mode("auto", source="test")
-            auto_token = begin_opencode_turn(workspace, "auto")
-            try:
-                auto = client.post("/mcp-approval-request", json={
-                    "gate_id": "auto-gate",
-                    "tool": "run_terminal_command",
-                    "params": {"command": "echo ok"},
-                    "workspace_path": workspace,
-                    "approval_turn_token": auto_token,
-                })
-                self.assertEqual(auto.status_code, 200)
-                self.assertEqual(auto.json()["status"], "resolved")
-                self.assertTrue(auto.json()["approved"])
-                self.assertNotIn(
-                    "auto-gate",
-                    client.get("/mcp-pending").json()["pending"],
-                )
-            finally:
-                end_opencode_turn(auto_token)
+            auto = client.post("/mcp-approval-request", json={
+                "gate_id": "auto-gate",
+                "tool": "run_terminal_command",
+                "params": {"command": "echo ok"},
+                "workspace_path": workspace,
+            })
+            self.assertEqual(auto.status_code, 200)
+            self.assertEqual(auto.json()["status"], "resolved")
+            self.assertTrue(auto.json()["approved"])
+            self.assertNotIn(
+                "auto-gate",
+                client.get("/mcp-pending").json()["pending"],
+            )
 
             approval_mode.set_mode("step", source="test")
-            step_token = begin_opencode_turn(workspace, "step")
-            try:
-                step = client.post("/mcp-approval-request", json={
-                    "gate_id": "step-gate",
-                    "tool": "run_terminal_command",
-                    "params": {"command": "echo ok"},
-                    "workspace_path": workspace,
-                    "approval_turn_token": step_token,
-                })
-                self.assertEqual(step.status_code, 200)
-                self.assertEqual(step.json()["status"], "ok")
-                self.assertIn(
-                    "step-gate",
-                    client.get("/mcp-pending").json()["pending"],
-                )
-            finally:
-                end_opencode_turn(step_token)
+            step = client.post("/mcp-approval-request", json={
+                "gate_id": "step-gate",
+                "tool": "run_terminal_command",
+                "params": {"command": "echo ok"},
+                "workspace_path": workspace,
+            })
+            self.assertEqual(step.status_code, 200)
+            self.assertEqual(step.json()["status"], "ok")
+            self.assertIn(
+                "step-gate",
+                client.get("/mcp-pending").json()["pending"],
+            )
 
     def test_approval_bridge_returns_immediate_auto_result_without_polling(self):
         from unity_ai_mcp import approval_bridge
@@ -944,10 +805,7 @@ class TestOpenCodeApprovalPolicy(unittest.TestCase):
                 FakeClient.get_called = True
                 raise AssertionError("Auto sonucu için polling yapılmamalı")
 
-        with patch.object(approval_bridge.httpx, "AsyncClient", FakeClient), \
-             patch.dict(os.environ, {
-                 "UNITYAI_APPROVAL_TURN_TOKEN": "one-turn-secret",
-             }):
+        with patch.object(approval_bridge.httpx, "AsyncClient", FakeClient):
             result = asyncio.run(approval_bridge.request_approval(
                 "run_terminal_command",
                 {"command": "echo ok"},

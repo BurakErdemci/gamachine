@@ -465,7 +465,7 @@ def test_bridge_reads_GAMACHINE_CONVERSATION_ID(monkeypatch, env, expected):
 
     body = _BridgeClient.bodies[0]
     assert body["gate_id"] and body["tool"] == "bash" and body["workspace_path"] == "/ws"
-    assert "approval_turn_token" in body
+    assert "approval_turn_token" not in body
     if expected == "absent":
         assert "conversation_id" not in body
     else:

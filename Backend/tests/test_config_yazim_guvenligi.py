@@ -232,7 +232,6 @@ def test_opencode_json_yolu_korunuyor(tmp_path):
     p = OpenCodeProvider.__new__(OpenCodeProvider)
     p._launcher_path = lambda name: "/bin/true"
     p._ensure_exec = lambda path: None
-    p._approval_turn_token = ""
     p.binary_name = "opencode:opencode/grok-code"
 
     p._register_mcp("/bin/true", ws, "http://localhost:8000")
@@ -419,7 +418,6 @@ def test_K3_hicbir_config_yazicisi_sirri_DISKE_yazmiyor(tmp_path, monkeypatch):
     p3 = OpenCodeProvider.__new__(OpenCodeProvider)
     p3.binary_name = "opencode:opencode/grok-code"
     p3._effort_level = "auto"
-    p3._approval_turn_token = ""
     p3._register_mcp("/bin/true", ws3, "http://127.0.0.1:8000")
     yazilanlar.append(os.path.join(ws3, "opencode.json"))
 

@@ -143,8 +143,7 @@ def _approval(params, workspace, total_deadline):
     headers = {"X-Session-Token": token} if token else {}
     gate_id = uuid.uuid4().hex[:10]
     body = {"gate_id": gate_id, "tool": "write_file", "params": params,
-            "workspace_path": workspace,
-            "approval_turn_token": os.environ.get("UNITYAI_APPROVAL_TURN_TOKEN", "")}
+            "workspace_path": workspace}
     owner = os.environ.get("GAMACHINE_CONVERSATION_ID", "")
     if owner.isascii() and owner.isdigit():
         conversation_id = int(owner)

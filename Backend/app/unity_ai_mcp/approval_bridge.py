@@ -89,7 +89,6 @@ async def request_approval(
         "tool": tool_name,
         "params": params,
         "workspace_path": workspace_path,
-        "approval_turn_token": os.environ.get("UNITYAI_APPROVAL_TURN_TOKEN", ""),
     }
     conversation_id = _conversation_id_from_env()
     if conversation_id is not None:

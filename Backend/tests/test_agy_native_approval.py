@@ -18,7 +18,6 @@ def approval(tmp_path, monkeypatch):
     gate.write_state(str(state), "step", "unityai", workspace=str(tmp_path))
     token = native.state_path.set(str(state))
     monkeypatch.setenv("LOCAL_APP_TOKEN", "session-secret")
-    monkeypatch.setenv("UNITYAI_APPROVAL_TURN_TOKEN", "turn-secret")
     monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", "42")
     monkeypatch.setenv("UNITYAI_URL", "http://approval.invalid")
     calls = []
@@ -63,7 +62,7 @@ def test_write_preview_and_request_identity(approval, content, expected):
     assert body == {"gate_id": body["gate_id"], "tool": "write_file",
                     "params": {"path": str(workspace / "a.txt"), "content": expected,
                                "original": "old\r\n"},
-                    "workspace_path": str(workspace), "approval_turn_token": "turn-secret",
+                    "workspace_path": str(workspace),
                     "conversation_id": 42}
     assert request.get_header("X-session-token") == "session-secret"
     assert request.get_header("Content-type") == "application/json"
