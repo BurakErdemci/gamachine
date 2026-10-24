@@ -43,7 +43,7 @@ export function InspectorTextInput({ value, label, disabled, numeric, rounded, c
 export function InspectorWriteError({ error, revert, disabled }: { error?: SceneWriteError; revert: () => void; disabled: boolean }) {
   const { t } = useLang();
   if (!error) return null;
-  return <div className="fr-err" role="alert"><span className="fr-err-t">{t(`sceneEditor.write.${error.code}`)}
+  return <div className="fr-err" role="alert"><span className="fr-err-t">{error.code === 'project_mismatch' && error.message ? error.message : t(`sceneEditor.write.${error.code}`)}
     {error.unsure && ` ${t('sceneEditor.write.unsure')}`}</span>
     {error.retry && <button type="button" disabled={disabled} onClick={error.retry}>{t('sceneEditor.retry')}</button>}
     <button type="button" onClick={revert}>{t('sceneEditor.revert')}</button>

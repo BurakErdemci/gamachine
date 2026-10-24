@@ -69,13 +69,27 @@ export const inspectorWriteKey = {
 export type SceneWriteCode =
   | 'locked' | 'compiling' | 'prefab_part' | 'invalid_name' | 'invalid_value' | 'invalid_item' | 'create_failed' | 'write_failed'
   | 'already_present' | 'required' | 'add_failed'
-  | 'not_found' | 'unity_unavailable' | 'unity_timeout' | 'unity_error';
-export type SceneWriteResult<T> = { ok: true; data: T } | { ok: false; code: SceneWriteCode };
+  | 'project_mismatch' | 'not_found' | 'unity_unavailable' | 'unity_timeout' | 'unity_error';
+/** `message` is the backend's own text for a refusal that names the projects involved. */
+export type SceneWriteResult<T> = { ok: true; data: T } | { ok: false; code: SceneWriteCode; message?: string };
 
 const CONFLICTS = new Set(['locked', 'compiling', 'prefab_part', 'invalid_name', 'invalid_value', 'invalid_item', 'create_failed', 'write_failed', 'already_present', 'required', 'add_failed']);
 
+const isMismatch = (detail: unknown): detail is { code: 'project_mismatch'; message: string } =>
+  !!detail && typeof detail === 'object' && (detail as { code?: unknown }).code === 'project_mismatch'
+  && typeof (detail as { message?: unknown }).message === 'string';
+
+/** The human text a 409 carries: the project-mismatch message, or a plain-string detail that is not a short code. */
+export function conflictMessage(detail: unknown): string | undefined {
+  if (isMismatch(detail)) return detail.message;
+  return typeof detail === 'string' && detail && !CONFLICTS.has(detail) ? detail : undefined;
+}
+
 export function writeErrorCode(status: number, detail: unknown): SceneWriteCode {
-  if (status === 409) return typeof detail === 'string' && CONFLICTS.has(detail) ? detail as SceneWriteCode : 'write_failed';
+  if (status === 409) {
+    if (isMismatch(detail)) return 'project_mismatch';
+    return typeof detail === 'string' && CONFLICTS.has(detail) ? detail as SceneWriteCode : 'write_failed';
+  }
   if (status === 404) return 'not_found';
   if (status === 503) return 'unity_unavailable';
   if (status === 504) return 'unity_timeout';
@@ -91,8 +105,27 @@ export async function postSceneWrite<T>(api: string, token: string, route: strin
   } catch { return { ok: false, code: 'unity_unavailable' }; }
   let data: unknown = null;
   try { data = await response.json(); } catch { /* An empty body still carries the status. */ }
-  if (!response.ok) return { ok: false, code: writeErrorCode(response.status, (data as { detail?: unknown } | null)?.detail) };
+  if (!response.ok) {
+    const detail = (data as { detail?: unknown } | null)?.detail;
+    const message = response.status === 409 ? conflictMessage(detail) : undefined;
+    return message === undefined ? { ok: false, code: writeErrorCode(response.status, detail) }
+      : { ok: false, code: writeErrorCode(response.status, detail), message };
+  }
   return { ok: true, data: data as T };
+}
+
+/** A failed read: the HTTP status, plus the backend's message when Unity has another project open. */
+export class SceneHttpError {
+  constructor(readonly status: number, readonly message?: string) {}
+}
+
+export async function loadFailure(response: Response): Promise<SceneHttpError> {
+  let message: string | undefined;
+  try {
+    const detail = ((await response.json()) as { detail?: unknown } | null)?.detail;
+    if (response.status === 409 && isMismatch(detail)) message = detail.message;
+  } catch { /* The status alone still says what failed. */ }
+  return new SceneHttpError(response.status, message);
 }
 
 export async function fetchCreateMenu(api: string, token: string): Promise<CreateMenuItem[]> {

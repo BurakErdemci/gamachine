@@ -12,6 +12,8 @@ export interface HierarchyActions {
   create: (item: string, parentId: number | null) => Written; rename: (id: number, name: string) => Written;
   duplicate: (id: number) => Written; remove: (id: number) => Written;
   writeError: SceneWriteError | null; clearWriteError: () => void;
+  /** The backend's text while Unity has another project open than Gamachine's. */
+  projectMismatch?: string | null;
 }
 interface Props {
   unityStatus: UnityMCPStatus; tree: SceneTree | null; loading: boolean; error: number | null; stale: boolean;
@@ -288,12 +290,12 @@ export const HierarchyPanel: React.FC<Props> = ({ unityStatus, tree, loading, er
       {actions?.writeError && (
         <div key={errorCount} className="hier-err" role="alert">
           <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 6v5M10 13.5v.5" /></svg>
-          <span className="hier-err-t">{t(`sceneEditor.write.${actions.writeError.code}`)}{actions.writeError.unsure && ` ${t('sceneEditor.write.unsure')}`}</span>
+          <span className="hier-err-t">{actions.writeError.code === 'project_mismatch' && actions.writeError.message ? actions.writeError.message : t(`sceneEditor.write.${actions.writeError.code}`)}{actions.writeError.unsure && ` ${t('sceneEditor.write.unsure')}`}</span>
           {actions.writeError.retry && <button type="button" onClick={actions.writeError.retry}>{t('sceneEditor.retry')}</button>}
           <button type="button" className="hier-err-x" aria-label={t('sceneEditor.dismiss')} onClick={actions.clearWriteError}>×</button>
         </div>
       )}
-      {error !== null && <p className="hier-note" role="alert">{t(error === 503 ? 'sceneEditor.unavailable' : error === 504 ? 'sceneEditor.timeout' : 'sceneEditor.error')}</p>}
+      {error !== null && <p className="hier-note" role="alert">{actions?.projectMismatch || t(error === 503 ? 'sceneEditor.unavailable' : error === 504 ? 'sceneEditor.timeout' : 'sceneEditor.error')}</p>}
       {!!tree && tree.total > 200 && breadcrumb.length > 0 && <div className="hier-crumb" title={breadcrumb.join(' › ')}>{breadcrumb.join(' › ')}</div>}
       {loading && !tree ? <div className="hier-state" role="status">{t('sceneEditor.loading')}</div> : !tree ? null : (
         <>

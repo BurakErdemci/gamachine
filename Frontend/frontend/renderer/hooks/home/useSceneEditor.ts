@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchComponentMenu, fetchCreateMenu, inspectorWriteKey, postSceneWrite } from '../../lib/sceneEditor';
+import { SceneHttpError, fetchComponentMenu, fetchCreateMenu, inspectorWriteKey, loadFailure, postSceneWrite } from '../../lib/sceneEditor';
 import type { ComponentAction, ComponentMenuItem, CreateMenuItem, Inspection, SceneField, SceneTree, SceneVersion, SceneWriteCode } from '../../lib/sceneEditor';
 import type { UnityMCPStatus } from './useAIConfig';
 
@@ -24,7 +24,7 @@ export interface InspectorActions {
   loadComponentMenu: (id: number) => void;
 }
 /** `retry` is absent when retrying cannot help or could run the edit twice; `unsure` = it may have happened, the tree was refreshed. */
-export interface SceneWriteError { code: SceneWriteCode | 'busy'; retry?: () => void | Promise<unknown>; unsure?: boolean }
+export interface SceneWriteError { code: SceneWriteCode | 'busy'; message?: string; retry?: () => void | Promise<unknown>; unsure?: boolean }
 // The create menu changes only with the Unity install or a domain reload, so it is cached per api + token + Unity epoch.
 const createMenuCache = new Map<string, CreateMenuItem[]>();
 // The user has to change something first; `locked` is a hidden or not-editable object.
@@ -64,6 +64,8 @@ function coalesce<A>(send: (arg: A) => void) {
 
 // A failing endpoint waits 1, 2, 4 ... 30 s between attempts instead of retrying on every poll.
 const MAX_BACKOFF = 30_000;
+const statusOf = (failure: unknown) => failure instanceof SceneHttpError ? failure.status : typeof failure === 'number' ? failure : 502;
+const mismatchOf = (failure: unknown) => failure instanceof SceneHttpError ? failure.message ?? null : null;
 const fresh = (): Backoff => ({ failures: 0, until: 0 });
 const failed = (backoff: Backoff) => {
   backoff.failures += 1;
@@ -99,6 +101,8 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   const [versionError, setVersionError] = useState<number | null>(null);
   const [inspectError, setInspectError] = useState<number | null>(null);
   const [stale, setStale] = useState(false);
+  // Set while the failing reads say Unity has another project open; the backend's text, shown instead of a generic error.
+  const [projectMismatch, setProjectMismatch] = useState<string | null>(null);
   const [writeError, setWriteError] = useState<SceneWriteError | null>(null);
   const [createMenu, setCreateMenu] = useState<CreateMenuState>({ state: 'idle' });
   const [componentMenu, setComponentMenu] = useState<ComponentMenuState>({ state: 'idle', id: null });
@@ -150,7 +154,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     treeLoaded.current = null; inspectLoaded.current = null;
     treeBackoff.current = fresh(); inspectBackoff.current = fresh();
     setTree(null); setInspection(null); setSelectedId(null); setStale(false);
-    setError(null); setVersionError(null); setInspectError(null); setWriteError(null);
+    setError(null); setVersionError(null); setInspectError(null); setWriteError(null); setProjectMismatch(null);
     setCreateMenu({ state: 'idle' });
     componentMenuCache.current.clear(); componentMenuRequest.current = null;
     setComponentMenu({ state: 'idle', id: null }); setInspectorWrites({});
@@ -175,15 +179,15 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       setLoading(!hasTree.current);
       try {
         const response = await fetch(`${api}/scene-editor/tree`, { headers, signal: request.signal });
-        if (!response.ok) throw response.status;
+        if (!response.ok) throw await loadFailure(response);
         const data: SceneTree = await response.json();
         if (!alive || request.signal.aborted || compiling.current) return;
         hasTree.current = true; treeLoaded.current = key; treeBackoff.current = fresh();
-        setTree(data); setError(null);
+        setTree(data); setError(null); setProjectMismatch(null);
       } catch (failure) {
         if (!alive || request.signal.aborted) return;
         failed(treeBackoff.current);
-        setError(typeof failure === 'number' ? failure : 502);
+        setError(statusOf(failure)); setProjectMismatch(mismatchOf(failure));
       } finally {
         if (requests.get('tree') === request) treePending = false;
         if (alive && !request.signal.aborted) setLoading(false);
@@ -198,7 +202,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       setInspectLoading(true);
       try {
         const response = await fetch(`${api}/scene-editor/inspect/${id}`, { headers, signal: request.signal });
-        if (!response.ok) throw response.status;
+        if (!response.ok) throw await loadFailure(response);
         const data: Inspection = await response.json();
         if (alive && !request.signal.aborted && !compiling.current && selected.current === id) {
           needsInspection.current = false; inspectLoaded.current = key; inspectBackoff.current = fresh();
@@ -217,12 +221,12 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         }
       } catch (failure) {
         if (!alive || request.signal.aborted || selected.current !== id) return;
-        if (failure === 404) {
+        if (statusOf(failure) === 404) {
           needsInspection.current = false; inspectBackoff.current = fresh();
           selected.current = null; setSelectedId(null); setInspection(null); setInspectError(null);
         } else {
           failed(inspectBackoff.current);
-          setInspectError(typeof failure === 'number' ? failure : 502);
+          setInspectError(statusOf(failure)); setProjectMismatch(mismatchOf(failure));
         }
       } finally {
         if (requests.get('inspect') === request) inspectPending = false;
@@ -263,10 +267,10 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       const settledAtStart = !selectionPending && !selectSync.busy();
       try {
         const response = await fetch(`${api}/scene-editor/version`, { headers, signal: request.signal });
-        if (!response.ok) throw response.status;
+        if (!response.ok) throw await loadFailure(response);
         const next: SceneVersion = await response.json();
         if (!alive || request.signal.aborted) return;
-        setVersionError(null);
+        setVersionError(null); setProjectMismatch(null);
         compiling.current = next.compiling;
         setStale(next.compiling);
         if (next.compiling) {
@@ -300,7 +304,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         if (selected.current !== null && !inspectPending && !inspectSync.waiting() && (needsInspection.current || inspectLoaded.current !== inspectAt)
           && now >= inspectBackoff.current.until) void getInspection(selected.current, inspectAt);
       } catch (failure) {
-        if (alive && !request.signal.aborted) setVersionError(typeof failure === 'number' ? failure : 502);
+        if (alive && !request.signal.aborted) { setVersionError(statusOf(failure)); setProjectMismatch(mismatchOf(failure)); }
       } finally {
         polling = false;
         if (again && alive) void poll();
@@ -400,6 +404,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
           }
           if (unsure) runtime.current?.poll();
           const error: SceneWriteError = { code: result.code, unsure };
+          if (result.message) error.message = result.message;
           // A retry from before a Unity reload would send old-epoch ids to the new scene.
           if (!FINAL.has(result.code) && !unsure) error.retry = () => { if (generation === writeGeneration.current) return write(route, body, done, error, control); };
           errorSource.current.set(error, { route, id, seq });
@@ -482,7 +487,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   const addComponent = useCallback((id: number, item: string) =>
     write<{ componentId: number; type: string; label: string }>('add-component', { id, item }, () => dropComponentMenu(true),
       undefined, { key: inspectorWriteKey.add(id) }), [write, dropComponentMenu]);
-  return { tree, inspection, selectedId, select, loading, inspectLoading, error: error ?? versionError, inspectError, stale,
+  return { tree, inspection, selectedId, select, loading, inspectLoading, error: error ?? versionError, inspectError, stale, projectMismatch,
     createMenu, loadCreateMenu, create, rename, duplicate, remove, writeError, clearWriteError,
     componentMenu, loadComponentMenu, inspectorWrites, clearInspectorWrite, setActive, setField, setComponentEnabled, componentAction, addComponent };
 }
