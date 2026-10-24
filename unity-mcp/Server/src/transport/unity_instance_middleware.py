@@ -36,6 +36,7 @@ from services.registry import get_registered_tools
 from services.registry.tool_actions import READ, classify
 from transport.approval_gate import ApprovalDenied, parse_conversation_id
 from transport.plugin_hub import PluginHub
+from transport.project_scope import project_scope_refusal
 
 logger = logging.getLogger("mcp-for-unity-server")
 # Separate logger that propagates to root -> stderr so diagnostics show in console
@@ -499,6 +500,11 @@ class UnityInstanceMiddleware(Middleware):
             # here into one; FastMCP 4 answers with a JSON-RPC protocol error
             # instead (measured with the live probe, 25 Sep 2026).
             raise ToolError(str(exc)) from exc
+        # Reads too: a read from the wrong project misleads the model as much
+        # as a write damages it.
+        refusal = await project_scope_refusal(getattr(context, "fastmcp_context", None), self._request_conversation_id())
+        if refusal:
+            raise ToolError(refusal)
         # A fixed rule, not a card: before the gate, so it holds in auto mode
         # and step mode shows no card for a call that would be refused anyway.
         mesaj = getattr(context, "message", None)
