@@ -69,7 +69,6 @@ EN: dict[str, str] = {
         "LOCAL_APP_TOKEN is not set. For development, use UNITYAI_ALLOW_NO_TOKEN=1.",
     "Geçersiz uygulama token'ı": "Invalid application token",
     "Bu kullanıcıya erişim yok": "Access to this user is denied",
-    "Çok fazla analiz isteği. Lütfen bir dakika bekleyin.": "Too many analysis requests. Please wait a minute.",
     "Bu endpoint devre dışı bırakıldı. Güvenli workspace export kullanın.":
         "This endpoint is disabled. Use the secure workspace export.",
     "Otomatik kurulum şu anda Windows ve macOS'ta destekleniyor.":
@@ -171,11 +170,7 @@ PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"'(?P<cli>.+)' için otomatik kurulum desteklenmiyor\.", re.DOTALL),
      "Automatic installation is not supported for '{cli}'."),
     (re.compile(r"'(?P<cli>.+)' için giriş akışı desteklenmiyor\.", re.DOTALL),
-    "Sign-in is not supported for '{cli}'."),
-    (re.compile(r"Analiz sırasında bir hata oluştu: (?P<error>.*)", re.DOTALL),
-     "An error occurred during analysis: {error}"),
-    (re.compile(r"Güvenlik Riski: Yüklemeye çalıştığınız dosya şüpheli talimatlar içeriyor ve engellendi\. \((?P<audit_result>.*)\)", re.DOTALL),
-     "Security risk: The file contains suspicious instructions and was blocked. ({audit_result})"),
+     "Sign-in is not supported for '{cli}'."),
 ]
 
 

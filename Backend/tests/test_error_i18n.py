@@ -112,9 +112,6 @@ async def test_handler_preserves_structured_detail():
     ("Bu görev size ait değil", "This görev does not belong to you"),
     ("'codex' için otomatik kurulum desteklenmiyor.", "Automatic installation is not supported for 'codex'."),
     ("'codex' için giriş akışı desteklenmiyor.", "Sign-in is not supported for 'codex'."),
-    ("Analiz sırasında bir hata oluştu: first\nsecond", "An error occurred during analysis: first\nsecond"),
-    ("Güvenlik Riski: Yüklemeye çalıştığınız dosya şüpheli talimatlar içeriyor ve engellendi. (audit\nresult)",
-     "Security risk: The file contains suspicious instructions and was blocked. (audit\nresult)"),
 ])
 def test_patterns_keep_variable_parts(detail, expected):
     assert translate_detail(detail, "en") == expected
