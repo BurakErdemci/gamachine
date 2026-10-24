@@ -84,6 +84,9 @@ def _raise_unity_error(error: str, status: int = 200) -> None:
     if error in {"locked", "compiling", "prefab_part", "invalid_name", "invalid_value",
                  "invalid_item", "create_failed", "write_failed", "already_present", "required", "add_failed"}:
         raise HTTPException(status_code=409, detail=error)
+    if status == 409:
+        # The MCP server's own refusal (the project is not open in Unity), already in user-facing text.
+        raise HTTPException(status_code=409, detail={"code": "project_mismatch", "message": error})
     try:
         logger.warning("Unity scene editor error (HTTP %s)", status)
     except Exception:

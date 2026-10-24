@@ -214,6 +214,17 @@ def test_unknown_write_error_stays_private(client, monkeypatch):
     assert response.json() == {"detail": "unity_error"}
 
 
+def test_server_project_refusal_reaches_the_client(client, monkeypatch):
+    http, routes = client
+    text = "Unity'de bu proje açık değil: GameA."
+    monkeypatch.setattr(routes.urllib.request, "urlopen", Mock(return_value=_reply(
+        {"success": False, "error": text}, status=409)))
+    response = http.post("/scene-editor/rename", json={"id": 1, "name": "x"},
+                         headers={"X-Session-Token": "app-secret"})
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "project_mismatch", "message": text}}
+
+
 @pytest.mark.parametrize("body,status,expected,detail", [
     ({"success": False, "error": "not_found"}, 200, 404, "not_found"),
     ({"status": "success", "result": {"success": False, "error": "not_found"}}, 200, 404, "not_found"),
