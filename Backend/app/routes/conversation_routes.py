@@ -2403,6 +2403,26 @@ Max 300 kelime. Türkçe yaz.
             return p.get("path")
         return params
 
+    @router.post("/mcp-project-check")
+    async def mcp_project_check(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
+        """Whether the Unity editor an MCP call targets is the project Gamachine has open."""
+        _check_token(x_session_token)
+        conversation_id = body.get("conversation_id")
+        project_path = body.get("project_path")
+        user_id = None
+        if type(conversation_id) is int and conversation_id > 0:
+            try:
+                user_id = db.get_conversation_owner(conversation_id)
+            except Exception:
+                user_id = None
+        if user_id is None:
+            return {"ok": False, "detail": "Bu sohbet bulunamadı; Unity'ye istek gönderilmedi."}
+        workspace = db.get_last_workspace(user_id)
+        detail = await asyncio.to_thread(
+            unity_project_presence.project_scope_detail, workspace or "",
+            project_path if isinstance(project_path, str) else "")
+        return {"ok": detail is None, "detail": detail}
+
     @router.post("/mcp-approval-request")
     async def mcp_approval_request(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
         """MCP server'dan gelen onay isteğini saklar. Frontend /mcp-pending ile yoklar."""

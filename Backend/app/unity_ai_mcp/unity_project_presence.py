@@ -195,3 +195,16 @@ def mcp_mismatch_detail(workspace_path) -> str | None:
     return (f"Unity'de bu proje açık değil: {name}."
             + (f" Unity'de açık olan: {', '.join(others)}." if others else "")
             + " Unity'de ve Gamachine'de aynı projeyi açıp tekrar dene.")
+
+
+def project_scope_detail(workspace_path, project_path) -> str | None:
+    if not workspace_path:
+        return "Gamachine'de açık bir Unity projesi yok; Unity'ye istek gönderilmedi."
+    if not project_path:
+        return "Hedef Unity editörü proje yolunu bildirmedi; istek gönderilmedi."
+    if _same_dir(project_path, workspace_path):
+        return None
+    target = os.path.basename(os.path.normpath(project_path))
+    name = os.path.basename(os.path.normpath(workspace_path))
+    return (f"Bu istek Unity'de açık olan projeye ({target}) gidiyor, Gamachine'de açık proje ise {name}; "
+            "istek gönderilmedi. Unity'de ve Gamachine'de aynı projeyi aç.")
