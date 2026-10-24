@@ -1281,45 +1281,47 @@ class DatabaseManager:
             ).fetchone()
             return (row[0] or "") if row else ""
 
-    def compact_conversation(self, conv_id: int, summary: str, through_id: int | None = None) -> None:
+    def compact_conversation(self, conv_id: int, summary: str, through_id: int | None = None) -> bool:
         """Sohbeti compact'la: özeti kaydet, eski mesajları sil, özet mesajını ekle."""
-        self.save_memory(conv_id, summary)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             # Keep boundary selection and replacement in the same write transaction.
             conn.execute('BEGIN IMMEDIATE')
             if through_id is None:
-                through_id = conn.execute(
+                boundary = conn.execute(
                     'SELECT MAX(id) FROM messages WHERE conversation_id = ?', (conv_id,)
                 ).fetchone()[0]
-            boundary = None
-            if through_id is not None:
+            else:
                 boundary = conn.execute(
-                    'SELECT id FROM messages WHERE id = ? AND conversation_id = ?',
-                    (through_id, conv_id)
-                ).fetchone()
+                    'SELECT MAX(id) FROM messages WHERE conversation_id = ? AND id <= ?',
+                    (conv_id, through_id)
+                ).fetchone()[0]
+                if boundary is None:
+                    logger.info(f"[Compact] Stale compaction skipped for conversation {conv_id} through {through_id}")
+                    return False
+            conn.execute(
+                'UPDATE conversations SET memory_summary = ? WHERE id = ?',
+                (summary, conv_id)
+            )
+            self._touch(conn, conv_id, now)
             content = f'📝 **Sohbet özetlendi.**\n\n{summary}'
-            if boundary:
+            if boundary is not None:
                 conn.execute(
                     'DELETE FROM messages WHERE conversation_id = ? AND id < ?',
-                    (conv_id, through_id)
+                    (conv_id, boundary)
                 )
                 conn.execute(
                     "UPDATE messages SET role='assistant', content=?, smells_json='[]', "
                     'timestamp=?, provider=NULL, model=NULL WHERE id = ?',
-                    (content, now, through_id)
+                    (content, now, boundary)
                 )
             else:
-                if through_id is not None:
-                    conn.execute(
-                        'DELETE FROM messages WHERE conversation_id = ? AND id <= ?',
-                        (conv_id, through_id)
-                    )
                 conn.execute(
                     'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp) VALUES (?, ?, ?, ?, ?)',
                     (conv_id, 'assistant', content, '[]', now)
                 )
             conn.commit()
+        return True
 
     def record_activity(self, kind, conversation_id=None, provider=None, model=None,
                         tool=None, detail=None, at=None) -> bool:

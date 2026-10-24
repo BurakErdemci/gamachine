@@ -46,24 +46,49 @@ def test_snapshot_compaction_preserves_newer_messages_and_order(db):
     assert db.get_conversation_messages(other) == unrelated
 
 
-def test_deleted_snapshot_end_inserts_summary_and_preserves_newer_rows(db):
+def test_deleted_snapshot_end_reuses_older_row_and_preserves_newer_rows(db):
     cid = db.create_conversation(1, "deleted boundary")
-    db.add_message(cid, "user", "old question")
+    older_id = db.add_message(cid, "user", "old question")
     through_id = db.add_message(cid, "assistant", "snapshot end")
     db.add_message(cid, "user", "newer question")
     newer = db.get_conversation_messages(cid)[-1]
     with closing(sqlite3.connect(db.db_path)) as conn, conn:
         conn.execute("DELETE FROM messages WHERE id = ?", (through_id,))
 
-    db.compact_conversation(cid, "summary", through_id=through_id)
+    applied = db.compact_conversation(cid, "summary", through_id=through_id)
 
     messages = db.get_conversation_messages(cid)
+    assert applied is True
     assert len(messages) == 2
-    assert messages[0] == newer
-    assert messages[1]["id"] > newer["id"]
-    assert messages[1]["content"] == SUMMARY_PREFIX + "summary"
-    assert messages[1]["role"] == "assistant"
+    assert messages[0]["id"] == older_id
+    assert messages[0]["content"] == SUMMARY_PREFIX + "summary"
+    assert messages[0]["role"] == "assistant"
+    assert messages[1] == newer
     assert db.get_memory(cid) == "summary"
+
+
+def test_overlapping_compaction_skips_stale_snapshot(db):
+    cid = db.create_conversation(1, "overlapping snapshots")
+    snapshot_ids = [db.add_message(cid, "user", f"message {i}") for i in range(12)]
+    db.add_message(cid, "user", "arrived after both snapshots")
+    newer = db.get_conversation_messages(cid)[-1]
+
+    assert db.compact_conversation(cid, "newer summary", through_id=snapshot_ids[-1]) is True
+    after_newer_compaction = db.get_conversation_messages(cid)
+    with closing(sqlite3.connect(db.db_path)) as conn:
+        conversation = conn.execute("SELECT * FROM conversations WHERE id = ?", (cid,)).fetchone()
+
+    assert db.compact_conversation(cid, "older summary", through_id=snapshot_ids[9]) is False
+
+    messages = db.get_conversation_messages(cid)
+    assert messages == after_newer_compaction
+    assert [m["id"] for m in messages] == [snapshot_ids[-1], newer["id"]]
+    assert messages[0]["content"] == SUMMARY_PREFIX + "newer summary"
+    assert messages[1] == newer
+    assert sum(m["content"].startswith(SUMMARY_PREFIX) for m in messages) == 1
+    assert db.get_memory(cid) == "newer summary"
+    with closing(sqlite3.connect(db.db_path)) as conn:
+        assert conn.execute("SELECT * FROM conversations WHERE id = ?", (cid,)).fetchone() == conversation
 
 
 @pytest.mark.parametrize("message_count", [0, 3])
@@ -72,7 +97,7 @@ def test_two_argument_compaction_covers_all_current_rows(db, message_count):
     for i in range(message_count):
         db.add_message(cid, "user", f"message {i}")
 
-    db.compact_conversation(cid, "legacy summary")
+    assert db.compact_conversation(cid, "legacy summary") is True
 
     messages = db.get_conversation_messages(cid)
     assert len(messages) == 1

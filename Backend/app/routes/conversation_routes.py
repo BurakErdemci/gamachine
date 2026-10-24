@@ -1830,7 +1830,8 @@ Max 300 kelime. Türkçe yaz.
                        + "Sohbetin son mesajları:\n"
                        + "\n".join(tail))
 
-        db.compact_conversation(conv_id, summary, through_id=through_id)
+        if db.compact_conversation(conv_id, summary, through_id=through_id) is False:
+            logger.info("[Compact] A newer compaction already covered this snapshot.")
 
         # Sonraki tur, özetlenmiş küçük bağlamla ve TEMİZ bir CLI oturumuyla başlar.
         await _cli_bagalamini_sifirla(db, conv_id)
