@@ -476,6 +476,14 @@ class PluginHub(WebSocketEndpoint):
         return None
 
     @classmethod
+    async def session_project_paths(cls, user_id: str | None = None) -> dict[str, str]:
+        """Return {session_id: registered project root} (empty string when unknown)."""
+        if cls._registry is None:
+            return {}
+        sessions = await cls._registry.list_sessions(user_id=user_id)
+        return {sid: session.project_path or "" for sid, session in sessions.items()}
+
+    @classmethod
     async def get_tools_for_project(
         cls,
         project_hash: str,

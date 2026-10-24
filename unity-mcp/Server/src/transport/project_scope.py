@@ -49,10 +49,9 @@ def _same_path(a: str, b: str) -> bool:
         return False
 
 
-def select_session_by_path(sessions: dict, project_path: str) -> tuple[str | None, str | None]:
-    """The one session whose editor has `project_path` open, or an error text."""
-    matches = [sid for sid, details in sessions.items()
-               if getattr(details, "project_path", None) and _same_path(details.project_path, project_path)]
+def select_session_by_path(paths: dict[str, str], project_path: str) -> tuple[str | None, str | None]:
+    """The one session (of {session_id: project root}) that has `project_path` open, or an error text."""
+    matches = [sid for sid, path in paths.items() if path and _same_path(path, project_path)]
     name = os.path.basename(os.path.normpath(project_path))
     if not matches:
         return None, f"Unity'de bu proje açık değil: {name}."

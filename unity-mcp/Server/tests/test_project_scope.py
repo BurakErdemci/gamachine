@@ -256,7 +256,7 @@ def test_session_wait_budget_is_clamped(monkeypatch):
 
 
 def _sessions(*entries):
-    return {sid: types.SimpleNamespace(project_path=path) for sid, path in entries}
+    return dict(entries)
 
 
 def test_select_session_by_path_picks_the_one_matching_session(tmp_path):

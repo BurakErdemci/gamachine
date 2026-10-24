@@ -613,7 +613,11 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
                 project_path = body.get("project_path")
                 if isinstance(project_path, str) and project_path:
                     from transport.project_scope import select_session_by_path
-                    path_sid, path_error = select_session_by_path(sessions.sessions, project_path)
+                    path_sid, path_error = select_session_by_path(
+                        await PluginHub.session_project_paths(), project_path)
+                    if path_sid and path_sid not in sessions.sessions:
+                        # The session left between the two reads.
+                        path_sid, path_error = select_session_by_path({}, project_path)
                     if path_error:
                         return JSONResponse({"success": False, "error": path_error}, status_code=409)
                     if session_id and session_id != path_sid:
