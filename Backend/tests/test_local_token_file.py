@@ -278,27 +278,28 @@ def harf_duyarsiz_kip(monkeypatch):
 
 @pytest.fixture
 def case_sensitive_dizin(tmp_path):
-    """Aynı adın iki yazımının YAN YANA durabildiği gerçek bir dizin.
+    """A directory that can hold two spellings of one name side by side.
 
-    POSIX'te bedava — dizinler zaten case-sensitive, yani bu testler CI Linux'ta
-    KOŞUYOR. Windows'ta `fsutil` ile açılıyor; ölçüldü (31 Tem 2026, bu makine,
-    AYRICALIKSIZ) `setCaseSensitiveInfo ... enable` rc=0 döndü. Yetenek yoksa
-    ölçüm yapılamıyor demektir ve o zaman atlanıyor — yeteneğin YOKLUĞUNU
-    "geçti" saymamak için üç durumlu kapıların aynı mantığı.
+    Linux CI volumes are case-sensitive, so these tests run there. On Windows
+    `fsutil setCaseSensitiveInfo ... enable` turns it on (measured 31 Jul 2026:
+    rc=0 without admin rights). macOS APFS is case-insensitive by default, so
+    the volume is probed and the test is skipped rather than counted as passed.
     """
-    if os.name != "nt":
-        return tmp_path
-    import subprocess
+    if os.name == "nt":
+        import subprocess
 
-    r = subprocess.run(
-        ["fsutil", "file", "setCaseSensitiveInfo", str(tmp_path), "enable"],
-        capture_output=True, text=True,
-    )
-    if r.returncode != 0:
-        pytest.skip(
-            "case-sensitive dizin kurulamadı — ölçüldü: "
-            f"fsutil rc={r.returncode} {(r.stdout + r.stderr).strip()[:100]}"
+        r = subprocess.run(
+            ["fsutil", "file", "setCaseSensitiveInfo", str(tmp_path), "enable"],
+            capture_output=True, text=True,
         )
+        if r.returncode != 0:
+            pytest.skip(
+                "case-sensitive dizin kurulamadı — ölçüldü: "
+                f"fsutil rc={r.returncode} {(r.stdout + r.stderr).strip()[:100]}"
+            )
+    (tmp_path / "case-sensitivity-probe").write_text("probe", encoding="utf-8")
+    if (tmp_path / "CASE-SENSITIVITY-PROBE").exists():
+        pytest.skip("Case-insensitive volume: distinct entries differing only in case are required")
     return tmp_path
 
 
