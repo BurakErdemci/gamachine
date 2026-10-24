@@ -17,6 +17,7 @@ from computer_use import driver_client, server
 @pytest.fixture(autouse=True)
 def no_real_cg_windows(monkeypatch):
     monkeypatch.setattr(driver_client, "_cg_window_list", lambda: [])
+    monkeypatch.setattr(driver_client, "_lsappinfo_front", AsyncMock(return_value=(False, None)))
 
 
 @pytest.fixture

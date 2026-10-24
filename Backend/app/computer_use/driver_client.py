@@ -99,6 +99,61 @@ async def _lsappinfo_list_text() -> str | None:
         return None
 
 
+async def _run_lsappinfo(*args) -> str | None:
+    if sys.platform != "darwin":
+        return None
+    try:
+        executable = os.path.join(os.sep, "usr", "bin", "lsappinfo")
+        if not os.path.isfile(executable):
+            return None
+        # At most one child per call; reap it on timeout and cancellation.
+        process = await asyncio.create_subprocess_exec(
+            executable, *args, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), 2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return None
+        return stdout.decode("utf-8", errors="replace") if process.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _parse_lsappinfo_front(front_text, info_text) -> tuple[bool, int | None]:
+    if not isinstance(front_text, str) or not isinstance(info_text, str):
+        return False, None
+    pids = re.findall(r'\bpid\s+=\s+(-?[0-9]+)\b', info_text)
+    types = re.findall(r'\btype="([^"\n]*)"', info_text)
+    if len(pids) != 1 or types != ["Foreground"]:
+        return True, None
+    pid = int(pids[0])
+    return True, pid if pid > 0 else None
+
+
+async def _lsappinfo_front() -> tuple[bool, int | None]:
+    try:
+        front_text = await _run_lsappinfo("front")
+        if front_text is None:
+            return False, None
+        asns = re.findall(r'\bASN:0x[0-9a-fA-F]+-0x[0-9a-fA-F]+:', front_text)
+        if len(asns) != 1:
+            return False, None
+        info_text = await _run_lsappinfo("info", "-only", "pid", "-only", "applicationtype", asns[0])
+        if info_text is None:
+            return False, None
+        return _parse_lsappinfo_front(front_text, info_text)
+    except Exception:
+        return False, None
+
+
 def _parse_lsappinfo_list(text) -> list[dict]:
     if not isinstance(text, str):
         return []
@@ -495,6 +550,9 @@ class DriverClient:
 
     async def frontmost_pid(self) -> int | None:
         try:
+            answered, pid = await _lsappinfo_front()
+            if answered:
+                return pid
             result = await self.call("list_apps", {})
             if result.is_error:
                 return None
