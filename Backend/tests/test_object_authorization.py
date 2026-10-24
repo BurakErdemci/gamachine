@@ -46,10 +46,9 @@ def gercek_token(monkeypatch):
     yield
 
 
-def _db(owner=1, analysis_owner=1):
+def _db(owner=1):
     db = MagicMock()
     db.get_conversation_owner.return_value = owner
-    db.get_analysis_owner.return_value = analysis_owner
     return db
 
 
@@ -72,16 +71,6 @@ def test_a_conversation_owned_by_someone_else_is_rejected(gercek_token):
 
 def test_an_existing_conversation_still_passes(gercek_token):
     assert auth_utils.require_conversation_owner(_db(owner=1), TOKEN, conv_id=5) == (1, 5)
-
-
-def test_the_analysis_dependency_carries_the_same_promise(gercek_token):
-    # Aynı sınıftan bir fonksiyon aynı dosyada aynı hatayı taşıyordu; ikisini
-    # ayrı davranışta bırakmak, bir sonraki okuyucunun hangisine güveneceğini
-    # bilememesi demek olurdu.
-    with pytest.raises(HTTPException) as e:
-        auth_utils.require_analysis_owner(_db(analysis_owner=None), TOKEN, item_id=999999)
-    assert e.value.status_code == 404
-    assert auth_utils.require_analysis_owner(_db(), TOKEN, item_id=3) == (1, 3)
 
 
 def test_a_user_id_that_is_not_the_local_user_is_rejected(gercek_token):

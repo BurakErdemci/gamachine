@@ -218,11 +218,8 @@ class DatabaseManager:
                 workspace TEXT,
                 updated_at TEXT,
                 PRIMARY KEY (conversation_id, provider))''')
-            # Eski Geçmiş (geriye uyumluluk)
-            cursor.execute('''CREATE TABLE IF NOT EXISTS history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, timestamp TEXT, title TEXT,
-                intent TEXT, original_code TEXT, ai_suggestion TEXT, smells TEXT,
-                FOREIGN KEY (user_id) REFERENCES users (id))''')
+            # The table held users' pasted code for the removed analysis feature; nothing reads it.
+            cursor.execute('DROP TABLE IF EXISTS history')
             # --- YENİ: Sohbetler ---
             cursor.execute('''CREATE TABLE IF NOT EXISTS conversations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -494,36 +491,6 @@ class DatabaseManager:
                 'DELETE FROM api_keys WHERE user_id = ? AND provider_type = ?',
                 (user_id, provider_type)
             )
-            conn.commit()
-
-    # ===================== ESKİ GEÇMİŞ (Geriye Uyumluluk) =====================
-    def save_analysis(self, user_id: int, title: str, intent: str, code: str, suggestion: str, smells: list) -> None:
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute('INSERT INTO history (user_id, timestamp, title, intent, original_code, ai_suggestion, smells) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                         (user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), title, intent, code, suggestion, json.dumps(smells)))
-
-    def get_user_history(self, user_id: int) -> List[Tuple]:
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            return conn.execute('SELECT id, timestamp, title, intent FROM history WHERE user_id = ? ORDER BY id DESC', (user_id,)).fetchall()
-
-    def get_analysis_detail(self, item_id: int) -> Optional[Dict[str, Any]]:
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            res = conn.execute('SELECT original_code, ai_suggestion, smells FROM history WHERE id = ?', (item_id,)).fetchone()
-            return {"code": res[0], "suggestion": res[1], "smells": json.loads(res[2])} if res else None
-
-    def get_analysis_owner(self, item_id: int) -> Optional[int]:
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            row = conn.execute('SELECT user_id FROM history WHERE id = ?', (item_id,)).fetchone()
-            return row[0] if row else None
-
-    def delete_analysis(self, item_id: int) -> None:
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute('DELETE FROM history WHERE id = ?', (item_id,))
-            conn.commit()
-
-    def rename_analysis(self, item_id: int, new_title: str) -> None:
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            conn.execute('UPDATE history SET title = ? WHERE id = ?', (new_title, item_id))
             conn.commit()
 
     # ===================== YENİ: SOHBETLER =====================

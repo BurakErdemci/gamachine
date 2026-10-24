@@ -95,10 +95,6 @@ def require_conversation_owner(db: Any, token: str, conv_id: int) -> tuple[int, 
     return _require_owned(db, token, conv_id, "get_conversation_owner", "sohbet")
 
 
-def require_analysis_owner(db: Any, token: str, item_id: int) -> tuple[int, int]:
-    return _require_owned(db, token, item_id, "get_analysis_owner", "analiz")
-
-
 def is_path_within_workspace(file_path: str, workspace_path: str) -> bool:
     try:
         resolved_file = Path(file_path).resolve(strict=False)
