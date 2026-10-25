@@ -525,8 +525,6 @@ export const tr = {
   // --- Sohbet akışı (useChat) ---
   'chat.deleteConfirm': 'Bu sohbet silinsin mi?',
   'chat.errorOccurred': '❌ Hata oluştu.',
-  'chat.historyCleared': 'Sohbet geçmişi temizlendi',
-  'chat.historyClearFailed': 'Geçmiş temizlenemedi',
   'chat.recent': 'Son sohbetler',
   // Sohbet dalları (sekmeler)
   'branch.tabs': 'Sohbet dalları',
@@ -2047,8 +2045,6 @@ export const en: Record<keyof typeof tr, string> = {
   // --- Chat flow (useChat) ---
   'chat.deleteConfirm': 'Delete this chat?',
   'chat.errorOccurred': '❌ Something went wrong.',
-  'chat.historyCleared': 'Chat history cleared',
-  'chat.historyClearFailed': 'Could not clear history',
   'chat.recent': 'Recent chats',
   'branch.tabs': 'Chat branches',
   'branch.new': 'Branch from here — the new tab gets the text history only; tool outputs are not copied',
