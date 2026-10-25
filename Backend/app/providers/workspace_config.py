@@ -19,8 +19,10 @@ gitignore yazamamak bir kolaylık kaybıdır; sohbetin ya da oturum açılışı
 kırılması değil. Bu yüzden her giriş noktası geniş bir `except` ile bitiyor.
 """
 
+import json
 import logging
 import os
+import stat
 import subprocess
 import tempfile
 from typing import Iterable, List, Optional, Set
@@ -325,6 +327,134 @@ def _compose(existing: str, missing: List[str]) -> str:
 
 
 # ───────────────────────────── genel arayüz ───────────────────────────────
+
+
+_BACKUP_SUFFIX = ".gamachine-backup"
+_MAX_CONFIG_BYTES = 1024 * 1024
+_RETRY = object()
+
+
+def _move_aside(parts: List[str], rel_path: str, dfd: int, path: str,
+                ident: tuple) -> object:
+    """Rename the verified config to the first free backup name.
+
+    Returns the backup's relative path, ``_RETRY`` if the name no longer refers to
+    the file that was read, or ``None`` when no rename is possible.
+    """
+    name = parts[-1]
+    kwargs = {"dir_fd": dfd} if dfd != -1 else {}
+    current = os.stat(path if dfd == -1 else name, follow_symlinks=False, **kwargs)
+    if (current.st_dev, current.st_ino) != ident:
+        return _RETRY
+    for n in range(0, 21):
+        suffix = _BACKUP_SUFFIX if n == 0 else f"{_BACKUP_SUFFIX}-{n}"
+        try:
+            if dfd != -1:
+                os.stat(name + suffix, follow_symlinks=False, dir_fd=dfd)
+            else:
+                os.lstat(path + suffix)
+        except FileNotFoundError:
+            pass
+        else:
+            continue  # never overwrite anything, a regular file included
+        try:
+            if dfd != -1:
+                os.rename(name, name + suffix, src_dir_fd=dfd, dst_dir_fd=dfd)
+            else:
+                os.replace(path, path + suffix)
+        except (IsADirectoryError, NotADirectoryError, FileExistsError):
+            continue
+        return rel_path + suffix
+    return None
+
+
+def _read_config_once(workspace: str, ws_real: str, rel_path: str, parts: List[str]) -> object:
+    from safe_paths import O_NOFOLLOW, dogrula_kimlik
+
+    path = os.path.join(ws_real, rel_path)
+    dfd = -1
+    fd = -1
+    try:
+        try:
+            if os.open in os.supports_dir_fd:
+                dfd = os.open(ws_real, os.O_RDONLY | os.O_DIRECTORY)
+                for part in parts[:-1]:
+                    next_dfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | O_NOFOLLOW, dir_fd=dfd)
+                    os.close(dfd)
+                    dfd = next_dfd
+                # Resolve every component against pinned directories, never a mutable path.
+                fd = os.open(parts[-1], os.O_RDONLY | O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+            else:
+                if not _icinde_mi(os.path.realpath(os.path.dirname(path)), ws_real):
+                    raise OSError("Config parent redirects outside the workspace")
+                fd = os.open(path, os.O_RDONLY | O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+        except FileNotFoundError:
+            return {}
+        try:
+            # Rejects hardlinks (st_nlink) and an fd that no longer sits at `path`.
+            dogrula_kimlik(fd, path)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError("Config must be a regular file")
+            ident = (info.st_dev, info.st_ino)
+            original_bytes = b""
+            if info.st_size <= _MAX_CONFIG_BYTES:
+                with os.fdopen(fd, "rb") as f:
+                    fd = -1
+                    original_bytes = f.read(_MAX_CONFIG_BYTES + 1)
+        finally:
+            if fd != -1:
+                os.close(fd)
+                fd = -1
+
+        if info.st_size <= _MAX_CONFIG_BYTES and len(original_bytes) <= _MAX_CONFIG_BYTES:
+            try:
+                original_text = original_bytes.decode("utf-8-sig")
+                if not original_text.strip():
+                    return {}
+                existing = json.loads(original_text)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+                pass
+            else:
+                if existing is None:
+                    return {}
+                if isinstance(existing, dict):
+                    return existing
+
+        backup_path = _move_aside(parts, rel_path, dfd, path, ident)
+        if backup_path is _RETRY or backup_path is None:
+            return backup_path
+        ensure_gitignored(workspace, [backup_path])
+        logger.warning("[config-read] Unusable JSON object in %s; original moved to %s.",
+                       path, os.path.join(workspace, backup_path))
+        return {}
+    except OSError:
+        logger.error("[config-read] Cannot read or rename %s; config left unchanged.", path)
+        return None
+    finally:
+        if fd != -1:
+            os.close(fd)
+        if dfd != -1:
+            os.close(dfd)
+
+
+def read_user_json_config(workspace: str, rel_path: str) -> Optional[dict]:
+    """Read a user config, renaming unusable regular files before replacement."""
+    ws_real = os.path.realpath(workspace)
+    normalized_path = rel_path.replace(os.altsep, os.sep) if os.altsep else rel_path
+    parts = normalized_path.split(os.sep)
+    if (os.path.isabs(rel_path) or os.path.splitdrive(rel_path)[0]
+            or any(part in ("", ".", "..") for part in parts)):
+        logger.error("[config-read] Invalid relative config path: %s", rel_path)
+        return None
+    # A changed name between read and rename means another process swapped the
+    # file; read once more, then give up rather than move the wrong file.
+    for _ in range(2):
+        result = _read_config_once(workspace, ws_real, rel_path, parts)
+        if result is not _RETRY:
+            return result
+    logger.error("[config-read] %s changed while being read; config left unchanged.", rel_path)
+    return None
 
 
 def guvenli_config_yaz(workspace: str, goreli_yol: str, icerik: str,
