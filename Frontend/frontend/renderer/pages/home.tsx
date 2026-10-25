@@ -779,6 +779,7 @@ export default function Home() {
   useEffect(() => { dismissGuide(); }, [guideScreenId, dismissGuide]);
   const sceneFrameVisible = !!fs.workspacePath && !backendError && !ai.showSettings;
   const sceneEditor = useSceneEditor({ api: API, token: auth.user?.sessionToken, editorOn,
+    projectPath: fs.workspacePath ?? null,
     unityStatus: ai.unityMcpStatus, hierarchyVisible: sceneFrameVisible && hierarchyVisible,
     inspectorVisible: sceneFrameVisible && !profileOpen && !guide.guideOpen && ws.open && ws.tab === 'sahne' });
   const selectSceneObject = useCallback((id: number) => {

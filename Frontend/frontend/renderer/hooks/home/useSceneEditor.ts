@@ -6,6 +6,7 @@ import type { UnityMCPStatus } from './useAIConfig';
 interface Options {
   api: string; token?: string; editorOn: boolean; unityStatus: UnityMCPStatus;
   hierarchyVisible: boolean; inspectorVisible: boolean;
+  projectPath?: string | null;
 }
 interface Runtime { inspect: (id: number | null) => void; select: (id: number | null) => void; poll: () => void }
 export type CreateMenuState = { state: 'idle' | 'loading' | 'failed' } | { state: 'ready'; items: CreateMenuItem[] };
@@ -89,7 +90,7 @@ function inspectionValues(data: Inspection | null): Record<string, unknown> {
   return values;
 }
 
-export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVisible, inspectorVisible }: Options) {
+export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVisible, inspectorVisible, projectPath }: Options) {
   const [visible, setVisible] = useState(() => typeof document !== 'undefined' && document.visibilityState === 'visible');
   const [tree, setTree] = useState<SceneTree | null>(null);
   const [inspection, setInspection] = useState<Inspection | null>(null);
@@ -154,11 +155,12 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     treeLoaded.current = null; inspectLoaded.current = null;
     treeBackoff.current = fresh(); inspectBackoff.current = fresh();
     setTree(null); setInspection(null); setSelectedId(null); setStale(false);
+    setLoading(false); setInspectLoading(false);
     setError(null); setVersionError(null); setInspectError(null); setWriteError(null); setProjectMismatch(null);
     setCreateMenu({ state: 'idle' });
     componentMenuCache.current.clear(); componentMenuRequest.current = null;
     setComponentMenu({ state: 'idle', id: null }); setInspectorWrites({});
-  }, [api, token, editorOn, unityStatus]);
+  }, [api, token, editorOn, unityStatus, projectPath]);
 
   useEffect(() => {
     if (!active) { setLoading(false); setInspectLoading(false); return; }
@@ -173,6 +175,10 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       const next = new AbortController(); requests.set(key, next); return next;
     };
     const headers = { 'X-Session-Token': token! };
+    const clearProjectData = () => {
+      setTree(null); hasTree.current = false; treeLoaded.current = null;
+      setInspection(null); inspectLoaded.current = null;
+    };
     const getTree = async (key: string | null) => {
       const request = controller('tree');
       treePending = true;
@@ -187,7 +193,9 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       } catch (failure) {
         if (!alive || request.signal.aborted) return;
         failed(treeBackoff.current);
-        setError(statusOf(failure)); setProjectMismatch(mismatchOf(failure));
+        const mismatch = mismatchOf(failure);
+        setError(statusOf(failure)); setProjectMismatch(mismatch);
+        if (mismatch !== null) clearProjectData();
       } finally {
         if (requests.get('tree') === request) treePending = false;
         if (alive && !request.signal.aborted) setLoading(false);
@@ -226,7 +234,9 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
           selected.current = null; setSelectedId(null); setInspection(null); setInspectError(null);
         } else {
           failed(inspectBackoff.current);
-          setInspectError(statusOf(failure)); setProjectMismatch(mismatchOf(failure));
+          const mismatch = mismatchOf(failure);
+          setInspectError(statusOf(failure)); setProjectMismatch(mismatch);
+          if (mismatch !== null) clearProjectData();
         }
       } finally {
         if (requests.get('inspect') === request) inspectPending = false;
@@ -304,7 +314,11 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         if (selected.current !== null && !inspectPending && !inspectSync.waiting() && (needsInspection.current || inspectLoaded.current !== inspectAt)
           && now >= inspectBackoff.current.until) void getInspection(selected.current, inspectAt);
       } catch (failure) {
-        if (alive && !request.signal.aborted) { setVersionError(statusOf(failure)); setProjectMismatch(mismatchOf(failure)); }
+        if (alive && !request.signal.aborted) {
+          const mismatch = mismatchOf(failure);
+          setVersionError(statusOf(failure)); setProjectMismatch(mismatch);
+          if (mismatch !== null) clearProjectData();
+        }
       } finally {
         polling = false;
         if (again && alive) void poll();
@@ -322,7 +336,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
       for (const request of requests.values()) request.abort();
       if (runtime.current === owner) runtime.current = null;
     };
-  }, [active, api, token]);
+  }, [active, api, token, projectPath]);
 
   const show = useCallback((id: number | null) => {
     localSelection.current += 1; selected.current = id; inspectBackoff.current = fresh();
