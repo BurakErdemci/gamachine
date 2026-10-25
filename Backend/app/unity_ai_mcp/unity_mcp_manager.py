@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import asyncio
 import httpx
@@ -7,9 +8,36 @@ import json
 import secrets
 from typing import Optional
 
+from spawn_env import build_spawn_env
 from .mcp_identity import Occupant, ServerIdentity, probe_port_identity
+from . import unity_project_presence
 
 logger = logging.getLogger(__name__)
+
+
+def _bring_editor_forward(project_path: str) -> None:
+    try:
+        if sys.platform != "darwin":
+            logger.debug("[UnityMCP] Editor activation is only supported on macOS.")
+            return
+        pid = unity_project_presence.editor_pid(project_path)
+        if pid is None:
+            logger.debug("[UnityMCP] No editor found for %s.", project_path)
+            return
+        result = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], timeout=5, capture_output=True, text=True,
+                                env=build_spawn_env())
+        executable = result.stdout.strip()
+        if result.returncode != 0 or ".app/" not in executable:
+            logger.debug("[UnityMCP] Could not resolve an editor bundle for PID %s.", pid)
+            return
+        bundle = executable.split(".app/", 1)[0] + ".app"
+        # Unity imports the autoconnect script only when the editor gains focus (measured 25 Oct 2026).
+        result = subprocess.run(["open", "-a", bundle], timeout=5, env=build_spawn_env())
+        if result.returncode != 0:
+            logger.debug("[UnityMCP] Editor activation failed for %s.", bundle)
+    except Exception:
+        logger.debug("[UnityMCP] Could not bring the editor forward.", exc_info=True)
+
 
 # Unity bağlantı durumu
 class UnityMCPStatus:
@@ -652,6 +680,7 @@ class UnityMCPManager:
                 if not self.is_running():
                     return False
                 self._write_autoconnect_script(workspace_path, auto_start=True)
+                _bring_editor_forward(workspace_path)
                 logger.info("[UnityMCP] Server hazır — autoconnect scripti yazıldı.")
                 return True
         logger.warning("[UnityMCP] Server %ds içinde hazır olmadı, autoconnect scripti yazılmadı.", timeout)
