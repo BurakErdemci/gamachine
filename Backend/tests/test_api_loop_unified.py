@@ -214,8 +214,10 @@ def test_truncation_never_executes_partial_tools(run_case, provider):
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
-def test_shared_system_and_invalid_image(run_case, provider, caplog):
-    _, requests, _, _ = run_case(provider, [response(provider)], images=["invalid-image"])
+@pytest.mark.parametrize("image", ["invalid-image", "data:;base64,YQ==",
+                                    "data:image/png,YQ==", "data:image/png;base64,"])
+def test_shared_system_and_invalid_image(run_case, provider, image, caplog):
+    _, requests, _, _ = run_case(provider, [response(provider)], images=[image])
     request = requests[0]
     if provider == "google":
         system = request["config"].system_instruction

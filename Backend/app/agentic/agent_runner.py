@@ -1437,12 +1437,10 @@ class AgentRunner:
         """
         Tool'u çalıştırır ve (result_dict, extra_events) döndürür.
 
-        NOT: Tehlikeli run_command onayı çağıran API yollarında (_run_gemini /
-        _run_anthropic / _run_openai) ZATEN inline yapılıyor (onaylanmazsa orada
-        'continue' edilir, buraya hiç gelmez). Eskiden burada İKİNCİ kez sorulması
-        onaylanan komutlarda çift-onaya yol açıyordu; o yüzden bu metot artık
-        yalnızca aracı çalıştırır. İmza (tuple) geriye-uyum için korunur
-        (çağrılar 'result, _ = ...' biçiminde).
+        The shared _api_loop handles dangerous-command approval before calling
+        this method; denied calls never reach it. Asking here again would cause
+        duplicate prompts. The (result, extra_events) signature is preserved for
+        existing callers.
         """
         if getattr(self, "read_only", False) and not _read_only_tool_allowed(tool_name, tool_args):
             logger.warning("[read-only] conv=%s refused %s", self.conversation_id, tool_name)
@@ -1732,8 +1730,8 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
         for image in self.images or []:
             try:
                 mime, data = _split_data_url(image)
-                if (not image.startswith("data:") or ";base64," not in image
-                        or not image[5:].split(";", 1)[0] or not data):
+                if (not image.startswith(f"data:{mime};") or ";base64," not in image
+                        or not data):
                     raise ValueError("Expected a base64 data URL")
                 images.append((mime, data))
             except (AttributeError, TypeError, ValueError):
@@ -1851,7 +1849,8 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                     with self._approval_gate(approval_text) as (gate_event, gate_id):
                         yield gate_event
                         decision = await self._await_approval(gate_id)
-                if decision is not None and not decision.approved:
+                denied = decision is not None and not decision.approved
+                if denied:
                     result = {"success": False, "summary": decision.summary}
                     screenshot = None
                     summary = decision.summary
@@ -1860,7 +1859,7 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                     screenshot = result.pop("image_base64", None)
                     summary = self._summarize_result(name, result)
                 result_str = json.dumps(result, ensure_ascii=False)
-                if len(result_str) > 8000 and not (decision is not None and not decision.approved):
+                if len(result_str) > 8000 and not denied:
                     result_str = result_str[:8000] + "... (kısaltıldı)"
                 yield AgentEvent("tool_result", {
                     "tool": name, "success": result.get("success", False), "summary": summary,
