@@ -112,28 +112,92 @@ it('a hierarchy click selects in Unity, reveals Inspector, and keeps expansion a
   expect(fetcher.mock.calls.some(([url]) => url.endsWith('inspect/-2'))).toBe(true)
 })
 
-it('polling pauses with document visibility, rejects late data, and never overlaps version requests', async () => {
+it('polls every second while visible and every five seconds while hidden without aborting the tree request', async () => {
   vi.useFakeTimers()
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-  const pending: ((response: Response) => void)[] = []
-  const fetcher = vi.fn((_url: string, _options?: RequestInit) => new Promise<Response>(resolve => pending.push(resolve)))
+  let finishTree!: (response: Response) => void
+  let treeSignal!: AbortSignal
+  const version = { epoch: 'a', scene: 1, selection: 0, selectedId: null, compiling: false, playing: false }
+  const fetcher = vi.fn((url: string, options?: RequestInit) => {
+    if (url.endsWith('tree')) {
+      treeSignal = options!.signal!
+      return new Promise<Response>(resolve => { finishTree = resolve })
+    }
+    return Promise.resolve({ ok: true, status: 200, json: async () => version } as Response)
+  })
   vi.stubGlobal('fetch', fetcher)
   const h = renderHook(() => useSceneEditor({ api: 'api', token: 't', editorOn: true, unityStatus: 'connected', hierarchyVisible: true, inspectorVisible: false }))
-  // Only /version goes out first: the tree waits for a version key (verify-f1 first-load race).
-  expect(fetcher).toHaveBeenCalledTimes(1)
-  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
-  expect(fetcher).toHaveBeenCalledTimes(1)
+  await act(async () => {})
+  const polls = () => fetcher.mock.calls.filter(([url]) => url.endsWith('version')).length
+  expect(polls()).toBe(1)
+  expect(h.result.current.loading).toBe(true)
+  await act(async () => { await vi.advanceTimersByTimeAsync(999) })
+  expect(polls()).toBe(1)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+  expect(polls()).toBe(2)
   visibility.mockReturnValue('hidden')
   act(() => document.dispatchEvent(new Event('visibilitychange')))
-  expect(fetcher.mock.calls.every(([, options]) => options?.signal?.aborted)).toBe(true)
-  await act(async () => { pending[0]({ ok: true, status: 200, json: async () => tree } as Response) })
-  expect(h.result.current.tree).toBeNull()
-  await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
-  expect(fetcher).toHaveBeenCalledTimes(1)
+  expect(treeSignal.aborted).toBe(false)
+  expect(polls()).toBe(2)
+  // The already scheduled tick adopts the hidden interval for subsequent polls.
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+  expect(polls()).toBe(3)
+  await act(async () => { await vi.advanceTimersByTimeAsync(4999) })
+  expect(polls()).toBe(3)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+  expect(polls()).toBe(4)
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+  expect(polls()).toBe(5)
+  visibility.mockReturnValue('visible')
+  act(() => document.dispatchEvent(new Event('visibilitychange')))
+  await act(async () => {})
+  expect(polls()).toBe(6)
+  expect(treeSignal.aborted).toBe(false)
+  await act(async () => { await vi.advanceTimersByTimeAsync(999) })
+  expect(polls()).toBe(6)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+  expect(polls()).toBe(7)
+  expect(fetcher.mock.calls.filter(([url]) => url.endsWith('tree'))).toHaveLength(1)
+  await act(async () => { finishTree({ ok: true, status: 200, json: async () => tree } as Response) })
+  expect(h.result.current.tree).toEqual(tree)
+  expect(h.result.current.loading).toBe(false)
   h.unmount()
+  expect(treeSignal.aborted).toBe(true)
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+  expect(polls()).toBe(7)
 })
 
-it('selects via POST, inspects, polls only changes, and aborts when hidden or unmounted', async () => {
+it('finishes the first tree load after going hidden even if the next version read fails', async () => {
+  vi.useFakeTimers()
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  let finishTree!: (response: Response) => void
+  let treeSignal!: AbortSignal
+  let versionStatus = 200
+  const fetcher = vi.fn((url: string, options?: RequestInit) => {
+    if (url.endsWith('tree')) {
+      treeSignal = options!.signal!
+      return new Promise<Response>(resolve => { finishTree = resolve })
+    }
+    return Promise.resolve({ ok: versionStatus === 200, status: versionStatus, json: async () => ({
+      epoch: 'a', scene: 1, selection: 0, selectedId: null, compiling: false, playing: false,
+    }) } as Response)
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const h = renderHook(() => useSceneEditor({ api: 'api', token: 't', editorOn: true, unityStatus: 'connected', hierarchyVisible: true, inspectorVisible: false }))
+  await act(async () => {})
+  expect(h.result.current.loading).toBe(true)
+  visibility.mockReturnValue('hidden')
+  act(() => document.dispatchEvent(new Event('visibilitychange')))
+  versionStatus = 500
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+  expect(h.result.current.error).toBe(500)
+  expect(treeSignal.aborted).toBe(false)
+  await act(async () => { finishTree({ ok: true, status: 200, json: async () => tree } as Response) })
+  expect(h.result.current.loading).toBe(false)
+  expect(h.result.current.tree).toEqual(tree)
+})
+
+it('selects via POST, inspects, polls only changes, and aborts when panels close or unmounted', async () => {
   vi.useFakeTimers()
   let scene = 1, epoch = 'a'
   const fetcher = vi.fn(async (url: string) => ({ ok: true, status: 200, json: async () => url.endsWith('tree') ? tree

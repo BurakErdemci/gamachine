@@ -43,6 +43,8 @@ const SYNC_DELAY = 120;
 // Unity answers a select within a frame or two; a post still open after this is hung (an editor stuck in a
 // modal or a dropped socket), and while it is open no Unity-side selection can be adopted.
 const SELECT_TIMEOUT = 5000;
+// Agents drive the app while it is in the background.
+const HIDDEN_POLL_INTERVAL = 5000;
 function coalesce<A>(send: (arg: A) => void) {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let pending: { arg: A } | null = null;
@@ -91,7 +93,7 @@ function inspectionValues(data: Inspection | null): Record<string, unknown> {
 }
 
 export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVisible, inspectorVisible, projectPath }: Options) {
-  const [visible, setVisible] = useState(() => typeof document !== 'undefined' && document.visibilityState === 'visible');
+  const visible = useRef(typeof document !== 'undefined' && document.visibilityState === 'visible');
   const [tree, setTree] = useState<SceneTree | null>(null);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const latestInspection = useRef(inspection); latestInspection.current = inspection;
@@ -137,10 +139,13 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
   const inspectLoaded = useRef<string | null>(null);
   const treeBackoff = useRef(fresh());
   const inspectBackoff = useRef(fresh());
-  const active = editorOn && unityStatus === 'connected' && (hierarchyVisible || inspectorVisible) && visible && !!token;
+  const active = editorOn && unityStatus === 'connected' && (hierarchyVisible || inspectorVisible) && !!token;
 
   useEffect(() => {
-    const changed = () => setVisible(document.visibilityState === 'visible');
+    const changed = () => {
+      visible.current = document.visibilityState === 'visible';
+      if (visible.current) runtime.current?.poll();
+    };
     document.addEventListener('visibilitychange', changed);
     return () => document.removeEventListener('visibilitychange', changed);
   }, []);
@@ -255,7 +260,7 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
     };
     const selectSync = coalesce(postSelection);
     const inspectSync = coalesce<number | null>(id => { void getInspection(id); });
-    const owner: Runtime = { inspect: inspectSync.call, select: selectSync.call, poll: () => { void poll(); } };
+    const owner: Runtime = { inspect: inspectSync.call, select: selectSync.call, poll: () => { void poll(); schedulePoll(); } };
     runtime.current = owner;
     const adopt = (id: number | null) => {
       selectionMoves.current += 1;
@@ -324,12 +329,17 @@ export function useSceneEditor({ api, token, editorOn, unityStatus, hierarchyVis
         if (again && alive) void poll();
       }
     };
+    let timer: ReturnType<typeof setTimeout>;
+    const schedulePoll = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { void poll(); schedulePoll(); }, visible.current ? 1000 : HIDDEN_POLL_INTERVAL);
+    };
     // Sent before the first poll so that poll cannot adopt Unity's older selection over the user's last one.
     if (unsynced.current) { unsynced.current = false; selectSync.call(selected.current); }
     void poll();
-    const timer = setInterval(() => { void poll(); }, 1000);
+    schedulePoll();
     return () => {
-      alive = false; clearInterval(timer);
+      alive = false; clearTimeout(timer);
       if (selectionPending || selectSync.waiting()) unsynced.current = true;
       if (inspectSync.waiting()) needsInspection.current = true;
       selectSync.cancel(); inspectSync.cancel();

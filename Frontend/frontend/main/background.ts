@@ -1264,6 +1264,8 @@ if (!gotTheLock) {
         icon: iconPath,
         webPreferences: {
           preload: path.join(__dirname, 'preload.js'),
+          // Agents drive the app while it is hidden; throttled timers would stall the scene and status polls.
+          backgroundThrottling: false,
         },
       })
       mainWindowRef = mainWindow
