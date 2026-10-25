@@ -140,6 +140,24 @@ def _urunun_sirri() -> Optional[str]:
         return None
 
 
+def _yerel_url_sir_tasiyor_mu(url: str, sir: str) -> bool:
+    """Loopback URL carrying the product secret as a query value or a path segment.
+
+    A remote URL that merely contains the token text is the user's own entry.
+    """
+    from urllib.parse import parse_qsl, urlsplit
+
+    try:
+        parcalar = urlsplit(url)
+        host = parcalar.hostname
+        sorgu_degerleri = [v for _, v in parse_qsl(parcalar.query, keep_blank_values=True)]
+    except ValueError:
+        return False
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        return False
+    return sir in sorgu_degerleri or sir in parcalar.path.split("/")
+
+
 def _urunun_kaydi_mi(ad: str, tanim: object, sir: Optional[str]) -> bool:
     """Bu kayıt ürünün mü? SEZGİSEL DEĞİL, ÜRÜNÜN GERÇEK SIRRIYLA eşleşme arar.
 
@@ -192,7 +210,10 @@ def _urunun_kaydi_mi(ad: str, tanim: object, sir: Optional[str]) -> bool:
                 backend_token = read_local_app_token()
             except Exception:
                 backend_token = ""
-            if backend_token and secrets.compare_digest(deger, backend_token):
+            if backend_token and secrets.compare_digest(
+                deger.encode("utf-8", "surrogatepass"),
+                backend_token.encode("utf-8", "surrogatepass"),
+            ):
                 return True
 
     if not sir:
@@ -202,11 +223,14 @@ def _urunun_kaydi_mi(ad: str, tanim: object, sir: Optional[str]) -> bool:
     if isinstance(basliklar, dict):
         for anahtar, deger in basliklar.items():
             if anahtar.lower() == "x-api-key" and isinstance(deger, str):
-                if secrets.compare_digest(deger, sir):
+                if secrets.compare_digest(
+                    deger.encode("utf-8", "surrogatepass"),
+                    sir.encode("utf-8", "surrogatepass"),
+                ):
                     return True
 
     url = tanim.get("url")
-    if isinstance(url, str) and sir in url:
+    if isinstance(url, str) and _yerel_url_sir_tasiyor_mu(url, sir):
         return True
 
     return False
