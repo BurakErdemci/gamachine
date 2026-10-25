@@ -97,6 +97,21 @@ EN: dict[str, str] = {
     "Ana sohbet gizlenemez; yalnız dallar kapatılıp yeniden açılabilir.":
         "The main chat cannot be hidden. Only branches can be closed and reopened.",
     "AI sağlayıcısına ulaşılamadı.": "Could not reach the AI provider.",
+    ("Google kota/hız sınırı nedeniyle üç denemede de isteği reddetti. "
+     "Bir süre bekleyip tekrar dene ya da başka bir modele geç."):
+        "Google rejected the request on all three attempts because of a quota/rate limit. "
+        "Wait a while and try again, or switch to another model.",
+    ("Google servisi üç denemede de meşgul döndü (503). Bu geçici; "
+     "birazdan tekrar dene."):
+        "Google was busy on all three attempts (503). This is temporary; try again shortly.",
+    ("Sağlayıcı kota/hız sınırı nedeniyle üç denemede de isteği reddetti. "
+     "Bir süre bekleyip tekrar dene ya da başka bir modele geç."):
+        "The provider rejected the request on all three attempts because of a quota/rate limit. "
+        "Wait a while and try again, or switch to another model.",
+    ("Sağlayıcı üç denemede de meşgul döndü (503). Bu geçici; "
+     "birazdan tekrar dene."):
+        "The provider was busy on all three attempts (503). This is temporary; try again shortly.",
+    "Sağlayıcıya üç denemede de ulaşılamadı.": "Could not reach the provider on any of the three attempts.",
     "gate_id gerekli": "gate_id is required",
     "enabled true ya da false olmalı.": "enabled must be true or false.",
     "Mod bu kanaldan değiştirilemez.": "The mode cannot be changed through this channel.",

@@ -55,7 +55,23 @@ def _untranslated_ui_literals():
             for key in keys:
                 if key not in fields:
                     continue
-                for literal in _literal_templates(fields[key]):
+                expressions = [fields[key]]
+                # Retry exhaustion messages are assigned from a dict lookup before emission.
+                if isinstance(fields[key], ast.Name):
+                    scope = node
+                    while scope in parents and not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        scope = parents[scope]
+                    for assignment in ast.walk(scope):
+                        if (isinstance(assignment, ast.Assign)
+                                and any(isinstance(target, ast.Name) and target.id == fields[key].id
+                                        for target in assignment.targets)
+                                and isinstance(assignment.value, ast.Call)
+                                and isinstance(assignment.value.func, ast.Attribute)
+                                and assignment.value.func.attr == "get"
+                                and isinstance(assignment.value.func.value, ast.Dict)):
+                            expressions.append(assignment.value)
+                for literal in (literal for expression in expressions
+                                for literal in _literal_templates(expression)):
                     if turkish.search(literal) and translate_detail(literal, "en") == literal:
                         missing.append(f"{filename}:{node.lineno}: {literal}")
     return missing
@@ -68,6 +84,18 @@ def test_every_turkish_ui_emitter_literal_is_translated():
 def test_ui_guard_detects_a_removed_dictionary_entry(monkeypatch):
     monkeypatch.delitem(EN, "İşlem durduruldu.")
     assert any("İşlem durduruldu." in item for item in _untranslated_ui_literals())
+
+
+@pytest.mark.parametrize("prefix", [
+    "Google kota/hız sınırı nedeniyle üç denemede",
+    "Google servisi üç denemede",
+    "Sağlayıcı kota/hız sınırı nedeniyle üç denemede",
+    "Sağlayıcı üç denemede",
+])
+def test_ui_guard_detects_missing_retry_exhaustion_translation(monkeypatch, prefix):
+    message = next(key for key in EN if key.startswith(prefix))
+    monkeypatch.delitem(EN, message)
+    assert any(message in item for item in _untranslated_ui_literals())
 
 
 @pytest.mark.parametrize("exception_type", [HTTPException, StarletteHTTPException])
