@@ -1757,10 +1757,13 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                     response = request.result()
                     break
                 except Exception as e:
+                    raw_error = str(e).lower()
                     error = redact_secrets(str(e))
-                    logger.error("Provider %s failed: %s", self.provider_type, error)
-                    code = provider_retry_code(error.lower())
-                    if "function calling is not enabled" in error.lower():
+                    code = provider_retry_code(raw_error)
+                    no_tools = "function calling is not enabled" in raw_error
+                    logger.error("Provider %s failed: %s", self.provider_type, error,
+                                 exc_info=not code or no_tools)
+                    if no_tools:
                         yield AgentEvent("error", {
                             "code": "model_no_tools", "model": self.model_name,
                             "message": (

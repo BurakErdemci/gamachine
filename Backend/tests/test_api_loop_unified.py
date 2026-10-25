@@ -235,9 +235,36 @@ def test_shared_system_and_invalid_image(run_case, provider, caplog):
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
-def test_provider_errors_redact_secrets(run_case, provider):
+def test_provider_errors_redact_secrets_and_log_traceback(run_case, provider, caplog):
     secret = "sk-ant-api03-" + "a" * 40
     events, _, _, _ = run_case(provider, [RuntimeError("rejected " + secret)])
     message = next(e.data["message"] for e in events if e.type == "error")
     assert secret not in message
     assert "rejected" in message
+    errors = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert len(errors) == 1
+    assert errors[0].exc_info is not None
+    assert secret not in errors[0].getMessage()
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_retry_classifies_raw_error_before_redaction(run_case, provider):
+    secret = "AIza" + "a" * 40
+    events, requests, _, sleep = run_case(
+        provider, [RuntimeError(f"x-api-key: {secret} status 429")] * 3)
+    assert len(requests) == 3
+    assert len([e for e in events if e.type == "status"]) == 3
+    assert [e.data["code"] for e in events if e.type == "error"] == ["provider_quota"]
+    assert all(secret not in json.dumps(e.data) for e in events)
+    assert sleep.call_args_list == [mock.call(10), mock.call(20), mock.call(30)]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_no_tools_classifies_raw_error_before_redaction(run_case, provider):
+    secret = "AIza" + "a" * 40
+    events, requests, _, sleep = run_case(
+        provider, [RuntimeError(f"x-api-key: {secret} function calling is not enabled")])
+    assert len(requests) == 1
+    assert [e.data["code"] for e in events if e.type == "error"] == ["model_no_tools"]
+    assert all(secret not in json.dumps(e.data) for e in events)
+    sleep.assert_not_called()
