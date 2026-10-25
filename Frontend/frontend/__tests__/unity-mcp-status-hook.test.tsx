@@ -61,6 +61,27 @@ afterEach(() => {
   cleanup()
 })
 
+describe('Unity instance projects', () => {
+  it('ignores malformed instance entries and clears projects after disconnect or failed polls', async () => {
+    mockedAxios.get.mockResolvedValue({ data: { status: 'connected', instances: [
+      null, false, 'Game', {}, { project: 7 }, { project: 'GameA' }, { project: 'GameB' },
+    ] } })
+    const { result } = mountHook()
+    await waitFor(() => expect(result.current.unityMcpProjects).toEqual(['GameA', 'GameB']))
+    mockedAxios.get.mockResolvedValue({ data: { status: 'connected', instances: {} } })
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    expect(result.current.unityMcpProjects).toEqual([])
+    mockedAxios.get.mockResolvedValue({ data: { status: 'connected', instances: [{ project: 'GameA' }] } })
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    mockedAxios.get.mockRejectedValue(new Error('offline'))
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    expect(result.current.unityMcpProjects).toEqual([])
+    mockedAxios.get.mockResolvedValue({ data: { status: 'off', instances: [{ project: 'stale' }] } })
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    expect(result.current.unityMcpProjects).toEqual([])
+  })
+})
+
 describe('useAIConfig — blocked durumu', () => {
   it('blocked yanıtı durum olarak geçiyor', async () => {
     mockedAxios.get.mockResolvedValue(statusPayload('blocked', BLOCKED_REASON))

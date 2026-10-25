@@ -120,6 +120,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
 
   // Unity MCP toggle
   const [unityMcpStatus, setUnityMcpStatus] = useState<UnityMCPStatus>('off');
+  const [unityMcpProjects, setUnityMcpProjects] = useState<string[]>([]);
   const [unityMcpToggling, setUnityMcpToggling] = useState(false);
   const [unityMcpError, setUnityMcpError] = useState<string | null>(null);
   // `blocked` sebebi. `unityMcpError` GEÇİCİ (bir toggle denemesinin sonucu, 6 sn
@@ -168,6 +169,10 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       if (status === 'off' && Date.now() < startingUntilRef.current) return;
 
       setUnityMcpStatus(status);
+      const instances: unknown = res.data?.instances;
+      setUnityMcpProjects(status === 'connected' && Array.isArray(instances)
+        ? instances.flatMap(instance => instance && typeof instance === 'object' && typeof instance.project === 'string' ? [instance.project] : [])
+        : []);
       // Sebep backend'de yalnız `blocked` dalında dolu. Başka durumda taşımak
       // bayat bir uyarıyı ekranda bırakırdı — kullanıcı çakışan sunucuyu
       // kapattıktan sonra bile "port başkasında" yazmaya devam ederdi.
@@ -199,6 +204,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       // kullanıcıyı sunucusu kapanmış sanmaya iter. Eski yorumun bu kısmı
       // haklıydı; eksik olan "bilinmiyor" seçeneğiydi.
       setUnityMcpStatus('unknown');
+      setUnityMcpProjects([]);
       setUnityMcpReason(null);
       stopPolling();
       pollRef.current = setInterval(fetchUnityMcpStatus, 5000);
@@ -241,6 +247,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       if (!guncelMi()) return false;
       if (turningOn) {
         setUnityMcpStatus('starting');
+        setUnityMcpProjects([]);
         startingUntilRef.current = Date.now() + 30000; // 30s boyunca 'off' yanıtını yoksay
         stopPolling();
         pollRef.current = setInterval(fetchUnityMcpStatus, 3000);
@@ -248,6 +255,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
         stopPolling();
         startingUntilRef.current = 0;
         setUnityMcpStatus('off');
+        setUnityMcpProjects([]);
         pollRef.current = setInterval(fetchUnityMcpStatus, 8000);
       }
       return true;
@@ -569,6 +577,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     effectiveProvider,
     displayModelName,
     unityMcpStatus,
+    unityMcpProjects,
     unityMcpToggling,
     unityMcpError,
     unityMcpReason,

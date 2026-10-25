@@ -895,6 +895,9 @@ export default function Home() {
   const previewRoute = fs.previewFile ? routeForFile(fs.previewFile.path) : null;
   const activeConversation = chat.conversations.find(c => c.id === chat.activeConvId) ?? null;
   const projectName = fs.workspacePath?.split(/[\\/]/).filter(Boolean).pop() ?? null;
+  const unityProjectName = ai.unityMcpProjects.find(project => project === projectName) ?? ai.unityMcpProjects[0] ?? null;
+  const projectMismatch = ai.unityMcpStatus === 'connected' && projectName !== null && unityProjectName !== null
+    && !ai.unityMcpProjects.includes(projectName);
   // Same predicate ChatPanel uses for "nothing to draw": the empty new chat takes its place.
   const chatEmpty = isChatEmpty(chat.activeConvId, chat.messages.length, chat.loading, !!mcp.activeGate);
   // A request waits in this chat (the title block's approval cell).
@@ -935,7 +938,7 @@ export default function Home() {
         defaultModel={ai.defaultConfig} onSaveDefaultModel={ai.saveDefaultModel}
         onSaveApiKey={ai.saveApiKey} onUseCustomModel={ai.applyCustomModel}
         unityMcpStatus={ai.unityMcpStatus} unityMcpToggling={ai.unityMcpToggling} onToggleUnityMcp={ai.toggleUnityMcp}
-        unityProjectName={projectName}
+        unityProjectName={unityProjectName}
         lang={lang} onLangChange={setLang}
         approvalMode={chat.generationMode} onApprovalModeChange={(m) => chat.setGenerationMode(m, 'settings')}
         autoTitles={autoTitles.autoTitles} autoTitlesSaving={autoTitles.autoTitlesSaving}
@@ -1012,7 +1015,8 @@ export default function Home() {
             reason={ai.unityMcpReason}
             error={ai.unityMcpError}
             onToggle={ai.toggleUnityMcp}
-            projectName={projectName}
+            projectName={unityProjectName}
+            projectMismatch={projectMismatch}
           />
           {/* Not in the mockup: the sidebar toggle. The editor's controls that shared this spot (the
               terminal button, the open file's name / save / close) moved into the workspace: the

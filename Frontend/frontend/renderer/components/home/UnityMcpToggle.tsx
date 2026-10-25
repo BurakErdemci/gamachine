@@ -66,6 +66,7 @@ interface UnityMcpToggleProps {
   onToggle: () => void;
   /** Shown after "Connected"; the backend reports no scene yet, so this is the project name. */
   projectName?: string | null;
+  projectMismatch?: boolean;
 }
 
 const PlugGlyph = () => (
@@ -94,9 +95,11 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   error,
   onToggle,
   projectName = null,
+  projectMismatch = false,
 }) => {
   const { t } = useLang();
   const state = STATE[status];
+  const hint = state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch' : null);
   const ids = useId();
   const stateId = `${ids}-state`;
   const whyId = `${ids}-why`;
@@ -159,7 +162,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
         {state.visual === 'on' && projectName && (
           <span className="unity-path min-w-0 max-w-[220px] truncate" title={projectName}>{projectName}</span>
         )}
-        {state.hint && <span className="unity-hint">{t(state.hint)}</span>}
+        {hint && <span className="unity-hint">{t(hint)}</span>}
         {status === 'blocked' && (
           <button
             className="unity-why-btn"
