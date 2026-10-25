@@ -40,6 +40,12 @@ _MCP_PATH_SECRET = re.compile(r"(/mcp/)[A-Za-z0-9_\-]{12,}")
 # LOCAL_APP_TOKEN=..., ANTHROPIC_API_KEY=..., X_API_SECRET=... gibi atamalar
 _ENV_ASSIGNMENT = re.compile(r"((?:TOKEN|KEY|SECRET)[A-Z_]*=)\S+")
 
+# SDK error text and logs can contain bare provider keys without a header.
+_BARE_PROVIDER_KEY = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{30,}|"
+    r"gsk_[A-Za-z0-9]{20,}|nvapi-[A-Za-z0-9_-]{20,})"
+)
+
 # `X-API-Key: <sır>` gibi HTTP başlıkları. `_ENV_ASSIGNMENT`'tan üç farkı var ve
 # üçü de S3'ün kaçmasının sebebiydi: ayraç `=` değil `:`, ad tire içeriyor, ve
 # harf kipi karışık.
@@ -118,6 +124,7 @@ def redact_secrets(text: str) -> str:
         return text
     text = _MCP_PATH_SECRET.sub(r"\1<REDACTED>", text)
     text = _ENV_ASSIGNMENT.sub(r"\1<REDACTED>", text)
+    text = _BARE_PROVIDER_KEY.sub("<REDACTED>", text)
     return _HEADER_SECRET.sub(_header_maskele, text)
 
 

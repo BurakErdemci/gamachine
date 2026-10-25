@@ -1751,9 +1751,6 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                     break
                 except Exception as e:
                     error = redact_secrets(str(e))
-                    # The shared redactor covers named credentials; SDK errors
-                    # can also echo a bare API key without its header name.
-                    error = re.sub(r"\bsk-[A-Za-z0-9_-]{20,}", "<REDACTED>", error)
                     logger.error("Provider %s failed: %s", self.provider_type, error)
                     code = provider_retry_code(error.lower())
                     if "function calling is not enabled" in error.lower():

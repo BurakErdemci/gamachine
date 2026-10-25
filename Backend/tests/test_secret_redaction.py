@@ -22,6 +22,70 @@ from secret_redaction import install_log_redaction, redact_secrets
 SIR = "aB3dE5fG7hIjKlMnOpQrStUvWxYz0123456789"
 
 
+BARE_PROVIDER_KEYS = [
+    "sk-ant-api03-" + SIR,
+    "sk-proj-" + SIR,
+    "sk-or-v1-" + SIR,
+    "sk-" + "A1_b-" * 4,
+    "AIza" + "A1_b-" * 6,
+    "gsk_" + "A1b2" * 5,
+    "nvapi-" + "A1_b-" * 4,
+]
+
+
+@pytest.mark.parametrize("key", BARE_PROVIDER_KEYS)
+@pytest.mark.parametrize("template", [
+    "Error: invalid credential {} rejected.",
+    '{{"credential": "{}", "status": "invalid"}}',
+    "key={}",
+])
+def test_bare_provider_keys_are_redacted(key, template):
+    assert redact_secrets(template.format(key)) == template.format("<REDACTED>")
+
+
+@pytest.mark.parametrize("text", [
+    "task-1234567890123456789012",
+    "risk-free",
+    "sk-short",
+    "AIza",
+    "aaa8a1b232643b5355d1c7d7b83fbbd8b2cd6d37",
+    "550e8400-e29b-41d4-a716-446655440000",
+    "Please ask-me before changing this setting.",
+    "sk-" + "A" * 19,
+    "AIza" + "A" * 29,
+    "gsk_" + "A" * 19,
+    "nvapi-" + "A" * 19,
+])
+def test_bare_provider_key_near_misses_stay_intact(text):
+    assert redact_secrets(text) == text
+
+
+@pytest.mark.parametrize("key", BARE_PROVIDER_KEYS)
+@pytest.mark.parametrize("prefix", ["a", "9", "_", "-"])
+def test_bare_provider_keys_require_a_left_boundary(key, prefix):
+    text = prefix + key
+    assert redact_secrets(text) == text
+
+
+@pytest.mark.parametrize("key", BARE_PROVIDER_KEYS)
+def test_log_filter_redacts_bare_provider_keys(key):
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        install_log_redaction()
+        logging.getLogger("providers.redaction_test").warning(
+            "Invalid credential %s rejected.", key
+        )
+        handler.flush()
+        output = stream.getvalue()
+    finally:
+        root.removeHandler(handler)
+
+    assert output == "Invalid credential <REDACTED> rejected.\n"
+
+
 @pytest.mark.parametrize("metin", [
     f"X-API-Key: {SIR}",                                  # düz başlık satırı
     f"x-api-key: {SIR}",                                  # küçük harf
