@@ -49,6 +49,9 @@ async function setup() {
   await act(async () => {});
   act(() => editor.select(7));
   await screen.findByRole('textbox', { name: 'float' });
+  // findByRole resolves before React's passive effects; under CPU load the inputs' reset effect then ran
+  // inside the first fireEvent and restored the old value (measured 25 Oct 2026, ~1 in 15 runs).
+  await act(async () => {});
   return view;
 }
 const posts = (route: string) => calls.filter(c => c.route === route).map(c => c.body);
