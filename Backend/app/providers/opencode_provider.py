@@ -11,7 +11,7 @@ from .oneshot_cli import (
     opencode_context_tokens, opencode_context_window, resolve_opencode_cmd, split_model_id,
 )
 from .unityai_tool_text import mail_and_fallback
-from .workspace_config import ensure_gitignored, guvenli_config_yaz
+from .workspace_config import ensure_gitignored, guvenli_config_yaz, read_user_json_config
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +306,11 @@ class OpenCodeProvider(BaseCLIProvider):
       Free models need a visible bash: a verified shadow (see
       _BASH_SHADOW_TS) turns it into "ask" for that spawn only.
     """
+    _register_mcp_carries_policy = True
+    _policy_refusal_message = (
+        "⚠️ Güvenlik ayarları çalışma klasörüne yazılamadığı için işlem başlatılmadı. "
+        "Klasördeki opencode.json dosyasını kontrol edin.")
+
 
     resume_session_id = None   # önceki turun sessionID'si (-s)
 
@@ -453,24 +458,28 @@ class OpenCodeProvider(BaseCLIProvider):
                     "enabled": True,
                 }
 
-            existing = {}
-            if os.path.exists(cfg_path):
-                try:
-                    with open(cfg_path, "r", encoding="utf-8") as f:
-                        existing = json.load(f) or {}
-                except Exception:
-                    existing = {}
+            existing = read_user_json_config(workspace, "opencode.json")
+            if existing is None:
+                logger.error("[OpenCodeProvider] Cannot read %s safely; the permission "
+                             "policy was not written and the turn is refused.", cfg_path)
+                return False
+            user_mcp = existing.get("mcp")
+            if not isinstance(user_mcp, dict):
+                user_mcp = {}
+            user_permission = existing.get("permission")
+            if not isinstance(user_permission, (dict, str)):  # "allow"/"ask" shorthand is valid
+                user_permission = {}
 
             # Yazma/shell CLI içinde kapalı → unityai MCP (onaylı) tek yol.
             # This file never opens bash: "ask" comes only from the shadow
             # dir (see _SHADOW_CONFIG), so a spawn without the shadow keeps
             # "deny" even when another chat's turn wrote this file.
-            permission = {**_without_grants(existing.get("permission", {})),
+            permission = {**_without_grants(user_permission),
                           "edit": "deny", "bash": "deny"}
             merged = {
                 "$schema": existing.get("$schema", "https://opencode.ai/config.json"),
                 **existing,
-                "mcp": {**existing.get("mcp", {}), **mcp},
+                "mcp": {**user_mcp, **mcp},
                 "permission": permission,
             }
             # An agent's own permission is merged after the top-level one
@@ -519,10 +528,12 @@ class OpenCodeProvider(BaseCLIProvider):
                                       json.dumps(merged, indent=2)):
                 logger.error("[OpenCodeProvider] %s güvenli yazılamadı; "
                              "MCP kaydı UYGULANMADI.", cfg_path)
-                return
+                return False
             logger.info("[OpenCodeProvider] opencode.json yazıldı (unityMCP stdio köprüsü).")
             # Dosyayı yazan nokta girdisini de yazar (bkz. workspace_config).
             ensure_gitignored(workspace, ["opencode.json"])
             self._bash_shadow_dir = self._prepare_bash_shadow()
+            return True
         except Exception as e:
             logger.warning(f"[OpenCodeProvider] opencode.json yazılamadı: {e}")
+            return False

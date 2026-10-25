@@ -297,6 +297,14 @@ class BaseCLIProvider(AIProvider):
                 count += 1
         return "\n".join(lines) if lines else "(boş workspace)"
 
+    # True for providers whose _register_mcp writes the CLI's deny policy and
+    # returns False when that policy could not be put in place.
+    _register_mcp_carries_policy = False
+    _policy_refusal_message = (
+        "⚠️ Güvenlik ayarları çalışma klasörüne yazılamadığı için işlem başlatılmadı. "
+        "Klasördeki yapılandırma dosyalarını kontrol edin.")
+    _policy_registration_failed = False
+
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
         """Subclass'lar kendi MCP kayıt mantığını override eder."""
         pass
@@ -370,17 +378,24 @@ class BaseCLIProvider(AIProvider):
         # başarısız olduğunda unityMCP'yi sebepsiz düşürürdü — korunacak bir
         # sır yokken işlev kaybı. Sertleştirme yine de HER ZAMAN deneniyor
         # (bkz. `guvenli_config_yaz`); yazım başarısızsa dosya hiç yazılmıyor.
+        self._policy_registration_failed = False
         if not guvenli_config_yaz(workspace, ".mcp.json",
                                   json.dumps(config, indent=2)):
             logger.error("[CLIProvider] %s güvenli yazılamadı; MCP kaydı "
                          "UYGULANMADI.", config_path)
-            return config_path
-        # Dosyayı yazan nokta girdisini de yazar: sır taşımasa da kullanıcının
-        # deposunda duruyor ve mutlak yollar içeriyor.
-        ensure_gitignored(workspace, [".mcp.json"])
+            # A provider whose _register_mcp writes a permission policy must
+            # still run it, or the CLI would start without that policy.
+            if not self._register_mcp_carries_policy:
+                return config_path
+        else:
+            # Dosyayı yazan nokta girdisini de yazar: sır taşımasa da kullanıcının
+            # deposunda duruyor ve mutlak yollar içeriyor.
+            ensure_gitignored(workspace, [".mcp.json"])
 
-        # Subclass'a MCP kayıt yaptır (claude, codex, agy için farklı davranış)
-        self._register_mcp(launcher, workspace, backend_url)
+        # Subclass'a MCP kayıt yaptır (claude, codex, agy için farklı davranış).
+        # `False` = the provider's permission policy is not in place.
+        if self._register_mcp(launcher, workspace, backend_url) is False:
+            self._policy_registration_failed = True
 
         return config_path
 
@@ -407,7 +422,12 @@ class BaseCLIProvider(AIProvider):
                     "Lütfen sol üstten yeni bir proje klasörü seçin."
                 )}
                 return
+            self._policy_registration_failed = False
             self._write_mcp_config(workspace)
+            if self._policy_registration_failed:
+                logger.error(f"[CLIProvider:{self.binary_name}] izin politikası yazılamadı — CLI başlatılmadı")
+                yield {"type": "error", "content": self._policy_refusal_message}
+                return
 
             # Codex için prompt'a gerçek dosya ağacını ekle (hallucination'ı önler)
             enriched_prompt = prompt

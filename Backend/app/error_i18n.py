@@ -51,6 +51,18 @@ EN: dict[str, str] = {
     "aşama: kayıt": "stage: saving",
     "Video işlenemedi; video atlandı, sohbet metinle sürüyor.":
         "The video could not be processed; it was skipped and the chat continues with text.",
+    ("⚠️ Güvenlik ayarları çalışma klasörüne yazılamadığı için işlem başlatılmadı. "
+     "Klasördeki .cursor/cli.json dosyasını kontrol edin."):
+        "⚠️ The task was not started because the safety settings could not be written to the "
+        "working folder. Check the .cursor/cli.json file in it.",
+    ("⚠️ Güvenlik ayarları çalışma klasörüne yazılamadığı için işlem başlatılmadı. "
+     "Klasördeki opencode.json dosyasını kontrol edin."):
+        "⚠️ The task was not started because the safety settings could not be written to the "
+        "working folder. Check the opencode.json file in it.",
+    ("⚠️ Güvenlik ayarları çalışma klasörüne yazılamadığı için işlem başlatılmadı. "
+     "Klasördeki yapılandırma dosyalarını kontrol edin."):
+        "⚠️ The task was not started because the safety settings could not be written to the "
+        "working folder. Check the configuration files in it.",
     ("📁 Çalışma klasörü bulunamadı (silinmiş veya taşınmış olabilir). "
      "Lütfen sol üstten yeni bir proje klasörü seçin."):
         "📁 Working folder not found (it may have been deleted or moved). "
