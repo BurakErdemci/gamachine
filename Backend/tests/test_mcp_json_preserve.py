@@ -135,3 +135,10 @@ def test_ensure_gitignored_fifo_returns(tmp_path):
     assert not t.is_alive(), "ensure_gitignored blocked on FIFO .gitignore"
     import stat
     assert stat.S_ISFIFO(os.lstat(fifo).st_mode)
+
+
+def test_read_text_normalises_newlines_like_text_mode(tmp_path):
+    # The writer is text mode; a kept "\r\n" became "\r\r\n" on Windows.
+    path = tmp_path / ".gitignore"
+    path.write_bytes(b"# rules\r\n*.secret\r\nold\rmac\n")
+    assert workspace_config._read_text(str(path)) == "# rules\n*.secret\nold\nmac\n"

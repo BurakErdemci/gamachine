@@ -102,7 +102,10 @@ def _read_text(path: str) -> str:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError("not a regular file")
         with os.fdopen(fd, "rb", closefd=False) as f:
-            return f.read().decode("utf-8")
+            # Universal newlines, as the old text-mode read gave: the text-mode
+            # write would turn a kept "\r\n" into "\r\r\n" on Windows.
+            text = f.read().decode("utf-8")
+            return text.replace("\r\n", "\n").replace("\r", "\n")
     finally:
         os.close(fd)
 
