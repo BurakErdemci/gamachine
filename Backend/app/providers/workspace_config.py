@@ -515,9 +515,12 @@ def guvenli_config_yaz(workspace: str, goreli_yol: str, icerik: str,
         # ve yönlendirilmişse dosyaya hiç dokunmadan reddetmek. Salt okunur
         # açılış, yanlışlıkla kısaltma ihtimalini de sıfırlıyor.
         if os.path.exists(hedef):
-            fd = os.open(hedef, os.O_RDONLY | O_NOFOLLOW)
+            fd = os.open(hedef, os.O_RDONLY | O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
             try:
                 dogrula_kimlik(fd, hedef)
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    logger.error("[config-yaz] %s düz dosya değil; yazılmadı", hedef)
+                    return False
             finally:
                 os.close(fd)
 
