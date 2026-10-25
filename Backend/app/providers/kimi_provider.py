@@ -1,5 +1,7 @@
 import os
+import json
 import logging
+import tempfile
 from .cli_base import BaseCLIProvider
 from .unityai_tool_text import mail_and_fallback, mcp_double_underscore
 
@@ -39,6 +41,51 @@ class KimiProvider(BaseCLIProvider):
         '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__unityai__*"\n'
         + _KIMI_MANAGED_END + "\n"
     )
+
+    _mcp_cfg_path = None  # this turn's temp MCP config file
+
+    async def analyze_code(self, *args, **kwargs):
+        try:
+            async for event in super().analyze_code(*args, **kwargs):
+                yield event
+        finally:
+            self._drop_mcp_cfg()
+
+    def _drop_mcp_cfg(self):
+        """Deletes this turn's temp MCP config once kimi has exited."""
+        path, self._mcp_cfg_path = self._mcp_cfg_path, None
+        if path:
+            try:
+                os.remove(path)
+            except OSError as e:
+                logger.warning("[KimiProvider] %s silinemedi: %s", path, e)
+
+    def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
+        """Writes a per-turn file with only the product servers. The workspace
+        .mcp.json is the project's own and must never be handed to kimi: its
+        servers would start without a prompt."""
+        self._drop_mcp_cfg()
+        path = None
+        try:
+            servers = self._product_mcp_servers_stdio(launcher, workspace, backend_url)
+            fd, path = tempfile.mkstemp(prefix="uai_kimi_mcp_", suffix=".json")
+            os.close(fd)
+            from .workspace_config import harden_config_file
+            if not harden_config_file(path):
+                logger.warning(
+                    "[KimiProvider] %s izinleri kısıtlanamadı; dosya dizin "
+                    "izinlerini miras alıyor.", path)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"mcpServers": servers}, f, indent=2)
+            self._mcp_cfg_path = path
+        except Exception as e:
+            self._mcp_cfg_path = None
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            logger.warning(f"[KimiProvider] MCP config yazılamadı: {e}")
 
     @staticmethod
     def _kimi_config_path() -> str:
@@ -107,7 +154,6 @@ class KimiProvider(BaseCLIProvider):
     def _build_cmd(self, prompt: str, thinking_level: str = "medium", workspace: str = None) -> list:
         self._write_kimi_permissions()
         workspace = workspace or os.getcwd()
-        mcp_json = os.path.join(workspace, ".mcp.json")
 
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         unity_running = unity_mcp_manager.is_running()
@@ -123,8 +169,11 @@ class KimiProvider(BaseCLIProvider):
             "kimi", "--print",
             "--output-format", "stream-json", "--verbose",
             "-w", workspace,
-            "--mcp-config-file", mcp_json,
-            "-m", self.binary_name,
-            "-p", hint + prompt,
         ]
+        if self._mcp_cfg_path:
+            cmd += ["--mcp-config-file", self._mcp_cfg_path]
+        else:
+            logger.warning("[KimiProvider] per-turn MCP config yok; "
+                           "--mcp-config-file verilmedi.")
+        cmd += ["-m", self.binary_name, "-p", hint + prompt]
         return cmd

@@ -314,30 +314,20 @@ class BaseCLIProvider(AIProvider):
         never into a config file several chats of one workspace share."""
         return {}
 
-    def _write_mcp_config(self, workspace: str) -> str:
-        """
-        Claude Code için workspace'e .mcp.json yazar.
-        Codex için ~/.codex/config.toml içindeki unityai MCP kaydını günceller.
-        Gemini CLI için MCP kaydını günceller.
-        Döndürür: Claude config dosyasının tam yolu.
-        """
-        launcher = self._launcher_path("run_mcp_server")
-        self._ensure_exec(launcher)
-        backend_url = os.environ.get("UNITYAI_URL", os.environ.get("ANTIGRAVITY_URL", "http://localhost:8000"))
+    def _product_mcp_servers_stdio(self, launcher: str, workspace: str,
+                                   backend_url: str) -> dict:
+        """The product's own MCP servers in stdio command/args/env form."""
         # LOCAL_APP_TOKEN buraya BİLEREK yazılmıyor: bu dosya modelin
         # okuyabildiği yerde duruyor ve token backend'de tek yetki kanıtı.
         # Çocuk süreç sırrı 0600 dosyadan okuyor (bkz. local_token_file).
         unityai_env = {"UNITYAI_URL": backend_url}
 
-        # Claude Code: workspace/.mcp.json
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
-        config = {
-            "mcpServers": {
-                "unityai": {
-                    "command": launcher,
-                    "args": ["--workspace", workspace],
-                    "env": unityai_env,
-                }
+        servers = {
+            "unityai": {
+                "command": launcher,
+                "args": ["--workspace", workspace],
+                "env": unityai_env,
             }
         }
         # Unity MCP: sadece aktifse ekle, kapalıysa kesinlikle ekleme
@@ -358,12 +348,28 @@ class BaseCLIProvider(AIProvider):
         if unity_mcp_url:
             from .codex_unitymcp_bridge import bridge_argv
             _argv = bridge_argv()
-            config["mcpServers"]["unityMCP"] = {
+            servers["unityMCP"] = {
                 "command": _argv[0],
                 "args": _argv[1:],
                 "env": {"UNITY_MCP_URL": unity_mcp_url},
             }
             logger.info("[CLIProvider] Unity MCP aktif, .mcp.json'a stdio köprüsüyle eklendi.")
+        return servers
+
+    def _write_mcp_config(self, workspace: str) -> str:
+        """
+        Claude Code için workspace'e .mcp.json yazar.
+        Codex için ~/.codex/config.toml içindeki unityai MCP kaydını günceller.
+        Gemini CLI için MCP kaydını günceller.
+        Döndürür: Claude config dosyasının tam yolu.
+        """
+        launcher = self._launcher_path("run_mcp_server")
+        self._ensure_exec(launcher)
+        backend_url = os.environ.get("UNITYAI_URL", os.environ.get("ANTIGRAVITY_URL", "http://localhost:8000"))
+        # Claude Code: workspace/.mcp.json
+        config = {"mcpServers": self._product_mcp_servers_stdio(
+            launcher, workspace, backend_url)}
+        unity_mcp_url = "unityMCP" in config["mcpServers"]
 
         config_path = os.path.join(workspace, ".mcp.json")
         from .workspace_config import (
