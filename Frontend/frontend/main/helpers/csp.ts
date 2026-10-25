@@ -148,11 +148,8 @@ export const buildPolicy = (isProd: boolean): string => {
     'frame-src': ["'none'"],
     'frame-ancestors': ["'none'"],
 
-    // 'none' DEĞİL, bilerek 'self'. Giriş formunun submit handler'ı
-    // (useAuth.ts noopAuthSubmit) preventDefault çağırmıyor, yani gerçek bir
-    // form gezinmesi olabiliyor; 'none' bunu bloklayıp mevcut davranışı
-    // değiştirirdi. 'self' ise asıl tehdidi — kimlik alanlarının uzak bir
-    // endpoint'e POST edilmesini — kapatıyor.
+    // 'self', not 'none': it closes the real threat (form fields posted to a
+    // remote endpoint) without blocking a same-origin form submission.
     'form-action': ["'self'"],
   }
 
