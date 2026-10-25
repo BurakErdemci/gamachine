@@ -352,8 +352,8 @@ class AgyProvider(BaseCLIProvider):
         return (
             "AVAILABLE MCP TOOLS — call these DIRECTLY when the task needs them:\n"
             "- unityMCP: Unity editor operations (manage_gameobject, manage_scene,\n"
-            "  manage_fbx, manage_animation, manage_material, refresh_unity, read_console,\n"
-            "  run_tests, find_gameobjects, etc.). Use directly for Unity queries/actions.\n"
+            "  manage_material, refresh_unity, read_console,\n"
+            "  find_gameobjects, etc.). Use directly for Unity queries/actions.\n"
             "- meshy: 3D asset generation (meshy_text_to_3d, meshy_image_to_3d, meshy_rig,\n"
             "  meshy_animate, meshy_retexture, meshy_check_balance, etc.). Use directly.\n"
             "  Meshy calls cost credits — state the cost and get user confirmation first.\n"
