@@ -89,7 +89,8 @@ def test_gamachine_profile_equals_the_backend_export(report):
     gamachine = report["old_era"]["/mcp/gamachine"]
     assert gamachine["status"] == 200, gamachine
     assert gamachine["names"] == exported
-    assert len(exported) == 37
+    # The server starts scripting_ext disabled and this probe's editor never enables it.
+    assert len(exported) == 35
 
 
 def test_full_profile_lists_every_group(report):
