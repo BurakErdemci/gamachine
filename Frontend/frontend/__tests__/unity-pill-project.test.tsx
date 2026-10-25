@@ -68,3 +68,12 @@ it('shows the slow hint only while connecting and keeps existing hints', () => {
   expect(en['unity.hintProjectMismatch']).toBe('Gamachine has a different project open')
   expect(en['unity.hintBringForward']).toBe('Unity may be in the background: bring Unity to the front')
 })
+
+// jsdom ignores the stylesheet: the hints rendered above were hidden by shell.css in the live app
+// (measured 25 Oct 2026, display:none at 1280 px), so pin the rules that show them.
+it('shows the hint while connected and while connecting in the stylesheet', () => {
+  const css = readFileSync(resolve(__dirname, '../renderer/styles/gm/shell.css'), 'utf8')
+  expect(css).toMatch(/\.unity\[data-unity="on"\] \.unity-hint \{ display: inline; grid-column: 3; \}/)
+  expect(css).toMatch(/\.unity\[data-unity="connecting"\] \.unity-hint \{ display: inline; \}/)
+  expect(css).toMatch(/\.unity-read \{[^}]*grid-template-columns: max-content minmax\(0, auto\) minmax\(0, auto\);/)
+})

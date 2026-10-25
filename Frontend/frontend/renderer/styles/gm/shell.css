@@ -288,7 +288,7 @@
 .us-leds { display: inline-flex; gap: 3px; }
 .us-leds i { width: 5px; height: var(--us-led-h); background: var(--us-led-off); transform: skewX(var(--seg-skew)); }
 /* two-line readout: row 1 "Unity", row 2 state word + path / hint / "Why?" */
-.unity-read { display: grid; grid-template-columns: max-content minmax(0, auto); justify-content: start; align-items: baseline; column-gap: 0; row-gap: 1px; min-width: 0; line-height: 1.3; overflow: hidden; }
+.unity-read { display: grid; grid-template-columns: max-content minmax(0, auto) minmax(0, auto); justify-content: start; align-items: baseline; column-gap: 0; row-gap: 1px; min-width: 0; line-height: 1.3; overflow: hidden; }
 .unity-text { display: contents; }
 .unity-k {
   overflow: hidden; text-overflow: ellipsis;
@@ -319,8 +319,11 @@
 .unity[data-unity="on"] .us-leds i { background: var(--us-on); }
 .unity[data-unity="on"] .unity-word { color: var(--us-on-text); }
 .unity[data-unity="on"] .unity-path { display: inline; }
+/* connected to another project than Gamachine's: the hint follows the name in its own column */
+.unity[data-unity="on"] .unity-hint { display: inline; grid-column: 3; }
 .unity[data-unity="off"] .unity-hint { display: inline; }
 .unity[data-unity="connecting"] .unity-word { color: var(--shell-text); }
+.unity[data-unity="connecting"] .unity-hint { display: inline; }
 .unity[data-unity="connecting"] .us-knob { color: var(--us-on); }
 .unity[data-unity="connecting"] .us-leds i:first-child { background: var(--us-on); }   /* static end state (reduced motion) */
 /* connecting: the LEDs chase left to right */
