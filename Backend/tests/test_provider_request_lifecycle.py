@@ -181,7 +181,8 @@ class TestHeartbeatCoversEveryProvider(unittest.TestCase):
         """
         src = open(ar.__file__, encoding="utf-8").read()
         self.assertEqual(src.count("asyncio.wait({"), 1)
-        self.assertEqual(src.count("self._await_provider("), 3)
+        # The three provider loops now share one request call site.
+        self.assertEqual(src.count("self._await_provider("), 1)
 
 
 # ── Durdurulan tur sağlayıcı isteğini de götürür ────────────────────────────

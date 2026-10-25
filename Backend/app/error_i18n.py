@@ -162,7 +162,7 @@ PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(?P<provider>.+) API key kaydedildi\.", re.DOTALL), "{provider} API key saved."),
     (re.compile(r"⏳ (?P<model>.+) (?P<seconds>.+) sn'dir yanıt vermedi — sağlayıcı hâlâ işliyor \(Durdur ile iptal edebilirsin\)", re.DOTALL),
      "⏳ {model} has not responded for {seconds}s — the provider is still processing (use Stop to cancel)"),
-    (re.compile(r"🚦 (?P<provider>Google|Sağlayıcı) (?P<code>.+) döndü \((?P<reason>.*)\) — (?P<seconds>.+) sn bekleniyor, deneme (?P<attempt>.+)/3", re.DOTALL),
+    (re.compile(r"🚦 (?P<provider>\S+) (?P<code>.+) döndü \((?P<reason>.*)\) — (?P<seconds>.+) sn bekleniyor, deneme (?P<attempt>.+)/3", re.DOTALL),
      "🚦 Provider returned {code} — waiting {seconds}s, attempt {attempt}/3"),
     (re.compile(r"🚦 Claude bu isteği kullanım penceresi sinyaliyle bekletiyor \((?P<window>.*)\)(?P<when>.*?)\. Bu, hesabındaki tüm Claude erişiminin kapandığı anlamına gelmeyebilir; CLI otomatik yeniden deniyor\. Durdur ile başka modele geçebilirsin\.", re.DOTALL),
      "🚦 Claude is delaying this request due to a usage window ({window}){when}. "

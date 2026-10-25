@@ -904,6 +904,257 @@ _CODEX_AUTO_MODE_INSTRUCTION = (
 )
 
 
+class _APITurn(NamedTuple):
+    texts: list
+    thoughts: list
+    calls: list  # (id, name, args, raw SDK call)
+    truncated: bool
+    input_tokens: int
+    output_tokens: int
+    malformed: bool = False
+    raw: Any = None
+
+
+class _GeminiAdapter:
+    label = "Google"
+    error_prefix = "AI hatası:"
+    iptal_edilebilir = False
+
+    def preflight(self, runner):
+        return None
+
+    def prepare(self, runner, system, user_message, images):
+        from providers.effort_caps import map_effort
+        self.client = genai.Client(api_key=runner.api_key)
+        declarations = get_gemini_tool_declarations()[0]["function_declarations"]
+        if runner.read_only:
+            declarations = [d for d in declarations if _read_only_tool_declared(d["name"])]
+        tools = [gtypes.Tool(function_declarations=[
+            gtypes.FunctionDeclaration(name=d["name"], description=d["description"],
+                                       parameters=d["parameters"])
+            for d in declarations
+        ])]
+        effort = map_effort("google", runner.model_name,
+                            runner.effort_level or runner.thinking_level or "auto")
+        thinking = None
+        try:
+            if "gemini_thinking_level" in effort:
+                thinking = gtypes.ThinkingConfig(thinking_level=effort["gemini_thinking_level"])
+            elif "gemini_thinking_budget" in effort:
+                thinking = gtypes.ThinkingConfig(thinking_budget=effort["gemini_thinking_budget"])
+        except TypeError:
+            thinking = gtypes.ThinkingConfig(thinking_budget=4096)
+        self.config = gtypes.GenerateContentConfig(system_instruction=system, tools=tools,
+                                                   thinking_config=thinking)
+        parts = [gtypes.Part(text=user_message)]
+        parts.extend(gtypes.Part(inline_data=gtypes.Blob(mime_type=mime, data=data))
+                     for mime, data in images)
+        self.contents = [gtypes.Content(role="user", parts=parts)]
+
+    async def request(self, runner):
+        return await asyncio.to_thread(self.client.models.generate_content,
+                                       model=runner.model_name, contents=self.contents,
+                                       config=self.config)
+
+    def view(self, response):
+        usage = getattr(response, "usage_metadata", None)
+        input_tokens = getattr(usage, "prompt_token_count", 0) or 0
+        output_tokens = getattr(usage, "candidates_token_count", 0) or 0
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return _APITurn([], [], [], False, input_tokens, output_tokens, True)
+        candidate = candidates[0]
+        content = getattr(candidate, "content", None)
+        texts, thoughts, calls = [], [], []
+        for part in getattr(content, "parts", None) or []:
+            text, fc, thought = _gemini_part_view(part)
+            if text:
+                (thoughts if thought else texts).append(text)
+            if fc is not None and getattr(fc, "name", None):
+                calls.append((getattr(fc, "id", None), fc.name,
+                              dict(getattr(fc, "args", None) or {}), fc))
+        reason = getattr(candidate, "finish_reason", None)
+        return _APITurn(texts, thoughts, calls,
+                        getattr(reason, "name", str(reason)) == "MAX_TOKENS",
+                        input_tokens, output_tokens, raw=content)
+
+    def append_assistant(self, turn):
+        if turn.raw is not None:
+            self.contents.append(turn.raw)
+        self.results = []
+        self.screenshots = []
+
+    def append_result(self, call, result_str, screenshot):
+        _, name, _, raw = call
+        self.results.append(_gemini_fn_response(raw, name, {"result": result_str}))
+        if screenshot:
+            import base64
+            mime, data = _split_data_url(screenshot)
+            self.screenshots.append(gtypes.Part(inline_data=gtypes.Blob(
+                mime_type=mime, data=base64.b64decode(data))))
+
+    def finish_results(self):
+        self.contents.append(gtypes.Content(role="user", parts=self.results))
+        if self.screenshots:
+            self.contents.append(gtypes.Content(role="user", parts=[gtypes.Part(
+                text="(capture_unity_screenshot çıktısı — ekran görüntüsü:)")
+            ] + self.screenshots))
+
+
+class _AnthropicAdapter:
+    label = "Sağlayıcı"
+    error_prefix = "Claude hatası:"
+    iptal_edilebilir = True
+
+    def preflight(self, runner):
+        return None
+
+    def prepare(self, runner, system, user_message, images):
+        from providers.effort_caps import map_effort
+        self.client = anthropic.AsyncAnthropic(api_key=runner.api_key)
+        self.tools = [{"name": t["name"], "description": t["description"],
+                       "input_schema": t["parameters"]} for t in runner._tool_definitions()]
+        if self.tools:
+            self.tools[-1]["cache_control"] = {"type": "ephemeral"}
+        self.system = [{"type": "text", "text": system,
+                        "cache_control": {"type": "ephemeral"}}]
+        parts = [{"type": "text", "text": user_message}]
+        parts.extend({"type": "image", "source": {"type": "base64", "media_type": mime,
+                                                  "data": data}} for mime, data in images)
+        self.messages = [{"role": "user", "content": parts}]
+        self.effort = map_effort("anthropic", runner.model_name,
+                                 runner.effort_level or runner.thinking_level or "auto"
+                                 ).get("anthropic_extra_body")
+
+    async def request(self, runner):
+        return await self.client.messages.create(
+            model=runner.model_name, max_tokens=_anthropic_loop_max_tokens(runner.model_name),
+            system=self.system, messages=self.messages, tools=self.tools,
+            timeout=_SAGLAYICI_ZAMAN_ASIMI,
+            **({"extra_body": self.effort} if self.effort else {}))
+
+    def view(self, response):
+        blocks = getattr(response, "content", None) or []
+        usage = getattr(response, "usage", None)
+        return _APITurn(
+            [b.text for b in blocks if b.type == "text" and b.text], [],
+            [(b.id, b.name, b.input, b) for b in blocks if b.type == "tool_use"],
+            getattr(response, "stop_reason", None) == "max_tokens",
+            getattr(usage, "input_tokens", 0) or 0,
+            getattr(usage, "output_tokens", 0) or 0, raw=blocks)
+
+    def append_assistant(self, turn):
+        self.messages.append({"role": "assistant", "content": turn.raw})
+        self.results = []
+
+    def append_result(self, call, result_str, screenshot):
+        content = result_str
+        if screenshot:
+            mime, data = _split_data_url(screenshot)
+            content = [{"type": "text", "text": result_str},
+                       {"type": "image", "source": {"type": "base64",
+                                                     "media_type": mime, "data": data}}]
+        self.results.append({"type": "tool_result", "tool_use_id": call[0], "content": content})
+
+    def finish_results(self):
+        self.messages.append({"role": "user", "content": self.results})
+
+
+class _OpenAIAdapter:
+    label = "Sağlayıcı"
+    error_prefix = "OpenAI/API hatası:"
+    iptal_edilebilir = True
+
+    def preflight(self, runner):
+        if ((runner.provider_type or "").lower() == "openai"
+                and (runner.model_name or "").lower().startswith("gpt-6")):
+            return AgentEvent("error", {"message": (
+                f"'{runner.model_name}' bu sürümde bulut API anahtarıyla araç kullanamıyor: "
+                "GPT-6 araç çağrısını yalnız Responses API'si üzerinden yapıyor, "
+                "uygulama ise Chat Completions kullanıyor. Codex (abonelik) yolundan "
+                "'Codex (GPT-6 Astra)' seçeneğini kullanın ya da başka bir bulut modeli seçin."
+            )})
+        return None
+
+    def prepare(self, runner, system, user_message, images):
+        from providers.effort_caps import map_effort
+        self.client = openai.AsyncOpenAI(api_key=runner.api_key)
+        base_url = {
+            "openrouter": "https://openrouter.ai/api/v1",
+            "deepseek": "https://api.deepseek.com",
+            "groq": "https://api.groq.com/openai/v1",
+            "moonshot": "https://api.moonshot.ai/v1",
+            "z-ai": "https://api.z.ai/api/paas/v4",
+            "nvidia": "https://integrate.api.nvidia.com/v1",
+        }.get(runner.provider_type)
+        if base_url:
+            self.client.base_url = base_url
+        self.tools = get_openai_tool_declarations()
+        if runner.read_only:
+            self.tools = [t for t in self.tools if _read_only_tool_declared(t["function"]["name"])]
+        system_content = system
+        if runner.provider_type == "openrouter":
+            system_content = [{"type": "text", "text": system,
+                               "cache_control": {"type": "ephemeral"}}]
+        parts = [{"type": "text", "text": user_message}]
+        parts.extend({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}}
+                     for mime, data in images)
+        self.messages = [{"role": "system", "content": system_content},
+                         {"role": "user", "content": parts}]
+        self.effort = map_effort(runner.provider_type, runner.model_name,
+                                 runner.effort_level or runner.thinking_level or "auto")
+
+    async def request(self, runner):
+        extra = self.effort.get("extra_body")
+        return await self.client.chat.completions.create(
+            model=runner.model_name, messages=self.messages, tools=self.tools,
+            tool_choice="auto", timeout=_SAGLAYICI_ZAMAN_ASIMI,
+            **self.effort.get("request_params", {}),
+            **({"extra_body": extra} if extra else {}))
+
+    def view(self, response):
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        output_tokens = getattr(usage, "completion_tokens", 0) or 0
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return _APITurn([], [], [], False, input_tokens, output_tokens, True)
+        message = choices[0].message
+        calls = []
+        for call in message.tool_calls or []:
+            try:
+                args = json.loads(call.function.arguments)
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            calls.append((call.id, call.function.name, args, call))
+        return _APITurn([message.content] if message.content else [], [], calls,
+                        getattr(choices[0], "finish_reason", None) == "length",
+                        input_tokens, output_tokens, raw=message)
+
+    def append_assistant(self, turn):
+        message = {"role": "assistant"}
+        if turn.raw.content:
+            message["content"] = turn.raw.content
+        if turn.calls:
+            message["tool_calls"] = [
+                {"id": call.id, "type": "function", "function": {
+                    "name": call.function.name, "arguments": call.function.arguments}}
+                for _, _, _, call in turn.calls]
+        self.messages.append(message)
+
+    def append_result(self, call, result_str, screenshot):
+        self.messages.append({"role": "tool", "tool_call_id": call[0], "name": call[1],
+                              "content": result_str})
+        if screenshot:
+            self.messages.append({"role": "user", "content": [
+                {"type": "text", "text": "[Screenshot — yukarıdaki tool sonucuyla ilgili görsel]"},
+                {"type": "image_url", "image_url": {"url": screenshot}},
+            ]})
+
+    def finish_results(self):
+        pass
+
+
 class AgentRunner:
     """
     Tek bir kullanıcı isteğini agentic loop ile çalıştırır.
@@ -995,6 +1246,8 @@ class AgentRunner:
         Proje kök dizininde ARCHITECT.md veya .claude.md varsa okur.
         Bu dosya proje kurallarını (naming convention, patterns vb.) içerir.
         """
+        if not self.workspace_path:
+            return ""
         wisdom_paths = ["ARCHITECT.md", ".claude.md", "CLAUDE.md"]
         for p in wisdom_paths:
             full_path = os.path.join(self.workspace_path, p)
@@ -1440,24 +1693,8 @@ class AgentRunner:
                                              self.model_name):
             yield _ev
 
-    async def _gemini_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        client = genai.Client(api_key=self.api_key)
-
-        # Tool tanımlarını Gemini formatına çevir
-        # Built-in + Unity MCP araçları (şema Gemini için sanitize edilir → 40+ Unity tool da gelir).
-        _gemini_decls = get_gemini_tool_declarations()[0]["function_declarations"]
-        if getattr(self, "read_only", False):
-            _gemini_decls = [d for d in _gemini_decls if _read_only_tool_declared(d["name"])]
-        tools = [gtypes.Tool(function_declarations=[
-            gtypes.FunctionDeclaration(
-                name=d["name"],
-                description=d["description"],
-                parameters=d["parameters"],
-            )
-            for d in _gemini_decls
-        ])]
-
-        system_instruction = f"""{SYSTEM_PROMPT}
+    def _api_system_instruction(self):
+        system = f"""{SYSTEM_PROMPT}
 
 Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçları kullanarak projeyi keşfedebilir, dosyaları okuyabilir, arama yapabilir ve kod yazabilirsin.
 
@@ -1467,306 +1704,173 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 3. KOD BLOKLARI: Her kod bloğunun İSTİSNASIZ İLK SATIRINA yolu ekle:
 // path: Assets/Scripts/Tam/Dosya/Yolu.cs
 
-4. `write_file` aracını C# kodu yazmak için KULLANMA. Bunun yerine, kodu Markdown kod bloğu (```csharp ... ```) içinde ver. Kullanıcı arayüzden onaylayacaktır.
-5. Kullanıcının en son verdiği teknik talimatları (örn: Update/Timer/Zırh) asla unutma, her güncellemede bunları koru.
-6. Eğer tam dosyayı yazmazsan sistem çalışmaz ve kullanıcıya hatalı bilgi vermiş olursun.
+4. Kullanıcının en son verdiği teknik talimatları asla unutma, her güncellemede bunları koru.
+5. Eğer tam dosyayı yazmazsan sistem çalışmaz ve kullanıcıya hatalı bilgi vermiş olursun.
 
 [BAĞLAM]
 {self.context or "Yeni sohbet."}
 
 [DİL]
 Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş."""
-        system_instruction += "\n\n" + self._agent_guide
+        return (system + "\n\n" + self._agent_guide
+                + self._get_architect_wisdom() + self._identity_note())
 
-        # Thinking config — kayıtçıdan (effort_caps): gemini-3.x → thinking_level (enum),
-        # gemini-2.5 → thinking_budget (token). İkisi birlikte ASLA gönderilmez (3.x'te 400).
-        # auto → None → modelin kendi varsayılanı.
-        from providers.effort_caps import map_effort as _map_effort
-        _eff = _map_effort("google", self.model_name,
-                           self.effort_level or self.thinking_level or "auto")
-        thinking_config = None
-        try:
-            if "gemini_thinking_level" in _eff:
-                thinking_config = gtypes.ThinkingConfig(thinking_level=_eff["gemini_thinking_level"])
-            elif "gemini_thinking_budget" in _eff:
-                thinking_config = gtypes.ThinkingConfig(thinking_budget=_eff["gemini_thinking_budget"])
-        except TypeError:
-            # Eski google-genai SDK thinking_level bilmiyorsa güvenli bütçeye düş
-            thinking_config = gtypes.ThinkingConfig(thinking_budget=4096)
+    async def _api_loop(self, adapter, user_message):
+        from secret_redaction import redact_secrets
 
-        config = gtypes.GenerateContentConfig(
-            system_instruction=system_instruction + self._identity_note(),
-            tools=tools,
-            thinking_config=thinking_config,
-        )
-
-        # İlk mesaj
-        parts = [gtypes.Part(text=user_message)]
-        if self.images:
-            for img_data in self.images:
-                try:
-                    # data:image/png;base64,.... formatını ayıkla
-                    if "," in img_data:
-                        header, base64_str = img_data.split(",", 1)
-                        mime_type = header.split(":")[1].split(";")[0]
-                        parts.append(gtypes.Part(inline_data=gtypes.Blob(mime_type=mime_type, data=base64_str)))
-                    else:
-                        # Fallback
-                        parts.append(gtypes.Part(inline_data=gtypes.Blob(mime_type="image/jpeg", data=img_data)))
-                except Exception as e:
-                    logger.error(f"Gemini image parsing hatası: {e}")
-
-        contents = [gtypes.Content(role="user", parts=parts)]
-
-        _turn_t0 = time.time()   # footer: tur süresi + token
-        _turn_in = _turn_out = 0
+        preflight = adapter.preflight(self)
+        if preflight is not None:
+            yield preflight
+            return
+        images = []
+        for image in self.images or []:
+            try:
+                mime, data = _split_data_url(image)
+                if (not image.startswith("data:") or ";base64," not in image
+                        or not image[5:].split(";", 1)[0] or not data):
+                    raise ValueError("Expected a base64 data URL")
+                images.append((mime, data))
+            except (AttributeError, TypeError, ValueError):
+                logger.warning("Skipping invalid initial image data URL")
+        adapter.prepare(self, self._api_system_instruction(), user_message, images)
+        turn_t0 = time.time()
+        turn_in = turn_out = 0
         _progress = _ProgressGuard()
         for iteration in range(MAX_ITERATIONS):
-            logger.info(f"  🔄 Agentic Loop iterasyon {iteration + 1}")
-            
-            # Rate limit (15 RPM) için güvenli mola (her 4s bir hak doluyor, 5s garantidir)
-            if iteration > 0:
-                await asyncio.sleep(5.0)
-
-            # Retry mekanizması (429 hataları için daha agresif)
+            logger.info("API loop %s iteration %s", self.provider_type, iteration + 1)
             response = None
-            _son_hata = ""          # son denemenin sebebi — tükenince kullanıcıya bu gidiyor
+            last_error = ""
             for retry in range(3):
                 try:
-                    # Bekleme SESSİZ olmamalı — kalp atışı üç sağlayıcı yolunda
-                    # da aynı yardımcıdan geliyor (bkz. `_await_provider`).
-                    _istek = asyncio.create_task(asyncio.to_thread(
-                        client.models.generate_content,
-                        model=self.model_name,
-                        contents=contents,
-                        config=config,
-                    ))
-                    async for _kalp in self._await_provider(_istek,
-                                                            iptal_edilebilir=False):
-                        yield _kalp
-                    response = _istek.result()
+                    request = asyncio.create_task(adapter.request(self))
+                    async with contextlib.aclosing(self._await_provider(
+                            request, iptal_edilebilir=adapter.iptal_edilebilir)) as waiting:
+                        async for event in waiting:
+                            yield event
+                    response = request.result()
                     break
                 except Exception as e:
-                    err_msg = str(e).lower()
-                    # 429 (Hız Sınırı) / 503 (Servis Kesintisi) → bekle ve tekrar dene.
-                    #
-                    # Kod araması SINIR İLE: eski hâli `"429" in err_msg` idi ve
-                    # içinde 4293 gibi bir sayı geçen HERHANGİ bir hatayı kota
-                    # sanıp üç kez yeniden deniyordu — sonra da onu kullanıcıya
-                    # "kota" diye raporluyordu. Yanlış sınıflandırma, yanlış
-                    # teşhis ve 60 saniye boşa bekleme, hepsi tek `in` yüzünden.
-                    _kod = provider_retry_code(err_msg)
-                    if _kod:
-                        _son_hata = _kod
-                        wait_time = (retry + 1) * 10
-                        logger.warning(f"  ⚠️ Google API Hatası ({_kod}). {wait_time}s bekleniyor... (Deneme {retry+1}/3)")
-                        # Bekleme SESSİZ olmamalı: üç deneme 60 saniye sürüyor ve
-                        # o süre boyunca arayüze tek olay gitmiyordu — kullanıcı
-                        # donmuş bir uygulama görüyor. Sebebi söyleyip bekliyoruz.
-                        yield AgentEvent("status", {"detail": (
-                            f"🚦 Google {_kod} döndü ({'kota/hız sınırı' if _kod == '429' else 'servis meşgul'}) — "
-                            f"{wait_time} sn bekleniyor, deneme {retry + 1}/3"
-                        )})
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        # 400 / diğer hatalar — tam hata mesajını logla
-                        logger.error(f"  ❌ Gemini API hatası [{self.model_name}]: {str(e)}", exc_info=True)
-                        # "Function calling is not enabled" seçilen modelin araç
-                        # çağıramadığı anlamına geliyor ve bu bir YAPILANDIRMA
-                        # sorunu, geçici bir arıza değil. Ham JSON'u kullanıcının
-                        # yüzüne basmak onu hata metnini çözmeye zorluyordu;
-                        # yapılacak şey tek: araç çağırabilen bir model seç.
-                        if "function calling is not enabled" in err_msg:
-                            # `code` + hazır `message`: arayüz kodu tanıyorsa
-                            # kendi dilinde yazar, tanımıyorsa bu metni gösterir.
-                            # Sadece kod göndermek eski arayüzü boş bırakırdı,
-                            # sadece metin göndermek İngilizce arayüzde Türkçe
-                            # cümle bırakıyordu — ikisi birden ikisini de kapatıyor.
-                            yield AgentEvent("error", {
-                                "code": "model_no_tools",
-                                "model": self.model_name,
-                                "message": (
-                                    f"`{self.model_name}` modeli araç çağırmayı desteklemiyor, "
-                                    "bu yüzden Unity/dosya araçlarını kullanamıyor. Araç gerektiren "
-                                    "işler için araç çağırabilen bir model seç."
-                                )})
-                            return
-                        yield AgentEvent("error", {"message": f"AI hatası: {str(e)}"})
+                    error = redact_secrets(str(e))
+                    # The shared redactor covers named credentials; SDK errors
+                    # can also echo a bare API key without its header name.
+                    error = re.sub(r"\bsk-[A-Za-z0-9_-]{20,}", "<REDACTED>", error)
+                    logger.error("Provider %s failed: %s", self.provider_type, error)
+                    code = provider_retry_code(error.lower())
+                    if "function calling is not enabled" in error.lower():
+                        yield AgentEvent("error", {
+                            "code": "model_no_tools", "model": self.model_name,
+                            "message": (
+                                f"`{self.model_name}` modeli araç çağırmayı desteklemiyor, "
+                                "bu yüzden Unity/dosya araçlarını kullanamıyor. Araç gerektiren "
+                                "işler için araç çağırabilen bir model seç."
+                            )})
                         return
+                    if not code:
+                        yield AgentEvent("error", {"message": f"{adapter.error_prefix} {error}"})
+                        return
+                    last_error = code
+                    wait_time = (retry + 1) * 10
+                    yield AgentEvent("status", {"detail": (
+                        f"🚦 {adapter.label} {code} döndü "
+                        f"({'kota/hız sınırı' if code == '429' else 'servis meşgul'}) — "
+                        f"{wait_time} sn bekleniyor, deneme {retry + 1}/3"
+                    )})
+                    await asyncio.sleep(wait_time)
 
-            if not response:
-                # Eski metin "AI yanıt vermeyi reddetti (Rate Limit)." idi ve iki
-                # şeyi birden yanlış söylüyordu: reddeden model değil sağlayıcı,
-                # ve 503 (servis kesintisi) de aynı cümleyle "rate limit" diye
-                # raporlanıyordu. Hangi kodun geldiği loglarda vardı, kullanıcıda
-                # yoktu — yani teşhis için gereken tek bilgi atılıyordu.
-                _kodlar = {"429": "provider_quota", "503": "provider_unavailable"}
-                _aciklama = {
-                    "429": "Google kota/hız sınırı nedeniyle üç denemede de isteği reddetti. "
-                           "Bir süre bekleyip tekrar dene ya da başka bir modele geç.",
-                    "503": "Google servisi üç denemede de meşgul döndü (503). Bu geçici; "
-                           "birazdan tekrar dene.",
-                }.get(_son_hata, "Sağlayıcıya üç denemede de ulaşılamadı.")
+            if response is None:
+                if adapter.label == "Google":
+                    explanation = {
+                        "429": "Google kota/hız sınırı nedeniyle üç denemede de isteği reddetti. "
+                               "Bir süre bekleyip tekrar dene ya da başka bir modele geç.",
+                        "503": "Google servisi üç denemede de meşgul döndü (503). Bu geçici; "
+                               "birazdan tekrar dene.",
+                    }.get(last_error, "Sağlayıcıya üç denemede de ulaşılamadı.")
+                else:
+                    explanation = {
+                        "429": "Sağlayıcı kota/hız sınırı nedeniyle üç denemede de isteği reddetti. "
+                               "Bir süre bekleyip tekrar dene ya da başka bir modele geç.",
+                        "503": "Sağlayıcı üç denemede de meşgul döndü (503). Bu geçici; "
+                               "birazdan tekrar dene.",
+                    }.get(last_error, "Sağlayıcıya üç denemede de ulaşılamadı.")
                 yield AgentEvent("error", {
-                    "code": _kodlar.get(_son_hata, "provider_unreachable"),
-                    "message": _aciklama,
+                    "code": {"429": "provider_quota", "503": "provider_unavailable"}.get(
+                        last_error, "provider_unreachable"),
+                    "message": explanation,
                 })
                 return
 
-            if not response.candidates:
-                yield AgentEvent("error", {"message": "AI yanıt üretemedi."})
+            turn = adapter.view(response)
+            turn_in += turn.input_tokens
+            turn_out += turn.output_tokens
+            if turn.malformed:
+                yield AgentEvent("error", {
+                    "code": "provider_malformed_response",
+                    "message": (
+                        f"`{self.model_name}` boş bir yanıt döndürdü (hiç seçenek yok). "
+                        "Bu sağlayıcı tarafında bir arıza; tekrar dene ya da başka bir "
+                        "modele geç."
+                    )})
                 return
-
-            _um = getattr(response, "usage_metadata", None)
-            if _um:
-                _turn_in += getattr(_um, "prompt_token_count", 0) or 0
-                _turn_out += getattr(_um, "candidates_token_count", 0) or 0
-
-            candidate = response.candidates[0]
-            # `candidates` boşluğu YUKARIDA zaten kapalı; kapalı olmayan `parts`
-            # idi. Google bir adayı içeriksiz (`content=None`) ya da parçasız
-            # döndürebiliyor ve `for part in None` bir `TypeError`'ı generator'ın
-            # dışına taşırdı — OpenAI yolundaki `choices[0]` ile aynı sınıf,
-            # terminalsiz biten tur. Boş listeye düşmek turu doğal yoluna
-            # sokuyor: araç çağrısı yok → boş final yanıt → tek `done`.
-            parts = getattr(candidate.content, "parts", None) or []
-
-            # Her parça TEK yerde şekline çevriliyor (`_gemini_part_view`): alan
-            # yokluğu bir arıza değil, "bu parça o türden değil" demek.
-            _views = [(p, *_gemini_part_view(p)) for p in parts]
-
-            # Thinking varsa yield et
-            for _p, _text, _fc, _thought in _views:
-                if _thought and _text:
-                    yield AgentEvent("thinking", {"text": _text})
-
-            # Tool call var mı kontrol et. İsimsiz bir `function_call`
-            # çağrılabilir değil — araç sayılmıyor, böylece tur araçsız yolundan
-            # doğal olarak tek `done` ile kapanıyor.
-            tool_calls = [(p, fc) for p, _t, fc, _th in _views
-                          if fc is not None and getattr(fc, "name", None)]
-            text_parts = [t for _p, t, _fc, th in _views if t and not th]
-
-            if not tool_calls:
-                # Tool call yok = AI işini bitirdi, final yanıt
-                final_text = "\n".join(text_parts)
+            for thought in turn.thoughts:
+                yield AgentEvent("thinking", {"text": thought})
+            text = "\n".join(t for t in turn.texts if t)
+            if turn.truncated or not turn.calls:
                 yield AgentEvent("turn_usage", {
-                    "input_tokens": _turn_in, "output_tokens": _turn_out, "cost_usd": None,
-                    "duration_ms": int((time.time() - _turn_t0) * 1000),
+                    "input_tokens": turn_in, "output_tokens": turn_out, "cost_usd": None,
+                    "duration_ms": int((time.time() - turn_t0) * 1000),
                 })
-                yield AgentEvent("response", {"content": final_text})
-                yield _done_event(iteration + 1)
+                if text or not turn.truncated:
+                    yield AgentEvent("response", {"content": text})
+                if turn.truncated:
+                    for event in _stop_events(iteration + 1, "max_tokens"):
+                        yield event
+                else:
+                    yield _done_event(iteration + 1)
                 return
 
-            # Tool call'ları çalıştır
-            function_response_parts = []
-            screenshot_parts = []  # Gemini: görsel tool-role Content'e KONMAZ (400) → ayrı user-content
-
-            for part, fc in tool_calls:
-                tool_name = fc.name
-                _args = getattr(fc, "args", None)
-                tool_args = dict(_args) if _args else {}
-
+            adapter.append_assistant(turn)
+            if text:
+                yield AgentEvent("text", {"content": text})
+            for call in turn.calls:
+                _, name, args, _ = call
                 yield AgentEvent("tool_call", {
-                    "tool": tool_name,
-                    "arguments": tool_args,
-                    "iteration": iteration + 1,
+                    "tool": name, "arguments": args, "iteration": iteration + 1,
                 })
-
-                # Tehlikeli komut kontrolü ve onay yield'ı
-                _approval_text = self._approval_prompt(tool_name, tool_args)
-                if _approval_text:
-                    with self._approval_gate(_approval_text) as (_gate_event, _gate_id):
-                        yield _gate_event
-                        _decision = await self._await_approval(_gate_id)
-                    if not _decision.approved:
-                        result = {"success": False, "summary": _decision.summary}
-                        # Tool result olarak ilet
-                        yield AgentEvent("tool_result", {
-                            "tool": tool_name,
-                            "success": False,
-                            "summary": _decision.summary,
-                        })
-                        # AI'a tool sonucunu bildir (döngü devam etsin diye)
-                        function_response_parts.append(
-                            _gemini_fn_response(fc, tool_name, result)
-                        )
-                        # Re-asking for a call the user keeps refusing is a stall
-                        # like any other, so it is recorded rather than skipped.
-                        _progress.record(tool_name, tool_args, result)
-                        if _progress.stalled:
-                            break
-                        continue
-
-                # Normal tool execution
-                result, _ = await self._execute_tool_with_approval(tool_name, tool_args)
-
-                screenshot_b64 = result.pop("image_base64", None)
+                decision = None
+                approval_text = self._approval_prompt(name, args)
+                if approval_text:
+                    with self._approval_gate(approval_text) as (gate_event, gate_id):
+                        yield gate_event
+                        decision = await self._await_approval(gate_id)
+                if decision is not None and not decision.approved:
+                    result = {"success": False, "summary": decision.summary}
+                    screenshot = None
+                    summary = decision.summary
+                else:
+                    result, _ = await self._execute_tool_with_approval(name, args)
+                    screenshot = result.pop("image_base64", None)
+                    summary = self._summarize_result(name, result)
                 result_str = json.dumps(result, ensure_ascii=False)
-                if len(result_str) > 8000:
+                if len(result_str) > 8000 and not (decision is not None and not decision.approved):
                     result_str = result_str[:8000] + "... (kısaltıldı)"
-
                 yield AgentEvent("tool_result", {
-                    "tool": tool_name,
-                    "success": result.get("success", False),
-                    "summary": self._summarize_result(tool_name, result),
+                    "tool": name, "success": result.get("success", False), "summary": summary,
                 })
-
-                function_response_parts.append(
-                    _gemini_fn_response(fc, tool_name, {"result": result_str})
-                )
-                # Recorded with the RESULT OBJECT — never `result_str`, which is
-                # the truncated copy built for the transcript (see
-                # `_canonical_blob`) — and checked per call rather than at the
-                # end of the batch: a response carrying A,A,A,B used to reset the
-                # streak before it was ever inspected.
-                _progress.record(tool_name, tool_args, result)
+                adapter.append_result(call, result_str, screenshot)
+                _progress.record(name, args, result)
                 if _progress.stalled:
                     break
-                if screenshot_b64:
-                    import base64 as _b64
-                    _mime, _data = _split_data_url(screenshot_b64)
-                    raw_bytes = _b64.b64decode(_data)
-                    # Gemini tool-role Content'ine inline_data KONULAMAZ (400 INVALID_ARGUMENT).
-                    # Görseli ayrı user-role Content olarak biriktir (aşağıda eklenir).
-                    screenshot_parts.append(
-                        gtypes.Part(inline_data=gtypes.Blob(mime_type=_mime, data=raw_bytes))
-                    )
-
-            # Arada metin varsa (AI'ın açıklaması) yield et
-            for _t in text_parts:
-                yield AgentEvent("text", {"content": _t})
-
-            # AI'ın yanıtını ve tool sonuçlarını geçmişe ekle
-            contents.append(candidate.content)
-            # Rol "user", "tool" DEĞİL. Google'ın kendi SDK'sı araç sonuçlarını
-            # tam olarak böyle sarıyor (`google/genai/models.py`, otomatik
-            # fonksiyon çağırma dalı: `types.Content(role='user', parts=...)`),
-            # ve uç "tool"u reddediyor:
-            #   400 INVALID_ARGUMENT — "Role 'tool' is not supported. Please use
-            #   a valid role: SYSTEM, SYSTEM_1, USER, ASSISTANT, DEVELOPER,
-            #   CONTEXT, USER_CONTEXT, MODEL, USER."
-            # Sahada 30 Ağu 2026'da yakalandı: Gemini yolu İLK araç çağrısında
-            # ölüyordu, yani bu yolun araçlı hali hiç çalışmamıştı. Satır 30 May
-            # 2026'dan beri böyleydi ("tool" OpenAI'ın konvansiyonu, Google'ın
-            # değil) — kimse tetiklemediği için sessiz kaldı.
-            contents.append(gtypes.Content(role="user", parts=function_response_parts))
-            # Screenshot(lar) → AYRI user-role Content (Gemini tool-role'a görsel kabul etmez → 400)
-            if screenshot_parts:
-                contents.append(gtypes.Content(
-                    role="user",
-                    parts=[gtypes.Part(text="(capture_unity_screenshot çıktısı — ekran görüntüsü:)")] + screenshot_parts,
-                ))
-
+            adapter.finish_results()
             if _progress.stalled:
-                logger.warning(f"  ⛔ Gemini loop {iteration + 1}. turda ilerlemeyi durdurdu")
-                for _ev in _stop_events(iteration + 1, "no_progress", _progress.repeated_tool):
-                    yield _ev
+                for event in _stop_events(iteration + 1, "no_progress", _progress.repeated_tool):
+                    yield event
                 return
+        for event in _stop_events(MAX_ITERATIONS, "max_iterations"):
+            yield event
 
-        for _ev in _stop_events(MAX_ITERATIONS, "max_iterations"):
-            yield _ev
+
+    def _gemini_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
+        return self._api_loop(_GeminiAdapter(), user_message)
 
     # ═══════════════════════════════════════════════
     # ANTHROPIC AGENTIC LOOP (Claude 3.5 Sonnet vb.)
@@ -1776,251 +1880,8 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                                              self.model_name):
             yield _ev
 
-    async def _anthropic_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        client = anthropic.AsyncAnthropic(api_key=self.api_key)
-        
-        system_instruction = f"""{SYSTEM_PROMPT}
-
-Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçları kullanarak projeyi keşfedebilir, dosyaları okuyabilir, arama yapabilir ve kod yazabilirsin.
-
-[ÇALIŞMA PRENSİBİ - HAYATİ KURALLAR]
-1. ÖNCE projeyi keşfet (dosya oku, ara).
-2. KOD YAZARKEN: KESİNLİKLE parça kod (snippet) verme. Sadece değişen yeri değil, dosyanın TAMAMINI yazmak ZORUNDASIN.
-3. KOD BLOKLARI: Her kod bloğunun İSTİSNASIZ İLK SATIRINA yolu ekle:
-// path: Assets/Scripts/Tam/Dosya/Yolu.cs
-
-4. `write_file` aracını C# kodu yazmak için KULLANMA. Bunun yerine, kodu Markdown kod bloğu (```csharp ... ```) içinde ver. Kullanıcı arayüzden onaylayacaktır.
-5. Kullanıcının en son verdiği teknik talimatları asla unutma, her güncellemede bunları koru.
-6. Eğer tam dosyayı yazmazsan sistem çalışmaz ve kullanıcıya hatalı bilgi vermiş olursun.
-
-[BAĞLAM]
-{self.context or "Yeni sohbet."}"""
-        
-        system_instruction += "\n\n" + self._agent_guide
-
-        # Tool formatı
-        anthropic_tools = []
-        for t in self._tool_definitions():
-            # Anthropic expects input_schema instead of parameters
-            anthropic_tools.append({
-                "name": t["name"],
-                "description": t["description"],
-                "input_schema": t["parameters"]
-            })
-
-        # İlk mesaj içeriği
-        user_parts = [{"type": "text", "text": user_message}]
-        if self.images:
-            for img_data in self.images:
-                try:
-                    if "," in img_data:
-                        header, base64_str = img_data.split(",", 1)
-                        mime_type = header.split(":")[1].split(";")[0]
-                        user_parts.append({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": mime_type,
-                                "data": base64_str
-                            }
-                        })
-                except Exception as e:
-                    logger.warning(f"Görsel işlenemedi: {e}")
-
-        # Anthropic API: sistem talimatı messages listesine DEĞİL, create()'in
-        # system= parametresine gider (aşağıda system_instruction olarak geçiliyor).
-        # messages'a "system" rolü koymak API 400 döndürür.
-        messages = []
-        _turn_t0 = time.time()   # footer: tur süresi + token
-        _turn_in = _turn_out = 0
-
-        # Sistem önekini tur başında BİR kez kur (deterministik) ve cache_control ile
-        # işaretle → statik system prefix 2..N. iterasyonlarda cache'ten okunur (~%90 tasarruf).
-        _sys_text = system_instruction + self._get_architect_wisdom() + self._identity_note()
-        _sys_blocks = [{"type": "text", "text": _sys_text,
-                        "cache_control": {"type": "ephemeral"}}]
-
-        _progress = _ProgressGuard()
-        for iteration in range(MAX_ITERATIONS):
-            logger.info(f"  🔄 Anthropic Agentic Loop iterasyon {iteration + 1}")
-            
-            # Tool formatı
-            anthropic_tools = []
-            for t in self._tool_definitions():
-                anthropic_tools.append({
-                    "name": t["name"],
-                    "description": t["description"],
-                    "input_schema": t["parameters"]
-                })
-            # Prompt caching: son tool'a breakpoint → tüm 'tools' prefix'i (statik ve
-            # büyük ~24k tok Unity MCP şemaları) cache'lenir; tekrar turlarda ~%90 tasarruf.
-            if anthropic_tools:
-                anthropic_tools[-1] = {**anthropic_tools[-1],
-                                       "cache_control": {"type": "ephemeral"}}
-
-            # İlk mesaj içeriği
-            if iteration == 0:
-                user_parts = [{"type": "text", "text": user_message}]
-                if self.images:
-                    for img_data in self.images:
-                        try:
-                            if "," in img_data:
-                                header, base64_str = img_data.split(",", 1)
-                                mime_type = header.split(":")[1].split(";")[0]
-                                user_parts.append({
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": mime_type,
-                                        "data": base64_str
-                                    }
-                                })
-                        except Exception as e:
-                            logger.error(f"Anthropic image parsing hatası: {e}")
-                messages.append({"role": "user", "content": user_parts})
-            
-            try:
-                # Effort: kayıtçıdan; extra_body ile geçer (output_config.effort —
-                # SDK sürümü parametreyi tanımasa da httpx gövdesine girer). auto → {}.
-                from providers.effort_caps import map_effort as _map_effort
-                _eff_body = _map_effort("anthropic", self.model_name,
-                                        self.effort_level or self.thinking_level or "auto"
-                                        ).get("anthropic_extra_body")
-                # Kalp atışı: OpenAI ve Gemini yollarıyla aynı yardımcı.
-                _istek = asyncio.create_task(client.messages.create(
-                    model=self.model_name,
-                    max_tokens=_anthropic_loop_max_tokens(self.model_name),
-                    system=_sys_blocks,
-                    messages=messages,
-                    tools=anthropic_tools,
-                    **({"extra_body": _eff_body} if _eff_body else {}),
-                ))
-                async for _kalp in self._await_provider(_istek):
-                    yield _kalp
-                response = _istek.result()
-            except Exception as e:
-                yield AgentEvent("error", {"message": f"Claude hatası: {str(e)}"})
-                return
-
-            _u = getattr(response, "usage", None)
-            if _u:
-                _turn_in += getattr(_u, "input_tokens", 0) or 0
-                _turn_out += getattr(_u, "output_tokens", 0) or 0
-
-            # OpenAI'daki `choices[0]` ile aynı sınıf: bloklar üzerinde koşulmadan
-            # önce gerçekten bir dizi olduğu doğrulanıyor. `None` gelirse eskiden
-            # `TypeError` generator'ın dışına taşınır ve tur terminalsiz biterdi.
-            _bloklar = getattr(response, "content", None) or []
-            messages.append({"role": "assistant", "content": _bloklar})
-
-            tool_calls = [block for block in _bloklar if block.type == "tool_use"]
-            text_blocks = [block for block in _bloklar if block.type == "text"]
-            
-            for text_block in text_blocks:
-                if text_block.text:
-                    yield AgentEvent("text", {"content": text_block.text})
-
-            if getattr(response, "stop_reason", None) == "max_tokens":
-                # Used to pass as a normal finish. A tool_use cut at the cap
-                # carries partial input, so no tool of this turn is run.
-                partial_text = "\n".join(b.text for b in text_blocks if b.text)
-                yield AgentEvent("turn_usage", {
-                    "input_tokens": _turn_in, "output_tokens": _turn_out, "cost_usd": None,
-                    "duration_ms": int((time.time() - _turn_t0) * 1000),
-                })
-                if partial_text:
-                    yield AgentEvent("response", {"content": partial_text})
-                for _ev in _stop_events(iteration + 1, "max_tokens"):
-                    yield _ev
-                return
-
-            if not tool_calls:
-                # Final yanıt
-                final_text = "\n".join(b.text for b in text_blocks if b.text)
-                yield AgentEvent("turn_usage", {
-                    "input_tokens": _turn_in, "output_tokens": _turn_out, "cost_usd": None,
-                    "duration_ms": int((time.time() - _turn_t0) * 1000),
-                })
-                yield AgentEvent("response", {"content": final_text})
-                yield _done_event(iteration + 1)
-                return
-
-            tool_results = []
-            for tool_call in tool_calls:
-                yield AgentEvent("tool_call", {
-                    "tool": tool_call.name,
-                    "arguments": tool_call.input,
-                    "iteration": iteration + 1,
-                })
-
-                # Terminal Onay Katmanı
-                _approval_text = self._approval_prompt(tool_call.name, tool_call.input)
-                if _approval_text:
-                    with self._approval_gate(_approval_text) as (_gate_event, _gate_id):
-                        yield _gate_event
-                        _decision = await self._await_approval(_gate_id)
-                    if not _decision.approved:
-                        _red = {"success": False, "summary": _decision.summary}
-                        result_str = json.dumps(_red, ensure_ascii=False)
-                        tool_results.append({"type": "tool_result", "tool_use_id": tool_call.id, "content": result_str})
-                        # Re-asking for a call the user keeps refusing is a stall
-                        # like any other, so it is recorded rather than skipped —
-                        # as the OBJECT, like every other `record` call site.
-                        _progress.record(tool_call.name, tool_call.input, _red)
-                        if _progress.stalled:
-                            break
-                        continue
-
-                result, _ = await self._execute_tool_with_approval(tool_call.name, tool_call.input)
-
-                screenshot_b64 = result.pop("image_base64", None)
-                result_str = json.dumps(result, ensure_ascii=False)
-                if len(result_str) > 8000:
-                    result_str = result_str[:8000] + "... (kısaltıldı)"
-
-                yield AgentEvent("tool_result", {
-                    "tool": tool_call.name,
-                    "success": result.get("success", False),
-                    "summary": self._summarize_result(tool_call.name, result),
-                })
-
-                if screenshot_b64:
-                    _mime, _data = _split_data_url(screenshot_b64)
-                    content = [
-                        {"type": "text", "text": result_str},
-                        {"type": "image", "source": {
-                            "type": "base64",
-                            "media_type": _mime,
-                            "data": _data,
-                        }},
-                    ]
-                else:
-                    content = result_str
-
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_call.id,
-                    "content": content
-                })
-                # Recorded with the RESULT OBJECT — never `result_str`, which is
-                # the truncated copy built for the transcript (see
-                # `_canonical_blob`) — and checked per call rather than at the
-                # end of the batch: a response carrying A,A,A,B used to reset the
-                # streak before it was ever inspected.
-                _progress.record(tool_call.name, tool_call.input, result)
-                if _progress.stalled:
-                    break
-
-            messages.append({"role": "user", "content": tool_results})
-
-            if _progress.stalled:
-                logger.warning(f"  ⛔ Anthropic loop {iteration + 1}. turda ilerlemeyi durdurdu")
-                for _ev in _stop_events(iteration + 1, "no_progress", _progress.repeated_tool):
-                    yield _ev
-                return
-
-        for _ev in _stop_events(MAX_ITERATIONS, "max_iterations"):
-            yield _ev
+    def _anthropic_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
+        return self._api_loop(_AnthropicAdapter(), user_message)
 
     # ═══════════════════════════════════════════════
     # OPENAI AGENTIC LOOP (OpenAI, DeepSeek, vb.)
@@ -2030,290 +1891,8 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
                                              self.model_name):
             yield _ev
 
-    async def _openai_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        # GPT-6 does tool calling ONLY through the Responses API: Chat
-        # Completions accepts the model but never returns tool_calls, so the
-        # agent loop would silently degrade into a tool-less chat. Explicit
-        # error instead, until this path is ported to the Responses API.
-        if ((self.provider_type or "").lower() == "openai"
-                and (self.model_name or "").lower().startswith("gpt-6")):
-            yield AgentEvent("error", {"message": (
-                f"'{self.model_name}' bu sürümde bulut API anahtarıyla araç kullanamıyor: "
-                "GPT-6 araç çağrısını yalnız Responses API'si üzerinden yapıyor, "
-                "uygulama ise Chat Completions kullanıyor. Codex (abonelik) yolundan "
-                "'Codex (GPT-6 Astra)' seçeneğini kullanın ya da başka bir bulut modeli seçin."
-            )})
-            return
-
-        client = openai.AsyncOpenAI(api_key=self.api_key)
-        
-        # DeepSeek OpenRouter veya custom base URL'ler için:
-        if self.provider_type == "openrouter":
-            client.base_url = "https://openrouter.ai/api/v1"
-        elif self.provider_type == "deepseek":
-            client.base_url = "https://api.deepseek.com"
-        elif self.provider_type == "groq":
-            client.base_url = "https://api.groq.com/openai/v1"
-        elif self.provider_type == "moonshot":
-            client.base_url = "https://api.moonshot.ai/v1"
-        elif self.provider_type == "z-ai":
-            client.base_url = "https://api.z.ai/api/paas/v4"
-        elif self.provider_type == "nvidia":
-            # NVIDIA NIM — OpenAI-uyumlu, tek nvapi- key ile ücretsiz model havuzu
-            client.base_url = "https://integrate.api.nvidia.com/v1"
-
-        system_instruction = f"""{SYSTEM_PROMPT}
-
-Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçları kullanarak projeyi keşfedebilir, dosyaları okuyabilir, arama yapabilir ve kod yazabilirsin.
-
-[ÇALIŞMA PRENSİBİ - HAYATİ KURALLAR]
-1. ÖNCE projeyi keşfet (dosya oku, ara).
-2. KOD YAZARKEN: KESİNLİKLE parça kod (snippet) verme. Sadece değişen yeri değil, dosyanın TAMAMINI yazmak ZORUNDASIN.
-3. KOD BLOKLARI: Her kod bloğunun İSTİSNASIZ İLK SATIRINA yolu ekle:
-// path: Assets/Scripts/Tam/Dosya/Yolu.cs
-
-4. `write_file` aracını C# kodu yazmak için KULLANMA. Bunun yerine, kodu Markdown kod bloğu (```csharp ... ```) içinde ver. Kullanıcı arayüzden onaylayacaktır.
-5. Kullanıcının en son verdiği teknik talimatları asla unutma, her güncellemede bunları koru.
-6. Eğer tam dosyayı yazmazsan sistem çalışmaz ve kullanıcıya hatalı bilgi vermiş olursun.
-
-[BAĞLAM]
-{self.context or "Yeni sohbet."}"""
-        
-        system_instruction += "\n\n" + self._agent_guide
-        openai_tools = get_openai_tool_declarations()
-        if getattr(self, "read_only", False):
-            openai_tools = [t for t in openai_tools if _read_only_tool_declared(t["function"]["name"])]
-        
-        # İlk mesaj içeriği
-        user_content = [{"type": "text", "text": user_message}]
-        if self.images:
-            for img_data in self.images:
-                user_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": img_data} # OpenAI direkt data URL kabul eder
-                })
-
-        # Prompt caching: statik system öneki (SYSTEM_PROMPT + transcript + kimlik) tekrar
-        # turlarda cache'ten okunsun. OpenRouter cache_control breakpoint'ini DESTEKLER
-        # (OR→Anthropic/Gemini için explicit ZORUNLU). DeepSeek/OpenAI/Moonshot(Kimi)/z-ai(GLM)
-        # zaten OTOMATİK prefix-cache yapar → düz string yeterli; bilinmeyen alanı reddedebilen
-        # sağlayıcılara cache_control göndermeyerek riski sıfırlıyoruz.
-        _sys = system_instruction + self._identity_note()
-        if self.provider_type == "openrouter":
-            system_msg = {"role": "system", "content": [
-                {"type": "text", "text": _sys, "cache_control": {"type": "ephemeral"}},
-            ]}
-        else:
-            system_msg = {"role": "system", "content": _sys}
-
-        messages = [
-            system_msg,
-            {"role": "user", "content": user_content}
-        ]
-
-        _turn_t0 = time.time()   # footer: tur süresi + token
-        # Reasoning/effort: kayıtçıdan (effort_caps) — auto/desteklenmeyen → hiçbir
-        # parametre gitmez. request_params üst-seviye (reasoning_effort), extra_body
-        # sağlayıcıya özel gövde (NIM chat_template_kwargs, deepseek/z-ai thinking).
-        from providers.effort_caps import map_effort as _map_effort
-        _eff = _map_effort(self.provider_type, self.model_name,
-                           self.effort_level or self.thinking_level or "auto")
-        _effort_params = _eff.get("request_params", {})
-        _effort_extra_body = _eff.get("extra_body")
-
-        _turn_in = _turn_out = 0
-        _progress = _ProgressGuard()
-        for iteration in range(MAX_ITERATIONS):
-            logger.info(f"  🔄 OpenAI Agentic Loop iterasyon {iteration + 1}")
-            
-            # Rate limit koruması için kısa mola
-            if iteration > 0:
-                await asyncio.sleep(5.0)
-
-            # Retry mekanizması
-            response = None
-            _son_hata = ""
-            for retry in range(3):
-                try:
-                    # İstek bir göreve alınıyor ki BEKLERKEN konuşabilelim.
-                    # Ölçüldü 30 Ağu 2026 (Burak, NVIDIA NIM üzerinde bir
-                    # DeepSeek modeli): iki dakika boyunca ekranda yalnız
-                    # "düşünüyor..." vardı ve kullanıcı uygulamanın mı yoksa
-                    # sağlayıcının mı takıldığını bilemiyordu. openai SDK'sının
-                    # varsayılan zaman aşımı 600 sn, yani hiçbir şey söylemeden
-                    # on dakika beklenebiliyordu.
-                    _istek = asyncio.create_task(client.chat.completions.create(
-                        model=self.model_name,
-                        messages=messages,
-                        tools=openai_tools,
-                        tool_choice="auto",
-                        timeout=_SAGLAYICI_ZAMAN_ASIMI,
-                        **_effort_params,
-                        **({"extra_body": _effort_extra_body} if _effort_extra_body else {}),
-                    ))
-                    async for _kalp in self._await_provider(_istek):
-                        yield _kalp
-                    response = _istek.result()
-                    break
-                except Exception as e:
-                    err_msg = str(e).lower()
-                    logger.error(f"  ❌ OpenAI/OpenRouter API hatası [{self.provider_type} / {self.model_name}]: {str(e)}", exc_info=True)
-                    _kod = provider_retry_code(err_msg)
-                    if _kod:
-                        _son_hata = _kod
-                        wait_time = (retry + 1) * 10
-                        logger.warning(f"  ⚠️ OpenAI/OpenRouter Hatası ({_kod}). {wait_time}s bekleniyor... (Deneme {retry+1}/3)")
-                        yield AgentEvent("status", {"detail": (
-                            f"🚦 Sağlayıcı {_kod} döndü "
-                            f"({'kota/hız sınırı' if _kod == '429' else 'servis meşgul'}) — "
-                            f"{wait_time} sn bekleniyor, deneme {retry + 1}/3"
-                        )})
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        yield AgentEvent("error", {"message": f"OpenAI/API hatası: {str(e)}"})
-                        return
-            
-            if not response:
-                # Gemini yolundaki ile AYNI sözleşme: reddeden model değil
-                # sağlayıcı, ve 429 ile 503 aynı cümleye sıkıştırılmıyor.
-                _kodlar = {"429": "provider_quota", "503": "provider_unavailable"}
-                _aciklama = {
-                    "429": "Sağlayıcı kota/hız sınırı nedeniyle üç denemede de isteği reddetti. "
-                           "Bir süre bekleyip tekrar dene ya da başka bir modele geç.",
-                    "503": "Sağlayıcı üç denemede de meşgul döndü (503). Bu geçici; "
-                           "birazdan tekrar dene.",
-                }.get(_son_hata, "Sağlayıcıya üç denemede de ulaşılamadı.")
-                yield AgentEvent("error", {
-                    "code": _kodlar.get(_son_hata, "provider_unreachable"),
-                    "message": _aciklama,
-                })
-                return
-
-            _u = getattr(response, "usage", None)
-            if _u:
-                _turn_in += getattr(_u, "prompt_tokens", 0) or 0
-                _turn_out += getattr(_u, "completion_tokens", 0) or 0
-
-            # `choices[0]` KONTROLSÜZ indekslenemez. Sözdizimsel olarak geçerli
-            # ama `choices=[]` olan bir sağlayıcı cevabı `IndexError`'ı
-            # generator'ın DIŞINA taşıyordu ve tur HİÇBİR terminal olay
-            # üretmeden bitiyordu (denetim, 30 Ağu 2026) — sözleşme her turun
-            # tam olarak bir `done` ya da bir `error` ile bitmesi. Bozuk cevap
-            # bir arıza, o yüzden tek `error`.
-            _secenekler = getattr(response, "choices", None) or []
-            if not _secenekler:
-                yield AgentEvent("error", {
-                    "code": "provider_malformed_response",
-                    "message": (
-                        f"`{self.model_name}` boş bir yanıt döndürdü (hiç seçenek yok). "
-                        "Bu sağlayıcı tarafında bir arıza; tekrar dene ya da başka bir "
-                        "modele geç."
-                    )})
-                return
-            message = _secenekler[0].message
-
-            # API formatında mesaja ekle
-            msg_dict = {"role": "assistant"}
-            if message.content:
-                msg_dict["content"] = message.content
-            if message.tool_calls:
-                msg_dict["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments}
-                    } for tc in message.tool_calls
-                ]
-            messages.append(msg_dict)
-            
-            if not message.tool_calls:
-                # Final yanıt
-                final_text = message.content or "Tamamlandı."
-                yield AgentEvent("turn_usage", {
-                    "input_tokens": _turn_in, "output_tokens": _turn_out, "cost_usd": None,
-                    "duration_ms": int((time.time() - _turn_t0) * 1000),
-                })
-                yield AgentEvent("response", {"content": final_text})
-                yield _done_event(iteration + 1)
-                return
-
-            if message.content:
-                yield AgentEvent("text", {"content": message.content})
-                
-            for tool_call in message.tool_calls:
-                tool_name = tool_call.function.name
-                try:
-                    tool_args = json.loads(tool_call.function.arguments)
-                except:
-                    tool_args = {}
-                    
-                yield AgentEvent("tool_call", {
-                    "tool": tool_name,
-                    "arguments": tool_args,
-                    "iteration": iteration + 1,
-                })
-
-                # Terminal Onay Katmanı
-                _approval_text = self._approval_prompt(tool_name, tool_args)
-                if _approval_text:
-                    with self._approval_gate(_approval_text) as (_gate_event, _gate_id):
-                        yield _gate_event
-                        _decision = await self._await_approval(_gate_id)
-                    if not _decision.approved:
-                        messages.append({"role": "tool", "tool_call_id": tool_call.id,
-                                         "name": tool_name, "content": _decision.summary})
-                        # Re-asking for a call the user keeps refusing is a stall
-                        # like any other, so it is recorded rather than skipped.
-                        _progress.record(tool_name, tool_args, _decision.summary)
-                        if _progress.stalled:
-                            break
-                        continue
-
-                result, _ = await self._execute_tool_with_approval(tool_name, tool_args)
-
-                screenshot_b64 = result.pop("image_base64", None)
-                result_str = json.dumps(result, ensure_ascii=False)
-                if len(result_str) > 8000:
-                    result_str = result_str[:8000] + "... (kısaltıldı)"
-
-                yield AgentEvent("tool_result", {
-                    "tool": tool_name,
-                    "success": result.get("success", False),
-                    "summary": self._summarize_result(tool_name, result),
-                })
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": tool_name,
-                    "content": result_str
-                })
-                # Recorded with the RESULT OBJECT — never `result_str`, which is
-                # the truncated copy built for the transcript (see
-                # `_canonical_blob`) — and checked per call rather than at the
-                # end of the batch: a response carrying A,A,A,B used to reset the
-                # streak before it was ever inspected.
-                _progress.record(tool_name, tool_args, result)
-                if _progress.stalled:
-                    break
-                if screenshot_b64:
-                    messages.append({
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "[Screenshot — yukarıdaki tool sonucuyla ilgili görsel]"},
-                            {"type": "image_url", "image_url": {"url": screenshot_b64}},
-                        ],
-                    })
-
-            if _progress.stalled:
-                logger.warning(f"  ⛔ OpenAI loop {iteration + 1}. turda ilerlemeyi durdurdu")
-                for _ev in _stop_events(iteration + 1, "no_progress", _progress.repeated_tool):
-                    yield _ev
-                return
-
-        for _ev in _stop_events(MAX_ITERATIONS, "max_iterations"):
-            yield _ev
+    def _openai_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
+        return self._api_loop(_OpenAIAdapter(), user_message)
 
     # ═══════════════════════════════════════════════
     # BASIT FALLBACK (Function calling olmayan provider'lar)
