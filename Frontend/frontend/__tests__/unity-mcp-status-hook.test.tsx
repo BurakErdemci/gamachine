@@ -59,9 +59,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
 })
 
-describe('Unity instance projects', () => {
+describe('Unity instance projects and connection wait', () => {
   it('ignores malformed instance entries and clears projects after disconnect or failed polls', async () => {
     mockedAxios.get.mockResolvedValue({ data: { status: 'connected', instances: [
       null, false, 'Game', {}, { project: 7 }, { project: 'GameA' }, { project: 'GameB' },
@@ -79,6 +80,51 @@ describe('Unity instance projects', () => {
     mockedAxios.get.mockResolvedValue({ data: { status: 'off', instances: [{ project: 'stale' }] } })
     await act(async () => { await result.current.refreshUnityMcpStatus() })
     expect(result.current.unityMcpProjects).toEqual([])
+  })
+
+  it('counts from toggle ON across starting and running and resets when connected', async () => {
+    vi.useFakeTimers()
+    mockedAxios.get.mockResolvedValue(statusPayload('off'))
+    mockedAxios.post.mockResolvedValue({ data: {} })
+    const { result } = mountHook()
+    await act(async () => {})
+    await act(async () => { await result.current.toggleUnityMcp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
+    mockedAxios.get.mockResolvedValue(statusPayload('running'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(14999) })
+    expect(result.current.unityMcpSlow).toBe(false)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(result.current.unityMcpSlow).toBe(true)
+    mockedAxios.get.mockResolvedValue(statusPayload('connected'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(result.current.unityMcpSlow).toBe(false)
+    await act(async () => { await result.current.toggleUnityMcp() })
+    expect(result.current.unityMcpSlow).toBe(false)
+  })
+
+  it('starts the clock on an already running server and resets after leaving connecting states', async () => {
+    vi.useFakeTimers()
+    mockedAxios.get.mockResolvedValue(statusPayload('running'))
+    const { result } = mountHook()
+    await act(async () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(29999) })
+    expect(result.current.unityMcpSlow).toBe(false)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(result.current.unityMcpSlow).toBe(true)
+    mockedAxios.get.mockResolvedValue(statusPayload('blocked'))
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    expect(result.current.unityMcpSlow).toBe(false)
+    mockedAxios.get.mockResolvedValue(statusPayload('starting'))
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(29999) })
+    expect(result.current.unityMcpSlow).toBe(false)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(result.current.unityMcpSlow).toBe(true)
+    mockedAxios.post.mockResolvedValue({ data: {} })
+    mockedAxios.get.mockResolvedValue(statusPayload('running'))
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    await act(async () => { await result.current.toggleUnityMcp() })
+    expect(result.current.unityMcpSlow).toBe(false)
   })
 })
 

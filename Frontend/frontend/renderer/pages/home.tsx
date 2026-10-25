@@ -1017,6 +1017,7 @@ export default function Home() {
             onToggle={ai.toggleUnityMcp}
             projectName={unityProjectName}
             projectMismatch={projectMismatch}
+            slowConnect={ai.unityMcpSlow}
           />
           {/* Not in the mockup: the sidebar toggle. The editor's controls that shared this spot (the
               terminal button, the open file's name / save / close) moved into the workspace: the

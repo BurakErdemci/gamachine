@@ -121,6 +121,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
   // Unity MCP toggle
   const [unityMcpStatus, setUnityMcpStatus] = useState<UnityMCPStatus>('off');
   const [unityMcpProjects, setUnityMcpProjects] = useState<string[]>([]);
+  const [unityMcpSlow, setUnityMcpSlow] = useState(false);
+  const connectingSinceRef = useRef<number | null>(null);
   const [unityMcpToggling, setUnityMcpToggling] = useState(false);
   const [unityMcpError, setUnityMcpError] = useState<string | null>(null);
   // `blocked` sebebi. `unityMcpError` GEÇİCİ (bir toggle denemesinin sonucu, 6 sn
@@ -138,6 +140,16 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }, []);
+
+  const updateConnectionWait = useCallback((status: UnityMCPStatus) => {
+    if (status === 'starting' || status === 'running') {
+      connectingSinceRef.current ??= Date.now();
+      setUnityMcpSlow(Date.now() - connectingSinceRef.current >= 30000);
+    } else {
+      connectingSinceRef.current = null;
+      setUnityMcpSlow(false);
+    }
   }, []);
 
   const fetchUnityMcpStatus = useCallback(async () => {
@@ -169,6 +181,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       if (status === 'off' && Date.now() < startingUntilRef.current) return;
 
       setUnityMcpStatus(status);
+      updateConnectionWait(status);
       const instances: unknown = res.data?.instances;
       setUnityMcpProjects(status === 'connected' && Array.isArray(instances)
         ? instances.flatMap(instance => instance && typeof instance === 'object' && typeof instance.project === 'string' ? [instance.project] : [])
@@ -191,8 +204,10 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
         // farkı görmez. Bilinçli boşluk, bulunmamış boşluk değil.
         stopPolling();
         pollRef.current = setInterval(fetchUnityMcpStatus, 8000);
+      } else if (status === 'starting' || status === 'running') {
+        stopPolling();
+        pollRef.current = setInterval(fetchUnityMcpStatus, 3000);
       }
-      // 'starting' veya 'running' → mevcut hızlı interval devam eder
     } catch {
       if (!guncelMi()) return;
       // Durum artık BİLİNMİYOR. Eskiden burada yalnız yoklama aralığı
@@ -205,11 +220,12 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       // haklıydı; eksik olan "bilinmiyor" seçeneğiydi.
       setUnityMcpStatus('unknown');
       setUnityMcpProjects([]);
+      updateConnectionWait('unknown');
       setUnityMcpReason(null);
       stopPolling();
       pollRef.current = setInterval(fetchUnityMcpStatus, 5000);
     }
-  }, [API, stopPolling]);
+  }, [API, stopPolling, updateConnectionWait]);
 
   const toggleUnityMcp = useCallback(async (): Promise<boolean> => {
     if (!API || unityMcpToggling || unityMcpStatus === 'starting') return false;
@@ -248,6 +264,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       if (turningOn) {
         setUnityMcpStatus('starting');
         setUnityMcpProjects([]);
+        connectingSinceRef.current = Date.now();
+        setUnityMcpSlow(false);
         startingUntilRef.current = Date.now() + 30000; // 30s boyunca 'off' yanıtını yoksay
         stopPolling();
         pollRef.current = setInterval(fetchUnityMcpStatus, 3000);
@@ -256,6 +274,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
         startingUntilRef.current = 0;
         setUnityMcpStatus('off');
         setUnityMcpProjects([]);
+        updateConnectionWait('off');
         pollRef.current = setInterval(fetchUnityMcpStatus, 8000);
       }
       return true;
@@ -287,7 +306,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     } finally {
       setUnityMcpToggling(false);
     }
-  }, [API, unityMcpStatus, unityMcpToggling, fetchUnityMcpStatus, stopPolling, showToast, workspacePath]);
+  }, [API, unityMcpStatus, unityMcpToggling, fetchUnityMcpStatus, stopPolling, updateConnectionWait, showToast, workspacePath]);
 
   // Başlangıçta sorgula ve sürekli kontrol et
   useEffect(() => {
@@ -578,6 +597,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     displayModelName,
     unityMcpStatus,
     unityMcpProjects,
+    unityMcpSlow,
     unityMcpToggling,
     unityMcpError,
     unityMcpReason,

@@ -67,6 +67,7 @@ interface UnityMcpToggleProps {
   /** Shown after "Connected"; the backend reports no scene yet, so this is the project name. */
   projectName?: string | null;
   projectMismatch?: boolean;
+  slowConnect?: boolean;
 }
 
 const PlugGlyph = () => (
@@ -96,10 +97,12 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   onToggle,
   projectName = null,
   projectMismatch = false,
+  slowConnect = false,
 }) => {
   const { t } = useLang();
   const state = STATE[status];
-  const hint = state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch' : null);
+  const hint = state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch'
+    : state.visual === 'connecting' && slowConnect ? 'unity.hintBringForward' : null);
   const ids = useId();
   const stateId = `${ids}-state`;
   const whyId = `${ids}-why`;

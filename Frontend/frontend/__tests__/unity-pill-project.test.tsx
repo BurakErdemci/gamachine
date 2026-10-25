@@ -5,7 +5,7 @@ import ts from 'typescript'
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { UnityMcpToggle } from '../renderer/components/home/UnityMcpToggle'
-import { tr } from '../renderer/lib/i18n'
+import { en, tr } from '../renderer/lib/i18n'
 
 afterEach(cleanup)
 const base = { status: 'connected' as const, toggling: false, reason: null, error: null, onToggle: vi.fn() }
@@ -38,6 +38,7 @@ it('shows the Unity project and mismatch hint when the workspace differs', () =>
   expect(home).toContain('unityProjectName={unityProjectName}')
   expect(home).toContain('projectName={unityProjectName}')
   expect(home).toContain('projectMismatch={projectMismatch}')
+  expect(home).toContain('slowConnect={ai.unityMcpSlow}')
 })
 
 it('prefers the matching instance and hides the mismatch hint', () => {
@@ -49,4 +50,21 @@ it('prefers the matching instance and hides the mismatch hint', () => {
 it('handles missing workspace and empty instance lists', () => {
   expect(projectProps([], 'GameA')).toEqual({ projectName: null, projectMismatch: false })
   expect(projectProps(['Other'], null)).toEqual({ projectName: 'Other', projectMismatch: false })
+})
+
+it('shows the slow hint only while connecting and keeps existing hints', () => {
+  const view = render(<UnityMcpToggle {...base} status="running" slowConnect={false} />)
+  expect(screen.queryByText(tr['unity.hintBringForward'])).toBeNull()
+  for (const status of ['starting', 'running'] as const) {
+    view.rerender(<UnityMcpToggle {...base} status={status} slowConnect />)
+    expect(screen.getByText(tr['unity.hintBringForward'])).toBeTruthy()
+  }
+  view.rerender(<UnityMcpToggle {...base} slowConnect />)
+  expect(screen.queryByText(tr['unity.hintBringForward'])).toBeNull()
+  view.rerender(<UnityMcpToggle {...base} status="off" slowConnect projectMismatch />)
+  expect(screen.getByText(tr['unity.hintOff'])).toBeTruthy()
+  expect(screen.queryByText(tr['unity.hintBringForward'])).toBeNull()
+  expect(screen.queryByText(tr['unity.hintProjectMismatch'])).toBeNull()
+  expect(en['unity.hintProjectMismatch']).toBe('Gamachine has a different project open')
+  expect(en['unity.hintBringForward']).toBe('Unity may be in the background: bring Unity to the front')
 })
