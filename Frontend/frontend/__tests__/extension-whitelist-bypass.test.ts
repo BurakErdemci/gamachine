@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { readModelFileFromWorkspace } from '../main/helpers/file-security'
+import { readBinaryFileFromWorkspace } from '../main/helpers/file-security'
 
 /**
  * NTFS 8.3 alias regression, from an external audit probe.
@@ -86,9 +86,9 @@ describe.skipIf(!shortNamesSupported)('extension-whitelist-bypass', () => {
 
     // The long name is refused; the alias names the same bytes and so must
     // reach the same verdict.
-    expect(readModelFileFromWorkspace(path.join(ws, longName), ws))
+    expect(readBinaryFileFromWorkspace(path.join(ws, longName), ws, 'model'))
       .toEqual({ error: 'unsupported' })
-    expect(readModelFileFromWorkspace(path.join(ws, alias), ws))
+    expect(readBinaryFileFromWorkspace(path.join(ws, alias), ws, 'model'))
       .toEqual({ error: 'unsupported' })
   })
 
@@ -99,7 +99,7 @@ describe.skipIf(!shortNamesSupported)('extension-whitelist-bypass', () => {
     const alias = shortNameOf(ws, longName)
     expect(alias).not.toBe('')
 
-    const result = readModelFileFromWorkspace(path.join(ws, alias), ws)
+    const result = readBinaryFileFromWorkspace(path.join(ws, alias), ws, 'model')
 
     expect('error' in result).toBe(false)
     if ('error' in result) return
@@ -118,8 +118,8 @@ describe.skipIf(!shortNamesSupported)('extension-whitelist-bypass', () => {
     expect(alias).not.toBe('')
 
     const shortWs = path.join(ws, alias)
-    expect(readModelFileFromWorkspace(model, shortWs)).not.toHaveProperty('error')
-    expect(readModelFileFromWorkspace(path.join(shortWs, 'mesh.glb'), longDir))
+    expect(readBinaryFileFromWorkspace(model, shortWs, 'model')).not.toHaveProperty('error')
+    expect(readBinaryFileFromWorkspace(path.join(shortWs, 'mesh.glb'), longDir, 'model'))
       .not.toHaveProperty('error')
   })
 })

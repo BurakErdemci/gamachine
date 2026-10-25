@@ -12,7 +12,7 @@ import path from 'path'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 
 import { ayniBelgeMi } from '../main/helpers/create-window'
-import { isAllowedWorkspaceReadFile } from '../main/helpers/file-security'
+import { okumaKarariVer } from '../main/helpers/file-security'
 import { yerelYolaCevir, linkTuru } from '../renderer/lib/chatLink'
 
 describe('navigasyon ölçütü — "aynı yol" değil "aynı belge"', () => {
@@ -101,7 +101,7 @@ describe('okuma kapısı — sabit bağ ve alternatif veri akışı', () => {
     // Ters yön: her şeyi reddeden bir mutant aşağıdaki iki testi de geçerdi.
     const p = path.join(ws, 'notes.txt')
     fs.writeFileSync(p, 'merhaba')
-    expect(isAllowedWorkspaceReadFile(p, ws)).toBe(true)
+    expect(okumaKarariVer(p, ws).izinli).toBe(true)
   })
 
   it('SABİT BAĞ reddediliyor', () => {
@@ -118,7 +118,7 @@ describe('okuma kapısı — sabit bağ ve alternatif veri akışı', () => {
       return // bu platformda sabit bağ kurulamıyor — iddia ölçülemez
     }
     try {
-      expect(isAllowedWorkspaceReadFile(yem, ws)).toBe(false)
+      expect(okumaKarariVer(yem, ws).izinli).toBe(false)
     } finally {
       try { fs.rmSync(disarisi, { force: true }) } catch { /* yok */ }
     }
@@ -140,13 +140,13 @@ describe('okuma kapısı — sabit bağ ve alternatif veri akışı', () => {
     // ile ayrıca sınanıyor (`dogrulama-turu.test.ts`).
     const yol = path.join(ws, 'host.exe:notes.txt')
     if (process.platform === 'win32') {
-      expect(isAllowedWorkspaceReadFile(yol, ws)).toBe(false)
+      expect(okumaKarariVer(yol, ws).izinli).toBe(false)
     } else {
       // POSIX'te iki nokta sıradan bir dosya adı karakteri: bu bir AKIŞ değil,
       // gerçekten `host.exe:notes.txt` adlı bir dosya. Reddetmek burada ürün
       // hatası olurdu — macOS'ta Finder `/` içeren klasör adlarını diskte `:`
       // olarak saklıyor, yani meşru dosyalar açılamaz hale gelirdi.
-      expect(isAllowedWorkspaceReadFile(yol, ws)).toBe(true)
+      expect(okumaKarariVer(yol, ws).izinli).toBe(true)
     }
   })
 })

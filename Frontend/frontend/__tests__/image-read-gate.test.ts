@@ -16,7 +16,7 @@ import {
   IMAGE_MAX_BYTES,
   MODEL_MAX_BYTES,
   okumaKarariVer,
-  readImageFileFromWorkspace,
+  readBinaryFileFromWorkspace,
 } from '../main/helpers/file-security'
 
 let ws = ''
@@ -47,7 +47,7 @@ describe('image read gate — accepts', () => {
       const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
       const p = write(ws, `skin${ext}`, bytes)
 
-      const result = readImageFileFromWorkspace(p, ws)
+      const result = readBinaryFileFromWorkspace(p, ws, 'image')
 
       expect('error' in result).toBe(false)
       if ('error' in result) return
@@ -62,7 +62,7 @@ describe('image read gate — accepts', () => {
 
   it('accepts an uppercase extension', () => {
     const p = write(ws, 'Skin.PNG', Buffer.from([1, 2, 3]))
-    expect(readImageFileFromWorkspace(p, ws)).not.toHaveProperty('error')
+    expect(readBinaryFileFromWorkspace(p, ws, 'image')).not.toHaveProperty('error')
   })
 
   it('does not refuse a file exactly on the cap', () => {
@@ -70,7 +70,7 @@ describe('image read gate — accepts', () => {
     const fd = fs.openSync(p, 'r+')
     try { fs.ftruncateSync(fd, IMAGE_MAX_BYTES) } finally { fs.closeSync(fd) }
 
-    const result = readImageFileFromWorkspace(p, ws)
+    const result = readBinaryFileFromWorkspace(p, ws, 'image')
     expect(result).not.toHaveProperty('error')
     if ('error' in result) return
     expect(result.data.byteLength).toBe(IMAGE_MAX_BYTES)
@@ -84,7 +84,7 @@ describe('image read gate — size cap', () => {
     try { fs.ftruncateSync(fd, IMAGE_MAX_BYTES + 1) } finally { fs.closeSync(fd) }
     expect(fs.statSync(p).size).toBe(IMAGE_MAX_BYTES + 1)
 
-    expect(readImageFileFromWorkspace(p, ws)).toEqual({ error: 'too-large' })
+    expect(readBinaryFileFromWorkspace(p, ws, 'image')).toEqual({ error: 'too-large' })
   })
 
   it('the image cap is its own number, half the model cap', () => {
@@ -97,25 +97,25 @@ describe('image read gate — size cap', () => {
   // refused here only because it never made the whitelist.
   it('refuses a .tga through the image channel — the whitelist alone decides', () => {
     const p = write(ws, 'skin.tga', Buffer.from([0, 0, 2]))
-    expect(readImageFileFromWorkspace(p, ws)).toEqual({ error: 'unsupported' })
+    expect(readBinaryFileFromWorkspace(p, ws, 'image')).toEqual({ error: 'unsupported' })
   })
 })
 
 describe('image read gate — the channel keeps its own whitelist', () => {
   it('refuses a model file through the image channel', () => {
     const p = write(ws, 'hero.fbx', Buffer.from([1, 2, 3]))
-    expect(readImageFileFromWorkspace(p, ws)).toEqual({ error: 'unsupported' })
+    expect(readBinaryFileFromWorkspace(p, ws, 'image')).toEqual({ error: 'unsupported' })
   })
 
   it('refuses a text file through the image channel', () => {
     const p = write(ws, 'Player.cs', 'class A {}')
-    expect(readImageFileFromWorkspace(p, ws)).toEqual({ error: 'unsupported' })
+    expect(readBinaryFileFromWorkspace(p, ws, 'image')).toEqual({ error: 'unsupported' })
   })
 
   for (const name of ['.env', 'key.pem', 'secrets.json', 'app.exe']) {
     it(`refuses it even inside the workspace: ${name}`, () => {
       const p = write(ws, name, 'SECRET=1')
-      expect(readImageFileFromWorkspace(p, ws)).toEqual({ error: 'unsupported' })
+      expect(readBinaryFileFromWorkspace(p, ws, 'image')).toEqual({ error: 'unsupported' })
     })
   }
 
@@ -130,13 +130,13 @@ describe('image read gate — the channel keeps its own whitelist', () => {
 describe('image read gate — containment', () => {
   it('refuses an image outside the workspace', () => {
     const p = write(outside, 'outside.png', Buffer.from([1, 2]))
-    expect(readImageFileFromWorkspace(p, ws)).toEqual({ error: 'denied' })
+    expect(readBinaryFileFromWorkspace(p, ws, 'image')).toEqual({ error: 'denied' })
   })
 
   it('refuses traversal out with ..', () => {
     write(outside, 'outside.png', Buffer.from([1, 2]))
     const traversal = path.join(ws, '..', path.basename(outside), 'outside.png')
-    expect(readImageFileFromWorkspace(traversal, ws)).toEqual({ error: 'denied' })
+    expect(readBinaryFileFromWorkspace(traversal, ws, 'image')).toEqual({ error: 'denied' })
   })
 
   it('refuses an image reached through a junction out of the workspace', () => {
@@ -154,17 +154,17 @@ describe('image read gate — containment', () => {
       if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EXDEV') throw err
       fs.symlinkSync(target, link, 'file')
     }
-    expect(readImageFileFromWorkspace(link, ws)).toEqual({ error: 'denied' })
+    expect(readBinaryFileFromWorkspace(link, ws, 'image')).toEqual({ error: 'denied' })
   })
 
   it('refuses a directory named like an image', () => {
     const d = path.join(ws, 'fake.png')
     fs.mkdirSync(d)
-    expect(readImageFileFromWorkspace(d, ws)).toHaveProperty('error')
+    expect(readBinaryFileFromWorkspace(d, ws, 'image')).toHaveProperty('error')
   })
 
   it('refuses an empty workspace path', () => {
     const p = write(ws, 'a.png', Buffer.from([1]))
-    expect(readImageFileFromWorkspace(p, '')).toHaveProperty('error')
+    expect(readBinaryFileFromWorkspace(p, '', 'image')).toHaveProperty('error')
   })
 })

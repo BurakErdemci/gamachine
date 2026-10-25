@@ -331,15 +331,6 @@ export function okumaKarariVer(
 }
 
 /**
- * Saf yol politikası — çağıranın açacağı yolu ÖĞRENMESİ gerekmiyorsa bu yeter.
- * Okuyup açacak olan `okumaKarariVer`'i çağırmalı: yalnız o, kararın hangi
- * çözülmüş yola dayandığını söylüyor.
- */
-export function isAllowedWorkspaceReadFile(filePath: string, workspacePath: string): boolean {
-  return okumaKarariVer(filePath, workspacePath).izinli
-}
-
-/**
  * AÇILMIŞ bir tanıtıcının hâlâ workspace içindeki bir dosyayı gösterdiğini
  * doğrular. Okuma kapısında sınıfı asıl kapatan kontrol budur.
  *
@@ -481,20 +472,6 @@ export function readBinaryFileFromWorkspace(
   } finally {
     if (fd !== null) { try { fs.closeSync(fd) } catch { /* close failure does not invalidate the read */ } }
   }
-}
-
-export function readModelFileFromWorkspace(
-  fullPath: string,
-  workspacePath: string,
-): ModelReadResult {
-  return readBinaryFileFromWorkspace(fullPath, workspacePath, 'model')
-}
-
-export function readImageFileFromWorkspace(
-  fullPath: string,
-  workspacePath: string,
-): BinaryReadResult {
-  return readBinaryFileFromWorkspace(fullPath, workspacePath, 'image')
 }
 
 /**

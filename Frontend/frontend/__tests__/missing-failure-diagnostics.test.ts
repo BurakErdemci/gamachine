@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readModelFileFromWorkspace } from '../main/helpers/file-security'
+import { readBinaryFileFromWorkspace } from '../main/helpers/file-security'
 
 /**
  * Silent operational failure on the model read channel, from an external audit
@@ -39,7 +39,7 @@ describe('missing-failure-diagnostics', () => {
       throw error
     })
 
-    const result = readModelFileFromWorkspace(model, dir)
+    const result = readBinaryFileFromWorkspace(model, dir, 'model')
 
     // Generic to the renderer...
     expect(result).toEqual({ error: 'denied' })
@@ -57,7 +57,7 @@ describe('missing-failure-diagnostics', () => {
     // read cannot reach the size it was told to expect.
     vi.spyOn(fs, 'readSync').mockImplementation(() => 0)
 
-    const result = readModelFileFromWorkspace(model, dir)
+    const result = readBinaryFileFromWorkspace(model, dir, 'model')
 
     expect(result).toEqual({ error: 'denied' })
     expect(logged.length).toBeGreaterThan(0)
@@ -72,7 +72,7 @@ describe('missing-failure-diagnostics', () => {
     const logged: string[] = []
     vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { logged.push(args.join(' ')) })
 
-    expect(readModelFileFromWorkspace(secret, dir)).toEqual({ error: 'unsupported' })
+    expect(readBinaryFileFromWorkspace(secret, dir, 'model')).toEqual({ error: 'unsupported' })
     expect(logged).toEqual([])
   })
 })

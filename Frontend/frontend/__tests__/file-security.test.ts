@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, it, expect } from 'vitest'
 import {
   isAllowedUnityScriptPath,
   isAllowedWorkspacePath,
-  isAllowedWorkspaceReadFile,
+  okumaKarariVer,
 } from '../main/helpers/file-security'
 
 const WS = '/project/MyGame'
@@ -153,24 +153,24 @@ describe('isAllowedWorkspacePath — workspace okuma sınırı', () => {
   })
 })
 
-describe('isAllowedWorkspaceReadFile — dosya okuma sınırı', () => {
+describe('okumaKarariVer — dosya okuma sınırı', () => {
   it('workspace içindeki .cs dosyasını kabul eder', () => {
-    expect(isAllowedWorkspaceReadFile(`${WS}/Assets/Scripts/Player.cs`, WS)).toBe(true)
+    expect(okumaKarariVer(`${WS}/Assets/Scripts/Player.cs`, WS).izinli).toBe(true)
   })
 
   it('workspace içindeki .txt/.md gibi metin dosyalarını kabul eder', () => {
     // Yeni davranış: TEXT_FILE_EXTENSIONS listesindeki tüm türler okunabilir
     // (dosya ağacı ne listeliyorsa editörde de açılabilsin).
-    expect(isAllowedWorkspaceReadFile(`${WS}/Assets/Scripts/notes.txt`, WS)).toBe(true)
-    expect(isAllowedWorkspaceReadFile(`${WS}/README.md`, WS)).toBe(true)
+    expect(okumaKarariVer(`${WS}/Assets/Scripts/notes.txt`, WS).izinli).toBe(true)
+    expect(okumaKarariVer(`${WS}/README.md`, WS).izinli).toBe(true)
   })
 
   it('binary/çalıştırılabilir türleri (.exe/.dll) reddeder', () => {
-    expect(isAllowedWorkspaceReadFile(`${WS}/Assets/tool.exe`, WS)).toBe(false)
-    expect(isAllowedWorkspaceReadFile(`${WS}/Assets/lib.dll`, WS)).toBe(false)
+    expect(okumaKarariVer(`${WS}/Assets/tool.exe`, WS).izinli).toBe(false)
+    expect(okumaKarariVer(`${WS}/Assets/lib.dll`, WS).izinli).toBe(false)
   })
 
   it('workspace dışındaki .cs dosyasını reddeder', () => {
-    expect(isAllowedWorkspaceReadFile('/tmp/Hack.cs', WS)).toBe(false)
+    expect(okumaKarariVer('/tmp/Hack.cs', WS).izinli).toBe(false)
   })
 })

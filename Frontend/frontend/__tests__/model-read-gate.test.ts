@@ -6,9 +6,8 @@ import {
   MODEL_FILE_EXTENSIONS,
   MODEL_MAX_BYTES,
   TEXT_MAX_BYTES,
-  isAllowedWorkspaceReadFile,
   okumaKarariVer,
-  readModelFileFromWorkspace,
+  readBinaryFileFromWorkspace,
 } from '../main/helpers/file-security'
 
 let ws = ''
@@ -39,7 +38,7 @@ describe('model read gate — accepts', () => {
       const bytes = Buffer.from([0x67, 0x6c, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00])
       const p = write(ws, `mesh${ext}`, bytes)
 
-      const result = readModelFileFromWorkspace(p, ws)
+      const result = readBinaryFileFromWorkspace(p, ws, 'model')
 
       expect('error' in result).toBe(false)
       if ('error' in result) return
@@ -56,13 +55,13 @@ describe('model read gate — accepts', () => {
 
   it('accepts an uppercase extension', () => {
     const p = write(ws, 'Mesh.GLB', Buffer.from([1, 2, 3]))
-    expect(readModelFileFromWorkspace(p, ws)).not.toHaveProperty('error')
+    expect(readBinaryFileFromWorkspace(p, ws, 'model')).not.toHaveProperty('error')
   })
 
   it('reads a model in a subdirectory', () => {
     fs.mkdirSync(path.join(ws, 'Assets', 'Models'), { recursive: true })
     const p = write(path.join(ws, 'Assets', 'Models'), 'char.fbx', Buffer.from([9, 9]))
-    expect(readModelFileFromWorkspace(p, ws)).not.toHaveProperty('error')
+    expect(readBinaryFileFromWorkspace(p, ws, 'model')).not.toHaveProperty('error')
   })
 
   // Zero bytes passes all three of the gate's questions (containment, extension,
@@ -73,7 +72,7 @@ describe('model read gate — accepts', () => {
   it('does not refuse a zero-byte file — emptiness is the parser\'s business, not the gate\'s', () => {
     const p = write(ws, 'empty.glb', Buffer.alloc(0))
 
-    const result = readModelFileFromWorkspace(p, ws)
+    const result = readBinaryFileFromWorkspace(p, ws, 'model')
 
     expect('error' in result).toBe(false)
     if ('error' in result) return
@@ -85,7 +84,7 @@ describe('model read gate — accepts', () => {
     const fd = fs.openSync(p, 'r+')
     try { fs.ftruncateSync(fd, MODEL_MAX_BYTES) } finally { fs.closeSync(fd) }
 
-    expect(readModelFileFromWorkspace(p, ws)).not.toHaveProperty('error')
+    expect(readBinaryFileFromWorkspace(p, ws, 'model')).not.toHaveProperty('error')
   })
 })
 
@@ -96,32 +95,32 @@ describe('model read gate — extension whitelist', () => {
   for (const name of ['.env', 'key.pem', 'secrets.json', 'Player.cs', 'notes.md', 'app.exe']) {
     it(`refuses it even inside the workspace: ${name}`, () => {
       const p = write(ws, name, 'SECRET=1')
-      expect(readModelFileFromWorkspace(p, ws)).toEqual({ error: 'unsupported' })
+      expect(readBinaryFileFromWorkspace(p, ws, 'model')).toEqual({ error: 'unsupported' })
     })
   }
 
   it('refuses a file with no extension', () => {
     const p = write(ws, 'model', Buffer.from([1]))
-    expect(readModelFileFromWorkspace(p, ws)).toEqual({ error: 'unsupported' })
+    expect(readBinaryFileFromWorkspace(p, ws, 'model')).toEqual({ error: 'unsupported' })
   })
 })
 
 describe('model read gate — containment', () => {
   it('refuses a model outside the workspace', () => {
     const p = write(outside, 'outside.glb', Buffer.from([1, 2]))
-    expect(readModelFileFromWorkspace(p, ws)).toEqual({ error: 'denied' })
+    expect(readBinaryFileFromWorkspace(p, ws, 'model')).toEqual({ error: 'denied' })
   })
 
   it('refuses traversal out with ..', () => {
     write(outside, 'outside.obj', Buffer.from([1, 2]))
     const traversal = path.join(ws, '..', path.basename(outside), 'outside.obj')
-    expect(readModelFileFromWorkspace(traversal, ws)).toEqual({ error: 'denied' })
+    expect(readBinaryFileFromWorkspace(traversal, ws, 'model')).toEqual({ error: 'denied' })
   })
 
   it('refuses a directory', () => {
     const d = path.join(ws, 'fake.glb')
     fs.mkdirSync(d)
-    expect(readModelFileFromWorkspace(d, ws)).toHaveProperty('error')
+    expect(readBinaryFileFromWorkspace(d, ws, 'model')).toHaveProperty('error')
   })
 
   it('refuses a hardlink pointing outside the workspace', () => {
@@ -149,12 +148,12 @@ describe('model read gate — containment', () => {
       if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EXDEV') throw err
       fs.symlinkSync(target, link, 'file')
     }
-    expect(readModelFileFromWorkspace(link, ws)).toEqual({ error: 'denied' })
+    expect(readBinaryFileFromWorkspace(link, ws, 'model')).toEqual({ error: 'denied' })
   })
 
   it('refuses an empty workspace path', () => {
     const p = write(ws, 'a.glb', Buffer.from([1]))
-    expect(readModelFileFromWorkspace(p, '')).toHaveProperty('error')
+    expect(readBinaryFileFromWorkspace(p, '', 'model')).toHaveProperty('error')
   })
 })
 
@@ -169,14 +168,14 @@ describe('model read gate — size cap', () => {
     }
     expect(fs.statSync(p).size).toBe(MODEL_MAX_BYTES + 1)
 
-    expect(readModelFileFromWorkspace(p, ws)).toEqual({ error: 'too-large' })
+    expect(readBinaryFileFromWorkspace(p, ws, 'model')).toEqual({ error: 'too-large' })
   })
 })
 
 describe('text path regression', () => {
   it('the text gate does not accept a model extension', () => {
     const p = write(ws, 'mesh.glb', Buffer.from([1]))
-    expect(isAllowedWorkspaceReadFile(p, ws)).toBe(false)
+    expect(okumaKarariVer(p, ws).izinli).toBe(false)
   })
 
   it('the model gate does not accept a text extension', () => {
@@ -187,7 +186,6 @@ describe('text path regression', () => {
   it('the default kind is text — .cs still passes', () => {
     const p = write(ws, 'Player.cs', 'class A {}')
     expect(okumaKarariVer(p, ws).izinli).toBe(true)
-    expect(isAllowedWorkspaceReadFile(p, ws)).toBe(true)
   })
 
   // Both caps are named constants now, so both can be pinned from here; the
