@@ -76,7 +76,9 @@ class FakeBackend:
                         "token": self.headers.get("X-Session-Token"),
                         "has_conversation": "conversation_id" in body,
                         "conversation_id": body.get("conversation_id")})
-                if self.path != "/mcp-approval-request":
+                if self.path == "/mcp-project-check":
+                    self._reply(200, {"ok": True})
+                elif self.path != "/mcp-approval-request":
                     self._reply(404, {})
                 elif scenario == "deny_now":
                     self._reply(200, {"status": "resolved", "approved": False,
