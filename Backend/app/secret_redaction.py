@@ -41,8 +41,10 @@ _MCP_PATH_SECRET = re.compile(r"(/mcp/)[A-Za-z0-9_\-]{12,}")
 _ENV_ASSIGNMENT = re.compile(r"((?:TOKEN|KEY|SECRET)[A-Z_]*=)\S+")
 
 # SDK error text and logs can contain bare provider keys without a header.
+# A leading '-' (e.g. "--key-sk-...") still counts as a boundary: when in
+# doubt, mask.
 _BARE_PROVIDER_KEY = re.compile(
-    r"(?<![A-Za-z0-9_-])(?:sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{30,}|"
+    r"(?<![A-Za-z0-9_])(?:sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{30,}|"
     r"gsk_[A-Za-z0-9]{20,}|nvapi-[A-Za-z0-9_-]{20,})"
 )
 

@@ -61,10 +61,15 @@ def test_bare_provider_key_near_misses_stay_intact(text):
 
 
 @pytest.mark.parametrize("key", BARE_PROVIDER_KEYS)
-@pytest.mark.parametrize("prefix", ["a", "9", "_", "-"])
+@pytest.mark.parametrize("prefix", ["a", "9", "_"])
 def test_bare_provider_keys_require_a_left_boundary(key, prefix):
     text = prefix + key
     assert redact_secrets(text) == text
+
+
+@pytest.mark.parametrize("key", BARE_PROVIDER_KEYS)
+def test_bare_provider_key_after_a_dash_is_masked(key):
+    assert key not in redact_secrets("--api-key-" + key)
 
 
 @pytest.mark.parametrize("key", BARE_PROVIDER_KEYS)
