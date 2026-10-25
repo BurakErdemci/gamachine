@@ -104,12 +104,14 @@ def test_retry_exhaustion(run_case, provider):
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
-def test_intermediate_text_precedes_execution_and_final_has_no_text(run_case, provider):
+def test_intermediate_text_precedes_execution_and_final_text_precedes_response(run_case, provider):
     events, _, timeline, sleep = run_case(provider, [response(provider, "working", tool=True),
                                                     response(provider)])
     assert timeline.index("text") < timeline.index("executed")
-    assert [e.data["content"] for e in events if e.type == "text"] == ["working"]
+    assert [e.data["content"] for e in events if e.type == "text"] == ["working", "finished"]
     assert [e.data["content"] for e in events if e.type == "response"] == ["finished"]
+    final_index = timeline.index("response")
+    assert timeline[final_index - 1] == "text"
     sleep.assert_not_called()
 
 
@@ -133,6 +135,19 @@ def test_denial_is_reported_and_encoded_in_history(run_case, provider):
 def test_empty_openai_final(run_case):
     events, _, _, _ = run_case("openai", [response("openai", None)])
     assert [e.data["content"] for e in events if e.type == "response"] == [""]
+    assert not any(e.type == "text" for e in events)
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_mailbox_reply_receives_final_answer_after_tools(run_case, provider):
+    from routes.conversation_routes import _TurnReply
+
+    events, _, _, _ = run_case(provider, [response(provider, "working", tool=True),
+                                         response(provider, "final answer")])
+    reply = _TurnReply()
+    for event in events:
+        reply.add(event)
+    assert reply.value() == "final answer"
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)

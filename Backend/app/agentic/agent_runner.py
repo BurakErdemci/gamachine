@@ -1817,6 +1817,8 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                     "duration_ms": int((time.time() - turn_t0) * 1000),
                 })
                 if text or not turn.truncated:
+                    if text and not turn.truncated:
+                        yield AgentEvent("text", {"content": text})
                     yield AgentEvent("response", {"content": text})
                 if turn.truncated:
                     for event in _stop_events(iteration + 1, "max_tokens"):
