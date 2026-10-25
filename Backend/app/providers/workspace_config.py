@@ -93,11 +93,18 @@ def _resolve_gitignore(workspace: str) -> Optional[tuple]:
 
 
 def _read_text(path: str) -> str:
+    # O_NONBLOCK + S_ISREG: opening a FIFO .gitignore would block forever.
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
     except FileNotFoundError:
         return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            return f.read().decode("utf-8")
+    finally:
+        os.close(fd)
 
 
 def _atomic_write(path: str, content: str, ws_real: str) -> None:
