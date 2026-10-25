@@ -145,20 +145,6 @@
     @apply w-[3px] cursor-col-resize bg-transparent hover:bg-blue-500/40 transition-colors duration-200;
   }
 
-  /* Düşünüyor göstergesi: kayan ışıltılı metin (Claude tarzı) */
-  .shimmer-text {
-    background: linear-gradient(90deg, #64748b 0%, #64748b 35%, #e2e8f0 50%, #64748b 65%, #64748b 100%);
-    background-size: 200% 100%;
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    animation: shimmerSlide 2.2s linear infinite;
-  }
-  @keyframes shimmerSlide {
-    from { background-position: 200% 0; }
-    to { background-position: -200% 0; }
-  }
-
   /* Typing indicator */
   .typing-dot {
     animation: typingBounce 1.4s infinite ease-in-out both;
