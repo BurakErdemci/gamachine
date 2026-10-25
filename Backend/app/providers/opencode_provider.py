@@ -306,7 +306,6 @@ class OpenCodeProvider(BaseCLIProvider):
       Free models need a visible bash: a verified shadow (see
       _BASH_SHADOW_TS) turns it into "ask" for that spawn only.
     """
-    _register_mcp_carries_policy = True
     _policy_refusal_message = (
         "⚠️ Güvenlik ayarları çalışma klasörüne yazılamadığı için işlem başlatılmadı. "
         "Klasördeki opencode.json dosyasını kontrol edin.")

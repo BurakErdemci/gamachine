@@ -104,3 +104,18 @@ def test_write_mcp_config_output_unchanged_for_plain_workspace(kimi, tmp_path):
         "env": {"UNITYAI_URL": backend_url},
     }}}
     kimi._drop_mcp_cfg()
+
+
+def test_kimi_file_present_when_workspace_mcp_json_has_bad_servers(kimi, tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / ".mcp.json").write_text('{"mcpServers": []}', encoding="utf-8")
+    kimi._write_mcp_config(str(ws))
+    path = _mcp_file(kimi._build_cmd("HELLO", workspace=str(ws)))
+    try:
+        assert os.path.realpath(path) != os.path.realpath(ws / ".mcp.json")
+        servers = json.loads(open(path, encoding="utf-8").read())["mcpServers"]
+        assert set(servers) == {"unityai"}
+        assert (ws / ".mcp.json").read_text(encoding="utf-8") == '{"mcpServers": []}'
+    finally:
+        kimi._drop_mcp_cfg()

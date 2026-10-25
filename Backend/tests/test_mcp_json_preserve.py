@@ -142,3 +142,29 @@ def test_read_text_normalises_newlines_like_text_mode(tmp_path):
     path = tmp_path / ".gitignore"
     path.write_bytes(b"# rules\r\n*.secret\r\nold\rmac\n")
     assert workspace_config._read_text(str(path)) == "# rules\n*.secret\nold\nmac\n"
+
+
+@pytest.mark.parametrize("provider_name", ["ClaudeCodeProvider", "CopilotProvider"])
+@pytest.mark.parametrize("state", ["symlink", "bad_servers"])
+def test_register_mcp_runs_whatever_happens_to_mcp_json(
+        tmp_path, monkeypatch, provider_name, state):
+    import importlib
+    module = importlib.import_module(
+        "providers." + {"ClaudeCodeProvider": "claude_provider",
+                        "CopilotProvider": "copilot_provider"}[provider_name])
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    if state == "symlink":
+        _unsafe(ws, "symlink")
+    else:
+        (ws / ".mcp.json").write_bytes(b'{"mcpServers": []}')
+    before = os.readlink(ws / ".mcp.json") if state == "symlink" else \
+        (ws / ".mcp.json").read_bytes()
+    provider = _provider(monkeypatch, cls=getattr(module, provider_name))
+    register = Mock(return_value=True)
+    monkeypatch.setattr(provider, "_register_mcp", register)
+    provider._write_mcp_config(str(ws))
+    register.assert_called_once()
+    after = os.readlink(ws / ".mcp.json") if state == "symlink" else \
+        (ws / ".mcp.json").read_bytes()
+    assert after == before

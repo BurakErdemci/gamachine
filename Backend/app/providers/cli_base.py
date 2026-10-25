@@ -297,9 +297,6 @@ class BaseCLIProvider(AIProvider):
                 count += 1
         return "\n".join(lines) if lines else "(boş workspace)"
 
-    # True for providers whose _register_mcp writes the CLI's deny policy and
-    # returns False when that policy could not be put in place.
-    _register_mcp_carries_policy = False
     _policy_refusal_message = (
         "⚠️ Güvenlik ayarları çalışma klasörüne yazılamadığı için işlem başlatılmadı. "
         "Klasördeki yapılandırma dosyalarını kontrol edin.")
@@ -393,8 +390,8 @@ class BaseCLIProvider(AIProvider):
             # Merging would drop the user's non-object value with no backup.
             existing = None
         if existing is None:
-            logger.error("[CLIProvider] %s güvenli okunamadı; MCP kaydı "
-                         "UYGULANMADI.", config_path)
+            logger.error("[CLIProvider] %s cannot be read safely; left "
+                         "unchanged.", config_path)
             written = False
         else:
             user_servers = existing.get("mcpServers", {})
@@ -405,19 +402,15 @@ class BaseCLIProvider(AIProvider):
             written = guvenli_config_yaz(workspace, ".mcp.json",
                                          json.dumps(merged, indent=2))
             if not written:
-                logger.error("[CLIProvider] %s güvenli yazılamadı; MCP kaydı "
-                             "UYGULANMADI.", config_path)
-        if not written:
-            # A provider whose _register_mcp writes a permission policy must
-            # still run it, or the CLI would start without that policy.
-            if not self._register_mcp_carries_policy:
-                return config_path
-        else:
+                logger.error("[CLIProvider] %s could not be written safely; "
+                             "left unchanged.", config_path)
+        if written:
             # Dosyayı yazan nokta girdisini de yazar: sır taşımasa da kullanıcının
             # deposunda duruyor ve mutlak yollar içeriyor.
             ensure_gitignored(workspace, [".mcp.json"])
 
         # Subclass'a MCP kayıt yaptır (claude, codex, agy için farklı davranış).
+        # Runs whatever happened to .mcp.json: no provider reads that file.
         # `False` = the provider's permission policy is not in place.
         if self._register_mcp(launcher, workspace, backend_url) is False:
             self._policy_registration_failed = True

@@ -21,7 +21,6 @@ class CursorProvider(BaseCLIProvider):
     Yazma izni İSTEMEZ (--force verilmez): dosya/shell işleri prompt'la
     unityai MCP'ye yönlendirilir → onay kartı bizim UI'da çıkar.
     """
-    _register_mcp_carries_policy = True
     _policy_refusal_message = (
         "⚠️ Güvenlik ayarları çalışma klasörüne yazılamadığı için işlem başlatılmadı. "
         "Klasördeki .cursor/cli.json dosyasını kontrol edin.")
