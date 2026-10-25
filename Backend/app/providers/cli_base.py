@@ -389,14 +389,15 @@ class BaseCLIProvider(AIProvider):
         # .mcp.json is the user's project MCP file: merge so their own
         # servers and top-level keys survive.
         existing = read_user_json_config(workspace, ".mcp.json")
+        if existing is not None and not isinstance(existing.get("mcpServers", {}), dict):
+            # Merging would drop the user's non-object value with no backup.
+            existing = None
         if existing is None:
             logger.error("[CLIProvider] %s güvenli okunamadı; MCP kaydı "
                          "UYGULANMADI.", config_path)
             written = False
         else:
-            user_servers = existing.get("mcpServers")
-            if not isinstance(user_servers, dict):
-                user_servers = {}
+            user_servers = existing.get("mcpServers", {})
             merged = {**existing,
                       "mcpServers": {**user_servers, **config["mcpServers"]}}
             if not unity_mcp_url:

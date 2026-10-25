@@ -64,6 +64,14 @@ def test_invalid_json_is_backed_up(tmp_path, monkeypatch):
     assert set(_read(tmp_path)["mcpServers"]) == {"unityai"}
 
 
+@pytest.mark.parametrize("value", [["a"], "text", None])
+def test_non_object_mcp_servers_is_left_untouched(tmp_path, monkeypatch, value):
+    original = json.dumps({"mcpServers": value, "keep": 1})
+    (tmp_path / ".mcp.json").write_text(original, encoding="utf-8")
+    _provider(monkeypatch)._write_mcp_config(str(tmp_path))
+    assert (tmp_path / ".mcp.json").read_text(encoding="utf-8") == original
+
+
 def _unsafe(tmp_path, kind):
     target = tmp_path / ".mcp.json"
     if kind == "symlink":
