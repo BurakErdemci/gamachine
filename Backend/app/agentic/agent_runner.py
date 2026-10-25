@@ -926,14 +926,6 @@ class _GeminiAdapter:
     def prepare(self, runner, system, user_message, images):
         from providers.effort_caps import map_effort
         self.client = genai.Client(api_key=runner.api_key)
-        declarations = get_gemini_tool_declarations()[0]["function_declarations"]
-        if runner.read_only:
-            declarations = [d for d in declarations if _read_only_tool_declared(d["name"])]
-        tools = [gtypes.Tool(function_declarations=[
-            gtypes.FunctionDeclaration(name=d["name"], description=d["description"],
-                                       parameters=d["parameters"])
-            for d in declarations
-        ])]
         effort = map_effort("google", runner.model_name,
                             runner.effort_level or runner.thinking_level or "auto")
         thinking = None
@@ -944,12 +936,22 @@ class _GeminiAdapter:
                 thinking = gtypes.ThinkingConfig(thinking_budget=effort["gemini_thinking_budget"])
         except TypeError:
             thinking = gtypes.ThinkingConfig(thinking_budget=4096)
-        self.config = gtypes.GenerateContentConfig(system_instruction=system, tools=tools,
+        self.config = gtypes.GenerateContentConfig(system_instruction=system,
                                                    thinking_config=thinking)
         parts = [gtypes.Part(text=user_message)]
         parts.extend(gtypes.Part(inline_data=gtypes.Blob(mime_type=mime, data=data))
                      for mime, data in images)
         self.contents = [gtypes.Content(role="user", parts=parts)]
+
+    def refresh_tools(self, runner):
+        declarations = get_gemini_tool_declarations()[0]["function_declarations"]
+        if runner.read_only:
+            declarations = [d for d in declarations if _read_only_tool_declared(d["name"])]
+        self.config.tools = [gtypes.Tool(function_declarations=[
+            gtypes.FunctionDeclaration(name=d["name"], description=d["description"],
+                                       parameters=d["parameters"])
+            for d in declarations
+        ])]
 
     async def request(self, runner):
         return await asyncio.to_thread(self.client.models.generate_content,
@@ -1012,10 +1014,6 @@ class _AnthropicAdapter:
     def prepare(self, runner, system, user_message, images):
         from providers.effort_caps import map_effort
         self.client = anthropic.AsyncAnthropic(api_key=runner.api_key)
-        self.tools = [{"name": t["name"], "description": t["description"],
-                       "input_schema": t["parameters"]} for t in runner._tool_definitions()]
-        if self.tools:
-            self.tools[-1]["cache_control"] = {"type": "ephemeral"}
         self.system = [{"type": "text", "text": system,
                         "cache_control": {"type": "ephemeral"}}]
         parts = [{"type": "text", "text": user_message}]
@@ -1025,6 +1023,12 @@ class _AnthropicAdapter:
         self.effort = map_effort("anthropic", runner.model_name,
                                  runner.effort_level or runner.thinking_level or "auto"
                                  ).get("anthropic_extra_body")
+
+    def refresh_tools(self, runner):
+        self.tools = [{"name": t["name"], "description": t["description"],
+                       "input_schema": t["parameters"]} for t in runner._tool_definitions()]
+        if self.tools:
+            self.tools[-1]["cache_control"] = {"type": "ephemeral"}
 
     async def request(self, runner):
         return await self.client.messages.create(
@@ -1089,9 +1093,6 @@ class _OpenAIAdapter:
         }.get(runner.provider_type)
         if base_url:
             self.client.base_url = base_url
-        self.tools = get_openai_tool_declarations()
-        if runner.read_only:
-            self.tools = [t for t in self.tools if _read_only_tool_declared(t["function"]["name"])]
         system_content = system
         if runner.provider_type == "openrouter":
             system_content = [{"type": "text", "text": system,
@@ -1103,6 +1104,11 @@ class _OpenAIAdapter:
                          {"role": "user", "content": parts}]
         self.effort = map_effort(runner.provider_type, runner.model_name,
                                  runner.effort_level or runner.thinking_level or "auto")
+
+    def refresh_tools(self, runner):
+        self.tools = get_openai_tool_declarations()
+        if runner.read_only:
+            self.tools = [t for t in self.tools if _read_only_tool_declared(t["function"]["name"])]
 
     async def request(self, runner):
         extra = self.effort.get("extra_body")
@@ -1738,6 +1744,7 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
         _progress = _ProgressGuard()
         for iteration in range(MAX_ITERATIONS):
             logger.info("API loop %s iteration %s", self.provider_type, iteration + 1)
+            adapter.refresh_tools(self)
             response = None
             last_error = ""
             for retry in range(3):

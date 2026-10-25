@@ -61,16 +61,19 @@ def run_case(monkeypatch):
     monkeypatch.setattr(ar, "_all_tool_definitions", lambda: [])
     monkeypatch.setattr(ar.AgentRunner, "_get_architect_wisdom", lambda self: "architect wisdom")
 
-    def run(provider, replies, denied=False, images=None):
+    def run(provider, replies, denied=False, images=None, on_execute=None, read_only=False):
         client = Client(replies)
         monkeypatch.setattr(ar.genai, "Client", lambda **kw: client)
         monkeypatch.setattr(ar.anthropic, "AsyncAnthropic", lambda **kw: client)
         monkeypatch.setattr(ar.openai, "AsyncOpenAI", lambda **kw: client)
         runner = ar.AgentRunner(provider, "k", "m", None, images=images)
+        runner.read_only = read_only
         timeline = []
 
         async def execute(name, args):
             timeline.append("executed")
+            if on_execute:
+                on_execute()
             return {"success": True, "summary": "ok"}, []
 
         monkeypatch.setattr(runner, "_execute_tool_with_approval", execute)
@@ -148,6 +151,55 @@ def test_mailbox_reply_receives_final_answer_after_tools(run_case, provider):
     for event in events:
         reply.add(event)
     assert reply.value() == "final answer"
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("read_only", [False, True])
+def test_tools_added_during_execution_reach_next_request(run_case, monkeypatch,
+                                                        provider, read_only):
+    registry = [{"name": "read_file", "description": "Read a file",
+                 "parameters": {"type": "object", "properties": {}}}]
+    monkeypatch.setattr(ar, "get_gemini_tool_declarations",
+                        lambda: [{"function_declarations": registry}])
+    monkeypatch.setattr(ar, "get_openai_tool_declarations", lambda: [
+        {"type": "function", "function": t} for t in registry])
+    monkeypatch.setattr(ar, "_all_tool_definitions", lambda: registry)
+
+    def add_tools():
+        registry.extend([
+            {"name": "newly_enabled_tool", "description": "New MCP tool",
+             "parameters": {"type": "object", "properties": {}}},
+            {"name": "write_file", "description": "Write a file",
+             "parameters": {"type": "object", "properties": {}}},
+        ])
+
+    _, requests, _, _ = run_case(provider, [response(provider, tool=True), response(provider)],
+                                 on_execute=add_tools, read_only=read_only)
+
+    def declarations(request):
+        if provider == "google":
+            return request["config"].tools[0].function_declarations
+        return request["tools"]
+
+    def names(request):
+        tools = declarations(request)
+        if provider == "google":
+            return [t.name for t in tools]
+        if provider == "openai":
+            return [t["function"]["name"] for t in tools]
+        return [t["name"] for t in tools]
+
+    assert names(requests[0]) == ["read_file"]
+    expected = ["read_file", "newly_enabled_tool"]
+    if not read_only:
+        expected.append("write_file")
+    assert names(requests[1]) == expected
+    if provider == "anthropic":
+        for request in requests:
+            tools = declarations(request)
+            assert tools[-1]["cache_control"] == {"type": "ephemeral"}
+            assert all("cache_control" not in t for t in tools[:-1])
+    assert all("cache_control" not in t for t in registry)
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
