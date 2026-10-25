@@ -1123,7 +1123,7 @@ export default function Home() {
           ) : (
             <div className="thread custom-scrollbar" onScroll={chatScroll.onScroll}>
               <ChatPanel
-                messages={chat.messages} activeConvId={chat.activeConvId} conversations={chat.conversations} user={auth.user} loading={chat.loading} clearHistory={chat.clearHistory} lang={lang}
+                messages={chat.messages} activeConvId={chat.activeConvId} conversations={chat.conversations} user={auth.user} loading={chat.loading} lang={lang}
                 thinkingLevel={thinkingLevel} workspacePath={fs.workspacePath} handleExportToUnity={fs.handleExportToUnity}
                 pendingGenFiles={fs.pendingGenFiles} setPendingGenFiles={fs.setPendingGenFiles} pendingFix={chat.pendingFix} setPendingFix={chat.setPendingFix} openedFilePath={fs.openedFilePath}
                 setCode={fs.setCode} setOriginalCode={fs.setOriginalCode} refreshFileTree={fs.refreshFileTree} openFile={openInPanel} sendMessage={handleSendMessage}

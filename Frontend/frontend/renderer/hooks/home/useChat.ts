@@ -1487,15 +1487,6 @@ export const useChat = (
     return () => { iptal = true; ac.abort(); };
   }, [API, userId, sessionToken, rt, applyServerTitle]);
 
-  const clearHistory = useCallback(async () => {
-    if (!activeConvId) return;
-    try {
-      // session-clear IPC channel removed; session management now handled by auth layer
-      setMessages([]);
-      showToast(cevir('chat.historyCleared'), 'info');
-    } catch (err) { showToast(cevir('chat.historyClearFailed'), 'error'); }
-  }, [activeConvId, setMessages, showToast]);
-
   // `convId` is a phone's `/compact` naming its chat; the desktop button and
   // composer pass nothing and mean the chat on screen.
   const compactConversation = useCallback(async (convId?: number) => {
@@ -1671,7 +1662,7 @@ export const useChat = (
     sendMessage, stopMessage, setWakeDefaults,
     queue: screen.queue, queuePaused: screen.queuePaused,
     deleteQueued, editQueued, resumeQueue, sendQueuedNow,
-    clearHistory, compactConversation,
+    compactConversation,
     // Kararı backend'e iletir ve İLETİLDİĞİNİ DOĞRULAR. Yanıt gövdesi eskiden
     // hiç okunmuyordu: gate düşmüşse backend {"status":"gate_not_found"} dönüyor,
     // kart yine de kapanıyor ve kullanıcı onayladığını sanıyordu (sessiz veri

@@ -99,7 +99,6 @@ interface ChatPanelProps {
   activeConvId: number | null;
   user: UserData | null;
   loading: boolean;
-  clearHistory: () => void;
   lang: string;
   thinkingLevel: 'auto' | 'off' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   workspacePath: string | null;
@@ -155,7 +154,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   activeConvId,
   user,
   loading,
-  clearHistory,
   thinkingLevel,
   workspacePath,
   handleExportToUnity,

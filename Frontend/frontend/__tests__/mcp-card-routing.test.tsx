@@ -82,7 +82,7 @@ const Harness: React.FC = () => {
       <div data-testid="chat-panel">
         <ChatPanel {...({
           messages: chat.messages, activeConvId: chat.activeConvId, user: USER, loading: chat.loading,
-          clearHistory: vi.fn(), lang: 'tr', effectiveProvider: 'claude', thinkingLevel: 'auto',
+          lang: 'tr', effectiveProvider: 'claude', thinkingLevel: 'auto',
           workspacePath: '/ws', handleExportToUnity: vi.fn(),
           pendingGenFiles: genFiles, setPendingGenFiles: setGenFiles,
           pendingFix: chat.pendingFix, setPendingFix: chat.setPendingFix,

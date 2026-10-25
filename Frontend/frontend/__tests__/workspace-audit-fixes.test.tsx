@@ -55,7 +55,7 @@ const diff = { original_code: 'old', fixed_code: 'new', explanation: 'fix' }
 const pendingFix = { data: diff, messageId: 1 }
 const panelProps = () => ({
   messages: [{ id: 1, role: 'assistant', content: '', timestamp: '' }], activeConvId: 1,
-  user: { name: 'local' }, loading: false, clearHistory: vi.fn(), lang: 'tr', thinkingLevel: 'auto',
+  user: { name: 'local' }, loading: false, lang: 'tr', thinkingLevel: 'auto',
   workspacePath: 'project', handleExportToUnity: vi.fn(), pendingGenFiles: null,
   setPendingGenFiles: vi.fn(), pendingFix, setPendingFix: vi.fn(), openedFilePath: 'Assets/A.cs',
   setCode: vi.fn(), setOriginalCode: vi.fn(), refreshFileTree: vi.fn(),

@@ -89,7 +89,6 @@ const renderPanel = (overrides: PanelOverrides = {}) => {
     activeConvId: 1,
     user: { id: 1, name: 'b', sessionToken: 'tok' },
     loading: false,
-    clearHistory: vi.fn(),
     lang: 'tr',
     effectiveProvider: 'claude',
     thinkingLevel: 'auto',

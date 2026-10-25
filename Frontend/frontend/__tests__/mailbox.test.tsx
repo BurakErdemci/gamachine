@@ -197,7 +197,7 @@ describe('the mail card', () => {
 
 describe('the note bubble', () => {
   const panel = (messages: any[]) => render(<ChatPanel {...({
-    messages, activeConvId: 7, user: USER, loading: false, clearHistory: vi.fn(), lang: 'tr',
+    messages, activeConvId: 7, user: USER, loading: false, lang: 'tr',
     effectiveProvider: 'claude', thinkingLevel: 'auto', workspacePath: '/ws', handleExportToUnity: vi.fn(),
     pendingGenFiles: null, setPendingGenFiles: vi.fn(), pendingFix: null, setPendingFix: vi.fn(),
     openedFilePath: null, setCode: vi.fn(), refreshFileTree: vi.fn(),
