@@ -130,6 +130,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
   return (
     <div className="cu-page" data-testid="cu-page" data-desktop={desktop ? 'true' : 'false'}>
       <SetPageHead title={t('set.nav.bilgisayar')} lede={t('cu.set.lede')} />
+      <p className="set-msg">{t('cu.set.providers')}</p>
 
       <SetGroup>
         <SetCard>
