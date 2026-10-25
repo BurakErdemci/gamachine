@@ -366,7 +366,8 @@ class BaseCLIProvider(AIProvider):
             logger.info("[CLIProvider] Unity MCP aktif, .mcp.json'a stdio köprüsüyle eklendi.")
 
         config_path = os.path.join(workspace, ".mcp.json")
-        from .workspace_config import ensure_gitignored, guvenli_config_yaz
+        from .workspace_config import (
+            ensure_gitignored, guvenli_config_yaz, read_user_json_config)
 
         # ⚠️ Düz `open(path, "w")` KULLANMA. K4: bu dosya kullanıcının Unity
         # projesinde ve o yol yönlendirilmiş olabilir (dosyanın kendisi sabit
@@ -379,10 +380,27 @@ class BaseCLIProvider(AIProvider):
         # sır yokken işlev kaybı. Sertleştirme yine de HER ZAMAN deneniyor
         # (bkz. `guvenli_config_yaz`); yazım başarısızsa dosya hiç yazılmıyor.
         self._policy_registration_failed = False
-        if not guvenli_config_yaz(workspace, ".mcp.json",
-                                  json.dumps(config, indent=2)):
-            logger.error("[CLIProvider] %s güvenli yazılamadı; MCP kaydı "
+        # .mcp.json is the user's project MCP file: merge so their own
+        # servers and top-level keys survive.
+        existing = read_user_json_config(workspace, ".mcp.json")
+        if existing is None:
+            logger.error("[CLIProvider] %s güvenli okunamadı; MCP kaydı "
                          "UYGULANMADI.", config_path)
+            written = False
+        else:
+            user_servers = existing.get("mcpServers")
+            if not isinstance(user_servers, dict):
+                user_servers = {}
+            merged = {**existing,
+                      "mcpServers": {**user_servers, **config["mcpServers"]}}
+            if not unity_mcp_url:
+                merged["mcpServers"].pop("unityMCP", None)
+            written = guvenli_config_yaz(workspace, ".mcp.json",
+                                         json.dumps(merged, indent=2))
+            if not written:
+                logger.error("[CLIProvider] %s güvenli yazılamadı; MCP kaydı "
+                             "UYGULANMADI.", config_path)
+        if not written:
             # A provider whose _register_mcp writes a permission policy must
             # still run it, or the CLI would start without that policy.
             if not self._register_mcp_carries_policy:
