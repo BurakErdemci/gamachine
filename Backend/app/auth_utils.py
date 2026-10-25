@@ -1,11 +1,10 @@
 import hmac
 import os
-from pathlib import Path, PurePath
 from typing import Any
 
 from fastapi import HTTPException
 
-from path_containment import is_within, resolve_within
+from path_containment import is_within
 
 _LOCAL_USER = (1, "local", "local@localhost", None, None)
 
@@ -100,20 +99,3 @@ def require_conversation_owner(db: Any, token: str, conv_id: int) -> tuple[int, 
 def is_path_within_workspace(file_path: str, workspace_path: str) -> bool:
     return is_within(file_path, workspace_path)
 
-
-def is_allowed_unity_script_path(file_path: str, workspace_path: str) -> bool:
-    resolved = resolve_within(file_path, workspace_path)
-    if resolved is None:
-        return False
-
-    try:
-        rel_parts = Path(resolved).relative_to(os.path.realpath(os.path.expanduser(workspace_path))).parts
-    except ValueError:
-        return False
-
-    if len(rel_parts) < 3:
-        return False
-    if rel_parts[0] != "Assets" or rel_parts[1] != "Scripts":
-        return False
-
-    return PurePath(file_path).suffix.lower() == ".cs"

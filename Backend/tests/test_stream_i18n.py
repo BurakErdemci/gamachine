@@ -137,16 +137,12 @@ async def test_closing_wrapper_closes_source():
 @pytest.mark.parametrize("lang", ["en", "tr", None])
 def test_plain_success_messages_use_header(monkeypatch, lang):
     import routes.config_routes as config
-    import routes.mcp_routes as mcp
 
     terminal = MagicMock()
-    install = MagicMock(return_value=True)
     monkeypatch.setattr(config, "_open_visible_terminal", terminal)
-    monkeypatch.setattr(mcp.unity_mcp_manager, "install_package", install)
     db = MagicMock()
     app = FastAPI()
     app.include_router(config.create_config_router(db))
-    app.include_router(mcp.create_mcp_router())
     headers = {"X-Session-Token": ""}
     if lang is not None:
         headers["X-UI-Lang"] = lang
@@ -155,8 +151,6 @@ def test_plain_success_messages_use_header(monkeypatch, lang):
         ("/cli-login/codex", None, "Giriş penceresi açıldı.", "Sign-in window opened."),
         ("/api-keys/save", {"provider_type": "openai", "api_key": "test-key"},
          "openai API key kaydedildi.", "openai API key saved."),
-        ("/mcp/unity/install", {"workspace_path": "."},
-         "Unity MCP paketi başarıyla kuruldu.", "Unity MCP package installed successfully."),
     ]
     with TestClient(app) as client:
         for endpoint, body, turkish, english in cases:
@@ -164,4 +158,3 @@ def test_plain_success_messages_use_header(monkeypatch, lang):
             assert response.status_code == 200, response.text
             assert response.json()["message"] == (english if lang == "en" else turkish)
     assert terminal.call_count == 2
-    install.assert_called_once_with(".")

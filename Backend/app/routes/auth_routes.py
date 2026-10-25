@@ -134,19 +134,4 @@ def create_auth_router(db):
         return {**base, "mounted": True, "entries": len(lines),
                 "fingerprint": _fingerprint_digest(lines)}
 
-    @router.post("/login")
-    async def login():
-        # Geriye dönük uyumluluk stub (token gerektirmez)
-        return {"session_token": "local",
-                "user": {"user_id": 1, "username": "local", "email": "local@localhost"}}
-
-    @router.post("/logout")
-    async def logout():
-        return {"ok": True}
-
-    @router.get("/auth/providers")
-    async def get_providers():
-        # Eski frontend bu shape'i bekliyordu
-        return {"google": False, "github": False}
-
     return router

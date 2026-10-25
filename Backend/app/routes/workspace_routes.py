@@ -1,11 +1,9 @@
 import logging
-import os
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header
 
-from auth_utils import get_current_user, is_allowed_unity_script_path, require_user
-from path_containment import resolve_within
-from schemas import WorkspaceRequest, WriteFileRequest
+from auth_utils import require_user
+from schemas import WorkspaceRequest
 
 logger = logging.getLogger(__name__)
 
@@ -41,21 +39,5 @@ def create_workspace_router(db):
     async def remove_workspace(req: WorkspaceRequest, x_session_token: str = Header(alias="X-Session-Token")):
         user_id, _ = require_user(db, x_session_token, req.user_id)
         return {"removed": db.remove_workspace(user_id, req.path)}
-
-    @router.post("/write-file")
-    async def write_file(req: WriteFileRequest, x_session_token: str = Header(alias="X-Session-Token")):
-        get_current_user(db, x_session_token)
-        if not is_allowed_unity_script_path(req.file_path, req.workspace_path):
-            raise HTTPException(403, "Dosya yalnızca workspace içindeki Assets/Scripts altına yazılabilir.")
-
-        try:
-            # The same resolution the check used: a relative path is relative to the workspace.
-            abs_file = resolve_within(req.file_path, req.workspace_path)
-            os.makedirs(os.path.dirname(abs_file), exist_ok=True)
-            with open(abs_file, "w", encoding="utf-8") as file:
-                file.write(req.content)
-            return {"status": "success", "path": abs_file}
-        except Exception as exc:
-            raise HTTPException(500, str(exc))
 
     return router

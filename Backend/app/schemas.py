@@ -84,8 +84,3 @@ class WorkspaceRequest(BaseModel):
     user_id: int
     path: str
 
-
-class WriteFileRequest(BaseModel):
-    file_path: str
-    content: str
-    workspace_path: str

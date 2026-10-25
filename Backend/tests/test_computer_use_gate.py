@@ -257,9 +257,12 @@ def test_deleted_and_side_chat_refusals_precede_computer_gate(env):
     assert response["approved"] is False
 
 
-def test_abort_all_rejects_pending_without_grant(env):
+def test_chat_stop_rejects_pending_without_grant(env):
     request(env)
-    env.client.post("/mcp-abort-all")
+    response = env.client.post("/chat-stop/1")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert pending(env) == {}
     assert result(env)["approved"] is False
     assert settings.grants(env.db) == []
 

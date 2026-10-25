@@ -83,7 +83,9 @@ On "Stop" I cut the SSE with an AbortController — but the backend CLI process 
 ```typescript
 stopMessage: () => {
   abortControllerRef.current?.abort();               // cut the SSE connection
-  fetch(`${API}/mcp-abort-all`, { method: 'POST' }); // reject pending approval gates
+  fetch(`${API}/chat-stop/${id}`, {
+    method: 'POST', headers: { 'X-Session-Token': sessionToken },
+  }); // stop this chat's backend turn and reject its pending approval gates
 }
 ```
 

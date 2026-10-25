@@ -40,7 +40,6 @@ EN: dict[str, str] = {
     "⚠️ Claude session yanıt vermedi — yeniden başlatılıyor…": "⚠️ Claude session did not respond — restarting…",
     "Kurulum penceresi açıldı.": "Installation window opened.",
     "Giriş penceresi açıldı.": "Sign-in window opened.",
-    "Unity MCP paketi başarıyla kuruldu.": "Unity MCP package installed successfully.",
     "Yan soru akışı sırasında bir hata oluştu. Ayrıntı sunucu loglarında.":
         "An error occurred while streaming the side question. See the server logs for details.",
     "Yanıt akışı sırasında bir hata oluştu. Ayrıntı sunucu loglarında.":

@@ -132,18 +132,6 @@ DELIBERATELY_OPEN: dict = {
         "gömülü MCP sunucusunda tam olarak bu uç yanlışlıkla 401'e döndü ve "
         "ürünün toggle'ı sonsuza kadar sarıda kaldı — kapanırsa ürün kırılır.",
 
-    ("POST", "/login"):
-        "Geriye dönük uyumluluk stub'ı: sabit bir gövde döner, DB'ye dokunmaz. "
-        "Döndürdüğü \"session_token\": \"local\" gerçek sır DEĞİL — gerçek sır "
-        "LOCAL_APP_TOKEN'dır ve bu uçtan elde edilemez.",
-
-    ("POST", "/logout"):
-        "Aynı stub ailesi: {\"ok\": true} döner, hiçbir durum değiştirmez.",
-
-    ("GET", "/auth/providers"):
-        "Sabit {\"google\": false, \"github\": false}. Yerel modda kimlik "
-        "sağlayıcı yok; makineye özel hiçbir bilgi sızdırmıyor.",
-
     # FastAPI'nin gömülü dokümantasyon yüzeyi. Dördü de yalnız şema servis
     # ediyor; veri okumuyor, yan etki üretmiyor.
     #
@@ -309,7 +297,7 @@ def test_the_open_whitelist_stays_short():
 
     Sınır bir hedef değil, bir alarm: her artış gerekçesiyle birlikte bilinçli
     olarak buraya yazılmalı."""
-    assert len(DELIBERATELY_OPEN) <= 12, (
+    assert len(DELIBERATELY_OPEN) <= 5, (
         "Bilerek açık uç sayısı arttı. Yeni satırın gerekçesi gerçekten "
         "'kapatılırsa ürün kırılır' seviyesinde mi?"
     )

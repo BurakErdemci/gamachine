@@ -6,13 +6,8 @@ from typing import Optional
 from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 from unity_ai_mcp import unity_project_presence
 from auth_utils import _check_token
-from error_i18n import translate_detail
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
-
-
-class MCPInstallRequest(BaseModel):
-    workspace_path: str
 
 
 class MCPToggleRequest(BaseModel):
@@ -109,17 +104,6 @@ async def get_unity_console(x_session_token: str = Header(alias="X-Session-Token
         return {"logs": logs, "connected": True}
     except Exception as e:
         return {"logs": [], "connected": False, "error": str(e)}
-
-
-@router.post("/unity/install")
-async def install_unity_mcp(request: MCPInstallRequest, x_session_token: str = Header(alias="X-Session-Token", default=""),
-                            x_ui_lang: str | None = Header(default=None, alias="X-UI-Lang")):
-    """Belirtilen Unity projesine manifest.json üzerinden MCP paketini kurar."""
-    _check_token(x_session_token)
-    success = unity_mcp_manager.install_package(request.workspace_path)
-    if not success:
-        raise HTTPException(status_code=400, detail="Paket kurulumu başarısız.")
-    return {"status": "success", "message": translate_detail("Unity MCP paketi başarıyla kuruldu.", x_ui_lang)}
 
 
 def create_mcp_router():

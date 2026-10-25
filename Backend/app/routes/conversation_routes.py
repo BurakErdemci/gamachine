@@ -851,7 +851,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         block = mailbox.mention_block(message, conv_id, chats if isinstance(chats, list) else [])
         return f"{message}\n\n{block}" if block else message
 
-    def _abort_pending_mcp_approvals(conversation_id: Optional[int] = None) -> int:
+    def _abort_pending_mcp_approvals(conversation_id: int) -> int:
         """Durdur sırasında subprocess'in beklediği MCP gate'lerini reddet.
 
         Scoped by owner. Unscoped, Stop in one conversation denied every pending
@@ -866,12 +866,10 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         only conversation this can affect is one that has no owner recorded
         either - the same blind spot `_wake_blocked` already fails
         safe on - whereas skipping an owned foreign gate is now guaranteed.
-        `conversation_id=None` keeps the unscoped meaning for `/mcp-abort-all`.
         """
         rejected = [
             gate_id for gate_id in _mcp_pending
-            if conversation_id is None
-            or _GATE_OWNERS.get(gate_id) in (None, conversation_id)
+            if _GATE_OWNERS.get(gate_id) in (None, conversation_id)
         ]
         for gate_id in rejected:
             _cards.close_card(gate_id, "cancelled")
@@ -2849,12 +2847,6 @@ Max 300 kelime. Türkçe yaz.
         _check_token(x_session_token)
         _sweep_mcp_gates()
         return {"pending": _mcp_pending}
-
-    @router.post("/mcp-abort-all")
-    async def mcp_abort_all(x_session_token: str = Header(alias="X-Session-Token", default="")):
-        """DURDUR butonuna basılınca tüm bekleyen gate'leri reddeder. MCP polling durur."""
-        _check_token(x_session_token)
-        return {"status": "ok", "rejected": _abort_pending_mcp_approvals()}
 
     # ── Chat mailbox routes ──────────────────────────────────────────────────
     # The unityai server and the Claude mail server call these with the app

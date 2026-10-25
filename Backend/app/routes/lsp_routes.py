@@ -49,11 +49,6 @@ def create_lsp_router(db: DatabaseManager):
         # errors only are checked", which is false when nothing is checked.
         return m.in_project(path) if m._ready() else None
 
-    @router.get("/lsp/status")
-    async def lsp_status(x_session_token: str = Header(alias="X-Session-Token", default="")):
-        _check_token(x_session_token)
-        return get_omnisharp_manager().status
-
     @router.post("/lsp/change")
     async def lsp_change(req: DocReq, x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
