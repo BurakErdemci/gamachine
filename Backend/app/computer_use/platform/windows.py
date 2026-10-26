@@ -17,6 +17,11 @@ DENY = frozenset({
     "consent.exe", "logonui.exe", "credentialuibroker.exe", "1password.exe",
     "bitwarden.exe", "keepass.exe", "keepassxc.exe", "nordpass.exe",
     "wscript.exe", "cscript.exe", "mshta.exe", "python.exe", "pythonw.exe", "node.exe",
+    "powershell_ise.exe", "wt.exe", "sh.exe", "git-bash.exe", "rundll32.exe", "msiexec.exe",
+    "regedt32.exe", "sechealthui.exe", "useraccountcontrolsettings.exe", "resmon.exe", "perfmon.exe",
+    "py.exe", "pyw.exe", "electron.exe",
+    # Agent CLIs ship as native executables now, so denying node.exe no longer covers them.
+    "claude.exe", "codex.exe",
 })
 ALIASES = {
     "cmd": "ctrl", "command": "ctrl", "meta": "ctrl", "super": "ctrl",
