@@ -261,7 +261,7 @@ def test_split_steps_stop_before_unverified_foreground_step(fake, monkeypatch, s
     asyncio.run(run())
     rows = calls(log)
     assert [row["tool"] for row in rows] == [
-        "list_apps", "list_apps", "run_steps", "bring_to_front", "bring_to_front"]
+        "list_apps", "list_apps", "run_steps", "list_apps", "bring_to_front", "bring_to_front"]
     assert rows[2]["args"]["steps"] == steps[:1]
     assert all(row["args"] == {"pid": 4242, "window_id": 7}
                for row in rows if row["tool"] == "bring_to_front")
@@ -284,7 +284,7 @@ def test_split_steps_verify_each_inherited_foreground_window(fake, monkeypatch):
     rows = calls(log)
     assert [row["tool"] for row in rows] == [
         "list_apps", "list_apps", "bring_to_front", "run_steps",
-        "bring_to_front", "run_steps"]
+        "list_apps", "bring_to_front", "run_steps"]
     assert [row["args"] for row in rows if row["tool"] == "bring_to_front"] == [
         {"pid": 4242, "window_id": 7},
         {"pid": 4242, "window_id": 7}]

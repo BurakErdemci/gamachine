@@ -434,6 +434,15 @@ class ComputerServer:
                 stop_reason = await self.approvals.batch_stop(params)
                 if stop_reason is not None:
                     break
+                if i > 0 and "pid" in base:
+                    current, _, refusal = await platform.current().identify(driver, base["pid"])
+                    if (refusal is not None or not policy.valid_bundle_id(current)
+                            or current.casefold() != params["bundle_id"].casefold()):
+                        entries.append({"index": i, "ok": False, "code": "target_changed",
+                                        "message": "Hedef uygulama adımlar arasında değişti; "
+                                                   "kalan adımlar çalıştırılmadı."})
+                        failed_step = i
+                        break
                 call_args = {**base, "steps": [step]}
                 if "observe" in forward_args and i == total - 1:
                     call_args["observe"] = forward_args["observe"]

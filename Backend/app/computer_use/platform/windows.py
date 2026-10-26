@@ -218,7 +218,7 @@ class WindowsPlatform:
             for hwnd in windows:
                 info = self.win32.window_info(hwnd)
                 if (info and info["visible"] and not info["cloaked"] and not info["minimized"]
-                        and info["owner"] == 0
+                        and (info["owner"] == 0 or hwnd == window_id)
                         and self.real_pid(hwnd, self.win32.window_pid(hwnd)) == pid):
                     return hwnd == window_id
             return False

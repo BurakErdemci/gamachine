@@ -252,12 +252,13 @@ def test_structured_report_preferred_and_all_failure_signals_stop(monkeypatch, f
               "observation": {"ok": True}}
     image = ImageContent(type="image", data="aGVsbG8=", mime_type="image/png")
     driver = AsyncMock()
+    driver.list_running_apps.return_value = {4242: ("com.apple.finder", "Finder")}
     driver.call.return_value = CallToolResult(
         content=[TextContent(type="text", text="not JSON"), image],
         structured_content=report, is_error=failure == "result")
     halted = AsyncMock(return_value=None)
     monkeypatch.setattr(server, "_batch_stop", halted)
-    result = asyncio.run(ComputerServer()._run_steps_split(driver, {"pid": 4242, "steps": steps(2)}, {}))
+    result = asyncio.run(ComputerServer()._run_steps_split(driver, {"pid": 4242, "steps": steps(2)}, {"bundle_id": "com.apple.finder"}))
     merged = json.loads(result.content[0].text)
     assert result.is_error is (failure is not None)
     assert merged["executed"] == (1 if failure else 2)

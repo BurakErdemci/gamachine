@@ -137,9 +137,12 @@ def integrity(pid) -> int | None:
 
 def self_elevated() -> bool:
     try:
-        return bool(_read_token(_current_process(), 20)) if _available else False
+        if not _available:
+            return False
+        value = _read_token(_current_process(), 20)
+        return True if value is None else bool(value)
     except (OSError, ValueError, TypeError, _ct.ArgumentError):
-        return False
+        return True
 
 
 def parent_pids() -> dict[int, int]:
