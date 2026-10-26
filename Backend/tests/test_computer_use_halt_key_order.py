@@ -1,13 +1,14 @@
 """Keep batch stop markers ahead of step details in serialized reports."""
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
-from computer_use import server
+from computer_use import driver_client, server
 from computer_use.driver_client import DriverClient
 from computer_use.server import ComputerServer
 
@@ -16,11 +17,16 @@ from computer_use.server import ComputerServer
 def fake(tmp_path, monkeypatch):
     # Each test starts at most one fake driver process and closes it afterward.
     fixture = Path(__file__).parent / "fixtures" / "fake_cua_driver.py"
-    executable = tmp_path / "cua-driver"
-    executable.write_text(
-        "#!" + sys.executable + "\nimport sys, runpy\nsys.dont_write_bytecode = True\n"
-        + "runpy.run_path(" + repr(str(fixture)) + ", run_name='__main__')\n")
-    executable.chmod(0o700)
+    transport = driver_client._transport
+
+    def fake_transport(command, env):
+        child_env = dict(env)
+        if "SYSTEMROOT" in os.environ:
+            child_env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        return transport([sys.executable, str(fixture), *command[1:]], child_env)
+
+    monkeypatch.setattr(driver_client, "_transport", fake_transport)
+    executable = Path(sys.executable)
     log = tmp_path / "calls.jsonl"
     socket = str(tmp_path / "fake-private-socket")
     driver = DriverClient(str(executable), socket)

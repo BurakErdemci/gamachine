@@ -5,7 +5,8 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from .policy import CLIPBOARD_BUNDLE_ID, TOOLS, is_hard_denied, valid_bundle_id
+from . import platform
+from .policy import CLIPBOARD_BUNDLE_ID, TOOLS
 
 logger = logging.getLogger(__name__)
 # Computer use is independent of the approval modes (owner decision, 15 Oct
@@ -30,11 +31,11 @@ def decide(tool, params, *, enabled, granted):
     if tool not in TOOLS:
         return Decision("deny", "Bilinmeyen bilgisayar kullanımı aracı.")
     bundle_id = params.get("bundle_id")
-    if not valid_bundle_id(bundle_id):
+    if not platform.current().valid_app_id(bundle_id):
         return Decision("deny", "Hedef uygulama tanınamadı.")
     if bundle_id.casefold() == CLIPBOARD_BUNDLE_ID.casefold() and tool != "computer_clipboard_read":
         return Decision("deny", "Bu uygulama bilgisayar kullanımına kapalı.")
-    if is_hard_denied(bundle_id):
+    if platform.current().is_hard_denied(bundle_id, params.get("pid")):
         return Decision("deny", "Bu uygulama bilgisayar kullanımına kapalı.")
     if tool == "computer_list_windows":
         return Decision("allow")

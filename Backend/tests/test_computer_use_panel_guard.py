@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from mcp.types import CallToolResult, TextContent
 
-from computer_use import driver_client, server
+from computer_use import server
+from computer_use.platform import macos as driver_client
 
 
 PID, PANEL, MAIN = 4242, 404, 7
@@ -37,6 +38,9 @@ def cg_row(number=PANEL, layer=8, **updates):
 
 @pytest.fixture
 def panel_driver(monkeypatch):
+    host = driver_client.MacPlatform()
+    monkeypatch.setattr(server.platform, "current", lambda: host)
+    monkeypatch.setattr(host, "frontmost_pid", lambda driver: driver.frontmost_pid())
     driver = AsyncMock()
     handler = server.ComputerServer(driver)
     top = [cg_row(), cg_row(MAIN, 0)]

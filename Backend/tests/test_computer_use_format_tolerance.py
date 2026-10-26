@@ -7,6 +7,7 @@ import pytest
 from mcp.types import CallToolResult
 
 from computer_use import policy, server
+from computer_use.platform import macos
 
 
 KEYBOARD_CASES = [
@@ -137,7 +138,7 @@ def proxy(monkeypatch):
     driver.binary, driver.socket = "bin", "sock"
     driver.call.return_value = CallToolResult(content=[], structuredContent={"ok": True, "steps": [{"ok": True}]})
     monkeypatch.setattr(server, "fetch_runtime", AsyncMock(return_value=("bin", "sock")))
-    monkeypatch.setattr(server.driver_client, "identify_running_app", AsyncMock(
+    monkeypatch.setattr(macos, "identify_running_app", AsyncMock(
         return_value=("com.apple.TextEdit", "TextEdit")))
     monkeypatch.setattr(server, "_batch_stop", AsyncMock(return_value=None))
     approval = AsyncMock(return_value={"approved": False})

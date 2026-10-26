@@ -6,7 +6,6 @@ driver argument without default injection; policy validates it before any I/O.
 from contextlib import asynccontextmanager, nullcontext
 import asyncio
 import json
-import os
 import re
 
 import httpx
@@ -14,8 +13,10 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
 from unity_ai_mcp import approval_bridge
-from . import driver_client, policy
-from .driver_client import DriverClient, DriverError, DriverUnavailable, fetch_runtime
+from . import platform, policy
+from .driver_client import DriverClient, DriverError, DriverUnavailable
+from .platform.base import WindowListUnavailable
+from .platform.macos import fetch_runtime
 
 
 _TOOL_HINTS = {
@@ -68,7 +69,7 @@ async def _merge_running_apps(result):
             return result
         seen = {row.get("pid") for payload in payloads for row in payload["apps"] if isinstance(row, dict)}
         extra = []
-        for row in await driver_client.running_apps_from_os():
+        for row in await platform.current().running_apps():
             if row["pid"] not in seen:
                 extra.append(row)
                 seen.add(row["pid"])
@@ -111,7 +112,7 @@ async def _merge_panel_windows(result, pid):
         base_z = max((row["z_index"] for row in rows if type(row.get("z_index")) is int), default=0)
         seen = {row.get("window_id") for row in rows}
         extra = []
-        for row in await driver_client.panel_windows_from_os(pid, base_z):
+        for row in await platform.current().panel_windows(pid, base_z):
             if row["window_id"] not in seen:
                 extra.append(row)
                 seen.add(row["window_id"])
@@ -238,28 +239,22 @@ async def _front_guard(driver, pid, window_id) -> str | None:
         if attempt == 0:
             await asyncio.sleep(0.3)
     try:
-        raw = await asyncio.wait_for(asyncio.to_thread(driver_client._cg_window_list), 2.0)
-        is_panel = any(row["window_id"] == window_id for row in driver_client._panel_rows(raw, pid, 0))
+        panels = await platform.current().panel_windows(pid, 0)
+        is_panel = any(row["window_id"] == window_id for row in panels)
     except Exception:
         is_panel = False
     if is_panel:
         try:
             await driver.call("bring_to_front", {"pid": pid})
             for attempt in range(2):
-                raw = await asyncio.wait_for(asyncio.to_thread(driver_client._cg_window_list), 2.0)
-                # Frontmost is read after the window list, right before input, so an app switch
-                # during the list read is caught instead of trusting an earlier answer.
-                frontmost = await driver.frontmost_pid()
-                if not isinstance(raw, list):
+                try:
+                    top_window = await platform.current().top_window_is(pid, window_id)
+                except WindowListUnavailable:
+                    await platform.current().frontmost_pid(driver)
                     break
-                top = next((row for row in raw if isinstance(row, dict)
-                            and row.get("kCGWindowOwnerPID") == pid
-                            and row.get("kCGWindowIsOnscreen") is True
-                            and type(row.get("kCGWindowLayer")) is int
-                            and 0 <= row["kCGWindowLayer"] <= 23
-                            and type(row.get("kCGWindowAlpha", 1.0)) in (int, float)
-                            and row.get("kCGWindowAlpha", 1.0) > 0), None)
-                if frontmost == pid and top is not None and top.get("kCGWindowNumber") == window_id:
+                # Read the foreground app after the window snapshot, immediately before input.
+                frontmost = await platform.current().frontmost_pid(driver)
+                if frontmost == pid and top_window:
                     return None
                 if attempt == 0:
                     await asyncio.sleep(0.3)
@@ -296,77 +291,29 @@ async def _front_guard(driver, pid, window_id) -> str | None:
         "to the front, or use background delivery with element_token.")
 
 
-_BUNDLE_SUFFIXES = (".app", ".bundle", ".framework", ".plugin", ".appex", ".prefpane",
-                    ".workflow", ".action", ".shortcut", ".scptd", ".pkg", ".mpkg",
-                    ".kext", ".xpc", ".terminal", ".command", ".tool",
-                    ".saver", ".service", ".systemextension", ".wdgt", ".dext",
-                    ".qlgenerator", ".mdimporter", ".component", ".colorpicker",
-                    ".osax", ".menu", ".vst", ".vst3", ".au", ".clap")
-
-_DOCUMENT_HANDLER_DENY = frozenset({
-    "com.apple.finder", "com.apple.terminal", "com.googlecode.iterm2", "org.python.pythonlauncher",
-    "dev.warp.warp-stable", "com.mitchellh.ghostty", "net.kovidgoyal.kitty", "org.alacritty",
-    "co.zeit.hyper", "com.github.wez.wezterm", "com.apple.installer", "com.apple.archiveutility",
-    "com.apple.scripteditor2", "com.apple.automator", "com.apple.shortcuts",
-})
-
-_RUNNABLE_FILE_SUFFIXES = (
-    ".sh", ".bash", ".zsh", ".csh", ".ksh", ".fish", ".command", ".tool", ".py", ".pyw", ".pyc",
-    ".rb", ".pl", ".php", ".scpt", ".applescript", ".jxa", ".workflow", ".shortcut", ".action",
-    ".terminal", ".webloc", ".inetloc", ".fileloc", ".url", ".desktop", ".jar", ".pkg", ".mpkg",
-    ".dmg", ".iso", ".img", ".sparseimage", ".sparsebundle", ".mobileconfig", ".provisionprofile",
-    ".docm", ".xlsm", ".pptm", ".dotm", ".xltm", ".potm", ".lnk", ".exe", ".msi", ".bat", ".cmd",
-    ".ps1", ".vbs", ".wsf", ".reg", ".so", ".dylib", ".bundle", ".kext", ".plugin", ".prefpane",
-    ".saver", ".qlgenerator", ".app",
-)
-
-
-def _is_bundle_dir(path):
-    return (os.path.basename(path).casefold().endswith(_BUNDLE_SUFFIXES)
-            or os.path.exists(os.path.join(path, "Contents", "Info.plist"))
-            or os.path.exists(os.path.join(path, "Contents", "MacOS")))
-
-
 LAUNCH_NAME_TIMEOUT = 3.0
 
 
 def _resolve_launch_targets(urls, bundle_id):
-    """Return the urls with every path replaced by its checked real path, or None."""
-    resolved = []
-    for url in urls:
-        if not url.startswith("/"):
-            resolved.append(url)
-            continue
-        try:
-            real_path = os.path.realpath(url)
-            if not (os.path.isdir(real_path) or (
-                    os.path.isfile(real_path)
-                    and bundle_id.casefold() not in _DOCUMENT_HANDLER_DENY
-                    and not os.path.basename(real_path).casefold().endswith(_RUNNABLE_FILE_SUFFIXES)
-                    and not os.path.basename(real_path).casefold().endswith(_BUNDLE_SUFFIXES)
-                    and os.stat(real_path).st_mode & 0o111 == 0)):
-                return None
-            current = real_path
-            while True:
-                if _is_bundle_dir(current):
-                    return None
-                parent = os.path.dirname(current)
-                if parent == current:
-                    break
-                current = parent
-        except (OSError, ValueError):
-            return None
-        resolved.append(real_path)
-    return resolved
+    return platform.current().resolve_launch_targets(urls, bundle_id)
 
 
 def _safe_launch_targets(urls, bundle_id):
     return _resolve_launch_targets(urls, bundle_id) is not None
 
 
+class BackendApprovals:
+    async def request(self, tool, params):
+        return await approval_bridge.request_approval(tool, params=params, workspace_path="")
+
+    async def batch_stop(self, params):
+        return await _batch_stop(params)
+
+
 class ComputerServer:
-    def __init__(self, driver=None):
+    def __init__(self, driver=None, approvals=None):
         self.driver = driver
+        self.approvals = approvals if approvals is not None else BackendApprovals()
         self._driver_lock = asyncio.Lock()
         # Fronting and the input it guards must not interleave with another call's fronting.
         self._front_lock = asyncio.Lock()
@@ -400,7 +347,9 @@ class ComputerServer:
             if "pid" in args:
                 pid = args["pid"]
                 driver = await self._runtime_driver()
-                bundle_id, app_name = await driver_client.identify_running_app(driver, pid)
+                bundle_id, app_name, refusal = await platform.current().identify(driver, pid)
+                if refusal is not None:
+                    return _text(refusal, True)
             elif tool == "computer_launch_app":
                 bundle_id = args["bundle_id"]
                 try:
@@ -419,7 +368,7 @@ class ComputerServer:
                       # bool is an int subclass; a window id is never True/False.
                       "window_id": args.get("window_id") if type(args.get("window_id")) is int else None}
             try:
-                result = await approval_bridge.request_approval(tool, params=params, workspace_path="")
+                result = await self.approvals.request(tool, params)
             except Exception:
                 result = {"approved": False, "error": "İşlem onayı doğrulanamadı."}
             if not isinstance(result, dict):
@@ -431,7 +380,9 @@ class ComputerServer:
             if not approved:
                 return _text(str(reason), True)
             if pid is not None:
-                current_bundle, _ = await driver_client.identify_running_app(driver, pid)
+                current_bundle, _, refusal = await platform.current().identify(driver, pid)
+                if refusal is not None:
+                    return _text(refusal, True)
                 if (not policy.valid_bundle_id(bundle_id) or not policy.valid_bundle_id(current_bundle)
                         or current_bundle.casefold() != bundle_id.casefold()):
                     return _text("Hedef uygulama onaydan sonra değişti; işlem reddedildi.", True)
@@ -480,7 +431,7 @@ class ComputerServer:
                 if i > 0:
                     if isinstance(delay_ms, int) and delay_ms > 0:
                         await asyncio.sleep(delay_ms / 1000)
-                stop_reason = await _batch_stop(params)
+                stop_reason = await self.approvals.batch_stop(params)
                 if stop_reason is not None:
                     break
                 call_args = {**base, "steps": [step]}
@@ -553,28 +504,7 @@ def create_server(driver=None):
         finally:
             await handler.close()
 
-    mcp = MCPServer(name="gamachineComputer", lifespan=lifespan, instructions=(
-        "Read a window with computer_window_state before acting. Prefer element_token over x,y. "
-        "Batch known steps with computer_run_steps. Call computer_confirm_risky_step before "
-        "deleting, purchasing, sending/publishing, overwriting or downloading with the user's account. "
-        "Terminals, System Settings and Gamachine are off limits. "
-        "Every tool takes exactly one parameter named args; put all arguments inside it, "
-        'e.g. {"args": {"pid": 123, "window_id": 45}}. '
-        "To check a file the task created, look only in the folder the task names; "
-        "never search the whole home folder, macOS blocks other apps' data and warns the user. "
-        "Work in the background: hotkeys, typing and element_token clicks reach background apps, "
-        "including their Open/Save panels. To open a file: computer_launch_app with the app's bundle_id "
-        "and urls set to the file's absolute path; only if that is refused, cmd+o, then type the full path starting with / "
-        "(the panel opens its own go-to field; do not press cmd+shift+g), return, return. To save: cmd+s. "
-        "In an Open or Save panel, set the file name with computer_set_value on the name field's element_token; "
-        "typed text often does not reach these panels. In Unity, open a scene by double-clicking it in the "
-        "Project window or with File > Open Recent Scene rather than the Open panel. "
-        "If a hotkey or click is refused in the background (e.g. Find/Replace cmd+alt+f, background_unavailable), "
-        "send the same call again with delivery_mode foreground and window_id: it brings the window to the front "
-        "and leaves it there. Use computer_bring_to_front only if that is refused too."
-        " Send multi-step foreground work (for example renaming: return, type the name, return) as ONE "
-        "computer_run_steps with delivery_mode foreground."
-    ))
+    mcp = MCPServer(name="gamachineComputer", lifespan=lifespan, instructions=platform.current().instructions)
 
     def register(name):
         async def invoke(args: dict) -> CallToolResult:

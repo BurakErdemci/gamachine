@@ -11,7 +11,8 @@ import pytest
 from mcp.types import CallToolResult, TextContent
 
 import agentic.agent_runner as ar
-from computer_use import driver_client, registration, server, settings
+from computer_use import registration, server, settings
+from computer_use.platform import macos as driver_client
 from computer_use.driver_client import DriverError, DriverUnavailable
 from spawn_env import CONVERSATION_ENV
 
@@ -369,6 +370,7 @@ def test_concurrent_runtime_change_constructs_one_owned_replacement(runtime, mon
 
 
 def test_old_client_held_across_replacement_cannot_spawn_or_retry(runtime, monkeypatch, tmp_path):
+    from computer_use import driver_client
     state, _ = runtime
     old = driver_client.DriverClient(state["driver_path"], state["socket_path"])
     old.list_running_apps = AsyncMock(return_value={4242: ("com.apple.TextEdit", "TextEdit")})

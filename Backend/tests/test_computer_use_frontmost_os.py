@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 from mcp.types import CallToolResult
 
-from computer_use import driver_client
+from computer_use.platform import macos as driver_client
 
 
 ASN = "ASN:0x0-0x57057:"
@@ -17,6 +17,7 @@ INFO = '    pid = 10586 !cgsConnection !signalled type="Foreground"\n'
 
 @pytest.fixture(autouse=True)
 def no_real_subprocesses(monkeypatch):
+    monkeypatch.setattr(driver_client.sys, "platform", "darwin")
     spawn = AsyncMock(side_effect=AssertionError("real subprocess forbidden"))
     monkeypatch.setattr(driver_client.asyncio, "create_subprocess_exec", spawn)
     return spawn

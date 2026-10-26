@@ -7,7 +7,13 @@ from unittest.mock import AsyncMock
 import pytest
 from mcp.types import CallToolResult, TextContent
 
-from computer_use import driver_client, server
+from computer_use import server
+from computer_use.platform import macos as driver_client
+
+
+@pytest.fixture(autouse=True)
+def mac_platform(monkeypatch):
+    monkeypatch.setattr(driver_client.sys, "platform", "darwin")
 
 
 def cg_row(**updates):

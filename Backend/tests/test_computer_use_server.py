@@ -12,24 +12,30 @@ from mcp.types import CallToolResult, TextContent
 from computer_use.driver_client import DriverClient, DriverError, DriverUnavailable
 from computer_use.server import ComputerServer, create_server
 from computer_use import driver_client, server
+from computer_use.platform import macos
 
 
 @pytest.fixture(autouse=True)
 def no_real_cg_windows(monkeypatch):
-    monkeypatch.setattr(driver_client, "_cg_window_list", lambda: [])
-    monkeypatch.setattr(driver_client, "_lsappinfo_front", AsyncMock(return_value=(False, None)))
+    monkeypatch.setattr(macos, "_cg_window_list", lambda: [])
+    monkeypatch.setattr(macos, "_lsappinfo_front", AsyncMock(return_value=(False, None)))
 
 
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
-    monkeypatch.setattr(driver_client, "_lsappinfo_text", AsyncMock(return_value=None))
+    monkeypatch.setattr(macos, "_lsappinfo_text", AsyncMock(return_value=None))
     # At most two child processes in the reconnect test, one in all others.
     fixture = Path(__file__).parent / "fixtures" / "fake_cua_driver.py"
-    executable = tmp_path / "cua-driver"
-    executable.write_text(
-        "#!" + sys.executable + "\nimport sys, runpy\nsys.dont_write_bytecode = True\n"
-        + "runpy.run_path(" + repr(str(fixture)) + ", run_name='__main__')\n")
-    executable.chmod(0o700)
+    transport = driver_client._transport
+
+    def fake_transport(command, env):
+        child_env = dict(env)
+        if "SYSTEMROOT" in os.environ:
+            child_env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+        return transport([sys.executable, str(fixture), *command[1:]], child_env)
+
+    monkeypatch.setattr(driver_client, "_transport", fake_transport)
+    executable = Path(sys.executable)
     log = tmp_path / "calls.jsonl"
     socket = str(tmp_path / "fake-private-socket")
     driver = DriverClient(str(executable), socket)
@@ -848,7 +854,8 @@ def test_opened_tools_forward_after_approval(fake, tool, args, forwarded):
                                    ".saver", ".service", ".systemextension", ".wdgt", ".dext",
                                    ".qlgenerator", ".mdimporter", ".component", ".colorpicker",
                                    ".osax", ".menu", ".vst", ".vst3", ".au", ".clap"])
-@pytest.mark.parametrize("form", ["path", "inside", "symlink"])
+@pytest.mark.parametrize("form", ["path", "inside", pytest.param(
+    "symlink", marks=pytest.mark.skipif(sys.platform != "darwin", reason="POSIX bundle symlinks"))])
 def test_launch_refuses_executable_directory_components_before_approval(fake, tmp_path, suffix, form):
     driver, log, approval = fake
     blocked = tmp_path / ("Target" + suffix.upper())
@@ -910,6 +917,7 @@ def test_launch_refuses_files_and_missing_paths(fake, tmp_path, kind):
 
 
 @pytest.mark.parametrize("name", ["plain-directory", "Unity Projeleri", "unityaıPython"])
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS launch paths, bundles and executable bits")
 def test_launch_plain_directory_forwards_resolved_real_path(fake, tmp_path, name):
     driver, log, approval = fake
     target = tmp_path / name
@@ -959,6 +967,7 @@ def _assert_document_refused(document_launch, target, bundle_id="com.apple.TextE
 
 
 @pytest.mark.parametrize("symlink", [False, True])
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS launch paths, bundles and executable bits")
 def test_document_launch_forwards_plain_file_real_path_after_approval(document_launch, tmp_path, symlink):
     driver, approval, _ = document_launch
     target = tmp_path / "notes.txt"
@@ -983,6 +992,7 @@ def test_document_launch_forwards_plain_file_real_path_after_approval(document_l
     assert server._safe_launch_targets(args["urls"], args["bundle_id"])
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS launch paths, bundles and executable bits")
 def test_document_launch_refuses_symlink_to_runnable(document_launch, tmp_path):
     target = tmp_path / "run.command"
     target.write_text("echo hello")
@@ -994,6 +1004,7 @@ def test_document_launch_refuses_symlink_to_runnable(document_launch, tmp_path):
 
 @pytest.mark.parametrize("suffix", [".sh", ".command", ".py", ".scpt", ".webloc", ".pkg",
                                    ".dmg", ".docm", ".SH", ".framework"])
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS launch paths, bundles and executable bits")
 def test_document_launch_refuses_runnable_suffixes(document_launch, tmp_path, suffix):
     target = tmp_path / ("document" + suffix)
     target.write_text("data")
@@ -1002,6 +1013,7 @@ def test_document_launch_refuses_runnable_suffixes(document_launch, tmp_path, su
 
 
 @pytest.mark.parametrize("mode", [0o744, 0o654, 0o645])
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS launch paths, bundles and executable bits")
 def test_document_launch_refuses_any_execute_bit(document_launch, tmp_path, mode):
     target = tmp_path / "notes.txt"
     target.write_text("data")
@@ -1015,6 +1027,7 @@ def test_document_launch_refuses_any_execute_bit(document_launch, tmp_path, mode
     "co.zeit.hyper", "com.github.wez.wezterm", "com.apple.installer", "com.apple.archiveutility",
     "com.apple.scripteditor2", "com.apple.automator", "com.apple.shortcuts",
 ])
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS launch paths, bundles and executable bits")
 def test_document_launch_refuses_unsafe_handlers(document_launch, tmp_path, bundle_id):
     target = tmp_path / "notes.txt"
     target.write_text("hello")
@@ -1025,6 +1038,7 @@ def test_document_launch_refuses_unsafe_handlers(document_launch, tmp_path, bund
 @pytest.mark.parametrize("bundle_name,marker", [
     ("Thing.app", None), ("Plain", "MacOS"), ("Plain", "Info.plist"),
 ])
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS launch paths, bundles and executable bits")
 def test_document_launch_refuses_files_inside_bundles(document_launch, tmp_path, bundle_name, marker):
     bundle = tmp_path / bundle_name
     resources = bundle / "Contents" / "Resources"
@@ -1039,12 +1053,14 @@ def test_document_launch_refuses_files_inside_bundles(document_launch, tmp_path,
     _assert_document_refused(document_launch, target)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS launch paths, bundles and executable bits")
 def test_document_launch_refuses_fifo(document_launch, tmp_path):
     target = tmp_path / "notes.txt"
     os.mkfifo(target, 0o644)
     _assert_document_refused(document_launch, target)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS launch paths, bundles and executable bits")
 def test_document_launch_keeps_directory_and_https_targets(document_launch, tmp_path):
     driver, approval, _ = document_launch
     target = tmp_path / "documents"

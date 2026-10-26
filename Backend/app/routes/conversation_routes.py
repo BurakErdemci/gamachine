@@ -30,7 +30,8 @@ from computer_use import activity as computer_activity
 from computer_use import gate as computer_gate
 from computer_use import policy as computer_policy
 from computer_use import settings as computer_settings
-from computer_use.policy import valid_bundle_id
+from computer_use import platform as computer_platform
+from computer_use.platform import valid_app_id as valid_bundle_id
 from unity_ai_mcp import unity_project_presence
 from providers.agy_provider import AgyStepGateError
 
@@ -686,8 +687,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             decision = computer_gate.Decision("deny", computer_gate.HALTED_REASON)
         else:
             reason = None
-            if (isinstance(bundle_id, str)
-                    and bundle_id.casefold().startswith("com.unity3d.unityeditor")
+            if (computer_platform.current().is_unity_editor(bundle_id)
                     and type(params.get("pid")) is int):
                 try:
                     user_id = db.get_conversation_owner(owner) if owner is not _UNKNOWN_OWNER else 1

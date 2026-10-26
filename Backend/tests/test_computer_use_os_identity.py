@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from mcp.types import CallToolResult
 
-from computer_use import driver_client, server
+from computer_use import server
+from computer_use.platform import macos as driver_client
 
 
 UNITY = ('"Unity" ASN:0x0-0x228228: \n'
@@ -20,6 +21,7 @@ BUNDLE = "com.unity3d.UnityEditor5.x"
 
 @pytest.fixture(autouse=True)
 def no_real_subprocesses(monkeypatch):
+    monkeypatch.setattr(driver_client.sys, "platform", "darwin")
     spawn = AsyncMock(side_effect=AssertionError("real subprocess forbidden"))
     monkeypatch.setattr(driver_client.asyncio, "create_subprocess_exec", spawn)
     return spawn

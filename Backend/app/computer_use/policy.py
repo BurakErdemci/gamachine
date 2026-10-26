@@ -1,33 +1,22 @@
 """Pure validation of the curated cua-driver 0.35.4 surface."""
 from copy import deepcopy
 from dataclasses import dataclass
-import re
 import unicodedata
 from urllib.parse import urlsplit
 
+from . import platform
+from .platform.macos import HARD_DENY_BUNDLE_IDS
+
 
 CLIPBOARD_BUNDLE_ID = "com.gamachine.clipboard"
-HARD_DENY_BUNDLE_IDS = frozenset({
-    "com.gamachine.app", "com.github.Electron", "com.trycua.driver",
-    "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable",
-    "com.mitchellh.ghostty", "net.kovidgoyal.kitty", "org.alacritty",
-    "com.github.wez.wezterm", "dev.commandline.waveterm", "com.raphaelamorim.rio",
-    "com.apple.systempreferences", "com.apple.Settings",
-    "com.1password.1password", "com.bitwarden.desktop", "com.dashlane.dashlanephonefinal",
-    "com.lastpass.LastPass", "com.nordsec.nordpass", "com.apple.Passwords",
-    "com.apple.keychainaccess", "com.apple.ScriptEditor2", "com.apple.Automator",
-    "com.apple.shortcuts", "com.apple.ScreenContinuity", "com.apple.SecurityAgent",
-    "com.apple.LocalAuthentication.UIAgent",
-})
-_DENIED = frozenset(b.casefold() for b in HARD_DENY_BUNDLE_IDS)
 
 
 def valid_bundle_id(value) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,254}", value) is not None
+    return platform.current().valid_app_id(value)
 
 
 def is_hard_denied(bundle_id) -> bool:
-    return isinstance(bundle_id, str) and bundle_id.casefold() in _DENIED
+    return platform.current().is_hard_denied(bundle_id, None)
 
 
 @dataclass(frozen=True)
@@ -223,7 +212,7 @@ def _split_keys(value):
     return [part.strip() for part in value.split("+") if part.strip()]
 
 
-def _normalized_keyboard_args(tool, args):
+def _keyboard_syntax(tool, args):
     if tool == "hotkey":
         if isinstance(args.get("keys"), str):
             return {**args, "keys": _split_keys(args["keys"])}
@@ -240,6 +229,10 @@ def _normalized_keyboard_args(tool, args):
     elif tool == "press_key" and isinstance(args.get("modifiers"), str):
         return {**args, "modifiers": _split_keys(args["modifiers"])}
     return args
+
+
+def _normalized_keyboard_args(tool, args):
+    return platform.current().normalize_keys(tool, _keyboard_syntax(tool, args))
 
 
 def _keyboard_targets(tool, args):
@@ -318,13 +311,13 @@ def validate_call(tool, args) -> Validated | Refusal:
         refusal = _steps(args)
         if refusal:
             return refusal
+    for name, target in _keyboard_targets(tool, args):
+        keys = target.get("keys", []) if name == "hotkey" else [target.get("key", ""), *target.get("modifiers", [])]
+        reason = platform.current().refused_chord(
+            frozenset(key.casefold() for key in keys))
+        if reason:
+            return Refusal(reason)
     return Validated(spec.driver_tool, args)
-
-
-_ALIASES = {"command": "cmd", "option": "opt", "alt": "opt", "control": "ctrl", "backspace": "delete", "escape": "esc"}
-_RISKY = frozenset(frozenset(s.split("+")) for s in (
-    "cmd+delete", "cmd+shift+delete", "cmd+opt+shift+delete", "cmd+opt+esc",
-    "cmd+opt+shift+esc", "ctrl+cmd+q", "cmd+shift+q", "cmd+opt+shift+q"))
 
 
 def risky_reason(tool, args) -> str:
@@ -349,7 +342,5 @@ def risky_reason(tool, args) -> str:
         keys = [args.get("key", ""), *modifiers]
     if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
         return ""
-    normalized = frozenset(_ALIASES.get(k.casefold(), k.casefold()) for k in keys)
-    if normalized == {"cmd", "q"}:
-        return "Uygulamadan çıkılsın mı? Kaydedilmemiş iş kaybolabilir."
-    return "Riskli klavye kısayolu: " + "+".join(sorted(normalized)) if normalized in _RISKY else ""
+    normalized = frozenset(k.casefold() for k in keys)
+    return platform.current().risky_chord(normalized)

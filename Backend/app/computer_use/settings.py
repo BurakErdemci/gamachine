@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .policy import is_hard_denied, valid_bundle_id
+from . import platform
 
 logger = logging.getLogger(__name__)
 ENABLED_KEY = "computer_use_enabled"
@@ -60,7 +60,7 @@ def _load_grants(db, *, require_backup=False):
     valid = []
     for row in result:
         try:
-            if (not isinstance(row, dict) or not valid_bundle_id(row.get("bundle_id"))
+            if (not isinstance(row, dict) or not platform.current().valid_app_id(row.get("bundle_id"))
                     or not isinstance(row.get("app_name"), str) or not row["app_name"].strip()
                     or not isinstance(row.get("granted_at"), str)):
                 raise ValueError("invalid grant row")
@@ -77,11 +77,11 @@ def grants(db):
 
 
 def is_granted(db, bundle_id):
-    return valid_bundle_id(bundle_id) and any(row["bundle_id"].casefold() == bundle_id.casefold() for row in grants(db))
+    return platform.current().valid_app_id(bundle_id) and any(row["bundle_id"].casefold() == bundle_id.casefold() for row in grants(db))
 
 
 def add_grant(db, bundle_id, app_name):
-    if not valid_bundle_id(bundle_id) or is_hard_denied(bundle_id):
+    if not platform.current().valid_app_id(bundle_id) or platform.current().is_hard_denied(bundle_id, None):
         raise ValueError("bundle_id cannot be granted")
     rows = _load_grants(db, require_backup=True)
     if any(row["bundle_id"].casefold() == bundle_id.casefold() for row in rows):
