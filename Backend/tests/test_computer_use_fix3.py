@@ -43,15 +43,15 @@ def test_structured_frames_and_latest_snapshot():
             "snapshot_id": snapshot, "elements": elements,
             "tree_markdown": '- [1] Button "Pencil"'}), {"pid": 77, "window_id": 31})
     cache("s1", [
-        {"element_token": "s1:1", "label": "Send", "frame": {"x": 10, "y": 10, "w": 20, "h": 20}},
-        {"element_token": "s1:2", "frame": {"x": 0, "y": 0, "w": 100, "h": 100}},
+        {"element_token": "s1:1", "label": "Send", "screenshot_frame": {"x": 10, "y": 10, "w": 20, "h": 20}},
+        {"element_token": "s1:2", "screenshot_frame": {"x": 0, "y": 0, "w": 100, "h": 100}},
     ])
     args = {"pid": 77, "window_id": 31, "x": 15, "y": 15}
     assert handler._element_name({**args, "element_token": "s1:1"}) == "Send"
     assert handler._element_at(args) == (True, "Send")
     assert handler._element_at({**args, "x": 50}) == (True, "")
     cache("s2", [])
-    assert handler._element_at(args) == (True, "")
+    assert handler._element_at(args) == (True, "Send")
     assert handler._element_name({**args, "element_token": "s1:1"}) is None
 
 
@@ -106,7 +106,7 @@ def test_window_state_caches_elements_before_filtering_reply(monkeypatch, tree_f
     win.identify = AsyncMock(return_value=("win:c:" + chr(92) + "editor.exe", "Editor", None))
     monkeypatch.setattr(platform, "current", lambda: win)
     report = {"snapshot_id": "s1", "elements": [{"element_token": "s1:1", "label": "Send",
-               "frame": {"x": 10, "y": 10, "w": 20, "h": 20}}]}
+               "screenshot_frame": {"x": 10, "y": 10, "w": 20, "h": 20}}]}
     driver = SimpleNamespace(binary="fake", socket="fake", call=AsyncMock(return_value=CallToolResult(
         content=[TextContent(type="text", text=json.dumps(report))], structured_content=report)))
     approvals = server.BackendApprovals()

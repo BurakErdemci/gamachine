@@ -390,21 +390,24 @@ def critical_name(name) -> str:
     name = unicodedata.normalize("NFKD", name)
     name = "".join(char for char in name if unicodedata.category(char) not in {"Mn", "Me", "Cf", "Cc"}
                    and char not in "\u115f\u1160\u3164\uffa0").replace("ı", "i")
-    name = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", name)
-    name = "".join((" " if index and (
-        name[index - 1].islower() and char.isupper()
-        or name[index - 1].isalpha() and char.isdigit()
-        or name[index - 1].isdigit() and char.isalpha()) else "") + char
-        for index, char in enumerate(name))
-    tokens = "".join(char if char.isalnum() else " " for char in name.casefold()).split()
-    for index, token in enumerate(tokens):
-        if token in _SHORT_KEYWORDS:
-            return token
-        if token == "satin" and tokens[index + 1:index + 2] == ["al"]:
-            return "satin al"
-        for keyword in _LONG_KEYWORDS:
-            if token.startswith(keyword) or token.endswith(keyword):
-                return keyword
+    # Check both the case-split form and the unsplit form: splitting hides "DELETEall"
+    # (DELET+Eall) while leaving it unsplit would hide "SendMessage" style joins.
+    split = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", name)
+    split = "".join((" " if index and (
+        split[index - 1].islower() and char.isupper()
+        or split[index - 1].isalpha() and char.isdigit()
+        or split[index - 1].isdigit() and char.isalpha()) else "") + char
+        for index, char in enumerate(split))
+    for form in (split, name, re.sub(r"(?<=[A-Z]{2})(?=[a-z])", " ", name)):
+        tokens = "".join(char if char.isalnum() else " " for char in form.casefold()).split()
+        for index, token in enumerate(tokens):
+            if token in _SHORT_KEYWORDS:
+                return token
+            if token == "satin" and tokens[index + 1:index + 2] == ["al"]:
+                return "satin al"
+            for keyword in _LONG_KEYWORDS:
+                if token.startswith(keyword) or token.endswith(keyword):
+                    return keyword
     return ""
 
 
@@ -445,8 +448,8 @@ def critical_reason(tool, args, *, app_id, resolve) -> str:
             if any(key in source for key in ("role", "nth")) and not any(
                     key in args or key in nested for key in ("name", "element_token")):
                 unknown = True
-        if not any(key in args or key in nested for key in ("name", "element_token")) and "x" in args and "y" in args:
-            known, name = resolve(args)
+        if "x" in args and "y" in args:
+            known, name = resolve({key: args[key] for key in ("pid", "window_id", "x", "y") if key in args})
             unknown |= known is not True
             if isinstance(name, str) and name:
                 names.append(name)

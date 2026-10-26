@@ -372,8 +372,9 @@ class ComputerServer:
             return
         rows = {}
         frames = []
-        if "elements" in report:
-            for element in report["elements"] if isinstance(report["elements"], list) else []:
+        elements = report.get("elements")
+        if isinstance(elements, list) and elements:
+            for element in elements:
                 if not isinstance(element, dict):
                     continue
                 token = element.get("element_token")
@@ -381,11 +382,16 @@ class ComputerServer:
                 label = label if isinstance(label, str) else ""
                 if isinstance(token, str):
                     rows.setdefault(token, label)
-                frame = element.get("frame")
+                # x/y clicks are screenshot pixels: "frame" is screen coordinates and only
+                # "screenshot_frame" shares their space (measured 26 Oct 2026, Paint on both
+                # monitors: Share frame x=521 vs screenshot_frame x=212).
+                frame = element.get("screenshot_frame")
                 if isinstance(frame, dict) and all(type(frame.get(key)) in (int, float)
                                                    for key in ("x", "y", "w", "h")):
                     if frame["w"] > 0 and frame["h"] > 0:
-                        frames.append((dict(frame), label))
+                        # The window root spans every point and is named after the document.
+                        root = element.get("depth") == 0 or str(element.get("role", "")).casefold() == "window"
+                        frames.append((dict(frame), label, root))
         elif isinstance(tree, str):
             for line in tree.splitlines():
                 # Driver rows contain nested action brackets and quoted values after the name.
@@ -396,6 +402,9 @@ class ComputerServer:
         else:
             return
         key = (args["pid"], args.get("window_id"))
+        if not frames:
+            # A snapshot without structured elements must not erase the frames of the last one.
+            frames = self._snapshots.get(key, (None, None, []))[2]
         self._snapshots.pop(key, None)
         self._snapshots[key] = (snapshot_id, rows, frames)
         while len(self._snapshots) > 16:
@@ -415,12 +424,21 @@ class ComputerServer:
         return None
 
     def _element_at(self, args):
-        snapshot = self._snapshots.get((args.get("pid"), args.get("window_id")))
         x, y = args.get("x"), args.get("y")
-        if snapshot is None or type(x) not in (int, float) or type(y) not in (int, float):
+        if type(x) not in (int, float) or type(y) not in (int, float):
             return True, ""
-        containing = [(frame["w"] * frame["h"], label) for frame, label in snapshot[2]
-                      if frame["x"] <= x < frame["x"] + frame["w"]
+        if "window_id" in args:
+            snapshot = self._snapshots.get((args.get("pid"), args["window_id"]))
+        else:
+            snapshot = next((value for (pid, _), value in reversed(self._snapshots.items())
+                             if pid == args.get("pid")), None)
+        if snapshot is None:
+            return True, ""
+        if not snapshot[2]:
+            # A snapshot exists but carries no frames, so the point cannot be classified.
+            return False, None
+        containing = [(frame["w"] * frame["h"], label) for frame, label, root in snapshot[2]
+                      if not root and frame["x"] <= x < frame["x"] + frame["w"]
                       and frame["y"] <= y < frame["y"] + frame["h"]]
         return True, min(containing, key=lambda item: item[0])[1] if containing else ""
 

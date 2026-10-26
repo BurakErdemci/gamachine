@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import re
 
+from .. import policy
+
 
 def confirm_hook_installed(paths=None) -> bool:
     try:
@@ -11,11 +13,18 @@ def confirm_hook_installed(paths=None) -> bool:
             override = os.environ.get("GAMACHINE_CU_CLAUDE_SETTINGS")
             paths = (override.split(os.pathsep) if override is not None else
                      [Path.home() / ".claude" / "settings.json", Path.home() / ".claude" / "settings.local.json"])
+        loaded = []
         for path in paths:
             try:
-                settings = json.loads(Path(path).read_text(encoding="utf-8"))
-                if settings.get("disableAllHooks") is True:
-                    continue
+                loaded.append(json.loads(Path(path).read_text(encoding="utf-8")))
+            except (OSError, ValueError, TypeError):
+                continue
+        # Claude Code merges the settings files and disableAllHooks is one switch for all of them.
+        if any(isinstance(settings, dict) and settings.get("disableAllHooks") is True for settings in loaded):
+            return False
+        required = ["mcp__gamachineComputerLocal__" + tool for tool in policy.TOOLS]
+        for settings in loaded:
+            try:
                 entries = settings["hooks"]["PreToolUse"]
                 if not isinstance(entries, list):
                     continue
@@ -23,9 +32,7 @@ def confirm_hook_installed(paths=None) -> bool:
                     if not isinstance(entry, dict) or not isinstance(entry.get("matcher"), str):
                         continue
                     try:
-                        matches = all(re.fullmatch(entry["matcher"], "mcp__gamachineComputerLocal__computer_" + tool)
-                                      for tool in ("click", "type_text", "press_key", "hotkey", "run_steps",
-                                                   "set_value", "confirm_risky_step"))
+                        matches = all(re.fullmatch(entry["matcher"], name) for name in required)
                     except re.error:
                         continue
                     hooks = entry.get("hooks")
