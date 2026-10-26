@@ -52,7 +52,7 @@ def test_xy_without_window_id_uses_the_latest_frames_of_the_pid():
     share_snapshot(handler)
     assert reason(handler, {"pid": 77, "x": 710, "y": 20})
     assert not reason(handler, {"pid": 77, "x": 20, "y": 20})
-    assert not reason(handler, {"pid": 78, "x": 710, "y": 20})
+    assert reason(handler, {"pid": 78, "x": 710, "y": 20})
 
 
 def test_token_and_xy_are_both_checked():

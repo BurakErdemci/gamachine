@@ -372,10 +372,13 @@ class ComputerServer:
             return
         rows = {}
         frames = []
+        complete = False
         elements = report.get("elements")
         if isinstance(elements, list) and elements:
+            complete = True
             for element in elements:
                 if not isinstance(element, dict):
+                    complete = False
                     continue
                 token = element.get("element_token")
                 label = element.get("label", "")
@@ -386,12 +389,14 @@ class ComputerServer:
                 # "screenshot_frame" shares their space (measured 26 Oct 2026, Paint on both
                 # monitors: Share frame x=521 vs screenshot_frame x=212).
                 frame = element.get("screenshot_frame")
-                if isinstance(frame, dict) and all(type(frame.get(key)) in (int, float)
-                                                   for key in ("x", "y", "w", "h")):
-                    if frame["w"] > 0 and frame["h"] > 0:
-                        # The window root spans every point and is named after the document.
-                        root = element.get("depth") == 0 or str(element.get("role", "")).casefold() == "window"
-                        frames.append((dict(frame), label, root))
+                if (isinstance(frame, dict) and all(type(frame.get(key)) in (int, float)
+                                                    for key in ("x", "y", "w", "h"))
+                        and frame["w"] > 0 and frame["h"] > 0):
+                    # The window root spans every point and is named after the document.
+                    root = element.get("depth") == 0 or str(element.get("role", "")).casefold() == "window"
+                    frames.append((dict(frame), label, root))
+                else:
+                    complete = False
         elif isinstance(tree, str):
             for line in tree.splitlines():
                 # Driver rows contain nested action brackets and quoted values after the name.
@@ -402,11 +407,12 @@ class ComputerServer:
         else:
             return
         key = (args["pid"], args.get("window_id"))
-        if not frames:
-            # A snapshot without structured elements must not erase the frames of the last one.
-            frames = self._snapshots.get(key, (None, None, []))[2]
+        if not (isinstance(elements, list) and elements):
+            # A snapshot without structured elements must not erase the frames of the last one;
+            # a structured one always replaces them, so stale labels never classify a new click.
+            _, _, frames, complete = self._snapshots.get(key, (None, None, [], False))
         self._snapshots.pop(key, None)
-        self._snapshots[key] = (snapshot_id, rows, frames)
+        self._snapshots[key] = (snapshot_id, rows, frames, complete)
         while len(self._snapshots) > 16:
             self._snapshots.popitem(last=False)
 
@@ -417,7 +423,7 @@ class ComputerServer:
         snapshot_id, separator, row = token.rpartition(":")
         if not separator or not row.isdecimal():
             return None
-        for (pid, window_id), (cached_id, rows, _) in reversed(self._snapshots.items()):
+        for (pid, window_id), (cached_id, rows, _, _) in reversed(self._snapshots.items()):
             if (pid == args.get("pid") and cached_id == snapshot_id
                     and ("window_id" not in args or args["window_id"] == window_id)):
                 return rows.get(token)
@@ -425,22 +431,26 @@ class ComputerServer:
 
     def _element_at(self, args):
         x, y = args.get("x"), args.get("y")
-        if type(x) not in (int, float) or type(y) not in (int, float):
-            return True, ""
+        if type(x) not in (int, float) or type(y) not in (int, float) or args.get("from_zoom"):
+            # Non-numeric points and zoom-image coordinates cannot be hit-tested in screenshot space.
+            return False, None
         if "window_id" in args:
-            snapshot = self._snapshots.get((args.get("pid"), args["window_id"]))
+            window_id = args["window_id"]
+            snapshot = (self._snapshots.get((args.get("pid"), window_id))
+                        if type(window_id) is int else None)
         else:
             snapshot = next((value for (pid, _), value in reversed(self._snapshots.items())
-                             if pid == args.get("pid")), None)
-        if snapshot is None:
-            return True, ""
-        if not snapshot[2]:
-            # A snapshot exists but carries no frames, so the point cannot be classified.
+                             if pid == args.get("pid") and value[2]), None)
+        if snapshot is None or not snapshot[2]:
+            # No snapshot, or one without frames: the point cannot be classified.
             return False, None
         containing = [(frame["w"] * frame["h"], label) for frame, label, root in snapshot[2]
                       if not root and frame["x"] <= x < frame["x"] + frame["w"]
                       and frame["y"] <= y < frame["y"] + frame["h"]]
-        return True, min(containing, key=lambda item: item[0])[1] if containing else ""
+        if containing:
+            return True, min(containing, key=lambda item: item[0])[1]
+        # Empty space is only verified when every element of the snapshot had a frame.
+        return (True, "") if snapshot[3] else (False, None)
 
     def _resolver(self, args):
         def resolve(target):
