@@ -67,7 +67,7 @@ def test_cache_parser_preserves_rows_and_quoted_names(handler):
     handler._cache_snapshot(CallToolResult(content=[], structured_content={
         "snapshot_id": "s1", "tree_markdown": tree}), {"pid": 77, "window_id": 31})
     for row, name in [(1, 'Pencil [2] Button "Settings"'), (2, "Send"),
-                      (3, 'Say "hello"'), (4, ""), (5, None), (6, None)]:
+                      (3, 'Say "hello"'), (4, ""), (5, None), (6, "")]:  # 6: unnamed row, known
         assert handler._element_name({"pid": 77, "window_id": 31, "element_token": f"s1:{row}"}) == name
 
 
@@ -307,3 +307,21 @@ def test_entry_point_sets_hook_availability_and_instructions(monkeypatch, tmp_pa
     assert captured["approvals"].confirm_available is hook
     assert ("Onay hook'u kurulu değil: kritik işlemler bu oturumda yapılamaz."
             in captured["instructions_extra"]) is (not hook)
+
+
+# Rows copied from the real cua-driver 0.35.4 tree on Paint and Notepad (26 Oct 2026):
+# nested brackets and quoted attribute values broke the first parser, so every
+# element_token click on a real window read as an unknown element.
+@pytest.mark.parametrize("line, expected", [
+    ('            - [14] Button "Pencil" [actions=[toggle]]', "Pencil"),
+    ('    - [0] Document "Text editor" [value="Hard trap, send it" actions=[set_value,text,scroll]]', "Text editor"),
+    ('        - [1] List [id=TabListView actions=[scroll]]', ""),
+    ('  - [55] TitleBar [value="great-question-stil.txt - Notepad" actions=[set_value]]', ""),
+    ('    - [59] Button "Kapat" [actions=[invoke]]', "Kapat"),
+    ('      - [3] Button "Say "hi" now" [actions=[invoke]]', 'Say "hi" now'),
+])
+def test_snapshot_rows_from_the_real_driver(line, expected):
+    from computer_use.server import _NAMED_ROW, _UNNAMED_ROW
+    match = _NAMED_ROW.match(line) or _UNNAMED_ROW.match(line)
+    assert match is not None
+    assert (match.group(2) if match.re is _NAMED_ROW else "") == expected

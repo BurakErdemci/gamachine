@@ -292,6 +292,11 @@ async def _front_guard(driver, pid, window_id) -> str | None:
 
 
 LAUNCH_NAME_TIMEOUT = 3.0
+# Snapshot rows: `- [14] Button "Pencil" [actions=[toggle]]`. The role part may not
+# contain "[" so a quoted attribute value is never read as the name; a row with no
+# quoted name is known and unnamed. A name containing `" [` is cut there.
+_NAMED_ROW = re.compile(r'^\s*- \[(\d+)\] [^"\[\n]*?"(.*?)"(?: \[.*)?\s*$')
+_UNNAMED_ROW = re.compile(r'^\s*- \[(\d+)\] [^"\[\n]*(?:\[.*)?$')
 
 
 def _resolve_launch_targets(urls, bundle_id):
@@ -337,9 +342,11 @@ class ComputerServer:
             return
         rows = {}
         for line in tree.splitlines():
-            match = re.match(r'^\s*- \[(\d+)\] (.+?) "(.*)"(?: \[[^\]\n]*\])?\s*$', line)
+            # Real driver rows nest brackets ("[actions=[toggle]]") and carry quoted
+            # values after the name; measured 26 Oct 2026 on Paint and Notepad.
+            match = _NAMED_ROW.match(line) or _UNNAMED_ROW.match(line)
             if match:
-                rows.setdefault(int(match.group(1)), match.group(3))
+                rows.setdefault(int(match.group(1)), match.group(2) if match.re is _NAMED_ROW else "")
         key = (args["pid"], args.get("window_id"))
         self._snapshots.pop(key, None)
         self._snapshots[key] = (snapshot_id, rows)
