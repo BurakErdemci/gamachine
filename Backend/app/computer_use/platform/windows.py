@@ -22,6 +22,14 @@ DENY = frozenset({
     "py.exe", "pyw.exe", "electron.exe",
     # Agent CLIs ship as native executables now, so denying node.exe no longer covers them.
     "claude.exe", "codex.exe",
+    "exodus.exe", "ledger live.exe", "trezor suite.exe", "electrum.exe",
+    "atomic wallet.exe", "binance.exe", "tws.exe", "terminal64.exe",
+})
+READ_ONLY = frozenset({
+    "msedge.exe", "chrome.exe", "firefox.exe", "opera.exe", "brave.exe", "vivaldi.exe",
+    "outlook.exe", "olk.exe", "hxoutlook.exe", "thunderbird.exe", "whatsapp.exe",
+    "whatsapp.root.exe", "telegram.exe", "discord.exe", "slack.exe", "ms-teams.exe",
+    "teams.exe", "signal.exe", "messenger.exe",
 })
 ALIASES = {
     "cmd": "ctrl", "command": "ctrl", "meta": "ctrl", "super": "ctrl",
@@ -71,7 +79,10 @@ def _basename(value):
 
 
 def _chord(keys):
-    return frozenset(_CHORD_ALIASES.get(key.casefold(), key.casefold()) for key in keys)
+    parts = (part for key in keys for part in
+             ([part.strip() for part in key.split("+") if part.strip()]
+              if len(key) > 1 and "+" in key else [key]))
+    return frozenset(_CHORD_ALIASES.get(key.casefold(), key.casefold()) for key in parts if key)
 
 
 class WindowsPlatform:
@@ -121,6 +132,18 @@ class WindowsPlatform:
 
     def is_unity_editor(self, app_id: str) -> bool:
         return _basename(app_id) == "unity.exe"
+
+    def read_only_app(self, app_id: str) -> bool:
+        return self.valid_app_id(app_id) and _basename(app_id) in READ_ONLY
+
+    def front_verified(self, report, pid, window_id) -> bool:
+        try:
+            return (isinstance(report, dict) and report.get("landed_on_target") is True
+                    and int(report["now_fg_hwnd"], 16) == int(report["target_hwnd"], 16) == window_id
+                    and self.win32.foreground_window() == window_id
+                    and self.real_pid(window_id, self.win32.window_pid(window_id)) == pid)
+        except Exception:
+            return False
 
     def normalize_keys(self, tool: str, args: dict) -> dict:
         updates = {}

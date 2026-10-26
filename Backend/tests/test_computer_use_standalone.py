@@ -3,7 +3,6 @@ import asyncio
 import hashlib
 import io
 import json
-import time
 import zipfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,7 +12,7 @@ import pytest
 from computer_use import gate, platform, policy, server
 from computer_use.driver_client import DriverUnavailable
 from computer_use.platform.windows import WindowsPlatform
-from computer_use.standalone import config, dialog, runtime
+from computer_use.standalone import config, runtime
 from computer_use.standalone import __main__ as entry
 from computer_use.standalone.approvals import LocalApprovals
 
@@ -51,7 +50,7 @@ def isolated(monkeypatch, tmp_path):
 
 
 def write_config(**changes):
-    data = {"enabled": True, "driver_path": None, "grants": [], **changes}
+    data = {"enabled": True, "driver_path": None, **changes}
     (config.STATE_DIR / "config.json").write_text(json.dumps(data), encoding="utf-8")
     return data
 
@@ -61,7 +60,7 @@ def journal_rows():
 
 
 def test_initial_config_is_disabled():
-    assert config.load() == {"enabled": False, "driver_path": None, "grants": []}
+    assert config.load() == {"enabled": False, "driver_path": None}
     assert json.loads((config.STATE_DIR / "config.json").read_text())["enabled"] is False
     assert config.log_path().parent == config.STATE_DIR
     assert config.journal_path().name == "computer_use_actions.jsonl"
@@ -71,7 +70,7 @@ def test_initial_config_is_disabled():
 def test_invalid_config_is_never_overwritten(content):
     path = config.STATE_DIR / "config.json"
     path.write_text(content, encoding="utf-8")
-    assert config.load() == {"enabled": False, "driver_path": None, "grants": [],
+    assert config.load() == {"enabled": False, "driver_path": None,
                              "error": "config.json okunamadı"}
     assert path.read_text(encoding="utf-8") == content
 
@@ -88,16 +87,10 @@ def test_unreadable_config(monkeypatch):
     assert config.load()["error"] == "config.json okunamadı"
 
 
-def test_grants_filter_invalid_and_denied_rows():
-    good = {"bundle_id": APP, "app_name": "Editor", "granted_at": "2026-10-26T10:00:00+00:00"}
-    bad = [None, "app", {}, {**good, "bundle_id": "unknown"},
-           {**good, "bundle_id": r"win:c:\apps\cmd.exe"}, {**good, "app_name": " "},
-           {**good, "app_name": 3}, {**good, "granted_at": None},
-           {**good, "granted_at": "not a date"}]
-    write_config(grants=[good, *bad])
-    assert config.load()["grants"] == [good]
-    write_config(grants="invalid")
-    assert config.load()["grants"] == []
+def test_config_ignores_extra_keys():
+    stored = write_config(grants=[{"bundle_id": APP}], extra="ignored")
+    assert config.load() == {"enabled": True, "driver_path": None}
+    assert json.loads((config.STATE_DIR / "config.json").read_text()) == stored
 
 
 @pytest.mark.parametrize("stage, expected", [
@@ -127,7 +120,8 @@ def test_startup_refusals_are_ordered(monkeypatch, stage, expected):
     if expected == "disabled":
         expected = ("Bağımsız bilgisayar kullanımı kapalı; config.json içinde enabled true yapın: "
                     + str(config.STATE_DIR / "config.json"))
-    assert entry._startup_refusal(hotkey) == expected
+    session_lock = SimpleNamespace(acquire=lambda: True)
+    assert entry._startup_refusal(hotkey, session_lock) == expected
     assert hotkey.started is (stage >= 6)
 
 
@@ -158,82 +152,66 @@ def test_main_stops_hotkey_when_server_fails(monkeypatch):
 
 
 def test_startup_refusal_is_journalled_without_dialog():
-    ask = AsyncMock()
-    approval = LocalApprovals("refused", FakeHotkey(), ask=ask)
+    approval = LocalApprovals("refused", FakeHotkey())
+    assert approval.preflight() == "refused"
     result = asyncio.run(approval.request("computer_list_apps", {}))
     assert result == {"approved": False, "error": "refused"}
-    ask.assert_not_awaited()
-    assert journal_rows()[0]["decision"] == "deny"
+    assert [row["decision"] for row in journal_rows()] == ["deny", "deny"]
     assert journal_rows()[0]["conversation_id"] is None
 
 
-def test_disabled_request_denied():
-    write_config(enabled=False)
-    ask = AsyncMock()
-    result = asyncio.run(LocalApprovals(None, FakeHotkey(), ask=ask).request("computer_click", PARAMS))
-    assert result == {"approved": False, "error": gate.INACTIVE_REASON}
-    ask.assert_not_awaited()
+def test_dead_hotkey_denies_request():
+    result = asyncio.run(LocalApprovals(None, FakeHotkey(False)).request("computer_click", PARAMS))
+    assert result == {"approved": False, "error":
+                      "Durdurma kısayolu (Ctrl+Alt+Esc) çalışmıyor; bilgisayar kullanımı durduruldu."}
+    assert journal_rows()[0]["decision"] == "deny"
 
 
-@pytest.mark.parametrize("answer", [True, False])
-def test_first_app_card_and_session_grant(answer):
+def test_ordinary_calls_need_no_grants():
     write_config()
-    ask = AsyncMock(return_value=answer)
-    approval = LocalApprovals(None, FakeHotkey(), ask=ask)
+    approval = LocalApprovals(None, FakeHotkey())
+    assert approval.preflight() is None
     async def scenario():
         first = await approval.request("computer_window_state", PARAMS)
         second = await approval.request("computer_window_state", PARAMS)
-        assert first["approved"] is answer and second["approved"] is answer
+        assert first["approved"] and second["approved"]
     asyncio.run(scenario())
-    assert ask.await_count == (1 if answer else 2)
-    text = ask.call_args.args[1]
-    assert "Editor:" in text and "İşlem: Read document" in text
-    assert [row["decision"] for row in journal_rows()] == (
-        ["card-approved", "allow"] if answer else ["card-rejected", "card-rejected"])
-    if not answer:
-        assert journal_rows()[0]["reason"] == "Kullanıcı reddetti."
-    assert config.load()["grants"] == []
+    assert [row["decision"] for row in journal_rows()] == ["allow", "allow"]
+    assert not hasattr(approval, "ask") and not hasattr(approval, "_session_grants")
 
 
-def test_persisted_grant_is_casefolded(monkeypatch):
-    write_config()
-    data = {"enabled": True, "grants": [{"bundle_id": APP.upper()}]}
-    monkeypatch.setattr(config, "load", lambda: data)
-    ask = AsyncMock()
-    result = asyncio.run(LocalApprovals(None, FakeHotkey(), ask=ask).request("computer_click", PARAMS))
-    assert result["approved"] is True
-    ask.assert_not_awaited()
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_critical_request_requires_confirmation(confirmed):
+    params = {**PARAMS, "critical_reason": "Delete", "confirmed": confirmed}
+    result = asyncio.run(LocalApprovals(None, FakeHotkey()).request("computer_click", params))
+    assert result["approved"] is confirmed
+    if not confirmed:
+        assert "args.confirm" in result["error"]
+    assert journal_rows()[0]["decision"] == ("confirmed" if confirmed else "deny")
 
 
-def test_risky_step_always_cards_even_when_granted():
-    write_config(grants=[{"bundle_id": APP, "app_name": "Editor", "granted_at": "2026-10-26T10:00:00"}])
-    ask = AsyncMock(return_value=True)
-    approval = LocalApprovals(None, FakeHotkey(), ask=ask)
+def test_risky_step_needs_confirmation_every_time():
+    approval = LocalApprovals(None, FakeHotkey())
     async def scenario():
-        for _ in range(2):
-            assert (await approval.request("computer_click", {**PARAMS, "risky": True, "risk_reason": "Delete?"}))["approved"]
+        params = {**PARAMS, "risky": True, "risk_reason": "Delete?"}
+        assert not (await approval.request("computer_click", params))["approved"]
+        assert (await approval.request("computer_click", {**params, "confirmed": True}))["approved"]
+        assert not (await approval.request("computer_click", params))["approved"]
+        assert (await approval.request("computer_confirm_risky_step", params))["approved"]
     asyncio.run(scenario())
-    assert ask.await_count == 2
-    assert all(row["decision"] == "card-approved" for row in journal_rows())
+    assert [row["decision"] for row in journal_rows()] == ["deny", "confirmed", "deny", "confirmed"]
 
 
-@pytest.mark.parametrize("elapsed, answer, approved, dialogs", [
-    (1, True, False, 0), (4.99, True, False, 0),
-    (5, False, False, 1), (6, True, True, 1),
-])
-def test_halt_and_resume(monkeypatch, elapsed, answer, approved, dialogs):
-    write_config()
-    monkeypatch.setattr(time, "monotonic", lambda: 100)
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_halt_and_resume(confirmed):
     hotkey = FakeHotkey()
-    hotkey.halted_at = 100 - elapsed
-    ask = AsyncMock(return_value=answer)
-    approval = LocalApprovals(None, hotkey, ask=ask)
-    result = asyncio.run(approval.request("computer_list_apps", {}))
-    assert result["approved"] is approved
-    assert ask.await_count == dialogs
-    assert (hotkey.halted_at is None) is approved
-    if not approved:
-        assert result["error"] == gate.HALTED_REASON
+    hotkey.halted_at = 0.0
+    approval = LocalApprovals(None, hotkey)
+    result = asyncio.run(approval.request("computer_list_apps", {"confirmed": confirmed}))
+    assert result["approved"] is confirmed
+    assert (hotkey.halted_at is None) is confirmed
+    if not confirmed:
+        assert result["error"] == gate.HALTED_REASON + " Devam için aynı çağrıyı args.confirm ile tekrarla."
 
 
 @pytest.mark.parametrize("halted, enabled, expected", [(True, False, "halted"),
@@ -246,22 +224,17 @@ def test_batch_stop(halted, enabled, expected):
     assert asyncio.run(LocalApprovals(None, hotkey).batch_stop({})) == expected
 
 
-def test_second_request_waits_for_open_card():
+def test_requests_are_serialized_and_journalled():
     write_config()
     async def scenario():
-        opened, release = asyncio.Event(), asyncio.Event()
-        async def ask(*args):
-            opened.set()
-            await release.wait()
-            return True
-        approval = LocalApprovals(None, FakeHotkey(), ask=ask)
+        approval = LocalApprovals(None, FakeHotkey())
+        await approval._lock.acquire()
         first = asyncio.create_task(approval.request("computer_click", PARAMS))
-        await asyncio.wait_for(opened.wait(), 2)
         second = asyncio.create_task(approval.request("computer_list_apps", {}))
         await asyncio.sleep(0)
         assert not first.done() and not second.done()
         assert not config.journal_path().exists()
-        release.set()
+        approval._lock.release()
         assert all(row["approved"] for row in await asyncio.gather(first, second))
     asyncio.run(scenario())
     rows = journal_rows()
@@ -399,38 +372,27 @@ def test_server_runtime_injection_and_close_order(monkeypatch):
     assert order == ["driver", "runtime"]
 
 
-@pytest.mark.parametrize("response, expected", [(6, True), (7, False), (0, False)])
-def test_dialog_only_accepts_yes(monkeypatch, response, expected):
-    titles = []
-    def message(hwnd, text, title, flags):
-        titles.append(title)
-        assert flags == 0x4 | 0x30 | 0x40000 | 0x10000 | 0x100
-        return response
-    monkeypatch.setattr(dialog, "_user32", lambda: SimpleNamespace(MessageBoxW=message))
-    async def scenario():
-        assert await dialog.ask("Consent", "Text") is expected
-        assert await dialog.ask("Consent", "Text") is expected
-    asyncio.run(scenario())
-    assert titles[0].startswith("Consent #") and titles[0] != titles[1]
+def test_session_lock_excludes_second_session_and_releases():
+    first, second = entry.SessionLock(), entry.SessionLock()
+    try:
+        assert first.acquire()
+        assert not second.acquire()
+        first.close()
+        assert second.acquire()
+    finally:
+        first.close()
+        second.close()
 
 
-def test_dialog_timeout_closes_window(monkeypatch):
-    import threading
-    released = threading.Event()
-    closed = []
-    def message(*args):
-        released.wait(2)
-        return 6
-    def close(*args):
-        closed.append(args)
-        released.set()
-    api = SimpleNamespace(MessageBoxW=message, FindWindowW=lambda *a: 99, PostMessageW=close)
-    monkeypatch.setattr(dialog, "_user32", lambda: api)
-    assert asyncio.run(dialog.ask("Consent", "Text", timeout=0.02)) is False
-    assert closed == [(99, 0x10, 0, 0)]
+def test_lock_refusal_precedes_remaining_startup_checks(monkeypatch):
+    monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", "present")
+    hotkey = FakeHotkey()
+    assert entry._startup_refusal(hotkey, SimpleNamespace(acquire=lambda: False)) == (
+        "Başka bir oturum bilgisayar kullanımını tutuyor.")
+    assert not hotkey.started
 
 
-@pytest.mark.parametrize("mismatch", [None, "wheel", "exe"])
+@pytest.mark.parametrize("mismatch", [None, "wheel", "exe", "written-exe", "written-helper", "replace", "config-replace"])
 def test_installer_pins_artifacts_without_network(monkeypatch, capsys, mismatch):
     binary = b"test driver"
     wheel = io.BytesIO()
@@ -446,12 +408,34 @@ def test_installer_pins_artifacts_without_network(monkeypatch, capsys, mismatch)
         return io.BytesIO(content)
     monkeypatch.setattr(entry.urllib.request, "urlopen", download)
     write_config(extra="preserved")
+    directory = config.STATE_DIR / "driver"
+    directory.mkdir()
+    previous = {"cua-driver.exe": b"previous driver", "cua-driver-uia.exe": b"previous helper"}
+    for name, value in previous.items():
+        (directory / name).write_bytes(value)
+    config_before = (config.STATE_DIR / "config.json").read_bytes()
+    original_read = type(directory).read_bytes
+    def read_bytes(path):
+        data = original_read(path)
+        corrupt = "cua-driver.exe.new" if mismatch == "written-exe" else "cua-driver-uia.exe.new"
+        return b"corrupted" if mismatch in {"written-exe", "written-helper"} and path.name == corrupt else data
+    monkeypatch.setattr(type(directory), "read_bytes", read_bytes)
+    original_replace = entry.os.replace
+    def replace(source, target):
+        name = "config.json.new" if mismatch == "config-replace" else "cua-driver-uia.exe.new"
+        if mismatch in {"replace", "config-replace"} and source.name == name:
+            raise OSError("replace mismatch")
+        return original_replace(source, target)
+    monkeypatch.setattr(entry.os, "replace", replace)
     assert entry._install_driver() == (0 if mismatch is None else 1)
     assert calls == [(config.WHEEL_URL, 120)]
     data = json.loads((config.STATE_DIR / "config.json").read_text())
     assert data["extra"] == "preserved" and data["enabled"] is True
     if mismatch:
-        assert not (config.STATE_DIR / "driver" / "cua-driver.exe").exists()
+        assert (config.STATE_DIR / "config.json").read_bytes() == config_before
+        assert all((directory / name).read_bytes() == value for name, value in previous.items())
+        assert not list(directory.glob("*.new"))
+        assert not (config.STATE_DIR / "config.json.new").exists()
         assert "mismatch" in capsys.readouterr().err
     else:
         assert data["driver_path"] == str((config.STATE_DIR / "driver" / "cua-driver.exe").resolve())

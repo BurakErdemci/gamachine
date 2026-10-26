@@ -461,6 +461,13 @@ class MacPlatform:
     def normalize_keys(self, tool: str, args: dict) -> dict:
         return args
 
+    def read_only_app(self, app_id: str) -> bool:
+        return False
+
+    def front_verified(self, report, pid, window_id) -> bool:
+        effect = report.get("exact_window_effect") if isinstance(report, dict) else None
+        return isinstance(effect, dict) and effect.get("verified") is True
+
     def refused_chord(self, keys: frozenset[str]) -> str | None:
         return None
 

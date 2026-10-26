@@ -65,6 +65,7 @@ def test_press_key_changed_key_copies_unchanged_modifier_list(win):
     (["alt", "tab"], "alt+tab"), (["opt", "escape"], "alt+esc"),
     (["ctrl", "esc"], "ctrl+esc"), (["control", "escape"], "ctrl+esc"),
     (["ctrl", "alt", "esc"], "alt+ctrl+esc"),
+    (["win+r"], "r+win"), (["Ctrl+Alt+Esc"], "alt+ctrl+esc"),
     (["ctrl", "shift", "escape", "x"], "ctrl+esc+shift+x"),
 ])
 def test_refused_chords_and_aliases(win, keys, normalized):
@@ -84,6 +85,8 @@ def test_ordinary_chords_not_refused(win, keys):
     (["command", "shift", "del"], "Riskli klavye kısayolu: ctrl+delete+shift"),
     (["ctrl", "w"], ""), (["ctrl", "f4"], ""), (["ctrl", "s"], ""),
     (["ctrl", "alt", "f4"], ""),
+    (["alt+f4"], "Uygulamadan çıkılsın mı? Kaydedilmemiş iş kaybolabilir."),
+    (["ctrl+shift+delete"], "Riskli klavye kısayolu: ctrl+delete+shift"),
 ])
 def test_risky_chords(win, keys, reason):
     assert win.risky_chord(frozenset(keys)) == reason
@@ -91,6 +94,8 @@ def test_risky_chords(win, keys, reason):
 
 @pytest.mark.parametrize("tool, args", [
     ("computer_hotkey", {"pid": 41, "keys": ["windows", "r"]}),
+    ("computer_hotkey", {"pid": 41, "keys": ["win+r"]}),
+    ("computer_press_key", {"pid": 41, "key": "win+r"}),
     ("computer_press_key", {"pid": 41, "key": "escape", "modifiers": ["control"]}),
     ("computer_run_steps", {"pid": 41, "steps": [
         {"type_text": {"text": "before"}}, {"hotkey": {"keys": ["windows", "r"]}},

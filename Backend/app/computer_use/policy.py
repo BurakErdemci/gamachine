@@ -1,6 +1,7 @@
 """Pure validation of the curated cua-driver 0.35.4 surface."""
 from copy import deepcopy
 from dataclasses import dataclass
+import re
 import unicodedata
 from urllib.parse import urlsplit
 
@@ -209,10 +210,20 @@ def _valid_launch_url(url):
 
 
 def _split_keys(value):
+    if value == "+":
+        return [value]
     return [part.strip() for part in value.split("+") if part.strip()]
 
 
 def _keyboard_syntax(tool, args):
+    original = args
+    args = dict(args)
+    for field in ("keys", "modifiers"):
+        value = args.get(field)
+        if isinstance(value, list):
+            args[field] = [part for token in value for part in
+                           (_split_keys(token) if isinstance(token, str) and len(token) > 1
+                            and "+" in token else [token])]
     if tool == "hotkey":
         if isinstance(args.get("keys"), str):
             return {**args, "keys": _split_keys(args["keys"])}
@@ -226,9 +237,17 @@ def _keyboard_syntax(tool, args):
                 normalized.pop("key")
                 normalized.pop("modifiers", None)
                 return normalized
-    elif tool == "press_key" and isinstance(args.get("modifiers"), str):
-        return {**args, "modifiers": _split_keys(args["modifiers"])}
-    return args
+    elif tool == "press_key":
+        if isinstance(args.get("modifiers"), str):
+            args["modifiers"] = _split_keys(args["modifiers"])
+        key = args.get("key")
+        if isinstance(key, str) and len(key) > 1 and "+" in key:
+            parts = _split_keys(key)
+            modifiers = args.get("modifiers", [])
+            if parts and isinstance(modifiers, list):
+                args["key"] = parts[-1]
+                args["modifiers"] = modifiers + parts[:-1]
+    return original if args == original else args
 
 
 def _normalized_keyboard_args(tool, args):
@@ -335,6 +354,7 @@ def risky_reason(tool, args) -> str:
         return " · ".join(reasons)
     if tool not in ("computer_hotkey", "computer_press_key"):
         return ""
+    args = _normalized_keyboard_args(tool[len("computer_"):], args)
     if tool == "computer_hotkey":
         keys = args.get("keys", [])
     else:
@@ -346,3 +366,39 @@ def risky_reason(tool, args) -> str:
         return ""
     normalized = frozenset(k.casefold() for k in keys)
     return platform.current().risky_chord(normalized)
+
+
+_INPUT_TOOLS = frozenset({
+    "computer_click", "computer_double_click", "computer_right_click", "computer_type_text",
+    "computer_set_value", "computer_press_key", "computer_hotkey", "computer_drag",
+    "computer_clipboard_write",
+})
+_ELEMENT_TOOLS = frozenset({
+    "computer_click", "computer_double_click", "computer_right_click", "computer_set_value",
+})
+_CRITICAL_NAME = re.compile(
+    r"\b(?:send|gönder|delete|sil|remove|kaldır|buy|satın al|purchase|pay|öde|order|sipariş|"
+    r"checkout|confirm|onayla|submit|publish|yayınla|post|paylaş|share|transfer|uninstall)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def critical_reason(tool, args, *, app_id, element_name) -> str:
+    risk = risky_reason(tool, args)
+    if risk:
+        return risk
+    if tool == "computer_run_steps":
+        for step in args.get("steps", []):
+            name = step.get("tool") or next(
+                (k for k in step if k in STEP_TOOLS or "computer_" + k in _INPUT_TOOLS), "")
+            step_args = step.get("args", {}) if "tool" in step else step.get(name, {})
+            reason = critical_reason("computer_" + name, step_args,
+                                     app_id=app_id, element_name=element_name)
+            if reason:
+                return reason
+        return ""
+    if tool in _INPUT_TOOLS and platform.current().read_only_app(app_id):
+        return "Tarayıcı, posta veya sohbet uygulamasına girdi gönderilecek."
+    if tool in _ELEMENT_TOOLS and isinstance(element_name, str) and _CRITICAL_NAME.search(element_name):
+        return "Kritik işlem düğmesi: " + element_name
+    return ""

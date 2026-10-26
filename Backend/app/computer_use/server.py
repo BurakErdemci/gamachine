@@ -4,6 +4,7 @@ Each tool takes a single ``args`` dictionary. This preserves every allowed
 driver argument without default injection; policy validates it before any I/O.
 """
 from contextlib import asynccontextmanager, nullcontext
+from collections import OrderedDict
 import asyncio
 import json
 import re
@@ -231,8 +232,7 @@ async def _front_guard(driver, pid, window_id) -> str | None:
                 if not isinstance(report, dict):
                     report = json.loads(next(block.text for block in result.content
                                              if isinstance(block, TextContent)))
-                effect = report.get("exact_window_effect") if isinstance(report, dict) else None
-                if isinstance(effect, dict) and effect.get("verified") is True:
+                if platform.current().front_verified(report, pid, window_id):
                     return None
             except (ValueError, TypeError, StopIteration):
                 pass
@@ -303,11 +303,17 @@ def _safe_launch_targets(urls, bundle_id):
 
 
 class BackendApprovals:
+    def preflight(self):
+        return None
+
     async def request(self, tool, params):
+        params = {key: value for key, value in params.items()
+                  if key not in {"confirmed", "element_name", "critical_reason"}}
         return await approval_bridge.request_approval(tool, params=params, workspace_path="")
 
     async def batch_stop(self, params):
-        return await _batch_stop(params)
+        return await _batch_stop({key: value for key, value in params.items()
+                                  if key not in {"confirmed", "element_name", "critical_reason"}})
 
 
 class ComputerServer:
@@ -318,6 +324,34 @@ class ComputerServer:
         self._driver_lock = asyncio.Lock()
         # Fronting and the input it guards must not interleave with another call's fronting.
         self._front_lock = asyncio.Lock()
+        self._snapshots = OrderedDict()
+
+    def _cache_snapshot(self, result, args):
+        report = result.structured_content
+        if result.is_error or not isinstance(report, dict):
+            return
+        snapshot_id, tree = report.get("snapshot_id"), report.get("tree_markdown")
+        if not isinstance(snapshot_id, str) or not isinstance(tree, str):
+            return
+        rows = {int(row): name for row, name in re.findall(r'\[(\d+)\]\s+[^\s"]+\s+"([^"]*)"', tree)}
+        key = (args["pid"], args["window_id"])
+        self._snapshots.pop(key, None)
+        self._snapshots[key] = (snapshot_id, rows)
+        while len(self._snapshots) > 16:
+            self._snapshots.popitem(last=False)
+
+    def _element_name(self, args):
+        token = args.get("element_token")
+        if not isinstance(token, str):
+            return None
+        snapshot_id, separator, row = token.rpartition(":")
+        if not separator or not row.isdecimal():
+            return None
+        for (pid, window_id), (cached_id, rows) in reversed(self._snapshots.items()):
+            if (pid == args.get("pid") and cached_id == snapshot_id
+                    and ("window_id" not in args or args["window_id"] == window_id)):
+                return rows.get(int(row))
+        return None
 
     async def _runtime_driver(self):
         async with self._driver_lock:
@@ -329,6 +363,14 @@ class ComputerServer:
             return self.driver
 
     async def call(self, tool, args):
+        refusal = self.approvals.preflight()
+        if isinstance(refusal, str):
+            return _text(refusal, True)
+        confirmed = False
+        if isinstance(args, dict) and "confirm" in args:
+            args = dict(args)
+            confirmation = args.pop("confirm", None)
+            confirmed = isinstance(confirmation, str) and 0 < len(confirmation.strip()) <= 500
         validated = policy.validate_call(tool, args)
         if isinstance(validated, policy.Refusal):
             return _text(validated.reason, True)
@@ -362,7 +404,25 @@ class ComputerServer:
             elif tool == "computer_clipboard_read":
                 bundle_id, app_name = policy.CLIPBOARD_BUNDLE_ID, "Clipboard"
             risk = policy.risky_reason(tool, args)
+            element_name = self._element_name(args)
+            critical = policy.critical_reason(tool, args, app_id=bundle_id, element_name=element_name)
+            if tool == "computer_run_steps":
+                for step in args["steps"]:
+                    name = step.get("tool") or next((k for k in policy.STEP_TOOLS if k in step), "")
+                    step_args = step.get("args", {}) if "tool" in step else step.get(name, {})
+                    target = {**{key: args[key] for key in ("pid", "window_id") if key in args}, **step_args}
+                    step_name = self._element_name(target)
+                    if element_name is None:
+                        element_name = step_name
+                    reason = policy.critical_reason("computer_" + name, target,
+                                                    app_id=bundle_id, element_name=step_name)
+                    if reason:
+                        critical = critical or reason
+                        if step_name is not None:
+                            element_name = step_name
+                        break
             params = {"bundle_id": bundle_id, "app_name": app_name, "pid": pid,
+                      "confirmed": confirmed, "element_name": element_name, "critical_reason": critical,
                       "risky": bool(risk), "risk_reason": risk,
                       "summary": args.get("summary") or app_name or bundle_id or tool,
                       "foreground": _foreground(args) or tool == "computer_bring_to_front",
@@ -397,8 +457,12 @@ class ComputerServer:
             if _foreground(forward_args):
                 refusal, result = await self._fronted_call(
                     driver, pid, forward_args.get("window_id"), validated.driver_tool, forward_args)
-                return _text(refusal, True) if refusal is not None else result
-            result = await driver.call(validated.driver_tool, forward_args)
+                if refusal is not None:
+                    return _text(refusal, True)
+            else:
+                result = await driver.call(validated.driver_tool, forward_args)
+            if tool == "computer_window_state":
+                self._cache_snapshot(result, args)
             if tool == "computer_list_windows":
                 return await _merge_panel_windows(result, pid)
             return await _merge_running_apps(result) if tool == "computer_list_apps" else result
@@ -506,7 +570,7 @@ class ComputerServer:
                 await self.runtime.aclose()
 
 
-def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineComputer"):
+def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineComputer", instructions_extra: str = ""):
     handler = ComputerServer(driver, approvals, runtime=runtime)
 
     @asynccontextmanager
@@ -516,7 +580,10 @@ def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineC
         finally:
             await handler.close()
 
-    mcp = MCPServer(name=name, lifespan=lifespan, instructions=platform.current().instructions)
+    instructions = platform.current().instructions
+    if instructions_extra:
+        instructions += " " + instructions_extra
+    mcp = MCPServer(name=name, lifespan=lifespan, instructions=instructions)
 
     def register(name):
         async def invoke(args: dict) -> CallToolResult:
