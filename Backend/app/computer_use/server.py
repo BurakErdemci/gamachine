@@ -311,16 +311,17 @@ class BackendApprovals:
 
 
 class ComputerServer:
-    def __init__(self, driver=None, approvals=None):
+    def __init__(self, driver=None, approvals=None, *, runtime=None):
         self.driver = driver
         self.approvals = approvals if approvals is not None else BackendApprovals()
+        self.runtime = runtime
         self._driver_lock = asyncio.Lock()
         # Fronting and the input it guards must not interleave with another call's fronting.
         self._front_lock = asyncio.Lock()
 
     async def _runtime_driver(self):
         async with self._driver_lock:
-            binary, socket = await fetch_runtime()
+            binary, socket = await (self.runtime or fetch_runtime)()
             if self.driver is None or (self.driver.binary, self.driver.socket) != (binary, socket):
                 if self.driver is not None:
                     await self.driver.close()
@@ -501,10 +502,12 @@ class ComputerServer:
         async with self._driver_lock:
             if self.driver is not None:
                 await self.driver.close()
+            if hasattr(self.runtime, "aclose"):
+                await self.runtime.aclose()
 
 
-def create_server(driver=None):
-    handler = ComputerServer(driver)
+def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineComputer"):
+    handler = ComputerServer(driver, approvals, runtime=runtime)
 
     @asynccontextmanager
     async def lifespan(server):
@@ -513,7 +516,7 @@ def create_server(driver=None):
         finally:
             await handler.close()
 
-    mcp = MCPServer(name="gamachineComputer", lifespan=lifespan, instructions=platform.current().instructions)
+    mcp = MCPServer(name=name, lifespan=lifespan, instructions=platform.current().instructions)
 
     def register(name):
         async def invoke(args: dict) -> CallToolResult:
@@ -541,7 +544,8 @@ def create_server(driver=None):
         mcp.tool(name=name, description=description)(invoke)
 
     for name in policy.TOOLS:
-        register(name)
+        if name not in platform.current().unsupported_tools:
+            register(name)
     return mcp
 
 

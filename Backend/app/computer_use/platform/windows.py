@@ -77,7 +77,7 @@ def _chord(keys):
 class WindowsPlatform:
     name = "win32"
     driver_basename = "cua-driver.exe"
-    unsupported_tools = frozenset({"computer_launch_app"})
+    unsupported_tools = frozenset({"computer_launch_app", "computer_invoke_menu"})
     instructions = WINDOWS_INSTRUCTIONS
 
     def __init__(self, win32=None):

@@ -311,6 +311,9 @@ _EXEMPT: Dict[Tuple[str, str], Tuple[int, str]] = {
     ("app/computer_use/driver_client.py", "_transport"): (
         1, "Embedded driver receives an exact minimal environment with telemetry disabled; "
            "parent secrets are intentionally not inherited."),
+    ("app/computer_use/standalone/runtime.py", "StandaloneRuntime.__call__"): (
+        1, "Standalone driver daemon gets the same exact minimal environment from "
+           "platform driver_command as _transport; parent secrets are not inherited."),
     # ── Sistem ikilileri: sabit argv, üçüncü taraf kod DEĞİL, vendor sırrı
     #    okuyacak bir yüzeyleri yok. Ortamı kısmak güvenlik satın almadan
     #    kullanılabilirlik satardı (git'in proxy/askpass ayarları, ekran
