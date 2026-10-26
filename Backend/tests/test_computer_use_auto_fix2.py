@@ -118,7 +118,7 @@ def test_harmless_names_stay_noncritical(win, name):
 def test_element_target_resolution_is_required(win, target):
     assert policy.critical_reason("computer_click", target, app_id=APP, resolve=lambda target: (False, None))
     assert policy.critical_reason("computer_click", {"x": 1, "y": 2}, app_id=APP,
-                                  resolve=lambda target: (False, None)) == ""
+                                  resolve=lambda target: (False, None))
 
 
 def test_batch_targets_inherit_context_and_use_each_steps_name(win):
@@ -135,7 +135,7 @@ def test_batch_targets_inherit_context_and_use_each_steps_name(win):
 
 @pytest.mark.parametrize("target, expected", [({"name": "Send"}, True),
                                               ({"name": "Pencil"}, False),
-                                              ({"role": "Button"}, False),
+                                              ({"role": "Button"}, True),
                                               ({"element_token": "missing:1"}, True)])
 def test_server_resolves_named_and_unknown_step_targets(handler, target, expected):
     result = asyncio.run(handler.call("computer_run_steps", {
@@ -175,13 +175,14 @@ def test_plus_key_survives_normalization(win, tool, args, expected):
     assert result.args == {"pid": 77, **expected}
 
 
-def hook_settings(matcher="mcp__gamachineComputerLocal__.*", command="bash guard-computer-use-confirm.sh"):
-    return {"hooks": {"PreToolUse": [{"matcher": matcher, "hooks": [{"command": command}]}]}}
+def hook_settings(matcher="mcp__gamachineComputerLocal__.*",
+                  command='bash "$HOME/.claude/hooks/guard-computer-use-confirm.sh"'):
+    return {"hooks": {"PreToolUse": [{"matcher": matcher, "hooks": [{"type": "command", "command": command}]}]}}
 
 
 @pytest.mark.parametrize("settings, expected", [
     (hook_settings(), True),
-    (hook_settings("mcp__gamachineComputerLocal__computer_click"), True),
+    (hook_settings("mcp__gamachineComputerLocal__computer_click"), False),
     (hook_settings("mcp__gamachineComputerLocal__"), False),
     (hook_settings("Bash"), False), (hook_settings("["), False),
     (hook_settings(command="another-hook.sh"), False),

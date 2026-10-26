@@ -47,6 +47,33 @@ def _text(value, error=False):
     return CallToolResult(content=[TextContent(type="text", text=value)], is_error=error)
 
 
+def window_state_driver_args(args) -> dict:
+    return {"tree_format": "both", **args}
+
+
+def strip_unrequested_elements(report, args) -> dict:
+    if args.get("tree_format") in {"elements", "both"}:
+        return dict(report)
+    return {key: value for key, value in report.items() if key != "elements"}
+
+
+def _strip_snapshot_result(result, args):
+    report = result.structured_content
+    if isinstance(report, dict):
+        report = strip_unrequested_elements(report, args)
+    content = []
+    for block in result.content:
+        if isinstance(block, TextContent):
+            try:
+                payload = json.loads(block.text)
+            except (ValueError, TypeError):
+                payload = None
+            if isinstance(payload, dict) and "elements" in payload:
+                block = block.model_copy(update={"text": json.dumps(strip_unrequested_elements(payload, args))})
+        content.append(block)
+    return result.model_copy(update={"structured_content": report, "content": content})
+
+
 async def _merge_running_apps(result):
     try:
         if result.is_error:
@@ -311,6 +338,9 @@ class BackendApprovals:
     def preflight(self):
         return None
 
+    async def dispatch_refusal(self, params) -> str | None:
+        return None
+
     async def request(self, tool, params):
         params = {key: value for key, value in params.items()
                   if key not in {"confirmed", "confirm_text", "element_name", "critical_reason"}}
@@ -338,18 +368,36 @@ class ComputerServer:
         if isinstance(report.get("observation"), dict):
             report = report["observation"]
         snapshot_id, tree = report.get("snapshot_id"), report.get("tree_markdown")
-        if not isinstance(snapshot_id, str) or not isinstance(tree, str):
+        if not isinstance(snapshot_id, str):
             return
         rows = {}
-        for line in tree.splitlines():
-            # Real driver rows nest brackets ("[actions=[toggle]]") and carry quoted
-            # values after the name; measured 26 Oct 2026 on Paint and Notepad.
-            match = _NAMED_ROW.match(line) or _UNNAMED_ROW.match(line)
-            if match:
-                rows.setdefault(int(match.group(1)), match.group(2) if match.re is _NAMED_ROW else "")
+        frames = []
+        if "elements" in report:
+            for element in report["elements"] if isinstance(report["elements"], list) else []:
+                if not isinstance(element, dict):
+                    continue
+                token = element.get("element_token")
+                label = element.get("label", "")
+                label = label if isinstance(label, str) else ""
+                if isinstance(token, str):
+                    rows.setdefault(token, label)
+                frame = element.get("frame")
+                if isinstance(frame, dict) and all(type(frame.get(key)) in (int, float)
+                                                   for key in ("x", "y", "w", "h")):
+                    if frame["w"] > 0 and frame["h"] > 0:
+                        frames.append((dict(frame), label))
+        elif isinstance(tree, str):
+            for line in tree.splitlines():
+                # Driver rows contain nested action brackets and quoted values after the name.
+                match = _NAMED_ROW.match(line) or _UNNAMED_ROW.match(line)
+                if match:
+                    rows.setdefault(f"{snapshot_id}:{int(match.group(1))}",
+                                    match.group(2) if match.re is _NAMED_ROW else "")
+        else:
+            return
         key = (args["pid"], args.get("window_id"))
         self._snapshots.pop(key, None)
-        self._snapshots[key] = (snapshot_id, rows)
+        self._snapshots[key] = (snapshot_id, rows, frames)
         while len(self._snapshots) > 16:
             self._snapshots.popitem(last=False)
 
@@ -360,11 +408,27 @@ class ComputerServer:
         snapshot_id, separator, row = token.rpartition(":")
         if not separator or not row.isdecimal():
             return None
-        for (pid, window_id), (cached_id, rows) in reversed(self._snapshots.items()):
+        for (pid, window_id), (cached_id, rows, _) in reversed(self._snapshots.items()):
             if (pid == args.get("pid") and cached_id == snapshot_id
                     and ("window_id" not in args or args["window_id"] == window_id)):
-                return rows.get(int(row))
+                return rows.get(token)
         return None
+
+    def _element_at(self, args):
+        snapshot = self._snapshots.get((args.get("pid"), args.get("window_id")))
+        x, y = args.get("x"), args.get("y")
+        if snapshot is None or type(x) not in (int, float) or type(y) not in (int, float):
+            return True, ""
+        containing = [(frame["w"] * frame["h"], label) for frame, label in snapshot[2]
+                      if frame["x"] <= x < frame["x"] + frame["w"]
+                      and frame["y"] <= y < frame["y"] + frame["h"]]
+        return True, min(containing, key=lambda item: item[0])[1] if containing else ""
+
+    def _resolver(self, args):
+        def resolve(target):
+            return self._resolve_target({**{key: args[key] for key in ("pid", "window_id") if key in args},
+                                         **target})
+        return resolve
 
     def _resolve_target(self, target):
         if "element_token" in target:
@@ -372,9 +436,18 @@ class ComputerServer:
             return name is not None, name
         nested = target.get("target") if isinstance(target.get("target"), dict) else {}
         for source in (target, nested):
-            if isinstance(source.get("name"), str):
-                return True, source["name"]
+            if "name" in source:
+                return isinstance(source["name"], str), source["name"] if isinstance(source["name"], str) else None
+        if any(key in source for source in (target, nested) for key in ("role", "nth")):
+            return False, None
+        if "x" in target and "y" in target:
+            return self._element_at(target)
         return True, None
+
+    async def _dispatch_refusal(self, params):
+        check = getattr(self.approvals, "dispatch_refusal", None)
+        refusal = await check(params) if check is not None else None
+        return refusal if isinstance(refusal, str) else None
 
     async def _runtime_driver(self):
         async with self._driver_lock:
@@ -404,6 +477,8 @@ class ComputerServer:
         try:
             driver = None
             forward_args = validated.args
+            if tool == "computer_window_state":
+                forward_args = window_state_driver_args(args)
             if tool == "computer_launch_app" and "urls" in args:
                 resolved = _resolve_launch_targets(args["urls"], args["bundle_id"])
                 if resolved is None:
@@ -431,9 +506,10 @@ class ComputerServer:
                 bundle_id, app_name = policy.CLIPBOARD_BUNDLE_ID, "Clipboard"
             risk = policy.risky_reason(tool, args)
             element_name = self._element_name(args)
+            target_resolver = self._resolver(args)
             def resolve(target):
                 nonlocal element_name
-                known, name = self._resolve_target(target)
+                known, name = target_resolver(target)
                 if name is not None:
                     element_name = name
                 return known, name
@@ -471,16 +547,24 @@ class ComputerServer:
                 return await self._run_steps_split(driver, forward_args, params)
             if tool == "computer_bring_to_front":
                 async with self._front_lock:
+                    refusal = await self._dispatch_refusal(params)
+                    if refusal is not None:
+                        return _text(refusal, True)
                     return await driver.call(validated.driver_tool, forward_args)
             if _foreground(forward_args):
                 refusal, result = await self._fronted_call(
-                    driver, pid, forward_args.get("window_id"), validated.driver_tool, forward_args)
+                    driver, pid, forward_args.get("window_id"), validated.driver_tool, forward_args, params)
                 if refusal is not None:
                     return _text(refusal, True)
             else:
+                refusal = await self._dispatch_refusal(params)
+                if refusal is not None:
+                    return _text(refusal, True)
                 result = await driver.call(validated.driver_tool, forward_args)
             if tool in {"computer_window_state", "computer_run_steps"}:
                 self._cache_snapshot(result, args)
+            if tool == "computer_window_state":
+                result = _strip_snapshot_result(result, args)
             if tool == "computer_list_windows":
                 return await _merge_panel_windows(result, pid)
             return await _merge_running_apps(result) if tool == "computer_list_apps" else result
@@ -489,9 +573,15 @@ class ComputerServer:
         except DriverError:
             return _text("Bilgisayar kullanımı sürücüsüyle bağlantı kesildi; işlem yinelenmedi.", True)
 
-    async def _fronted_call(self, driver, pid, window_id, tool, args):
+    async def _fronted_call(self, driver, pid, window_id, tool, args, params=None):
         async with self._front_lock:
+            refusal = await self._dispatch_refusal(params or {})
+            if refusal is not None:
+                return refusal, None
             refusal = await _front_guard(driver, pid, window_id)
+            if refusal is not None:
+                return refusal, None
+            refusal = await self._dispatch_refusal(params or {})
             if refusal is not None:
                 return refusal, None
             result = await driver.call(tool, args)
@@ -535,12 +625,18 @@ class ComputerServer:
                     window_id = step_args.get("window_id")
                     if type(window_id) is not int:
                         window_id = base.get("window_id")
+                    refusal = await self._dispatch_refusal(params)
+                    if refusal is not None:
+                        return _text(refusal, True)
                     refusal = await _front_guard(driver, base["pid"], window_id)
                     if refusal is not None:
                         entries.append({"index": i, "ok": False, "code": "foreground_unverified",
                                         "message": refusal})
                         failed_step = i
                         break
+                refusal = await self._dispatch_refusal(params)
+                if refusal is not None:
+                    return _text(refusal, True)
                 result = await driver.call("run_steps", call_args)
                 report = result.structured_content
                 try:

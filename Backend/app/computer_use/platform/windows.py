@@ -176,9 +176,9 @@ class WindowsPlatform:
 
     def risky_chord(self, keys: frozenset[str]) -> str:
         normalized = _chord(keys)
-        if normalized == {"alt", "f4"}:
+        if {"alt", "f4"} <= normalized:
             return "Uygulamadan çıkılsın mı? Kaydedilmemiş iş kaybolabilir."
-        if normalized in ({"shift", "delete"}, {"ctrl", "shift", "delete"}):
+        if {"shift", "delete"} <= normalized or {"ctrl", "shift", "delete"} <= normalized:
             return "Riskli klavye kısayolu: " + "+".join(sorted(normalized))
         return ""
 

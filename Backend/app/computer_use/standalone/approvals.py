@@ -35,14 +35,13 @@ class LocalApprovals:
 
     async def request(self, tool, params):
         async with self._lock:
+            refusal = await self.dispatch_refusal(params)
             if self.hotkey.halted_at is not None:
-                return self._outcome(tool, params, "deny", gate.HALTED_REASON
-                                     + " Bilgisayar kullanımını sürdürmek için sunucuyu yeniden başlat (Claude Code: /mcp).")
+                return self._outcome(tool, params, "deny", refusal)
             if self.startup_refusal:
                 return self._outcome(tool, params, "deny", self.startup_refusal)
-            if not self.hotkey.registered:
-                return self._outcome(tool, params, "deny",
-                                     "Durdurma kısayolu (Ctrl+Alt+Esc) çalışmıyor; bilgisayar kullanımı durduruldu.")
+            if refusal is not None:
+                return self._outcome(tool, params, "deny", refusal)
             decision = gate.decide(tool, params, enabled=True, granted=True)
             if decision.kind == "deny":
                 return self._outcome(tool, params, "deny", decision.reason)
@@ -60,6 +59,14 @@ class LocalApprovals:
                 return self._outcome(tool, params, "deny", f"{critical} — bu kritik bir işlem: aynı çağrıyı "
                                      "args.confirm = '<ne yapılacağı>' ile tekrarla; kullanıcıya sorulacak.")
             return self._outcome(tool, params, "confirmed" if critical else "allow", critical)
+
+    async def dispatch_refusal(self, params) -> str | None:
+        if self.hotkey.halted_at is not None:
+            return (gate.HALTED_REASON
+                    + " Bilgisayar kullanımını sürdürmek için sunucuyu yeniden başlat (Claude Code: /mcp).")
+        if not self.hotkey.registered:
+            return "Durdurma kısayolu (Ctrl+Alt+Esc) çalışmıyor; bilgisayar kullanımı durduruldu."
+        return None
 
     async def batch_stop(self, params):
         if self.hotkey.halted_at is not None or not self.hotkey.registered:

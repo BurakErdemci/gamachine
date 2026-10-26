@@ -14,6 +14,8 @@ def confirm_hook_installed(paths=None) -> bool:
         for path in paths:
             try:
                 settings = json.loads(Path(path).read_text(encoding="utf-8"))
+                if settings.get("disableAllHooks") is True:
+                    continue
                 entries = settings["hooks"]["PreToolUse"]
                 if not isinstance(entries, list):
                     continue
@@ -21,13 +23,18 @@ def confirm_hook_installed(paths=None) -> bool:
                     if not isinstance(entry, dict) or not isinstance(entry.get("matcher"), str):
                         continue
                     try:
-                        matches = re.fullmatch(entry["matcher"], "mcp__gamachineComputerLocal__computer_click")
+                        matches = all(re.fullmatch(entry["matcher"], "mcp__gamachineComputerLocal__computer_" + tool)
+                                      for tool in ("click", "type_text", "press_key", "hotkey", "run_steps",
+                                                   "set_value", "confirm_risky_step"))
                     except re.error:
                         continue
                     hooks = entry.get("hooks")
                     if matches and isinstance(hooks, list) and any(
                             isinstance(hook, dict) and isinstance(hook.get("command"), str)
-                            and "guard-computer-use-confirm" in hook["command"] for hook in hooks):
+                            and hook.get("type") == "command" and hook["command"].strip() in {
+                                'bash "$HOME/.claude/hooks/guard-computer-use-confirm.sh"',
+                                'bash ~/.claude/hooks/guard-computer-use-confirm.sh',
+                            } for hook in hooks):
                         return True
             except (OSError, ValueError, TypeError, KeyError):
                 continue

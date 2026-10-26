@@ -376,21 +376,36 @@ _INPUT_TOOLS = frozenset({
 })
 _ELEMENT_TOOLS = frozenset({
     "computer_click", "computer_double_click", "computer_right_click", "computer_set_value",
-    "computer_type_text", "computer_press_key",
+    "computer_type_text", "computer_press_key", "computer_hotkey",
 })
-_CRITICAL_NAME = re.compile(
-    r"\b(?:send|gönder|delete|sil|remove|kaldır|buy|satın al|purchase|pay|öde|order|sipariş|"
-    r"checkout|confirm|onayla|submit|publish|yayınla|post|paylaş|share|transfer|uninstall)\b",
-    re.IGNORECASE | re.UNICODE,
+_LONG_KEYWORDS = (
+    "send", "delete", "remove", "purchase", "checkout", "confirm", "submit", "publish",
+    "transfer", "uninstall", "gonder", "kaldir", "onayla", "paylas", "yayinla", "siparis",
+    "odeme", "satinal",
 )
+_SHORT_KEYWORDS = frozenset({"sil", "pay", "ode", "buy", "order", "post", "share"})
 
 
-def _normalized_element_name(name):
-    name = unicodedata.normalize("NFKC", name)
-    name = "".join(char for char in name if unicodedata.category(char) != "Cf")
-    name = "".join((" " if index and name[index - 1].islower() and char.isupper() else "") + char
-                   for index, char in enumerate(name))
-    return name.translate(str.maketrans({"_": " ", "-": " ", ".": " "})).casefold()
+def critical_name(name) -> str:
+    name = unicodedata.normalize("NFKD", name)
+    name = "".join(char for char in name if unicodedata.category(char) not in {"Mn", "Me", "Cf", "Cc"}
+                   and char not in "\u115f\u1160\u3164\uffa0").replace("ı", "i")
+    name = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", name)
+    name = "".join((" " if index and (
+        name[index - 1].islower() and char.isupper()
+        or name[index - 1].isalpha() and char.isdigit()
+        or name[index - 1].isdigit() and char.isalpha()) else "") + char
+        for index, char in enumerate(name))
+    tokens = "".join(char if char.isalnum() else " " for char in name.casefold()).split()
+    for index, token in enumerate(tokens):
+        if token in _SHORT_KEYWORDS:
+            return token
+        if token == "satin" and tokens[index + 1:index + 2] == ["al"]:
+            return "satin al"
+        for keyword in _LONG_KEYWORDS:
+            if token.startswith(keyword) or token.endswith(keyword):
+                return keyword
+    return ""
 
 
 def critical_reason(tool, args, *, app_id, resolve) -> str:
@@ -411,11 +426,33 @@ def critical_reason(tool, args, *, app_id, resolve) -> str:
     if tool in _INPUT_TOOLS and platform.current().read_only_app(app_id):
         return "Tarayıcı, posta veya sohbet uygulamasına girdi gönderilecek."
     nested = args.get("target") if isinstance(args.get("target"), dict) else {}
-    addressed = "element_token" in args or any(key in source for source in (args, nested) for key in ("name", "role"))
-    if tool in _ELEMENT_TOOLS and addressed:
-        known, name = resolve(args)
-        if known is False:
+    if tool in _ELEMENT_TOOLS:
+        unknown = False
+        names = []
+        for source in (args, nested):
+            if "element_token" in source:
+                target = {key: args[key] for key in ("pid", "window_id") if key in args}
+                target.update(source)
+                known, name = resolve(target)
+                unknown |= known is not True
+                if isinstance(name, str):
+                    names.append(name)
+            if "name" in source:
+                if isinstance(source["name"], str):
+                    names.append(source["name"])
+                else:
+                    unknown = True
+            if any(key in source for key in ("role", "nth")) and not any(
+                    key in args or key in nested for key in ("name", "element_token")):
+                unknown = True
+        if not any(key in args or key in nested for key in ("name", "element_token")) and "x" in args and "y" in args:
+            known, name = resolve(args)
+            unknown |= known is not True
+            if isinstance(name, str) and name:
+                names.append(name)
+        if unknown:
             return "Hedef öğe doğrulanamadı; kritik işlem olabilir."
-        if isinstance(name, str) and _CRITICAL_NAME.search(_normalized_element_name(name)):
-            return "Kritik işlem düğmesi: " + name
+        for name in names:
+            if critical_name(name):
+                return "Kritik işlem düğmesi: " + name
     return ""

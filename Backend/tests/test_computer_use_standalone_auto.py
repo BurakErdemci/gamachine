@@ -106,10 +106,15 @@ def test_critical_button_names_match_unicode_words(win, name):
                                   app_id=APP, resolve=resolve)
 
 
-@pytest.mark.parametrize("name", ["Silver", "Pencil", "Settings", "Close Tab", "Sending options"])
+@pytest.mark.parametrize("name", ["Silver", "Pencil", "Settings", "Close Tab"])
 def test_ordinary_button_names_do_not_match(win, name):
     assert policy.critical_reason("computer_click", {"element_token": "s1:1"}, app_id=APP,
                                   resolve=lambda target: (True, name)) == ""
+
+
+def test_long_keyword_prefix_is_critical(win):
+    assert policy.critical_reason("computer_click", {"element_token": "s1:1"}, app_id=APP,
+                                  resolve=lambda target: (True, "Sending options"))
 
 
 @pytest.mark.parametrize("tool", ["click", "double_click", "right_click", "type_text", "set_value",

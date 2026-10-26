@@ -84,7 +84,7 @@ def test_ordinary_chords_not_refused(win, keys):
     (["ctrl", "shift", "delete"], "Riskli klavye kısayolu: ctrl+delete+shift"),
     (["command", "shift", "del"], "Riskli klavye kısayolu: ctrl+delete+shift"),
     (["ctrl", "w"], ""), (["ctrl", "f4"], ""), (["ctrl", "s"], ""),
-    (["ctrl", "alt", "f4"], ""),
+    (["ctrl", "alt", "f4"], "Uygulamadan çıkılsın mı? Kaydedilmemiş iş kaybolabilir."),
     (["alt+f4"], "Uygulamadan çıkılsın mı? Kaydedilmemiş iş kaybolabilir."),
     (["ctrl+shift+delete"], "Riskli klavye kısayolu: ctrl+delete+shift"),
 ])
