@@ -50,6 +50,8 @@ def decide(tool, params, *, enabled, granted):
 def actions_log_append(path, record):
     try:
         row = {key: record.get(key) for key in ("conversation_id", "tool", "bundle_id", "pid", "decision", "reason")}
+        if "confirm" in record:
+            row["confirm"] = record["confirm"]
         row["ts"] = datetime.now(timezone.utc).isoformat()
         data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)

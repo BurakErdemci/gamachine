@@ -41,6 +41,7 @@ class FakeHotkey:
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("GAMACHINE_CU_STANDALONE_DIR", str(tmp_path))
+    monkeypatch.setenv("GAMACHINE_CU_CLAUDE_SETTINGS", str(tmp_path / "settings.json"))
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
     win = WindowsPlatform(SimpleNamespace(set_dpi_awareness=lambda: None, parent_pids=lambda: {}))
     monkeypatch.setattr(platform, "current", lambda: win)
@@ -183,7 +184,7 @@ def test_ordinary_calls_need_no_grants():
 @pytest.mark.parametrize("confirmed", [False, True])
 def test_critical_request_requires_confirmation(confirmed):
     params = {**PARAMS, "critical_reason": "Delete", "confirmed": confirmed}
-    result = asyncio.run(LocalApprovals(None, FakeHotkey()).request("computer_click", params))
+    result = asyncio.run(LocalApprovals(None, FakeHotkey(), confirm_available=True).request("computer_click", params))
     assert result["approved"] is confirmed
     if not confirmed:
         assert "args.confirm" in result["error"]
@@ -191,7 +192,7 @@ def test_critical_request_requires_confirmation(confirmed):
 
 
 def test_risky_step_needs_confirmation_every_time():
-    approval = LocalApprovals(None, FakeHotkey())
+    approval = LocalApprovals(None, FakeHotkey(), confirm_available=True)
     async def scenario():
         params = {**PARAMS, "risky": True, "risk_reason": "Delete?"}
         assert not (await approval.request("computer_click", params))["approved"]
@@ -203,15 +204,14 @@ def test_risky_step_needs_confirmation_every_time():
 
 
 @pytest.mark.parametrize("confirmed", [False, True])
-def test_halt_and_resume(confirmed):
+def test_halt_requires_server_restart(confirmed):
     hotkey = FakeHotkey()
     hotkey.halted_at = 0.0
-    approval = LocalApprovals(None, hotkey)
+    approval = LocalApprovals(None, hotkey, confirm_available=True)
     result = asyncio.run(approval.request("computer_list_apps", {"confirmed": confirmed}))
-    assert result["approved"] is confirmed
-    assert (hotkey.halted_at is None) is confirmed
-    if not confirmed:
-        assert result["error"] == gate.HALTED_REASON + " Devam için aynı çağrıyı args.confirm ile tekrarla."
+    assert result["approved"] is False
+    assert hotkey.halted_at == 0.0
+    assert result["error"] == gate.HALTED_REASON + " Bilgisayar kullanımını sürdürmek için sunucuyu yeniden başlat (Claude Code: /mcp)."
 
 
 @pytest.mark.parametrize("halted, enabled, expected", [(True, False, "halted"),

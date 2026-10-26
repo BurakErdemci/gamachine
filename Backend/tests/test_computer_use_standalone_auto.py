@@ -100,31 +100,36 @@ def test_key_tokens_expand_without_changing_input(win, tool, args, expected):
     "yayınla", "post", "paylaş", "share", "transfer", "uninstall",
 ])
 def test_critical_button_names_match_unicode_words(win, name):
-    assert policy.critical_reason("computer_click", {}, app_id=APP, element_name=name)
-    assert policy.critical_reason("computer_run_steps", {"steps": [{"set_value": {"value": "x"}}]},
-                                  app_id=APP, element_name=name)
+    resolve = lambda target: (True, name)
+    assert policy.critical_reason("computer_click", {"element_token": "s1:1"}, app_id=APP, resolve=resolve)
+    assert policy.critical_reason("computer_run_steps", {"steps": [{"set_value": {"value": "x", "element_token": "s1:1"}}]},
+                                  app_id=APP, resolve=resolve)
 
 
 @pytest.mark.parametrize("name", ["Silver", "Pencil", "Settings", "Close Tab", "Sending options"])
 def test_ordinary_button_names_do_not_match(win, name):
-    assert policy.critical_reason("computer_click", {}, app_id=APP, element_name=name) == ""
+    assert policy.critical_reason("computer_click", {"element_token": "s1:1"}, app_id=APP,
+                                  resolve=lambda target: (True, name)) == ""
 
 
 @pytest.mark.parametrize("tool", ["click", "double_click", "right_click", "type_text", "set_value",
                                  "press_key", "hotkey", "drag", "clipboard_write"])
 def test_read_only_app_input_requires_confirmation(win, tool):
     app = APP.replace("editor.exe", "chrome.exe")
-    assert policy.critical_reason("computer_" + tool, {}, app_id=app, element_name=None)
-    assert policy.critical_reason("computer_run_steps", {"steps": [{tool: {}}]}, app_id=app, element_name=None)
+    assert policy.critical_reason("computer_" + tool, {}, app_id=app, resolve=lambda target: (True, None))
+    assert policy.critical_reason("computer_run_steps", {"steps": [{tool: {}}]}, app_id=app,
+                                  resolve=lambda target: (True, None))
 
 
 @pytest.mark.parametrize("tool", ["scroll", "list_windows", "window_state", "bring_to_front", "zoom"])
 def test_read_only_app_observation_is_not_critical(win, tool):
     assert policy.critical_reason("computer_" + tool, {},
-                                  app_id=APP.replace("editor.exe", "chrome.exe"), element_name="Send") == ""
+                                  app_id=APP.replace("editor.exe", "chrome.exe"), resolve=lambda target: (True, "Send")) == ""
 
 
 class Approvals:
+    accepts_confirm = True
+
     def __init__(self, refusal=None):
         self.refusal = refusal
         self.params = []
@@ -169,7 +174,7 @@ def test_snapshot_names_are_used_for_single_and_batch_calls(handler):
     async def scenario():
         handler.driver = await handler._runtime_driver()
         handler.driver.call.return_value = CallToolResult(content=[], structured_content={
-            "snapshot_id": "s1", "tree_markdown": '- [59] Button "Gönder" [actions=[invoke]]\n- [14] Button "Pencil" [id=X actions=[toggle]]'})
+            "snapshot_id": "s1", "tree_markdown": '- [59] Button "Gönder" [actions=invoke]\n- [14] Button "Pencil" [id=X actions=toggle]'})
         assert not (await handler.call("computer_window_state", {"pid": 77, "window_id": 31})).is_error
         await handler.call("computer_click", {"pid": 77, "window_id": 31, "element_token": "s1:59"})
         assert handler.approvals.params[-1]["element_name"] == "Gönder"

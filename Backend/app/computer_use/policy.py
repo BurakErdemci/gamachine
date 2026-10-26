@@ -212,7 +212,8 @@ def _valid_launch_url(url):
 def _split_keys(value):
     if value == "+":
         return [value]
-    return [part.strip() for part in value.split("+") if part.strip()]
+    parts = [part.strip() for part in value.split("+") if part.strip()]
+    return parts + (["+"] if value.endswith("++") else [])
 
 
 def _keyboard_syntax(tool, args):
@@ -375,6 +376,7 @@ _INPUT_TOOLS = frozenset({
 })
 _ELEMENT_TOOLS = frozenset({
     "computer_click", "computer_double_click", "computer_right_click", "computer_set_value",
+    "computer_type_text", "computer_press_key",
 })
 _CRITICAL_NAME = re.compile(
     r"\b(?:send|gönder|delete|sil|remove|kaldır|buy|satın al|purchase|pay|öde|order|sipariş|"
@@ -383,7 +385,15 @@ _CRITICAL_NAME = re.compile(
 )
 
 
-def critical_reason(tool, args, *, app_id, element_name) -> str:
+def _normalized_element_name(name):
+    name = unicodedata.normalize("NFKC", name)
+    name = "".join(char for char in name if unicodedata.category(char) != "Cf")
+    name = "".join((" " if index and name[index - 1].islower() and char.isupper() else "") + char
+                   for index, char in enumerate(name))
+    return name.translate(str.maketrans({"_": " ", "-": " ", ".": " "})).casefold()
+
+
+def critical_reason(tool, args, *, app_id, resolve) -> str:
     risk = risky_reason(tool, args)
     if risk:
         return risk
@@ -392,13 +402,20 @@ def critical_reason(tool, args, *, app_id, element_name) -> str:
             name = step.get("tool") or next(
                 (k for k in step if k in STEP_TOOLS or "computer_" + k in _INPUT_TOOLS), "")
             step_args = step.get("args", {}) if "tool" in step else step.get(name, {})
-            reason = critical_reason("computer_" + name, step_args,
-                                     app_id=app_id, element_name=element_name)
+            target = {**{key: args[key] for key in ("pid", "window_id", "element_token") if key in args},
+                      **step_args}
+            reason = critical_reason("computer_" + name, target, app_id=app_id, resolve=resolve)
             if reason:
                 return reason
         return ""
     if tool in _INPUT_TOOLS and platform.current().read_only_app(app_id):
         return "Tarayıcı, posta veya sohbet uygulamasına girdi gönderilecek."
-    if tool in _ELEMENT_TOOLS and isinstance(element_name, str) and _CRITICAL_NAME.search(element_name):
-        return "Kritik işlem düğmesi: " + element_name
+    nested = args.get("target") if isinstance(args.get("target"), dict) else {}
+    addressed = "element_token" in args or any(key in source for source in (args, nested) for key in ("name", "role"))
+    if tool in _ELEMENT_TOOLS and addressed:
+        known, name = resolve(args)
+        if known is False:
+            return "Hedef öğe doğrulanamadı; kritik işlem olabilir."
+        if isinstance(name, str) and _CRITICAL_NAME.search(_normalized_element_name(name)):
+            return "Kritik işlem düğmesi: " + name
     return ""

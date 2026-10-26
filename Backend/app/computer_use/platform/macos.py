@@ -468,6 +468,9 @@ class MacPlatform:
         effect = report.get("exact_window_effect") if isinstance(report, dict) else None
         return isinstance(effect, dict) and effect.get("verified") is True
 
+    def foreground_window_is(self, window_id) -> bool:
+        return True
+
     def refused_chord(self, keys: frozenset[str]) -> str | None:
         return None
 

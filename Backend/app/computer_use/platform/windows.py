@@ -30,6 +30,7 @@ READ_ONLY = frozenset({
     "outlook.exe", "olk.exe", "hxoutlook.exe", "thunderbird.exe", "whatsapp.exe",
     "whatsapp.root.exe", "telegram.exe", "discord.exe", "slack.exe", "ms-teams.exe",
     "teams.exe", "signal.exe", "messenger.exe",
+    "iexplore.exe", "arc.exe", "zoom.exe", "skype.exe", "wechat.exe", "mailspring.exe",
 })
 ALIASES = {
     "cmd": "ctrl", "command": "ctrl", "meta": "ctrl", "super": "ctrl",
@@ -142,6 +143,12 @@ class WindowsPlatform:
                     and int(report["now_fg_hwnd"], 16) == int(report["target_hwnd"], 16) == window_id
                     and self.win32.foreground_window() == window_id
                     and self.real_pid(window_id, self.win32.window_pid(window_id)) == pid)
+        except Exception:
+            return False
+
+    def foreground_window_is(self, window_id) -> bool:
+        try:
+            return self.win32.foreground_window() == window_id
         except Exception:
             return False
 

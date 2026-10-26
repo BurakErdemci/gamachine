@@ -254,7 +254,7 @@ async def _front_guard(driver, pid, window_id) -> str | None:
                     break
                 # Read the foreground app after the window snapshot, immediately before input.
                 frontmost = await platform.current().frontmost_pid(driver)
-                if frontmost == pid and top_window:
+                if frontmost == pid and top_window and platform.current().foreground_window_is(window_id):
                     return None
                 if attempt == 0:
                     await asyncio.sleep(0.3)
@@ -308,12 +308,12 @@ class BackendApprovals:
 
     async def request(self, tool, params):
         params = {key: value for key, value in params.items()
-                  if key not in {"confirmed", "element_name", "critical_reason"}}
+                  if key not in {"confirmed", "confirm_text", "element_name", "critical_reason"}}
         return await approval_bridge.request_approval(tool, params=params, workspace_path="")
 
     async def batch_stop(self, params):
         return await _batch_stop({key: value for key, value in params.items()
-                                  if key not in {"confirmed", "element_name", "critical_reason"}})
+                                  if key not in {"confirmed", "confirm_text", "element_name", "critical_reason"}})
 
 
 class ComputerServer:
@@ -330,11 +330,17 @@ class ComputerServer:
         report = result.structured_content
         if result.is_error or not isinstance(report, dict):
             return
+        if isinstance(report.get("observation"), dict):
+            report = report["observation"]
         snapshot_id, tree = report.get("snapshot_id"), report.get("tree_markdown")
         if not isinstance(snapshot_id, str) or not isinstance(tree, str):
             return
-        rows = {int(row): name for row, name in re.findall(r'\[(\d+)\]\s+[^\s"]+\s+"([^"]*)"', tree)}
-        key = (args["pid"], args["window_id"])
+        rows = {}
+        for line in tree.splitlines():
+            match = re.match(r'^\s*- \[(\d+)\] (.+?) "(.*)"(?: \[[^\]\n]*\])?\s*$', line)
+            if match:
+                rows.setdefault(int(match.group(1)), match.group(3))
+        key = (args["pid"], args.get("window_id"))
         self._snapshots.pop(key, None)
         self._snapshots[key] = (snapshot_id, rows)
         while len(self._snapshots) > 16:
@@ -353,12 +359,23 @@ class ComputerServer:
                 return rows.get(int(row))
         return None
 
+    def _resolve_target(self, target):
+        if "element_token" in target:
+            name = self._element_name(target)
+            return name is not None, name
+        nested = target.get("target") if isinstance(target.get("target"), dict) else {}
+        for source in (target, nested):
+            if isinstance(source.get("name"), str):
+                return True, source["name"]
+        return True, None
+
     async def _runtime_driver(self):
         async with self._driver_lock:
             binary, socket = await (self.runtime or fetch_runtime)()
             if self.driver is None or (self.driver.binary, self.driver.socket) != (binary, socket):
                 if self.driver is not None:
                     await self.driver.close()
+                self._snapshots.clear()
                 self.driver = DriverClient(binary, socket)
             return self.driver
 
@@ -367,10 +384,12 @@ class ComputerServer:
         if isinstance(refusal, str):
             return _text(refusal, True)
         confirmed = False
-        if isinstance(args, dict) and "confirm" in args:
+        confirm_text = None
+        if getattr(self.approvals, "accepts_confirm", False) and isinstance(args, dict) and "confirm" in args:
             args = dict(args)
             confirmation = args.pop("confirm", None)
-            confirmed = isinstance(confirmation, str) and 0 < len(confirmation.strip()) <= 500
+            confirm_text = confirmation.strip() if isinstance(confirmation, str) else None
+            confirmed = confirm_text is not None and 0 < len(confirm_text) <= 500
         validated = policy.validate_call(tool, args)
         if isinstance(validated, policy.Refusal):
             return _text(validated.reason, True)
@@ -405,24 +424,16 @@ class ComputerServer:
                 bundle_id, app_name = policy.CLIPBOARD_BUNDLE_ID, "Clipboard"
             risk = policy.risky_reason(tool, args)
             element_name = self._element_name(args)
-            critical = policy.critical_reason(tool, args, app_id=bundle_id, element_name=element_name)
-            if tool == "computer_run_steps":
-                for step in args["steps"]:
-                    name = step.get("tool") or next((k for k in policy.STEP_TOOLS if k in step), "")
-                    step_args = step.get("args", {}) if "tool" in step else step.get(name, {})
-                    target = {**{key: args[key] for key in ("pid", "window_id") if key in args}, **step_args}
-                    step_name = self._element_name(target)
-                    if element_name is None:
-                        element_name = step_name
-                    reason = policy.critical_reason("computer_" + name, target,
-                                                    app_id=bundle_id, element_name=step_name)
-                    if reason:
-                        critical = critical or reason
-                        if step_name is not None:
-                            element_name = step_name
-                        break
+            def resolve(target):
+                nonlocal element_name
+                known, name = self._resolve_target(target)
+                if name is not None:
+                    element_name = name
+                return known, name
+            critical = policy.critical_reason(tool, args, app_id=bundle_id, resolve=resolve)
             params = {"bundle_id": bundle_id, "app_name": app_name, "pid": pid,
-                      "confirmed": confirmed, "element_name": element_name, "critical_reason": critical,
+                      "confirmed": confirmed, "confirm_text": confirm_text,
+                      "element_name": element_name, "critical_reason": critical,
                       "risky": bool(risk), "risk_reason": risk,
                       "summary": args.get("summary") or app_name or bundle_id or tool,
                       "foreground": _foreground(args) or tool == "computer_bring_to_front",
@@ -461,7 +472,7 @@ class ComputerServer:
                     return _text(refusal, True)
             else:
                 result = await driver.call(validated.driver_tool, forward_args)
-            if tool == "computer_window_state":
+            if tool in {"computer_window_state", "computer_run_steps"}:
                 self._cache_snapshot(result, args)
             if tool == "computer_list_windows":
                 return await _merge_panel_windows(result, pid)
@@ -536,6 +547,7 @@ class ComputerServer:
                     return CallToolResult(content=[TextContent(
                         type="text", text=f"Adım {i+1}/{total} sonucu okunamadı; kalan adımlar çalıştırılmadı.")]
                         + result.content, is_error=True)
+                self._cache_snapshot(result, call_args)
                 entry = {**report["steps"][0], "index": i}
                 entries.append(entry)
                 observation = {"observation": report["observation"]} if "observation" in report else {}

@@ -11,7 +11,7 @@ import zipfile
 from .. import platform
 from ..platform import _win32
 from ..server import create_server
-from . import config
+from . import config, hookcheck
 from .approvals import LocalApprovals
 from .hotkey import HaltHotkey
 from .runtime import StandaloneRuntime
@@ -140,9 +140,13 @@ def main(argv=None):
         sys.stderr = log
         try:
             refusal = _startup_refusal(hotkey, session_lock)
-            create_server(approvals=LocalApprovals(refusal, hotkey),
+            confirm_available = hookcheck.confirm_hook_installed()
+            instructions = INSTRUCTIONS_EXTRA
+            if not confirm_available:
+                instructions += " Onay hook'u kurulu değil: kritik işlemler bu oturumda yapılamaz."
+            create_server(approvals=LocalApprovals(refusal, hotkey, confirm_available=confirm_available),
                           runtime=StandaloneRuntime(), name="gamachineComputerLocal",
-                          instructions_extra=INSTRUCTIONS_EXTRA).run(transport="stdio")
+                          instructions_extra=instructions).run(transport="stdio")
         finally:
             hotkey.stop()
             session_lock.close()
