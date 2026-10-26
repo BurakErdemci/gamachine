@@ -6,6 +6,8 @@ from typing import Protocol
 class Platform(Protocol):
     name: str
     instructions: str
+    driver_basename: str
+    unsupported_tools: frozenset[str]
 
     def valid_app_id(self, value) -> bool: ...
     def is_hard_denied(self, app_id: str, pid: int | None) -> bool: ...

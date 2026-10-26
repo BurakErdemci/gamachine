@@ -31,6 +31,20 @@ if _APP not in sys.path:
 
 
 @pytest.fixture(autouse=True)
+def _computer_use_legacy_platform(request, monkeypatch):
+    if sys.platform == "win32" and request.path.name not in {
+            "test_computer_use_platform_windows.py", "test_computer_use_keys_windows.py"}:
+        from computer_use import platform
+        from computer_use.platform.macos import UnsupportedPlatform
+
+        # Existing computer-use tests exercise macOS application identifiers and policy.
+        unsupported = UnsupportedPlatform()
+        original_current = platform.current
+        monkeypatch.setattr(platform, "current",
+                            lambda: unsupported if sys.platform == "win32" else original_current())
+
+
+@pytest.fixture(autouse=True)
 def _allow_tokenless_local_api(monkeypatch):
     monkeypatch.setenv("UNITYAI_ALLOW_NO_TOKEN", "1")
     monkeypatch.delenv("LOCAL_APP_TOKEN", raising=False)

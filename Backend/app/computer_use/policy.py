@@ -280,6 +280,8 @@ def _normalize_args(tool, args):
 def validate_call(tool, args) -> Validated | Refusal:
     if not isinstance(tool, str) or tool not in TOOLS:
         return Refusal("Unknown tool")
+    if tool in platform.current().unsupported_tools:
+        return Refusal("Bu araç bu işletim sisteminde henüz kullanılamıyor.")
     if not isinstance(args, dict):
         return Refusal("args must be an object")
     args = _normalize_args(tool, args)

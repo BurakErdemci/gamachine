@@ -326,6 +326,8 @@ async def identify_running_app(driver, pid) -> tuple[str | None, str | None]:
 
 
 async def fetch_runtime() -> tuple[str, str]:
+    from . import current
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(
@@ -339,7 +341,7 @@ async def fetch_runtime() -> tuple[str, str]:
             raise DriverUnavailable("Embedded computer-use driver is not running")
         binary, socket = runtime.get("driver_path"), runtime.get("socket_path")
         if (not isinstance(binary, str) or not os.path.isabs(binary)
-                or os.path.basename(binary) != "cua-driver" or not os.path.isfile(binary)
+                or os.path.basename(binary) != current().driver_basename or not os.path.isfile(binary)
                 or not isinstance(socket, str) or not os.path.isabs(socket)):
             raise DriverUnavailable("Embedded computer-use driver runtime is invalid")
         return binary, socket
@@ -444,6 +446,8 @@ INSTRUCTIONS = (
 class MacPlatform:
     name = "darwin"
     instructions = INSTRUCTIONS
+    driver_basename = "cua-driver"
+    unsupported_tools = frozenset()
 
     def valid_app_id(self, value) -> bool:
         return valid_bundle_id(value)
