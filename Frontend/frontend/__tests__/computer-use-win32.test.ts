@@ -144,6 +144,24 @@ describe('ComputerUseHost on win32', () => {
     }
   })
 
+  it('remove-grant deletes valid AUMID grants and rejects malformed AUMIDs on win32', async () => {
+    const f = fixture()
+    const id = 'aumid:Microsoft.WindowsCalculator_8wekyb3d8bbwe!App'
+    await f.host.invoke({ op: 'remove-grant', bundleId: id })
+    expect(f.http.request).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'delete', url: `http://localhost:9/computer-use/grants/${encodeURIComponent(id)}`,
+    }))
+    for (const malformed of [
+      'aumid:Microsoft.WindowsCalculator!App', 'aumid:Microsoft.Paint_8WEKYB3D8BBWE!App',
+      'aumid:Microsoft.Paint_8wekyb3d8bbwe!', 'aumid:Microsoft.Paint_8wekyb3d8bbwe!App!Other',
+    ]) {
+      f.http.request.mockClear()
+      expect(await f.host.invoke({ op: 'remove-grant', bundleId: malformed }))
+        .toEqual({ error: 'Unknown operation or malformed computer-use arguments.' })
+      expect(f.http.request).not.toHaveBeenCalled()
+    }
+  })
+
   it('remove-grant does not accept a Windows id on darwin', async () => {
     const f = fixture('darwin')
     expect(await f.host.invoke({ op: 'remove-grant', bundleId: 'win:c:\\x\\y.exe' }))

@@ -55,12 +55,19 @@ class FakeWin32:
     def window_info(self, hwnd):
         return self.info.get(hwnd)
 
+    def foreground_window(self):
+        return 100
+
+    def top_level_windows(self):
+        return [100]
+
 
 @pytest.fixture
 def win(monkeypatch):
     facts = FakeWin32()
     facts.children[100] = [101]
-    facts.pids.update({100: 42, 101: 43})
+    facts.pids.update({10: 41, 100: 42, 101: 43})
+    facts.info[100] = facts.window()
     facts.info[101] = facts.window(class_name="Windows.UI.Core.CoreWindow")
     facts.levels.update({42: 0x2000, 43: 0x2000, 44: 0x2000})
     facts.paths[44] = facts.paths[41]
@@ -98,6 +105,9 @@ def test_aumid_launch_forwarded_and_gated_by_aumid(win, proxy, app_id):
     "Microsoft.WindowsTerminal", "Microsoft.PowerShell", "windows.immersivecontrolpanel",
     "Microsoft.WindowsStore", "Microsoft.DesktopAppInstaller", "Microsoft.Windows.Explorer",
     "Microsoft.WindowsCommunicationsApps", "MICROSOFT.WindowsTerminalPreview",
+    "PythonSoftwareFoundation.Python.3.13", "CanonicalGroupLimited.Ubuntu",
+    "MicrosoftCorporationII.WindowsSubsystemForLinux", "Microsoft.WindowsSubsystemForLinux",
+    "Microsoft.SecHealthUI",
 ])
 def test_denied_packaged_families(win, proxy, family):
     app_id = "aumid:" + family + "_8wekyb3d8bbwe!App"
@@ -177,9 +187,52 @@ def test_frame_identity_uses_core_owner_and_integrity(win):
     assert asyncio.run(win.identify(None, 42, window_id=100))[2]
 
 
-@pytest.mark.parametrize("window_id", [None, True, False, "100", 999])
+@pytest.mark.parametrize("window_id", [None, True, False, "100", 999, 0, -1, 2**64])
 def test_frame_without_integer_window_stays_unidentified(win, window_id):
     assert asyncio.run(win.identify(None, 42, window_id=window_id)) == (None, None, None)
+
+
+def test_frame_identity_refuses_mismatched_window_owner(win):
+    win.win32.paths[45] = win.win32.paths[42]
+    win.win32.pids[200] = 45
+    win.win32.children[200] = [101]
+    assert asyncio.run(win.identify(None, 42, window_id=200)) == (None, None, None)
+
+
+@pytest.mark.parametrize("read", ["window_pid", "image_path", "child_windows", "window_info"])
+def test_frame_identity_refuses_ownership_read_errors(win, monkeypatch, read):
+    def unavailable(*args):
+        raise OSError("Window unavailable")
+    monkeypatch.setattr(win.win32, read, unavailable)
+    assert asyncio.run(win.identify(None, 43, window_id=100)) == (None, None, None)
+
+
+@pytest.mark.parametrize("pid", [42, 43])
+def test_frame_foreground_ownership_and_default_drag(win, proxy, pid):
+    handler, driver, approvals = proxy
+    report = {"landed_on_target": True, "now_fg_hwnd": "64", "target_hwnd": "64"}
+    assert win.front_verified(report, pid, 100)
+    assert asyncio.run(win.top_window_is(pid, 100))
+    assert asyncio.run(win.frontmost_pid(driver)) == 43
+
+    async def dispatch(tool, args):
+        return CallToolResult(content=[], structured_content=report if tool == "bring_to_front" else {"ok": True})
+    driver.call.side_effect = dispatch
+    result = asyncio.run(handler.call("computer_drag", {"pid": pid, "window_id": 100, **DRAG}))
+    assert not result.is_error
+    assert approvals.request.await_args.args[1]["foreground"] is True
+    assert [call.args for call in driver.call.await_args_list] == [
+        ("bring_to_front", {"pid": pid, "window_id": 100}),
+        ("drag", {"pid": pid, "window_id": 100, **DRAG, "delivery_mode": "foreground"}),
+    ]
+
+
+@pytest.mark.parametrize("pid", [42, 43])
+def test_frame_panel_ownership(win, pid):
+    win.win32.info[100] = win.win32.window(owner=99, bounds=(0, 0, 300, 200))
+    assert asyncio.run(win.top_window_is(pid, 100))
+    panels = asyncio.run(win.panel_windows(pid, 0))
+    assert [(panel["window_id"], panel["pid"]) for panel in panels] == [(100, pid)]
 
 
 def test_denied_core_owner_is_refused_before_dispatch(win, proxy, monkeypatch, tmp_path):

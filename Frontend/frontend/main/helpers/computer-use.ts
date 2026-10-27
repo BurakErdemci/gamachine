@@ -379,7 +379,8 @@ export class ComputerUseHost {
           return { running: this.running }
         case 'remove-grant':
           if (typeof bundleId !== 'string' || !(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId) && bundleId.length <= 255
-            || this.deps.platform === 'win32' && /^win:[^\x00-\x1f]{1,1020}$/.test(bundleId))) break
+            || this.deps.platform === 'win32' && (/^win:[^\x00-\x1f]{1,1020}$/.test(bundleId)
+              || /^aumid:[A-Za-z0-9.-]{1,120}_[a-z0-9]{13}![A-Za-z0-9._-]{1,120}$/.test(bundleId)))) break
           return (await this.request('delete', `/computer-use/grants/${encodeURIComponent(bundleId)}`, undefined, true)).data
         case 'answer-card':
           if (typeof gateId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(gateId)

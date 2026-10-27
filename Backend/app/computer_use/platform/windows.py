@@ -48,6 +48,9 @@ _DENIED_PACKAGES = (
     "microsoft.windowsterminal", "microsoft.powershell", "windows.immersivecontrolpanel",
     "microsoft.windowsstore", "microsoft.desktopappinstaller", "microsoft.windows.explorer",
     "microsoft.windowscommunicationsapps",
+    "pythonsoftwarefoundation.", "canonicalgrouplimited.",
+    "microsoftcorporationii.windowssubsystemforlinux", "microsoft.windowssubsystemforlinux",
+    "microsoft.sechealthui",
 )
 _ENV_KEYS = ("PATH", "SYSTEMROOT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
              "ProgramData", "ALLUSERSPROFILE", "TEMP", "TMP", "USERNAME",
@@ -153,12 +156,16 @@ class WindowsPlatform:
     def read_only_app(self, app_id: str) -> bool:
         return self.valid_app_id(app_id) and _basename(app_id) in READ_ONLY
 
+    def _owned_by(self, hwnd, pid) -> bool:
+        owner = self.win32.window_pid(hwnd)
+        return owner == pid or self.real_pid(hwnd, owner) == pid
+
     def front_verified(self, report, pid, window_id) -> bool:
         try:
             return (isinstance(report, dict) and report.get("landed_on_target") is True
                     and int(report["now_fg_hwnd"], 16) == int(report["target_hwnd"], 16) == window_id
                     and self.win32.foreground_window() == window_id
-                    and self.real_pid(window_id, self.win32.window_pid(window_id)) == pid)
+                    and self._owned_by(window_id, pid))
         except Exception:
             return False
 
@@ -245,7 +252,14 @@ class WindowsPlatform:
             return None, None, None
 
         def read():
-            real_pid = self.real_pid(window_id, pid) if type(window_id) is int else pid
+            real_pid = pid
+            if window_id is not None:
+                try:
+                    if type(window_id) is not int or window_id <= 0 or not self._owned_by(window_id, pid):
+                        return None, None, None
+                    real_pid = self.real_pid(window_id, pid)
+                except Exception:
+                    return None, None, None
             app_id = self.app_id_for(real_pid)
             if app_id is None or _basename(app_id) == "applicationframehost.exe":
                 return None, None, None
@@ -284,7 +298,7 @@ class WindowsPlatform:
                 info = self.win32.window_info(hwnd)
                 if (info and info["visible"] and not info["cloaked"] and not info["minimized"]
                         and (info["owner"] == 0 or hwnd == window_id)
-                        and self.real_pid(hwnd, self.win32.window_pid(hwnd)) == pid):
+                        and self._owned_by(hwnd, pid)):
                     return hwnd == window_id
             return False
 
@@ -298,7 +312,7 @@ class WindowsPlatform:
             for hwnd in self.win32.top_level_windows() or []:
                 info = self.win32.window_info(hwnd)
                 if (not info or not info["owner"] or not info["visible"] or info["cloaked"]
-                        or self.real_pid(hwnd, self.win32.window_pid(hwnd)) != pid):
+                        or not self._owned_by(hwnd, pid)):
                     continue
                 x, y, width, height = info["bounds"]
                 if width < 40 or height < 40:
