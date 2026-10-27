@@ -314,6 +314,10 @@ def validate_call(tool, args) -> Validated | Refusal:
             return Refusal("bundle_id must be a valid application identifier")
         if args["bundle_id"].casefold() == CLIPBOARD_BUNDLE_ID.casefold():
             return Refusal("bundle_id is reserved for the clipboard tool")
+        if platform.current().launch_target(args["bundle_id"]) is None:
+            return Refusal("bundle_id must target a permitted packaged aumid: identifier or existing win: .exe path")
+        if platform.current().name == "win32" and "creates_new_application_instance" in args:
+            return Refusal("creates_new_application_instance is not supported on Windows")
         if "urls" in args:
             urls = args["urls"]
             if not isinstance(urls, list) or not 1 <= len(urls) <= 16:
@@ -339,6 +343,17 @@ def validate_call(tool, args) -> Validated | Refusal:
             frozenset(key.casefold() for key in keys))
         if reason:
             return Refusal(reason)
+    delivery = platform.current().default_drag_delivery
+    if delivery is not None and "delivery_mode" not in args:
+        if tool == "computer_drag":
+            args = {**args, "delivery_mode": delivery}
+        elif tool == "computer_run_steps":
+            args = deepcopy(args)
+            for step in args["steps"]:
+                if step.get("tool") == "drag":
+                    step["args"].setdefault("delivery_mode", delivery)
+                elif "drag" in step:
+                    step["drag"].setdefault("delivery_mode", delivery)
     return Validated(spec.driver_tool, args)
 
 

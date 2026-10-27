@@ -449,6 +449,7 @@ class MacPlatform:
     instructions = INSTRUCTIONS
     driver_basename = "cua-driver"
     unsupported_tools = frozenset()
+    default_drag_delivery = None
 
     def valid_app_id(self, value) -> bool:
         return valid_bundle_id(value)
@@ -487,10 +488,13 @@ class MacPlatform:
     def resolve_launch_targets(self, urls, app_id) -> list | None:
         return _resolve_launch_targets(urls, app_id)
 
+    def launch_target(self, bundle_id) -> dict:
+        return {"bundle_id": bundle_id}
+
     def driver_command(self, binary: str, socket: str) -> tuple[list[str], dict]:
         return driver_command(binary, socket)
 
-    async def identify(self, driver, pid) -> tuple[str | None, str | None, str | None]:
+    async def identify(self, driver, pid, window_id=None) -> tuple[str | None, str | None, str | None]:
         app_id, name = await identify_running_app(driver, pid)
         return app_id, name, None
 

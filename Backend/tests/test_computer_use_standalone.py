@@ -353,7 +353,7 @@ def test_server_name_and_unsupported_tools():
         mcp = server.create_server(name="local-test", approvals=object(), runtime=AsyncMock())
         assert mcp.name == "local-test"
         tools = {tool.name for tool in await mcp.list_tools()}
-        assert tools == set(policy.TOOLS) - {"computer_launch_app", "computer_invoke_menu"}
+        assert tools == set(policy.TOOLS) - {"computer_invoke_menu"}
     asyncio.run(scenario())
 
 

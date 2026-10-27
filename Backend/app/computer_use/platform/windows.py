@@ -43,6 +43,12 @@ _REFUSED = tuple(map(frozenset, (
     {"alt", "tab"}, {"alt", "esc"}, {"ctrl", "esc"},
 )))
 _APP_ID = re.compile(r'win:[a-z]:\\[^<>"|?*:\x00-\x1f]{1,255}\.exe')
+_AUMID = re.compile(r"aumid:[A-Za-z0-9.-]{1,120}_[a-z0-9]{13}![A-Za-z0-9._-]{1,120}")
+_DENIED_PACKAGES = (
+    "microsoft.windowsterminal", "microsoft.powershell", "windows.immersivecontrolpanel",
+    "microsoft.windowsstore", "microsoft.desktopappinstaller", "microsoft.windows.explorer",
+    "microsoft.windowscommunicationsapps",
+)
 _ENV_KEYS = ("PATH", "SYSTEMROOT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
              "ProgramData", "ALLUSERSPROFILE", "TEMP", "TMP", "USERNAME",
              "HOMEDRIVE", "HOMEPATH")
@@ -63,7 +69,7 @@ WINDOWS_INSTRUCTIONS = (
     "Work in the background: hotkeys, typing and element_token clicks reach background apps, "
     "including their Open/Save panels. To open a file: ctrl+o in the app, type the full path "
     "starting with the drive letter (for example C:\\Users\\...), enter. To save: ctrl+s. "
-    "computer_launch_app is not available on Windows. "
+    "To open an app use computer_launch_app with bundle_id 'aumid:<AppUserModelId>' for Store apps (Paint: aumid:Microsoft.Paint_8wekyb3d8bbwe!App, Calculator: aumid:Microsoft.WindowsCalculator_8wekyb3d8bbwe!App; others: 'aumid:' + the bundle_id from computer_list_apps + '!App') or the app's 'win:' id (full .exe path) for desktop apps; then use the pid and window_id it returns (Store apps like Calculator report their window under ApplicationFrameHost). "
     "In an Open or Save panel, set the file name with computer_set_value on the name field's element_token; "
     "typed text often does not reach these panels. In Unity, open a scene by double-clicking it in the "
     "Project window or with File > Open Recent Scene rather than the Open panel. "
@@ -90,7 +96,9 @@ def _chord(keys):
 class WindowsPlatform:
     name = "win32"
     driver_basename = "cua-driver.exe"
-    unsupported_tools = frozenset({"computer_launch_app", "computer_invoke_menu"})
+    unsupported_tools = frozenset({"computer_invoke_menu"})
+    # Measured: background drags draw nothing on Windows canvases while reporting success.
+    default_drag_delivery = "foreground"
     instructions = WINDOWS_INSTRUCTIONS
 
     def __init__(self, win32=None):
@@ -108,6 +116,8 @@ class WindowsPlatform:
             return False
         if value.casefold() == CLIPBOARD_APP_ID:
             return True
+        if _AUMID.fullmatch(value) is not None:
+            return True
         return (value == value.casefold() and _APP_ID.fullmatch(value) is not None
                 and all(segment not in {"", ".", ".."} for segment in value[7:].split("\\")))
 
@@ -117,6 +127,8 @@ class WindowsPlatform:
         return app_id if self.valid_app_id(app_id) else None
 
     def is_hard_denied(self, app_id: str, pid: int | None) -> bool:
+        if isinstance(app_id, str) and app_id.startswith("aumid:"):
+            return app_id[6:].split("!", 1)[0].casefold().startswith(_DENIED_PACKAGES)
         if isinstance(app_id, str) and app_id.casefold() == CLIPBOARD_APP_ID:
             return False
         name = _basename(app_id)
@@ -189,6 +201,24 @@ class WindowsPlatform:
     def resolve_launch_targets(self, urls, app_id) -> None:
         return None
 
+    def launch_target(self, bundle_id) -> dict | None:
+        if not self.valid_app_id(bundle_id) or self.is_hard_denied(bundle_id, None):
+            return None
+        # Launching gets a first-use card per AUMID; input is gated again by the real app id.
+        if _AUMID.fullmatch(bundle_id) is not None:
+            return {"aumid": bundle_id[6:]}
+        if not bundle_id.startswith("win:"):
+            return None
+        try:
+            path = os.path.realpath(bundle_id[4:])
+            app_id = "win:" + path.casefold()
+            if (os.path.isfile(path) and self.valid_app_id(app_id)
+                    and not self.is_hard_denied(app_id, None)):
+                return {"path": path}
+        except (OSError, ValueError):
+            pass
+        return None
+
     def driver_command(self, binary: str, socket: str) -> tuple[list[str], dict]:
         if self.win32.self_elevated():
             from ..driver_client import DriverUnavailable
@@ -210,17 +240,18 @@ class WindowsPlatform:
                         return child_pid
         return pid
 
-    async def identify(self, driver, pid) -> tuple[str | None, str | None, str | None]:
+    async def identify(self, driver, pid, window_id=None) -> tuple[str | None, str | None, str | None]:
         if type(pid) is not int or pid <= 0:
             return None, None, None
 
         def read():
-            app_id = self.app_id_for(pid)
+            real_pid = self.real_pid(window_id, pid) if type(window_id) is int else pid
+            app_id = self.app_id_for(real_pid)
             if app_id is None or _basename(app_id) == "applicationframehost.exe":
                 return None, None, None
-            path = self.win32.image_path(pid)
+            path = self.win32.image_path(real_pid)
             name = ntpath.splitext(ntpath.basename(path))[0] if path else None
-            level = self.win32.integrity(pid)
+            level = self.win32.integrity(real_pid)
             own_level = self.win32.integrity(os.getpid())
             if level is None or own_level is None or level > own_level:
                 return app_id, name, _INTEGRITY_REFUSAL

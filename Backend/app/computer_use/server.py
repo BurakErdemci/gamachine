@@ -1,7 +1,7 @@
 """Curated MCP proxy for computer use.
 
 Each tool takes a single ``args`` dictionary. This preserves every allowed
-driver argument without default injection; policy validates it before any I/O.
+driver argument; policy validates it and applies platform defaults before any I/O.
 """
 from contextlib import asynccontextmanager, nullcontext
 from collections import OrderedDict
@@ -502,6 +502,7 @@ class ComputerServer:
         if isinstance(validated, policy.Refusal):
             return _text(validated.reason, True)
         args = validated.args
+        window_id = args.get("window_id") if type(args.get("window_id")) is int else None
         try:
             driver = None
             forward_args = validated.args
@@ -519,11 +520,16 @@ class ComputerServer:
             if "pid" in args:
                 pid = args["pid"]
                 driver = await self._runtime_driver()
-                bundle_id, app_name, refusal = await platform.current().identify(driver, pid)
+                bundle_id, app_name, refusal = await platform.current().identify(driver, pid, window_id=window_id)
                 if refusal is not None:
                     return _text(refusal, True)
             elif tool == "computer_launch_app":
                 bundle_id = args["bundle_id"]
+                launch_args = platform.current().launch_target(bundle_id)
+                if launch_args is None:
+                    return _text("Launch target is no longer available or permitted.", True)
+                forward_args = {key: value for key, value in forward_args.items() if key != "bundle_id"}
+                forward_args.update(launch_args)
                 try:
                     driver = await self._runtime_driver()
                     app_name = await asyncio.wait_for(driver.installed_app_name(bundle_id), LAUNCH_NAME_TIMEOUT)
@@ -563,7 +569,7 @@ class ComputerServer:
             if not approved:
                 return _text(str(reason), True)
             if pid is not None:
-                current_bundle, _, refusal = await platform.current().identify(driver, pid)
+                current_bundle, _, refusal = await platform.current().identify(driver, pid, window_id=window_id)
                 if refusal is not None:
                     return _text(refusal, True)
                 if (not policy.valid_bundle_id(bundle_id) or not policy.valid_bundle_id(current_bundle)
@@ -636,7 +642,8 @@ class ComputerServer:
                 if stop_reason is not None:
                     break
                 if i > 0 and "pid" in base:
-                    current, _, refusal = await platform.current().identify(driver, base["pid"])
+                    window_id = base.get("window_id") if type(base.get("window_id")) is int else None
+                    current, _, refusal = await platform.current().identify(driver, base["pid"], window_id=window_id)
                     if (refusal is not None or not policy.valid_bundle_id(current)
                             or current.casefold() != params["bundle_id"].casefold()):
                         entries.append({"index": i, "ok": False, "code": "target_changed",

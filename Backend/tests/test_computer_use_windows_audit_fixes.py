@@ -93,7 +93,7 @@ def test_split_batch_dispatches_all_steps_when_identity_stays_same(win, batch, m
     handler, driver, app_id, args = batch
     dispatch_counts = []
 
-    async def identify(driver_arg, pid):
+    async def identify(driver_arg, pid, window_id=None):
         assert driver_arg is driver and pid == 41
         dispatch_counts.append(driver.call.await_count)
         return app_id, "Editor", None

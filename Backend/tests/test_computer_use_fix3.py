@@ -68,7 +68,7 @@ def test_stop_during_identity_or_fronting_prevents_input(monkeypatch, tmp_path, 
             hotkey.halted_at = 1.0
         else:
             hotkey.registered = False
-    async def identify(*args):
+    async def identify(*args, window_id=None):
         nonlocal identities
         identities += 1
         if identities == (3 if shape == "split" else 2) and shape != "foreground":

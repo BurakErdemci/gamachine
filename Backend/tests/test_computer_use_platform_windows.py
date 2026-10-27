@@ -269,12 +269,16 @@ def test_panels_errors_and_running_apps(win, monkeypatch):
     assert asyncio.run(win.running_apps()) == []
 
 
-def test_windows_launch_tool_refused_before_arguments(win, monkeypatch):
+def test_windows_launch_targets(win, monkeypatch):
     assert policy.platform is platform
     monkeypatch.setattr(platform, "current", lambda: win)
     result = policy.validate_call("computer_launch_app", {"bundle_id": r"win:c:\apps\editor.exe"})
     assert isinstance(result, policy.Refusal)
-    assert result.reason == "Bu araç bu işletim sisteminde henüz kullanılamıyor."
+    result = policy.validate_call("computer_launch_app", {
+        "bundle_id": "aumid:Microsoft.Paint_8wekyb3d8bbwe!App"})
+    assert isinstance(result, policy.Validated)
+    assert isinstance(policy.validate_call("computer_launch_app", {
+        "bundle_id": "aumid:Microsoft.WindowsStore_8wekyb3d8bbwe!App"}), policy.Refusal)
 
 
 def test_win32_unavailable_returns_safe_defaults(monkeypatch):
