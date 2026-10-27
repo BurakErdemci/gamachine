@@ -7,7 +7,7 @@ import type { HttpClient } from './remote-control'
 
 const HOST_BUNDLE_ID = 'com.gamachine.app'
 // The Windows driver loses list_apps rows without these; measured 26 Oct 2026.
-const WIN_ENV_KEYS = ['PATH', 'SYSTEMROOT', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData',
+export const WIN_ENV_KEYS = ['PATH', 'SYSTEMROOT', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData',
   'ALLUSERSPROFILE', 'TEMP', 'TMP', 'USERNAME', 'HOMEDRIVE', 'HOMEPATH']
 
 export interface ComputerUseDeps {

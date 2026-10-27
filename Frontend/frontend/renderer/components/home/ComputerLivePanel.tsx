@@ -31,7 +31,9 @@ const EMPTY: LiveState = { active: false, running: false, conversationId: null, 
 const ipcOf = (): any => (typeof window !== 'undefined' ? (window as any).ipc : null);
 
 const isMac = () => typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent || '');
-export const haltKeys = () => (isMac() ? '⌘⇧Esc' : 'Ctrl+Shift+Esc');
+const isWindows = () => typeof navigator !== 'undefined' && /Win/i.test(navigator.platform || navigator.userAgent || '');
+// Must match haltShortcut() in main/helpers/computer-use-live.ts.
+export const haltKeys = () => (isMac() ? '⌘⇧Esc' : isWindows() ? 'Ctrl+Alt+Esc' : 'Ctrl+Shift+Esc');
 
 function toState(raw: any): LiveState {
   if (!raw || typeof raw !== 'object') return EMPTY;

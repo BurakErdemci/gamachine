@@ -1,6 +1,7 @@
 import path from 'path'
 import type { ChildProcess, SpawnOptions } from 'child_process'
 import type { HttpClient } from './remote-control'
+import { WIN_ENV_KEYS } from './computer-use'
 
 /** One computer call the backend let through (Backend/app/computer_use/activity.py). */
 export interface LiveAction {
@@ -603,15 +604,16 @@ export class ComputerLive {
     // The same minimal environment ComputerUseHost gives the daemon: no app token, no UI secret.
     const home = path.join(this.deps.userData, 'cua', 'home')
     const env = {} as NodeJS.ProcessEnv
-    for (const key of ['PATH', 'HOME', 'TMPDIR']) {
+    const win = this.deps.platform === 'win32'
+    for (const key of win ? WIN_ENV_KEYS : ['PATH', 'HOME', 'TMPDIR']) {
       if (process.env[key] !== undefined) env[key] = process.env[key]
     }
     Object.assign(env, {
       CUA_DRIVER_EMBEDDED: '1', DO_NOT_TRACK: '1', CUA_DRIVER_RS_TELEMETRY_ENABLED: '0',
       CUA_DRIVER_RS_UPDATE_CHECK: '0', CUA_DRIVER_DISABLE_RUN_SCRIPT: '1',
-      CUA_DRIVER_HOST_BUNDLE_ID: 'com.gamachine.app',
       CUA_DRIVER_RS_HOME: home, CUA_DRIVER_TELEMETRY_HOME: home,
     })
+    if (!win) env.CUA_DRIVER_HOST_BUNDLE_ID = 'com.gamachine.app'
     return env
   }
 
