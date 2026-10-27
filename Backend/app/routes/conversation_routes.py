@@ -2784,7 +2784,10 @@ Max 300 kelime. Türkçe yaz.
         _check_token(x_session_token)
         if not approval_mode.check_ui_secret(x_ui_secret):
             raise HTTPException(status_code=403, detail="Uygulama izni yalnız uygulama arayüzünden kaldırılabilir.")
-        return {"removed": computer_settings.remove_grant(db, bundle_id)}
+        removed = computer_settings.remove_grant(db, bundle_id)
+        _computer_session_grants.difference_update(
+            {key for key in _computer_session_grants if key[1].casefold() == bundle_id.casefold()})
+        return {"removed": removed}
 
     @router.get("/chat-title-setting")
     async def get_chat_title_setting(x_session_token: str = Header(alias="X-Session-Token", default="")):
