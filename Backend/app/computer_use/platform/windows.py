@@ -50,7 +50,7 @@ _DENIED_PACKAGES = (
     "microsoft.windowscommunicationsapps",
     "pythonsoftwarefoundation.", "canonicalgrouplimited.",
     "microsoftcorporationii.windowssubsystemforlinux", "microsoft.windowssubsystemforlinux",
-    "microsoft.sechealthui",
+    "microsoft.sechealthui", "kalilinux.", "thedebianproject.",
 )
 _ENV_KEYS = ("PATH", "SYSTEMROOT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
              "ProgramData", "ALLUSERSPROFILE", "TEMP", "TMP", "USERNAME",

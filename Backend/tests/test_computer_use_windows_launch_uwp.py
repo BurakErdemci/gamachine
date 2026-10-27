@@ -107,7 +107,7 @@ def test_aumid_launch_forwarded_and_gated_by_aumid(win, proxy, app_id):
     "Microsoft.WindowsCommunicationsApps", "MICROSOFT.WindowsTerminalPreview",
     "PythonSoftwareFoundation.Python.3.13", "CanonicalGroupLimited.Ubuntu",
     "MicrosoftCorporationII.WindowsSubsystemForLinux", "Microsoft.WindowsSubsystemForLinux",
-    "Microsoft.SecHealthUI",
+    "Microsoft.SecHealthUI", "KaliLinux.54290C8133FEE", "TheDebianProject.DebianGNULinux",
 ])
 def test_denied_packaged_families(win, proxy, family):
     app_id = "aumid:" + family + "_8wekyb3d8bbwe!App"
@@ -129,6 +129,12 @@ def test_denied_packaged_families(win, proxy, family):
 def test_invalid_or_system_aumid_refused(win, app_id):
     assert not win.valid_app_id(app_id)
     assert isinstance(policy.validate_call("computer_launch_app", {"bundle_id": app_id}), policy.Refusal)
+
+
+@pytest.mark.parametrize("window_id", [100.0, "100", [100], 0, -5])
+def test_non_integer_window_id_refused_before_identity(window_id):
+    refusal = policy.validate_call("computer_click", {"pid": 41, "window_id": window_id, "x": 1, "y": 1})
+    assert isinstance(refusal, policy.Refusal)
 
 
 def test_desktop_launch_preserves_filesystem_case(win, proxy, monkeypatch):

@@ -89,6 +89,9 @@ def _keys(args, allowed, required, *, batch=False):
             return Refusal(f"Missing required argument: {key}")
     if "pid" in args and (type(args["pid"]) is not int or args["pid"] <= 0):
         return Refusal("pid must be a positive integer")
+    # The ownership check in identify() only runs for int window ids; anything else would skip it.
+    if "window_id" in args and (type(args["window_id"]) is not int or args["window_id"] <= 0):
+        return Refusal("window_id must be a positive integer")
     for key in _NUMERIC_KEYS.intersection(args):
         if batch and key == "delay_ms":
             continue  # The batch range check also rejects booleans.
