@@ -72,6 +72,7 @@ WINDOWS_INSTRUCTIONS = (
     "and leaves it there. Use computer_bring_to_front only if that is refused too."
     " Send multi-step foreground work (for example renaming: return, type the name, return) as ONE "
     "computer_run_steps with delivery_mode foreground."
+    " When the user asks you to do something in an app, do it in that app with these tools; do not answer from your own reasoning or by reading files instead, unless the user allows it."
 )
 
 
