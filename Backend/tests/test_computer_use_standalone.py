@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import io
 import json
+import sys
 import zipfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -36,6 +37,10 @@ class FakeHotkey:
 
     def clear(self):
         self.halted_at = None
+
+
+# The server's session lock uses msvcrt, which exists only on Windows.
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="session lock uses msvcrt")
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +131,7 @@ def test_startup_refusals_are_ordered(monkeypatch, stage, expected):
     assert hotkey.started is (stage >= 6)
 
 
+@windows_only
 def test_main_supplies_local_components_and_stops_hotkey(monkeypatch):
     write_config()
     hotkey = FakeHotkey()
@@ -143,6 +149,7 @@ def test_main_supplies_local_components_and_stops_hotkey(monkeypatch):
     assert hotkey.started and hotkey.stopped
 
 
+@windows_only
 def test_main_stops_hotkey_when_server_fails(monkeypatch):
     hotkey = FakeHotkey()
     monkeypatch.setattr(entry, "HaltHotkey", lambda: hotkey)
@@ -372,6 +379,7 @@ def test_server_runtime_injection_and_close_order(monkeypatch):
     assert order == ["driver", "runtime"]
 
 
+@windows_only
 def test_session_lock_excludes_second_session_and_releases():
     first, second = entry.SessionLock(), entry.SessionLock()
     try:
