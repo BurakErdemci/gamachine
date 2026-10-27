@@ -72,7 +72,7 @@ def test_entries_contain_only_the_stable_backend_url_and_owner(monkeypatch, sour
         "env": {CONVERSATION_ENV: "7", "UNITYAI_URL": url},
     }
     entry = {"command": argv[0], "args": argv[1:], "env": {"UNITYAI_URL": url},
-             "default_tools_approval_mode": "approve"}
+             "default_tools_approval_mode": "approve", "tool_timeout_sec": 180.0}
     assert registration.codex_thread_entry(()) == entry
     assert registration.codex_thread_entry((CONVERSATION_ENV,)) == {
         **entry, "env_vars": [CONVERSATION_ENV],

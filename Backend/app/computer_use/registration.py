@@ -45,6 +45,8 @@ def codex_thread_entry(forward_env) -> dict | None:
                 "UNITYAI_URL", os.environ.get("ANTIGRAVITY_URL", "http://localhost:8000")),
         },
         "default_tools_approval_mode": "approve",
+        # Longer than approval_bridge's 150 s card wait so Codex does not give up on a pending card.
+        "tool_timeout_sec": 180.0,
     }
     if forward_env:
         entry["env_vars"] = list(forward_env)
