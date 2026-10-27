@@ -4,9 +4,11 @@ import os
 from pathlib import Path
 
 
+# CI runs on Linux, where LOCALAPPDATA is unset; importing must not fail there.
 STATE_DIR = (Path(os.environ["GAMACHINE_CU_STANDALONE_DIR"])
              if "GAMACHINE_CU_STANDALONE_DIR" in os.environ else
-             Path(os.environ["LOCALAPPDATA"]) / "Gamachine" / "computer-use-standalone")
+             Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+             / "Gamachine" / "computer-use-standalone")
 WHEEL_URL = ("https://files.pythonhosted.org/packages/11/70/"
              "97a2aae9d289623151028ec1b8ba5a12763843bacf66b2ac9b3250f991b4/"
              "cua_driver-0.35.4-py3-none-win_amd64.whl")
