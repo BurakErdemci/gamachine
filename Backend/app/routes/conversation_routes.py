@@ -1478,6 +1478,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         # Memory store'ları temizle (unbounded growth önlemi)
         scope_plan_store.pop(conv_id, None)
         continuation_store.pop(conv_id, None)
+        # A deleted halted chat otherwise stops every unowned batch.
+        _computer_halted.discard(conv_id)
         # Deny, never leave: an open card of a deleted chat was approved by a
         # later switch to auto (Codex branchaudit, 26 Sep 2026). MCP cards go
         # the way Stop sends them; in-process gates are woken with no result,
