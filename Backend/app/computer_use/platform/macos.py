@@ -342,7 +342,7 @@ async def fetch_runtime() -> tuple[str, str]:
         binary, socket = runtime.get("driver_path"), runtime.get("socket_path")
         if (not isinstance(binary, str) or not os.path.isabs(binary)
                 or os.path.basename(binary) != current().driver_basename or not os.path.isfile(binary)
-                or not isinstance(socket, str) or not os.path.isabs(socket)):
+                or not isinstance(socket, str) or not current().valid_socket(socket)):
             raise DriverUnavailable("Embedded computer-use driver runtime is invalid")
         return binary, socket
     except (httpx.HTTPError, OSError, ValueError, TypeError) as exc:
@@ -451,6 +451,9 @@ class MacPlatform:
 
     def valid_app_id(self, value) -> bool:
         return valid_bundle_id(value)
+
+    def valid_socket(self, path: str) -> bool:
+        return os.path.isabs(path)
 
     def is_hard_denied(self, app_id: str, pid: int | None) -> bool:
         return is_hard_denied(app_id)

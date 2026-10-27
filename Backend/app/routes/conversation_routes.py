@@ -2702,7 +2702,7 @@ Max 300 kelime. Türkçe yaz.
                 or (socket_path is not None and not isinstance(socket_path, str))):
             raise HTTPException(status_code=400, detail="Bilgisayar kullanımı çalışma durumu geçersiz.")
         if running and (not driver_path or not os.path.isabs(driver_path) or not os.path.isfile(driver_path)
-                        or not socket_path or not os.path.isabs(socket_path)):
+                        or not socket_path or not computer_platform.current().valid_socket(socket_path)):
             raise HTTPException(status_code=400, detail="Bilgisayar kullanımı sürücü ve soket yolları geçersiz.")
         _computer_runtime.update(running=running, driver_path=driver_path if running else None,
                                  socket_path=socket_path if running else None)

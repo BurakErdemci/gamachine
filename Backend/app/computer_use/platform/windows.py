@@ -99,6 +99,9 @@ class WindowsPlatform:
         self.win32 = win32
         self.win32.set_dpi_awareness()
 
+    def valid_socket(self, path: str) -> bool:
+        return re.fullmatch(r"\\\\\.\\pipe\\[A-Za-z0-9._-]{1,200}", path) is not None
+
     def valid_app_id(self, value) -> bool:
         if not isinstance(value, str):
             return False

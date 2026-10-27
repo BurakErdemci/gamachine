@@ -72,7 +72,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
     if (!status) return;
     const before = prevPerms.current;
     prevPerms.current = status.permissions;
-    if (!before || !status.settings.enabled || !status.available) return;
+    if (!before || !status.settings.enabled || !status.available || status.platform !== 'darwin') return;
     const gained = (!before.accessibility && status.permissions.accessibility)
       || (before.screen !== 'granted' && status.permissions.screen === 'granted');
     if (gained) void restartComputerUse().then(() => refresh());
@@ -104,6 +104,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
   const enabled = status?.settings.enabled === true;
   const available = status?.available === true;
   const perms = status?.permissions;
+  const mac = (status?.platform ?? 'darwin') === 'darwin';
   const screenOk = perms?.screen === 'granted';
 
   const toggle = () => run('switch', () => setComputerUseEnabled(!enabled), r => {
@@ -115,7 +116,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
   const masterHint = !desktop ? t('cu.set.desktopOnly')
     : readFailed ? t('cu.set.readFailed')
     : !status ? t('cu.set.loading')
-    : !available ? t('cu.set.unavailable')
+    : !available ? t(mac ? 'cu.set.unavailable' : 'cu.set.unavailableOther')
     : enabled ? t('cu.set.masterOn') : t('cu.set.masterOff');
   const masterTone = !status || !available ? undefined : enabled ? 'ok' : undefined;
 
@@ -129,7 +130,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
 
   return (
     <div className="cu-page" data-testid="cu-page" data-desktop={desktop ? 'true' : 'false'}>
-      <SetPageHead title={t('set.nav.bilgisayar')} lede={t('cu.set.lede')} />
+      <SetPageHead title={t('set.nav.bilgisayar')} lede={t(mac ? 'cu.set.lede' : 'cu.set.ledeOther')} />
       <p className="set-msg">{t('cu.set.providers')}</p>
 
       <SetGroup>
@@ -164,7 +165,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
 
       {desktop && status && available && (
         <>
-          <SetGroup title={t('cu.set.perms')} note={t('cu.set.permsNote')} testId="cu-perms">
+          {mac && <SetGroup title={t('cu.set.perms')} note={t('cu.set.permsNote')} testId="cu-perms">
             <SetCard>
               <SetRow
                 testId="cu-perm-ax"
@@ -192,7 +193,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
               />
             </SetCard>
             {(!perms?.accessibility || !screenOk) && <p className="set-msg cu-after">{t('cu.set.afterGrant')}</p>}
-          </SetGroup>
+          </SetGroup>}
 
           <SetGroup title={t('cu.set.driver')} testId="cu-driver">
             <SetCard>

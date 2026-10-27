@@ -6,6 +6,9 @@ import type { Socket } from 'net'
 import type { HttpClient } from './remote-control'
 
 const HOST_BUNDLE_ID = 'com.gamachine.app'
+// The Windows driver loses list_apps rows without these; measured 26 Oct 2026.
+const WIN_ENV_KEYS = ['PATH', 'SYSTEMROOT', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData',
+  'ALLUSERSPROFILE', 'TEMP', 'TMP', 'USERNAME', 'HOMEDRIVE', 'HOMEPATH']
 
 export interface ComputerUseDeps {
   platform: string
@@ -60,12 +63,13 @@ export class ComputerUseHost {
 
   driverPath(): string {
     const p = this.deps.paths
-    return p.resourcesPath ? path.join(p.resourcesPath, 'cua', 'cua-driver')
-      : path.join(p.repoRoot, 'Backend', 'vendor', 'cua', 'cua-driver')
+    const file = this.deps.platform === 'win32' ? 'cua-driver.exe' : 'cua-driver'
+    return p.resourcesPath ? path.join(p.resourcesPath, 'cua', file)
+      : path.join(p.repoRoot, 'Backend', 'vendor', 'cua', file)
   }
 
   get available(): boolean {
-    return this.deps.platform === 'darwin' && this.deps.fs.existsSync(this.driverPath())
+    return (this.deps.platform === 'darwin' || this.deps.platform === 'win32') && this.deps.fs.existsSync(this.driverPath())
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -122,7 +126,10 @@ export class ComputerUseHost {
 
   private cleanSocket() {
     if (this.socketPath) {
-      try { this.deps.fs.unlinkSync(this.socketPath) } catch { /* already absent */ }
+      // A Windows named pipe vanishes with its daemon; there is no file to unlink.
+      if (this.deps.platform !== 'win32') {
+        try { this.deps.fs.unlinkSync(this.socketPath) } catch { /* already absent */ }
+      }
       this.socketPath = null
     }
     if (this.fallbackDir) {
@@ -137,6 +144,10 @@ export class ComputerUseHost {
     for (const dir of [root, home]) {
       this.deps.fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
       this.deps.fs.chmodSync(dir, 0o700)
+    }
+    if (this.deps.platform === 'win32') {
+      this.socketPath = `\\\\.\\pipe\\gamachine-cua-${randomBytes(4).toString('hex')}`
+      return home
     }
     const name = `d-${randomBytes(4).toString('hex')}.sock`
     this.socketPath = path.join(root, name)
@@ -181,20 +192,23 @@ export class ComputerUseHost {
     const home = this.preparePaths()
     // Next's global types make NODE_ENV required; the driver deliberately gets none.
     const env = {} as NodeJS.ProcessEnv
-    for (const key of ['PATH', 'HOME', 'TMPDIR']) {
+    const win = this.deps.platform === 'win32'
+    for (const key of win ? WIN_ENV_KEYS : ['PATH', 'HOME', 'TMPDIR']) {
       if (process.env[key] !== undefined) env[key] = process.env[key]
     }
     Object.assign(env, {
       CUA_DRIVER_EMBEDDED: '1', DO_NOT_TRACK: '1', CUA_DRIVER_RS_TELEMETRY_ENABLED: '0',
       CUA_DRIVER_RS_UPDATE_CHECK: '0', CUA_DRIVER_DISABLE_RUN_SCRIPT: '1',
-      CUA_DRIVER_HOST_BUNDLE_ID: HOST_BUNDLE_ID,
       CUA_DRIVER_RS_HOME: home, CUA_DRIVER_TELEMETRY_HOME: home,
     })
+    if (!win) env.CUA_DRIVER_HOST_BUNDLE_ID = HOST_BUNDLE_ID
     this.intentionalStop = false
     try {
-      const child = this.deps.spawn(this.driverPath(), ['serve', '--embedded', '--socket', this.socketPath!,
-        '--permission-mode', 'standard', '--host-bundle-id', HOST_BUNDLE_ID, '--no-permissions-gate'],
-      { env, stdio: ['ignore', 'pipe', 'pipe'] })
+      // --no-overlay: the driver's own overlay window would otherwise show up in window lists.
+      const args = win ? ['serve', '--embedded', '--socket', this.socketPath!, '--no-overlay']
+        : ['serve', '--embedded', '--socket', this.socketPath!,
+          '--permission-mode', 'standard', '--host-bundle-id', HOST_BUNDLE_ID, '--no-permissions-gate']
+      const child = this.deps.spawn(this.driverPath(), args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
       this.child = child
       const exited = () => {
         if (this.child !== child) return
@@ -323,7 +337,7 @@ export class ComputerUseHost {
           const appAx = this.deps.platform === 'darwin' && this.deps.systemPreferences.isTrustedAccessibilityClient(false)
           const appScreen = this.deps.platform === 'darwin' ? this.deps.systemPreferences.getMediaAccessStatus('screen') : 'not-determined'
           const drv = await this.driverPermissions()
-          return { available: this.available, running: this.running, settings, permissions: {
+          return { available: this.available, running: this.running, platform: this.deps.platform, settings, permissions: {
             accessibility: drv === null ? appAx : drv.accessibility,
             screen: drv === null ? appScreen : (drv.screen ? 'granted' : (appScreen === 'granted' ? 'denied' : appScreen)),
           } }
@@ -364,7 +378,8 @@ export class ComputerUseHost {
           await this.reconcile()
           return { running: this.running }
         case 'remove-grant':
-          if (typeof bundleId !== 'string' || !/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId) || bundleId.length > 255) break
+          if (typeof bundleId !== 'string' || !(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(bundleId) && bundleId.length <= 255
+            || this.deps.platform === 'win32' && /^win:[^\x00-\x1f]{1,1020}$/.test(bundleId))) break
           return (await this.request('delete', `/computer-use/grants/${encodeURIComponent(bundleId)}`, undefined, true)).data
         case 'answer-card':
           if (typeof gateId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(gateId)

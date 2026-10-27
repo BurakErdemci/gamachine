@@ -58,7 +58,7 @@ describe('fetch-cua-driver (offline, no real subprocesses)', () => {
   })
   it('is a no-op on other platforms', async () => {
     const f = fixture()
-    await fetchCuaDriver({ ...f.options, platform: 'win32' })
+    await fetchCuaDriver({ ...f.options, platform: 'linux' })
     expect(f.fs.readFileSync).not.toHaveBeenCalled()
     expect(f.download).not.toHaveBeenCalled()
     expect(f.options.log).toHaveBeenCalled()

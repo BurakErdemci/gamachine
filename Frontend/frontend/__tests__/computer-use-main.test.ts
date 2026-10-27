@@ -336,7 +336,7 @@ describe('ComputerUseHost', () => {
     ['darwin', true, true, 'auto', 1], ['darwin', false, true, 'auto', 0],
     ['darwin', true, false, 'auto', 0], ['darwin', true, true, 'balanced', 1],
     ['darwin', true, true, 'step', 1], ['darwin', true, false, 'step', 0],
-    ['win32', true, true, 'auto', 0], ['win32', true, true, 'step', 0],
+    ['linux', true, true, 'auto', 0], ['linux', true, true, 'step', 0],
   ])('reconciles %s available=%s enabled=%s mode=%s', async (platform, available, enabled, mode, count) => {
     const f = fixture({ platform: platform as string, available: available as boolean })
     f.settings({ enabled: enabled as boolean, mode: mode as string })

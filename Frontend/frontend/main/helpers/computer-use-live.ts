@@ -89,6 +89,8 @@ export interface ComputerLiveDeps {
 export const LIVE_CHANNEL = 'computer-use-live'
 export const LIVE_OPEN_EVENT = 'computer-use-live-open'
 export const HALT_SHORTCUT = 'CommandOrControl+Shift+Escape'
+// On Windows Ctrl+Shift+Esc opens Task Manager.
+export const haltShortcut = (platform: string) => platform === 'win32' ? 'Control+Alt+Escape' : HALT_SHORTCUT
 export const POLL_MS = 1000
 // ~8 fps: a 480 px frame took a median 66 ms on the real driver (15 Oct 2026),
 // so 125 ms leaves the driver idle half the time.
@@ -409,7 +411,7 @@ export class ComputerLive {
   private registerShortcut() {
     if (this.shortcutOn) return
     try {
-      this.shortcutOn = this.deps.shortcut.register(HALT_SHORTCUT, () => { void this.halt().catch(() => {}) })
+      this.shortcutOn = this.deps.shortcut.register(haltShortcut(this.deps.platform), () => { void this.halt().catch(() => {}) })
       if (!this.shortcutOn) this.log('[cua-live] halt shortcut is taken by another app')
     } catch (error) {
       this.log('[cua-live] halt shortcut failed', error instanceof Error ? error.message : String(error))
@@ -419,7 +421,7 @@ export class ComputerLive {
   private unregisterShortcut() {
     if (!this.shortcutOn) return
     this.shortcutOn = false
-    try { this.deps.shortcut.unregister(HALT_SHORTCUT) } catch { /* already gone at quit */ }
+    try { this.deps.shortcut.unregister(haltShortcut(this.deps.platform)) } catch { /* already gone at quit */ }
   }
 
   // --- indicator --------------------------------------------------------

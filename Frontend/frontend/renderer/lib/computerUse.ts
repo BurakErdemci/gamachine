@@ -11,6 +11,8 @@ export interface ComputerGrant { bundle_id: string; app_name: string; granted_at
 export interface ComputerUseStatus {
   available: boolean;
   running: boolean;
+  /** Host OS (`process.platform`); drives which permission steps the page shows. */
+  platform: string;
   settings: {
     enabled: boolean;
     active?: boolean;
@@ -55,6 +57,7 @@ export const parseComputerUseStatus = (v: unknown): ComputerUseStatus | null => 
   return {
     available: s.available,
     running: s.running === true,
+    platform: typeof s.platform === 'string' ? s.platform : 'darwin',
     settings: { ...s.settings, grants },
     permissions: {
       accessibility: s.permissions.accessibility === true,

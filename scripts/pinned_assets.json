@@ -24,6 +24,12 @@
       "size": 49233277,
       "kaynak": "pypi"
     },
+    "cua-driver/windows-x64": {
+      "url": "https://files.pythonhosted.org/packages/11/70/97a2aae9d289623151028ec1b8ba5a12763843bacf66b2ac9b3250f991b4/cua_driver-0.35.4-py3-none-win_amd64.whl",
+      "digest": "sha256:617ba777b0b711c55f8d7c7ec7d51b037e0c7b016140f9a819fcfe49d3ea9738",
+      "size": 32176026,
+      "kaynak": "pypi"
+    },
     "omnisharp/win-x64": {
       "url": "https://github.com/OmniSharp/omnisharp-roslyn/releases/download/v1.39.15/omnisharp-win-x64-net6.0.zip",
       "digest": "sha256:b03eb6b9ac6446fce803b87c0965e94cef5570cc86f47bfefe2f60933d8658e8",

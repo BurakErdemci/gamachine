@@ -129,6 +129,13 @@ mac:
       arch:
         - arm64
 win:
+  extraResources:
+    - from: ../../Backend/vendor/cua
+      to: cua
+      filter:
+        - cua-driver.exe
+    - from: resources/licenses/cua-driver-LICENSE.md
+      to: cua/LICENSE
   target:
     - target: nsis
       arch:
