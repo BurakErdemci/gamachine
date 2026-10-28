@@ -1,5 +1,6 @@
 import hashlib
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -61,6 +62,7 @@ def test_failed_swap_preserves_old_destination(resources, monkeypatch, fail_at):
     manager._ensure_writable_resources()
     bridge = destination / "MCPForUnity"
     (bridge / "old-sentinel").write_text("usable", encoding="utf-8")
+    (bridge / ".gamachine-source-digest").write_text(module._tree_digest(bridge), encoding="utf-8")
     (root / "unity-mcp" / "MCPForUnity" / "new.cs").write_text("changed", encoding="utf-8")
     original = os.replace
     calls = 0
@@ -68,7 +70,7 @@ def test_failed_swap_preserves_old_destination(resources, monkeypatch, fail_at):
     def fail_swap(source, target):
         nonlocal calls
         calls += 1
-        if calls >= fail_at:
+        if calls == fail_at:
             raise OSError("swap denied")
         return original(source, target)
 
@@ -77,6 +79,149 @@ def test_failed_swap_preserves_old_destination(resources, monkeypatch, fail_at):
     assert (bridge / "old-sentinel").read_text() == "usable"
     assert manager.local_mcp_source == str(bridge)
     assert not Path(str(bridge) + ".new").exists()
+
+
+def seal(path):
+    (path / ".gamachine-source-digest").write_text(module._tree_digest(path), encoding="utf-8")
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_recovers_newest_complete_backup_before_failed_refresh(resources, monkeypatch, incomplete):
+    manager, root, destination = resources
+    bridge = destination / "MCPForUnity"
+    for name, content in ((".old-1", "older"), (".old-2", "newest"), (".old-3", "broken")):
+        backup = Path(str(bridge) + name)
+        backup.mkdir(parents=True)
+        (backup / "package.json").write_text(content)
+        seal(backup)
+        os.utime(backup, ns=(int(name[-1]) * 1000000000,) * 2)
+        if content == "broken":
+            (backup / "partial").write_text("incomplete")
+    if incomplete:
+        bridge.mkdir()
+        (bridge / "partial").write_text("incomplete")
+    original = shutil.copytree
+
+    def fail_stage(source, target, *args, **kwargs):
+        if str(source) == str(root / "unity-mcp" / "MCPForUnity"):
+            raise OSError("disk full")
+        return original(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copytree", fail_stage)
+    manager._ensure_writable_resources()
+    assert (bridge / "package.json").read_text() == "newest"
+    assert manager.local_mcp_source == str(bridge)
+    assert (Path(str(bridge) + ".old-1") / "package.json").read_text() == "older"
+
+
+def test_abrupt_exit_between_renames_is_recovered_on_next_run(resources, monkeypatch):
+    manager, root, destination = resources
+    manager._ensure_writable_resources()
+    bridge = destination / "MCPForUnity"
+    (root / "unity-mcp" / "MCPForUnity" / "new.cs").write_text("changed")
+    original = os.replace
+
+    class AbruptExit(BaseException):
+        pass
+
+    def crash(source, target):
+        if str(source).startswith(str(bridge) + ".new-"):
+            raise AbruptExit()
+        return original(source, target)
+
+    monkeypatch.setattr(module.os, "replace", crash)
+    with pytest.raises(AbruptExit):
+        manager._ensure_writable_resources()
+    assert not bridge.exists()
+    assert list(destination.glob("MCPForUnity.old-*"))
+
+    def deny_promotion(source, target):
+        if str(source).startswith(str(bridge) + ".new-"):
+            raise OSError("promotion denied")
+        return original(source, target)
+
+    monkeypatch.setattr(module.os, "replace", deny_promotion)
+    manager._ensure_writable_resources()
+    assert (bridge / "package.json").read_text() == "same version"
+    assert manager.local_mcp_source == str(bridge)
+
+
+def test_failed_promotion_and_restore_keep_attribute_and_backup(resources, monkeypatch):
+    manager, root, destination = resources
+    manager._ensure_writable_resources()
+    bridge = destination / "MCPForUnity"
+    manager.local_mcp_source = "unchanged-source"
+    (root / "unity-mcp" / "MCPForUnity" / "new.cs").write_text("changed")
+    original = os.replace
+    copied = []
+    original_copy = shutil.copytree
+
+    def deny(source, target):
+        if str(source).startswith((str(bridge) + ".new-", str(bridge) + ".old-")):
+            raise OSError("denied")
+        return original(source, target)
+
+    def track_copy(source, target, *args, **kwargs):
+        copied.append(str(source))
+        return original_copy(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "replace", deny)
+    monkeypatch.setattr(shutil, "copytree", track_copy)
+    manager._ensure_writable_resources()
+    assert manager.local_mcp_source == "unchanged-source"
+    assert not bridge.exists()
+    assert any((backup / "package.json").read_text() == "same version"
+               for backup in destination.glob("MCPForUnity.old-*"))
+    assert not any(".old-" in path for path in copied)
+
+
+def test_undeletable_leftovers_are_logged_without_preventing_refresh(resources, monkeypatch, caplog):
+    manager, root, destination = resources
+    manager._ensure_writable_resources()
+    bridge = destination / "MCPForUnity"
+    (root / "unity-mcp" / "MCPForUnity" / "new.cs").write_text("changed")
+    leftovers = [Path(str(bridge) + suffix) for suffix in (".old-locked", ".new-locked")]
+    for path in leftovers:
+        path.mkdir()
+        (path / "locked").write_text("read only")
+    original = shutil.rmtree
+    retried = []
+
+    def deny(path, *args, **kwargs):
+        if Path(path) in leftovers:
+            def locked(target):
+                retried.append(target)
+                raise PermissionError("still locked")
+            kwargs["onerror"](locked, str(Path(path) / "locked"), (PermissionError, PermissionError("read only"), None))
+            return
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", deny)
+    manager._ensure_writable_resources()
+    assert (bridge / "new.cs").read_text() == "changed"
+    assert len(retried) == 2
+    assert all(path.exists() for path in leftovers)
+    assert "still locked" in caplog.text
+
+
+def test_read_only_leftover_is_removed_after_retry(resources):
+    import stat
+
+    manager, root, destination = resources
+    manager._ensure_writable_resources()
+    leftover = destination / "MCPForUnity.new-readonly"
+    leftover.mkdir()
+    locked = leftover / "locked"
+    locked.write_text("read only")
+    locked.chmod(stat.S_IREAD)
+    try:
+        (root / "unity-mcp" / "MCPForUnity" / "new.cs").write_text("changed")
+        manager._ensure_writable_resources()
+        assert not leftover.exists()
+        assert (destination / "MCPForUnity" / "new.cs").read_text() == "changed"
+    finally:
+        if locked.exists():
+            locked.chmod(stat.S_IWRITE)
 
 
 def test_tree_digest_order_paths_bytes_and_generated_exclusions(tmp_path):

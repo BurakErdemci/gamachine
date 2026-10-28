@@ -127,14 +127,47 @@ class UnityMCPManager:
         if not getattr(sys, "frozen", False):
             return  # Dev: kaynak repo zaten yazılabilir
         import shutil
+        import stat
+        import time
+        from pathlib import Path
+
+        def complete(path):
+            try:
+                with open(os.path.join(path, ".gamachine-source-digest"), encoding="utf-8") as stored:
+                    return stored.read() == _tree_digest(path)
+            except Exception:
+                return False
+
+        def remove_leftover(path):
+            def retry(operation, target, error):
+                os.chmod(target, os.stat(target).st_mode | stat.S_IWRITE)
+                operation(target)
+
+            try:
+                if os.path.isdir(path):
+                    shutil.rmtree(path, onerror=retry)
+            except Exception as error:
+                logger.warning("[UnityMCP] Could not remove leftover %s: %s", path, error)
+
         base = os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity-mcp")
         targets = [("Server", "server_dir"), ("MCPForUnity", "local_mcp_source")]
         for sub, attr in targets:
             src = os.path.join(self.project_root, "unity-mcp", sub)
             dst = os.path.join(base, sub)
-            staged, old = dst + ".new", dst + ".old"
+            suffix = f"-{os.getpid()}-{time.time_ns()}"
+            staged, old = dst + ".new" + suffix, dst + ".old" + suffix
             try:
+                backups = sorted((path for path in Path(base).glob(sub + ".old*") if path.is_dir()),
+                                 key=lambda path: path.stat().st_mtime_ns, reverse=True)
+                if backups and not complete(dst):
+                    recovered = next((path for path in backups if complete(path)), None)
+                    if recovered is not None:
+                        if os.path.exists(dst):
+                            os.replace(dst, old)
+                        os.replace(recovered, dst)
                 if not os.path.isdir(src):
+                    if complete(dst):
+                        setattr(self, attr, dst)
                     continue
                 source_digest = _tree_digest(src)
                 digest_file = os.path.join(dst, ".gamachine-source-digest")
@@ -146,31 +179,27 @@ class UnityMCPManager:
                         with open(digest_file, encoding="utf-8") as stored:
                             need = stored.read() != source_digest
                 if need:
-                    if os.path.exists(staged):
-                        shutil.rmtree(staged)
                     shutil.copytree(src, staged)
                     with open(os.path.join(staged, ".gamachine-source-digest"), "w", encoding="utf-8") as stored:
                         stored.write(source_digest)
-                    if os.path.exists(old):
-                        shutil.rmtree(old)
                     if os.path.isdir(dst):
+                        old = dst + f".old-{os.getpid()}-{time.time_ns()}"
                         os.replace(dst, old)
                     os.replace(staged, dst)
-                    shutil.rmtree(old, ignore_errors=True)
                 setattr(self, attr, dst)
+                # Only retire backups after a usable destination has been retained or promoted.
+                for pattern in (sub + ".old*", sub + ".new*"):
+                    for leftover in Path(base).glob(pattern):
+                        remove_leftover(leftover)
             except Exception as e:
                 logger.warning(f"[UnityMCP] {sub} yazılabilir dizine kopyalanamadı: {e}")
-                shutil.rmtree(staged, ignore_errors=True)
+                remove_leftover(staged)
                 if not os.path.isdir(dst) and os.path.isdir(old):
                     try:
                         os.replace(old, dst)
                     except Exception:
-                        try:
-                            # A failed rename must not strand the previous usable copy.
-                            shutil.copytree(old, dst)
-                        except Exception:
-                            logger.warning("[UnityMCP] Could not restore %s", dst, exc_info=True)
-                if os.path.isdir(dst):
+                        logger.warning("[UnityMCP] Could not restore %s", dst, exc_info=True)
+                if complete(dst):
                     setattr(self, attr, dst)
         self.unity_mcp_repo = f"file:{self.local_mcp_source}"
 
