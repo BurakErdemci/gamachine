@@ -113,4 +113,4 @@ directory = "htmlcov"
 # key is pyproject.toml alone: `uvx --from` kept serving a 25 Sep build after
 # src/ had changed for three weeks (measured 14 Oct 2026, uv 0.11.23).
 # Package data such as services/registry/tool_actions.json (the approval gate's ledger) must rebuild the cached server too.
-cache-keys = [{ file = "pyproject.toml" }, { file = "uv.lock" }, { file = "src/**/*.py" }, { file = "src/**/*.json" }]
+cache-keys = [{ file = "pyproject.toml" }, { file = "uv.lock" }, { file = "src/**/*.py" }, { file = "src/**/*.json" }, { file = ".gamachine-source-digest" }]

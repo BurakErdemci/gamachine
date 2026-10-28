@@ -2,6 +2,10 @@
 
 import fnmatch
 import os
+import json
+import shutil
+import subprocess
+import sys
 from pathlib import Path, PurePath
 import tomllib
 
@@ -59,7 +63,50 @@ def test_launch_always_uses_cache(monkeypatch, tmp_path, marker_content):
 
 def test_cache_keys_cover_source_and_build_inputs(server_config):
     keys = {key["file"] for key in server_config["tool"]["uv"]["cache-keys"] if "file" in key}
-    assert {"pyproject.toml", "uv.lock", "src/**/*.py", "src/**/*.json"} <= keys
+    assert {"pyproject.toml", "uv.lock", "src/**/*.py", "src/**/*.json", ".gamachine-source-digest"} <= keys
+
+
+@pytest.mark.parametrize("has_digest", [False, True])
+def test_offline_uvx_accepts_missing_or_present_digest(server_config, tmp_path, has_digest):
+    uvx = shutil.which("uvx")
+    assert uvx, "The offline cache-key compatibility check requires the installed uvx"
+    source = tmp_path / "source"
+    (source / "src").mkdir(parents=True)
+    keys = json.dumps(server_config["tool"]["uv"]["cache-keys"]).replace(': ', ' = ')
+    (source / "pyproject.toml").write_text(
+        '[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n'
+        '[project]\nname="cache-key-check"\nversion="1.0"\ndependencies=[]\n'
+        '[project.scripts]\ncache-key-check="tool:main"\n'
+        '[tool.uv]\ncache-keys=' + keys + '\n', encoding="utf-8")
+    (source / "src" / "tool.py").write_text('def main():\n    print("CACHE-KEY-OK")\n', encoding="utf-8")
+    (source / "backend.py").write_text('''from pathlib import Path
+from zipfile import ZipFile
+def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+    name = "cache_key_check-1.0-py3-none-any.whl"
+    dist = "cache_key_check-1.0.dist-info/"
+    entries = {
+        "tool.py": Path("src/tool.py").read_text(),
+        dist + "METADATA": "Metadata-Version: 2.1\\nName: cache-key-check\\nVersion: 1.0\\n",
+        dist + "WHEEL": "Wheel-Version: 1.0\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n",
+        dist + "entry_points.txt": "[console_scripts]\\ncache-key-check=tool:main\\n",
+    }
+    entries[dist + "RECORD"] = "".join(key + ",,\\n" for key in entries) + dist + "RECORD,,\\n"
+    with ZipFile(Path(wheel_directory) / name, "w") as output:
+        for key, value in entries.items():
+            output.writestr(key, value)
+    return name
+''', encoding="utf-8")
+    if has_digest:
+        (source / ".gamachine-source-digest").write_text("fixture-digest", encoding="utf-8")
+    env = dict(os.environ, UV_OFFLINE="true", UV_NO_CONFIG="true", UV_PYTHON_DOWNLOADS="never",
+               UV_CACHE_DIR=str(tmp_path / "cache"), UV_TOOL_DIR=str(tmp_path / "tools"),
+               UV_TOOL_BIN_DIR=str(tmp_path / "bin"), UV_PYTHON_INSTALL_DIR=str(tmp_path / "python"),
+               UV_PYTHON=sys.executable)
+    # One child per parametrized case, with no network and a bounded runtime.
+    result = subprocess.run([uvx, "--offline", "--from", str(source), "cache-key-check"],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "CACHE-KEY-OK"
 
 
 def test_all_packaged_data_files_have_a_cache_key(server_config):
