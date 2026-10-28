@@ -1,6 +1,7 @@
 import React from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
 
 import { UnityMcpToggle } from '../renderer/components/home/UnityMcpToggle'
 import { cevir, ceviriUygula, LangContext } from '../renderer/lib/i18n'
@@ -31,6 +32,23 @@ describe('Unity bridge compile reason', () => {
     expect(screen.queryByRole('button', { name: cevir('unity.why') })).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByTestId('unity-bay').classList.contains('has-reason')).toBe(false)
+  })
+
+  it('ignores unknown running reason codes', () => {
+    render(<UnityMcpToggle {...props} status="running" reason={null} reasonCode="future_reason" reasonLines={['unknown']} slowConnect />)
+    expect(screen.queryByRole('button', { name: cevir('unity.why') })).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByTestId('unity-bay').classList.contains('has-reason')).toBe(false)
+    expect(document.querySelector('.unity-hint')).not.toBeNull()
+  })
+
+  it('preserves separate compiler lines without changing blocked whitespace', () => {
+    const lines = [...diagnostic.reasonLines, 'Other.cs(1,2): error CS0001: second error']
+    render(<UnityMcpToggle {...props} {...diagnostic} status="running" reason={null} reasonLines={lines} />)
+    expect(document.querySelector('.unity-compile-lines')?.textContent).toBe(lines.join('\n'))
+    const css = readFileSync('renderer/styles/gm/shell.css', 'utf-8')
+    expect(css).toMatch(/\.unity-compile-lines\s*\{[^}]*white-space:\s*pre-line/)
+    expect(css).toMatch(/\.unity-why\s*\{[^}]*white-space:\s*normal/)
   })
 
   it('removes the reason when the connection succeeds', () => {

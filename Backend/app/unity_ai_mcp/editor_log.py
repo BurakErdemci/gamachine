@@ -43,7 +43,7 @@ def bridge_compile_errors(path: str, limit: int = 5) -> list[str]:
         errors = []
         seen = set()
         for line in lines[last_compile:]:
-            match = re.match(r"(.+\.cs)\((\d+,\d+)\):\s*(error CS\d+:.*)", line)
+            match = re.match(r"^\s*((?:[A-Za-z]:)?[^:\r\n]+?\.cs)\((\d+,\d+)\):\s*(error CS\d+:.*)", line)
             if not match:
                 continue
             components = re.split(r"[/\\]", match.group(1))

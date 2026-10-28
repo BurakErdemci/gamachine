@@ -725,8 +725,8 @@ class UnityMCPManager:
           "port": 8080,
           "instances": [...],
           "reason": str | None,  # blocked only
-          "reason_code": str | None,  # running diagnostic, translated by the renderer
-          "reason_lines": list[str]  # raw compiler diagnostics
+          "reason_code": str,  # present only for running bridge errors; translated by the renderer
+          "reason_lines": list[str]  # present only for running bridge errors; raw compiler diagnostics
         }
 
         `reason` alanı bilerek BU uçtan dönüyor: sebep eskiden yalnız toggle
@@ -781,7 +781,7 @@ class UnityMCPManager:
             "instances": instances,
             "reason": None,
         }
-        if unity_status == UnityMCPStatus.RUNNING:
+        if reason_code is not None:
             result.update(reason_code=reason_code, reason_lines=reason_lines)
         return result
 

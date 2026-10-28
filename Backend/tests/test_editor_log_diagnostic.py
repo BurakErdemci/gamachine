@@ -104,9 +104,8 @@ def test_running_without_diagnostic_keeps_reason_empty(monkeypatch, raises):
 
     monkeypatch.setattr(module, "bridge_compile_errors", diagnostic)
     result = asyncio.run(manager.get_status())
-    assert result["reason"] is None
-    assert result["reason_code"] is None
-    assert result["reason_lines"] == []
+    assert result == {"status": "running", "pid": None, "port": 8080,
+                      "instances": [], "reason": None}
 
 
 @pytest.mark.parametrize("path", [
@@ -117,3 +116,19 @@ def test_message_and_partial_component_names_are_not_bridge_paths(tmp_path, path
     log = tmp_path / "Editor.log"
     log.write_text(f"{path}(1,2): error CS0234: MCPForUnity and com.coplaydev.unity-mcp missing", encoding="utf-8")
     assert bridge_compile_errors(str(log)) == []
+
+
+@pytest.mark.parametrize("source", ["Assets/User.cs", "Assets/User.js"])
+@pytest.mark.parametrize("diagnostic", ["error CS0001", "warning CS0001"])
+def test_nested_bridge_path_in_message_is_not_the_source(tmp_path, source, diagnostic):
+    log = tmp_path / "Editor.log"
+    log.write_text(f'{source}(1,2): {diagnostic}: see "Packages/MCPForUnity/B.cs(2,3): error CS0002: nested"',
+                   encoding="utf-8")
+    assert bridge_compile_errors(str(log)) == []
+
+
+def test_indented_source_with_spaces_and_parentheses(tmp_path):
+    log = tmp_path / "Editor.log"
+    log.write_text("   C:/My Project (copy)/MCPForUnity/Editor/A.cs(1,2): error CS0001: failure",
+                   encoding="utf-8")
+    assert bridge_compile_errors(str(log)) == ["A.cs(1,2): error CS0001: failure"]
