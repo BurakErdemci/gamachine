@@ -69,3 +69,27 @@ def test_autoconnect_write_preserves_original_and_cleans_stage(tmp_path, monkeyp
         assert '"MCPForUnity.AutoStartOnLoad", false' in script.read_text(encoding="utf-8")
         assert str(tmp_path) not in manager._autoconnect_workspaces
     assert list(script.parent.iterdir()) == [script]
+
+
+def test_stop_server_keeps_workspace_when_autoconnect_off_write_fails(tmp_path, monkeypatch):
+    script = tmp_path / "Assets" / "Editor" / "UnityArchitectAIMCPSetup.cs"
+    manager = module.UnityMCPManager()
+    monkeypatch.setattr(manager, "_get_uvx", lambda: "uvx")
+    manager._write_autoconnect_script(str(tmp_path), auto_start=True)
+    workspace = str(tmp_path)
+    assert workspace in manager._autoconnect_workspaces
+
+    real_replace = module.os.replace
+
+    def denied(*args, **kwargs):
+        raise PermissionError("sharing violation")
+
+    monkeypatch.setattr(module.os, "replace", denied)
+    manager.stop_server()
+    assert workspace in manager._autoconnect_workspaces
+    assert '"MCPForUnity.AutoStartOnLoad", true' in script.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(module.os, "replace", real_replace)
+    manager.stop_server()
+    assert workspace not in manager._autoconnect_workspaces
+    assert '"MCPForUnity.AutoStartOnLoad", false' in script.read_text(encoding="utf-8")

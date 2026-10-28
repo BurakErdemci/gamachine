@@ -332,3 +332,20 @@ def test_started_server_retained_after_failed_promotion(resources, monkeypatch):
     assert manager.server_dir == str(server)
     assert (server / "build" / "built.py").read_text() == "generated"
     assert not (server / "new.py").exists()
+
+
+def test_failed_refresh_drops_damaged_destination_selection(resources, monkeypatch):
+    manager, root, destination = resources
+    manager._ensure_writable_resources()
+    bridge = destination / "MCPForUnity"
+    assert manager.local_mcp_source == str(bridge)
+    (bridge / "package.json").write_text("damaged", encoding="utf-8")
+
+    def disk_full(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(shutil, "copytree", disk_full)
+    manager._ensure_writable_resources()
+    source = str(root / "unity-mcp" / "MCPForUnity")
+    assert manager.local_mcp_source == source
+    assert manager.unity_mcp_repo == "file:" + source
