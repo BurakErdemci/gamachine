@@ -173,12 +173,14 @@ namespace MCPForUnity.Editor.Services
             }
 
             if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
-            if (!MCPServiceLocator.Server.IsLocalHttpServerReachable())
+            if (MCPServiceLocator.Server.IsLocalHttpServerReachable())
+            {
+                McpLog.WarnGamachineConnectionFailed();
+            }
+            else
             {
                 McpLog.Debug("[HTTP Reload] No local server is listening; skipping connection warning.");
-                return;
             }
-            McpLog.WarnGamachineConnectionFailed();
 
             await ResumeTailLoopAsync();
         }

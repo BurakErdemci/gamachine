@@ -1,9 +1,11 @@
 """Project switches hand MCP over without leaving the old editor on autoconnect."""
 
 import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -43,7 +45,7 @@ def switch(monkeypatch, tmp_path):
         state.running = True
         return True
 
-    async def write(workspace):
+    async def write(workspace, generation=None):
         manager._write_autoconnect_script(workspace, auto_start=True)
 
     monkeypatch.setattr(manager_module, "unity_mcp_manager", manager)
@@ -86,7 +88,8 @@ def test_switch_stops_old_project_before_starting_new_one(switch):
     assert switch.manager.active_workspace == str(switch.new)
     assert switch.manager.language == "tr"
     switch.manager.install_package.assert_called_once_with(str(switch.new), write_autoconnect=False)
-    switch.manager.write_autoconnect_when_ready.assert_awaited_once_with(str(switch.new))
+    switch.manager.write_autoconnect_when_ready.assert_awaited_once_with(
+        str(switch.new), generation=switch.manager.generation)
     unity_project_presence.mcp_mismatch_detail.assert_called_once_with(str(switch.new))
     switch.db.get_last_workspace.assert_called_once_with(1)
     switch.db.save_workspace.assert_called_once_with(1, str(switch.new))
@@ -221,3 +224,106 @@ def test_old_readiness_task_cannot_reenable_previous_workspace(monkeypatch):
     assert asyncio.run(manager.write_autoconnect_when_ready("old", timeout=1)) is False
     writer.assert_not_called()
     forward.assert_not_called()
+
+
+def _async_client(switch):
+    app = FastAPI()
+    app.include_router(workspace_routes.create_workspace_router(switch.db))
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
+
+
+async def _post_save(client, path):
+    response = await client.post("/save-workspace", json={"user_id": 1, "path": str(path)},
+                                 headers={"X-Session-Token": "t"})
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_overlapping_saves_leave_mcp_on_the_last_saved_workspace(switch, tmp_path):
+    b, c = tmp_path / "b", tmp_path / "c"
+    entered, release = threading.Event(), threading.Event()
+
+    def presence(workspace):
+        if workspace == str(b):
+            entered.set()
+            assert release.wait(5)
+        return None
+
+    unity_project_presence.mcp_mismatch_detail.side_effect = presence
+
+    async def run():
+        async with _async_client(switch) as client:
+            first = asyncio.create_task(_post_save(client, b))
+            while not entered.is_set():
+                await asyncio.sleep(0.01)
+            second = asyncio.create_task(_post_save(client, c))
+            await asyncio.sleep(0.1)
+            release.set()
+            return await first, await second
+
+    first, second = asyncio.run(run())
+    assert first["mcp"] == {"state": "switched"} and second["mcp"] == {"state": "switched"}
+    assert switch.manager.active_workspace == str(c)
+    assert switch.state.running
+    assert switch.db.save_workspace.call_args_list[-1].args == (1, str(c))
+    assert OFF in (b / SCRIPT).read_text(encoding="utf-8")
+    assert ON in (c / SCRIPT).read_text(encoding="utf-8")
+
+
+def test_save_while_server_is_still_starting_retargets_mcp(switch):
+    # Server passes its health check only later: is_running() stays False after the toggle.
+    switch.state.running = False
+    switch.manager.active_workspace = None
+    switch.manager.start_server.side_effect = lambda: switch.events.append("start") or True
+    tasks = BackgroundTasks()
+
+    async def run():
+        await mcp_routes.toggle_unity_mcp(mcp_routes.MCPToggleRequest(
+            enabled=True, workspace_path=str(switch.old)), tasks, "test-token")
+        stale_generation = switch.manager.generation
+        async with _async_client(switch) as client:
+            result = await _post_save(client, switch.new)
+        return stale_generation, result
+
+    stale_generation, result = asyncio.run(run())
+    assert result == {"status": "success", "mcp": {"state": "switched"}}
+    assert switch.events == ["start", "stop", "start"]
+    assert switch.manager.active_workspace == str(switch.new)
+    assert switch.manager.generation > stale_generation
+    assert switch.manager.enabled
+
+
+def test_readiness_task_from_before_a_restart_is_ignored(monkeypatch):
+    manager = manager_module.UnityMCPManager()
+    manager.active_workspace = "old"
+    manager.generation = 1
+    manager.enabled = True
+
+    async def sleep(delay):
+        if delay == 1:
+            # Toggle off, then on again without a workspace path.
+            manager.enabled = False
+            manager.generation += 1
+            manager.active_workspace = None
+            manager.enabled = True
+            manager.generation += 1
+
+    monkeypatch.setattr(manager_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(manager, "is_running", Mock(return_value=True))
+    writer = Mock()
+    monkeypatch.setattr(manager, "_write_autoconnect_script", writer)
+    forward = Mock()
+    monkeypatch.setattr(manager_module, "_bring_editor_forward", forward)
+    assert asyncio.run(manager.write_autoconnect_when_ready("old", timeout=1, generation=1)) is False
+    writer.assert_not_called()
+    forward.assert_not_called()
+
+
+def test_start_and_stop_advance_generation_and_enabled(switch):
+    switch.state.running = False
+    tasks = BackgroundTasks()
+    asyncio.run(mcp_routes.start_mcp_for(str(switch.new), tasks, None))
+    assert switch.manager.enabled and switch.manager.generation == 1
+    assert tasks.tasks[0].kwargs == {"generation": 1}
+    mcp_routes.stop_mcp()
+    assert not switch.manager.enabled and switch.manager.generation == 2

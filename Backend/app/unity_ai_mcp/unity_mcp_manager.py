@@ -121,6 +121,9 @@ class UnityMCPManager:
         self._autoconnect_workspaces: set[str] = set()
         self.active_workspace: Optional[str] = None
         self.language = "en"
+        self.enabled = False  # MCP is intended on (true while the server is still starting)
+        self.generation = 0  # bumped on every start/stop so stale readiness tasks can detect a restart
+        self._mcp_lock: Optional[asyncio.Lock] = None
         # port_occupant() kimlik probe'u cache'i (perf). Değer artık bool DEĞİL:
         # "biri dinliyor mu" ile "o biri BİZ miyiz" ayrı sorular ve ikincisi
         # cevaplanmadan toggle yeşile dönüyordu.
@@ -238,6 +241,13 @@ class UnityMCPManager:
         self.unity_mcp_repo = f"file:{self.local_mcp_source}"
 
     # ─── Subprocess Yönetimi ─────────────────────────────────────────────────
+
+    @property
+    def mcp_lock(self) -> asyncio.Lock:
+        """Serializes toggle and workspace-switch requests; created lazily inside the running loop."""
+        if self._mcp_lock is None:
+            self._mcp_lock = asyncio.Lock()
+        return self._mcp_lock
 
     def is_running(self) -> bool:
         """BİZİM Unity MCP sunucumuz ayakta mı?
@@ -795,7 +805,8 @@ class UnityMCPManager:
 
     # ─── Unity Paket Kurulumu ────────────────────────────────────────────────
 
-    async def write_autoconnect_when_ready(self, workspace_path: str, timeout: int = 60) -> bool:
+    async def write_autoconnect_when_ready(self, workspace_path: str, timeout: int = 60,
+                                           generation: Optional[int] = None) -> bool:
         """
         Server port'u açılana kadar bekler, sonra autoconnect scriptini yazar.
         Bu sayede Unity plugin'i bağlanmaya çalıştığında server zaten hazırdır.
@@ -806,6 +817,8 @@ class UnityMCPManager:
                 await asyncio.sleep(1)  # Port açık ama HTTP handler tam init olmamış olabilir
                 # A disable or project switch must not be undone by an older readiness task.
                 if not self.is_running() or (
+                    generation is not None and generation != self.generation
+                ) or (
                     self.active_workspace is not None and self.active_workspace != workspace_path
                 ):
                     return False

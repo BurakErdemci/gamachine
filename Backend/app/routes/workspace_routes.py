@@ -17,32 +17,35 @@ def create_workspace_router(db):
                              x_session_token: str = Header(alias="X-Session-Token")):
         user_id, _ = require_user(db, x_session_token, req.user_id)
         previous_workspace = None
-        try:
-            previous_workspace = db.get_last_workspace(user_id)
-        except Exception as e:
-            logger.debug("[Workspace] Previous workspace unavailable: %s", e)
-        db.save_workspace(user_id, req.path)
-        try:
-            from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
-            from routes.mcp_routes import start_mcp_for, stop_mcp
+        from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+        # One switch at a time: the persisted workspace order must equal the MCP switch order.
+        async with unity_mcp_manager.mcp_lock:
+            try:
+                previous_workspace = db.get_last_workspace(user_id)
+            except Exception as e:
+                logger.debug("[Workspace] Previous workspace unavailable: %s", e)
+            db.save_workspace(user_id, req.path)
+            try:
+                from routes.mcp_routes import start_mcp_for, stop_mcp
 
-            if unity_mcp_manager.is_running():
-                active_workspace = unity_mcp_manager.active_workspace
-                if not active_workspace or (
-                    os.path.normcase(os.path.realpath(active_workspace))
-                    != os.path.normcase(os.path.realpath(req.path))
-                ):
-                    stop_mcp()
-                    try:
-                        await start_mcp_for(req.path, background_tasks, language=unity_mcp_manager.language)
-                    except HTTPException as e:
-                        return {"status": "success", "mcp": {"state": "off", "reason": e.detail}}
-                    return {"status": "success", "mcp": {"state": "switched"}}
-            else:
-                unity_mcp_manager.reset_autoconnect_off(
-                    unity_mcp_manager.active_workspace or previous_workspace)
-        except Exception as e:
-            logger.debug("[Workspace] Autoconnect reset skipped: %s", e)
+                # enabled covers the starting state, where is_running() is still False.
+                if unity_mcp_manager.enabled or unity_mcp_manager.is_running():
+                    active_workspace = unity_mcp_manager.active_workspace
+                    if not active_workspace or (
+                        os.path.normcase(os.path.realpath(active_workspace))
+                        != os.path.normcase(os.path.realpath(req.path))
+                    ):
+                        stop_mcp()
+                        try:
+                            await start_mcp_for(req.path, background_tasks, language=unity_mcp_manager.language)
+                        except HTTPException as e:
+                            return {"status": "success", "mcp": {"state": "off", "reason": e.detail}}
+                        return {"status": "success", "mcp": {"state": "switched"}}
+                else:
+                    unity_mcp_manager.reset_autoconnect_off(
+                        unity_mcp_manager.active_workspace or previous_workspace)
+            except Exception as e:
+                logger.debug("[Workspace] Autoconnect reset skipped: %s", e)
         return {"status": "success"}
 
     @router.get("/last-workspace/{user_id}")

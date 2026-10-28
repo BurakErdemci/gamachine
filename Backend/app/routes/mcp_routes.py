@@ -23,9 +23,10 @@ async def toggle_unity_mcp(req: MCPToggleRequest, background_tasks: BackgroundTa
     Toggle ON için Unity Editor'ün açık olması ZORUNLUDUR.
     """
     _check_token(x_session_token)
-    if req.enabled:
-        return await start_mcp_for(req.workspace_path, background_tasks, req.language)
-    return stop_mcp(req.workspace_path)
+    async with unity_mcp_manager.mcp_lock:
+        if req.enabled:
+            return await start_mcp_for(req.workspace_path, background_tasks, req.language)
+        return stop_mcp(req.workspace_path)
 
 
 async def start_mcp_for(workspace_path, background_tasks, language=None):
@@ -59,6 +60,9 @@ async def start_mcp_for(workspace_path, background_tasks, language=None):
             detail=unity_mcp_manager.last_error or "Unity MCP sunucusu başlatılamadı."
         )
 
+    unity_mcp_manager.enabled = True
+    unity_mcp_manager.generation += 1
+    generation = unity_mcp_manager.generation
     unity_mcp_manager.active_workspace = workspace_path
     package_installed = False
     if workspace_path:
@@ -66,7 +70,8 @@ async def start_mcp_for(workspace_path, background_tasks, language=None):
         # Böylece Unity plugin bağlanmaya çalıştığında server zaten ayakta olur
         # ve Unity Console'da "Connection failed" hatası çıkmaz.
         package_installed = unity_mcp_manager.install_package(workspace_path, write_autoconnect=False)
-        background_tasks.add_task(unity_mcp_manager.write_autoconnect_when_ready, workspace_path)
+        background_tasks.add_task(unity_mcp_manager.write_autoconnect_when_ready,
+                                  workspace_path, generation=generation)
 
     return {
         "status": "started",
@@ -77,6 +82,8 @@ async def start_mcp_for(workspace_path, background_tasks, language=None):
 
 def stop_mcp(workspace_path=None):
     unity_mcp_manager.stop_server()
+    unity_mcp_manager.enabled = False
+    unity_mcp_manager.generation += 1
     unity_mcp_manager.active_workspace = None
     from tools.unity_mcp_tools import unload_unity_tools
     unload_unity_tools()
