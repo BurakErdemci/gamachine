@@ -186,10 +186,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       setUnityMcpProjects(status === 'connected' && Array.isArray(instances)
         ? instances.flatMap(instance => instance && typeof instance === 'object' && typeof instance.project === 'string' ? [instance.project] : [])
         : []);
-      // Sebep backend'de yalnız `blocked` dalında dolu. Başka durumda taşımak
-      // bayat bir uyarıyı ekranda bırakırdı — kullanıcı çakışan sunucuyu
-      // kapattıktan sonra bile "port başkasında" yazmaya devam ederdi.
-      setUnityMcpReason(status === 'blocked' ? reason : null);
+      // Keep only reasons relevant to the current status, including bridge compile errors.
+      setUnityMcpReason(status === 'blocked' || status === 'running' ? reason : null);
       if (status === 'connected') {
         stopPolling();
         pollRef.current = setInterval(fetchUnityMcpStatus, 15000);

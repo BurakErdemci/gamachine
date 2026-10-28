@@ -63,6 +63,17 @@ afterEach(() => {
 })
 
 describe('Unity instance projects and connection wait', () => {
+  it('keeps a running compile reason and clears it when connected', async () => {
+    const reason = 'Unity bridge compile failed: File.cs(1,2): error CS0234'
+    mockedAxios.get.mockResolvedValue(statusPayload('running', reason))
+    const { result } = mountHook()
+    await waitFor(() => expect(result.current.unityMcpStatus).toBe('running'))
+    expect(result.current.unityMcpReason).toBe(reason)
+    mockedAxios.get.mockResolvedValue(statusPayload('connected', reason))
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    expect(result.current.unityMcpReason).toBeNull()
+  })
+
   it('ignores malformed instance entries and clears projects after disconnect or failed polls', async () => {
     mockedAxios.get.mockResolvedValue({ data: { status: 'connected', instances: [
       null, false, 'Game', {}, { project: 7 }, { project: 'GameA' }, { project: 'GameB' },

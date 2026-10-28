@@ -12,6 +12,7 @@ from typing import Optional
 from spawn_env import build_spawn_env
 from .mcp_identity import Occupant, ServerIdentity, probe_port_identity
 from . import unity_project_presence
+from .editor_log import bridge_compile_errors, editor_log_path
 
 logger = logging.getLogger(__name__)
 
@@ -668,7 +669,7 @@ class UnityMCPManager:
           "pid": int | None,
           "port": 8080,
           "instances": [...],
-          "reason": str | None   # yalnız "blocked" durumunda dolu
+          "reason": str | None   # blocked or running with bridge compile errors
         }
 
         `reason` alanı bilerek BU uçtan dönüyor: sebep eskiden yalnız toggle
@@ -706,12 +707,20 @@ class UnityMCPManager:
             instances = []
 
         unity_status = UnityMCPStatus.CONNECTED if instances else UnityMCPStatus.RUNNING
+        reason = None
+        if unity_status == UnityMCPStatus.RUNNING:
+            try:
+                errors = bridge_compile_errors(editor_log_path())
+                if errors:
+                    reason = "Unity köprü paketi derlenemedi:\n" + "\n".join(errors)
+            except Exception:
+                logger.debug("[UnityMCP] Could not read bridge compile errors.", exc_info=True)
         return {
             "status": unity_status,
             "pid": pid,
             "port": self.mcp_port,
             "instances": instances,
-            "reason": None,
+            "reason": reason,
         }
 
     # ─── Unity Paket Kurulumu ────────────────────────────────────────────────

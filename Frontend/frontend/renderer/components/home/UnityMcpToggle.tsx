@@ -59,7 +59,7 @@ export function useUnityLinkPulse(status: UnityMCPStatus | undefined): boolean {
 interface UnityMcpToggleProps {
   status: UnityMCPStatus;
   toggling: boolean;
-  /** Reason for `blocked`: comes from the backend and lives with the status. */
+  /** A blocked connection or bridge compile diagnostic from the backend. */
   reason: string | null;
   /** A failed toggle attempt; the caller clears it after 6 s. */
   error: string | null;
@@ -108,8 +108,8 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   const whyId = `${ids}-why`;
   const bayRef = useRef<HTMLDivElement>(null);
   const linked = useUnityLinkPulse(status);
-  // The reason belongs to `blocked` only: one left over from an earlier state is stale.
-  const sebep = status === 'blocked' ? reason : null;
+  const sebep = status === 'blocked' || status === 'running' ? reason : null;
+  const showReason = status === 'blocked' || (status === 'running' && Boolean(sebep));
 
   // The reason opens by itself when the block arrives (the old strip showed it without a click,
   // and the user must act on it); "Why?" then closes and reopens it, as in the mockup.
@@ -131,7 +131,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
 
   // The bay may shrink, but `.unity { min-width: min-content }` in shell.css keeps its
   // own content minimum; its labels give way through the `topbar` container queries.
-  const cls = ['unity', '!shrink', linked ? 'is-linked' : '', whyOpen && status === 'blocked' ? 'why-open' : '']
+  const cls = ['unity', '!shrink', linked ? 'is-linked' : '', whyOpen && showReason ? 'why-open' : '']
     .filter(Boolean).join(' ');
 
   return (
@@ -166,7 +166,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
           <span className="unity-path min-w-0 max-w-[220px] truncate" title={projectName}>{projectName}</span>
         )}
         {hint && <span className="unity-hint">{t(hint)}</span>}
-        {status === 'blocked' && (
+        {showReason && (
           <button
             className="unity-why-btn"
             type="button"
@@ -178,15 +178,15 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
           </button>
         )}
       </span>
-      {(status === 'blocked' || error) && (
+      {(showReason || error) && (
         // Both can be up at once (a toggle on a blocked port gets a 500), so they stack in one
         // column under the bay instead of covering each other.
         <span className="unity-pops">
-          {status === 'blocked' && (
-            // In the DOM for the whole blocked state, shown by CSS when open / hovered / focused:
+          {showReason && (
+            // In the DOM while a reason exists, shown by CSS when open / hovered / focused:
             // it follows the status, not a timer.
             <span className="unity-why" id={whyId} role="alert">
-              <b>{t('unity.whyTitle')}</b>{' '}
+              <b>{t(status === 'running' ? 'unity.compileWhyTitle' : 'unity.whyTitle')}</b>{' '}
               {/* No nowrap: the reason carries a process name and PID, so it is long. */}
               {sebep || t('home.unityBlocked')}
             </span>
