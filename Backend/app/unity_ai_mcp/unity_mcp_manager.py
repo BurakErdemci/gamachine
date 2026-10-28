@@ -6,6 +6,7 @@ import httpx
 import logging
 import json
 import secrets
+import hashlib
 from typing import Optional
 
 from spawn_env import build_spawn_env
@@ -13,6 +14,31 @@ from .mcp_identity import Occupant, ServerIdentity, probe_port_identity
 from . import unity_project_presence
 
 logger = logging.getLogger(__name__)
+
+
+def _tree_digest(path) -> str:
+    """Hash relative paths and contents, excluding generated Python metadata."""
+    digest = hashlib.sha256()
+    paths = []
+
+    def fail(error):
+        raise error
+
+    for root, directories, files in os.walk(path, onerror=fail):
+        directories[:] = [name for name in directories
+                          if name != "__pycache__" and not name.endswith(".egg-info")]
+        for name in files:
+            if name == ".gamachine-source-digest":
+                continue
+            full_path = os.path.join(root, name)
+            relative = os.path.relpath(full_path, path).replace(os.sep, "/")
+            paths.append((relative, full_path))
+    for relative, full_path in sorted(paths):
+        digest.update(relative.encode("utf-8") + b"\0")
+        with open(full_path, "rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _bring_editor_forward(project_path: str) -> None:
@@ -90,38 +116,61 @@ class UnityMCPManager:
         self.unity_mcp_repo = f"file:{self.local_mcp_source}"
 
     def _ensure_writable_resources(self) -> None:
-        """Frozen build: bundled Server/MCPForUnity Program Files altında (yazılamaz).
-        - uvx, paketi --from kaynağının içine egg-info yazarak derler → 'Erişim engellendi'
-        - Unity, paket dizinine ~UnityDirMonSyncFile~ yazar → 'Couldn't create'
-        Bu yüzden ikisini de yazılabilir kullanıcı dizinine kopyalar ve server_dir /
-        local_mcp_source / unity_mcp_repo yollarını oraya yöneltir. Idempotent (mtime'a
-        göre yeniden kopyalar). Asla exception fırlatmaz."""
+        """Copy frozen resources to writable storage, refreshing by source content.
+
+        The packager does not preserve mtimes; mtime checks left 284 stale files
+        in a measured install. Stage each refresh before replacing the old copy.
+        Keep the previous destination usable on failure. Never raises.
+        """
         import sys
         if not getattr(sys, "frozen", False):
             return  # Dev: kaynak repo zaten yazılabilir
         import shutil
         base = os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity-mcp")
-        targets = [("Server", "pyproject.toml", "server_dir"),
-                   ("MCPForUnity", "package.json", "local_mcp_source")]
-        for sub, marker, attr in targets:
+        targets = [("Server", "server_dir"), ("MCPForUnity", "local_mcp_source")]
+        for sub, attr in targets:
             src = os.path.join(self.project_root, "unity-mcp", sub)
             dst = os.path.join(base, sub)
+            staged, old = dst + ".new", dst + ".old"
             try:
                 if not os.path.isdir(src):
                     continue
+                source_digest = _tree_digest(src)
+                digest_file = os.path.join(dst, ".gamachine-source-digest")
                 need = not os.path.isdir(dst)
                 if not need:
-                    s, d = os.path.join(src, marker), os.path.join(dst, marker)
-                    need = (not os.path.isfile(d)) or (
-                        os.path.isfile(s) and os.path.getmtime(s) > os.path.getmtime(d)
-                    )
+                    if not os.path.isfile(digest_file):
+                        need = True
+                    else:
+                        with open(digest_file, encoding="utf-8") as stored:
+                            need = stored.read() != source_digest
                 if need:
+                    if os.path.exists(staged):
+                        shutil.rmtree(staged)
+                    shutil.copytree(src, staged)
+                    with open(os.path.join(staged, ".gamachine-source-digest"), "w", encoding="utf-8") as stored:
+                        stored.write(source_digest)
+                    if os.path.exists(old):
+                        shutil.rmtree(old)
                     if os.path.isdir(dst):
-                        shutil.rmtree(dst, ignore_errors=True)
-                    shutil.copytree(src, dst)
+                        os.replace(dst, old)
+                    os.replace(staged, dst)
+                    shutil.rmtree(old, ignore_errors=True)
                 setattr(self, attr, dst)
             except Exception as e:
                 logger.warning(f"[UnityMCP] {sub} yazılabilir dizine kopyalanamadı: {e}")
+                shutil.rmtree(staged, ignore_errors=True)
+                if not os.path.isdir(dst) and os.path.isdir(old):
+                    try:
+                        os.replace(old, dst)
+                    except Exception:
+                        try:
+                            # A failed rename must not strand the previous usable copy.
+                            shutil.copytree(old, dst)
+                        except Exception:
+                            logger.warning("[UnityMCP] Could not restore %s", dst, exc_info=True)
+                if os.path.isdir(dst):
+                    setattr(self, attr, dst)
         self.unity_mcp_repo = f"file:{self.local_mcp_source}"
 
     # ─── Subprocess Yönetimi ─────────────────────────────────────────────────
