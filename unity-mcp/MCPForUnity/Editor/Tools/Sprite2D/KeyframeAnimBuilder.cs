@@ -316,9 +316,10 @@ namespace MCPForUnity.Editor.Tools.Sprite2D
 
                 case "alpha":
                     // CanvasGroup varsa kullan; yoksa ekle (UI Image varsa Image.color.a tercih edilir)
-                    if (go.GetComponent<UnityEngine.UI.Image>() != null && go.GetComponent<CanvasGroup>() == null)
+                    var imageType = UnityTypeResolver.ResolveComponent("UnityEngine.UI.Image");
+                    if (imageType != null && go.GetComponent(imageType) != null && go.GetComponent<CanvasGroup>() == null)
                     {
-                        SetFloatCurve(clip, typeof(UnityEngine.UI.Image), "m_Color.a", keys);
+                        SetFloatCurve(clip, imageType, "m_Color.a", keys);
                         break;
                     }
                     // The binding needs only the type; the component itself is added by the
@@ -366,7 +367,8 @@ namespace MCPForUnity.Editor.Tools.Sprite2D
         private static Type DetectColorComponent(GameObject go)
         {
             if (go.GetComponent<SpriteRenderer>() != null) return typeof(SpriteRenderer);
-            if (go.GetComponent<UnityEngine.UI.Image>() != null) return typeof(UnityEngine.UI.Image);
+            var imageType = UnityTypeResolver.ResolveComponent("UnityEngine.UI.Image");
+            if (imageType != null && go.GetComponent(imageType) != null) return imageType;
             return typeof(SpriteRenderer); // fallback
         }
     }
