@@ -43,13 +43,14 @@ def bridge_compile_errors(path: str, limit: int = 5) -> list[str]:
         errors = []
         seen = set()
         for line in lines[last_compile:]:
-            if "error CS" not in line or not (
-                "MCPForUnity" in line or "com.coplaydev.unity-mcp" in line
-            ):
+            match = re.match(r"(.+\.cs)\((\d+,\d+)\):\s*(error CS\d+:.*)", line)
+            if not match:
                 continue
-            match = re.search(r"([^/\\\r\n]+\.cs\(\d+,\d+\):\s*error CS\d+:.*)", line)
-            if match and match.group(1) not in seen:
-                shortened = match.group(1)
+            components = re.split(r"[/\\]", match.group(1))
+            if not {"MCPForUnity", "com.coplaydev.unity-mcp"}.intersection(components[:-1]):
+                continue
+            shortened = f"{components[-1]}({match.group(2)}): {match.group(3)}"
+            if shortened not in seen:
                 seen.add(shortened)
                 errors.append(shortened)
                 if len(errors) >= limit:

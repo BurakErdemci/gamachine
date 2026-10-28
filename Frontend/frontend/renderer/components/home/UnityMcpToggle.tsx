@@ -59,8 +59,10 @@ export function useUnityLinkPulse(status: UnityMCPStatus | undefined): boolean {
 interface UnityMcpToggleProps {
   status: UnityMCPStatus;
   toggling: boolean;
-  /** A blocked connection or bridge compile diagnostic from the backend. */
+  /** A blocked connection diagnostic from the backend. */
   reason: string | null;
+  reasonCode?: string | null;
+  reasonLines?: string[];
   /** A failed toggle attempt; the caller clears it after 6 s. */
   error: string | null;
   onToggle: () => void;
@@ -93,6 +95,8 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   status,
   toggling,
   reason,
+  reasonCode = null,
+  reasonLines = [],
   error,
   onToggle,
   projectName = null,
@@ -108,8 +112,9 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   const whyId = `${ids}-why`;
   const bayRef = useRef<HTMLDivElement>(null);
   const linked = useUnityLinkPulse(status);
-  const sebep = status === 'blocked' || status === 'running' ? reason : null;
-  const showReason = status === 'blocked' || (status === 'running' && Boolean(sebep));
+  const compileFailed = status === 'running' && reasonCode === 'bridge_compile_failed';
+  const sebep = status === 'blocked' ? reason : compileFailed ? reasonLines.join('\n') : null;
+  const showReason = status === 'blocked' || (status === 'running' && Boolean(reasonCode));
 
   // The reason opens by itself when the block arrives (the old strip showed it without a click,
   // and the user must act on it); "Why?" then closes and reopens it, as in the mockup.
@@ -131,7 +136,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
 
   // The bay may shrink, but `.unity { min-width: min-content }` in shell.css keeps its
   // own content minimum; its labels give way through the `topbar` container queries.
-  const cls = ['unity', '!shrink', linked ? 'is-linked' : '', whyOpen && showReason ? 'why-open' : '']
+  const cls = ['unity', '!shrink', linked ? 'is-linked' : '', showReason ? 'has-reason' : '', whyOpen && showReason ? 'why-open' : '']
     .filter(Boolean).join(' ');
 
   return (
@@ -144,7 +149,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
         // Checked = clicking turns it off. `blocked` is not: a click there retries the start
         // (useAIConfig treats off and blocked alike), so it reads as off to assistive tech.
         aria-checked={status !== 'off' && status !== 'blocked'}
-        aria-describedby={sebep ? `${stateId} ${whyId}` : stateId}
+        aria-describedby={showReason ? `${stateId} ${whyId}` : stateId}
         title={t(state.title)}
         onClick={onToggle}
         // `blocked` stays PRESSABLE: after the user closes the conflicting server, this button
@@ -165,7 +170,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
         {state.visual === 'on' && projectName && (
           <span className="unity-path min-w-0 max-w-[220px] truncate" title={projectName}>{projectName}</span>
         )}
-        {hint && <span className="unity-hint">{t(hint)}</span>}
+        {hint && !showReason && <span className="unity-hint">{t(hint)}</span>}
         {showReason && (
           <button
             className="unity-why-btn"
@@ -186,9 +191,9 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
             // In the DOM while a reason exists, shown by CSS when open / hovered / focused:
             // it follows the status, not a timer.
             <span className="unity-why" id={whyId} role="alert">
-              <b>{t(status === 'running' ? 'unity.compileWhyTitle' : 'unity.whyTitle')}</b>{' '}
+              <b>{t(compileFailed ? 'unity.compileWhyTitle' : 'unity.whyTitle')}</b>{' '}
               {/* No nowrap: the reason carries a process name and PID, so it is long. */}
-              {sebep || t('home.unityBlocked')}
+              {status === 'blocked' ? sebep || t('home.unityBlocked') : sebep}
             </span>
           )}
           {error && <span className="unity-err" role="alert">{error}</span>}

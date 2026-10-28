@@ -63,15 +63,31 @@ afterEach(() => {
 })
 
 describe('Unity instance projects and connection wait', () => {
+  it.each(['off', 'blocked', 'starting', 'connected', 'unknown', 'poll failure'])('clears compile fields on %s', async status => {
+    const diagnostic = { reason_code: 'bridge_compile_failed', reason_lines: ['raw diagnostic'] }
+    mockedAxios.get.mockResolvedValue({ data: { status: 'running', ...diagnostic } })
+    const { result } = mountHook()
+    await waitFor(() => expect(result.current.unityMcpReasonCode).toBe(diagnostic.reason_code))
+    if (status === 'poll failure') mockedAxios.get.mockRejectedValue(new Error('offline'))
+    else mockedAxios.get.mockResolvedValue({ data: { status, ...diagnostic } })
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    expect(result.current.unityMcpReasonCode).toBeNull()
+    expect(result.current.unityMcpReasonLines).toEqual([])
+  })
+
   it('keeps a running compile reason and clears it when connected', async () => {
-    const reason = 'Unity bridge compile failed: File.cs(1,2): error CS0234'
-    mockedAxios.get.mockResolvedValue(statusPayload('running', reason))
+    const diagnostic = { reason_code: 'bridge_compile_failed', reason_lines: ['File.cs(1,2): error CS0234'] }
+    mockedAxios.get.mockResolvedValue({ data: { status: 'running', reason: null, ...diagnostic } })
     const { result } = mountHook()
     await waitFor(() => expect(result.current.unityMcpStatus).toBe('running'))
-    expect(result.current.unityMcpReason).toBe(reason)
-    mockedAxios.get.mockResolvedValue(statusPayload('connected', reason))
+    expect(result.current.unityMcpReason).toBeNull()
+    expect(result.current.unityMcpReasonCode).toBe(diagnostic.reason_code)
+    expect(result.current.unityMcpReasonLines).toEqual(diagnostic.reason_lines)
+    mockedAxios.get.mockResolvedValue({ data: { status: 'connected', ...diagnostic } })
     await act(async () => { await result.current.refreshUnityMcpStatus() })
     expect(result.current.unityMcpReason).toBeNull()
+    expect(result.current.unityMcpReasonCode).toBeNull()
+    expect(result.current.unityMcpReasonLines).toEqual([])
   })
 
   it('ignores malformed instance entries and clears projects after disconnect or failed polls', async () => {

@@ -1748,7 +1748,7 @@ export const en: Record<keyof typeof tr, string> = {
   'unity.hintBringForward': 'Unity may be in the background: bring Unity to the front',
   'unity.why': 'Why?',
   'unity.whyTitle': 'Connection blocked.',
-  'unity.compileWhyTitle': 'Unity bridge package failed to compile.',
+  'unity.compileWhyTitle': 'The Unity bridge package failed to compile.',
   'home.panelHide': 'Hide the workspace',
   'home.panelShow': 'Show the workspace',
   'home.sidebarHide': 'Hide the sidebar',

@@ -1014,6 +1014,8 @@ export default function Home() {
             status={ai.unityMcpStatus}
             toggling={ai.unityMcpToggling}
             reason={ai.unityMcpReason}
+            reasonCode={ai.unityMcpReasonCode}
+            reasonLines={ai.unityMcpReasonLines}
             error={ai.unityMcpError}
             onToggle={ai.toggleUnityMcp}
             projectName={unityProjectName}

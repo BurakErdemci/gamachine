@@ -698,7 +698,9 @@ class UnityMCPManager:
           "pid": int | None,
           "port": 8080,
           "instances": [...],
-          "reason": str | None   # blocked or running with bridge compile errors
+          "reason": str | None,  # blocked only
+          "reason_code": str | None,  # running diagnostic, translated by the renderer
+          "reason_lines": list[str]  # raw compiler diagnostics
         }
 
         `reason` alanı bilerek BU uçtan dönüyor: sebep eskiden yalnız toggle
@@ -736,21 +738,26 @@ class UnityMCPManager:
             instances = []
 
         unity_status = UnityMCPStatus.CONNECTED if instances else UnityMCPStatus.RUNNING
-        reason = None
+        reason_code = None
+        reason_lines = []
         if unity_status == UnityMCPStatus.RUNNING:
             try:
                 errors = bridge_compile_errors(editor_log_path())
                 if errors:
-                    reason = "Unity köprü paketi derlenemedi:\n" + "\n".join(errors)
+                    reason_code = "bridge_compile_failed"
+                    reason_lines = errors
             except Exception:
                 logger.debug("[UnityMCP] Could not read bridge compile errors.", exc_info=True)
-        return {
+        result = {
             "status": unity_status,
             "pid": pid,
             "port": self.mcp_port,
             "instances": instances,
-            "reason": reason,
+            "reason": None,
         }
+        if unity_status == UnityMCPStatus.RUNNING:
+            result.update(reason_code=reason_code, reason_lines=reason_lines)
+        return result
 
     # ─── Unity Paket Kurulumu ────────────────────────────────────────────────
 

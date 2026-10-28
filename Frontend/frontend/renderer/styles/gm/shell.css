@@ -241,7 +241,8 @@
 
 /* ---------- Unity connection switch (round 7, module round 8): the app's signature control ----------
    Switch position = the user's intent; the light = the real state. data-unity on .unity:
-   off | connecting | on | closed (editor not running / status unknown) | blocked (reason in .unity-why).
+   off | connecting | on | closed (editor not running / status unknown) | blocked.
+   .has-reason exposes .unity-why for blocked connections and running bridge compile errors.
    Its own bay at the far left of the top bar (full bar height, hairline after it) with a
    two-line readout: "Unity" over the state word + project/scene (or a plain hint). */
 .unity {
@@ -338,9 +339,9 @@
 .unity[data-unity="blocked"] .us-plug { display: none; }
 .unity[data-unity="blocked"] .us-lock { display: block; }
 .unity[data-unity="blocked"] .unity-word { color: var(--us-alert-text); font-weight: 600; }
-.unity[data-unity="blocked"] .unity-why-btn { display: inline; }
+.unity.has-reason .unity-why-btn { display: inline; }
 .unity[data-unity="off"] .unity-word { color: var(--shell-text-dim); }
-.unity[data-unity="blocked"]:is(.why-open, :has(.unity-why-btn:hover), :has(.unity-why-btn:focus-visible)) .unity-why { display: block; }
+.unity.has-reason:is(.why-open, :has(.unity-why-btn:hover), :has(.unity-why-btn:focus-visible)) .unity-why { display: block; }
 .unity.is-linked .us-knob .ic { animation: pop 300ms var(--g-ease-press); }  /* on the glyph: a transform on the knob would replace its translateX and snap it back */
 /* the link lands: the sidebar head's visor goes dark and lights again, once */
 .brand.is-linked .brand-logo { animation: visor-blink 520ms var(--g-ease-move); }

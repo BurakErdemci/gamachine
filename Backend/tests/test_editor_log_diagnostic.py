@@ -78,7 +78,9 @@ def test_status_reads_compile_errors_only_when_running(monkeypatch, status):
     result = asyncio.run(manager.get_status())
     assert result["status"] == status
     if status == "running":
-        assert result["reason"] == "Unity köprü paketi derlenemedi:\nFile.cs(1,2): error CS0234: missing type"
+        assert result["reason"] is None
+        assert result["reason_code"] == "bridge_compile_failed"
+        assert result["reason_lines"] == ["File.cs(1,2): error CS0234: missing type"]
         assert calls == ["current-log"]
     else:
         assert calls == []
@@ -101,4 +103,17 @@ def test_running_without_diagnostic_keeps_reason_empty(monkeypatch, raises):
         return []
 
     monkeypatch.setattr(module, "bridge_compile_errors", diagnostic)
-    assert asyncio.run(manager.get_status())["reason"] is None
+    result = asyncio.run(manager.get_status())
+    assert result["reason"] is None
+    assert result["reason_code"] is None
+    assert result["reason_lines"] == []
+
+
+@pytest.mark.parametrize("path", [
+    "Assets/User.cs", "Assets/MCPForUnityExtra/User.cs",
+    "Assets/com.coplaydev.unity-mcp-extra/User.cs",
+])
+def test_message_and_partial_component_names_are_not_bridge_paths(tmp_path, path):
+    log = tmp_path / "Editor.log"
+    log.write_text(f"{path}(1,2): error CS0234: MCPForUnity and com.coplaydev.unity-mcp missing", encoding="utf-8")
+    assert bridge_compile_errors(str(log)) == []

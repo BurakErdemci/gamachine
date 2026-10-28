@@ -130,6 +130,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
   // başkasındayken sebep ekranda durmalı, yoksa kullanıcı 6 saniye sonra elinde
   // yalnız gri bir düğmeyle kalıyor.
   const [unityMcpReason, setUnityMcpReason] = useState<string | null>(null);
+  const [unityMcpReasonCode, setUnityMcpReasonCode] = useState<string | null>(null);
+  const [unityMcpReasonLines, setUnityMcpReasonLines] = useState<string[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Yoklama kuşağı sayacı + montaj bayrağı; ikisi de `fetchUnityMcpStatus`'ta
   // kullanılıyor, gerekçe orada.
@@ -186,8 +188,11 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       setUnityMcpProjects(status === 'connected' && Array.isArray(instances)
         ? instances.flatMap(instance => instance && typeof instance === 'object' && typeof instance.project === 'string' ? [instance.project] : [])
         : []);
-      // Keep only reasons relevant to the current status, including bridge compile errors.
-      setUnityMcpReason(status === 'blocked' || status === 'running' ? reason : null);
+      setUnityMcpReason(status === 'blocked' ? reason : null);
+      setUnityMcpReasonCode(status === 'running' && typeof res.data?.reason_code === 'string'
+        ? res.data.reason_code : null);
+      setUnityMcpReasonLines(status === 'running' && Array.isArray(res.data?.reason_lines)
+        ? res.data.reason_lines.filter((line: unknown): line is string => typeof line === 'string') : []);
       if (status === 'connected') {
         stopPolling();
         pollRef.current = setInterval(fetchUnityMcpStatus, 15000);
@@ -220,6 +225,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       setUnityMcpProjects([]);
       updateConnectionWait('unknown');
       setUnityMcpReason(null);
+      setUnityMcpReasonCode(null);
+      setUnityMcpReasonLines([]);
       stopPolling();
       pollRef.current = setInterval(fetchUnityMcpStatus, 5000);
     }
@@ -259,6 +266,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       }
       await axios.post(`${API}/mcp/unity/toggle`, { enabled: turningOn, workspace_path: mcpWorkspace });
       if (!guncelMi()) return false;
+      setUnityMcpReasonCode(null);
+      setUnityMcpReasonLines([]);
       if (turningOn) {
         setUnityMcpStatus('starting');
         setUnityMcpProjects([]);
@@ -599,6 +608,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     unityMcpToggling,
     unityMcpError,
     unityMcpReason,
+    unityMcpReasonCode,
+    unityMcpReasonLines,
     toggleUnityMcp,
     // Durumu dışarıdan tazelemek için. İki tüketicisi var ve ikisi de aynı
     // soruyu soruyor: "şu an gerçekten ne durumda" — hata sonrası ölçüm, ve
