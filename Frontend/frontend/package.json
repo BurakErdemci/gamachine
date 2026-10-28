@@ -2,7 +2,7 @@
   "private": true,
   "name": "gamachine",
   "description": "AI-powered Unity script generation and analysis tool",
-  "version": "3.2.0",
+  "version": "4.0.0",
   "author": "Burak Emre Erdemci",
   "license": "MIT",
   "main": "app/background.js",
