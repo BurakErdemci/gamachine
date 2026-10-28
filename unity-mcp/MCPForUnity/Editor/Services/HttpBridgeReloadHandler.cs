@@ -173,7 +173,12 @@ namespace MCPForUnity.Editor.Services
             }
 
             if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
-            McpLog.Warn("Unity MCP is on in Gamachine but Unity could not connect to it. Turn Unity MCP off and on in Gamachine to retry.");
+            if (!MCPServiceLocator.Server.IsLocalHttpServerReachable())
+            {
+                McpLog.Debug("[HTTP Reload] No local server is listening; skipping connection warning.");
+                return;
+            }
+            McpLog.WarnGamachineConnectionFailed();
 
             await ResumeTailLoopAsync();
         }

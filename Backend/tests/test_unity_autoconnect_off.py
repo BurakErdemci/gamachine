@@ -111,6 +111,7 @@ def test_failed_on_write_is_not_tracked(manager, tmp_path, monkeypatch):
 @pytest.mark.parametrize("running", [False, True])
 def test_save_workspace_resets_only_when_mcp_is_off(manager, tmp_path, monkeypatch, running):
     manager._write_autoconnect_script(str(tmp_path), auto_start=True)
+    monkeypatch.setattr(manager, "active_workspace", str(tmp_path))
     monkeypatch.setattr(manager, "is_running", lambda: running)
     monkeypatch.setattr(workspace_routes, "require_user", lambda *args: (1, {}))
     db = Mock()

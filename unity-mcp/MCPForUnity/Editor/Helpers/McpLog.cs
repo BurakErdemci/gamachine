@@ -45,6 +45,18 @@ namespace MCPForUnity.Editor.Helpers
             UnityEngine.Debug.LogWarning($"{WarnPrefix} {message}");
         }
 
+        public static void WarnGamachineConnectionFailed()
+        {
+            Warn(GamachineConnectionFailedMessage());
+        }
+
+        private static string GamachineConnectionFailedMessage()
+        {
+            return EditorPrefs.GetString("Gamachine.UiLanguage", "en") == "tr"
+                ? "Unity MCP Gamachine'de açık ama Unity bağlanamadı. Yeniden denemek için Gamachine'de Unity MCP'yi kapatıp açın."
+                : "Unity MCP is on in Gamachine but Unity could not connect to it. Turn Unity MCP off and on in Gamachine to retry.";
+        }
+
         public static void Error(string message)
         {
             UnityEngine.Debug.LogError($"{ErrorPrefix} {message}");

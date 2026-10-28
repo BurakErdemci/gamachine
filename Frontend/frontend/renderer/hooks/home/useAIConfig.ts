@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, type SetStateAction 
 import axios from 'axios';
 import { AIConfig, AvailableModels, ProviderReady, UserData } from '../../components/home/types';
 import { apiHataMesaji } from '../../lib/apiError';
-import { cevir } from '../../lib/i18n';
+import { aktifDil, cevir } from '../../lib/i18n';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { shortModelId } from '../../lib/modelText';
 
@@ -264,7 +264,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       if (turningOn && workspacePath && mcpWorkspace === null) {
         showToast(cevir('workspace.outsideDockerMount'), 'warning');
       }
-      await axios.post(`${API}/mcp/unity/toggle`, { enabled: turningOn, workspace_path: mcpWorkspace });
+      await axios.post(`${API}/mcp/unity/toggle`, { enabled: turningOn, workspace_path: mcpWorkspace, language: aktifDil() });
       if (!guncelMi()) return false;
       setUnityMcpReasonCode(null);
       setUnityMcpReasonLines([]);

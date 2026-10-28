@@ -227,7 +227,10 @@ namespace MCPForUnity.Editor.Tools
         {
             var tcs = new TaskCompletionSource<(bool, CompilerMessage[])>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+            // Unity 6.4 deprecates AssemblyBuilder; replacement APIs differ in 6.4 vs 6.5+, so preserve behavior.
+#pragma warning disable CS0618
             var builder = new AssemblyBuilder(dllPath, new[] { srcPath })
+#pragma warning restore CS0618
             {
                 flags = AssemblyBuilderFlags.EditorAssembly,
                 referencesOptions = ReferencesOptions.UseEngineModules,

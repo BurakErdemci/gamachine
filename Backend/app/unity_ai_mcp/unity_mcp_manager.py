@@ -119,6 +119,8 @@ class UnityMCPManager:
         self.mcp_port = 8080
         self._starting = False  # Çift başlatmayı önler
         self._autoconnect_workspaces: set[str] = set()
+        self.active_workspace: Optional[str] = None
+        self.language = "en"
         # port_occupant() kimlik probe'u cache'i (perf). Değer artık bool DEĞİL:
         # "biri dinliyor mu" ile "o biri BİZ miyiz" ayrı sorular ve ikincisi
         # cevaplanmadan toggle yeşile dönüyordu.
@@ -802,8 +804,10 @@ class UnityMCPManager:
             await asyncio.sleep(0.5)
             if self.is_running():
                 await asyncio.sleep(1)  # Port açık ama HTTP handler tam init olmamış olabilir
-                # A disable during that second already wrote the off script; do not overwrite it.
-                if not self.is_running():
+                # A disable or project switch must not be undone by an older readiness task.
+                if not self.is_running() or (
+                    self.active_workspace is not None and self.active_workspace != workspace_path
+                ):
                     return False
                 self._write_autoconnect_script(workspace_path, auto_start=True)
                 _bring_editor_forward(workspace_path)
@@ -894,7 +898,30 @@ class UnityMCPManager:
         # Değiştirilecekse ÖNCE eski dosyayı silen bir göç adımı yazılmalı.
         script_path = os.path.join(editor_dir, "UnityArchitectAIMCPSetup.cs")
 
-        auto_start_val = "true" if auto_start else "false"
+        language = self.language if self.language in ("tr", "en") else "en"
+        autoconnect_settings = '''            EditorPrefs.SetBool("MCPForUnity.AutoStartOnLoad", false);
+            EditorPrefs.SetBool("MCPForUnity.ResumeHttpAfterReload", false);'''
+        if auto_start:
+            autoconnect_settings = f'''            bool serverReachable = false;
+            try
+            {{
+                using (var client = new System.Net.Sockets.TcpClient())
+                {{
+                    var connection = client.ConnectAsync("127.0.0.1", {self.mcp_port});
+                    serverReachable = connection.Wait(150) && client.Connected;
+                }}
+            }}
+            catch {{ }}
+            if (serverReachable)
+            {{
+                EditorPrefs.SetBool("MCPForUnity.AutoStartOnLoad", true);
+                EditorPrefs.SetBool("MCPForUnity.ResumeHttpAfterReload", true);
+            }}
+            else
+            {{
+                EditorPrefs.SetBool("MCPForUnity.AutoStartOnLoad", false);
+                EditorPrefs.SetBool("MCPForUnity.ResumeHttpAfterReload", false);
+            }}'''
         timestamp = int(time.time())
 
         # Unity MCP eklentisi sistem PATH'inde uv/uvx arıyor; kullanıcının PC'sinde uv
@@ -922,8 +949,8 @@ namespace UnityArchitectAI
         {{
             EditorPrefs.SetBool("MCPForUnity.UseHttpTransport", true);
             EditorPrefs.SetString("MCPForUnity.HttpUrl", "http://127.0.0.1:{self.mcp_port}");
-            EditorPrefs.SetBool("MCPForUnity.AutoStartOnLoad", {auto_start_val});
-            EditorPrefs.SetBool("MCPForUnity.ResumeHttpAfterReload", {auto_start_val});
+            EditorPrefs.SetString("Gamachine.UiLanguage", "{language}");
+{autoconnect_settings}
 {uvx_override}        }}
     }}
 }}

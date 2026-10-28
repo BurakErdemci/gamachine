@@ -13,6 +13,7 @@ router = APIRouter(prefix="/mcp", tags=["mcp"])
 class MCPToggleRequest(BaseModel):
     enabled: bool
     workspace_path: Optional[str] = None
+    language: Optional[str] = None
 
 
 @router.post("/unity/toggle")
@@ -23,54 +24,65 @@ async def toggle_unity_mcp(req: MCPToggleRequest, background_tasks: BackgroundTa
     """
     _check_token(x_session_token)
     if req.enabled:
-        # Unity açık değilse hemen hata dön
-        if not unity_mcp_manager.is_unity_running():
-            raise HTTPException(
-                status_code=409,
-                detail="Unity Editor açık değil. Lütfen önce Unity'yi açın."
-            )
+        return await start_mcp_for(req.workspace_path, background_tasks, req.language)
+    return stop_mcp(req.workspace_path)
 
-        if req.workspace_path:
-            detail = await asyncio.to_thread(unity_project_presence.mcp_mismatch_detail, req.workspace_path)
-            if detail is not None:
-                raise HTTPException(status_code=409, detail=detail)
 
-        if unity_mcp_manager.is_running():
-            status = await unity_mcp_manager.get_status()
-            return {"status": "already_running", **status}
+async def start_mcp_for(workspace_path, background_tasks, language=None):
+    if language in ("tr", "en"):
+        unity_mcp_manager.language = language
+    # Unity açık değilse hemen hata dön
+    if not unity_mcp_manager.is_unity_running():
+        raise HTTPException(
+            status_code=409,
+            detail="Unity Editor açık değil. Lütfen önce Unity'yi açın."
+        )
 
-        success = unity_mcp_manager.start_server()
-        if not success:
-            # Sebebi olduğu gibi geçir: en sık vaka 8080'in başka bir süreçte
-            # olması ve o süreci öldürmek artık seçenek değil, dolayısıyla
-            # kullanıcının ne yapacağını bilmesi tek çıkış yolu.
-            raise HTTPException(
-                # Durum kodu bilerek 500'de bırakıldı: 409 bu uçta zaten "Unity
-                # açık değil" anlamına geliyor ve frontend onu ayrı ele alıyor.
-                status_code=500,
-                detail=unity_mcp_manager.last_error or "Unity MCP sunucusu başlatılamadı."
-            )
+    if workspace_path:
+        detail = await asyncio.to_thread(unity_project_presence.mcp_mismatch_detail, workspace_path)
+        if detail is not None:
+            raise HTTPException(status_code=409, detail=detail)
 
-        package_installed = False
-        if req.workspace_path:
-            # Manifest'i hemen kur ama autoconnect scriptini server hazır olunca yaz.
-            # Böylece Unity plugin bağlanmaya çalıştığında server zaten ayakta olur
-            # ve Unity Console'da "Connection failed" hatası çıkmaz.
-            package_installed = unity_mcp_manager.install_package(req.workspace_path, write_autoconnect=False)
-            background_tasks.add_task(unity_mcp_manager.write_autoconnect_when_ready, req.workspace_path)
+    if unity_mcp_manager.is_running():
+        status = await unity_mcp_manager.get_status()
+        return {"status": "already_running", **status}
 
-        return {
-            "status": "started",
-            "port": unity_mcp_manager.mcp_port,
-            "package_installed": package_installed,
-        }
-    else:
-        unity_mcp_manager.stop_server()
-        from tools.unity_mcp_tools import unload_unity_tools
-        unload_unity_tools()
-        if req.workspace_path:
-            unity_mcp_manager._write_autoconnect_script(req.workspace_path, auto_start=False)
-        return {"status": "stopped"}
+    success = unity_mcp_manager.start_server()
+    if not success:
+        # Sebebi olduğu gibi geçir: en sık vaka 8080'in başka bir süreçte
+        # olması ve o süreci öldürmek artık seçenek değil, dolayısıyla
+        # kullanıcının ne yapacağını bilmesi tek çıkış yolu.
+        raise HTTPException(
+            # Durum kodu bilerek 500'de bırakıldı: 409 bu uçta zaten "Unity
+            # açık değil" anlamına geliyor ve frontend onu ayrı ele alıyor.
+            status_code=500,
+            detail=unity_mcp_manager.last_error or "Unity MCP sunucusu başlatılamadı."
+        )
+
+    unity_mcp_manager.active_workspace = workspace_path
+    package_installed = False
+    if workspace_path:
+        # Manifest'i hemen kur ama autoconnect scriptini server hazır olunca yaz.
+        # Böylece Unity plugin bağlanmaya çalıştığında server zaten ayakta olur
+        # ve Unity Console'da "Connection failed" hatası çıkmaz.
+        package_installed = unity_mcp_manager.install_package(workspace_path, write_autoconnect=False)
+        background_tasks.add_task(unity_mcp_manager.write_autoconnect_when_ready, workspace_path)
+
+    return {
+        "status": "started",
+        "port": unity_mcp_manager.mcp_port,
+        "package_installed": package_installed,
+    }
+
+
+def stop_mcp(workspace_path=None):
+    unity_mcp_manager.stop_server()
+    unity_mcp_manager.active_workspace = None
+    from tools.unity_mcp_tools import unload_unity_tools
+    unload_unity_tools()
+    if workspace_path:
+        unity_mcp_manager._write_autoconnect_script(workspace_path, auto_start=False)
+    return {"status": "stopped"}
 
 
 @router.get("/unity/status")

@@ -1,6 +1,7 @@
 import logging
+import os
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 
 from auth_utils import require_user
 from schemas import WorkspaceRequest
@@ -12,13 +13,34 @@ def create_workspace_router(db):
     router = APIRouter()
 
     @router.post("/save-workspace")
-    async def save_workspace(req: WorkspaceRequest, x_session_token: str = Header(alias="X-Session-Token")):
+    async def save_workspace(req: WorkspaceRequest, background_tasks: BackgroundTasks,
+                             x_session_token: str = Header(alias="X-Session-Token")):
         user_id, _ = require_user(db, x_session_token, req.user_id)
+        previous_workspace = None
+        try:
+            previous_workspace = db.get_last_workspace(user_id)
+        except Exception as e:
+            logger.debug("[Workspace] Previous workspace unavailable: %s", e)
         db.save_workspace(user_id, req.path)
         try:
             from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
-            if not unity_mcp_manager.is_running():
-                unity_mcp_manager.reset_autoconnect_off(req.path)
+            from routes.mcp_routes import start_mcp_for, stop_mcp
+
+            if unity_mcp_manager.is_running():
+                active_workspace = unity_mcp_manager.active_workspace
+                if not active_workspace or (
+                    os.path.normcase(os.path.realpath(active_workspace))
+                    != os.path.normcase(os.path.realpath(req.path))
+                ):
+                    stop_mcp()
+                    try:
+                        await start_mcp_for(req.path, background_tasks, language=unity_mcp_manager.language)
+                    except HTTPException as e:
+                        return {"status": "success", "mcp": {"state": "off", "reason": e.detail}}
+                    return {"status": "success", "mcp": {"state": "switched"}}
+            else:
+                unity_mcp_manager.reset_autoconnect_off(
+                    unity_mcp_manager.active_workspace or previous_workspace)
         except Exception as e:
             logger.debug("[Workspace] Autoconnect reset skipped: %s", e)
         return {"status": "success"}
