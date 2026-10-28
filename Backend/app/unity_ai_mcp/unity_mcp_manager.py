@@ -792,8 +792,19 @@ class UnityMCPManager:
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
             manifest.setdefault("dependencies", {})["com.coplaydev.unity-mcp"] = self.unity_mcp_repo
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2)
+            import tempfile
+            staged_manifest = None
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=os.path.dirname(manifest_path),
+                                                 prefix=".manifest-", suffix=".json", delete=False) as f:
+                    staged_manifest = f.name
+                    json.dump(manifest, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(staged_manifest, manifest_path)
+            finally:
+                if staged_manifest is not None and os.path.exists(staged_manifest):
+                    os.unlink(staged_manifest)
 
             # 2. Otomatik bağlantı scriptini yaz (write_autoconnect=False ise çağıran handle eder)
             if write_autoconnect:
