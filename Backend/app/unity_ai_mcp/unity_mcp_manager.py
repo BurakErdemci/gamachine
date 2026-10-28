@@ -623,17 +623,9 @@ class UnityMCPManager:
         logger.info("[UnityMCP] Sunucu durduruldu.")
 
         try:
+            # reset_autoconnect_off drops only known-off workspaces, so the next stop retries failures.
             for workspace_path in tuple(self._autoconnect_workspaces):
                 self.reset_autoconnect_off(workspace_path)
-                script_path = os.path.join(workspace_path, "Assets", "Editor", "UnityArchitectAIMCPSetup.cs")
-                try:
-                    with open(script_path, "r", encoding="utf-8") as f:
-                        still_on = '"MCPForUnity.AutoStartOnLoad", true' in f.read()
-                except FileNotFoundError:
-                    still_on = False
-                # Keep a workspace whose autoconnect is still on so the next stop retries it.
-                if not still_on:
-                    self._autoconnect_workspaces.discard(workspace_path)
         except Exception as e:
             logger.debug("[UnityMCP] Autoconnect cleanup skipped: %s", e)
 
@@ -865,12 +857,16 @@ class UnityMCPManager:
     def reset_autoconnect_off(self, workspace_path) -> bool:
         try:
             if not isinstance(workspace_path, str) or not workspace_path or not os.path.isdir(workspace_path):
+                if isinstance(workspace_path, str):
+                    self._autoconnect_workspaces.discard(workspace_path)
                 return False
             script_path = os.path.join(workspace_path, "Assets", "Editor", "UnityArchitectAIMCPSetup.cs")
             if not os.path.isfile(script_path):
+                self._autoconnect_workspaces.discard(workspace_path)
                 return False
             with open(script_path, "r", encoding="utf-8") as f:
                 if '"MCPForUnity.AutoStartOnLoad", true' not in f.read():
+                    self._autoconnect_workspaces.discard(workspace_path)
                     return False
             self._write_autoconnect_script(workspace_path, auto_start=False)
             return True

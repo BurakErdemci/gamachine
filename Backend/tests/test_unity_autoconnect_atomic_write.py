@@ -93,3 +93,58 @@ def test_stop_server_keeps_workspace_when_autoconnect_off_write_fails(tmp_path, 
     manager.stop_server()
     assert workspace not in manager._autoconnect_workspaces
     assert '"MCPForUnity.AutoStartOnLoad", false' in script.read_text(encoding="utf-8")
+
+
+def test_stop_server_resets_readable_workspaces_after_first_read_fails(tmp_path, monkeypatch):
+    manager = module.UnityMCPManager()
+    monkeypatch.setattr(manager, "_get_uvx", lambda: "uvx")
+    monkeypatch.setattr(manager, "is_running", lambda: False)
+    scripts = {}
+    for index in range(3):
+        workspace = tmp_path / f"workspace-{index}"
+        manager._write_autoconnect_script(str(workspace), auto_start=True)
+        scripts[str(workspace)] = workspace / "Assets" / "Editor" / "UnityArchitectAIMCPSetup.cs"
+
+    unreadable_workspace = next(iter(manager._autoconnect_workspaces))
+    unreadable_script = scripts[unreadable_workspace]
+    real_open = builtins.open
+
+    def open_with_failure(path, mode="r", *args, **kwargs):
+        if module.os.fspath(path) == str(unreadable_script) and mode == "r":
+            raise PermissionError("script cannot be read")
+        return real_open(path, mode, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "open", open_with_failure, raising=False)
+        manager.stop_server()
+
+    assert manager._autoconnect_workspaces == {unreadable_workspace}
+    for workspace, script in scripts.items():
+        expected = "true" if workspace == unreadable_workspace else "false"
+        assert f'"MCPForUnity.AutoStartOnLoad", {expected}' in script.read_text(encoding="utf-8")
+
+
+def test_stop_server_removes_workspace_with_missing_script(tmp_path, monkeypatch):
+    manager = module.UnityMCPManager()
+    monkeypatch.setattr(manager, "is_running", lambda: False)
+    workspace = str(tmp_path)
+    script = tmp_path / "Assets" / "Editor" / "UnityArchitectAIMCPSetup.cs"
+    assert tmp_path.is_dir()
+    assert not script.exists()
+    manager._autoconnect_workspaces.add(workspace)
+
+    manager.stop_server()
+
+    assert workspace not in manager._autoconnect_workspaces
+
+
+def test_stop_server_removes_workspace_with_missing_directory(tmp_path, monkeypatch):
+    manager = module.UnityMCPManager()
+    monkeypatch.setattr(manager, "is_running", lambda: False)
+    workspace = tmp_path / "missing-workspace"
+    assert not workspace.exists()
+    manager._autoconnect_workspaces.add(str(workspace))
+
+    manager.stop_server()
+
+    assert str(workspace) not in manager._autoconnect_workspaces
