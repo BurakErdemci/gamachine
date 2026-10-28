@@ -7,6 +7,9 @@ import logging
 import json
 import secrets
 import hashlib
+import fnmatch
+import io
+import tempfile
 from typing import Optional
 
 from spawn_env import build_spawn_env
@@ -16,9 +19,34 @@ from .editor_log import bridge_compile_errors, editor_log_path
 
 logger = logging.getLogger(__name__)
 
+_GENERATED_DIR_PATTERNS = ("__pycache__", "*.egg-info", "build", ".venv")
+
+
+class _ManifestChanged(Exception):
+    """The live manifest changed while its replacement was being staged."""
+
+
+def _atomic_write_text(path, text, *, expected_bytes=None):
+    """Stage beside the target; optionally reject a stale manifest snapshot."""
+    descriptor, staged = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".gamachine-", suffix=".tmp")
+    try:
+        os.close(descriptor)
+        with open(staged, "w", encoding="utf-8") as output:
+            output.write(text)
+            output.flush()
+            os.fsync(output.fileno())
+        if expected_bytes is not None:
+            with open(path, "rb") as live:
+                if live.read() != expected_bytes:
+                    raise _ManifestChanged()
+        os.replace(staged, path)
+    finally:
+        if os.path.exists(staged):
+            os.unlink(staged)
+
 
 def _tree_digest(path) -> str:
-    """Hash relative paths and contents, excluding generated Python metadata."""
+    """Hash relative paths and contents, excluding generated directories."""
     digest = hashlib.sha256()
     paths = []
 
@@ -27,7 +55,8 @@ def _tree_digest(path) -> str:
 
     for root, directories, files in os.walk(path, onerror=fail):
         directories[:] = [name for name in directories
-                          if name != "__pycache__" and not name.endswith(".egg-info")]
+                          if not any(fnmatch.fnmatchcase(name, pattern)
+                                     for pattern in _GENERATED_DIR_PATTERNS)]
         for name in files:
             if name == ".gamachine-source-digest":
                 continue
@@ -131,12 +160,13 @@ class UnityMCPManager:
         import time
         from pathlib import Path
 
-        def complete(path):
+        def complete_digest(path):
             try:
                 with open(os.path.join(path, ".gamachine-source-digest"), encoding="utf-8") as stored:
-                    return stored.read() == _tree_digest(path)
+                    digest = stored.read()
+                return digest if digest == _tree_digest(path) else None
             except Exception:
-                return False
+                return None
 
         def remove_leftover(path):
             def retry(operation, target, error):
@@ -159,33 +189,29 @@ class UnityMCPManager:
             try:
                 backups = sorted((path for path in Path(base).glob(sub + ".old*") if path.is_dir()),
                                  key=lambda path: path.stat().st_mtime_ns, reverse=True)
-                if backups and not complete(dst):
-                    recovered = next((path for path in backups if complete(path)), None)
+                if backups and complete_digest(dst) is None:
+                    recovered = next((path for path in backups if complete_digest(path) is not None), None)
                     if recovered is not None:
                         if os.path.exists(dst):
                             os.replace(dst, old)
                         os.replace(recovered, dst)
                 if not os.path.isdir(src):
-                    if complete(dst):
+                    if complete_digest(dst) is not None:
                         setattr(self, attr, dst)
                     continue
                 source_digest = _tree_digest(src)
-                digest_file = os.path.join(dst, ".gamachine-source-digest")
-                need = not os.path.isdir(dst)
-                if not need:
-                    if not os.path.isfile(digest_file):
-                        need = True
-                    else:
-                        with open(digest_file, encoding="utf-8") as stored:
-                            need = stored.read() != source_digest
-                if need:
+                if complete_digest(dst) != source_digest:
                     shutil.copytree(src, staged)
                     with open(os.path.join(staged, ".gamachine-source-digest"), "w", encoding="utf-8") as stored:
                         stored.write(source_digest)
+                    if complete_digest(staged) is None:
+                        raise OSError("Staged resources do not match the source digest")
                     if os.path.isdir(dst):
                         old = dst + f".old-{os.getpid()}-{time.time_ns()}"
                         os.replace(dst, old)
                     os.replace(staged, dst)
+                if complete_digest(dst) is None:
+                    raise OSError("Destination resources are incomplete")
                 setattr(self, attr, dst)
                 # Only retire backups after a usable destination has been retained or promoted.
                 for pattern in (sub + ".old*", sub + ".new*"):
@@ -199,7 +225,7 @@ class UnityMCPManager:
                         os.replace(old, dst)
                     except Exception:
                         logger.warning("[UnityMCP] Could not restore %s", dst, exc_info=True)
-                if complete(dst):
+                if complete_digest(dst) is not None:
                     setattr(self, attr, dst)
         self.unity_mcp_repo = f"file:{self.local_mcp_source}"
 
@@ -796,22 +822,21 @@ class UnityMCPManager:
             return False
         try:
             # 1. Paketi manifest.json'a ekle
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-            manifest.setdefault("dependencies", {})["com.coplaydev.unity-mcp"] = self.unity_mcp_repo
-            import tempfile
-            staged_manifest = None
-            try:
-                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=os.path.dirname(manifest_path),
-                                                 prefix=".manifest-", suffix=".json", delete=False) as f:
-                    staged_manifest = f.name
-                    json.dump(manifest, f, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(staged_manifest, manifest_path)
-            finally:
-                if staged_manifest is not None and os.path.exists(staged_manifest):
-                    os.unlink(staged_manifest)
+            for attempt in range(3):
+                with open(manifest_path, "rb") as source:
+                    original_bytes = source.read()
+                manifest = json.loads(original_bytes)
+                manifest.setdefault("dependencies", {})["com.coplaydev.unity-mcp"] = self.unity_mcp_repo
+                serialized = io.StringIO()
+                json.dump(manifest, serialized, indent=2)
+                try:
+                    _atomic_write_text(manifest_path, serialized.getvalue(), expected_bytes=original_bytes)
+                    break
+                except _ManifestChanged:
+                    logger.warning("[UnityMCP] Manifest changed during installation (attempt %s/3).", attempt + 1)
+            else:
+                logger.error("[UnityMCP] Manifest kept changing; installation cancelled without replacing it.")
+                return False
 
             # 2. Otomatik bağlantı scriptini yaz (write_autoconnect=False ise çağıran handle eder)
             if write_autoconnect:
@@ -894,8 +919,7 @@ namespace UnityArchitectAI
 }}
 #endif
 """
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(script)
+        _atomic_write_text(script_path, script)
         if auto_start:
             self._autoconnect_workspaces.add(workspace_path)
         else:

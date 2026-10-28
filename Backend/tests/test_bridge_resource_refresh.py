@@ -37,11 +37,18 @@ def test_refreshes_added_file_without_marker_mtime_change(resources):
     assert manager.unity_mcp_repo == f"file:{manager.local_mcp_source}"
 
 
-def test_matching_digest_does_not_copy(resources):
+def test_matching_digest_does_not_copy(resources, monkeypatch):
     manager, _, destination = resources
     manager._ensure_writable_resources()
-    sentinel = destination / "MCPForUnity" / "user-sentinel"
+    generated = destination / "MCPForUnity" / "build"
+    generated.mkdir()
+    sentinel = generated / "user-sentinel"
     sentinel.write_text("keep", encoding="utf-8")
+
+    def unexpected_copy(*args, **kwargs):
+        pytest.fail("Matching complete resources must not be copied")
+
+    monkeypatch.setattr(shutil, "copytree", unexpected_copy)
     manager._ensure_writable_resources()
     assert sentinel.read_text() == "keep"
 
@@ -228,9 +235,10 @@ def test_tree_digest_order_paths_bytes_and_generated_exclusions(tmp_path):
     (tmp_path / "z").write_bytes(b"last")
     (tmp_path / "a").mkdir()
     (tmp_path / "a" / "b").write_bytes(b"first")
-    for name in ("__pycache__", "generated.egg-info"):
-        (tmp_path / name).mkdir()
-        (tmp_path / name / "ignored").write_bytes(b"noise")
+    for parent in (tmp_path, tmp_path / "a"):
+        for name in ("__pycache__", "generated.egg-info", "build", ".venv"):
+            (parent / name).mkdir()
+            (parent / name / "ignored").write_bytes(b"noise")
     (tmp_path / ".gamachine-source-digest").write_bytes(b"ignored")
     expected = hashlib.sha256(b"a/b\0firstz\0last").hexdigest()
     assert module._tree_digest(tmp_path) == expected
@@ -241,3 +249,86 @@ def test_non_frozen_does_not_copy(resources, monkeypatch):
     monkeypatch.setattr(sys, "frozen", False)
     manager._ensure_writable_resources()
     assert not destination.exists()
+
+
+@pytest.mark.parametrize("damage", ["missing", "changed", "extra"])
+def test_stored_digest_does_not_hide_destination_damage(resources, damage):
+    manager, _, destination = resources
+    manager._ensure_writable_resources()
+    bridge = destination / "MCPForUnity"
+    if damage == "missing":
+        (bridge / "package.json").unlink()
+    elif damage == "changed":
+        (bridge / "package.json").write_text("damaged")
+    else:
+        (bridge / "unexpected.cs").write_text("damaged")
+    manager._ensure_writable_resources()
+    assert (bridge / "package.json").read_text() == "same version"
+    assert not (bridge / "unexpected.cs").exists()
+    assert (bridge / ".gamachine-source-digest").read_text() == module._tree_digest(bridge)
+    assert manager.local_mcp_source == str(bridge)
+
+
+def test_incomplete_destination_failed_refresh_leaves_attribute_unchanged(resources, monkeypatch):
+    manager, _, destination = resources
+    manager._ensure_writable_resources()
+    bridge = destination / "MCPForUnity"
+    (bridge / "package.json").write_text("damaged")
+    manager.local_mcp_source = "unchanged-source"
+
+    def deny(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(shutil, "copytree", deny)
+    manager._ensure_writable_resources()
+    assert manager.local_mcp_source == "unchanged-source"
+    assert manager.unity_mcp_repo == "file:unchanged-source"
+
+
+@pytest.mark.parametrize("missing_source", [False, True])
+def test_started_server_backup_recovers_before_bundle_check(resources, monkeypatch, missing_source):
+    manager, root, destination = resources
+    manager._ensure_writable_resources()
+    server = destination / "Server"
+    generated = server / "build" / "lib"
+    generated.mkdir(parents=True)
+    (generated / "built.py").write_text("generated")
+    backup = Path(str(server) + ".old-started")
+    os.replace(server, backup)
+    source = root / "unity-mcp" / "Server"
+    if missing_source:
+        os.replace(source, root / "unavailable-server")
+    else:
+        (source / "new.py").write_text("new version")
+
+        def deny(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(shutil, "copytree", deny)
+    manager.server_dir = "unchanged-source"
+    manager._ensure_writable_resources()
+    assert manager.server_dir == str(server)
+    assert (server / "pyproject.toml").read_text() == "same version"
+    assert (server / "build" / "lib" / "built.py").read_text() == "generated"
+
+
+def test_started_server_retained_after_failed_promotion(resources, monkeypatch):
+    manager, root, destination = resources
+    manager._ensure_writable_resources()
+    server = destination / "Server"
+    (server / "build").mkdir()
+    (server / "build" / "built.py").write_text("generated")
+    (root / "unity-mcp" / "Server" / "new.py").write_text("new version")
+    replace = os.replace
+
+    def deny_promotion(source, target):
+        if str(source).startswith(str(server) + ".new-"):
+            raise OSError("promotion denied")
+        return replace(source, target)
+
+    monkeypatch.setattr(module.os, "replace", deny_promotion)
+    manager.server_dir = "unchanged-source"
+    manager._ensure_writable_resources()
+    assert manager.server_dir == str(server)
+    assert (server / "build" / "built.py").read_text() == "generated"
+    assert not (server / "new.py").exists()
