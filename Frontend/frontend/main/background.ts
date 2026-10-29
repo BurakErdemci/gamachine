@@ -30,6 +30,10 @@ import { applyContentSecurityPolicy } from './helpers/csp'
 import { assertRegistrableChannel } from './helpers/ipc-whitelist'
 import { inspectProject, isUnityProjectDir } from './helpers/unity-project'
 import { findUnityHub } from './helpers/unity-hub'
+import { listEditors, listTemplates, templatesDir, EditorDeps } from './helpers/unity-editors'
+import { createProject, cancelCreate } from './helpers/unity-create'
+import { openProject } from './helpers/unity-launch'
+import { readUnityVersion } from './helpers/unity-project'
 import * as pty from 'node-pty'
 import {
   DOCKER_WORKSPACE_MOUNT,
@@ -323,6 +327,95 @@ handleSecure('open-unity-hub', async () => {
   } catch {
     return { opened: false }
   }
+})
+
+// --- MINI UNITY HUB: editors, templates, project creation, launch ---
+const editorDeps = (): EditorDeps => ({
+  exists: fs.existsSync,
+  readdir: (p) => fs.readdirSync(p),
+  readFile: (p) => fs.readFileSync(p, 'utf-8'),
+  platform: process.platform,
+  env: process.env,
+  homedir: os.homedir(),
+})
+// Only folders the native dialog returned may parent a new project.
+const pickedParentDirs = new Set<string>()
+
+const readLogTail = (file: string): string => {
+  const fd = fs.openSync(file, 'r')
+  try {
+    const size = fs.fstatSync(fd).size
+    const length = Math.min(size, 4096)
+    const buffer = Buffer.alloc(length)
+    fs.readSync(fd, buffer, 0, length, size - length)
+    return buffer.toString('utf8')
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+handleSecure('hub-list-editors', () => listEditors(editorDeps()))
+
+handleSecure('hub-list-templates', (_event, arg: any) => {
+  if (!arg || typeof arg.version !== 'string') return { templates: [] }
+  return listTemplates(arg.version, editorDeps())
+})
+
+handleSecure('hub-pick-parent-dir', async () => {
+  const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
+  if (result.canceled || result.filePaths.length === 0) return { path: null }
+  pickedParentDirs.add(result.filePaths[0])
+  return { path: result.filePaths[0] }
+})
+
+handleSecure('hub-create-project', async (event, arg: any) => {
+  if (!arg || typeof arg.parentDir !== 'string' || typeof arg.name !== 'string' ||
+      typeof arg.version !== 'string' || (arg.templateId !== undefined && typeof arg.templateId !== 'string')) {
+    return { ok: false, error: 'Invalid arguments.' }
+  }
+  if (!pickedParentDirs.has(arg.parentDir)) return { ok: false, error: 'Choose the parent folder with the folder picker.' }
+  const deps = editorDeps()
+  const editor = listEditors(deps).editors.find(e => e.version === arg.version)
+  if (!editor) return { ok: false, error: `Unity ${arg.version} is not installed.` }
+  let templatePath: string | undefined
+  if (arg.templateId) {
+    const template = listTemplates(arg.version, deps).templates.find(t => t.id === arg.templateId)
+    if (!template) return { ok: false, error: 'Unknown template.' }
+    const dir = templatesDir(editor.path, process.platform)
+    templatePath = (process.platform === 'win32' ? path.win32 : path.posix).join(dir, template.file)
+  }
+  return createProject({
+    editorPath: editor.path,
+    parentDir: arg.parentDir,
+    name: arg.name,
+    templatePath,
+    onProgress: (progress) => {
+      if (!event.sender.isDestroyed()) event.sender.send('hub-create-progress', progress)
+    },
+  }, {
+    platform: process.platform,
+    exists: fs.existsSync,
+    spawn: (command, args) => spawn(command, args, { stdio: 'ignore' }),
+    readLogTail,
+    isProject: isUnityProjectDir,
+    registerTrusted: registerTrustedRoot,
+    logFile: () => path.join(os.tmpdir(), `gamachine-create-${randomUUID()}.log`),
+    now: Date.now,
+  })
+})
+
+handleSecure('hub-cancel-create', () => cancelCreate())
+
+handleSecure('hub-open-project', (_event, arg: any) => {
+  if (!arg || typeof arg.path !== 'string' || (arg.version !== undefined && typeof arg.version !== 'string')) {
+    return { opened: false, error: 'Invalid arguments.' }
+  }
+  return openProject({ path: arg.path, version: arg.version }, {
+    editors: editorDeps(),
+    isTrusted: isTrustedRoot,
+    readVersion: readUnityVersion,
+    spawn: (command, args, options) => spawn(command, args, options),
+  })
 })
 
 handleSecure('register-dropped-folder', (_event, p: unknown) => {
