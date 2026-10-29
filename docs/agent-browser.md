@@ -124,11 +124,16 @@ in that time the tool returns at once:
 
 When the user approves the card (on the desktop or from a paired remote device) after
 the gateway's wait has ended, the backend stores a one-time grant keyed by
-`(conversation_id, op, url, element fingerprint)` (fingerprint = role + name + form
-action, normalised). The agent's next identical call finds the grant, consumes it and
+`(conversation_id, op, url, element fingerprint, value hash)`. For click, fill and select
+the fingerprint (role + name + form action, normalised) also carries the call's snapshot
+id and ref, so the grant covers that one element of that snapshot only; Enter keeps the
+element fingerprint. The agent's next identical call finds the grant, consumes it and
 proceeds without a new card. An approval answered inside the wait runs the step in that
-same call and leaves no grant. A rejected card, a navigation away, a halt or 10 minutes
-without use drop the grant. The chat text never approves anything; only the card does.
+same call and leaves no grant; a Stop pressed after the approval still stops the step.
+A rejected card, any successful navigation (navigate, back, forward, reload), a halt or
+10 minutes without use drop the grant. Only `_browser_card` may create `browser-` gates;
+`/mcp-approval-request` refuses those ids and any id already in use (409). The chat text
+never approves anything; only the card does.
 
 ## Work packages
 

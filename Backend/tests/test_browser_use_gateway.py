@@ -168,7 +168,7 @@ def test_critical_click_returns_needs_approval_within_the_wait_and_card_fields_c
     assert params["value_preview"] == ""
     assert params["risky"] is True and "Buy now" in params["risk_reason"] and "shop.example" in params["risk_reason"]
     assert set(params) == {"element_name", "page_url", "value_preview", "risky", "risk_reason", "fingerprint", "value_hash"}
-    assert params["fingerprint"] == policy.fingerprint(fake.elements["9"]) and params["value_hash"] == ""
+    assert params["fingerprint"] == policy.fingerprint(fake.elements["9"]) + "|s1|9" and params["value_hash"] == ""
 
 
 def test_card_answered_during_the_wait_lets_the_step_run():

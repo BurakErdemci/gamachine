@@ -26,6 +26,7 @@ NEEDS_APPROVAL = (
 HALTED = ("The user stopped the browser for this turn. Do not use browser tools "
           "again until the user's next message.")
 _ELEMENT_OPS = frozenset({"click", "fill", "select"})
+_NAVIGATION_OPS = frozenset({"navigate", "back", "forward", "reload"})
 # The host command contract: what each op may forward. Anything else in args is dropped.
 _ARGS = {
     "navigate": ("url",), "snapshot": ("max_chars",),
@@ -87,12 +88,14 @@ class BrowserGateway:
     """host_transport(runtime, op, conversation_id, args) -> host reply;
     open_card(conversation_id, tool, params) -> the card decision ({"status": "resolved",
     "approved", "error"?} or {"status": "ok", "gate_id"}); wait_card(gate_id) -> the card's
-    result once answered, else None; now() -> monotonic seconds."""
+    result once answered, else None; drop_grants(conversation_id) forgets the chat's one-time approvals
+    after a navigation; now() -> monotonic seconds."""
 
-    def __init__(self, host_transport, open_card, wait_card, now=time.monotonic):
+    def __init__(self, host_transport, open_card, wait_card, drop_grants=None, now=time.monotonic):
         self._host = host_transport
         self._open_card = open_card
         self._wait_card = wait_card
+        self._drop_grants = drop_grants
         self._now = now
         # One command at a time, like the host's own queue: a step's describe must see its own page.
         self._lock = asyncio.Lock()
@@ -117,10 +120,11 @@ class BrowserGateway:
             await asyncio.sleep(_POLL_S)
 
     async def _gate(self, runtime, conversation_id, op, args):
-        """Refusal (dict) for a step that needs a card, or None when it may run."""
+        """(refusal, carded): a refusal (dict) for a step that needs a card, or None when it may run;
+        carded says the step went through a card decision."""
         if op == "press":
             if args["key"].casefold() != "enter":
-                return None
+                return None, False
             # The host sends the key to whatever has focus, so that is what gets described.
             target = {"focused": True}
         else:
@@ -129,13 +133,13 @@ class BrowserGateway:
         described = await self._cmd(runtime, conversation_id, "describe", target)
         if described.get("ok") is not True:
             if op != "press":
-                return _refusal(str(described.get("error") or "The element could not be described."))
+                return _refusal(str(described.get("error") or "The element could not be described.")), False
         else:
             element, url = described.get("element"), str(described.get("url") or "")
         reason = (policy.critical_reason(op, element) if element is not None
                   else "Enter was pressed with no known target, so it could submit a form")
         if not reason:
-            return None
+            return None, False
         host = _host_of(url)
         shown = f"{reason} (page {host})" if host else reason
         element = element if isinstance(element, dict) else {}
@@ -143,20 +147,24 @@ class BrowserGateway:
         if op in {"fill", "select"}:
             preview = "••••" if element.get("is_password") is True else policy.display_name(
                 args[_TEXT_ARG[op]], _PREVIEW_LIMIT)
+        # A grant covers one element of one snapshot; Enter has no ref, so it keeps the element's own.
+        fingerprint = policy.fingerprint(element)
+        if op != "press":
+            fingerprint += f"|{args['snapshot_id']}|{args['ref']}"
         # The exact string the step will send, so a card approved for one value cannot cover another.
         value_hash = hashlib.sha256(args[_TEXT_ARG[op]].encode("utf-8")).hexdigest() if op in _TEXT_ARG else ""
         result = await self._card_result(self._open_card(conversation_id, f"browser_{op}", {
             "element_name": policy.display_name(element.get("name")), "page_url": url,
             "value_preview": preview, "risky": True, "risk_reason": shown,
             # Not shown: the backend keys the one-time grant on it.
-            "fingerprint": policy.fingerprint(element), "value_hash": value_hash,
+            "fingerprint": fingerprint, "value_hash": value_hash,
         }))
         if result is None:
-            return _refusal(NEEDS_APPROVAL.format(reason=shown), needs_approval=True)
+            return _refusal(NEEDS_APPROVAL.format(reason=shown), needs_approval=True), True
         if not isinstance(result, dict) or result.get("approved") is not True:
             error = result.get("error") if isinstance(result, dict) else None
-            return _refusal(str(error or "The user did not approve this step."))
-        return None
+            return _refusal(str(error or "The user did not approve this step.")), True
+        return None, True
 
     async def call(self, conversation_id: int, op: str, args, state) -> dict:
         """Run one tool call for a verified chat; state() -> {enabled, halted, runtime}, read under the lock."""
@@ -173,12 +181,19 @@ class BrowserGateway:
                 if refusal:
                     return _refusal(f"Refused: {refusal}")
             if op in _ELEMENT_OPS or op == "press":
-                refusal = await self._gate(runtime, conversation_id, op, args)
+                refusal, carded = await self._gate(runtime, conversation_id, op, args)
                 if refusal:
                     return refusal
+                if carded:
+                    # The wait for the card can outlast a Stop or the switch being turned off.
+                    runtime, refusal = _usable(state())
+                    if refusal:
+                        return _refusal(refusal)
             forward = {key: args[key] for key in _ARGS[op] if key in args}
             reply = await self._cmd(runtime, conversation_id, op, forward)
             ok = reply.get("ok") is True
+            if ok and op in _NAVIGATION_OPS and self._drop_grants is not None:
+                self._drop_grants(conversation_id)
             if ok and op == "screenshot" and isinstance(reply.get("image"), str):
                 meta = {key: value for key, value in reply.items() if key != "image"}
                 return {"ok": True, "text": json.dumps(meta, ensure_ascii=False), "image": reply["image"]}

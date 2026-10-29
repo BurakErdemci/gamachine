@@ -844,7 +844,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             return result
         # The agent retried while its card is still open: that card stays the only one.
         for open_gate, open_entry in _mcp_pending.items():
-            if key is not None and open_entry.get("grant_key") == key and _cards.get(open_gate) is not None:
+            if key is not None and open_entry.get("grant_key") == key and _cards.is_open(open_gate):
                 return {"status": "ok", "gate_id": open_gate}
         _register_gate(gate_id, owner, kind="external")
         summary = f"browser {op}: {params.get('element_name') or 'element'}"
@@ -886,8 +886,12 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             _browser_grants.pop(key, None)  # the waiting call runs the step: that approval is spent
         return result
 
+    def _drop_browser_grants(conversation_id: int) -> None:
+        for key in [k for k in _browser_grants if k[0] == conversation_id]:
+            del _browser_grants[key]
+
     _browser_gateway = browser_gateway.BrowserGateway(
-        browser_gateway.post_cmd, _browser_card, _browser_card_result)
+        browser_gateway.post_cmd, _browser_card, _browser_card_result, _drop_browser_grants)
 
     def _sweep_mcp_gates() -> None:
         """İki aşamalı süpürme: önce bekleyeni kalmayan KART, sonra kayıt.
@@ -2554,6 +2558,10 @@ Max 300 kelime. Türkçe yaz.
         gate_id = body.get("gate_id")
         if not gate_id:
             raise HTTPException(status_code=400, detail="gate_id gerekli")
+        # Only _browser_card makes browser- gates, and a taken id is never overwritten: a replaced
+        # entry would drop the browser flag that /mcp-approval-respond checks the UI secret on.
+        if str(gate_id).startswith("browser-") or gate_id in _mcp_pending or gate_id in _mcp_results:
+            raise HTTPException(status_code=409, detail="gate_id already in use")
         # A deleted chat's child can still be alive between the row delete and
         # its session close; its request would otherwise become an unowned card
         # the user could approve, or be auto-approved (Codex verifyb). Ids are
