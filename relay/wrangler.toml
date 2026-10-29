@@ -22,3 +22,13 @@ class_name = "IpLimiter"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room", "IpLimiter"]
+
+# Per-IP request budget checked before any Durable Object is created. Counters are per
+# Cloudflare location (docs, 29 Oct 2026). If the plan does not support this binding, deploy
+# reports it; the worker still runs because the code skips a missing binding.
+[[ratelimits]]
+name = "RELAY_RATE_LIMIT"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 120
+  period = 60

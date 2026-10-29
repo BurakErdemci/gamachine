@@ -101,8 +101,21 @@ async function routeSocket(request, env, url, role, pairId) {
   return room.fetch(request);
 }
 
+// Per-IP budget checked before routing, so a flood never reaches static serving or a
+// Durable Object. A missing binding or a failing call lets the request through.
+async function overBudget(request, env) {
+  if (!env.RELAY_RATE_LIMIT) return false;
+  try {
+    const { success } = await env.RELAY_RATE_LIMIT.limit({ key: request.headers.get('CF-Connecting-IP') || 'unknown' });
+    return !success;
+  } catch {
+    return false;
+  }
+}
+
 export default {
   async fetch(request, env) {
+    if (await overBudget(request, env)) return plain(429, 'too many requests', { 'Retry-After': '60' });
     const url = new URL(request.url);
     const ws = url.pathname.match(/^\/ws\/(pc|phone|pair)\/([^/]+)$/);
     if (ws) {

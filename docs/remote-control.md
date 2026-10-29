@@ -123,7 +123,8 @@ counts it.
 - The PC connects before it shows the QR, so the room exists when the phone
   scans it. A pairing socket for a room that does not exist gets `no_room`
   and the page says no PC is waiting for this code; this costs no attempt.
-- Limits: new rooms 10 per hour per IP (reconnecting to an existing room is
+- Limits: 120 requests per minute per IP before any room is touched (Cloudflare
+  rate-limit binding, counted per location, skipped when absent); new rooms 10 per hour per IP (reconnecting to an existing room is
   free). A room whose PC has not been connected for 30 days is deleted; every
   PC connect moves that date. When the PC comes back to a deleted room it
   registers its devices' token hashes again. Frame limits count UTF-8 bytes:
