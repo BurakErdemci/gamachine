@@ -58,6 +58,7 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   })
   autoUpdater.on('update-not-available', () => logger.log('[updater] uygulama güncel'))
   autoUpdater.on('update-downloaded', async (info: any) => {
+    if (disposed) return
     logger.log('[updater] güncelleme indirildi:', info?.version)
     try {
       const options: MessageBoxOptions = {
@@ -71,11 +72,13 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
       }
       const win = getMainWindow()
       const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+      if (disposed) return
       if (response === 0) {
         if (installing) return
         installing = true
         // Armed before stopBackend so a hung stop still ends in a relaunch.
         installTimer = setTimeout(() => failInstall('30 sn içinde çıkış olmadı'), INSTALL_TIMEOUT_MS)
+        // Not checked for dispose here: an install the user already accepted still runs during a quit.
         await stopBackend()
         autoUpdater.quitAndInstall(false, true)
       }

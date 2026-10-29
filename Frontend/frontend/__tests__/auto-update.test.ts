@@ -128,5 +128,28 @@ describe('setupAutoUpdate', () => {
       vi.advanceTimersByTime(60 * 1000)
       expect(relaunch).not.toHaveBeenCalled()
     })
+
+    it('a download event after dispose shows no dialog', async () => {
+      const { updater, dialog, stopBackend, handle } = setup(0)
+      handle.dispose()
+      updater.emit('update-downloaded', { version: '9.9.9' })
+      await Promise.resolve()
+      expect(dialog.showMessageBox).not.toHaveBeenCalled()
+      expect(stopBackend).not.toHaveBeenCalled()
+    })
+
+    it('a dialog answered after dispose starts nothing', async () => {
+      let answer!: (v: any) => void
+      const { updater, dialog, stopBackend, handle } = setup(0)
+      dialog.showMessageBox.mockImplementation(() => new Promise((r) => { answer = r }) as any)
+      updater.emit('update-downloaded', { version: '9.9.9' })
+      await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
+      handle.dispose()
+      answer({ response: 0 })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(stopBackend).not.toHaveBeenCalled()
+      expect(updater.quitAndInstall).not.toHaveBeenCalled()
+    })
   })
 })
