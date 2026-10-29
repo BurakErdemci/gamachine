@@ -1199,7 +1199,10 @@ async function startPythonBackend() {
     // closed right after, so nothing the backend spawns can read it later.
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: backendDir,
-    detached: false, // process group ile başlat — kapanırken tüm child'lar ölsün
+    // POSIX: its own process group, so killBackend's kill(-pid) also ends what the backend
+    // started (measured 29 Oct 2026: with false a descendant outlived the quit). Windows uses
+    // taskkill /T instead, and detached there would open a console window.
+    detached: process.platform !== 'win32',
     env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PORT: String(selectedPort), LOCAL_APP_TOKEN: localAppToken, GAMACHINE_UI_SECRET_STDIN: '1' },
   });
   pyBackendProcess.stdin?.on('error', (err) => console.error('[approval-mode] UI secret not delivered:', err))
