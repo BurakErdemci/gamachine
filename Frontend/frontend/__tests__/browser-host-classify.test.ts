@@ -130,6 +130,47 @@ describe('Enter in a field follows the form default button', () => {
   })
 })
 
+describe('the controls a form owns', () => {
+  it('counts a form="id" password field outside the form', async () => {
+    const { describeFocused } = await page('<input type="password" aria-label="Secret" form="f"><form id="f" method="get" action="/continue"><button>Continue</button></form>')
+    ;(document.querySelector('button') as HTMLButtonElement).focus()
+    expect((await describeFocused()).element).toMatchObject({ form_method: 'get', form_has_password: true })
+  })
+
+  it('a password field inside the form but owned by another form does not count', async () => {
+    const { describeFocused } = await page('<form id="other"></form><form method="get" action="/s"><input type="password" form="other" aria-label="Pw"><button>Go</button></form>')
+    ;(document.querySelectorAll('button')[0] as HTMLButtonElement).focus()
+    expect((await describeFocused()).element.form_has_password).toBe(false)
+  })
+
+  it('a focused field in an open shadow root follows its form default button', async () => {
+    const { describeFocused } = await page('<div id="h"></div>')
+    const root = document.getElementById('h')!.attachShadow({ mode: 'open' })
+    root.innerHTML = '<form method="get" action="/search"><input aria-label="Query"><button formmethod="post" formaction="/commit">Continue</button></form>'
+    ;(root.querySelector('input') as HTMLInputElement).focus()
+    const e = (await describeFocused()).element
+    expect(e).toMatchObject({ submits_form: true, form_method: 'post', form_submit_name: 'Continue' })
+    expect(String(e.form_action)).toMatch(/\/commit$/)
+  })
+})
+
+describe('element ids', () => {
+  it('one element keeps its id and an equal-looking element gets another', async () => {
+    const { describeFocused } = await page('<button>Buy now</button><button>Buy now</button>')
+    const [a, b] = Array.from(document.querySelectorAll('button')) as HTMLButtonElement[]
+    a.focus()
+    const first = (await describeFocused()).element
+    b.focus()
+    const second = (await describeFocused()).element
+    a.focus()
+    const again = (await describeFocused()).element
+    expect(first.name).toBe(second.name)
+    expect(typeof first.element_id).toBe('string')
+    expect(second.element_id).not.toBe(first.element_id)
+    expect(again.element_id).toBe(first.element_id)
+  })
+})
+
 describe('form properties shadowed by named controls', () => {
   it('a POST form with name=method/action/elements controls keeps its real method and action', async () => {
     const { describeElement } = await page('<form method="post" action="/real"><input name="method"><input name="action"><input name="elements"><input aria-label="Q"><button>Send</button></form>')

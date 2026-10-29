@@ -118,6 +118,19 @@ const PAGE_LIB = String.raw`(() => {
   // A named control (name="method", "action", "elements", "querySelector") shadows the form's own properties on the instance, so form state is read through the prototype.
   const formGet = (form, prop) => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, prop).get.call(form);
   const submitControl = (el) => (tag(el) === 'button' && el.type === 'submit') || (tag(el) === 'input' && (el.type === 'submit' || el.type === 'image'));
+  // Every control the form owns, in tree order: form="id" controls outside it count, and a form in an open shadow root owns controls the document query cannot see.
+  const ownedControls = (el, form) => {
+    const root = el.getRootNode();
+    const scopes = root !== document && root && root.querySelectorAll ? [root, document] : [document];
+    return scopes.flatMap((scope) => Array.from(scope.querySelectorAll('button, input, select, textarea')).filter((f) => f.form === form));
+  };
+  // A stable id for each element this page describes, so an Enter approved on one element cannot be spent on an equal-looking other one.
+  const elementIds = new WeakMap();
+  let lastElementId = 0;
+  const elementId = (el) => {
+    if (!elementIds.has(el)) elementIds.set(el, 'el' + (++lastElementId));
+    return elementIds.get(el);
+  };
   globalThis.__gmBrowser = {
     snapshot(a) {
       const refs = new Map();
@@ -195,7 +208,7 @@ const PAGE_LIB = String.raw`(() => {
         el = r.el;
       }
       const t = tag(el);
-      const element = { role: roleOf(el), name: nameOf(el), tag: t };
+      const element = { role: roleOf(el), name: nameOf(el), tag: t, element_id: elementId(el) };
       if (t === 'input') element.type = inputType(el);
       if (t === 'button') element.type = el.type;
       if (t === 'a') {
@@ -210,8 +223,9 @@ const PAGE_LIB = String.raw`(() => {
         const typing = t === 'input' && !BUTTON_TYPES.concat(NON_TEXT_TYPES).includes(element.type);
         const textFields = Array.from(formGet(form, 'elements')).filter((f) => tag(f) === 'input' && !BUTTON_TYPES.concat(NON_TEXT_TYPES).includes(inputType(f)));
         // Enter presses the form's default button, so its formmethod/formaction decide where the form goes (read as attributes: jsdom lacks the formMethod/formAction properties).
-        // form.elements omits <input type=image>, so the form's controls are collected from the document (form="id" controls included).
-        const defaultButton = Array.from(document.querySelectorAll('button, input')).find((f) => f.form === form && submitControl(f)) || null;
+        // form.elements omits <input type=image>, so the form's controls are collected from the tree (form="id" controls included).
+        const owned = ownedControls(el, form);
+        const defaultButton = owned.find(submitControl) || null;
         element.submits_form = submitter || (typing && (!!defaultButton || textFields.length === 1));
         const via = submitter ? el : typing ? defaultButton : null;
         if (typing && defaultButton) element.form_submit_name = nameOf(defaultButton);
@@ -220,7 +234,7 @@ const PAGE_LIB = String.raw`(() => {
         const method = typeof rawMethod === 'string' ? rawMethod.toLowerCase() : 'post';
         element.form_method = ['post', 'dialog'].includes(method) ? method : 'get';
         element.form_action = (via && via.hasAttribute('formaction') ? new URL(via.getAttribute('formaction'), document.baseURI).href : formGet(form, 'action')) || location.href;
-        element.form_has_password = !!Element.prototype.querySelector.call(form, 'input[type=password]');
+        element.form_has_password = owned.some((f) => tag(f) === 'input' && inputType(f) === 'password');
       } else {
         element.submits_form = false;
         element.form_has_password = false;

@@ -22,6 +22,8 @@ BUY = {"role": "button", "name": "Buy now", "tag": "button"}
 BUY_LATER = {"role": "button", "name": "Buy later", "tag": "button"}
 NOTES = {"role": "textbox", "name": "Order notes", "tag": "input", "form_method": "post"}
 MORE = {"role": "button", "name": "Show more", "tag": "button"}
+LINK = {"role": "link", "name": "Other page", "tag": "a", "href": "https://shop.example/other"}
+OTHER = "https://shop.example/other"
 
 
 class Host:
@@ -29,13 +31,16 @@ class Host:
 
     def __init__(self):
         self.url = PAGE
-        self.elements = {"9": BUY, "8": BUY_LATER, "4": NOTES, "7": MORE}
+        self.elements = {"9": BUY, "8": BUY_LATER, "4": NOTES, "7": MORE, "5": LINK}
+        self.focused = NOTES
         self.cmds = []
 
     async def __call__(self, runtime, op, conversation_id, args):
         self.cmds.append((op, conversation_id, args, runtime))
+        if op == "click" and args.get("ref") == "5":
+            self.url = OTHER  # a plain link: no card, but the page changes
         if op == "describe":
-            element = NOTES if args.get("focused") else self.elements.get(args["ref"])
+            element = self.focused if args.get("focused") else self.elements.get(args["ref"])
             if element is None:
                 return {"ok": False, "error": "stale_snapshot", "url": self.url}
             return {"ok": True, "url": self.url, "title": "t", "element": element}
@@ -111,6 +116,12 @@ def closure_var(fn, name):
     return fn.__closure__[fn.__code__.co_freevars.index(name)].cell_contents
 
 
+def browser_store(router, name):
+    """A store of the gateway's card function (_browser_card): grants, gate keys, page generation."""
+    endpoint = next(route.endpoint for route in router.routes if route.name == "browser_command")
+    return closure_var(closure_var(endpoint, "_browser_gateway")._open_card, name)
+
+
 def test_request_route_cannot_replace_an_open_browser_gate(live):
     assert command(live)["needs_approval"] is True
     gate_id = open_card()
@@ -175,7 +186,7 @@ def test_navigation_drops_the_grant(live, nav):
 def test_navigation_closes_open_cards(live):
     assert command(live)["needs_approval"] is True
     gate_id = open_card()
-    gate_keys = closure_var(live.router.halt_computer, "_browser_gate_keys")
+    gate_keys = browser_store(live.router, "_browser_gate_keys")
     assert command(live, "reload")["ok"] is True
     assert not gate_keys and not cards.is_open(gate_id)
 
@@ -184,7 +195,7 @@ def test_retry_does_not_attach_to_a_closed_card(live):
     assert command(live)["needs_approval"] is True
     gate_id = open_card()
     # Answered elsewhere (another thread) and not yet delivered: its pending entry is still there.
-    pending = closure_var(live.router.halt_computer, "_browser_gate_keys")
+    pending = browser_store(live.router, "_browser_gate_keys")
     assert gate_id in pending
     cards.close_card(gate_id, "timed_out")
     assert command(live)["needs_approval"] is True
@@ -192,7 +203,7 @@ def test_retry_does_not_attach_to_a_closed_card(live):
 
 
 def grants_of(env):
-    return closure_var(env.router.halt_computer, "_browser_grants")
+    return browser_store(env.router, "_browser_grants")
 
 
 def test_enter_card_approved_after_a_reload_leaves_no_grant(live):
@@ -239,10 +250,136 @@ def test_identical_enter_retry_after_a_reload_opens_a_new_card(live):
     assert live.host.ops().count("press") == 0
 
 
-def test_another_chats_open_card_survives_a_reload(live):
+def test_another_chats_reload_closes_this_chats_open_card(live):
+    # One browser view is shared by every chat, so chat 1's reload changes chat 2's page too.
     other = live.client.post("/browser/command", json={
         "tool": "browser_press", "args": {"key": "Enter"}, "conversation_id": 2}).json()
     assert other["needs_approval"] is True
     gate_id = open_card()
     assert command(live, "reload")["ok"] is True
+    assert not cards.is_open(gate_id)
+    assert not browser_store(live.router, "_browser_gate_keys")
+
+
+# Rule A: one shared page; any page change closes every chat's cards and grants.
+
+def test_a_link_click_that_changes_the_page_closes_every_open_card(live):
+    approve(live, ref="8")
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    gate_id = open_card()
+    assert command(live, ref="5")["ok"] is True
+    assert not cards.is_open(gate_id)
+    assert not browser_store(live.router, "_browser_grants")
+    live.host.url = PAGE
+    assert command(live, ref="8")["needs_approval"] is True
+    assert live.host.ops().count("click") == 1
+
+
+def test_a_step_on_the_same_page_keeps_the_open_card(live):
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    gate_id = open_card()
+    assert command(live, "scroll", direction="down")["ok"] is True
     assert cards.is_open(gate_id)
+
+
+# Rule B and C: the moment of the approval, driven through the route functions in one event loop.
+
+def endpoints(env):
+    return {route.name: route.endpoint for route in env.router.routes}
+
+
+async def first_open_card():
+    for _ in range(400):
+        if cards.list_pending():
+            return open_card()
+        await asyncio.sleep(0.001)
+    raise AssertionError("no card opened")
+
+
+def run_with_answer(env, answer, op="click", **args):
+    """The step and, while its card waits, answer(gate_id, endpoints); returns the step's reply."""
+    routes = endpoints(env)
+    if op == "click":
+        args = {"snapshot_id": "s1", "ref": "9", **args}
+
+    async def answer_card():
+        await answer(await first_open_card(), routes)
+
+    async def main():
+        reply, _ = await asyncio.gather(routes["browser_command"](
+            {"tool": f"browser_{op}", "args": args, "conversation_id": 1}, x_session_token=""), answer_card())
+        return reply
+    return asyncio.run(main())
+
+
+async def desktop_approve(gate_id, routes):
+    await routes["mcp_approval_respond"](gate_id, {"approved": True}, x_session_token="", x_ui_secret=SECRET)
+
+
+@pytest.fixture
+def waiting(live, monkeypatch):
+    monkeypatch.setattr(gateway, "APPROVAL_WAIT_S", 2.0)
+    monkeypatch.setattr(gateway, "_POLL_S", 0.01)
+    return live
+
+
+def test_an_approval_inside_the_wait_runs_the_step(waiting):
+    assert run_with_answer(waiting, desktop_approve)["ok"] is True
+    assert waiting.host.ops().count("click") == 1
+
+
+def test_a_switch_cycle_during_the_wait_refuses_the_approved_step(waiting):
+    async def approve_then_cycle(gate_id, routes):
+        await desktop_approve(gate_id, routes)
+        for on in (False, True):
+            await routes["set_browser_settings"]({"enabled": on}, x_session_token="",
+                                                 x_ui_secret=SECRET, x_maintenance="")
+
+    reply = run_with_answer(waiting, approve_then_cycle)
+    assert reply["ok"] is False and reply["error"] == gateway.PAGE_CHANGED
+    assert waiting.host.ops().count("click") == 0
+
+
+def test_deleting_the_chat_during_the_wait_refuses_the_approved_step(waiting, monkeypatch):
+    waiting.db.delete_conversation_family_and_sides.return_value = ([1], [])
+    monkeypatch.setattr(conversation_routes, "require_conversation_owner", lambda *args: None)
+    closer = next(route.endpoint for route in waiting.router.routes if route.name == "delete_conversation")
+    cell = closer.__closure__[closer.__code__.co_freevars.index("_close_conversation_sessions")]
+    original = cell.cell_contents
+
+    async def no_sessions(conv_id):
+        return None
+
+    async def approve_then_delete(gate_id, routes):
+        await desktop_approve(gate_id, routes)
+        assert (await routes["delete_conversation"](1, x_session_token=""))["deleted_ids"] == [1]
+
+    cell.cell_contents = no_sessions
+    try:
+        reply = run_with_answer(waiting, approve_then_delete)
+    finally:
+        cell.cell_contents = original
+    assert reply["ok"] is False
+    assert waiting.host.ops().count("click") == 0
+
+
+def test_a_focus_change_during_the_wait_refuses_the_approved_enter(waiting):
+    waiting.host.focused = BUY
+
+    async def move_focus_then_approve(gate_id, routes):
+        waiting.host.focused = {"role": "button", "name": "Delete account", "tag": "button"}
+        await desktop_approve(gate_id, routes)
+
+    reply = run_with_answer(waiting, move_focus_then_approve, op="press", key="Enter")
+    assert reply["ok"] is False and reply["error"] == gateway.FOCUS_CHANGED
+    assert waiting.host.ops().count("press") == 0
+
+
+def test_an_equal_looking_focused_element_needs_its_own_card(live):
+    live.host.focused = dict(BUY, element_id="el1")
+    approve(live, op="press", key="Enter")
+    live.host.focused = dict(BUY, element_id="el2")
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    live.host.focused = dict(BUY, element_id="el1")
+    assert command(live, "press", key="Enter")["ok"] is True
+    assert live.host.ops().count("press") == 1

@@ -126,14 +126,26 @@ When the user approves the card (on the desktop or from a paired remote device) 
 the gateway's wait has ended, the backend stores a one-time grant keyed by
 `(conversation_id, op, url, element fingerprint, value hash)`. For click, fill and select
 the fingerprint (role + name + form action, normalised) also carries the call's snapshot
-id and ref, so the grant covers that one element of that snapshot only; Enter keeps the
-element fingerprint. The agent's next identical call finds the grant, consumes it and
+id and ref, so the grant covers that one element of that snapshot only; Enter has no ref,
+so its fingerprint carries the focused element's `element_id` instead (a per-page id the
+host's page script gives every element it describes), and an equal-looking other element
+needs its own card. The agent's next identical call finds the grant, consumes it and
 proceeds without a new card. An approval answered inside the wait runs the step in that
-same call and leaves no grant; a Stop pressed after the approval still stops the step.
-A rejected card, any successful navigation (navigate, back, forward, reload), a halt or
-10 minutes without use drop the grant; a page change also closes the chat's open browser cards. Only `_browser_card` may create `browser-` gates;
-`/mcp-approval-request` refuses those ids and any id already in use (409). An approval given after the page changed (or after a Stop or switch-off) allows nothing later. The chat text
-never approves anything; only the card does.
+same call and leaves no grant; before an Enter approved that way is pressed, the gateway
+describes the focused element again and refuses if the page, the element or its id changed.
+
+Every chat shares the one browser view, so there is one page generation for the whole
+browser. A page change (a successful navigate, back, forward or reload, or any successful
+step whose reply comes from a different URL than the gateway saw before it, such as a link
+click), a Stop, the switch turned off and a deleted chat each bump it. A page change closes
+every chat's open browser cards and drops every grant; a Stop or a deleted chat does that for
+its own chat, the switch-off for all. The gateway notes the generation before a step that
+needs a card and, after an approval inside the wait, refuses if it changed, the chat is
+halted or the switch is off, so a Stop, an off/on cycle or a deletion after the approval
+still stops the step. An approval given after the generation changed allows nothing later;
+10 minutes without use and a rejected card also drop the grant. Only `_browser_card` may
+create `browser-` gates; `/mcp-approval-request` refuses those ids and any id already in use
+(409). The chat text never approves anything; only the card does.
 
 ## Work packages
 

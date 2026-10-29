@@ -145,9 +145,15 @@ def closure_var(fn, name):
     return fn.__closure__[fn.__code__.co_freevars.index(name)].cell_contents
 
 
+def browser_store(router, name):
+    """A store of the gateway's card function (_browser_card): grants, gate keys, page generation."""
+    endpoint = next(route.endpoint for route in router.routes if route.name == "browser_command")
+    return closure_var(closure_var(endpoint, "_browser_gateway")._open_card, name)
+
+
 def test_halt_drops_the_chats_gate_keys_and_grants(live):
-    gate_keys = closure_var(live.router.halt_computer, "_browser_gate_keys")
-    grants = closure_var(live.router.halt_computer, "_browser_grants")
+    gate_keys = browser_store(live.router, "_browser_gate_keys")
+    grants = browser_store(live.router, "_browser_grants")
     assert click(live)["needs_approval"] is True
     assert len(gate_keys) == 1
     assert live.client.post("/computer-use/halt/1", headers=UI).status_code == 200
@@ -156,7 +162,7 @@ def test_halt_drops_the_chats_gate_keys_and_grants(live):
 
 def test_delivered_gate_leaves_no_key_behind(live, monkeypatch):
     monkeypatch.setattr(gateway, "APPROVAL_WAIT_S", 5.0)
-    gate_keys = closure_var(live.router.halt_computer, "_browser_gate_keys")
+    gate_keys = browser_store(live.router, "_browser_gate_keys")
 
     def reject_when_open():
         for _ in range(200):
