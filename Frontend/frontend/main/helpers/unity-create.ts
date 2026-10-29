@@ -1,3 +1,4 @@
+import fs from 'fs'
 import path from 'path'
 
 export type CreatePhase = 'starting' | 'running' | 'done' | 'failed'
@@ -16,6 +17,7 @@ export interface CreateDeps {
   exists: (p: string) => boolean
   realpath: (p: string) => string
   removeDir: (dir: string) => void
+  lstat?: (p: string) => { isDirectory: () => boolean; isSymbolicLink: () => boolean; birthtimeMs: number }
   spawn: (command: string, args: string[]) => CreateChild
   readLogTail: (file: string) => string
   isProject: (dir: string) => boolean
@@ -75,6 +77,7 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
   args.push('-logFile', logFile)
 
   const started = deps.now()
+  const startedAt = Date.now()
   const emit = (phase: CreatePhase) => {
     let logTail: string | undefined
     try { logTail = deps.readLogTail(logFile) } catch { /* The log may not exist yet. */ }
@@ -108,10 +111,20 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
       let resolved: string | null = null
       try { resolved = deps.realpath(target) } catch { /* Nothing at target, so nothing to remove. */ }
       if (resolved === target) {
+        // Only a directory born after this attempt began is provably ours; a renamed-in project is not.
+        let ours = false
         try {
-          deps.removeDir(target)
-        } catch {
-          error += ` The partial folder could not be removed: ${target}`
+          const st = (deps.lstat ?? fs.lstatSync)(target)
+          ours = st.isDirectory() && !st.isSymbolicLink() && st.birthtimeMs > 0 && st.birthtimeMs >= startedAt
+        } catch { /* Unreadable, so keep it. */ }
+        if (!ours) {
+          error += ` The folder was not removed because it was not created by this attempt: ${target}`
+        } else {
+          try {
+            deps.removeDir(target)
+          } catch {
+            error += ` The partial folder could not be removed: ${target}`
+          }
         }
       } else if (resolved !== null) {
         error += ` The partial folder was not removed because its path changed: ${target}`

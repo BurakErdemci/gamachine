@@ -21,6 +21,7 @@ function setup(over: Partial<CreateDeps> = {}, platform: NodeJS.Platform = 'darw
       throw new Error('ENOENT')
     },
     removeDir: vi.fn(),
+    lstat: () => ({ isDirectory: () => true, isSymbolicLink: () => false, birthtimeMs: Date.now() }),
     spawn: vi.fn(() => child),
     readLogTail: () => 'log line',
     isProject: () => true,
@@ -235,5 +236,48 @@ describe('createProject', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it('keeps a directory renamed into place that this attempt did not create', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gm-create-')))
+    try {
+      // Fake timers freeze the clock, so the birth time is reported an hour old as a pre-existing project's would be.
+      const { child, deps, opts } = setup({
+        exists: fs.existsSync,
+        realpath: fs.realpathSync,
+        lstat: p => ({ isDirectory: () => fs.lstatSync(p).isDirectory(), isSymbolicLink: () => false, birthtimeMs: Date.now() - 3_600_000 }),
+        removeDir: dir => fs.rmSync(dir, { recursive: true, force: true }),
+      })
+      const done = path.join(root, 'Completed')
+      fs.mkdirSync(done)
+      fs.writeFileSync(path.join(done, 'keep.txt'), 'x')
+      const promise = createProject({ ...opts, parentDir: root, name: 'Game' }, deps)
+      fs.renameSync(done, path.join(root, 'Game'))
+      child.emit('exit', 1, null)
+      expect((await promise).ok).toBe(false)
+      expect(fs.existsSync(path.join(root, 'Game', 'keep.txt'))).toBe(true)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the folder when its birth time is unavailable', async () => {
+    const { child, deps, opts } = setup({
+      lstat: () => ({ isDirectory: () => true, isSymbolicLink: () => false, birthtimeMs: 0 }),
+    })
+    const promise = createProject(opts, deps)
+    child.emit('exit', 1, null)
+    expect(await promise).toMatchObject({ ok: false, error: expect.stringContaining('not created by this attempt') })
+    expect(deps.removeDir).not.toHaveBeenCalled()
+  })
+
+  it('keeps a symlink at the target', async () => {
+    const { child, deps, opts } = setup({
+      lstat: () => ({ isDirectory: () => false, isSymbolicLink: () => true, birthtimeMs: Date.now() }),
+    })
+    const promise = createProject(opts, deps)
+    child.emit('exit', 1, null)
+    await promise
+    expect(deps.removeDir).not.toHaveBeenCalled()
   })
 })
