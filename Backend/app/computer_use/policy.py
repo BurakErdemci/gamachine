@@ -430,7 +430,14 @@ def critical_name(name) -> str:
 
 
 def _critical_display_name(name: str) -> str:
+    name = "".join(char for char in name if unicodedata.category(char) not in {"Cf", "Cc"}
+                   and char not in "\u115f\u1160\u3164\uffa0")
+    name = " ".join(name.split())
     return name if len(name) <= 80 else name[:79] + "…"
+
+
+def _name_hint(display: str, keyword: str) -> str:
+    return display if critical_name(display) else f"{display} (eşleşen: {keyword})"
 
 
 def critical_reason(tool, args, *, app_id, resolve, strict: bool = True) -> str:
@@ -451,7 +458,7 @@ def critical_reason(tool, args, *, app_id, resolve, strict: bool = True) -> str:
                     return reason
                 if reason not in reasons:
                     reasons.append(reason)
-        return " · ".join(reasons)
+        return " · ".join(reasons[:6]) + (f" · +{len(reasons) - 6} daha" if len(reasons) > 6 else "")
     if tool == "computer_invoke_menu":
         path = args.get("path", [])
         if not isinstance(path, list):
@@ -459,8 +466,12 @@ def critical_reason(tool, args, *, app_id, resolve, strict: bool = True) -> str:
         names = [name for name in path if isinstance(name, str)]
         if strict and len(names) != len(path):
             return "Hedef öğe doğrulanamadı; kritik işlem olabilir."
-        if any(critical_name(name) for name in names):
-            return "Kritik işlem menüsü: " + " > ".join(_critical_display_name(name) for name in names)
+        keyword = next((critical_name(name) for name in names if critical_name(name)), "")
+        if keyword:
+            shown = [_critical_display_name(name) for name in names]
+            if len(shown) > 6:
+                shown = shown[:2] + ["…"] + shown[-3:]
+            return "Kritik işlem menüsü: " + _name_hint(" > ".join(shown), keyword)
         return ""
     if strict and tool in _INPUT_TOOLS and platform.current().read_only_app(app_id):
         return "Tarayıcı, posta veya sohbet uygulamasına girdi gönderilecek."
@@ -494,5 +505,5 @@ def critical_reason(tool, args, *, app_id, resolve, strict: bool = True) -> str:
             return "Hedef öğe doğrulanamadı; kritik işlem olabilir."
         for name in names:
             if critical_name(name):
-                return "Kritik işlem düğmesi: " + _critical_display_name(name)
+                return "Kritik işlem düğmesi: " + _name_hint(_critical_display_name(name), critical_name(name))
     return ""

@@ -345,8 +345,10 @@ class BackendApprovals:
         named_critical = params.get("named_critical")
         params = {key: value for key, value in params.items()
                   if key not in {"confirmed", "confirm_text", "element_name", "critical_reason", "named_critical"}}
-        if named_critical and not params.get("risky"):
-            params.update(risky=True, risk_reason=named_critical)
+        if named_critical:
+            existing = params.get("risk_reason") if params.get("risky") else ""
+            params.update(risky=True, risk_reason=named_critical if not existing or existing in named_critical
+                          else f"{existing} · {named_critical}")
         return await approval_bridge.request_approval(tool, params=params, workspace_path="")
 
     async def batch_stop(self, params):

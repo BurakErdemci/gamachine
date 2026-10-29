@@ -160,7 +160,7 @@ def test_backend_preserves_existing_risk_and_filters_batch_metadata(monkeypatch,
     asyncio.run(approvals.request("computer_click", params))
     assert bridge.call_args.kwargs["params"] == {
         "bundle_id": APP, "risky": True,
-        "risk_reason": "Existing risk" if risky else "Kritik işlem düğmesi: Delete"}
+        "risk_reason": "Existing risk · Kritik işlem düğmesi: Delete" if risky else "Kritik işlem düğmesi: Delete"}
     asyncio.run(approvals.batch_stop(params))
     assert stop.call_args.args == ({
         "bundle_id": APP, "risky": risky, "risk_reason": original["risk_reason"]},)
@@ -327,3 +327,47 @@ def test_menu_reason_caps_each_path_item(win):
     reason = policy.critical_reason("computer_invoke_menu", {"path": names}, app_id=APP,
                                     resolve=lambda target: (False, None), strict=False)
     assert reason == "Kritik işlem menüsü: " + " > ".join(name[:79] + "…" for name in names)
+
+
+def _reason(tool, args, strict=False):
+    return policy.critical_reason(tool, args, app_id=APP, resolve=lambda target: (False, None), strict=strict)
+
+
+def test_display_name_drops_hidden_characters_and_names_hidden_keyword(win):
+    assert _reason("computer_click", {"name": "Del​eteㅤ  now"}) == "Kritik işlem düğmesi: Delete now"
+    far = "a" * 90 + " Delete"
+    assert _reason("computer_click", {"name": far}) == "Kritik işlem düğmesi: " + "a" * 79 + "… (eşleşen: delete)"
+    assert _reason("computer_click", {"name": "​Delete"}) == "Kritik işlem düğmesi: Delete"
+
+
+def test_long_menu_path_is_shortened_and_names_hidden_keyword(win):
+    path = ["File", "B", "C", "D", "E", "F", "Delete", "G"]
+    assert _reason("computer_invoke_menu", {"path": path}) == "Kritik işlem menüsü: File > B > … > F > Delete > G"
+    path = ["File", "Delete", "C", "D", "E", "F", "G", "H"]
+    assert _reason("computer_invoke_menu", {"path": path}) == (
+        "Kritik işlem menüsü: File > Delete > … > F > G > H")
+    path = ["File", "B", "C", "Delete", "E", "F", "G", "H"]
+    assert _reason("computer_invoke_menu", {"path": path}) == (
+        "Kritik işlem menüsü: File > B > … > F > G > H (eşleşen: delete)")
+
+
+def test_named_batch_keeps_six_reasons_and_counts_the_rest(win):
+    args = {"steps": [{"click": {"name": f"Delete {index}"}} for index in range(9)]}
+    reason = _reason("computer_run_steps", args)
+    assert reason.count("Kritik işlem düğmesi") == 6
+    assert reason.endswith(" · +3 daha")
+    assert "+" not in _reason("computer_run_steps", {"steps": args["steps"][:6]})
+
+
+@pytest.mark.parametrize("existing,expected", [
+    ("", "Kritik işlem düğmesi: Delete"),
+    ("Kritik işlem düğmesi", "Kritik işlem düğmesi: Delete"),
+    ("Tehlikeli tuş", "Tehlikeli tuş · Kritik işlem düğmesi: Delete"),
+])
+def test_approval_merges_named_critical_with_existing_risk(monkeypatch, existing, expected):
+    bridge = AsyncMock()
+    monkeypatch.setattr(server.approval_bridge, "request_approval", bridge)
+    params = {"named_critical": "Kritik işlem düğmesi: Delete", "risky": bool(existing), "risk_reason": existing}
+    asyncio.run(server.BackendApprovals().request("computer_run_steps", params))
+    sent = bridge.call_args.kwargs["params"]
+    assert sent["risky"] is True and sent["risk_reason"] == expected
