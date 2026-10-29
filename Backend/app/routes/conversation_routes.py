@@ -31,6 +31,7 @@ from computer_use import activity as computer_activity
 from computer_use import gate as computer_gate
 from computer_use import policy as computer_policy
 from computer_use import settings as computer_settings
+from browser_use import gateway as browser_gateway
 from browser_use import settings as browser_settings
 from computer_use import platform as computer_platform
 from computer_use.platform import valid_app_id as valid_bundle_id
@@ -641,7 +642,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
     _computer_halted: set[int] = set()
     # Where Electron's agent-browser host listens; reported by the app, never persisted.
     _browser_runtime = {"running": False, "port": None, "token": None}
-    # One-time approvals of critical browser steps: (chat, op, url, fingerprint) -> expiry.
+    # One-time approvals of critical browser steps: (chat, op, url, fingerprint, value_hash) -> expiry.
     _browser_grants: dict[tuple, float] = {}
     _mcp_results: dict = {}   # gate_id → {approved, ...}
     _mcp_result_ts: dict = {}  # gate_id → oluşturulma zamanı (TTL süpürmesi için)
@@ -796,30 +797,27 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             rejected += 1
         return rejected
 
-    def _browser_request(body, x_session_token):
-        gate_id = body["gate_id"]
-        tool = body.get("tool")
-        params = body.get("params")
-        if not isinstance(params, dict):
-            params = {}
-        owner, why_unowned = _verified_mcp_owner(body.get("conversation_id"), x_session_token)
-        claimed = body.get("conversation_id")
-        op = str(tool)[len("browser_"):]
+    def _browser_card(owner: int, tool: str, params: dict) -> dict:
+        """The gateway's card for a critical browser step of a verified chat: denied, allowed by
+        consuming a one-time grant, or an open card ({"status": "ok", "gate_id"})."""
+        gate_id = f"browser-{uuid.uuid4().hex[:10]}"
+        op = tool[len("browser_"):]
         url, fingerprint = params.get("page_url"), params.get("fingerprint")
         value_hash = params.get("value_hash", "")
         valid = (op in _BROWSER_CRITICAL_OPS
                  and isinstance(url, str) and isinstance(fingerprint, str)
                  and isinstance(value_hash, str) and re.fullmatch(r"[0-9a-f]{64}|", value_hash) is not None)
-        key = (owner, op, url, fingerprint, value_hash) if valid and owner is not _UNKNOWN_OWNER else None
+        key = (owner, op, url, fingerprint, value_hash) if valid else None
         now = time()
         for stale in [k for k, expiry in _browser_grants.items() if expiry <= now]:
             del _browser_grants[stale]
         granted = key is not None and _browser_grants.pop(key, None) is not None
+        side_refusal = _side_chat_claim_refusal(owner)
         if not valid:
             decision = computer_gate.Decision("deny", "Invalid browser approval request.")
-        elif ((owner is not _UNKNOWN_OWNER and owner in _computer_halted)
-                or (type(claimed) is int and claimed in _computer_halted)):
-            # A claimed id is honoured even unverified: it can only deny more.
+        elif side_refusal is not None:
+            decision = computer_gate.Decision("deny", side_refusal)
+        elif owner in _computer_halted:
             decision = computer_gate.Decision("deny", BROWSER_HALTED_REASON)
         elif not browser_settings.enabled(db):
             decision = computer_gate.Decision("deny", BROWSER_INACTIVE_REASON)
@@ -831,7 +829,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
 
         def log(outcome, reason):
             computer_gate.actions_log_append(log_path, {
-                "conversation_id": body.get("conversation_id"), "tool": tool, "url": url,
+                "conversation_id": owner, "tool": tool, "url": url,
                 "fingerprint": fingerprint, "decision": outcome, "reason": reason,
                 "granted": granted,
             })
@@ -849,9 +847,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         _register_gate(gate_id, owner, kind="external")
         summary = f"browser {op}: {params.get('element_name') or 'element'}"
         _mcp_pending[gate_id] = {
-            "tool": tool, "params": params, "workspace_path": body.get("workspace_path", ""),
-            "conversation_id": None if owner is _UNKNOWN_OWNER else owner,
-            "claimed_conversation_id": claimed if type(claimed) is int and claimed > 0 else None,
+            "tool": tool, "params": params, "workspace_path": "", "conversation_id": owner,
             "browser_use": True, "grant_key": key, "risk_reason": decision.reason, "summary": summary,
         }
         _mcp_results[gate_id] = {"status": "pending"}
@@ -870,9 +866,19 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         _cards.open_card(gate_id, conversation_id=_mcp_pending[gate_id]["conversation_id"],
                          kind="mcp", tool=tool, summary=summary, params=params,
                          risk=decision.reason, resolver=resolve)
-        if owner is _UNKNOWN_OWNER:
-            logger.warning("[browser-use] gate %s is unowned (%s)", gate_id, why_unowned)
         return {"status": "ok", "gate_id": gate_id}
+
+    def _browser_card_result(gate_id) -> Optional[dict]:
+        """A browser card's result once answered (its gate is then dropped, as
+        /mcp-approval-result does on delivery), else None."""
+        result = _mcp_results.get(gate_id)
+        if result is None or result.get("status") == "pending":
+            return None
+        _drop_mcp_gate(gate_id)
+        return result
+
+    _browser_gateway = browser_gateway.BrowserGateway(
+        browser_gateway.post_cmd, _browser_card, _browser_card_result)
 
     def _sweep_mcp_gates() -> None:
         """İki aşamalı süpürme: önce bekleyeni kalmayan KART, sonra kayıt.
@@ -2557,8 +2563,6 @@ Max 300 kelime. Türkçe yaz.
             }
         if str(body.get("tool")).startswith("computer_"):
             return _computer_use_request(body, x_session_token)
-        if str(body.get("tool")).startswith("browser_"):
-            return _browser_request(body, x_session_token)
         # Global auto mode (owner decision, 25 Sep 2026): no card for anyone,
         # with or without a conversation - external MCP clients included.
         # Nothing is registered, so an auto request leaves no pending entry.
@@ -2851,8 +2855,27 @@ Max 300 kelime. Türkçe yaz.
         x_session_token: str = Header(alias="X-Session-Token", default=""),
     ):
         _check_token(x_session_token)
-        return {"enabled": browser_settings.enabled(db), "runtime": dict(_browser_runtime),
+        # Never the host port or token: those stay between Electron main and the gateway.
+        return {"enabled": browser_settings.enabled(db), "running": _browser_runtime["running"],
                 "halted": sorted(_computer_halted)}
+
+    @router.post("/browser/command")
+    async def browser_command(
+        body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+    ):
+        """Every agent-browser command: navigation check, critical-step card and grant, then the host."""
+        _check_token(x_session_token)
+        tool, args = body.get("tool"), body.get("args")
+        if not isinstance(tool, str) or not tool.startswith("browser_"):
+            raise HTTPException(status_code=400, detail="tool must be a browser_* tool.")
+        owner, why_unowned = _verified_mcp_owner(body.get("conversation_id"), x_session_token)
+        if owner is _UNKNOWN_OWNER:
+            logger.warning("[browser-use] command refused (%s)", why_unowned)
+            return {"ok": False, "error": "The agent browser only works for a chat whose turn is running."}
+        return await _browser_gateway.call(owner, tool[len("browser_"):], args, lambda: {
+            "enabled": browser_settings.enabled(db), "halted": owner in _computer_halted,
+            "runtime": dict(_browser_runtime)})
 
     @router.put("/browser/settings")
     async def set_browser_settings(

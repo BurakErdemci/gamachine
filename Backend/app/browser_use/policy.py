@@ -88,6 +88,11 @@ def _is_download(element) -> bool:
     return path.endswith(_DOWNLOAD_SUFFIXES)
 
 
+def _is_submit_control(element) -> bool:
+    return (element.get("tag") == "button" or element.get("role") == "button"
+            or (element.get("tag") == "input" and element.get("type") in {"submit", "image"}))
+
+
 def critical_reason(op, element) -> str:
     """'' when the step may run without a card, otherwise what makes it critical."""
     if not isinstance(element, dict):
@@ -103,9 +108,11 @@ def critical_reason(op, element) -> str:
                 return f'{op} on {shown} (matches "{keyword}")'
     if _is_download(element):
         return f"{op} on {shown} starts a download"
-    # Enter in an input has no submit button of its own: the field's form decides.
-    if op in {"click", "press"} and (element.get("submits_form") is True
-                                     or (op == "press" and element.get("form_method") is not None)):
+    # describe marks a text field submits_form too (Enter would submit it), but clicking one only
+    # focuses it; Enter in an input has no submit button of its own, so the field's form decides.
+    if ((op == "click" and element.get("submits_form") is True and _is_submit_control(element))
+            or (op == "press" and (element.get("submits_form") is True
+                                   or element.get("form_method") is not None))):
         if element.get("form_has_password") is True:
             return f"{op} on {shown} submits a form that contains a password field"
         if element.get("form_method") != "get":

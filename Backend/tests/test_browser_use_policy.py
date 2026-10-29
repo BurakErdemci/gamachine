@@ -65,6 +65,32 @@ def test_critical_reason(op, fields, critical):
         assert op in reason
 
 
+FIELD = {"role": "textbox", "name": "Email", "tag": "input", "type": "text", "submits_form": True}
+
+
+@pytest.mark.parametrize("op,fields,critical", [
+    # Clicking a field only focuses it, even when Enter in it would submit the form.
+    ("click", {**FIELD, "form_method": "post"}, False),
+    ("click", {**FIELD, "form_method": "get", "form_has_password": True}, False),
+    ("click", {**FIELD, "role": "searchbox", "tag": "input", "form_method": "post"}, False),
+    ("press", {**FIELD, "form_method": "post"}, True),
+    ("press", {**FIELD, "form_method": "get", "form_has_password": True}, True),
+    ("press", {**FIELD, "form_method": "get"}, False),
+    ("click", {"role": "button", "name": "Continue", "tag": "button", "type": "submit",
+               "submits_form": True, "form_method": "post"}, True),
+    ("click", {"role": "button", "name": "Continue", "tag": "input", "type": "submit",
+               "submits_form": True, "form_method": "post"}, True),
+    ("click", {"role": "button", "name": "Go", "tag": "input", "type": "image",
+               "submits_form": True, "form_method": "dialog"}, True),
+    ("click", {"role": "button", "name": "Continue", "tag": "div", "submits_form": True,
+               "form_method": "post"}, True),
+    ("click", {"role": "button", "name": "Continue", "tag": "button", "submits_form": True,
+               "form_method": "get", "form_has_password": True}, True),
+])
+def test_only_a_button_click_submits_but_enter_in_a_field_does(op, fields, critical):
+    assert bool(policy.critical_reason(op, fields)) is critical
+
+
 def test_unidentified_element_is_critical():
     assert policy.critical_reason("click", None)
 
@@ -74,3 +100,9 @@ def test_fingerprint_is_normalised_and_distinguishes_targets():
     assert policy.fingerprint(base) == policy.fingerprint({"role": "button", "name": "buy now", "form_action": "/pay"})
     assert policy.fingerprint(base) != policy.fingerprint({**base, "form_action": "/other"})
     assert policy.fingerprint(base) != policy.fingerprint({**base, "name": "Buy later"})
+
+
+def test_display_name_strips_format_characters_and_caps():
+    assert policy.display_name("a\u202eb\x00 \n c") == "ab c"
+    assert policy.display_name("x" * 500).endswith("…") and len(policy.display_name("x" * 500)) == 120
+    assert policy.display_name(None) == ""

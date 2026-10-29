@@ -1,4 +1,4 @@
-"""Agent-browser backend routes: runtime and settings, halt, one-time grants."""
+"""Agent-browser backend routes: runtime and settings, the command gateway, halt, one-time grants."""
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from agentic import approval_mode, approval_policy, cards
 from agentic.command_gates import GATE_OWNERS
-from browser_use import settings
+from browser_use import gateway, settings
 from computer_use import settings as computer_settings
 from routes import conversation_routes
 from routes.conversation_routes import create_conversation_router
@@ -16,14 +16,40 @@ from routes.conversation_routes import create_conversation_router
 SECRET = "browser-use-secret"
 UI = {"X-Gamachine-UI-Secret": SECRET}
 TOKEN = "ab" * 32
-PARAMS = {"page_url": "https://shop.example/cart", "fingerprint": "button|buy now|",
-          "element_name": "Buy now", "value_preview": "",
-          "risky": True, "risk_reason": 'click on "Buy now" (page shop.example)'}
+PAGE = "https://shop.example/cart"
+BUY = {"role": "button", "name": "Buy now", "tag": "button"}
+BUY_LATER = {"role": "button", "name": "Buy later", "tag": "button"}
+NOTES = {"role": "textbox", "name": "Order notes", "tag": "input", "form_method": "post"}
+MORE = {"role": "button", "name": "Show more", "tag": "button"}
+
+
+class Host:
+    """Electron's host as the gateway sees it."""
+
+    def __init__(self):
+        self.url = PAGE
+        self.elements = {"9": BUY, "8": BUY_LATER, "4": NOTES, "7": MORE}
+        self.cmds = []
+
+    async def __call__(self, runtime, op, conversation_id, args):
+        self.cmds.append((op, conversation_id, args, runtime))
+        if op == "describe":
+            element = self.elements.get(args["ref"])
+            if element is None:
+                return {"ok": False, "error": "stale_snapshot", "url": self.url}
+            return {"ok": True, "url": self.url, "title": "t", "element": element}
+        return {"ok": True, "url": self.url, "title": "t"}
+
+    def ops(self):
+        return [cmd[0] for cmd in self.cmds]
 
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(approval_policy, "conversation_turn_in_flight", lambda cid: cid in (1, 2))
+    monkeypatch.setattr(gateway, "APPROVAL_WAIT_S", 0.05)
+    host = Host()
+    monkeypatch.setattr(gateway, "post_cmd", host)
     rows = {}
     db = MagicMock()
     db.db_path = str(tmp_path / "db.sqlite")
@@ -39,35 +65,60 @@ def env(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(create_conversation_router(db, {}))
     with TestClient(app, raise_server_exceptions=False) as client:
-        yield SimpleNamespace(db=db, client=client, tmp=tmp_path)
+        yield SimpleNamespace(db=db, client=client, tmp=tmp_path, host=host)
     for card in cards.list_pending():
         GATE_OWNERS.pop(card["card_id"], None)
     cards.reset()
     approval_mode.set_ui_secret("")
 
 
-def request(env, gate_id="b-first", op="click", conversation_id=1, tool=None, **params):
-    return env.client.post("/mcp-approval-request", json={
-        "gate_id": gate_id, "tool": tool or f"browser_{op}",
-        "conversation_id": conversation_id, "params": {**PARAMS, **params},
-    }).json()
-
-
-def answer(env, gate_id, approved, headers=UI):
-    return env.client.post(f"/mcp-approval-respond/{gate_id}", json={"approved": approved}, headers=headers)
+@pytest.fixture
+def live(env):
+    assert env.client.post("/browser/runtime", json=runtime_body(), headers=UI).status_code == 200
+    return env
 
 
 def runtime_body(**changes):
     return {"running": True, "port": 4711, "token": TOKEN, **changes}
 
 
-def test_runtime_roundtrip_and_settings_view(env):
-    first = env.client.get("/browser/settings").json()
-    assert first == {"enabled": True, "halted": [], "runtime": {"running": False, "port": None, "token": None}}
+def command(env, op="click", conversation_id=1, **args):
+    if op in {"click", "fill", "select"}:
+        args = {"snapshot_id": "s1", "ref": "9", **args}
+    return env.client.post("/browser/command", json={
+        "tool": f"browser_{op}", "args": args, "conversation_id": conversation_id}).json()
+
+
+def open_card(env):
+    """The newest open card's id."""
+    return cards.list_pending()[-1]["card_id"]
+
+
+def answer(env, gate_id, approved, headers=UI):
+    return env.client.post(f"/mcp-approval-respond/{gate_id}", json={"approved": approved}, headers=headers)
+
+
+def approve_click(env, conversation_id=1, **args):
+    """A critical step that opens a card the user approves."""
+    reply = command(env, conversation_id=conversation_id, **args)
+    assert reply["needs_approval"] is True
+    gate_id = open_card(env)
+    assert answer(env, gate_id, True).status_code == 200
+    return gate_id
+
+
+def test_settings_never_expose_the_host_port_or_token(env):
+    first = env.client.get("/browser/settings")
+    assert first.json() == {"enabled": True, "running": False, "halted": []}
     assert env.client.post("/browser/runtime", json=runtime_body(), headers=UI).json() == runtime_body()
-    assert env.client.get("/browser/settings").json()["runtime"] == runtime_body()
+    view = env.client.get("/browser/settings")
+    assert view.json() == {"enabled": True, "running": True, "halted": []}
+    assert TOKEN not in view.text and "4711" not in view.text
+    switched = env.client.put("/browser/settings", json={"enabled": True}, headers=UI)
+    assert TOKEN not in switched.text and "4711" not in switched.text
     stopped = env.client.post("/browser/runtime", json={"running": False, "port": 4711, "token": TOKEN}, headers=UI)
     assert stopped.json() == {"running": False, "port": None, "token": None}
+    assert env.client.get("/browser/settings").json()["running"] is False
 
 
 @pytest.mark.parametrize("changes", [
@@ -78,7 +129,7 @@ def test_runtime_roundtrip_and_settings_view(env):
 def test_runtime_validation_rejects_bad_bodies(env, changes):
     response = env.client.post("/browser/runtime", json=runtime_body(**changes), headers=UI)
     assert response.status_code == 400
-    assert env.client.get("/browser/settings").json()["runtime"]["running"] is False
+    assert env.client.get("/browser/settings").json()["running"] is False
 
 
 @pytest.mark.parametrize("headers,code", [
@@ -87,16 +138,21 @@ def test_runtime_validation_rejects_bad_bodies(env, changes):
 def test_runtime_and_switch_need_the_ui_secret(env, headers, code):
     assert env.client.post("/browser/runtime", json=runtime_body(), headers=headers).status_code == code
     assert env.client.put("/browser/settings", json={"enabled": False}, headers=headers).status_code == code
-    assert env.client.get("/browser/settings").json()["runtime"]["running"] is False
+    assert env.client.get("/browser/settings").json()["running"] is False
     assert env.client.get("/browser/settings").json()["enabled"] is True
 
 
-def test_endpoints_need_the_app_token(env, monkeypatch):
+def test_endpoints_need_the_app_token(live, monkeypatch):
     monkeypatch.setenv("LOCAL_APP_TOKEN", "token")
-    assert env.client.get("/browser/settings").status_code == 401
-    assert env.client.post("/browser/runtime", json=runtime_body(), headers=UI).status_code == 401
-    assert env.client.put("/browser/settings", json={"enabled": True}, headers=UI).status_code == 401
-    assert env.client.get("/browser/settings", headers={"X-Session-Token": "token"}).status_code == 200
+    assert live.client.get("/browser/settings").status_code == 401
+    assert live.client.post("/browser/runtime", json=runtime_body(), headers=UI).status_code == 401
+    assert live.client.put("/browser/settings", json={"enabled": True}, headers=UI).status_code == 401
+    body = {"tool": "browser_snapshot", "args": {}, "conversation_id": 1}
+    assert live.client.post("/browser/command", json=body).status_code == 401
+    assert live.host.cmds == []
+    assert live.client.get("/browser/settings", headers={"X-Session-Token": "token"}).status_code == 200
+    reply = live.client.post("/browser/command", json=body, headers={"X-Session-Token": "token"}).json()
+    assert reply["ok"] is True and live.host.ops() == ["snapshot"]
 
 
 @pytest.mark.parametrize("bad", ["true", 1, None])
@@ -111,177 +167,223 @@ def test_switch_persists_under_its_own_key(env):
     assert env.client.put("/browser/settings", json={"enabled": True}, headers=UI).json()["enabled"] is True
 
 
-def test_critical_step_opens_an_owned_card_with_the_reason(env):
-    assert request(env) == {"status": "ok", "gate_id": "b-first"}
-    card = cards.get("b-first")
-    assert card.open and card.tool == "browser_click" and card.risk == PARAMS["risk_reason"]
-    pending = env.client.get("/mcp-pending").json()["pending"]["b-first"]
-    assert pending["conversation_id"] == 1
-    assert env.client.get("/mcp-approval-result/b-first").json()["status"] == "pending"
-    journal = (env.tmp / "browser_actions.jsonl").read_text().splitlines()
-    assert len(journal) == 1 and '"decision": "card"' in journal[0]
+def test_command_runs_on_the_reported_host(live):
+    reply = command(live, "navigate", url="https://opengameart.org/")
+    assert reply["ok"] is True and '"url"' in reply["text"]
+    op, conversation_id, args, runtime = live.host.cmds[0]
+    assert (op, conversation_id, args) == ("navigate", 1, {"url": "https://opengameart.org/"})
+    assert runtime == runtime_body()
 
 
-def test_invalid_requests_are_denied_without_a_card(env):
-    for kwargs in ({"op": ""}, {"op": "navigate"}, {"page_url": 5}, {"fingerprint": None}):
-        response = request(env, **kwargs)
-        assert response["approved"] is False and response["status"] == "resolved"
-    assert env.client.get("/mcp-pending").json()["pending"] == {}
-
-
-def test_switch_off_denies_and_turning_it_off_rejects_open_cards(env):
-    assert request(env)["status"] == "ok"
-    off = env.client.put("/browser/settings", json={"enabled": False}, headers=UI).json()
-    assert off["rejected_browser_use"] == 1
-    assert env.client.get("/mcp-approval-result/b-first").json()["approved"] is False
-    denied = request(env, "b-second")
-    assert denied["approved"] is False and "turned off" in denied["error"]
-
-
-def test_approval_issues_a_one_time_grant_for_the_identical_retry(env):
-    assert request(env)["status"] == "ok"
-    assert answer(env, "b-first", True).status_code == 200
-    assert env.client.get("/mcp-approval-result/b-first").json()["approved"] is True
-    retry = request(env, "b-retry")
-    assert retry["status"] == "resolved" and retry["approved"] is True
-    # Consumed: the third identical call needs a new card.
-    assert request(env, "b-third")["status"] == "ok"
-    assert cards.get("b-third").open
-
-
-@pytest.mark.parametrize("change", [
-    {"op": "fill"}, {"page_url": "https://shop.example/other"}, {"fingerprint": "button|buy later|"},
+@pytest.mark.parametrize("body", [
+    {"tool": "navigate", "args": {}, "conversation_id": 1},
+    {"tool": 5, "args": {}, "conversation_id": 1},
+    {"args": {}, "conversation_id": 1},
 ])
-def test_grant_is_keyed_on_op_url_and_element(env, change):
-    assert request(env)["status"] == "ok"
-    answer(env, "b-first", True)
-    assert request(env, "b-other", **change)["status"] == "ok"
+def test_command_needs_a_browser_tool(live, body):
+    assert live.client.post("/browser/command", json=body).status_code == 400
+    assert live.host.cmds == []
+
+
+@pytest.mark.parametrize("conversation_id", [9, None, 0, "1", True])
+def test_unknown_owner_is_refused_before_the_host(live, conversation_id):
+    for op, args in (("snapshot", {}), ("navigate", {"url": "https://example.com/"})):
+        reply = live.client.post("/browser/command", json={
+            "tool": f"browser_{op}", "args": args, "conversation_id": conversation_id}).json()
+        assert reply["ok"] is False and "turn is running" in reply["error"]
+    assert command(live, conversation_id=conversation_id)["ok"] is False
+    assert live.host.cmds == [] and cards.list_pending() == []
+
+
+def test_other_users_chat_is_refused(live):
+    live.db.get_conversation_owner.return_value = 2
+    assert command(live, "snapshot")["ok"] is False
+    assert live.host.cmds == []
+
+
+def test_disabled_or_not_running_browser_is_refused(env):
+    reply = command(env, "snapshot")
+    assert reply["ok"] is False and "not running" in reply["error"]
+    env.client.post("/browser/runtime", json=runtime_body(), headers=UI)
+    env.client.put("/browser/settings", json={"enabled": False}, headers=UI)
+    reply = command(env, "snapshot")
+    assert reply["ok"] is False and "turned off" in reply["error"]
+    assert env.host.cmds == []
+
+
+def test_refused_url_never_reaches_the_host(live):
+    reply = command(live, "navigate", url="http://127.0.0.1:8000/")
+    assert reply["ok"] is False and reply["error"].startswith("Refused:")
+    assert live.host.cmds == []
+
+
+def test_critical_step_opens_an_owned_card_with_the_reason(live):
+    reply = command(live)
+    assert reply["ok"] is False and reply["needs_approval"] is True
+    assert reply["error"].startswith("needs_approval: ")
+    gate_id = open_card(live)
+    card = cards.get(gate_id)
+    assert card.open and card.tool == "browser_click" and "Buy now" in card.risk and "shop.example" in card.risk
+    pending = live.client.get("/mcp-pending").json()["pending"][gate_id]
+    assert pending["conversation_id"] == 1
+    assert pending["params"]["element_name"] == "Buy now" and pending["params"]["page_url"] == PAGE
+    assert live.host.ops() == ["describe"]
+    journal = (live.tmp / "browser_actions.jsonl").read_text().splitlines()
+    assert len(journal) == 1 and '"decision": "card"' in journal[0] and '"conversation_id": 1' in journal[0]
+
+
+def test_free_steps_open_no_card(live):
+    assert command(live, ref="7")["ok"] is True
+    assert live.host.ops() == ["describe", "click"] and cards.list_pending() == []
+
+
+def test_approval_issues_a_one_time_grant_for_the_identical_retry(live):
+    approve_click(live)
+    retry = command(live)
+    assert retry["ok"] is True and live.host.ops() == ["describe", "describe", "click"]
+    # Consumed: the third identical call needs a new card.
+    third = command(live)
+    assert third["needs_approval"] is True and cards.get(open_card(live)).open
+    assert live.host.ops().count("click") == 1
+
+
+@pytest.mark.parametrize("change", ["op", "url", "element"])
+def test_grant_is_keyed_on_op_url_and_element(live, change):
+    approve_click(live)
+    if change == "op":
+        other = command(live, "fill", value="x")
+    elif change == "url":
+        live.host.url = "https://shop.example/other"
+        other = command(live)
+        live.host.url = PAGE
+    else:
+        other = command(live, ref="8")
+    assert other["needs_approval"] is True
     # The original key is still granted.
-    assert request(env, "b-same")["approved"] is True
+    assert command(live)["ok"] is True
 
 
-def test_grant_is_bound_to_the_exact_value(env):
-    a, b = "a" * 64, "b" * 64
-    assert request(env, op="fill", value_hash=a)["status"] == "ok"
-    answer(env, "b-first", True)
-    other = request(env, "b-other", op="fill", value_hash=b)
-    assert other["status"] == "ok" and cards.get("b-other").open
+def test_grant_is_bound_to_the_exact_value(live):
+    assert command(live, "fill", ref="4", value="a")["needs_approval"] is True
+    answer(live, open_card(live), True)
+    other = command(live, "fill", ref="4", value="b")
+    assert other["needs_approval"] is True and cards.get(open_card(live)).open
     # The approved value's grant is still there and is consumed by the identical retry.
-    assert request(env, "b-same", op="fill", value_hash=a)["approved"] is True
-    assert request(env, "b-again", op="fill", value_hash=a)["status"] == "ok"
+    assert command(live, "fill", ref="4", value="a")["ok"] is True
+    assert command(live, "fill", ref="4", value="a")["needs_approval"] is True
+    filled = [cmd[2]["value"] for cmd in live.host.cmds if cmd[0] == "fill"]
+    assert filled == ["a"]
 
 
-@pytest.mark.parametrize("bad", ["xyz", "A" * 64, "a" * 63, 5, None])
-def test_malformed_value_hash_is_denied(env, bad):
-    response = request(env, op="fill", value_hash=bad)
-    assert response["approved"] is False and response["status"] == "resolved"
+def test_grant_belongs_to_one_chat(live):
+    approve_click(live)
+    assert command(live, conversation_id=2)["needs_approval"] is True
+    assert command(live)["ok"] is True
 
 
-def test_grant_belongs_to_one_chat(env):
-    assert request(env)["status"] == "ok"
-    answer(env, "b-first", True)
-    other = request(env, "b-chat2", conversation_id=2)
-    assert other["status"] == "ok"
-    assert request(env, "b-same")["approved"] is True
-
-
-def test_grant_needs_a_verified_owner(env):
-    assert request(env, conversation_id=9)["status"] == "ok"  # no turn in flight: unowned
-    answer(env, "b-first", True)
-    assert request(env, "b-retry", conversation_id=9)["status"] == "ok"
-
-
-def test_grant_expires_after_ten_minutes(env, monkeypatch):
+def test_grant_expires_after_ten_minutes(live, monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(conversation_routes, "time", lambda: clock[0])
-    assert request(env)["status"] == "ok"
-    answer(env, "b-first", True)
+    approve_click(live)
     clock[0] += conversation_routes.BROWSER_GRANT_TTL - 1
     # Just inside the window: still usable (and consumed).
-    assert request(env, "b-in")["approved"] is True
-    assert request(env, "b-fresh")["status"] == "ok"
-    answer(env, "b-fresh", True)
+    assert command(live)["ok"] is True
+    approve_click(live)
     clock[0] += conversation_routes.BROWSER_GRANT_TTL + 1
-    expired = request(env, "b-late")
-    assert expired["status"] == "ok" and cards.get("b-late").open
+    assert command(live)["needs_approval"] is True
 
 
-def test_rejection_issues_no_grant(env):
-    assert request(env)["status"] == "ok"
-    answer(env, "b-first", False)
-    assert env.client.get("/mcp-approval-result/b-first").json()["approved"] is False
-    assert request(env, "b-after")["status"] == "ok"
-    assert cards.get("b-after").open
+def test_rejection_issues_no_grant(live):
+    assert command(live)["needs_approval"] is True
+    answer(live, open_card(live), False)
+    assert command(live)["needs_approval"] is True
+    assert "click" not in live.host.ops()
 
 
-def test_rejecting_a_later_card_for_the_same_step_leaves_no_grant(env):
-    assert request(env)["status"] == "ok"
-    answer(env, "b-first", True)
-    assert request(env, "b-second")["approved"] is True  # grant consumed
-    assert request(env, "b-third")["status"] == "ok"
-    answer(env, "b-third", False)
-    assert request(env, "b-fourth")["status"] == "ok"
-    assert cards.get("b-fourth").open
+def test_rejecting_a_later_card_for_the_same_step_leaves_no_grant(live):
+    approve_click(live)
+    assert command(live)["ok"] is True  # grant consumed
+    assert command(live)["needs_approval"] is True
+    answer(live, open_card(live), False)
+    assert command(live)["needs_approval"] is True
 
 
-def test_approving_needs_the_ui_secret(env):
-    assert request(env)["status"] == "ok"
-    assert answer(env, "b-first", True, headers={}).status_code == 403
-    assert cards.get("b-first").open
-    assert request(env, "b-retry")["gate_id"] == "b-first"
+def test_approving_needs_the_ui_secret(live):
+    assert command(live)["needs_approval"] is True
+    gate_id = open_card(live)
+    assert answer(live, gate_id, True, headers={}).status_code == 403
+    assert cards.get(gate_id).open
+    assert command(live)["needs_approval"] is True
+    assert [c["card_id"] for c in cards.list_pending()] == [gate_id]
 
 
-def test_a_retry_while_the_card_is_open_does_not_open_a_second_card(env):
-    assert request(env)["status"] == "ok"
-    again = request(env, "b-dup")
-    assert again == {"status": "ok", "gate_id": "b-first"}
-    assert [c["card_id"] for c in cards.list_pending()] == ["b-first"]
-
-
-def test_switching_approval_mode_never_approves_a_browser_card(env):
-    assert request(env)["status"] == "ok"
+def test_switching_approval_mode_never_approves_a_browser_card(live):
+    assert command(live)["needs_approval"] is True
+    gate_id = open_card(live)
     for mode in ("balanced", "auto", "step"):
-        env.client.post("/approval-mode", json={"mode": mode}, headers=UI)
-        assert cards.get("b-first").open
-    assert env.client.get("/mcp-approval-result/b-first").json()["status"] == "pending"
+        live.client.post("/approval-mode", json={"mode": mode}, headers=UI)
+        assert cards.get(gate_id).open
+    assert command(live)["needs_approval"] is True
 
 
-def test_halt_denies_browser_calls_and_rejects_only_that_chats_cards(env):
-    assert request(env, "b-one", conversation_id=1)["status"] == "ok"
-    assert request(env, "b-two", conversation_id=2)["status"] == "ok"
-    assert env.client.post("/computer-use/halt/1", headers=UI).status_code == 200
-    result = env.client.get("/mcp-approval-result/b-one").json()
-    assert result["approved"] is False and "stopped the browser" in result["error"]
-    assert cards.get("b-one").decision == "computer_halt"
-    assert cards.get("b-two").open
-    denied = request(env, "b-three", conversation_id=1)
-    assert denied["approved"] is False and "stopped the browser" in denied["error"]
-    assert 1 in env.client.get("/browser/settings").json()["halted"]
+def test_side_chat_cannot_run_a_critical_step(live):
+    live.db.get_side_of.return_value = 5
+    reply = command(live)
+    assert reply["ok"] is False and "needs_approval" not in reply and "salt okunur" in reply["error"]
+    assert cards.list_pending() == [] and "click" not in live.host.ops()
 
 
-def test_halt_leaves_other_chats_grants_alone(env):
-    assert request(env, "b-one", conversation_id=1)["status"] == "ok"
-    answer(env, "b-one", True)
-    assert request(env, "b-two", conversation_id=2)["status"] == "ok"
-    answer(env, "b-two", True)
-    env.client.post("/computer-use/halt/1", headers=UI)
-    assert request(env, "b-two-retry", conversation_id=2)["approved"] is True
+def test_approval_request_route_no_longer_grants_browser_steps(live):
+    """The old card path is gone: a browser_* card request there cannot mint a gateway grant."""
+    for mode in ("auto", "step"):
+        approval_mode.set_mode(mode, source="test")
+        live.client.post("/mcp-approval-request", json={
+            "gate_id": f"b-old-{mode}", "tool": "browser_click", "conversation_id": 1,
+            "params": {"page_url": PAGE, "fingerprint": "button|buy now|", "value_hash": ""}})
+        if cards.get(f"b-old-{mode}") is not None:
+            answer(live, f"b-old-{mode}", True)
+    assert command(live)["needs_approval"] is True
+    assert "click" not in live.host.ops()
 
 
-def test_turning_the_switch_off_and_on_clears_grants(env):
-    assert request(env)["status"] == "ok"
-    answer(env, "b-first", True)
-    env.client.put("/browser/settings", json={"enabled": False}, headers=UI)
-    env.client.put("/browser/settings", json={"enabled": True}, headers=UI)
-    assert request(env, "b-after")["status"] == "ok"
+def test_halt_denies_browser_calls_and_rejects_only_that_chats_cards(live):
+    assert command(live, conversation_id=1)["needs_approval"] is True
+    one = open_card(live)
+    assert command(live, conversation_id=2)["needs_approval"] is True
+    two = open_card(live)
+    assert live.client.post("/computer-use/halt/1", headers=UI).status_code == 200
+    assert cards.get(one).decision == "computer_halt"
+    assert cards.get(two).open
+    denied = command(live, "snapshot", conversation_id=1)
+    assert denied["ok"] is False and "stopped the browser" in denied["error"]
+    assert command(live, "snapshot", conversation_id=2)["ok"] is True
+    assert 1 in live.client.get("/browser/settings").json()["halted"]
 
 
-def test_computer_cards_are_untouched_by_browser_halt_and_switch(env):
-    computer_settings.set_enabled(env.db, True)
-    computer = env.client.post("/mcp-approval-request", json={
+def test_halt_leaves_other_chats_grants_alone(live):
+    approve_click(live, conversation_id=1)
+    approve_click(live, conversation_id=2)
+    live.client.post("/computer-use/halt/1", headers=UI)
+    assert command(live, conversation_id=2)["ok"] is True
+
+
+def test_switch_off_rejects_open_cards_and_turning_it_back_on_clears_grants(live):
+    approve_click(live)
+    assert command(live, ref="8")["needs_approval"] is True
+    off = live.client.put("/browser/settings", json={"enabled": False}, headers=UI).json()
+    assert off["rejected_browser_use"] == 1
+    denied = command(live)
+    assert denied["ok"] is False and "turned off" in denied["error"]
+    live.client.put("/browser/settings", json={"enabled": True}, headers=UI)
+    assert command(live)["needs_approval"] is True
+
+
+def test_computer_cards_are_untouched_by_browser_halt_and_switch(live):
+    computer_settings.set_enabled(live.db, True)
+    computer = live.client.post("/mcp-approval-request", json={
         "gate_id": "cu-one", "tool": "computer_click", "conversation_id": 2,
         "params": {"pid": 1, "bundle_id": "com.apple.TextEdit", "app_name": "TextEdit",
                    "risky": True, "risk_reason": "risky", "summary": "x", "foreground": False}}).json()
     assert computer["status"] == "ok"
-    env.client.put("/browser/settings", json={"enabled": False}, headers=UI)
+    live.client.put("/browser/settings", json={"enabled": False}, headers=UI)
     assert cards.get("cu-one").open
