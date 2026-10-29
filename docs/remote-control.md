@@ -160,6 +160,14 @@ Steps:
 5. Limits: 5 pairing attempts per minute per pairing id, 20 per hour per IP
    (relay and PC both enforce).
 
+Device expiry and risky cards (owner decisions, 29 Oct 2026): a paired device
+that has not connected for 90 days (`last_seen`, or `created` when never seen)
+is forgotten like a removed one, token drop included; the PC sweeps at start
+and every 6 hours, and `hello` from an expired device is already answered
+`unknown_device`. A card with a non-empty `risk` carries `hold_to_confirm: true`:
+the phone page shows the risk text and approves only after Approve is held
+for 1.2 s (pointer, or Enter/Space); Reject stays a single tap.
+
 Remove device: the PC deletes the key and tells the relay to drop the token
 hash; the relay closes that phone's sockets. Turning remote control off and
 forgetting everything: the PC sends `reset_room`, the relay deletes all it

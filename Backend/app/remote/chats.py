@@ -211,7 +211,7 @@ def phone_card(card: dict) -> dict:
     kind = card.get("kind")
     out = {"card_id": card["card_id"], "chat_id": None if conv is None else str(conv),
            "kind": kind, "tool": card.get("tool"), "risk": card.get("risk"),
-           "created_at": card.get("created_at")}
+           "hold_to_confirm": bool(card.get("risk")), "created_at": card.get("created_at")}
     if kind == "question":
         questions = card.get("questions") or []
         out["title"] = KIND_TITLES["question"]

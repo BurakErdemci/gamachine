@@ -424,6 +424,36 @@ async def test_remove_device_drops_its_token_at_the_relay(env):
     assert (await other.request("list_chats"))["ok"] is True
 
 
+def _age_device(env, device_id, days_created, days_seen):
+    now = time.time()
+    with closing(sqlite3.connect(env.db.db_path)) as conn, conn:
+        conn.execute("UPDATE remote_devices SET created = ?, last_seen = ? WHERE device_id = ?",
+                     (now - days_created * 86400, None if days_seen is None else now - days_seen * 86400,
+                      device_id))
+
+
+async def test_sweep_forgets_idle_devices_and_drops_their_tokens(env):
+    old = await pair_phone(env, "old")
+    never = await pair_phone(env, "never")
+    fresh = await pair_phone(env, "fresh")
+    _age_device(env, old.device_id, 200, 91)
+    _age_device(env, never.device_id, 91, None)
+    _age_device(env, fresh.device_id, 200, 89)
+    assert env.bridge.store.expired_device_ids(time.time()) == [old.device_id, never.device_id]
+    assert await env.bridge.sweep_expired_devices() == 2
+    assert [d["name"] for d in env.bridge.devices()] == ["fresh"]
+    assert env.relay.rooms[env.bridge.keys.pair_id].tokens == [C.token_hash(fresh.token)]
+    await until(lambda: old.close_code is not None)
+    assert await env.bridge.sweep_expired_devices() == 0
+
+
+async def test_expired_device_hello_is_rejected_before_the_sweep(env):
+    phone = await pair_phone(env)
+    _age_device(env, phone.device_id, 200, 91)
+    assert (await phone.hello()) == {"type": "hello_reject", "reason": "unknown_device"}
+    assert env.bridge.store.get_device(phone.device_id) is not None
+
+
 async def test_remove_all_devices(env):
     phone = await pair_phone(env)
     assert await env.bridge.remove_all_devices() == 1
@@ -757,6 +787,7 @@ def _check_phone_cards(found, conv):
     for c in by_id.values():
         assert c["chat_id"] == str(conv)
     assert by_id["gate-codex"]["kind"] == "command" and by_id["gate-codex"]["detail"]
+    assert by_id["gate-codex"]["hold_to_confirm"] is True and by_id["gate-ask"]["hold_to_confirm"] is False
     assert by_id["gate-ask"]["kind"] == "question"
     assert by_id["gate-ask"]["choices"] == [{"id": "Unity", "label": "Unity"},
                                             {"id": "Godot", "label": "Godot"}]

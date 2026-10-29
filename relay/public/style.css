@@ -670,6 +670,21 @@ body[data-link="hello_rejected"] #status-text { color: var(--us-alert-text); }
 }
 .card .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
 .card .row button { margin: 0; }
+/* Risky cards: the reason in warning colour, and Approve filled left to right while held. */
+.card .risk {
+  margin: 2px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1.5px var(--err);
+  color: var(--err);
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.card .row button.hold { position: relative; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.hold-fill { position: absolute; inset: 0; width: 0; background: rgba(255, 255, 255, .35); pointer-events: none; }
+.hold.holding .hold-fill { width: 100%; transition: width 1.2s linear; }
+.hold-label { position: relative; }
 .card .note { margin: 0; min-height: 0; }
 .card .note:empty { display: none; }
 

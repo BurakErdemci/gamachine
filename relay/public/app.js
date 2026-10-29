@@ -256,6 +256,38 @@ function chatTitle(id) {
   return chats.find((c) => c.chat_id === id)?.title || t('chat.title');
 }
 
+// How long Approve is held on a risky card before it counts.
+const HOLD_MS = 1200;
+
+// A button that fires `onDone` only after being held for HOLD_MS (pointer or Enter/Space);
+// releasing, leaving or cancelling early abandons the hold.
+function holdButton(label, onDone) {
+  const fill = el('span', { class: 'hold-fill' });
+  const node = el('button', { type: 'button', class: 'hold' }, fill, el('span', { class: 'hold-label', textContent: label }));
+  let timer = null;
+  const cancel = () => {
+    if (timer === null) return;
+    clearTimeout(timer);
+    timer = null;
+    node.classList.remove('holding');
+  };
+  const begin = () => {
+    if (timer !== null || node.disabled) return;
+    node.classList.add('holding');
+    timer = setTimeout(() => { timer = null; node.classList.remove('holding'); onDone(); }, HOLD_MS);
+  };
+  node.addEventListener('pointerdown', (e) => { if (e.button === 0 || e.button === undefined) begin(); });
+  for (const type of ['pointerup', 'pointerleave', 'pointercancel', 'blur']) node.addEventListener(type, cancel);
+  node.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    if (!e.repeat) begin();
+  });
+  node.addEventListener('keyup', (e) => { if (e.key === 'Enter' || e.key === ' ') cancel(); });
+  node.addEventListener('contextmenu', (e) => e.preventDefault());
+  return node;
+}
+
 function cardNode(card) {
   const box = el('div', { class: 'card' });
   const { buttons, note: hint } = cardActions(card);
@@ -266,6 +298,7 @@ function cardNode(card) {
   box.append(el('b', { textContent: title }));
   if (card.chat_id && view.shown !== card.chat_id) box.append(el('span', { class: 'meta', textContent: chatTitle(card.chat_id) }));
   if (card.detail) box.append(el('pre', { class: 'detail', textContent: String(card.detail) }));
+  if (card.hold_to_confirm && card.risk) box.append(el('p', { class: 'risk', textContent: String(card.risk) }));
   const row = el('div', { class: 'row' });
   const answer = async (payload) => {
     for (const b of row.querySelectorAll('button')) b.disabled = true;
@@ -287,7 +320,9 @@ function cardNode(card) {
     }
   };
   for (const btn of buttons) {
-    const node = el('button', { type: 'button', textContent: btn.label, onclick: () => answer(btn.payload) });
+    const hold = card.hold_to_confirm && btn.payload.decision === 'approve';
+    const node = hold ? holdButton(t('card.holdApprove'), () => answer(btn.payload))
+      : el('button', { type: 'button', textContent: btn.label, onclick: () => answer(btn.payload) });
     if (btn.secondary) node.className = 'secondary';
     node.dataset.decision = btn.payload.decision;
     row.append(node);
