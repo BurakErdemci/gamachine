@@ -141,6 +141,11 @@ jobs:
             export APPLE_API_KEY="$key_file"
           fi
           unset APPLE_API_KEY_P8
+          # A missing secret arrives as "", which electron-builder treats as a certificate
+          # path and fails on; unset empty ones so the ad-hoc fallback runs instead.
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!name:-}" ]; then unset "$name"; fi
+          done
           npm run build -- --publish never
 
       # Only when a certificate was supplied: an unsigned build has nothing to staple
