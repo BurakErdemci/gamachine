@@ -16,7 +16,10 @@ appId: com.gamachine.app
 # boşluk üründen değil NSIS şablonundan (`${productName} Setup ${version}`)
 # geliyor. Kalıcı çözüm aşağıdaki `nsis.artifactName` (v3.0.3'te eklendi).
 productName: Gamachine
-afterPack: scripts/adhoc-sign-mac.js
+# Signs every nested Mach-O under Contents/Resources (backend, uv, cua-driver,
+# OmniSharp/.NET) deepest-first: with the Developer ID when one is available, else
+# ad-hoc together with the frameworks, helpers and the app. See the mac block below.
+afterPack: scripts/sign-mac-nested.js
 copyright: Copyright © 2026 Burak Emre Erdemci
 directories:
   output: build
@@ -81,6 +84,9 @@ extraResources:
     to: uv
     filter:
       - "**/*"
+      # Intel Macs are not supported (29 Oct 2026); a darwin-x64 folder left over
+      # from an older fetch_uv.sh must not ship.
+      - "!darwin-x64{,/**}"
   # OmniSharp-Roslyn sidecar (C# diagnostics + IntelliSense).
   # Ana klasörü kopyalarız → build hangi OS'te koşuyorsa prebuild yalnız o
   # platformun alt-klasörünü (win-x64 / osx-arm64) indirir; diğer platformun
@@ -118,14 +124,38 @@ mac:
   # crash, not as "permission denied".
   extendInfo:
     NSMicrophoneUsageDescription: "Gamachine uses the microphone only to dictate text into the chat box. Audio is transcribed on this computer and never uploaded."
-  # identity: null means no certificate; afterPack ad-hoc signs as com.gamachine.app
-  # so macOS permissions reach the embedded computer-use driver.
-  # Remove both afterPack and identity: null once a Developer ID certificate exists.
-  identity: null
-  hardenedRuntime: false
+  # Signing (owner decision 29 Oct 2026: Developer ID + notarization; docs/building.md).
+  # The identity is not written here: electron-builder takes it from CSC_LINK +
+  # CSC_KEY_PASSWORD (CI) or finds a "Developer ID Application" in the keychain.
+  # Without one, scripts/sign-mac-nested.js ad-hoc signs the app as com.gamachine.app
+  # and sets identity to null, so electron-builder skips signing and notarization
+  # and the build succeeds exactly as before. Force a local unsigned build on a Mac
+  # that has a Developer ID with: CSC_IDENTITY_AUTO_DISCOVERY=false npm run build
+  hardenedRuntime: true
+  # One file for the app and everything inside it:
+  # - cs.allow-jit: V8 in Electron's main and renderer processes compiles JIT code.
+  # - cs.allow-unsigned-executable-memory: Electron/V8 and the bundled .NET runtime
+  #   (OmniSharp) still write executable pages without MAP_JIT.
+  # - cs.disable-library-validation: the PyInstaller backend loads its own .so/.dylib
+  #   files and Python.framework, and the .NET host loads its runtime; under the
+  #   hardened runtime library validation would refuse code from those copies.
+  # - device.audio-input: dictation records the microphone (NSMicrophoneUsageDescription
+  #   above); the hardened runtime blocks the microphone without it.
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  # notarytool with the App Store Connect API key: APPLE_API_KEY (path to the .p8),
+  # APPLE_API_KEY_ID, APPLE_API_ISSUER. electron-builder 24 notarizes only after it
+  # signed the app, and with none of those variables it logs "skipped macOS
+  # notarization" and goes on; setting only some of them fails the build.
+  notarize: true
   target:
     - target: dmg
       # Apple silicon only: Intel Macs are not supported (owner decision, 16 Oct 2026).
+      arch:
+        - arm64
+    # Squirrel.Mac (electron-updater) updates from the zip, never the dmg; the zip
+    # target also writes latest-mac.yml.
+    - target: zip
       arch:
         - arm64
 win:

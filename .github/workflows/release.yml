@@ -38,6 +38,11 @@ jobs:
     name: Build (${{ matrix.os }})
     needs: kalite
     runs-on: ${{ matrix.os }}
+    # The macOS job holds the Developer ID certificate and the App Store Connect
+    # key, so it waits behind the `release-signing` environment (the owner creates
+    # it with required reviewers; its secrets live there). Windows stays unsigned
+    # and needs no environment: an empty name means none.
+    environment: ${{ matrix.os == 'macos-latest' && 'release-signing' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -98,6 +103,7 @@ jobs:
         run: npm ci
 
       - name: Frontend build (installer + updater feed)
+        if: runner.os == 'Windows'
         working-directory: Frontend/frontend
         # ⚠️ `--publish never` ZORUNLU (ölçüldü 2 Ağu 2026, v2.3.0 tag'inde).
         # electron-builder CI'da bir tag görünce KENDİLİĞİNDEN yayınlama moduna
@@ -111,6 +117,49 @@ jobs:
         # ondan üretiliyor, yani kaldırmak güncelleme bildirimini öldürürdü.
         # Doğru yer burası — yayınlamayı ayrı bir job yapıyor.
         run: npm run build -- --publish never
+
+      # Same build as above (`--publish never` for the same reason), plus the signing
+      # inputs. electron-builder signs with the Developer ID in CSC_LINK (base64 .p12)
+      # and notarizes with the App Store Connect API key: APPLE_API_KEY must be a FILE
+      # path, so the .p8 secret is written to the runner's temp dir and removed on exit.
+      # Without these secrets the build still succeeds, ad-hoc signed and not notarized.
+      - name: Frontend build (macOS — Developer ID signing + notarization)
+        if: runner.os == 'macOS'
+        working-directory: Frontend/frontend
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          if [ -n "$APPLE_API_KEY_P8" ]; then
+            key_file="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            trap 'rm -f "$key_file"' EXIT
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$key_file"
+            export APPLE_API_KEY="$key_file"
+          fi
+          unset APPLE_API_KEY_P8
+          npm run build -- --publish never
+
+      # Only when a certificate was supplied: an unsigned build has nothing to staple
+      # and Gatekeeper rejects it by design. A signed but un-notarized app fails here.
+      - name: macOS imza + notarization doğrulaması
+        if: runner.os == 'macOS'
+        working-directory: Frontend/frontend
+        env:
+          HAS_CERT: ${{ secrets.CSC_LINK != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAS_CERT" != "true" ]; then
+            echo "CSC_LINK not set: unsigned build, signature checks skipped."
+            exit 0
+          fi
+          app="build/mac-arm64/Gamachine.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl -a -vv -t exec "$app"
 
       - name: Artifact'ları yükle
         uses: actions/upload-artifact@v4

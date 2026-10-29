@@ -53,7 +53,7 @@ A distributable app is produced in four steps (none of the bundled binaries are 
 
 ```bash
 # 1) Download the uv toolchain for Unity MCP
-#    macOS: downloads both architectures (arm64 + x64)
+#    macOS: Apple silicon (darwin-arm64) only
 bash Backend/vendor/fetch_uv.sh
 #    Windows: pwsh Backend/vendor/fetch_uv.ps1
 
@@ -74,12 +74,46 @@ cd Frontend/frontend && npm install && npm run build
 ```
 
 Outputs land under `Frontend/frontend/build/`:
-- macOS: `Gamachine-<version>-arm64.dmg` (Apple Silicon)
+- macOS: `Gamachine-<version>-arm64.dmg` (Apple Silicon) and a `Gamachine-<version>…-mac.zip` (what in-app updates download) + `latest-mac.yml`
 - Windows: NSIS installer (`.exe`)
 
 > ℹ️ **Apple Silicon only:** the macOS package is built for arm64 only; Intel Macs are not supported (the backend binary is compiled for the host architecture).
 
-> 🍎 **macOS quarantine note:** the app is only ad-hoc signed (no Developer ID); if macOS reports it as "damaged" after downloading, clear the quarantine flag with `xattr -cr "/Applications/Gamachine.app"`.
+> 🍎 **macOS quarantine note:** a build made without a Developer ID (any local build, see below) is only ad-hoc signed; if macOS reports it as "damaged" after downloading, clear the quarantine flag with `xattr -cr "/Applications/Gamachine.app"`.
+
+### macOS signing and notarization
+
+Release builds are signed with a Developer ID Application certificate (hardened
+runtime, every nested binary signed by `scripts/sign-mac-nested.js`) and notarized
+with an App Store Connect API key. The CI job does it from GitHub Secrets; the
+owner-only setup, once:
+
+1. In the Apple Developer account, create a **Developer ID Application** certificate
+   and install it in Keychain Access.
+2. Export it with its private key as a `.p12` (with a password). In GitHub →
+   Settings → Environments, create an environment named **`release-signing`** with
+   yourself as a required reviewer, and add these secrets to it:
+   - `CSC_LINK`: the `.p12` as base64 (`base64 -i cert.p12 | pbcopy`)
+   - `CSC_KEY_PASSWORD`: the `.p12` password
+3. In App Store Connect → Users and Access → Integrations, create an API key with
+   the Developer role and download the `.p8` (it can be downloaded only once). Add
+   to the same environment:
+   - `APPLE_API_KEY_P8`: the full contents of the `.p8` file
+   - `APPLE_API_KEY_ID`: the key ID
+   - `APPLE_API_ISSUER`: the issuer ID shown above the key list
+
+The macOS release job then waits for your approval, signs, notarizes and staples
+the app, and checks it with `xcrun stapler validate` and `spctl`. Without those
+secrets it still builds, ad-hoc signed and not notarized.
+
+**Local unsigned build:** with no Developer ID Application certificate in the
+keychain and no `CSC_LINK`, `npm run build` already produces an ad-hoc signed app
+and skips notarization (other certificates, such as Apple Development, are not
+used). On a Mac that has a Developer ID, force an unsigned build with
+`CSC_IDENTITY_AUTO_DISCOVERY=false npm run build`. To sign locally instead, keep
+the certificate in the keychain and export `APPLE_API_KEY` (path to the `.p8`),
+`APPLE_API_KEY_ID` and `APPLE_API_ISSUER`; setting only some of the three fails
+the build.
 
 The packaged app does **not** require Python or .NET — the backend is a single frozen binary; the `mcp-server` and `unityai` subcommands are invoked through that same binary. `uvx`, OmniSharp (+.NET), ffmpeg/yt-dlp and the dictation engine are all embedded.
 
@@ -153,8 +187,8 @@ The Windows build does not apply as is. What a macOS build would need:
   command line tools; no Vulkan SDK, no VC++ runtime.
 - A `build_whisper.sh` producing the same `bin/` + `models/` layout; the resolver in
   `stt_whisper.py` already looks for `whisper-server` without `.exe`.
-- Signing: the dmg is unsigned today, but a hardened-runtime build would have to sign
-  the extra executable, and the microphone description in `electron-builder.yml`
+- Signing: `scripts/sign-mac-nested.js` signs every Mach-O under Resources, so a
+  bundled `whisper-server` would be signed with the hardened runtime too, and the microphone description in `electron-builder.yml`
   (`NSMicrophoneUsageDescription`) is already in place.
 - Measure it before shipping: the GPU/CPU detection reads the server's startup log
   (`using … backend` / `no GPU found`) and was only measured on Windows + Vulkan.
