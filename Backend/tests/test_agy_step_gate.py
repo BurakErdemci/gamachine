@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from agy_step_gate import bare_word
 from providers import agy_provider
 from providers.agy_provider import AgyProvider, AgyStepGateError, STEP_GATE_KEY, STEP_GATE_TOOLS
 
@@ -70,8 +71,10 @@ class TestAgyStepGate(unittest.TestCase):
     def test_generated_shim_runs_the_backend_hook(self):
         AgyProvider()._write_step_gate(self.ws, step_mode=True)
         launcher = AgyProvider()._launcher_path("unityai")
+        # The shape the call rules hand the model: quoted unless the gate accepts the path bare.
+        posix_call = launcher if bare_word(launcher) else f'"{launcher}"'
         bridge = (f'& "{launcher}" delete-file --path "a.txt"' if sys.platform == "win32"
-                  else f'{launcher} delete-file --path "a.txt"')
+                  else f'{posix_call} delete-file --path "a.txt"')
         write = self.run_shim({"toolCall": {"name": "write_to_file", "args": {}}})
         self.assertEqual(write["decision"], "deny")
         self.assertIn("TargetFile", write["reason"])

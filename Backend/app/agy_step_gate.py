@@ -180,6 +180,11 @@ _HEREDOC_END = "UNITYAI_EOF"
 PS_UTF8_PREFIX = "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)"
 
 
+def bare_word(word: str) -> bool:
+    """True when the gate accepts `word` unquoted; any other launcher path must be quoted."""
+    return _BARE.fullmatch(word) is not None
+
+
 def _value_ok(text: str) -> bool:
     # A trailing backslash would make bash and the Windows argv parser read
     # the closing quote as escaped, so they would split tokens differently
@@ -215,7 +220,7 @@ def _tokens(line: str):
         j = line.find(" ", i)
         j = n if j < 0 else j
         word = line[i:j]
-        if word != "&" and not _BARE.fullmatch(word):
+        if word != "&" and not bare_word(word):
             return None
         out.append(("", word))
         i = j

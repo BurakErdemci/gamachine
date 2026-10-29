@@ -8,7 +8,7 @@ from typing import Optional
 from .cli_base import BaseCLIProvider
 from agy_step_gate import (BALANCED_MODE, CLOSED_MODE, GATED_TOOLS, PS_UTF8_PREFIX, RUN_TOOL,
                            SIDE_HOOK_MATCHERS, SIDE_MODE, STEP_GATE_HOOKS_FILE, STEP_GATE_KEY,
-                           write_state)
+                           bare_word, write_state)
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +331,8 @@ class AgyProvider(BaseCLIProvider):
                 f"   '@ | {call} save-file --path \"<rel/path>\" --content-stdin\n"
                 "   Use @' '@ (single quotes) ONLY — @\" \"@ expands $ and corrupts the file.\n")
         else:
-            call = f'"{unityai_cli}"' if " " in unityai_cli else unityai_cli
+            # A path with a space or a non-ASCII letter (a Turkish user folder) is refused bare.
+            call = unityai_cli if bare_word(unityai_cli) else f'"{unityai_cli}"'
             write = (
                 "1. CREATE or EDIT a file — pipe the content via stdin (handles multiline):\n"
                 f"   run_command: {call} save-file --path \"<rel/path>\" --content-stdin <<'UNITYAI_EOF'\n"
