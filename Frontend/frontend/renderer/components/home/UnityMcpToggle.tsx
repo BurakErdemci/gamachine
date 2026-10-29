@@ -68,6 +68,8 @@ interface UnityMcpToggleProps {
   onToggle: () => void;
   /** Shown after "Connected"; the backend reports no scene yet, so this is the project name. */
   projectName?: string | null;
+  /** The Gamachine workspace name, used in the slow-connect hint. */
+  targetProject?: string | null;
   projectMismatch?: boolean;
   slowConnect?: boolean;
 }
@@ -100,6 +102,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   error,
   onToggle,
   projectName = null,
+  targetProject = null,
   projectMismatch = false,
   slowConnect = false,
 }) => {
@@ -107,6 +110,10 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   const state = STATE[status];
   const hint = state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch'
     : state.visual === 'connecting' && slowConnect ? 'unity.hintBringForward' : null);
+  const hintText = hint === 'unity.hintBringForward'
+    ? typeof targetProject === 'string' && targetProject.length > 0
+      ? t('unity.hintBringForward', { name: targetProject }) : t('unity.hintBringForwardGeneric')
+    : hint ? t(hint) : null;
   const ids = useId();
   const stateId = `${ids}-state`;
   const whyId = `${ids}-why`;
@@ -170,7 +177,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
         {state.visual === 'on' && projectName && (
           <span className="unity-path min-w-0 max-w-[220px] truncate" title={projectName}>{projectName}</span>
         )}
-        {hint && !showReason && <span className="unity-hint">{t(hint)}</span>}
+        {hint && !showReason && <span className="unity-hint">{hintText}</span>}
         {showReason && (
           <button
             className="unity-why-btn"

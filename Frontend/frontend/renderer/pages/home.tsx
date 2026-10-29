@@ -1019,6 +1019,7 @@ export default function Home() {
             error={ai.unityMcpError}
             onToggle={ai.toggleUnityMcp}
             projectName={unityProjectName}
+            targetProject={projectName}
             projectMismatch={projectMismatch}
             slowConnect={ai.unityMcpSlow}
           />

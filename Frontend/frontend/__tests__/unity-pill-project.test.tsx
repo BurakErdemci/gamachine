@@ -54,19 +54,19 @@ it('handles missing workspace and empty instance lists', () => {
 
 it('shows the slow hint only while connecting and keeps existing hints', () => {
   const view = render(<UnityMcpToggle {...base} status="running" slowConnect={false} />)
-  expect(screen.queryByText(tr['unity.hintBringForward'])).toBeNull()
+  expect(screen.queryByText(tr['unity.hintBringForwardGeneric'])).toBeNull()
   for (const status of ['starting', 'running'] as const) {
     view.rerender(<UnityMcpToggle {...base} status={status} slowConnect />)
-    expect(screen.getByText(tr['unity.hintBringForward'])).toBeTruthy()
+    expect(screen.getByText(tr['unity.hintBringForwardGeneric'])).toBeTruthy()
   }
   view.rerender(<UnityMcpToggle {...base} slowConnect />)
-  expect(screen.queryByText(tr['unity.hintBringForward'])).toBeNull()
+  expect(screen.queryByText(tr['unity.hintBringForwardGeneric'])).toBeNull()
   view.rerender(<UnityMcpToggle {...base} status="off" slowConnect projectMismatch />)
   expect(screen.getByText(tr['unity.hintOff'])).toBeTruthy()
-  expect(screen.queryByText(tr['unity.hintBringForward'])).toBeNull()
+  expect(screen.queryByText(tr['unity.hintBringForwardGeneric'])).toBeNull()
   expect(screen.queryByText(tr['unity.hintProjectMismatch'])).toBeNull()
   expect(en['unity.hintProjectMismatch']).toBe('Gamachine has a different project open')
-  expect(en['unity.hintBringForward']).toBe('Unity may be in the background: bring Unity to the front')
+  expect(en['unity.hintBringForwardGeneric']).toBe('Unity may be in the background: bring Unity to the front')
 })
 
 // jsdom ignores the stylesheet: the hints rendered above were hidden by shell.css in the live app
