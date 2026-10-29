@@ -127,11 +127,14 @@ class KimiProvider(BaseCLIProvider):
             try:
                 # mkstemp makes the file 0600; config.toml can hold provider keys,
                 # so the original's mode (not the umask default) must carry over.
-                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".config-", suffix=".tmp")
+                # Replace the link's target, not the link: a symlinked config.toml
+                # (dotfiles) must keep pointing at the refreshed file.
+                target = os.path.realpath(path)
+                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".config-", suffix=".tmp")
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(existing[:start] + current + existing[end:])
-                os.chmod(tmp, os.stat(path).st_mode & 0o7777)
-                os.replace(tmp, path)
+                os.chmod(tmp, os.stat(target).st_mode & 0o7777)
+                os.replace(tmp, target)
                 tmp = None
                 logger.info(f"[KimiProvider] permission.rules güncellendi: {path}")
             except Exception as e:
