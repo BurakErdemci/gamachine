@@ -31,6 +31,7 @@ from remote.webpush import PushSender
 logger = logging.getLogger(__name__)
 
 TOUCH_EVERY_S = 60.0
+EXPIRY_SWEEP_EVERY_S = 6 * 3600.0
 
 
 class BridgeError(Exception):
@@ -73,6 +74,7 @@ class RemoteBridge:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._listening = False
         self._tasks: set = set()
+        self._sweep_task: Optional[asyncio.Task] = None
         self.relay_error: Optional[str] = None
         # The desktop renderer's effort as it last reported it: {level, levels, ultracode}.
         # The renderer owns the state (see set_desktop_effort); None until it reports.
@@ -85,8 +87,13 @@ class RemoteBridge:
         if self.store.enabled():
             self.keys = self.store.ensure_keys()
             self._start_relay()
+        self._sweep_task = self._loop.create_task(self._sweep_loop())
 
     async def shutdown(self) -> None:
+        task, self._sweep_task = self._sweep_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await self._stop_relay()
         await self.push.aclose()
 
@@ -289,6 +296,23 @@ class RemoteBridge:
                 # The next welcome re-registers exactly our hashes (replace:true).
                 logger.info("[remote] drop_token not confirmed: %s", exc)
         return True
+
+    async def sweep_expired_devices(self) -> int:
+        forgotten = 0
+        for device_id in self.store.expired_device_ids(self.clock()):
+            device = self.store.get_device(device_id)
+            if device is not None and await self._forget_device(device_id):
+                logger.info("[remote] device %r idle for 90 days: forgotten", device.name)
+                forgotten += 1
+        return forgotten
+
+    async def _sweep_loop(self) -> None:
+        while True:
+            try:
+                await self.sweep_expired_devices()
+            except Exception:
+                logger.exception("[remote] expiry sweep failed")
+            await asyncio.sleep(EXPIRY_SWEEP_EVERY_S)
 
     async def remove_all_devices(self) -> int:
         count = self.store.remove_all_devices()

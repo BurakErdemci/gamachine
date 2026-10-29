@@ -11,7 +11,7 @@ import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from remote import crypto as C
-from remote.store import Device, RemoteStore
+from remote.store import DEVICE_IDLE_LIMIT_S, Device, RemoteStore
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,9 @@ def handle_hello(msg: dict, conn_token_hash: Optional[str], store: RemoteStore,
     # device that token belongs to.
     if device is None or conn_token_hash is None or not C.equal(
             device.token_hash.encode(), conn_token_hash.encode()):
+        return {"type": "hello_reject", "reason": "unknown_device"}, None
+    # Rejected before the periodic sweep removes the row.
+    if (device.last_seen or device.created) < now - DEVICE_IDLE_LIMIT_S:
         return {"type": "hello_reject", "reason": "unknown_device"}, None
     k_static = static_key.ecdh(device.phone_pub)
     if not C.equal(tag, C.hmac_sha256(k_static, C.hello_tag_input(device_id, eph_phone, t))):

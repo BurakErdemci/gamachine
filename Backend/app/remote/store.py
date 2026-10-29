@@ -95,6 +95,10 @@ def ws_origin(relay_url: str) -> str:
     return ("wss://" if relay_url.startswith("https://") else "ws://") + relay_url.split("://", 1)[1]
 
 
+# A paired phone that has not connected for this long is forgotten (docs/remote-control.md).
+DEVICE_IDLE_LIMIT_S = 90 * 24 * 3600
+
+
 class RemoteStore:
     def __init__(self, db):
         self.db = db
@@ -202,6 +206,13 @@ class RemoteStore:
         with closing(self._connect()) as conn:
             rows = conn.execute(f"SELECT {self._COLS} FROM remote_devices ORDER BY created").fetchall()
         return [self._row(r) for r in rows]
+
+    def expired_device_ids(self, now: float) -> List[str]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute("SELECT device_id FROM remote_devices "
+                                "WHERE COALESCE(last_seen, created) < ? ORDER BY created",
+                                (now - DEVICE_IDLE_LIMIT_S,)).fetchall()
+        return [r[0] for r in rows]
 
     def token_hashes(self) -> List[str]:
         with closing(self._connect()) as conn:
