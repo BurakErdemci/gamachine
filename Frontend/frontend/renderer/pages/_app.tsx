@@ -29,6 +29,7 @@ import '../styles/gm/welcome.css'
 import '../styles/gm/intro.css'
 import '../styles/gm/toast.css'
 import '../styles/gm/computer-live.css'
+import '../styles/gm/browser-panel.css'
 // Last on purpose: Özel's rules (all under [data-theme="ozel"]) override base rules from every file
 // above, the way each Sade override follows its base rule inside the same file.
 import '../styles/gm/theme-ozel.shell.css'

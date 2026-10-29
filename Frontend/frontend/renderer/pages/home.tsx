@@ -23,6 +23,7 @@ import { ModelSelector } from '../components/home/ModelSelector';
 import { WorkspaceScreen } from '../components/home/WorkspaceScreen';
 import { Workspace, KodPane, PreviewPane, ScenePane, ChangedFiles, toggleTerminalDrawer, type WsDiff, type ChangedFile } from '../components/home/Workspace';
 import { ComputerLivePanel } from '../components/home/ComputerLivePanel';
+import { BrowserPanel } from '../components/home/BrowserPanel';
 import { HierarchyPanel } from '../components/home/HierarchyPanel';
 import { InspectorPane } from '../components/home/InspectorPane';
 import { useSceneEditorSetting } from '../lib/sceneEditor';
@@ -403,6 +404,13 @@ export default function Home() {
     if (!ipc) return;
     const tracker = createLiveRevealTracker(() => wsReveal('bilgisayar'));
     const off = ipc.on('computer-use-live', tracker);
+    return () => { if (typeof off === 'function') off(); };
+  }, [ipc, wsReveal]);
+  // The agent browser opens its tab the same way: once per run, when main reports it active.
+  useEffect(() => {
+    if (!ipc) return;
+    const tracker = createLiveRevealTracker(() => wsReveal('tarayici'));
+    const off = ipc.on('browser-live', tracker);
     return () => { if (typeof off === 'function') off(); };
   }, [ipc, wsReveal]);
   const [projectProblems, setProjectProblems] = useState<Record<string, any[]>>({});
@@ -1309,6 +1317,7 @@ export default function Home() {
               />
             ),
             bilgisayar: <ComputerLivePanel visible={ws.open && ws.tab === 'bilgisayar'} />,
+            tarayici: <BrowserPanel visible={ws.open && ws.tab === 'tarayici'} />,
           }}
           drawer={(
             <TerminalPanel

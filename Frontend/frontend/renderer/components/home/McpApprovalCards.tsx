@@ -24,6 +24,7 @@ import { FileCreationApproval, PendingFile } from './FileCreationApproval';
 import { FileDeleteApproval } from './FileDeleteApproval';
 import { CommandApproval } from './CommandApproval';
 import { ComputerUseApproval } from './ComputerUseApproval';
+import { BrowserApproval } from './BrowserApproval';
 import { RiskReasonLine } from './RiskReasonLine';
 import { GateFailure, postMcpDecision, postComputerDecision, decisionToast } from '../../hooks/home/gateResponse';
 import { MCP_MSG_ID, McpActiveGate } from '../../hooks/home/useMCPApproval';
@@ -337,6 +338,7 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
   const risk = { riskReason: gate.riskReason, riskDetail: gate.riskDetail, phonePaired };
 
   const computer = gate.computer;
+  const browser = gate.browser;
 
   return (
     <>
@@ -353,6 +355,21 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
               const app = stripBidi(computer.appName ?? computer.bundleId ?? t('cu.card.unknownApp'));
               reportDecision(result, !approved ? t('cu.card.rejected')
                 : remember ? t('cu.card.sentAlways', { ad: app }) : t('cu.card.sent'));
+            }}
+          />)}
+        </div>
+      )}
+
+      {browser && (
+        <div className="approval-slot">
+          {lock(
+          <BrowserApproval
+            info={browser}
+            phonePaired={phonePaired}
+            onAnswer={async (approved) => {
+              const result = await decide(approved);
+              onResolved();
+              reportDecision(result, approved ? t('cu.card.sent') : t('cu.card.rejected'));
             }}
           />)}
         </div>

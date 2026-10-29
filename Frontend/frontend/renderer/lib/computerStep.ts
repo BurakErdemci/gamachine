@@ -1,5 +1,5 @@
 export function userStopped(tool: string, output?: string): boolean {
-  if (!(tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_')) || !output) return false;
+  if (!(tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_') || browserStepLabel(tool) !== null) || !output) return false;
   try {
     const report: unknown = JSON.parse(output);
     return plainObject(report) && report.stop_reason === 'halted';
@@ -71,9 +71,22 @@ function describeStep(step: unknown): string {
   return parts.join(' ');
 }
 
+const BROWSER_STEP: Record<string, string> = {
+  navigate: 'Sayfayı açtı', snapshot: 'Sayfayı okudu', click: 'Tıkladı', fill: 'Yazdı', select: 'Seçti',
+  press: 'Tuşa bastı', scroll: 'Kaydırdı', back: 'Geri gitti', forward: 'İleri gitti', reload: 'Yeniledi',
+  screenshot: 'Ekran görüntüsü aldı',
+};
+
+/** A short Turkish label for a browser_* tool step, or null for any other tool. */
+export function browserStepLabel(tool: string): string | null {
+  const name = tool.replace(/^mcp__gamachineBrowser__/, '');
+  if (name === tool && !tool.startsWith('browser_')) return null;
+  return BROWSER_STEP[name.replace(/^browser_/, '')] ?? 'Tarayıcıda bir adım attı';
+}
+
 export function describeComputerArgs(tool: string, args: unknown): { meta: string[]; steps: string[] } | null {
   args = unwrapComputerArgs(args);
-  if (!(tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_')) || !plainObject(args)) {
+  if (!(tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_') || browserStepLabel(tool) !== null) || !plainObject(args)) {
     return null;
   }
   return {

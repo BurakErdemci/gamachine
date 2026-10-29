@@ -28,6 +28,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import axios from 'axios';
 import { PendingFile } from '../../components/home/FileCreationApproval';
 import { computerCardInfo, type ComputerCardInfo } from '../../components/home/ComputerUseApproval';
+import { browserCardInfo, type BrowserCardInfo } from '../../components/home/BrowserApproval';
 import { cevir } from '../../lib/i18n';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { onCardClosed } from '../../lib/remoteControl';
@@ -60,6 +61,8 @@ export interface McpActiveGate {
    * (app, summary, risk) and answers through Electron with the UI secret.
    */
   computer?: ComputerCardInfo;
+  /** Set for browser_* tools only: the agent browser's own card. */
+  browser?: BrowserCardInfo;
 }
 
 /** A request whose source chat the backend could not name (tray entry). */
@@ -525,6 +528,11 @@ export const useMCPApproval = ({
         const withComputer: McpActiveGate = { ...gate, computer: computerCardInfo(tool, params, req) };
         activeGateRef.current = withComputer;
         setActiveGate(withComputer);
+        clearActiveCardRef.current = null;
+      } else if (typeof tool === 'string' && tool.startsWith('browser_')) {
+        const withBrowser: McpActiveGate = { ...gate, browser: browserCardInfo(tool, params) };
+        activeGateRef.current = withBrowser;
+        setActiveGate(withBrowser);
         clearActiveCardRef.current = null;
       } else if (tool === MAIL_TOOL && typeof yuk.body === 'string') {
         // A note between chats: its own card, so the user reads "which chat

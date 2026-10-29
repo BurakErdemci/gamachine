@@ -10,6 +10,7 @@ import { RemoteControlSection } from '../RemoteControlSection';
 import { ModelsPage } from './ModelsPage';
 import { AgentGuidePage } from './AgentGuidePage';
 import { ComputerUsePage } from './ComputerUsePage';
+import { BrowserUsePage } from './BrowserUsePage';
 import { APP_VERSION, AccountPage, AppearancePage, ApprovalPage, GeneralPage, UnityPage } from './SettingsPages';
 import { SetPageHead } from './controls';
 import { SETTINGS_PAGES, type SettingsPage } from './pages';
@@ -86,14 +87,14 @@ const SEARCH_KEYS: Record<SettingsPage, TKey[]> = {
   gorunum: ['set.nav.gorunum', 'settings.appearance.theme', 'settings.appearance.readingFont', 'settings.appearance.codeFont', 'settings.appearance.textSize', 'settings.appearance.intro'],
   unity: ['set.unity.conn', 'set.unity.trouble'],
   onay: ['set.nav.onay', 'set.mode.stepTitle', 'set.mode.balancedTitle', 'set.mode.autoTitle'],
-  bilgisayar: ['set.nav.bilgisayar', 'cu.set.master', 'cu.set.ax', 'cu.set.screen', 'cu.set.driver', 'cu.set.apps'],
+  bilgisayar: ['set.nav.bilgisayar', 'cu.set.master', 'cu.set.ax', 'cu.set.screen', 'cu.set.driver', 'cu.set.apps', 'bp.set.master'],
   ajan: ['set.nav.ajan', 'set.ajan.base', 'set.ajan.addendum'],
   uzak: ['set.nav.uzak', 'set.uzak.phones', 'set.uzak.pairNew', 'remote.relay', 'remote.keepAwake', 'remote.forget'],
   hesap: ['set.nav.hesap', 'set.hesap.logout', 'set.hesap.version', 'set.hesap.profile', 'set.hesap.reset'],
 };
 const EXTRA_TERMS: Partial<Record<SettingsPage, string[]>> = {
   ajan: ['agent', 'guide', 'kılavuz', 'brief', 'prompt'],
-  bilgisayar: ['computer use', 'mac', 'macos', 'cua'],
+  bilgisayar: ['computer use', 'mac', 'macos', 'cua', 'tarayıcı', 'tarayici', 'browser'],
   unity: ['unity', 'mcp'], modeller: ['api', 'claude', 'codex', 'antigravity', 'ollama', 'openrouter'], uzak: ['qr', 'relay'],
 };
 
@@ -241,7 +242,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
               projectName={props.unityProjectName} saved={saved} />
           )}
           {page === 'onay' && <ApprovalPage mode={props.approvalMode} onChange={props.onApprovalModeChange} saved={saved} />}
-          {page === 'bilgisayar' && <ComputerUsePage saved={saved} showToast={props.showToast} />}
+          {page === 'bilgisayar' && <><ComputerUsePage saved={saved} showToast={props.showToast} /><BrowserUsePage saved={saved} showToast={props.showToast} /></>}
           {page === 'ajan' && <AgentGuidePage lang={lang} API={props.API} http={props.http} token={user?.sessionToken} saved={saved} />}
           {page === 'uzak' && (
             <>

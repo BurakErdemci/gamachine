@@ -16,10 +16,10 @@ const WIDTH_ICON: Record<WsWidth, React.ReactNode> = {
 };
 const X_ICON = <path d="M5.5 5.5l9 9M14.5 5.5l-9 9" />;
 
-const TAB_KEY: Record<WsTab, TKey> = { sahne: 'ws.tabScene', dosyalar: 'ws.tabFiles', kod: 'ws.tabCode', onizleme: 'ws.tabPreview', bilgisayar: 'ws.tabComputer' };
+const TAB_KEY: Record<WsTab, TKey> = { sahne: 'ws.tabScene', dosyalar: 'ws.tabFiles', kod: 'ws.tabCode', onizleme: 'ws.tabPreview', bilgisayar: 'ws.tabComputer', tarayici: 'ws.tabBrowser' };
 // Guide anchors on the panes (lib/guide/anchors.ts). The file tree is anchored here, not in
 // FileTree, because the sidebar's Files tab draws the same tree and the guide means this one.
-const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosyalar: 'file-tree', kod: 'ws-code', onizleme: 'ws-preview', bilgisayar: undefined };
+const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosyalar: 'file-tree', kod: 'ws-code', onizleme: 'ws-preview', bilgisayar: undefined, tarayici: undefined };
 const WIDTH_KEY: Record<WsWidth, TKey> = { dar: 'ws.widthNarrow', yarim: 'ws.widthHalf', odak: 'ws.widthFocus' };
 
 interface WorkspaceProps<T extends WsTab> {
