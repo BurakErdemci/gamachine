@@ -3,6 +3,8 @@ Tool Registry — Agentic AI'ın kullanabileceği tüm araçları ve LLM functio
 """
 import json
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Dict, Callable
 
 from tools.file_tools import read_file, write_file, list_directory, delete_file, run_command
@@ -308,9 +310,23 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any], workspace_path: str,
         return {"success": False, "error": str(e)}
 
 
+# Tools one API run brings with it (its own stdio servers). Context-scoped so the
+# global registry, and every other chat reading it, never sees them.
+_RUN_TOOL_DEFINITIONS: ContextVar[tuple] = ContextVar("run_tool_definitions", default=())
+
+
+@contextmanager
+def run_tool_definitions(definitions):
+    token = _RUN_TOOL_DEFINITIONS.set(tuple(definitions))
+    try:
+        yield
+    finally:
+        _RUN_TOOL_DEFINITIONS.reset(token)
+
+
 def _all_tool_definitions() -> list:
     """Standart + aktif Unity MCP tool'larını birleştirir."""
-    return TOOL_DEFINITIONS + get_unity_tool_definitions()
+    return TOOL_DEFINITIONS + get_unity_tool_definitions() + list(_RUN_TOOL_DEFINITIONS.get())
 
 
 # Gemini function-calling şeması OpenAPI 3.0 ALT KÜMESİDİR — pydantic/FastMCP'nin ürettiği

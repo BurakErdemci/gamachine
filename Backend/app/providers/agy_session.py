@@ -71,6 +71,14 @@ def _updater_env(platform: Optional[str] = None) -> Dict[str, str]:
     return {}
 
 
+def _switch_state() -> tuple:
+    """Whether the computer-use and agent-browser servers are on right now."""
+    from computer_use import registration as computer_registration
+    from browser_use import registration as browser_registration
+    return (computer_registration.stdio_entry() is not None,
+            browser_registration.stdio_entry() is not None)
+
+
 def _turn_lock_busy(lock: asyncio.Lock) -> bool:
     """Would acquiring the agy turn lock wait? Mirrors Lock.acquire's fast path:
     a just-released lock whose woken waiter has not run yet is still taken."""
@@ -396,6 +404,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self.session_id = resume_id if conversation_id >= 0 else None
         self.model = None
         self._model_slug = None
+        self._switches = (False, False)
         self._active_process = None
         self._gate_token = None  # this child's key in _GATED_CHILDREN
         self._auto_approve = False
@@ -643,9 +652,13 @@ class AgyStreamSession(SaglayiciSahipligi):
         mode = _effective_gate_mode()
         self._auto_approve = mode == "auto"
         model_slug = AgyProvider._resolve_agy_model(model, thinking_level)
+        # The servers are registered in the global config at spawn only, so a
+        # switch flip needs a new child to take effect.
+        switches = _switch_state()
         if self._active_process is not None and (
             not self.is_live or self.cwd != cwd
             or self._model_slug != model_slug
+            or self._switches != switches
         ):
             await self._stop_process()
         if self._kapandi:
@@ -739,6 +752,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self._stderr_task = asyncio.create_task(self._drain_stderr(process))
         self.model = model
         self._model_slug = provider._pending_agy_model_slug
+        self._switches = switches
         if self.conversation_id < 0:
             # Visible to approval_mode's flip propagation while it runs; close()
             # removes it. A one-shot is never looked up by id.
@@ -822,6 +836,13 @@ class AgyStreamSession(SaglayiciSahipligi):
         SIDE_MODE, stopped after SIDE_TURN_TIMEOUT_S or when another agy turn
         starts; `language` picks the text of those stop messages."""
         agent_guide = agent_guide or getattr(self, "agent_guide", "")
+        if agent_guide and not side:
+            import agent_guide as guides
+            computer_on, browser_on = _switch_state()
+            if computer_on:
+                agent_guide = guides.with_computer_use(agent_guide)
+            if browser_on:
+                agent_guide = guides.with_browser_use(agent_guide)
         # Global serialization covers the complete turn, not the process life.
         # A queued turn rechecks the closed flag before spawning or writing.
         completed = False

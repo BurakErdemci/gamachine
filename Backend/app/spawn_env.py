@@ -241,6 +241,22 @@ def build_spawn_env(family: Optional[str] = None,
 CONVERSATION_ENV = "GAMACHINE_CONVERSATION_ID"
 
 
+# Set on the CLI process of a read-only turn; the computer/browser servers refuse
+# every call while it is "1" (a workspace file shared by chats can still list them).
+READ_ONLY_ENV = "GAMACHINE_READ_ONLY"
+
+
+def read_only_env(read_only) -> Dict[str, str]:
+    return {READ_ONLY_ENV: "1"} if read_only else {}
+
+
+def read_only_refusal() -> Optional[str]:
+    """Refusal text for a tool call made inside a read-only turn, else None."""
+    if os.environ.get(READ_ONLY_ENV) == "1":
+        return "Read-only turn: this tool is not available."
+    return None
+
+
 def conversation_env(conversation_id) -> Dict[str, str]:
     """`overrides` entry naming the chat a spawned CLI works for, or {}.
 

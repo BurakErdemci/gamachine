@@ -40,6 +40,7 @@ import openai
 from tools.tool_registry import (
     TOOL_DEFINITIONS, execute_tool, execute_tool_async, is_async_tool,
     get_openai_tool_declarations, get_gemini_tool_declarations, _all_tool_definitions,
+    run_tool_definitions,
 )
 from prompts import SYSTEM_PROMPT
 import agent_guide
@@ -1693,11 +1694,16 @@ class AgentRunner:
     # GEMINI AGENTIC LOOP (Native Function Calling)
     # ═══════════════════════════════════════════════
     async def _run_gemini(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        async for _ev in _guarantee_terminal(self._gemini_loop(user_message),
-                                             self.model_name):
-            yield _ev
+        events = _guarantee_terminal(self._gemini_loop(user_message), self.model_name)
+        try:
+            async for _ev in events:
+                yield _ev
+        finally:
+            # Closing this wrapper early must reach _api_loop now, so its MCP
+            # server processes stop before the caller moves on.
+            await events.aclose()
 
-    def _api_system_instruction(self):
+    def _api_system_instruction(self, toolset=None):
         system = f"""{SYSTEM_PROMPT}
 
 Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçları kullanarak projeyi keşfedebilir, dosyaları okuyabilir, arama yapabilir ve kod yazabilirsin.
@@ -1716,10 +1722,25 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 
 [DİL]
 Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş."""
-        return (system + "\n\n" + self._agent_guide
+        guide = toolset.with_guide(self._agent_guide) if toolset is not None else self._agent_guide
+        return (system + "\n\n" + guide
                 + self._get_architect_wisdom() + self._identity_note())
 
     async def _api_loop(self, adapter, user_message):
+        # Read-only runs get no computer/browser tools at all.
+        toolset = None
+        if not getattr(self, "read_only", False):
+            from agentic.stdio_toolset import StdioToolset
+            toolset = StdioToolset(self.conversation_id)
+        try:
+            async with contextlib.aclosing(self._api_turns(adapter, user_message, toolset)) as turns:
+                async for event in turns:
+                    yield event
+        finally:
+            if toolset is not None:
+                await toolset.aclose()
+
+    async def _api_turns(self, adapter, user_message, toolset):
         from secret_redaction import redact_secrets
 
         preflight = adapter.preflight(self)
@@ -1736,13 +1757,19 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                 images.append((mime, data))
             except (AttributeError, TypeError, ValueError):
                 logger.warning("Skipping invalid initial image data URL")
-        adapter.prepare(self, self._api_system_instruction(), user_message, images)
+        if toolset is not None:
+            await toolset.sync()
+        adapter.prepare(self, self._api_system_instruction(toolset), user_message, images)
         turn_t0 = time.time()
         turn_in = turn_out = 0
         _progress = _ProgressGuard()
         for iteration in range(MAX_ITERATIONS):
             logger.info("API loop %s iteration %s", self.provider_type, iteration + 1)
-            adapter.refresh_tools(self)
+            if toolset is not None:
+                # A switch flipped since the last request takes effect on this one.
+                await toolset.sync()
+            with run_tool_definitions(toolset.definitions() if toolset is not None else ()):
+                adapter.refresh_tools(self)
             response = None
             last_error = ""
             for retry in range(3):
@@ -1855,7 +1882,10 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                     screenshot = None
                     summary = decision.summary
                 else:
-                    result, _ = await self._execute_tool_with_approval(name, args)
+                    if toolset is not None and toolset.owns(name):
+                        result = await toolset.call(name, args)
+                    else:
+                        result, _ = await self._execute_tool_with_approval(name, args)
                     screenshot = result.pop("image_base64", None)
                     summary = self._summarize_result(name, result)
                 result_str = json.dumps(result, ensure_ascii=False)
@@ -1884,9 +1914,14 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
     # ANTHROPIC AGENTIC LOOP (Claude 3.5 Sonnet vb.)
     # ═══════════════════════════════════════════════
     async def _run_anthropic(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        async for _ev in _guarantee_terminal(self._anthropic_loop(user_message),
-                                             self.model_name):
-            yield _ev
+        events = _guarantee_terminal(self._anthropic_loop(user_message), self.model_name)
+        try:
+            async for _ev in events:
+                yield _ev
+        finally:
+            # Closing this wrapper early must reach _api_loop now, so its MCP
+            # server processes stop before the caller moves on.
+            await events.aclose()
 
     def _anthropic_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         return self._api_loop(_AnthropicAdapter(), user_message)
@@ -1895,9 +1930,14 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
     # OPENAI AGENTIC LOOP (OpenAI, DeepSeek, vb.)
     # ═══════════════════════════════════════════════
     async def _run_openai(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        async for _ev in _guarantee_terminal(self._openai_loop(user_message),
-                                             self.model_name):
-            yield _ev
+        events = _guarantee_terminal(self._openai_loop(user_message), self.model_name)
+        try:
+            async for _ev in events:
+                yield _ev
+        finally:
+            # Closing this wrapper early must reach _api_loop now, so its MCP
+            # server processes stop before the caller moves on.
+            await events.aclose()
 
     def _openai_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         return self._api_loop(_OpenAIAdapter(), user_message)
@@ -2063,14 +2103,24 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
             # Every process this provider spawns works for this chat only
             # (cli_base turns it into GAMACHINE_CONVERSATION_ID, if valid).
             p._conversation_id = self.conversation_id
-            p._agent_guide = self._agent_guide
+            p._read_only = _read_only
+            p._agent_guide = _cli_guide
             p._language = getattr(self, "language", "tr")
             return p
 
         # Windows command-line limit (32,767 UTF-16 units) minus room for the
         # mcp hint; a side turn is fitted and refused in those units (fits/text).
         # The guide travels in the same argv, so its UTF-16 length comes off the cap.
-        _guide_units = len((self._agent_guide or "").encode("utf-16-le")) // 2
+        _read_only = bool(getattr(self, "read_only", False))
+        _cli_guide = self._agent_guide
+        if _cli_guide and not _read_only:
+            from computer_use import registration as _computer_reg
+            from browser_use import registration as _browser_reg
+            if _computer_reg.stdio_entry() is not None:
+                _cli_guide = agent_guide.with_computer_use(_cli_guide)
+            if _browser_reg.stdio_entry() is not None:
+                _cli_guide = agent_guide.with_browser_use(_cli_guide)
+        _guide_units = len((_cli_guide or "").encode("utf-16-le")) // 2
         _prompt_cap = 24000 - _guide_units
         if _prompt_cap < _MIN_ONESHOT_PROMPT_UNITS or (
                 getattr(self, "side_turn", None) is not None and not self.side_turn.fits(_prompt_cap)):

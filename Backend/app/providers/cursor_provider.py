@@ -185,6 +185,7 @@ class CursorProvider(BaseCLIProvider):
             # durumda eski URL artık 404 alır, CLI bağlanamayan MCP'de takılır.
             if not unity_mcp_url:
                 merged["mcpServers"].pop("unityMCP", None)
+            self._apply_computer_servers(merged["mcpServers"], lambda e: e, chat_id=False)
 
             # ⚠️ Düz `open` DEĞİL: bu dosya kullanıcının projesinde ve yolu
             # yönlendirilmiş olabilir (K4, iki vektör de ayrıcalıksız ölçüldü).

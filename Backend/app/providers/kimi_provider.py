@@ -38,7 +38,9 @@ class KimiProvider(BaseCLIProvider):
         '[[permission.rules]]\ndecision = "deny"\npattern = "Write"\n\n'
         '[[permission.rules]]\ndecision = "deny"\npattern = "Edit"\n\n'
         '[[permission.rules]]\ndecision = "deny"\npattern = "Bash"\n\n'
-        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__unityai__*"\n'
+        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__unityai__*"\n\n'
+        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineComputer__*"\n\n'
+        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineBrowser__*"\n'
         + _KIMI_MANAGED_END + "\n"
     )
 
@@ -68,6 +70,7 @@ class KimiProvider(BaseCLIProvider):
         path = None
         try:
             servers = self._product_mcp_servers_stdio(launcher, workspace, backend_url)
+            self._apply_computer_servers(servers, lambda e: e, chat_id=True)
             fd, path = tempfile.mkstemp(prefix="uai_kimi_mcp_", suffix=".json")
             os.close(fd)
             from .workspace_config import harden_config_file
@@ -109,11 +112,45 @@ class KimiProvider(BaseCLIProvider):
         except Exception as e:
             logger.warning(f"[KimiProvider] config.toml okunamadı: {e}")
             existing = ""
-        if (self._KIMI_MANAGED_MARKER in existing
-                or self._KIMI_LEGACY_MARKER in existing):
+        start = existing.find(self._KIMI_MANAGED_MARKER)
+        if start >= 0:
+            # A block from an older build lacks the newer rules: replace it in
+            # place when its text differs; a block with no end marker is left alone.
+            end = existing.find(self._KIMI_MANAGED_END, start)
+            if end < 0:
+                return
+            end += len(self._KIMI_MANAGED_END)
+            current = self._KIMI_PERMISSION_BLOCK.strip("\n")
+            if existing[start:end] == current:
+                return
+            tmp = None
+            try:
+                # mkstemp makes the file 0600; config.toml can hold provider keys,
+                # so the original's mode (not the umask default) must carry over.
+                # Replace the link's target, not the link: a symlinked config.toml
+                # (dotfiles) must keep pointing at the refreshed file.
+                target = os.path.realpath(path)
+                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".config-", suffix=".tmp")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(existing[:start] + current + existing[end:])
+                os.chmod(tmp, os.stat(target).st_mode & 0o7777)
+                os.replace(tmp, target)
+                tmp = None
+                logger.info(f"[KimiProvider] permission.rules güncellendi: {path}")
+            except Exception as e:
+                logger.warning(f"[KimiProvider] config.toml güncellenemedi: {e}")
+            finally:
+                if tmp is not None:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+            return
+        if self._KIMI_LEGACY_MARKER in existing:
             return  # zaten yazılı — idempotent
         try:
-            with open(path, "a", encoding="utf-8") as f:
+            # Created here only when absent; keep a new config.toml private.
+            with open(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a", encoding="utf-8") as f:
                 f.write(self._KIMI_PERMISSION_BLOCK)
             logger.info(f"[KimiProvider] permission.rules yazıldı: {path}")
         except Exception as e:

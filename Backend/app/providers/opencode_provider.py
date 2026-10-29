@@ -494,6 +494,13 @@ class OpenCodeProvider(BaseCLIProvider):
                     }
             if not unity_mcp_manager.is_running():
                 merged["mcp"].pop("unityMCP", None)
+            # Unlisted MCP tools run headless without a prompt (measured by the
+            # vault image test, 15 Oct 2026), so no permission entry is needed.
+            self._apply_computer_servers(
+                merged["mcp"],
+                lambda e: {"type": "local", "command": [e["command"], *e["args"]],
+                           "environment": e["env"], "enabled": True},
+                chat_id=False)
 
             # Reasoning effort: opencode CLI flag sunmaz — model options'a yazılır
             # (provider.<id>.models.<model>.options.reasoningEffort). auto → dokunma.
