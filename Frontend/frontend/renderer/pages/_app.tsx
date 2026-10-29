@@ -30,6 +30,7 @@ import '../styles/gm/intro.css'
 import '../styles/gm/toast.css'
 import '../styles/gm/computer-live.css'
 import '../styles/gm/browser-panel.css'
+import '../styles/gm/remote.css'
 // Last on purpose: Özel's rules (all under [data-theme="ozel"]) override base rules from every file
 // above, the way each Sade override follows its base rule inside the same file.
 import '../styles/gm/theme-ozel.shell.css'
@@ -40,6 +41,7 @@ import { CopyOnSelect } from '../components/ui/CopyOnSelect'
 import { ConfirmDialogHost } from '../components/ui/ConfirmDialog'
 import { ErrorBoundary } from '../components/ui/ErrorBoundary'
 import { AppearanceProvider } from '../lib/appearance'
+import { withRemoteMode } from '../lib/remote/bootstrap'
 
 function MyApp({ Component, pageProps, router }: AppProps) {
   // The computer-use indicator is its own tiny always-on-top window: the intro, copy and
@@ -73,4 +75,6 @@ function MyApp({ Component, pageProps, router }: AppProps) {
   )
 }
 
-export default MyApp
+// Remote mode (relay-served page, no Electron): installs the remote shims and shows pairing
+// until a session is up. On the desktop it returns MyApp unchanged.
+export default withRemoteMode(MyApp)

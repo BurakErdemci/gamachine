@@ -1,0 +1,42 @@
+/* ======================= WEB REMOTE (components/remote/RemotePairing.tsx) =======================
+   Only rendered in remote mode (the relay-served page). Built from the theme tokens so the pairing
+   screen and the connection banner follow the selected theme like the rest of the app. */
+.gm-remote {
+  min-height: 100vh; display: grid; place-items: center; padding: 24px 16px;
+  background: var(--page-bg); color: var(--page-text); font-family: var(--font-body);
+}
+.gm-remote-card {
+  width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 14px;
+  padding: 24px; background: var(--paper-raised); color: var(--ink);
+  border: var(--line-w) solid var(--paper-line); border-radius: var(--radius-lg); box-shadow: var(--shadow-card);
+  font-size: var(--fs-body); line-height: 1.5;
+}
+.gm-remote-card p { margin: 0; }
+.gm-remote-title { margin: 0; font-family: var(--font-title); font-size: var(--fs-title); }
+.gm-remote-dim { color: var(--ink-dim); font-size: var(--fs-small); }
+.gm-remote-form { display: flex; flex-direction: column; gap: 10px; }
+.gm-remote-label { font-size: var(--fs-meta); color: var(--ink-dim); }
+.gm-remote-input {
+  width: 100%; padding: 8px 10px; font: inherit; font-family: var(--font-mono); font-size: var(--fs-small);
+  background: transparent; color: var(--ink);
+  border: var(--line-w) solid var(--paper-line); border-radius: var(--radius-md);
+}
+.gm-remote-input:focus-visible, .gm-remote-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.gm-remote-btn {
+  align-self: flex-start; padding: 8px 16px; font: inherit; cursor: pointer;
+  background: var(--btn-bg); color: var(--btn-text); border: 0; border-radius: var(--radius-md);
+}
+.gm-remote-btn:hover:not(:disabled) { background: var(--btn-hover); }
+.gm-remote-btn:disabled { opacity: .5; cursor: default; }
+.gm-remote-btn-ghost { background: transparent; color: var(--ink); border: var(--line-w) solid var(--paper-line); }
+.gm-remote-btn-ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.gm-remote-sas { display: flex; flex-direction: column; gap: 8px; }
+.gm-remote-code {
+  font-family: var(--font-mono); font-size: 2rem; letter-spacing: .3em; color: var(--accent);
+}
+.gm-remote-error { color: var(--toast-err); font-size: var(--fs-small); }
+.gm-remote-note { color: var(--ink-dim); font-size: var(--fs-small); }
+.gm-remote-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 300; padding: 6px 16px; text-align: center;
+  background: var(--accent); color: var(--accent-ink); font-family: var(--font-body); font-size: var(--fs-small);
+}
