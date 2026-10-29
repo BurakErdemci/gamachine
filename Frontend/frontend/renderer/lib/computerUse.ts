@@ -6,6 +6,8 @@
  * call answers `{ error: 'no_desktop' }` without throwing.
  */
 
+import { isRemotePage } from './remote/transport';
+
 export interface ComputerGrant { bundle_id: string; app_name: string; granted_at: string }
 
 export interface ComputerUseStatus {
@@ -30,7 +32,9 @@ const ipc = (): { invoke: (...a: unknown[]) => Promise<unknown> } | null => {
   return w?.ipc?.invoke ? w.ipc : null;
 };
 
-export const hasComputerUseIpc = (): boolean => ipc() !== null;
+// The paired browser's `window.ipc` is the remote shim, and the backend refuses the
+// `computer-use` channel over it: that page has no desktop computer-use IPC.
+export const hasComputerUseIpc = (): boolean => ipc() !== null && !isRemotePage();
 
 export const isComputerUseError = (v: unknown): v is ComputerUseError =>
   !!v && typeof v === 'object' && typeof (v as { error?: unknown }).error === 'string';
