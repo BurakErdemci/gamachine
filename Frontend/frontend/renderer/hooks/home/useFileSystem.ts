@@ -430,7 +430,8 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
             { user_id: user.id, path: backendPath },
             { headers: { 'X-Session-Token': user.sessionToken } }
           );
-          const reason = response.data?.mcp?.reason;
+          // A refusal for a switch the user already left names the wrong project.
+          const reason = gecerliMi() ? response.data?.mcp?.reason : undefined;
           if (response.data?.mcp?.state === 'off' && typeof reason === 'string' && reason.length > 0) {
             showToast(reason, 'warning');
           }
