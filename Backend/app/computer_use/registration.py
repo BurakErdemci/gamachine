@@ -2,7 +2,7 @@
 import os
 import sys
 
-from spawn_env import CONVERSATION_ENV
+from spawn_env import conversation_env
 from . import settings
 
 SERVER_NAME = "gamachineComputer"
@@ -17,20 +17,27 @@ def server_argv() -> list[str]:
     return [sys.executable, main_py, "computer-mcp-server"]
 
 
-def claude_server_entry(conversation_id) -> dict | None:
-    if type(conversation_id) is not int or conversation_id <= 0 or not settings.enabled_now():
+def stdio_entry(conversation_id=None) -> dict | None:
+    """Generic command/args/env entry for CLIs that adapt it to their own config shape."""
+    if not settings.enabled_now():
         return None
     argv = server_argv()
     return {
-        "type": "stdio",
         "command": argv[0],
         "args": argv[1:],
         "env": {
-            CONVERSATION_ENV: str(conversation_id),
+            **conversation_env(conversation_id),
             "UNITYAI_URL": os.environ.get(
                 "UNITYAI_URL", os.environ.get("ANTIGRAVITY_URL", "http://localhost:8000")),
         },
     }
+
+
+def claude_server_entry(conversation_id) -> dict | None:
+    if type(conversation_id) is not int or conversation_id <= 0:
+        return None
+    entry = stdio_entry(conversation_id)
+    return None if entry is None else {"type": "stdio", **entry}
 
 
 def codex_thread_entry(forward_env) -> dict | None:

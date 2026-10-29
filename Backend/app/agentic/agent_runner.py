@@ -2063,14 +2063,24 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
             # Every process this provider spawns works for this chat only
             # (cli_base turns it into GAMACHINE_CONVERSATION_ID, if valid).
             p._conversation_id = self.conversation_id
-            p._agent_guide = self._agent_guide
+            p._read_only = _read_only
+            p._agent_guide = _cli_guide
             p._language = getattr(self, "language", "tr")
             return p
 
         # Windows command-line limit (32,767 UTF-16 units) minus room for the
         # mcp hint; a side turn is fitted and refused in those units (fits/text).
         # The guide travels in the same argv, so its UTF-16 length comes off the cap.
-        _guide_units = len((self._agent_guide or "").encode("utf-16-le")) // 2
+        _read_only = bool(getattr(self, "read_only", False))
+        _cli_guide = self._agent_guide
+        if _cli_guide and not _read_only:
+            from computer_use import registration as _computer_reg
+            from browser_use import registration as _browser_reg
+            if _computer_reg.stdio_entry() is not None:
+                _cli_guide = agent_guide.with_computer_use(_cli_guide)
+            if _browser_reg.stdio_entry() is not None:
+                _cli_guide = agent_guide.with_browser_use(_cli_guide)
+        _guide_units = len((_cli_guide or "").encode("utf-16-le")) // 2
         _prompt_cap = 24000 - _guide_units
         if _prompt_cap < _MIN_ONESHOT_PROMPT_UNITS or (
                 getattr(self, "side_turn", None) is not None and not self.side_turn.fits(_prompt_cap)):

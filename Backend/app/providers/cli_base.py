@@ -311,6 +311,27 @@ class BaseCLIProvider(AIProvider):
         never into a config file several chats of one workspace share."""
         return {}
 
+    # Set by the chat runner for a read-only side turn: no computer/browser servers.
+    _read_only = False
+
+    def _apply_computer_servers(self, servers: dict, shape, *, chat_id: bool) -> list:
+        """Sets or removes gamachineComputer / gamachineBrowser in `servers`,
+        each entry adapted by `shape` to the CLI's config format. chat_id=False
+        for a file several chats of one workspace share (the id then reaches
+        the server through the spawn env). Returns the names registered."""
+        from computer_use import registration as computer_reg
+        from browser_use import registration as browser_reg
+        owner = getattr(self, "_conversation_id", None) if chat_id else None
+        registered = []
+        for reg in (computer_reg, browser_reg):
+            entry = None if self._read_only else reg.stdio_entry(owner)
+            if entry is None:
+                servers.pop(reg.SERVER_NAME, None)
+            else:
+                servers[reg.SERVER_NAME] = shape(entry)
+                registered.append(reg.SERVER_NAME)
+        return registered
+
     def _product_mcp_servers_stdio(self, launcher: str, workspace: str,
                                    backend_url: str) -> dict:
         """The product's own MCP servers in stdio command/args/env form."""

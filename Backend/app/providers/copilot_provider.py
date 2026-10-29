@@ -30,6 +30,7 @@ class CopilotProvider(BaseCLIProvider):
 
     fresh_session_id = None    # ilk tur için bizim ürettiğimiz uuid (--session-id)
     _mcp_cfg_path = None       # bu tur için yazılan geçici MCP config dosyası
+    _computer_tools: list = []  # computer/browser servers in this turn's config
 
     async def analyze_code(self, *args, **kwargs):
         try:
@@ -95,6 +96,8 @@ class CopilotProvider(BaseCLIProvider):
         ]
         if unity_running:
             cmd += ["--allow-tool", "unityMCP"]
+        for name in self._computer_tools:
+            cmd += ["--allow-tool", name]
         cmd += ["--model", model or "auto"]
         if self.resume_session_id:
             cmd += [f"--resume={self.resume_session_id}"]
@@ -133,6 +136,7 @@ class CopilotProvider(BaseCLIProvider):
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 
         self._drop_mcp_cfg()
+        self._computer_tools = []
         path = None
         try:
             # The file is this turn's alone, so it can name the chat too.
@@ -168,6 +172,9 @@ class CopilotProvider(BaseCLIProvider):
                     "tools": ["*"],
                 }
 
+            computer_tools = self._apply_computer_servers(
+                servers, lambda e: {"type": "local", **e, "tools": ["*"]}, chat_id=True)
+
             fd, path = tempfile.mkstemp(prefix="uai_copilot_mcp_", suffix=".json")
             os.close(fd)
             # `mkstemp` dosyayı 0600 ile yaratıyor ama Windows'ta POSIX izin
@@ -190,6 +197,7 @@ class CopilotProvider(BaseCLIProvider):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({"mcpServers": servers}, f, indent=2)
             self._mcp_cfg_path = path
+            self._computer_tools = computer_tools
             logger.info(f"[CopilotProvider] session MCP config yazıldı: {path}")
         except Exception as e:
             self._mcp_cfg_path = None

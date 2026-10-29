@@ -38,7 +38,9 @@ class KimiProvider(BaseCLIProvider):
         '[[permission.rules]]\ndecision = "deny"\npattern = "Write"\n\n'
         '[[permission.rules]]\ndecision = "deny"\npattern = "Edit"\n\n'
         '[[permission.rules]]\ndecision = "deny"\npattern = "Bash"\n\n'
-        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__unityai__*"\n'
+        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__unityai__*"\n\n'
+        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineComputer__*"\n\n'
+        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineBrowser__*"\n'
         + _KIMI_MANAGED_END + "\n"
     )
 
@@ -68,6 +70,7 @@ class KimiProvider(BaseCLIProvider):
         path = None
         try:
             servers = self._product_mcp_servers_stdio(launcher, workspace, backend_url)
+            self._apply_computer_servers(servers, lambda e: e, chat_id=True)
             fd, path = tempfile.mkstemp(prefix="uai_kimi_mcp_", suffix=".json")
             os.close(fd)
             from .workspace_config import harden_config_file
@@ -109,8 +112,27 @@ class KimiProvider(BaseCLIProvider):
         except Exception as e:
             logger.warning(f"[KimiProvider] config.toml okunamadı: {e}")
             existing = ""
-        if (self._KIMI_MANAGED_MARKER in existing
-                or self._KIMI_LEGACY_MARKER in existing):
+        start = existing.find(self._KIMI_MANAGED_MARKER)
+        if start >= 0:
+            # A block from an older build lacks the newer rules: replace it in
+            # place when its text differs; a block with no end marker is left alone.
+            end = existing.find(self._KIMI_MANAGED_END, start)
+            if end < 0:
+                return
+            end += len(self._KIMI_MANAGED_END)
+            current = self._KIMI_PERMISSION_BLOCK.strip("\n")
+            if existing[start:end] == current:
+                return
+            try:
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(existing[:start] + current + existing[end:])
+                os.replace(tmp, path)
+                logger.info(f"[KimiProvider] permission.rules güncellendi: {path}")
+            except Exception as e:
+                logger.warning(f"[KimiProvider] config.toml güncellenemedi: {e}")
+            return
+        if self._KIMI_LEGACY_MARKER in existing:
             return  # zaten yazılı — idempotent
         try:
             with open(path, "a", encoding="utf-8") as f:
