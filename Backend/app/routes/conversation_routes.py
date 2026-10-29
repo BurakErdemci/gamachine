@@ -628,6 +628,7 @@ BROWSER_GRANT_TTL = 600
 _BROWSER_CRITICAL_OPS = frozenset({"click", "fill", "select", "press"})
 BROWSER_HALTED_REASON = ("The user stopped the browser for this turn; "
                          "do not use browser tools again until the user's next message.")
+BROWSER_NAVIGATION_REASON = "The page changed, so this browser approval no longer applies."
 BROWSER_INACTIVE_REASON = "The agent browser is turned off in Settings."
 
 
@@ -846,20 +847,21 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             return result
         # The agent retried while its card is still open: that card stays the only one.
         for open_gate, open_entry in _mcp_pending.items():
-            if key is not None and open_entry.get("grant_key") == key and _cards.is_open(open_gate):
+            if (key is not None and open_entry.get("grant_key") == key and _cards.is_open(open_gate)
+                    and open_entry.get("nav_gen") == _browser_nav_gen.get(owner)):
                 return {"status": "ok", "gate_id": open_gate}
+        opened_gen = _browser_nav_gen.setdefault(owner, 0)
         _register_gate(gate_id, owner, kind="external")
         summary = f"browser {op}: {params.get('element_name') or 'element'}"
         _mcp_pending[gate_id] = {
             "tool": tool, "params": params, "workspace_path": "", "conversation_id": owner,
-            "browser_use": True, "grant_key": key, "risk_reason": decision.reason, "summary": summary,
+            "browser_use": True, "grant_key": key, "nav_gen": opened_gen, "risk_reason": decision.reason, "summary": summary,
         }
         _mcp_results[gate_id] = {"status": "pending"}
         _mcp_result_ts[gate_id] = time()
         if key is not None:
             _browser_gate_keys[gate_id] = key
         base_resolver = _mcp_resolver(gate_id)
-        opened_gen = _browser_nav_gen.setdefault(owner, 0)
 
         def resolve(result):
             # The grant exists before the result becomes visible, or the gateway's poll could run the step
@@ -894,6 +896,10 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         _browser_nav_gen[conversation_id] = _browser_nav_gen.get(conversation_id, 0) + 1
         for key in [k for k in _browser_grants if k[0] == conversation_id]:
             del _browser_grants[key]
+        _reject_computer_use_pending(conversation_id, BROWSER_NAVIGATION_REASON, "browser_navigation",
+                                     flag="browser_use")
+        for gate_id in [g for g, k in _browser_gate_keys.items() if k[0] == conversation_id]:
+            del _browser_gate_keys[gate_id]
 
     _browser_gateway = browser_gateway.BrowserGateway(
         browser_gateway.post_cmd, _browser_card, _browser_card_result, _drop_browser_grants)

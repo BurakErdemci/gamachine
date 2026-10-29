@@ -172,11 +172,12 @@ def test_navigation_drops_the_grant(live, nav):
     assert live.host.ops().count("click") == 0
 
 
-def test_navigation_leaves_open_cards_answerable(live):
+def test_navigation_closes_open_cards(live):
     assert command(live)["needs_approval"] is True
+    gate_id = open_card()
     gate_keys = closure_var(live.router.halt_computer, "_browser_gate_keys")
     assert command(live, "reload")["ok"] is True
-    assert len(gate_keys) == 1 and cards.is_open(open_card())
+    assert not gate_keys and not cards.is_open(gate_id)
 
 
 def test_retry_does_not_attach_to_a_closed_card(live):
@@ -218,3 +219,30 @@ def test_approval_without_navigation_still_creates_the_grant(live):
     approve(live)
     assert len(grants_of(live)) == 1
     assert command(live)["ok"] is True
+
+
+def test_reload_rejects_the_chats_open_browser_card(live):
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    gate_id = open_card()
+    assert command(live, "reload")["ok"] is True
+    assert not cards.is_open(gate_id)
+    live.client.post(f"/mcp-approval-respond/{gate_id}", json={"approved": True}, headers=UI)
+    assert not grants_of(live)
+
+
+def test_identical_enter_retry_after_a_reload_opens_a_new_card(live):
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    old_gate = open_card()
+    assert command(live, "reload")["ok"] is True
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    assert open_card() != old_gate and cards.is_open(open_card())
+    assert live.host.ops().count("press") == 0
+
+
+def test_another_chats_open_card_survives_a_reload(live):
+    other = live.client.post("/browser/command", json={
+        "tool": "browser_press", "args": {"key": "Enter"}, "conversation_id": 2}).json()
+    assert other["needs_approval"] is True
+    gate_id = open_card()
+    assert command(live, "reload")["ok"] is True
+    assert cards.is_open(gate_id)
