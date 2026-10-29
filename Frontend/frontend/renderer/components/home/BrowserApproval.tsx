@@ -9,26 +9,34 @@ export interface BrowserCardInfo {
   /** The action without the prefix: click, fill, select, press. */
   action: string;
   element: string;
-  host: string;
+  pageUrl: string;
+  valuePreview: string;
   riskReason: string;
 }
 
 const str = (v: unknown): string => (typeof v === 'string' && v.trim() ? v : '');
 
-const hostOf = (url: string): string => {
-  try { return new URL(url).host; } catch { return ''; }
-};
-
-/** Reads the card's params; anything malformed falls back to empty, never throws. */
+/** Reads the card's params; only the fields the backend computes are read, so a page cannot spoof the card. */
 export const browserCardInfo = (tool: string, params: unknown): BrowserCardInfo => {
   const p: any = params && typeof params === 'object' ? params : {};
   return {
     tool,
     action: tool.replace(/^browser_/, ''),
-    element: str(p.element_name) || str(p.element) || str(p.name),
-    host: str(p.host) || str(p.page_host) || hostOf(str(p.url)),
+    element: str(p.element_name),
+    pageUrl: str(p.page_url),
+    valuePreview: str(p.value_preview),
     riskReason: str(p.risk_reason),
   };
+};
+
+const hostOf = (url: string): string => {
+  try { return new URL(url).host; } catch { return ''; }
+};
+
+// i18n.tsx is outside this change's scope, so the two new labels live here.
+const LABELS = {
+  tr: { value: 'Değer', badUrl: 'Sayfa adresi okunamadı; yukarıdaki metne güvenme.' },
+  en: { value: 'Value', badUrl: 'The page address could not be read; do not trust the text above.' },
 };
 
 interface BrowserApprovalProps {
@@ -39,9 +47,13 @@ interface BrowserApprovalProps {
 
 /** The browser_* approval card: what the agent wants to do on which page, why it is risky, and the answers. */
 export const BrowserApproval: React.FC<BrowserApprovalProps> = ({ info, onAnswer, phonePaired }) => {
-  const { t } = useLang();
-  const host = stripBidi(info.host) || t('bp.card.unknownHost');
+  const { t, lang } = useLang();
+  const labels = lang === 'en' ? LABELS.en : LABELS.tr;
+  const url = stripBidi(info.pageUrl);
+  const host = stripBidi(hostOf(info.pageUrl));
+  const at = host ? url.toLowerCase().indexOf(host.toLowerCase()) : -1;
   const element = stripBidi(info.element);
+  const preview = ['fill', 'select'].includes(info.action) ? stripBidi(info.valuePreview) : '';
   const reason = stripBidi(info.riskReason) || t('bp.card.riskUnknown');
   return (
     <div className="contents" data-risky="true">
@@ -49,7 +61,7 @@ export const BrowserApproval: React.FC<BrowserApprovalProps> = ({ info, onAnswer
         kind="computer"
         testId="browser-approval"
         who={t('bp.card.who')}
-        name={t('bp.card.name', { ad: host })}
+        name={t('bp.card.name', { ad: host || t('bp.card.unknownHost') })}
         sentence={t('bp.card.sentence')}
         why={(
           <p className="approval-why cu-card-risk" data-testid="bp-card-risk">
@@ -62,8 +74,16 @@ export const BrowserApproval: React.FC<BrowserApprovalProps> = ({ info, onAnswer
             <dt>{t('bp.card.action')}</dt>
             <dd><code>{stripBidi(info.action)}</code></dd>
             {element && <><dt>{t('bp.card.element')}</dt><dd data-testid="bp-card-element">{element}</dd></>}
+            {preview && <><dt>{labels.value}</dt><dd data-testid="bp-card-value">{preview}</dd></>}
             <dt>{t('bp.card.host')}</dt>
-            <dd data-testid="bp-card-host">{host}</dd>
+            <dd>
+              <code className="break-all" data-testid="bp-card-url">
+                {at >= 0
+                  ? <>{url.slice(0, at)}<b data-testid="bp-card-host">{url.slice(at, at + host.length)}</b>{url.slice(at + host.length)}</>
+                  : url || t('bp.card.unknownHost')}
+              </code>
+              {url && !host && <p className="approval-why" data-testid="bp-card-warn">{labels.badUrl}</p>}
+            </dd>
           </dl>
         )}
         phoneHint={phonePaired}

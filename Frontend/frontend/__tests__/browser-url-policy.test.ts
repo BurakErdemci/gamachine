@@ -24,6 +24,19 @@ describe('isPrivateAddress', () => {
       expect(isPrivateAddress(ip), ip).toBe(true)
   })
 
+  it('flags the reserved IPv4 ranges and the IPv6 forms that embed a private IPv4 address', () => {
+    for (const ip of ['100.64.0.1', '100.127.255.254', '192.0.0.8', '192.0.2.5', '198.18.0.1', '198.19.255.255', '198.51.100.7',
+      '203.0.113.9', '224.0.0.1', '239.1.1.1', '240.0.0.1', '255.255.255.255', 'ff02::1', 'ff00::', '::7f00:1', '::a00:1',
+      '64:ff9b::7f00:1', '64:ff9b::10.0.0.1', '2002:7f00:1::1', '2002:c0a8:101::1'])
+      expect(isPrivateAddress(ip), ip).toBe(true)
+  })
+
+  it('leaves the neighbours of those ranges alone', () => {
+    for (const ip of ['100.63.255.255', '100.128.0.1', '198.20.0.1', '192.0.1.1', '223.255.255.255', '2002:808:808::1',
+      '64:ff9b::808:808', '::808:808'])
+      expect(isPrivateAddress(ip), ip).toBe(false)
+  })
+
   it('leaves public addresses and non-addresses alone', () => {
     for (const ip of ['8.8.8.8', '172.32.0.1', '172.15.255.255', '1.1.1.1', '2606:4700::1111', 'fec0::1', '::ffff:8.8.8.8', 'example.com'])
       expect(isPrivateAddress(ip), ip).toBe(false)

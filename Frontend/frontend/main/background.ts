@@ -814,6 +814,7 @@ const computerLive = new ComputerLive({
     win.focus()
     win.webContents.send(LIVE_OPEN_EVENT)
   },
+  onHalt: () => browserHost.halt(),
   log: (...args) => console.log(...args),
 })
 handleSecure('computer-use-live', (_event, req: unknown) => computerLive.invoke(req))

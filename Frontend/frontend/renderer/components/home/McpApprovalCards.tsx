@@ -26,7 +26,7 @@ import { CommandApproval } from './CommandApproval';
 import { ComputerUseApproval } from './ComputerUseApproval';
 import { BrowserApproval } from './BrowserApproval';
 import { RiskReasonLine } from './RiskReasonLine';
-import { GateFailure, postMcpDecision, postComputerDecision, decisionToast } from '../../hooks/home/gateResponse';
+import { GateFailure, gateFailure, postMcpDecision, postComputerDecision, decisionToast } from '../../hooks/home/gateResponse';
 import { MCP_MSG_ID, McpActiveGate } from '../../hooks/home/useMCPApproval';
 import { useLang, type TKey } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
@@ -49,6 +49,24 @@ import { stripBidi } from '../../lib/modelText';
 type DecisionResult =
   | { sent: true; failure: GateFailure | null }
   | { sent: false; reason: 'in-flight' | 'already-decided' };
+
+/**
+ * Answers a browser_* card through Electron: the backend refuses an approval without the UI
+ * secret, which only the main process holds. Like the computer cards, a reply without a
+ * `status` (or a lost call) is reported as an uncertain delivery.
+ */
+const postBrowserDecision = async (gateId: string, approved: boolean): Promise<GateFailure | null> => {
+  const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
+  let res: unknown = { error: 'no_desktop' };
+  if (ipc?.invoke) {
+    try { res = await ipc.invoke('browser-live', { op: 'answer-card', gateId, approved }); } catch { res = { error: 'no answer' }; }
+  }
+  if (res && typeof res === 'object' && typeof (res as { status?: unknown }).status === 'string') {
+    return gateFailure('mcp', { httpOk: true, body: res });
+  }
+  const error = res && typeof res === 'object' ? (res as { error?: unknown }).error : undefined;
+  return gateFailure('mcp', { httpOk: false, error: error ?? 'no answer' });
+};
 
 /**
  * Bastırılan karar için kullanıcıya ne denir.
@@ -236,7 +254,9 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
       // computer_* cards answer through Electron with the UI secret and "Always".
       const failure = gate.computer
         ? await postComputerDecision(apiBase, gateId, approved, remember, sessionToken)
-        : await postMcpDecision(apiBase, gateId, approved, sessionToken);
+        : gate.browser
+          ? await postBrowserDecision(gateId, approved)
+          : await postMcpDecision(apiBase, gateId, approved, sessionToken);
       decidedRef.current = gateId;
       return { sent: true, failure };
     } finally {

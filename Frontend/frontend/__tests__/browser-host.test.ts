@@ -46,7 +46,7 @@ function fixture() {
   const session: any = new EventEmitter()
   session.setPermissionRequestHandler = vi.fn()
   session.setPermissionCheckHandler = vi.fn()
-  session.webRequest = { onBeforeRequest: vi.fn() }
+  session.webRequest = { onBeforeRequest: vi.fn(), onResponseStarted: vi.fn(), onCompleted: vi.fn() }
   const win: any = { isDestroyed: () => false, contentView: { addChildView: vi.fn(), removeChildView: vi.fn() }, webContents: { send: vi.fn() } }
   const http = { request: vi.fn(async (config: any) => {
     if (config.method === 'get') return { data: { enabled: true, runtime: { running: false, port: null, token: null } } }
@@ -150,7 +150,7 @@ describe('BrowserHost navigation refusal', () => {
     expect(await reply).toMatchObject({ ok: false, error: 'url_not_allowed' })
   })
 
-  it('cancels sub-resource requests to private hosts, caching the lookup per host', async () => {
+  it('cancels sub-resource requests to private hosts, caching only the blocked lookups', async () => {
     const f = fixture()
     await navigate(f)
     const gate = f.session.webRequest.onBeforeRequest.mock.calls[0][0]
@@ -163,7 +163,42 @@ describe('BrowserHost navigation refusal', () => {
     expect(await ask('https://cdn.example/b.png', 'image')).toEqual({ cancel: false })
     expect(await ask('data:image/png;base64,AAAA', 'image')).toEqual({ cancel: false })
     expect(await ask('data:text/html,hi', 'subFrame')).toEqual({ cancel: true })
-    expect(f.lookup.mock.calls.filter(([h]: [string]) => h === 'cdn.example')).toHaveLength(1)
+    // An allowed verdict is looked up again every time, so a rebinding name is caught on its next request.
+    expect(f.lookup.mock.calls.filter(([h]: [string]) => h === 'cdn.example')).toHaveLength(2)
+    expect(await ask('https://internal.corp/y.js', 'script')).toEqual({ cancel: true })
+    expect(f.lookup.mock.calls.filter(([h]: [string]) => h === 'internal.corp')).toHaveLength(1)
+  })
+
+  it('re-resolves an allowed host on the next navigation and blocks it once it rebinds', async () => {
+    const f = fixture()
+    await navigate(f, 'https://rebind.example/')
+    f.lookup.mockImplementation(async () => [{ address: '127.0.0.1', family: 4 }])
+    expect(await f.host.handle({ op: 'navigate', args: { url: 'https://rebind.example/again' } })).toMatchObject({ ok: false, error: 'url_not_allowed' })
+  })
+
+  it('aborts the page and reports private_address when the connected IP is private', async () => {
+    const f = fixture()
+    await navigate(f)
+    const started = f.session.webRequest.onResponseStarted.mock.calls[0][0]
+    const completed = f.session.webRequest.onCompleted.mock.calls[0][0]
+    f.win.webContents.send.mockClear()
+    started({ url: 'https://example.com/ok.js', ip: '93.184.216.34' })
+    started({ url: 'https://example.com/cached.js' })
+    started({ url: 'http://93.184.216.34/literal', ip: '10.0.0.1' })
+    expect(f.wc.stop).not.toHaveBeenCalled()
+    const pending = f.host.handle({ op: 'navigate', args: { url: 'https://rebind.example/' } })
+    await vi.waitFor(() => expect(f.wc.loadURL).toHaveBeenCalledWith('https://rebind.example/'))
+    started({ url: 'https://rebind.example/', ip: '127.0.0.1' })
+    expect(await pending).toMatchObject({ ok: false, error: 'private_address' })
+    expect(f.wc.stop).toHaveBeenCalled()
+    expect(f.wc.loadURL).toHaveBeenLastCalledWith('about:blank')
+    const payloads = f.win.webContents.send.mock.calls.filter(([channel]: [string]) => channel === 'browser-live').map(([, p]: [string, any]) => p)
+    expect(payloads.some((p: any) => p.error === 'private_address')).toBe(true)
+    // The host is now blocked even though its lookup answers publicly again.
+    expect(await f.host.handle({ op: 'navigate', args: { url: 'https://rebind.example/' } })).toMatchObject({ ok: false, error: 'url_not_allowed' })
+    f.wc.loadURL.mockClear()
+    completed({ url: 'https://other.example/', ip: '[::1]' })
+    expect(f.wc.loadURL).toHaveBeenCalledWith('about:blank')
   })
 
   it('reports a navigation that never finishes as a timeout', async () => {
@@ -208,6 +243,28 @@ describe('BrowserHost page scripts', () => {
     expect(described.element).toMatchObject({ submits_form: true, form_method: 'post', form_has_password: true, is_password: false })
   })
 
+  it('describes the form of an input, so Enter in it is classified', async () => {
+    const f = fixture()
+    await navigate(f, 'https://example.com/', PAGE +
+      '<form method="GET" action="/s"><input aria-label="Query"></form>' +
+      '<form action="/two"><input aria-label="First"><input aria-label="Second"></form>' +
+      '<form method="post" action="/two-btn"><input aria-label="Name"><input aria-label="Tick" type="checkbox"><button>Go</button></form>' +
+      '<input aria-label="Loose">')
+    const snap = await f.host.handle({ op: 'snapshot', args: {} })
+    const refOf = (name: string) => (snap.elements as { ref: string; name: string }[]).find((e) => e.name === name)!.ref
+    const describe = async (name: string) => (await f.host.handle({ op: 'describe', args: { snapshot_id: snap.snapshot_id, ref: refOf(name) } })).element
+    expect(await describe('User')).toMatchObject({ tag: 'input', submits_form: true, form_method: 'post', form_has_password: true })
+    expect(await describe('Password')).toMatchObject({ is_password: true, submits_form: true, form_has_password: true })
+    expect(await describe('Query')).toMatchObject({ submits_form: true, form_method: 'get', form_has_password: false })
+    expect(await describe('First')).toMatchObject({ submits_form: false, form_method: 'get' })
+    expect(await describe('Name')).toMatchObject({ submits_form: true, form_method: 'post' })
+    expect(await describe('Tick')).toMatchObject({ submits_form: false, form_method: 'post' })
+    expect(await describe('License')).toMatchObject({ tag: 'select', submits_form: false, form_has_password: false })
+    const loose = await describe('Loose') as Record<string, unknown>
+    expect(loose).toMatchObject({ submits_form: false, form_has_password: false })
+    expect(loose).not.toHaveProperty('form_method')
+  })
+
   it('returns stale_snapshot for an old snapshot id and after the page changed', async () => {
     const f = fixture()
     await navigate(f, 'https://example.com/', PAGE)
@@ -227,11 +284,35 @@ describe('BrowserHost halt and renderer channel', () => {
     const pending = f.host.handle({ op: 'navigate', args: { url: 'https://slow.example/' } })
     await vi.waitFor(() => expect(f.wc.loadURL).toHaveBeenCalledTimes(2))
     expect(await f.host.invoke({ op: 'halt' })).toEqual({ halted: true })
+    expect(f.http.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'post', url: 'http://127.0.0.1:9/computer-use/halt/4',
+      headers: { 'X-Session-Token': 'tok', 'X-Gamachine-UI-Secret': 'secret' } }))
     expect(await pending).toMatchObject({ ok: false, error: 'halted' })
     expect(f.wc.stop).toHaveBeenCalled()
     expect(f.onHalt).toHaveBeenCalled()
     expect(await f.host.handle({ op: 'halt', args: {} })).toMatchObject({ ok: true })
     expect(f.onHalt).toHaveBeenCalledTimes(2)
+  })
+
+  it('halt with no active conversation does not call the backend', async () => {
+    const f = fixture()
+    expect(await f.host.invoke({ op: 'halt' })).toEqual({ halted: true })
+    expect(f.http.request).not.toHaveBeenCalled()
+  })
+
+  it('answer-card posts the decision with the UI secret and returns the backend reply', async () => {
+    const f = fixture()
+    f.http.request.mockResolvedValueOnce({ data: { status: 'ok' } } as any)
+    expect(await f.host.invoke({ op: 'answer-card', gateId: 'b-12_x', approved: true })).toEqual({ status: 'ok' })
+    expect(f.http.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'post', url: 'http://127.0.0.1:9/mcp-approval-respond/b-12_x',
+      data: { approved: true }, headers: { 'X-Session-Token': 'tok', 'X-Gamachine-UI-Secret': 'secret' } }))
+    f.http.request.mockClear()
+    for (const bad of [{ gateId: '../x', approved: true }, { gateId: '', approved: true }, { gateId: 'a'.repeat(129), approved: true },
+      { gateId: 'ok', approved: 'yes' }, { gateId: 5, approved: true }])
+      expect(await f.host.invoke({ op: 'answer-card', ...bad })).toHaveProperty('error')
+    expect(f.http.request).not.toHaveBeenCalled()
+    f.http.request.mockRejectedValueOnce(Object.assign(new Error('500'), { config: { headers: { 'X-Gamachine-UI-Secret': 'secret' } } }))
+    const failed = await f.host.invoke({ op: 'answer-card', gateId: 'g1', approved: false })
+    expect(failed).toEqual({ error: 'Approval request failed.' })
   })
 
   it('emits browser-live to the main window while commands run', async () => {

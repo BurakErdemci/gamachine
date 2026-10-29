@@ -129,7 +129,8 @@ def test_critical_click_returns_needs_approval_within_two_seconds_and_card_field
     assert params["page_url"] == PAGE
     assert params["value_preview"] == ""
     assert params["risky"] is True and "Buy now" in params["risk_reason"] and "shop.example" in params["risk_reason"]
-    assert set(params) == {"element_name", "page_url", "value_preview", "risky", "risk_reason", "fingerprint"}
+    assert set(params) == {"element_name", "page_url", "value_preview", "risky", "risk_reason", "fingerprint", "value_hash"}
+    assert params["value_hash"] == ""
 
 
 def test_granted_retry_proceeds():
@@ -171,6 +172,16 @@ def test_fill_preview_is_capped_and_search_fill_is_free():
     fake = Fake({"5": SEARCH_FORM})
     assert run(fake, "fill", {"snapshot_id": "s1", "ref": "5", "value": "walk cycle"}).is_error is False
     assert fake.approval_calls == [] and fake.cmds[-1][2]["value"] == "walk cycle"
+
+
+def test_value_hash_is_the_sha256_of_the_exact_value():
+    import hashlib
+    fake = Fake({"2": {**POST_FORM, "name": "Order notes"}, "4": {"role": "combobox", "name": "Delete after", "tag": "select"}})
+    run(fake, "fill", {"snapshot_id": "s1", "ref": "2", "value": "a"})
+    run(fake, "fill", {"snapshot_id": "s1", "ref": "2", "value": "b"})
+    run(fake, "select", {"snapshot_id": "s1", "ref": "4", "option": "30 days"})
+    hashes = [params["value_hash"] for _, params in fake.approval_calls]
+    assert hashes == [hashlib.sha256(v.encode()).hexdigest() for v in ("a", "b", "30 days")]
 
 
 def test_select_preview_uses_the_option():

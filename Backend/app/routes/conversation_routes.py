@@ -806,9 +806,11 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         claimed = body.get("conversation_id")
         op = str(tool)[len("browser_"):]
         url, fingerprint = params.get("page_url"), params.get("fingerprint")
+        value_hash = params.get("value_hash", "")
         valid = (op in _BROWSER_CRITICAL_OPS
-                 and isinstance(url, str) and isinstance(fingerprint, str))
-        key = (owner, op, url, fingerprint) if valid and owner is not _UNKNOWN_OWNER else None
+                 and isinstance(url, str) and isinstance(fingerprint, str)
+                 and isinstance(value_hash, str) and re.fullmatch(r"[0-9a-f]{64}|", value_hash) is not None)
+        key = (owner, op, url, fingerprint, value_hash) if valid and owner is not _UNKNOWN_OWNER else None
         now = time()
         for stale in [k for k, expiry in _browser_grants.items() if expiry <= now]:
             del _browser_grants[stale]

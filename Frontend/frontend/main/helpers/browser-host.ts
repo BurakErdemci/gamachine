@@ -1,7 +1,8 @@
 import type { NativeImage, Rectangle, Session, WebContents, WebContentsView, WebContentsViewConstructorOptions } from 'electron'
 import type { HttpClient } from './remote-control'
 import type { BrowserCommand } from './browser-server'
-import { isAllowedNavigation, resolvesToPrivate, type LookupAll } from './browser-url-policy'
+import { isIP } from 'net'
+import { isAllowedNavigation, isPrivateAddress, resolvesToPrivate, type LookupAll } from './browser-url-policy'
 
 export const BROWSER_PARTITION = 'gamachine-agent-browser'
 export const BROWSER_LIVE_CHANNEL = 'browser-live'
@@ -47,6 +48,8 @@ export interface BrowserLivePayload {
   url: string
   title: string
   loading: boolean
+  /** Set on the event that reports a blocked private address. */
+  error?: string
 }
 
 type Reply = { ok: boolean; error?: string; url: string; title: string; [key: string]: unknown }
@@ -69,6 +72,7 @@ const PAGE_LIB = String.raw`(() => {
   const tag = (el) => el.tagName.toLowerCase();
   const inputType = (el) => String(el.getAttribute('type') || 'text').toLowerCase();
   const BUTTON_TYPES = ['button', 'submit', 'reset', 'image'];
+  const NON_TEXT_TYPES = ['checkbox', 'radio', 'file', 'range', 'color', 'hidden'];
   const roleOf = (el) => {
     const explicit = el.getAttribute('role');
     if (explicit) return explicit;
@@ -191,7 +195,11 @@ const PAGE_LIB = String.raw`(() => {
       const form = formOf(el);
       if (form) {
         const submitter = (t === 'button' && element.type === 'submit') || (t === 'input' && (element.type === 'submit' || element.type === 'image'));
-        element.submits_form = submitter;
+        // Enter in a text field submits when the form has a submit button or the field is its only text field.
+        const typing = t === 'input' && !BUTTON_TYPES.concat(NON_TEXT_TYPES).includes(element.type);
+        const textFields = Array.from(form.elements).filter((f) => tag(f) === 'input' && !BUTTON_TYPES.concat(NON_TEXT_TYPES).includes(inputType(f)));
+        const hasSubmit = !!form.querySelector('button:not([type=button]):not([type=reset]), input[type=submit], input[type=image]');
+        element.submits_form = submitter || (typing && (hasSubmit || textFields.length === 1));
         const method = String((submitter && el.getAttribute('formmethod')) || form.getAttribute('method') || 'get').toLowerCase();
         element.form_method = ['post', 'dialog'].includes(method) ? method : 'get';
         element.form_action = (submitter && el.getAttribute('formaction') ? el.formAction : form.action) || location.href;
@@ -224,7 +232,7 @@ export class BrowserHost {
   private popupBlocked: string | null = null
   private snapshotSeq = 0
   private loadWaiter: ((result: LoadResult) => void) | null = null
-  private readonly hostCache = new Map<string, { blocked: boolean; at: number }>()
+  private readonly hostCache = new Map<string, { blocked: true; at: number }>()
   private runtime: { port: number; token: string } | null = null
   private stopped = false
   private pollTimer: ReturnType<typeof setTimeout> | null = null
@@ -313,6 +321,28 @@ export class BrowserHost {
         () => callback({ cancel: true }),
       )
     })
+    // The pre-check resolves the name itself, so a rebinding server can still answer the browser's own
+    // lookup with a private address. The connected IP is the ground truth: the first request can reach
+    // that address before it is aborted here (residual risk: local services need tokens).
+    session.webRequest.onResponseStarted((details) => this.checkConnectedIp(details))
+    session.webRequest.onCompleted((details) => this.checkConnectedIp(details))
+  }
+
+  private checkConnectedIp(details: { url: string; ip?: string }): void {
+    const ip = (details.ip || '').replace(/^\[|\]$/g, '')
+    if (!ip || !isPrivateAddress(ip)) return
+    let host: string
+    try { host = new URL(details.url).hostname } catch { return }
+    // A literal host was already judged by the static policy, so the connection is not a rebinding.
+    if (isIP(host.replace(/^\[|\]$/g, ''))) return
+    this.hostCache.set(host.toLowerCase(), { blocked: true, at: this.now() })
+    const wc = this.view && !this.view.webContents.isDestroyed() ? this.view.webContents : null
+    this.settleLoad({ ok: false, error: 'private_address' })
+    if (wc) {
+      wc.stop()
+      wc.loadURL('about:blank').catch(() => { /* nothing left to report */ })
+    }
+    this.emitLive('private_address')
   }
 
   /** Sub-resource gate: frames follow the navigation rule, every http(s)/ws(s) host must not resolve to a private address. */
@@ -334,9 +364,10 @@ export class BrowserHost {
   private async hostBlocked(hostname: string): Promise<boolean> {
     const key = hostname.toLowerCase()
     const hit = this.hostCache.get(key)
-    if (hit && this.now() - hit.at < HOST_CACHE_MS) return hit.blocked
+    if (hit && this.now() - hit.at < HOST_CACHE_MS) return true
+    // Allowed verdicts are not cached: a name that resolved publicly a moment ago may rebind.
     const blocked = await resolvesToPrivate(key, this.deps.lookup)
-    this.hostCache.set(key, { blocked, at: this.now() })
+    if (blocked) this.hostCache.set(key, { blocked, at: this.now() })
     return blocked
   }
 
@@ -420,15 +451,15 @@ export class BrowserHost {
     }
   }
 
-  private emitLive(): void {
+  private emitLive(error?: string): void {
     const win = this.deps.window()
     if (!win || win.isDestroyed()) return
-    try { win.webContents.send(BROWSER_LIVE_CHANNEL, this.livePayload()) } catch { /* window closing */ }
+    try { win.webContents.send(BROWSER_LIVE_CHANNEL, error ? { ...this.livePayload(), error } : this.livePayload()) } catch { /* window closing */ }
   }
 
   async invoke(req: unknown): Promise<unknown> {
     if (!req || typeof req !== 'object' || Array.isArray(req)) return { error: 'Invalid browser-live request.' }
-    const { op, bounds, visible } = req as Record<string, unknown>
+    const { op, bounds, visible, gateId, approved } = req as Record<string, unknown>
     switch (op) {
       case 'status':
         return { ...this.livePayload(), visible: this.visible, bounds: this.bounds }
@@ -445,9 +476,23 @@ export class BrowserHost {
         this.visible = visible
         this.view?.setVisible(visible)
         return { visible }
-      case 'halt':
+      case 'halt': {
+        const conversationId = this.active ? this.conversationId : null
         this.halt()
+        // The backend halt set also covers browser tools, so the agent's next call is refused too.
+        if (conversationId !== null) {
+          try { await this.request('post', `/computer-use/halt/${conversationId}`, undefined, true) } catch { this.log('[browser] backend halt failed') }
+        }
         return { halted: true }
+      }
+      case 'answer-card':
+        if (typeof gateId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(gateId) || typeof approved !== 'boolean') break
+        try {
+          return (await this.request('post', `/mcp-approval-respond/${gateId}`, { approved }, true)).data
+        } catch {
+          // Not serialised: the request config inside the error carries both secrets.
+          return { error: 'Approval request failed.' }
+        }
       case 'settings':
       case 'enable':
       case 'disable':

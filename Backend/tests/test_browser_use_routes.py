@@ -160,6 +160,23 @@ def test_grant_is_keyed_on_op_url_and_element(env, change):
     assert request(env, "b-same")["approved"] is True
 
 
+def test_grant_is_bound_to_the_exact_value(env):
+    a, b = "a" * 64, "b" * 64
+    assert request(env, op="fill", value_hash=a)["status"] == "ok"
+    answer(env, "b-first", True)
+    other = request(env, "b-other", op="fill", value_hash=b)
+    assert other["status"] == "ok" and cards.get("b-other").open
+    # The approved value's grant is still there and is consumed by the identical retry.
+    assert request(env, "b-same", op="fill", value_hash=a)["approved"] is True
+    assert request(env, "b-again", op="fill", value_hash=a)["status"] == "ok"
+
+
+@pytest.mark.parametrize("bad", ["xyz", "A" * 64, "a" * 63, 5, None])
+def test_malformed_value_hash_is_denied(env, bad):
+    response = request(env, op="fill", value_hash=bad)
+    assert response["approved"] is False and response["status"] == "resolved"
+
+
 def test_grant_belongs_to_one_chat(env):
     assert request(env)["status"] == "ok"
     answer(env, "b-first", True)

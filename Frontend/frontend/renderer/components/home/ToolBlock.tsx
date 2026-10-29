@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
-import { describeComputerArgs, describeComputerOutput, unwrapComputerArgs, userStopped } from '../../lib/computerStep';
+import { browserStepLabel, describeComputerArgs, describeComputerOutput, unwrapComputerArgs, userStopped } from '../../lib/computerStep';
 
 interface ToolBlockProps {
   tool: string;
@@ -25,7 +25,7 @@ const KIND: Record<string, ToolKind> = {
 };
 
 export const toolKind = (tool: string): ToolKind =>
-  KIND[tool] ?? (tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_') ? 'computer' : tool.startsWith('mcp__') ? 'unity' : 'other');
+  KIND[tool] ?? (tool.startsWith('mcp__gamachineComputer__') || tool.startsWith('computer_') || browserStepLabel(tool) !== null ? 'computer' : tool.startsWith('mcp__') ? 'unity' : 'other');
 
 /** The file or thing a step acted on: its path argument first, then the stream's summary. */
 export const toolTarget = (tc: { args?: any; summary?: string }): string | null => {
@@ -50,7 +50,8 @@ export const ToolBlock = ({ tool, args, summary, success, output }: ToolBlockPro
   const unwrappedArgs = kind === 'computer' ? unwrapComputerArgs(args) : null;
   const computerName = tool.replace(/^mcp__gamachineComputer__/, '').replace(/^computer_/, '');
   const steps = unwrappedArgs && typeof unwrappedArgs === 'object' && 'steps' in unwrappedArgs ? unwrappedArgs.steps : null;
-  const target = kind === 'computer'
+  const browserLabel = browserStepLabel(tool);
+  const target = browserLabel !== null ? browserLabel : kind === 'computer'
     ? computerName + (computerName === 'run_steps' && Array.isArray(steps) ? ' · ' + t('tool.cu.stepsCount', { n: steps.length }) : '')
     : toolTarget({ args, summary }) || summary || (kind === 'unity' ? unityName : tool);
   const hasArgs = args != null && (typeof args !== 'object' || Object.keys(args).length > 0);

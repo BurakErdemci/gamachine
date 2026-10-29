@@ -76,20 +76,21 @@ function fixture(options: { platform?: string; saved?: string; panel?: boolean }
     writeFileSync: vi.fn(),
   }
   const log = vi.fn()
+  const onHalt = vi.fn()
   const deps: ComputerLiveDeps = {
     host, http, baseUrl: () => 'http://127.0.0.1:9', appToken: 'app-token-secret', platform: options.platform ?? 'darwin',
     userData: '/user', spawn: spawn as any,
     windows: () => [main, ...indicators.filter(w => !w.destroyed)],
     newIndicator, loadIndicator: vi.fn(async () => {}), preload: '/app/preload.js',
     workAreas: () => ({ primary: { x: 0, y: 25, width: 1440, height: 875 }, all: [{ x: 0, y: 25, width: 1440, height: 875 }] }),
-    shortcut, fs, focusMain: vi.fn(), mainVisible: () => state.mainVisible, now: () => Date.now(), setTimeout, clearTimeout, log,
+    shortcut, fs, focusMain: vi.fn(), mainVisible: () => state.mainVisible, now: () => Date.now(), setTimeout, clearTimeout, log, onHalt,
   }
   const live = new ComputerLive(deps)
   // Most cases watch the Computer tab at its higher frame rate.
   if (options.panel !== false) void live.invoke({ op: 'panel-visible', visible: true })
   const frames = () => main.webContents.send.mock.calls.filter(([, p]: any) => typeof p.frame === 'string')
   const windowCalls = () => rpc.filter(m => m.method === 'tools/call')
-  return { live, deps, log, state, rpc, children, host, http, spawn, main, indicators, shortcut, fs, frames, windowCalls }
+  return { live, deps, log, onHalt, state, rpc, children, host, http, spawn, main, indicators, shortcut, fs, frames, windowCalls }
 }
 
 beforeEach(() => { vi.useFakeTimers() })
@@ -332,14 +333,16 @@ describe('computer-use-live: halt and ops', () => {
     callback()
     await vi.advanceTimersByTimeAsync(0)
     expect(f.host.invoke).toHaveBeenCalledWith({ op: 'halt', conversationId: 7 })
+    expect(f.onHalt).toHaveBeenCalledTimes(1)
     expect(f.shortcut.unregister).toHaveBeenCalledWith(HALT_SHORTCUT)
     f.live.shutdown()
   })
 
-  it('halt with nothing active asks nobody', async () => {
+  it('halt with nothing active asks nobody but still stops the agent browser', async () => {
     const f = fixture()
     expect(await f.live.invoke({ op: 'halt' })).toEqual({ error: 'Computer use is not active.' })
     expect(f.host.invoke).not.toHaveBeenCalled()
+    expect(f.onHalt).toHaveBeenCalledTimes(1)
   })
 
   it("'halted' only forgets the run it names and never calls the host", async () => {
@@ -352,7 +355,9 @@ describe('computer-use-live: halt and ops', () => {
     expect(await f.live.invoke({ op: 'halted', conversationId: 7 })).toEqual({ halted: true })
     expect(f.indicators[0].close).toHaveBeenCalled()
     expect(f.host.invoke).not.toHaveBeenCalled()
+    expect(f.onHalt).toHaveBeenCalledTimes(2)
     expect(await f.live.invoke({ op: 'halted', conversationId: '7' })).toHaveProperty('error')
+    expect(f.onHalt).toHaveBeenCalledTimes(2)
     f.live.shutdown()
   })
 

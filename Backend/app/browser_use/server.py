@@ -6,6 +6,7 @@ approval card in the backend and return at once; the card's one-time grant lets
 the identical retry through (see docs/agent-browser.md).
 """
 import asyncio
+import hashlib
 import json
 import os
 from typing import Literal
@@ -152,11 +153,14 @@ class BrowserServer:
         if op in {"fill", "select"}:
             preview = "••••" if element.get("is_password") is True else policy.display_name(
                 args.get("value", args.get("option")), _PREVIEW_LIMIT)
+        # The exact string the step will send, so a card approved for one value cannot cover another.
+        exact = {"fill": args.get("value"), "select": args.get("option"), "press": args.get("key")}.get(op)
+        value_hash = hashlib.sha256(str(exact).encode("utf-8")).hexdigest() if exact is not None else ""
         result = await self._ask(f"browser_{op}", {
             "element_name": policy.display_name(element.get("name")), "page_url": url,
             "value_preview": preview, "risky": True, "risk_reason": shown,
             # Not shown: the backend keys the one-time grant on it.
-            "fingerprint": policy.fingerprint(element),
+            "fingerprint": policy.fingerprint(element), "value_hash": value_hash,
         })
         if result is None:
             return _NEEDS_APPROVAL.format(reason=shown)

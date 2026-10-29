@@ -77,6 +77,8 @@ export interface ComputerLiveDeps {
   workAreas: () => { primary: Rect; all: Rect[] }
   shortcut: { register(accelerator: string, callback: () => void): boolean; unregister(accelerator: string): void }
   fs: { readFileSync(file: string, encoding: 'utf8'): string; writeFileSync(file: string, data: string, options?: unknown): void }
+  /** Called on every halt (shortcut or panel) so the agent browser stops with the computer. */
+  onHalt?: () => void
   /** Bring the main window forward on the right-panel computer tab. */
   focusMain: () => void
   /** True while the main window is shown and not minimized. */
@@ -351,6 +353,7 @@ export class ComputerLive {
       case 'halted':
         // The panel already called the host's halt itself; only forget the run here.
         if (!isInt(conversationId)) break
+        this.deps.onHalt?.()
         if (conversationId === this.conversationId) {
           this.haltedAt = this.now()
           this.goIdle()
@@ -366,6 +369,7 @@ export class ComputerLive {
 
   /** Stop: the host's halt contract removes the computer tools for the rest of the turn. */
   halt(): Promise<unknown> {
+    this.deps.onHalt?.()
     const conversationId = this.conversationId
     if (conversationId === null) return Promise.resolve({ error: 'Computer use is not active.' })
     // Presses for the same conversation while its halt is in flight share one answer.
