@@ -156,6 +156,7 @@ IPC_OPS = {
 IPC_EVENTS = frozenset({"browser-live", "computer-use-live", "open-conversation"})
 _IPC_EVENT_PREFIX = re.compile(r"(terminal-data|terminal-exit)-[A-Za-z0-9_-]{1,64}")
 
+_GATE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _UPLOAD_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _STREAM_ID = re.compile(r"[0-9a-f]{16}")
 IPC_REQUEST_ID = re.compile(r"[0-9a-f]{16}")
@@ -536,14 +537,19 @@ class UiDispatcher:
         if not isinstance(payload, dict):
             return {"status": 422, "content_type": "application/json", "body": json.dumps({"detail": "bad_body"})}
         # Only `true` approves, as in the route: a broken answer is a rejection.
-        decision = "approve" if payload.get("approved") is True else "reject"
+        res = self._card_reply(session, card_id, payload.get("approved") is True)
+        return {"status": 200, "content_type": "application/json", "body": json.dumps(res)}
+
+    @staticmethod
+    def _card_reply(session: PhoneSession, card_id: str, approved: bool) -> dict:
+        decision = "approve" if approved else "reject"
         card = cards.get(card_id)
         res = rpc.answer_card_as(session.device_label, card, decision) if card is not None else {"status": "not_found"}
         if res.get("status") == "ok":
             res = {"status": "ok"}
         elif res.get("status") == "not_found":
             res = {"status": "gate_not_found"}
-        return {"status": 200, "content_type": "application/json", "body": json.dumps(res)}
+        return res
 
     async def stream_open(self, session: PhoneSession, req: dict, rid):
         app = self._asgi_app()
@@ -659,6 +665,13 @@ class UiDispatcher:
             logger.info("[remote] ui_ipc %s %s refused", session.device_label, channel[:64])
             raise rpc.RpcError("remote_unavailable")
         logger.info("[remote] ui_ipc %s %s", session.device_label, channel)
+        if channel == "browser-live" and args[0].get("op") == "answer-card":
+            # Not relayed to the desktop's main process: answered here so the
+            # card and ledger record the device, with main's validation and reply.
+            gate_id, approved = args[0].get("gateId"), args[0].get("approved")
+            if not isinstance(gate_id, str) or not _GATE_ID.fullmatch(gate_id) or not isinstance(approved, bool):
+                return {"error": "Unknown operation or malformed browser-live arguments."}
+            return self._card_reply(session, gate_id, approved)
         if not desktop_renderer_ready():
             raise rpc.RpcError("desktop_not_ready")
         if req.get("upload_id") is not None:

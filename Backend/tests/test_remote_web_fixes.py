@@ -254,3 +254,107 @@ async def test_stream_cut_short_ends_with_an_error():
 async def test_failure_before_the_response_stays_a_500_reply():
     r = await call(dispatcher(failing_app()), FakeSession(), type="ui_http", method="GET", path="/conversations/1/messages")
     assert r["ok"] and r["result"]["status"] == 500
+
+
+# ── G1: only the dispatcher decides a request is remote ─────────────────
+async def test_desktop_header_does_not_select_remote_workspace_policy(workspaces):
+    transport = httpx.ASGITransport(app=workspaces.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        res = await client.post("/save-workspace", json={"user_id": 1, "path": "/new/marked"},
+                                headers={"X-Session-Token": TOKEN, "X-Gamachine-Remote": "1"})
+    assert res.status_code == 200
+    assert workspaces.db.get_last_workspace(1) == "/new/marked"
+
+
+# ── G2: the Unity toggle takes only a saved workspace from a paired device ──
+@pytest.fixture
+def toggle_app(workspaces, monkeypatch):
+    import routes.mcp_routes as mr
+    monkeypatch.setattr(mr, "_check_token", lambda token: None)
+    monkeypatch.setattr(mr, "stop_mcp", lambda path=None: {"stopped": path})
+    app = FastAPI()
+    app.include_router(mr.router)
+    return SimpleNamespace(app=app, known=workspaces.known)
+
+
+async def test_remote_unity_toggle_refuses_an_unsaved_workspace(toggle_app):
+    r = await call(dispatcher(toggle_app.app), FakeSession(), type="ui_http", method="POST",
+                   path="/mcp/unity/toggle", body={"enabled": False, "workspace_path": "/never/saved"})
+    assert r["ok"] and r["result"]["status"] == 403
+    assert "remote_forbidden" in r["result"]["body"]
+
+
+async def test_remote_unity_toggle_takes_a_saved_workspace(toggle_app):
+    r = await call(dispatcher(toggle_app.app), FakeSession(), type="ui_http", method="POST",
+                   path="/mcp/unity/toggle", body={"enabled": False, "workspace_path": toggle_app.known})
+    assert r["result"]["status"] == 200
+    assert json.loads(r["result"]["body"]) == {"stopped": toggle_app.known}
+
+
+async def test_desktop_unity_toggle_takes_any_workspace(toggle_app):
+    transport = httpx.ASGITransport(app=toggle_app.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        res = await client.post("/mcp/unity/toggle", json={"enabled": False, "workspace_path": "/never/saved"})
+    assert res.status_code == 200
+
+
+# ── G4: the end of a reply is never lost ────────────────────────────────
+async def burst_then_fail(scope, receive, send):
+    await send({"type": "http.response.start", "status": 200,
+                "headers": [(b"content-type", b"application/octet-stream")]})
+    for _ in range(63):
+        await send({"type": "http.response.body", "body": b"partial", "more_body": True})
+    raise RuntimeError("synthetic failure with a full queue")
+
+
+async def raise_at_once(scope, receive, send):
+    raise RuntimeError("synthetic failure before the response started")
+
+
+async def test_full_queue_does_not_lose_the_failure():
+    r = await call(rpc.Dispatcher(SimpleNamespace(), app=burst_then_fail), FakeSession(),
+                   type="ui_http", method="GET", path="/session-report/1/x")
+    assert r == {"id": 1, "ok": False, "error": "upstream_failed"}
+    session = FakeSession()
+    await rpc.Dispatcher(SimpleNamespace(), app=burst_then_fail).handle(
+        session, {"id": 1, "type": "ui_stream_open", "method": "GET", "path": "/session-report/1/x"})
+    assert session.sent[-1]["type"] == "ui_stream_end" and session.sent[-1]["error"] == "upstream_failed"
+
+
+async def test_failure_before_response_start_fails_promptly(monkeypatch):
+    monkeypatch.setattr(d, "HTTP_TIMEOUT_S", 0.5)
+    r = await call(rpc.Dispatcher(SimpleNamespace(), app=raise_at_once), FakeSession(),
+                   type="ui_http", method="GET", path="/session-report/1/x")
+    assert r == {"id": 1, "ok": False, "error": "upstream_failed"}
+    session = FakeSession()
+    await rpc.Dispatcher(SimpleNamespace(), app=raise_at_once).handle(
+        session, {"id": 1, "type": "ui_stream_open", "method": "GET", "path": "/session-report/1/x"})
+    assert session.replies(1)[-1] == {"id": 1, "ok": False, "error": "upstream_failed"}
+    assert not [m for m in session.sent if m.get("type") == "ui_stream_end" and "error" not in m]
+
+
+# ── G5: a browser card answered over the browser-live IPC op is the device's ──
+async def test_browser_live_answer_card_is_the_devices(card_app):
+    g = card_app.gate("web-bl", "approval")
+    session = FakeSession()
+    r = await call(dispatcher(card_app.app), session, type="ui_ipc", channel="browser-live",
+                   args=[{"op": "answer-card", "gateId": g, "approved": True}])
+    assert r == {"id": 1, "ok": True, "result": {"status": "ok"}}
+    card = cards.get(g)
+    assert not card.open and card.by == session.device_label
+    assert [row.get("device") for row in card_app.ledger] == [session.device_label]
+    assert [f["card_id"] for f in closed_frames(card_app.q)] == [g]
+    again = await call(dispatcher(card_app.app), session, rid=2, type="ui_ipc", channel="browser-live",
+                       args=[{"op": "answer-card", "gateId": g, "approved": False}])
+    assert again["result"]["status"] == "already_answered"
+
+
+async def test_browser_live_answer_card_validates_like_the_desktop(card_app):
+    session = FakeSession()
+    for bad in ({"gateId": "../x", "approved": True}, {"gateId": "ok", "approved": "yes"}, {"gateId": 5, "approved": True}):
+        r = await call(dispatcher(card_app.app), session, type="ui_ipc", channel="browser-live",
+                       args=[{"op": "answer-card", **bad}])
+        assert "error" in r["result"]
+    r = await call(dispatcher(card_app.app), session, type="ui_ipc", channel="browser-live",
+                   args=[{"op": "answer-card", "gateId": "nope", "approved": True}])
+    assert r["result"] == {"status": "gate_not_found"}
