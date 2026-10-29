@@ -72,7 +72,7 @@ at a time (a queue; a second caller waits). Reply is always HTTP 200 with
 | `scroll` | `{direction: 'up'\|'down', amount?}` | — |
 | `back` / `forward` / `reload` | `{}` | — |
 | `screenshot` | `{}` | `image` (PNG base64, max 1280 px wide) |
-| `describe` | `{snapshot_id, ref}` | `element`: role, name, tag, type, form action/method, whether it submits a form, whether the input is a password |
+| `describe` | `{snapshot_id, ref}` | `element`: `{role, name, tag, type?, href?, download?: bool, submits_form?: bool, form_method?: 'get'\|'post'\|'dialog', form_action?, form_has_password?: bool, is_password?: bool}` |
 | `halt` | `{}` | — (stops loading, clears pending input) |
 
 Refs are only valid for the `snapshot_id` they came from; a stale id returns
@@ -96,8 +96,10 @@ the switch is on and the chat is not halted.
 first calls `describe` and classifies:
 
 - **critical** when any of: `computer_use.policy.critical_name` matches the element's
-  name or its form's submit button name; the click submits a form (`type=submit`, a
-  button inside a form, or Enter in a form input); the field is a password field
+  name or its form's submit button name; the click submits a form whose method is not
+  GET or that contains a password field (`type=submit`, a button inside a form, or Enter
+  in a form input; GET forms such as site search are navigation and stay allowed, because
+  asset search is the main use); the field is a password field
   (filling it always needs approval); the element is a link whose target is a download
   (`download` attribute or a known archive/installer extension).
 - otherwise allowed.
