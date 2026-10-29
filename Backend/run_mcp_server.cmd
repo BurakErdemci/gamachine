@@ -7,7 +7,11 @@ set "SCRIPT_DIR=%~dp0"
 REM No "2>> log" redirection here: cmd.exe opens the file without write sharing,
 REM so while one unityai server ran every other launch died before Python
 REM started (measured 27 Sep 2026). The server opens this log itself, shared.
-if not defined UNITYAI_MCP_LOG_FILE set "UNITYAI_MCP_LOG_FILE=%SCRIPT_DIR%mcp_server.log"
+REM The install folder may be read-only (Program Files), so the default log goes to the user folder.
+if not defined UNITYAI_MCP_LOG_FILE (
+  if not exist "%USERPROFILE%\.unity_architect_ai" mkdir "%USERPROFILE%\.unity_architect_ai"
+  set "UNITYAI_MCP_LOG_FILE=%USERPROFILE%\.unity_architect_ai\mcp_server.log"
+)
 REM Turkce karakterler icin UTF-8 stdio (cp1252 UnicodeEncodeError fix).
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"

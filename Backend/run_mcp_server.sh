@@ -3,7 +3,9 @@
 # Venv varsa onu kullanır, yoksa sistem python'ına düşer.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-LOG_FILE="$SCRIPT_DIR/mcp_server.log"
+# The log lives in the user folder, not next to this script: a signed app bundle must not change.
+LOG_FILE="${UNITYAI_MCP_LOG_FILE:-$HOME/.unity_architect_ai/mcp_server.log}"
+mkdir -p "$(dirname "$LOG_FILE")"
 echo "[$(date)] MCP Server başlatılıyor... ANTIGRAVITY_URL=${ANTIGRAVITY_URL}" >> "$LOG_FILE"
 
 cd "$SCRIPT_DIR"
