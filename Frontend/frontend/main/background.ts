@@ -414,6 +414,7 @@ handleSecure('hub-open-project', (_event, arg: any) => {
   return openProject({ path: arg.path, version: arg.version }, {
     editors: editorDeps(),
     isTrusted: isTrustedRoot,
+    isProject: isUnityProjectDir,
     readVersion: readUnityVersion,
     spawn: (command, args, options) => spawn(command, args, options),
   })

@@ -20,6 +20,7 @@ function setup(over: Partial<LaunchDeps> = {}) {
       readFile: () => { throw new Error('ENOENT') },
     },
     isTrusted: () => true,
+    isProject: () => true,
     readVersion: () => '2022.3.1f1',
     spawn,
     ...over,
@@ -33,6 +34,14 @@ describe('openProject', () => {
     expect(openProject({ path: '/p/Game' }, deps)).toEqual({ opened: true })
     expect(spawn).toHaveBeenCalledExactlyOnceWith(exe('2022.3.1f1'), ['-projectPath', '/p/Game'], { detached: true, stdio: 'ignore' })
     expect(child.unref).toHaveBeenCalled()
+  })
+
+  it('refuses a trusted subfolder that is not a project root, and opens a real project', () => {
+    const projects = new Set(['/p/Game'])
+    const { deps, spawn } = setup({ isProject: d => projects.has(d) })
+    expect(openProject({ path: '/p/Game/Library' }, deps)).toEqual({ opened: false, error: 'Not a Unity project folder.' })
+    expect(spawn).not.toHaveBeenCalled()
+    expect(openProject({ path: '/p/Game' }, deps)).toEqual({ opened: true })
   })
 
   it('prefers the version given by the caller', () => {

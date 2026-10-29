@@ -3,6 +3,7 @@ import { listEditors, EditorDeps } from './unity-editors'
 export interface LaunchDeps {
   editors: EditorDeps
   isTrusted: (p: string) => boolean
+  isProject: (dir: string) => boolean
   readVersion: (dir: string) => string | null
   spawn: (command: string, args: string[], options: { detached: boolean; stdio: 'ignore' }) =>
     { unref: () => void; on: (event: 'error', listener: () => void) => unknown }
@@ -13,6 +14,7 @@ export function openProject(
   deps: LaunchDeps,
 ): { opened: boolean; error?: string } {
   if (!deps.isTrusted(opts.path)) return { opened: false, error: 'Project folder is not trusted.' }
+  if (!deps.isProject(opts.path)) return { opened: false, error: 'Not a Unity project folder.' }
   const version = opts.version || deps.readVersion(opts.path)
   if (!version) return { opened: false, error: 'Unity version of the project is unknown.' }
   const editor = listEditors(deps.editors).editors.find(e => e.version === version)
