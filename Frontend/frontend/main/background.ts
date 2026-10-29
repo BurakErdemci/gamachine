@@ -2,8 +2,8 @@ import path from 'path'
 import fs from 'fs'
 import os from 'os'
 import net from 'net'
-import { randomUUID, createHash } from 'crypto'
-import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer } from 'electron'
+import { randomUUID, createHash, randomBytes } from 'crypto'
+import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer, WebContentsView, session } from 'electron'
 import serve from 'electron-serve'
 import { createWindow, applyNavigationPolicy } from './helpers'
 import { spawn, ChildProcess, execFile } from 'child_process'
@@ -50,6 +50,8 @@ import { hideOrMinimize } from './helpers/hide-while-live'
 import { reopenMain } from './helpers/reopen-main'
 import { createProfileReset } from './helpers/profile-reset'
 import { collectMtimes } from './helpers/stat-mtimes'
+import { BrowserHost } from './helpers/browser-host'
+import { startCommandServer, type CommandServer } from './helpers/browser-server'
 
 const useDockerBackend = process.env.USE_DOCKER_BACKEND === 'true'
 
@@ -816,6 +818,43 @@ const computerLive = new ComputerLive({
 })
 handleSecure('computer-use-live', (_event, req: unknown) => computerLive.invoke(req))
 
+// Agent browser (helpers/browser-host.ts): a page the agent drives over the main
+// window, commanded through a loopback server whose port and per-launch token
+// reach the backend only through POST /browser/runtime.
+const browserToken = randomBytes(32).toString('hex')
+let browserServer: CommandServer | null = null
+const browserHost = new BrowserHost({
+  window: () => mainWindowRef,
+  // Read on use: tests load this module with electron mocks that lack these.
+  createView: options => new WebContentsView(options),
+  fromPartition: partition => session.fromPartition(partition),
+  http: axios, baseUrl: getBackendBaseUrl, appToken: localAppToken, uiSecret,
+  onHalt: () => browserServer?.cancelPending(),
+  log: (...args) => console.log(...args),
+})
+handleSecure('browser-live', (_event, req: unknown) => browserHost.invoke(req))
+
+async function startBrowserHost(): Promise<void> {
+  if (browserServer) return
+  try {
+    browserServer = await startCommandServer({
+      token: browserToken,
+      handle: cmd => browserHost.handle(cmd),
+      immediate: cmd => cmd.op === 'halt',
+    })
+    browserHost.setRuntime({ port: browserServer.port, token: browserToken })
+    browserHost.beginPolling()
+  } catch (err) {
+    console.error('[browser] command server failed to start', err)
+  }
+}
+
+function stopBrowserHost(): Promise<unknown> {
+  const server = browserServer
+  browserServer = null
+  return Promise.all([server?.close(), browserHost.shutdown()]).catch(() => undefined)
+}
+
 // The renderer picks a folder with a HOST path, but in Docker mode the backend
 // is a different filesystem namespace where that path does not exist — only the
 // mount does. Sending the host path unchanged is what an audit caught on
@@ -1279,7 +1318,8 @@ if (!gotTheLock) {
         mainWindow.on(ev as any, () => computerLive.mainVisibilityChanged())
       }
       // The indicator alone must not keep the app alive once the main window is gone.
-      mainWindow.on('closed', () => { mainWindowRef = null; computerLive.shutdown() })
+      mainWindow.on('closed', () => { mainWindowRef = null; computerLive.shutdown(); browserHost.destroyView() })
+      void startBrowserHost()
 
       if (isProd) {
         await mainWindow.loadURL('app://./home')
@@ -1458,7 +1498,7 @@ if (!gotTheLock) {
   app.on('window-all-closed', () => {
     remoteControl.shutdown()
     computerLive.shutdown()
-    void computerUse.shutdown().finally(() => { killBackend(); app.quit() })
+    void Promise.all([computerUse.shutdown(), stopBrowserHost()]).finally(() => { killBackend(); app.quit() })
   })
 
   let quitReady = false
@@ -1467,7 +1507,7 @@ if (!gotTheLock) {
     computerLive.shutdown()
     if (quitReady) { killBackend(); return }
     event.preventDefault()
-    void computerUse.shutdown().finally(() => {
+    void Promise.all([computerUse.shutdown(), stopBrowserHost()]).finally(() => {
       quitReady = true
       killBackend()
       app.quit()
@@ -1475,10 +1515,10 @@ if (!gotTheLock) {
   })
 
   // Beklenmedik çıkışlarda da temizle
-  process.on('exit', () => { remoteControl.shutdown(); computerLive.shutdown(true); void computerUse.shutdown(true); killBackend() })
+  process.on('exit', () => { remoteControl.shutdown(); computerLive.shutdown(true); void computerUse.shutdown(true); void stopBrowserHost(); killBackend() })
   process.on('SIGTERM', () => {
     remoteControl.shutdown()
     computerLive.shutdown()
-    void computerUse.shutdown().finally(() => { killBackend(); process.exit(0) })
+    void Promise.all([computerUse.shutdown(), stopBrowserHost()]).finally(() => { killBackend(); process.exit(0) })
   })
 }

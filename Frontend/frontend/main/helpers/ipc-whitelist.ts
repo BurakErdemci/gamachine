@@ -33,6 +33,7 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'workspace-info',
   'open-unity-hub',
   'authorize-workspace',
+  'browser-live',
 ])
 
 export const PRELOAD_ONLY_CHANNELS = new Set(['register-dropped-folder'])
