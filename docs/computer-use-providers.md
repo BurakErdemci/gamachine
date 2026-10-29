@@ -94,3 +94,25 @@ subscription), then 8 of 9 measured. Per provider, live:
 2. A critical step opens the card; approving runs it once; Stop refuses the next call.
 3. Switch off, next turn: the tools are gone.
 4. A browser tool call from the same provider carries the chat id (no "needs a chat" refusal).
+
+## Decisions after the probe survey (29 Oct 2026)
+
+Facts measured while writing the acceptance probes changed four points above:
+
+1. Only kimi (and the unused `.mcp.json`) build from `_product_mcp_servers_stdio`. copilot,
+   cursor and opencode build their own shapes (opencode: `command` as a list plus
+   `environment`). P1 therefore adds one generic stdio entry builder per server in the two
+   `registration.py` modules (`{command, args, env}`), and each provider adapts it to its own
+   shape.
+2. CLI providers have no read-only input today. P1 adds one: `agent_runner` sets
+   `provider._read_only` next to `provider._conversation_id` for one-shot CLI turns, and the
+   entries are skipped while it is true.
+3. kimi's allow rules live in a managed block that is written only when missing. P1 makes the
+   block's content current: a managed block whose text differs is replaced, so existing users get
+   the two new rules.
+4. copilot: an entry's `env` wins over the forwarded environment, so the chat id goes in both
+   the entry env and the spawn env.
+5. agy: `_register_mcp` writes both `~/.gemini/config/mcp_config.json` and
+   `~/.gemini/antigravity-cli/mcp_config.json`; adding and removing covers both.
+6. The browser settings page has no providers note; P4 changes only `cu.set.providers` and its
+   test.
