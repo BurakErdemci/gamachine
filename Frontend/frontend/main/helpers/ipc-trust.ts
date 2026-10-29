@@ -217,6 +217,9 @@ export function confirmRecentRoot(rawPath: string, parent?: BrowserWindow): bool
   const root = normalize(rawPath)
   if (!root || !isUnityProjectDir(root)) return false
   if (!askAuthorize(root, 'Uygulama bu klasörün içindeki dosyaları okuyup yazabilecek.', parent)) return false
+  // The modal can stay open for minutes: register only if the path still resolves to the
+  // project the user saw, not to whatever was swapped in meanwhile.
+  if (normalize(rawPath) !== root || normalize(root) !== root || !isUnityProjectDir(root)) return false
   registerTrustedRoot(root)
   return true
 }

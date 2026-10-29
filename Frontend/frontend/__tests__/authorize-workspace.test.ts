@@ -65,6 +65,26 @@ describe('confirmRecentRoot', () => {
     expect(isTrustedRoot(plain)).toBe(false)
   })
 
+  it('registers nothing when the path is swapped while the box is open', () => {
+    electron.dialog.showMessageBoxSync.mockImplementation(() => {
+      fs.renameSync(project, path.join(base, 'GameMoved'))
+      fs.symlinkSync(plain, project)
+      return 0
+    })
+    expect(confirmRecentRoot(project)).toBe(false)
+    expect(isTrustedRoot(project)).toBe(false)
+    expect(isTrustedRoot(plain)).toBe(false)
+  })
+
+  it('registers nothing when the folder stops being a Unity project while the box is open', () => {
+    electron.dialog.showMessageBoxSync.mockImplementation(() => {
+      fs.rmSync(path.join(project, 'ProjectSettings'), { recursive: true })
+      return 0
+    })
+    expect(confirmRecentRoot(project)).toBe(false)
+    expect(isTrustedRoot(project)).toBe(false)
+  })
+
   it('passes the parent window to the native box', () => {
     electron.dialog.showMessageBoxSync.mockReturnValue(1)
     const parent = {} as any
