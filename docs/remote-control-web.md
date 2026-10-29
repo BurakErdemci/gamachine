@@ -51,10 +51,16 @@ authenticated session:
   installs, approval mode secrets, profile reset, remote-control pairing itself, computer-use
   grants and the browser runtime are never on the list. Model/effort selection stays the
   existing RPCs (lists only, as today).
-- **IPC allow-list:** read-only workspace operations (`read-directory`, `read-file`,
-  `file-exists`, `git-status`, `workspace-info`) inside trusted roots, executed by Electron
-  main through `desktop_channel` with the same trust checks as local IPC. File writes,
-  terminal, dialogs, folder authorisation and shell open stay desktop-only in v4.
+- **Work parity (owner decision, 29 Oct 2026):** everything the user does at the desk to
+  keep the game moving works remotely: chats, cards, file tree, file read and write,
+  rename/move/delete inside trusted roots, the terminal (`terminal-spawn/write/resize`
+  streamed both ways), scene editor and Unity operations, previews. These IPC channels run
+  in Electron main through `desktop_channel` with the same trust checks as local IPC.
+  Native dialogs (open-file, open-folder) have no remote equivalent: the remote UI offers a
+  picker over the trusted roots instead; authorising a new root stays desktop-only.
+  Desktop-only: API keys, provider sign-in, CLI install, remote pairing management,
+  profile reset, computer-use app grants. A paired device that is taken can run terminal
+  commands; the guards are pairing, the 90-day idle expiry and one-click device removal.
 - **Cards** keep their rules: risky cards need the hold on the page; approving a
   computer-use or browser card from remote goes through the existing remote answer path
   (`cards.answer_card(..., device=...)`), which records the device in the ledger.
@@ -93,5 +99,6 @@ Order: W1 and W2 in parallel against this contract; W0 independent; W3 last.
    desktop app and lists the same chats.
 2. Sending a message streams the reply in the browser and on the desktop.
 3. Settings → API keys shows placeholders and cannot be changed from the browser.
-4. Terminal and file write actions say they are desktop-only.
+4. A terminal opened from the browser runs on the desktop and streams both ways; a file
+   saved from the browser is changed on the desktop.
 5. Removing the device on the desktop drops the browser back to pairing within seconds.
