@@ -729,7 +729,8 @@ class ComputerServer:
                 await self.runtime.aclose()
 
 
-def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineComputer", instructions_extra: str = ""):
+def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineComputer", instructions_extra: str = "",
+                  require_chat: bool = False):
     handler = ComputerServer(driver, approvals, runtime=runtime)
 
     @asynccontextmanager
@@ -746,6 +747,10 @@ def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineC
 
     def register(name):
         async def invoke(args: dict) -> CallToolResult:
+            # agy shares one global config, so this server also starts for runs
+            # outside Gamachine; without a chat id they would bypass halt/ownership.
+            if require_chat and approval_bridge._conversation_id_from_env() is None:
+                return _text("The computer server needs a chat; this server was started without one.", True)
             return await handler.call(name, args)
         spec = policy.TOOLS[name]
         description = (
@@ -778,7 +783,7 @@ def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineC
 def main():
     from unity_ai_mcp.server import _redirect_stderr_to_log
     _redirect_stderr_to_log()
-    create_server().run(transport="stdio")
+    create_server(require_chat=True).run(transport="stdio")
 
 
 if __name__ == "__main__":
