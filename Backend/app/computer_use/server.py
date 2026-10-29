@@ -748,7 +748,7 @@ def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineC
     def register(name):
         async def invoke(args: dict) -> CallToolResult:
             # agy shares one global config, so this server also starts for runs
-            # outside Gamachine; without a chat id they would bypass halt/ownership.
+            # outside Gamachine; without a chat id Stop and chat ownership cannot apply to them.
             if require_chat and approval_bridge._conversation_id_from_env() is None:
                 return _text("The computer server needs a chat; this server was started without one.", True)
             return await handler.call(name, args)
