@@ -51,6 +51,8 @@ const CACHE = {
 };
 
 // inlineStyles is for the /app/ export only: React and Next emit style= attributes and a <style>.
+// The same export gets the data:/blob: sources the desktop CSP allows its renderer
+// (Frontend/frontend/main/helpers/csp.ts): image previews, live panel frames, fonts, workers.
 function csp(url, scriptHashes = [], inlineStyles = false) {
   // Safari has not always matched ws(s): against 'self', so the socket origin is explicit.
   const ws = (url.protocol === 'https:' ? 'wss://' : 'ws://') + url.host;
@@ -58,11 +60,11 @@ function csp(url, scriptHashes = [], inlineStyles = false) {
     "default-src 'none'",
     ["script-src 'self'", ...scriptHashes.map((h) => `'${h}'`)].join(' '),
     inlineStyles ? "style-src 'self' 'unsafe-inline'" : "style-src 'self'",
-    "font-src 'self'",
-    "img-src 'self'",
+    inlineStyles ? "font-src 'self' data:" : "font-src 'self'",
+    inlineStyles ? "img-src 'self' data: blob:" : "img-src 'self'",
     `connect-src 'self' ${ws}`,
     "manifest-src 'self'",
-    "worker-src 'self'",
+    inlineStyles ? "worker-src 'self' blob:" : "worker-src 'self'",
     "base-uri 'none'",
     "form-action 'none'",
     "frame-ancestors 'none'",

@@ -435,3 +435,29 @@ test('HTTP routes: page with CSP, whitelist only, sockets need an upgrade and a 
   assert.equal((await open(env, 'phone', ['gamachine.v1'], { pairId: 'short' })).status, 404);
   assert.equal((await open(env, 'admin', ['gamachine.v1'])).status, 404);
 });
+
+// The /app/ renderer shows data:/blob: images (attachments, previews, live panel frames), a
+// data: font and blob: workers, as the desktop CSP allows; the v1 /p page keeps the narrow set.
+test('/app/ CSP allows the renderer data:/blob: sources; /p stays narrow', async () => {
+  const files = { '/app/index.html': '<html>app</html>', '/app-csp.json': '{"index.html":[]}', '/index.html': '<html>p</html>' };
+  const env = { ASSETS: { fetch: async (req) => {
+    const p = new URL(req.url).pathname;
+    return files[p] ? new Response(files[p]) : new Response('no', { status: 404 });
+  } } };
+  const directives = (res) => Object.fromEntries(res.headers.get('Content-Security-Policy').split('; ').map((d) => {
+    const [name, ...srcs] = d.split(' ');
+    return [name, srcs.join(' ')];
+  }));
+  const app = directives(await worker.fetch(new Request('https://relay.test/app/'), env));
+  assert.equal(app['img-src'], "'self' data: blob:");
+  assert.equal(app['font-src'], "'self' data:");
+  assert.equal(app['worker-src'], "'self' blob:");
+  assert.equal(app['default-src'], "'none'");
+  assert.equal(app['script-src'], "'self'");
+  const page = await worker.fetch(new Request('https://relay.test/p'), env);
+  assert.equal(page.status, 200);
+  const p = directives(page);
+  assert.equal(p['img-src'], "'self'");
+  assert.equal(p['font-src'], "'self'");
+  assert.equal(p['worker-src'], "'self'");
+});
