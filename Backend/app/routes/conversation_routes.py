@@ -915,6 +915,23 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             _release_gate(gate_id)
             _settle_mail(gate_id, False)
 
+    def _sweep_card_gate(gate_id: str, device: str) -> Optional[dict]:
+        """Sweep like /mcp-approval-respond, in the same order: another device's
+        answer first, then the route's gate_expired body when the sweep already
+        rejected this gate, else None. Used by remote answers."""
+        _sweep_mcp_gates()
+        won = _won_elsewhere(gate_id, device)
+        if won is not None:
+            return won
+        resolved = _mcp_results.get(gate_id, {})
+        if resolved.get("status") == "resolved":
+            return {"status": "gate_expired",
+                    "error": resolved.get("error") or "Bu onay isteği artık geçerli değil."}
+        return None
+
+    from remote import ui_dispatch as _ui_dispatch
+    _ui_dispatch.set_card_sweeper(_sweep_card_gate)
+
     def _drop_mcp_gate(gate_id: str) -> None:
         """Sonucu teslim edilmiş bir gate'in tüm izlerini siler."""
         _mcp_results.pop(gate_id, None)

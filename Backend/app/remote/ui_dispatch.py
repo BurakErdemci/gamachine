@@ -55,6 +55,16 @@ REMOTE_HEADER = b"x-gamachine-remote"
 # own task, so no HTTP client can claim it. Card routes record it as the answerer.
 REMOTE_DEVICE: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("remote_device", default=None)
 
+# Registered by create_conversation_router: sweeps stale cards like the desktop
+# card route and returns its gate_expired body for an already-expired gate.
+_card_sweeper = None
+
+
+def set_card_sweeper(fn) -> None:
+    global _card_sweeper
+    _card_sweeper = fn
+
+
 _ID = r"[^/]+"
 
 # (methods, path pattern). The path is the percent-decoded one `_normalise`
@@ -544,6 +554,10 @@ class UiDispatcher:
     @staticmethod
     def _card_reply(session: PhoneSession, card_id: str, approved: bool) -> dict:
         decision = "approve" if approved else "reject"
+        if _card_sweeper is not None:
+            expired = _card_sweeper(card_id, session.device_label)
+            if expired is not None:
+                return expired
         card = cards.get(card_id)
         res = rpc.answer_card_as(session.device_label, card, decision) if card is not None else {"status": "not_found"}
         if res.get("status") == "ok":

@@ -358,3 +358,93 @@ async def test_browser_live_answer_card_validates_like_the_desktop(card_app):
     r = await call(dispatcher(card_app.app), session, type="ui_ipc", channel="browser-live",
                    args=[{"op": "answer-card", "gateId": "nope", "approved": True}])
     assert r["result"] == {"status": "gate_not_found"}
+
+
+# ── H2: a device answer expires stale cards like the desktop route ──────
+async def test_remote_card_answer_sweeps_expired_cards(card_app):
+    transport = httpx.ASGITransport(app=card_app.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        for gate in ("web-exp-1", "web-exp-2"):
+            res = await client.post("/mcp-approval-request", json={
+                "gate_id": gate, "tool": "bash", "params": {"command": "ls"}, "workspace_path": ".",
+                "conversation_id": None}, headers={"X-Session-Token": TOKEN})
+            assert res.json()["status"] == "ok", res.text
+        later = cr.time() + 180
+        from unittest.mock import patch
+        with patch.object(cr, "time", return_value=later):
+            desktop = (await client.post("/mcp-approval-respond/web-exp-1", json={"approved": True},
+                                         headers={"X-Session-Token": TOKEN})).json()
+            r = await call(dispatcher(card_app.app), FakeSession(), type="ui_http", method="POST",
+                           path="/mcp-approval-respond/web-exp-2", body={"approved": True})
+            via_ipc = await call(dispatcher(card_app.app), FakeSession(), rid=2, type="ui_ipc",
+                                 channel="browser-live",
+                                 args=[{"op": "answer-card", "gateId": "web-exp-2", "approved": True}])
+    remote = json.loads(r["result"]["body"])
+    assert desktop["status"] == "gate_expired"
+    assert remote["status"] == "gate_expired"
+    assert remote["error"] == desktop["error"]
+    assert via_ipc["result"]["status"] == "gate_expired"
+    assert cards.get("web-exp-2").outcome == "timed_out"
+
+
+async def test_remote_answer_to_a_desktop_closed_card_says_already_answered(card_app):
+    # The sweep must not hide who decided: the desktop route reports the other
+    # device's answer before it calls a resolved gate expired, and so must the remote one.
+    transport = httpx.ASGITransport(app=card_app.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        res = await client.post("/mcp-approval-request", json={
+            "gate_id": "web-won-1", "tool": "bash", "params": {"command": "ls"}, "workspace_path": ".",
+            "conversation_id": None}, headers={"X-Session-Token": TOKEN})
+        assert res.json()["status"] == "ok", res.text
+        await client.post("/mcp-approval-respond/web-won-1", json={"approved": True},
+                          headers={"X-Session-Token": TOKEN})
+        r = await call(dispatcher(card_app.app), FakeSession(), type="ui_http", method="POST",
+                       path="/mcp-approval-respond/web-won-1", body={"approved": False})
+        via_ipc = await call(dispatcher(card_app.app), FakeSession(), rid=2, type="ui_ipc",
+                             channel="browser-live",
+                             args=[{"op": "answer-card", "gateId": "web-won-1", "approved": False}])
+    assert json.loads(r["result"]["body"])["status"] == "already_answered"
+    assert via_ipc["result"]["status"] == "already_answered"
+
+
+# ── H1: a device-approved browser card earns the one-time retry grant ───
+async def test_device_browser_approval_grants_the_one_time_retry(tmp_path, monkeypatch):
+    from unittest.mock import patch
+    from agentic import approval_mode, approval_policy
+    from browser_use import gateway, settings
+    cards.reset()
+    host_ops = []
+
+    async def host(runtime, op, conversation_id, args):
+        host_ops.append(op)
+        return {"ok": True, "url": "https://shop.example/cart",
+                "element": {"role": "button", "name": "Buy now", "tag": "button"}}
+
+    db = DatabaseManager(str(tmp_path / "h1.db"))
+    approval_mode.set_ui_secret("h1-secret")
+    settings.set_enabled(db, True)
+    monkeypatch.setattr(cr, "_check_token", lambda token: None)
+    headers = {"X-Session-Token": TOKEN, "X-Gamachine-UI-Secret": "h1-secret"}
+    body_for = lambda conv: {"tool": "browser_click", "conversation_id": conv,
+                             "args": {"snapshot_id": "s1", "ref": "9"}}
+    # The router builds its gateway on the host transport it finds at creation.
+    with patch.object(gateway, "post_cmd", host), patch.object(gateway, "APPROVAL_WAIT_S", 0.02):
+        app = FastAPI()
+        app.include_router(cr.create_conversation_router(db))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://127.0.0.1", headers=headers) as client:
+            await client.post("/browser/runtime", json={"running": True, "port": 4711, "token": "ab" * 32})
+            conv = db.create_conversation(1, "h1")
+            with approval_policy.ambient_turn("", "step", conversation_id=conv):
+                first = (await client.post("/browser/command", json=body_for(conv))).json()
+                assert first.get("needs_approval") is True, first
+                gate = next(c["card_id"] for c in cards.list_pending(conv))
+                answer = await call(dispatcher(app), FakeSession(), type="ui_ipc", channel="browser-live",
+                                    args=[{"op": "answer-card", "gateId": gate, "approved": True}])
+                assert answer["result"]["status"] == "ok"
+                assert cards.get(gate).by == FakeSession.device_label
+                before = len(host_ops)
+                retry = (await client.post("/browser/command", json=body_for(conv))).json()
+    cards.set_ledger(None)
+    cards.reset()
+    assert retry.get("ok") is True and "click" in host_ops[before:], retry
