@@ -75,12 +75,6 @@ def env(tmp_path, monkeypatch):
     approval_mode.set_ui_secret("")
 
 
-@pytest.fixture
-def live(env):
-    assert env.client.post("/browser/runtime", json=runtime_body(), headers=UI).status_code == 200
-    return env
-
-
 def runtime_body():
     return {"running": True, "port": 4711, "token": TOKEN}
 
