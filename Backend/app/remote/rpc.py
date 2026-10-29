@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from agentic import approval_mode, cards, chat_model, turn_events
 from providers.agy_provider import AgyStepGateError
-from remote import chats, webpush
+from remote import chats, ui_dispatch, webpush
 from providers.effort_caps import EFFORT_LEVELS
 from remote.desktop_channel import (
     CARD_CLOSED_TYPE, CHANNEL, EFFORT_SET_TYPE, FRAME_TYPE, MODE_CHANGED_TYPE, MODEL_CHANGED_TYPE,
@@ -63,6 +63,7 @@ def _conv_id(value: Any) -> int:
 class Dispatcher:
     def __init__(self, bridge: "RemoteBridge"):
         self.bridge = bridge
+        self.ui = ui_dispatch.UiDispatcher(bridge)
         self.handlers = {
             "list_chats": self.list_chats,
             "open_chat": self.open_chat,
@@ -78,6 +79,13 @@ class Dispatcher:
             "set_model": self.set_model,
             "set_effort": self.set_effort,
             "push_subscribe": self.push_subscribe,
+            # The web remote (docs/remote-control-web.md, "Frame contract").
+            "ui_http": self.ui.http,
+            "ui_stream_open": self.ui.stream_open,
+            "ui_stream_close": self.ui.stream_close,
+            "ui_upload_part": self.ui.upload_part,
+            "ui_ipc": self.ui.ipc,
+            "ui_ipc_subscribe": self.ui.ipc_subscribe,
         }
 
     @property

@@ -43,6 +43,25 @@ the level only if the active model offers it, and reports what it has
 
     {"type": "remote_effort", "level": <canonical level>,
      "by": "phone:<device name>", "at": <ms>}
+
+A paired browser's `ui_ipc` (remote/ui_dispatch.py) runs in the renderer,
+which holds `window.ipc`. The channel is already on the remote allow-list and
+`payload` is the argument list; the renderer checks its own copy of the list,
+invokes, and posts `{ok, result | error}` to
+`POST /remote/ui-ipc-result/{request_id}` within 30 s:
+
+    {"type": "remote_ipc", "request_id": <16 hex>, "channel": str,
+     "payload": [arg, ...]}
+
+A browser subscribing to a main -> renderer event channel asks the renderer to
+listen to it and post every event to `POST /remote/ui-ipc-event`
+`{channel, args}`; the answer `{"subscribed": false}` means no session wants
+it any more and the renderer drops the listener:
+
+    {"type": "remote_ipc_subscribe", "channel": str}
+
+The command frames (`DESKTOP_ONLY_TYPES`) are for the desktop renderer alone:
+a browser's copy of `/wake-stream-all` leaves them out.
 """
 from __future__ import annotations
 
@@ -57,6 +76,9 @@ CARD_CLOSED_TYPE = "card_closed"
 MODE_CHANGED_TYPE = "approval_mode_changed"
 MODEL_CHANGED_TYPE = "chat_model_changed"
 EFFORT_SET_TYPE = "remote_effort"
+IPC_TYPE = "remote_ipc"
+IPC_SUBSCRIBE_TYPE = "remote_ipc_subscribe"
+DESKTOP_ONLY_TYPES = frozenset({FRAME_TYPE, EFFORT_SET_TYPE, IPC_TYPE, IPC_SUBSCRIBE_TYPE})
 QUEUE_SIZE = 100
 
 
@@ -88,6 +110,15 @@ class DesktopChannel:
 
 
 CHANNEL = DesktopChannel()
+
+
+def publish_ipc(request_id: str, channel: str, payload: list) -> bool:
+    return CHANNEL.publish({"type": IPC_TYPE, "request_id": request_id, "channel": channel,
+                            "payload": payload})
+
+
+def publish_ipc_subscribe(channel: str) -> bool:
+    return CHANNEL.publish({"type": IPC_SUBSCRIBE_TYPE, "channel": channel})
 
 
 async def next_frame(q: asyncio.Queue, timeout: float) -> Optional[dict]:

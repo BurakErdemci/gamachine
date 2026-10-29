@@ -15,6 +15,7 @@ import {
   claimRemoteMessage, deliverEffortRequest, onCardClosed, parseEffortRequest, parseChatModelChanged, parseModeChanged, parseRemoteMessage, phoneDeviceName,
   type ModeChanged, type RemoteMessage,
 } from '../../lib/remoteControl';
+import { handleRemoteIpcFrame } from '../../lib/remote/desktopRunner';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -1439,6 +1440,7 @@ export const useChat = (
                   applyServerTitle(Number(data.conversation_id), data.title);
                   continue;
                 }
+                if (!iptal && handleRemoteIpcFrame(data, API, sessionToken)) continue;
                 if (data?.type === 'remote_message') {
                   const remoteMsg = parseRemoteMessage(data);
                   if (remoteMsg && !iptal) void deliverRemoteRef.current(remoteMsg);

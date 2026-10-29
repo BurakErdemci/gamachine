@@ -15,6 +15,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from agentic import approval_mode
 from auth_utils import _check_token
+from remote import ui_dispatch
 from remote.bridge import BridgeError, RemoteBridge
 
 
@@ -154,5 +155,26 @@ def create_remote_router(bridge: RemoteBridge) -> APIRouter:
             return bridge.set_desktop_ui(body.get("lang"), body.get("theme"))
         except BridgeError as exc:
             fail(exc)
+
+    @router.post("/ui-ipc-result/{request_id}")
+    async def ui_ipc_result(request_id: str, body: dict,
+                            x_session_token: str = Header(alias="X-Session-Token", default="")):
+        """The desktop renderer's answer to a `remote_ipc` frame:
+        {"ok": bool, "result"?: any, "error"?: str}. Unknown ids are ignored."""
+        _check_token(x_session_token)
+        if not ui_dispatch.IPC_REQUEST_ID.fullmatch(request_id):
+            raise HTTPException(status_code=400, detail={"code": "bad_request_id"})
+        return {"accepted": bridge.rpc.ui.resolve_ipc(request_id, body)}
+
+    @router.post("/ui-ipc-event")
+    async def ui_ipc_event(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
+        """A main -> renderer event for the browsers subscribed to its channel:
+        {"channel": str, "args": [...]}. `subscribed: false` tells the renderer
+        to stop listening."""
+        _check_token(x_session_token)
+        channel, args = body.get("channel"), body.get("args")
+        if not ui_dispatch.ipc_event_allowed(channel) or not isinstance(args, list):
+            raise HTTPException(status_code=400, detail={"code": "bad_event"})
+        return {"subscribed": bridge.rpc.ui.forward_event(channel, args)}
 
     return router
