@@ -1694,9 +1694,14 @@ class AgentRunner:
     # GEMINI AGENTIC LOOP (Native Function Calling)
     # ═══════════════════════════════════════════════
     async def _run_gemini(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        async for _ev in _guarantee_terminal(self._gemini_loop(user_message),
-                                             self.model_name):
-            yield _ev
+        events = _guarantee_terminal(self._gemini_loop(user_message), self.model_name)
+        try:
+            async for _ev in events:
+                yield _ev
+        finally:
+            # Closing this wrapper early must reach _api_loop now, so its MCP
+            # server processes stop before the caller moves on.
+            await events.aclose()
 
     def _api_system_instruction(self, toolset=None):
         system = f"""{SYSTEM_PROMPT}
@@ -1909,9 +1914,14 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
     # ANTHROPIC AGENTIC LOOP (Claude 3.5 Sonnet vb.)
     # ═══════════════════════════════════════════════
     async def _run_anthropic(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        async for _ev in _guarantee_terminal(self._anthropic_loop(user_message),
-                                             self.model_name):
-            yield _ev
+        events = _guarantee_terminal(self._anthropic_loop(user_message), self.model_name)
+        try:
+            async for _ev in events:
+                yield _ev
+        finally:
+            # Closing this wrapper early must reach _api_loop now, so its MCP
+            # server processes stop before the caller moves on.
+            await events.aclose()
 
     def _anthropic_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         return self._api_loop(_AnthropicAdapter(), user_message)
@@ -1920,9 +1930,14 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
     # OPENAI AGENTIC LOOP (OpenAI, DeepSeek, vb.)
     # ═══════════════════════════════════════════════
     async def _run_openai(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        async for _ev in _guarantee_terminal(self._openai_loop(user_message),
-                                             self.model_name):
-            yield _ev
+        events = _guarantee_terminal(self._openai_loop(user_message), self.model_name)
+        try:
+            async for _ev in events:
+                yield _ev
+        finally:
+            # Closing this wrapper early must reach _api_loop now, so its MCP
+            # server processes stop before the caller moves on.
+            await events.aclose()
 
     def _openai_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         return self._api_loop(_OpenAIAdapter(), user_message)
