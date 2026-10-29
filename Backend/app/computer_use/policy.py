@@ -429,11 +429,16 @@ def critical_name(name) -> str:
     return ""
 
 
+def _critical_display_name(name: str) -> str:
+    return name if len(name) <= 80 else name[:79] + "…"
+
+
 def critical_reason(tool, args, *, app_id, resolve, strict: bool = True) -> str:
     risk = risky_reason(tool, args)
-    if risk:
+    if risk and (strict or tool != "computer_run_steps"):
         return risk
     if tool == "computer_run_steps":
+        reasons = []
         for step in args.get("steps", []):
             name = step.get("tool") or next(
                 (k for k in step if k in STEP_TOOLS or "computer_" + k in _INPUT_TOOLS), "")
@@ -442,7 +447,20 @@ def critical_reason(tool, args, *, app_id, resolve, strict: bool = True) -> str:
                       **step_args}
             reason = critical_reason("computer_" + name, target, app_id=app_id, resolve=resolve, strict=strict)
             if reason:
-                return reason
+                if strict:
+                    return reason
+                if reason not in reasons:
+                    reasons.append(reason)
+        return " · ".join(reasons)
+    if tool == "computer_invoke_menu":
+        path = args.get("path", [])
+        if not isinstance(path, list):
+            return "Hedef öğe doğrulanamadı; kritik işlem olabilir." if strict else ""
+        names = [name for name in path if isinstance(name, str)]
+        if strict and len(names) != len(path):
+            return "Hedef öğe doğrulanamadı; kritik işlem olabilir."
+        if any(critical_name(name) for name in names):
+            return "Kritik işlem menüsü: " + " > ".join(_critical_display_name(name) for name in names)
         return ""
     if strict and tool in _INPUT_TOOLS and platform.current().read_only_app(app_id):
         return "Tarayıcı, posta veya sohbet uygulamasına girdi gönderilecek."
@@ -467,7 +485,8 @@ def critical_reason(tool, args, *, app_id, resolve, strict: bool = True) -> str:
                     key in args or key in nested for key in ("name", "element_token")):
                 unknown = True
         if "x" in args and "y" in args:
-            known, name = resolve({key: args[key] for key in ("pid", "window_id", "x", "y") if key in args})
+            known, name = resolve({key: args[key] for key in ("pid", "window_id", "x", "y", "from_zoom")
+                                   if key in args})
             unknown |= known is not True
             if isinstance(name, str) and name:
                 names.append(name)
@@ -475,5 +494,5 @@ def critical_reason(tool, args, *, app_id, resolve, strict: bool = True) -> str:
             return "Hedef öğe doğrulanamadı; kritik işlem olabilir."
         for name in names:
             if critical_name(name):
-                return "Kritik işlem düğmesi: " + name
+                return "Kritik işlem düğmesi: " + _critical_display_name(name)
     return ""
