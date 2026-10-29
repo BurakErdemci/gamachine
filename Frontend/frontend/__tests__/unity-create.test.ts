@@ -21,7 +21,7 @@ function setup(over: Partial<CreateDeps> = {}, platform: NodeJS.Platform = 'darw
       throw new Error('ENOENT')
     },
     removeDir: vi.fn(),
-    lstat: () => ({ isDirectory: () => true, isSymbolicLink: () => false, birthtimeMs: Date.now() }),
+    lstat: () => ({ isDirectory: () => true, isSymbolicLink: () => false, birthtimeMs: Date.now() + 1_000 }),
     spawn: vi.fn(() => child),
     readLogTail: () => 'log line',
     isProject: () => true,

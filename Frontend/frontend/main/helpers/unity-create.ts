@@ -112,10 +112,11 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
       try { resolved = deps.realpath(target) } catch { /* Nothing at target, so nothing to remove. */ }
       if (resolved === target) {
         // Only a directory born after this attempt began is provably ours; a renamed-in project is not.
+        // Date.now() drops the fraction of a millisecond that birthtimeMs keeps, hence the + 1.
         let ours = false
         try {
           const st = (deps.lstat ?? fs.lstatSync)(target)
-          ours = st.isDirectory() && !st.isSymbolicLink() && st.birthtimeMs > 0 && st.birthtimeMs >= startedAt
+          ours = st.isDirectory() && !st.isSymbolicLink() && st.birthtimeMs > 0 && st.birthtimeMs > startedAt + 1
         } catch { /* Unreadable, so keep it. */ }
         if (!ours) {
           error += ` The folder was not removed because it was not created by this attempt: ${target}`
