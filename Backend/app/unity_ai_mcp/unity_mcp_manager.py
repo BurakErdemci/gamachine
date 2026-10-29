@@ -80,6 +80,21 @@ def _bring_editor_forward(project_path: str) -> None:
         if pid is None:
             logger.debug("[UnityMCP] No editor found for %s.", project_path)
             return
+        pid = int(pid)
+        # Unity imports the autoconnect script only when the editor gains focus (measured 25 Oct 2026).
+        # Two editors share one bundle: open -a picks the first; lsappinfo setfront fails in the background (measured 29 Oct 2026).
+        script = ("ObjC.import('AppKit'); "
+                  f"$.NSRunningApplication.runningApplicationWithProcessIdentifier({pid})"
+                  ".activateWithOptions($.NSApplicationActivateAllWindows);")
+        try:
+            result = subprocess.run(["osascript", "-l", "JavaScript", "-e", script], timeout=5,
+                                    env=build_spawn_env(), capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip() == "true":
+                return
+            logger.debug("[UnityMCP] PID activation failed for %s (rc=%s, output=%r); falling back to the bundle.",
+                         pid, result.returncode, result.stdout)
+        except Exception:
+            logger.debug("[UnityMCP] PID activation failed for %s; falling back to the bundle.", pid, exc_info=True)
         result = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], timeout=5, capture_output=True, text=True,
                                 env=build_spawn_env())
         executable = result.stdout.strip()
@@ -87,7 +102,6 @@ def _bring_editor_forward(project_path: str) -> None:
             logger.debug("[UnityMCP] Could not resolve an editor bundle for PID %s.", pid)
             return
         bundle = executable.split(".app/", 1)[0] + ".app"
-        # Unity imports the autoconnect script only when the editor gains focus (measured 25 Oct 2026).
         result = subprocess.run(["open", "-a", bundle], timeout=5, env=build_spawn_env())
         if result.returncode != 0:
             logger.debug("[UnityMCP] Editor activation failed for %s.", bundle)
