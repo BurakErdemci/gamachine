@@ -45,9 +45,10 @@ export async function listEditors(): Promise<HubEditor[] | null> {
   return res.editors.filter((e: any) => e && typeof e.version === 'string' && typeof e.path === 'string');
 }
 
-export async function listTemplates(version: string): Promise<HubTemplate[]> {
+/** null = the call failed; [] = the version has no templates. */
+export async function listTemplates(version: string): Promise<HubTemplate[] | null> {
   const res = await call('hub-list-templates', { version });
-  if (!res || !Array.isArray(res.templates)) return [];
+  if (!res || !Array.isArray(res.templates)) return null;
   return res.templates.filter((t: any) => t && typeof t.id === 'string' && typeof t.file === 'string');
 }
 
@@ -116,3 +117,54 @@ export const joinTarget = (parent: string, name: string) => {
   const sep = /\\/.test(parent) && !/\//.test(parent) ? '\\' : '/';
   return `${parent.replace(/[\\/]+$/, '')}${sep}${name}`;
 };
+
+export type HubRun =
+  | { state: 'idle' }
+  | { state: 'creating'; name: string; progress: HubProgress; cancelling: boolean }
+  | { state: 'done'; name: string; path: string; version: string }
+  | { state: 'failed'; name: string; error: string }
+  | { state: 'cancelled'; name: string };
+
+/**
+ * The creation run, kept outside any component: the engine runs one creation per process, so a
+ * screen that remounts mid-run (or after it) finds the run here instead of an idle form. The store
+ * holds the only hub-create-progress listener, and only while a run is active.
+ */
+let run: HubRun = { state: 'idle' };
+let stopProgress: (() => void) | null = null;
+const watchers = new Set<() => void>();
+const setRun = (next: HubRun) => { run = next; watchers.forEach(w => w()); };
+const dropProgress = () => { stopProgress?.(); stopProgress = null; };
+
+export const getRun = (): HubRun => run;
+export const subscribeRun = (cb: () => void): (() => void) => {
+  watchers.add(cb);
+  return () => { watchers.delete(cb); };
+};
+
+export async function startCreate(arg: { parentDir: string; name: string; version: string; templateId?: string }): Promise<void> {
+  if (run.state === 'creating') return;
+  const made = arg.name;
+  setRun({ state: 'creating', name: made, progress: { phase: 'starting', elapsedMs: 0 }, cancelling: false });
+  dropProgress();
+  stopProgress = onCreateProgress(p => setRun(run.state === 'creating' ? { ...run, progress: p } : run));
+  const res = await createProject(arg);
+  dropProgress();
+  if ('path' in res) setRun({ state: 'done', name: made, path: res.path, version: arg.version });
+  else if (isCancelled(res.error)) setRun({ state: 'cancelled', name: made });
+  else setRun({ state: 'failed', name: made, error: res.error });
+}
+
+export async function cancelRun(): Promise<void> {
+  if (run.state !== 'creating') return;
+  setRun({ ...run, cancelling: true });
+  const stopped = await cancelCreate();
+  // Not stopped: Unity had already exited, so the result arrives on its own.
+  if (!stopped && run.state === 'creating') setRun({ ...run, cancelling: false });
+}
+
+/** Leaves a finished run (done, failed, cancelled); a run in progress stays. */
+export const clearRun = () => { if (run.state !== 'creating') setRun({ state: 'idle' }); };
+
+/** Test hook: forgets any run and its listener. */
+export const resetHubStore = () => { dropProgress(); setRun({ state: 'idle' }); };

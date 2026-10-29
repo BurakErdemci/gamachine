@@ -91,6 +91,14 @@ export const VersionSelect = ({ h, className = 'hub-select' }: { h: Hub; classNa
 export const TemplateChoices = ({ h, className = 'hub-tpls', show = 'full' }: { h: Hub; className?: string; show?: 'full' | 'short' }) => {
   const { t } = useLang();
   if (h.templates === undefined) return <p className="hub-wait" role="status">{t('hub.templatesLoading')}</p>;
+  if (h.templates === null) {
+    return (
+      <div className="hub-wait" role="alert" data-testid="hub-templates-failed">
+        <span>{t('hub.templatesFailed')}</span>{' '}
+        <button type="button" className="set-link" onClick={h.retryTemplates} data-testid="hub-templates-retry">{t('hub.retry')}</button>
+      </div>
+    );
+  }
   if (!h.templates.length) return <p className="hub-wait" role="status">{t(h.version ? 'hub.templatesNone' : 'hub.needEditor')}</p>;
   return (
     <div className={className} role="radiogroup" aria-labelledby="hub-tpl-label" data-testid="hub-templates">
@@ -155,7 +163,7 @@ export const useResult = (h: Hub) => {
   if (r.state === 'failed' || r.state === 'cancelled') {
     return {
       kind: r.state, title: t(r.state === 'failed' ? 'hub.failedTitle' : 'hub.cancelledTitle', { name: r.name }),
-      text: r.state === 'failed' ? r.error : t('hub.cancelledText'),
+      text: r.state === 'failed' ? r.error || t('hub.failedUnknown') : t('hub.cancelledText'),
       actions: <button type="button" className="btn btn-primary hub-go" onClick={h.back} data-testid="hub-back">{t('hub.back')}</button>,
     };
   }

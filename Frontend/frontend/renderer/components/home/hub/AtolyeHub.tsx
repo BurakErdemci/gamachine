@@ -45,6 +45,9 @@ export const AtolyeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
                 ))}
               </ul>
             )}
+            {!!h.editors?.length && (
+              <button type="button" className="set-link at-refresh" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+            )}
           </section>
         )}
 
@@ -79,7 +82,7 @@ export const AtolyeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
               </div>
               <footer className="at-foot">
                 <span className="at-foot-t"><Target h={h} /><span className="hub-hint">{t('hub.createHint')}</span></span>
-                <button type="submit" className="btn btn-primary at-go" data-testid="hub-create">{t('hub.createShop')}</button>
+                <button type="submit" className="btn btn-primary at-go" disabled={h.templates === null} data-testid="hub-create">{t('hub.createShop')}</button>
               </footer>
             </div>
           </form>

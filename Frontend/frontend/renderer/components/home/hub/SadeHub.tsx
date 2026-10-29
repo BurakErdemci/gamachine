@@ -71,7 +71,7 @@ export const SadeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
             </div>
             <footer className="sd-foot">
               <span className="hub-hint">{t('hub.createHint')}</span>
-              <button type="submit" className="btn btn-primary" data-testid="hub-create">{t('hub.create')}</button>
+              <button type="submit" className="btn btn-primary" disabled={h.templates === null} data-testid="hub-create">{t('hub.create')}</button>
             </footer>
           </form>
         )}

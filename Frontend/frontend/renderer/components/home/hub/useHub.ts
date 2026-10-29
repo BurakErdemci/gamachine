@@ -1,19 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { useLang } from '../../../lib/i18n';
 import {
-  cancelCreate, createProject, isCancelled, launchProject, listEditors, listTemplates, nameProblem, onCreateProgress,
-  pickParentDir, sortTemplates, type HubEditor, type HubProgress, type HubTemplate, type NameProblem,
+  cancelRun, clearRun, getRun, launchProject, listEditors, listTemplates, nameProblem, pickParentDir, sortTemplates,
+  startCreate, subscribeRun, type HubEditor, type HubRun, type HubTemplate, type NameProblem,
 } from '../../../lib/hub';
 import type { RecentWorkspace } from '../../../hooks/home/useRecentWorkspaces';
 
 export type HubView = 'projects' | 'editors' | 'new';
-export type HubRun =
-  | { state: 'idle' }
-  | { state: 'creating'; name: string; progress: HubProgress; cancelling: boolean }
-  | { state: 'done'; name: string; path: string; version: string }
-  | { state: 'failed'; name: string; error: string }
-  | { state: 'cancelled'; name: string };
+export type { HubRun };
 
 /** Creating from a template took 85-105 s when measured (29 Oct 2026); the bar is an estimate on that. */
 export const EXPECTED_MS = 100_000;
@@ -30,10 +25,12 @@ export interface HubDeps {
 /** All of the mini Hub's state; the per-theme compositions only lay it out. */
 export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
   const { t } = useLang();
-  const [view, setView] = useState<HubView>('projects');
+  // A run already under way (the screen remounted) is shown first.
+  const [view, setView] = useState<HubView>(() => (getRun().state === 'idle' ? 'projects' : 'new'));
   // undefined = still looking, null = the call failed, [] = none installed
   const [editors, setEditors] = useState<HubEditor[] | null | undefined>(undefined);
-  const [templates, setTemplates] = useState<HubTemplate[] | undefined>(undefined);
+  // undefined = still looking, null = the call failed
+  const [templates, setTemplates] = useState<HubTemplate[] | null | undefined>(undefined);
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   // Set by a press on Create: missing answers then show why it did not start.
@@ -41,18 +38,20 @@ export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
   const [parent, setParent] = useState<string | null>(null);
   const [version, setVersionState] = useState('');
   const [templateId, setTemplateId] = useState('');
-  const [run, setRun] = useState<HubRun>({ state: 'idle' });
+  const run = useSyncExternalStore(subscribeRun, getRun);
   const versionRef = useRef('');
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  // Set again on every run: StrictMode runs the cleanup once before the real mount.
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   const loadTemplates = useCallback(async (v: string) => {
     setTemplates(undefined);
-    const list = v ? sortTemplates(await listTemplates(v)) : [];
+    const found = v ? await listTemplates(v) : [];
+    const list = found && sortTemplates(found);
     // A later version pick owns the list; an answer for an earlier one is dropped.
     if (!alive.current || versionRef.current !== v) return;
     setTemplates(list);
-    setTemplateId(prev => (list.some(x => x.id === prev) ? prev : (list.find(x => x.label === '3d') ?? list[0])?.id ?? ''));
+    setTemplateId(prev => (list?.some(x => x.id === prev) ? prev : (list?.find(x => x.label === '3d') ?? list?.[0])?.id ?? ''));
   }, []);
 
   const refreshEditors = useCallback(async () => {
@@ -71,7 +70,7 @@ export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
   const setVersion = (v: string) => { versionRef.current = v; setVersionState(v); void loadTemplates(v); };
 
   const problem: NameProblem = nameProblem(name);
-  const canCreate = !problem && !!parent && !!version && templates !== undefined && run.state !== 'creating';
+  const canCreate = !problem && !!parent && !!version && !!templates && run.state !== 'creating';
 
   const pickParent = async () => {
     const chosen = await pickParentDir();
@@ -82,30 +81,15 @@ export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
     setNameTouched(true);
     setTried(true);
     if (!canCreate || !parent) return;
-    const made = name;
-    setRun({ state: 'creating', name: made, progress: { phase: 'starting', elapsedMs: 0 }, cancelling: false });
-    const off = onCreateProgress(p => {
-      if (alive.current) setRun(r => (r.state === 'creating' ? { ...r, progress: p } : r));
-    });
-    const res = await createProject({ parentDir: parent, name: made, version, ...(templateId ? { templateId } : {}) });
-    off();
-    if (!alive.current) return;
-    if ('path' in res) setRun({ state: 'done', name: made, path: res.path, version });
-    else if (isCancelled(res.error)) setRun({ state: 'cancelled', name: made });
-    else setRun({ state: 'failed', name: made, error: res.error || t('hub.failedUnknown') });
+    void startCreate({ parentDir: parent, name, version, ...(templateId ? { templateId } : {}) });
   };
 
-  const cancel = async () => {
-    setRun(r => (r.state === 'creating' ? { ...r, cancelling: true } : r));
-    const stopped = await cancelCreate();
-    // Not stopped: Unity had already exited, so the result arrives on its own.
-    if (!stopped && alive.current) setRun(r => (r.state === 'creating' ? { ...r, cancelling: false } : r));
-  };
+  const cancel = () => cancelRun();
 
   /** Back to the form with the same answers (after a failure or a cancel). */
-  const back = () => setRun({ state: 'idle' });
+  const back = () => clearRun();
   /** A fresh form for another project. */
-  const another = () => { setRun({ state: 'idle' }); setName(''); setNameTouched(false); setTried(false); };
+  const another = () => { clearRun(); setName(''); setNameTouched(false); setTried(false); };
 
   const openCreated = async () => { if (run.state === 'done') await onSelectWorkspace(run.path); };
 
@@ -127,7 +111,7 @@ export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
   return {
     view, setView, editors, refreshEditors, templates, template, templateId, setTemplateId,
     name, setName, nameTouched, setNameTouched, tried, problem, parent, pickParent, version, setVersion,
-    canCreate, create, cancel, run, back, another, openCreated, launch, usage, recentCount: recent.length,
+    canCreate, create, cancel, retryTemplates: () => void loadTemplates(versionRef.current), run, back, another, openCreated, launch, usage, recentCount: recent.length,
   };
 }
 

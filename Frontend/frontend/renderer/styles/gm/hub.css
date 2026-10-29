@@ -157,6 +157,7 @@
 
 /* engines */
 [data-hub="arena"] .ar-engine-list { display: grid; gap: 10px; }
+[data-hub="arena"] .ar-refresh { margin-top: 14px; border-radius: 0; }
 [data-hub="arena"] .ar-engine {
   --ch: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
   position: relative; display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 4px 16px; padding: 14px 20px; isolation: isolate;
@@ -472,6 +473,7 @@
 [data-hub="atolye"] .at-tool-v { font-family: var(--font-label); font-size: 22px; color: var(--ink); }
 [data-hub="atolye"] .at-tool-u { font-size: 13px; color: var(--ink-dim); }
 [data-hub="atolye"] .at-tool-p { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-hub="atolye"] .at-refresh { display: inline-block; margin-top: 18px; }
 [data-hub="atolye"] .hub-empty { background: var(--paper-raised); border-style: solid; }
 
 /* ======================= Özel: the user's own colours ======================= */

@@ -82,7 +82,7 @@ export const OzelHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
                 </span>
               </div>
               <FolderNote h={h} />
-              <button type="submit" className="btn btn-primary oz-go" data-testid="hub-create">{t('hub.create')}</button>
+              <button type="submit" className="btn btn-primary oz-go" disabled={h.templates === null} data-testid="hub-create">{t('hub.create')}</button>
               <p className="hub-hint">{t('hub.createHint')}</p>
             </div>
           </form>

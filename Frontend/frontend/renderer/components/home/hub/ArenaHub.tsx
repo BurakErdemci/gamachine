@@ -45,6 +45,9 @@ export const ArenaHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
                 })}
               </ul>
             )}
+            {!!h.editors?.length && (
+              <button type="button" className="btn btn-ghost ar-refresh" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+            )}
           </section>
         )}
 
@@ -71,7 +74,7 @@ export const ArenaHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
               <label className="ar-lab" htmlFor="hub-version">{t('hub.fieldVersion')}</label>
               <VersionSelect h={h} className="hub-select ar-select" />
               <Target h={h} />
-              <button type="submit" className="btn btn-primary ar-start" data-testid="hub-create">
+              <button type="submit" className="btn btn-primary ar-start" disabled={h.templates === null} data-testid="hub-create">
                 {t('hub.createQuest')}
                 <Ic16 />
               </button>

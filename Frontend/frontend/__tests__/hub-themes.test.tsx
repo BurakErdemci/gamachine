@@ -11,6 +11,7 @@ vi.mock('axios', () => ({ default: { get: vi.fn(async () => ({ data: { workspace
 
 import { WorkspaceScreen } from '../renderer/components/home/WorkspaceScreen'
 import { AppearanceContext, DEFAULTS, THEMES, type Theme } from '../renderer/lib/appearance'
+import { resetHubStore } from '../renderer/lib/hub'
 import { LangContext, ceviriUygula, translations } from '../renderer/lib/i18n'
 
 const en = translations.en
@@ -44,7 +45,7 @@ const view = (theme: Theme) => {
   )
 }
 
-beforeEach(() => { mocks.invoke.mockReset().mockImplementation(ipc) })
+beforeEach(() => { resetHubStore(); mocks.invoke.mockReset().mockImplementation(ipc) })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('hub: one composition per theme', () => {
@@ -70,5 +71,14 @@ describe('hub: one composition per theme', () => {
     await waitFor(() => expect(screen.getByTestId('hub-progress')).toBeTruthy())
     expect(container.querySelector(sig.run)).not.toBeNull()
     expect(screen.getByTestId('hub-cancel')).toBeTruthy()
+  })
+
+  it.each(THEMES.map(t => [t]))('%s offers Refresh on a populated editors list', async (theme) => {
+    view(theme as Theme)
+    fireEvent.click(screen.getByTestId('hub-tab-editors'))
+    await screen.findByTestId('hub-editors')
+    const before = mocks.invoke.mock.calls.filter(c => c[0] === 'hub-list-editors').length
+    fireEvent.click(screen.getByRole('button', { name: en['hub.refresh'] }))
+    await waitFor(() => expect(mocks.invoke.mock.calls.filter(c => c[0] === 'hub-list-editors').length).toBe(before + 1))
   })
 })

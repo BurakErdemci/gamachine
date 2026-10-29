@@ -15,7 +15,7 @@ vi.mock('axios', () => ({ default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), 
 import axios from 'axios'
 import { WorkspaceScreen, UNITY_DOWNLOAD_URL } from '../renderer/components/home/WorkspaceScreen'
 import { LangContext, ceviriUygula, translations } from '../renderer/lib/i18n'
-import { nameProblem, templateName, joinTarget, clock } from '../renderer/lib/hub'
+import { nameProblem, templateName, joinTarget, clock, resetHubStore } from '../renderer/lib/hub'
 
 const en = translations.en
 const EDITORS = [
@@ -66,13 +66,16 @@ const fillForm = async (name = 'Night Run') => {
   fireEvent.click(screen.getByTestId('hub-folder'))
   await waitFor(() => expect(screen.getByTestId('hub-target').textContent).toBe(en['hub.target'].replace('{path}', `/Users/me/Games/${name}`)))
 }
+const progressSubscriptions = () => mocks.on.mock.calls.filter(c => c[0] === 'hub-create-progress').length
 const progress = (p: unknown) => act(async () => { mocks.listeners.get('hub-create-progress')!(p) })
 
 beforeEach(() => {
+  resetHubStore()
   editors = { editors: EDITORS }
   create = vi.fn(async () => ({ ok: true, path: '/Users/me/Games/Night Run' }))
   mocks.invoke.mockReset().mockImplementation(ipc)
   mocks.listeners.clear()
+  mocks.on.mockClear()
   vi.mocked(axios.get).mockReset().mockResolvedValue({ data: { workspaces: [{ path: '/b/Arena', last_accessed: '2026-10-29 10:00:00', chat_count: 2 }] } })
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
@@ -228,6 +231,91 @@ describe('hub: recent projects', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Options for Arena' }))
     fireEvent.click(screen.getByRole('menuitem', { name: en['hub.launchWith'].replace('{version}', '6000.2.4f1') }))
     await waitFor(() => expect(p.showToast).toHaveBeenCalledWith(en['hub.launchFailed'].replace('{error}', 'Unity 6000.2.4f1 is not installed.'), 'error'))
+  })
+})
+
+describe('hub: the run outlives the screen', () => {
+  it('a remounted screen shows the running creation, its progress and then the Open offer', async () => {
+    const finish = pending()
+    const p = props()
+    view(p)
+    await fillForm()
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-progress')
+    cleanup()
+    view(p)
+    expect(screen.getByTestId('hub-progress')).toBeTruthy()
+    expect(screen.queryByTestId('hub-create')).toBeNull()
+    await progress({ phase: 'running', elapsedMs: 42_000, logTail: 'x\n' })
+    expect(screen.getByTestId('hub-elapsed').textContent).toBe('00:42')
+    expect(create).toHaveBeenCalledTimes(1)
+    await finish({ ok: true, path: '/Users/me/Games/Night Run' })
+    fireEvent.click(screen.getByTestId('hub-open-created'))
+    await waitFor(() => expect(p.onSelectWorkspace).toHaveBeenCalledWith('/Users/me/Games/Night Run'))
+    cleanup()
+    view(p)
+    expect(screen.getByTestId('hub-result-done')).toBeTruthy()
+  })
+
+  it('unmounting drops the screen from the run; the only progress listener is the store\'s and ends with the run', async () => {
+    const finish = pending()
+    view()
+    await fillForm()
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-progress')
+    expect(mocks.listeners.has('hub-create-progress')).toBe(true)
+    expect(progressSubscriptions()).toBe(1)
+    cleanup()
+    // the run goes on without a screen, still with exactly one listener
+    expect(mocks.listeners.has('hub-create-progress')).toBe(true)
+    expect(progressSubscriptions()).toBe(1)
+    await finish({ ok: true, path: '/Users/me/Games/Night Run' })
+    expect(mocks.listeners.has('hub-create-progress')).toBe(false)
+  })
+
+  it('no listener is left after a run that failed', async () => {
+    create = vi.fn(async () => ({ ok: false, error: 'boom' }))
+    view()
+    await fillForm()
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-result-failed')
+    expect(mocks.listeners.has('hub-create-progress')).toBe(false)
+  })
+})
+
+describe('hub: templates that cannot be read', () => {
+  it('shows an error with a retry, keeps Create off and never creates without a template id', async () => {
+    let fail = true
+    mocks.invoke.mockImplementation(async (channel: string, arg: any) => {
+      if (channel === 'hub-list-templates' && fail) throw new Error('ipc down')
+      return ipc(channel, arg)
+    })
+    view()
+    tab('new')
+    expect(await screen.findByTestId('hub-templates-failed')).toBeTruthy()
+    fireEvent.change(nameBox(), { target: { value: 'Game' } })
+    fireEvent.click(screen.getByTestId('hub-folder'))
+    await waitFor(() => expect(screen.getByTestId('hub-target')).toBeTruthy())
+    const btn = screen.getByTestId('hub-create') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    fireEvent.click(btn)
+    fireEvent.submit(btn.closest('form')!)
+    expect(mocks.invoke).not.toHaveBeenCalledWith('hub-create-project', expect.anything())
+    fail = false
+    fireEvent.click(screen.getByTestId('hub-templates-retry'))
+    await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(3))
+    expect((screen.getByTestId('hub-create') as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
+describe('hub: StrictMode', () => {
+  it('still lists the editors when effects run twice', async () => {
+    const value = { lang: 'en' as const, setLang: () => {}, t: (k: any, v?: any) => ceviriUygula('en', k, v) }
+    render(<React.StrictMode><LangContext.Provider value={value}><WorkspaceScreen {...props()} /></LangContext.Provider></React.StrictMode>)
+    tab('editors')
+    expect((await screen.findByTestId('hub-editors')).textContent).toContain('6000.2.4f1')
+    tab('new')
+    await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(3))
   })
 })
 
