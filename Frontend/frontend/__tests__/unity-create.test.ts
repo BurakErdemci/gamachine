@@ -1,4 +1,7 @@
 import { EventEmitter } from 'events'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateDeps, CreateProgress, cancelCreate, createProject } from '../main/helpers/unity-create'
 
@@ -13,6 +16,10 @@ function setup(over: Partial<CreateDeps> = {}, platform: NodeJS.Platform = 'darw
   const deps: CreateDeps = {
     platform,
     exists: p => existing.has(p),
+    realpath: p => {
+      if (existing.has(p) || p.startsWith('/parent/')) return p
+      throw new Error('ENOENT')
+    },
     removeDir: vi.fn(),
     spawn: vi.fn(() => child),
     readLogTail: () => 'log line',
@@ -162,5 +169,51 @@ describe('createProject', () => {
       ok: false,
       error: 'Unity exited with code 3. The partial folder could not be removed: /parent/My Game',
     })
+  })
+
+  it('leaves another folder intact when the parent symlink is re-pointed during the run', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gm-create-'))
+    try {
+      const realA = path.join(root, 'a')
+      const realB = path.join(root, 'b')
+      fs.mkdirSync(path.join(realA, 'Game'), { recursive: true })
+      fs.mkdirSync(path.join(realB, 'Game'), { recursive: true })
+      fs.writeFileSync(path.join(realB, 'Game', 'keep.txt'), 'x')
+      const link = path.join(root, 'link')
+      fs.symlinkSync(realA, link)
+      fs.rmSync(path.join(realA, 'Game'), { recursive: true })
+      const { child, deps, opts } = setup({
+        exists: fs.existsSync,
+        realpath: fs.realpathSync,
+        removeDir: dir => fs.rmSync(dir, { recursive: true, force: true }),
+      })
+      const promise = createProject({ ...opts, parentDir: link, name: 'Game' }, deps)
+      fs.mkdirSync(path.join(realA, 'Game'))
+      fs.unlinkSync(link)
+      fs.symlinkSync(realB, link)
+      child.emit('exit', 1, null)
+      expect(await promise).toEqual({ ok: false, error: 'Unity exited with code 1.' })
+      expect(fs.existsSync(path.join(realB, 'Game', 'keep.txt'))).toBe(true)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('builds the target from the resolved parent and removes it on a normal failure', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gm-create-')))
+    try {
+      const { child, deps, opts } = setup({
+        exists: fs.existsSync,
+        realpath: fs.realpathSync,
+        removeDir: dir => fs.rmSync(dir, { recursive: true, force: true }),
+      })
+      const promise = createProject({ ...opts, parentDir: root, name: 'Game' }, deps)
+      fs.mkdirSync(path.join(root, 'Game'))
+      child.emit('exit', 1, null)
+      expect(await promise).toEqual({ ok: false, error: 'Unity exited with code 1.' })
+      expect(fs.existsSync(path.join(root, 'Game'))).toBe(false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 })

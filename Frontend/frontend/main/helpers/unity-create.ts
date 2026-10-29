@@ -12,6 +12,7 @@ export interface CreateChild {
 export interface CreateDeps {
   platform: NodeJS.Platform
   exists: (p: string) => boolean
+  realpath: (p: string) => string
   removeDir: (dir: string) => void
   spawn: (command: string, args: string[]) => CreateChild
   readLogTail: (file: string) => string
@@ -51,10 +52,15 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
   if (!NAME_PATTERN.test(opts.name) || opts.name !== opts.name.trim()) {
     return Promise.resolve(fail('Project name may use letters, digits, space, - and _ only (1-64 characters).'))
   }
-  if (!p.isAbsolute(opts.parentDir) || !deps.exists(opts.parentDir)) {
+  if (!p.isAbsolute(opts.parentDir)) return Promise.resolve(fail('Parent folder does not exist.'))
+  // Resolve once so a symlink re-pointed while Unity runs cannot redirect the cleanup.
+  let parent: string
+  try {
+    parent = deps.realpath(opts.parentDir)
+  } catch {
     return Promise.resolve(fail('Parent folder does not exist.'))
   }
-  const target = p.join(opts.parentDir, opts.name)
+  const target = p.join(parent, opts.name)
   if (deps.exists(target)) return Promise.resolve(fail('A folder with this name already exists.'))
   if (deps.platform === 'win32' && target.length > MAX_WINDOWS_PATH) {
     return Promise.resolve(fail(`Project path is too long (${target.length} > ${MAX_WINDOWS_PATH}); choose a shorter location.`))
@@ -96,10 +102,16 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
     }
     // A failed run leaves a half-made folder that would block retrying the same name.
     const failAndClean = (error: string) => {
-      try {
-        deps.removeDir(target)
-      } catch {
-        error += ` The partial folder could not be removed: ${target}`
+      let resolved: string | null = null
+      try { resolved = deps.realpath(target) } catch { /* Nothing at target, so nothing to remove. */ }
+      if (resolved === target) {
+        try {
+          deps.removeDir(target)
+        } catch {
+          error += ` The partial folder could not be removed: ${target}`
+        }
+      } else if (resolved !== null) {
+        error += ` The partial folder was not removed because its path changed: ${target}`
       }
       finish(fail(error))
     }
