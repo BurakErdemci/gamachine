@@ -619,6 +619,16 @@ class AgyProvider(BaseCLIProvider):
                 "env": {"UNITY_MCP_URL": unity_mcp_url, **AGY_CHILD_SECRET_BLANKS},
                 "trust": True,
             }
+        # Computer use and the agent browser: no chat id here, the files are
+        # shared by every chat; it reaches the servers through agy's spawn env.
+        from computer_use import registration as computer_registration
+        from browser_use import registration as browser_registration
+        switched = (("gamachineComputer", computer_registration), ("gamachineBrowser", browser_registration))
+        for name, registration in switched:
+            entry = registration.stdio_entry()
+            if entry is not None:
+                ours[name] = {**entry, "env": {**entry["env"], **AGY_CHILD_SECRET_BLANKS}, "trust": True}
+        optional = ("unityMCP", *(name for name, _ in switched))
 
         def servers_of(cfg: Optional[dict], path: str) -> Optional[dict]:
             if cfg is None:
@@ -636,8 +646,9 @@ class AgyProvider(BaseCLIProvider):
         if config_servers is not None:
             config_servers.pop("antigravity", None)
             config_servers.update(ours)
-            if not unity_mcp_url:
-                config_servers.pop("unityMCP", None)
+            for name in optional:
+                if name not in ours:
+                    config_servers.pop(name, None)
             # disabledTools mcp_config.json'da OLMAMALI — agy geçersiz key görünce tüm dosyayı
             # yoksayarak MCP server'ları başlatmaz. disabledTools sadece settings.json'da olmalı.
             config.pop("disabledTools", None)
@@ -659,11 +670,12 @@ class AgyProvider(BaseCLIProvider):
             # taze unityai/unityMCP kazanır; eski dosya okunamadıysa yalnız bizimkiler
             merged_servers.update(config_servers if config_servers is not None else ours)
             merged_servers.pop("antigravity", None)
-            if not unity_mcp_url:
-                # The merge above only adds; without this an old entry (e.g.
-                # the pre-K3 keyless http one) survives here while the server
-                # is off, and agy tries it on every start.
-                merged_servers.pop("unityMCP", None)
+            for name in optional:
+                if name not in ours:
+                    # The merge above only adds; without this an old entry (e.g.
+                    # the pre-K3 keyless http one) survives here while the server
+                    # is off, and agy tries it on every start.
+                    merged_servers.pop(name, None)
             migrated_cfg.pop("disabledTools", None)  # geçersiz key → agy tüm dosyayı yoksayar
             if _write_json_config(migrated_path, migrated_cfg):
                 logger.info(f"[CLIProvider] agy MIGRATED mcp_config.json yazıldı ({len(merged_servers)} server): {migrated_path}")
