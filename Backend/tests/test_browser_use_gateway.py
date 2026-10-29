@@ -174,7 +174,8 @@ def test_critical_click_returns_needs_approval_within_the_wait_and_card_fields_c
 def test_card_answered_during_the_wait_lets_the_step_run():
     fake = Fake({"9": BUY}, answer=("answer", {"status": "resolved", "approved": True}))
     reply = run(fake, "click", {"snapshot_id": "s1", "ref": "9"})
-    assert reply["ok"] is True and fake.ops() == ["describe", "click"] and fake.polls == 3
+    # The second describe checks that the approved element is still the one on the page.
+    assert reply["ok"] is True and fake.ops() == ["describe", "describe", "click"] and fake.polls == 3
 
 
 def test_consumed_grant_lets_the_retry_through_without_waiting():

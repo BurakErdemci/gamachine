@@ -629,6 +629,7 @@ _BROWSER_CRITICAL_OPS = frozenset({"click", "fill", "select", "press"})
 BROWSER_HALTED_REASON = ("The user stopped the browser for this turn; "
                          "do not use browser tools again until the user's next message.")
 BROWSER_NAVIGATION_REASON = "The page changed, so this browser approval no longer applies."
+BROWSER_RESTART_REASON = "The agent browser restarted, so this browser approval no longer applies."
 BROWSER_INACTIVE_REASON = "The agent browser is turned off in Settings."
 
 
@@ -647,8 +648,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
     _browser_grants: dict[tuple, float] = {}
     # gate_id -> grant key of an open browser card, so the gateway's in-wait delivery can consume its approval.
     _browser_gate_keys: dict[str, tuple] = {}
-    # [count of page changes, Stop presses, switch-offs and chat deletions]: every chat shares the one
-    # browser view, so an approval given under an older count grants nothing and runs nothing.
+    # [count of page changes, switch-offs and browser restarts]: every chat shares the one browser
+    # view, so an approval given under an older count grants nothing and runs nothing. A Stop or a
+    # chat deletion is one chat's business and leaves it alone.
     _browser_page_gen = [0]
     _mcp_results: dict = {}   # gate_id → {approved, ...}
     _mcp_result_ts: dict = {}  # gate_id → oluşturulma zamanı (TTL süpürmesi için)
@@ -867,12 +869,13 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         def resolve(result):
             # The grant exists before the result becomes visible, or the gateway's poll could run the step
             # on the result and miss the grant that its delivery has to consume.
+            # A card from an older generation touches no grant: a fresh card may hold the same key.
             card = _cards.get(gate_id)
-            if (result is True and key is not None and card is not None and card.by
-                    and _browser_page_gen[0] == opened_gen):
-                _browser_grants[key] = time() + BROWSER_GRANT_TTL
-            elif key is not None:
-                _browser_grants.pop(key, None)
+            if key is not None and _browser_page_gen[0] == opened_gen:
+                if result is True and card is not None and card.by:
+                    _browser_grants[key] = time() + BROWSER_GRANT_TTL
+                else:
+                    _browser_grants.pop(key, None)
             base_resolver(result)
             log("approved" if result is True else "rejected", decision.reason)
 
@@ -894,9 +897,10 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         return result
 
     def _forget_browser_approvals(conversation_id: Optional[int] = None) -> None:
-        """Drop the one-time browser grants and open-card keys of one chat (or of all) and bump the
-        page generation, so no approval given before this moment allows or runs anything later."""
-        _browser_page_gen[0] += 1
+        """Drop the one-time browser grants and open-card keys of one chat, or of all; for all, also
+        bump the page generation so no approval given before this moment allows or runs anything."""
+        if conversation_id is None:
+            _browser_page_gen[0] += 1
         for key in [k for k in _browser_grants if conversation_id in (None, k[0])]:
             del _browser_grants[key]
         for gate_id in [g for g, k in _browser_gate_keys.items() if conversation_id in (None, k[0])]:
@@ -1631,7 +1635,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         # the way Stop sends them; in-process gates are woken with no result,
         # which every waiter reads as a rejection.
         _abort_pending_mcp_approvals(conv_id)
-        # Its browser approvals go too, and the bumped page generation stops a step already approved.
+        # Its browser approvals go too; a step already approved is stopped by the gateway's state
+        # read, which reports the chat as deleted.
         _forget_browser_approvals(conv_id)
         # A note card is owned by its sender; one addressed to this chat is
         # another chat's card and is denied here, since its target is gone.
@@ -2930,6 +2935,7 @@ Max 300 kelime. Türkçe yaz.
             return {"ok": False, "error": "The agent browser only works for a chat whose turn is running."}
         return await _browser_gateway.call(owner, tool[len("browser_"):], args, lambda: {
             "enabled": browser_settings.enabled(db), "halted": owner in _computer_halted,
+            "deleted": _names_missing_chat(owner),
             "runtime": dict(_browser_runtime), "page_gen": _browser_page_gen[0]})
 
     @router.put("/browser/settings")
@@ -2972,8 +2978,13 @@ Max 300 kelime. Türkçe yaz.
         if running and (type(port) is not int or not 1 <= port <= 65535
                         or not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token)):
             raise HTTPException(status_code=400, detail="Tarayıcı portu ve anahtarı geçersiz.")
+        previous = dict(_browser_runtime)
         _browser_runtime.update(running=running, port=port if running else None,
                                 token=token if running else None)
+        if _browser_runtime != previous:
+            # Another host (or none) means another page: nothing approved on the old one carries over.
+            _reject_computer_use_pending(None, BROWSER_RESTART_REASON, "browser_restart", flag="browser_use")
+            _forget_browser_approvals()
         return dict(_browser_runtime)
 
     async def halt_computer(conversation_id: int) -> dict:

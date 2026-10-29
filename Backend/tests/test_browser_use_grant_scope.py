@@ -23,6 +23,7 @@ BUY_LATER = {"role": "button", "name": "Buy later", "tag": "button"}
 NOTES = {"role": "textbox", "name": "Order notes", "tag": "input", "form_method": "post"}
 MORE = {"role": "button", "name": "Show more", "tag": "button"}
 LINK = {"role": "link", "name": "Other page", "tag": "a", "href": "https://shop.example/other"}
+SLOW_LINK = {"role": "link", "name": "Slow page", "tag": "a", "href": "https://shop.example/other"}
 OTHER = "https://shop.example/other"
 
 
@@ -31,16 +32,22 @@ class Host:
 
     def __init__(self):
         self.url = PAGE
-        self.elements = {"9": BUY, "8": BUY_LATER, "4": NOTES, "7": MORE, "5": LINK}
+        self.elements = {"9": BUY, "8": BUY_LATER, "4": NOTES, "7": MORE, "5": LINK, "6": SLOW_LINK}
         self.focused = NOTES
         self.cmds = []
+        self.after_describe = None  # async (conversation_id) -> None, run once a describe is answered
 
     async def __call__(self, runtime, op, conversation_id, args):
         self.cmds.append((op, conversation_id, args, runtime))
         if op == "click" and args.get("ref") == "5":
             self.url = OTHER  # a plain link: no card, but the page changes
+        if op == "click" and args.get("ref") == "6":
+            self.url = OTHER  # the host gave up waiting for the load, yet the view moved
+            return {"ok": False, "error": "navigation_timeout", "url": self.url}
         if op == "describe":
             element = self.focused if args.get("focused") else self.elements.get(args["ref"])
+            if self.after_describe is not None:
+                await self.after_describe(conversation_id)
             if element is None:
                 return {"ok": False, "error": "stale_snapshot", "url": self.url}
             return {"ok": True, "url": self.url, "title": "t", "element": element}
@@ -89,11 +96,11 @@ def live(env):
     return env
 
 
-def command(env, op="click", ref="9", **args):
+def command(env, op="click", ref="9", cid=1, **args):
     if op in {"click", "fill", "select"}:
         args = {"snapshot_id": "s1", "ref": ref, **args}
     return env.client.post("/browser/command", json={
-        "tool": f"browser_{op}", "args": args, "conversation_id": 1}).json()
+        "tool": f"browser_{op}", "args": args, "conversation_id": cid}).json()
 
 
 def open_card():
@@ -353,6 +360,7 @@ def test_deleting_the_chat_during_the_wait_refuses_the_approved_step(waiting, mo
     async def approve_then_delete(gate_id, routes):
         await desktop_approve(gate_id, routes)
         assert (await routes["delete_conversation"](1, x_session_token=""))["deleted_ids"] == [1]
+        waiting.db.get_conversation_owner.return_value = None  # the row is gone, as in the real DB
 
     cell.cell_contents = no_sessions
     try:
@@ -383,3 +391,82 @@ def test_an_equal_looking_focused_element_needs_its_own_card(live):
     live.host.focused = dict(BUY, element_id="el1")
     assert command(live, "press", key="Enter")["ok"] is True
     assert live.host.ops().count("press") == 1
+
+
+# Turn 6: every step is checked again right before it is sent (R1-R5).
+
+def test_a_stop_during_the_describe_refuses_a_step_that_needs_no_card(live):
+    async def stop(conversation_id):
+        await live.router.halt_computer(conversation_id)
+
+    live.host.after_describe = stop
+    reply = command(live, ref="7")
+    assert reply["ok"] is False and reply["error"] == gateway.HALTED
+    assert live.host.ops().count("click") == 0
+
+
+def test_a_chat_deleted_during_the_describe_sends_nothing(live):
+    async def delete(conversation_id):
+        live.db.get_conversation_owner.return_value = None
+
+    live.host.after_describe = delete
+    reply = command(live, ref="7")
+    assert reply["ok"] is False and reply["error"] == gateway.CHAT_DELETED
+    assert live.host.ops().count("click") == 0
+
+
+def test_a_describe_that_sees_another_url_closes_the_open_card(live):
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    gate_id = open_card()
+    live.host.url = OTHER  # the page moved on its own
+    command(live, ref="7", cid=2)
+    assert not cards.is_open(gate_id) and not browser_store(live.router, "_browser_gate_keys")
+
+
+def test_a_failed_step_whose_reply_shows_another_url_closes_the_open_card(live):
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    gate_id = open_card()
+    assert command(live, ref="6", cid=2)["ok"] is False
+    assert not cards.is_open(gate_id)
+
+
+def test_an_element_changed_during_the_wait_is_not_clicked(waiting):
+    async def rename_then_approve(gate_id, routes):
+        waiting.host.elements["9"] = {"role": "button", "name": "Delete account", "tag": "button"}
+        await desktop_approve(gate_id, routes)
+
+    reply = run_with_answer(waiting, rename_then_approve)
+    assert reply["ok"] is False and reply["error"] == gateway.TARGET_CHANGED
+    assert waiting.host.ops().count("click") == 0
+
+
+def test_another_chats_stop_keeps_this_chats_card_and_the_page_generation(live):
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    gate_id = open_card()
+    generation = browser_store(live.router, "_browser_page_gen")[0]
+    asyncio.run(live.router.halt_computer(2))
+    assert cards.is_open(gate_id) and browser_store(live.router, "_browser_page_gen")[0] == generation
+    # The retry finds that card instead of opening a duplicate.
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    assert [card["card_id"] for card in cards.list_pending()] == [gate_id]
+
+
+def test_a_browser_restart_closes_open_cards_and_drops_grants(live):
+    approve(live)
+    assert command(live, ref="8")["needs_approval"] is True
+    gate_id = open_card()
+    restarted = {"running": True, "port": 4712, "token": "cd" * 32}
+    assert live.client.post("/browser/runtime", json=restarted, headers=UI).status_code == 200
+    assert not cards.is_open(gate_id)
+    assert not browser_store(live.router, "_browser_grants") and not browser_store(live.router, "_browser_gate_keys")
+
+
+def test_a_browser_restart_during_the_wait_refuses_the_approved_step(waiting):
+    async def approve_then_restart(gate_id, routes):
+        await desktop_approve(gate_id, routes)
+        await routes["set_browser_runtime"]({"running": True, "port": 4712, "token": "cd" * 32},
+                                            x_session_token="", x_ui_secret=SECRET, x_maintenance="")
+
+    reply = run_with_answer(waiting, approve_then_restart)
+    assert reply["ok"] is False and reply["error"] == gateway.PAGE_CHANGED
+    assert waiting.host.ops().count("click") == 0
