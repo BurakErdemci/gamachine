@@ -116,7 +116,7 @@ test('the app budget fails open when missing or throwing', async () => {
 const sha = (text) => 'sha256-' + createHash('sha256').update(text, 'utf8').digest('base64');
 const scriptSrc = (res) => res.headers.get('Content-Security-Policy').split('; ').find((d) => d.startsWith('script-src'));
 
-test('each /app/ page allows exactly its own inline scripts by hash, never unsafe-inline', async () => {
+test('each /app/ page allows exactly its own inline scripts by hash and may use inline styles', async () => {
   const boot = sha('self.__boot=1');
   const other = sha('self.__other=1');
   const files = {
@@ -127,7 +127,9 @@ test('each /app/ page allows exactly its own inline scripts by hash, never unsaf
   for (const p of ['/app/', '/app/chat/3']) {
     const res = await get(p, makeEnv({}, files));
     assert.equal(scriptSrc(res), `script-src 'self' '${boot}'`, p);
-    assert.doesNotMatch(res.headers.get('Content-Security-Policy'), /unsafe-inline/);
+    // Inline styles are allowed (React/Next emit them); scripts never are.
+    assert.match(res.headers.get('Content-Security-Policy'), /style-src 'self' 'unsafe-inline'/);
+    assert.doesNotMatch(scriptSrc(res), /unsafe-inline/);
     assert.match(res.headers.get('Content-Security-Policy'), /connect-src 'self' wss:\/\/relay\.test/);
   }
   assert.equal(scriptSrc(await get('/app/home/index.html', makeEnv({}, files))), `script-src 'self' '${other}'`);

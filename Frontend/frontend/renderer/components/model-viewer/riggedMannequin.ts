@@ -5,6 +5,7 @@ import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 import { MANNEQUIN_MARKER, type MannequinHandle } from './mannequin';
 import { type HumanoidMap } from './humanoidRig';
+import { withBase } from '../../lib/basePath';
 
 /**
  * The bundled CC0 mannequin (Quaternius, Universal Animation Library) wearing a
@@ -13,7 +14,7 @@ import { type HumanoidMap } from './humanoidRig';
  * the packaged build (electron-serve registers it with fetch support, and CSP
  * `connect-src 'self'` covers it).
  */
-export const MANNEQUIN_URL = '/models/mannequin.glb';
+export const MANNEQUIN_URL = withBase('/models/mannequin.glb');
 
 /** Material name in the glb that takes the secondary (joint) colour. */
 export const MANNEQUIN_JOINT_MATERIAL = 'M_Joints';

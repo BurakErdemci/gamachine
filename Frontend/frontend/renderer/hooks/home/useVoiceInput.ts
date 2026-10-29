@@ -30,6 +30,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { apiHataMesaji } from '../../lib/apiError';
 import { cevir } from '../../lib/i18n';
+import { withBase } from '../../lib/basePath';
 import {
   MAX_RECORD_MS,
   WAV_MAX_BYTES,
@@ -88,7 +89,7 @@ const releaseContext = (ctx: AudioContext | null | undefined) => {
   });
 };
 
-const WORKLET_URL = '/audio/pcm-capture-worklet.js';
+const WORKLET_URL = withBase('/audio/pcm-capture-worklet.js');
 const PROCESSOR_NAME = 'pcm-capture';
 /** Elapsed-time refresh. 200 ms is under one mm:ss tick, so the timer never skips a second. */
 const TICK_MS = 200;

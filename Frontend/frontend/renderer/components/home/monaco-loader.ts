@@ -1,4 +1,5 @@
 import { loader } from '@monaco-editor/react';
+import { withBase } from '../../lib/basePath';
 
 /**
  * Monaco'yu CDN'den DEĞİL, uygulamanın kendi origin'inden yükletir.
@@ -47,6 +48,6 @@ import { loader } from '@monaco-editor/react';
  * (http://localhost:PORT) yanlış olurdu. `/` ile başlayan değer ise hem regex'i
  * geçiyor hem de iki modda da doğru.
  */
-export const MONACO_VS_PATH = '/monaco/vs';
+export const MONACO_VS_PATH = withBase('/monaco/vs');
 
 loader.config({ paths: { vs: MONACO_VS_PATH } });

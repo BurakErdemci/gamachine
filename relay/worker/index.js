@@ -50,13 +50,14 @@ const CACHE = {
   woff2: 'public, max-age=31536000, immutable',
 };
 
-function csp(url, scriptHashes = []) {
+// inlineStyles is for the /app/ export only: React and Next emit style= attributes and a <style>.
+function csp(url, scriptHashes = [], inlineStyles = false) {
   // Safari has not always matched ws(s): against 'self', so the socket origin is explicit.
   const ws = (url.protocol === 'https:' ? 'wss://' : 'ws://') + url.host;
   return [
     "default-src 'none'",
     ["script-src 'self'", ...scriptHashes.map((h) => `'${h}'`)].join(' '),
-    "style-src 'self'",
+    inlineStyles ? "style-src 'self' 'unsafe-inline'" : "style-src 'self'",
     "font-src 'self'",
     "img-src 'self'",
     `connect-src 'self' ${ws}`,
@@ -68,7 +69,7 @@ function csp(url, scriptHashes = []) {
   ].join('; ');
 }
 
-function staticResponse(request, url, upstream, ext, cache, scriptHashes = []) {
+function staticResponse(request, url, upstream, ext, cache, scriptHashes = [], inlineStyles = false) {
   const headers = new Headers({
     'Content-Type': TYPES[ext] || 'application/octet-stream',
     'X-Content-Type-Options': 'nosniff',
@@ -77,7 +78,7 @@ function staticResponse(request, url, upstream, ext, cache, scriptHashes = []) {
     'Cache-Control': cache,
   });
   if (ext === 'html') {
-    headers.set('Content-Security-Policy', csp(url, scriptHashes));
+    headers.set('Content-Security-Policy', csp(url, scriptHashes, inlineStyles));
     headers.set('X-Frame-Options', 'DENY');
   }
   return new Response(request.method === 'HEAD' ? null : upstream.body, { status: 200, headers });
@@ -128,7 +129,7 @@ async function serveApp(request, env, url) {
   const ext = assetPath.slice(assetPath.lastIndexOf('.') + 1);
   const cache = assetPath.startsWith('/app/_next/static/') ? 'public, max-age=31536000, immutable' : 'no-cache';
   const hashes = ext === 'html' ? await appScriptHashes(env, url, assetPath) : [];
-  return staticResponse(request, url, upstream, ext, cache, hashes);
+  return staticResponse(request, url, upstream, ext, cache, hashes, true);
 }
 
 // Browsers always send Origin on a WebSocket upgrade and a page cannot change it.

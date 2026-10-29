@@ -2,11 +2,16 @@
 # Copies an existing renderer export into relay/public/app/ (builds nothing itself) and writes
 # relay/public/app-csp.json: the sha256 of every inline script of each exported page, which the
 # relay worker puts in that page's Content-Security-Policy (no 'unsafe-inline').
-# Usage: scripts/build-remote-web.sh [export_dir]   (default Frontend/frontend/renderer/out)
+# Usage: scripts/build-remote-web.sh [--build] [export_dir]   (default Frontend/frontend/app-remote)
+# --build runs the REMOTE_WEB=1 renderer export first.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-src="${1:-$root/Frontend/frontend/renderer/out}"
+if [ "${1:-}" = "--build" ]; then
+  shift
+  (cd "$root/Frontend/frontend" && REMOTE_WEB=1 NODE_ENV=production npx --no-install next build renderer)
+fi
+src="${1:-$root/Frontend/frontend/app-remote}"
 dest="$root/relay/public/app"
 csp="$root/relay/public/app-csp.json"
 
