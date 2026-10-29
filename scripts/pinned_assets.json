@@ -74,12 +74,6 @@
       "size": 17585565,
       "kaynak": "yayinci"
     },
-    "uv/darwin-x64": {
-      "url": "https://github.com/astral-sh/uv/releases/download/0.11.33/uv-x86_64-apple-darwin.tar.gz",
-      "digest": "sha256:f1b919f740bd6be1d014ff58c4271b0779a32198adfb19ad9c5d1c4d9b2b4301",
-      "size": 19456887,
-      "kaynak": "yayinci"
-    },
     "uv/win-x64": {
       "url": "https://github.com/astral-sh/uv/releases/download/0.11.33/uv-x86_64-pc-windows-msvc.zip",
       "digest": "sha256:c253ce868ad48d29327b661452ce184c9e333e6d6f5bc8d6fcfbf4dd52b83442",

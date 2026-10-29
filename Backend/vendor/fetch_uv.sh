@@ -4,13 +4,13 @@
 # böylece kullanıcının Mac'inde uv kurulu olmasa da Unity MCP çalışır.
 # Boyutları büyük olduğu için git'e konmaz (.gitignore); build öncesi bunu çalıştır.
 #
-# Windows'taki fetch_uv.ps1 tek arch (x64) indirir çünkü Windows tek hedef.
-# macOS'ta hem Apple Silicon (arm64) hem Intel (x64) dmg basıldığı için İKİSİNİ de
-# indirir ve arch alt-dizinlerine koyar: vendor/uv/darwin-arm64/, vendor/uv/darwin-x64/
-# _get_uvx() çalışma anında doğru mimariyi seçer.
+# Only Apple silicon is fetched, into vendor/uv/darwin-arm64/: Intel Macs are not
+# supported (owner decision, 29 Oct 2026), so the dmg is arm64-only and an x64 uv
+# would be dead weight. The arch subdirectory stays because _get_uvx() and the
+# Windows flat layout (fetch_uv.ps1 → uv/uvx.exe) both depend on it.
 #
 # Sürüm SABİT, `latest` değil: adres ve beklenen sha256 scripts/pinned_assets.json
-# içinde (anahtarlar uv/darwin-arm64, uv/darwin-x64). `latest` kullanmak, her build'in
+# içinde (anahtar uv/darwin-arm64). `latest` kullanmak, her build'in
 # o anda yayında olan farklı bir ikiliyi installer'a gömmesi demekti — ne tekrar
 # üretilebilir bir çıktı ne de doğrulanacak bir beklenti kalıyordu.
 # Sürüm yükseltmek için: `python3 scripts/pinned_assets.py refresh`, sonra diff'i incele.
@@ -120,7 +120,6 @@ fetch_arch() {
 }
 
 fetch_arch "aarch64-apple-darwin" "darwin-arm64" "uv/darwin-arm64"
-fetch_arch "x86_64-apple-darwin"  "darwin-x64"   "uv/darwin-x64"
 
 echo ""
 echo "=== uv araç zinciri hazır: $DEST ==="
