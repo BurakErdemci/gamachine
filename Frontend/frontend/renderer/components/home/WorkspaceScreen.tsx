@@ -131,9 +131,12 @@ export const WorkspaceScreen = ({
 
   const openItem = async (it: RecentWorkspace) => {
     if (!it.hostPath) return;
-    // Not yet granted to this window: the native dialog, preselected on it, is what grants access.
-    if (it.status === 'untrusted') await onOpenFolder(it.hostPath);
-    else await onSelectWorkspace(it.hostPath);
+    if (it.status === 'untrusted') {
+      // Not yet granted: the main process asks with a native box; the renderer cannot answer it.
+      let trusted = false;
+      try { trusted = !!(await (window as any).ipc?.invoke('authorize-workspace', it.hostPath))?.trusted; } catch { trusted = false; }
+      if (trusted) await onSelectWorkspace(it.hostPath);
+    } else await onSelectWorkspace(it.hostPath);
   };
   const dropItem = async (it: RecentWorkspace) => {
     setMenuFor(null);

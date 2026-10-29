@@ -22,6 +22,7 @@ import {
 } from './helpers/file-security'
 import {
   confirmLegacyRoot,
+  confirmRecentRoot,
   isOwnFrame,
   isTrustedRoot,
   registerTrustedRoot,
@@ -314,6 +315,11 @@ handleSecure('workspace-info', (_event, paths: unknown) => {
     const info = inspectProject(p)
     return { path: p, status: info.exists ? 'ok' : 'missing', unityVersion: info.unityVersion }
   })
+})
+
+handleSecure('authorize-workspace', (event, p: unknown) => {
+  if (typeof p !== 'string' || !p || !path.isAbsolute(p)) return { trusted: false }
+  return { trusted: confirmRecentRoot(p, BrowserWindow.fromWebContents(event.sender) ?? undefined) }
 })
 
 handleSecure('open-unity-hub', async () => {

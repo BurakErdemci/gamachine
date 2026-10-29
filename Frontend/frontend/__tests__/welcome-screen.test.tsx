@@ -39,6 +39,7 @@ const ipcDefault = async (channel: string, arg: any) => {
   if (channel === 'host-workspace-path') return arg === '/b/nomap' ? '' : arg.replace('/b/', '/h/')
   if (channel === 'workspace-info') return arg.map((path: string) => ({ path, ...INFO[path] }))
   if (channel === 'open-unity-hub') return { opened: true }
+  if (channel === 'authorize-workspace') return { trusted: true }
   return null
 }
 
@@ -100,7 +101,7 @@ describe('welcome screen: recent projects', () => {
     expect(screen.getByTestId('welcome').hasAttribute('data-wl-first')).toBe(false)
   })
 
-  it('opens an ok project directly and an untrusted one through the preselected dialog', async () => {
+  it('opens an ok project directly and an untrusted one through the authorize box', async () => {
     const { p } = view()
     await waitFor(() => expect(cards()).toHaveLength(4))
     fireEvent.click(screen.getByRole('button', { name: 'Open Arena' }))
@@ -108,8 +109,9 @@ describe('welcome screen: recent projects', () => {
     expect(p.onOpenFolder).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Open KagitKart' }))
-    await waitFor(() => expect(p.onOpenFolder).toHaveBeenCalledWith('/h/KagitKart'))
-    expect(p.onSelectWorkspace).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('authorize-workspace', '/h/KagitKart'))
+    await waitFor(() => expect(p.onSelectWorkspace).toHaveBeenCalledWith('/h/KagitKart'))
+    expect(p.onOpenFolder).not.toHaveBeenCalled()
   })
 
   it('missing: Locate opens the dialog on the parent folder and then drops the stale backend entry', async () => {
@@ -123,7 +125,7 @@ describe('welcome screen: recent projects', () => {
     expect(p.onOpenFolder).toHaveBeenCalledWith('/h')
   })
 
-  it.each(['rejected', 'non-array'])('uses the dialog when workspace-info is %s', async failure => {
+  it.each(['rejected', 'non-array'])('asks the authorize box for every project when workspace-info is %s', async failure => {
     mocks.invoke.mockImplementation(async (channel: string, arg: any) => {
       if (channel === 'workspace-info') {
         if (failure === 'rejected') throw new Error('inspection failed')
@@ -135,9 +137,9 @@ describe('welcome screen: recent projects', () => {
     await waitFor(() => expect(cards()).toHaveLength(4))
     for (const name of ['Arena', 'KagitKart', 'Gone']) {
       fireEvent.click(screen.getByRole('button', { name: `Open ${name}` }))
-      await waitFor(() => expect(p.onOpenFolder).toHaveBeenCalledWith(`/h/${name}`))
+      await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('authorize-workspace', `/h/${name}`))
     }
-    expect(p.onSelectWorkspace).not.toHaveBeenCalled()
+    expect(p.onOpenFolder).not.toHaveBeenCalled()
     expect(cardNamed('nomap').className).toContain('is-missing')
   })
 

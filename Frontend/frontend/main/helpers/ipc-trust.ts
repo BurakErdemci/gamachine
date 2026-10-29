@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
-import { app, dialog, IpcMainInvokeEvent } from 'electron'
+import { app, dialog, BrowserWindow, IpcMainInvokeEvent } from 'electron'
+import { isUnityProjectDir } from './unity-project'
 
 /**
  * IPC güven katmanı — 2026-07-27 denetiminin D grubu bulguları.
@@ -170,28 +171,52 @@ export const confirmLegacyRoot = (rawPath: string): boolean => {
     return false
   }
 
-  // Senkron modal: karar verilmeden hiçbir dosya işlemi ilerlemesin.
-  const { response } = dialog.showMessageBoxSync
-    ? { response: dialog.showMessageBoxSync({
-        type: 'question',
-        buttons: ['Yetkilendir', 'İptal'],
-        defaultId: 1,
-        cancelId: 1,
-        title: 'Çalışma klasörünü yetkilendir',
-        message: 'Bu klasöre erişim izni verilsin mi?',
-        detail:
-          `${root}\n\n` +
-          'Uygulama bu klasörün içindeki dosyaları okuyup yazabilecek. ' +
-          'Bu soruyu bir kez görüyorsun: daha önce seçtiğin çalışma klasörü ' +
-          'yeni güvenlik kaydında yok. Emin değilsen İptal de ve klasörü ' +
-          'uygulama içinden yeniden seç.',
-      }) }
-    : { response: 1 }
+  const approved = askAuthorize(
+    root,
+    'Uygulama bu klasörün içindeki dosyaları okuyup yazabilecek. ' +
+      'Bu soruyu bir kez görüyorsun: daha önce seçtiğin çalışma klasörü ' +
+      'yeni güvenlik kaydında yok. Emin değilsen İptal de ve klasörü ' +
+      'uygulama içinden yeniden seç.',
+  )
+  if (!approved) return false
+  registerTrustedRoot(root)
+  return true
+}
 
+/**
+ * Native "Yetkilendir / İptal" kutusu. Senkron modal: karar verilmeden hiçbir
+ * dosya işlemi ilerlemesin; renderer bu kutuyu süremez.
+ */
+const askAuthorize = (root: string, explanation: string, parent?: BrowserWindow): boolean => {
+  const options = {
+    type: 'question' as const,
+    buttons: ['Yetkilendir', 'İptal'],
+    defaultId: 1,
+    cancelId: 1,
+    title: 'Çalışma klasörünü yetkilendir',
+    message: 'Bu klasöre erişim izni verilsin mi?',
+    detail: `${root}\n\n${explanation}`,
+  }
+  const response = dialog.showMessageBoxSync
+    ? (parent ? dialog.showMessageBoxSync(parent, options) : dialog.showMessageBoxSync(options))
+    : 1
   if (response !== 0) {
     console.warn('[ipc-trust] kullanıcı kök yetkilendirmesini reddetti:', root)
     return false
   }
+  return true
+}
+
+/**
+ * Kütük doluyken, son projeler listesinden tıklanan yetkisiz bir Unity projesi
+ * için tek tıkla native onay. Yalnızca var olan bir Unity proje klasörü sorulur;
+ * onay yoksa hiçbir şey kaydedilmez.
+ */
+export function confirmRecentRoot(rawPath: string, parent?: BrowserWindow): boolean {
+  if (isTrustedRoot(rawPath)) return true
+  const root = normalize(rawPath)
+  if (!root || !isUnityProjectDir(root)) return false
+  if (!askAuthorize(root, 'Uygulama bu klasörün içindeki dosyaları okuyup yazabilecek.', parent)) return false
   registerTrustedRoot(root)
   return true
 }

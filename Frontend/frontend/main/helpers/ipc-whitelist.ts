@@ -32,6 +32,7 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'profile-reset',
   'workspace-info',
   'open-unity-hub',
+  'authorize-workspace',
 ])
 
 export const PRELOAD_ONLY_CHANNELS = new Set(['register-dropped-folder'])

@@ -96,14 +96,15 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // 35 -> 36: computer-use keeps daemon ownership and approval secrets in main.
   // 36 -> 37: computer-use-live carries the live view, the indicator and Stop.
   // 37 -> 33: project memory import/export and two unused file channels removed.
-  it('contains exactly 33 channels', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(33)
+  // 33 -> 34: 'authorize-workspace' asks the native Yetkilendir box for a recent project.
+  it('contains exactly 34 channels', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(34)
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use')).toBe(true)
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use-live')).toBe(true)
   })
 
   it('allows welcome screen project information and Unity Hub actions', () => {
-    for (const channel of ['workspace-info', 'open-unity-hub']) {
+    for (const channel of ['workspace-info', 'open-unity-hub', 'authorize-workspace']) {
       expect(ALLOWED_INVOKE_CHANNELS.has(channel)).toBe(true)
       expect(() => assertAllowedInvokeChannel(channel)).not.toThrow()
     }
