@@ -95,6 +95,10 @@ jobs:
           # sabitlendi; pinsiz bırakılırsa bir pytest major sürümü kapıyı
           # ürün değişmeden kırar.
           pip install pytest==9.0.3 pytest-asyncio==1.3.0
+          # test_mcp_server_cache_policy.py builds a real package with uvx to
+          # prove the cache keys work offline; without uvx it fails rather than
+          # skips. Same version the installer bundles (scripts/pinned_assets.json).
+          pip install uv==0.11.33
 
       # `python -m pytest` (çıplak `pytest` değil) ve depo kökünden koşuluyor:
       # yerelde yeşil ölçülen tam çağrı bu. `asyncio_mode = auto` ayarı
