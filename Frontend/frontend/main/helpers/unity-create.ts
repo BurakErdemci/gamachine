@@ -12,6 +12,7 @@ export interface CreateChild {
 export interface CreateDeps {
   platform: NodeJS.Platform
   exists: (p: string) => boolean
+  removeDir: (dir: string) => void
   spawn: (command: string, args: string[]) => CreateChild
   readLogTail: (file: string) => string
   isProject: (dir: string) => boolean
@@ -93,12 +94,22 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
       emit(result.ok ? 'done' : 'failed')
       resolve(result)
     }
+    // A failed run leaves a half-made folder that would block retrying the same name.
+    const failAndClean = (error: string) => {
+      try {
+        deps.removeDir(target)
+      } catch {
+        error += ` The partial folder could not be removed: ${target}`
+      }
+      finish(fail(error))
+    }
     // Windows: Unity.exe is a GUI binary, so only the child's own 'exit' is a reliable end.
+    // Unity never ran, so a folder at target now is not ours to remove.
     child.once('error', (err: Error) => finish(fail(`Could not start Unity: ${err?.message || err}`)))
     child.once('exit', (code: number | null) => {
-      if (cancelRequested) return finish(fail('cancelled'))
-      if (code !== 0) return finish(fail(`Unity exited with code ${code}.`))
-      if (!deps.isProject(target)) return finish(fail('Unity finished but the project was not created.'))
+      if (cancelRequested) return failAndClean('cancelled')
+      if (code !== 0) return failAndClean(`Unity exited with code ${code}.`)
+      if (!deps.isProject(target)) return failAndClean('Unity finished but the project was not created.')
       deps.registerTrusted(target)
       finish({ ok: true, path: target })
     })

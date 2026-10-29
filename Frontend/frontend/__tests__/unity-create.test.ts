@@ -13,6 +13,7 @@ function setup(over: Partial<CreateDeps> = {}, platform: NodeJS.Platform = 'darw
   const deps: CreateDeps = {
     platform,
     exists: p => existing.has(p),
+    removeDir: vi.fn(),
     spawn: vi.fn(() => child),
     readLogTail: () => 'log line',
     isProject: () => true,
@@ -126,5 +127,40 @@ describe('createProject', () => {
     const p2 = createProject(again.opts, again.deps)
     again.child.emit('exit', 0, null)
     expect(await p2).toMatchObject({ ok: true })
+  })
+
+  it('removes the half-made folder after a cancel or a non-zero exit', async () => {
+    const a = setup()
+    const pa = createProject(a.opts, a.deps)
+    cancelCreate()
+    expect(await pa).toEqual({ ok: false, error: 'cancelled' })
+    expect(a.deps.removeDir).toHaveBeenCalledExactlyOnceWith('/parent/My Game')
+    const b = setup()
+    const pb = createProject(b.opts, b.deps)
+    b.child.emit('exit', 1, null)
+    await pb
+    expect(b.deps.removeDir).toHaveBeenCalledExactlyOnceWith('/parent/My Game')
+  })
+
+  it('does not remove anything on success or when validation rejects an existing target', async () => {
+    const a = setup()
+    const pa = createProject(a.opts, a.deps)
+    a.child.emit('exit', 0, null)
+    expect(await pa).toMatchObject({ ok: true })
+    expect(a.deps.removeDir).not.toHaveBeenCalled()
+    const b = setup()
+    b.existing.add('/parent/My Game')
+    expect((await createProject(b.opts, b.deps)).ok).toBe(false)
+    expect(b.deps.removeDir).not.toHaveBeenCalled()
+  })
+
+  it('keeps the original error and appends a note when the cleanup throws', async () => {
+    const { child, deps, opts } = setup({ removeDir: () => { throw new Error('EBUSY') } })
+    const promise = createProject(opts, deps)
+    child.emit('exit', 3, null)
+    expect(await promise).toEqual({
+      ok: false,
+      error: 'Unity exited with code 3. The partial folder could not be removed: /parent/My Game',
+    })
   })
 })

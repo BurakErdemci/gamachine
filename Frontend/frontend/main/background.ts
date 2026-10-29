@@ -395,6 +395,7 @@ handleSecure('hub-create-project', async (event, arg: any) => {
   }, {
     platform: process.platform,
     exists: fs.existsSync,
+    removeDir: (dir) => fs.rmSync(dir, { recursive: true, force: true }),
     spawn: (command, args) => spawn(command, args, { stdio: 'ignore' }),
     readLogTail,
     isProject: isUnityProjectDir,
