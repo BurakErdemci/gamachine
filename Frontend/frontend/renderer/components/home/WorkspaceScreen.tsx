@@ -9,6 +9,8 @@ import type { UserData } from './types';
 import { BrandLogo, MascotHead } from './BrandLogo';
 import { GamachineFigure } from './GamachineMascot';
 import { APP_VERSION } from './settings/SettingsPages';
+import { HubPanel } from './hub/HubPanel';
+import { useHub } from './hub/useHub';
 
 type ToastKind = 'success' | 'error' | 'warning' | 'info';
 
@@ -78,7 +80,8 @@ const parentDir = (p: string): string | undefined => {
 /**
  * The welcome screen / project picker (mockup round 12 screen 5, `section.welcome`), shown while no
  * workspace is open: the shell column on the left (lockup, waving mascot, greeting, open / new),
- * recent projects as cards on the right, and a first-launch variant when the list is empty.
+ * and on the right the mini Unity Hub (hub/): recent projects as cards (with a first-launch variant
+ * when the list is empty), installed editors and the new-project flow, laid out per theme.
  */
 export const WorkspaceScreen = ({
   api, user, userName, onOpenFolder, onSelectWorkspace, onLogout, showToast,
@@ -93,6 +96,7 @@ export const WorkspaceScreen = ({
   const mac = useMemo(isMacPlatform, []);
   const name = displayName(userName);
   const first = load === 'ok' && items.length === 0;
+  const hub = useHub({ recent: items, onSelectWorkspace, showToast });
 
   const openFolder = (defaultPath?: string) => { void onOpenFolder(defaultPath); };
 
@@ -244,12 +248,70 @@ export const WorkspaceScreen = ({
         )}
         {menuFor === key && (
           <div className="wl-menu" role="menu">
+            {it.status === 'ok' && it.hostPath && (
+              <button type="button" role="menuitem" onClick={() => { setMenuFor(null); void hub.launch(it.hostPath!, it.unityVersion ?? undefined); }}>
+                {it.unityVersion ? t('hub.launchWith', { version: it.unityVersion }) : t('hub.launchUnity')}
+              </button>
+            )}
             <button type="button" role="menuitem" onClick={() => dropItem(it)}>{t('welcome.remove')}</button>
           </div>
         )}
       </li>
     );
   };
+
+  // The Hub's projects view: search, cards, drop zones and the first-launch steps.
+  const recentList = (
+    <div className="wl-col">
+      <header className="wl-main-head">
+        <h2 className="wl-h"><span className="lex">
+          <span className="lex-d">{t('welcome.recent')}</span>
+          <span className="lex-q">{t('welcome.recentQuest')}</span>
+          <span className="lex-p">{t('welcome.recentNote')}</span>
+          <span className="lex-w">{t('welcome.recentShop')}</span>
+        </span></h2>
+        <span className="wl-count num" data-testid="welcome-count">{items.length}</span>
+        <label className="wl-search">
+          <Ic className="ic ic-sm"><circle cx="9" cy="9" r="5" /><path d="M13 13l3.5 3.5" /></Ic>
+          <input type="text" value={query} onChange={e => setQuery(e.target.value)}
+            placeholder={t('welcome.search')} aria-label={t('welcome.search')} autoComplete="off" />
+        </label>
+      </header>
+
+      {load === 'failed' && (
+        <p className="wl-note" role="status">{t('welcome.loadFailed')}
+          <button type="button" className="set-link" onClick={() => refresh()}>{t('welcome.retry')}</button></p>
+      )}
+      {q && !shown.length && <p className="wl-note" role="status">{t('welcome.searchNone')}</p>}
+
+      <ul className="wl-projects" aria-busy={load === 'loading'}>
+        {shown.map(card)}
+        <li {...dropProps('list')}>
+          <FolderIc />
+          <span className="wl-drop-t">{t('welcome.dropTitle')}</span>
+          <span className="wl-drop-s">{rich(t('welcome.dropText'), { ...code, pick: pick(t('welcome.dropPick')) })}</span>
+        </li>
+      </ul>
+
+      {first && (
+        <div className="wl-first">
+          <ol className="wl-steps">
+            <li><span className="wl-step-n num">1</span><span className="wl-step-t"><b>{t('welcome.step1Title')}</b> {rich(t('welcome.step1'), code)}</span></li>
+            <li><span className="wl-step-n num">2</span><span className="wl-step-t"><b>{t('welcome.step2Title')}</b> {t('welcome.step2')}</span></li>
+            <li><span className="wl-step-n num">3</span><span className="wl-step-t"><b>{t('welcome.step3Title')}</b> {t('welcome.step3')}</span></li>
+          </ol>
+          <div {...dropProps('lg')}>
+            <FolderIc />
+            <span className="wl-drop-t">{t('welcome.dropLgTitle')}</span>
+            <span className="wl-drop-s">{rich(t('welcome.dropLgText'), {
+              pick: pick(t('welcome.dropLgPick')),
+              new: <button type="button" className="set-link" onClick={e => { e.stopPropagation(); hub.setView('new'); }}>{t('welcome.dropLgNew')}</button>,
+            })}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <section ref={rootRef} className="welcome" aria-label={t('welcome.aria')} data-testid="welcome"
@@ -285,7 +347,7 @@ export const WorkspaceScreen = ({
             </button>
             <button type="button" className="btn btn-ghost wl-new" aria-describedby="wl-new-hint" onClick={newProject}
               data-guide="welcome-new-project" data-testid="welcome-new">
-              <Ic><path d="M10 4v12M4 10h12" /></Ic>{t('welcome.new')}
+              {t('welcome.new')}
               <Ic className="ic ic-sm wl-new-out"><path d="M8 4.5H4.5v11h11V12M11 4.5h4.5V9M15.5 4.5L9 11" /></Ic>
             </button>
           </div>
@@ -313,52 +375,7 @@ export const WorkspaceScreen = ({
       </div>
 
       <div className="wl-main paper">
-        <div className="wl-col">
-          <header className="wl-main-head">
-            <h2 className="wl-h"><span className="lex">
-              <span className="lex-d">{t('welcome.recent')}</span>
-              <span className="lex-q">{t('welcome.recentQuest')}</span>
-              <span className="lex-p">{t('welcome.recentNote')}</span>
-              <span className="lex-w">{t('welcome.recentShop')}</span>
-            </span></h2>
-            <span className="wl-count num" data-testid="welcome-count">{items.length}</span>
-            <label className="wl-search">
-              <Ic className="ic ic-sm"><circle cx="9" cy="9" r="5" /><path d="M13 13l3.5 3.5" /></Ic>
-              <input type="text" value={query} onChange={e => setQuery(e.target.value)}
-                placeholder={t('welcome.search')} aria-label={t('welcome.search')} autoComplete="off" />
-            </label>
-          </header>
-
-          {load === 'failed' && (
-            <p className="wl-note" role="status">{t('welcome.loadFailed')}
-              <button type="button" className="set-link" onClick={() => refresh()}>{t('welcome.retry')}</button></p>
-          )}
-          {q && !shown.length && <p className="wl-note" role="status">{t('welcome.searchNone')}</p>}
-
-          <ul className="wl-projects" aria-busy={load === 'loading'}>
-            {shown.map(card)}
-            <li {...dropProps('list')}>
-              <FolderIc />
-              <span className="wl-drop-t">{t('welcome.dropTitle')}</span>
-              <span className="wl-drop-s">{rich(t('welcome.dropText'), { ...code, pick: pick(t('welcome.dropPick')) })}</span>
-            </li>
-          </ul>
-
-          {first && (
-            <div className="wl-first">
-              <ol className="wl-steps">
-                <li><span className="wl-step-n num">1</span><span className="wl-step-t"><b>{t('welcome.step1Title')}</b> {rich(t('welcome.step1'), code)}</span></li>
-                <li><span className="wl-step-n num">2</span><span className="wl-step-t"><b>{t('welcome.step2Title')}</b> {t('welcome.step2')}</span></li>
-                <li><span className="wl-step-n num">3</span><span className="wl-step-t"><b>{t('welcome.step3Title')}</b> {t('welcome.step3')}</span></li>
-              </ol>
-              <div {...dropProps('lg')}>
-                <FolderIc />
-                <span className="wl-drop-t">{t('welcome.dropLgTitle')}</span>
-                <span className="wl-drop-s">{rich(t('welcome.dropLgText'), { pick: pick(t('welcome.dropLgPick')), new: <b>{t('welcome.new')}</b> })}</span>
-              </div>
-            </div>
-          )}
-        </div>
+        <HubPanel h={hub} onGetUnity={() => window.open(UNITY_DOWNLOAD_URL, '_blank')} recent={recentList} />
         {APP_VERSION && <p className="wl-ver-foot">Gamachine <span className="num">{APP_VERSION}</span></p>}
       </div>
       {guideOpen && guideScreen}
