@@ -857,7 +857,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         def resolve(result):
             base_resolver(result)
             card = _cards.get(gate_id)
-            if result is True and key is not None and card is not None and card.by == "desktop":
+            # One-time grant for the approved step: any answerer (desktop or a
+            # paired device) earns it, unlike the persistent computer-use grant.
+            if result is True and key is not None and card is not None:
                 _browser_grants[key] = time() + BROWSER_GRANT_TTL
             elif key is not None:
                 _browser_grants.pop(key, None)
