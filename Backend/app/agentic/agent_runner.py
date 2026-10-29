@@ -2317,6 +2317,7 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
         # Chat mailbox: a separate server with the two mail tools only. A side
         # chat never mails, so its read-only session does not get it.
         from computer_use import registration
+        from browser_use import registration as browser_registration
         if not getattr(self, "read_only", False):
             from agentic import mailbox as _mailbox
             _mail_entry = _mailbox.claude_server_entry(self.conversation_id)
@@ -2325,11 +2326,16 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
             _computer_entry = registration.claude_server_entry(self.conversation_id)
             if _computer_entry is not None:
                 mcp_servers_cfg[registration.SERVER_NAME] = _computer_entry
+            _browser_entry = browser_registration.claude_server_entry(self.conversation_id)
+            if _browser_entry is not None:
+                mcp_servers_cfg[browser_registration.SERVER_NAME] = _browser_entry
 
         _session_guide = (
             agent_guide.with_computer_use(self._agent_guide)
             if registration.SERVER_NAME in mcp_servers_cfg else self._agent_guide
         )
+        if browser_registration.SERVER_NAME in mcp_servers_cfg:
+            _session_guide = agent_guide.with_browser_use(_session_guide)
         model = self.model_name if (self.model_name or "").startswith("claude-") else None
 
         # Effort: kayıtçıdan (effort_caps) eşlenir — "auto" veya desteklenmeyen seviye →
@@ -2470,9 +2476,13 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
         from providers.codex_session import get_session, close_session, _SESSIONS
         from providers.effort_caps import map_effort as _map_effort
         from computer_use import settings as computer_use_settings
+        from browser_use import settings as browser_use_settings
 
         desired_computer_use = (
             not bool(getattr(self, "read_only", False)) and computer_use_settings.enabled_now()
+        )
+        desired_browser_use = (
+            not bool(getattr(self, "read_only", False)) and browser_use_settings.enabled_now()
         )
 
         desired_unity_mcp = False
@@ -2511,8 +2521,13 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
             _existing is not None
             and bool(getattr(_existing, "computer_use", False)) != desired_computer_use
         )
+        _browser_changed = (
+            _existing is not None
+            and bool(getattr(_existing, "browser_use", False)) != desired_browser_use
+        )
         if _existing is not None and (
             _effort_changed or _workspace_changed or _ro_changed or _unity_changed or _computer_changed
+            or _browser_changed
         ):
             reasons = []
             if _ro_changed:
@@ -2525,6 +2540,8 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                 reasons.append("unityMCP açıldı" if desired_unity_mcp else "unityMCP kapandı")
             if _computer_changed:
                 reasons.append("bilgisayar kullanımı açıldı" if desired_computer_use else "bilgisayar kullanımı kapandı")
+            if _browser_changed:
+                reasons.append("tarayıcı kullanımı açıldı" if desired_browser_use else "tarayıcı kullanımı kapandı")
             logger.info(
                 "[CodexSession] %s; session yeniden kuruluyor",
                 ", ".join(reasons),
@@ -2559,6 +2576,7 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
             read_only=bool(getattr(self, "read_only", False)),
             unity_mcp=desired_unity_mcp,
             computer_use=desired_computer_use,
+            browser_use=desired_browser_use,
         )
         # Oto mod → onay otomatik accept; Adım/Plan modu → her mutasyonda onay kartı.
         session.auto_approve = (self.generation_mode == "auto")
@@ -2592,6 +2610,8 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
                     agent_guide.with_computer_use(self._agent_guide)
                     if desired_computer_use else self._agent_guide
                 )
+                if desired_browser_use:
+                    _session_guide = agent_guide.with_browser_use(_session_guide)
                 message = _session_guide + "\n\n" + message
             session._ctx_injected = True
         if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False):

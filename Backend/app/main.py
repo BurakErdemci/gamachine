@@ -52,9 +52,11 @@ os.environ["PATH"] = os.pathsep.join(
 #   backend agy-hook --state <file>     → agy_step_gate.main (agy PreToolUse hook, every approval mode)
 #   backend mail-mcp-server             → unity_ai_mcp.mail_server.main (Claude chats' mail tools)
 #   backend computer-mcp-server         → computer_use.server.main (computer-use tools)
+#   backend browser-mcp-server          → browser_use.server.main (agent browser tools)
 # FastAPI/uvicorn app'i kurmadan erken dön — bu komutlar HTTP server başlatmaz.
 if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bridge", "agy-hook",
-                                         "mail-mcp-server", "computer-mcp-server", "computer-mcp-standalone"):
+                                         "mail-mcp-server", "computer-mcp-server", "computer-mcp-standalone",
+                                         "browser-mcp-server"):
     _sub_mode = sys.argv[1]
     sys.argv = [sys.argv[0]] + sys.argv[2:]
     if _sub_mode == "mcp-server":
@@ -67,6 +69,10 @@ if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bri
         sys.exit(0)
     elif _sub_mode == "computer-mcp-server":
         from computer_use.server import main as _sub_main
+        _sub_main()
+        sys.exit(0)
+    elif _sub_mode == "browser-mcp-server":
+        from browser_use.server import main as _sub_main
         _sub_main()
         sys.exit(0)
     elif _sub_mode == "computer-mcp-standalone":
@@ -347,9 +353,11 @@ usage_service = UsageService()
 
 from agentic import approval_mode  # noqa: E402
 from computer_use import settings as computer_use_settings  # noqa: E402
+from browser_use import settings as browser_use_settings  # noqa: E402
 
 approval_mode.bind_store(db)
 computer_use_settings.bind_store(db)
+browser_use_settings.bind_store(db)
 
 _ALLOWED_ORIGINS = [
     "http://localhost:8888",    # Nextron dev renderer

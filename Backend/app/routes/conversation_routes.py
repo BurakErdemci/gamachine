@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import threading
 import types
 import uuid
@@ -30,6 +31,7 @@ from computer_use import activity as computer_activity
 from computer_use import gate as computer_gate
 from computer_use import policy as computer_policy
 from computer_use import settings as computer_settings
+from browser_use import settings as browser_settings
 from computer_use import platform as computer_platform
 from computer_use.platform import valid_app_id as valid_bundle_id
 from unity_ai_mcp import unity_project_presence
@@ -621,6 +623,13 @@ def _stream_language(body, header):
     return header
 
 
+BROWSER_GRANT_TTL = 600
+_BROWSER_CRITICAL_OPS = frozenset({"click", "fill", "select", "press"})
+BROWSER_HALTED_REASON = ("The user stopped the browser for this turn; "
+                         "do not use browser tools again until the user's next message.")
+BROWSER_INACTIVE_REASON = "The agent browser is turned off in Settings."
+
+
 def create_conversation_router(db, progress_store=None):  # Kept only for call compatibility.
     router = APIRouter()
     _mcp_pending: dict = {}   # gate_id → {tool, params, workspace_path}
@@ -630,6 +639,10 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
     # call they make is denied until the user's next message starts a turn.
     # In memory on purpose: a restart ends every turn anyway.
     _computer_halted: set[int] = set()
+    # Where Electron's agent-browser host listens; reported by the app, never persisted.
+    _browser_runtime = {"running": False, "port": None, "token": None}
+    # One-time approvals of critical browser steps: (chat, op, url, fingerprint) -> expiry.
+    _browser_grants: dict[tuple, float] = {}
     _mcp_results: dict = {}   # gate_id → {approved, ...}
     _mcp_result_ts: dict = {}  # gate_id → oluşturulma zamanı (TTL süpürmesi için)
 
@@ -762,11 +775,11 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
 
     def _reject_computer_use_pending(conversation_id: Optional[int] = None,
                                      reason: str = computer_gate.INACTIVE_REASON,
-                                     decision: str = "mode_switch"):
-        """Reject open computer cards: all of them, or one conversation's."""
+                                     decision: str = "mode_switch", flag: str = "computer_use"):
+        """Reject open computer (or, with flag="browser_use", browser) cards: all of them, or one conversation's."""
         rejected = 0
         for gate_id, entry in list(_mcp_pending.items()):
-            if not entry.get("computer_use"):
+            if not entry.get(flag):
                 continue
             if (conversation_id is not None and entry.get("conversation_id") != conversation_id
                     and entry.get("claimed_conversation_id") != conversation_id):
@@ -782,6 +795,82 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             _release_gate(gate_id)
             rejected += 1
         return rejected
+
+    def _browser_request(body, x_session_token):
+        gate_id = body["gate_id"]
+        tool = body.get("tool")
+        params = body.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        owner, why_unowned = _verified_mcp_owner(body.get("conversation_id"), x_session_token)
+        claimed = body.get("conversation_id")
+        op = str(tool)[len("browser_"):]
+        url, fingerprint = params.get("page_url"), params.get("fingerprint")
+        valid = (op in _BROWSER_CRITICAL_OPS
+                 and isinstance(url, str) and isinstance(fingerprint, str))
+        key = (owner, op, url, fingerprint) if valid and owner is not _UNKNOWN_OWNER else None
+        now = time()
+        for stale in [k for k, expiry in _browser_grants.items() if expiry <= now]:
+            del _browser_grants[stale]
+        granted = key is not None and _browser_grants.pop(key, None) is not None
+        if not valid:
+            decision = computer_gate.Decision("deny", "Invalid browser approval request.")
+        elif ((owner is not _UNKNOWN_OWNER and owner in _computer_halted)
+                or (type(claimed) is int and claimed in _computer_halted)):
+            # A claimed id is honoured even unverified: it can only deny more.
+            decision = computer_gate.Decision("deny", BROWSER_HALTED_REASON)
+        elif not browser_settings.enabled(db):
+            decision = computer_gate.Decision("deny", BROWSER_INACTIVE_REASON)
+        elif granted:
+            decision = computer_gate.Decision("allow")
+        else:
+            decision = computer_gate.Decision("card", params.get("risk_reason") or f"browser {op}")
+        log_path = os.path.join(os.path.dirname(db.db_path), "browser_actions.jsonl")
+
+        def log(outcome, reason):
+            computer_gate.actions_log_append(log_path, {
+                "conversation_id": body.get("conversation_id"), "tool": tool, "url": url,
+                "fingerprint": fingerprint, "decision": outcome, "reason": reason,
+                "granted": granted,
+            })
+
+        log(decision.kind, decision.reason)
+        if decision.kind != "card":
+            result = {"status": "resolved", "approved": decision.kind == "allow", "gate_id": gate_id}
+            if decision.kind == "deny":
+                result["error"] = decision.reason
+            return result
+        # The agent retried while its card is still open: that card stays the only one.
+        for open_gate, open_entry in _mcp_pending.items():
+            if key is not None and open_entry.get("grant_key") == key and _cards.get(open_gate) is not None:
+                return {"status": "ok", "gate_id": open_gate}
+        _register_gate(gate_id, owner, kind="external")
+        summary = f"browser {op}: {params.get('element_name') or 'element'}"
+        _mcp_pending[gate_id] = {
+            "tool": tool, "params": params, "workspace_path": body.get("workspace_path", ""),
+            "conversation_id": None if owner is _UNKNOWN_OWNER else owner,
+            "claimed_conversation_id": claimed if type(claimed) is int and claimed > 0 else None,
+            "browser_use": True, "grant_key": key, "risk_reason": decision.reason, "summary": summary,
+        }
+        _mcp_results[gate_id] = {"status": "pending"}
+        _mcp_result_ts[gate_id] = time()
+        base_resolver = _mcp_resolver(gate_id)
+
+        def resolve(result):
+            base_resolver(result)
+            card = _cards.get(gate_id)
+            if result is True and key is not None and card is not None and card.by == "desktop":
+                _browser_grants[key] = time() + BROWSER_GRANT_TTL
+            elif key is not None:
+                _browser_grants.pop(key, None)
+            log("approved" if result is True else "rejected", decision.reason)
+
+        _cards.open_card(gate_id, conversation_id=_mcp_pending[gate_id]["conversation_id"],
+                         kind="mcp", tool=tool, summary=summary, params=params,
+                         risk=decision.reason, resolver=resolve)
+        if owner is _UNKNOWN_OWNER:
+            logger.warning("[browser-use] gate %s is unowned (%s)", gate_id, why_unowned)
+        return {"status": "ok", "gate_id": gate_id}
 
     def _sweep_mcp_gates() -> None:
         """İki aşamalı süpürme: önce bekleyeni kalmayan KART, sonra kayıt.
@@ -2466,6 +2555,8 @@ Max 300 kelime. Türkçe yaz.
             }
         if str(body.get("tool")).startswith("computer_"):
             return _computer_use_request(body, x_session_token)
+        if str(body.get("tool")).startswith("browser_"):
+            return _browser_request(body, x_session_token)
         # Global auto mode (owner decision, 25 Sep 2026): no card for anyone,
         # with or without a conversation - external MCP clients included.
         # Nothing is registered, so an auto request leaves no pending entry.
@@ -2573,7 +2664,7 @@ Max 300 kelime. Türkçe yaz.
             }
         if gate_id in _mcp_results:
             entry = _mcp_pending.get(gate_id, {})
-            if entry.get("computer_use"):
+            if entry.get("computer_use") or entry.get("browser_use"):
                 if approved and not approval_mode.check_ui_secret(x_ui_secret):
                     raise HTTPException(status_code=403, detail="Bilgisayar kullanımı yalnız uygulama arayüzünden onaylanabilir.")
                 entry["remember"] = body.get("remember") is True
@@ -2597,7 +2688,7 @@ Max 300 kelime. Türkçe yaz.
         """
         approved = 0
         for gate_id in list(_mcp_pending):
-            if _mcp_pending[gate_id].get("computer_use"):
+            if _mcp_pending[gate_id].get("computer_use") or _mcp_pending[gate_id].get("browser_use"):
                 continue
             _cards.close_card(gate_id, "approved", decision="mode_switch", device="desktop")
             _mcp_results[gate_id] = {"status": "resolved", "approved": True, "automatic": True}
@@ -2627,7 +2718,7 @@ Max 300 kelime. Türkçe yaz.
         """
         approved = 0
         for gate_id, entry in list(_mcp_pending.items()):
-            if entry.get("computer_use"):
+            if entry.get("computer_use") or entry.get("browser_use"):
                 continue
             if entry.get("kind") == "mail":
                 action = {"kind": "mail"}
@@ -2753,6 +2844,58 @@ Max 300 kelime. Türkçe yaz.
                                      "computer_run_steps", params, "allow")
         return {"stop": "halted" if halted else "disabled" if not enabled else None}
 
+    @router.get("/browser/settings")
+    async def get_browser_settings(
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+    ):
+        _check_token(x_session_token)
+        return {"enabled": browser_settings.enabled(db), "runtime": dict(_browser_runtime),
+                "halted": sorted(_computer_halted)}
+
+    @router.put("/browser/settings")
+    async def set_browser_settings(
+        body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+        x_ui_secret: str = Header(alias="X-Gamachine-UI-Secret", default=""),
+        x_maintenance: str = Header(alias="X-UnityAI-Maintenance", default=""),
+    ):
+        _check_token(x_session_token)
+        if x_maintenance:
+            raise HTTPException(status_code=403, detail="Bu kanaldan tarayıcı kullanımı değiştirilemez.")
+        if not approval_mode.check_ui_secret(x_ui_secret):
+            raise HTTPException(status_code=403, detail="Tarayıcı kullanımı yalnız uygulama arayüzünden değiştirilebilir.")
+        on = body.get("enabled")
+        if type(on) is not bool:
+            raise HTTPException(status_code=400, detail="enabled true ya da false olmalı.")
+        browser_settings.set_enabled(db, on)
+        if not on:
+            _browser_grants.clear()
+        rejected = _reject_computer_use_pending(reason=BROWSER_INACTIVE_REASON, flag="browser_use") if not on else 0
+        result = await get_browser_settings(x_session_token=x_session_token)
+        return {**result, "rejected_browser_use": rejected}
+
+    @router.post("/browser/runtime")
+    async def set_browser_runtime(
+        body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+        x_ui_secret: str = Header(alias="X-Gamachine-UI-Secret", default=""),
+        x_maintenance: str = Header(alias="X-UnityAI-Maintenance", default=""),
+    ):
+        _check_token(x_session_token)
+        if x_maintenance:
+            raise HTTPException(status_code=403, detail="Bu kanaldan tarayıcı durumu değiştirilemez.")
+        if not approval_mode.check_ui_secret(x_ui_secret):
+            raise HTTPException(status_code=403, detail="Tarayıcı çalışma durumu yalnız uygulama arayüzünden bildirilebilir.")
+        running, port, token = body.get("running"), body.get("port"), body.get("token")
+        if type(running) is not bool:
+            raise HTTPException(status_code=400, detail="Tarayıcı çalışma durumu geçersiz.")
+        if running and (type(port) is not int or not 1 <= port <= 65535
+                        or not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token)):
+            raise HTTPException(status_code=400, detail="Tarayıcı portu ve anahtarı geçersiz.")
+        _browser_runtime.update(running=running, port=port if running else None,
+                                token=token if running else None)
+        return dict(_browser_runtime)
+
     @router.post("/computer-use/halt/{conversation_id}")
     async def halt_computer_use(
         conversation_id: int,
@@ -2773,6 +2916,9 @@ Max 300 kelime. Türkçe yaz.
             raise HTTPException(status_code=400, detail="Sohbet kimliği pozitif bir tam sayı olmalı.")
         _computer_halted.add(conversation_id)
         _reject_computer_use_pending(conversation_id, computer_gate.HALTED_REASON, "computer_halt")
+        _reject_computer_use_pending(conversation_id, BROWSER_HALTED_REASON, "computer_halt", flag="browser_use")
+        for key in [k for k in _browser_grants if k[0] == conversation_id]:
+            del _browser_grants[key]
         return {"halted": True, "conversation_id": conversation_id}
 
     @router.delete("/computer-use/grants/{bundle_id}")

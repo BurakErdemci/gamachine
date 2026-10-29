@@ -37,6 +37,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Set
 
 import unity_file_guard
 from computer_use import registration
+from browser_use import registration as browser_registration
 from providers.text_blocks import block_break
 from agentic.command_gates import APPROVAL_GATES, APPROVAL_RESULTS, APPROVAL_TIMEOUT_S
 from agentic.command_gates import cancel_gate, mark_timed_out, register_gate, release_gate
@@ -826,6 +827,9 @@ def _trusted_mcp_config(forward_env: Sequence[str] = (), read_only: bool = False
         entry = registration.codex_thread_entry(forward_env)
         if entry is not None:
             servers[registration.SERVER_NAME] = entry
+        browser_entry = browser_registration.codex_thread_entry(forward_env)
+        if browser_entry is not None:
+            servers[browser_registration.SERVER_NAME] = browser_entry
     return {"mcp_servers": servers}
 
 
@@ -887,12 +891,14 @@ class CodexSession:
         read_only: bool = False,
         unity_mcp: bool = False,
         computer_use: bool = False,
+        browser_use: bool = False,
     ):
         self.conversation_id = conversation_id
         # Side chat session: every approval request is declined, in every mode.
         self.read_only = bool(read_only)
         self.unity_mcp = unity_mcp
         self.computer_use = computer_use
+        self.browser_use = browser_use
         self.model = model
         self.cwd = cwd
         # Reasoning effort (minimal..xhigh; max yalnız gpt-5.6). Launch-time config'tir
@@ -1709,11 +1715,12 @@ class CodexSession:
                 self._active_gate_ids.clear()
 
 
-def get_session(conversation_id: int, *, computer_use: bool = False, **kwargs) -> CodexSession:
+def get_session(conversation_id: int, *, computer_use: bool = False, browser_use: bool = False,
+                **kwargs) -> CodexSession:
     """conversation_id için canlı session'ı getir; yoksa oluştur."""
     sess = _SESSIONS.get(conversation_id)
     if sess is None:
-        sess = CodexSession(conversation_id, computer_use=computer_use, **kwargs)
+        sess = CodexSession(conversation_id, computer_use=computer_use, browser_use=browser_use, **kwargs)
         _SESSIONS[conversation_id] = sess
     return sess
 
