@@ -104,7 +104,8 @@ def backend_app(seen):
             yield "z" * (d.CHUNK_MAX * 2 + 5)
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    @app.get("/conversations/{conv}/wake-stream")
+    # An allowed stream that never ends (the per-chat wake stream is desktop-only).
+    @app.get("/conversations/{conv}/turn-events")
     async def endless(conv: int):
         async def gen():
             yield "data: start\n\n"
@@ -331,7 +332,7 @@ async def test_http_has_an_overall_timeout(ui, monkeypatch):
 
 
 async def test_http_refuses_an_event_stream(ui):
-    r = await call(ui, type="ui_http", method="GET", path="/conversations/1/wake-stream")
+    r = await call(ui, type="ui_http", method="GET", path="/conversations/1/turn-events")
     assert r["ok"] is False and r["error"] == "stream_only"
     for _ in range(100):
         if "cancelled" in ui.seen:
@@ -373,7 +374,7 @@ async def test_stream_chunks_in_order_then_ends(ui):
 
 async def test_stream_close_cancels_the_request(ui):
     task = asyncio.create_task(ui.disp.handle(ui.session, {"id": 1, "type": "ui_stream_open", "method": "GET",
-                                                           "path": "/conversations/1/wake-stream"}))
+                                                           "path": "/conversations/1/turn-events"}))
     for _ in range(100):
         if any(m.get("type") == "ui_stream_chunk" for m in ui.session.sent):
             break
@@ -394,7 +395,7 @@ async def test_stream_close_cancels_the_request(ui):
 
 async def test_stream_ends_with_the_session(ui):
     task = asyncio.create_task(ui.disp.handle(ui.session, {"id": 1, "type": "ui_stream_open", "method": "GET",
-                                                           "path": "/conversations/1/wake-stream"}))
+                                                           "path": "/conversations/1/turn-events"}))
     await asyncio.sleep(0.05)
     task.cancel()  # PhoneSession.close() cancels its tasks
     await asyncio.gather(task, return_exceptions=True)
@@ -409,9 +410,9 @@ async def test_stream_ends_with_the_session(ui):
 async def test_stream_limit_per_session(ui, monkeypatch):
     monkeypatch.setattr(d, "MAX_STREAMS", 1)
     task = asyncio.create_task(ui.disp.handle(ui.session, {"id": 1, "type": "ui_stream_open", "method": "GET",
-                                                           "path": "/conversations/1/wake-stream"}))
+                                                           "path": "/conversations/1/turn-events"}))
     await asyncio.sleep(0.05)
-    r = await call(ui, rid=2, type="ui_stream_open", method="GET", path="/conversations/1/wake-stream")
+    r = await call(ui, rid=2, type="ui_stream_open", method="GET", path="/conversations/1/turn-events")
     assert r["error"] == "too_many_streams"
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)

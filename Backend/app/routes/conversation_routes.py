@@ -2243,29 +2243,42 @@ Max 300 kelime. Türkçe yaz.
             localize_sse(_tag_sse_stream(event_generator(), request.conversation_id), _stream_language(request, x_ui_lang)),
             media_type="text/event-stream")
 
-    def _desktop_answer(gate_id: str, decision: str, choice: Any = None) -> Optional[dict]:
-        """The desktop's answer through the shared first-answer-wins gate;
-        None for a gate with no registered card (then the old direct path)."""
-        if _cards.get(gate_id) is None:
+    def _answering_device() -> str:
+        """Who sends this answer: the paired device when the web remote's
+        dispatcher runs the request (remote/ui_dispatch.py), else the desktop."""
+        from remote import ui_dispatch
+        return ui_dispatch.REMOTE_DEVICE.get() or "desktop"
+
+    def _desktop_answer(gate_id: str, decision: str, choice: Any = None,
+                        device: str = "desktop") -> Optional[dict]:
+        """The answer through the shared first-answer-wins gate, recorded as
+        `device`; None for a gate with no registered card (then the old direct
+        path). A paired device's answer also closes the desktop's copy."""
+        card = _cards.get(gate_id)
+        if card is None:
             return None
-        res = _cards.answer_card(gate_id, decision, choice, device="desktop")
+        if device == "desktop":
+            res = _cards.answer_card(gate_id, decision, choice, device="desktop")
+        else:
+            from remote import rpc
+            res = rpc.answer_card_as(device, card, decision, choice)
         return None if res.get("status") == "not_found" else res
 
-    def _answered_elsewhere(res: dict, decision: str) -> bool:
-        """A later answer that lost. The desktop repeating its own answer is
-        not one: the renderer may resend after an uncertain delivery, and that
-        keeps getting the reply it always got."""
+    def _answered_elsewhere(res: dict, decision: str, device: str = "desktop") -> bool:
+        """A later answer that lost. The same device repeating its own answer
+        is not one: the renderer may resend after an uncertain delivery, and
+        that keeps getting the reply it always got."""
         return res.get("status") == "already_answered" and not (
-            res.get("by") == "desktop" and res.get("decision") == decision)
+            res.get("by") == device and res.get("decision") == decision)
 
-    def _won_elsewhere(gate_id: str) -> Optional[dict]:
+    def _won_elsewhere(gate_id: str, device: str = "desktop") -> Optional[dict]:
         """`already_answered` when another device closed this card. Needed
         where the live gate dicts no longer know it: once the winner's waiter
-        releases its gate, a late desktop answer would read the phone's
-        decision as a missing or expired gate. A close by the desktop itself
-        or by the system (timeout, Stop) keeps the reply the renderer knows."""
+        releases its gate, a late answer would read the other device's
+        decision as a missing or expired gate. A close by the answering device
+        itself or by the system (timeout, Stop) keeps the reply the renderer knows."""
         card = _cards.get(gate_id)
-        if card is not None and not card.open and card.by not in ("desktop", _cards.SYSTEM):
+        if card is not None and not card.open and card.by not in (device, _cards.SYSTEM):
             return _cards.already_answered(card)
         return None
 
@@ -2289,16 +2302,17 @@ Max 300 kelime. Türkçe yaz.
         # Kapının sözleşmesi "bozuk yanıt = RED" diyor; doğruluk (truthiness)
         # o sözleşmeyi sessizce tersine çeviriyordu.
         approved = body.get("approved") is True
+        device = _answering_device()
         if gate_id in _APPROVAL_GATES:
             decision = "approve" if approved else "reject"
-            res = _desktop_answer(gate_id, decision)
+            res = _desktop_answer(gate_id, decision, device=device)
             if res is None:
                 _APPROVAL_RESULTS[gate_id] = approved
                 _APPROVAL_GATES[gate_id].set()
-            elif _answered_elsewhere(res, decision):
+            elif _answered_elsewhere(res, decision, device):
                 return res
             return {"status": "ok", "approved": approved}
-        return _won_elsewhere(gate_id) or {"status": "gate_not_found"}
+        return _won_elsewhere(gate_id, device) or {"status": "gate_not_found"}
 
     @router.post("/question-answer/{gate_id}")
     async def question_answer(gate_id: str, body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
@@ -2311,15 +2325,16 @@ Max 300 kelime. Türkçe yaz.
         answers = body.get("answers")
         if not isinstance(answers, dict):
             return {"status": "invalid", "error": "answers (dict) gerekli."}
+        device = _answering_device()
         if gate_id in _QUESTION_GATES:
-            res = _desktop_answer(gate_id, "answer", answers)
+            res = _desktop_answer(gate_id, "answer", answers, device=device)
             if res is None:
                 _QUESTION_RESULTS[gate_id] = answers
                 _QUESTION_GATES[gate_id].set()
-            elif _answered_elsewhere(res, "answer"):
+            elif _answered_elsewhere(res, "answer", device):
                 return res
             return {"status": "ok"}
-        return _won_elsewhere(gate_id) or {"status": "gate_not_found"}
+        return _won_elsewhere(gate_id, device) or {"status": "gate_not_found"}
 
     @router.post("/chat-stop/{conversation_id}")
     async def chat_stop(conversation_id: int, x_session_token: str = Header(alias="X-Session-Token", default="")):

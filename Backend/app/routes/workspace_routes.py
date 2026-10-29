@@ -8,14 +8,24 @@ from schemas import WorkspaceRequest
 
 logger = logging.getLogger(__name__)
 
+# The most rows get_recent_workspaces returns: a paired device picks from the
+# saved list it is shown, never a new root.
+_SAVED_LOOKUP_LIMIT = 50
+
 
 def create_workspace_router(db):
     router = APIRouter()
 
     @router.post("/save-workspace")
     async def save_workspace(req: WorkspaceRequest, background_tasks: BackgroundTasks,
-                             x_session_token: str = Header(alias="X-Session-Token")):
+                             x_session_token: str = Header(alias="X-Session-Token"),
+                             x_gamachine_remote: str = Header(default="", alias="X-Gamachine-Remote")):
         user_id, _ = require_user(db, x_session_token, req.user_id)
+        # Authorising a new workspace root stays desktop-only (docs/remote-control-web.md);
+        # the remote dispatcher marks its requests. Paths compare as save_workspace does.
+        if x_gamachine_remote == "1" and not any(
+                w["path"] == req.path for w in db.get_recent_workspaces(user_id, _SAVED_LOOKUP_LIMIT)):
+            raise HTTPException(status_code=403, detail="remote_forbidden")
         previous_workspace = None
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         # One switch at a time: the persisted workspace order must equal the MCP switch order.
