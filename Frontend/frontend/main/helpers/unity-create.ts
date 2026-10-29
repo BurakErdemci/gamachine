@@ -6,6 +6,8 @@ export type CreateResult = { ok: true; path: string } | { ok: false; error: stri
 
 export interface CreateChild {
   kill: () => boolean | void
+  exitCode?: number | null
+  signalCode?: string | null
   once: (event: string, listener: (...args: any[]) => void) => unknown
 }
 
@@ -40,6 +42,7 @@ let cancelRequested = false
 
 export function cancelCreate(): { cancelled: boolean } {
   if (!active) return { cancelled: false }
+  if (active.exitCode != null || active.signalCode != null) return { cancelled: false }
   cancelRequested = true
   active.kill()
   return { cancelled: true }
@@ -119,11 +122,14 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
     // Unity never ran, so a folder at target now is not ours to remove.
     child.once('error', (err: Error) => finish(fail(`Could not start Unity: ${err?.message || err}`)))
     child.once('exit', (code: number | null) => {
+      // A finished project wins over a cancel that landed after Unity had already exited.
+      if (code === 0 && deps.isProject(target)) {
+        deps.registerTrusted(target)
+        return finish({ ok: true, path: target })
+      }
       if (cancelRequested) return failAndClean('cancelled')
       if (code !== 0) return failAndClean(`Unity exited with code ${code}.`)
-      if (!deps.isProject(target)) return failAndClean('Unity finished but the project was not created.')
-      deps.registerTrusted(target)
-      finish({ ok: true, path: target })
+      failAndClean('Unity finished but the project was not created.')
     })
   })
 }

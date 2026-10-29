@@ -136,6 +136,26 @@ describe('createProject', () => {
     expect(await p2).toMatchObject({ ok: true })
   })
 
+  it('keeps a finished project when a cancel races a successful exit', async () => {
+    const { child, deps, opts } = setup()
+    child.kill = () => true // The kill arrives too late to stop a process that already finished.
+    const promise = createProject(opts, deps)
+    expect(cancelCreate()).toEqual({ cancelled: true })
+    child.emit('exit', 0, null)
+    expect(await promise).toEqual({ ok: true, path: '/parent/My Game' })
+    expect(deps.removeDir).not.toHaveBeenCalled()
+    expect(deps.registerTrusted).toHaveBeenCalledExactlyOnceWith('/parent/My Game')
+  })
+
+  it('does not claim a cancel once the child has already exited', async () => {
+    const { child, deps, opts } = setup()
+    const promise = createProject(opts, deps)
+    ;(child as any).exitCode = 0
+    expect(cancelCreate()).toEqual({ cancelled: false })
+    child.emit('exit', 0, null)
+    expect(await promise).toMatchObject({ ok: true })
+  })
+
   it('removes the half-made folder after a cancel or a non-zero exit', async () => {
     const a = setup()
     const pa = createProject(a.opts, a.deps)
