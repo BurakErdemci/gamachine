@@ -426,10 +426,14 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
         showToast(cevir('workspace.outsideDockerMount'), 'warning');
       } else {
         try {
-          await axios.post(`${API}/save-workspace`,
+          const response = await axios.post(`${API}/save-workspace`,
             { user_id: user.id, path: backendPath },
             { headers: { 'X-Session-Token': user.sessionToken } }
           );
+          const reason = response.data?.mcp?.reason;
+          if (response.data?.mcp?.state === 'off' && typeof reason === 'string' && reason.length > 0) {
+            showToast(reason, 'warning');
+          }
         } catch (err) { console.error("Workspace kaydetme hatası:", err); }
       }
     }
