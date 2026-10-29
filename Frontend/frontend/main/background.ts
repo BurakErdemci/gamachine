@@ -1408,8 +1408,9 @@ if (!gotTheLock) {
             remoteControl.shutdown()
             computerLive.shutdown()
             await computerUse.shutdown()
-            quitReady = true
             await killBackend()
+            // Only now: a quit during the kill wait must go through before-quit's own wait.
+            quitReady = true
           },
           logger: console,
           relaunch: () => { app.relaunch(); app.exit(0) },
@@ -1470,8 +1471,8 @@ if (!gotTheLock) {
     if (quitReady) { void killBackend(); return }
     event.preventDefault()
     void computerUse.shutdown().finally(async () => {
-      quitReady = true
       await killBackend()
+      quitReady = true
       app.quit()
     })
   })
