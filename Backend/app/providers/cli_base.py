@@ -36,6 +36,7 @@ from spawn_env import (  # noqa: F401  (yeniden dışa verim — bkz. yukarı)
     env_family,
     build_spawn_env,
     conversation_env,
+    read_only_env,
 )
 
 
@@ -495,6 +496,7 @@ class BaseCLIProvider(AIProvider):
                 overrides={"NO_COLOR": "1", "TERM": "xterm-256color",
                            "COLUMNS": "220", "LINES": "50",
                            **conversation_env(getattr(self, "_conversation_id", None)),
+                           **read_only_env(self._read_only),
                            **self._turn_spawn_env()},
             )
 

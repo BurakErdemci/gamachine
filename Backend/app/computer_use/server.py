@@ -13,6 +13,7 @@ import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
+from spawn_env import read_only_refusal
 from unity_ai_mcp import approval_bridge
 from . import platform, policy
 from .driver_client import DriverClient, DriverError, DriverUnavailable
@@ -493,7 +494,7 @@ class ComputerServer:
             return self.driver
 
     async def call(self, tool, args):
-        refusal = self.approvals.preflight()
+        refusal = read_only_refusal() or self.approvals.preflight()
         if isinstance(refusal, str):
             return _text(refusal, True)
         confirmed = False

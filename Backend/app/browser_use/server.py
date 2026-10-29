@@ -11,7 +11,7 @@ import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, ImageContent, TextContent
 
-from spawn_env import CONVERSATION_ENV
+from spawn_env import CONVERSATION_ENV, read_only_refusal
 from unity_ai_mcp import approval_bridge
 
 # The gateway may run two host commands (describe, then the step) of up to 90 s each.
@@ -48,6 +48,8 @@ class BrowserServer:
         self._conversation_id = conversation_id
 
     async def call(self, op: str, args: dict) -> CallToolResult:
+        if (refusal := read_only_refusal()) is not None:
+            return _text(refusal, True)
         conversation_id = self._conversation_id or _conversation_id()
         if conversation_id is None:
             return _text("The agent browser needs a chat; this server was started without one.", True)
