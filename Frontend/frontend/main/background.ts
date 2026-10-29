@@ -396,7 +396,9 @@ handleSecure('hub-create-project', async (event, arg: any) => {
     platform: process.platform,
     exists: fs.existsSync,
     realpath: fs.realpathSync,
-    removeDir: (dir) => fs.rmSync(dir, { recursive: true, force: true }),
+    // To the Trash, not deleted: a project copied into the target during the attempt is born
+    // after it started too, so no birth-time rule can tell it apart (measured 29 Oct 2026).
+    removeDir: (dir) => { void shell.trashItem(dir).catch((e) => console.error('[hub] partial folder not moved to Trash:', dir, e?.message || e)) },
     spawn: (command, args) => spawn(command, args, { stdio: 'ignore' }),
     readLogTail,
     isProject: isUnityProjectDir,
