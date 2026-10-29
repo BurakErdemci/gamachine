@@ -38,21 +38,29 @@ no Playwright, no browser extension.
 ## Processes and channels
 
 ```
-model ──MCP stdio──▶ gamachineBrowser server (Python, backend binary sub-command)
-                        │  1. GET /browser/settings (X-Session-Token) → {enabled, runtime:{running,port,token}}
-                        │  2. POST /mcp-approval-request (tool browser_*) for critical actions
+model ──MCP stdio──▶ gamachineBrowser server (thin; backend binary sub-command)
+                        │  POST /browser/command (X-Session-Token) {tool, args, conversation_id}
                         ▼
-                     Electron main: BrowserHost (127.0.0.1:<random port>, Bearer <random token>)
-                        │  POST /cmd {op, conversation_id, args}
+                     backend: browser gateway (policy, describe, cards, one-time grants, halt)
+                        │  POST /cmd {op, conversation_id, args}  (Bearer <host token>)
+                        ▼
+                     Electron main: BrowserHost (127.0.0.1:<random port>)
+                        │
                         ▼
                      WebContentsView (agent session)  ──event 'browser-live'──▶ renderer panel
 ```
 
-Main reports its listener with `POST /browser/runtime` (X-Session-Token + UI secret),
-exactly like `POST /computer-use/runtime` (conversation_routes.py:2687). The token is a
-fresh 32-byte random value per launch and is compared in constant time. Docker backend
-mode is not supported in v4 (the container cannot reach the host's loopback); the
-settings endpoint reports `runtime.running=false` there and the tools say so.
+The host token is known only to Electron main and the backend process (owner decision,
+29 Oct 2026). Main reports `{running, port, token}` with `POST /browser/runtime`
+(X-Session-Token + UI secret), exactly like `POST /computer-use/runtime`. No endpoint
+returns the port or the token: `GET /browser/settings` answers `{enabled, running}`. Every
+browser command, from the MCP server or from anything else holding the local app token,
+goes through `POST /browser/command`, so the navigation check, the critical-step
+classification, the card and the one-time grant cannot be skipped. Approving a card
+needs the UI secret, which only main holds. The host still enforces its own navigation
+allow-list and connected-address check. The token is a fresh 32-byte random value per
+launch and is compared in constant time. Docker backend mode is not supported in v4 (the
+container cannot reach the host's loopback); `running` is false there and the tools say so.
 
 ## Command contract (main side)
 
