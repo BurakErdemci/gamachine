@@ -136,6 +136,8 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
     // Unity never ran, so a folder at target now is not ours to remove.
     child.once('error', (err: Error) => finish(fail(`Could not start Unity: ${err?.message || err}`)))
     child.once('exit', (code: number | null) => {
+      // An 'error' already ended this attempt and freed the slot; a retry may own the folder now.
+      if (settled) return
       // A finished project wins over a cancel that landed after Unity had already exited.
       if (code === 0 && deps.isProject(target)) {
         deps.registerTrusted(target)
