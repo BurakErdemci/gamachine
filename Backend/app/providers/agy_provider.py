@@ -667,8 +667,12 @@ class AgyProvider(BaseCLIProvider):
         migrated_cfg = _read_json_config(migrated_path)
         merged_servers = servers_of(migrated_cfg, migrated_path)
         if merged_servers is not None:
-            # taze unityai/unityMCP kazanır; eski dosya okunamadıysa yalnız bizimkiler
-            merged_servers.update(config_servers if config_servers is not None else ours)
+            # Legacy entries only fill gaps: the migrated file is what agy reads,
+            # so a user entry there is current and its legacy copy may be stale.
+            # Our own entries always win.
+            for name, entry in (config_servers or {}).items():
+                merged_servers.setdefault(name, entry)
+            merged_servers.update(ours)
             merged_servers.pop("antigravity", None)
             for name in optional:
                 if name not in ours:
