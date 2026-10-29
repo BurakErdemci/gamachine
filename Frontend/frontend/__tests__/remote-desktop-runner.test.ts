@@ -20,7 +20,8 @@ const ipc = vi.hoisted(() => {
 
 vi.mock('axios', () => {
   const post = vi.fn()
-  return { default: { post }, post }
+  const get = vi.fn()
+  return { default: { post, get }, post, get }
 })
 
 import axios from 'axios'
@@ -30,6 +31,7 @@ import {
 } from '../renderer/lib/remote/desktopRunner'
 
 const post = (axios as unknown as { post: ReturnType<typeof vi.fn> }).post
+const get = (axios as unknown as { get: ReturnType<typeof vi.fn> }).get
 const API = 'http://127.0.0.1:8000'
 const RID = '0123456789abcdef'
 const flush = () => new Promise(r => setTimeout(r, 0))
@@ -39,6 +41,7 @@ beforeEach(() => {
   ipc.on.mockClear()
   post.mockReset()
   post.mockResolvedValue({ data: { accepted: true } })
+  get.mockReset()
 })
 
 afterEach(() => resetRemoteSubscriptionsForTests())
@@ -116,6 +119,32 @@ describe('subscriptions', () => {
     // A later subscribe listens again.
     handleRemoteIpcFrame({ type: 'remote_ipc_subscribe', channel: 'terminal-data-t1' }, API, 'tok')
     expect(ipc.on).toHaveBeenCalledTimes(2)
+  })
+
+  it('listens again to the channels browsers still want after a reload', async () => {
+    get.mockResolvedValue({ data: { channels: ['terminal-data-t1', 'browser-live', 'menu-open-terminal', 7] } })
+    expect(handleRemoteIpcFrame({ type: 'remote_ipc_resync' }, API, 'tok')).toBe(true)
+    await flush()
+    expect(get).toHaveBeenCalledWith(`${API}/remote/ui-ipc-subscriptions`, { headers: { 'X-Session-Token': 'tok' } })
+    expect(ipc.on.mock.calls.map(c => c[0])).toEqual(['terminal-data-t1', 'browser-live'])
+
+    // A second resync (the wake stream reconnected) keeps one listener per channel.
+    handleRemoteIpcFrame({ type: 'remote_ipc_resync' }, API, 'tok')
+    await flush()
+    expect(ipc.on).toHaveBeenCalledTimes(2)
+
+    post.mockResolvedValueOnce({ data: { subscribed: true } })
+    ipc.listeners.get('terminal-data-t1')!('out')
+    await flush()
+    expect(post).toHaveBeenCalledWith(`${API}/remote/ui-ipc-event`, { channel: 'terminal-data-t1', args: ['out'] },
+      { headers: { 'X-Session-Token': 'tok' } })
+  })
+
+  it('survives a failing subscription list', async () => {
+    get.mockRejectedValue(new Error('down'))
+    handleRemoteIpcFrame({ type: 'remote_ipc_resync' }, API, 'tok')
+    await flush()
+    expect(ipc.on).not.toHaveBeenCalled()
   })
 
   it('ignores channels off the event list', () => {

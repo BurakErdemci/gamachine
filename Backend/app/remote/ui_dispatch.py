@@ -7,7 +7,8 @@ desktop's app token added here; the token never travels back. The UI secret is
 added only for the two routes in `secret_elevated`. IPC runs in the desktop
 renderer (it holds `window.ipc`): the backend publishes a `remote_ipc` frame on
 `/wake-stream-all` and the renderer posts the answer to
-`/remote/ui-ipc-result/{request_id}`.
+`/remote/ui-ipc-result/{request_id}`. A card answer (`/mcp-approval-respond`)
+never runs the HTTP route: it is the v1 remote answer, recorded as the device's.
 """
 from __future__ import annotations
 
@@ -18,13 +19,12 @@ import json
 import logging
 import re
 import secrets
-import sys
 import time
 import weakref
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, unquote, urlencode
 
-from agentic import approval_mode
+from agentic import approval_mode, cards
 from local_token_file import read_local_app_token
 from remote import crypto as C
 from remote import desktop_channel, rpc
@@ -40,11 +40,15 @@ UPLOAD_PART_MAX = 48 * 1024
 UPLOAD_TOTAL_MAX = 32 * 1024 * 1024
 UPLOAD_TTL_S = 600.0
 IPC_TIMEOUT_S = 30.0
+HTTP_TIMEOUT_S = 30.0
 START_TIMEOUT_S = 60.0
 MAX_STREAMS = 4
 IPC_ARGS_MAX = 8
 # Room left in a reply frame for its envelope (id, ok, status...).
 REPLY_ROOM = FRAME_PLAINTEXT_MAX - 4096
+# Set on every dispatched request; /wake-stream-all reads it so a browser's
+# copy of the stream does not count as a desktop renderer.
+REMOTE_HEADER = b"x-gamachine-remote"
 
 _ID = r"[^/]+"
 
@@ -121,6 +125,8 @@ _DENY: List[Tuple[Optional[Tuple[str, ...]], str]] = [
 # The only routes that get the UI secret, and only for these methods.
 _SECRET = [("POST", re.compile(rf"/mcp-approval-respond/{_ID}")),
            ("POST", re.compile(rf"/computer-use/halt/{_ID}"))]
+# Answered here through the v1 card path, never by running the route.
+_CARD_ANSWER = re.compile(rf"/mcp-approval-respond/({_ID})")
 
 _ALLOW_RE = [(methods, re.compile(p)) for methods, p in _ALLOW]
 
@@ -213,11 +219,26 @@ def ipc_event_allowed(channel: Any) -> bool:
     return isinstance(channel, str) and (channel in IPC_EVENTS or bool(_IPC_EVENT_PREFIX.fullmatch(channel)))
 
 
-def _ui_secret() -> str:
-    # approval_mode keeps the secret private and has no getter; read it under
-    # its lock. Empty means none is configured, and the route then refuses.
-    with approval_mode._LOCK:
-        return approval_mode._ui_secret.decode("utf-8")
+# Frame types a browser's copy of /wake-stream-all may carry; every other
+# event is dropped. The command frames (desktop_channel.DESKTOP_ONLY_TYPES)
+# are for the desktop renderer alone: a browser acting on `remote_message` or
+# `remote_ipc` would send the phone's text again or run the IPC a second time.
+BROWSER_FRAME_TYPES = frozenset({"title", desktop_channel.CARD_CLOSED_TYPE, desktop_channel.MODE_CHANGED_TYPE,
+                                 desktop_channel.MODEL_CHANGED_TYPE})
+
+# The desktop channel queues that belong to a remote session's copy of
+# /wake-stream-all (the route marks them).
+_remote_listeners: "weakref.WeakSet[asyncio.Queue]" = weakref.WeakSet()
+
+
+def mark_remote_listener(q: asyncio.Queue) -> None:
+    _remote_listeners.add(q)
+
+
+def desktop_renderer_ready() -> bool:
+    """A desktop renderer listens on /wake-stream-all. DesktopChannel counts
+    every listener, and a browser's copy would make a call wait for nobody."""
+    return any(q not in _remote_listeners for q in list(desktop_channel.CHANNEL._queues))
 
 
 def _too_big(obj: Any) -> bool:
@@ -285,29 +306,50 @@ class _AsgiCall:
 
 
 class _SseFilter:
-    """Drops the desktop-only command frames from a `/wake-stream-all` copy:
-    a browser renderer acting on `remote_message` or `remote_ipc` would send
-    the phone's text again or run the IPC a second time."""
+    """A browser's copy of `/wake-stream-all`: parses the event stream (CR, LF
+    or CRLF line ends, data lines joined) and passes only the events whose
+    frame type is in BROWSER_FRAME_TYPES, re-serialised; a comment-only block
+    passes as a keepalive. Anything else, unparseable included, is dropped."""
 
     def __init__(self):
         self._buf = b""
+        self._lines: List[bytes] = []
 
     def feed(self, data: bytes) -> bytes:
         self._buf += data
-        events = self._buf.split(b"\n\n")
-        self._buf = events.pop()
-        return b"".join(e + b"\n\n" for e in events if not self._desktop_only(e))
+        out = []
+        while True:
+            cr, lf = self._buf.find(b"\r"), self._buf.find(b"\n")
+            end = min(i for i in (cr, lf) if i >= 0) if cr >= 0 or lf >= 0 else -1
+            if end < 0 or (end == cr and end == len(self._buf) - 1):
+                break  # no line end yet, or a CR whose LF may still come
+            line = self._buf[:end]
+            self._buf = self._buf[end + (2 if self._buf[end:end + 2] == b"\r\n" else 1):]
+            if line:
+                self._lines.append(line)
+            elif self._lines:
+                out.append(self._event(self._lines))
+                self._lines = []
+        return b"".join(out)
 
     @staticmethod
-    def _desktop_only(event: bytes) -> bool:
-        for line in event.split(b"\n"):
-            if line.startswith(b"data:"):
-                try:
-                    frame = json.loads(line[5:])
-                except ValueError:
-                    return False
-                return isinstance(frame, dict) and frame.get("type") in desktop_channel.DESKTOP_ONLY_TYPES
-        return False
+    def _event(lines: List[bytes]) -> bytes:
+        data = []
+        for line in lines:
+            if line.startswith(b":"):
+                continue
+            name, _, value = line.partition(b":")
+            if name == b"data":
+                data.append(value[1:] if value.startswith(b" ") else value)
+        if not data:
+            return b": keepalive\n\n" if all(line.startswith(b":") for line in lines) else b""
+        try:
+            frame = json.loads(b"\n".join(data).decode("utf-8"))
+        except ValueError:
+            return b""
+        if not isinstance(frame, dict) or frame.get("type") not in BROWSER_FRAME_TYPES:
+            return b""
+        return b"data: " + json.dumps(frame).encode("utf-8") + b"\n\n"
 
 
 class _Upload:
@@ -338,18 +380,10 @@ class UiDispatcher:
 
     # ── plumbing ───────────────────────────────────────────────────────
     def _asgi_app(self):
-        if self.app is not None:
-            return self.app
-        # main.py runs as __main__ (frozen build) or as `main` (uvicorn
-        # reload); the module that built this bridge holds the app.
-        for name in ("__main__", "main"):
-            mod = sys.modules.get(name)
-            if mod is not None and getattr(mod, "remote_bridge", None) is self.bridge:
-                app = getattr(mod, "app", None)
-                if app is not None:
-                    self.app = app
-                    return app
-        raise rpc.RpcError("unavailable")
+        # main.py hands the app over when it builds the bridge.
+        if self.app is None:
+            raise rpc.RpcError("unavailable")
+        return self.app
 
     def _session_state(self, session: PhoneSession) -> _SessionState:
         state = self._state.get(session)
@@ -395,7 +429,11 @@ class UiDispatcher:
                                   or not all(0x20 <= ord(c) < 0x7F for c in ctype)):
             raise rpc.RpcError("bad_content_type")
         body = b""
-        if given == ["body"]:
+        if given == ["body"] and isinstance(req["body"], str):
+            # The page sends text bodies (JSON included) as the text itself.
+            body = req["body"].encode("utf-8")
+            ctype = ctype or "text/plain;charset=utf-8"
+        elif given == ["body"]:
             body = json.dumps(req["body"]).encode("utf-8")
             ctype = "application/json"
         elif given == ["body_b64"]:
@@ -408,14 +446,14 @@ class UiDispatcher:
             body = self._take_upload(session, req["upload_id"])
             ctype = ctype or "application/octet-stream"
 
-        headers = [(b"host", b"127.0.0.1"), (b"content-length", str(len(body)).encode())]
+        headers = [(b"host", b"127.0.0.1"), (b"content-length", str(len(body)).encode()), (REMOTE_HEADER, b"1")]
         if ctype:
             headers.append((b"content-type", ctype.encode("latin-1")))
         token = read_local_app_token()
         if token:
             headers.append((b"x-session-token", token.encode("utf-8")))
         if secret_elevated(method, path):
-            secret = _ui_secret()
+            secret = approval_mode.ui_secret()
             if secret:
                 headers.append((b"x-gamachine-ui-secret", secret.encode("utf-8")))
         scope = {
@@ -429,10 +467,14 @@ class UiDispatcher:
     async def http(self, session: PhoneSession, req: dict, rid):
         app = self._asgi_app()
         scope, body = self._request(session, req, "ui_http")
+        card = _CARD_ANSWER.fullmatch(scope["path"]) if scope["method"] == "POST" else None
+        if card is not None:
+            return self._answer_card(session, card.group(1), body)
         call = _AsgiCall(app, scope, body)
         try:
-            status, ctype = await call.start()
-            data = b"".join([c async for c in call.chunks()])
+            status, ctype, data = await asyncio.wait_for(self._read_reply(call), HTTP_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            raise rpc.RpcError("timeout")
         finally:
             call.close()
         out: Dict[str, Any] = {"status": status, "content_type": ctype}
@@ -448,8 +490,41 @@ class UiDispatcher:
             out["body_b64"] = base64.b64encode(data).decode("ascii")
         if _too_big(out):
             # One reply frame cannot carry it; ui_stream_open can, in chunks.
-            raise rpc.RpcError("too_large", size=len(data))
+            raise rpc.RpcError("too_large")
         return out
+
+    @staticmethod
+    async def _read_reply(call: _AsgiCall) -> Tuple[int, str, bytes]:
+        status, ctype = await call.start()
+        if ctype.split(";")[0].strip().lower() == "text/event-stream":
+            # It may never end; such routes are read through ui_stream_open.
+            raise rpc.RpcError("stream_only")
+        data = bytearray()
+        async for chunk in call.chunks():
+            data += chunk
+            # The reply cannot be smaller than the raw body: stop reading.
+            if len(data) > REPLY_ROOM:
+                raise rpc.RpcError("too_large")
+        return status, ctype, bytes(data)
+
+    def _answer_card(self, session: PhoneSession, card_id: str, body: bytes) -> dict:
+        """POST /mcp-approval-respond/{id} from a browser, answered like the v1
+        answer_card RPC (the ledger records the device) with the route's reply."""
+        try:
+            payload = json.loads(body) if body else None
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            return {"status": 422, "content_type": "application/json", "body": json.dumps({"detail": "bad_body"})}
+        # Only `true` approves, as in the route: a broken answer is a rejection.
+        decision = "approve" if payload.get("approved") is True else "reject"
+        card = cards.get(card_id)
+        res = rpc.answer_card_as(session.device_label, card, decision) if card is not None else {"status": "not_found"}
+        if res.get("status") == "ok":
+            res = {"status": "ok"}
+        elif res.get("status") == "not_found":
+            res = {"status": "gate_not_found"}
+        return {"status": 200, "content_type": "application/json", "body": json.dumps(res)}
 
     async def stream_open(self, session: PhoneSession, req: dict, rid):
         app = self._asgi_app()
@@ -457,6 +532,8 @@ class UiDispatcher:
         if len(state.streams) >= MAX_STREAMS:
             raise rpc.RpcError("too_many_streams")
         scope, body = self._request(session, req, "ui_stream_open")
+        if scope["method"] == "POST" and _CARD_ANSWER.fullmatch(scope["path"]):
+            raise rpc.RpcError("remote_forbidden", status=403)
         stream_id = secrets.token_hex(8)
         me = asyncio.current_task()
         state.streams[stream_id] = me
@@ -561,6 +638,8 @@ class UiDispatcher:
             logger.info("[remote] ui_ipc %s %s refused", session.device_label, channel[:64])
             raise rpc.RpcError("remote_unavailable")
         logger.info("[remote] ui_ipc %s %s", session.device_label, channel)
+        if not desktop_renderer_ready():
+            raise rpc.RpcError("desktop_not_ready")
         if req.get("upload_id") is not None:
             # An argument too large for one frame (a file being written)
             # arrives as an upload and takes its place here.
@@ -608,10 +687,15 @@ class UiDispatcher:
         if not ipc_event_allowed(channel):
             raise rpc.RpcError("remote_unavailable")
         logger.info("[remote] ui_ipc_subscribe %s %s", session.device_label, channel)
-        if not desktop_channel.publish_ipc_subscribe(channel):
+        if not desktop_renderer_ready() or not desktop_channel.publish_ipc_subscribe(channel):
             raise rpc.RpcError("desktop_not_ready")
         self._subs.setdefault(channel, weakref.WeakSet()).add(session)
         return {}
+
+    def subscribed_channels(self) -> List[str]:
+        """The event channels a live session still listens to; a desktop
+        renderer that reloaded attaches to them again."""
+        return sorted(ch for ch, subs in self._subs.items() if any(not s.closed for s in list(subs)))
 
     def forward_event(self, channel: str, args: list) -> bool:
         """Sends a renderer event to the sessions subscribed to its channel.

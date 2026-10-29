@@ -38,11 +38,16 @@ export function createIpcShim(transport: RemoteTransport, onUnavailable: (channe
       if (channel === 'app-token-get') return null
       if (DESKTOP_ONLY.has(channel)) throw unavailable(channel)
       try {
-        // `payload` is the first argument as the contract names it; `args` keeps multi-argument
-        // channels (write-file path, content, workspace) whole.
-        return await transport.request('ui_ipc', { channel, payload: args[0] ?? null, args })
+        // All arguments go: multi-argument channels (write-file path, content, workspace) stay whole.
+        return await transport.ipc(channel, args)
       } catch (err) {
         if (err instanceof RemoteError && err.code === 'remote_unavailable') throw unavailable(channel)
+        if (err instanceof RemoteError && err.code === 'too_large') {
+          // An answer (or argument) that no frame can carry: retrying would not help.
+          const tooLarge = new RemoteError('too_large', err.reply)
+          tooLarge.message = `${channel}: too large to send over the remote connection`
+          throw tooLarge
+        }
         throw err
       }
     },

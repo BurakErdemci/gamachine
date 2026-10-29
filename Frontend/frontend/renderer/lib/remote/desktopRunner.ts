@@ -104,7 +104,23 @@ export function subscribeRemoteEvents(channel: string, api: string, token: strin
   subscriptions.set(channel, typeof off === 'function' ? off : () => {});
 }
 
-/** Handles the two remote IPC frames of the wake stream; false for any other. */
+/** Listens again to the channels browsers still want. The backend asks for it
+ *  (`remote_ipc_resync`) when this renderer's wake stream starts: a reload
+ *  dropped the listeners, the browsers' subscriptions live on. */
+export async function restoreRemoteSubscriptions(api: string, token: string): Promise<void> {
+  try {
+    const res = await axios.get(`${api}/remote/ui-ipc-subscriptions`, { headers: { 'X-Session-Token': token } });
+    const channels = res?.data?.channels;
+    if (!Array.isArray(channels)) return;
+    for (const channel of channels) {
+      if (typeof channel === 'string') subscribeRemoteEvents(channel, api, token);
+    }
+  } catch (err) {
+    console.warn('[remote] restoring IPC subscriptions failed', err);
+  }
+}
+
+/** Handles the remote IPC frames of the wake stream; false for any other. */
 export function handleRemoteIpcFrame(data: any, api: string, token: string): boolean {
   if (data?.type === 'remote_ipc') {
     const call = parseRemoteIpc(data);
@@ -113,6 +129,10 @@ export function handleRemoteIpcFrame(data: any, api: string, token: string): boo
   }
   if (data?.type === 'remote_ipc_subscribe') {
     if (typeof data.channel === 'string') subscribeRemoteEvents(data.channel, api, token);
+    return true;
+  }
+  if (data?.type === 'remote_ipc_resync') {
+    void restoreRemoteSubscriptions(api, token);
     return true;
   }
   return false;

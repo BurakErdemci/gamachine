@@ -396,8 +396,12 @@ remote_bridge = RemoteBridge(db, stop_chat=_conversation_router.stop_chat,
                              list_slash_commands=_conversation_router.list_slash_commands,
                              apply_approval_mode=_conversation_router.apply_approval_mode,
                              list_models=_config_router.list_models,
-                             plan_locked=_config_router.plan_locked)
+                             plan_locked=_config_router.plan_locked,
+                             app=app)
 app.include_router(create_remote_router(remote_bridge))
+# A desktop renderer's /wake-stream-all asks it to re-attach the event
+# channels browsers still listen to (its listeners died with a reload).
+_conversation_router.remote_subscriptions = remote_bridge.rpc.ui.subscribed_channels
 
 
 @app.get("/health")

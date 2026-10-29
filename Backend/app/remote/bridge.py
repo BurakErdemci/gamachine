@@ -49,7 +49,8 @@ class RemoteBridge:
                  list_slash_commands: Optional[Callable[[str], Awaitable[dict]]] = None,
                  apply_approval_mode: Optional[Callable[[str, str], dict]] = None,
                  list_models: Optional[Callable[[Optional[int]], Awaitable[dict]]] = None,
-                 plan_locked: Optional[Callable[[object, object], bool]] = None):
+                 plan_locked: Optional[Callable[[object, object], bool]] = None,
+                 app=None):
         self.db = db
         self.store = RemoteStore(db)
         self.stop_chat = stop_chat
@@ -63,7 +64,8 @@ class RemoteBridge:
         self.keys: Optional[Keys] = None
         self.client: Optional[RelayClient] = None
         self.pairing = PairingManager(lambda: self.keys.static, self._send_to, clock)
-        self.rpc = Dispatcher(self)
+        # `app` is the FastAPI app the web remote's ui_http runs against.
+        self.rpc = Dispatcher(self, app=app)
         self.push = PushSender(self.store, lambda: self.keys.vapid if self.keys else None)
         self.sessions: Dict[str, PhoneSession] = {}
         self._phones: Dict[str, str] = {}

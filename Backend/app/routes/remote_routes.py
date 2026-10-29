@@ -177,4 +177,11 @@ def create_remote_router(bridge: RemoteBridge) -> APIRouter:
             raise HTTPException(status_code=400, detail={"code": "bad_event"})
         return {"subscribed": bridge.rpc.ui.forward_event(channel, args)}
 
+    @router.get("/ui-ipc-subscriptions")
+    async def ui_ipc_subscriptions(x_session_token: str = Header(alias="X-Session-Token", default="")):
+        """The event channels browsers still listen to: a desktop renderer
+        that reloaded listens to them again."""
+        _check_token(x_session_token)
+        return {"channels": bridge.rpc.ui.subscribed_channels()}
+
     return router

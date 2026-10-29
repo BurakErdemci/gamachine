@@ -114,9 +114,90 @@ describe('RemoteTransport uploads', () => {
     expect(http.params.body_b64).toBeUndefined()
   })
 
+  it('reads a GET reply too large for one frame again through a stream', async () => {
+    const payload = new Uint8Array(1000).map((_, i) => i % 256)
+    let t!: RemoteTransport
+    const { link, calls } = fakeLink((type) => {
+      if (type === 'ui_http') throw refuse('too_large')
+      setTimeout(() => {
+        t.handlePush({ type: 'ui_stream_chunk', stream_id: 's2', seq: 0, data_b64: toBase64(payload.subarray(0, 600)) })
+        t.handlePush({ type: 'ui_stream_chunk', stream_id: 's2', seq: 1, data_b64: toBase64(payload.subarray(600)) })
+        t.handlePush({ type: 'ui_stream_end', stream_id: 's2' })
+      }, 0)
+      return { stream_id: 's2', status: 200, content_type: 'application/json' }
+    })
+    t = new RemoteTransport(link)
+    t.handleStatus('ready')
+    const r = await t.http({ method: 'get', path: '/conversations/1/messages', query: { a: '1' } })
+    expect(calls.map((c) => c.type)).toEqual(['ui_http', 'ui_stream_open'])
+    expect(calls[1].params).toEqual(calls[0].params)
+    expect(r.status).toBe(200)
+    expect(r.content_type).toBe('application/json')
+    expect(fromBase64(r.body_b64!)).toEqual(payload)
+  })
+
+  it('does not run a non-GET request twice after too_large, and reports a broken stream', async () => {
+    const { link, calls } = fakeLink(() => {
+      throw refuse('too_large')
+    })
+    const t = new RemoteTransport(link)
+    t.handleStatus('ready')
+    await expect(t.http({ method: 'POST', path: '/scene-editor/x', body: '{}' })).rejects.toMatchObject({ code: 'too_large' })
+    expect(calls.map((c) => c.type)).toEqual(['ui_http'])
+
+    let t2!: RemoteTransport
+    const second = fakeLink((type) => {
+      if (type === 'ui_http') throw refuse('too_large')
+      setTimeout(() => t2.handlePush({ type: 'ui_stream_end', stream_id: 's3', error: 'internal' }), 0)
+      return { stream_id: 's3', status: 200 }
+    })
+    t2 = new RemoteTransport(second.link)
+    t2.handleStatus('ready')
+    await expect(t2.http({ method: 'GET', path: '/x' })).rejects.toMatchObject({ code: 'internal' })
+    expect(second.calls.map((c) => c.type)).toEqual(['ui_http', 'ui_stream_open'])
+  })
+
   it('round-trips base64', () => {
     const bytes = new Uint8Array(70_000).map((_, i) => (i * 7) % 256)
     expect(fromBase64(toBase64(bytes))).toEqual(bytes)
+  })
+})
+
+describe('RemoteTransport ipc', () => {
+  it('sends small arguments inline', async () => {
+    const { link, calls } = fakeLink(() => ({ ok: true }))
+    const t = new RemoteTransport(link)
+    t.handleStatus('ready')
+    await t.ipc('write-file', ['/w/a.cs', 'abc', '/w'])
+    expect(calls).toEqual([{ type: 'ui_ipc', params: { channel: 'write-file', payload: '/w/a.cs', args: ['/w/a.cs', 'abc', '/w'] } }])
+  })
+
+  it('uploads the string argument that would not fit and names its index', async () => {
+    const { link, calls } = fakeLink((type) => (type === 'ui_upload_part' ? { received: 1 } : { success: true }))
+    const t = new RemoteTransport(link)
+    t.handleStatus('ready')
+    const content = 'class A {}\n// çğ'.repeat(6000)
+    await expect(t.ipc('write-file', ['/w/a.cs', content, '/w'])).resolves.toEqual({ success: true })
+    const parts = calls.filter((c) => c.type === 'ui_upload_part')
+    expect(parts.length).toBeGreaterThan(1)
+    const joined = new Uint8Array(parts.flatMap((p) => Array.from(fromBase64(p.params.data_b64))))
+    expect(new TextDecoder().decode(joined)).toBe(content)
+    const ipc = calls[calls.length - 1]
+    expect(ipc).toEqual({
+      type: 'ui_ipc',
+      params: { channel: 'write-file', payload: '/w/a.cs', args: ['/w/a.cs', '', '/w'], upload_id: parts[0].params.upload_id, upload_arg_index: 1 },
+    })
+    expect(JSON.stringify(ipc.params).length).toBeLessThan(INLINE_BODY_MAX)
+  })
+
+  it('refuses with too_large when one upload cannot make the frame fit', async () => {
+    const { link, calls } = fakeLink()
+    const t = new RemoteTransport(link)
+    t.handleStatus('ready')
+    const big = 'x'.repeat(INLINE_BODY_MAX)
+    await expect(t.ipc('write-file', [big, big])).rejects.toMatchObject({ code: 'too_large' })
+    await expect(t.ipc('write-file', [{ blob: big }])).rejects.toMatchObject({ code: 'too_large' })
+    expect(calls).toHaveLength(0)
   })
 })
 

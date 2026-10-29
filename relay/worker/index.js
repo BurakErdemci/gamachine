@@ -50,12 +50,12 @@ const CACHE = {
   woff2: 'public, max-age=31536000, immutable',
 };
 
-function csp(url) {
+function csp(url, scriptHashes = []) {
   // Safari has not always matched ws(s): against 'self', so the socket origin is explicit.
   const ws = (url.protocol === 'https:' ? 'wss://' : 'ws://') + url.host;
   return [
     "default-src 'none'",
-    "script-src 'self'",
+    ["script-src 'self'", ...scriptHashes.map((h) => `'${h}'`)].join(' '),
     "style-src 'self'",
     "font-src 'self'",
     "img-src 'self'",
@@ -68,7 +68,7 @@ function csp(url) {
   ].join('; ');
 }
 
-function staticResponse(request, url, upstream, ext, cache) {
+function staticResponse(request, url, upstream, ext, cache, scriptHashes = []) {
   const headers = new Headers({
     'Content-Type': TYPES[ext] || 'application/octet-stream',
     'X-Content-Type-Options': 'nosniff',
@@ -77,7 +77,7 @@ function staticResponse(request, url, upstream, ext, cache) {
     'Cache-Control': cache,
   });
   if (ext === 'html') {
-    headers.set('Content-Security-Policy', csp(url));
+    headers.set('Content-Security-Policy', csp(url, scriptHashes));
     headers.set('X-Frame-Options', 'DENY');
   }
   return new Response(request.method === 'HEAD' ? null : upstream.body, { status: 200, headers });
@@ -93,6 +93,23 @@ async function serveStatic(request, env, url) {
 }
 
 const APP_INDEX = '/app/index.html';
+// The sha256 of every inline script of each exported page, keyed by its path under /app/,
+// written by scripts/build-remote-web.sh when it copies the export. It sits outside /app/, so
+// only the worker reads it.
+const APP_CSP = '/app-csp.json';
+const CSP_HASH_RE = /^sha256-[A-Za-z0-9+/]{43}=$/;
+
+// The page's own inline scripts and nothing else; a missing, broken or foreign entry adds none.
+async function appScriptHashes(env, url, assetPath) {
+  try {
+    const res = await env.ASSETS.fetch(new Request(new URL(APP_CSP, url.origin), { method: 'GET' }));
+    if (!res.ok) return [];
+    const hashes = (await res.json())?.[assetPath.slice('/app/'.length)];
+    return Array.isArray(hashes) ? hashes.filter((h) => typeof h === 'string' && CSP_HASH_RE.test(h)) : [];
+  } catch {
+    return [];
+  }
+}
 
 // The web remote bundle (renderer export) lives under /app/ and is served by prefix. A path
 // without a file extension is a client route and gets the index page; a missing file does not.
@@ -110,7 +127,8 @@ async function serveApp(request, env, url) {
   if (!upstream.ok) return plain(404, 'not found');
   const ext = assetPath.slice(assetPath.lastIndexOf('.') + 1);
   const cache = assetPath.startsWith('/app/_next/static/') ? 'public, max-age=31536000, immutable' : 'no-cache';
-  return staticResponse(request, url, upstream, ext, cache);
+  const hashes = ext === 'html' ? await appScriptHashes(env, url, assetPath) : [];
+  return staticResponse(request, url, upstream, ext, cache, hashes);
 }
 
 // Browsers always send Origin on a WebSocket upgrade and a page cannot change it.

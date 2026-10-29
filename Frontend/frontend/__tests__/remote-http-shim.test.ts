@@ -105,6 +105,36 @@ describe('remote axios adapter', () => {
   })
 })
 
+describe('replies too large for one frame', () => {
+  function bigReply(body: unknown) {
+    let push!: (obj: any) => void
+    const bytes = new TextEncoder().encode(JSON.stringify(body))
+    const s = setup((type) => {
+      if (type === 'ui_http') return { ok: false, error: 'too_large' }
+      setTimeout(() => {
+        push({ type: 'ui_stream_chunk', stream_id: 'b1', seq: 0, data_b64: toBase64(bytes) })
+        push({ type: 'ui_stream_end', stream_id: 'b1' })
+      }, 0)
+      return { stream_id: 'b1', status: 200, content_type: 'application/json' }
+    })
+    push = (obj) => s.transport.handlePush(obj)
+    return s
+  }
+
+  it('axios gets the whole reply through a stream', async () => {
+    const { http, calls } = bigReply({ messages: ['a', 'b'] })
+    const res = await http.get(`${BASE}/conversations/1/messages`)
+    expect(res.data).toEqual({ messages: ['a', 'b'] })
+    expect(calls.map((c) => c.type)).toEqual(['ui_http', 'ui_stream_open'])
+  })
+
+  it('fetch gets the whole reply through a stream', async () => {
+    const { remoteFetch } = bigReply({ ok: 1 })
+    const res = await remoteFetch(`${BASE}/conversations/1/messages`)
+    await expect(res.json()).resolves.toEqual({ ok: 1 })
+  })
+})
+
 describe('remote fetch', () => {
   it('serves JSON over ui_http', async () => {
     const { remoteFetch, calls } = setup(() => json(200, { id: 'c1' }))

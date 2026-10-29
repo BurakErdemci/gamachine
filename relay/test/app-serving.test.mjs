@@ -2,6 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { installRuntimeGlobals } from './fake-do.mjs';
 
 installRuntimeGlobals();
@@ -16,13 +17,13 @@ const FILES = {
   '/worker/index.js': ['SECRET', 200],
 };
 
-function makeEnv(extra = {}) {
+function makeEnv(extra = {}, files = FILES) {
   const fetched = [];
   const ASSETS = {
     fetch: async (req) => {
       const path = new URL(req.url).pathname;
       fetched.push(path);
-      const f = FILES[path];
+      const f = files[path];
       return f ? new Response(f[0], { status: f[1] }) : new Response('nope', { status: 404 });
     },
   };
@@ -110,4 +111,50 @@ test('the app budget fails open when missing or throwing', async () => {
   assert.equal((await get('/app/', makeEnv())).status, 200);
   const throwing = { limit: async () => { throw new Error('down'); } };
   assert.equal((await get('/app/', makeEnv({ RELAY_APP_RATE_LIMIT: throwing }))).status, 200);
+});
+
+const sha = (text) => 'sha256-' + createHash('sha256').update(text, 'utf8').digest('base64');
+const scriptSrc = (res) => res.headers.get('Content-Security-Policy').split('; ').find((d) => d.startsWith('script-src'));
+
+test('each /app/ page allows exactly its own inline scripts by hash, never unsafe-inline', async () => {
+  const boot = sha('self.__boot=1');
+  const other = sha('self.__other=1');
+  const files = {
+    ...FILES,
+    '/app/home/index.html': ['<html>home</html>', 200],
+    '/app-csp.json': [JSON.stringify({ 'index.html': [boot], 'home/index.html': [other] }), 200],
+  };
+  for (const p of ['/app/', '/app/chat/3']) {
+    const res = await get(p, makeEnv({}, files));
+    assert.equal(scriptSrc(res), `script-src 'self' '${boot}'`, p);
+    assert.doesNotMatch(res.headers.get('Content-Security-Policy'), /unsafe-inline/);
+    assert.match(res.headers.get('Content-Security-Policy'), /connect-src 'self' wss:\/\/relay\.test/);
+  }
+  assert.equal(scriptSrc(await get('/app/home/index.html', makeEnv({}, files))), `script-src 'self' '${other}'`);
+  // Code files carry no page policy and need no list.
+  const env = makeEnv({}, files);
+  const js = await get('/app/_next/static/chunks/main-abc.js', env);
+  assert.equal(js.headers.get('Content-Security-Policy'), null);
+  assert.ok(!env.fetched.includes('/app-csp.json'));
+});
+
+test('a missing, broken or foreign hash list leaves script-src at self', async () => {
+  const cases = [
+    {},
+    { '/app-csp.json': ['{not json', 200] },
+    { '/app-csp.json': [JSON.stringify(['x']), 200] },
+    { '/app-csp.json': [JSON.stringify({ 'index.html': "'unsafe-inline'" }), 200] },
+    { '/app-csp.json': [JSON.stringify({ 'index.html': ["'unsafe-inline'", 'sha256-short', `${sha('a')}; script-src *`, 7] }), 200] },
+  ];
+  for (const extra of cases) {
+    const res = await get('/app/', makeEnv({}, { ...FILES, ...extra }));
+    assert.equal(res.status, 200);
+    assert.equal(scriptSrc(res), "script-src 'self'", JSON.stringify(extra));
+  }
+});
+
+test('the hash list is not served to visitors', async () => {
+  const files = { ...FILES, '/app-csp.json': ['{}', 200] };
+  assert.equal((await get('/app-csp.json', makeEnv({}, files))).status, 404);
+  assert.equal((await get('/app/../app-csp.json', makeEnv({}, files))).status, 404);
 });

@@ -39,6 +39,26 @@ describe('remote window.ipc shim', () => {
     })
   })
 
+  it('uploads file content too large for one frame', async () => {
+    const { ipc, calls } = setup((type) => (type === 'ui_upload_part' ? { received: 1 } : { success: true }))
+    const content = 'x'.repeat(200 * 1024)
+    await expect(ipc.invoke('write-file', '/w/a.cs', content, '/w')).resolves.toEqual({ success: true })
+    const last = calls[calls.length - 1]
+    expect(last.type).toBe('ui_ipc')
+    expect(last.params).toMatchObject({ channel: 'write-file', args: ['/w/a.cs', '', '/w'], upload_arg_index: 1 })
+    expect(calls.filter((c) => c.type === 'ui_upload_part').length).toBeGreaterThan(1)
+  })
+
+  it('turns a too_large answer into a clear error without retrying', async () => {
+    const { ipc, calls, onUnavailable } = setup(() => ({ ok: false, error: 'too_large' }))
+    const err = await ipc.invoke('read-file', '/w/huge.bin').catch((e) => e)
+    expect(err.code).toBe('too_large')
+    expect(err.message).toContain('read-file')
+    expect(err.message).toContain('too large')
+    expect(calls.filter((c) => c.type === 'ui_ipc')).toHaveLength(1)
+    expect(onUnavailable).not.toHaveBeenCalled()
+  })
+
   it('rejects remote_unavailable from the desktop with a coded Error and tells the UI', async () => {
     const { ipc, onUnavailable } = setup(() => ({ ok: false, error: 'remote_unavailable' }))
     const err = await ipc.invoke('app-zoom-set', 1.2).catch((e) => e)

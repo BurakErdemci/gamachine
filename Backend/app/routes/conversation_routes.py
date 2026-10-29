@@ -1333,9 +1333,13 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
 
         return StreamingResponse(localize_sse(gen(), x_ui_lang), media_type="text/event-stream")
 
+    # main.py sets it to the web remote's subscribed_channels (remote/ui_dispatch.py).
+    router.remote_subscriptions = None
+
     @router.get("/wake-stream-all")
     async def wake_stream_all(x_session_token: str = Header(alias="X-Session-Token"),
-                              x_ui_lang: str | None = Header(default=None, alias="X-UI-Lang")):
+                              x_ui_lang: str | None = Header(default=None, alias="X-UI-Lang"),
+                              x_gamachine_remote: str = Header(default="", alias="X-Gamachine-Remote")):
         """AUTO-WAKE for EVERY chat of the local user, on one connection.
 
         `/conversations/{id}/wake-stream` serves only the chat on screen, so a
@@ -1343,10 +1347,16 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         Frames name their chat; the client starts that chat's wake turn in its
         background runtime. Unlike the per-chat stream this one stays open:
         one frame per chat at a time is still enforced by the ticket.
+
+        A paired browser's copy (the remote dispatcher sets X-Gamachine-Remote)
+        is no desktop renderer: it does not make phone requests "accepted" and
+        it takes no wake ticket, which the desktop renderer must run.
         """
         user_id, _ = get_current_user(db, x_session_token)
         from agentic import wake_queue
-        from remote import desktop_channel
+        from remote import desktop_channel, ui_dispatch
+        remote_copy = x_gamachine_remote == "1"
+        subscriptions = router.remote_subscriptions
         _requeue_queued_mail(user_id)
 
         async def gen():
@@ -1356,8 +1366,14 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             # Phone messages for the renderer (remote/desktop_channel.py); a
             # listening stream is what makes send_message "accepted".
             remote_q = desktop_channel.CHANNEL.listen()
+            if remote_copy:
+                ui_dispatch.mark_remote_listener(remote_q)
             pending_remote = None
             try:
+                # A reloaded desktop renderer lost the event listeners browsers
+                # still want; it fetches /remote/ui-ipc-subscriptions on this.
+                if not remote_copy and subscriptions is not None and subscriptions():
+                    yield "data: " + json.dumps({"type": "remote_ipc_resync"}) + "\n\n"
                 while True:
                     while pending_remote is not None or not remote_q.empty():
                         frame = pending_remote if pending_remote is not None else remote_q.get_nowait()
@@ -1374,7 +1390,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                             continue
                         last_frame = time()
                         yield "data: " + json.dumps({"type": "title", **item}) + "\n\n"
-                    for conv_id in wake_queue.pending_conversations():
+                    for conv_id in ([] if remote_copy else wake_queue.pending_conversations()):
                         if not _mail_target_ok(conv_id, user_id):
                             continue
                         if _wake_blocked(conv_id) is not None:

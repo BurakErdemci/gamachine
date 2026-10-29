@@ -11,10 +11,12 @@ import pytest
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import Response, StreamingResponse
 
-from agentic import approval_mode
+import routes.conversation_routes as cr
+from agentic import approval_mode, cards, wake_queue
 from remote import desktop_channel, rpc, ui_dispatch as d
 from remote.desktop_channel import CHANNEL
 from routes.remote_routes import create_remote_router
+from tests.test_remote_bridge import env, make_chat, until  # noqa: F401  (fixture)
 
 TOKEN = "app-token-for-ui-dispatch"
 SECRET = "ui-secret-for-ui-dispatch"
@@ -51,6 +53,24 @@ def backend_app(seen):
     async def respond(gate: str, request: Request):
         seen.append(dict(request.headers))
         return {"gate": gate, "body": await request.json()}
+
+    @app.post("/computer-use/halt/{conv}")
+    async def halt(conv: int, request: Request):
+        seen.append(dict(request.headers))
+        return {"halted": conv}
+
+    @app.get("/big/{n}")
+    async def big_stream(n: int):
+        # A plain (not event-stream) body sent in many parts; `seen` counts them.
+        async def gen():
+            for _ in range(n):
+                seen.append("part")
+                yield b"x" * (d.REPLY_ROOM // 4)
+        return StreamingResponse(gen(), media_type="application/octet-stream")
+
+    @app.get("/slow")
+    async def slow():
+        await asyncio.Event().wait()
 
     @app.post("/chat-stop/{conv}")
     async def stop(conv: int, request: Request):
@@ -206,12 +226,78 @@ async def test_http_runs_with_the_desktop_token_and_never_the_secret(ui):
     assert r["result"]["status"] == 200 and "x-gamachine-ui-secret" not in ui.seen[-1]
 
 
-async def test_http_adds_the_secret_for_card_answers(ui):
-    r = await call(ui, type="ui_http", method="POST", path="/mcp-approval-respond/g1", body={"approved": True})
-    assert json.loads(r["result"]["body"]) == {"gate": "g1", "body": {"approved": True}}
+async def test_http_adds_the_secret_for_halt(ui):
+    assert approval_mode.ui_secret() == SECRET
+    r = await call(ui, type="ui_http", method="POST", path="/computer-use/halt/4")
+    assert json.loads(r["result"]["body"]) == {"halted": 4}
     assert ui.seen[-1]["x-gamachine-ui-secret"] == SECRET
     assert ui.seen[-1]["x-session-token"] == TOKEN
     assert SECRET not in json.dumps(ui.session.sent)
+
+
+@pytest.fixture
+def card():
+    cards.reset()
+    answers = []
+    cards.open_card("g1", conversation_id=None, kind="mcp", tool="git", resolver=answers.append)
+    q = CHANNEL.listen()
+    yield SimpleNamespace(answers=answers, q=q)
+    CHANNEL.unlisten(q)
+    cards.reset()
+
+
+async def test_card_answer_is_recorded_as_the_devices_and_never_runs_the_route(ui, card):
+    r = await call(ui, type="ui_http", method="POST", path="/mcp-approval-respond/g1", body={"approved": True})
+    assert r["result"]["status"] == 200 and json.loads(r["result"]["body"]) == {"status": "ok"}
+    assert ui.seen == []  # the HTTP route (and the UI secret) never ran
+    assert card.answers == [True]
+    assert cards.get("g1").by == "phone:pixel" and cards.get("g1").outcome == "approved"
+    closed = card.q.get_nowait()
+    assert closed["type"] == desktop_channel.CARD_CLOSED_TYPE and closed["card_id"] == "g1"
+    assert closed["by"] == "phone:pixel"
+
+    r = await call(ui, rid=2, type="ui_http", method="POST", path="/mcp-approval-respond/g1",
+                   body='{"approved": false}', content_type="application/json")
+    late = json.loads(r["result"]["body"])
+    assert late["status"] == "already_answered" and late["by"] == "phone:pixel"
+    r = await call(ui, rid=3, type="ui_http", method="POST", path="/mcp-approval-respond/nope", body={"approved": True})
+    assert json.loads(r["result"]["body"]) == {"status": "gate_not_found"}
+    assert ui.seen == []
+
+
+async def test_card_answer_reads_only_true_as_approval(ui, card):
+    # The page sends its JSON as text; a truthy non-true value is a rejection.
+    r = await call(ui, type="ui_http", method="POST", path="/mcp-approval-respond/g1",
+                   body='{"approved": "true"}', content_type="application/json")
+    assert json.loads(r["result"]["body"]) == {"status": "ok"}
+    assert card.answers == [False] and cards.get("g1").outcome == "rejected"
+    r = await call(ui, rid=2, type="ui_http", method="POST", path="/mcp-approval-respond/g1", body="not json")
+    assert r["result"]["status"] == 422
+
+
+async def test_card_answer_cannot_go_through_a_stream(ui, card):
+    r = await call(ui, type="ui_stream_open", method="POST", path="/mcp-approval-respond/g1", body={"approved": True})
+    assert r["error"] == "remote_forbidden"
+    assert card.answers == [] and ui.seen == []
+
+
+async def test_text_body_reaches_the_route_unchanged(ui):
+    r = await call(ui, type="ui_http", method="POST", path="/transcribe", body='{"a":1}',
+                   content_type="application/json")
+    assert json.loads(r["result"]["body"])["len"] == 7
+    assert json.loads(r["result"]["body"])["ctype"] == "application/json"
+    r = await call(ui, rid=2, type="ui_http", method="POST", path="/transcribe", body="abc")
+    assert json.loads(r["result"]["body"])["ctype"].startswith("text/plain")
+
+
+async def test_requests_are_marked_remote(ui):
+    await call(ui, type="ui_http", method="GET", path="/conversations/7/messages")
+    assert ui.seen[-1]["x-gamachine-remote"] == "1"
+
+
+def test_the_app_is_handed_over_explicitly():
+    app = FastAPI()
+    assert rpc.Dispatcher(SimpleNamespace(), app=app).ui.app is app
 
 
 async def test_http_refuses_off_list_paths_without_running_them(ui):
@@ -226,6 +312,32 @@ async def test_http_binary_body_and_too_large(ui):
     assert base64.b64decode(r["result"]["body_b64"]).startswith(b"\x89PNG")
     r = await call(ui, rid=2, type="ui_http", method="GET", path="/conversations/1/model")
     assert r["ok"] is False and r["error"] == "too_large"
+
+
+async def test_http_stops_reading_an_oversized_body(ui, monkeypatch):
+    monkeypatch.setattr(d, "_ALLOW_RE", d._ALLOW_RE + [(("GET",), __import__("re").compile(r"/big/\d+"))])
+    r = await call(ui, type="ui_http", method="GET", path="/big/1000")
+    assert r["ok"] is False and r["error"] == "too_large"
+    await asyncio.sleep(0.05)
+    # Aborted after the budget: the app never got to produce the whole body.
+    assert ui.seen.count("part") < 200
+
+
+async def test_http_has_an_overall_timeout(ui, monkeypatch):
+    monkeypatch.setattr(d, "_ALLOW_RE", d._ALLOW_RE + [(("GET",), __import__("re").compile(r"/slow"))])
+    monkeypatch.setattr(d, "HTTP_TIMEOUT_S", 0.05)
+    r = await call(ui, type="ui_http", method="GET", path="/slow")
+    assert r["error"] == "timeout"
+
+
+async def test_http_refuses_an_event_stream(ui):
+    r = await call(ui, type="ui_http", method="GET", path="/conversations/1/wake-stream")
+    assert r["ok"] is False and r["error"] == "stream_only"
+    for _ in range(100):
+        if "cancelled" in ui.seen:
+            break
+        await asyncio.sleep(0.01)
+    assert "cancelled" in ui.seen
 
 
 async def test_http_rejects_bad_params(ui):
@@ -310,6 +422,35 @@ async def test_wake_stream_copy_drops_desktop_commands(ui):
     data = b"".join(base64.b64decode(m["data_b64"]) for m in ui.session.sent if m.get("type") == "ui_stream_chunk")
     assert b"remote_ipc" not in data and b"remote_message" not in data
     assert b'"title"' in data and b"card_closed" in data and b": keepalive" in data
+
+
+def sse(*chunks):
+    f = d._SseFilter()
+    return b"".join(f.feed(c) for c in chunks)
+
+
+def test_sse_copy_passes_only_listed_types():
+    out = sse(b'data: {"type": "title", "conversation_id": 1}\n\n',
+              b'data: {"type": "wake", "conversation_id": 1}\n\n',
+              b'data: {"type": "remote_ipc_resync"}\n\n',
+              b'data: {"type": "remote_effort", "level": "high"}\n\n',
+              b'data: {"no_type": 1}\n\n', b'data: [1, 2]\n\n', b"data: {not json\n\n",
+              b"data: \xff\xfe\n\n", b"event: x\n\n", b": keepalive\n\n")
+    assert out == b'data: {"type": "title", "conversation_id": 1}\n\n: keepalive\n\n'
+
+
+def test_sse_copy_parses_every_line_ending_and_multi_line_data():
+    want = b'data: {"type": "card_closed", "card_id": "c"}\n\n'
+    assert sse(b'data: {"type": "card_closed",\r\ndata: "card_id": "c"}\r\n\r\n') == want
+    # A trailing CR waits for the next chunk: it may be the first half of a CRLF.
+    assert sse(b'data: {"type": "card_closed",\rdata:"card_id": "c"}\r\r') == b""
+    assert sse(b'data: {"type": "card_closed",\rdata:"card_id": "c"}\r\r', b"data: x") == want
+    # A CRLF split across chunks is one line end, not two.
+    assert sse(b'data: {"type": "card_closed", "card_id": "c"}\r', b'\n\r', b'\n') == want
+    # A desktop-only frame hidden on a second data line is still the event's type.
+    assert sse(b'data: {"text": "x",\r\ndata: "type": "remote_message"}\r\n\r\n') == b""
+    # The copy carries the frame alone, not the event's other fields.
+    assert sse(b'id: 7\nevent: x\ndata: {"type": "title"}\n\n') == b'data: {"type": "title"}\n\n'
 
 
 async def test_stream_refused_path(ui):
@@ -432,6 +573,22 @@ async def test_ipc_without_a_renderer(ui):
     assert r["error"] == "desktop_not_ready"
 
 
+async def test_a_browser_copy_of_the_wake_stream_is_no_renderer(ui):
+    q = CHANNEL.listen()
+    d.mark_remote_listener(q)
+    try:
+        assert CHANNEL.ready() and not d.desktop_renderer_ready()
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        r = await call(ui, type="ui_ipc", channel="read-file", args=["a"])
+        assert r["error"] == "desktop_not_ready" and loop.time() - started < 1.0
+        r = await call(ui, rid=2, type="ui_ipc_subscribe", channel="terminal-data-t1")
+        assert r["error"] == "desktop_not_ready"
+        assert q.empty()
+    finally:
+        CHANNEL.unlisten(q)
+
+
 async def test_ipc_timeout(ui, renderer, monkeypatch):
     monkeypatch.setattr(d, "IPC_TIMEOUT_S", 0.05)
     r = await call(ui, type="ui_ipc", channel="read-directory", payload="Assets")
@@ -459,6 +616,86 @@ async def test_subscription_forwards_events_until_the_session_ends(ui, renderer)
     r = await renderer.client.post("/remote/ui-ipc-event", json={"channel": "terminal-data-t1", "args": ["x"]},
                                    headers=h)
     assert r.json() == {"subscribed": False}
+
+
+async def test_subscriptions_are_listed_for_a_reloaded_renderer(ui, renderer):
+    h = {"X-Session-Token": TOKEN}
+    assert (await renderer.client.get("/remote/ui-ipc-subscriptions")).status_code == 401
+    assert (await renderer.client.get("/remote/ui-ipc-subscriptions", headers=h)).json() == {"channels": []}
+    await call(ui, type="ui_ipc_subscribe", channel="terminal-data-t1")
+    await call(ui, rid=2, type="ui_ipc_subscribe", channel="browser-live")
+    r = await renderer.client.get("/remote/ui-ipc-subscriptions", headers=h)
+    assert r.json() == {"channels": ["browser-live", "terminal-data-t1"]}
+    ui.session.closed = True
+    assert (await renderer.client.get("/remote/ui-ipc-subscriptions", headers=h)).json() == {"channels": []}
+
+
+# ── /wake-stream-all as the desktop renderer and as a browser's copy ────
+async def _first_chunk(stream, timeout=5):
+    chunk = await asyncio.wait_for(stream.__anext__(), timeout)
+    while chunk.startswith(":"):
+        chunk = await asyncio.wait_for(stream.__anext__(), timeout)
+    return chunk
+
+
+async def test_wake_stream_marked_remote_does_not_make_the_desktop_ready(env, monkeypatch):
+    monkeypatch.setattr(cr, "WAKE_ALL_POLL_S", 0.05)
+    router = cr.create_conversation_router(env.db, {})
+    endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", "") == "/wake-stream-all")
+    conv = make_chat(env.db)
+    session = SimpleNamespace(device=SimpleNamespace(device_id="d", name="Pixel"), device_label="phone:Pixel")
+    wake_queue.enqueue(conv, "tasks_done|x")
+    browser = (await endpoint(x_session_token="", x_ui_lang=None, x_gamachine_remote="1")).body_iterator
+    pending = asyncio.ensure_future(browser.__anext__())
+    try:
+        await until(lambda: CHANNEL.ready())
+        assert not d.desktop_renderer_ready()
+        r = await env.bridge.rpc.send_message(session, {"chat_id": conv, "text": "hi"}, 1)
+        assert r == {"status": "desktop_not_ready"}
+        await asyncio.sleep(0.2)
+        assert wake_queue.pending(conv) == 1  # the wake is the desktop renderer's to run
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await browser.aclose()
+    wake_queue.drain(conv)
+    wake_queue.release(conv)
+
+    desktop = (await endpoint(x_session_token="")).body_iterator
+    pending = asyncio.ensure_future(desktop.__anext__())
+    try:
+        await until(lambda: CHANNEL.ready())
+        assert d.desktop_renderer_ready()
+        r = await env.bridge.rpc.send_message(session, {"chat_id": conv, "text": "hi"}, 1)
+        assert r == {"status": "accepted"}
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await desktop.aclose()
+
+
+async def test_desktop_wake_stream_asks_for_a_resync_only_when_browsers_listen(env, monkeypatch):
+    monkeypatch.setattr(cr, "WAKE_ALL_POLL_S", 0.05)
+    router = cr.create_conversation_router(env.db, {})
+    endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", "") == "/wake-stream-all")
+    channels = ["terminal-data-t1"]
+    router.remote_subscriptions = lambda: channels
+    desktop = (await endpoint(x_session_token="")).body_iterator
+    try:
+        assert json.loads((await _first_chunk(desktop))[len("data: "):]) == {"type": "remote_ipc_resync"}
+    finally:
+        await desktop.aclose()
+    # Not to a browser's copy, and not when no browser listens.
+    for kwargs in ({"x_gamachine_remote": "1"}, {}):
+        channels[:] = [] if not kwargs else channels
+        stream = (await endpoint(x_session_token="", x_ui_lang=None, **kwargs)).body_iterator
+        first = asyncio.ensure_future(stream.__anext__())
+        try:
+            await until(lambda: CHANNEL.ready())
+            CHANNEL.publish({"type": "card_closed", "card_id": "c"})
+            assert '"card_closed"' in await asyncio.wait_for(first, 5)
+        finally:
+            await stream.aclose()
 
 
 async def answer_next(renderer, result):

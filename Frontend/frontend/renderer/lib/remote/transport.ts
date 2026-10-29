@@ -233,9 +233,45 @@ export class RemoteTransport {
     return uploadId
   }
 
-  /** ui_http: resolves `{status, content_type, body?, body_b64?}`. */
+  /** ui_http: resolves `{status, content_type, body?, body_b64?}`. A reply too large for one
+   *  frame is read once more through ui_stream_open, which carries it in chunks; only for a GET,
+   *  since the desktop has already run the request once. */
   async http(req: HttpRequest): Promise<{ status: number; content_type?: string; body?: unknown; body_b64?: string }> {
-    return this.request('ui_http', await this.httpParams(req))
+    try {
+      return await this.request('ui_http', await this.httpParams(req))
+    } catch (err) {
+      if (!(err instanceof RemoteError) || err.code !== 'too_large' || req.method.toUpperCase() !== 'GET') throw err
+    }
+    const parts: Uint8Array[] = []
+    let finish!: (error?: string) => void
+    const ended = new Promise<string | undefined>((resolve) => (finish = resolve))
+    const opened = await this.openStream(req, { onChunk: (b) => parts.push(b), onEnd: (e) => finish(e) })
+    const error = await ended
+    if (error) throw new RemoteError(error)
+    const bytes = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+    let at = 0
+    for (const p of parts) {
+      bytes.set(p, at)
+      at += p.length
+    }
+    return { status: opened.status, content_type: opened.contentType, body_b64: toBase64(bytes) }
+  }
+
+  /** ui_ipc with the whole argument list. When the frame would go over the inline limit, the
+   *  largest string argument (a file being written) goes ahead as an upload and the desktop puts
+   *  it back at `upload_arg_index`; the desktop takes one upload per call. */
+  async ipc(channel: string, args: unknown[]): Promise<any> {
+    const frameBytes = (a: unknown[]) => encoder.encode(JSON.stringify({ channel, payload: a[0] ?? null, args: a })).length
+    if (frameBytes(args) <= INLINE_BODY_MAX) return this.request('ui_ipc', { channel, payload: args[0] ?? null, args })
+    let index = -1
+    args.forEach((a, i) => {
+      if (typeof a === 'string' && (index < 0 || a.length > (args[index] as string).length)) index = i
+    })
+    const rest = [...args]
+    if (index >= 0) rest[index] = ''
+    if (index < 0 || frameBytes(rest) > INLINE_BODY_MAX) throw new RemoteError('too_large')
+    const uploadId = await this.upload(encoder.encode(args[index] as string))
+    return this.request('ui_ipc', { channel, payload: rest[0] ?? null, args: rest, upload_id: uploadId, upload_arg_index: index })
   }
 
   /** ui_stream_open: chunks go to `handlers` until ui_stream_end; `close()` cancels on the desktop. */

@@ -366,6 +366,13 @@ def ui_secret_configured() -> bool:
         return bool(_ui_secret)
 
 
+def ui_secret() -> str:
+    """The configured secret, '' when none is. Only for the remote dispatcher,
+    which adds it to the two routes that need it (remote/ui_dispatch.py)."""
+    with _LOCK:
+        return _ui_secret.decode("utf-8")
+
+
 def check_ui_secret(presented: str) -> bool:
     """Fail-closed: with no secret configured nothing matches, not even ''."""
     with _LOCK:

@@ -60,10 +60,29 @@ def _conv_id(value: Any) -> int:
     return conv
 
 
+def answer_card_as(device_label: str, card, target: str, choice: Any = None) -> dict:
+    """`cards.answer_card` for a remote device, so the ledger records the
+    device; the winning answer also closes the desktop's copy of the card.
+    The web remote's card route (remote/ui_dispatch.py) answers through here too."""
+    res = cards.answer_card(card.card_id, target, choice, device=device_label)
+    if res.get("status") == "ok":
+        # Only the winning answer closes the desktop's copy of the card.
+        # The decision is already committed: a failed notification must not
+        # turn it into an error the phone would retry into already_answered.
+        try:
+            CHANNEL.publish({"type": CARD_CLOSED_TYPE, "card_id": card.card_id,
+                             "conversation_id": card.conversation_id, "by": res.get("by"),
+                             "decision": target, "outcome": res.get("outcome"),
+                             "at": int(time.time() * 1000)})
+        except Exception:
+            logger.exception("[remote] card_closed publish failed for %s", card.card_id)
+    return res
+
+
 class Dispatcher:
-    def __init__(self, bridge: "RemoteBridge"):
+    def __init__(self, bridge: "RemoteBridge", app=None):
         self.bridge = bridge
-        self.ui = ui_dispatch.UiDispatcher(bridge)
+        self.ui = ui_dispatch.UiDispatcher(bridge, app=app)
         self.handlers = {
             "list_chats": self.list_chats,
             "open_chat": self.open_chat,
@@ -229,19 +248,9 @@ class Dispatcher:
         else:
             target = decision
         # On the event loop thread: resolvers set asyncio events.
-        res = cards.answer_card(card_id, target, choice, device=session.device_label)
+        res = answer_card_as(session.device_label, card, target, choice)
         status = res.get("status")
         if status == "ok":
-            # Only the winning answer closes the desktop's copy of the card.
-            # The decision is already committed: a failed notification must not
-            # turn it into an error the phone would retry into already_answered.
-            try:
-                CHANNEL.publish({"type": CARD_CLOSED_TYPE, "card_id": card_id,
-                                 "conversation_id": card.conversation_id, "by": res.get("by"),
-                                 "decision": target, "outcome": res.get("outcome"),
-                                 "at": int(time.time() * 1000)})
-            except Exception:
-                logger.exception("[remote] card_closed publish failed for %s", card_id)
             return {"outcome": res.get("outcome"), "by": res.get("by"), "at": res.get("at")}
         if status == "already_answered":
             raise RpcError("already_answered", by=res.get("by"), at=res.get("at"))
@@ -272,6 +281,9 @@ class Dispatcher:
                     row["provider_type"], row["model_name"]):
                 raise RpcError("bad_effort")
             frame["effort"] = effort
+        # A browser's copy of /wake-stream-all takes the frame too but sends nothing.
+        if not ui_dispatch.desktop_renderer_ready():
+            return {"status": "desktop_not_ready"}
         return {"status": "accepted" if CHANNEL.publish(frame) else "desktop_not_ready"}
 
     async def list_slash_commands(self, session, req, rid):
@@ -363,6 +375,8 @@ class Dispatcher:
         logger.info("[remote] effort %s requested by %s", level, session.device_label)
         frame = {"type": EFFORT_SET_TYPE, "level": level, "by": session.device_label,
                  "at": int(time.time() * 1000)}
+        if not ui_dispatch.desktop_renderer_ready():
+            return {"status": "desktop_not_ready"}
         return {"status": "accepted" if CHANNEL.publish(frame) else "desktop_not_ready"}
 
     async def set_approval_mode(self, session: PhoneSession, req, rid):

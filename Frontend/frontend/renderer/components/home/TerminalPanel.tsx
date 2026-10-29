@@ -171,9 +171,10 @@ const ConnectionsPane: React.FC<{ apiUrl?: string }> = ({ apiUrl }) => {
     } catch { if (!alive.current) return; setBackendOk(false); }
     if (!alive.current) return;
     try {
-      await axios.get('http://localhost:8080/health', { timeout: 1000 });
+      // Asked of the backend, not of the port: in a paired browser localhost is not the desktop.
+      const res = await axios.get(`${apiUrl}/mcp/unity/status`);
       if (!alive.current) return;
-      setMcpOk(true);
+      setMcpOk(res.data?.status === 'running' || res.data?.status === 'connected');
     } catch { if (alive.current) setMcpOk(false); }
   }, [apiUrl]);
   // The historical PortsTab checks on mount and on refresh, without an interval.
