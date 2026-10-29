@@ -288,14 +288,15 @@ class _AsgiCall:
             logger.exception("[remote] ui request %s %s failed", scope["method"], scope["path"])
             self.failed = True
         finally:
-            try:
-                self._q.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            # Awaited: a full queue must not lose the terminator. The reader
+            # always closes the call, which cancels this wait.
+            await self._q.put(None)
 
     async def start(self) -> Tuple[int, str]:
         """Status and content type, once the app has started its response."""
         msg = await self._q.get()
+        if msg is None and self.failed:
+            raise rpc.RpcError("upstream_failed")
         if msg is None or msg.get("type") != "http.response.start":
             return 500, "text/plain"
         ctype = ""
