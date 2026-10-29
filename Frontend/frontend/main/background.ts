@@ -1409,7 +1409,7 @@ if (!gotTheLock) {
             computerLive.shutdown()
             await computerUse.shutdown()
             quitReady = true
-            killBackend()
+            await killBackend()
           },
           logger: console,
           relaunch: () => { app.relaunch(); app.exit(0) },
@@ -1418,53 +1418,69 @@ if (!gotTheLock) {
       }
     })()
 
-  const killBackend = () => {
-    if (pyBackendProcess) {
-      const pid = pyBackendProcess.pid
+  // Resolves once the backend is gone (the Windows installer cannot overwrite a locked
+  // backend.exe), or after 10 s so a hung kill never blocks quitting.
+  const killBackend = (): Promise<void> => {
+    const proc = pyBackendProcess
+    if (!proc) return Promise.resolve()
+    const gone = (child: ChildProcess) => child.exitCode != null || child.signalCode != null
+    const onceEvent = (emitter: ChildProcess, event: string) =>
+      new Promise<void>((resolve) => { emitter.once(event, () => resolve()) })
+    // Test doubles and already-exited children have nothing to listen on.
+    const waits: Promise<void>[] = [gone(proc) || typeof proc.once !== 'function' ? Promise.resolve() : onceEvent(proc, 'exit')]
+    const pid = proc.pid
+    if (!gone(proc)) {
       if (process.platform === 'win32' && pid) {
         // Windows: negatif PID (process group) yok — taskkill /T tüm child ağacını öldürür
         // (PyInstaller bootloader + uvicorn worker'ları dahil). Aksi halde orphan kalır.
         try {
-          spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+          const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+          waits.push(new Promise<void>((resolve) => {
+            killer.once('exit', () => resolve())
+            killer.once('error', () => resolve())
+          }))
         } catch {
-          try { pyBackendProcess.kill() } catch { /* zaten ölmüş */ }
+          try { proc.kill() } catch { /* zaten ölmüş */ }
         }
       } else {
         // POSIX: tüm process grubunu öldür (uvicorn reload child'ları dahil)
         try {
           process.kill(-pid!, 'SIGKILL')
         } catch {
-          pyBackendProcess.kill('SIGKILL')
+          proc.kill('SIGKILL')
         }
       }
-      pyBackendProcess = null
     }
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 10000)
+      void Promise.all(waits).then(() => { clearTimeout(timer); resolve() })
+    }).then(() => { if (pyBackendProcess === proc) pyBackendProcess = null })
   }
 
   app.on('window-all-closed', () => {
     remoteControl.shutdown()
     computerLive.shutdown()
-    void computerUse.shutdown().finally(() => { killBackend(); app.quit() })
+    void computerUse.shutdown().finally(async () => { await killBackend(); app.quit() })
   })
 
   app.on('before-quit', (event) => {
     updateHandle?.dispose()
     remoteControl.shutdown()
     computerLive.shutdown()
-    if (quitReady) { killBackend(); return }
+    if (quitReady) { void killBackend(); return }
     event.preventDefault()
-    void computerUse.shutdown().finally(() => {
+    void computerUse.shutdown().finally(async () => {
       quitReady = true
-      killBackend()
+      await killBackend()
       app.quit()
     })
   })
 
   // Beklenmedik çıkışlarda da temizle
-  process.on('exit', () => { remoteControl.shutdown(); computerLive.shutdown(true); void computerUse.shutdown(true); killBackend() })
+  process.on('exit', () => { remoteControl.shutdown(); computerLive.shutdown(true); void computerUse.shutdown(true); void killBackend() })
   process.on('SIGTERM', () => {
     remoteControl.shutdown()
     computerLive.shutdown()
-    void computerUse.shutdown().finally(() => { killBackend(); process.exit(0) })
+    void computerUse.shutdown().finally(() => { void killBackend(); process.exit(0) })
   })
 }

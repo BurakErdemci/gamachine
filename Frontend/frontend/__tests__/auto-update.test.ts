@@ -2,12 +2,12 @@ import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setupAutoUpdate } from '../main/helpers/auto-update'
 
-function setup(response = 0, quitImpl?: () => void) {
+function setup(response = 0, quitImpl?: () => void, stopImpl?: () => Promise<void>) {
   const updater: any = new EventEmitter()
   updater.checkForUpdates = vi.fn(() => Promise.resolve(null))
   const order: string[] = []
   updater.quitAndInstall = vi.fn(() => { order.push('quitAndInstall'); quitImpl?.() })
-  const stopBackend = vi.fn(async () => { order.push('stopBackend') })
+  const stopBackend = vi.fn(stopImpl ?? (async () => { order.push('stopBackend') }))
   const dialog = { showMessageBox: vi.fn(async () => ({ response, checkboxChecked: false })) }
   const logger = { log: vi.fn(), error: vi.fn() }
   const relaunch = vi.fn()
@@ -104,6 +104,29 @@ describe('setupAutoUpdate', () => {
       vi.advanceTimersByTime(60 * 1000)
       expect(relaunch).toHaveBeenCalledTimes(1)
       handle.dispose()
+    })
+    it('a hung stopBackend still relaunches after 30 s', async () => {
+      const { updater, relaunch, stopBackend, handle } = setup(0, undefined, () => new Promise<void>(() => {}))
+      updater.emit('update-downloaded', { version: '9.9.9' })
+      await vi.waitFor(() => expect(stopBackend).toHaveBeenCalled())
+      vi.advanceTimersByTime(31 * 1000)
+      expect(relaunch).toHaveBeenCalledTimes(1)
+      expect(updater.quitAndInstall).not.toHaveBeenCalled()
+      handle.dispose()
+    })
+
+    it('dispose during a quit in progress cancels the relaunch', async () => {
+      let release!: () => void
+      const { updater, relaunch, handle } = setup(0, undefined, () => new Promise<void>((r) => { release = r }))
+      updater.emit('update-downloaded', { version: '9.9.9' })
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+      handle.dispose()
+      vi.advanceTimersByTime(60 * 1000)
+      release()
+      await vi.waitFor(() => expect(updater.quitAndInstall).toHaveBeenCalled())
+      updater.emit('error', new Error('late'))
+      vi.advanceTimersByTime(60 * 1000)
+      expect(relaunch).not.toHaveBeenCalled()
     })
   })
 })

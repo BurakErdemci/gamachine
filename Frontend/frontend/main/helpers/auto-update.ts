@@ -41,9 +41,11 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   // relaunch (once) so it does not keep running without its backend.
   let installing = false
   let relaunched = false
+  // Set by dispose(): a quit is under way, so a late failure must not relaunch a second app.
+  let disposed = false
   let installTimer: ReturnType<typeof setTimeout> | undefined
   const failInstall = (reason: string) => {
-    if (!installing || relaunched) return
+    if (!installing || relaunched || disposed) return
     relaunched = true
     if (installTimer) clearTimeout(installTimer)
     logger.error('[updater] kurulum başarısız, uygulama yeniden başlatılıyor:', reason)
@@ -72,8 +74,9 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
       if (response === 0) {
         if (installing) return
         installing = true
-        await stopBackend()
+        // Armed before stopBackend so a hung stop still ends in a relaunch.
         installTimer = setTimeout(() => failInstall('30 sn içinde çıkış olmadı'), INSTALL_TIMEOUT_MS)
+        await stopBackend()
         autoUpdater.quitAndInstall(false, true)
       }
     } catch (e) {
@@ -93,5 +96,11 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   }
   check()
   const timer = setInterval(check, CHECK_INTERVAL_MS)
-  return { dispose: () => clearInterval(timer) }
+  return {
+    dispose: () => {
+      disposed = true
+      clearInterval(timer)
+      if (installTimer) clearTimeout(installTimer)
+    },
+  }
 }
