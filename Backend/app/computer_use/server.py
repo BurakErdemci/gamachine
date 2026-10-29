@@ -342,13 +342,16 @@ class BackendApprovals:
         return None
 
     async def request(self, tool, params):
+        named_critical = params.get("named_critical")
         params = {key: value for key, value in params.items()
-                  if key not in {"confirmed", "confirm_text", "element_name", "critical_reason"}}
+                  if key not in {"confirmed", "confirm_text", "element_name", "critical_reason", "named_critical"}}
+        if named_critical and not params.get("risky"):
+            params.update(risky=True, risk_reason=named_critical)
         return await approval_bridge.request_approval(tool, params=params, workspace_path="")
 
     async def batch_stop(self, params):
         return await _batch_stop({key: value for key, value in params.items()
-                                  if key not in {"confirmed", "confirm_text", "element_name", "critical_reason"}})
+                                  if key not in {"confirmed", "confirm_text", "element_name", "critical_reason", "named_critical"}})
 
 
 class ComputerServer:
@@ -548,9 +551,12 @@ class ComputerServer:
                     element_name = name
                 return known, name
             critical = policy.critical_reason(tool, args, app_id=bundle_id, resolve=resolve)
+            named_critical = policy.critical_reason(
+                tool, args, app_id=bundle_id, resolve=resolve, strict=False) if critical else ""
             params = {"bundle_id": bundle_id, "app_name": app_name, "pid": pid,
                       "confirmed": confirmed, "confirm_text": confirm_text,
                       "element_name": element_name, "critical_reason": critical,
+                      "named_critical": named_critical,
                       "risky": bool(risk), "risk_reason": risk,
                       "summary": args.get("summary") or app_name or bundle_id or tool,
                       "foreground": _foreground(args) or tool == "computer_bring_to_front",

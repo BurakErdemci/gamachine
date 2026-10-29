@@ -429,7 +429,7 @@ def critical_name(name) -> str:
     return ""
 
 
-def critical_reason(tool, args, *, app_id, resolve) -> str:
+def critical_reason(tool, args, *, app_id, resolve, strict: bool = True) -> str:
     risk = risky_reason(tool, args)
     if risk:
         return risk
@@ -440,11 +440,11 @@ def critical_reason(tool, args, *, app_id, resolve) -> str:
             step_args = step.get("args", {}) if "tool" in step else step.get(name, {})
             target = {**{key: args[key] for key in ("pid", "window_id", "element_token") if key in args},
                       **step_args}
-            reason = critical_reason("computer_" + name, target, app_id=app_id, resolve=resolve)
+            reason = critical_reason("computer_" + name, target, app_id=app_id, resolve=resolve, strict=strict)
             if reason:
                 return reason
         return ""
-    if tool in _INPUT_TOOLS and platform.current().read_only_app(app_id):
+    if strict and tool in _INPUT_TOOLS and platform.current().read_only_app(app_id):
         return "Tarayıcı, posta veya sohbet uygulamasına girdi gönderilecek."
     nested = args.get("target") if isinstance(args.get("target"), dict) else {}
     if tool in _ELEMENT_TOOLS:
@@ -471,7 +471,7 @@ def critical_reason(tool, args, *, app_id, resolve) -> str:
             unknown |= known is not True
             if isinstance(name, str) and name:
                 names.append(name)
-        if unknown:
+        if strict and unknown:
             return "Hedef öğe doğrulanamadı; kritik işlem olabilir."
         for name in names:
             if critical_name(name):
