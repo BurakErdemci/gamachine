@@ -27,6 +27,16 @@ EN: dict[str, str] = {
         "Computer use is off; it can be turned on in Settings > Computer.",
     "Kullanıcı bilgisayar kullanımını bu tur için durdurdu; bu turda bilgisayar araçlarını yeniden deneme.":
         "The user stopped computer use for this turn; do not retry the computer tools in this turn.",
+    "Bu kanaldan tarayıcı kullanımı değiştirilemez.":
+        "The agent browser cannot be changed through this channel.",
+    "Tarayıcı kullanımı yalnız uygulama arayüzünden değiştirilebilir.":
+        "The agent browser can only be changed from the app interface.",
+    "Bu kanaldan tarayıcı durumu değiştirilemez.":
+        "The agent browser state cannot be changed through this channel.",
+    "Tarayıcı çalışma durumu yalnız uygulama arayüzünden bildirilebilir.":
+        "The agent browser runtime can only be reported from the app interface.",
+    "Tarayıcı çalışma durumu geçersiz.": "Invalid agent browser runtime state.",
+    "Tarayıcı portu ve anahtarı geçersiz.": "Invalid agent browser port and token.",
     "Uygulama izni yalnız uygulama arayüzünden kaldırılabilir.":
         "Application access can only be revoked from the app interface.",
     "İşlem durduruldu.": "Operation stopped.",
