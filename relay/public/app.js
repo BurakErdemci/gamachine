@@ -46,6 +46,13 @@ let link = null;
 let chats = [];
 let cards = [];
 const view = new ChatView();
+// The "stop computer use" button shares Stop's visibility (renderChatHeader).
+const haltBtn = document.createElement('button');
+haltBtn.id = 'btn-halt-computer';
+haltBtn.type = 'button';
+haltBtn.className = 'danger';
+haltBtn.hidden = true;
+setText(haltBtn, () => t('haltComputer'));
 let wantedChatId = null;
 let liveText = null;
 let pendingFragment = null;
@@ -586,6 +593,7 @@ function renderChatHeader() {
   setText($('chat-status'), () => link?.ready ? status : $('status-text').textContent);
   // A turn waiting on a card is still running and can be stopped.
   $('btn-stop').hidden = !(chat && (chat.status === 'running' || chat.status === 'awaiting_card'));
+  haltBtn.hidden = $('btn-stop').hidden;
   $('btn-send').disabled = !link?.ready;
   $('btn-slash').disabled = !link?.ready;
 }
@@ -997,6 +1005,20 @@ function wire() {
       setText($('chat-status'), () => stopLine(r.status));
     } catch (err) {
       setText($('chat-status'), () => t('stop.requestFailed', { error: err.message }));
+    }
+  });
+
+  // Placed right after Stop; the optional chain is for the unit tests' stub DOM, which has no parents.
+  $('btn-stop').parentNode?.insertBefore(haltBtn, $('btn-stop').nextSibling);
+  haltBtn.addEventListener('click', async () => {
+    haltBtn.disabled = true;
+    try {
+      await call('halt_computer', { chat_id: view.shown });
+      setText($('chat-status'), () => t('haltComputer.requested'));
+    } catch (err) {
+      setText($('chat-status'), () => t('haltComputer.requestFailed', { error: err.message }));
+    } finally {
+      haltBtn.disabled = false;
     }
   });
 

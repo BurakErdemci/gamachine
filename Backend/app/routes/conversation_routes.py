@@ -2937,6 +2937,17 @@ Max 300 kelime. Türkçe yaz.
                                 token=token if running else None)
         return dict(_browser_runtime)
 
+    async def halt_computer(conversation_id: int) -> dict:
+        """The desktop's computer-use halt, shared with the phone's `halt_computer` (remote bridge)."""
+        _computer_halted.add(conversation_id)
+        _reject_computer_use_pending(conversation_id, computer_gate.HALTED_REASON, "computer_halt")
+        _reject_computer_use_pending(conversation_id, BROWSER_HALTED_REASON, "computer_halt", flag="browser_use")
+        for key in [k for k in _browser_grants if k[0] == conversation_id]:
+            del _browser_grants[key]
+        return {"halted": True, "conversation_id": conversation_id}
+
+    router.halt_computer = halt_computer
+
     @router.post("/computer-use/halt/{conversation_id}")
     async def halt_computer_use(
         conversation_id: int,
@@ -2955,12 +2966,7 @@ Max 300 kelime. Türkçe yaz.
             raise HTTPException(status_code=403, detail="Bilgisayar kullanımı yalnız uygulama arayüzünden durdurulabilir.")
         if conversation_id <= 0:
             raise HTTPException(status_code=400, detail="Sohbet kimliği pozitif bir tam sayı olmalı.")
-        _computer_halted.add(conversation_id)
-        _reject_computer_use_pending(conversation_id, computer_gate.HALTED_REASON, "computer_halt")
-        _reject_computer_use_pending(conversation_id, BROWSER_HALTED_REASON, "computer_halt", flag="browser_use")
-        for key in [k for k in _browser_grants if k[0] == conversation_id]:
-            del _browser_grants[key]
-        return {"halted": True, "conversation_id": conversation_id}
+        return await halt_computer(conversation_id)
 
     @router.delete("/computer-use/grants/{bundle_id}")
     async def delete_computer_use_grant(

@@ -16,7 +16,7 @@ from providers.agy_provider import AgyStepGateError
 from remote import chats, ui_dispatch, webpush
 from providers.effort_caps import EFFORT_LEVELS
 from remote.desktop_channel import (
-    CARD_CLOSED_TYPE, CHANNEL, EFFORT_SET_TYPE, FRAME_TYPE, MODE_CHANGED_TYPE, MODEL_CHANGED_TYPE,
+    CARD_CLOSED_TYPE, CHANNEL, COMPUTER_HALTED_TYPE, EFFORT_SET_TYPE, FRAME_TYPE, MODE_CHANGED_TYPE, MODEL_CHANGED_TYPE,
 )
 from remote.session import PhoneSession
 
@@ -90,6 +90,7 @@ class Dispatcher:
             "pending_cards": self.pending_cards,
             "answer_card": self.answer_card,
             "stop": self.stop,
+            "halt_computer": self.halt_computer,
             "send_message": self.send_message,
             "list_slash_commands": self.list_slash_commands,
             "get_config": self.get_config,
@@ -265,6 +266,20 @@ class Dispatcher:
             raise RpcError("unavailable")
         res = await stop_chat(row["id"])
         return {"status": (res or {}).get("status")}
+
+    async def halt_computer(self, session, req, rid):
+        row = self._chat(req.get("chat_id"))
+        halt = self.bridge.halt_computer
+        if halt is None:
+            raise RpcError("unsupported")
+        await halt(row["id"])
+        logger.info("[remote] computer use halted for chat %s by %s", row["id"], session.device_label)
+        try:
+            CHANNEL.publish({"type": COMPUTER_HALTED_TYPE, "conversation_id": row["id"],
+                             "by": session.device_label, "at": int(time.time() * 1000)})
+        except Exception:
+            logger.exception("[remote] computer_halted publish failed")
+        return {"status": "halted"}
 
     async def send_message(self, session: PhoneSession, req, rid):
         row = self._chat(req.get("chat_id"))

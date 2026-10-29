@@ -407,3 +407,48 @@ async def test_the_route_answers_an_agy_refusal_as_before(env, monkeypatch):
     r = TestClient(app).post("/approval-mode", json={"mode": "step"}, headers={"X-Gamachine-UI-Secret": "ui-secret"})
     assert r.status_code == 409
     assert r.json()["detail"] == {"code": "agy_step_refused", "message": "kapı kurulamadı", "pids": "9"}
+
+
+# ── halt_computer ──────────────────────────────────────────────────────────
+
+
+def fake_halt(env):
+    halted = []
+
+    async def halt(conversation_id):
+        halted.append(conversation_id)
+        return {"halted": True, "conversation_id": conversation_id}
+
+    env.bridge.halt_computer = halt
+    return halted
+
+
+async def test_halt_computer_halts_the_right_chat_and_tells_the_renderer(env):
+    halted = fake_halt(env)
+    phone = await pair_phone(env, name="Burak'ın iPhone'u")
+    conv = make_chat(env.db)
+    q = CHANNEL.listen()
+    try:
+        r = await phone.request("halt_computer", chat_id=str(conv))
+        frame = q.get_nowait()
+    finally:
+        CHANNEL.unlisten(q)
+    assert r["ok"] is True and r["result"] == {"status": "halted"}
+    assert halted == [conv]
+    frame.pop("at")
+    assert frame == {"type": "computer_halted", "conversation_id": conv, "by": "phone:Burak'ın iPhone'u"}
+
+
+async def test_halt_computer_refuses_an_unknown_chat(env):
+    halted = fake_halt(env)
+    phone = await pair_phone(env)
+    assert (await phone.request("halt_computer", chat_id="999999"))["error"] == "unknown_chat"
+    assert (await phone.request("halt_computer", chat_id="abc"))["error"] == "bad_chat_id"
+    assert halted == []
+
+
+async def test_halt_computer_needs_the_desktop_function(env):
+    phone = await pair_phone(env)
+    conv = make_chat(env.db)
+    r = await phone.request("halt_computer", chat_id=str(conv))
+    assert r["ok"] is False and r["error"] == "unsupported"

@@ -50,10 +50,12 @@ class RemoteBridge:
                  apply_approval_mode: Optional[Callable[[str, str], dict]] = None,
                  list_models: Optional[Callable[[Optional[int]], Awaitable[dict]]] = None,
                  plan_locked: Optional[Callable[[object, object], bool]] = None,
+                 halt_computer: Optional[Callable[[int], Awaitable[dict]]] = None,
                  app=None):
         self.db = db
         self.store = RemoteStore(db)
         self.stop_chat = stop_chat
+        self.halt_computer = halt_computer
         self.list_slash_commands = list_slash_commands
         self.apply_approval_mode = apply_approval_mode
         self.list_models = list_models

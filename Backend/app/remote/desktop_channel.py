@@ -44,6 +44,12 @@ the level only if the active model offers it, and reports what it has
     {"type": "remote_effort", "level": <canonical level>,
      "by": "phone:<device name>", "at": <ms>}
 
+A phone that halted computer use for a chat tells the renderer, which shows the
+halt as its own would (the backend has already halted; this is only the news):
+
+    {"type": "computer_halted", "conversation_id": int,
+     "by": "phone:<device name>", "at": <ms>}
+
 A paired browser's `ui_ipc` (remote/ui_dispatch.py) runs in the renderer,
 which holds `window.ipc`. The channel is already on the remote allow-list and
 `payload` is the argument list; the renderer checks its own copy of the list,
@@ -76,6 +82,7 @@ CARD_CLOSED_TYPE = "card_closed"
 MODE_CHANGED_TYPE = "approval_mode_changed"
 MODEL_CHANGED_TYPE = "chat_model_changed"
 EFFORT_SET_TYPE = "remote_effort"
+COMPUTER_HALTED_TYPE = "computer_halted"
 IPC_TYPE = "remote_ipc"
 IPC_SUBSCRIBE_TYPE = "remote_ipc_subscribe"
 DESKTOP_ONLY_TYPES = frozenset({FRAME_TYPE, EFFORT_SET_TYPE, IPC_TYPE, IPC_SUBSCRIBE_TYPE})
