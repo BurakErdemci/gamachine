@@ -101,8 +101,9 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
     async def browser_select(snapshot_id: str, ref: str | int, option: str) -> CallToolResult:
         return await handler.call("select", {"snapshot_id": snapshot_id, "ref": ref, "option": option})
 
-    @tool("browser_press", "Press a key (Enter, Tab, Escape, arrows, PageUp, PageDown). Enter may submit a form and "
-          "then opens an approval card; pass snapshot_id and ref of the focused field so it can be checked.")
+    @tool("browser_press", "Press a key (Enter, Tab, Escape, arrows, PageUp, PageDown). Enter acts on the element that "
+          "has focus and may submit a form, which then opens an approval card. snapshot_id and ref are accepted "
+          "but ignored for that check.")
     async def browser_press(key: str, snapshot_id: str | None = None, ref: str | int | None = None) -> CallToolResult:
         args = {"key": key}
         if snapshot_id is not None and ref is not None:

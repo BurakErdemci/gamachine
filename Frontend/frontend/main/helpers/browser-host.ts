@@ -70,7 +70,7 @@ const PAGE_LIB = String.raw`(() => {
     return st.visibility !== 'hidden' && st.display !== 'none';
   };
   const tag = (el) => el.tagName.toLowerCase();
-  const inputType = (el) => String(el.getAttribute('type') || 'text').toLowerCase();
+  const inputType = (el) => String(el.type || 'text').toLowerCase();
   const BUTTON_TYPES = ['button', 'submit', 'reset', 'image'];
   const NON_TEXT_TYPES = ['checkbox', 'radio', 'file', 'range', 'color', 'hidden'];
   const roleOf = (el) => {
@@ -115,6 +115,9 @@ const PAGE_LIB = String.raw`(() => {
   };
   const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
   const formOf = (el) => el.form || (el.closest ? el.closest('form') : null);
+  // A named control (name="method", "action", "elements", "querySelector") shadows the form's own properties on the instance, so form state is read through the prototype.
+  const formGet = (form, prop) => Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, prop).get.call(form);
+  const submitControl = (el) => (tag(el) === 'button' && el.type === 'submit') || (tag(el) === 'input' && (el.type === 'submit' || el.type === 'image'));
   globalThis.__gmBrowser = {
     snapshot(a) {
       const refs = new Map();
@@ -180,13 +183,21 @@ const PAGE_LIB = String.raw`(() => {
       return { scroll_y: Math.round(scrollY), at_bottom: Math.ceil(scrollY + innerHeight) >= root.scrollHeight };
     },
     describe(a) {
-      const r = resolve(a.snapshotId, a.ref);
-      if (r.error) return r;
-      const el = r.el;
+      let el;
+      if (a.focused) {
+        el = document.activeElement;
+        while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+        if (el && (tag(el) === 'iframe' || tag(el) === 'frame')) return { error: 'focus_in_frame' };
+        if (!el || el === document.documentElement) el = document.body || document.documentElement;
+      } else {
+        const r = resolve(a.snapshotId, a.ref);
+        if (r.error) return r;
+        el = r.el;
+      }
       const t = tag(el);
       const element = { role: roleOf(el), name: nameOf(el), tag: t };
       if (t === 'input') element.type = inputType(el);
-      if (t === 'button') element.type = String(el.getAttribute('type') || 'submit').toLowerCase();
+      if (t === 'button') element.type = el.type;
       if (t === 'a') {
         if (el.href) element.href = el.href;
         element.download = el.hasAttribute('download');
@@ -194,16 +205,22 @@ const PAGE_LIB = String.raw`(() => {
       element.is_password = t === 'input' && inputType(el) === 'password';
       const form = formOf(el);
       if (form) {
-        const submitter = (t === 'button' && element.type === 'submit') || (t === 'input' && (element.type === 'submit' || element.type === 'image'));
+        const submitter = submitControl(el);
         // Enter in a text field submits when the form has a submit button or the field is its only text field.
         const typing = t === 'input' && !BUTTON_TYPES.concat(NON_TEXT_TYPES).includes(element.type);
-        const textFields = Array.from(form.elements).filter((f) => tag(f) === 'input' && !BUTTON_TYPES.concat(NON_TEXT_TYPES).includes(inputType(f)));
-        const hasSubmit = !!form.querySelector('button:not([type=button]):not([type=reset]), input[type=submit], input[type=image]');
-        element.submits_form = submitter || (typing && (hasSubmit || textFields.length === 1));
-        const method = String((submitter && el.getAttribute('formmethod')) || form.getAttribute('method') || 'get').toLowerCase();
+        const textFields = Array.from(formGet(form, 'elements')).filter((f) => tag(f) === 'input' && !BUTTON_TYPES.concat(NON_TEXT_TYPES).includes(inputType(f)));
+        // Enter presses the form's default button, so its formmethod/formaction decide where the form goes (read as attributes: jsdom lacks the formMethod/formAction properties).
+        // form.elements omits <input type=image>, so the form's controls are collected from the document (form="id" controls included).
+        const defaultButton = Array.from(document.querySelectorAll('button, input')).find((f) => f.form === form && submitControl(f)) || null;
+        element.submits_form = submitter || (typing && (!!defaultButton || textFields.length === 1));
+        const via = submitter ? el : typing ? defaultButton : null;
+        if (typing && defaultButton) element.form_submit_name = nameOf(defaultButton);
+        const rawMethod = via && via.hasAttribute('formmethod') ? via.getAttribute('formmethod') : formGet(form, 'method');
+        // A non-string method is unknown: report post so a card opens.
+        const method = typeof rawMethod === 'string' ? rawMethod.toLowerCase() : 'post';
         element.form_method = ['post', 'dialog'].includes(method) ? method : 'get';
-        element.form_action = (submitter && el.getAttribute('formaction') ? el.formAction : form.action) || location.href;
-        element.form_has_password = !!form.querySelector('input[type=password]');
+        element.form_action = (via && via.hasAttribute('formaction') ? new URL(via.getAttribute('formaction'), document.baseURI).href : formGet(form, 'action')) || location.href;
+        element.form_has_password = !!Element.prototype.querySelector.call(form, 'input[type=password]');
       } else {
         element.submits_form = false;
         element.form_has_password = false;
@@ -477,13 +494,14 @@ export class BrowserHost {
         this.view?.setVisible(visible)
         return { visible }
       case 'halt': {
-        const conversationId = this.active ? this.conversationId : null
-        this.halt()
-        // The backend halt set also covers browser tools, so the agent's next call is refused too.
-        if (conversationId !== null) {
-          try { await this.request('post', `/computer-use/halt/${conversationId}`, undefined, true) } catch { this.log('[browser] backend halt failed') }
+        this.stopLocal()
+        try {
+          await this.haltBackend()
+          return { halted: true }
+        } catch {
+          this.log('[browser] backend halt failed')
+          return { halted: false, error: 'Stopping the agent browser failed in the backend.' }
         }
-        return { halted: true }
       }
       case 'answer-card':
         if (typeof gateId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(gateId) || typeof approved !== 'boolean') break
@@ -516,6 +534,18 @@ export class BrowserHost {
 
   /** Stops loading and wakes a waiting navigation; queued commands are dropped through onHalt. */
   halt(): void {
+    this.stopLocal()
+    this.haltBackend().catch(() => { this.log('[browser] backend halt failed') })
+  }
+
+  /** The backend halt set also covers browser tools, so the agent's next call is refused too. */
+  private async haltBackend(): Promise<void> {
+    if (this.active && this.conversationId !== null) {
+      await this.request('post', `/computer-use/halt/${this.conversationId}`, undefined, true)
+    }
+  }
+
+  private stopLocal(): void {
     this.deps.onHalt?.()
     this.settleLoad({ ok: false, error: 'halted' })
     const wc = this.view?.webContents
@@ -569,7 +599,7 @@ export class BrowserHost {
   async handle(cmd: BrowserCommand): Promise<Reply> {
     if (Number.isInteger(cmd.conversation_id)) this.conversationId = cmd.conversation_id as number
     if (cmd.op === 'halt') {
-      this.halt()
+      this.stopLocal()
       const wc = this.view?.webContents
       return { ok: true, ...(wc ? this.base(wc) : { url: '', title: '' }) }
     }
@@ -634,6 +664,7 @@ export class BrowserHost {
         if (!needsRef() || typeof args.option !== 'string') return { error: 'bad_args' }
         return this.page('select', { ...ref, option: args.option }, true)
       case 'describe':
+        if (args.focused === true) return this.page('describe', { focused: true })
         if (!needsRef()) return { error: 'bad_args' }
         return this.page('describe', ref)
       case 'scroll': {

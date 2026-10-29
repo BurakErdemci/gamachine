@@ -96,8 +96,6 @@ class BrowserGateway:
         self._now = now
         # One command at a time, like the host's own queue: a step's describe must see its own page.
         self._lock = asyncio.Lock()
-        # Element the last click/fill/select touched: what a bare Enter would act on.
-        self._last_target: dict[int, dict] = {}
 
     async def _cmd(self, runtime, conversation_id, op, args):
         try:
@@ -120,20 +118,20 @@ class BrowserGateway:
 
     async def _gate(self, runtime, conversation_id, op, args):
         """Refusal (dict) for a step that needs a card, or None when it may run."""
-        target = args if op in _ELEMENT_OPS else self._last_target.get(conversation_id)
         if op == "press":
             if args["key"].casefold() != "enter":
                 return None
-            target = args if _has_target(args) else target
+            # The host sends the key to whatever has focus, so that is what gets described.
+            target = {"focused": True}
+        else:
+            target = {"snapshot_id": args["snapshot_id"], "ref": args["ref"]}
         element, url = None, ""
-        if target is not None:
-            described = await self._cmd(runtime, conversation_id, "describe",
-                                        {"snapshot_id": target["snapshot_id"], "ref": target["ref"]})
-            if described.get("ok") is not True:
-                if op != "press":
-                    return _refusal(str(described.get("error") or "The element could not be described."))
-            else:
-                element, url = described.get("element"), str(described.get("url") or "")
+        described = await self._cmd(runtime, conversation_id, "describe", target)
+        if described.get("ok") is not True:
+            if op != "press":
+                return _refusal(str(described.get("error") or "The element could not be described."))
+        else:
+            element, url = described.get("element"), str(described.get("url") or "")
         reason = (policy.critical_reason(op, element) if element is not None
                   else "Enter was pressed with no known target, so it could submit a form")
         if not reason:
@@ -181,10 +179,6 @@ class BrowserGateway:
             forward = {key: args[key] for key in _ARGS[op] if key in args}
             reply = await self._cmd(runtime, conversation_id, op, forward)
             ok = reply.get("ok") is True
-            if ok and op in _ELEMENT_OPS:
-                self._last_target[conversation_id] = {"snapshot_id": args["snapshot_id"], "ref": args["ref"]}
-            elif ok and op in {"navigate", "back", "forward", "reload"}:
-                self._last_target.pop(conversation_id, None)
             if ok and op == "screenshot" and isinstance(reply.get("image"), str):
                 meta = {key: value for key, value in reply.items() if key != "image"}
                 return {"ok": True, "text": json.dumps(meta, ensure_ascii=False), "image": reply["image"]}
