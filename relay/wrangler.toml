@@ -32,3 +32,12 @@ namespace_id = "1001"
   [ratelimits.simple]
   limit = 120
   period = 60
+
+# Separate, larger budget for the web remote bundle under /app/: one page load fetches the
+# HTML, a handful of hashed bundles and fonts, which would eat the 120/min API budget above.
+[[ratelimits]]
+name = "RELAY_APP_RATE_LIMIT"
+namespace_id = "1002"
+  [ratelimits.simple]
+  limit = 600
+  period = 60

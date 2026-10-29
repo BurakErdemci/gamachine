@@ -25,12 +25,19 @@ node test/make-vectors.mjs         # rebuild test/vectors.json (deterministic)
 wrangler deploy                    # deploys the worker named gamachine-relay
 ```
 
+## Web remote bundle
+
+`relay/public/app/` is generated: `scripts/build-remote-web.sh [export_dir]` copies an existing
+renderer export (default `Frontend/frontend/renderer/out`) into it. It is not committed; do not
+add it to a commit.
+
 ## Endpoints
 
 | Path | What |
 |---|---|
 | `GET /p` | the phone page (strict CSP, no inline code) |
 | `GET /app.js` `/net.js` `/crypto.js` `/store.js` `/style.css` `/sw.js` `/manifest.webmanifest` `/icon-192.png` `/icon-512.png` `/apple-touch-icon.png` | page files; nothing else in `public/` is served |
+| `GET/HEAD /app/*` | the web remote bundle, served by prefix; an extension-less unknown path falls back to `/app/index.html`; its own request budget (`RELAY_APP_RATE_LIMIT`) |
 | `GET /` | redirect to `/p` |
 | `WSS /ws/pc/<pair_id>` | the PC. Subprotocols: `gamachine.v1`, `key.<room_key>` |
 | `WSS /ws/phone/<pair_id>` | a paired phone. Subprotocols: `gamachine.v1`, `tok.<token>` |
