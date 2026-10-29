@@ -112,6 +112,28 @@ describe.each(cards)('$name on the paired browser', (card) => {
     expect(onAnswer).toHaveBeenCalledWith(false, ...(card.approved.length > 1 ? [false] : []))
   })
 
+  it('abandons the hold when the window loses focus or the page is hidden', () => {
+    for (const lose of [
+      () => window.dispatchEvent(new Event('blur')),
+      () => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+        document.dispatchEvent(new Event('visibilitychange'))
+      },
+    ]) {
+      const onAnswer = vi.fn()
+      const { unmount } = card.render(onAnswer)
+      const button = screen.getByTestId(card.approve)
+      fireEvent.pointerDown(button, { button: 0 })
+      act(() => { vi.advanceTimersByTime(HOLD_MS / 2) })
+      act(() => { lose() })
+      expect(button.getAttribute('data-hold')).toBe('idle')
+      act(() => { vi.advanceTimersByTime(HOLD_MS * 2) })
+      expect(onAnswer).not.toHaveBeenCalled()
+      delete (document as any).visibilityState
+      unmount()
+    }
+  })
+
   it('drops a hold still running when the card goes away', () => {
     const onAnswer = vi.fn()
     const { unmount } = card.render(onAnswer)

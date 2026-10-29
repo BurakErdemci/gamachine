@@ -168,6 +168,18 @@ export const RiskyApproveButton: React.FC<{ testId: string; label: string; onApp
   useEffect(() => () => {
     if (timer.current !== null) clearTimeout(timer.current);
   }, []);
+  // The page losing focus or going to the background ends the press for the user, but the
+  // pointerup may never reach us: a risky hold must not complete unseen.
+  useEffect(() => {
+    if (!holding) return undefined;
+    const abandon = () => { if (document.visibilityState === 'hidden') cancel(); };
+    window.addEventListener('blur', cancel);
+    document.addEventListener('visibilitychange', abandon);
+    return () => {
+      window.removeEventListener('blur', cancel);
+      document.removeEventListener('visibilitychange', abandon);
+    };
+  }, [holding]);
 
   if (!hold) {
     return (
