@@ -646,6 +646,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
     _browser_grants: dict[tuple, float] = {}
     # gate_id -> grant key of an open browser card, so the gateway's in-wait delivery can consume its approval.
     _browser_gate_keys: dict[str, tuple] = {}
+    # chat -> count of page changes, Stop presses and switch-offs; an approval from an older count grants nothing.
+    _browser_nav_gen: dict[int, int] = {}
     _mcp_results: dict = {}   # gate_id → {approved, ...}
     _mcp_result_ts: dict = {}  # gate_id → oluşturulma zamanı (TTL süpürmesi için)
 
@@ -857,12 +859,14 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         if key is not None:
             _browser_gate_keys[gate_id] = key
         base_resolver = _mcp_resolver(gate_id)
+        opened_gen = _browser_nav_gen.setdefault(owner, 0)
 
         def resolve(result):
             # The grant exists before the result becomes visible, or the gateway's poll could run the step
             # on the result and miss the grant that its delivery has to consume.
             card = _cards.get(gate_id)
-            if result is True and key is not None and card is not None and card.by:
+            if (result is True and key is not None and card is not None and card.by
+                    and _browser_nav_gen.get(owner) == opened_gen):
                 _browser_grants[key] = time() + BROWSER_GRANT_TTL
             elif key is not None:
                 _browser_grants.pop(key, None)
@@ -887,6 +891,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         return result
 
     def _drop_browser_grants(conversation_id: int) -> None:
+        _browser_nav_gen[conversation_id] = _browser_nav_gen.get(conversation_id, 0) + 1
         for key in [k for k in _browser_grants if k[0] == conversation_id]:
             del _browser_grants[key]
 
@@ -2931,6 +2936,8 @@ Max 300 kelime. Türkçe yaz.
         if not on:
             _browser_grants.clear()
             _browser_gate_keys.clear()
+            for chat in _browser_nav_gen:
+                _browser_nav_gen[chat] += 1
         rejected = _reject_computer_use_pending(reason=BROWSER_INACTIVE_REASON, flag="browser_use") if not on else 0
         result = await get_browser_settings(x_session_token=x_session_token)
         return {**result, "rejected_browser_use": rejected}
@@ -2962,6 +2969,7 @@ Max 300 kelime. Türkçe yaz.
         _computer_halted.add(conversation_id)
         _reject_computer_use_pending(conversation_id, computer_gate.HALTED_REASON, "computer_halt")
         _reject_computer_use_pending(conversation_id, BROWSER_HALTED_REASON, "computer_halt", flag="browser_use")
+        _browser_nav_gen[conversation_id] = _browser_nav_gen.get(conversation_id, 0) + 1
         for key in [k for k in _browser_grants if k[0] == conversation_id]:
             del _browser_grants[key]
         for gate_id in [g for g, k in _browser_gate_keys.items() if k[0] == conversation_id]:

@@ -132,7 +132,7 @@ proceeds without a new card. An approval answered inside the wait runs the step 
 same call and leaves no grant; a Stop pressed after the approval still stops the step.
 A rejected card, any successful navigation (navigate, back, forward, reload), a halt or
 10 minutes without use drop the grant. Only `_browser_card` may create `browser-` gates;
-`/mcp-approval-request` refuses those ids and any id already in use (409). The chat text
+`/mcp-approval-request` refuses those ids and any id already in use (409). An approval given after the page changed (or after a Stop or switch-off) allows nothing later. The chat text
 never approves anything; only the card does.
 
 ## Work packages

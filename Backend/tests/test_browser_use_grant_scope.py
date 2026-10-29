@@ -35,7 +35,7 @@ class Host:
     async def __call__(self, runtime, op, conversation_id, args):
         self.cmds.append((op, conversation_id, args, runtime))
         if op == "describe":
-            element = self.elements.get(args["ref"])
+            element = NOTES if args.get("focused") else self.elements.get(args["ref"])
             if element is None:
                 return {"ok": False, "error": "stale_snapshot", "url": self.url}
             return {"ok": True, "url": self.url, "title": "t", "element": element}
@@ -188,3 +188,33 @@ def test_retry_does_not_attach_to_a_closed_card(live):
     cards.close_card(gate_id, "timed_out")
     assert command(live)["needs_approval"] is True
     assert open_card() != gate_id
+
+
+def grants_of(env):
+    return closure_var(env.router.halt_computer, "_browser_grants")
+
+
+def test_enter_card_approved_after_a_reload_leaves_no_grant(live):
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    gate_id = open_card()
+    assert command(live, "reload")["ok"] is True
+    assert live.client.post(f"/mcp-approval-respond/{gate_id}", json={"approved": True},
+                            headers=UI).status_code == 200
+    assert not grants_of(live)
+    assert command(live, "press", key="Enter")["needs_approval"] is True
+    assert live.host.ops().count("press") == 0
+
+
+def test_click_card_approved_after_navigation_leaves_no_grant(live):
+    assert command(live)["needs_approval"] is True
+    gate_id = open_card()
+    assert command(live, "navigate", url="https://shop.example/other")["ok"] is True
+    assert live.client.post(f"/mcp-approval-respond/{gate_id}", json={"approved": True},
+                            headers=UI).status_code == 200
+    assert not grants_of(live)
+
+
+def test_approval_without_navigation_still_creates_the_grant(live):
+    approve(live)
+    assert len(grants_of(live)) == 1
+    assert command(live)["ok"] is True
