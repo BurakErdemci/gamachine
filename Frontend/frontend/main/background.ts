@@ -408,7 +408,7 @@ handleSecure('hub-create-project', async (event, arg: any) => {
 
 handleSecure('hub-cancel-create', () => cancelCreate())
 
-handleSecure('hub-open-project', (_event, arg: any) => {
+handleSecure('hub-open-project', async (_event, arg: any) => {
   if (!arg || typeof arg.path !== 'string' || (arg.version !== undefined && typeof arg.version !== 'string')) {
     return { opened: false, error: 'Invalid arguments.' }
   }
