@@ -70,6 +70,31 @@ authenticated session:
 
 Every dispatched request is logged with device id, method and path (no bodies).
 
+## Frame contract (browser ⇄ desktop, inside the existing encrypted channel)
+
+Requests use the v1 request/reply shape (`{id, type, ...}` → `{id, ok, result|error}`,
+`relay/public/net.js` `Link.request`, `Backend/app/remote/rpc.py` `Dispatcher.handle`).
+Browser → desktop frames are capped at 64 KiB, so larger bodies are uploaded in parts.
+
+| type | params | result / pushes |
+|---|---|---|
+| `ui_http` | `{method, path, query?, body?, body_b64?, upload_id?}` | `{status, content_type, body?, body_b64?}`; 403 `remote_forbidden` for paths off the allow-list |
+| `ui_stream_open` | same as `ui_http` | `{stream_id, status, content_type}`, then pushes `{type:'ui_stream_chunk', stream_id, seq, data_b64}` … `{type:'ui_stream_end', stream_id, error?}` |
+| `ui_stream_close` | `{stream_id}` | `{}`; the desktop cancels the underlying request |
+| `ui_upload_part` | `{upload_id, seq, data_b64, last}` (≤ 48 KiB decoded per part, ≤ 32 MiB total) | `{received}`; the finished upload is referenced once by `upload_id` |
+| `ui_ipc` | `{channel, payload}` | the main-process reply; `remote_unavailable` for channels off the allow-list |
+| `ui_ipc_subscribe` | `{channel}` | `{}`; then pushes `{type:'ui_ipc_event', channel, args}` for main → renderer events on that channel (terminal data/exit, browser-live, computer-use-live, hub progress, open-conversation) until the session ends |
+
+HTTP allow-list rules (W1 owns the exact table): everything under the chat, conversation,
+workspace, file, scene, Unity, model-list, card and halt routes is allowed. Denied by
+default and always: `/api-keys/*`, `/cli-install/*`, `/cli-login/*`, `/profile/reset`,
+`/computer-use/grants/*`, `/computer-use/runtime`, `/computer-use/settings` (POST),
+`/browser/runtime`, `/browser/settings` (PUT), `/remote/*`, `/approval-mode` (POST; the v1
+`set_approval_mode` RPC stays the remote way). Requests run in-process with an internal
+device identity. The few allowed routes that require the UI secret (card answer
+`/mcp-approval-respond/*`, halt `/computer-use/halt/*`) get it added by the dispatcher from
+an explicit, separate list; no other route ever sees it.
+
 ## Relay and budget
 
 The renderer export (`Frontend/frontend/renderer/out`) is copied into `relay/public/app/`
