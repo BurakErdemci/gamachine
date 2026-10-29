@@ -644,6 +644,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
     _browser_runtime = {"running": False, "port": None, "token": None}
     # One-time approvals of critical browser steps: (chat, op, url, fingerprint, value_hash) -> expiry.
     _browser_grants: dict[tuple, float] = {}
+    # gate_id -> grant key of an open browser card, so the gateway's in-wait delivery can consume its approval.
+    _browser_gate_keys: dict[str, tuple] = {}
     _mcp_results: dict = {}   # gate_id → {approved, ...}
     _mcp_result_ts: dict = {}  # gate_id → oluşturulma zamanı (TTL süpürmesi için)
 
@@ -852,15 +854,19 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         }
         _mcp_results[gate_id] = {"status": "pending"}
         _mcp_result_ts[gate_id] = time()
+        if key is not None:
+            _browser_gate_keys[gate_id] = key
         base_resolver = _mcp_resolver(gate_id)
 
         def resolve(result):
-            base_resolver(result)
+            # The grant exists before the result becomes visible, or the gateway's poll could run the step
+            # on the result and miss the grant that its delivery has to consume.
             card = _cards.get(gate_id)
-            if result is True and key is not None and card is not None and card.by == "desktop":
+            if result is True and key is not None and card is not None and card.by:
                 _browser_grants[key] = time() + BROWSER_GRANT_TTL
             elif key is not None:
                 _browser_grants.pop(key, None)
+            base_resolver(result)
             log("approved" if result is True else "rejected", decision.reason)
 
         _cards.open_card(gate_id, conversation_id=_mcp_pending[gate_id]["conversation_id"],
@@ -874,7 +880,10 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         result = _mcp_results.get(gate_id)
         if result is None or result.get("status") == "pending":
             return None
+        key = _browser_gate_keys.get(gate_id)
         _drop_mcp_gate(gate_id)
+        if key is not None and result.get("approved") is True:
+            _browser_grants.pop(key, None)  # the waiting call runs the step: that approval is spent
         return result
 
     _browser_gateway = browser_gateway.BrowserGateway(
@@ -910,6 +919,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             _mcp_result_ts.pop(gate_id, None)
             _mcp_results.pop(gate_id, None)
             _mcp_pending.pop(gate_id, None)
+            _browser_gate_keys.pop(gate_id, None)
             _release_gate(gate_id)
             _settle_mail(gate_id, False)
 
@@ -918,6 +928,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         _mcp_results.pop(gate_id, None)
         _mcp_result_ts.pop(gate_id, None)
         _mcp_pending.pop(gate_id, None)
+        _browser_gate_keys.pop(gate_id, None)
         _release_gate(gate_id)
 
     def _side_main_of(conv_id: Any) -> Optional[int]:
@@ -2911,6 +2922,7 @@ Max 300 kelime. Türkçe yaz.
         browser_settings.set_enabled(db, on)
         if not on:
             _browser_grants.clear()
+            _browser_gate_keys.clear()
         rejected = _reject_computer_use_pending(reason=BROWSER_INACTIVE_REASON, flag="browser_use") if not on else 0
         result = await get_browser_settings(x_session_token=x_session_token)
         return {**result, "rejected_browser_use": rejected}
@@ -2944,6 +2956,8 @@ Max 300 kelime. Türkçe yaz.
         _reject_computer_use_pending(conversation_id, BROWSER_HALTED_REASON, "computer_halt", flag="browser_use")
         for key in [k for k in _browser_grants if k[0] == conversation_id]:
             del _browser_grants[key]
+        for gate_id in [g for g, k in _browser_gate_keys.items() if k[0] == conversation_id]:
+            del _browser_gate_keys[gate_id]
         return {"halted": True, "conversation_id": conversation_id}
 
     router.halt_computer = halt_computer

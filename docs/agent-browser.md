@@ -57,7 +57,9 @@ returns the port or the token: `GET /browser/settings` answers `{enabled, runnin
 browser command, from the MCP server or from anything else holding the local app token,
 goes through `POST /browser/command`, so the navigation check, the critical-step
 classification, the card and the one-time grant cannot be skipped. Approving a card
-needs the UI secret, which only main holds. The host still enforces its own navigation
+needs the UI secret (main) or a paired remote device's answer through the remote answer
+path (recorded with the device in the card ledger); one approval runs the step once,
+whether answered inside the 2 s wait or later. The host still enforces its own navigation
 allow-list and connected-address check. The token is a fresh 32-byte random value per
 launch and is compared in constant time. Docker backend mode is not supported in v4 (the
 container cannot reach the host's loopback); `running` is false there and the tools say so.
@@ -120,10 +122,12 @@ in that time the tool returns at once:
 > `needs_approval: <reason>. An approval card is open in the chat. Tell the user what
 > you want to do and why, then wait for their next message before trying again.`
 
-When the user approves the card, the backend stores a one-time grant keyed by
+When the user approves the card (on the desktop or from a paired remote device) after
+the gateway's wait has ended, the backend stores a one-time grant keyed by
 `(conversation_id, op, url, element fingerprint)` (fingerprint = role + name + form
 action, normalised). The agent's next identical call finds the grant, consumes it and
-proceeds without a new card. A rejected card, a navigation away, a halt or 10 minutes
+proceeds without a new card. An approval answered inside the wait runs the step in that
+same call and leaves no grant. A rejected card, a navigation away, a halt or 10 minutes
 without use drop the grant. The chat text never approves anything; only the card does.
 
 ## Work packages
