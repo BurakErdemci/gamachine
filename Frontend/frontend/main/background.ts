@@ -10,6 +10,7 @@ import { spawn, ChildProcess, execFile } from 'child_process'
 import { promisify } from 'util'
 import axios from 'axios'
 import { autoUpdater } from 'electron-updater'
+import { setupAutoUpdate, type AutoUpdateHandle } from './helpers/auto-update'
 import {
   TEXT_MAX_BYTES,
   isAllowedWorkspacePath,
@@ -1206,6 +1207,9 @@ if (!gotTheLock) {
     }
   })
 
+  let quitReady = false
+  let updateHandle: AutoUpdateHandle | undefined
+
     ; (async () => {
       await app.whenReady()
 
@@ -1394,35 +1398,23 @@ if (!gotTheLock) {
       const menu = Menu.buildFromTemplate(template);
       Menu.setApplicationMenu(menu);
 
-      // --- GÜNCELLEME KONTROLÜ (BİLDİR-ONLY, electron-updater → GitHub Releases) ---
-      // GÜVENLİK: Sessiz otomatik indirme/kurulum YOK. App yalnızca yeni sürümü tespit
-      // edip kullanıcıya haber verir ve resmi release sayfasını açar — kurulumu kullanıcı
-      // bilerek yapar (OS SmartScreen/Gatekeeper devrede). Böylece GitHub hesabı ele
-      // geçse bile kimsenin makinesinde otomatik kod çalışmaz. Public repo → token gerekmez.
+      // Owner decision (29 Oct 2026): in-app auto-update; Windows unsigned (sha512 only), mac signed.
       if (isProd) {
-        autoUpdater.autoDownload = false
-        autoUpdater.autoInstallOnAppQuit = false
-        autoUpdater.on('error', (err) => console.error('[updater] hata:', err?.message || err))
-        autoUpdater.on('update-not-available', () => console.log('[updater] uygulama güncel'))
-        autoUpdater.on('update-available', async (info) => {
-          console.log('[updater] yeni sürüm mevcut:', info?.version)
-          try {
-            const { response } = await dialog.showMessageBox({
-              type: 'info',
-              buttons: ['İndirme sayfasını aç', 'Sonra'],
-              defaultId: 0,
-              cancelId: 1,
-              title: 'Güncelleme mevcut',
-              message: `Yeni sürüm çıktı: v${info?.version}`,
-              detail: 'Resmi indirme sayfasını açmak için "İndirme sayfasını aç"a bas. ' +
-                'Kurulumu sen onaylayacaksın — otomatik/sessiz kurulum yapılmaz.',
-            })
-            if (response === 0) {
-              await shell.openExternal('https://github.com/BurakErdemci/gamachine/releases/latest')
-            }
-          } catch (e) { console.error('[updater] bildirim hatası:', (e as any)?.message || e) }
+        updateHandle = setupAutoUpdate({
+          autoUpdater,
+          dialog,
+          // Run the same teardown before-quit would, so its preventDefault has nothing left to wait for.
+          stopBackend: async () => {
+            remoteControl.shutdown()
+            computerLive.shutdown()
+            await computerUse.shutdown()
+            quitReady = true
+            killBackend()
+          },
+          logger: console,
+          relaunch: () => { app.relaunch(); app.exit(0) },
+          getMainWindow: () => BrowserWindow.getAllWindows()[0],
         })
-        autoUpdater.checkForUpdates().catch((e) => console.error('[updater] kontrol başarısız:', e?.message || e))
       }
     })()
 
@@ -1455,8 +1447,8 @@ if (!gotTheLock) {
     void computerUse.shutdown().finally(() => { killBackend(); app.quit() })
   })
 
-  let quitReady = false
   app.on('before-quit', (event) => {
+    updateHandle?.dispose()
     remoteControl.shutdown()
     computerLive.shutdown()
     if (quitReady) { killBackend(); return }
