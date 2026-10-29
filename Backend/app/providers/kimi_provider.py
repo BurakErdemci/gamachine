@@ -123,19 +123,31 @@ class KimiProvider(BaseCLIProvider):
             current = self._KIMI_PERMISSION_BLOCK.strip("\n")
             if existing[start:end] == current:
                 return
+            tmp = None
             try:
-                tmp = path + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as f:
+                # mkstemp makes the file 0600; config.toml can hold provider keys,
+                # so the original's mode (not the umask default) must carry over.
+                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".config-", suffix=".tmp")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(existing[:start] + current + existing[end:])
+                os.chmod(tmp, os.stat(path).st_mode & 0o7777)
                 os.replace(tmp, path)
+                tmp = None
                 logger.info(f"[KimiProvider] permission.rules güncellendi: {path}")
             except Exception as e:
                 logger.warning(f"[KimiProvider] config.toml güncellenemedi: {e}")
+            finally:
+                if tmp is not None:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
             return
         if self._KIMI_LEGACY_MARKER in existing:
             return  # zaten yazılı — idempotent
         try:
-            with open(path, "a", encoding="utf-8") as f:
+            # Created here only when absent; keep a new config.toml private.
+            with open(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a", encoding="utf-8") as f:
                 f.write(self._KIMI_PERMISSION_BLOCK)
             logger.info(f"[KimiProvider] permission.rules yazıldı: {path}")
         except Exception as e:
