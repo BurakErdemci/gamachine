@@ -34,6 +34,12 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'open-unity-hub',
   'authorize-workspace',
   'browser-live',
+  'hub-list-editors',
+  'hub-list-templates',
+  'hub-create-project',
+  'hub-cancel-create',
+  'hub-open-project',
+  'hub-pick-parent-dir',
 ])
 
 export const PRELOAD_ONLY_CHANNELS = new Set(['register-dropped-folder'])

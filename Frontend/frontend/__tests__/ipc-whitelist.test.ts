@@ -98,8 +98,9 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // 37 -> 33: project memory import/export and two unused file channels removed.
   // 33 -> 34: 'authorize-workspace' asks the native Yetkilendir box for a recent project.
   // 34 -> 35: 'browser-live' positions, shows and halts the agent browser view and keeps its settings secret in main.
-  it('contains exactly 35 channels', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(35)
+  // 35 -> 41: the Mini Hub engine (editors, templates, create, cancel, open, folder picker).
+  it('contains exactly 41 channels', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(41)
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use')).toBe(true)
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use-live')).toBe(true)
   })
