@@ -289,9 +289,10 @@ class _AsgiCall:
             logger.exception("[remote] ui request %s %s failed", scope["method"], scope["path"])
             self.failed = True
         finally:
-            # Awaited: a full queue must not lose the terminator. The reader
-            # always closes the call, which cancels this wait.
-            await self._q.put(None)
+            # Awaited: a full queue must not lose the terminator. A closed call
+            # has no reader left, so waiting there would never end.
+            if not self._gone.is_set():
+                await self._q.put(None)
 
     async def start(self) -> Tuple[int, str]:
         """Status and content type, once the app has started its response."""
