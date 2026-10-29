@@ -71,8 +71,10 @@ def _clean(value) -> str:
 
 
 def fingerprint(element) -> str:
-    """Role + name + form action, normalised: what a one-time grant is keyed on."""
-    return "|".join(_clean(element.get(key)).casefold() for key in ("role", "name", "form_action"))
+    """Role + name + form action + a link's href: what a one-time grant is keyed on. The
+    human-facing role and name are case-folded; URLs stay exact, a changed path is another target."""
+    return "|".join((_clean(element.get("role")).casefold(), _clean(element.get("name")).casefold(),
+                     _clean(element.get("form_action")), _clean(element.get("href"))))
 
 
 def _is_download(element) -> bool:

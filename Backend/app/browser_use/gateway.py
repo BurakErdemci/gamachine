@@ -96,6 +96,9 @@ def _recheck(first, now, same_page=True) -> tuple:
     runtime, refusal = _usable(now)
     if refusal:
         return None, refusal
+    if now.get("stop_gen") != first.get("stop_gen"):
+        # A Stop of this chat, even one whose halt a new user message has already cleared.
+        return None, HALTED
     if runtime != first.get("runtime") or (same_page and now.get("page_gen") != first.get("page_gen")):
         return None, PAGE_CHANGED
     return runtime, None
@@ -114,11 +117,22 @@ def _target_fingerprint(op, args, element) -> str:
 
 
 def _seen(described, op, args):
-    """(url, fingerprint) of a describe reply, or None when it described nothing."""
+    """(url, fingerprint, element id or None) of a describe reply, or None when it described nothing."""
     element = described.get("element") if described.get("ok") is True else None
     if element is None:
         return None
-    return str(described.get("url") or ""), _target_fingerprint(op, args, element if isinstance(element, dict) else {})
+    element = element if isinstance(element, dict) else {}
+    element_id = element.get("element_id")
+    if not (isinstance(element_id, str) or type(element_id) is int):
+        element_id = None
+    return str(described.get("url") or ""), _target_fingerprint(op, args, element), element_id
+
+
+def _same_target(first, second) -> bool:
+    """Whether two _seen results name the same page and element; ids are compared when both carry one."""
+    if first is None or second is None:
+        return first is second
+    return first[:2] == second[:2] and (first[2] is None or second[2] is None or first[2] == second[2])
 
 
 class BrowserGateway:
@@ -225,7 +239,7 @@ class BrowserGateway:
             # to what was approved. A grant needs no second look: nothing runs between its describe
             # and the step.
             again = await self._cmd(runtime, conversation_id, "describe", target)
-            if _seen(again, op, args) != _seen(described, op, args):
+            if not _same_target(_seen(again, op, args), _seen(described, op, args)):
                 return _refusal(FOCUS_CHANGED if op == "press" else TARGET_CHANGED), None
         # The wait can outlast a Stop, a switch-off (even one turned back on), a deleted chat, a host
         # restart or another chat's page change.
@@ -235,7 +249,7 @@ class BrowserGateway:
         return None, runtime
 
     async def call(self, conversation_id: int, op: str, args, state) -> dict:
-        """Run one tool call for a verified chat; state() -> {enabled, halted, deleted, runtime, page_gen},
+        """Run one tool call for a verified chat; state() -> {enabled, halted, deleted, runtime, page_gen, stop_gen},
         read under the lock and again after every describe and approval wait."""
         if op not in _ARGS:
             return _refusal(f"Unknown browser tool browser_{op}.")

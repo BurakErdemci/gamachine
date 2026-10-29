@@ -125,10 +125,12 @@ const PAGE_LIB = String.raw`(() => {
     return scopes.flatMap((scope) => Array.from(scope.querySelectorAll('button, input, select, textarea')).filter((f) => f.form === form));
   };
   // A stable id for each element this page describes, so an Enter approved on one element cannot be spent on an equal-looking other one.
+  // The ids carry a random token made when this page script starts, so a new document at the same URL never repeats an old id.
+  const documentToken = Array.from(crypto.getRandomValues(new Uint32Array(3)), (n) => n.toString(36)).join('');
   const elementIds = new WeakMap();
   let lastElementId = 0;
   const elementId = (el) => {
-    if (!elementIds.has(el)) elementIds.set(el, 'el' + (++lastElementId));
+    if (!elementIds.has(el)) elementIds.set(el, 'd' + documentToken + '-el' + (++lastElementId));
     return elementIds.get(el);
   };
   globalThis.__gmBrowser = {

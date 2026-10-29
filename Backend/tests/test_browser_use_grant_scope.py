@@ -470,3 +470,63 @@ def test_a_browser_restart_during_the_wait_refuses_the_approved_step(waiting):
     reply = run_with_answer(waiting, approve_then_restart)
     assert reply["ok"] is False and reply["error"] == gateway.PAGE_CHANGED
     assert waiting.host.ops().count("click") == 0
+
+
+def test_an_href_or_form_action_changed_during_the_wait_is_not_clicked(waiting):
+    waiting.host.elements["9"] = {"role": "link", "name": "Get file", "tag": "a", "href": "https://shop.example/a.zip"}
+
+    async def swap_then_approve(gate_id, routes):
+        waiting.host.elements["9"] = dict(waiting.host.elements["9"], href="https://evil.example/a.exe")
+        await desktop_approve(gate_id, routes)
+
+    reply = run_with_answer(waiting, swap_then_approve)
+    assert reply["error"] == gateway.TARGET_CHANGED and waiting.host.ops().count("click") == 0
+
+
+def test_the_fingerprint_folds_role_and_name_but_keeps_urls_exact():
+    from browser_use import policy
+    base = {"role": "Button", "name": "Buy  NOW", "form_action": "https://shop.example/pay"}
+    assert policy.fingerprint(base) == policy.fingerprint({**base, "role": "button", "name": "buy now"})
+    assert policy.fingerprint(base) != policy.fingerprint({**base, "form_action": "https://shop.example/Pay"})
+    link = {"role": "link", "name": "Get", "href": "https://shop.example/a"}
+    assert policy.fingerprint(link) != policy.fingerprint({**link, "href": "https://shop.example/A"})
+
+
+def test_a_new_element_id_in_the_wait_is_not_pressed(waiting):
+    async def new_document_then_approve(gate_id, routes):
+        waiting.host.focused = dict(waiting.host.focused, element_id="d2-el1")
+        await desktop_approve(gate_id, routes)
+
+    waiting.host.focused = dict(NOTES, element_id="d1-el1")
+    reply = run_with_answer(waiting, new_document_then_approve, op="press", key="Enter")
+    assert reply["error"] == gateway.FOCUS_CHANGED and waiting.host.ops().count("press") == 0
+
+
+def test_the_chats_own_stop_closes_its_card_and_grant_without_a_session(live):
+    approve(live)
+    assert command(live, ref="8")["needs_approval"] is True
+    gate_id = open_card()
+    generation = browser_store(live.router, "_browser_page_gen")[0]
+    assert asyncio.run(live.router.stop_chat(1)) == {"status": "no_session"}
+    assert not cards.is_open(gate_id) and not browser_store(live.router, "_browser_grants")
+    assert browser_store(live.router, "_browser_page_gen")[0] == generation
+
+
+def test_a_stop_that_a_new_message_cleared_still_refuses_the_waiting_step(waiting):
+    async def approve_stop_then_clear(gate_id, routes):
+        await desktop_approve(gate_id, routes)
+        await waiting.router.halt_computer(1)
+        browser_store(waiting.router, "_computer_halted").discard(1)
+
+    reply = run_with_answer(waiting, approve_stop_then_clear)
+    assert reply["ok"] is False and reply["error"] == gateway.HALTED
+    assert waiting.host.ops().count("click") == 0
+
+
+def test_a_failed_chat_lookup_after_the_describe_refuses_the_step(live):
+    async def lookup_breaks(conversation_id):
+        live.db.get_conversation_owner.side_effect = RuntimeError("db locked")
+
+    live.host.after_describe = lookup_breaks
+    reply = command(live, ref="7")
+    assert reply["ok"] is False and "click" not in live.host.ops()

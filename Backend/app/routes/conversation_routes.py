@@ -652,6 +652,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
     # view, so an approval given under an older count grants nothing and runs nothing. A Stop or a
     # chat deletion is one chat's business and leaves it alone.
     _browser_page_gen = [0]
+    # chat id -> count of that chat's Stops: a step that was already waiting when its chat was stopped
+    # must not run, even after the next user message cleared the halt.
+    _browser_stop_gen: dict[int, int] = {}
     _mcp_results: dict = {}   # gate_id → {approved, ...}
     _mcp_result_ts: dict = {}  # gate_id → oluşturulma zamanı (TTL süpürmesi için)
 
@@ -905,6 +908,13 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             del _browser_grants[key]
         for gate_id in [g for g, k in _browser_gate_keys.items() if conversation_id in (None, k[0])]:
             del _browser_gate_keys[gate_id]
+
+    def _stop_browser_for_chat(conversation_id: int) -> None:
+        """One chat's Stop: its open browser cards close, its grants and keys go, its stop count moves.
+        The shared page generation stays: other chats' approvals are theirs."""
+        _browser_stop_gen[conversation_id] = _browser_stop_gen.get(conversation_id, 0) + 1
+        _reject_computer_use_pending(conversation_id, BROWSER_HALTED_REASON, "computer_halt", flag="browser_use")
+        _forget_browser_approvals(conversation_id)
 
     def _drop_browser_grants(conversation_id: int) -> None:
         """The gateway's report that the shared page changed: every chat's browser cards and grants
@@ -2374,6 +2384,7 @@ Max 300 kelime. Türkçe yaz.
     async def stop_chat(conversation_id: int) -> dict:
         """The desktop Stop, shared with the phone's `stop` (remote bridge)."""
         turn_events.note_stop(conversation_id)
+        _stop_browser_for_chat(conversation_id)
         # A stopped mail wake turn's text is not its answer: nothing is forwarded.
         _owed = _reply_owed.get(conversation_id)
         if _owed is not None:
@@ -2505,14 +2516,15 @@ Max 300 kelime. Türkçe yaz.
             return _UNKNOWN_OWNER, f"conversation {claimed} has no turn in flight"
         return claimed, ""
 
-    def _names_missing_chat(claimed: Any) -> bool:
+    def _names_missing_chat(claimed: Any, fail_closed: bool = False) -> bool:
         if type(claimed) is not int or claimed <= 0:
             return False
         try:
             return db.get_conversation_owner(claimed) is None
         except Exception:
-            # A failed lookup proves nothing; the card stays unowned instead.
-            return False
+            # A failed lookup proves nothing; the card stays unowned instead. A browser step about to
+            # run cannot take that chance and counts the chat as gone.
+            return fail_closed
 
     def _side_chat_claim_refusal(claimed: Any) -> Optional[str]:
         """Refusal text when the claimed chat is (or may be) a side chat, else None."""
@@ -2935,8 +2947,9 @@ Max 300 kelime. Türkçe yaz.
             return {"ok": False, "error": "The agent browser only works for a chat whose turn is running."}
         return await _browser_gateway.call(owner, tool[len("browser_"):], args, lambda: {
             "enabled": browser_settings.enabled(db), "halted": owner in _computer_halted,
-            "deleted": _names_missing_chat(owner),
-            "runtime": dict(_browser_runtime), "page_gen": _browser_page_gen[0]})
+            "deleted": _names_missing_chat(owner, fail_closed=True),
+            "runtime": dict(_browser_runtime), "page_gen": _browser_page_gen[0],
+            "stop_gen": _browser_stop_gen.get(owner, 0)})
 
     @router.put("/browser/settings")
     async def set_browser_settings(
@@ -2991,8 +3004,7 @@ Max 300 kelime. Türkçe yaz.
         """The desktop's computer-use halt, shared with the phone's `halt_computer` (remote bridge)."""
         _computer_halted.add(conversation_id)
         _reject_computer_use_pending(conversation_id, computer_gate.HALTED_REASON, "computer_halt")
-        _reject_computer_use_pending(conversation_id, BROWSER_HALTED_REASON, "computer_halt", flag="browser_use")
-        _forget_browser_approvals(conversation_id)
+        _stop_browser_for_chat(conversation_id)
         return {"halted": True, "conversation_id": conversation_id}
 
     router.halt_computer = halt_computer

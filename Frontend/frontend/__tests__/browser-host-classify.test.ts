@@ -169,6 +169,16 @@ describe('element ids', () => {
     expect(second.element_id).not.toBe(first.element_id)
     expect(again.element_id).toBe(first.element_id)
   })
+
+  it('a new document at the same URL never repeats an id', async () => {
+    const ids: string[] = []
+    for (let visit = 0; visit < 2; visit++) {
+      const { describeFocused } = await page('<button>Buy now</button>')
+      ;(document.querySelector('button') as HTMLButtonElement).focus()
+      ids.push((await describeFocused()).element.element_id)
+    }
+    expect(ids[0]).not.toBe(ids[1])
+  })
 })
 
 describe('form properties shadowed by named controls', () => {
