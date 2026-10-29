@@ -10,6 +10,7 @@ import { spawn, ChildProcess, execFile } from 'child_process'
 import { promisify } from 'util'
 import axios from 'axios'
 import { autoUpdater } from 'electron-updater'
+import { setupAutoUpdate, type AutoUpdateHandle } from './helpers/auto-update'
 import {
   TEXT_MAX_BYTES,
   isAllowedWorkspacePath,
@@ -1128,6 +1129,53 @@ function getBackendPaths(): { pythonExec: string; pythonScript: string; backendD
   }
 }
 
+// Resolves once the backend is gone (the Windows installer cannot overwrite a locked
+// backend.exe), or after 10 s so a hung kill never blocks quitting. Never rejects.
+const killBackend = (): Promise<void> => {
+  const proc = pyBackendProcess
+  if (!proc) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    // Armed first: nothing below may skip the cap.
+    const timer = setTimeout(resolve, 10000)
+    const settle = () => { clearTimeout(timer); resolve() }
+    const gone = (child: ChildProcess) => child.exitCode != null || child.signalCode != null
+    const onceEvent = (emitter: ChildProcess, event: string) =>
+      new Promise<void>((done) => { emitter.once(event, () => done()) })
+    // Test doubles and already-exited children have nothing to listen on.
+    const waits: Promise<void>[] = [gone(proc) || typeof proc.once !== 'function' ? Promise.resolve() : onceEvent(proc, 'exit')]
+    const pid = proc.pid
+    if (!gone(proc)) {
+      const fallbackKill = (signal?: NodeJS.Signals) => {
+        try { proc.kill(signal) } catch (e) {
+          console.error('[backend] kill failed:', (e as any)?.message || e)
+          settle()
+        }
+      }
+      if (process.platform === 'win32' && pid) {
+        // Windows: negatif PID (process group) yok — taskkill /T tüm child ağacını öldürür
+        // (PyInstaller bootloader + uvicorn worker'ları dahil). Aksi halde orphan kalır.
+        try {
+          const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+          waits.push(new Promise<void>((done) => {
+            killer.once('exit', () => done())
+            killer.once('error', () => done())
+          }))
+        } catch {
+          fallbackKill()
+        }
+      } else {
+        // POSIX: tüm process grubunu öldür (uvicorn reload child'ları dahil)
+        try {
+          process.kill(-pid!, 'SIGKILL')
+        } catch {
+          fallbackKill('SIGKILL')
+        }
+      }
+    }
+    void Promise.all(waits).then(settle)
+  }).then(() => { if (pyBackendProcess === proc) pyBackendProcess = null })
+}
+
 // --- BACKEND BAŞLATMA ---
 async function startPythonBackend() {
   // Docker modu: Python spawn etme, doğrudan Docker backend'e bağlan
@@ -1197,7 +1245,10 @@ async function startPythonBackend() {
     // closed right after, so nothing the backend spawns can read it later.
     stdio: ['pipe', 'pipe', 'pipe'],
     cwd: backendDir,
-    detached: false, // process group ile başlat — kapanırken tüm child'lar ölsün
+    // POSIX: its own process group, so killBackend's kill(-pid) also ends what the backend
+    // started (measured 29 Oct 2026: with false a descendant outlived the quit). Windows uses
+    // taskkill /T instead, and detached there would open a console window.
+    detached: process.platform !== 'win32',
     env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PORT: String(selectedPort), LOCAL_APP_TOKEN: localAppToken, GAMACHINE_UI_SECRET_STDIN: '1' },
   });
   pyBackendProcess.stdin?.on('error', (err) => console.error('[approval-mode] UI secret not delivered:', err))
@@ -1224,8 +1275,8 @@ async function startPythonBackend() {
   } catch (err) {
     // Sağlık kontrolü başarısız — port'u sıfırla, pencere yine de açılacak
     backendPort = null
-    pyBackendProcess?.kill()
-    pyBackendProcess = null
+    // Same wait as quit/install: the handle stays until the process exited or the cap passed.
+    await killBackend()
     throw err
   }
 }
@@ -1251,6 +1302,9 @@ if (!gotTheLock) {
       win.focus()
     }
   })
+
+  let quitReady = false
+  let updateHandle: AutoUpdateHandle | undefined
 
     ; (async () => {
       await app.whenReady()
@@ -1441,85 +1495,53 @@ if (!gotTheLock) {
       const menu = Menu.buildFromTemplate(template);
       Menu.setApplicationMenu(menu);
 
-      // --- GÜNCELLEME KONTROLÜ (BİLDİR-ONLY, electron-updater → GitHub Releases) ---
-      // GÜVENLİK: Sessiz otomatik indirme/kurulum YOK. App yalnızca yeni sürümü tespit
-      // edip kullanıcıya haber verir ve resmi release sayfasını açar — kurulumu kullanıcı
-      // bilerek yapar (OS SmartScreen/Gatekeeper devrede). Böylece GitHub hesabı ele
-      // geçse bile kimsenin makinesinde otomatik kod çalışmaz. Public repo → token gerekmez.
+      // Owner decision (29 Oct 2026): in-app auto-update; Windows unsigned (sha512 only), mac signed.
       if (isProd) {
-        autoUpdater.autoDownload = false
-        autoUpdater.autoInstallOnAppQuit = false
-        autoUpdater.on('error', (err) => console.error('[updater] hata:', err?.message || err))
-        autoUpdater.on('update-not-available', () => console.log('[updater] uygulama güncel'))
-        autoUpdater.on('update-available', async (info) => {
-          console.log('[updater] yeni sürüm mevcut:', info?.version)
-          try {
-            const { response } = await dialog.showMessageBox({
-              type: 'info',
-              buttons: ['İndirme sayfasını aç', 'Sonra'],
-              defaultId: 0,
-              cancelId: 1,
-              title: 'Güncelleme mevcut',
-              message: `Yeni sürüm çıktı: v${info?.version}`,
-              detail: 'Resmi indirme sayfasını açmak için "İndirme sayfasını aç"a bas. ' +
-                'Kurulumu sen onaylayacaksın — otomatik/sessiz kurulum yapılmaz.',
-            })
-            if (response === 0) {
-              await shell.openExternal('https://github.com/BurakErdemci/gamachine/releases/latest')
-            }
-          } catch (e) { console.error('[updater] bildirim hatası:', (e as any)?.message || e) }
+        updateHandle = setupAutoUpdate({
+          autoUpdater,
+          dialog,
+          // Run the same teardown before-quit would, so its preventDefault has nothing left to wait for.
+          stopBackend: async () => {
+            remoteControl.shutdown()
+            computerLive.shutdown()
+            await Promise.all([computerUse.shutdown(), stopBrowserHost()])
+            await killBackend()
+            // Only now: a quit during the kill wait must go through before-quit's own wait.
+            quitReady = true
+          },
+          logger: console,
+          relaunch: () => { app.relaunch(); app.exit(0) },
+          getMainWindow: () => BrowserWindow.getAllWindows()[0],
         })
-        autoUpdater.checkForUpdates().catch((e) => console.error('[updater] kontrol başarısız:', e?.message || e))
       }
     })()
-
-  const killBackend = () => {
-    if (pyBackendProcess) {
-      const pid = pyBackendProcess.pid
-      if (process.platform === 'win32' && pid) {
-        // Windows: negatif PID (process group) yok — taskkill /T tüm child ağacını öldürür
-        // (PyInstaller bootloader + uvicorn worker'ları dahil). Aksi halde orphan kalır.
-        try {
-          spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
-        } catch {
-          try { pyBackendProcess.kill() } catch { /* zaten ölmüş */ }
-        }
-      } else {
-        // POSIX: tüm process grubunu öldür (uvicorn reload child'ları dahil)
-        try {
-          process.kill(-pid!, 'SIGKILL')
-        } catch {
-          pyBackendProcess.kill('SIGKILL')
-        }
-      }
-      pyBackendProcess = null
-    }
-  }
 
   app.on('window-all-closed', () => {
     remoteControl.shutdown()
     computerLive.shutdown()
-    void Promise.all([computerUse.shutdown(), stopBrowserHost()]).finally(() => { killBackend(); app.quit() })
+    void Promise.all([computerUse.shutdown(), stopBrowserHost()]).finally(async () => { await killBackend(); app.quit() })
   })
 
-  let quitReady = false
   app.on('before-quit', (event) => {
+    updateHandle?.dispose()
     remoteControl.shutdown()
     computerLive.shutdown()
-    if (quitReady) { killBackend(); return }
+    if (quitReady) { void killBackend(); return }
     event.preventDefault()
-    void Promise.all([computerUse.shutdown(), stopBrowserHost()]).finally(() => {
+    void Promise.all([computerUse.shutdown(), stopBrowserHost()]).finally(async () => {
+      await killBackend()
       quitReady = true
-      killBackend()
       app.quit()
     })
   })
 
   // Beklenmedik çıkışlarda da temizle
-  process.on('exit', () => { remoteControl.shutdown(); computerLive.shutdown(true); void computerUse.shutdown(true); void stopBrowserHost(); killBackend() })
+  process.on('exit', () => { remoteControl.shutdown(); computerLive.shutdown(true); void computerUse.shutdown(true); void stopBrowserHost(); void killBackend() })
   process.on('SIGTERM', () => {
     remoteControl.shutdown()
     computerLive.shutdown()
-    void Promise.all([computerUse.shutdown(), stopBrowserHost()]).finally(() => { killBackend(); process.exit(0) })
+    void Promise.all([computerUse.shutdown(), stopBrowserHost()]).finally(async () => { await killBackend(); process.exit(0) })
+    // A second signal while waiting exits at once.
+    process.once('SIGTERM', () => process.exit(0))
   })
 }
