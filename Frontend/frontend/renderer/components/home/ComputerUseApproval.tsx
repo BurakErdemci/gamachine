@@ -2,7 +2,7 @@ import React from 'react';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
 import { isCodeEditorBundle } from '../../lib/computerUse';
-import { ApprovalCard, ApprovalWhy, CheckIcon } from './ApprovalCard';
+import { ApprovalCard, ApprovalWhy, CheckIcon, RiskyApproveButton } from './ApprovalCard';
 
 /** The structured params of a computer_* card (backend computer branch of `/mcp-approval-request`). */
 export interface ComputerCardInfo {
@@ -102,9 +102,7 @@ export const ComputerUseApproval: React.FC<ComputerUseApprovalProps> = ({ info, 
         phoneHint={phonePaired}
         actions={risky ? (
           <>
-            <button type="button" className="btn btn-primary" data-testid="cu-card-approve" onClick={() => onAnswer(true, false)}>
-              <CheckIcon /><span>{t('cu.card.approve')}</span>
-            </button>
+            <RiskyApproveButton testId="cu-card-approve" label={t('cu.card.approve')} onApprove={() => onAnswer(true, false)} />
             <button type="button" className="btn btn-ghost" data-testid="cu-card-reject" onClick={() => onAnswer(false, false)}>
               {t('cu.card.reject')}
             </button>

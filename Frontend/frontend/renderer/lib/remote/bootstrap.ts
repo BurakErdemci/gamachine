@@ -4,7 +4,7 @@ import { RemoteGate } from '../../components/remote/RemotePairing'
 import { cevir, type TKey } from '../i18n'
 import { installFetchShim, installAxiosShim } from './httpShim'
 import { createIpcShim } from './ipcShim'
-import { RemoteTransport, type LinkStatus } from './transport'
+import { RemoteTransport, isRemotePage, type LinkStatus } from './transport'
 
 // Remote mode (docs/remote-control-web.md W2): the renderer served by the relay, without
 // Electron. The pairing, keys and encrypted Link are the v1 phone page's own modules, loaded
@@ -13,8 +13,7 @@ import { RemoteTransport, type LinkStatus } from './transport'
 /** No preload bridge and served over https from a non-app origin. */
 export function isRemoteMode(win: any = typeof window === 'undefined' ? undefined : window): boolean {
   if (!win || win.ipc) return false
-  const loc = win.location
-  return loc?.protocol === 'https:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1'
+  return isRemotePage(win)
 }
 
 export type PairStep = 'idle' | 'working' | 'failed'
