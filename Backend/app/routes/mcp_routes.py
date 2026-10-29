@@ -6,6 +6,7 @@ from typing import Optional
 from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 from unity_ai_mcp import unity_project_presence
 from auth_utils import _check_token
+from routes.workspace_routes import require_saved_workspace_when_remote
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -23,6 +24,8 @@ async def toggle_unity_mcp(req: MCPToggleRequest, background_tasks: BackgroundTa
     Toggle ON için Unity Editor'ün açık olması ZORUNLUDUR.
     """
     _check_token(x_session_token)
+    if req.workspace_path:
+        require_saved_workspace_when_remote(req.workspace_path, x_session_token)
     async with unity_mcp_manager.mcp_lock:
         if req.enabled:
             return await start_mcp_for(req.workspace_path, background_tasks, req.language)
