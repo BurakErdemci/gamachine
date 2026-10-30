@@ -55,7 +55,7 @@ export const AtolyeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
           <form className="at-order" onSubmit={onSubmit(h)} noValidate>
             <aside className="at-stub" aria-hidden="true">
               <span className="at-grommet" />
-              <span className="at-stub-no">No {orderNo}</span>
+              <span className="at-stub-no">{t('hub.orderNo', { no: orderNo })}</span>
             </aside>
             <div className="at-body">
               <header className="at-order-head">
@@ -106,7 +106,7 @@ export const AtolyeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
               <span className="at-gauge-k">{t(phaseKey(h))}</span>
             </div>
             <div className="at-receipt">
-              <span className="at-receipt-h"><b>{r.name}</b><span className="num">No {orderNo}</span></span>
+              <span className="at-receipt-h"><b>{r.name}</b><span className="num">{t('hub.orderNo', { no: orderNo })}</span></span>
               <LogTail text={r.progress.logTail} className="hub-log at-log" />
             </div>
             <p className="at-est hub-hint">{t('hub.estimate')}</p>
@@ -118,7 +118,7 @@ export const AtolyeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
           <section className={`at-order at-result is-${result.kind}`} data-testid={`hub-result-${result.kind}`}>
             <aside className="at-stub" aria-hidden="true">
               <span className="at-grommet" />
-              <span className="at-stub-no">No {orderNo}</span>
+              <span className="at-stub-no">{t('hub.orderNo', { no: orderNo })}</span>
             </aside>
             <div className="at-body">
               <span className="at-punch" aria-hidden="true">{t(result.kind === 'done' ? 'hub.stampDoneShop' : result.kind === 'failed' ? 'hub.stampFailedShop' : 'hub.stampCancelledShop')}</span>
