@@ -38,7 +38,8 @@ export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
   const [parent, setParent] = useState<string | null>(null);
   const [version, setVersionState] = useState('');
   const [templateId, setTemplateId] = useState('');
-  const run = useSyncExternalStore(subscribeRun, getRun);
+  // The third getter serves the static export prerender, which has no run.
+  const run = useSyncExternalStore(subscribeRun, getRun, getRun);
   const versionRef = useRef('');
   const alive = useRef(true);
   // Set again on every run: StrictMode runs the cleanup once before the real mount.
