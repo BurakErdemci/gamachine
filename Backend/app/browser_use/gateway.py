@@ -256,8 +256,11 @@ class BrowserGateway:
         if not isinstance(args, dict) or not _valid_args(op, args):
             return _refusal(f"Invalid arguments for browser_{op}.")
         # Read before queueing: a Stop that lands while this call waits for the lock must still refuse it,
-        # even after a new user message has cleared the halt.
+        # even after a new user message has cleared the halt. A call that arrives already halted is refused
+        # here for the same reason: the halt may be lifted before the lock frees.
         entry = state()
+        if isinstance(entry, dict) and entry.get("halted"):
+            return _refusal(HALTED)
         entry_stop_gen = entry.get("stop_gen") if isinstance(entry, dict) else None
         async with self._lock:
             before = state()
