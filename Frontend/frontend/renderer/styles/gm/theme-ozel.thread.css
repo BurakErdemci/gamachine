@@ -79,6 +79,9 @@
 [data-theme="ozel"] .empty-hero { grid-template-columns: 150px minmax(0, 1fr); gap: 24px; }
 [data-theme="ozel"] .empty-head { display: none; }
 [data-theme="ozel"] .empty-mascot { display: block; width: 150px; height: auto; }
+@container stage (max-width: 720px) {
+  [data-theme="ozel"] .empty-hero { grid-template-columns: minmax(0, 1fr); }
+}
 
 [data-theme="ozel"] .has-error .composer { border-color: var(--oz-err); }
 [data-theme="ozel"] .composer-msg { color: var(--oz-err-text); }
@@ -133,4 +136,4 @@
 }
 [data-theme="ozel"] .confirm-mark { width: 16px; height: 22px; margin-top: 0; background: transparent; }
 [data-theme="ozel"] .confirm-msg { padding-top: 0; font-size: 14px; }
-[data-theme="ozel"] .confirm .btn { height: 32px; padding: 0 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); }
+[data-theme="ozel"] .confirm .btn { min-height: 32px; padding: 0 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); }

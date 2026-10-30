@@ -72,6 +72,9 @@
 [data-theme="atolye"] .empty-hero { grid-template-columns: 150px minmax(0, 1fr); gap: 24px; }
 [data-theme="atolye"] .empty-head { display: none; }
 [data-theme="atolye"] .empty-mascot { display: block; width: 150px; height: auto; }
+@container stage (max-width: 720px) {
+  [data-theme="atolye"] .empty-hero { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ================= confirm dialog: a WORK-ORDER TAG =================
    The approval card's tear-off stub and grommet, in the risk colour; the warning glyph is
