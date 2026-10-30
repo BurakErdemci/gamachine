@@ -53,7 +53,6 @@
 }
 .bp-open-go:hover:not(:disabled) { background: var(--paper-sunk, var(--paper-bg-2)); }
 .bp-open-go:disabled { opacity: .5; cursor: default; }
-.bp-address:disabled { opacity: .5; }
 
 .bp-title { margin: 0; display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; min-width: 0; }
 .bp-title-t { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

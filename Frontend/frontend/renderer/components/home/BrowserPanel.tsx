@@ -96,6 +96,10 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
   const lastBounds = useRef('');
   const chatId = useRef(conversationId);
   chatId.current = conversationId;
+  const prevRunning = useRef(running);
+  const runningNow = useRef(running);
+  const stopGen = useRef(0);
+  const opening = useRef(false);
 
   const measure = useCallback(() => {
     const el = hostRef.current;
@@ -147,10 +151,15 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
   useEffect(() => () => {
     if (conversationId != null) void invoke({ op: 'visible', conversationId, visible: false });
   }, [conversationId]);
-  useEffect(() => { setStop('idle'); setStopFailed(false); setEditing(false); }, [state.active, conversationId]);
+  useEffect(() => { stopGen.current += 1; setStop('idle'); setStopFailed(false); setEditing(false); }, [state.active, conversationId]);
+  // A new turn starts: whatever the last stop was doing, the button is armed again and results still in flight are dropped.
+  useEffect(() => {
+    if (running && !prevRunning.current) { stopGen.current += 1; setStop('idle'); setStopFailed(false); }
+    prevRunning.current = running;
+    runningNow.current = running;
+  }, [running]);
   useEffect(() => {
     if (stop === 'sent' && !running) setStop('stopped');
-    else if (stop === 'stopped' && running) setStop('idle');
   }, [stop, running]);
   useEffect(() => { setOpenUrl(''); }, [conversationId]);
 
@@ -162,18 +171,16 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
   const doStop = async () => {
     if (stop !== 'idle' || !running || conversationId == null) return;
     const id = conversationId;
+    const gen = stopGen.current;
     setStop('busy');
     setStopFailed(false);
     try {
-      const [halt] = await Promise.all([
-        Promise.resolve(ipcOf()?.invoke?.(BROWSER_CHANNEL, { op: 'halt', conversationId: id })),
-        onStop(),
-      ]);
-      if (chatId.current !== id) return;
-      if (halt?.halted === false) throw new Error('halt refused');
-      setStop('sent');
+      // A refused halt is not a failure: the chat's Stop halts the browser tools too.
+      await Promise.all([invoke({ op: 'halt', conversationId: id }), onStop()]);
+      if (stopGen.current !== gen) return;
+      setStop(runningNow.current ? 'sent' : 'stopped');
     } catch {
-      if (chatId.current !== id) return;
+      if (stopGen.current !== gen) return;
       setStopFailed(true);
       setStop('idle');
     }
@@ -181,9 +188,14 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
 
   const openFromIdle = async (text: string) => {
     const target = addressToUrl(text);
-    if (!target) return;
-    const id = conversationId ?? await onNeedChat();
-    if (id) void invoke({ op: 'open', conversationId: id, url: target });
+    if (!target || opening.current) return;
+    opening.current = true;
+    try {
+      const id = conversationId ?? await onNeedChat();
+      if (id) void invoke({ op: 'open', conversationId: id, url: target });
+    } finally {
+      opening.current = false;
+    }
   };
 
   const submit = (op: 'navigate', text: string) => {

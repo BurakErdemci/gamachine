@@ -88,6 +88,19 @@ describe('BrowserPanel', () => {
     expect(p.onNeedChat).toHaveBeenCalledTimes(1)
   })
 
+  it('Enter twice while the chat is being created opens one chat', async () => {
+    let made!: (id: number) => void
+    const p = props({ onNeedChat: vi.fn(() => new Promise<number>(res => { made = res })) })
+    render(<BrowserPanel visible conversationId={null} {...p} />)
+    const input = screen.getByLabelText(tr['bp.address'])
+    fireEvent.change(input, { target: { value: 'https://example.com' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(p.onNeedChat).toHaveBeenCalledTimes(1)
+    await act(async () => { made(9) })
+    await waitFor(() => expect(calls('open')).toHaveLength(1))
+  })
+
   it('Open from a fresh chat sends nothing when the chat could not be created', async () => {
     const p = props({ onNeedChat: vi.fn(async () => null) })
     render(<BrowserPanel visible conversationId={null} {...p} />)
@@ -199,24 +212,47 @@ describe('BrowserPanel', () => {
     expect((screen.getByRole('button', { name: new RegExp(tr['bp.stop']) }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('a failed Stop (halted false, or a throwing stop) shows an alert and re-enables the button', async () => {
+  it('a refused halt with a successful chat Stop is no failure', async () => {
     invoke.mockImplementation(async (_c: string, req: any) =>
       (req?.op === 'status' ? { active: false } : req?.op === 'halt' ? { ok: true, halted: false } : { ok: true }))
     const onStop = vi.fn(async () => {})
-    const { unmount } = render(<BrowserPanel visible conversationId={3} {...props({ onStop })} />)
+    render(<BrowserPanel visible conversationId={3} {...props({ onStop })} />)
+    await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
+    push(live())
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(tr['bp.stop']) }))
+    await waitFor(() => expect(onStop).toHaveBeenCalledTimes(1))
+    await screen.findByRole('button', { name: new RegExp(tr['bp.stopping']) })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a throwing chat Stop shows an alert that the next turn clears', async () => {
+    invoke.mockImplementation(async (_c: string, req: any) => (req?.op === 'status' ? { active: false } : { ok: true, halted: true }))
+    const onStop = vi.fn(async () => { throw new Error('x') })
+    const { rerender } = render(<BrowserPanel visible conversationId={3} {...props({ onStop })} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
     push(live())
     fireEvent.click(screen.getByRole('button', { name: new RegExp(tr['bp.stop']) }))
     expect((await screen.findByRole('alert')).textContent).toBe(tr['bp.stopFailed'])
     expect((screen.getByRole('button', { name: new RegExp(tr['bp.stop']) }) as HTMLButtonElement).disabled).toBe(false)
-    unmount()
+    rerender(<BrowserPanel visible conversationId={3} {...props({ onStop, running: false })} />)
+    rerender(<BrowserPanel visible conversationId={3} {...props({ onStop, running: true })} />)
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  })
 
-    invoke.mockImplementation(async (_c: string, req: any) => (req?.op === 'status' ? { active: false } : { ok: true, halted: true }))
-    render(<BrowserPanel visible conversationId={3} {...props({ onStop: vi.fn(async () => { throw new Error('x') }) })} />)
+  it('a new turn while the stop calls are in flight re-arms the button', async () => {
+    let finish!: () => void
+    const onStop = vi.fn(() => new Promise<void>(res => { finish = res }))
+    const { rerender } = render(<BrowserPanel visible conversationId={3} {...props({ onStop })} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
     push(live())
     fireEvent.click(screen.getByRole('button', { name: new RegExp(tr['bp.stop']) }))
-    expect((await screen.findByRole('alert')).textContent).toBe(tr['bp.stopFailed'])
+    await screen.findByRole('button', { name: new RegExp(tr['bp.stopping']) })
+    rerender(<BrowserPanel visible conversationId={3} {...props({ onStop, running: false })} />)
+    rerender(<BrowserPanel visible conversationId={3} {...props({ onStop, running: true })} />)
+    const again = await screen.findByRole('button', { name: new RegExp(`^${tr['bp.stop']}`) }) as HTMLButtonElement
+    expect(again.disabled).toBe(false)
+    await act(async () => { finish() })
+    expect((screen.getByRole('button', { name: new RegExp(`^${tr['bp.stop']}`) }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('shows the user-control badge and has no take-over or release button', async () => {
