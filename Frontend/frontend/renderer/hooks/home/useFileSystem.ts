@@ -624,15 +624,28 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   const submitTreeCreate = useCallback(async () => {
     if (!treeCreating || !treeCreateValue.trim()) { setTreeCreating(null); return; }
     const { parentPath, type } = treeCreating;
-    const newPath = `${parentPath}/${treeCreateValue.trim()}`;
-    setTreeCreating(null);
-    if (type === 'file') {
-      await ipc.invoke('create-file', newPath, workspacePath);
-    } else {
-      await ipc.invoke('create-folder', newPath, workspacePath);
+    // Resolve '.' and 'x/..' here: the main process refuses any '..' segment, so a
+    // typed name must reach it already normalized and still inside parentPath.
+    const segments: string[] = [];
+    let escapes = false;
+    for (const seg of treeCreateValue.trim().split(/[\\/]+/)) {
+      if (seg === '' || seg === '.') continue;
+      if (seg === '..') { if (segments.pop() === undefined) escapes = true; continue; }
+      segments.push(seg);
     }
+    if (escapes || segments.length === 0) {
+      showToast(cevir('file.invalidName'), 'warning');
+      return;
+    }
+    const newPath = `${parentPath}/${segments.join('/')}`;
+    const res = await ipc.invoke(type === 'file' ? 'create-file' : 'create-folder', newPath, workspacePath);
+    if (!res?.success) {
+      showToast(cevir('file.createError', { hata: res?.error || cevir('common.unknown') }), 'error');
+      return;
+    }
+    setTreeCreating(null);
     refreshFileTree();
-  }, [refreshFileTree, treeCreateValue, treeCreating, workspacePath]);
+  }, [refreshFileTree, showToast, treeCreateValue, treeCreating, workspacePath]);
 
   const suggestFilePath = useCallback((name: string) => {
     const ext = name.split('.').pop()?.toLowerCase();

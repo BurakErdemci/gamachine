@@ -538,6 +538,23 @@ export function isAllowedWorkspaceWriteFile(filePath: string, workspacePath: str
 }
 
 /**
+ * An EXISTING write target must be a regular file with a single name. A second
+ * hard link is another name for bytes that may live outside the workspace; the
+ * read policy already refuses `nlink > 1` and the write path has to agree
+ * (Codex audit 30 Oct: write-file changed an outside file through a hard link).
+ * A missing target is fine. Follows symlinks on purpose: the containment guard
+ * already resolved them, and the bytes written are the target's.
+ */
+export function isWritableExistingTarget(filePath: string): boolean {
+  try {
+    const st = fs.statSync(filePath)
+    return st.isFile() && st.nlink <= 1
+  } catch (err: any) {
+    return err?.code === 'ENOENT'
+  }
+}
+
+/**
  * How many model reads the main process will have in flight at once.
  *
  * Two, because the per-file cap was the channel's ONLY bound and the cost of

@@ -8,6 +8,7 @@ import {
   isAllowedWorkspaceWriteFile,
   isAllowedWorkspacePath,
   isInsideWorkspace,
+  isWritableExistingTarget,
   okumaKarariVer,
 } from '../main/helpers/file-security'
 
@@ -269,5 +270,31 @@ describe("'..' segments are refused (symlink + '..' alias)", () => {
     expect(isInsideWorkspace(alias, ws)).toBe(false)
     expect(isAllowedWorkspacePath(alias, ws)).toBe(false)
     expect(isAllowedWorkspaceWriteFile(`${alias}/x.txt`, ws)).toBe(false)
+  })
+})
+
+describe('isWritableExistingTarget (hard-link write refusal)', () => {
+  it('allows a missing target and a single-name regular file', () => {
+    expect(isWritableExistingTarget(path.join(tempRoot, 'new.txt'))).toBe(true)
+    const f = path.join(tempRoot, 'one.txt')
+    fs.writeFileSync(f, 'x')
+    expect(isWritableExistingTarget(f)).toBe(true)
+  })
+
+  it('refuses a file with a second hard link, like the read policy', () => {
+    const outside = path.join(tempRoot, 'outside.txt')
+    const alias = path.join(tempRoot, 'ws-linked.txt')
+    fs.writeFileSync(outside, 'secret')
+    try {
+      fs.linkSync(outside, alias)
+    } catch {
+      return
+    }
+    expect(isWritableExistingTarget(alias)).toBe(false)
+    expect(isWritableExistingTarget(outside)).toBe(false)
+  })
+
+  it('refuses a directory', () => {
+    expect(isWritableExistingTarget(tempRoot)).toBe(false)
   })
 })
