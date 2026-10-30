@@ -84,8 +84,9 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
             return fn
         return register
 
-    @tool("browser_navigate", "Open an http(s) page in the agent browser. Local and private addresses are refused. "
-          "Use it for an address you know; when you would have to guess a URL, use browser_search instead.")
+    @tool("browser_navigate", "Open an http(s) page in the agent browser, in your agent tab (the tab that was in "
+          "front when the user sent their message; switch with browser_use_tab). Local and private addresses are "
+          "refused. Use it for an address you know; when you would have to guess a URL, use browser_search instead.")
     async def browser_navigate(url: str) -> CallToolResult:
         return await handler.call("navigate", {"url": url})
 
@@ -99,10 +100,25 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
             return _text("query is too long (max 500 characters).", True)
         return await handler.call("navigate", {"url": SEARCH_URL + quote_plus(query.strip())})
 
-    @tool("browser_snapshot", "Read the current page: readable text plus numbered elements (links, buttons, inputs). "
-          "Returns a snapshot_id that the element tools need.")
+    @tool("browser_snapshot", "Read the current page of your agent tab (the tab that was in front when the user sent "
+          "their message; switch with browser_use_tab): readable text plus numbered elements (links, buttons, "
+          "inputs). Returns a snapshot_id that the element tools need.")
     async def browser_snapshot(max_chars: int | None = None) -> CallToolResult:
         return await handler.call("snapshot", {} if max_chars is None else {"max_chars": max_chars})
+
+    @tool("browser_tabs", "List this chat's open browser tabs: id, title, url, which one is in front (active), which "
+          "one is your agent tab (agent) and which ones the user has used since their last message (userTouched). "
+          "Tabs other than your agent tab show only their site and title, not the full url. "
+          "Call it first when the user refers to a page that may already be open, then switch with browser_use_tab.")
+    async def browser_tabs() -> CallToolResult:
+        return await handler.call("tabs", {})
+
+    @tool("browser_use_tab", "Make one of this chat's open tabs your agent tab, so the other browser tools work in "
+          "it. Pick the tab from browser_tabs whose title or url matches the user's request, then take a new "
+          "browser_snapshot. Refused for a tab the user has used since their last message; then tell the user "
+          "instead of retrying. The user's view does not change.")
+    async def browser_use_tab(tab_id: int) -> CallToolResult:
+        return await handler.call("use_tab", {"tab_id": tab_id})
 
     @tool("browser_click", "Click an element from the latest snapshot. Submitting forms, purchases, deletions, "
           "publishing and downloads open an approval card; then stop, tell the user and wait." + _ELEMENT_NOTE)
