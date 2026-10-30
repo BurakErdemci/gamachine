@@ -34,6 +34,7 @@ let editors: unknown
 let create: (arg: any) => Promise<any>
 const ipc = async (channel: string, arg: any) => {
   if (channel === 'host-workspace-path') return arg.replace('/b/', '/h/')
+  if (channel === 'backend-workspace-path') return arg.replace('/h/', '/b/')
   if (channel === 'workspace-info') return arg.map((path: string) => ({ path, status: 'ok', unityVersion: '6000.2.4f1' }))
   if (channel === 'hub-list-editors') return editors
   if (channel === 'hub-list-templates') return { templates: arg.version === '6000.2.4f1' ? TEMPLATES : [] }
@@ -437,9 +438,10 @@ describe('useFileSystem.selectWorkspace result', () => {
 })
 
 describe('hub: Locate', () => {
-  const locateRow = async (chosen: string | null) => {
+  const locateRow = async (chosen: string | null, nullChannel = '') => {
     mocks.invoke.mockImplementation(async (channel: string, arg: any) => (
-      channel === 'workspace-info' ? arg.map((path: string) => ({ path, status: 'missing', unityVersion: null })) : ipc(channel, arg)))
+      channel === 'workspace-info' ? arg.map((path: string) => ({ path, status: 'missing', unityVersion: null }))
+        : channel === nullChannel ? null : ipc(channel, arg)))
     vi.mocked(axios.post).mockReset().mockResolvedValue({ data: { removed: true } })
     const p = props()
     p.onOpenFolder = vi.fn(async () => chosen)
@@ -457,6 +459,16 @@ describe('hub: Locate', () => {
 
   it('keeps the record when the same folder is chosen again', async () => {
     await locateRow('/h/Arena/')
+    expect(removed()).toHaveLength(0)
+  })
+
+  it('keeps the record of an unmapped entry when its original folder is chosen again', async () => {
+    await locateRow('/h/Arena', 'host-workspace-path')
+    expect(removed()).toHaveLength(0)
+  })
+
+  it('keeps the old record when the saved key cannot be known', async () => {
+    await locateRow('/h/Elsewhere', 'backend-workspace-path')
     expect(removed()).toHaveLength(0)
   })
 

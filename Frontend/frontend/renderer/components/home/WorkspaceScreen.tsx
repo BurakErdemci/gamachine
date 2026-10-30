@@ -4,6 +4,8 @@ import Head from 'next/head';
 import { useLang, type Lang } from '../../lib/i18n';
 import { displayName } from '../../lib/displayName';
 import { isMacPlatform } from '../../lib/platformKeys';
+import { canonicalPath } from '../../hooks/home/useFileSystem';
+import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { useRecentWorkspaces, type RecentWorkspace } from '../../hooks/home/useRecentWorkspaces';
 import type { UserData } from './types';
 import { BrandLogo, MascotHead } from './BrandLogo';
@@ -149,9 +151,12 @@ export const WorkspaceScreen = ({
   };
   const locate = async (it: RecentWorkspace) => {
     const chosen = await onOpenFolder(it.hostPath ? parentDir(it.hostPath) : undefined);
-    // Choosing the same folder again re-saves this very record; removing it would delete the new one.
-    const sameFolder = (a: string, b: string) => a.replace(/[\\/]+$/, '').replace(/\\/g, '/') === b.replace(/[\\/]+$/, '').replace(/\\/g, '/');
-    if (chosen && !(it.hostPath && sameFolder(chosen, it.hostPath))) await remove(it);
+    if (!chosen) return;
+    // Selecting the folder saved it under its backend key; removing `it` when that is the same key would delete the
+    // record just saved. An unmapped (null) key cannot be compared, so the old record stays.
+    const savedKey = await backendWorkspacePath(chosen);
+    if (savedKey === null || canonicalPath(savedKey, null) === canonicalPath(it.backendPath, null)) return;
+    await remove(it);
   };
 
   const newProject = async () => {

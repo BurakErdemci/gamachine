@@ -58,7 +58,7 @@ const resolveDotSegments = (duz: string, mutlakMi: boolean) => {
 
 // COMPARISON ONLY. Nothing derived from this is stored or displayed: the paths
 // the user sees keep the casing and separators the main process reported.
-const canonicalPath = (p: string, workspacePath: string | null) => {
+export const canonicalPath = (p: string, workspacePath: string | null) => {
   const mutlak = absoluteYol(p) || !workspacePath ? p : `${workspacePath}/${p}`;
   const duz = mutlak.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/\/+$/, '');
   const cozulmus = resolveDotSegments(duz, absoluteYol(mutlak));
