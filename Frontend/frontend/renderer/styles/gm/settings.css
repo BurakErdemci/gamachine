@@ -422,3 +422,4 @@
 @media (prefers-reduced-motion: reduce) {
   .set-page, .meter.is-loading i, .set-switch[aria-busy="true"] .set-knob { animation: none; }
 }
+.set-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }

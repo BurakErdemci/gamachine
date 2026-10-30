@@ -193,6 +193,25 @@ export class BrowserHistory {
     return this.flush()
   }
 
+  /** Forgets one page by its stored address; true when it was there. The file is rewritten at once. */
+  remove(url: string): Promise<boolean> {
+    const before = this.entries.length
+    this.entries = this.entries.filter((entry) => entry.url !== url)
+    if (this.entries.length === before) return Promise.resolve(false)
+    this.dirty = true
+    return this.flush()
+  }
+
+  /**
+   * Forgets every page last visited at or after `ms` and writes the file at once. One entry keeps only its newest
+   * visit, so "the last hour" also takes a page visited in that hour together with its older visits.
+   */
+  clearSince(ms: number): Promise<boolean> {
+    this.entries = this.entries.filter((entry) => entry.lastVisit < ms)
+    this.dirty = true
+    return this.flush()
+  }
+
   /** Writes pending changes now (also on shutdown); false when the write failed and the data waits for the next flush. */
   flush(): Promise<boolean> {
     if (this.timer) clearTimeout(this.timer)

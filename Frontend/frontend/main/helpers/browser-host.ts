@@ -41,6 +41,20 @@ export interface BrowserHostWindow {
   webContents: { send(channel: string, payload: unknown): void }
 }
 
+// Second-level labels under a two-letter country code (example.com.tr, example.co.uk): the site is one label further up.
+const SECOND_LEVEL = new Set(['co', 'com', 'org', 'net', 'gov', 'edu', 'ac'])
+const SITE_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/
+const STORAGES = ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage', 'websql', 'filesystem']
+
+/** A cookie domain as a site: leading dot dropped, then the last two labels (three under co.uk style). No public-suffix list. */
+export function siteOf(domain: string): string {
+  const host = domain.replace(/^\.+/, '').toLowerCase()
+  if (isIP(host) || host.includes(':')) return host
+  const labels = host.split('.')
+  const keep = labels.length >= 3 && SECOND_LEVEL.has(labels[labels.length - 2]) && labels[labels.length - 1].length === 2 ? 3 : 2
+  return labels.slice(-keep).join('.')
+}
+
 export interface BrowserHostDeps {
   window: () => BrowserHostWindow | null
   createView: (options: WebContentsViewConstructorOptions) => WebContentsView
@@ -51,7 +65,7 @@ export interface BrowserHostDeps {
   uiSecret: string
   lookup?: LookupAll
   /** Visited-page store behind the omnibox and the Suggested grid; absent in tests that do not need it. */
-  history?: Pick<BrowserHistory, 'visit' | 'update' | 'list' | 'clear' | 'flush'>
+  history?: Pick<BrowserHistory, 'visit' | 'update' | 'list' | 'clear' | 'flush'> & Partial<Pick<BrowserHistory, 'remove' | 'clearSince'>>
   /** Decides which modifier the tab shortcuts use (Cmd on darwin, Ctrl elsewhere); defaults to process.platform. */
   platform?: string
   /** Called on every halt so the command server can drop what is still queued: one chat, or every chat with null. */
@@ -1080,8 +1094,64 @@ export class BrowserHost {
       }
       case 'reopen-tab':
         return this.reopenTab(conversationId)
-      case 'history':
-        return { entries: this.deps.history?.list() ?? [] }
+      case 'history': {
+        const { query } = req as { query?: unknown }
+        const needle = typeof query === 'string' ? query.slice(0, 200).trim().toLowerCase() : ''
+        const entries = this.deps.history?.list() ?? []
+        return { entries: (needle ? entries.filter((e) => e.url.toLowerCase().includes(needle) || e.title.toLowerCase().includes(needle)) : entries).slice(0, 500) }
+      }
+      case 'history-remove': {
+        if (!str(url) || !this.deps.history?.remove) return { error: 'bad_args' }
+        return (await this.deps.history.remove(url)) ? { ok: true } : { error: 'history_remove_failed' }
+      }
+      case 'history-clear': {
+        const { range } = req as { range?: unknown }
+        if (range !== 'hour' && range !== 'day' && range !== 'all') return { error: 'bad_args' }
+        const history = this.deps.history
+        if (!history?.clearSince) return { error: 'bad_args' }
+        const now = this.now()
+        // 'day' is since the local midnight, not the last 24 hours.
+        const since = range === 'hour' ? now - 3_600_000 : range === 'day' ? new Date(now).setHours(0, 0, 0, 0) : 0
+        return (await history.clearSince(since)) ? { ok: true } : { error: 'history_clear_failed' }
+      }
+      // Sites only: counts and expiry, never a cookie's name or value.
+      case 'sites': {
+        try {
+          const sites = new Map<string, { site: string; cookies: number; lastExpiry?: number }>()
+          for (const cookie of await this.session().cookies.get({})) {
+            if (!cookie.domain) continue
+            const site = siteOf(cookie.domain)
+            const entry = sites.get(site) ?? { site, cookies: 0 }
+            entry.cookies++
+            if (cookie.expirationDate !== undefined && cookie.expirationDate > (entry.lastExpiry ?? 0)) entry.lastExpiry = cookie.expirationDate
+            sites.set(site, entry)
+          }
+          return { sites: [...sites.values()].sort((a, b) => a.site.localeCompare(b.site)) }
+        } catch {
+          return { error: 'sites_failed' }
+        }
+      }
+      case 'site-remove': {
+        const { site } = req as { site?: unknown }
+        if (typeof site !== 'string' || site.length > 253 || !SITE_RE.test(site)) return { error: 'bad_args' }
+        try {
+          const session = this.session()
+          let removed = 0
+          for (const cookie of await session.cookies.get({})) {
+            const domain = (cookie.domain ?? '').replace(/^\.+/, '').toLowerCase()
+            if (domain !== site && !domain.endsWith(`.${site}`)) continue
+            await session.cookies.remove(`${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path ?? '/'}`, cookie.name)
+            removed++
+          }
+          for (const host of [site, `www.${site}`]) {
+            for (const scheme of ['https', 'http']) await session.clearStorageData({ origin: `${scheme}://${host}`, storages: STORAGES as any })
+          }
+          return { ok: true, removed }
+        } catch {
+          this.log('[browser] removing a site failed')
+          return { error: 'site_remove_failed' }
+        }
+      }
       case 'close': {
         this.closeGen.set(conversationId, (this.closeGen.get(conversationId) ?? 0) + 1)
         // Like a Stop: the chat's running and queued agent commands end without making a new tab.
