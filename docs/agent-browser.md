@@ -147,7 +147,8 @@ sit under it).
 
 ## Policy (backend side)
 
-`browser_navigate`, `browser_snapshot`, `browser_scroll`, `browser_back`,
+`browser_navigate`, `browser_search` (opens a Google results page through the same navigate
+path and policy), `browser_snapshot`, `browser_scroll`, `browser_back`,
 `browser_forward`, `browser_reload`, `browser_screenshot`: allowed without a card when
 the switch is on and the chat is not halted.
 

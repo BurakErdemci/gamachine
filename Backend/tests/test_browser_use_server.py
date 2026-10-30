@@ -65,6 +65,10 @@ def test_search_opens_a_results_page_through_navigate():
     assert fake.calls == [("browser_navigate", {"url": "https://www.google.com/search?q=free+walk+cycle+sprites"}, 3)]
     empty = call_tool(Fake(), "browser_search", {"query": "  "})
     assert empty.is_error and text(empty) == "query is empty."
+    long = Fake()
+    refused = call_tool(long, "browser_search", {"query": "x" * 501})
+    assert refused.is_error and text(refused) == "query is too long (max 500 characters)." and long.calls == []
+    assert call_tool(Fake(), "browser_search", {"query": " " + "x" * 500 + " "}).is_error is False
 
 
 def test_refusals_and_needs_approval_come_back_as_errors():

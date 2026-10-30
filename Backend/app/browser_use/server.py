@@ -95,6 +95,8 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
         # A guessed store or account URL often 404s; a results page needs no guess.
         if not query.strip():
             return _text("query is empty.", True)
+        if len(query.strip()) > 500:
+            return _text("query is too long (max 500 characters).", True)
         return await handler.call("navigate", {"url": SEARCH_URL + quote_plus(query.strip())})
 
     @tool("browser_snapshot", "Read the current page: readable text plus numbered elements (links, buttons, inputs). "
