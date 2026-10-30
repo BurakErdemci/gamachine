@@ -367,12 +367,12 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   // the third overlapping actor, which is why ownership is a counter rather
   // than the requested path: a close has no path to compare against, and an
   // in-flight selection used to commit after it and silently reopen.
-  const selectWorkspace = useCallback(async (path: string) => {
+  const selectWorkspace = useCallback(async (path: string): Promise<boolean> => {
     const gecerliMi = workspaceRequest.claim();
     // Klasör hâlâ var mı? (silinmiş/taşınmış workspace'i otomatik yüklemeyi engelle)
     if (ipc) {
       const exists = await ipc.invoke('path-exists', path);
-      if (!gecerliMi()) return;
+      if (!gecerliMi()) return false;
       if (!exists) {
         showToast(cevir('workspace.missing'), 'warning');
         // Geçersiz yolu temizle ki bir daha otomatik yüklenmeye çalışılmasın
@@ -392,7 +392,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
         setOpenedFilePath(null);
         setCode('');
         setOriginalCode('');
-        return;
+        return false;
       }
     }
     // The content area belongs to the workspace being left: a preview or an
@@ -409,7 +409,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     setRootFolderPath(path);
     if (ipc) {
       const entries = await ipc.invoke('read-directory', path, path);
-      if (!gecerliMi()) return;
+      if (!gecerliMi()) return false;
       setFileTree(entries || []);
     }
     setExpandedDirs(new Set());
@@ -418,7 +418,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
       const backendPath = await backendWorkspacePath(path);
       // A mapping that arrives after the user moved on describes a workspace
       // nobody is in: neither the warning nor the write belongs to it.
-      if (!gecerliMi()) return;
+      if (!gecerliMi()) return false;
       // null = Docker modu bu klasörü backend'e ADLANDIRAMIYOR (mount dışında).
       // Eski yolu göndermek, düzenleyicinin bir projede, ajanların başka bir
       // projede çalışması demekti — ikisi de başarılı görünerek.
@@ -438,6 +438,8 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
         } catch (err) { console.error("Workspace kaydetme hatası:", err); }
       }
     }
+    // Still the current claim after the last await: the workspace really opened.
+    return gecerliMi();
   }, [API, user, workspaceRequest, contentRequest]);
 
   const refreshFileTree = useCallback(async () => {
