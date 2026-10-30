@@ -2436,11 +2436,12 @@ Max 300 kelime. Türkçe yaz.
         turn_events.note_stop(conversation_id)
         # A side chat, a deleted chat or an id that never existed gets no user message to lift a halt,
         # and one stale id would halt every unowned computer-use batch; only an ordinary chat is halted.
-        # A failed lookup is unknown: the card rule below keeps its old fallback, the halt is not added.
+        # A failed lookup is unknown: the halt fails closed (added, a user message lifts it) and the card rule
+        # below keeps its old fallback.
         ordinary = _is_ordinary_chat(conversation_id)
         if ordinary is None:
             logger.warning("[chat-stop] chat lookup failed for %s", conversation_id)
-        if ordinary is True:
+        if ordinary is not False:
             _computer_halted.add(conversation_id)
         _stop_browser_for_chat(conversation_id)
         # A stopped mail wake turn's text is not its answer: nothing is forwarded.
@@ -2967,6 +2968,12 @@ Max 300 kelime. Türkçe yaz.
         halted = ((owner is not _UNKNOWN_OWNER and owner in _computer_halted)
                   or (type(claimed) is int and claimed in _computer_halted)
                   or (claimed is None and bool(_computer_halted)))
+        if not halted and type(claimed) is int:
+            # An approval granted before Stop can arrive after the chat was deleted; nothing may run for it.
+            try:
+                halted = db.get_conversation_owner(claimed) is None
+            except Exception:
+                pass
         enabled = computer_settings.enabled(db)
         if enabled and not halted and body.get("check") is not True:
             computer_activity.record(None if owner is _UNKNOWN_OWNER else owner,
@@ -3053,8 +3060,9 @@ Max 300 kelime. Türkçe yaz.
 
     async def halt_computer(conversation_id: int) -> dict:
         """The desktop's computer-use halt, shared with the phone's `halt_computer` (remote bridge)."""
-        # Only an ordinary chat can be un-halted by its next user message; any other id would stay in the set for good.
-        if _is_ordinary_chat(conversation_id) is True:
+        # Only a definitely non-ordinary id (side, deleted, unknown) is skipped: it could never be un-halted by a
+        # user message. A failed lookup fails closed.
+        if _is_ordinary_chat(conversation_id) is not False:
             _computer_halted.add(conversation_id)
         _reject_computer_use_pending(conversation_id, computer_gate.HALTED_REASON, "computer_halt")
         _stop_browser_for_chat(conversation_id)

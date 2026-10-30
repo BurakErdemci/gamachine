@@ -209,3 +209,16 @@ def test_halt_only_sticks_to_an_ordinary_chat(env):
     assert halt(env, 1).status_code == 200
     assert halted(env) == [1]
     assert _batch(env) == "halted"
+
+
+def test_a_failed_chat_lookup_still_halts(env):
+    env.db.get_conversation_owner.side_effect = RuntimeError("db locked")
+    assert halt(env, 1).json() == {"halted": True, "conversation_id": 1}
+    assert halted(env) == [1]
+
+
+def test_batch_step_for_a_deleted_chat_is_halted(env):
+    env.db.get_conversation_owner.side_effect = lambda cid: None if cid == 7 else 1
+    assert _batch(env, 7) == "halted"
+    assert _batch(env, 7, check=True) == "halted"
+    assert _batch(env, 1) is None

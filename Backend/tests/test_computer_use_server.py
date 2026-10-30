@@ -401,6 +401,40 @@ def test_batch_preserves_early_exit_without_fronting_another_app(batch_driver, m
     assert not handler._front_lock.locked()
 
 
+def test_a_dispatch_refusal_mid_batch_reports_what_already_ran(batch_driver, monkeypatch):
+    handler, _, state, _ = batch_driver
+    monkeypatch.setattr(server.BackendApprovals, "dispatch_refusal",
+                        AsyncMock(side_effect=[None, "Durduruldu."]))
+    result = asyncio.run(handler.call("computer_run_steps", foreground_batch()))
+    assert result.is_error
+    report = json.loads(result.content[0].text)
+    assert (report["executed"], report["total"], len(report["steps"])) == (1, 3, 1)
+    assert report["halted"] is True and "Durduruldu." in report["halt_reason"]
+    assert state["steps"] == 1
+
+
+def test_a_background_batch_skips_the_backend_question_that_nothing_separates(batch_driver):
+    handler, _, state, _ = batch_driver
+    state["locked"] = False
+    batch = {"pid": 4242, "window_id": 7, "steps": [
+        {"tool": "press_key", "args": {"key": "return"}}, {"tool": "press_key", "args": {"key": "tab"}}]}
+    result = asyncio.run(handler.call("computer_run_steps", batch))
+    assert not result.is_error
+    assert state["steps"] == 2
+    # Step 0: one question. Step 1: the top one plus a check-only one after the identity read (was 2 + 2).
+    assert server._batch_stop.await_count == 2
+    assert server.BackendApprovals.dispatch_refusal.await_count == 1
+
+
+def test_front_guard_does_not_retry_bring_to_front_after_a_refusal():
+    driver = AsyncMock()
+    driver.call.return_value = CallToolResult(content=[], structured_content={
+        "exact_window_effect": {"verified": False}})
+    recheck = AsyncMock(return_value="Durduruldu.")
+    assert asyncio.run(server._front_guard(driver, 4242, 7, recheck)) == "Durduruldu."
+    assert driver.call.await_count == 1
+
+
 def test_batch_preserves_report_and_leaves_target_in_front(batch_driver):
     handler, _, state, events = batch_driver
     result = asyncio.run(handler.call("computer_run_steps", foreground_batch()))
