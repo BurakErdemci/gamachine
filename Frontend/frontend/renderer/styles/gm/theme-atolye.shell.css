@@ -44,3 +44,6 @@
      the same hue lifted for text on the dark intro ground: 4.81:1 */
   --intro-energy: #9B8368;
 }
+
+/* browser full screen: the chat strip is a board on the bench, a hard shadow up over the page */
+[data-theme="atolye"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-top: 2px solid var(--paper-line-strong); box-shadow: 0 -2px 0 var(--paper-line-strong); }

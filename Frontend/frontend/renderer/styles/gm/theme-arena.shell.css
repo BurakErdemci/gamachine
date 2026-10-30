@@ -6,3 +6,6 @@
 [data-theme="arena"] .lex-q,
 [data-theme="arena"] .badge-bang { display: inline; }
 [data-theme="arena"] .badge { font-family: var(--font-display); font-size: 13px; min-width: 22px; height: 22px; line-height: 22px; border-radius: 0; }
+
+/* browser full screen: the chat strip is the quest log, its top edge in the quest window's edge colour */
+[data-theme="arena"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-top: 2px solid var(--quest-edge); }

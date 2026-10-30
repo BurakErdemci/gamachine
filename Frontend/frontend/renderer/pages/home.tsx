@@ -88,6 +88,7 @@ import { useLiveSide, shownSides, viewSide } from '../lib/liveSide';
 import { useLiveFeatures } from '../lib/liveFeatures';
 import { browserRunningIn, useBrowserActiveChats, useComputerRunning } from '../lib/liveRunning';
 import { LivePane } from '../components/home/LivePane';
+import { useBrowserFull } from '../lib/browserFull';
 
 // The guide's prepare-action arguments (REHBER-KAYITLARI.md section 4) in this app's own ids.
 const GUIDE_SETTINGS: Record<Parameters<PrepareHandlers['settings']>[0], SettingsPage> = {
@@ -382,6 +383,7 @@ export default function Home() {
   const liveShown = shownSides(liveFeatures, live.running);
   const liveAny = liveShown.bilgisayar || liveShown.tarayici;
   const liveView = viewSide(live.side, liveShown);
+  const browserFull = useBrowserFull(ws.open && ws.tab === 'canli' && liveView === 'tarayici');
   // The Inspector and Canlı tabs exist only while their feature is on; the panel leaves them when they go.
   useEffect(() => {
     if ((ws.tab === 'sahne' && !editorOn) || (ws.tab === 'canli' && !liveAny)) setWsTab('dosyalar');
@@ -950,6 +952,8 @@ export default function Home() {
       // Panel width mode (workspace.css): none = dar; the sidebar's state feeds the half / focus math.
       data-ws={ws.open && ws.width !== 'dar' ? ws.width : undefined}
       data-side={isSidebarOpen ? undefined : 'closed'}
+      // The agent browser fills the window above a docked chat strip (shell.css).
+      data-browser-full={browserFull.full ? 'true' : undefined}
       // While the settings screen shows, the rest of the frame is hidden (settings.css), not
       // unmounted: running chats, the terminal and the editor keep their state.
       data-screen={ai.showSettings ? 'ayarlar' : profileOpen ? 'profil' : guide.guideOpen ? 'rehber' : undefined}
@@ -1330,7 +1334,7 @@ export default function Home() {
                 running={live.running}
                 shown={liveShown}
                 computer={<ComputerLivePanel visible={ws.open && ws.tab === 'canli' && liveView === 'bilgisayar'} />}
-                browser={<BrowserPanel visible={ws.open && ws.tab === 'canli' && liveView === 'tarayici'} conversationId={chat.activeConvId} running={chat.loading} onStop={chat.stopMessage} onNeedChat={() => chat.createNewConversation()} />}
+                browser={<BrowserPanel visible={ws.open && ws.tab === 'canli' && liveView === 'tarayici'} conversationId={chat.activeConvId} running={chat.loading} onStop={chat.stopMessage} onNeedChat={() => chat.createNewConversation()} full={browserFull.full} onToggleFull={browserFull.toggle} />}
               />
             ) } : {}),
           }}
