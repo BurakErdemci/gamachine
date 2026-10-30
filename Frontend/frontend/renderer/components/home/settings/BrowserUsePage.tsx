@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useLang } from '../../../lib/i18n';
+import { confirmDialog } from '../../ui/ConfirmDialog';
 import { Lamp, SetCard, SetGroup, SetRow, SetSwitch } from './controls';
 
 type Toast = (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
@@ -64,6 +65,24 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
     }
   };
 
+  const [clearing, setClearing] = useState(false);
+  const clearData = async () => {
+    if (clearing || !(await confirmDialog(t('bp.set.clearConfirm'), t('bp.set.clear'), t('confirm.cancel')))) return;
+    setClearing(true);
+    setMsg(null);
+    try {
+      const r = await call({ op: 'clear-browsing-data' });
+      if (isError(r)) {
+        setMsg(t('bp.set.clearFailed'));
+        showToast?.(t('bp.set.clearFailed'), 'error');
+      } else {
+        showToast?.(t('bp.set.cleared'), 'success');
+      }
+    } finally {
+      if (alive.current) setClearing(false);
+    }
+  };
+
   const hint = !desktop ? t('bp.set.desktopOnly')
     : readFailed ? t('bp.set.readFailed')
     : enabled === null ? t('bp.set.loading')
@@ -88,7 +107,19 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
             />
           )}
         />
+        <SetRow
+          testId="bp-clear-row"
+          name={t('bp.set.clear')}
+          hint={t('bp.set.clearHint')}
+          control={(
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void clearData(); }}
+              disabled={!desktop || clearing} data-testid="bp-clear">
+              {t('bp.set.clear')}
+            </button>
+          )}
+        />
       </SetCard>
+      <p className="set-hint" data-testid="bp-privacy">{t('bp.set.privacy')}</p>
       {msg && <p data-testid="bp-msg" className="set-msg set-msg-err" role="alert">{msg}</p>}
     </SetGroup>
   );

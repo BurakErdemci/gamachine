@@ -630,6 +630,7 @@ BROWSER_HALTED_REASON = ("The user stopped the browser for this turn; "
                          "do not use browser tools again until the user's next message.")
 BROWSER_NAVIGATION_REASON = "The page changed, so this browser approval no longer applies."
 BROWSER_RESTART_REASON = "The agent browser restarted, so this browser approval no longer applies."
+BROWSER_CLEARED_REASON = "The browser data was cleared, so this browser approval no longer applies."
 BROWSER_INACTIVE_REASON = "The agent browser is turned off in Settings."
 
 
@@ -648,10 +649,16 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
     _browser_grants: dict[tuple, float] = {}
     # gate_id -> grant key of an open browser card, so the gateway's in-wait delivery can consume its approval.
     _browser_gate_keys: dict[str, tuple] = {}
-    # [count of page changes, switch-offs and browser restarts]: every chat shares the one browser
-    # view, so an approval given under an older count grants nothing and runs nothing. A Stop or a
-    # chat deletion is one chat's business and leaves it alone.
-    _browser_page_gen = [0]
+    # Page generation = (global count, that chat's count). The global one moves on a switch-off, a
+    # browser restart or cleared browsing data; a chat's own moves when its tab changes page. An
+    # approval given under an older pair grants nothing and runs nothing. A Stop or a chat deletion
+    # is one chat's business and leaves the generations alone.
+    _browser_global_gen = [0]
+    _browser_page_gen: dict[int, int] = {}
+
+    def _browser_gen(owner: int) -> tuple:
+        return (_browser_global_gen[0], _browser_page_gen.get(owner, 0))
+
     # chat id -> count of that chat's Stops: a step that was already waiting when its chat was stopped
     # must not run, even after the next user message cleared the halt.
     _browser_stop_gen: dict[int, int] = {}
@@ -854,9 +861,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         # The agent retried while its card is still open: that card stays the only one.
         for open_gate, open_entry in _mcp_pending.items():
             if (key is not None and open_entry.get("grant_key") == key and _cards.is_open(open_gate)
-                    and open_entry.get("page_gen") == _browser_page_gen[0]):
+                    and open_entry.get("page_gen") == _browser_gen(owner)):
                 return {"status": "ok", "gate_id": open_gate}
-        opened_gen = _browser_page_gen[0]
+        opened_gen = _browser_gen(owner)
         _register_gate(gate_id, owner, kind="external")
         summary = f"browser {op}: {params.get('element_name') or 'element'}"
         _mcp_pending[gate_id] = {
@@ -876,7 +883,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             card = _cards.get(gate_id)
             # One-time grant for the approved step: any answerer (desktop or a
             # paired device) earns it, unlike the persistent computer-use grant.
-            if key is not None and _browser_page_gen[0] == opened_gen:
+            if key is not None and _browser_gen(owner) == opened_gen:
                 if result is True and card is not None and card.by:
                     _browser_grants[key] = time() + BROWSER_GRANT_TTL
                 else:
@@ -903,9 +910,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
 
     def _forget_browser_approvals(conversation_id: Optional[int] = None) -> None:
         """Drop the one-time browser grants and open-card keys of one chat, or of all; for all, also
-        bump the page generation so no approval given before this moment allows or runs anything."""
+        bump the global page generation so no approval given before this moment allows or runs anything."""
         if conversation_id is None:
-            _browser_page_gen[0] += 1
+            _browser_global_gen[0] += 1
         for key in [k for k in _browser_grants if conversation_id in (None, k[0])]:
             del _browser_grants[key]
         for gate_id in [g for g, k in _browser_gate_keys.items() if conversation_id in (None, k[0])]:
@@ -919,10 +926,11 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         _forget_browser_approvals(conversation_id)
 
     def _drop_browser_grants(conversation_id: int) -> None:
-        """The gateway's report that the shared page changed: every chat's browser cards and grants
-        belonged to the old page, whichever chat changed it."""
-        _reject_computer_use_pending(None, BROWSER_NAVIGATION_REASON, "browser_navigation", flag="browser_use")
-        _forget_browser_approvals()
+        """The gateway's report that this chat's tab changed page: this chat's browser cards and
+        grants belonged to the old page; other chats' tabs are untouched."""
+        _browser_page_gen[conversation_id] = _browser_page_gen.get(conversation_id, 0) + 1
+        _reject_computer_use_pending(conversation_id, BROWSER_NAVIGATION_REASON, "browser_navigation", flag="browser_use")
+        _forget_browser_approvals(conversation_id)
 
     _browser_gateway = browser_gateway.BrowserGateway(
         browser_gateway.post_cmd, _browser_card, _browser_card_result, _drop_browser_grants)
@@ -3003,7 +3011,7 @@ Max 300 kelime. Türkçe yaz.
         return await _browser_gateway.call(owner, tool[len("browser_"):], args, lambda: {
             "enabled": browser_settings.enabled(db), "halted": owner in _computer_halted,
             "deleted": _names_missing_chat(owner, fail_closed=True),
-            "runtime": dict(_browser_runtime), "page_gen": _browser_page_gen[0],
+            "runtime": dict(_browser_runtime), "page_gen": _browser_gen(owner),
             "stop_gen": _browser_stop_gen.get(owner, 0)})
 
     @router.put("/browser/settings")
@@ -3049,9 +3057,12 @@ Max 300 kelime. Türkçe yaz.
         previous = dict(_browser_runtime)
         _browser_runtime.update(running=running, port=port if running else None,
                                 token=token if running else None)
-        if _browser_runtime != previous:
-            # Another host (or none) means another page: nothing approved on the old one carries over.
-            _reject_computer_use_pending(None, BROWSER_RESTART_REASON, "browser_restart", flag="browser_use")
+        cleared = body.get("cleared") is True
+        if _browser_runtime != previous or cleared:
+            # Another host (or none), or cleared browsing data, means other pages and logins: nothing
+            # approved before carries over.
+            _reject_computer_use_pending(None, BROWSER_CLEARED_REASON if cleared else BROWSER_RESTART_REASON,
+                                         "browser_cleared" if cleared else "browser_restart", flag="browser_use")
             _forget_browser_approvals()
         return dict(_browser_runtime)
 

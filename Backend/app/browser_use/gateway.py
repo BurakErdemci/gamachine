@@ -29,6 +29,10 @@ PAGE_CHANGED = "The page changed while the approval card was open, so nothing wa
 FOCUS_CHANGED = "The focused element changed after the approval, so Enter was not pressed."
 TARGET_CHANGED = "The element or the page changed after the approval, so nothing was done. Look at the page again."
 CHAT_DELETED = "This chat was deleted, so the browser step was not run."
+USER_CONTROL = (
+    "The user is using this chat's browser tab. "
+    "Do not call browser tools until the user says they are done; tell the user what you are waiting for."
+)
 _ELEMENT_OPS = frozenset({"click", "fill", "select"})
 _NAVIGATION_OPS = frozenset({"navigate", "back", "forward", "reload"})
 # The host command contract: what each op may forward. Anything else in args is dropped.
@@ -139,9 +143,9 @@ class BrowserGateway:
     """host_transport(runtime, op, conversation_id, args) -> host reply;
     open_card(conversation_id, tool, params) -> the card decision ({"status": "resolved",
     "approved", "error"?} or {"status": "ok", "gate_id"}); wait_card(gate_id) -> the card's
-    result once answered, else None; drop_grants(conversation_id) reports that the one shared page
-    changed (a navigation, or any reply that shows another URL) so every approval given before it is
-    forgotten; now() -> monotonic seconds."""
+    result once answered, else None; drop_grants(conversation_id) reports that this chat's page
+    changed (a navigation, or any reply that shows another URL) so every approval that chat was given
+    before it is forgotten; now() -> monotonic seconds."""
 
     def __init__(self, host_transport, open_card, wait_card, drop_grants=None, now=time.monotonic):
         self._host = host_transport
@@ -149,10 +153,11 @@ class BrowserGateway:
         self._wait_card = wait_card
         self._drop_grants = drop_grants
         self._now = now
-        # The URL of the one view every chat shares, as the last host reply showed it.
-        self._page_url = None
-        # One command at a time, like the host's own queue: a step's describe must see its own page.
-        self._lock = asyncio.Lock()
+        # Per chat, as the last host reply showed it: every chat has its own tab.
+        self._page_url: dict[int, str] = {}
+        # One command at a time per chat, like the host's own per-tab queue: a step's describe must
+        # see its own page. A chat waiting for its card blocks no other chat.
+        self._locks: dict[int, asyncio.Lock] = {}
 
     async def _cmd(self, runtime, conversation_id, op, args):
         try:
@@ -161,15 +166,19 @@ class BrowserGateway:
             return {"ok": False, "error": "The browser did not answer."}
         if not isinstance(reply, dict):
             return {"ok": False, "error": "The browser sent an invalid reply."}
+        if reply.get("ok") is False and reply.get("error") == "user_control":
+            # The user holds the tab: not a page change, nothing is dropped.
+            return {"ok": False, "error": USER_CONTROL}
         # Any reply that shows another URL, failed ones included (a load error or a click's navigation
         # timeout still leaves the view on the new page), is a page change; it is reported before the
         # new URL becomes the baseline. A successful navigation op is one even on the same URL.
         url = reply.get("url")
-        moved = isinstance(url, str) and self._page_url is not None and url != self._page_url
+        known = self._page_url.get(conversation_id)
+        moved = isinstance(url, str) and known is not None and url != known
         if (moved or (op in _NAVIGATION_OPS and reply.get("ok") is True)) and self._drop_grants is not None:
             self._drop_grants(conversation_id)
         if isinstance(url, str):
-            self._page_url = url
+            self._page_url[conversation_id] = url
         return reply
 
     async def _card_result(self, decision):
@@ -203,6 +212,8 @@ class BrowserGateway:
         runtime, refusal = _recheck(before, mark, same_page=False)
         if refusal:
             return _refusal(refusal), None
+        if described.get("error") == USER_CONTROL:
+            return _refusal(USER_CONTROL), None
         if described.get("ok") is not True:
             if op != "press":
                 return _refusal(str(described.get("error") or "The element could not be described.")), None
@@ -239,10 +250,12 @@ class BrowserGateway:
             # to what was approved. A grant needs no second look: nothing runs between its describe
             # and the step.
             again = await self._cmd(runtime, conversation_id, "describe", target)
+            if again.get("error") == USER_CONTROL:
+                return _refusal(USER_CONTROL), None
             if not _same_target(_seen(again, op, args), _seen(described, op, args)):
                 return _refusal(FOCUS_CHANGED if op == "press" else TARGET_CHANGED), None
         # The wait can outlast a Stop, a switch-off (even one turned back on), a deleted chat, a host
-        # restart or another chat's page change.
+        # restart or this chat's page change.
         runtime, refusal = _recheck(mark, state())
         if refusal:
             return _refusal(refusal), None
@@ -262,7 +275,7 @@ class BrowserGateway:
         if isinstance(entry, dict) and entry.get("halted"):
             return _refusal(HALTED)
         entry_stop_gen = entry.get("stop_gen") if isinstance(entry, dict) else None
-        async with self._lock:
+        async with self._locks.setdefault(conversation_id, asyncio.Lock()):
             before = state()
             if isinstance(before, dict) and before.get("stop_gen") != entry_stop_gen:
                 return _refusal(HALTED)
@@ -279,6 +292,8 @@ class BrowserGateway:
                     return refusal
             forward = {key: args[key] for key in _ARGS[op] if key in args}
             reply = await self._cmd(runtime, conversation_id, op, forward)
+            if reply.get("error") == USER_CONTROL:
+                return _refusal(USER_CONTROL)
             ok = reply.get("ok") is True
             if ok and op == "screenshot" and isinstance(reply.get("image"), str):
                 meta = {key: value for key, value in reply.items() if key != "image"}

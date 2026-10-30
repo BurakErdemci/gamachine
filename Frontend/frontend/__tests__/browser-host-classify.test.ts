@@ -46,13 +46,13 @@ async function page(html: string) {
   f.wc.url = 'https://example.com/'
   f.wc.emit('did-finish-load')
   await reply
-  const snap: any = await f.host.handle({ op: 'snapshot', args: {} })
+  const snap: any = await f.host.handle({ op: 'snapshot', conversation_id: 1, args: {} })
   const describeElement = async (name: string) => {
     const el = snap.elements.find((e: any) => e.name === name)
     expect(el, `element ${name} in snapshot`).toBeTruthy()
-    return ((await f.host.handle({ op: 'describe', args: { snapshot_id: snap.snapshot_id, ref: el.ref } })) as any).element
+    return ((await f.host.handle({ op: 'describe', conversation_id: 1, args: { snapshot_id: snap.snapshot_id, ref: el.ref } })) as any).element
   }
-  const describeFocused = async () => (await f.host.handle({ op: 'describe', args: { focused: true } })) as any
+  const describeFocused = async () => (await f.host.handle({ op: 'describe', conversation_id: 1, args: { focused: true } })) as any
   return { ...f, describeElement, describeFocused }
 }
 
@@ -229,7 +229,7 @@ describe('describe {focused: true}', () => {
 
   it('still rejects a describe with neither a ref nor focused', async () => {
     const { host } = await page('<button>Pay</button>')
-    expect(await host.handle({ op: 'describe', args: {} })).toMatchObject({ ok: false, error: 'bad_args' })
+    expect(await host.handle({ op: 'describe', conversation_id: 1, args: {} })).toMatchObject({ ok: false, error: 'bad_args' })
   })
 })
 
@@ -263,6 +263,31 @@ describe('every Stop path reaches the backend halt', () => {
     await start(f)
     expect(() => f.host.halt()).not.toThrow()
     await new Promise((r) => setTimeout(r, 20))
+  })
+
+  it('a halt for a chat posts even after its tab was closed', async () => {
+    const f = fixture()
+    await start(f)
+    await f.host.invoke({ op: 'close', conversationId: 4 })
+    expect(await f.host.invoke({ op: 'halt', conversationId: 4 })).toEqual({ halted: true })
+    expect(haltPosts(f.request).map((c: any[]) => c[0].url)).toEqual([expect.stringContaining('/computer-use/halt/4')])
+  })
+
+  it('a halt without an id posts for every chat the agent acted in except a deleted (closed) one', async () => {
+    const f = fixture()
+    await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} }).catch(() => {})
+    await f.host.handle({ op: 'snapshot', conversation_id: 5, args: {} }).catch(() => {})
+    await f.host.invoke({ op: 'close', conversationId: 4 })
+    f.host.halt()
+    await vi.waitFor(() => expect(haltPosts(f.request)).toHaveLength(1))
+    expect(haltPosts(f.request)[0][0].url).toContain('/computer-use/halt/5')
+  })
+
+  it('a command without a conversation id is refused and never routed to the last chat', async () => {
+    const f = fixture()
+    await start(f)
+    expect(await f.host.handle({ op: 'snapshot', args: {} })).toMatchObject({ ok: false, error: 'no_conversation' })
+    expect(await f.host.handle({ op: 'halt' })).toMatchObject({ ok: false, error: 'no_conversation' })
   })
 
   it('with no active conversation there is no post', async () => {

@@ -929,7 +929,7 @@ const browserHost = new BrowserHost({
   createView: options => new WebContentsView(options),
   fromPartition: partition => session.fromPartition(partition),
   http: axios, baseUrl: getBackendBaseUrl, appToken: localAppToken, uiSecret,
-  onHalt: () => browserServer?.cancelPending(),
+  onHalt: conversationId => browserServer?.cancelPending(conversationId ?? undefined),
   log: (...args) => console.log(...args),
 })
 handleSecure('browser-live', (_event, req: unknown) => browserHost.invoke(req))
@@ -941,6 +941,8 @@ async function startBrowserHost(): Promise<void> {
       token: browserToken,
       handle: cmd => browserHost.handle(cmd),
       immediate: cmd => cmd.op === 'halt',
+      // A tab the user has taken over answers user_control at once instead of queueing.
+      refuse: cmd => browserHost.userControlReply(cmd),
     })
     browserHost.setRuntime({ port: browserServer.port, token: browserToken })
     browserHost.beginPolling()

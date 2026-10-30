@@ -4,11 +4,15 @@ import type { BrowserCommand } from './browser-server'
 import { isIP } from 'net'
 import { isAllowedNavigation, isPrivateAddress, resolvesToPrivate, type LookupAll } from './browser-url-policy'
 
-export const BROWSER_PARTITION = 'gamachine-agent-browser'
+// persist: keeps one login for every chat's tab and across app restarts.
+export const BROWSER_PARTITION = 'persist:gamachine-agent-browser'
 export const BROWSER_LIVE_CHANNEL = 'browser-live'
 // Electron reserves 0 (page) and 999 (its own isolated world); any other id up to 2^29 is free.
 export const BROWSER_WORLD_ID = 1777
 export const NAVIGATION_TIMEOUT_MS = 30_000
+export const MAX_TABS = 8
+// How long keyboard input after a `press` is taken as the host's own events coming back.
+const SYNTHETIC_INPUT_MS = 1_000
 const SCRIPT_TIMEOUT_MS = 10_000
 const HOST_CACHE_MS = 60_000
 const SCREENSHOT_MAX_WIDTH = 1280
@@ -34,8 +38,8 @@ export interface BrowserHostDeps {
   appToken: string
   uiSecret: string
   lookup?: LookupAll
-  /** Called on every halt so the command server can drop what is still queued. */
-  onHalt?: () => void
+  /** Called on every halt so the command server can drop what is still queued: one chat, or every chat with null. */
+  onHalt?: (conversationId: number | null) => void
   now?: () => number
   setTimeout?: typeof setTimeout
   clearTimeout?: typeof clearTimeout
@@ -44,10 +48,12 @@ export interface BrowserHostDeps {
 
 export interface BrowserLivePayload {
   active: boolean
-  conversationId: number | null
+  conversationId: number
   url: string
   title: string
   loading: boolean
+  /** The user has taken the tab over; agent commands are refused until release. */
+  userControl: boolean
   /** Set on the event that reports a blocked private address. */
   error?: string
 }
@@ -254,17 +260,35 @@ function finiteNonNegative(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
-/** One agent-driven page in a hardened WebContentsView over the main window, created on the first command. */
+
+function positiveInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+}
+
+/** One chat's page: everything that used to be single-slot lives here. */
+interface Tab {
+  conversationId: number
+  view: WebContentsView
+  snapshotSeq: number
+  loadWaiter: ((result: LoadResult) => void) | null
+  popupBlocked: string | null
+  userControl: boolean
+  /** Keyboard input before this time is the host's own `press`, not the user. */
+  syntheticUntil: number
+  lastUsed: number
+}
+
+/** One hardened WebContentsView per chat over the main window, all on one persistent session. */
 export class BrowserHost {
-  private view: WebContentsView | null = null
+  private readonly tabs = new Map<number, Tab>()
   private hardened = false
-  private active = false
-  private conversationId: number | null = null
+  private visibleId: number | null = null
+  /** Chats the agent has acted in. Outlives the tab on evict and clear so a Stop still reaches the backend halt; close (a deleted chat) drops it. */
+  private readonly actedIn = new Set<number>()
+  /** True while clear-browsing-data is awaited: no tab may be created or navigated meanwhile. */
+  private clearing = false
+  private clock = 0
   private bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
-  private visible = false
-  private popupBlocked: string | null = null
-  private snapshotSeq = 0
-  private loadWaiter: ((result: LoadResult) => void) | null = null
   private readonly hostCache = new Map<string, { blocked: true; at: number }>()
   private runtime: { port: number; token: string } | null = null
   private stopped = false
@@ -295,9 +319,10 @@ export class BrowserHost {
     return { running, port: running ? this.runtime!.port : null, token: running ? this.runtime!.token : null }
   }
 
-  private report() {
+  /** `cleared` makes the backend drop every chat's cards and grants in the same report. */
+  private report(cleared = false) {
     const data = this.runtimeBody()
-    this.reports = this.reports.then(() => this.request('post', '/browser/runtime', data, true))
+    this.reports = this.reports.then(() => this.request('post', '/browser/runtime', cleared ? { ...data, cleared } : data, true))
       .catch(() => { this.log('[browser] runtime report failed') })
     return this.reports
   }
@@ -327,7 +352,7 @@ export class BrowserHost {
     this.pollTimer = this.later(() => { void poll() }, 0)
   }
 
-  /** Reports running=false, stops polling and destroys the view. */
+  /** Reports running=false, stops polling and destroys every tab. */
   shutdown(): Promise<void> {
     if (this.stopped) return this.reports.then(() => undefined)
     this.stopped = true
@@ -337,7 +362,11 @@ export class BrowserHost {
     return this.report().then(() => undefined)
   }
 
-  // ---- view and session ----
+  // ---- tabs and session ----
+
+  private session(): Session {
+    return this.deps.fromPartition(BROWSER_PARTITION)
+  }
 
   private harden(session: Session): void {
     if (this.hardened) return
@@ -361,7 +390,7 @@ export class BrowserHost {
     session.webRequest.onCompleted((details) => this.checkConnectedIp(details))
   }
 
-  private checkConnectedIp(details: { url: string; ip?: string }): void {
+  private checkConnectedIp(details: { url: string; ip?: string; webContentsId?: number }): void {
     const ip = (details.ip || '').replace(/^\[|\]$/g, '')
     if (!ip || !isPrivateAddress(ip)) return
     let host: string
@@ -369,13 +398,18 @@ export class BrowserHost {
     // A literal host was already judged by the static policy, so the connection is not a rebinding.
     if (isIP(host.replace(/^\[|\]$/g, ''))) return
     this.hostCache.set(host.toLowerCase(), { blocked: true, at: this.now() })
-    const wc = this.view && !this.view.webContents.isDestroyed() ? this.view.webContents : null
-    this.settleLoad({ ok: false, error: 'private_address' })
-    if (wc) {
-      wc.stop()
-      wc.loadURL('about:blank').catch(() => { /* nothing left to report */ })
+    // A request with no page behind it (a worker) cannot be pinned to one tab, so every tab is stopped.
+    const hit = [...this.tabs.values()].filter((tab) => details.webContentsId === undefined ||
+      (!tab.view.webContents.isDestroyed() && tab.view.webContents.id === details.webContentsId))
+    for (const tab of hit) {
+      const wc = tab.view.webContents
+      this.settleLoad(tab, { ok: false, error: 'private_address' })
+      if (!wc.isDestroyed()) {
+        wc.stop()
+        wc.loadURL('about:blank').catch(() => { /* nothing left to report */ })
+      }
+      this.emitLive(tab.conversationId, 'private_address')
     }
-    this.emitLive('private_address')
   }
 
   /** Sub-resource gate: frames follow the navigation rule, every http(s)/ws(s) host must not resolve to a private address. */
@@ -404,12 +438,19 @@ export class BrowserHost {
     return blocked
   }
 
-  private ensureView(): WebContentsView {
-    if (this.view && !this.view.webContents.isDestroyed()) return this.view
-    if (this.view) this.destroyView()
+  private liveTab(conversationId: number): Tab | null {
+    const tab = this.tabs.get(conversationId)
+    return tab && !tab.view.webContents.isDestroyed() ? tab : null
+  }
+
+  private ensureTab(conversationId: number): Tab {
+    const existing = this.tabs.get(conversationId)
+    if (existing && !existing.view.webContents.isDestroyed()) return this.touch(existing)
+    if (existing) this.closeTab(existing)
     const win = this.deps.window()
     if (!win || win.isDestroyed()) throw new Error('no_window')
-    const session = this.deps.fromPartition(BROWSER_PARTITION)
+    if (this.tabs.size >= MAX_TABS) this.evict()
+    const session = this.session()
     this.harden(session)
     const view = this.deps.createView({
       webPreferences: {
@@ -424,100 +465,227 @@ export class BrowserHost {
         safeDialogs: true,
       },
     })
-    this.wire(view.webContents)
+    const tab: Tab = { conversationId, view, snapshotSeq: 0, loadWaiter: null, popupBlocked: null,
+      userControl: false, syntheticUntil: 0, lastUsed: 0 }
+    this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
-    view.setVisible(this.visible)
-    this.view = view
-    return view
+    view.setVisible(this.visibleId === conversationId)
+    this.tabs.set(conversationId, tab)
+    return this.touch(tab)
   }
 
-  private wire(wc: WebContents): void {
+  private touch(tab: Tab): Tab {
+    tab.lastUsed = ++this.clock
+    return tab
+  }
+
+  /** Beyond the cap the least recently used hidden tab goes (never one the user controls; the cap may be exceeded). */
+  private evict(): void {
+    let oldest: Tab | null = null
+    for (const tab of this.tabs.values()) {
+      if (tab.conversationId !== this.visibleId && !tab.userControl && (!oldest || tab.lastUsed < oldest.lastUsed)) oldest = tab
+    }
+    if (oldest) this.closeTab(oldest)
+  }
+
+  private wire(tab: Tab): void {
+    const wc = tab.view.webContents
     wc.setWindowOpenHandler(({ url }) => {
-      this.popupBlocked = url
+      tab.popupBlocked = url
       return { action: 'deny' }
     })
     const refuse = (event: { url: string; isMainFrame: boolean; preventDefault(): void }) => {
       if (isAllowedNavigation(event.url)) return
       event.preventDefault()
       // A refused main-frame navigation ends as ERR_ABORTED, which waitForLoad ignores.
-      if (event.isMainFrame) this.settleLoad({ ok: false, error: 'url_not_allowed' })
+      if (event.isMainFrame) this.settleLoad(tab, { ok: false, error: 'url_not_allowed' })
     }
     wc.on('will-navigate', refuse)
     wc.on('will-redirect', refuse)
     wc.on('will-frame-navigate', refuse)
     wc.on('will-attach-webview', (event) => event.preventDefault())
-    wc.on('did-finish-load', () => this.settleLoad({ ok: true }))
+    wc.on('did-finish-load', () => this.settleLoad(tab, { ok: true }))
     wc.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
       // -3 is ERR_ABORTED: a new navigation replaced this one, and its own load event will follow.
-      if (isMainFrame && code !== -3) this.settleLoad({ ok: false, error: `load_failed: ${description || code}` })
+      if (isMainFrame && code !== -3) this.settleLoad(tab, { ok: false, error: `load_failed: ${description || code}` })
     })
-    wc.on('render-process-gone', () => this.settleLoad({ ok: false, error: 'page_crashed' }))
+    wc.on('render-process-gone', () => this.settleLoad(tab, { ok: false, error: 'page_crashed' }))
     for (const name of ['did-start-loading', 'did-stop-loading', 'page-title-updated', 'did-navigate', 'did-navigate-in-page'] as const) {
-      wc.on(name as 'did-start-loading', () => this.emitLive())
+      wc.on(name as 'did-start-loading', () => this.emitLive(tab.conversationId))
     }
+    // before-input-event sees keys only; input-event also sees the mouse.
+    wc.on('before-input-event', (_event, input) => this.userInput(tab, input.type))
+    wc.on('input-event', (_event, input) => this.userInput(tab, input.type))
   }
 
-  /** Closes the page; the next command opens a fresh one. Called when the main window goes away. */
-  destroyView(): void {
-    const view = this.view
-    this.view = null
-    this.active = false
-    this.settleLoad({ ok: false, error: 'halted' })
-    if (!view) return
+  private userInput(tab: Tab, type: string): void {
+    const key = type === 'keyDown' || type === 'rawKeyDown'
+    if (!key && type !== 'mouseDown') return
+    // sendInputEvent from `press` comes back through these same events.
+    if (key && this.now() < tab.syntheticUntil) return
+    this.setUserControl(tab, true)
+  }
+
+  private setUserControl(tab: Tab, on: boolean): void {
+    if (tab.userControl === on) return
+    tab.userControl = on
+    this.emitLive(tab.conversationId)
+  }
+
+  private closeTab(tab: Tab): void {
+    if (this.tabs.get(tab.conversationId) === tab) this.tabs.delete(tab.conversationId)
+    this.settleLoad(tab, { ok: false, error: 'halted' })
     const win = this.deps.window()
-    try { if (win && !win.isDestroyed()) win.contentView.removeChildView(view) } catch { /* window closing */ }
-    try { if (!view.webContents.isDestroyed()) view.webContents.close() } catch { /* already closed */ }
-    this.emitLive()
+    try { if (win && !win.isDestroyed()) win.contentView.removeChildView(tab.view) } catch { /* window closing */ }
+    try { if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close() } catch { /* already closed */ }
+    this.emitLive(tab.conversationId)
+  }
+
+  /** Closes every tab; the next command opens fresh ones. Called when the main window goes away. */
+  destroyView(): void {
+    for (const tab of [...this.tabs.values()]) this.closeTab(tab)
+  }
+
+  private show(conversationId: number | null): void {
+    this.visibleId = conversationId
+    for (const tab of this.tabs.values()) {
+      const shown = tab.conversationId === conversationId
+      if (shown) tab.view.setBounds(this.bounds)
+      tab.view.setVisible(shown)
+    }
   }
 
   // ---- renderer channel ----
 
-  livePayload(): BrowserLivePayload {
-    const wc = this.view && !this.view.webContents.isDestroyed() ? this.view.webContents : null
+  livePayload(conversationId: number): BrowserLivePayload {
+    const tab = this.liveTab(conversationId)
+    const wc = tab?.view.webContents
     return {
-      active: this.active,
-      conversationId: this.conversationId,
+      active: !!tab,
+      conversationId,
       url: wc ? wc.getURL() : '',
       title: wc ? wc.getTitle() : '',
       loading: wc ? wc.isLoading() : false,
+      userControl: tab ? tab.userControl : false,
     }
   }
 
-  private emitLive(error?: string): void {
+  private emitLive(conversationId: number, error?: string): void {
     const win = this.deps.window()
     if (!win || win.isDestroyed()) return
-    try { win.webContents.send(BROWSER_LIVE_CHANNEL, error ? { ...this.livePayload(), error } : this.livePayload()) } catch { /* window closing */ }
+    const payload = this.livePayload(conversationId)
+    try { win.webContents.send(BROWSER_LIVE_CHANNEL, error ? { ...payload, error } : payload) } catch { /* window closing */ }
+  }
+
+  /** Same checks as the agent's navigate: allow-list, then the host must not resolve privately. */
+  private async navigationAllowed(url: unknown): Promise<boolean> {
+    if (!str(url) || !isAllowedNavigation(url)) return false
+    return !(await this.hostBlocked(new URL(url).hostname))
   }
 
   async invoke(req: unknown): Promise<unknown> {
     if (!req || typeof req !== 'object' || Array.isArray(req)) return { error: 'Invalid browser-live request.' }
-    const { op, bounds, visible, gateId, approved } = req as Record<string, unknown>
+    const { op, conversationId: id, bounds, visible, url, gateId, approved } = req as Record<string, unknown>
+    const tabOps = ['status', 'set-bounds', 'visible', 'open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close']
+    if (typeof op === 'string' && tabOps.includes(op) && !positiveInt(id)) return { error: 'Unknown operation or malformed browser-live arguments.' }
+    const conversationId = id as number
     switch (op) {
       case 'status':
-        return { ...this.livePayload(), visible: this.visible, bounds: this.bounds }
+        return { ...this.livePayload(conversationId), visible: this.visibleId === conversationId, bounds: this.bounds }
       case 'set-bounds': {
         const b = bounds as Record<string, unknown> | null
         if (!b || typeof b !== 'object' || ![b.x, b.y, b.width, b.height].every(finiteNonNegative)) break
         this.bounds = { x: Math.round(b.x as number), y: Math.round(b.y as number),
           width: Math.round(b.width as number), height: Math.round(b.height as number) }
-        this.view?.setBounds(this.bounds)
+        this.liveTab(conversationId)?.view.setBounds(this.bounds)
         return { bounds: this.bounds }
       }
       case 'visible':
         if (typeof visible !== 'boolean') break
-        this.visible = visible
-        this.view?.setVisible(visible)
+        if (visible) {
+          const tab = this.liveTab(conversationId)
+          if (tab) this.touch(tab)
+          this.show(conversationId)
+        } else if (this.visibleId === conversationId) {
+          this.show(null)
+        }
         return { visible }
       case 'halt': {
-        this.stopLocal()
+        if (id !== undefined && !positiveInt(id)) break
+        const only = id === undefined ? null : conversationId
+        this.stopLocal(only)
         try {
-          await this.haltBackend()
+          await this.haltBackend(only)
           return { halted: true }
         } catch {
           this.log('[browser] backend halt failed')
           return { halted: false, error: 'Stopping the agent browser failed in the backend.' }
         }
+      }
+      case 'open':
+      case 'navigate': {
+        if (this.clearing) return { error: 'clearing' }
+        if (op === 'navigate' || url !== undefined) {
+          if (!(await this.navigationAllowed(url))) return { error: 'url_not_allowed' }
+        }
+        // A clear can start during the lookup above.
+        if (this.clearing) return { error: 'clearing' }
+        let tab: Tab
+        try { tab = this.ensureTab(conversationId) } catch (error) { return { error: error instanceof Error ? error.message : 'no_window' } }
+        if (op === 'open') this.show(conversationId)
+        if (str(url)) tab.view.webContents.loadURL(url).catch(() => { /* reported by did-fail-load */ })
+        this.emitLive(conversationId)
+        return this.livePayload(conversationId)
+      }
+      case 'back':
+      case 'forward':
+      case 'reload': {
+        const tab = this.liveTab(conversationId)
+        if (!tab) return { error: 'no_tab' }
+        this.touch(tab)
+        const wc = tab.view.webContents
+        const history = wc.navigationHistory
+        if (op === 'reload') wc.reload()
+        else if (op === 'back' ? !history.canGoBack() : !history.canGoForward()) return { error: 'no_history' }
+        else if (op === 'back') history.goBack()
+        else history.goForward()
+        return this.livePayload(conversationId)
+      }
+      case 'take-over':
+      case 'release': {
+        const tab = this.liveTab(conversationId)
+        if (!tab) return op === 'release' ? this.livePayload(conversationId) : { error: 'no_tab' }
+        this.setUserControl(tab, op === 'take-over')
+        return this.livePayload(conversationId)
+      }
+      case 'close': {
+        const tab = this.tabs.get(conversationId)
+        if (tab) this.closeTab(tab)
+        // Only a deleted chat is closed; evict and clear keep the id so a Stop still reaches the backend.
+        this.actedIn.delete(conversationId)
+        return this.livePayload(conversationId)
+      }
+      case 'clear-browsing-data': {
+        if (this.clearing) return { error: 'clearing' }
+        this.clearing = true
+        // Tabs go first so no page writes new cookies between the clear and its close.
+        this.destroyView()
+        let failed = false
+        try {
+          const session = this.session()
+          await session.clearStorageData()
+          await session.clearCache()
+        } catch {
+          this.log('[browser] clearing browsing data failed')
+          failed = true
+        } finally {
+          this.destroyView()
+          this.clearing = false
+        }
+        // Even a failed clear may have wiped logins, so the backend drops every chat's grants either way.
+        await this.report(true)
+        return failed ? { error: 'Clearing browsing data failed.' } : { cleared: true }
       }
       case 'answer-card':
         if (typeof gateId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(gateId) || typeof approved !== 'boolean') break
@@ -548,52 +716,58 @@ export class BrowserHost {
     return { error: 'Unknown operation or malformed browser-live arguments.' }
   }
 
-  /** Stops loading and wakes a waiting navigation; queued commands are dropped through onHalt. */
-  halt(): void {
-    this.stopLocal()
-    this.haltBackend().catch(() => { this.log('[browser] backend halt failed') })
+  /**
+   * Stops one chat's tab, or every tab without an id (the computer-use Stop is global), wakes a
+   * waiting navigation and drops queued commands through onHalt.
+   */
+  halt(conversationId?: number): void {
+    const only = conversationId ?? null
+    this.stopLocal(only)
+    this.haltBackend(only).catch(() => { this.log('[browser] backend halt failed') })
   }
 
   /** The backend halt set also covers browser tools, so the agent's next call is refused too. */
-  private async haltBackend(): Promise<void> {
-    if (this.active && this.conversationId !== null) {
-      await this.request('post', `/computer-use/halt/${this.conversationId}`, undefined, true)
-    }
+  private async haltBackend(only: number | null): Promise<void> {
+    const ids = only === null ? [...this.actedIn] : [only]
+    await Promise.all(ids.map((id) => this.request('post', `/computer-use/halt/${id}`, undefined, true)))
   }
 
-  private stopLocal(): void {
-    this.deps.onHalt?.()
-    this.settleLoad({ ok: false, error: 'halted' })
-    const wc = this.view?.webContents
-    if (wc && !wc.isDestroyed()) wc.stop()
-    this.emitLive()
+  private stopLocal(only: number | null): void {
+    this.deps.onHalt?.(only)
+    for (const tab of [...this.tabs.values()]) {
+      if (only !== null && tab.conversationId !== only) continue
+      this.settleLoad(tab, { ok: false, error: 'halted' })
+      const wc = tab.view.webContents
+      if (!wc.isDestroyed()) wc.stop()
+      this.emitLive(tab.conversationId)
+    }
   }
 
   // ---- command handling ----
 
-  private settleLoad(result: LoadResult): void {
-    const waiter = this.loadWaiter
-    this.loadWaiter = null
+  private settleLoad(tab: Tab, result: LoadResult): void {
+    const waiter = tab.loadWaiter
+    tab.loadWaiter = null
     waiter?.(result)
   }
 
-  private waitForLoad(start: () => void): Promise<LoadResult> {
-    this.settleLoad({ ok: false, error: 'superseded' })
+  private waitForLoad(tab: Tab, start: () => void): Promise<LoadResult> {
+    this.settleLoad(tab, { ok: false, error: 'superseded' })
     return new Promise<LoadResult>((resolve) => {
       const timer = this.later(() => {
-        if (this.loadWaiter === done) this.settleLoad({ ok: false, error: 'navigation_timeout' })
+        if (tab.loadWaiter === done) this.settleLoad(tab, { ok: false, error: 'navigation_timeout' })
       }, NAVIGATION_TIMEOUT_MS)
       const done = (result: LoadResult) => {
         this.clear(timer)
         resolve(result)
       }
-      this.loadWaiter = done
-      try { start() } catch (error) { this.settleLoad({ ok: false, error: error instanceof Error ? error.message : 'load_failed' }) }
+      tab.loadWaiter = done
+      try { start() } catch (error) { this.settleLoad(tab, { ok: false, error: error instanceof Error ? error.message : 'load_failed' }) }
     })
   }
 
-  private async page(fn: string, args: Record<string, unknown>, userGesture = false): Promise<Record<string, unknown>> {
-    const wc = this.view!.webContents
+  private async page(tab: Tab, fn: string, args: Record<string, unknown>, userGesture = false): Promise<Record<string, unknown>> {
+    const wc = tab.view.webContents
     const code = `${PAGE_LIB}\n;globalThis.__gmBrowser.${fn}(${JSON.stringify(args)})`
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_resolve, reject) => {
@@ -607,90 +781,109 @@ export class BrowserHost {
     }
   }
 
-  private base(wc: WebContents): { url: string; title: string } {
-    return wc.isDestroyed() ? { url: '', title: '' } : { url: wc.getURL(), title: wc.getTitle() }
+  private base(wc: WebContents | undefined): { url: string; title: string } {
+    return !wc || wc.isDestroyed() ? { url: '', title: '' } : { url: wc.getURL(), title: wc.getTitle() }
+  }
+
+  /** The chat a command belongs to; one without a valid id belongs to none and is refused. */
+  private commandConversation(cmd: BrowserCommand): number | null {
+    return positiveInt(cmd.conversation_id) ? cmd.conversation_id : null
+  }
+
+  /** The refusal for an agent command whose tab the user has taken over, or null when it may run. */
+  userControlReply(cmd: BrowserCommand): Reply | null {
+    if (cmd.op === 'halt') return null
+    const id = this.commandConversation(cmd)
+    const tab = id === null ? null : this.liveTab(id)
+    if (!tab?.userControl) return null
+    return { ok: false, error: 'user_control', ...this.base(tab.view.webContents) }
   }
 
   /** Entry point for the command server; always resolves to a reply object. */
   async handle(cmd: BrowserCommand): Promise<Reply> {
-    if (Number.isInteger(cmd.conversation_id)) this.conversationId = cmd.conversation_id as number
+    const id = this.commandConversation(cmd)
+    if (id === null) return { ok: false, error: 'no_conversation', url: '', title: '' }
+    if (cmd.op !== 'halt' && this.clearing) return { ok: false, error: 'clearing', url: '', title: '' }
     if (cmd.op === 'halt') {
-      this.stopLocal()
-      const wc = this.view?.webContents
-      return { ok: true, ...(wc ? this.base(wc) : { url: '', title: '' }) }
+      this.stopLocal(id)
+      return { ok: true, ...this.base(this.liveTab(id)?.view.webContents) }
     }
-    let view: WebContentsView
+    const refused = this.userControlReply({ ...cmd, conversation_id: id })
+    if (refused) return refused
+    let tab: Tab
     try {
-      view = this.ensureView()
+      tab = this.ensureTab(id)
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : 'no_window', url: '', title: '' }
     }
-    this.active = true
-    this.emitLive()
-    const wc = view.webContents
+    this.actedIn.add(id)
+    this.emitLive(id)
+    const wc = tab.view.webContents
     let reply: Reply
     try {
-      const extra = await this.run(wc, cmd.op, cmd.args && typeof cmd.args === 'object' ? cmd.args : {})
+      const extra = await this.run(tab, cmd.op, cmd.args && typeof cmd.args === 'object' ? cmd.args : {})
       reply = { ok: !extra.error, ...extra, ...this.base(wc) } as Reply
       if (!extra.error) delete reply.error
     } catch (error) {
       reply = { ok: false, error: error instanceof Error ? error.message : String(error), ...this.base(wc) }
     }
-    if (this.popupBlocked) {
-      reply.popup_blocked = this.popupBlocked
-      this.popupBlocked = null
+    if (tab.popupBlocked) {
+      reply.popup_blocked = tab.popupBlocked
+      tab.popupBlocked = null
     }
-    this.emitLive()
+    this.emitLive(id)
     return reply
   }
 
-  private async run(wc: WebContents, op: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async run(tab: Tab, op: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const wc = tab.view.webContents
     const ref = { snapshotId: args.snapshot_id, ref: args.ref }
     const needsRef = () => str(args.snapshot_id) && str(args.ref)
     switch (op) {
       case 'navigate': {
         const url = args.url
-        if (!str(url) || !isAllowedNavigation(url)) return { error: 'url_not_allowed' }
-        if (await this.hostBlocked(new URL(url).hostname)) return { error: 'url_not_allowed' }
-        return this.loadResult(await this.waitForLoad(() => { wc.loadURL(url).catch(() => { /* reported by did-fail-load */ }) }))
+        if (!(await this.navigationAllowed(url))) return { error: 'url_not_allowed' }
+        return this.loadResult(await this.waitForLoad(tab, () => { wc.loadURL(url as string).catch(() => { /* reported by did-fail-load */ }) }))
       }
       case 'back':
       case 'forward': {
         const history = wc.navigationHistory
         if (op === 'back' ? !history.canGoBack() : !history.canGoForward()) return { error: 'no_history' }
-        return this.loadResult(await this.waitForLoad(() => (op === 'back' ? history.goBack() : history.goForward())))
+        return this.loadResult(await this.waitForLoad(tab, () => (op === 'back' ? history.goBack() : history.goForward())))
       }
       case 'reload':
-        return this.loadResult(await this.waitForLoad(() => wc.reload()))
+        return this.loadResult(await this.waitForLoad(tab, () => wc.reload()))
       case 'snapshot': {
         const requested = Number(args.max_chars)
         const maxChars = Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), MAX_TEXT_CHARS) : 20_000
-        const snapshotId = `s${++this.snapshotSeq}`
-        const result = await this.page('snapshot', { snapshotId, maxChars })
+        const snapshotId = `s${++tab.snapshotSeq}`
+        const result = await this.page(tab, 'snapshot', { snapshotId, maxChars })
         return result.error ? result : { ...result, snapshot_id: snapshotId }
       }
       case 'click':
         if (!needsRef()) return { error: 'bad_args' }
-        return this.page('click', ref, true)
+        return this.page(tab, 'click', ref, true)
       case 'fill':
         if (!needsRef() || typeof args.value !== 'string') return { error: 'bad_args' }
         if (args.value.length > MAX_FILL_CHARS) return { error: 'value_too_long' }
-        return this.page('fill', { ...ref, value: args.value }, true)
+        return this.page(tab, 'fill', { ...ref, value: args.value }, true)
       case 'select':
         if (!needsRef() || typeof args.option !== 'string') return { error: 'bad_args' }
-        return this.page('select', { ...ref, option: args.option }, true)
+        return this.page(tab, 'select', { ...ref, option: args.option }, true)
       case 'describe':
-        if (args.focused === true) return this.page('describe', { focused: true })
+        if (args.focused === true) return this.page(tab, 'describe', { focused: true })
         if (!needsRef()) return { error: 'bad_args' }
-        return this.page('describe', ref)
+        return this.page(tab, 'describe', ref)
       case 'scroll': {
         if (args.direction !== 'up' && args.direction !== 'down') return { error: 'bad_args' }
         const amount = finiteNonNegative(args.amount) ? Math.min(args.amount, 100_000) : 0
-        return this.page('scroll', { direction: args.direction, amount })
+        return this.page(tab, 'scroll', { direction: args.direction, amount })
       }
       case 'press': {
         const keyCode = typeof args.key === 'string' ? KEYS[args.key] : undefined
         if (!keyCode) return { error: 'key_not_allowed' }
+        if (tab.userControl) return { error: 'user_control' }
+        tab.syntheticUntil = this.now() + SYNTHETIC_INPUT_MS
         wc.focus()
         wc.sendInputEvent({ type: 'keyDown', keyCode })
         if (keyCode === 'Enter') wc.sendInputEvent({ type: 'char', keyCode: '\r' })

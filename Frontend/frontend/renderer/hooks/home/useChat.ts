@@ -646,6 +646,8 @@ export const useChat = (
         controllersRef.current.get(id)?.abort();
         controllersRef.current.delete(id);
         dropConv(id);
+        // Its browser tab goes with it; a failure only leaves an idle tab behind.
+        Promise.resolve(ipc?.invoke?.('browser-live', { op: 'close', conversationId: id })).catch(() => {});
       }
       const target = activeConvIdRef.current != null && ids.includes(activeConvIdRef.current)
         ? next() : undefined;

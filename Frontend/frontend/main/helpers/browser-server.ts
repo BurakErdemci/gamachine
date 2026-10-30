@@ -11,8 +11,8 @@ export interface BrowserCommand {
 
 export interface CommandServer {
   port: number
-  /** Answers every command still waiting in the queue with `halted` instead of running it. */
-  cancelPending(): void
+  /** Answers the commands still waiting in one conversation's queue (every queue without an id) with `halted`. */
+  cancelPending(conversationId?: number): void
   close(): Promise<void>
 }
 
@@ -30,28 +30,46 @@ function reply(res: http.ServerResponse, status: number, body: unknown, close = 
   res.end(JSON.stringify(body))
 }
 
+type Lane = { tail: Promise<unknown>; epoch: number; pending: number }
+
+const laneKey = (cmd: BrowserCommand) => (Number.isInteger(cmd.conversation_id) ? String(cmd.conversation_id) : '')
+
 /**
  * Loopback-only command endpoint for the browser MCP server: POST /cmd, Bearer token,
- * one command at a time. Commands for which `immediate` returns true (halt) skip the
- * queue, because waiting behind a 30 s navigation would defeat them, and they drop
- * whatever was still queued.
+ * one command at a time per conversation (each chat has its own tab). Commands for which
+ * `immediate` returns true (halt) skip the queue, because waiting behind a 30 s navigation
+ * would defeat them, and they drop whatever was still queued for that conversation.
+ * A reply from `refuse` answers the command at once without queueing it.
  */
 export function startCommandServer(options: {
   token: string
   handle: (cmd: BrowserCommand) => Promise<unknown>
   immediate?: (cmd: BrowserCommand) => boolean
+  refuse?: (cmd: BrowserCommand) => unknown
 }): Promise<CommandServer> {
-  const { token, handle, immediate } = options
-  let tail: Promise<unknown> = Promise.resolve()
-  let epoch = 0
+  const { token, handle, immediate, refuse } = options
+  const lanes = new Map<string, Lane>()
   const enqueue = (cmd: BrowserCommand): Promise<unknown> => {
+    const key = laneKey(cmd)
     if (immediate?.(cmd)) {
-      epoch++
+      const lane = lanes.get(key)
+      if (lane) lane.epoch++
       return Promise.resolve().then(() => handle(cmd))
     }
-    const arrived = epoch
-    const run = tail.then(() => (arrived === epoch ? handle(cmd) : HALTED_REPLY))
-    tail = run.catch(() => undefined)
+    const refused = refuse?.(cmd)
+    if (refused) return Promise.resolve(refused)
+    let lane = lanes.get(key)
+    if (!lane) {
+      lane = { tail: Promise.resolve(), epoch: 0, pending: 0 }
+      lanes.set(key, lane)
+    }
+    const own = lane
+    const arrived = own.epoch
+    own.pending++
+    const run = own.tail.then(() => (arrived === own.epoch ? handle(cmd) : HALTED_REPLY))
+    own.tail = run.catch(() => undefined).then(() => {
+      if (--own.pending === 0 && lanes.get(key) === own) lanes.delete(key)
+    })
     return run
   }
 
@@ -115,7 +133,10 @@ export function startCommandServer(options: {
       const port = typeof address === 'object' && address ? address.port : 0
       resolve({
         port,
-        cancelPending: () => { epoch++ },
+        cancelPending: (conversationId?: number) => {
+          if (conversationId === undefined) for (const lane of lanes.values()) lane.epoch++
+          else { const lane = lanes.get(String(conversationId)); if (lane) lane.epoch++ }
+        },
         close: () => new Promise<void>((done) => {
           server.close(() => done())
           server.closeAllConnections?.()

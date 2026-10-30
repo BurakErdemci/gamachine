@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { translations } from '../renderer/lib/i18n'
 import { BrowserPanel } from '../renderer/components/home/BrowserPanel'
+import { confirmDialog } from '../renderer/components/ui/ConfirmDialog'
 import { BrowserUsePage } from '../renderer/components/home/settings/BrowserUsePage'
 
+vi.mock('../renderer/components/ui/ConfirmDialog', () => ({ confirmDialog: vi.fn() }))
+const confirm = confirmDialog as unknown as ReturnType<typeof vi.fn>
 const tr = translations.tr
 
 let listeners: Map<string, (payload: unknown) => void>
@@ -52,19 +55,43 @@ afterEach(() => {
 })
 
 describe('BrowserPanel', () => {
-  it('shows the idle state until the agent uses the browser', async () => {
-    const { container } = render(<BrowserPanel visible />)
+  it('shows the empty state until the chat has a tab', async () => {
+    const { container } = render(<BrowserPanel visible conversationId={3} />)
     expect(await screen.findByText(tr['bp.idle'])).toBeTruthy()
     expect(container.querySelector('.bp-panel')!.getAttribute('data-state')).toBe('idle')
+    expect(screen.getByRole('button', { name: tr['bp.open'] })).toBeTruthy()
+  })
+
+  it('asks status for the open chat on mount and again when the chat changes', async () => {
+    const { rerender } = render(<BrowserPanel visible conversationId={3} />)
+    await waitFor(() => expect(calls('status')).toEqual([{ op: 'status', conversationId: 3 }]))
+    rerender(<BrowserPanel visible conversationId={4} />)
+    await waitFor(() => expect(calls('status').at(-1)).toEqual({ op: 'status', conversationId: 4 }))
+  })
+
+  it('without a chat it sends nothing and disables Open', () => {
+    render(<BrowserPanel visible conversationId={null} />)
+    expect(calls('status')).toHaveLength(0)
+    expect((screen.getByRole('button', { name: tr['bp.open'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('Open sends open with the typed address and the chat id', async () => {
+    render(<BrowserPanel visible conversationId={3} />)
+    const input = await screen.findByLabelText(tr['bp.address'])
+    fireEvent.change(input, { target: { value: 'https://itch.io' } })
+    fireEvent.click(screen.getByRole('button', { name: tr['bp.open'] }))
+    expect(calls('open')).toEqual([{ op: 'open', conversationId: 3, url: 'https://itch.io' }])
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(calls('open')).toHaveLength(2)
   })
 
   it('updates the address, title and loading state from browser-live events', async () => {
-    render(<BrowserPanel visible />)
+    render(<BrowserPanel visible conversationId={3} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
     push(live({ loading: true }))
     const address = screen.getByLabelText(tr['bp.address']) as HTMLInputElement
     expect(address.value).toBe('https://itch.io/game-assets')
-    expect(address.readOnly).toBe(true)
+    expect(address.readOnly).toBe(false)
     expect(screen.getByText('Free assets')).toBeTruthy()
     expect(screen.getByText(tr['bp.loading'])).toBeTruthy()
     push(live({ loading: false, url: 'https://itch.io/next' }))
@@ -72,53 +99,95 @@ describe('BrowserPanel', () => {
     expect(screen.queryByText(tr['bp.loading'])).toBeNull()
   })
 
-  it('Stop invokes halt', async () => {
-    render(<BrowserPanel visible />)
+  it('ignores browser-live events of another chat', async () => {
+    render(<BrowserPanel visible conversationId={3} />)
+    await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
+    push(live({ conversationId: 9, url: 'https://other.example/' }))
+    expect(screen.queryByDisplayValue('https://other.example/')).toBeNull()
+    expect(screen.getByText(tr['bp.idle'])).toBeTruthy()
+    push(live())
+    push(live({ conversationId: 9, active: false }))
+    expect((screen.getByLabelText(tr['bp.address']) as HTMLInputElement).value).toBe('https://itch.io/game-assets')
+  })
+
+  it('Enter in the address bar sends navigate; Escape-free typing does not', async () => {
+    render(<BrowserPanel visible conversationId={3} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
     push(live())
+    const address = screen.getByLabelText(tr['bp.address']) as HTMLInputElement
+    fireEvent.focus(address)
+    fireEvent.change(address, { target: { value: 'https://example.com/a' } })
+    expect(calls('navigate')).toHaveLength(0)
+    fireEvent.keyDown(address, { key: 'Enter' })
+    expect(calls('navigate')).toEqual([{ op: 'navigate', conversationId: 3, url: 'https://example.com/a' }])
+  })
+
+  it('back, forward, reload, take-over and halt carry the chat id', async () => {
+    render(<BrowserPanel visible conversationId={3} />)
+    await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
+    push(live())
+    fireEvent.click(screen.getByRole('button', { name: tr['bp.back'] }))
+    fireEvent.click(screen.getByRole('button', { name: tr['bp.forward'] }))
+    fireEvent.click(screen.getByRole('button', { name: tr['bp.reload'] }))
+    fireEvent.click(screen.getByRole('button', { name: tr['bp.takeOver'] }))
     fireEvent.click(screen.getByRole('button', { name: new RegExp(tr['bp.stop']) }))
-    await waitFor(() => expect(calls('halt')).toHaveLength(1))
+    for (const op of ['back', 'forward', 'reload', 'take-over']) {
+      await waitFor(() => expect(calls(op)).toEqual([{ op, conversationId: 3 }]))
+    }
+    await waitFor(() => expect(calls('halt')).toEqual([{ op: 'halt', conversationId: 3 }]))
+  })
+
+  it('shows the user-control strip and Release sends release', async () => {
+    render(<BrowserPanel visible conversationId={3} />)
+    await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
+    push(live())
+    expect(screen.queryByText(tr['bp.userControl'])).toBeNull()
+    push(live({ userControl: true }))
+    expect(screen.getByText(tr['bp.userControl'])).toBeTruthy()
+    expect(screen.queryByRole('button', { name: tr['bp.takeOver'] })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: tr['bp.release'] }))
+    expect(calls('release')).toEqual([{ op: 'release', conversationId: 3 }])
   })
 
   it('sends visible:false while the tab is hidden and visible:true once shown and active', async () => {
-    const { rerender } = render(<BrowserPanel visible={false} />)
+    const { rerender } = render(<BrowserPanel visible={false} conversationId={3} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
     push(live())
     expect(calls('visible').every(c => c.visible === false)).toBe(true)
-    rerender(<BrowserPanel visible />)
-    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', visible: true }))
-    rerender(<BrowserPanel visible={false} />)
-    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', visible: false }))
+    rerender(<BrowserPanel visible conversationId={3} />)
+    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', conversationId: 3, visible: true }))
+    rerender(<BrowserPanel visible={false} conversationId={3} />)
+    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', conversationId: 3, visible: false }))
   })
 
   it('hides the native view while a dialog overlaps the placeholder', async () => {
-    render(<BrowserPanel visible />)
+    render(<BrowserPanel visible conversationId={3} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
     push(live())
-    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', visible: true }))
+    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', conversationId: 3, visible: true }))
     const dialog = document.createElement('div')
     dialog.setAttribute('role', 'dialog')
     dialog.dataset.overlay = '1'
     act(() => { document.body.appendChild(dialog) })
     act(() => { observers.forEach(cb => cb()) })
-    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', visible: false }))
+    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', conversationId: 3, visible: false }))
     act(() => { dialog.remove() })
     act(() => { observers.forEach(cb => cb()) })
-    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', visible: true }))
+    await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', conversationId: 3, visible: true }))
   })
 
-  it('sends set-bounds from the ResizeObserver', async () => {
-    render(<BrowserPanel visible />)
-    await waitFor(() => expect(calls('set-bounds').at(-1)?.bounds).toEqual({ x: 10, y: 20, width: 300, height: 200 }))
+  it('sends set-bounds with the chat id from the ResizeObserver', async () => {
+    render(<BrowserPanel visible conversationId={3} />)
+    await waitFor(() => expect(calls('set-bounds').at(-1)).toEqual({ op: 'set-bounds', conversationId: 3, bounds: { x: 10, y: 20, width: 300, height: 200 } }))
     rect = { left: 10, top: 20, width: 420, height: 260 }
     act(() => { observers.forEach(cb => cb()) })
     await waitFor(() => expect(calls('set-bounds').at(-1)?.bounds).toEqual({ x: 10, y: 20, width: 420, height: 260 }))
   })
 
   it('hides the view on unmount', async () => {
-    const { unmount } = render(<BrowserPanel visible />)
+    const { unmount } = render(<BrowserPanel visible conversationId={3} />)
     unmount()
-    expect(calls('visible').at(-1)).toEqual({ op: 'visible', visible: false })
+    expect(calls('visible').at(-1)).toEqual({ op: 'visible', conversationId: 3, visible: false })
   })
 })
 
@@ -139,5 +208,36 @@ describe('BrowserUsePage', () => {
     await waitFor(() => expect(saved).toHaveBeenCalled())
     expect(calls('enable')).toHaveLength(1)
     expect(screen.getByTestId('bp-master-state').textContent).toBe(tr['bp.set.masterOn'])
+  })
+
+  it('clears browsing data only after the confirm', async () => {
+    invoke.mockImplementation(async (_c: string, req: any) => (req.op === 'settings' ? { enabled: true } : { ok: true }))
+    render(<BrowserUsePage saved={vi.fn()} />)
+    const btn = await screen.findByTestId('bp-clear')
+    confirm.mockResolvedValueOnce(false)
+    fireEvent.click(btn)
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    expect(calls('clear-browsing-data')).toHaveLength(0)
+    confirm.mockResolvedValueOnce(true)
+    fireEvent.click(btn)
+    await waitFor(() => expect(calls('clear-browsing-data')).toEqual([{ op: 'clear-browsing-data' }]))
+    expect(screen.getByTestId('bp-privacy').textContent).toBe(tr['bp.set.privacy'])
+  })
+})
+
+describe('deleting a chat closes its browser tab', () => {
+  it('sends close for the chat once the delete succeeded', async () => {
+    vi.resetModules()
+    vi.doMock('axios', () => ({ default: { get: vi.fn(async () => ({ data: [] })), put: vi.fn(), post: vi.fn(), delete: vi.fn(async () => ({ data: { deleted_ids: [5] } })) } }))
+    const fresh = (await import('../renderer/components/ui/ConfirmDialog')).confirmDialog as unknown as ReturnType<typeof vi.fn>
+    fresh.mockResolvedValue(true)
+    const { renderHook } = await import('@testing-library/react')
+    const { useChat } = await import('../renderer/hooks/home/useChat')
+    const { result } = renderHook(() => useChat('http://127.0.0.1:8000', { id: 1, name: 't', sessionToken: 't' } as any,
+      { provider_type: 'subscription', model_name: 'claude-opus-5' } as any, '/ws', vi.fn(), vi.fn(), (s: string) => s))
+    invoke.mockClear()
+    await act(async () => { await result.current.deleteConversation({ stopPropagation() {} } as any, 5) })
+    expect(calls('close')).toEqual([{ op: 'close', conversationId: 5 }])
+    vi.doUnmock('axios')
   })
 })

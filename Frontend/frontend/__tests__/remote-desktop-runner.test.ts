@@ -57,6 +57,12 @@ describe('allow-list mirror', () => {
     }
     expect(remoteIpcAllowed('browser-live', [{ op: 'halt' }])).toBe(true)
     expect(remoteIpcAllowed('browser-live', [{ op: 'enable' }])).toBe(false)
+    for (const op of ['status', 'halt', 'answer-card']) {
+      expect(remoteIpcAllowed('browser-live', [{ op, conversationId: 3 }])).toBe(true)
+    }
+    for (const op of ['open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close', 'clear-browsing-data', 'set-bounds', 'visible']) {
+      expect(remoteIpcAllowed('browser-live', [{ op, conversationId: 3 }])).toBe(false)
+    }
     expect(remoteIpcAllowed('computer-use-live', [{ op: 'open-panel' }])).toBe(false)
     expect(remoteEventAllowed('terminal-data-t1')).toBe(true)
     expect(remoteEventAllowed('menu-open-terminal')).toBe(false)
