@@ -383,7 +383,6 @@ export default function Home() {
   const liveShown = shownSides(liveFeatures, live.running);
   const liveAny = liveShown.bilgisayar || liveShown.tarayici;
   const liveView = viewSide(live.side, liveShown);
-  const browserFull = useBrowserFull(ws.open && ws.tab === 'canli' && liveView === 'tarayici');
   // The Inspector and Canlı tabs exist only while their feature is on; the panel leaves them when they go.
   useEffect(() => {
     if ((ws.tab === 'sahne' && !editorOn) || (ws.tab === 'canli' && !liveAny)) setWsTab('dosyalar');
@@ -807,6 +806,7 @@ export default function Home() {
   const { closeGuide, dismiss: dismissGuide } = guide;
   // Opening or closing a project swaps the screen under the guide and its topic list.
   useEffect(() => { dismissGuide(); }, [guideScreenId, dismissGuide]);
+  const browserFull = useBrowserFull(ws.open && ws.tab === 'canli' && liveView === 'tarayici' && !ai.showSettings && !profileOpen && !guide.guideOpen);
   const sceneFrameVisible = !!fs.workspacePath && !backendError && !ai.showSettings;
   const sceneEditor = useSceneEditor({ api: API, token: auth.user?.sessionToken, editorOn,
     projectPath: fs.workspacePath ?? null,

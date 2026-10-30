@@ -671,6 +671,32 @@ const press = (wc: any, input: any) => {
 }
 const status = async (f: ReturnType<typeof fixture>, conversationId = 4) => (await f.host.invoke({ op: 'panel-status', conversationId })) as any
 
+describe('BrowserHost full-screen chord from the native page', () => {
+  const fullSends = (f: ReturnType<typeof fixture>) => f.win.webContents.send.mock.calls.filter(([c]: [string]) => c === 'browser-full-toggle')
+
+  it('claims Ctrl+Shift+F on Windows and tells the renderer once, but not Esc or other keys', async () => {
+    const f = fixture('win32')
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://mine.example/' })
+    const wc = f.views[0].webContents
+    const ev = press(wc, key('F', { control: true, shift: true }))
+    expect(ev.preventDefault).toHaveBeenCalledTimes(1)
+    expect(fullSends(f)).toHaveLength(1)
+    for (const input of [key('Escape'), key('f', { control: true }), key('f', { meta: true, shift: true }), key('F', { control: true, shift: true, alt: true }), key('F', { control: true, shift: true }, { isAutoRepeat: true }), { type: 'keyUp', key: 'F', control: true, shift: true }]) {
+      expect(press(wc, input).preventDefault).not.toHaveBeenCalled()
+    }
+    expect(fullSends(f)).toHaveLength(1)
+  })
+
+  it('uses Cmd+Shift+F on macOS', async () => {
+    const f = fixture('darwin')
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://mine.example/' })
+    const wc = f.views[0].webContents
+    expect(press(wc, key('F', { control: true, shift: true })).preventDefault).not.toHaveBeenCalled()
+    expect(press(wc, key('f', { meta: true, shift: true })).preventDefault).toHaveBeenCalledTimes(1)
+    expect(fullSends(f)).toHaveLength(1)
+  })
+})
+
 describe('BrowserHost agent tab and user tabs', () => {
   async function withUserTab() {
     const f = fixture('win32')

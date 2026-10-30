@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { ConfirmDialogHost, confirmDialog } from '../renderer/components/ui/ConfirmDialog'
 import { translations } from '../renderer/lib/i18n'
 import { BrowserPanel } from '../renderer/components/home/BrowserPanel'
 import { isBrowserFullShortcut, useBrowserFull } from '../renderer/lib/browserFull'
@@ -176,6 +177,89 @@ describe('browser full screen', () => {
     await screen.findByText(tr['bp.idle'])
     fireEvent.click(toggleBtn())
     expect(app().getAttribute('data-browser-full')).toBe('true')
+  })
+})
+
+describe('browser full screen keyboard rules', () => {
+  const full = () => app().getAttribute('data-browser-full') === 'true'
+  const enter = async () => {
+    await screen.findByRole('combobox')
+    fireEvent.click(toggleBtn())
+    expect(full()).toBe(true)
+  }
+
+  it('keeps full mode when Esc closes a real confirm dialog', async () => {
+    render(<Frame browserShown />)
+    await enter()
+    render(<ConfirmDialogHost />)
+    let answer: boolean | undefined
+    await act(async () => { void confirmDialog('delete?').then(v => { answer = v }) })
+    expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
+    await act(async () => { key({ key: 'Escape' }) })
+    expect(answer).toBe(false)
+    expect(full()).toBe(true)
+  })
+
+  it('keeps full mode when Esc closes a document-level popup with focus in the composer', async () => {
+    render(<Frame browserShown />)
+    await enter()
+    let open = true
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') open = false }
+    document.addEventListener('keydown', onKey)
+    fireEvent.keyDown(screen.getByLabelText('composer'), { key: 'Escape' })
+    document.removeEventListener('keydown', onKey)
+    expect(open).toBe(false)
+    expect(full()).toBe(true)
+  })
+
+  it('leaves on Esc with focus inside the browser panel or on the body', async () => {
+    render(<Frame browserShown />)
+    await enter()
+    fireEvent.keyDown(document.querySelector('.bp-view') as Element, { key: 'Escape' })
+    expect(full()).toBe(false)
+    fireEvent.click(toggleBtn())
+    expect(full()).toBe(true)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(full()).toBe(false)
+  })
+
+  it('ignores the chord while a modal dialog is open and on key auto-repeat', async () => {
+    render(<Frame browserShown />)
+    await screen.findByRole('combobox')
+    const modal = document.createElement('div')
+    modal.setAttribute('aria-modal', 'true')
+    document.body.appendChild(modal)
+    key({ key: 'F', ctrlKey: true, shiftKey: true })
+    expect(full()).toBe(false)
+    modal.remove()
+    for (let i = 0; i < 3; i++) key({ key: 'F', ctrlKey: true, shiftKey: true, repeat: i > 0 })
+    expect(full()).toBe(true)
+  })
+
+  it('toggles when main forwards the chord pressed inside the native page', async () => {
+    render(<Frame browserShown />)
+    await screen.findByRole('combobox')
+    act(() => { listeners.get('browser-full-toggle')?.(undefined) })
+    expect(full()).toBe(true)
+    act(() => { listeners.get('browser-full-toggle')?.(undefined) })
+    expect(full()).toBe(false)
+  })
+
+  it('is not shown while the settings, profile or guide screen is up', async () => {
+    function Screened({ screen }: { screen: boolean }) {
+      const bf = useBrowserFull(true && !screen)
+      return <div data-testid="s" data-full={bf.full ? 'y' : 'n'}><button onClick={bf.toggle}>t</button></div>
+    }
+    const { rerender } = render(<Screened screen={false} />)
+    fireEvent.click(screen.getByText('t'))
+    expect(screen.getByTestId('s').dataset.full).toBe('y')
+    rerender(<Screened screen />)
+    expect(screen.getByTestId('s').dataset.full).toBe('n')
+  })
+
+  it('home.tsx passes the screen rule into the hook', () => {
+    const src = readFileSync(join(__dirname, '../renderer/pages/home.tsx'), 'utf8')
+    expect(src).toMatch(/useBrowserFull\([^)]*!ai\.showSettings && !profileOpen && !guide\.guideOpen\)/)
   })
 })
 
