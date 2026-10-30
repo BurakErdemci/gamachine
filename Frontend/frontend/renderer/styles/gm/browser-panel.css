@@ -3,8 +3,8 @@
 
 .workspace[data-tab="tarayici"] .ws-pane[data-pane="tarayici"] { display: flex; }
 
-.bp-panel { display: flex; flex: 1; flex-direction: column; gap: 10px; padding: 14px 14px 16px; min-height: 100%; box-sizing: border-box; color: var(--ink); }
-.bp-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bp-panel { display: flex; flex: 1; flex-direction: column; gap: 6px; padding: 8px 8px 10px; min-height: 100%; box-sizing: border-box; color: var(--ink); }
+.bp-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 
 .bp-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); }
 .bp-panel[data-state="active"] .bp-dot { background: var(--toast-ok); }
@@ -12,7 +12,7 @@
 @keyframes bp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 .bp-address {
-  flex: 1; min-width: 0; height: 28px; padding: 0 10px; box-sizing: border-box;
+  flex: 1; min-width: 0; height: 26px; padding: 0 10px; box-sizing: border-box;
   font-family: var(--font-mono); font-size: 12px; color: var(--ink);
   background: var(--paper-sunk, var(--paper-bg-2)); border: var(--line-w, 1px) solid var(--paper-line);
   border-radius: var(--radius-md); text-overflow: ellipsis;
@@ -21,7 +21,7 @@
 
 .bp-stop {
   flex: none; display: inline-flex; align-items: center; gap: 6px;
-  height: 28px; padding: 0 10px;
+  height: 26px; padding: 0 8px;
   font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight, 600);
   text-transform: var(--label-case); letter-spacing: var(--label-track);
   color: var(--ink); background: transparent;
@@ -34,7 +34,7 @@
 .bp-stop-ic { width: 10px; height: 10px; fill: currentColor; }
 
 .bp-nav {
-  flex: none; width: 26px; height: 28px; padding: 0; line-height: 1; font-size: 16px;
+  flex: none; width: 24px; height: 26px; padding: 0; line-height: 1; font-size: 16px;
   color: var(--ink); background: transparent;
   border: var(--line-w, 1px) solid var(--paper-line); border-radius: var(--radius-md); cursor: pointer;
 }
@@ -42,7 +42,11 @@
 .bp-nav:focus-visible, .bp-open-go:focus-visible { outline: 2px solid var(--accent-text, var(--ink)); outline-offset: 1px; }
 .bp-nav:disabled { opacity: .5; cursor: default; }
 
-.bp-control-t { flex: none; max-width: 40%; font-size: 12px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-control-t {
+  flex: none; max-width: 45%; margin-right: 6px; padding: 1px 7px; font-size: 11px; font-weight: 600; line-height: 1.5;
+  color: var(--paper-bg, var(--toast-bg)); background: var(--accent-text, var(--ink)); border-radius: var(--radius-md);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .bp-stop-failed { margin: 0; font-size: 12px; color: var(--toast-err); }
 .bp-open-go {
   flex: none; height: 24px; padding: 0 10px; cursor: pointer;
@@ -54,21 +58,90 @@
 .bp-open-go:hover:not(:disabled) { background: var(--paper-sunk, var(--paper-bg-2)); }
 .bp-open-go:disabled { opacity: .5; cursor: default; }
 
-.bp-title { margin: 0; display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; min-width: 0; }
-.bp-title-t { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-loading { flex: none; font-size: 12px; color: var(--ink-dim); }
+.bp-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* One address field: dot, text, user-control badge and the suggestion list share a box. */
+.bp-omni {
+  position: relative; flex: 1; min-width: 0; display: flex; align-items: center; height: 26px; padding-left: 8px; box-sizing: border-box;
+  background: var(--paper-sunk, var(--paper-bg-2)); border: var(--line-w, 1px) solid var(--paper-line); border-radius: var(--radius-md);
+}
+.bp-omni:focus-within { outline: 2px solid var(--accent-text, var(--ink)); outline-offset: 1px; }
+.bp-omni .bp-address { height: 24px; border: 0; background: transparent; padding: 0 6px; outline: none; }
+.bp-omni[data-agent="true"] { border-color: var(--accent-text, var(--ink)); }
+
+.bp-suggest {
+  position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; right: 0; margin: 0; padding: 4px; list-style: none;
+  max-height: 232px; overflow-y: auto; scrollbar-gutter: stable; box-sizing: border-box;
+  background: var(--paper-bg, var(--toast-bg)); color: var(--ink);
+  border: var(--line-w, 1px) solid var(--paper-line-strong, var(--paper-line)); border-radius: var(--radius-md); box-shadow: var(--shadow-card);
+}
+.bp-suggest-row { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: var(--radius-md); font-size: 12.5px; cursor: pointer; }
+.bp-suggest-row:hover, .bp-suggest-row[data-active="true"] { background: var(--paper-sunk, var(--paper-bg-2)); }
+.bp-suggest-row[data-active="true"] { outline: 1px solid var(--accent-text, var(--ink)); outline-offset: -1px; }
+.bp-suggest-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-suggest-u { flex: none; max-width: 40%; font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Site icon: the page's own favicon, or its first letter. */
+.bp-ico { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; font-size: 11px; line-height: 1; color: var(--ink-dim); }
+.bp-ico img { display: block; width: 14px; height: 14px; object-fit: contain; }
+.bp-ico-ch { font-weight: 700; }
+.bp-ico-search { font-size: 14px; }
+
+/* Tab strip: one compact row; the scrollbar is hidden so a classic (fixed-width) Windows bar never eats its height. */
+.bp-tabs { position: relative; display: flex; align-items: stretch; gap: 2px; height: 28px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; }
+.bp-tabs::-webkit-scrollbar { display: none; }
+.bp-tab {
+  position: relative; flex: 0 1 168px; min-width: 76px; display: flex; align-items: center;
+  border: var(--line-w, 1px) solid transparent; border-bottom: 0; border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.bp-tab[data-active="true"] { background: var(--paper-sunk, var(--paper-bg-2)); border-color: var(--paper-line); }
+.bp-tab:hover:not([data-active="true"]) { background: var(--paper-sunk, var(--paper-bg-2)); }
+.bp-tab[data-agent="true"][data-active="true"] { border-top: 2px solid var(--accent-text, var(--ink)); }
+.bp-tab[data-loading="true"] .bp-ico { animation: bp-pulse 1.2s ease-in-out infinite; }
+.bp-tab-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 2px 0 8px;
+  font: inherit; font-size: 12px; color: var(--ink); background: transparent; border: 0; cursor: pointer; text-align: left;
+}
+.bp-tab[data-active="false"] .bp-tab-main { color: var(--ink-dim); }
+.bp-tab-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-tab-agent {
+  flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0 5px; height: 15px; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--paper-bg, var(--toast-bg)); background: var(--accent-text, var(--ink)); border-radius: 8px;
+}
+.bp-agent-ic { width: 9px; height: 9px; fill: currentColor; }
+.bp-tab-x, .bp-tab-new {
+  flex: none; width: 20px; height: 20px; padding: 0; margin: 0 3px; font-size: 14px; line-height: 1; color: var(--ink-dim);
+  background: transparent; border: 0; border-radius: var(--radius-md); cursor: pointer;
+}
+.bp-tab-new { align-self: center; width: 24px; height: 24px; font-size: 16px; }
+.bp-tab-x:hover, .bp-tab-new:hover { background: var(--paper-line); color: var(--ink); }
+.bp-tab-main:focus-visible, .bp-tab-x:focus-visible, .bp-tab-new:focus-visible, .bp-tile:focus-visible { outline: 2px solid var(--accent-text, var(--ink)); outline-offset: -2px; }
+
+/* "Önerilen": what an empty tab shows in place of the page. */
+.bp-grid-wrap { align-self: stretch; width: 100%; padding: 16px; box-sizing: border-box; overflow-y: auto; scrollbar-gutter: stable; }
+.bp-grid-title { margin: 0 0 10px; font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight, 600); text-transform: var(--label-case); letter-spacing: var(--label-track); color: var(--ink-dim); }
+.bp-grid-empty { margin: 0; font-size: 12.5px; color: var(--ink-faint); }
+.bp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.bp-tile {
+  width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 6px; box-sizing: border-box;
+  font: inherit; font-size: 12px; color: var(--ink); background: var(--paper-bg, transparent); cursor: pointer;
+  border: var(--line-w, 1px) solid var(--paper-line); border-radius: var(--radius-md);
+}
+.bp-tile:hover { border-color: var(--paper-line-strong, var(--ink-dim)); background: var(--paper-bg-2, transparent); }
+.bp-tile .bp-ico { width: 28px; height: 28px; font-size: 15px; background: var(--paper-sunk, var(--paper-bg-2)); border-radius: var(--radius-md); }
+.bp-tile .bp-ico img { width: 18px; height: 18px; }
+.bp-tile-t { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The placeholder: the native view is laid exactly over this box. */
 .bp-view {
   position: relative; flex: 1; min-height: 240px;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
   background: var(--paper-sunk, var(--paper-bg-2)); border: var(--line-w, 1px) solid var(--paper-line-strong, var(--paper-line));
   border-radius: var(--radius-md); box-shadow: var(--shadow-card); overflow: hidden;
 }
 .bp-idle { padding: 16px; text-align: center; }
 .bp-open { display: flex; gap: 8px; margin-top: 12px; min-width: 220px; }
 .bp-idle-title { margin: 0; font-weight: 600; font-size: 13.5px; color: var(--ink-dim); }
-.bp-note { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--ink-faint); }
 
 [data-theme="arena"] .bp-view { clip-path: var(--clip-md); border-radius: 0; }
 [data-theme="sade"] .bp-view { border-radius: 10px; }

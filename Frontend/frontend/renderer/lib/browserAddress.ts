@@ -14,6 +14,11 @@ export function addressToUrl(input: string): string | null {
   return SEARCH_URL + encodeURIComponent(text);
 }
 
+/** True for the search address `addressToUrl` makes of plain words. */
+export function isSearchUrl(url: string): boolean {
+  return url.startsWith(SEARCH_URL);
+}
+
 /** The short form shown while the bar is not being edited: the site name, without "www.". */
 export function displayAddress(url: string): string {
   try {

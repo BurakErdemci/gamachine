@@ -18,6 +18,7 @@ const ALLOW = new Set([
   'computer-use-live', 'browser-live',
 ]);
 const OPS: Record<string, Set<string>> = {
+  // `status` answers with the agent's page only; the panel's `panel-status` (every tab) is not on this list.
   'browser-live': new Set(['status', 'halt', 'answer-card']),
   'computer-use-live': new Set(['status', 'halt', 'halted']),
 };
