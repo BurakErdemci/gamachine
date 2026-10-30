@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useLang } from '../../lib/i18n';
+import { isRemotePage } from '../../lib/remote/transport';
 
 export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'failed';
 
@@ -127,6 +128,97 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
 export const CheckIcon = () => (
   <svg className="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8" /></svg>
 );
+
+/** How long Approve is held on a risky card on the paired browser (relay/public/app.js HOLD_MS). */
+export const HOLD_MS = 1200;
+
+const HOLD_STYLE: React.CSSProperties = {
+  position: 'relative', overflow: 'hidden', touchAction: 'none', userSelect: 'none', WebkitUserSelect: 'none',
+};
+
+/**
+ * Approve on a risky card. On the desktop a click. On the paired browser (/app, docs K4) it
+ * fires only after HOLD_MS held (pointer, or Enter/Space), like the v1 phone page's holdButton;
+ * releasing, leaving or cancelling early abandons the hold and a plain click does nothing.
+ */
+export const RiskyApproveButton: React.FC<{ testId: string; label: string; onApprove: () => void }> = ({
+  testId, label, onApprove,
+}) => {
+  const { t } = useLang();
+  const hold = isRemotePage();
+  const [holding, setHolding] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const approve = useRef(onApprove);
+  approve.current = onApprove;
+  const cancel = () => {
+    if (timer.current === null) return;
+    clearTimeout(timer.current);
+    timer.current = null;
+    setHolding(false);
+  };
+  const begin = () => {
+    if (timer.current !== null) return;
+    setHolding(true);
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      setHolding(false);
+      approve.current();
+    }, HOLD_MS);
+  };
+  useEffect(() => () => {
+    if (timer.current !== null) clearTimeout(timer.current);
+  }, []);
+  // The page losing focus or going to the background ends the press for the user, but the
+  // pointerup may never reach us: a risky hold must not complete unseen.
+  useEffect(() => {
+    if (!holding) return undefined;
+    const abandon = () => { if (document.visibilityState === 'hidden') cancel(); };
+    window.addEventListener('blur', cancel);
+    document.addEventListener('visibilitychange', abandon);
+    return () => {
+      window.removeEventListener('blur', cancel);
+      document.removeEventListener('visibilitychange', abandon);
+    };
+  }, [holding]);
+
+  if (!hold) {
+    return (
+      <button type="button" className="btn btn-primary" data-testid={testId} onClick={onApprove}>
+        <CheckIcon /><span>{label}</span>
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="btn btn-primary"
+      data-testid={testId}
+      data-hold={holding ? 'holding' : 'idle'}
+      style={HOLD_STYLE}
+      onPointerDown={(e) => { if (e.button === 0) begin(); }}
+      onPointerUp={cancel}
+      onPointerLeave={cancel}
+      onPointerCancel={cancel}
+      onBlur={cancel}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        if (!e.repeat) begin();
+      }}
+      onKeyUp={(e) => { if (e.key === 'Enter' || e.key === ' ') cancel(); }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          position: 'absolute', inset: 0, width: holding ? '100%' : 0, pointerEvents: 'none',
+          background: 'rgba(255, 255, 255, .35)', transition: holding ? `width ${HOLD_MS}ms linear` : 'none',
+        }}
+      />
+      <CheckIcon /><span>{t('card.holdApprove')}</span>
+    </button>
+  );
+};
 
 /**
  * A card's own warning line, drawn where the risk line goes (`.approval-why`). `secondary` is the

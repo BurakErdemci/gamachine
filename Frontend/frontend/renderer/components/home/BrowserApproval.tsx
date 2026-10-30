@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
-import { ApprovalCard, CheckIcon } from './ApprovalCard';
+import { ApprovalCard, RiskyApproveButton } from './ApprovalCard';
 
 /** The structured params of a browser_* card (backend browser branch of `/mcp-approval-request`). */
 export interface BrowserCardInfo {
@@ -89,9 +89,7 @@ export const BrowserApproval: React.FC<BrowserApprovalProps> = ({ info, onAnswer
         phoneHint={phonePaired}
         actions={(
           <>
-            <button type="button" className="btn btn-primary" data-testid="bp-card-approve" onClick={() => onAnswer(true)}>
-              <CheckIcon /><span>{t('cu.card.approve')}</span>
-            </button>
+            <RiskyApproveButton testId="bp-card-approve" label={t('cu.card.approve')} onApprove={() => onAnswer(true)} />
             <button type="button" className="btn btn-ghost" data-testid="bp-card-reject" onClick={() => onAnswer(false)}>
               {t('cu.card.reject')}
             </button>

@@ -9,12 +9,14 @@ renderer (it holds `window.ipc`): the backend publishes a `remote_ipc` frame on
 `/wake-stream-all` and the renderer posts the answer to
 `/remote/ui-ipc-result/{request_id}`. A card answer (`/mcp-approval-respond`)
 never runs the HTTP route: it is the v1 remote answer, recorded as the device's.
+The other card routes run with REMOTE_DEVICE set, so they record the device too.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
 import binascii
+import contextvars
 import json
 import logging
 import re
@@ -49,6 +51,19 @@ REPLY_ROOM = FRAME_PLAINTEXT_MAX - 4096
 # Set on every dispatched request; /wake-stream-all reads it so a browser's
 # copy of the stream does not count as a desktop renderer.
 REMOTE_HEADER = b"x-gamachine-remote"
+# The paired device a dispatched request runs for; set only inside the request's
+# own task, so no HTTP client can claim it. Card routes record it as the answerer.
+REMOTE_DEVICE: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("remote_device", default=None)
+
+# Registered by create_conversation_router: sweeps stale cards like the desktop
+# card route and returns its gate_expired body for an already-expired gate.
+_card_sweeper = None
+
+
+def set_card_sweeper(fn) -> None:
+    global _card_sweeper
+    _card_sweeper = fn
+
 
 _ID = r"[^/]+"
 
@@ -59,7 +74,6 @@ _ALLOW: List[Tuple[Tuple[str, ...], str]] = [
     (("POST",), r"/chat-stream"),
     (("POST",), rf"/chat-stop/{_ID}"),
     (("POST",), rf"/conversations/{_ID}/side-stream"),
-    (("GET",), rf"/conversations/{_ID}/wake-stream"),
     (("GET",), r"/wake-stream-all"),
     (("GET",), rf"/conversations/{_ID}/turn-events"),
     (("POST",), rf"/conversations/{_ID}/compact"),
@@ -152,6 +166,7 @@ IPC_OPS = {
 IPC_EVENTS = frozenset({"browser-live", "computer-use-live", "open-conversation"})
 _IPC_EVENT_PREFIX = re.compile(r"(terminal-data|terminal-exit)-[A-Za-z0-9_-]{1,64}")
 
+_GATE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _UPLOAD_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _STREAM_ID = re.compile(r"[0-9a-f]{16}")
 IPC_REQUEST_ID = re.compile(r"[0-9a-f]{16}")
@@ -241,6 +256,15 @@ def desktop_renderer_ready() -> bool:
     return any(q not in _remote_listeners for q in list(desktop_channel.CHANNEL._queues))
 
 
+def _start_call(session: PhoneSession, app, scope: dict, body: bytes) -> "_AsgiCall":
+    # The request's task copies the context as it is created.
+    token = REMOTE_DEVICE.set(session.device_label)
+    try:
+        return _AsgiCall(app, scope, body)
+    finally:
+        REMOTE_DEVICE.reset(token)
+
+
 def _too_big(obj: Any) -> bool:
     return len(C.compact_json(obj).encode("utf-8")) > REPLY_ROOM
 
@@ -254,6 +278,8 @@ class _AsgiCall:
         self._q: asyncio.Queue = asyncio.Queue(maxsize=64)
         self._gone = asyncio.Event()
         self._body: Optional[bytes] = body
+        # The app raised: a body that stopped there is cut short, not complete.
+        self.failed = False
         self.task = asyncio.get_running_loop().create_task(self._run(app, scope))
 
     async def _run(self, app, scope):
@@ -271,15 +297,18 @@ class _AsgiCall:
             await app(scope, receive, send)
         except Exception:
             logger.exception("[remote] ui request %s %s failed", scope["method"], scope["path"])
+            self.failed = True
         finally:
-            try:
-                self._q.put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            # Awaited: a full queue must not lose the terminator. A closed call
+            # has no reader left, so waiting there would never end.
+            if not self._gone.is_set():
+                await self._q.put(None)
 
     async def start(self) -> Tuple[int, str]:
         """Status and content type, once the app has started its response."""
         msg = await self._q.get()
+        if msg is None and self.failed:
+            raise rpc.RpcError("upstream_failed")
         if msg is None or msg.get("type") != "http.response.start":
             return 500, "text/plain"
         ctype = ""
@@ -292,6 +321,8 @@ class _AsgiCall:
         while True:
             msg = await self._q.get()
             if msg is None:
+                if self.failed:
+                    raise rpc.RpcError("upstream_failed")
                 return
             if msg.get("type") == "http.response.body":
                 if msg.get("body"):
@@ -470,7 +501,7 @@ class UiDispatcher:
         card = _CARD_ANSWER.fullmatch(scope["path"]) if scope["method"] == "POST" else None
         if card is not None:
             return self._answer_card(session, card.group(1), body)
-        call = _AsgiCall(app, scope, body)
+        call = _start_call(session, app, scope, body)
         try:
             status, ctype, data = await asyncio.wait_for(self._read_reply(call), HTTP_TIMEOUT_S)
         except asyncio.TimeoutError:
@@ -517,14 +548,23 @@ class UiDispatcher:
         if not isinstance(payload, dict):
             return {"status": 422, "content_type": "application/json", "body": json.dumps({"detail": "bad_body"})}
         # Only `true` approves, as in the route: a broken answer is a rejection.
-        decision = "approve" if payload.get("approved") is True else "reject"
+        res = self._card_reply(session, card_id, payload.get("approved") is True)
+        return {"status": 200, "content_type": "application/json", "body": json.dumps(res)}
+
+    @staticmethod
+    def _card_reply(session: PhoneSession, card_id: str, approved: bool) -> dict:
+        decision = "approve" if approved else "reject"
+        if _card_sweeper is not None:
+            expired = _card_sweeper(card_id, session.device_label)
+            if expired is not None:
+                return expired
         card = cards.get(card_id)
         res = rpc.answer_card_as(session.device_label, card, decision) if card is not None else {"status": "not_found"}
         if res.get("status") == "ok":
             res = {"status": "ok"}
         elif res.get("status") == "not_found":
             res = {"status": "gate_not_found"}
-        return {"status": 200, "content_type": "application/json", "body": json.dumps(res)}
+        return res
 
     async def stream_open(self, session: PhoneSession, req: dict, rid):
         app = self._asgi_app()
@@ -537,7 +577,7 @@ class UiDispatcher:
         stream_id = secrets.token_hex(8)
         me = asyncio.current_task()
         state.streams[stream_id] = me
-        call = _AsgiCall(app, scope, body)
+        call = _start_call(session, app, scope, body)
         sse = _SseFilter() if scope["path"] == "/wake-stream-all" else None
         error = None
         try:
@@ -559,6 +599,8 @@ class UiDispatcher:
                                                    "data_b64": base64.b64encode(piece).decode("ascii")}):
                             return rpc._REPLIED
                         seq += 1
+            except rpc.RpcError as exc:
+                error = exc.error
             except Exception:
                 logger.exception("[remote] ui stream %s failed", scope["path"])
                 error = "internal"
@@ -638,6 +680,13 @@ class UiDispatcher:
             logger.info("[remote] ui_ipc %s %s refused", session.device_label, channel[:64])
             raise rpc.RpcError("remote_unavailable")
         logger.info("[remote] ui_ipc %s %s", session.device_label, channel)
+        if channel == "browser-live" and args[0].get("op") == "answer-card":
+            # Not relayed to the desktop's main process: answered here so the
+            # card and ledger record the device, with main's validation and reply.
+            gate_id, approved = args[0].get("gateId"), args[0].get("approved")
+            if not isinstance(gate_id, str) or not _GATE_ID.fullmatch(gate_id) or not isinstance(approved, bool):
+                return {"error": "Unknown operation or malformed browser-live arguments."}
+            return self._card_reply(session, gate_id, approved)
         if not desktop_renderer_ready():
             raise rpc.RpcError("desktop_not_ready")
         if req.get("upload_id") is not None:

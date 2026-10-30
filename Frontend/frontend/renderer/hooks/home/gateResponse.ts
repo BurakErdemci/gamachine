@@ -333,7 +333,9 @@ export async function postMcpDecision(
  * main process holds, so it goes through the `computer-use` channel with
  * `remember` ("Always"). Outside Electron there is no secret to send: the plain
  * MCP answer is posted with `approved` only (the backend refuses an approval
- * without the secret and that refusal is shown; a rejection still lands).
+ * without the secret and that refusal is shown; a rejection still lands). The
+ * paired browser posts it the same way: the desktop answers it as that
+ * device's, and the `computer-use` channel is refused over the remote link.
  */
 export async function postComputerDecision(
   apiBase: string,

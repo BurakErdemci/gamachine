@@ -2,6 +2,14 @@
 // Everything the renderer asks of the desktop goes through one RemoteTransport over the v1
 // encrypted Link (relay/public/net.js). The Link is passed in, so tests drive a fake one.
 
+/** Served over https from a non-app origin: the relay's /app/ export. The desktop loads the
+ *  renderer from app:// or http://localhost. Unlike `isRemoteMode` this stays true once the
+ *  remote `window.ipc` shim is installed, so components can ask it at render time. */
+export function isRemotePage(win: any = typeof window === 'undefined' ? undefined : window): boolean {
+  const loc = win?.location
+  return loc?.protocol === 'https:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1'
+}
+
 /** The part of relay/public/net.js `Link` the transport uses. */
 export interface RemoteLink {
   /** Resolves with `{id, ok, result}` or `{id, ok: false, error}`; rejects on transport failure. */

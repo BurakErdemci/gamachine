@@ -249,6 +249,13 @@ class Dispatcher:
         else:
             target = decision
         # On the event loop thread: resolvers set asyncio events.
+        # Same sweep as the web path: an expired card must not be approved.
+        sweeper = ui_dispatch._card_sweeper
+        late = sweeper(card_id, session.device_label) if sweeper is not None else None
+        if late is not None:
+            if late.get("status") == "already_answered":
+                raise RpcError("already_answered", by=late.get("by"), at=late.get("at"))
+            raise RpcError("gate_expired", detail=late.get("error"))
         res = answer_card_as(session.device_label, card, target, choice)
         status = res.get("status")
         if status == "ok":

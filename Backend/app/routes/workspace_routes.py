@@ -3,19 +3,44 @@ import os
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 
-from auth_utils import require_user
+from auth_utils import get_current_user, require_user
 from schemas import WorkspaceRequest
 
 logger = logging.getLogger(__name__)
 
+# The most rows get_recent_workspaces returns: a paired device picks from the
+# saved list it is shown, never a new root.
+_SAVED_LOOKUP_LIMIT = 50
+
+
+# Set by create_workspace_router: routes that have no db of their own (the
+# Unity toggle) read the saved list through it.
+_db = None
+
+
+def require_saved_workspace_when_remote(path, token) -> None:
+    """A paired device may only act on a workspace root the user already saved;
+    authorising a new one stays desktop-only (docs/remote-control-web.md). Remote
+    is decided by the dispatcher's REMOTE_DEVICE, which no HTTP client can set.
+    Paths compare as save_workspace does."""
+    from remote import ui_dispatch
+    if ui_dispatch.REMOTE_DEVICE.get() is None:
+        return
+    user_id, _ = get_current_user(_db, token)
+    if _db is None or not any(w["path"] == path for w in _db.get_recent_workspaces(user_id, _SAVED_LOOKUP_LIMIT)):
+        raise HTTPException(status_code=403, detail="remote_forbidden")
+
 
 def create_workspace_router(db):
+    global _db
+    _db = db
     router = APIRouter()
 
     @router.post("/save-workspace")
     async def save_workspace(req: WorkspaceRequest, background_tasks: BackgroundTasks,
                              x_session_token: str = Header(alias="X-Session-Token")):
         user_id, _ = require_user(db, x_session_token, req.user_id)
+        require_saved_workspace_when_remote(req.path, x_session_token)
         previous_workspace = None
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         # One switch at a time: the persisted workspace order must equal the MCP switch order.
