@@ -2092,8 +2092,9 @@ Max 300 kelime. Türkçe yaz.
             # DB and are re-armed once this turn is over.
             wake_queue.drain(request.conversation_id)
             wake_queue.reset_chain(request.conversation_id)
-            # The user's next message ends a computer-use Stop.
-            _computer_halted.discard(request.conversation_id)
+            # The user's next message ends a computer-use Stop; a wake that lost its ticket is not one.
+            if request.origin != "wake":
+                _computer_halted.discard(request.conversation_id)
             db.add_message(request.conversation_id, "user", request.message)
             turn_message = _with_mentions(request.conversation_id, user_id, request.message)
 
@@ -2384,7 +2385,19 @@ Max 300 kelime. Türkçe yaz.
     async def stop_chat(conversation_id: int) -> dict:
         """The desktop Stop, shared with the phone's `stop` (remote bridge)."""
         turn_events.note_stop(conversation_id)
-        _computer_halted.add(conversation_id)
+        # A side chat, a deleted chat or an id that never existed gets no user message to lift a halt,
+        # and one stale id would halt every unowned computer-use batch; only an ordinary chat is halted.
+        # A failed lookup is unknown: the card rule below keeps its old fallback, the halt is not added.
+        lookup_failed = False
+        try:
+            ordinary = (db.get_conversation_owner(conversation_id) is not None
+                        and _side_main_of(conversation_id) is None)
+        except Exception:
+            lookup_failed = True
+            ordinary = True
+            logger.warning("[chat-stop] chat lookup failed for %s", conversation_id)
+        if ordinary and not lookup_failed:
+            _computer_halted.add(conversation_id)
         _stop_browser_for_chat(conversation_id)
         # A stopped mail wake turn's text is not its answer: nothing is forwarded.
         _owed = _reply_owed.get(conversation_id)
@@ -2413,14 +2426,6 @@ Max 300 kelime. Türkçe yaz.
             # hit the main chat's. A chat with no row (a swept side chat, a
             # deleted one) had its own cards purged already: its Stop must
             # not reach anyone's unowned cards either (Codex sideaudit).
-            try:
-                ordinary = (db.get_conversation_owner(conversation_id) is not None
-                            and _side_main_of(conversation_id) is None)
-            except Exception:
-                # Unknown: keep the Stop rule that held before side chats,
-                # or an ordinary chat's own pending card outlives its Stop.
-                logger.warning("[chat-stop] chat lookup failed for %s", conversation_id)
-                ordinary = True
             if ordinary and _abort_pending_mcp_approvals(conversation_id):
                 stopped = True
             return {"status": "ok" if stopped else "no_session"}

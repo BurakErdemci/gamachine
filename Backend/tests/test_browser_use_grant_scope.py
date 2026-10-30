@@ -1,7 +1,7 @@
 """Agent-browser grant scope: one approval covers one element, one page visit and one moment."""
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -577,3 +577,57 @@ def test_a_new_click_after_the_chats_stop_is_refused_until_the_next_message(live
     assert 1 in browser_store(live.router, "_computer_halted")
     reply = command(live, ref="7")
     assert reply["ok"] is False and "click" not in live.host.ops()
+
+
+def halted_ids(env):
+    return env.client.get("/computer-use/settings").json()["halted"]
+
+
+def test_a_stop_for_a_side_chat_or_a_missing_chat_halts_nothing(live):
+    live.db.get_side_of.side_effect = lambda cid: 1 if cid == 50 else None
+    live.db.get_conversation_owner.side_effect = lambda cid: None if cid == 99 else 1
+    for cid in (50, 99):
+        assert live.client.post(f"/chat-stop/{cid}").status_code == 200
+    assert halted_ids(live) == []
+    computer_settings.set_enabled(live.db, True)
+    batch = live.client.post("/computer-use/batch-step", json={"params": {}}).json()
+    assert batch["stop"] is None
+
+
+def test_a_stop_whose_chat_lookup_fails_adds_no_halt(live):
+    live.db.get_conversation_owner.side_effect = RuntimeError("db locked")
+    assert live.client.post("/chat-stop/1").status_code == 200
+    assert halted_ids(live) == []
+
+
+def test_a_call_queued_before_a_stop_is_refused_after_the_next_message_cleared_the_halt(waiting):
+    routes = endpoints(waiting)
+
+    async def main():
+        other = asyncio.ensure_future(routes["browser_command"](
+            {"tool": "browser_click", "args": {"snapshot_id": "s1", "ref": "9"}, "conversation_id": 2},
+            x_session_token=""))
+        gate_id = await first_open_card()
+        queued = asyncio.ensure_future(routes["browser_command"](
+            {"tool": "browser_click", "args": {"snapshot_id": "s1", "ref": "7"}, "conversation_id": 1},
+            x_session_token=""))
+        await asyncio.sleep(0.05)
+        await waiting.router.stop_chat(1)
+        browser_store(waiting.router, "_computer_halted").discard(1)
+        await desktop_approve(gate_id, routes)
+        await other
+        return await queued
+
+    reply = asyncio.run(main())
+    assert reply["ok"] is False and reply["error"] == gateway.HALTED
+    assert all(not (cmd[0] == "click" and cmd[1] == 1) for cmd in waiting.host.cmds)
+
+
+def test_a_wake_request_with_an_expired_ticket_leaves_the_halt(live):
+    asyncio.run(live.router.stop_chat(1))
+    live.db.add_message.side_effect = RuntimeError("stop here")
+    with patch("routes.conversation_routes._check_chat_rate_limit"):
+        live.client.post("/chat-stream", json={"conversation_id": 1, "message": "hi", "user_id": 1,
+                                               "origin": "wake"}, headers={"X-Session-Token": ""})
+    assert live.db.add_message.called
+    assert halted_ids(live) == [1]
