@@ -74,7 +74,7 @@ function describeStep(step: unknown): string {
 const BROWSER_STEP: Record<string, string> = {
   navigate: 'Sayfayı açtı', snapshot: 'Sayfayı okudu', click: 'Tıkladı', fill: 'Yazdı', select: 'Seçti',
   press: 'Tuşa bastı', scroll: 'Kaydırdı', back: 'Geri gitti', forward: 'İleri gitti', reload: 'Yeniledi',
-  screenshot: 'Ekran görüntüsü aldı',
+  screenshot: 'Ekran görüntüsü aldı', tabs: 'Sekmeleri listeledi', use_tab: 'Başka bir sekmeye geçti',
 };
 
 /** A short Turkish label for a browser_* tool step, or null for any other tool. */

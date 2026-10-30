@@ -104,6 +104,68 @@ def test_only_the_documented_args_reach_the_host():
     assert fake.cmds[-1][2] == {"direction": "down", "amount": 2}
 
 
+TABS = [{"id": 1, "title": "GitHub", "url": "https://github.com/", "active": True, "agent": True, "userTouched": False},
+        {"id": 2, "title": "Epic", "url": "https://epic.example/", "active": False, "agent": False, "userTouched": False}]
+
+
+def tab_gateway(fake, dropped, reply):
+    async def host(runtime, op, conversation_id, args):
+        fake.cmds.append((op, conversation_id, args))
+        return reply(op)
+    return BrowserGateway(host, fake.open_card, fake.wait_card, dropped.append)
+
+
+def test_tabs_is_read_only_needs_no_card_and_forwards_no_args():
+    fake = Fake()
+    dropped = []
+    handler = tab_gateway(fake, dropped, lambda op: {"ok": True, "url": PAGE, "title": "t", "tabs": TABS})
+    reply = asyncio.run(handler.call(3, "tabs", {"tab_id": 9}, lambda: fake.state))
+    assert reply["ok"] is True and json.loads(reply["text"])["tabs"] == TABS
+    assert fake.cmds == [("tabs", 3, {})] and fake.cards == [] and dropped == []
+
+
+@pytest.mark.parametrize("args", [{}, {"tab_id": "2"}, {"tab_id": True}, {"tab_id": 0}, {"tab_id": -1}, {"tab_id": 1.5}])
+def test_use_tab_needs_a_positive_integer_id(args):
+    fake = Fake()
+    reply = run(fake, "use_tab", args)
+    assert reply["ok"] is False and "Invalid arguments" in reply["error"] and fake.cmds == []
+
+
+def test_use_tab_needs_no_card_forwards_only_the_id_and_drops_grants_even_on_the_same_url():
+    fake = Fake()
+    dropped = []
+    handler = tab_gateway(fake, dropped, lambda op: {"ok": True, "url": PAGE, "title": "t"})
+    asyncio.run(handler.call(3, "snapshot", {}, lambda: fake.state))
+    assert dropped == []
+    reply = asyncio.run(handler.call(3, "use_tab", {"tab_id": 2, "x": 1}, lambda: fake.state))
+    assert reply["ok"] is True
+    assert fake.cmds[-1] == ("use_tab", 3, {"tab_id": 2}) and fake.cards == []
+    assert dropped == [3]
+
+
+def test_use_tab_to_another_url_drops_grants_once_and_the_new_url_is_the_baseline():
+    fake = Fake()
+    dropped = []
+    urls = iter(["https://github.com/", "https://epic.example/", "https://epic.example/"])
+    handler = tab_gateway(fake, dropped, lambda op: {"ok": True, "url": next(urls), "title": "t"})
+    for op, args in (("snapshot", {}), ("use_tab", {"tab_id": 2}), ("snapshot", {})):
+        asyncio.run(handler.call(3, op, args, lambda: fake.state))
+    assert dropped == [3]
+
+
+def test_a_refused_use_tab_drops_nothing_and_user_control_gives_the_wait_text():
+    fake = Fake()
+    dropped = []
+    replies = {"use_tab": {"ok": False, "error": "user_control", "url": "https://other.example/", "title": ""}}
+    handler = tab_gateway(fake, dropped, lambda op: replies.get(op, {"ok": True, "url": PAGE, "title": "t"}))
+    asyncio.run(handler.call(3, "snapshot", {}, lambda: fake.state))
+    reply = asyncio.run(handler.call(3, "use_tab", {"tab_id": 2}, lambda: fake.state))
+    assert reply == {"ok": False, "error": gateway.USER_CONTROL} and dropped == []
+    replies["use_tab"] = {"ok": False, "error": "no_tab", "url": PAGE, "title": "t"}
+    refused = asyncio.run(handler.call(3, "use_tab", {"tab_id": 9}, lambda: fake.state))
+    assert refused["ok"] is False and dropped == []
+
+
 @pytest.mark.parametrize("op", ["describe", "halt", "eval", "", "cmd"])
 def test_unknown_ops_never_reach_the_host(op):
     fake = Fake()

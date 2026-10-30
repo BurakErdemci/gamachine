@@ -91,6 +91,27 @@ the **agent tab**, and it is the only page the agent can reach.
   gets the selected one) and clears user control. While the agent runs, switching or opening tabs
   does not move it, and user input on the agent tab still sets user control. The one exception
   that keeps the current agent tab: a command is running on it.
+- **The agent can list and switch tabs (30 Oct 2026).** `browser_tabs` and `browser_use_tab` (host ops
+  `tabs` and `use_tab`) let a request like "look at my Epic library" land on the open Epic tab.
+  - R1: the agent may list only its own chat's tabs (id, title, url, `active` = in front, `agent`,
+    `userTouched`); another chat's tabs never appear and its ids resolve to `no_tab`. Only the agent
+    tab shows its full url; every other tab shows just its origin (scheme://host[:port]) and title,
+    since a user tab's path or query can carry secrets. A switched-to tab's full page is read through
+    the normal snapshot.
+  - R2: `use_tab {tab_id}` makes one of the chat's tabs the single agent tab and the old agent tab a
+    user tab, as `release` does. The tab is not selected or shown: the user's view does not change.
+    Using the agent tab itself succeeds without change; an unknown, other-chat or closed id is `no_tab`;
+    a command still running on the agent tab gives `busy`. `tabs` and `use_tab` also work while the
+    user holds the agent tab (the agent may move away from it); only a user-touched target is refused.
+  - R3: a tab the user pressed a key or mouse button in (not the host's own `press` echo) since the
+    chat's last `release` is `userTouched`; switching to it is refused as `user_control`, which the
+    gateway turns into the usual wait text. Every `release` clears the marks.
+  - R4: without a switch the agent works in the tab selected when the user sent the message.
+  - R5: for the gateway a successful `use_tab` is a page change like a navigation: the chat's grants
+    and open cards are dropped and the new URL becomes the baseline, even at the same URL, so an
+    approval given on one tab never carries to another. `tabs` is read-only and needs no card;
+    `use_tab` needs none either. Snapshot ids come from the tab they were taken in, so the agent
+    takes a new snapshot after switching.
 - **Same filters everywhere.** Navigation, redirect and frame checks, the request gate, the
   connected-IP check and `navigationAllowed` (open, navigate, reopen, link-in-new-tab) apply to
   every tab. `clear-browsing-data` closes every tab of every chat, empties the reopen stacks and
@@ -225,6 +246,8 @@ at a time per tab (one queue per chat's tab; a second caller for that tab waits)
 | `screenshot` | `{}` | `image` (PNG base64, max 1280 px wide) |
 | `describe` | `{snapshot_id, ref}` | `element`: `{role, name, tag, type?, href?, download?: bool, submits_form?: bool, form_method?: 'get'\|'post'\|'dialog', form_action?, form_has_password?: bool, is_password?: bool}` |
 | `halt` | `{}` | — (stops loading, clears pending input) |
+| `tabs` | `{}` | `tabs`: `[{id, title, url, active, agent, userTouched}]` of the chat's own tabs (`url` is an origin unless `agent`); top-level `url`/`title` are the agent tab's |
+| `use_tab` | `{tab_id}` | — (`url`/`title` are the new agent tab's; errors `bad_args`, `no_tab`, `user_control`, `busy`) |
 
 Refs are only valid for the `snapshot_id` they came from; a stale id returns
 `{ok:false, error:'stale_snapshot'}`. Element refs are assigned by a script injected
