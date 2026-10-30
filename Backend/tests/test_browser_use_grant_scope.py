@@ -257,20 +257,61 @@ def test_identical_enter_retry_after_a_reload_opens_a_new_card(live):
     assert live.host.ops().count("press") == 0
 
 
-def test_another_chats_reload_closes_this_chats_open_card(live):
-    # One browser view is shared by every chat, so chat 1's reload changes chat 2's page too.
+def test_another_chats_reload_leaves_this_chats_open_card(live):
+    # Every chat has its own tab: chat 1's reload changes only chat 1's page.
     other = live.client.post("/browser/command", json={
         "tool": "browser_press", "args": {"key": "Enter"}, "conversation_id": 2}).json()
     assert other["needs_approval"] is True
     gate_id = open_card()
     assert command(live, "reload")["ok"] is True
-    assert not cards.is_open(gate_id)
-    assert not browser_store(live.router, "_browser_gate_keys")
+    assert cards.is_open(gate_id)
+    assert len(browser_store(live.router, "_browser_gate_keys")) == 1
 
 
-# Rule A: one shared page; any page change closes every chat's cards and grants.
+def test_two_chats_navigate_independently_without_touching_each_others_grants(live):
+    approve(live, cid=1)
+    approve(live, cid=2)
+    assert {key[0] for key in grants_of(live)} == {1, 2}
+    assert command(live, "navigate", cid=1, url="https://shop.example/other")["ok"] is True
+    assert {key[0] for key in grants_of(live)} == {2}
+    assert command(live, "navigate", cid=2, url="https://shop.example/other")["ok"] is True
+    assert not grants_of(live)
 
-def test_a_link_click_that_changes_the_page_closes_every_open_card(live):
+
+def test_a_user_control_reply_gives_the_wait_text_and_keeps_the_grant(live):
+    approve(live)
+    endpoint = next(route.endpoint for route in live.router.routes if route.name == "browser_command")
+    browser_gateway = closure_var(endpoint, "_browser_gateway")
+    host_call = browser_gateway._host
+
+    async def user_holds_the_tab(runtime, op, conversation_id, args):
+        return {"ok": False, "error": "user_control"}
+
+    browser_gateway._host = user_holds_the_tab
+    try:
+        for reply in (command(live), command(live, "scroll", direction="down")):
+            assert reply["ok"] is False and reply["error"] == gateway.USER_CONTROL
+    finally:
+        browser_gateway._host = host_call
+    assert "Do not call browser tools until the user says they are done" in gateway.USER_CONTROL
+    assert len(grants_of(live)) == 1
+    assert command(live)["ok"] is True
+
+
+def test_cleared_browsing_data_drops_every_chats_grants_and_cards(live):
+    approve(live, cid=1)
+    approve(live, cid=2)
+    assert command(live, ref="8", cid=1)["needs_approval"] is True
+    gate_id = open_card()
+    assert live.client.post("/browser/runtime", json={**runtime_body(), "cleared": True},
+                            headers=UI).status_code == 200
+    assert not grants_of(live) and not cards.is_open(gate_id)
+    assert command(live, cid=2)["needs_approval"] is True
+
+
+# Rule A: every chat has its own page; a page change closes that chat's cards and grants only.
+
+def test_a_link_click_that_changes_the_page_closes_the_chats_open_cards(live):
     approve(live, ref="8")
     assert command(live, "press", key="Enter")["needs_approval"] is True
     gate_id = open_card()
@@ -419,14 +460,14 @@ def test_a_describe_that_sees_another_url_closes_the_open_card(live):
     assert command(live, "press", key="Enter")["needs_approval"] is True
     gate_id = open_card()
     live.host.url = OTHER  # the page moved on its own
-    command(live, ref="7", cid=2)
+    command(live, ref="7")
     assert not cards.is_open(gate_id) and not browser_store(live.router, "_browser_gate_keys")
 
 
 def test_a_failed_step_whose_reply_shows_another_url_closes_the_open_card(live):
     assert command(live, "press", key="Enter")["needs_approval"] is True
     gate_id = open_card()
-    assert command(live, ref="6", cid=2)["ok"] is False
+    assert command(live, ref="6")["ok"] is False
     assert not cards.is_open(gate_id)
 
 
@@ -443,9 +484,9 @@ def test_an_element_changed_during_the_wait_is_not_clicked(waiting):
 def test_another_chats_stop_keeps_this_chats_card_and_the_page_generation(live):
     assert command(live, "press", key="Enter")["needs_approval"] is True
     gate_id = open_card()
-    generation = browser_store(live.router, "_browser_page_gen")[0]
+    generation = browser_store(live.router, "_browser_gen")(1)
     asyncio.run(live.router.halt_computer(2))
-    assert cards.is_open(gate_id) and browser_store(live.router, "_browser_page_gen")[0] == generation
+    assert cards.is_open(gate_id) and browser_store(live.router, "_browser_gen")(1) == generation
     # The retry finds that card instead of opening a duplicate.
     assert command(live, "press", key="Enter")["needs_approval"] is True
     assert [card["card_id"] for card in cards.list_pending()] == [gate_id]
@@ -506,10 +547,10 @@ def test_the_chats_own_stop_closes_its_card_and_grant_without_a_session(live):
     approve(live)
     assert command(live, ref="8")["needs_approval"] is True
     gate_id = open_card()
-    generation = browser_store(live.router, "_browser_page_gen")[0]
+    generation = browser_store(live.router, "_browser_gen")(1)
     assert asyncio.run(live.router.stop_chat(1)) == {"status": "no_session"}
     assert not cards.is_open(gate_id) and not browser_store(live.router, "_browser_grants")
-    assert browser_store(live.router, "_browser_page_gen")[0] == generation
+    assert browser_store(live.router, "_browser_gen")(1) == generation
 
 
 def test_a_stop_that_a_new_message_cleared_still_refuses_the_waiting_step(waiting):
@@ -550,12 +591,31 @@ def test_a_pipe_shifted_between_name_and_form_action_in_the_wait_is_not_clicked(
     assert reply["error"] == gateway.TARGET_CHANGED and waiting.host.ops().count("click") == 0
 
 
-def test_the_chats_stop_route_refuses_a_call_queued_behind_another_chats_wait(waiting):
+def test_a_call_is_not_queued_behind_another_chats_wait(waiting):
     routes = endpoints(waiting)
 
     async def main():
         other = asyncio.ensure_future(routes["browser_command"](
             {"tool": "browser_click", "args": {"snapshot_id": "s1", "ref": "9"}, "conversation_id": 2},
+            x_session_token=""))
+        gate_id = await first_open_card()
+        free = await routes["browser_command"](
+            {"tool": "browser_click", "args": {"snapshot_id": "s1", "ref": "7"}, "conversation_id": 1},
+            x_session_token="")
+        assert not other.done()
+        await desktop_approve(gate_id, routes)
+        await other
+        return free
+
+    assert asyncio.run(main())["ok"] is True
+
+
+def test_the_chats_stop_route_refuses_a_call_queued_behind_its_own_wait(waiting):
+    routes = endpoints(waiting)
+
+    async def main():
+        other = asyncio.ensure_future(routes["browser_command"](
+            {"tool": "browser_click", "args": {"snapshot_id": "s1", "ref": "9"}, "conversation_id": 1},
             x_session_token=""))
         gate_id = await first_open_card()
         queued = asyncio.ensure_future(routes["browser_command"](
@@ -605,7 +665,7 @@ def test_a_call_queued_before_a_stop_is_refused_after_the_next_message_cleared_t
 
     async def main():
         other = asyncio.ensure_future(routes["browser_command"](
-            {"tool": "browser_click", "args": {"snapshot_id": "s1", "ref": "9"}, "conversation_id": 2},
+            {"tool": "browser_click", "args": {"snapshot_id": "s1", "ref": "9"}, "conversation_id": 1},
             x_session_token=""))
         gate_id = await first_open_card()
         queued = asyncio.ensure_future(routes["browser_command"](
