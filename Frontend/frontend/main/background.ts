@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import net from 'net'
 import { randomUUID, createHash, randomBytes } from 'crypto'
-import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer, WebContentsView, session } from 'electron'
+import { app, autoUpdater as nativeUpdater, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer, WebContentsView, session } from 'electron'
 import serve from 'electron-serve'
 import { createWindow, applyNavigationPolicy } from './helpers'
 import { spawn, ChildProcess, execFile } from 'child_process'
@@ -1606,7 +1606,7 @@ if (!gotTheLock) {
       const menu = Menu.buildFromTemplate(template);
       Menu.setApplicationMenu(menu);
 
-      // Owner decision (29 Oct 2026): in-app auto-update; Windows unsigned (sha512 only), mac signed.
+      // Owner decision (29 Oct 2026): in-app auto-update; Windows is unsigned, so installs are gated on our own Ed25519 signature of the manifest (docs/releasing.md).
       if (isProd) {
         updateHandle = setupAutoUpdate({
           autoUpdater,
@@ -1622,7 +1622,9 @@ if (!gotTheLock) {
           },
           logger: console,
           relaunch: () => { app.relaunch(); app.exit(0) },
+          openExternal: (url) => shell.openExternal(url),
           getMainWindow: () => BrowserWindow.getAllWindows()[0],
+          stageNative: () => nativeUpdater.checkForUpdates(),
         })
       }
     })()
