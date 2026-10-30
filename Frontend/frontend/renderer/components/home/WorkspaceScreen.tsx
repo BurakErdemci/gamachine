@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Head from 'next/head';
+import axios from 'axios';
 
 import { useLang, type Lang } from '../../lib/i18n';
 import { displayName } from '../../lib/displayName';
@@ -99,7 +100,17 @@ export const WorkspaceScreen = ({
   const mac = useMemo(isMacPlatform, []);
   const name = displayName(userName);
   const first = load === 'ok' && items.length === 0;
-  const hub = useHub({ recent: items, onSelectWorkspace, showToast });
+  // A created project is listed at once; openCreated saves it again through selectWorkspace, which is harmless.
+  const saveCreated = useCallback(async (hostPath: string) => {
+    if (!user?.sessionToken || !api) return;
+    const backendPath = await backendWorkspacePath(hostPath);
+    if (backendPath === null) return;
+    try {
+      await axios.post(`${api}/save-workspace`, { user_id: user.id, path: backendPath }, { headers: { 'X-Session-Token': user.sessionToken } });
+      refresh();
+    } catch (err) { console.error('Created project save failed:', err); }
+  }, [api, user, refresh]);
+  const hub = useHub({ recent: items, onSelectWorkspace, showToast, onCreated: saveCreated });
 
   const openFolder = (defaultPath?: string) => { void onOpenFolder(defaultPath); };
 

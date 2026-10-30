@@ -20,10 +20,14 @@ export interface HubDeps {
   recent: RecentWorkspace[];
   onSelectWorkspace: (hostPath: string) => Promise<boolean | void> | boolean | void;
   showToast: (message: string, type: ToastKind) => void;
+  /** Called once when a creation finishes, with the new project's host path (saves it to the recents). */
+  onCreated?: (hostPath: string) => Promise<void>;
 }
 
+const announced = new WeakSet<HubRun>();
+
 /** All of the mini Hub's state; the per-theme compositions only lay it out. */
-export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
+export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubDeps) {
   const { t } = useLang();
   // A run already under way (the screen remounted) is shown first.
   const [view, setView] = useState<HubView>(() => (getRun().state === 'idle' ? 'projects' : 'new'));
@@ -44,6 +48,15 @@ export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
   const alive = useRef(true);
   // Set again on every run: StrictMode runs the cleanup once before the real mount.
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+
+  // Once per finished run object, across remounts of the screen.
+  const onCreatedRef = useRef(onCreated);
+  onCreatedRef.current = onCreated;
+  useEffect(() => {
+    if (run.state !== 'done' || announced.has(run)) return;
+    announced.add(run);
+    void onCreatedRef.current?.(run.path)?.catch(err => console.error('Created project save failed:', err));
+  }, [run]);
 
   const loadTemplates = useCallback(async (v: string) => {
     setTemplates(undefined);
@@ -109,9 +122,8 @@ export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
   };
 
   const launch = async (path: string, v?: string) => {
-    const started = run;
     const res = await launchProject(path, v);
-    if (res.opened) { showToast(t('hub.launched'), 'success'); if (started.state === 'done' && started.path === path) clearRunIf(started); }
+    if (res.opened) showToast(t('hub.launched'), 'success');
     else showToast(t('hub.launchFailed', { error: res.error || t('hub.failedUnknown') }), 'error');
   };
 
