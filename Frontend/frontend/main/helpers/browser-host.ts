@@ -9,6 +9,8 @@ import type { BrowserHistory } from './browser-history'
 export const BROWSER_PARTITION = 'persist:gamachine-agent-browser'
 export const BROWSER_LIVE_CHANNEL = 'browser-live'
 export const BROWSER_FULL_TOGGLE_CHANNEL = 'browser-full-toggle'
+/** Main to renderer: notes the user saved in annotate mode ({ conversationId, tabId, url, title, notes }). */
+export const BROWSER_NOTES_CHANNEL = 'browser-notes'
 // Electron reserves 0 (page) and 999 (its own isolated world); any other id up to 2^29 is free.
 export const BROWSER_WORLD_ID = 1777
 export const NAVIGATION_TIMEOUT_MS = 30_000
@@ -30,6 +32,9 @@ const MAX_FAVICON_REDIRECTS = 3
 const SCREENSHOT_MAX_WIDTH = 1280
 const MAX_TEXT_CHARS = 100_000
 const MAX_FILL_CHARS = 10_000
+const NOTES_POLL_MS = 500
+const MAX_NOTES_PER_POLL = 50
+const MAX_CLEAR_IDS = 200
 const KEYS: Record<string, string> = {
   Enter: 'Enter', Tab: 'Tab', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left',
   ArrowRight: 'Right', PageUp: 'PageUp', PageDown: 'PageDown',
@@ -85,6 +90,8 @@ export interface BrowserLivePayload {
   userControl: boolean
   tabs: BrowserTabInfo[]
   activeTabId: number | null
+  /** Set only while the selected tab is in annotate mode (left out otherwise, so older readers see the same payload). */
+  annotating?: true
   /** Set on the event that reports a blocked private address. */
   error?: string
 }
@@ -95,7 +102,7 @@ type LoadResult = { ok: true } | { ok: false; error: string }
 // Runs inside the isolated world, so it must be plain browser JavaScript. The world's
 // globals survive between calls on one document and vanish with it, which is what
 // makes refs from an earlier page come back as stale_snapshot.
-const PAGE_LIB = String.raw`(() => {
+export const PAGE_LIB = String.raw`(() => {
   if (globalThis.__gmBrowser) return;
   const SELECTOR = 'a[href], button, input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [role=checkbox], [role=radio], [role=tab], [role=menuitem], [role=option], [role=combobox], [role=textbox], [role=searchbox], [contenteditable=""], [contenteditable="true"]';
   const MAX_ELEMENTS = 300;
@@ -169,6 +176,310 @@ const PAGE_LIB = String.raw`(() => {
   const elementId = (el) => {
     if (!elementIds.has(el)) elementIds.set(el, 'd' + documentToken + '-el' + (++lastElementId));
     return elementIds.get(el);
+  };
+  // ---- annotation overlay (docs/agent-browser.md "Annotate mode") ----
+  const NOTE_MAX_NOTES = 50;
+  const NOTE_COMMENT_CHARS = 1000;
+  const NOTE_NAME_CHARS = 200;
+  const NOTE_PATH_CHARS = 200;
+  const NOTE_AREA_CHARS = 500;
+  const DRAG_PX = 6;
+  const BOX_WIDTH = 264;
+  // Text a person typed or chose never leaves the page: every place that reads text skips fields and editors.
+  const FIELD_SELECTOR = 'input, textarea, select, option, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"], [role=textbox], [role=searchbox], [role=combobox]';
+  const SKIPPED_TEXT = FIELD_SELECTOR + ', script, style, noscript, template';
+  const isField = (el) => !!(el.closest && el.closest(FIELD_SELECTOR));
+  const OVERLAY_CSS = [
+    '*{box-sizing:border-box;font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}',
+    '.hl,.frame{position:fixed;display:none;pointer-events:none;border:2px solid #2f6fed;border-radius:4px;background:rgba(47,111,237,.10)}',
+    '.frame{border-style:dashed}',
+    '.pin{position:fixed;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:#2f6fed;color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px #fff,0 2px 6px rgba(15,23,42,.35);pointer-events:none}',
+    '.bar{position:fixed;top:10px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 24px);padding:5px 12px;border-radius:999px;background:rgba(21,27,38,.88);color:#f4f6fa;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 2px 10px rgba(15,23,42,.3);pointer-events:none}',
+    '.box{position:fixed;display:none;width:' + BOX_WIDTH + 'px;padding:10px;border-radius:10px;background:#fff;color:#1b1f27;box-shadow:0 10px 30px rgba(15,23,42,.22),0 0 0 1px rgba(15,23,42,.08);pointer-events:auto}',
+    '.box textarea{display:block;width:100%;height:66px;resize:none;padding:6px 8px;border:1px solid #d3d9e3;border-radius:6px;background:#fff;color:#1b1f27;outline:none;font:inherit}',
+    '.box textarea:focus{border-color:#2f6fed;box-shadow:0 0 0 3px rgba(47,111,237,.18)}',
+    '.box textarea::placeholder{color:#8a93a3}',
+    '.hint{margin-top:6px;color:#6b7686;font-size:11px}',
+  ].join('');
+  const rectOf = (r) => ({ x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) });
+  const placeAt = (node, r) => {
+    node.style.left = r.x + 'px';
+    node.style.top = r.y + 'px';
+    node.style.width = r.width + 'px';
+    node.style.height = r.height + 'px';
+  };
+  const textOf = (root, max) => {
+    let out = '';
+    let visited = 0;
+    const walk = (node, depth) => {
+      if (out.length >= max || visited++ > 3000 || depth > 80) return;
+      if (node.nodeType === 3) { out += node.nodeValue + ' '; return; }
+      if (node.nodeType !== 1 || node.matches(SKIPPED_TEXT)) return;
+      const st = getComputedStyle(node);
+      if (st.display === 'none' || st.visibility === 'hidden') return;
+      for (const child of node.childNodes) walk(child, depth + 1);
+    };
+    walk(root, 0);
+    return clean(out, max);
+  };
+  const noteName = (el) => {
+    const by = el.getAttribute('aria-labelledby');
+    const byText = by ? by.split(/\s+/).map((id) => { const n = document.getElementById(id); return n ? textOf(n, NOTE_NAME_CHARS) : ''; }).join(' ') : '';
+    const labels = el.labels && el.labels.length ? Array.from(el.labels).map((l) => textOf(l, NOTE_NAME_CHARS)).join(' ') : '';
+    const field = isField(el);
+    const buttonValue = tag(el) === 'input' && BUTTON_TYPES.includes(inputType(el)) ? el.value : '';
+    const img = !field && el.querySelector ? el.querySelector('img[alt]') : null;
+    return clean(el.getAttribute('aria-label') || byText || labels || buttonValue || (field ? '' : textOf(el, NOTE_NAME_CHARS)) ||
+      el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || (img ? img.alt : ''), NOTE_NAME_CHARS);
+  };
+  const cssPath = (el) => {
+    const parts = [];
+    for (let n = el; n && n.nodeType === 1 && n !== document.documentElement && parts.length < 6; n = n.parentElement) {
+      let part = tag(n);
+      if (n.id && /^[A-Za-z][\w-]{0,40}$/.test(n.id)) { parts.unshift(part + '#' + n.id); break; }
+      const classes = typeof n.className === 'string' ? n.className.trim().split(/\s+/).filter((c) => /^[A-Za-z_][\w-]{0,30}$/.test(c)).slice(0, 2) : [];
+      if (classes.length) part += '.' + classes.join('.');
+      const same = n.parentElement ? Array.from(n.parentElement.children).filter((s) => s.tagName === n.tagName) : [];
+      if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(n) + 1) + ')';
+      parts.unshift(part);
+    }
+    return clean(parts.join(' > '), NOTE_PATH_CHARS);
+  };
+  const describeElement = (el) => {
+    const data = { tag: tag(el), role: roleOf(el), name: noteName(el), path: cssPath(el), rect: rectOf(el.getBoundingClientRect()) };
+    const link = el.closest ? el.closest('a[href]') : null;
+    if (link && link.href) data.href = String(link.href).slice(0, 300);
+    return data;
+  };
+  // Own text of the elements the frame overlaps, in tree order; fields and editors are skipped like everywhere else.
+  const areaText = (rect) => {
+    let out = '';
+    let visited = 0;
+    for (const el of document.body ? document.body.querySelectorAll('*') : []) {
+      if (out.length >= NOTE_AREA_CHARS || visited++ > 5000) break;
+      if (el.closest(SKIPPED_TEXT)) continue;
+      let own = '';
+      for (const child of el.childNodes) if (child.nodeType === 3) own += child.nodeValue + ' ';
+      if (!own.trim()) continue;
+      const r = el.getBoundingClientRect();
+      if (r.right <= rect.x || r.left >= rect.x + rect.width || r.bottom <= rect.y || r.top >= rect.y + rect.height || !shown(el)) continue;
+      out += own;
+    }
+    return clean(out, NOTE_AREA_CHARS);
+  };
+  const saved = [];
+  let noteSeq = 0;
+  // The overlay (anno) outlives the mode while pins are drawn; modeOn is the mode itself.
+  let anno = null;
+  let modeOn = false;
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(n, hi));
+  const anchorRect = (note) => {
+    const a = note.anchor;
+    const el = a.el && a.el.deref();
+    if (el && el.isConnected) return rectOf(el.getBoundingClientRect());
+    return { x: a.x - scrollX, y: a.y - scrollY, width: a.width, height: a.height };
+  };
+  const drawPins = () => {
+    if (!anno) return;
+    anno.pins.replaceChildren();
+    saved.forEach((note, i) => {
+      const r = anchorRect(note);
+      if (r.x + r.width < 0 || r.y + r.height < 0 || r.x > innerWidth || r.y > innerHeight) return;
+      const pin = document.createElement('div');
+      pin.className = 'pin';
+      pin.textContent = String(i + 1);
+      pin.title = note.data.comment;
+      pin.style.left = clamp(r.x, 10, innerWidth - 10) + 'px';
+      pin.style.top = clamp(r.y, 10, innerHeight - 10) + 'px';
+      anno.pins.appendChild(pin);
+    });
+  };
+  const closeBox = () => {
+    if (!anno || !anno.target) return;
+    anno.target = null;
+    anno.box.style.display = 'none';
+    anno.hl.style.display = 'none';
+    anno.frame.style.display = 'none';
+    anno.input.value = '';
+    anno.input.blur();
+  };
+  const openBox = (target) => {
+    closeBox();
+    anno.target = target;
+    const r = target.rect;
+    const node = target.kind === 'area' ? anno.frame : anno.hl;
+    placeAt(node, r);
+    node.style.display = 'block';
+    // Right of the target when it fits, else left, else under it; always fully on screen.
+    const boxHeight = 120;
+    let x = r.x + r.width + 10;
+    if (x + BOX_WIDTH > innerWidth - 8) x = r.x - BOX_WIDTH - 10;
+    if (x < 8) x = clamp(r.x, 8, Math.max(8, innerWidth - BOX_WIDTH - 8));
+    const y = clamp(r.y, 8, Math.max(8, innerHeight - boxHeight - 8));
+    anno.box.style.left = x + 'px';
+    anno.box.style.top = y + 'px';
+    anno.box.style.display = 'block';
+    anno.input.focus();
+  };
+  const saveNote = () => {
+    const t = anno.target;
+    const comment = String(anno.input.value || '').trim().slice(0, NOTE_COMMENT_CHARS);
+    if (!t || !comment) return;
+    if (saved.length < NOTE_MAX_NOTES) {
+      const base = { id: 'n' + documentToken.slice(0, 5) + '.' + (++noteSeq), comment, kind: t.kind };
+      const data = Object.assign(base, t.kind === 'area' ? { rect: t.rect, text: areaText(t.rect) } : describeElement(t.el));
+      const anchor = { x: t.rect.x + scrollX, y: t.rect.y + scrollY, width: t.rect.width, height: t.rect.height };
+      if (t.el) anchor.el = new WeakRef(t.el);
+      saved.push({ data, taken: false, anchor });
+    }
+    closeBox();
+    drawPins();
+    // One note per activation: the mode ends with the save, the pin stays.
+    stopAnnotate();
+  };
+  const buildOverlay = () => {
+    const host = document.createElement('div');
+    host.setAttribute('data-gm-annotate', '');
+    host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
+    const root = host.attachShadow({ mode: 'closed' });
+    try {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(OVERLAY_CSS);
+      root.adoptedStyleSheets = [sheet];
+    } catch (e) {
+      // A constructed sheet is the way past a strict page CSP; a plain style element is the fallback.
+      const style = document.createElement('style');
+      style.textContent = OVERLAY_CSS;
+      root.appendChild(style);
+    }
+    const make = (cls, text) => {
+      const n = document.createElement('div');
+      n.className = cls;
+      if (text) n.textContent = text;
+      root.appendChild(n);
+      return n;
+    };
+    const hl = make('hl');
+    const frame = make('frame');
+    const pins = make('pins');
+    const bar = make('bar', 'İşaretleme · bir öğeye tıkla ya da alan çiz · Esc çıkış');
+    const box = make('box');
+    box.style.display = 'none';
+    const input = document.createElement('textarea');
+    input.placeholder = 'Yorum ekle…';
+    input.maxLength = NOTE_COMMENT_CHARS;
+    box.appendChild(input);
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = 'Enter kaydeder · Shift+Enter yeni satır · Esc iptal';
+    box.appendChild(hint);
+    return { host, hl, frame, pins, bar, box, input };
+  };
+  const startAnnotate = () => {
+    if (!anno) {
+      anno = Object.assign(buildOverlay(), { target: null, drag: null, cursor: '', listeners: [], frameId: 0 });
+      (document.body || document.documentElement).appendChild(anno.host);
+    }
+    modeOn = true;
+    anno.cursor = document.documentElement.style.getPropertyValue('cursor');
+    anno.bar.style.display = 'block';
+    const on = (type, fn, target) => {
+      (target || window).addEventListener(type, fn, true);
+      anno.listeners.push([target || window, type, fn]);
+    };
+    // Whatever the overlay itself shows reaches the page as an event from the host element.
+    const foreign = (e) => e.isTrusted && e.target !== anno.host;
+    const stop = (e) => { e.preventDefault(); e.stopImmediatePropagation(); };
+    const targetAt = (x, y) => {
+      const el = document.elementFromPoint(x, y);
+      if (!el || el === anno.host) return null;
+      return el === document.documentElement ? document.body : el;
+    };
+    const setCursor = (on) => {
+      if (on) document.documentElement.style.setProperty('cursor', 'crosshair', 'important');
+      else if (anno.cursor) document.documentElement.style.setProperty('cursor', anno.cursor);
+      else document.documentElement.style.removeProperty('cursor');
+    };
+    for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick']) {
+      on(type, (e) => { if (foreign(e) && (e.button === 0 || type === 'auxclick')) stop(e); });
+    }
+    on('pointerdown', (e) => {
+      if (!foreign(e)) return;
+      e.stopImmediatePropagation();
+      if (e.button !== 0) return;
+      closeBox();
+      anno.hl.style.display = 'none';
+      anno.drag = { x: e.clientX, y: e.clientY, area: false, rect: null };
+    });
+    on('pointermove', (e) => {
+      if (!foreign(e) || anno.target) return;
+      const d = anno.drag;
+      if (d && e.buttons === 0) { anno.drag = null; anno.frame.style.display = 'none'; return; }
+      if (d) {
+        if (!d.area && Math.hypot(e.clientX - d.x, e.clientY - d.y) >= DRAG_PX) d.area = true;
+        if (d.area) {
+          const x = clamp(Math.min(d.x, e.clientX), 0, innerWidth);
+          const y = clamp(Math.min(d.y, e.clientY), 0, innerHeight);
+          d.rect = { x, y, width: clamp(Math.max(d.x, e.clientX), 0, innerWidth) - x, height: clamp(Math.max(d.y, e.clientY), 0, innerHeight) - y };
+          placeAt(anno.frame, d.rect);
+          anno.frame.style.display = 'block';
+        }
+        return;
+      }
+      const el = targetAt(e.clientX, e.clientY);
+      if (!el) { anno.hl.style.display = 'none'; return; }
+      placeAt(anno.hl, rectOf(el.getBoundingClientRect()));
+      anno.hl.style.display = 'block';
+    });
+    on('pointerup', (e) => {
+      if (!foreign(e)) return;
+      e.stopImmediatePropagation();
+      const d = anno.drag;
+      if (!d) return;
+      anno.drag = null;
+      if (d.area && d.rect) { openBox({ kind: 'area', rect: d.rect }); return; }
+      const el = targetAt(e.clientX, e.clientY);
+      if (el) openBox({ kind: 'element', el, rect: rectOf(el.getBoundingClientRect()) });
+    });
+    on('keydown', (e) => {
+      if (!e.isTrusted || e.target === anno.host || e.key !== 'Escape') return;
+      stop(e);
+      if (anno.drag) { anno.drag = null; anno.frame.style.display = 'none'; return; }
+      stopAnnotate();
+    });
+    const redraw = () => {
+      if (anno.frameId) return;
+      anno.frameId = requestAnimationFrame(() => { anno.frameId = 0; drawPins(); });
+    };
+    on('scroll', redraw);
+    on('resize', redraw);
+    // Input keys typed in the comment box stay out of the page's own handlers.
+    anno.input.addEventListener('keydown', (e) => {
+      if (!e.isTrusted) return;
+      e.stopPropagation();
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); saveNote(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeBox(); }
+    });
+    for (const type of ['keyup', 'keypress', 'input']) anno.input.addEventListener(type, (e) => { if (e.isTrusted) e.stopPropagation(); });
+    setCursor(true);
+    drawPins();
+  };
+  // Ends the mode; the overlay stays while pins are drawn, and goes with the last one.
+  const stopAnnotate = () => {
+    if (!anno) return;
+    modeOn = false;
+    closeBox();
+    for (const [target, type, fn] of anno.listeners) target.removeEventListener(type, fn, true);
+    anno.listeners = [];
+    anno.drag = null;
+    anno.bar.style.display = 'none';
+    anno.hl.style.display = 'none';
+    anno.frame.style.display = 'none';
+    if (anno.frameId) cancelAnimationFrame(anno.frameId);
+    anno.frameId = 0;
+    if (anno.cursor) document.documentElement.style.setProperty('cursor', anno.cursor);
+    else document.documentElement.style.removeProperty('cursor');
+    if (saved.length === 0) { anno.host.remove(); anno = null; }
   };
   globalThis.__gmBrowser = {
     snapshot(a) {
@@ -280,6 +591,34 @@ const PAGE_LIB = String.raw`(() => {
       }
       return { element };
     },
+    annotateOn() {
+      if (modeOn) return { active: true };
+      if (!document.body) return { error: 'no_page' };
+      startAnnotate();
+      return { active: true };
+    },
+    annotateOff() {
+      stopAnnotate();
+      return { active: false };
+    },
+    // Saved notes not handed over yet; the pins stay until clearNotes, also after the mode ended. "active" is false once the page left the mode itself (Esc).
+    takeNotes() {
+      const fresh = saved.filter((note) => !note.taken);
+      for (const note of fresh) note.taken = true;
+      return { notes: fresh.map((note) => note.data), active: modeOn };
+    },
+    clearNotes(a) {
+      const ids = Array.isArray(a && a.ids) ? a.ids : null;
+      let cleared = 0;
+      for (let i = saved.length - 1; i >= 0; i--) {
+        if (ids && !ids.includes(saved[i].data.id)) continue;
+        saved.splice(i, 1);
+        cleared++;
+      }
+      drawPins();
+      if (!modeOn && saved.length === 0 && anno) { anno.host.remove(); anno = null; }
+      return { cleared };
+    },
   };
 })();`
 
@@ -365,6 +704,14 @@ export function isFullChord(input: { type?: string; key?: string; control?: bool
   return platform === 'darwin' ? !!input.meta && !input.control : !!input.control && !input.meta
 }
 
+/** Ctrl+Shift+E (Cmd+Shift+E on macOS): toggles annotate mode, claimed here because keys in the page never reach the renderer. */
+export function isAnnotateChord(input: { type?: string; key?: string; control?: boolean; meta?: boolean; shift?: boolean; alt?: boolean; isAutoRepeat?: boolean },
+  platform: string): boolean {
+  if (input.type !== 'keyDown' || input.isAutoRepeat || typeof input.key !== 'string' || input.alt || !input.shift) return false
+  if (input.key.toLowerCase() !== 'e') return false
+  return platform === 'darwin' ? !!input.meta && !input.control : !!input.control && !input.meta
+}
+
 /** One page: a chat's agent tab, or a tab the user opened. */
 interface Tab {
   id: number
@@ -381,6 +728,8 @@ interface Tab {
   lastGesture: number | null
   /** The user pressed a key or mouse button in this page since the chat's last message; the agent may not switch to it. */
   userTouched: boolean
+  /** The user is placing notes on this page (annotate mode); ends with any navigation. */
+  annotating: boolean
   /** Bumped by every navigation, so a favicon fetched for an earlier page is dropped. */
   faviconSeq: number
   /** Settles when the tab is closed, so a command waiting on something else can stop at once. */
@@ -432,6 +781,7 @@ export class BrowserHost {
   private stopped = false
   private historySaved: Promise<boolean> | null = null
   private pollTimer: ReturnType<typeof setTimeout> | null = null
+  private notesTimer: ReturnType<typeof setTimeout> | null = null
   private reports: Promise<unknown> = Promise.resolve()
   private readonly now: () => number
   private readonly later: typeof setTimeout
@@ -499,6 +849,8 @@ export class BrowserHost {
       this.stopped = true
       if (this.pollTimer) this.clear(this.pollTimer)
       this.pollTimer = null
+      if (this.notesTimer) this.clear(this.notesTimer)
+      this.notesTimer = null
       this.destroyView()
       void this.report()
     }
@@ -647,7 +999,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -700,6 +1052,9 @@ export class BrowserHost {
     for (const name of ['did-start-loading', 'did-stop-loading', 'page-title-updated', 'did-navigate', 'did-navigate-in-page'] as const) {
       wc.on(name as 'did-start-loading', () => this.emitLive(tab.conversationId))
     }
+    // A new document takes the overlay with it; a same-document load (did-finish-load after a reload) ends the mode too.
+    wc.on('did-navigate', () => this.endAnnotate(tab))
+    wc.on('did-finish-load', () => this.endAnnotate(tab))
     wc.on('did-navigate', (_event, url) => {
       tab.favicon = ''
       tab.faviconSeq++
@@ -718,6 +1073,11 @@ export class BrowserHost {
         if (win && !win.isDestroyed()) {
           try { win.webContents.send(BROWSER_FULL_TOGGLE_CHANNEL, null) } catch { /* window closing */ }
         }
+        return
+      }
+      if (isAnnotateChord(input, this.platform)) {
+        event.preventDefault()
+        void this.setAnnotate(tab, !tab.annotating)
         return
       }
       const shortcut = tabShortcut(input, this.platform)
@@ -807,6 +1167,7 @@ export class BrowserHost {
   }
 
   private closeTab(tab: Tab): void {
+    tab.annotating = false
     if (this.tabs.get(tab.id) === tab) {
       this.tabs.delete(tab.id)
       if (this.selected.get(tab.conversationId) === tab.id) this.reselect(tab)
@@ -868,6 +1229,93 @@ export class BrowserHost {
       if (visible) tab.view.setBounds(this.bounds)
       tab.view.setVisible(visible)
     }
+    this.syncNotesPoll()
+  }
+
+  // ---- annotate mode ----
+
+  /** Ends the tab's annotate mode; `removeOverlay` also takes the overlay out of a document that stays (a navigation drops it by itself). */
+  private endAnnotate(tab: Tab, removeOverlay = false): void {
+    if (!tab.annotating) return
+    tab.annotating = false
+    if (removeOverlay && this.isLive(tab)) void this.page(tab, 'annotateOff', {}).catch(() => { /* the page is gone */ })
+    this.emitLive(tab.conversationId)
+  }
+
+  /** Turns the tab's annotate mode on or off; the error reply when it cannot. */
+  private async setAnnotate(tab: Tab, on: boolean): Promise<{ error: string } | null> {
+    if (on) {
+      const wc = tab.view.webContents
+      if (!/^https?:\/\//i.test(wc.getURL()) || wc.isLoading()) return { error: 'no_page' }
+      if (!tab.annotating) {
+        try {
+          const result = await this.page(tab, 'annotateOn', {})
+          if (result.error) return { error: String(result.error) }
+        } catch {
+          return { error: 'annotate_failed' }
+        }
+        tab.annotating = true
+      }
+      // The user is working in this page: the agent may not move to it until their next message.
+      this.touch(tab)
+      tab.userTouched = true
+      this.emitLive(tab.conversationId)
+      this.syncNotesPoll()
+      return null
+    }
+    // Notes saved since the last poll are handed over before the mode ends.
+    try {
+      const { notes } = await this.collectNotes(tab)
+      if (notes.length > 0) this.emitNotes(tab, notes)
+    } catch { /* the page is gone */ }
+    this.endAnnotate(tab, true)
+    return null
+  }
+
+  /** Annotating tabs the user can see right now: only those are polled for new notes. */
+  private annotatingVisible(): Tab[] {
+    return [...this.tabs.values()].filter((tab) => tab.annotating && this.isLive(tab) &&
+      tab.conversationId === this.visibleId && this.selected.get(tab.conversationId) === tab.id)
+  }
+
+  private syncNotesPoll(): void {
+    if (this.notesTimer || this.stopped || this.annotatingVisible().length === 0) return
+    this.notesTimer = this.later(() => {
+      this.notesTimer = null
+      void this.pollNotes()
+    }, NOTES_POLL_MS)
+  }
+
+  private async pollNotes(): Promise<void> {
+    try {
+      for (const tab of this.annotatingVisible()) {
+        try {
+          const { notes, active } = await this.collectNotes(tab)
+          if (!tab.annotating) continue
+          if (notes.length > 0) this.emitNotes(tab, notes)
+          // The page left the mode itself (Esc), or it is a new document without the overlay.
+          if (!active) this.endAnnotate(tab)
+        } catch {
+          this.endAnnotate(tab)
+        }
+      }
+    } finally {
+      this.syncNotesPoll()
+    }
+  }
+
+  private async collectNotes(tab: Tab): Promise<{ notes: unknown[]; active: boolean }> {
+    const result = await this.page(tab, 'takeNotes', {})
+    return { notes: Array.isArray(result.notes) ? result.notes.slice(0, MAX_NOTES_PER_POLL) : [], active: result.active !== false }
+  }
+
+  private emitNotes(tab: Tab, notes: unknown[]): void {
+    const win = this.deps.window()
+    if (!win || win.isDestroyed()) return
+    const wc = tab.view.webContents
+    try {
+      win.webContents.send(BROWSER_NOTES_CHANNEL, { conversationId: tab.conversationId, tabId: tab.id, url: wc.getURL(), title: wc.getTitle(), notes })
+    } catch { /* window closing */ }
   }
 
   /**
@@ -962,6 +1410,7 @@ export class BrowserHost {
       tabs: tabs.map((tab) => ({ id: tab.id, url: tab.view.webContents.getURL(), title: tab.view.webContents.getTitle(),
         loading: tab.view.webContents.isLoading(), favicon: tab.favicon, agent: tab.agent })),
       activeTabId: shown ? shown.id : null,
+      ...(shown?.annotating ? { annotating: true as const } : {}),
     }
   }
 
@@ -980,9 +1429,9 @@ export class BrowserHost {
 
   async invoke(req: unknown): Promise<unknown> {
     if (!req || typeof req !== 'object' || Array.isArray(req)) return { error: 'Invalid browser-live request.' }
-    const { op, conversationId: id, bounds, visible, url, gateId, approved, tabId } = req as Record<string, unknown>
+    const { op, conversationId: id, bounds, visible, url, gateId, approved, tabId, on, ids } = req as Record<string, unknown>
     const tabOps = ['status', 'panel-status', 'set-bounds', 'visible', 'open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close',
-      'select', 'close-tab', 'reopen-tab']
+      'select', 'close-tab', 'reopen-tab', 'annotate', 'notes', 'clear-notes']
     if (typeof op === 'string' && tabOps.includes(op) && !positiveInt(id)) return { error: 'Unknown operation or malformed browser-live arguments.' }
     if (tabId !== undefined && !positiveInt(tabId)) return { error: 'Unknown operation or malformed browser-live arguments.' }
     const conversationId = id as number
@@ -1040,6 +1489,7 @@ export class BrowserHost {
         if (!tab) return tabId === undefined ? this.openUserTab(conversationId, url) : { error: 'no_tab' }
         this.touch(tab)
         tab.userTouched = true
+        this.endAnnotate(tab, true)
         tab.view.webContents.loadURL(url as string).catch(() => { /* reported by did-fail-load */ })
         this.emitLive(conversationId)
         return this.livePayload(conversationId)
@@ -1053,8 +1503,9 @@ export class BrowserHost {
         tab.userTouched = true
         const wc = tab.view.webContents
         const history = wc.navigationHistory
+        if (op !== 'reload' && (op === 'back' ? !history.canGoBack() : !history.canGoForward())) return { error: 'no_history' }
+        this.endAnnotate(tab, true)
         if (op === 'reload') wc.reload()
-        else if (op === 'back' ? !history.canGoBack() : !history.canGoForward()) return { error: 'no_history' }
         else if (op === 'back') history.goBack()
         else history.goForward()
         return this.livePayload(conversationId)
@@ -1080,6 +1531,35 @@ export class BrowserHost {
       }
       case 'reopen-tab':
         return this.reopenTab(conversationId)
+      case 'annotate': {
+        if (typeof on !== 'boolean') break
+        const tab = this.chatTab(conversationId, tabId)
+        if (!tab) return { error: 'no_tab' }
+        const failed = await this.setAnnotate(tab, on)
+        if (failed) return failed
+        return this.livePayload(conversationId)
+      }
+      case 'notes': {
+        const tab = this.chatTab(conversationId, tabId)
+        if (!tab) return { error: 'no_tab' }
+        try {
+          const { notes } = await this.collectNotes(tab)
+          const wc = tab.view.webContents
+          return { notes, tabId: tab.id, url: wc.getURL(), title: wc.getTitle() }
+        } catch {
+          return { error: 'notes_failed' }
+        }
+      }
+      case 'clear-notes': {
+        const tab = this.chatTab(conversationId, tabId)
+        if (!tab) return { error: 'no_tab' }
+        if (ids !== undefined && !(Array.isArray(ids) && ids.length <= MAX_CLEAR_IDS && ids.every((one) => typeof one === 'string' && one.length <= 64))) break
+        try {
+          return await this.page(tab, 'clearNotes', ids === undefined ? {} : { ids })
+        } catch {
+          return { error: 'notes_failed' }
+        }
+      }
       case 'history':
         return { entries: this.deps.history?.list() ?? [] }
       case 'close': {

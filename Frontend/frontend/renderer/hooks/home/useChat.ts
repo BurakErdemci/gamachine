@@ -16,6 +16,7 @@ import {
   type ModeChanged, type RemoteMessage,
 } from '../../lib/remoteControl';
 import { handleRemoteIpcFrame } from '../../lib/remote/desktopRunner';
+import { clearBrowserPins, formatBrowserContext, notesTab, releaseBrowser, takeBrowserChips } from '../../lib/browserNotes';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -839,6 +840,10 @@ export const useChat = (
   ) => {
     if (!user || !API) return;
     const requested = targetOverride ?? activeConvIdRef.current;
+    // The composer's browser chips (page notes, pages asked about) ride along with the user's own message.
+    const chips = origin === 'user' && !remote ? takeBrowserChips(requested) : [];
+    const browserContext = formatBrowserContext(chips);
+    if (browserContext) messageContent = messageContent.trim() ? `${messageContent}\n\n${browserContext}` : browserContext;
     const slot = rt(keyOf(requested));
     // Only THIS chat's running turn blocks a send; other chats run independently.
     if (slot.loading) {
@@ -851,6 +856,7 @@ export const useChat = (
           images, videos, ultracode, remote,
         };
         patchConv(keyOf(requested), r => ({ queue: [...r.queue, item] }));
+        if (requested) clearBrowserPins(requested, chips);
         if (targetOverride == null) setChatInput('');
       }
       return;
@@ -878,7 +884,9 @@ export const useChat = (
     // same when it is drained, since the drain sends it through here).
     if (origin === 'user') {
       try {
-        Promise.resolve((window as any).ipc?.invoke?.('browser-live', { op: 'release', conversationId: targetConvId })).catch(() => {});
+        // Notes from one tab make that tab the agent's: it is selected before the release adopts the selection.
+        releaseBrowser(targetConvId, notesTab(chips));
+        clearBrowserPins(targetConvId, chips);
       } catch { /* the send must not depend on the browser */ }
     }
     // Yeni tur: bu sohbetin önceki turundan kalmış bekleyen onay/soru ve

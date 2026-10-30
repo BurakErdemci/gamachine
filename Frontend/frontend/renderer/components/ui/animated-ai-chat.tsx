@@ -16,6 +16,7 @@ import { useLang } from "../../lib/i18n";
 import { useVoiceInput, formatElapsed } from "../../hooks/home/useVoiceInput";
 import type { Conversation } from "../home/types";
 import { mentionQueryAt, mentionTargets, findMentions, mentionLabel } from "../../lib/chatMentions";
+import { chipLabel, dismissBrowserChip, useBrowserChips } from "../../lib/browserNotes";
 import { MessageQueue, type MessageQueueProps, type QueueItemView } from "./message-queue";
 
 interface UseAutoResizeTextareaProps {
@@ -145,6 +146,7 @@ export function AnimatedChatInput({
     const [internalValue, setInternalValue] = useState(value);
     const [attachments, setAttachments] = useState<{ name: string, data: string, type: 'image' | 'file' | 'video', path?: string, url?: string }[]>([]);
     const { t, lang } = useLang();
+    const chips = useBrowserChips(currentChatId);
     const [activeSuggestion, setActiveSuggestion] = useState<number>(-1);
     const [showCommandPalette, setShowCommandPalette] = useState(false);
     // Mockup `.composer textarea`: one line tall (36 px) growing to 160 px.
@@ -688,13 +690,13 @@ export function AnimatedChatInput({
             }
         } else if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            if (internalValue.trim() || attachments.length > 0) handleSendMessage();
+            if (internalValue.trim() || attachments.length > 0 || chips.length > 0) handleSendMessage();
         }
     };
 
     const handleSendMessage = async () => {
         // While a turn runs the page queues the message instead of sending it.
-        if (internalValue.trim() || attachments.length > 0) {
+        if (internalValue.trim() || attachments.length > 0 || chips.length > 0) {
             const trimmed = internalValue.trim();
             if (trimmed.startsWith('/') && onCommand) {
                 const handled = onCommand(trimmed);
@@ -748,7 +750,7 @@ export function AnimatedChatInput({
         if (restored.length > 0) setAttachments(prev => [...prev, ...restored]);
         scheduleDeferred(() => { textareaRef.current?.focus(); adjustHeight(); });
     };
-    const hasDraft = Boolean(internalValue.trim()) || attachments.length > 0;
+    const hasDraft = Boolean(internalValue.trim()) || attachments.length > 0 || chips.length > 0;
 
     return (
         <div ref={hostRef} className={cn("composer-host", className)}>
@@ -839,6 +841,25 @@ export function AnimatedChatInput({
             )}
 
             {queue && <MessageQueue {...queue} onEditTake={takeBackQueued} />}
+
+            {chips.length > 0 && (
+                <div className="composer-chips" data-testid="browser-chips">
+                    {chips.map((chip, i) => (
+                        <span key={chip.key} className="composer-chip" title={chip.type === 'note' ? chip.note.comment : chip.url}>
+                            <span className="composer-chip-n" aria-hidden="true">{i + 1}</span>
+                            <span className="composer-chip-label">{chipLabel(chip)}</span>
+                            <button
+                                type="button"
+                                aria-label={`${t('chat.chipRemove')}: ${chipLabel(chip)}`}
+                                onClick={() => dismissBrowserChip(currentChatId, chip)}
+                                className="composer-chip-x"
+                            >
+                                <XIcon size={12} aria-hidden="true" />
+                            </button>
+                        </span>
+                    ))}
+                </div>
+            )}
 
             <AnimatePresence>
                 {attachments.length > 0 && (

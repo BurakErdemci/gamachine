@@ -24,6 +24,7 @@ import { WorkspaceScreen } from '../components/home/WorkspaceScreen';
 import { Workspace, KodPane, PreviewPane, ChangedFiles, toggleTerminalDrawer, type WsDiff, type ChangedFile } from '../components/home/Workspace';
 import { ComputerLivePanel } from '../components/home/ComputerLivePanel';
 import { BrowserPanel } from '../components/home/BrowserPanel';
+import { hasBrowserChips } from '../lib/browserNotes';
 import { HierarchyPanel } from '../components/home/HierarchyPanel';
 import { InspectorPane } from '../components/home/InspectorPane';
 import { useSceneEditorSetting } from '../lib/sceneEditor';
@@ -663,7 +664,7 @@ export default function Home() {
     // typing never updates (a card's deleted prompt went out with the image).
     const draft = msg ?? chat.chatInput;
     let input = draft.trim();
-    if (!input && (!images || images.length === 0) && (!videos || videos.length === 0)) return;
+    if (!input && (!images || images.length === 0) && (!videos || videos.length === 0) && !hasBrowserChips(chat.activeConvId)) return;
 
     // Send-gate: aktif bulut sağlayıcının API key'i yoksa göndermeyi engelle (net uyarı +
     // Ayarlar). Optimistic model seçimiyle beraber → keyless modele geçilse bile sessizce
