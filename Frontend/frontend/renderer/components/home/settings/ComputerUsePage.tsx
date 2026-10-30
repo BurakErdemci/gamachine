@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useLang, type TKey } from '../../../lib/i18n';
+import { LIVE_FEATURES_EVENT } from '../../../lib/liveFeatures';
 import { stripBidi } from '../../../lib/modelText';
 import {
   computerUseStatus, hasComputerUseIpc, isComputerUseError, openScreenSettings, removeComputerGrant,
@@ -111,6 +112,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
     const on = (r as { enabled?: unknown })?.enabled;
     if (typeof on === 'boolean' && on === enabled) { fail(); return; }
     saved();
+    window.dispatchEvent(new CustomEvent(LIVE_FEATURES_EVENT));
   });
 
   const masterHint = !desktop ? t('cu.set.desktopOnly')

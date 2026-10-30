@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useLang } from '../../../lib/i18n';
+import { LIVE_FEATURES_EVENT } from '../../../lib/liveFeatures';
 import { confirmDialog } from '../../ui/ConfirmDialog';
 import { Lamp, SetCard, SetGroup, SetPageHead, SetRow, SetSwitch } from './controls';
 
@@ -59,6 +60,7 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
       } else {
         setEnabled(r.enabled);
         saved();
+        window.dispatchEvent(new CustomEvent(LIVE_FEATURES_EVENT));
       }
     } finally {
       if (alive.current) setBusy(false);

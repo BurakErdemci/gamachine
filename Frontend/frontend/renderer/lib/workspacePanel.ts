@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { routeForFile } from '../components/model-viewer/extensions';
 
-/** The workspace tabs (mockup `.ws-tab[data-tab]`): scene, files, code, preview, the live computer view and the agent browser. */
-export type WsTab = 'sahne' | 'dosyalar' | 'kod' | 'onizleme' | 'bilgisayar' | 'tarayici';
+/** The workspace tabs (mockup `.ws-tab[data-tab]`): inspector (scene editor only), files, code, preview and the live view. */
+export type WsTab = 'sahne' | 'dosyalar' | 'kod' | 'onizleme' | 'canli';
+/** The two sides of the live tab: the computer-use mirror and the agent browser. */
+export type LiveSide = 'bilgisayar' | 'tarayici';
 /** The three widths (mockup `.app[data-ws]`): narrow beside the chat, half, focus. */
 export type WsWidth = 'dar' | 'yarim' | 'odak';
 
-export const WS_TABS: WsTab[] = ['sahne', 'dosyalar', 'kod', 'onizleme', 'bilgisayar', 'tarayici'];
+export const WS_TABS: WsTab[] = ['sahne', 'dosyalar', 'kod', 'onizleme', 'canli'];
 export const WS_WIDTHS: WsWidth[] = ['dar', 'yarim', 'odak'];
 
 /** Which tab shows a path: text opens in Kod, everything the preview panels take in Önizleme. */
@@ -24,7 +26,7 @@ export const tabForPath = (path: string): WsTab => (routeForFile(path) === 'text
  */
 export function useWorkspacePanel(initial: { tab?: WsTab; width?: WsWidth } = {}) {
   const [open, setOpen] = useState(true);
-  const [tab, setTab] = useState<WsTab>(initial.tab ?? 'sahne');
+  const [tab, setTab] = useState<WsTab>(initial.tab ?? 'dosyalar');
   const [width, setWidth] = useState<WsWidth>(initial.width ?? 'dar');
 
   const reveal = useCallback((next: WsTab, opts: { widen?: boolean } = {}) => {
@@ -36,6 +38,30 @@ export function useWorkspacePanel(initial: { tab?: WsTab; width?: WsWidth } = {}
   }, []);
 
   return { open, setOpen, tab, setTab, width, setWidth, reveal };
+}
+
+/**
+ * The widest panel (`odak`) takes the sidebar's place: the sidebar folds away when the panel
+ * turns widest and comes back when it leaves, unless the user opened it in between (a user
+ * toggle shows up as the sidebar being open again while it was folded here). In a narrow window
+ * it stays closed: reopening it there would make useOneSideColumnWhenNarrow close the panel.
+ */
+export function useSidebarFoldedByFocusWidth(width: WsWidth, sidebar: { open: boolean; setOpen: (open: boolean) => void }, narrow = false): void {
+  const { open, setOpen } = sidebar;
+  const prevWidth = useRef(width);
+  const folded = useRef(false);
+
+  useEffect(() => {
+    const was = prevWidth.current;
+    prevWidth.current = width;
+    if (width === 'odak' && was !== 'odak' && open) {
+      folded.current = true;
+      setOpen(false);
+      return;
+    }
+    if (width !== 'odak' && was === 'odak' && folded.current && !open && !narrow) setOpen(true);
+    if (width !== 'odak' || open) folded.current = false;
+  }, [width, open, setOpen, narrow]);
 }
 
 /**

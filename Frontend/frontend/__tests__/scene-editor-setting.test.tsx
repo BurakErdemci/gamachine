@@ -42,14 +42,14 @@ it('the Unity settings switch updates all subscribers live', () => {
   expect(toggle.getAttribute('aria-checked')).toBe('false')
 })
 
-it.each(['tr', 'en'] as const)('keeps the disabled sidebar and Scene label unchanged in %s', lang => {
+it.each(['tr', 'en'] as const)('keeps the disabled sidebar and labels the sahne tab Inspector in %s', lang => {
   render(<LangContext.Provider value={{ lang, setLang: noop, t: (key, vars) => ceviriUygula(lang, key, vars) }}>
     <Sidebar {...sidebarProps} unityStatus="connected" />
     <Workspace open tab="sahne" width="dar" onTab={noop} onWidth={noop} onClose={noop}
       panes={{ sahne: null, dosyalar: null, kod: null, onizleme: null }} drawer={null} />
   </LangContext.Provider>)
   expect(document.querySelector('.side-tabs')).toBeNull()
-  expect(screen.getByRole('tab', { name: lang === 'tr' ? 'Sahne' : 'Scene' })).toBeTruthy()
+  expect(screen.getByRole('tab', { name: 'Inspector' })).toBeTruthy()
   act(() => writeSceneEditor(true))
   // Unity off still closes the feature gate.
   cleanup()

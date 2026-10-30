@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import React from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { clearSeen, isUnseen, loadSeen, saveSeen, type Seen } from '../renderer/lib/changesSeen'
-import { ScenePane } from '../renderer/components/home/Workspace'
+import { ChangedFiles } from '../renderer/components/home/Workspace'
 import { ceviriUygula, LangContext, type Lang } from '../renderer/lib/i18n'
 
 beforeEach(() => localStorage.clear())
@@ -77,18 +77,18 @@ describe('isUnseen', () => {
   })
 })
 
-describe.each(['tr', 'en'] as const)('ScenePane seen actions (%s)', lang => {
+describe.each(['tr', 'en'] as const)('ChangedFiles seen actions (%s)', lang => {
   const labels = lang === 'tr'
     ? { ack: 'Gördüm', title: 'Bu listeyi gördüm: yalnız bundan sonra değişenler görünsün', empty: 'Yeni değişiklik yok · 3 dosyayı gördün.', more: '3 dosyayı gördün.', all: 'Hepsini göster' }
     : { ack: 'Mark as seen', title: 'Hide these until they change again', empty: 'No new changes · 3 files marked as seen.', more: '3 files marked as seen.', all: 'Show all' }
-  const base: React.ComponentProps<typeof ScenePane> = {
+  const base: React.ComponentProps<typeof ChangedFiles> = {
     change: null, changed: [], changedTotal: 0, isRepo: true,
     workspacePath: workspace, onShowChange: vi.fn(), onOpen: vi.fn(),
   }
   const changed = [{ path: file, rel: 'Assets/Player.cs', status: 'modified' }]
   const pane = (props: Partial<typeof base> = {}, language: Lang = lang) => render(
     <LangContext.Provider value={{ lang: language, setLang: vi.fn(), t: (k, v) => ceviriUygula(language, k, v) }}>
-      <ScenePane {...base} {...props} />
+      <ChangedFiles {...base} {...props} />
     </LangContext.Provider>,
   )
 

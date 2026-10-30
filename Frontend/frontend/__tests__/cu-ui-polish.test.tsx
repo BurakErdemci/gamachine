@@ -53,13 +53,13 @@ describe('D1 · settings status text', () => {
 })
 
 describe('D2 · workspace tabs', () => {
-  it('renders the full Bilgisayar label and no stylesheet ellipsises .ws-tab', () => {
+  it('renders the full Canlı label and no stylesheet ellipsises .ws-tab', () => {
     aktifDilAyarla('tr')
-    const panes = { sahne: <p>a</p>, dosyalar: <p>b</p>, kod: <p>c</p>, onizleme: <p>d</p>, bilgisayar: <p>e</p> }
+    const panes = { sahne: <p>a</p>, dosyalar: <p>b</p>, kod: <p>c</p>, onizleme: <p>d</p>, canli: <p>e</p> }
     const { container } = render(<Workspace open tab="sahne" onTab={vi.fn()} width="dar" onWidth={vi.fn()} onClose={vi.fn()} panes={panes} drawer={null} />)
     const tabs = container.querySelectorAll('.ws-tab')
     expect(tabs).toHaveLength(5)
-    expect(tabs[4].textContent).toBe(translations.tr['ws.tabComputer'])
+    expect(tabs[4].textContent).toBe(translations.tr['ws.tabLive'])
     for (const file of fs.readdirSync(STYLES).filter(f => f.endsWith('.css'))) {
       const text = css(file)
       for (const sel of ['.ws-tab', '.ws-tabs']) {

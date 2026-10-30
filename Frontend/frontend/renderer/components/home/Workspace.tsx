@@ -16,10 +16,10 @@ const WIDTH_ICON: Record<WsWidth, React.ReactNode> = {
 };
 const X_ICON = <path d="M5.5 5.5l9 9M14.5 5.5l-9 9" />;
 
-const TAB_KEY: Record<WsTab, TKey> = { sahne: 'ws.tabScene', dosyalar: 'ws.tabFiles', kod: 'ws.tabCode', onizleme: 'ws.tabPreview', bilgisayar: 'ws.tabComputer', tarayici: 'ws.tabBrowser' };
+const TAB_KEY: Record<WsTab, TKey> = { sahne: 'ws.tabInspector', dosyalar: 'ws.tabFiles', kod: 'ws.tabCode', onizleme: 'ws.tabPreview', canli: 'ws.tabLive' };
 // Guide anchors on the panes (lib/guide/anchors.ts). The file tree is anchored here, not in
 // FileTree, because the sidebar's Files tab draws the same tree and the guide means this one.
-const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosyalar: 'file-tree', kod: 'ws-code', onizleme: 'ws-preview', bilgisayar: undefined, tarayici: undefined };
+const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosyalar: 'file-tree', kod: 'ws-code', onizleme: 'ws-preview', canli: undefined };
 const WIDTH_KEY: Record<WsWidth, TKey> = { dar: 'ws.widthNarrow', yarim: 'ws.widthHalf', odak: 'ws.widthFocus' };
 
 interface WorkspaceProps<T extends WsTab> {
@@ -33,7 +33,7 @@ interface WorkspaceProps<T extends WsTab> {
   onClose: () => void;
   /** Every pane stays mounted: Monaco's buffer and undo, the 3D stage and the file tree
    *  survive a tab switch. Only the visible one is laid out (workspace.css `.ws-pane`). */
-  panes: Record<T, React.ReactNode>;
+  panes: { [K in T]?: React.ReactNode };
   /** The terminal drawer under the panes. */
   drawer: React.ReactNode;
 }
@@ -45,8 +45,8 @@ interface WorkspaceProps<T extends WsTab> {
  */
 export function Workspace<T extends WsTab = WsTab>({ open, tab, onTab, width, onWidth, onClose, panes, drawer, editorOn = false }: WorkspaceProps<T>) {
   const { t } = useLang();
-  // A tab is drawn only when its pane is supplied: callers that predate the Bilgisayar tab
-  // pass the four original panes and keep the four original tabs.
+  // A tab is drawn only when its pane is supplied: the Inspector and Canlı panes exist only
+  // while the scene editor or a live feature is on.
   const tabs = WS_TABS.filter((id): id is T => id in panes);
   // #11 pane change: the newly shown pane rises in once (mockup `.ws-pane.is-entering`).
   const [entering, setEntering] = useState<T | null>(null);
@@ -117,7 +117,7 @@ export function Workspace<T extends WsTab = WsTab>({ open, tab, onTab, width, on
             tabIndex={tab === id ? 0 : -1}
             onClick={() => onTab(id)}
           >
-            {t(id === 'sahne' && editorOn ? 'ws.tabInspector' : TAB_KEY[id])}
+            {t(TAB_KEY[id])}
             {id === 'kod' && <span className="ws-tab-mark" role="img" aria-label={t('ws.pendingMark')} />}
           </button>
         ))}
@@ -325,7 +325,7 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({ file, kind, onClose, v
 
 export interface ChangedFile { path: string; rel: string; status: string }
 
-interface ScenePaneProps {
+interface ChangedFilesProps {
   change: PendingChange | null;
   changed: ChangedFile[];
   /** Total before the list was capped. */
@@ -344,24 +344,7 @@ const STATUS_KEY: Record<string, TKey> = {
 };
 const STATUS_TAG: Record<string, string> = { modified: 'tag-mod', untracked: 'tag-new', added: 'tag-new', deleted: 'tag-del' };
 
-/**
- * Sahne (mockup `.ws-pane[data-pane=sahne]`). The app has no source for the Unity scene tree
- * (no hook or backend call reads the hierarchy), so the scene section says so in one line; the
- * changed files come from the git status the file tree already polls, with the change a card is
- * waiting on at the top.
- */
-export const ScenePane: React.FC<ScenePaneProps> = (props) => {
-  const { t } = useLang();
-  return <>
-    <section className="ws-sec">
-      <h3 className="ws-label"><span>{t('ws.scene')}</span></h3>
-      <p className="ws-note">{t('ws.sceneEmpty')}</p>
-    </section>
-    <ChangedFiles {...props} />
-  </>;
-};
-
-export const ChangedFiles: React.FC<ScenePaneProps> = ({ change, changed, changedTotal, seenHidden = 0, onAck, onShowAll, isRepo, workspacePath, onShowChange, onOpen }) => {
+export const ChangedFiles: React.FC<ChangedFilesProps> = ({ change, changed, changedTotal, seenHidden = 0, onAck, onShowAll, isRepo, workspacePath, onShowChange, onOpen }) => {
   const { t } = useLang();
   const count = changedTotal + (change ? 1 : 0);
   return (

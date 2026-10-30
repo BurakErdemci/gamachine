@@ -17,6 +17,8 @@ export type Lang = 'tr' | 'en';
 export const tr = {
   // Computer use: live presence (right-panel tab and the floating indicator)
   'ws.tabComputer': 'Bilgisayar',
+  'ws.tabLive': 'Canlı',
+  'ws.liveRunning': 'Çalışıyor',
   'ws.tabBrowser': 'Tarayıcı',
   'bp.address': 'Sayfa adresi',
   'bp.addressHint': 'Ara veya adres gir',
@@ -1163,7 +1165,6 @@ export const tr = {
   'ws.resize': 'Çalışma alanının genişliğini değiştir',
   'ws.empty': 'Açık dosya yok. Kenar çubuğundaki Dosyalar sekmesinden ya da sohbetteki bir bağlantıdan aç.',
   'ws.tabs': 'Çalışma alanı sekmeleri',
-  'ws.tabScene': 'Sahne',
   'ws.tabInspector': 'Inspector',
   'sceneEditor.setting': 'Sahne editörü',
   'sceneEditor.settingHint': 'Açık sahnenin sana ait görünümü. Ajan bu paneli asla görmez.',
@@ -1267,8 +1268,6 @@ export const tr = {
   'ws.previewClose': 'Önizlemeyi kapat',
   'ws.previewEmpty': 'Önizlenecek bir şey yok. Dosyalar sekmesinden bir görsel ya da 3D model aç.',
   'ws.orbitHint': 'Sürükle: döndür · Tekerlek: yakınlaş',
-  'ws.scene': 'Sahne',
-  'ws.sceneEmpty': 'Unity sahne ağacı uygulamada henüz gösterilmiyor. Projede neyin değiştiği aşağıda.',
   'ws.changed': 'Değişen dosyalar',
   'ws.changedEmpty': 'Projenin git durumunda değişiklik yok.',
   'ws.changedNoRepo': 'Bu proje bir git deposu değil, değişen dosyalar listelenemiyor.',
@@ -1738,6 +1737,8 @@ export const tr = {
 export const en: Record<keyof typeof tr, string> = {
   // Computer use: live presence (right-panel tab and the floating indicator)
   'ws.tabComputer': 'Computer',
+  'ws.tabLive': 'Live',
+  'ws.liveRunning': 'Running',
   'ws.tabBrowser': 'Browser',
   'bp.address': 'Page address',
   'bp.addressHint': 'Search or enter an address',
@@ -2862,7 +2863,6 @@ export const en: Record<keyof typeof tr, string> = {
   'ws.resize': 'Resize the workspace',
   'ws.empty': 'No file open. Open one from the Files tab in the sidebar or from a link in the chat.',
   'ws.tabs': 'Workspace tabs',
-  'ws.tabScene': 'Scene',
   'ws.tabInspector': 'Inspector',
   'sceneEditor.setting': 'Scene editor',
   'sceneEditor.settingHint': 'Your own view of the open scene. The agent never sees this panel.',
@@ -2966,8 +2966,6 @@ export const en: Record<keyof typeof tr, string> = {
   'ws.previewClose': 'Close the preview',
   'ws.previewEmpty': 'Nothing to preview. Open an image or a 3D model from the Files tab.',
   'ws.orbitHint': 'Drag: rotate · Wheel: zoom',
-  'ws.scene': 'Scene',
-  'ws.sceneEmpty': 'The Unity scene tree is not shown in the app yet. What changed in the project is below.',
   'ws.changed': 'Changed files',
   'ws.changedEmpty': 'No changes in the project\'s git status.',
   'ws.changedNoRepo': 'This project is not a git repository, so changed files cannot be listed.',

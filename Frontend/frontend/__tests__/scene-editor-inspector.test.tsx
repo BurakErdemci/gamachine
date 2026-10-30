@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-li
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import { InspectorPane } from '../renderer/components/home/InspectorPane'
-import { ChangedFiles, ScenePane } from '../renderer/components/home/Workspace'
+import { ChangedFiles } from '../renderer/components/home/Workspace'
 import { useSceneEditor } from '../renderer/hooks/home/useSceneEditor'
 import type { Inspection, SceneField } from '../renderer/lib/sceneEditor'
 import { LangContext, ceviriUygula } from '../renderer/lib/i18n'
@@ -103,7 +103,7 @@ it('reuses the changed-files block with the same acknowledge action and wires it
   expect(ack).toHaveBeenCalledOnce()
   view.rerender(<InspectorPane inspection={inspection} loading={false} error={null} stale={false} />)
   expect(view.container.querySelector('[data-guide="changed-files"]')).toBeNull()
-  view.rerender(<ScenePane {...props} />)
+  view.rerender(<ChangedFiles {...props} />)
   expect(view.container.querySelector('[data-guide="changed-files"]')).toBeTruthy()
   const source = ts.createSourceFile('home.tsx', readFileSync('renderer/pages/home.tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   let panes = ''
@@ -112,6 +112,6 @@ it('reuses the changed-files block with the same acknowledge action and wires it
     ts.forEachChild(n, visit)
   }
   visit(source)
-  expect(panes).toMatch(/sahne:\s*editorOn\s*\?\s*<InspectorPane/)
-  expect(panes).toMatch(/dosyalar:[\s\S]*editorOn && <ChangedFiles/)
+  expect(panes).toMatch(/\.\.\.\(editorOn\s*\?\s*\{\s*sahne:\s*<InspectorPane/)
+  expect(panes).toMatch(/dosyalar:\s*\(\s*<>\s*<ChangedFiles/)
 })

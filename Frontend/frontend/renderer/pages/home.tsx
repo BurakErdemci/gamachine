@@ -21,7 +21,7 @@ import type { SettingsPage } from '../components/home/settings/pages';
 import { ExportModal } from '../components/home/ExportModal';
 import { ModelSelector } from '../components/home/ModelSelector';
 import { WorkspaceScreen } from '../components/home/WorkspaceScreen';
-import { Workspace, KodPane, PreviewPane, ScenePane, ChangedFiles, toggleTerminalDrawer, type WsDiff, type ChangedFile } from '../components/home/Workspace';
+import { Workspace, KodPane, PreviewPane, ChangedFiles, toggleTerminalDrawer, type WsDiff, type ChangedFile } from '../components/home/Workspace';
 import { ComputerLivePanel } from '../components/home/ComputerLivePanel';
 import { BrowserPanel } from '../components/home/BrowserPanel';
 import { HierarchyPanel } from '../components/home/HierarchyPanel';
@@ -64,7 +64,7 @@ import { useAppearance } from '../lib/appearance';
 import { awaitingElsewhere } from '../lib/convFamily';
 import { useNewChatShortcut } from '../lib/newChatShortcut';
 import { useTurnDone, cardOnScreen } from '../lib/turnDone';
-import { useWorkspacePanel, useNarrowWindow, useOneSideColumnWhenNarrow, tabForPath } from '../lib/workspacePanel';
+import { useWorkspacePanel, useNarrowWindow, useOneSideColumnWhenNarrow, useSidebarFoldedByFocusWidth, tabForPath } from '../lib/workspacePanel';
 import { createLiveRevealTracker } from '../lib/computerLiveReveal';
 import { usePendingChange } from '../lib/pendingChange';
 import { clearSeen, isUnseen, loadSeen, saveSeen, type Seen } from '../lib/changesSeen';
@@ -84,12 +84,16 @@ import { parseGuideCommand } from '../lib/guide/command';
 import type { GuideContext, GuideScreenId } from '../lib/guide/registry';
 import { guideWorkspaceTab, wants, type PrepareHandlers } from '../lib/guide/prepare';
 import type { WsTab, WsWidth } from '../lib/workspacePanel';
+import { useLiveSide, shownSides, viewSide } from '../lib/liveSide';
+import { useLiveFeatures } from '../lib/liveFeatures';
+import { browserRunningIn, useBrowserActiveChats, useComputerRunning } from '../lib/liveRunning';
+import { LivePane } from '../components/home/LivePane';
 
 // The guide's prepare-action arguments (REHBER-KAYITLARI.md section 4) in this app's own ids.
 const GUIDE_SETTINGS: Record<Parameters<PrepareHandlers['settings']>[0], SettingsPage> = {
   general: 'genel', models: 'modeller', appearance: 'gorunum', unity: 'unity', approval: 'onay', remote: 'uzak', account: 'hesap',
 };
-const GUIDE_TABS: Record<Parameters<PrepareHandlers['workspace.tab']>[0], WsTab> = { scene: 'sahne', files: 'dosyalar', code: 'kod', preview: 'onizleme' };
+const GUIDE_TABS: Record<Parameters<PrepareHandlers['workspace.tab']>[0], WsTab> = { scene: 'dosyalar', files: 'dosyalar', code: 'kod', preview: 'onizleme' };
 const GUIDE_WIDTHS: Record<Parameters<PrepareHandlers['workspace.width']>[0], WsWidth> = { narrow: 'dar', half: 'yarim', focus: 'odak' };
 const GUIDE_DRAWER: Record<Parameters<PrepareHandlers['drawer']>[0], DrawerTab> = { terminal: 'terminal', console: 'konsol', problems: 'sorunlar', connections: 'baglantilar' };
 /** What a guide topic changed and gives back when it ends. */
@@ -368,8 +372,20 @@ export default function Home() {
   const narrowWindow = useNarrowWindow();
   useOneSideColumnWhenNarrow(narrowWindow,
     { open: isSidebarOpen, setOpen: setIsSidebarOpen }, { open: ws.open, setOpen: setWsOpen });
+  useSidebarFoldedByFocusWidth(ws.width, { open: isSidebarOpen, setOpen: setIsSidebarOpen }, narrowWindow);
   const [sceneEditorSetting] = useSceneEditorSetting();
   const editorOn = sceneEditorSetting && ai.unityMcpStatus !== 'off';
+  // The Canlı tab: which sides are on (or running), which one it shows, and the running lights.
+  const live = useLiveSide();
+  const { setRunning: setLiveRunning, autoReveal: liveAutoReveal, pick: pickLive } = live;
+  const liveFeatures = useLiveFeatures();
+  const liveShown = shownSides(liveFeatures, live.running);
+  const liveAny = liveShown.bilgisayar || liveShown.tarayici;
+  const liveView = viewSide(live.side, liveShown);
+  // The Inspector and Canlı tabs exist only while their feature is on; the panel leaves them when they go.
+  useEffect(() => {
+    if ((ws.tab === 'sahne' && !editorOn) || (ws.tab === 'canli' && !liveAny)) setWsTab('dosyalar');
+  }, [ws.tab, editorOn, liveAny, setWsTab]);
   const [hierarchyVisible, setHierarchyVisible] = useState(false);
   // The file change a card is waiting on, with that card's own Accept / Reject handlers.
   const pendingChange = usePendingChange();
@@ -396,25 +412,27 @@ export default function Home() {
   // The floating computer-use indicator's body opens the live tab here (main/helpers/computer-use-live.ts).
   useEffect(() => {
     if (!ipc) return;
-    const off = ipc.on('computer-use-live-open', () => wsReveal('bilgisayar'));
+    const off = ipc.on('computer-use-live-open', () => { pickLive('bilgisayar'); wsReveal('canli'); });
     return () => { if (typeof off === 'function') off(); };
-  }, [ipc, wsReveal]);
+  }, [ipc, wsReveal, pickLive]);
   // Open the tab once per run without focusing the window so the agent's target app keeps focus.
+  const computerTracker = useMemo(() => createLiveRevealTracker(() => { if (liveAutoReveal('bilgisayar')) { setLiveRunning('bilgisayar', true); wsReveal('canli'); } }), [liveAutoReveal, setLiveRunning, wsReveal]);
+  const computerRunning = useComputerRunning(ipc, computerTracker);
+  useEffect(() => { setLiveRunning('bilgisayar', computerRunning); }, [computerRunning, setLiveRunning]);
+  // The agent browser opens its tab the same way: once per run, when main reports it active for the open chat's running turn.
+  const openChatRef = useRef({ id: chat.activeConvId, loading: chat.loading });
+  openChatRef.current = { id: chat.activeConvId, loading: chat.loading };
+  const browserTracker = useMemo(() => createLiveRevealTracker(
+    () => { if (liveAutoReveal('tarayici')) { setLiveRunning('tarayici', true); wsReveal('canli'); } },
+    id => id === openChatRef.current.id && openChatRef.current.loading,
+  ), [liveAutoReveal, setLiveRunning, wsReveal]);
+  const browserChats = useBrowserActiveChats(ipc, chat.activeConvId, browserTracker);
+  const browserRunning = browserRunningIn(browserChats, chat.activeConvId, chat.loading);
+  // The retained tab outlives the turn: its end re-arms the reveal so the next turn opens Canlı again.
   useEffect(() => {
-    if (!ipc) return;
-    const tracker = createLiveRevealTracker(() => wsReveal('bilgisayar'));
-    const off = ipc.on('computer-use-live', tracker);
-    return () => { if (typeof off === 'function') off(); };
-  }, [ipc, wsReveal]);
-  // The agent browser opens its tab the same way: once per run, when main reports it active.
-  const openConvRef = useRef<number | null>(null);
-  openConvRef.current = chat.activeConvId;
-  useEffect(() => {
-    if (!ipc) return;
-    const tracker = createLiveRevealTracker(() => wsReveal('tarayici'), id => id === openConvRef.current);
-    const off = ipc.on('browser-live', tracker);
-    return () => { if (typeof off === 'function') off(); };
-  }, [ipc, wsReveal]);
+    if (!chat.loading && chat.activeConvId !== null) browserTracker({ active: false, conversationId: chat.activeConvId });
+  }, [chat.loading, chat.activeConvId, browserTracker]);
+  useEffect(() => { setLiveRunning('tarayici', browserRunning); }, [browserRunning, setLiveRunning]);
   const [projectProblems, setProjectProblems] = useState<Record<string, any[]>>({});
   // Chat'te '/' autocomplete için Claude Code slash komutları + skill'ler (backend'den)
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
@@ -738,7 +756,7 @@ export default function Home() {
       if (a === 'new_chat' && !isChatEmpty(chat.activeConvId, chat.messages.length, chat.loading, !!mcp.activeGate)) guideGoTo(null);
     },
     settings: (page) => openSettings(GUIDE_SETTINGS[page]),
-    'workspace.tab': (tab) => { setWsOpen(true); setWsTab(GUIDE_TABS[guideWorkspaceTab(tab, editorOn)]); },
+    'workspace.tab': (tab) => { setWsOpen(true); setWsTab(GUIDE_TABS[guideWorkspaceTab(tab)]); },
     'workspace.width': (w) => { setWsOpen(true); ws.setWidth(GUIDE_WIDTHS[w]); },
     'workspace.peek': () => { if (!ws.open) { guidePeekRef.current = true; setWsOpen(true); } },
     // No "most recent asset" list exists: the Preview tab shows what is open, or its empty state.
@@ -1239,28 +1257,15 @@ export default function Home() {
           onWidth={ws.setWidth}
           onClose={() => setWsOpen(false)}
           panes={{
-            sahne: editorOn ? <InspectorPane inspection={sceneEditor.inspection} loading={sceneEditor.inspectLoading}
-              error={sceneEditor.inspectError} stale={sceneEditor.stale} actions={sceneEditor} /> : (
-              <ScenePane
-                change={pendingChange}
-                changed={changedFiles.shown}
-                changedTotal={changedFiles.total}
-                seenHidden={changedFiles.seenHidden}
-                onAck={onAckChanges}
-                onShowAll={onShowAllChanges}
-                isRepo={!!fs.gitStatus?.isRepo}
-                workspacePath={fs.workspacePath}
-                onShowChange={() => setWsTab('kod')}
-                onOpen={openInPanel}
-              />
-            ),
+            ...(editorOn ? { sahne: <InspectorPane inspection={sceneEditor.inspection} loading={sceneEditor.inspectLoading}
+              error={sceneEditor.inspectError} stale={sceneEditor.stale} actions={sceneEditor} /> } : {}),
             dosyalar: (
               <>
-              {editorOn && <ChangedFiles
+              <ChangedFiles
                 change={pendingChange} changed={changedFiles.shown} changedTotal={changedFiles.total}
                 seenHidden={changedFiles.seenHidden} onAck={onAckChanges} onShowAll={onShowAllChanges}
                 isRepo={!!fs.gitStatus?.isRepo} workspacePath={fs.workspacePath}
-                onShowChange={() => setWsTab('kod')} onOpen={openInPanel} />}
+                onShowChange={() => setWsTab('kod')} onOpen={openInPanel} />
               <ProjectFiles
                 {...fs}
                 openFile={openInPanel}
@@ -1318,8 +1323,16 @@ export default function Home() {
                   ))}
               />
             ),
-            bilgisayar: <ComputerLivePanel visible={ws.open && ws.tab === 'bilgisayar'} />,
-            tarayici: <BrowserPanel visible={ws.open && ws.tab === 'tarayici'} conversationId={chat.activeConvId} running={chat.loading} onStop={chat.stopMessage} onNeedChat={() => chat.createNewConversation()} />,
+            ...(liveAny ? { canli: (
+              <LivePane
+                side={liveView}
+                onPick={pickLive}
+                running={live.running}
+                shown={liveShown}
+                computer={<ComputerLivePanel visible={ws.open && ws.tab === 'canli' && liveView === 'bilgisayar'} />}
+                browser={<BrowserPanel visible={ws.open && ws.tab === 'canli' && liveView === 'tarayici'} conversationId={chat.activeConvId} running={chat.loading} onStop={chat.stopMessage} onNeedChat={() => chat.createNewConversation()} />}
+              />
+            ) } : {}),
           }}
           drawer={(
             <TerminalPanel
