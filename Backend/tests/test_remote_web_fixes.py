@@ -448,3 +448,49 @@ async def test_device_browser_approval_grants_the_one_time_retry(tmp_path, monke
     cards.set_ledger(None)
     cards.reset()
     assert retry.get("ok") is True and "click" in host_ops[before:], retry
+
+
+# ── Turn 4: resend, expiry after result retention, legacy RPC sweep ─────
+async def _request_gate(client, gate):
+    res = await client.post("/mcp-approval-request", json={
+        "gate_id": gate, "tool": "bash", "params": {"command": "ls"}, "workspace_path": ".",
+        "conversation_id": None}, headers={"X-Session-Token": TOKEN})
+    assert res.json()["status"] == "ok", res.text
+
+
+async def test_same_device_resend_says_already_answered(card_app):
+    transport = httpx.ASGITransport(app=card_app.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        await _request_gate(client, "web-resend-1")
+    session = FakeSession()
+    first = await call(dispatcher(card_app.app), session, type="ui_http", method="POST",
+                       path="/mcp-approval-respond/web-resend-1", body={"approved": True})
+    again = await call(dispatcher(card_app.app), session, rid=2, type="ui_http", method="POST",
+                       path="/mcp-approval-respond/web-resend-1", body={"approved": True})
+    assert json.loads(first["result"]["body"])["status"] == "ok"
+    assert json.loads(again["result"]["body"])["status"] == "already_answered"
+
+
+async def test_expiry_survives_result_retention(card_app):
+    from unittest.mock import patch
+    transport = httpx.ASGITransport(app=card_app.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        await _request_gate(client, "web-late-1")
+    # Far past both lifetimes: the sweep times the card out and drops its result record.
+    with patch.object(cr, "time", return_value=cr.time() + 100000):
+        r = await call(dispatcher(card_app.app), FakeSession(), type="ui_http", method="POST",
+                       path="/mcp-approval-respond/web-late-1", body={"approved": True})
+    assert json.loads(r["result"]["body"])["status"] == "gate_expired"
+    assert cards.get("web-late-1").outcome == "timed_out"
+
+
+async def test_legacy_answer_card_rpc_sweeps_expired_cards(card_app):
+    from unittest.mock import patch
+    transport = httpx.ASGITransport(app=card_app.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+        await _request_gate(client, "web-rpc-1")
+    with patch.object(cr, "time", return_value=cr.time() + 180):
+        r = await call(dispatcher(card_app.app), FakeSession(), type="answer_card",
+                       card_id="web-rpc-1", decision="approve")
+    assert r["ok"] is False and r["error"] == "gate_expired"
+    assert cards.get("web-rpc-1").outcome == "timed_out"

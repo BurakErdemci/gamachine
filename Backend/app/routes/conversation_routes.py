@@ -923,8 +923,15 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         won = _won_elsewhere(gate_id, device)
         if won is not None:
             return won
+        card = _cards.get(gate_id)
+        if card is not None and not card.open:
+            # The device's own resend keeps the reply it got before the sweep existed.
+            if card.by == device:
+                return _cards.already_answered(card)
         resolved = _mcp_results.get(gate_id, {})
-        if resolved.get("status") == "resolved":
+        # Timed out by the sweep: the result record may already be gone.
+        timed_out = card is not None and card.by == _cards.SYSTEM and card.outcome == "timed_out"
+        if resolved.get("status") == "resolved" or timed_out:
             return {"status": "gate_expired",
                     "error": resolved.get("error") or "Bu onay isteği artık geçerli değil."}
         return None
