@@ -1,6 +1,9 @@
 import { EventEmitter } from 'events'
+import http from 'http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { remoteEventArgs } from '../renderer/lib/remote/desktopRunner'
+import { startCommandServer } from '../main/helpers/browser-server'
+import { browserStepLabel } from '../renderer/lib/computerStep'
 import { BROWSER_PARTITION, BROWSER_WORLD_ID, BrowserHost, MAX_CHAT_TABS, MAX_TABS, NAVIGATION_TIMEOUT_MS, type BrowserHostDeps } from '../main/helpers/browser-host'
 
 // The isolated-world script runs for real against jsdom. jsdom lays nothing out and
@@ -425,8 +428,9 @@ describe('BrowserHost tabs per chat', () => {
     const [a, b] = f.views
     expect(a.webContents.loadURL).toHaveBeenCalledWith('https://a.example/')
     expect(a.webContents.loadURL).not.toHaveBeenCalledWith('https://b.example/')
-    expect((await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })).snapshot_id).toBe('s1')
-    expect((await f.host.handle({ op: 'snapshot', conversation_id: 7, args: {} })).snapshot_id).toBe('s1')
+    const snapA = (await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })).snapshot_id
+    const snapB = (await f.host.handle({ op: 'snapshot', conversation_id: 7, args: {} })).snapshot_id
+    expect(snapA).not.toBe(snapB)
     expect(await f.host.invoke({ op: 'visible', conversationId: 7, visible: true })).toEqual({ visible: true })
     expect(b.setVisible).toHaveBeenLastCalledWith(true)
     expect(a.setVisible).toHaveBeenLastCalledWith(false)
@@ -1439,6 +1443,9 @@ describe('BrowserHost tabs and use_tab ops', () => {
     epic.finish('https://epic.example/', 'Epic library')
     news.finish('https://news.example/', 'News')
     const ids = (await status(f)).tabs.map((t: any) => t.id)
+    // Selecting counts as the user's use, so the release afterwards clears the marks with the first tab in front.
+    await f.host.invoke({ op: 'select', conversationId: 4, tabId: ids[0] })
+    await f.host.invoke({ op: 'release', conversationId: 4 })
     return { f, agent, epic, news, ids }
   }
   const useTab = (f: ReturnType<typeof fixture>, tabId: unknown, conversationId = 4) =>
@@ -1452,9 +1459,9 @@ describe('BrowserHost tabs and use_tab ops', () => {
     const reply = await f.host.handle({ op: 'tabs', conversation_id: 4, args: {} })
     expect(reply).toMatchObject({ ok: true, url: 'https://github.example/' })
     expect(reply.tabs).toEqual([
-      { id: ids[0], title: 'Page', url: 'https://github.example/', active: false, agent: true, userTouched: false },
+      { id: ids[0], title: 'Page', url: 'https://github.example/', active: true, agent: true, userTouched: false },
       { id: ids[1], title: 'Epic library', url: 'https://epic.example', active: false, agent: false, userTouched: true },
-      { id: ids[2], title: 'News', url: 'https://news.example', active: true, agent: false, userTouched: false },
+      { id: ids[2], title: 'News', url: 'https://news.example', active: false, agent: false, userTouched: false },
     ])
     expect(JSON.stringify(reply)).not.toContain('other-chat')
     expect((await f.host.handle({ op: 'tabs', conversation_id: 5, args: {} })).tabs).toHaveLength(1)
@@ -1589,5 +1596,82 @@ describe('BrowserHost tabs and use_tab ops', () => {
     expect(news.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled()
     expect(news.capturePage).not.toHaveBeenCalled()
     expect(epic.executeJavaScriptInIsolatedWorld).toHaveBeenCalled()
+  })
+
+  it('tabs and use_tab pass the command server\'s user-control refusal while the user holds the agent tab', async () => {
+    const { f, agent, ids } = await chatWithTabs()
+    agent.emit('input-event', {}, { type: 'mouseDown' })
+    const server = await startCommandServer({ token: 'T', handle: (cmd) => f.host.handle(cmd as any),
+      immediate: (cmd) => cmd.op === 'halt', refuse: (cmd) => f.host.userControlReply(cmd as any) })
+    const post = (body: unknown) => new Promise<any>((resolve, reject) => {
+      const data = JSON.stringify(body)
+      const req = http.request({ host: '127.0.0.1', port: server.port, path: '/cmd', method: 'POST',
+        headers: { authorization: 'Bearer T', 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+        let text = ''
+        res.on('data', (chunk) => { text += chunk })
+        res.on('end', () => resolve(JSON.parse(text)))
+      })
+      req.on('error', reject)
+      req.end(data)
+    })
+    try {
+      expect(await post({ op: 'snapshot', conversation_id: 4, args: {} })).toMatchObject({ ok: false, error: 'user_control' })
+      expect(await post({ op: 'tabs', conversation_id: 4, args: {} })).toMatchObject({ ok: true })
+      expect(await post({ op: 'use_tab', conversation_id: 4, args: { tab_id: ids[2] } })).toMatchObject({ ok: true })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('leaving a tab the user holds marks it the user\'s, so the agent cannot switch back before the next message', async () => {
+    const { f, agent, ids } = await chatWithTabs()
+    agent.emit('input-event', {}, { type: 'mouseDown' })
+    expect(await useTab(f, ids[2])).toMatchObject({ ok: true })
+    expect(await useTab(f, ids[0])).toMatchObject({ ok: false, error: 'user_control' })
+    expect((await f.host.handle({ op: 'tabs', conversation_id: 4, args: {} })).tabs[0]).toMatchObject({ agent: false, userTouched: true })
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    expect(await useTab(f, ids[0])).toMatchObject({ ok: true })
+  })
+
+  it('a take-over from the panel also marks the tab on a switch away', async () => {
+    const { f, ids } = await chatWithTabs()
+    await f.host.invoke({ op: 'take-over', conversationId: 4 })
+    expect(await useTab(f, ids[1])).toMatchObject({ ok: true })
+    expect(await useTab(f, ids[0])).toMatchObject({ ok: false, error: 'user_control' })
+  })
+
+  it('a tab the user selected, navigated, reloaded or moved through history in the panel counts as used', async () => {
+    const { f, epic, news, ids } = await chatWithTabs()
+    const marks = async () => ((await f.host.handle({ op: 'tabs', conversation_id: 4, args: {} })).tabs as any[]).map((t) => t.userTouched)
+    expect(await marks()).toEqual([false, false, false])
+    await f.host.invoke({ op: 'select', conversationId: 4, tabId: ids[1] })
+    expect(await marks()).toEqual([false, true, false])
+    await f.host.invoke({ op: 'navigate', conversationId: 4, tabId: ids[2], url: 'https://news.example/typed' })
+    expect(await marks()).toEqual([false, true, true])
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    for (const op of ['reload', 'back', 'forward']) {
+      await f.host.invoke({ op, conversationId: 4, tabId: ids[1] })
+      expect(await marks()).toEqual([false, true, false])
+      await f.host.invoke({ op: 'release', conversationId: 4 })
+    }
+    expect(epic.reload).toHaveBeenCalled()
+    expect(news.loadURL).toHaveBeenCalledWith('https://news.example/typed')
+  })
+
+  it('snapshot ids are unique across tabs and a snapshot id from another tab is stale after a switch', async () => {
+    const { f, ids } = await chatWithTabs()
+    const first = await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
+    const ref = (first.elements as { ref: string }[])[0]?.ref ?? 'e1'
+    await useTab(f, ids[1])
+    const second = await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
+    expect(second.snapshot_id).not.toBe(first.snapshot_id)
+    for (const op of ['click', 'describe'])
+      expect(await f.host.handle({ op, conversation_id: 4, args: { snapshot_id: first.snapshot_id, ref } })).toMatchObject({ ok: false, error: 'stale_snapshot' })
+    expect(await f.host.handle({ op: 'click', conversation_id: 4, args: { snapshot_id: 's999', ref } })).toMatchObject({ ok: false, error: 'stale_snapshot' })
+  })
+
+  it('has step labels for tabs and use_tab', () => {
+    expect(browserStepLabel('browser_tabs')).toBe('Sekmeleri listeledi')
+    expect(browserStepLabel('mcp__gamachineBrowser__browser_use_tab')).toBe('Başka bir sekmeye geçti')
   })
 })

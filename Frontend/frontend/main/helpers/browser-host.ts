@@ -363,7 +363,8 @@ interface Tab {
   agent: boolean
   view: WebContentsView
   favicon: string
-  snapshotSeq: number
+  /** The id of the newest snapshot taken in this tab; element commands carrying any other id are stale. */
+  snapshotId: string
   loadWaiter: ((result: LoadResult) => void) | null
   popupBlocked: string | null
   userControl: boolean
@@ -392,6 +393,8 @@ interface ClosedTab { url: string; title: string }
 export class BrowserHost {
   private readonly tabs = new Map<number, Tab>()
   private nextTabId = 0
+  /** Snapshot ids count across all tabs, so an id never means two pages. */
+  private snapshotSeq = 0
   /** The tab each chat shows in the panel. */
   private readonly selected = new Map<number, number>()
   /** Tabs the user closed, newest last, for reopen. */
@@ -634,7 +637,7 @@ export class BrowserHost {
     })
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
-    const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotSeq: 0, loadWaiter: null,
+    const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
       popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
@@ -738,10 +741,15 @@ export class BrowserHost {
     if (agent) this.setUserControl(agent, false)
     const next = this.selectedTab(conversationId)
     if (!next || next === agent || (agent?.busy ?? 0) > 0) return
-    if (agent) agent.agent = false
+    this.moveAgent(agent, next)
+    this.emitLive(conversationId)
+  }
+
+  /** `next` becomes the chat's single agent tab; the old one turns into a user tab. */
+  private moveAgent(old: Tab | null, next: Tab): void {
+    if (old) old.agent = false
     next.agent = true
     next.expected = []
-    this.emitLive(conversationId)
   }
 
   /**
@@ -1014,6 +1022,7 @@ export class BrowserHost {
         const tab = this.chatTab(conversationId, tabId)
         if (!tab) return tabId === undefined ? this.openUserTab(conversationId, url) : { error: 'no_tab' }
         this.touch(tab)
+        tab.userTouched = true
         tab.view.webContents.loadURL(url as string).catch(() => { /* reported by did-fail-load */ })
         this.emitLive(conversationId)
         return this.livePayload(conversationId)
@@ -1024,6 +1033,7 @@ export class BrowserHost {
         const tab = this.chatTab(conversationId, tabId)
         if (!tab) return { error: 'no_tab' }
         this.touch(tab)
+        tab.userTouched = true
         const wc = tab.view.webContents
         const history = wc.navigationHistory
         if (op === 'reload') wc.reload()
@@ -1045,8 +1055,10 @@ export class BrowserHost {
       case 'close-tab': {
         const tab = tabId === undefined ? null : this.chatTab(conversationId, tabId)
         if (!tab) return { error: 'no_tab' }
-        if (op === 'select') this.selectTab(tab)
-        else this.closeByUser(tab)
+        if (op === 'select') {
+          tab.userTouched = true
+          this.selectTab(tab)
+        } else this.closeByUser(tab)
         return this.livePayload(conversationId)
       }
       case 'reopen-tab':
@@ -1209,7 +1221,8 @@ export class BrowserHost {
 
   /** The refusal for an agent command whose tab the user has taken over, or null when it may run. */
   userControlReply(cmd: BrowserCommand): Reply | null {
-    if (cmd.op === 'halt') return null
+    // `tabs` and `use_tab` are judged inside handle: the agent may move away from the tab the user holds.
+    if (cmd.op === 'halt' || cmd.op === 'tabs' || cmd.op === 'use_tab') return null
     const id = this.commandConversation(cmd)
     const tab = id === null ? null : this.agentTab(id)
     if (!tab?.userControl) return null
@@ -1270,8 +1283,11 @@ export class BrowserHost {
    */
   private tabsReply(conversationId: number): Reply {
     const shown = this.selectedTab(conversationId)
-    const tabs = this.tabsOf(conversationId).map((tab) => ({ id: tab.id, title: tab.view.webContents.getTitle(),
-      url: tab.agent ? tab.view.webContents.getURL() : originOf(tab.view.webContents.getURL()), active: tab === shown, agent: tab.agent, userTouched: tab.userTouched }))
+    const tabs = this.tabsOf(conversationId).map((tab) => {
+      const url = tab.view.webContents.getURL()
+      return { id: tab.id, title: tab.view.webContents.getTitle(), url: tab.agent ? url : originOf(url),
+        active: tab === shown, agent: tab.agent, userTouched: tab.userTouched }
+    })
     return { ok: true, tabs, ...this.base(this.agentTab(conversationId)?.view.webContents) }
   }
 
@@ -1288,14 +1304,14 @@ export class BrowserHost {
     const next = this.chatTab(conversationId, tabId)
     if (!next) return failed('no_tab')
     if (next === agent) return { ok: true, ...this.base(next.view.webContents) }
-    if (next.userTouched) return failed('user_control')
+    if (next.userTouched || next.userControl) return failed('user_control')
     if ((agent?.busy ?? 0) > 0) return failed('busy')
-    if (agent) {
-      agent.agent = false
+    if (agent?.userControl) {
+      // The tab the user held stays theirs until their next message.
+      agent.userTouched = true
       this.setUserControl(agent, false)
     }
-    next.agent = true
-    next.expected = []
+    this.moveAgent(agent, next)
     this.touch(next)
     this.emitLive(conversationId)
     return { ok: true, ...this.base(next.view.webContents) }
@@ -1306,6 +1322,7 @@ export class BrowserHost {
     const wc = tab.view.webContents
     const ref = { snapshotId: args.snapshot_id, ref: args.ref }
     const needsRef = () => str(args.snapshot_id) && str(args.ref)
+    if (op !== 'snapshot' && str(args.snapshot_id) && args.snapshot_id !== tab.snapshotId) return { error: 'stale_snapshot' }
     switch (op) {
       case 'navigate': {
         const url = args.url
@@ -1329,7 +1346,8 @@ export class BrowserHost {
       case 'snapshot': {
         const requested = Number(args.max_chars)
         const maxChars = Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), MAX_TEXT_CHARS) : 20_000
-        const snapshotId = `s${++tab.snapshotSeq}`
+        const snapshotId = `s${++this.snapshotSeq}`
+        tab.snapshotId = snapshotId
         const result = await this.page(tab, 'snapshot', { snapshotId, maxChars })
         return result.error ? result : { ...result, snapshot_id: snapshotId }
       }
