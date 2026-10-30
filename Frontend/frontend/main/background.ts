@@ -1595,7 +1595,7 @@ if (!gotTheLock) {
       const menu = Menu.buildFromTemplate(template);
       Menu.setApplicationMenu(menu);
 
-      // Owner decision (29 Oct 2026): in-app auto-update; Windows unsigned (sha512 only), mac signed.
+      // Owner decision (29 Oct 2026): in-app auto-update; Windows is unsigned, so installs are gated on our own Ed25519 signature of the manifest (docs/releasing.md).
       if (isProd) {
         updateHandle = setupAutoUpdate({
           autoUpdater,
@@ -1611,6 +1611,7 @@ if (!gotTheLock) {
           },
           logger: console,
           relaunch: () => { app.relaunch(); app.exit(0) },
+          openExternal: (url) => shell.openExternal(url),
           getMainWindow: () => BrowserWindow.getAllWindows()[0],
         })
       }
