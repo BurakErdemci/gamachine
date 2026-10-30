@@ -269,8 +269,6 @@ function positiveInt(value: unknown): value is number {
 interface Tab {
   conversationId: number
   view: WebContentsView
-  /** An agent command has run here, so a Stop must also reach the backend halt. */
-  agent: boolean
   snapshotSeq: number
   loadWaiter: ((result: LoadResult) => void) | null
   popupBlocked: string | null
@@ -285,7 +283,8 @@ export class BrowserHost {
   private readonly tabs = new Map<number, Tab>()
   private hardened = false
   private visibleId: number | null = null
-  private lastAgentId: number | null = null
+  /** Chats the agent has acted in. Outlives the tab (evict, close, clear) so a Stop still reaches the backend halt. */
+  private readonly actedIn = new Set<number>()
   private clock = 0
   private bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
   private readonly hostCache = new Map<string, { blocked: true; at: number }>()
@@ -325,16 +324,10 @@ export class BrowserHost {
     return this.reports
   }
 
-  /**
-   * The backend drops every chat's cards and grants on a runtime change, so a cleared session is
-   * reported as one: down, then up again. A failed step is repaired by the next reconcile poll.
-   */
+  /** One report that also carries `cleared`, so the backend drops every chat's cards and grants. */
   private reportCleared() {
     const data = this.runtimeBody()
-    if (!data.running) return this.reports
-    this.reports = this.reports
-      .then(() => this.request('post', '/browser/runtime', { running: false, port: null, token: null }, true))
-      .then(() => this.request('post', '/browser/runtime', data, true))
+    this.reports = this.reports.then(() => this.request('post', '/browser/runtime', { ...data, cleared: true }, true))
       .catch(() => { this.log('[browser] runtime report failed') })
     return this.reports
   }
@@ -477,7 +470,7 @@ export class BrowserHost {
         safeDialogs: true,
       },
     })
-    const tab: Tab = { conversationId, view, agent: false, snapshotSeq: 0, loadWaiter: null, popupBlocked: null,
+    const tab: Tab = { conversationId, view, snapshotSeq: 0, loadWaiter: null, popupBlocked: null,
       userControl: false, syntheticUntil: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
@@ -728,8 +721,7 @@ export class BrowserHost {
 
   /** The backend halt set also covers browser tools, so the agent's next call is refused too. */
   private async haltBackend(only: number | null): Promise<void> {
-    const ids = [...this.tabs.values()].filter((tab) => tab.agent && (only === null || tab.conversationId === only))
-      .map((tab) => tab.conversationId)
+    const ids = only === null ? [...this.actedIn] : [only]
     await Promise.all(ids.map((id) => this.request('post', `/computer-use/halt/${id}`, undefined, true)))
   }
 
@@ -786,9 +778,9 @@ export class BrowserHost {
     return !wc || wc.isDestroyed() ? { url: '', title: '' } : { url: wc.getURL(), title: wc.getTitle() }
   }
 
-  /** The chat a command belongs to; one without an id goes to the chat the agent used last. */
+  /** The chat a command belongs to; one without a valid id belongs to none and is refused. */
   private commandConversation(cmd: BrowserCommand): number | null {
-    return positiveInt(cmd.conversation_id) ? cmd.conversation_id : this.lastAgentId
+    return positiveInt(cmd.conversation_id) ? cmd.conversation_id : null
   }
 
   /** The refusal for an agent command whose tab the user has taken over, or null when it may run. */
@@ -816,8 +808,7 @@ export class BrowserHost {
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : 'no_window', url: '', title: '' }
     }
-    tab.agent = true
-    this.lastAgentId = id
+    this.actedIn.add(id)
     this.emitLive(id)
     const wc = tab.view.webContents
     let reply: Reply

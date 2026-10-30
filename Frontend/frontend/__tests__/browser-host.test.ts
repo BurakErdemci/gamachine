@@ -318,11 +318,13 @@ describe('BrowserHost halt and renderer channel', () => {
     expect(f.onHalt).toHaveBeenCalledTimes(2)
   })
 
-  it('halt with no active conversation does not call the backend', async () => {
+  it('halt for a chat without a tab still posts the backend halt; an id-less halt with no acted chat does not', async () => {
     const f = fixture()
-    expect(await f.host.invoke({ op: 'halt', conversationId: 4 })).toEqual({ halted: true })
     expect(await f.host.invoke({ op: 'halt' })).toEqual({ halted: true })
     expect(f.http.request).not.toHaveBeenCalled()
+    expect(await f.host.invoke({ op: 'halt', conversationId: 4 })).toEqual({ halted: true })
+    expect(f.http.request).toHaveBeenCalledTimes(1)
+    expect(f.http.request).toHaveBeenCalledWith(expect.objectContaining({ url: 'http://127.0.0.1:9/computer-use/halt/4' }))
     for (const conversationId of [0, -1, 1.5, '4'])
       expect(await f.host.invoke({ op: 'halt', conversationId })).toHaveProperty('error')
   })
@@ -583,7 +585,7 @@ describe('BrowserHost user operations', () => {
     expect(livePayloads(f)).toContainEqual(expect.objectContaining({ active: false, conversationId: 7 }))
     expect(await f.host.invoke({ op: 'status', conversationId: 4 })).toMatchObject({ active: false })
     const posts = f.http.request.mock.calls.map(([c]: [any]) => c).filter((c: any) => c.url.endsWith('/browser/runtime'))
-    expect(posts.map((c: any) => c.data)).toEqual([{ running: false, port: null, token: null }, { running: true, port: 4321, token: 'tkn' }])
+    expect(posts.map((c: any) => c.data)).toEqual([{ running: true, port: 4321, token: 'tkn', cleared: true }])
     expect(posts[0].headers).toEqual({ 'X-Session-Token': 'tok', 'X-Gamachine-UI-Secret': 'secret' })
     f.session.clearCache.mockRejectedValueOnce(new Error('disk'))
     expect(await f.host.invoke({ op: 'clear-browsing-data' })).toEqual({ error: 'Clearing browsing data failed.' })
