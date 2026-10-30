@@ -90,11 +90,14 @@ describe('BrowserPanel', () => {
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
     push(live({ loading: true }))
     const address = screen.getByLabelText(tr['bp.address']) as HTMLInputElement
-    expect(address.value).toBe('https://itch.io/game-assets')
+    expect(address.value).toBe('itch.io')
+    expect(address.title).toBe('https://itch.io/game-assets')
     expect(address.readOnly).toBe(false)
     expect(screen.getByText('Free assets')).toBeTruthy()
     expect(screen.getByText(tr['bp.loading'])).toBeTruthy()
     push(live({ loading: false, url: 'https://itch.io/next' }))
+    expect(address.title).toBe('https://itch.io/next')
+    fireEvent.focus(address)
     expect(address.value).toBe('https://itch.io/next')
     expect(screen.queryByText(tr['bp.loading'])).toBeNull()
   })
@@ -103,11 +106,11 @@ describe('BrowserPanel', () => {
     render(<BrowserPanel visible conversationId={3} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
     push(live({ conversationId: 9, url: 'https://other.example/' }))
-    expect(screen.queryByDisplayValue('https://other.example/')).toBeNull()
+    expect(screen.queryByDisplayValue('other.example')).toBeNull()
     expect(screen.getByText(tr['bp.idle'])).toBeTruthy()
     push(live())
     push(live({ conversationId: 9, active: false }))
-    expect((screen.getByLabelText(tr['bp.address']) as HTMLInputElement).value).toBe('https://itch.io/game-assets')
+    expect((screen.getByLabelText(tr['bp.address']) as HTMLInputElement).value).toBe('itch.io')
   })
 
   it('Enter in the address bar sends navigate; Escape-free typing does not', async () => {
@@ -120,6 +123,21 @@ describe('BrowserPanel', () => {
     expect(calls('navigate')).toHaveLength(0)
     fireEvent.keyDown(address, { key: 'Enter' })
     expect(calls('navigate')).toEqual([{ op: 'navigate', conversationId: 3, url: 'https://example.com/a' }])
+  })
+
+  it('searches typed words and completes a bare site name', async () => {
+    render(<BrowserPanel visible conversationId={3} />)
+    await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
+    push(live())
+    const address = screen.getByLabelText(tr['bp.address']) as HTMLInputElement
+    fireEvent.focus(address)
+    fireEvent.change(address, { target: { value: 'unity hub' } })
+    fireEvent.keyDown(address, { key: 'Enter' })
+    fireEvent.focus(address)
+    fireEvent.change(address, { target: { value: 'github.com' } })
+    fireEvent.keyDown(address, { key: 'Enter' })
+    expect(calls('navigate').map(c => c.url)).toEqual([
+      'https://www.google.com/search?q=unity%20hub', 'https://github.com'])
   })
 
   it('back, forward, reload, take-over and halt carry the chat id', async () => {

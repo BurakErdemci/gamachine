@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLang } from '../../lib/i18n';
+import { addressToUrl, displayAddress } from '../../lib/browserAddress';
 
 /** Main-process event and invoke channel for the agent browser (docs/agent-browser.md). */
 export const BROWSER_CHANNEL = 'browser-live';
@@ -149,8 +150,8 @@ export function BrowserPanel({ visible, conversationId }: { visible: boolean; co
     setStopping(false);
   };
 
-  const submit = (op: 'navigate' | 'open', url: string) => {
-    const target = url.trim();
+  const submit = (op: 'navigate' | 'open', text: string) => {
+    const target = addressToUrl(text);
     if (!target) return;
     send(op, { url: target });
   };
@@ -177,7 +178,7 @@ export function BrowserPanel({ visible, conversationId }: { visible: boolean; co
             {nav('forward', '›')}
             {nav('reload', '↻')}
             <span className="bp-dot" data-loading={state.loading ? 'true' : 'false'} aria-hidden="true" />
-            <input className="bp-address" type="text" value={editing ? draft : state.url} placeholder="https://"
+            <input className="bp-address" type="text" value={editing ? draft : displayAddress(state.url)} placeholder={t('bp.addressHint')}
               aria-label={t('bp.address')} title={state.url} spellCheck={false}
               onFocus={e => { setDraft(state.url); setEditing(true); e.currentTarget.select(); }}
               onBlur={() => setEditing(false)}
@@ -208,7 +209,7 @@ export function BrowserPanel({ visible, conversationId }: { visible: boolean; co
           <div className="bp-idle">
             <p className="bp-idle-title">{t(conversationId == null ? 'bp.noChat' : 'bp.idle')}</p>
             <div className="bp-open">
-              <input className="bp-address" type="text" value={openUrl} placeholder="https://"
+              <input className="bp-address" type="text" value={openUrl} placeholder={t('bp.addressHint')}
                 aria-label={t('bp.address')} spellCheck={false} disabled={conversationId == null}
                 onChange={e => setOpenUrl(e.target.value)}
                 onKeyDown={keyOf('open', openUrl)} />
