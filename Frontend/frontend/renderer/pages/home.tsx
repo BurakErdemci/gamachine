@@ -416,18 +416,22 @@ export default function Home() {
     return () => { if (typeof off === 'function') off(); };
   }, [ipc, wsReveal, pickLive]);
   // Open the tab once per run without focusing the window so the agent's target app keeps focus.
-  const computerTracker = useMemo(() => createLiveRevealTracker(() => { if (liveAutoReveal('bilgisayar')) wsReveal('canli'); }), [liveAutoReveal, wsReveal]);
+  const computerTracker = useMemo(() => createLiveRevealTracker(() => { if (liveAutoReveal('bilgisayar')) { setLiveRunning('bilgisayar', true); wsReveal('canli'); } }), [liveAutoReveal, setLiveRunning, wsReveal]);
   const computerRunning = useComputerRunning(ipc, computerTracker);
   useEffect(() => { setLiveRunning('bilgisayar', computerRunning); }, [computerRunning, setLiveRunning]);
   // The agent browser opens its tab the same way: once per run, when main reports it active for the open chat's running turn.
   const openChatRef = useRef({ id: chat.activeConvId, loading: chat.loading });
   openChatRef.current = { id: chat.activeConvId, loading: chat.loading };
   const browserTracker = useMemo(() => createLiveRevealTracker(
-    () => { if (liveAutoReveal('tarayici')) wsReveal('canli'); },
+    () => { if (liveAutoReveal('tarayici')) { setLiveRunning('tarayici', true); wsReveal('canli'); } },
     id => id === openChatRef.current.id && openChatRef.current.loading,
-  ), [liveAutoReveal, wsReveal]);
+  ), [liveAutoReveal, setLiveRunning, wsReveal]);
   const browserChats = useBrowserActiveChats(ipc, chat.activeConvId, browserTracker);
   const browserRunning = browserRunningIn(browserChats, chat.activeConvId, chat.loading);
+  // The retained tab outlives the turn: its end re-arms the reveal so the next turn opens Canlı again.
+  useEffect(() => {
+    if (!chat.loading && chat.activeConvId !== null) browserTracker({ active: false, conversationId: chat.activeConvId });
+  }, [chat.loading, chat.activeConvId, browserTracker]);
   useEffect(() => { setLiveRunning('tarayici', browserRunning); }, [browserRunning, setLiveRunning]);
   const [projectProblems, setProjectProblems] = useState<Record<string, any[]>>({});
   // Chat'te '/' autocomplete için Claude Code slash komutları + skill'ler (backend'den)

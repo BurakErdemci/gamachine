@@ -6,6 +6,7 @@ import { translations } from '../renderer/lib/i18n'
 import { LivePane } from '../renderer/components/home/LivePane'
 import { Workspace } from '../renderer/components/home/Workspace'
 import { LIVE_FEATURES_EVENT, useLiveFeatures } from '../renderer/lib/liveFeatures'
+import { createLiveRevealTracker } from '../renderer/lib/computerLiveReveal'
 import { shownSides, useLiveSide, viewSide } from '../renderer/lib/liveSide'
 import { browserRunningIn, useBrowserActiveChats, useComputerRunning } from '../renderer/lib/liveRunning'
 import { useOneSideColumnWhenNarrow, useSidebarFoldedByFocusWidth, useWorkspacePanel, type WsWidth } from '../renderer/lib/workspacePanel'
@@ -361,5 +362,76 @@ describe('useLiveFeatures ordering', () => {
     await act(async () => { pending[0]({ enabled: false }) })
     expect(result.current.browser).toBe(true)
     delete (window as any).ipc
+  })
+})
+
+describe('Canlı reveal wiring in the page', () => {
+  type Listener = (raw: unknown) => void
+  const listeners = new Map<string, Listener>()
+  const ipc = {
+    invoke: async () => ({ active: false }),
+    on: (channel: string, fn: Listener) => { listeners.set(channel, fn); return () => { listeners.delete(channel) } },
+  }
+  const emit = (channel: string, raw: unknown) => act(() => { listeners.get(channel)!(raw) })
+
+  // The page's wiring: the reveal marks the side running first, then opens the tab; the fallback leaves Canlı when no side is shown.
+  function usePage(chat: { activeConvId: number; loading: boolean }) {
+    const ws = useWorkspacePanel()
+    const live = useLiveSide()
+    const features = { computer: false, browser: false }
+    const shown = shownSides(features, live.running)
+    const { setRunning, autoReveal } = live
+    const { reveal, setTab } = ws
+    const openChat = React.useRef(chat)
+    openChat.current = chat
+    const reveals = React.useRef(0)
+    const computerTracker = React.useMemo(() => createLiveRevealTracker(() => {
+      if (autoReveal('bilgisayar')) { setRunning('bilgisayar', true); reveals.current++; reveal('canli') }
+    }), [autoReveal, setRunning, reveal])
+    const computerRunning = useComputerRunning(ipc, computerTracker)
+    React.useEffect(() => { setRunning('bilgisayar', computerRunning) }, [computerRunning, setRunning])
+    const browserTracker = React.useMemo(() => createLiveRevealTracker(
+      () => { if (autoReveal('tarayici')) { setRunning('tarayici', true); reveals.current++; reveal('canli') } },
+      id => id === openChat.current.activeConvId && openChat.current.loading,
+    ), [autoReveal, setRunning, reveal])
+    const browserChats = useBrowserActiveChats(ipc, chat.activeConvId, browserTracker)
+    const browserRunning = browserRunningIn(browserChats, chat.activeConvId, chat.loading)
+    React.useEffect(() => {
+      if (!chat.loading) browserTracker({ active: false, conversationId: chat.activeConvId })
+    }, [chat.loading, chat.activeConvId, browserTracker])
+    React.useEffect(() => { setRunning('tarayici', browserRunning) }, [browserRunning, setRunning])
+    React.useEffect(() => {
+      if (ws.tab === 'canli' && !(shown.bilgisayar || shown.tarayici)) setTab('dosyalar')
+    }, [ws.tab, shown.bilgisayar, shown.tarayici, setTab])
+    return { ws, live, shown, reveals }
+  }
+
+  afterEach(() => { listeners.clear() })
+
+  it('keeps the revealed Canlı tab when a computer run arrives with its feature off', async () => {
+    const { result } = renderHook(() => usePage({ activeConvId: 1, loading: true }))
+    await act(async () => {})
+    emit('computer-use-live', { active: true, conversationId: 1 })
+    expect(result.current.ws.tab).toBe('canli')
+    expect(result.current.shown.bilgisayar).toBe(true)
+  })
+
+  it('keeps the revealed Canlı tab when a browser run arrives with its feature off', async () => {
+    const { result } = renderHook(() => usePage({ activeConvId: 1, loading: true }))
+    await act(async () => {})
+    emit('browser-live', { active: true, conversationId: 1 })
+    expect(result.current.ws.tab).toBe('canli')
+    expect(result.current.shown.tarayici).toBe(true)
+  })
+
+  it('reveals again on the next turn of the same chat while the tab stays', async () => {
+    const { result, rerender } = renderHook(({ loading }) => usePage({ activeConvId: 1, loading }), { initialProps: { loading: true } })
+    await act(async () => {})
+    emit('browser-live', { active: true, conversationId: 1 })
+    expect(result.current.reveals.current).toBe(1)
+    rerender({ loading: false })
+    rerender({ loading: true })
+    emit('browser-live', { active: true, conversationId: 1 })
+    expect(result.current.reveals.current).toBe(2)
   })
 })
