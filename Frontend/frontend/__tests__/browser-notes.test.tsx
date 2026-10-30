@@ -21,7 +21,7 @@ import { AnimatedChatInput } from '../renderer/components/ui/animated-ai-chat'
 import { useChat } from '../renderer/hooks/home/useChat'
 import {
   addBrowserChips, addNotesFromEvent, addPageChip, captureNoteShots, formatBrowserContext, notesTab, getBrowserChips, isAnnotateShortcut, parseBrowserContext,
-  takeBrowserChips, withinMs, MAX_CONTEXT_CHARS, type BrowserChip,
+  takeBrowserChips, withinMs, MAX_CONTEXT_CHARS, MAX_MESSAGE_IMAGES, type BrowserChip,
 } from '../renderer/lib/browserNotes'
 import { ceviriUygula } from '../renderer/lib/i18n'
 
@@ -923,6 +923,20 @@ describe('page script', () => {
     expect(names[0]).toBe('Genel etiket')
   })
 
+  it('T6 snapshot and describe names never read an editor, nor a label inside one', () => {
+    start('<div contenteditable="true"><span id="private">PRIVATE_EDITOR_TEXT</span><label for="field">PRIVATE_FIELD_LABEL</label></div>'
+      + '<button id="b" aria-labelledby="private">Save</button><input id="field">')
+    for (const el of document.querySelectorAll('[contenteditable]')) Object.defineProperty(el, 'isContentEditable', { value: true })
+    const snapshot = lib().snapshot({ snapshotId: 't6', maxChars: 1000 })
+    const names = [...snapshot.elements.map((e: any) => e.name)]
+    for (const id of ['b', 'field']) {
+      document.getElementById(id)!.focus()
+      names.push(lib().describe({ focused: true }).element.name)
+    }
+    expect(JSON.stringify(names)).not.toContain('PRIVATE')
+    expect(names).toContain('Save')
+  })
+
   it('draws the number the host gave on the pin, refuses a missing number, and uncommitPin takes the pin back as a pending target', () => {
     start(BUTTON)
     click(document.getElementById('buy')!, 20, 30)
@@ -1484,5 +1498,155 @@ describe('T5 one block per tab and plain text', () => {
     expect(parseBrowserContext(after)).toEqual({ text: after, blocks: [] })
     const bare = 'x\n\n[Bu sayfa hakkında — sekme 2]'
     expect(parseBrowserContext(bare)).toEqual({ text: bare, blocks: [] })
+  })
+})
+
+describe('T6 host races', () => {
+  const settle = async () => { await new Promise(r => setImmediate(r)); await new Promise(r => setImmediate(r)) }
+
+  it('T6 an older pick poll answering late never replaces a newer pick or its draft', async () => {
+    const f = fakeHostFixture()
+    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
+    await openPage(f)
+    await annotate(f, true)
+    let answerOld: (v: unknown) => void = () => {}
+    f.wc.pickState = () => new Promise(resolve => { answerOld = resolve })
+    await f.poll()
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
+    await f.poll()
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenCalled())
+    boxSays(f, { t: 'draft', text: 'NEW DRAFT' })
+    answerOld(pickState({ pick: PICK }))
+    await settle()
+    const pick = (f.host as any).tabs.get(1).pick
+    expect(pick.data.id).toBe('p2')
+    expect(pick.draft).toBe('NEW DRAFT')
+  })
+
+  it('T6 a pick with a draft is not replaced by another pick', async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    boxSays(f, { t: 'draft', text: 'KEEP ME' })
+    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
+    await f.poll()
+    expect((f.host as any).tabs.get(1).pick.data.id).toBe('p1')
+    expect((f.host as any).tabs.get(1).pick.draft).toBe('KEEP ME')
+  })
+
+  it('T6 a tab hidden while the mode is ended is captured with stayHidden', async () => {
+    const f = fakeHostFixture()
+    await openPage(f)
+    await annotate(f, true)
+    let release: (v: unknown) => void = () => {}
+    f.wc.executeJavaScriptInIsolatedWorld.mockImplementation(async (_w: number, scripts: { code: string }[]) =>
+      (scripts[0].code.includes('.annotateOff(') ? new Promise(resolve => { release = resolve }) : {}))
+    const pending = f.host.invoke({ op: 'capture-notes', conversationId: 4, tabId: 1 }) as Promise<any>
+    await settle()
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+    release({})
+    await pending
+    expect(f.wc.capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true })
+  })
+
+  it('T6 a background page popup keeps the selected tab, a foreground one selects the new tab', async () => {
+    for (const [disposition, selected] of [['background-tab', 1], ['foreground-tab', 2]] as const) {
+      const f = fakeHostFixture()
+      await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://example.com/' })
+      await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+      const first = f.wc
+      // the fixture's second view is the comment box: the popup tab gets its own
+      const second = fakeWc()
+      Object.assign(second, { executeJavaScriptInIsolatedWorld: vi.fn(async () => ({})) })
+      ;(f.host as any).deps.createView = () => ({ webContents: second, setBounds: vi.fn(), setVisible: vi.fn() })
+      first.emit('input-event', {}, { type: 'mouseDown' })
+      expect(first.setWindowOpenHandler.mock.calls.at(-1)![0]({ url: 'https://popup.example/', disposition })).toEqual({ action: 'deny' })
+      await settle()
+      const panel = (await f.host.invoke({ op: 'panel-status', conversationId: 4 })) as any
+      expect(panel.tabs).toHaveLength(2)
+      expect(panel.activeTabId).toBe(selected)
+    }
+  })
+})
+
+describe('T6 the bubble parser', () => {
+  it('T6 text between a generated block and a later bare fence is shown as typed', () => {
+    const block = formatBrowserContext([{ type: 'page', key: 'page:2', tabId: 2, url: 'https://example.com/', title: 'Example' }])
+    const content = `Before\n\n${block}\n\nMY TYPED EXPLANATION\n<page_data>\n{}\n</page_data>`
+    expect(parseBrowserContext(content)).toEqual({ text: content, blocks: [] })
+    const notes = formatBrowserContext([noteChip({ id: 'a' }, 2)])
+    const extra = `${notes}\nbir satır daha`
+    expect(parseBrowserContext(`x\n\n${extra}`)).toEqual({ text: `x\n\n${extra}`, blocks: [] })
+    expect(parseBrowserContext(`x\n\n${notes}`).blocks).toHaveLength(1)
+    const two = formatBrowserContext([noteChip({ id: 'a' }, 2), noteChip({ id: 'b' }, 3)])
+    expect(parseBrowserContext(`x\n\n${two}`).blocks).toHaveLength(2)
+  })
+})
+
+describe('T6 send limits', () => {
+  const SHOT = 'data:image/jpeg;base64,c2hvdA=='
+  const sseDone = () => ({
+    ok: true,
+    body: { getReader: () => { let given = false; return { read: async () => {
+      if (given) return { done: true, value: undefined }
+      given = true
+      return { done: false, value: new TextEncoder().encode(`data: ${JSON.stringify({ type: 'done', stop_reason: 'complete' })}\n\n`) }
+    } } } },
+  })
+  let invoke: ReturnType<typeof vi.fn>
+  let fetchMock: ReturnType<typeof vi.fn>
+  beforeEach(() => {
+    mockedAxios.post.mockReset().mockResolvedValue({ data: { id: 5 } })
+    mockedAxios.get.mockReset().mockResolvedValue({ data: [] })
+    mockedAxios.delete.mockReset().mockResolvedValue({ data: {} })
+    invoke = vi.fn(async (_c: string, req: any) => (req?.op === 'panel-status' ? { activeTabId: 1 } : req?.op === 'capture-notes' ? { image: `${SHOT}#${req.tabId}` } : { ok: true }))
+    vi.stubGlobal('ipc', { invoke, on: vi.fn(() => () => {}) })
+    vi.stubGlobal('confirm', () => true)
+    fetchMock = vi.fn().mockImplementation((url: string) => (String(url).includes('/wake-stream') ? new Promise(() => {}) : Promise.resolve(sseDone())))
+    vi.stubGlobal('fetch', fetchMock)
+  })
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+  const hook = () => renderHook(() => useChat('http://127.0.0.1:8000', { id: 1, name: 'b', sessionToken: 'tok' } as any,
+    { provider_type: 'subscription', model_name: 'claude-opus-5' } as any, '/ws', vi.fn(), vi.fn(), (n: string) => n))
+  const sentBody = () => JSON.parse(String(fetchMock.mock.calls.find((c: any[]) => String(c[1]?.body).includes('conversation_id'))![1].body))
+  const clears = () => invoke.mock.calls.filter(c => c[1]?.op === 'clear-notes')
+
+  it('T6 screenshots never push a send over the image limit', async () => {
+    expect(MAX_MESSAGE_IMAGES).toBe(20)
+    const own = Array.from({ length: 15 }, (_, i) => `data:image/png;base64,own${i}`)
+    // tab 5 has the most notes: its shot is the one kept first
+    addBrowserChips(null, [noteChip({ id: 'a' }, 1), noteChip({ id: 'b' }, 5), noteChip({ id: 'c' }, 5), ...[2, 3, 4, 6, 7, 8].map(t => noteChip({ id: `t${t}` }, t))])
+    const { result } = hook()
+    await act(async () => { await result.current.sendMessage('x', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn(), own) })
+    const images = sentBody().images as string[]
+    expect(images).toHaveLength(MAX_MESSAGE_IMAGES)
+    expect(images.slice(0, 15)).toEqual(own)
+    expect(images[15]).toBe(`${SHOT}#5`)
+    // a send that already carries 20 pictures gets no shot at all
+    addBrowserChips(null, [noteChip({ id: 'z' }, 1)])
+    const full = Array.from({ length: 20 }, (_, i) => `data:image/png;base64,f${i}`)
+    await act(async () => { await result.current.sendMessage('y', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn(), full) })
+    const last = JSON.parse(String(fetchMock.mock.calls.filter((c: any[]) => String(c[1]?.body).includes('conversation_id')).at(-1)![1].body))
+    expect(last.images).toEqual(full)
+  })
+
+  it('T6 a failed send keeps the notes', async () => {
+    addBrowserChips(null, [noteChip({ id: 'n1' }, 7)])
+    for (const failure of [() => Promise.reject(new Error('offline')), () => Promise.resolve({ ok: false, status: 400, body: null })]) {
+      fetchMock.mockImplementation(failure)
+      const { result } = hook()
+      await act(async () => { await result.current.sendMessage('x', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn()) })
+      expect(clears()).toHaveLength(0)
+      expect(getBrowserChips(5).map(c => c.key)).toEqual(['7:n1'])
+      takeBrowserChips(5)
+      addBrowserChips(null, [noteChip({ id: 'n1' }, 7)])
+    }
+    // an accepted send clears the pins and leaves no chip behind
+    fetchMock.mockImplementation(() => Promise.resolve(sseDone()))
+    const { result } = hook()
+    await act(async () => { await result.current.sendMessage('x', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn()) })
+    expect(clears()).toHaveLength(1)
+    expect(getBrowserChips(5)).toHaveLength(0)
   })
 })

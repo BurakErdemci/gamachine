@@ -16,7 +16,7 @@ import {
   type ModeChanged, type RemoteMessage,
 } from '../../lib/remoteControl';
 import { handleRemoteIpcFrame } from '../../lib/remote/desktopRunner';
-import { addBrowserChips, captureNoteShots, clearBrowserPins, dropChatBrowser, formatBrowserContext, notesTab, releaseBrowser, CAPTURE_WAIT_MS, RELEASE_WAIT_MS, takeBrowserChips, withinMs, type BrowserChip } from '../../lib/browserNotes';
+import { addBrowserChips, captureNoteShots, clearBrowserPins, dropChatBrowser, formatBrowserContext, MAX_MESSAGE_IMAGES, notesTab, releaseBrowser, CAPTURE_WAIT_MS, RELEASE_WAIT_MS, takeBrowserChips, withinMs, type BrowserChip } from '../../lib/browserNotes';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -880,7 +880,7 @@ export const useChat = (
       created = await createNewConversation();
       const waiting = rt(NO_CONV).queue;
       patchConv(NO_CONV, () => ({ loading: false, ...(created ? { queue: [] } : { queuePaused: waiting.length > 0 }) }));
-      if (!created) return;
+      if (!created) { addBrowserChips(requested, chips); return; }
       patchConv(created, r => ({ loading: true, queue: [...waiting, ...r.queue] }));
     }
     const targetConvId: number = requested || created!;
@@ -893,9 +893,10 @@ export const useChat = (
         if (chips.length > 0) {
           await withinMs(released, RELEASE_WAIT_MS);
           // The picture is taken while the notes' frames and pins are still drawn; the pins of the sent notes go after it.
+          // The backend refuses more than MAX_MESSAGE_IMAGES: the user's own pictures come first, the agent tab's shot next.
           const shots = (await withinMs(captureNoteShots(targetConvId, chips), CAPTURE_WAIT_MS)) ?? [];
-          if (shots.length > 0) images = [...(images ?? []), ...shots];
-          clearBrowserPins(targetConvId, chips);
+          const room = Math.max(0, MAX_MESSAGE_IMAGES - (images?.length ?? 0));
+          if (shots.length > 0 && room > 0) images = [...(images ?? []), ...shots.slice(0, room)];
         }
       } catch { /* the send must not depend on the browser */ }
     }
@@ -998,6 +999,14 @@ export const useChat = (
       videosToSend = resolved;
     }
 
+    // The chips and pins go only once the server took the message; a refused or failed send gives them back.
+    let chipsSettled = chips.length === 0;
+    const settleChips = (accepted: boolean) => {
+      if (chipsSettled) return;
+      chipsSettled = true;
+      if (accepted) clearBrowserPins(targetConvId, chips);
+      else addBrowserChips(targetConvId, chips);
+    };
     try {
       const response = await fetch(`${API}/chat-stream`, {
         method: 'POST',
@@ -1022,6 +1031,7 @@ export const useChat = (
         }),
       });
 
+      settleChips(response.ok);
       const reader = response.body?.getReader();
       const decoder = new TextDecoder('utf-8');
       if (reader) {
@@ -1276,6 +1286,7 @@ export const useChat = (
       }
       fetchConversations(user.id);
     } catch (err: any) {
+      settleChips(false);
       // After `done`/`response` the answer is complete and the server has it;
       // a later failure is not the user's to see, and must not block the refetch.
       if (err?.name !== 'AbortError' && ownsTurn() && !finishedCleanly) {

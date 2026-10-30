@@ -201,6 +201,9 @@ export function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | undefi
 /** The longest a send waits for the browser to hand its tab back before it goes on. */
 export const RELEASE_WAIT_MS = 2000;
 
+/** Most pictures one message may carry; the backend refuses more (Backend/app/schemas.py, ChatRequest.images max_length). */
+export const MAX_MESSAGE_IMAGES = 20;
+
 /** The longest a send waits for the notes' picture before it goes without one. */
 export const CAPTURE_WAIT_MS = 5000;
 
@@ -251,13 +254,20 @@ export function releaseBrowser(conversationId: number, noteTab: number | null): 
  * cannot be captured, or an error, only leaves its picture out: the send never waits on it.
  */
 export async function captureNoteShots(conversationId: number, chips: readonly BrowserChip[]): Promise<string[]> {
-  const tabs = [...new Set(chips.filter(c => c.type === 'note').map(c => c.tabId))];
+  // The agent's tab (the one with the most notes) comes first: when the send has room for fewer pictures, it is the one kept.
+  const agentTab = notesTab(chips);
+  const tabs = [...new Set(chips.filter(c => c.type === 'note').map(c => c.tabId))].sort((a, b) => Number(b === agentTab) - Number(a === agentTab));
   const shots = await Promise.all(tabs.map(async (tabId) => {
     const res: any = await invoke({ op: 'capture-notes', conversationId, tabId });
     return typeof res?.image === 'string' && res.image.startsWith('data:image/') ? res.image : '';
   }));
   return shots.filter(Boolean);
 }
+
+// A generated block is exactly: heading, (notes only) one line per comment, the notice, ONE fence with one line of JSON.
+const FENCE_LINES = `${FENCE_NOTICE}\n<page_data[^>\\n]*>\n[^\\n]*\n</page_data>$`;
+const NOTE_BLOCK = new RegExp(`^[^\\n]*\\n(?:\\d+\\. ".*"\\n)+${FENCE_LINES}`);
+const PAGE_BLOCK = new RegExp(`^[^\\n]*\\n${FENCE_LINES}`);
 
 /**
  * The sent message as the bubble shows it: what the user typed, and one summary per block the send appended
@@ -271,7 +281,7 @@ export function parseBrowserContext(content: string): { text: string; blocks: { 
     const tail = content.slice(start);
     const segments = tail.split(/\n\n(?=\[(?:Tarayıcı notları|Bu sayfa hakkında) — sekme \d+\]$)/m);
     const heads = segments.map(seg => seg.split('\n', 1)[0].match(HEAD));
-    if (!heads.every(Boolean) || !segments.every(seg => /<page_data[^>]*>\n[\s\S]*\n<\/page_data>$/.test(seg))) continue;
+    if (!heads.every(Boolean) || !segments.every((seg, i) => (heads[i]![1] === 'Bu sayfa hakkında' ? PAGE_BLOCK : NOTE_BLOCK).test(seg))) continue;
     const blocks = segments.map((segment, i) => {
       const kind: 'note' | 'page' = heads[i]![1] === 'Bu sayfa hakkında' ? 'page' : 'note';
       let site = '';

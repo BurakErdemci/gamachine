@@ -153,13 +153,15 @@ export const PAGE_LIB = String.raw`(() => {
     if (t === 'input') return BUTTON_TYPES.includes(inputType(el)) ? 'button' : 'input';
     return 'button';
   };
+  // A referenced label that is a field, or sits inside one (an editor), is a person's own text: it is skipped.
+  const refName = (n, read) => (n && !isField(n) ? read(n) : '');
   const nameOf = (el) => {
     const by = el.getAttribute('aria-labelledby');
-    const byText = by ? by.split(/\s+/).map((id) => { const n = document.getElementById(id); return n ? n.innerText : ''; }).join(' ') : '';
-    const labels = el.labels && el.labels.length ? Array.from(el.labels).map((l) => l.innerText).join(' ') : '';
+    const byText = by ? by.split(/\s+/).map((id) => refName(document.getElementById(id), (n) => n.innerText)).join(' ') : '';
+    const labels = el.labels && el.labels.length ? Array.from(el.labels).map((l) => refName(l, (n) => n.innerText)).join(' ') : '';
     const img = el.querySelector ? el.querySelector('img[alt]') : null;
     const buttonValue = tag(el) === 'input' && BUTTON_TYPES.includes(inputType(el)) ? el.value : '';
-    return clean(el.getAttribute('aria-label') || byText || labels || buttonValue || el.innerText ||
+    return clean(el.getAttribute('aria-label') || byText || labels || buttonValue || (isField(el) ? '' : el.innerText) ||
       el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || (img ? img.alt : ''), 120);
   };
   const resolve = (id, ref) => {
@@ -231,8 +233,7 @@ export const PAGE_LIB = String.raw`(() => {
     return clean(out, max);
   };
   const noteName = (el) => {
-    // A referenced label that is a field, or sits inside one (an editor), is a person's own text: it is skipped.
-    const refText = (n) => (n && !isField(n) ? textOf(n, NOTE_NAME_CHARS) : '');
+    const refText = (n) => refName(n, (m) => textOf(m, NOTE_NAME_CHARS));
     const by = el.getAttribute('aria-labelledby');
     const byText = by ? by.split(/\s+/).map((id) => refText(document.getElementById(id))).join(' ') : '';
     const labels = el.labels && el.labels.length ? Array.from(el.labels).map(refText).join(' ') : '';
@@ -829,6 +830,9 @@ interface Tab {
   userTouched: boolean
   /** The user is placing notes on this page (annotate mode); ends with any navigation. */
   annotating: boolean
+  /** Pick polls issued and the newest one whose reply was applied: an older reply must not overwrite a newer one. */
+  pollSeq: number
+  pollApplied: number
   /** The target waiting for its comment (held here so a closed box can come back); the page keeps its outline until it is saved or dropped. */
   pick: HostPick | null
   /** Notes committed in this document, for the pin numbers. */
@@ -1121,7 +1125,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, pick: null, pinSeq: 0, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, pollSeq: 0, pollApplied: 0, pick: null, pinSeq: 0, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -1151,7 +1155,7 @@ export class BrowserHost {
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (tab.agent) tab.popupBlocked = url
       else if ((disposition === 'foreground-tab' || disposition === 'background-tab') && this.pageMayOpenTab(tab)) {
-        this.openUserTab(tab.conversationId, url, true).catch(() => { /* refused or no window */ })
+        this.openUserTab(tab.conversationId, url, true, disposition === 'background-tab').catch(() => { /* refused or no window */ })
       }
       return { action: 'deny' }
     })
@@ -1421,8 +1425,10 @@ export class BrowserHost {
     try {
       for (const tab of this.annotatingVisible()) {
         try {
+          const seq = ++tab.pollSeq
           const state = await this.page(tab, 'takePick', {})
-          if (!tab.annotating) continue
+          if (!tab.annotating || seq < tab.pollApplied) continue
+          tab.pollApplied = seq
           // The page left the mode itself (Esc), or it is a new document without the overlay.
           if (state.active === false) this.endAnnotate(tab)
           else this.onPickState(tab, state)
@@ -1442,6 +1448,8 @@ export class BrowserHost {
     const fresh = state.pick
     if (fresh && typeof fresh === 'object' && !Array.isArray(fresh) && typeof (fresh as Record<string, unknown>).id === 'string') {
       const data = fresh as HostPick['data']
+      // A pick with the user's words in its box is never replaced by another one.
+      if (tab.pick && tab.pick.draft !== '' && tab.pick.data.id !== data.id) return
       tab.pick = { data, draft: '', error: '', scroll, viewport }
       this.hideBox()
       void this.showBox(tab, rect ?? toRect(data.rect))
@@ -1652,7 +1660,6 @@ export class BrowserHost {
    */
   private async captureTab(tab: Tab): Promise<string> {
     if (!this.isLive(tab)) return ''
-    const shown = this.visibleId === tab.conversationId && this.selected.get(tab.conversationId) === tab.id
     if (this.boxTab === tab) this.hideBox()
     if (tab.annotating) {
       tab.annotating = false
@@ -1662,6 +1669,8 @@ export class BrowserHost {
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_resolve, reject) => { timer = this.later(() => reject(new Error('capture_timeout')), CAPTURE_TIMEOUT_MS) })
     try {
+      // Visibility can change while annotateOff was awaited: it is read right before the capture.
+      const shown = this.visibleId === tab.conversationId && this.selected.get(tab.conversationId) === tab.id
       const image = await Promise.race([shown ? tab.view.webContents.capturePage() : tab.view.webContents.capturePage(undefined, { stayHidden: true }), timeout])
       if (image.isEmpty()) return ''
       const { width, height } = image.getSize()
@@ -1682,7 +1691,7 @@ export class BrowserHost {
    * A new tab of the user's own, selected; with an address it is checked like every navigation. A tab a page
    * opened (`fromPage`) leaves the panel as it is: the chat is already on screen, and nothing may bring another forward.
    */
-  private async openUserTab(conversationId: number, url?: unknown, fromPage = false): Promise<Record<string, unknown>> {
+  private async openUserTab(conversationId: number, url?: unknown, fromPage = false, background = false): Promise<Record<string, unknown>> {
     if (this.clearing) return { error: 'clearing' }
     const epoch = this.lifecycleEpoch(conversationId)
     if (url !== undefined && !(await this.navigationAllowed(url))) return { error: 'url_not_allowed' }
@@ -1691,7 +1700,7 @@ export class BrowserHost {
     if (stale) return stale
     let tab: Tab
     try { tab = this.createTab(conversationId, false) } catch (error) { return { error: error instanceof Error ? error.message : 'no_window' } }
-    this.selected.set(conversationId, tab.id)
+    if (!background) this.selected.set(conversationId, tab.id)
     if (fromPage) this.layout()
     else this.show(conversationId)
     if (str(url)) tab.view.webContents.loadURL(url).catch(() => { /* reported by did-fail-load */ })
