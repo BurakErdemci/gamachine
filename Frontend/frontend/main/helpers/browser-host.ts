@@ -32,8 +32,18 @@ const MAX_FAVICON_REDIRECTS = 3
 const SCREENSHOT_MAX_WIDTH = 1280
 const MAX_TEXT_CHARS = 100_000
 const MAX_FILL_CHARS = 10_000
-const NOTES_POLL_MS = 500
+// How often the page is asked for a new pick while annotate mode is on and visible.
+const PICK_POLL_MS = 150
 const MAX_NOTES_PER_POLL = 50
+const NOTE_COMMENT_CHARS = 1000
+const NOTE_BOX_WIDTH = 320
+const NOTE_BOX_MIN_HEIGHT = 56
+const NOTE_BOX_MAX_HEIGHT = 168
+const NOTE_BOX_GAP = 10
+const NOTE_BOX_MARGIN = 8
+const MAX_CAPTURE_SIDE = 1600
+const CAPTURE_JPEG_QUALITY = 80
+const CAPTURE_TIMEOUT_MS = 4_000
 const MAX_CLEAR_IDS = 200
 const KEYS: Record<string, string> = {
   Enter: 'Enter', Tab: 'Tab', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left',
@@ -178,28 +188,24 @@ export const PAGE_LIB = String.raw`(() => {
     return elementIds.get(el);
   };
   // ---- annotation overlay (docs/agent-browser.md "Annotate mode") ----
+  // The page side only picks and draws. The comment is typed into an app-owned view (BrowserHost.openBox), so no text input exists here and the page never sees the comment.
   const NOTE_MAX_NOTES = 50;
-  const NOTE_COMMENT_CHARS = 1000;
   const NOTE_NAME_CHARS = 200;
   const NOTE_PATH_CHARS = 200;
   const NOTE_AREA_CHARS = 500;
   const DRAG_PX = 6;
-  const BOX_WIDTH = 264;
-  // Text a person typed or chose never leaves the page: every place that reads text skips fields and editors.
-  const FIELD_SELECTOR = 'input, textarea, select, option, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"], [role=textbox], [role=searchbox], [role=combobox]';
+  // Text a person typed or chose never leaves the page: every place that reads text skips fields and editors (any contenteditable value except "false", in any case).
+  const FIELD_SELECTOR = 'input, textarea, select, option, [contenteditable]:not([contenteditable="false" i]), [role="textbox" i], [role="searchbox" i], [role="combobox" i], [aria-multiline="true" i]';
   const SKIPPED_TEXT = FIELD_SELECTOR + ', script, style, noscript, template';
-  const isField = (el) => !!(el.closest && el.closest(FIELD_SELECTOR));
+  const isField = (el) => !!el.isContentEditable || !!(el.closest && el.closest(FIELD_SELECTOR));
+  const isSkipped = (el) => !!el.isContentEditable || !!el.closest(SKIPPED_TEXT);
   const OVERLAY_CSS = [
     '*{box-sizing:border-box;font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}',
     '.hl,.frame{position:fixed;display:none;pointer-events:none;border:2px solid #2f6fed;border-radius:4px;background:rgba(47,111,237,.10)}',
     '.frame{border-style:dashed}',
+    '.mark{position:fixed;pointer-events:none;border:2px solid #2f6fed;border-radius:4px;background:rgba(47,111,237,.06)}',
     '.pin{position:fixed;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:#2f6fed;color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px #fff,0 2px 6px rgba(15,23,42,.35);pointer-events:none}',
     '.bar{position:fixed;top:10px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 24px);padding:5px 12px;border-radius:999px;background:rgba(21,27,38,.88);color:#f4f6fa;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 2px 10px rgba(15,23,42,.3);pointer-events:none}',
-    '.box{position:fixed;display:none;width:' + BOX_WIDTH + 'px;padding:10px;border-radius:10px;background:#fff;color:#1b1f27;box-shadow:0 10px 30px rgba(15,23,42,.22),0 0 0 1px rgba(15,23,42,.08);pointer-events:auto}',
-    '.box textarea{display:block;width:100%;height:66px;resize:none;padding:6px 8px;border:1px solid #d3d9e3;border-radius:6px;background:#fff;color:#1b1f27;outline:none;font:inherit}',
-    '.box textarea:focus{border-color:#2f6fed;box-shadow:0 0 0 3px rgba(47,111,237,.18)}',
-    '.box textarea::placeholder{color:#8a93a3}',
-    '.hint{margin-top:6px;color:#6b7686;font-size:11px}',
   ].join('');
   const rectOf = (r) => ({ x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) });
   const placeAt = (node, r) => {
@@ -214,7 +220,7 @@ export const PAGE_LIB = String.raw`(() => {
     const walk = (node, depth) => {
       if (out.length >= max || visited++ > 3000 || depth > 80) return;
       if (node.nodeType === 3) { out += node.nodeValue + ' '; return; }
-      if (node.nodeType !== 1 || node.matches(SKIPPED_TEXT)) return;
+      if (node.nodeType !== 1 || node.isContentEditable || node.matches(SKIPPED_TEXT)) return;
       const st = getComputedStyle(node);
       if (st.display === 'none' || st.visibility === 'hidden') return;
       for (const child of node.childNodes) walk(child, depth + 1);
@@ -257,7 +263,7 @@ export const PAGE_LIB = String.raw`(() => {
     let visited = 0;
     for (const el of document.body ? document.body.querySelectorAll('*') : []) {
       if (out.length >= NOTE_AREA_CHARS || visited++ > 5000) break;
-      if (el.closest(SKIPPED_TEXT)) continue;
+      if (isSkipped(el)) continue;
       let own = '';
       for (const child of el.childNodes) if (child.nodeType === 3) own += child.nodeValue + ' ';
       if (!own.trim()) continue;
@@ -267,9 +273,11 @@ export const PAGE_LIB = String.raw`(() => {
     }
     return clean(out, NOTE_AREA_CHARS);
   };
+  // saved: committed notes (frame and pin drawn); pending: the one pick waiting for its comment (kept by the host).
   const saved = [];
-  let noteSeq = 0;
-  // The overlay (anno) outlives the mode while pins are drawn; modeOn is the mode itself.
+  let pending = null;
+  let pickSeq = 0;
+  // The overlay (anno) outlives the mode while pins or a pending pick are drawn; modeOn is the mode itself.
   let anno = null;
   let modeOn = false;
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(n, hi));
@@ -285,57 +293,40 @@ export const PAGE_LIB = String.raw`(() => {
     saved.forEach((note, i) => {
       const r = anchorRect(note);
       if (r.x + r.width < 0 || r.y + r.height < 0 || r.x > innerWidth || r.y > innerHeight) return;
+      const mark = document.createElement('div');
+      mark.className = 'mark';
+      placeAt(mark, r);
+      anno.pins.appendChild(mark);
       const pin = document.createElement('div');
       pin.className = 'pin';
       pin.textContent = String(i + 1);
-      pin.title = note.data.comment;
       pin.style.left = clamp(r.x, 10, innerWidth - 10) + 'px';
       pin.style.top = clamp(r.y, 10, innerHeight - 10) + 'px';
       anno.pins.appendChild(pin);
     });
   };
-  const closeBox = () => {
-    if (!anno || !anno.target) return;
-    anno.target = null;
-    anno.box.style.display = 'none';
+  // The pending pick is outlined while the mode is on, so the user sees what the comment is about.
+  const drawPick = () => {
+    if (!anno || anno.drag) return;
     anno.hl.style.display = 'none';
     anno.frame.style.display = 'none';
-    anno.input.value = '';
-    anno.input.blur();
-  };
-  const openBox = (target) => {
-    closeBox();
-    anno.target = target;
-    const r = target.rect;
-    const node = target.kind === 'area' ? anno.frame : anno.hl;
-    placeAt(node, r);
+    if (!pending || !modeOn) return;
+    const node = pending.kind === 'area' ? anno.frame : anno.hl;
+    placeAt(node, anchorRect(pending));
     node.style.display = 'block';
-    // Right of the target when it fits, else left, else under it; always fully on screen.
-    const boxHeight = 120;
-    let x = r.x + r.width + 10;
-    if (x + BOX_WIDTH > innerWidth - 8) x = r.x - BOX_WIDTH - 10;
-    if (x < 8) x = clamp(r.x, 8, Math.max(8, innerWidth - BOX_WIDTH - 8));
-    const y = clamp(r.y, 8, Math.max(8, innerHeight - boxHeight - 8));
-    anno.box.style.left = x + 'px';
-    anno.box.style.top = y + 'px';
-    anno.box.style.display = 'block';
-    anno.input.focus();
   };
-  const saveNote = () => {
-    const t = anno.target;
-    const comment = String(anno.input.value || '').trim().slice(0, NOTE_COMMENT_CHARS);
-    if (!t || !comment) return;
-    if (saved.length < NOTE_MAX_NOTES) {
-      const base = { id: 'n' + documentToken.slice(0, 5) + '.' + (++noteSeq), comment, kind: t.kind };
-      const data = Object.assign(base, t.kind === 'area' ? { rect: t.rect, text: areaText(t.rect) } : describeElement(t.el));
-      const anchor = { x: t.rect.x + scrollX, y: t.rect.y + scrollY, width: t.rect.width, height: t.rect.height };
-      if (t.el) anchor.el = new WeakRef(t.el);
-      saved.push({ data, taken: false, anchor });
-    }
-    closeBox();
-    drawPins();
-    // One note per activation: the mode ends with the save, the pin stays.
-    stopAnnotate();
+  const dropPending = () => {
+    pending = null;
+    drawPick();
+  };
+  const setPending = (kind, el, rect) => {
+    const id = 'n' + documentToken.slice(0, 5) + '.' + (++pickSeq);
+    const base = { id, kind };
+    const data = Object.assign(base, kind === 'area' ? { rect, text: areaText(rect) } : describeElement(el));
+    const anchor = { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height };
+    if (el) anchor.el = new WeakRef(el);
+    pending = { id, kind, data, anchor, reported: false };
+    drawPick();
   };
   const buildOverlay = () => {
     const host = document.createElement('div');
@@ -363,21 +354,11 @@ export const PAGE_LIB = String.raw`(() => {
     const frame = make('frame');
     const pins = make('pins');
     const bar = make('bar', 'İşaretleme · bir öğeye tıkla ya da alan çiz · Esc çıkış');
-    const box = make('box');
-    box.style.display = 'none';
-    const input = document.createElement('textarea');
-    input.placeholder = 'Yorum ekle…';
-    input.maxLength = NOTE_COMMENT_CHARS;
-    box.appendChild(input);
-    const hint = document.createElement('div');
-    hint.className = 'hint';
-    hint.textContent = 'Enter kaydeder · Shift+Enter yeni satır · Esc iptal';
-    box.appendChild(hint);
-    return { host, hl, frame, pins, bar, box, input };
+    return { host, hl, frame, pins, bar };
   };
   const startAnnotate = () => {
     if (!anno) {
-      anno = Object.assign(buildOverlay(), { target: null, drag: null, cursor: '', listeners: [], frameId: 0 });
+      anno = Object.assign(buildOverlay(), { drag: null, cursor: '', listeners: [], frameId: 0 });
       (document.body || document.documentElement).appendChild(anno.host);
     }
     modeOn = true;
@@ -407,13 +388,14 @@ export const PAGE_LIB = String.raw`(() => {
       if (!foreign(e)) return;
       e.stopImmediatePropagation();
       if (e.button !== 0) return;
-      closeBox();
+      dropPending();
       anno.hl.style.display = 'none';
       anno.drag = { x: e.clientX, y: e.clientY, area: false, rect: null };
     });
     on('pointermove', (e) => {
-      if (!foreign(e) || anno.target) return;
+      if (!foreign(e)) return;
       const d = anno.drag;
+      if (!d && pending) return;
       if (d && e.buttons === 0) { anno.drag = null; anno.frame.style.display = 'none'; return; }
       if (d) {
         if (!d.area && Math.hypot(e.clientX - d.x, e.clientY - d.y) >= DRAG_PX) d.area = true;
@@ -437,38 +419,34 @@ export const PAGE_LIB = String.raw`(() => {
       const d = anno.drag;
       if (!d) return;
       anno.drag = null;
-      if (d.area && d.rect) { openBox({ kind: 'area', rect: d.rect }); return; }
+      if (d.area && d.rect) { setPending('area', null, d.rect); return; }
       const el = targetAt(e.clientX, e.clientY);
-      if (el) openBox({ kind: 'element', el, rect: rectOf(el.getBoundingClientRect()) });
+      if (el) setPending('element', el, rectOf(el.getBoundingClientRect()));
     });
     on('keydown', (e) => {
       if (!e.isTrusted || e.target === anno.host || e.key !== 'Escape') return;
       stop(e);
       if (anno.drag) { anno.drag = null; anno.frame.style.display = 'none'; return; }
+      if (pending) { dropPending(); return; }
       stopAnnotate();
     });
     const redraw = () => {
       if (anno.frameId) return;
-      anno.frameId = requestAnimationFrame(() => { anno.frameId = 0; drawPins(); });
+      anno.frameId = requestAnimationFrame(() => { anno.frameId = 0; drawPins(); drawPick(); });
     };
     on('scroll', redraw);
     on('resize', redraw);
-    // Input keys typed in the comment box stay out of the page's own handlers.
-    anno.input.addEventListener('keydown', (e) => {
-      if (!e.isTrusted) return;
-      e.stopPropagation();
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); saveNote(); }
-      else if (e.key === 'Escape') { e.preventDefault(); closeBox(); }
-    });
-    for (const type of ['keyup', 'keypress', 'input']) anno.input.addEventListener(type, (e) => { if (e.isTrusted) e.stopPropagation(); });
     setCursor(true);
     drawPins();
+    drawPick();
   };
-  // Ends the mode; the overlay stays while pins are drawn, and goes with the last one.
+  const dropOverlayIfIdle = () => {
+    if (anno && !modeOn && saved.length === 0 && !pending) { anno.host.remove(); anno = null; }
+  };
+  // Ends the mode; the overlay stays while pins or a pending pick exist, and goes with the last one.
   const stopAnnotate = () => {
     if (!anno) return;
     modeOn = false;
-    closeBox();
     for (const [target, type, fn] of anno.listeners) target.removeEventListener(type, fn, true);
     anno.listeners = [];
     anno.drag = null;
@@ -479,7 +457,7 @@ export const PAGE_LIB = String.raw`(() => {
     anno.frameId = 0;
     if (anno.cursor) document.documentElement.style.setProperty('cursor', anno.cursor);
     else document.documentElement.style.removeProperty('cursor');
-    if (saved.length === 0) { anno.host.remove(); anno = null; }
+    dropOverlayIfIdle();
   };
   globalThis.__gmBrowser = {
     snapshot(a) {
@@ -601,7 +579,35 @@ export const PAGE_LIB = String.raw`(() => {
       stopAnnotate();
       return { active: false };
     },
-    // Saved notes not handed over yet; the pins stay until clearNotes, also after the mode ended. "active" is false once the page left the mode itself (Esc).
+    // The host polls this while the mode is on. "pick" is a new target not reported yet; "picking" and "rect" describe the pending one (null once it is gone); "active" is false once the page left the mode itself (Esc).
+    takePick() {
+      const fresh = pending && !pending.reported ? pending : null;
+      if (fresh) fresh.reported = true;
+      return {
+        active: modeOn,
+        scroll: [Math.round(scrollX), Math.round(scrollY)],
+        viewport: { width: innerWidth, height: innerHeight },
+        picking: pending ? pending.id : null,
+        rect: pending ? anchorRect(pending) : null,
+        pick: fresh ? fresh.data : null,
+      };
+    },
+    // The host saved the comment: the pending pick becomes a pinned, framed note.
+    commitPin(a) {
+      if (!pending || pending.id !== (a && a.pickId)) return { error: 'no_pick' };
+      if (saved.length >= NOTE_MAX_NOTES) return { error: 'too_many_notes' };
+      saved.push({ data: pending.data, taken: false, anchor: pending.anchor, n: a.n });
+      pending = null;
+      drawPins();
+      drawPick();
+      return { ok: true };
+    },
+    dropPick(a) {
+      if (pending && (!a || !a.pickId || a.pickId === pending.id)) dropPending();
+      dropOverlayIfIdle();
+      return { ok: true };
+    },
+    // Pinned notes not handed over yet (they carry no comment: the host holds it); the pins stay until clearNotes.
     takeNotes() {
       const fresh = saved.filter((note) => !note.taken);
       for (const note of fresh) note.taken = true;
@@ -616,11 +622,67 @@ export const PAGE_LIB = String.raw`(() => {
         cleared++;
       }
       drawPins();
-      if (!modeOn && saved.length === 0 && anno) { anno.host.remove(); anno = null; }
+      dropOverlayIfIdle();
       return { cleared };
     },
   };
 })();`
+
+/**
+ * The comment box: a self-contained page the host shows in its own view above the tab, so the typed text never
+ * enters the page being annotated. It has no preload; it talks to the host through document.title (JSON with a
+ * counter, so two equal messages still fire page-title-updated).
+ */
+export const NOTE_BOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}
+html,body{margin:0;background:transparent;overflow:hidden;font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{padding:6px}
+#b{display:flex;align-items:flex-end;gap:8px;padding:6px 6px 6px 16px;border-radius:24px;background:#1e2126;color:#f2f3f5;border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 24px rgba(0,0,0,.4)}
+#t{flex:1;min-width:0;height:24px;max-height:112px;margin:5px 0;padding:0;border:0;outline:0;resize:none;background:transparent;color:inherit;font:inherit;caret-color:#f2f3f5}
+#t::placeholder{color:#9aa1ad}
+#s{flex:none;width:32px;height:32px;border:0;border-radius:50%;background:#f2f3f5;color:#1e2126;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+#s:disabled{opacity:.35;cursor:default}
+</style></head><body><div id="b"><textarea id="t" rows="1" maxlength="1000" placeholder="Yorum ekle…" aria-label="Yorum ekle"></textarea><button id="s" type="button" aria-label="Gönder" disabled><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></button></div><script>
+const ta=document.getElementById('t'),send=document.getElementById('s'),box=document.getElementById('b');
+let seq=0;
+const post=(o)=>{o.q=++seq;document.title=JSON.stringify(o)};
+const fit=()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,112)+'px';send.disabled=!ta.value.trim()};
+const draft=()=>{fit();post({t:'draft',text:ta.value,h:box.offsetHeight+12})};
+const submit=()=>{if(ta.value.trim())post({t:'submit',text:ta.value})};
+ta.addEventListener('input',draft);
+ta.addEventListener('keydown',(e)=>{
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();submit()}
+  else if(e.key==='Escape'){e.preventDefault();post({t:'cancel'})}
+});
+send.addEventListener('click',submit);
+window.__set=(v)=>{ta.value=v;draft();ta.focus()};
+ta.focus();
+</script></body></html>`
+
+/**
+ * Where the comment box goes, in window coordinates: right of the picked rect (viewport CSS px inside the panel),
+ * else left, else below, else above, always inside the panel. Only when nothing fits does it cover the target.
+ */
+export function placeNoteBox(rect: { x: number; y: number; width: number; height: number }, panel: Rectangle,
+  size: { width: number; height: number }): Rectangle {
+  const left = panel.x + rect.x
+  const top = panel.y + rect.y
+  const right = left + rect.width
+  const bottom = top + rect.height
+  const minX = panel.x + NOTE_BOX_MARGIN
+  const minY = panel.y + NOTE_BOX_MARGIN
+  const maxX = Math.max(minX, panel.x + panel.width - NOTE_BOX_MARGIN - size.width)
+  const maxY = Math.max(minY, panel.y + panel.height - NOTE_BOX_MARGIN - size.height)
+  const clampX = (v: number) => Math.max(minX, Math.min(v, maxX))
+  const clampY = (v: number) => Math.max(minY, Math.min(v, maxY))
+  let x = clampX(left)
+  let y = clampY(top)
+  if (right + NOTE_BOX_GAP <= maxX) x = right + NOTE_BOX_GAP
+  else if (left - NOTE_BOX_GAP - size.width >= minX) x = left - NOTE_BOX_GAP - size.width
+  else if (bottom + NOTE_BOX_GAP <= maxY) y = bottom + NOTE_BOX_GAP
+  else if (top - NOTE_BOX_GAP - size.height >= minY) y = top - NOTE_BOX_GAP - size.height
+  return { x: Math.round(x), y: Math.round(y), width: size.width, height: size.height }
+}
 
 function str(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
@@ -633,6 +695,19 @@ function finiteNonNegative(value: unknown): value is number {
 
 function positiveInt(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
+}
+
+function toRect(value: unknown): { x: number; y: number; width: number; height: number } | null {
+  if (!value || typeof value !== 'object') return null
+  const r = value as Record<string, unknown>
+  return ['x', 'y', 'width', 'height'].every((k) => typeof r[k] === 'number' && Number.isFinite(r[k]))
+    ? { x: r.x as number, y: r.y as number, width: r.width as number, height: r.height as number } : null
+}
+
+function toViewport(value: unknown): { width: number; height: number } {
+  const r = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const side = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0)
+  return { width: side(r.width), height: side(r.height) }
 }
 
 /** scheme://host[:port] of a web address, or '' for anything else (blank pages, unparsable text). */
@@ -730,6 +805,10 @@ interface Tab {
   userTouched: boolean
   /** The user is placing notes on this page (annotate mode); ends with any navigation. */
   annotating: boolean
+  /** The target waiting for its comment (held here so a closed box can come back); the page keeps its outline until it is saved or dropped. */
+  pick: HostPick | null
+  /** Notes committed in this document, for the pin numbers. */
+  pinSeq: number
   /** Bumped by every navigation, so a favicon fetched for an earlier page is dropped. */
   faviconSeq: number
   /** Settles when the tab is closed, so a command waiting on something else can stop at once. */
@@ -743,6 +822,15 @@ interface Tab {
 }
 
 interface ClosedTab { url: string; title: string }
+
+interface HostPick {
+  /** The page's description of the target (id, kind, tag, role, name, rect, ...). */
+  data: Record<string, unknown> & { id: string }
+  /** What the user has typed into the comment box so far. */
+  draft: string
+  scroll: [number, number]
+  viewport: { width: number; height: number }
+}
 
 /**
  * Hardened WebContentsViews over the main window, all on one persistent session: per chat one agent tab
@@ -782,6 +870,12 @@ export class BrowserHost {
   private historySaved: Promise<boolean> | null = null
   private pollTimer: ReturnType<typeof setTimeout> | null = null
   private notesTimer: ReturnType<typeof setTimeout> | null = null
+  /** The one comment box (an app-owned view above the tabs) and the tab whose pick it shows right now. */
+  private noteBox: { view: WebContentsView; ready: Promise<void> } | null = null
+  private boxTab: Tab | null = null
+  private boxRect = { x: 0, y: 0, width: 0, height: 0 }
+  private boxHeight = NOTE_BOX_MIN_HEIGHT
+  private boxSeq = 0
   private reports: Promise<unknown> = Promise.resolve()
   private readonly now: () => number
   private readonly later: typeof setTimeout
@@ -999,7 +1093,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, pick: null, pinSeq: 0, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -1053,8 +1147,8 @@ export class BrowserHost {
       wc.on(name as 'did-start-loading', () => this.emitLive(tab.conversationId))
     }
     // A new document takes the overlay with it; a same-document load (did-finish-load after a reload) ends the mode too.
-    wc.on('did-navigate', () => this.endAnnotate(tab))
-    wc.on('did-finish-load', () => this.endAnnotate(tab))
+    wc.on('did-navigate', () => this.forgetPick(tab))
+    wc.on('did-finish-load', () => this.forgetPick(tab))
     wc.on('did-navigate', (_event, url) => {
       tab.favicon = ''
       tab.faviconSeq++
@@ -1168,6 +1262,7 @@ export class BrowserHost {
 
   private closeTab(tab: Tab): void {
     tab.annotating = false
+    this.forgetPick(tab)
     if (this.tabs.get(tab.id) === tab) {
       this.tabs.delete(tab.id)
       if (this.selected.get(tab.conversationId) === tab.id) this.reselect(tab)
@@ -1207,6 +1302,7 @@ export class BrowserHost {
   destroyView(): void {
     for (const tab of [...this.tabs.values()]) this.closeTab(tab)
     this.selected.clear()
+    this.destroyBox()
   }
 
   private selectTab(tab: Tab): void {
@@ -1229,17 +1325,30 @@ export class BrowserHost {
       if (visible) tab.view.setBounds(this.bounds)
       tab.view.setVisible(visible)
     }
+    if (this.boxTab && this.boxTab.id !== shown) this.hideBox()
     this.syncNotesPoll()
   }
 
   // ---- annotate mode ----
 
-  /** Ends the tab's annotate mode; `removeOverlay` also takes the overlay out of a document that stays (a navigation drops it by itself). */
+  /**
+   * Ends the tab's annotate mode. `removeOverlay` also takes the mode out of a document that stays (a navigation drops it
+   * by itself). A pick waiting for its comment is kept, with the draft, for the next time the mode is on.
+   */
   private endAnnotate(tab: Tab, removeOverlay = false): void {
     if (!tab.annotating) return
     tab.annotating = false
+    if (this.boxTab === tab) this.hideBox()
     if (removeOverlay && this.isLive(tab)) void this.page(tab, 'annotateOff', {}).catch(() => { /* the page is gone */ })
     this.emitLive(tab.conversationId)
+  }
+
+  /** A new document has no pick: the target, the draft and the box go. */
+  private forgetPick(tab: Tab, removeOverlay = false): void {
+    tab.pick = null
+    tab.pinSeq = 0
+    if (this.boxTab === tab) this.hideBox()
+    this.endAnnotate(tab, removeOverlay)
   }
 
   /** Turns the tab's annotate mode on or off; the error reply when it cannot. */
@@ -1263,16 +1372,11 @@ export class BrowserHost {
       this.syncNotesPoll()
       return null
     }
-    // Notes saved since the last poll are handed over before the mode ends.
-    try {
-      const { notes } = await this.collectNotes(tab)
-      if (notes.length > 0) this.emitNotes(tab, notes)
-    } catch { /* the page is gone */ }
     this.endAnnotate(tab, true)
     return null
   }
 
-  /** Annotating tabs the user can see right now: only those are polled for new notes. */
+  /** Annotating tabs the user can see right now: only those are polled for picks. */
   private annotatingVisible(): Tab[] {
     return [...this.tabs.values()].filter((tab) => tab.annotating && this.isLive(tab) &&
       tab.conversationId === this.visibleId && this.selected.get(tab.conversationId) === tab.id)
@@ -1282,19 +1386,19 @@ export class BrowserHost {
     if (this.notesTimer || this.stopped || this.annotatingVisible().length === 0) return
     this.notesTimer = this.later(() => {
       this.notesTimer = null
-      void this.pollNotes()
-    }, NOTES_POLL_MS)
+      void this.pollPicks()
+    }, PICK_POLL_MS)
   }
 
-  private async pollNotes(): Promise<void> {
+  private async pollPicks(): Promise<void> {
     try {
       for (const tab of this.annotatingVisible()) {
         try {
-          const { notes, active } = await this.collectNotes(tab)
+          const state = await this.page(tab, 'takePick', {})
           if (!tab.annotating) continue
-          if (notes.length > 0) this.emitNotes(tab, notes)
           // The page left the mode itself (Esc), or it is a new document without the overlay.
-          if (!active) this.endAnnotate(tab)
+          if (state.active === false) this.endAnnotate(tab)
+          else this.onPickState(tab, state)
         } catch {
           this.endAnnotate(tab)
         }
@@ -1304,18 +1408,206 @@ export class BrowserHost {
     }
   }
 
+  private onPickState(tab: Tab, state: Record<string, unknown>): void {
+    const scroll: [number, number] = Array.isArray(state.scroll) ? [Number(state.scroll[0]) || 0, Number(state.scroll[1]) || 0] : [0, 0]
+    const viewport = toViewport(state.viewport)
+    const rect = toRect(state.rect)
+    const fresh = state.pick
+    if (fresh && typeof fresh === 'object' && !Array.isArray(fresh) && typeof (fresh as Record<string, unknown>).id === 'string') {
+      const data = fresh as HostPick['data']
+      tab.pick = { data, draft: '', scroll, viewport }
+      this.hideBox()
+      void this.showBox(tab, rect ?? toRect(data.rect))
+      return
+    }
+    const pick = tab.pick
+    if (!pick) return
+    // The page dropped it (a new click, Esc), or the document changed under it.
+    if (state.picking !== pick.data.id) {
+      tab.pick = null
+      if (this.boxTab === tab) this.hideBox()
+      return
+    }
+    const moved = scroll[0] !== pick.scroll[0] || scroll[1] !== pick.scroll[1]
+    pick.scroll = scroll
+    pick.viewport = viewport
+    // The box is tied to where the target was: it goes while the page moves and comes back (with the draft) once it rests.
+    if (this.boxTab === tab) {
+      if (moved) this.hideBox()
+    } else if (!moved && rect) {
+      void this.showBox(tab, rect)
+    }
+  }
+
+  // ---- comment box ----
+
+  private ensureBox(): { view: WebContentsView; ready: Promise<void> } {
+    if (this.noteBox) return this.noteBox
+    const view = this.deps.createView({
+      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false, spellcheck: false, safeDialogs: true },
+    })
+    const wc = view.webContents
+    try { view.setBackgroundColor('#00000000') } catch { /* older Electron */ }
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }))
+    wc.on('will-navigate', (event) => event.preventDefault())
+    wc.on('page-title-updated', (_event, title) => this.onBoxMessage(title))
+    // Keys inside the box never reach the renderer either: the annotate chord is claimed here like in a tab.
+    wc.on('before-input-event', (event, input) => {
+      if (!isAnnotateChord(input, this.platform)) return
+      event.preventDefault()
+      const tab = this.boxTab
+      if (tab) void this.setAnnotate(tab, !tab.annotating)
+    })
+    const ready = Promise.resolve(wc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(NOTE_BOX_HTML)}`)).then(() => undefined, () => undefined)
+    this.noteBox = { view, ready }
+    return this.noteBox
+  }
+
+  private async showBox(tab: Tab, rect: { x: number; y: number; width: number; height: number } | null): Promise<void> {
+    const win = this.deps.window()
+    if (!win || win.isDestroyed() || !rect || !tab.pick) return
+    const token = ++this.boxSeq
+    let box: ReturnType<BrowserHost['ensureBox']>
+    try { box = this.ensureBox() } catch { return }
+    this.boxTab = tab
+    this.boxRect = rect
+    this.boxHeight = NOTE_BOX_MIN_HEIGHT
+    await box.ready
+    if (token !== this.boxSeq || this.boxTab !== tab || !tab.pick || this.stopped) return
+    try {
+      this.placeBox()
+      // Re-added each time so the box sits above any tab view added since.
+      win.contentView.removeChildView(box.view)
+      win.contentView.addChildView(box.view)
+      box.view.setVisible(true)
+      const wc = box.view.webContents
+      await wc.executeJavaScript(`window.__set(${JSON.stringify(tab.pick.draft)})`)
+      if (token === this.boxSeq) wc.focus()
+    } catch {
+      this.log('[browser] note box failed')
+    }
+  }
+
+  private placeBox(): void {
+    if (!this.noteBox) return
+    this.noteBox.view.setBounds(placeNoteBox(this.boxRect, this.bounds, { width: NOTE_BOX_WIDTH, height: this.boxHeight }))
+  }
+
+  /** The box goes; the pick and its draft stay on the tab. */
+  private hideBox(): void {
+    this.boxSeq++
+    if (!this.boxTab) return
+    this.boxTab = null
+    const win = this.deps.window()
+    try {
+      this.noteBox?.view.setVisible(false)
+      if (win && !win.isDestroyed() && this.noteBox) win.contentView.removeChildView(this.noteBox.view)
+    } catch { /* window closing */ }
+  }
+
+  private destroyBox(): void {
+    this.hideBox()
+    const box = this.noteBox
+    this.noteBox = null
+    try { if (box && !box.view.webContents.isDestroyed()) box.view.webContents.close() } catch { /* already closed */ }
+  }
+
+  /** What the box reported through its title: the draft so far, a submit or a cancel. */
+  private onBoxMessage(title: string): void {
+    const tab = this.boxTab
+    if (!tab || !tab.pick) return
+    let message: Record<string, unknown>
+    try {
+      const parsed = JSON.parse(title)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+      message = parsed
+    } catch { return }
+    const text = typeof message.text === 'string' ? message.text.slice(0, NOTE_COMMENT_CHARS) : ''
+    if (message.t === 'draft') {
+      tab.pick.draft = text
+      if (typeof message.h === 'number' && Number.isFinite(message.h)) {
+        this.boxHeight = Math.max(NOTE_BOX_MIN_HEIGHT, Math.min(Math.round(message.h), NOTE_BOX_MAX_HEIGHT))
+        this.placeBox()
+      }
+    } else if (message.t === 'cancel') this.cancelPick(tab)
+    else if (message.t === 'submit') void this.savePick(tab, text)
+  }
+
+  private cancelPick(tab: Tab): void {
+    const pick = tab.pick
+    tab.pick = null
+    this.hideBox()
+    this.focusTab(tab)
+    if (pick && this.isLive(tab)) void this.page(tab, 'dropPick', { pickId: pick.data.id }).catch(() => { /* the page is gone */ })
+  }
+
+  private focusTab(tab: Tab): void {
+    try { tab.view.webContents.focus() } catch { /* destroyed */ }
+  }
+
+  /** Saving ends annotate mode here first (the one place that knows), then pins the target and hands the note to the renderer. */
+  private async savePick(tab: Tab, text: string): Promise<void> {
+    const pick = tab.pick
+    const comment = text.trim()
+    if (!pick || !comment) return
+    tab.pick = null
+    tab.annotating = false
+    this.hideBox()
+    this.focusTab(tab)
+    this.emitLive(tab.conversationId)
+    try {
+      const pinned = await this.page(tab, 'commitPin', { pickId: pick.data.id, n: ++tab.pinSeq })
+      if (pinned.error) return
+      await this.page(tab, 'annotateOff', {})
+    } catch {
+      return
+    }
+    this.emitNotes(tab, [{ ...pick.data, comment }], pick.viewport)
+  }
+
+  private emitNotes(tab: Tab, notes: unknown[], viewport?: { width: number; height: number }): void {
+    const win = this.deps.window()
+    if (!win || win.isDestroyed()) return
+    const wc = tab.view.webContents
+    try {
+      win.webContents.send(BROWSER_NOTES_CHANNEL, { conversationId: tab.conversationId, tabId: tab.id, url: wc.getURL(), title: wc.getTitle(), notes, ...(viewport ? { viewport } : {}) })
+    } catch { /* window closing */ }
+  }
+
   private async collectNotes(tab: Tab): Promise<{ notes: unknown[]; active: boolean }> {
     const result = await this.page(tab, 'takeNotes', {})
     return { notes: Array.isArray(result.notes) ? result.notes.slice(0, MAX_NOTES_PER_POLL) : [], active: result.active !== false }
   }
 
-  private emitNotes(tab: Tab, notes: unknown[]): void {
-    const win = this.deps.window()
-    if (!win || win.isDestroyed()) return
-    const wc = tab.view.webContents
+  /**
+   * A picture of a tab on screen for a message that carries its notes: frames and pins are in the page, the comment box
+   * is a separate view and the hover outline goes with the mode. Empty when the tab is not shown or the capture fails.
+   */
+  private async captureTab(tab: Tab): Promise<string> {
+    if (this.visibleId !== tab.conversationId || this.selected.get(tab.conversationId) !== tab.id || !this.isLive(tab)) return ''
+    if (this.boxTab === tab) this.hideBox()
+    if (tab.annotating) {
+      tab.annotating = false
+      this.emitLive(tab.conversationId)
+      try { await this.page(tab, 'annotateOff', {}) } catch { /* the page is gone */ }
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_resolve, reject) => { timer = this.later(() => reject(new Error('capture_timeout')), CAPTURE_TIMEOUT_MS) })
     try {
-      win.webContents.send(BROWSER_NOTES_CHANNEL, { conversationId: tab.conversationId, tabId: tab.id, url: wc.getURL(), title: wc.getTitle(), notes })
-    } catch { /* window closing */ }
+      const image = await Promise.race([tab.view.webContents.capturePage(), timeout])
+      if (image.isEmpty()) return ''
+      const { width, height } = image.getSize()
+      const longer = Math.max(width, height)
+      const scaled = longer > MAX_CAPTURE_SIDE
+        ? image.resize({ width: Math.max(1, Math.round(width * MAX_CAPTURE_SIDE / longer)), height: Math.max(1, Math.round(height * MAX_CAPTURE_SIDE / longer)), quality: 'good' })
+        : image
+      const jpeg = scaled.toJPEG(CAPTURE_JPEG_QUALITY)
+      return jpeg.length > 0 ? `data:image/jpeg;base64,${jpeg.toString('base64')}` : ''
+    } catch {
+      return ''
+    } finally {
+      this.clear(timer)
+    }
   }
 
   /**
@@ -1431,7 +1723,7 @@ export class BrowserHost {
     if (!req || typeof req !== 'object' || Array.isArray(req)) return { error: 'Invalid browser-live request.' }
     const { op, conversationId: id, bounds, visible, url, gateId, approved, tabId, on, ids } = req as Record<string, unknown>
     const tabOps = ['status', 'panel-status', 'set-bounds', 'visible', 'open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close',
-      'select', 'close-tab', 'reopen-tab', 'annotate', 'notes', 'clear-notes']
+      'select', 'close-tab', 'reopen-tab', 'annotate', 'notes', 'clear-notes', 'capture-notes']
     if (typeof op === 'string' && tabOps.includes(op) && !positiveInt(id)) return { error: 'Unknown operation or malformed browser-live arguments.' }
     if (tabId !== undefined && !positiveInt(tabId)) return { error: 'Unknown operation or malformed browser-live arguments.' }
     const conversationId = id as number
@@ -1449,9 +1741,12 @@ export class BrowserHost {
       case 'set-bounds': {
         const b = bounds as Record<string, unknown> | null
         if (!b || typeof b !== 'object' || ![b.x, b.y, b.width, b.height].every(finiteNonNegative)) break
+        const before = this.bounds
         this.bounds = { x: Math.round(b.x as number), y: Math.round(b.y as number),
           width: Math.round(b.width as number), height: Math.round(b.height as number) }
         for (const tab of this.tabsOf(conversationId)) tab.view.setBounds(this.bounds)
+        // The panel moved or resized (full screen, a side panel): the box is placed again from the next poll.
+        if (before.x !== this.bounds.x || before.y !== this.bounds.y || before.width !== this.bounds.width || before.height !== this.bounds.height) this.hideBox()
         return { bounds: this.bounds }
       }
       case 'visible':
@@ -1489,7 +1784,7 @@ export class BrowserHost {
         if (!tab) return tabId === undefined ? this.openUserTab(conversationId, url) : { error: 'no_tab' }
         this.touch(tab)
         tab.userTouched = true
-        this.endAnnotate(tab, true)
+        this.forgetPick(tab, true)
         tab.view.webContents.loadURL(url as string).catch(() => { /* reported by did-fail-load */ })
         this.emitLive(conversationId)
         return this.livePayload(conversationId)
@@ -1504,7 +1799,7 @@ export class BrowserHost {
         const wc = tab.view.webContents
         const history = wc.navigationHistory
         if (op !== 'reload' && (op === 'back' ? !history.canGoBack() : !history.canGoForward())) return { error: 'no_history' }
-        this.endAnnotate(tab, true)
+        this.forgetPick(tab, true)
         if (op === 'reload') wc.reload()
         else if (op === 'back') history.goBack()
         else history.goForward()
@@ -1549,6 +1844,11 @@ export class BrowserHost {
         } catch {
           return { error: 'notes_failed' }
         }
+      }
+      case 'capture-notes': {
+        const tab = this.chatTab(conversationId, tabId)
+        if (!tab) return { error: 'no_tab' }
+        return { image: await this.captureTab(tab) }
       }
       case 'clear-notes': {
         const tab = this.chatTab(conversationId, tabId)
