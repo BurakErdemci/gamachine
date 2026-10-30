@@ -85,4 +85,17 @@ describe('createLiveRevealTracker', () => {
     track({ active: true, conversationId });
     expect(reveal).toHaveBeenCalledOnce();
   });
+
+  it('ignores an inactive payload from a chat other than the open one', () => {
+    const reveal = vi.fn();
+    const track = createLiveRevealTracker(reveal, id => id === 3);
+
+    track({ active: true, conversationId: 3 });
+    track({ active: false, conversationId: 8 });
+    track({ active: true, conversationId: 3 });
+    expect(reveal).toHaveBeenCalledOnce();
+    track({ active: false, conversationId: 3 });
+    track({ active: true, conversationId: 3 });
+    expect(reveal).toHaveBeenCalledTimes(2);
+  });
 });

@@ -8,11 +8,13 @@ export function createLiveRevealTracker(reveal: () => void, isOpenChat?: (conver
       return;
     }
     const payload = raw as { active?: unknown; conversationId?: unknown };
+    const conversationId = payload.conversationId;
+    // Another chat going idle must not re-arm the reveal for the open chat.
+    if (payload.active !== true && isOpenChat && typeof conversationId === 'number' && !isOpenChat(conversationId)) return;
     if (payload.active !== true) {
       activeConversationId = null;
       return;
     }
-    const conversationId = payload.conversationId;
     if (typeof conversationId !== 'number' || !Number.isInteger(conversationId)) return;
     if (isOpenChat && !isOpenChat(conversationId)) return;
     if (activeConversationId === conversationId) return;
