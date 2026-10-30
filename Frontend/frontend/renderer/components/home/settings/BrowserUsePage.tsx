@@ -30,7 +30,7 @@ interface HistoryRow { url: string; title: string; lastVisit: number }
 const isError = (v: unknown) => !!v && typeof v === 'object' && typeof (v as { error?: unknown }).error === 'string';
 
 /** The sites that left cookies in the agent browser, one "Kaldır" per site (login and site data go together). */
-const SitesCard = ({ showToast, setMsg }: { showToast?: Toast; setMsg: (m: string | null) => void }) => {
+const SitesCard = ({ showToast, setMsg, reloadKey }: { showToast?: Toast; setMsg: (m: string | null) => void; reloadKey: number }) => {
   const { t } = useLang();
   const [sites, setSites] = useState<SiteRow[] | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -40,10 +40,11 @@ const SitesCard = ({ showToast, setMsg }: { showToast?: Toast; setMsg: (m: strin
   const load = useCallback(async () => {
     const r = await call({ op: 'sites' });
     if (!alive.current) return;
-    if (isError(r) || !Array.isArray(r?.sites)) { setSites([]); setMsg(t('bp.sites.loadFailed')); return; }
+    // A failed load leaves the list unknown (null), so the empty-state row does not claim there are no sites.
+    if (isError(r) || !Array.isArray(r?.sites)) { setSites(null); setMsg(t('bp.sites.loadFailed')); return; }
     setSites(r.sites);
   }, [setMsg, t]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, reloadKey]);
 
   const remove = async (site: string) => {
     if (removing || !(await confirmDialog(t('bp.sites.removeConfirm', { site }), t('bp.sites.remove'), t('confirm.cancel')))) return;
@@ -90,7 +91,7 @@ const SitesCard = ({ showToast, setMsg }: { showToast?: Toast; setMsg: (m: strin
 type ClearRange = 'hour' | 'day' | 'all';
 
 /** The browsing history: search, delete one page, or delete the last hour, today or everything. */
-const HistoryCard = ({ showToast, setMsg }: { showToast?: Toast; setMsg: (m: string | null) => void }) => {
+const HistoryCard = ({ showToast, setMsg, reloadKey }: { showToast?: Toast; setMsg: (m: string | null) => void; reloadKey: number }) => {
   const { t } = useLang();
   const [entries, setEntries] = useState<HistoryRow[] | null>(null);
   const [input, setInput] = useState('');
@@ -105,13 +106,16 @@ const HistoryCard = ({ showToast, setMsg }: { showToast?: Toast; setMsg: (m: str
     return () => clearTimeout(timer);
   }, [input]);
 
+  // Only the newest request may fill the list: a slow reply to an older search must not overwrite it.
+  const seq = useRef(0);
   const load = useCallback(async () => {
+    const mine = ++seq.current;
     const r = await call({ op: 'history', query });
-    if (!alive.current) return;
+    if (!alive.current || mine !== seq.current) return;
     if (isError(r) || !Array.isArray(r?.entries)) { setEntries([]); setMsg(t('bp.hist.loadFailed')); return; }
     setEntries(r.entries);
   }, [query, setMsg, t]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, reloadKey]);
 
   const act = async (req: Record<string, unknown>, failed: string, done?: string) => {
     if (busy) return;
@@ -227,6 +231,7 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
   };
 
   const [clearing, setClearing] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const clearData = async () => {
     if (clearing || !(await confirmDialog(t('bp.set.clearConfirm'), t('bp.set.clear'), t('confirm.cancel')))) return;
     setClearing(true);
@@ -238,6 +243,7 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
         showToast?.(t('bp.set.clearFailed'), 'error');
       } else {
         showToast?.(t('bp.set.cleared'), 'success');
+        setReloadKey((n) => n + 1);
       }
     } finally {
       if (alive.current) setClearing(false);
@@ -285,8 +291,8 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
         <p className="set-hint" data-testid="bp-privacy">{t('bp.set.privacy')}</p>
         {msg && <p data-testid="bp-msg" className="set-msg set-msg-err" role="alert">{msg}</p>}
       </SetGroup>
-      {desktop && <SitesCard showToast={showToast} setMsg={setMsg} />}
-      {desktop && <HistoryCard showToast={showToast} setMsg={setMsg} />}
+      {desktop && <SitesCard showToast={showToast} setMsg={setMsg} reloadKey={reloadKey} />}
+      {desktop && <HistoryCard showToast={showToast} setMsg={setMsg} reloadKey={reloadKey} />}
     </>
   );
 };

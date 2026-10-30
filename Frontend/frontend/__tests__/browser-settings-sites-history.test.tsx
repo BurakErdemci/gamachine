@@ -1,4 +1,5 @@
 import React from 'react'
+import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { BrowserHistory, type HistoryIo } from '../main/helpers/browser-history'
@@ -91,10 +92,10 @@ describe('browser-live history ops', () => {
     const f = hostFixture()
     f.history.visit('https://a.example/', 'A')
     f.history.visit('https://b.example/', 'B')
-    expect(await f.host.invoke({ op: 'history-remove', url: 'https://a.example/' })).toEqual({ ok: true })
+    expect(await f.host.invoke({ op: 'history-remove', url: 'https://a.example/' })).toEqual({ ok: true, removed: true })
     expect(f.history.list().map((e) => e.url)).toEqual(['https://b.example/'])
     expect(await f.host.invoke({ op: 'history-remove' })).toEqual({ error: 'bad_args' })
-    expect(await f.host.invoke({ op: 'history-remove', url: 'https://gone.example/' })).toMatchObject({ error: expect.any(String) })
+    expect(await f.host.invoke({ op: 'history-remove', url: 'https://gone.example/' })).toEqual({ ok: true, removed: false })
   })
 
   it('history-clear removes the last hour, today (local midnight) or everything by the host clock', async () => {
@@ -152,7 +153,7 @@ describe('browser-live sites ops', () => {
     expect(await f.host.invoke({ op: 'site-remove', site: 'github.com' })).toEqual({ ok: true, removed: 2 })
     expect(f.session.cookies.remove.mock.calls).toEqual([['https://github.com/', 'sid'], ['http://gist.github.com/a', 'k']])
     const origins = f.session.clearStorageData.mock.calls.map(([o]: [any]) => o.origin)
-    expect(origins).toEqual(['https://github.com', 'http://github.com', 'https://www.github.com', 'http://www.github.com'])
+    expect(origins).toEqual(['https://github.com', 'http://github.com', 'https://www.github.com', 'http://www.github.com', 'https://gist.github.com', 'http://gist.github.com'])
     expect(f.session.clearStorageData.mock.calls[0][0].storages).toEqual(['localstorage', 'indexdb', 'serviceworkers', 'cachestorage', 'websql', 'filesystem'])
   })
 
@@ -163,6 +164,99 @@ describe('browser-live sites ops', () => {
     }
     expect(f.session.cookies.remove).not.toHaveBeenCalled()
     expect(f.session.clearStorageData).not.toHaveBeenCalled()
+  })
+})
+
+function fakeTabView(id: number) {
+  const wc: any = new EventEmitter()
+  Object.assign(wc, {
+    id, url: '', title: '', destroyed: false,
+    isDestroyed: () => wc.destroyed, getURL: () => wc.url, getTitle: () => wc.title, isLoading: () => false,
+    setWindowOpenHandler: vi.fn(), loadURL: vi.fn(async (url: string) => { wc.url = url }), stop: vi.fn(), reload: vi.fn(), focus: vi.fn(),
+    close: vi.fn(() => { wc.destroyed = true }), sendInputEvent: vi.fn(),
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false, goBack: vi.fn(), goForward: vi.fn() },
+  })
+  return { webContents: wc, setBounds: vi.fn(), setVisible: vi.fn() } as any
+}
+
+/** A host with real open tabs (fake views) and a recorder for the backend reports. */
+function tabFixture(history?: unknown) {
+  const views: any[] = []
+  const session: any = Object.assign(new EventEmitter(), {
+    cookies: { get: vi.fn(async () => [] as any[]), remove: vi.fn(async () => {}) }, clearStorageData: vi.fn(async () => {}),
+    setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), webRequest: { onBeforeRequest: vi.fn(), onResponseStarted: vi.fn(), onCompleted: vi.fn() },
+  })
+  const win: any = { isDestroyed: () => false, contentView: { addChildView: vi.fn(), removeChildView: vi.fn() }, webContents: { send: vi.fn() } }
+  const http = { request: vi.fn(async () => ({ data: {} })) }
+  const onHalt = vi.fn()
+  const host = new BrowserHost({
+    window: () => win, createView: vi.fn(() => { const v = fakeTabView(views.length + 1); views.push(v); return v }), fromPartition: () => session,
+    http, baseUrl: () => 'http://127.0.0.1:9', appToken: 't', uiSecret: 's', history, onHalt,
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+  } as unknown as BrowserHostDeps)
+  const open = async (conversationId: number, url: string) => {
+    await host.invoke({ op: 'open', conversationId, url })
+    await vi.waitFor(() => expect(views.length).toBeGreaterThan(0))
+    views[views.length - 1].webContents.url = url
+  }
+  return { host, session, views, http, onHalt, open }
+}
+
+describe('site-remove, turn 2', () => {
+  it('clears storage of subdomains, cookie domains and history origins with ports', async () => {
+    const history = { list: () => [
+      { url: 'http://dev.example.com:3000/x', title: '', favicon: '', lastVisit: 1, visits: 1 },
+      { url: 'https://other.org:8443/', title: '', favicon: '', lastVisit: 1, visits: 1 },
+      { url: 'https://notexample.com/', title: '', favicon: '', lastVisit: 1, visits: 1 },
+    ], clear: async () => true, remove: async () => true, clearSince: async () => true, visit() {}, update() {}, flush: async () => true }
+    const f = tabFixture(history)
+    f.session.cookies.get.mockResolvedValue([{ name: 'sid', value: 'v', domain: '.app.example.com', path: '/', secure: true }])
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 1 })
+    const origins = f.session.clearStorageData.mock.calls.map((c: any) => c[0].origin)
+    expect(origins).toEqual(expect.arrayContaining(['https://example.com', 'http://www.example.com', 'https://app.example.com', 'http://app.example.com', 'http://dev.example.com:3000']))
+    expect(origins).not.toContain('https://other.org:8443')
+    expect(origins).not.toContain('https://notexample.com')
+    expect(new Set(origins).size).toBe(origins.length)
+  })
+
+  it('closes the open tabs of the site (any chat), stops those chats and leaves other tabs', async () => {
+    const f = tabFixture()
+    await f.open(4, 'https://app.example.com/home')
+    await f.open(7, 'https://example.com/')
+    await f.open(9, 'https://notexample.com/')
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 0 })
+    expect(f.views[0].webContents.close).toHaveBeenCalled()
+    expect(f.views[1].webContents.close).toHaveBeenCalled()
+    expect(f.views[2].webContents.close).not.toHaveBeenCalled()
+    expect(f.onHalt.mock.calls.map((c) => c[0]).sort()).toEqual([4, 7])
+  })
+
+  it('reports to the backend so the grants drop', async () => {
+    const f = tabFixture()
+    await f.host.invoke({ op: 'site-remove', site: 'example.com' })
+    expect(f.http.request).toHaveBeenCalledWith(expect.objectContaining({ url: expect.stringContaining('/browser/runtime'), data: expect.objectContaining({ cleared: true }) }))
+  })
+
+  it('keeps going when one cookie removal throws and says partial', async () => {
+    const f = tabFixture()
+    f.session.cookies.get.mockResolvedValue([
+      { name: 'a', value: 'v', domain: 'example.com', path: '/', secure: true },
+      { name: 'b', value: 'v', domain: 'example.com', path: '/', secure: true },
+    ])
+    f.session.cookies.remove.mockRejectedValueOnce(new Error('boom'))
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: false, error: 'site_remove_partial', removed: 1, failed: 1 })
+    expect(f.session.cookies.remove).toHaveBeenCalledTimes(2)
+    expect(f.session.clearStorageData).toHaveBeenCalled()
+  })
+
+  it('refuses a bare public suffix or a value without letters', async () => {
+    const f = tabFixture()
+    f.session.cookies.get.mockResolvedValue([{ name: 'a', value: 'v', domain: 'x.co.uk', path: '/', secure: true }])
+    for (const site of ['com', 'co.uk', 'com.tr', '-', '--', 'uk']) expect(await f.host.invoke({ op: 'site-remove', site })).toEqual({ error: 'bad_args' })
+    expect(f.session.cookies.remove).not.toHaveBeenCalled()
+    expect(f.session.clearStorageData).not.toHaveBeenCalled()
+    expect(await f.host.invoke({ op: 'site-remove', site: 'localhost' })).toMatchObject({ ok: true })
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.co.uk' })).toMatchObject({ ok: true })
   })
 })
 
@@ -264,5 +358,40 @@ describe('BrowserUsePage sites and history', () => {
     fireEvent.click(await screen.findByTestId('bp-site-remove-github.com'))
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.any(String), 'error'))
     expect((await screen.findByTestId('bp-msg')).textContent).toBeTruthy()
+  })
+
+  it('reloads the sites and history after a successful clear of browsing data', async () => {
+    render(<BrowserUsePage saved={vi.fn()} />)
+    await screen.findByTestId('bp-site-github.com')
+    const before = { sites: calls('sites').length, history: calls('history').length }
+    confirm.mockResolvedValueOnce(true)
+    fireEvent.click(screen.getByTestId('bp-clear'))
+    await waitFor(() => expect(calls('sites').length).toBe(before.sites + 1))
+    expect(calls('history').length).toBe(before.history + 1)
+  })
+
+  it('does not show the empty state when the sites list fails to load', async () => {
+    invoke.mockImplementation(async (_c: string, req: any) => (req.op === 'sites' ? { error: 'sites_failed' } : req.op === 'history' ? { entries: [] } : { enabled: true }))
+    render(<BrowserUsePage saved={vi.fn()} />)
+    expect((await screen.findByTestId('bp-msg')).textContent).toBeTruthy()
+    expect(screen.queryByTestId('bp-sites-empty')).toBeNull()
+  })
+
+  it('ignores a history reply that belongs to an older search', async () => {
+    const pending: Record<string, (v: unknown) => void> = {}
+    invoke.mockImplementation(async (_c: string, req: any) => {
+      if (req.op === 'history') return new Promise((resolve) => { pending[req.query ?? ''] = resolve })
+      return req.op === 'sites' ? { sites: [] } : { enabled: true }
+    })
+    render(<BrowserUsePage saved={vi.fn()} />)
+    await waitFor(() => expect(pending['']).toBeTruthy())
+    fireEvent.change(screen.getByTestId('bp-hist-search'), { target: { value: 'new' } })
+    await waitFor(() => expect(pending['new']).toBeTruthy())
+    pending['new']({ entries: [{ url: 'https://new.example/', title: 'New', favicon: '', lastVisit: 2, visits: 1 }] })
+    await waitFor(() => expect(screen.getAllByTestId('bp-hist-row')).toHaveLength(1))
+    pending['']({ entries: rows(3) })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.getAllByTestId('bp-hist-row')).toHaveLength(1)
+    expect(screen.getByTestId('bp-hist-row').textContent).toContain('New')
   })
 })

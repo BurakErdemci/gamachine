@@ -55,6 +55,13 @@ export function siteOf(domain: string): string {
   return labels.slice(-keep).join('.')
 }
 
+/** A bare public suffix (com, co.uk) or the like: removing it would wipe every site under it. */
+function isPublicSuffix(site: string): boolean {
+  const labels = site.split('.')
+  if (labels.length === 1) return site !== 'localhost'
+  return labels.length === 2 && SECOND_LEVEL.has(labels[0]) && labels[1].length === 2
+}
+
 export interface BrowserHostDeps {
   window: () => BrowserHostWindow | null
   createView: (options: WebContentsViewConstructorOptions) => WebContentsView
@@ -1102,7 +1109,9 @@ export class BrowserHost {
       }
       case 'history-remove': {
         if (!str(url) || !this.deps.history?.remove) return { error: 'bad_args' }
-        return (await this.deps.history.remove(url)) ? { ok: true } : { error: 'history_remove_failed' }
+        // An entry already gone (another window, a clear) is not an error; a false from remove() is then a failed write.
+        if (!this.deps.history.list().some((entry) => entry.url === url)) return { ok: true, removed: false }
+        return (await this.deps.history.remove(url)) ? { ok: true, removed: true } : { error: 'history_remove_failed' }
       }
       case 'history-clear': {
         const { range } = req as { range?: unknown }
@@ -1133,20 +1142,48 @@ export class BrowserHost {
       }
       case 'site-remove': {
         const { site } = req as { site?: unknown }
-        if (typeof site !== 'string' || site.length > 253 || !SITE_RE.test(site)) return { error: 'bad_args' }
+        if (typeof site !== 'string' || site.length > 253 || !SITE_RE.test(site) || !/[a-z0-9]/.test(site) || isPublicSuffix(site)) return { error: 'bad_args' }
+        const inSite = (host: string) => host === site || host.endsWith(`.${site}`)
         try {
+          // Open pages of the site go first: a live page would write the login back after the cookies are gone.
+          const chats = new Set<number>()
+          const doomed = [...this.tabs.values()].filter((tab) => {
+            try {
+              if (tab.view.webContents.isDestroyed() || !inSite(new URL(tab.view.webContents.getURL()).hostname.toLowerCase())) return false
+            } catch { return false }
+            return true
+          })
+          for (const tab of doomed) chats.add(tab.conversationId)
+          for (const id of chats) this.stopLocal(id)
+          for (const tab of doomed) this.closeTab(tab)
           const session = this.session()
+          const origins = new Set<string>()
+          for (const host of [site, `www.${site}`]) for (const scheme of ['https', 'http']) origins.add(`${scheme}://${host}`)
           let removed = 0
+          let failed = 0
           for (const cookie of await session.cookies.get({})) {
             const domain = (cookie.domain ?? '').replace(/^\.+/, '').toLowerCase()
-            if (domain !== site && !domain.endsWith(`.${site}`)) continue
-            await session.cookies.remove(`${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path ?? '/'}`, cookie.name)
-            removed++
+            if (!inSite(domain)) continue
+            // Storage of a subdomain (app.site) is not covered by the origins of site itself.
+            for (const scheme of ['https', 'http']) origins.add(`${scheme}://${domain}`)
+            try {
+              await session.cookies.remove(`${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path ?? '/'}`, cookie.name)
+              removed++
+            } catch { failed++ }
           }
-          for (const host of [site, `www.${site}`]) {
-            for (const scheme of ['https', 'http']) await session.clearStorageData({ origin: `${scheme}://${host}`, storages: STORAGES as any })
+          // Pages visited on other ports or subdomains: the exact origin, port included.
+          for (const entry of this.deps.history?.list() ?? []) {
+            try {
+              const u = new URL(entry.url)
+              if ((u.protocol === 'https:' || u.protocol === 'http:') && inSite(u.hostname.toLowerCase())) origins.add(u.origin)
+            } catch { /* not a URL */ }
           }
-          return { ok: true, removed }
+          for (const origin of origins) {
+            try { await session.clearStorageData({ origin, storages: STORAGES as any }) } catch { failed++ }
+          }
+          // The login is gone whatever the outcome, so the backend drops the chats' grants like after a full clear.
+          await this.report(true)
+          return failed > 0 ? { ok: false, error: 'site_remove_partial', removed, failed } : { ok: true, removed }
         } catch {
           this.log('[browser] removing a site failed')
           return { error: 'site_remove_failed' }
