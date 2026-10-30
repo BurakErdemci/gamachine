@@ -21,10 +21,12 @@ async function readBrowser(): Promise<boolean> {
 export function useLiveFeatures(): LiveFeatures {
   const [features, setFeatures] = useState<LiveFeatures>({ computer: false, browser: false });
   const alive = useRef(true);
+  const latest = useRef(0);
 
   const refresh = useCallback(async () => {
+    const seq = ++latest.current;
     const [status, browser] = await Promise.all([computerUseStatus().catch(() => null), readBrowser()]);
-    if (!alive.current) return;
+    if (!alive.current || seq !== latest.current) return;
     const computer = !!status && !isComputerUseError(status) && status.settings.enabled === true && status.available === true;
     setFeatures(prev => (prev.computer === computer && prev.browser === browser ? prev : { computer, browser }));
   }, []);

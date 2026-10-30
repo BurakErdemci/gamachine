@@ -43,9 +43,10 @@ export function useWorkspacePanel(initial: { tab?: WsTab; width?: WsWidth } = {}
 /**
  * The widest panel (`odak`) takes the sidebar's place: the sidebar folds away when the panel
  * turns widest and comes back when it leaves, unless the user opened it in between (a user
- * toggle shows up as the sidebar being open again while it was folded here).
+ * toggle shows up as the sidebar being open again while it was folded here). In a narrow window
+ * it stays closed: reopening it there would make useOneSideColumnWhenNarrow close the panel.
  */
-export function useSidebarFoldedByFocusWidth(width: WsWidth, sidebar: { open: boolean; setOpen: (open: boolean) => void }): void {
+export function useSidebarFoldedByFocusWidth(width: WsWidth, sidebar: { open: boolean; setOpen: (open: boolean) => void }, narrow = false): void {
   const { open, setOpen } = sidebar;
   const prevWidth = useRef(width);
   const folded = useRef(false);
@@ -58,9 +59,9 @@ export function useSidebarFoldedByFocusWidth(width: WsWidth, sidebar: { open: bo
       setOpen(false);
       return;
     }
-    if (width !== 'odak' && was === 'odak' && folded.current && !open) setOpen(true);
+    if (width !== 'odak' && was === 'odak' && folded.current && !open && !narrow) setOpen(true);
     if (width !== 'odak' || open) folded.current = false;
-  }, [width, open, setOpen]);
+  }, [width, open, setOpen, narrow]);
 }
 
 /**

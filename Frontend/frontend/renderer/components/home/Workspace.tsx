@@ -325,7 +325,7 @@ export const PreviewPane: React.FC<PreviewPaneProps> = ({ file, kind, onClose, v
 
 export interface ChangedFile { path: string; rel: string; status: string }
 
-interface ScenePaneProps {
+interface ChangedFilesProps {
   change: PendingChange | null;
   changed: ChangedFile[];
   /** Total before the list was capped. */
@@ -344,7 +344,7 @@ const STATUS_KEY: Record<string, TKey> = {
 };
 const STATUS_TAG: Record<string, string> = { modified: 'tag-mod', untracked: 'tag-new', added: 'tag-new', deleted: 'tag-del' };
 
-export const ChangedFiles: React.FC<ScenePaneProps> = ({ change, changed, changedTotal, seenHidden = 0, onAck, onShowAll, isRepo, workspacePath, onShowChange, onOpen }) => {
+export const ChangedFiles: React.FC<ChangedFilesProps> = ({ change, changed, changedTotal, seenHidden = 0, onAck, onShowAll, isRepo, workspacePath, onShowChange, onOpen }) => {
   const { t } = useLang();
   const count = changedTotal + (change ? 1 : 0);
   return (

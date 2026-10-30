@@ -86,6 +86,7 @@ import { guideWorkspaceTab, wants, type PrepareHandlers } from '../lib/guide/pre
 import type { WsTab, WsWidth } from '../lib/workspacePanel';
 import { useLiveSide, shownSides, viewSide } from '../lib/liveSide';
 import { useLiveFeatures } from '../lib/liveFeatures';
+import { browserRunningIn, useBrowserActiveChats, useComputerRunning } from '../lib/liveRunning';
 import { LivePane } from '../components/home/LivePane';
 
 // The guide's prepare-action arguments (REHBER-KAYITLARI.md section 4) in this app's own ids.
@@ -371,7 +372,7 @@ export default function Home() {
   const narrowWindow = useNarrowWindow();
   useOneSideColumnWhenNarrow(narrowWindow,
     { open: isSidebarOpen, setOpen: setIsSidebarOpen }, { open: ws.open, setOpen: setWsOpen });
-  useSidebarFoldedByFocusWidth(ws.width, { open: isSidebarOpen, setOpen: setIsSidebarOpen });
+  useSidebarFoldedByFocusWidth(ws.width, { open: isSidebarOpen, setOpen: setIsSidebarOpen }, narrowWindow);
   const [sceneEditorSetting] = useSceneEditorSetting();
   const editorOn = sceneEditorSetting && ai.unityMcpStatus !== 'off';
   // The Canlı tab: which sides are on (or running), which one it shows, and the running lights.
@@ -415,35 +416,19 @@ export default function Home() {
     return () => { if (typeof off === 'function') off(); };
   }, [ipc, wsReveal, pickLive]);
   // Open the tab once per run without focusing the window so the agent's target app keeps focus.
-  useEffect(() => {
-    if (!ipc) return;
-    const tracker = createLiveRevealTracker(() => { if (liveAutoReveal('bilgisayar')) wsReveal('canli'); });
-    const off = ipc.on('computer-use-live', (raw: unknown) => {
-      setLiveRunning('bilgisayar', (raw as { active?: unknown } | null)?.active === true);
-      tracker(raw);
-    });
-    return () => { if (typeof off === 'function') off(); };
-  }, [ipc, wsReveal, liveAutoReveal, setLiveRunning]);
-  // The agent browser opens its tab the same way: once per run, when main reports it active.
-  const openConvRef = useRef<number | null>(null);
-  openConvRef.current = chat.activeConvId;
-  // The chat the browser is running in; its light shows only while that chat is the open one.
-  const browserRunConv = useRef<number | null>(null);
-  useEffect(() => {
-    if (!ipc) return;
-    const tracker = createLiveRevealTracker(() => { if (liveAutoReveal('tarayici')) wsReveal('canli'); }, id => id === openConvRef.current);
-    const off = ipc.on('browser-live', (raw: unknown) => {
-      const p = raw && typeof raw === 'object' ? raw as { active?: unknown; conversationId?: unknown } : {};
-      if (p.active === true && typeof p.conversationId === 'number') browserRunConv.current = p.conversationId;
-      else if (typeof p.conversationId !== 'number' || p.conversationId === browserRunConv.current) browserRunConv.current = null;
-      setLiveRunning('tarayici', browserRunConv.current !== null && browserRunConv.current === openConvRef.current);
-      tracker(raw);
-    });
-    return () => { if (typeof off === 'function') off(); };
-  }, [ipc, wsReveal, liveAutoReveal, setLiveRunning]);
-  useEffect(() => {
-    setLiveRunning('tarayici', browserRunConv.current !== null && browserRunConv.current === chat.activeConvId);
-  }, [chat.activeConvId, setLiveRunning]);
+  const computerTracker = useMemo(() => createLiveRevealTracker(() => { if (liveAutoReveal('bilgisayar')) wsReveal('canli'); }), [liveAutoReveal, wsReveal]);
+  const computerRunning = useComputerRunning(ipc, computerTracker);
+  useEffect(() => { setLiveRunning('bilgisayar', computerRunning); }, [computerRunning, setLiveRunning]);
+  // The agent browser opens its tab the same way: once per run, when main reports it active for the open chat's running turn.
+  const openChatRef = useRef({ id: chat.activeConvId, loading: chat.loading });
+  openChatRef.current = { id: chat.activeConvId, loading: chat.loading };
+  const browserTracker = useMemo(() => createLiveRevealTracker(
+    () => { if (liveAutoReveal('tarayici')) wsReveal('canli'); },
+    id => id === openChatRef.current.id && openChatRef.current.loading,
+  ), [liveAutoReveal, wsReveal]);
+  const browserChats = useBrowserActiveChats(ipc, chat.activeConvId, browserTracker);
+  const browserRunning = browserRunningIn(browserChats, chat.activeConvId, chat.loading);
+  useEffect(() => { setLiveRunning('tarayici', browserRunning); }, [browserRunning, setLiveRunning]);
   const [projectProblems, setProjectProblems] = useState<Record<string, any[]>>({});
   // Chat'te '/' autocomplete için Claude Code slash komutları + skill'ler (backend'den)
   const [slashCommands, setSlashCommands] = useState<string[]>([]);

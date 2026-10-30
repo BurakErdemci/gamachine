@@ -5,9 +5,10 @@ import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@t
 import { translations } from '../renderer/lib/i18n'
 import { LivePane } from '../renderer/components/home/LivePane'
 import { Workspace } from '../renderer/components/home/Workspace'
-import { useLiveFeatures } from '../renderer/lib/liveFeatures'
+import { LIVE_FEATURES_EVENT, useLiveFeatures } from '../renderer/lib/liveFeatures'
 import { shownSides, useLiveSide, viewSide } from '../renderer/lib/liveSide'
-import { useSidebarFoldedByFocusWidth, useWorkspacePanel, type WsWidth } from '../renderer/lib/workspacePanel'
+import { browserRunningIn, useBrowserActiveChats, useComputerRunning } from '../renderer/lib/liveRunning'
+import { useOneSideColumnWhenNarrow, useSidebarFoldedByFocusWidth, useWorkspacePanel, type WsWidth } from '../renderer/lib/workspacePanel'
 
 const tr = translations.tr
 const BOTH = { bilgisayar: true, tarayici: true }
@@ -160,7 +161,7 @@ describe('useLiveFeatures and the Canlı tab', () => {
     await settle()
     expect(liveTab()).toBeNull()
     setIpc(cuStatus(), { enabled: false })
-    act(() => { window.dispatchEvent(new CustomEvent('app-live-features-changed')) })
+    act(() => { window.dispatchEvent(new CustomEvent(LIVE_FEATURES_EVENT)) })
     await waitFor(() => expect(liveTab()).toBeTruthy())
   })
 
@@ -178,7 +179,8 @@ describe('terminal drawer in the Canlı tab', () => {
     expect(screen.getByTestId('workspace').getAttribute('data-tab')).toBe('canli')
     expect(screen.getByText('drawer')).toBeTruthy()
     const css = readFileSync('renderer/styles/gm/workspace.css', 'utf8')
-    expect(css).toMatch(/\.workspace\[data-tab="canli"\] \.term \{ display: none; \}/)
+    expect(css).toMatch(/\.workspace\[data-tab="canli"\] \.term\[data-open="false"\] \{ display: none; \}/)
+    expect(css).not.toMatch(/\.workspace\[data-tab="canli"\] \.term \{/)
     for (const theme of ['sade', 'atolye', 'ozel', 'pafta']) {
       const t = readFileSync(`renderer/styles/gm/theme-${theme}.workspace.css`, 'utf8')
       expect(t).not.toMatch(/data-tab="canli"[^{]*\.term[^{]*\{[^}]*display:\s*(flex|block|grid)/)
@@ -220,5 +222,144 @@ describe('sidebar and the widest panel', () => {
     const widths: WsWidth[] = ['odak', 'dar']
     for (const w of widths) act(() => result.current.setWidth(w))
     expect(result.current.open).toBe(false)
+  })
+})
+
+describe('sidebar, odak and a narrow window', () => {
+  function useAll(narrow: boolean) {
+    const [open, setOpen] = React.useState(true)
+    const ws = useWorkspacePanel()
+    useOneSideColumnWhenNarrow(narrow, { open, setOpen }, { open: ws.open, setOpen: ws.setOpen })
+    useSidebarFoldedByFocusWidth(ws.width, { open, setOpen }, narrow)
+    return { ...ws, sidebar: open }
+  }
+
+  it('keeps the panel open and the sidebar closed when odak is left after the window narrowed', () => {
+    const { result, rerender } = renderHook(({ narrow }) => useAll(narrow), { initialProps: { narrow: false } })
+    act(() => result.current.setWidth('odak'))
+    expect(result.current.sidebar).toBe(false)
+    rerender({ narrow: true })
+    act(() => result.current.setWidth('yarim'))
+    expect(result.current.open).toBe(true)
+    expect(result.current.sidebar).toBe(false)
+  })
+
+  it('still brings the sidebar back when odak is left in a wide window', () => {
+    const { result } = renderHook(() => useAll(false))
+    act(() => result.current.setWidth('odak'))
+    act(() => result.current.setWidth('yarim'))
+    expect(result.current.sidebar).toBe(true)
+    expect(result.current.open).toBe(true)
+  })
+})
+
+describe('what counts as a running agent in the Canlı tab', () => {
+  type Listener = (raw: unknown) => void
+  function fakeIpc(status: (channel: string, req: any) => unknown = () => ({ error: 'none' })) {
+    const listeners = new Map<string, Listener>()
+    return {
+      listeners,
+      on: vi.fn((channel: string, fn: Listener) => { listeners.set(channel, fn); return () => { listeners.delete(channel) } }),
+      invoke: vi.fn(async (channel: string, req: any) => status(channel, req)),
+      emit: (channel: string, raw: unknown) => listeners.get(channel)!(raw),
+    }
+  }
+  const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
+
+  it('needs both a turn in flight and a live tab in the open chat', () => {
+    const chats = new Set([101])
+    expect(browserRunningIn(chats, 101, true)).toBe(true)
+    expect(browserRunningIn(chats, 101, false)).toBe(false)
+    expect(browserRunningIn(chats, 202, true)).toBe(false)
+    expect(browserRunningIn(chats, null, true)).toBe(false)
+  })
+
+  it('keeps one record per chat: another chat going active or idle changes only itself', async () => {
+    const ipc = fakeIpc()
+    const { result } = renderHook(() => useBrowserActiveChats(ipc, 101, vi.fn()))
+    await settle()
+    act(() => ipc.emit('browser-live', { active: true, conversationId: 101 }))
+    act(() => ipc.emit('browser-live', { active: true, conversationId: 202 }))
+    expect([...result.current].sort()).toEqual([101, 202])
+    act(() => ipc.emit('browser-live', { active: false, conversationId: 202 }))
+    expect([...result.current]).toEqual([101])
+  })
+
+  it('remembers a chat across A -> B -> A', async () => {
+    const ipc = fakeIpc()
+    const { result, rerender } = renderHook(({ id }) => useBrowserActiveChats(ipc, id, vi.fn()), { initialProps: { id: 101 } })
+    await settle()
+    act(() => ipc.emit('browser-live', { active: true, conversationId: 101 }))
+    act(() => ipc.emit('browser-live', { active: true, conversationId: 202 }))
+    rerender({ id: 202 })
+    rerender({ id: 101 })
+    await settle()
+    expect(browserRunningIn(result.current, 101, true)).toBe(true)
+  })
+
+  it('goes off when the turn ends although the tab stays', async () => {
+    const ipc = fakeIpc()
+    const { result } = renderHook(() => useBrowserActiveChats(ipc, 101, vi.fn()))
+    await settle()
+    act(() => ipc.emit('browser-live', { active: true, conversationId: 101 }))
+    expect(browserRunningIn(result.current, 101, true)).toBe(true)
+    expect(browserRunningIn(result.current, 101, false)).toBe(false)
+  })
+
+  it('hydrates the open chat from its status read, and a status never overrides an event', async () => {
+    const ipc = fakeIpc((channel, req) => channel === 'browser-live' && req.op === 'status' ? { active: true, conversationId: req.conversationId } : { error: 'none' })
+    const { result } = renderHook(() => useBrowserActiveChats(ipc, 101, vi.fn()))
+    await settle()
+    expect([...result.current]).toEqual([101])
+    expect(ipc.invoke).toHaveBeenCalledWith('browser-live', { op: 'status', conversationId: 101 })
+
+    let release: (v: unknown) => void = () => {}
+    const slow = fakeIpc(() => new Promise(r => { release = r }))
+    const late = renderHook(() => useBrowserActiveChats(slow, 303, vi.fn()))
+    act(() => slow.emit('browser-live', { active: false, conversationId: 303 }))
+    await act(async () => { release({ active: true, conversationId: 303 }) })
+    expect([...late.result.current]).toEqual([])
+  })
+
+  it('passes every browser event to the reveal callback', async () => {
+    const ipc = fakeIpc()
+    const onEvent = vi.fn()
+    renderHook(() => useBrowserActiveChats(ipc, 101, onEvent))
+    act(() => ipc.emit('browser-live', { active: true, conversationId: 101 }))
+    expect(onEvent).toHaveBeenCalledWith({ active: true, conversationId: 101 })
+  })
+
+  it('hydrates the computer run on mount without calling the reveal callback, then follows events', async () => {
+    const ipc = fakeIpc((channel, req) => channel === 'computer-use-live' && req.op === 'status' ? { active: true } : { error: 'none' })
+    const onEvent = vi.fn()
+    const { result } = renderHook(() => useComputerRunning(ipc, onEvent))
+    await settle()
+    expect(result.current).toBe(true)
+    expect(onEvent).not.toHaveBeenCalled()
+    act(() => ipc.emit('computer-use-live', { active: false }))
+    expect(result.current).toBe(false)
+    expect(onEvent).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useLiveFeatures ordering', () => {
+  it('lets the latest started read win over an older, slower one', async () => {
+    const pending: Array<(v: unknown) => void> = []
+    ;(window as any).ipc = {
+      invoke: vi.fn((channel: string, req: { op?: string }) => {
+        if (channel === 'computer-use' && req.op === 'status') return Promise.resolve({ error: 'x' })
+        return new Promise(resolve => { pending.push(resolve) })
+      }),
+    }
+    const { result } = renderHook(() => useLiveFeatures())
+    await act(async () => {})
+    act(() => { window.dispatchEvent(new CustomEvent(LIVE_FEATURES_EVENT)) })
+    await act(async () => {})
+    expect(pending).toHaveLength(2)
+    await act(async () => { pending[1]({ enabled: true }) })
+    expect(result.current.browser).toBe(true)
+    await act(async () => { pending[0]({ enabled: false }) })
+    expect(result.current.browser).toBe(true)
+    delete (window as any).ipc
   })
 })
