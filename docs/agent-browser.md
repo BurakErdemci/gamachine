@@ -91,7 +91,7 @@ the **agent tab**, and it is the only page the agent can reach.
   gets the selected one) and clears user control. While the agent runs, switching or opening tabs
   does not move it, and user input on the agent tab still sets user control. The one exception
   that keeps the current agent tab: a command is running on it.
-- **The agent can list and switch tabs (31 Oct 2026).** `browser_tabs` and `browser_use_tab` (host ops
+- **The agent can list and switch tabs (30 Oct 2026).** `browser_tabs` and `browser_use_tab` (host ops
   `tabs` and `use_tab`) let a request like "look at my Epic library" land on the open Epic tab.
   - R1: the agent may list only its own chat's tabs (id, title, url, `active` = in front, `agent`,
     `userTouched`); another chat's tabs never appear and its ids resolve to `no_tab`. Only the agent
