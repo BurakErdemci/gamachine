@@ -149,7 +149,9 @@ export const WorkspaceScreen = ({
   };
   const locate = async (it: RecentWorkspace) => {
     const chosen = await onOpenFolder(it.hostPath ? parentDir(it.hostPath) : undefined);
-    if (chosen) await remove(it);
+    // Choosing the same folder again re-saves this very record; removing it would delete the new one.
+    const sameFolder = (a: string, b: string) => a.replace(/[\\/]+$/, '').replace(/\\/g, '/') === b.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+    if (chosen && !(it.hostPath && sameFolder(chosen, it.hostPath))) await remove(it);
   };
 
   const newProject = async () => {

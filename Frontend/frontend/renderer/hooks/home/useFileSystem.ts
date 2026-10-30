@@ -480,8 +480,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     // once the choice comes back.
     if (!halaGecerli()) return null;
     if (!folderPath) return null;
-    await selectWorkspace(folderPath);
-    return folderPath;
+    return (await selectWorkspace(folderPath)) ? folderPath : null;
   }, [selectWorkspace, workspaceRequest]);
 
   const openFilePicker = useCallback(async () => {

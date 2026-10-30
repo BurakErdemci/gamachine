@@ -436,6 +436,36 @@ describe('useFileSystem.selectWorkspace result', () => {
   })
 })
 
+describe('hub: Locate', () => {
+  const locateRow = async (chosen: string | null) => {
+    mocks.invoke.mockImplementation(async (channel: string, arg: any) => (
+      channel === 'workspace-info' ? arg.map((path: string) => ({ path, status: 'missing', unityVersion: null })) : ipc(channel, arg)))
+    vi.mocked(axios.post).mockReset().mockResolvedValue({ data: { removed: true } })
+    const p = props()
+    p.onOpenFolder = vi.fn(async () => chosen)
+    view(p)
+    fireEvent.click(await screen.findByText(en['welcome.locate']))
+    await waitFor(() => expect(p.onOpenFolder).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+  }
+  const removed = () => vi.mocked(axios.post).mock.calls.filter(c => String(c[0]).endsWith('/remove-workspace'))
+
+  it('keeps the old record when the selection was refused', async () => {
+    await locateRow(null)
+    expect(removed()).toHaveLength(0)
+  })
+
+  it('keeps the record when the same folder is chosen again', async () => {
+    await locateRow('/h/Arena/')
+    expect(removed()).toHaveLength(0)
+  })
+
+  it('removes the old record when a different folder replaced it', async () => {
+    await locateRow('/h/Elsewhere')
+    await waitFor(() => expect(removed()).toHaveLength(1))
+  })
+})
+
 describe('hub: a rejected invoke', () => {
   it('shows the thrown message for a creation instead of "no error"', async () => {
     create = vi.fn(async () => { throw new Error('main exploded') })

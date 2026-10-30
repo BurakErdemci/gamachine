@@ -93,4 +93,21 @@ describe('stale-workspace-selection', () => {
     expect(result.current.workspacePath).toBe('/workspace')
     expect(result.current.fileTree.map((e: any) => e.name)).toEqual(['A.cs'])
   })
+
+  it('openFolder returns null when the selection was refused and the folder when it succeeded', async () => {
+    let exists = false
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'open-folder-dialog') return '/workspace'
+      if (channel === 'path-exists') return exists
+      if (channel === 'read-directory') return []
+      throw new Error(`unexpected IPC channel: ${channel}`)
+    })
+    const { result } = mount()
+    let refused: string | null | undefined, opened: string | null | undefined
+    await act(async () => { refused = await result.current.openFolder() })
+    exists = true
+    await act(async () => { opened = await result.current.openFolder() })
+    expect(refused).toBeNull()
+    expect(opened).toBe('/workspace')
+  })
 })
