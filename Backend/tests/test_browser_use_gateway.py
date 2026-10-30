@@ -319,7 +319,8 @@ def test_state_is_read_again_for_every_call():
     handler = fake.gateway()
     asyncio.run(handler.call(3, "snapshot", {}, state))
     asyncio.run(handler.call(3, "snapshot", {}, lambda: {**STATE, "halted": True}))
-    assert len(reads) == 1 and fake.ops() == ["snapshot"]
+    # One read at entry (before the lock queue) and one under the lock.
+    assert len(reads) == 2 and fake.ops() == ["snapshot"]
 
 
 def test_post_cmd_sends_the_bearer_token_to_the_host_port(monkeypatch):

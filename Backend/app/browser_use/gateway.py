@@ -255,8 +255,14 @@ class BrowserGateway:
             return _refusal(f"Unknown browser tool browser_{op}.")
         if not isinstance(args, dict) or not _valid_args(op, args):
             return _refusal(f"Invalid arguments for browser_{op}.")
+        # Read before queueing: a Stop that lands while this call waits for the lock must still refuse it,
+        # even after a new user message has cleared the halt.
+        entry = state()
+        entry_stop_gen = entry.get("stop_gen") if isinstance(entry, dict) else None
         async with self._lock:
             before = state()
+            if isinstance(before, dict) and before.get("stop_gen") != entry_stop_gen:
+                return _refusal(HALTED)
             runtime, refusal = _usable(before)
             if refusal:
                 return _refusal(refusal)
