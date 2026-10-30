@@ -26,6 +26,7 @@ import {
   confirmRecentRoot,
   isOwnFrame,
   isTrustedRoot,
+  isRegisteredRoot,
   registerTrustedRoot,
 } from './helpers/ipc-trust'
 import { applyContentSecurityPolicy } from './helpers/csp'
@@ -436,9 +437,10 @@ handleSecure('hub-open-project', async (_event, arg: any) => {
 
 // Moves a Unity project to the Trash / Recycle Bin; never a permanent delete. Only a root the user
 // authorized may go, and the confirmation is this process's own box, not something the renderer answers.
-// The open workspace is not tracked here, so the renderer names it and project-trash re-checks it.
+// Only a registered root itself may go, never a folder inside one. The renderer names the open workspace
+// and project-trash re-checks it.
 handleSecure('workspace-trash', async (event, hostPath: unknown, openWorkspace: unknown) => {
-  if (typeof hostPath !== 'string' || untrustedWorkspace(hostPath)) return { error: 'untrusted' }
+  if (typeof hostPath !== 'string' || !isRegisteredRoot(hostPath)) return { error: 'untrusted' }
   const known = (name: Parameters<typeof app.getPath>[0]) => { try { return app.getPath(name) } catch { return '' } }
   const win = BrowserWindow.fromWebContents(event.sender)
   const identity = (p: string) => {
@@ -452,7 +454,7 @@ handleSecure('workspace-trash', async (event, hostPath: unknown, openWorkspace: 
     identity,
     protectedDirs: [os.homedir(), known('home'), known('desktop'), known('documents'), known('downloads')].filter(Boolean),
     appDirs: [known('userData'), app.getAppPath(), path.dirname(process.execPath), process.resourcesPath ?? ''].filter(Boolean),
-    openWorkspace: typeof openWorkspace === 'string' && openWorkspace ? openWorkspace : null,
+    openWorkspaces: typeof openWorkspace === 'string' && openWorkspace ? [openWorkspace] : [],
     // Anything but a clean open or a missing file counts as Unity holding it.
     probeLock: (file) => {
       try { fs.closeSync(fs.openSync(file, 'r+')); return 'free' } catch (e: any) { return e?.code === 'ENOENT' ? 'absent' : 'busy' }

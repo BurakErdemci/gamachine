@@ -1,8 +1,13 @@
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { describe, it, expect, vi } from 'vitest'
 
+const electron = vi.hoisted(() => ({ userData: '' }))
+vi.mock('electron', () => ({ app: { getPath: () => electron.userData }, dialog: {}, BrowserWindow: {} }))
+
 import { checkTrashable, trashProject, trashPrompt, type TrashDeps } from '../main/helpers/project-trash'
+import { isRegisteredRoot, registerTrustedRoot } from '../main/helpers/ipc-trust'
 import { ALLOWED_INVOKE_CHANNELS } from '../main/helpers/ipc-whitelist'
 
 // A fake disk: `dirs` exist, `links` map a path to its target.
@@ -20,7 +25,8 @@ const fake = (platform: 'win32' | 'darwin' | 'linux', dirs: string[], over: Part
     exists: (p) => files.has(p),
     protectedDirs: [],
     appDirs: [],
-    openWorkspace: null,
+    openWorkspaces: [],
+    identity: (p) => `id:${p}`,
     probeLock: () => 'absent',
     processCommands: async () => [],
     confirm: vi.fn(async () => true),
@@ -125,16 +131,16 @@ describe('project-trash guards', () => {
   it('refuses the open workspace and any folder that contains it', async () => {
     const dirs = [...unity(MAC, '/'), ...unity('/Users/me/Games', '/')]
     for (const dir of [MAC, '/Users/me/Games']) {
-      const { deps } = fake('darwin', dirs, { openWorkspace: MAC })
+      const { deps } = fake('darwin', dirs, { openWorkspaces: [MAC] })
       expect(await trashProject(dir, deps)).toEqual({ error: 'open-workspace' })
       expect(deps.trashItem).not.toHaveBeenCalled()
     }
-    const { deps } = fake('darwin', [...dirs, '/Users/me/Other'], { openWorkspace: '/Users/me/Other' })
+    const { deps } = fake('darwin', [...dirs, '/Users/me/Other'], { openWorkspaces: ['/Users/me/Other'] })
     expect(await trashProject(MAC, deps)).toEqual({ ok: true })
   })
 
   it('compares paths without case on Windows', async () => {
-    const { deps } = fake('win32', unity(WIN, '\\'), { openWorkspace: WIN.toUpperCase() }, { [WIN.toUpperCase()]: WIN })
+    const { deps } = fake('win32', unity(WIN, '\\'), { openWorkspaces: [WIN.toUpperCase()] }, { [WIN.toUpperCase()]: WIN })
     expect(await trashProject(WIN, deps)).toEqual({ error: 'open-workspace' })
   })
 
@@ -197,6 +203,29 @@ describe('project-trash guards', () => {
         files.add(`${MAC}/Temp/UnityLockfile`)
         expect(await trashProject(MAC, deps), cmd).toEqual(open ? { error: 'unity-open' } : { ok: true })
       }
+    })
+
+    it('refuses when the editor was started through another absolute alias of the project', async () => {
+      const ALIAS = '/Volumes/Alias/Arena'
+      for (const arg of [ALIAS, `"${ALIAS}"`, `'${ALIAS}'`]) {
+        const { deps, files } = fake(platform, unity(MAC, '/'), { processCommands: async () => [`${editor(arg)} -logFile /tmp/x.log`] }, { [ALIAS]: MAC })
+        files.add(`${MAC}/Temp/UnityLockfile`)
+        expect(await trashProject(MAC, deps), arg).toEqual({ error: 'unity-open' })
+        expect(deps.trashItem).not.toHaveBeenCalled()
+      }
+    })
+
+    it('refuses an alias that only the inode ties to the project, and finds an unquoted path with spaces', async () => {
+      const { deps, files } = fake(platform, [...unity(MAC, '/'), '/Other/Same'], {
+        identity: (p) => (p === '/Other/Same' || p === MAC ? '7:7' : `id:${p}`),
+        processCommands: async () => [editor('/Other/Same')],
+      })
+      files.add(`${MAC}/Temp/UnityLockfile`)
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'unity-open' })
+      const SPACED = '/Users/me/My Games/Arena'
+      const spaced = fake(platform, unity(SPACED, '/'), { processCommands: async () => [`${editor(SPACED)} -batchmode`] })
+      spaced.files.add(`${SPACED}/Temp/UnityLockfile`)
+      expect(await trashProject(SPACED, spaced.deps)).toEqual({ error: 'unity-open' })
     })
 
     it.each(['null', 'throw'])('refuses when the process list cannot be read (%s)', async (how) => {
@@ -342,8 +371,33 @@ describe('project-trash guards', () => {
     })
 
     it('refuses the open workspace by inode', async () => {
-      const { deps } = fake('linux', [...unity('/b/Alias', '/'), '/a/Docs'], { identity: (p) => (p === '/b/Alias' ? '1:1' : identity(p)), openWorkspace: '/a/Docs' })
+      const { deps } = fake('linux', [...unity('/b/Alias', '/'), '/a/Docs'], { identity: (p) => (p === '/b/Alias' ? '1:1' : identity(p)), openWorkspaces: ['/a/Docs'] })
       expect(await trashProject('/b/Alias', deps)).toEqual({ error: 'open-workspace' })
+    })
+  })
+
+  describe('identity across the confirmation', () => {
+    it('refuses when another directory sits at the same path after the box', async () => {
+      let swapped = false
+      const { deps } = fake('darwin', unity(MAC, '/'), { identity: (p) => (p === MAC ? (swapped ? '2:2' : '1:1') : `id:${p}`) })
+      deps.confirm = vi.fn(async () => { swapped = true; return true })
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'not-found' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('refuses when no identity can be taken', async () => {
+      const { deps } = fake('darwin', unity(MAC, '/'), { identity: () => null })
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'not-found' })
+      expect(deps.confirm).not.toHaveBeenCalled()
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('refuses when the identity is gone only after the box', async () => {
+      let asked = false
+      const { deps } = fake('darwin', unity(MAC, '/'), { identity: (p) => (p === MAC && asked ? null : `id:${p}`) })
+      deps.confirm = vi.fn(async () => { asked = true; return true })
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'not-found' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
     })
   })
 
@@ -351,7 +405,7 @@ describe('project-trash guards', () => {
     const { deps } = fake('darwin', unity(MAC, '/'), { trashItem: vi.fn(async () => { throw new Error('denied') }) })
     expect(await trashProject(MAC, deps)).toEqual({ error: 'trash-failed' })
     const { deps: ok } = fake('darwin', unity(MAC, '/'))
-    expect(await checkTrashable(MAC, ok)).toEqual({ real: MAC })
+    expect(await checkTrashable(MAC, ok)).toEqual({ real: MAC, id: `id:${MAC}` })
     expect(ok.trashItem).not.toHaveBeenCalled()
   })
 })
@@ -367,7 +421,8 @@ describe('workspace-trash channel', () => {
   it('authorizes the root and confirms natively in main before trashing', () => {
     const src = read('main/background.ts')
     const handler = src.slice(src.indexOf("handleSecure('workspace-trash'"), src.indexOf("handleSecure('register-dropped-folder'"))
-    expect(handler.indexOf('untrustedWorkspace(hostPath)')).toBeGreaterThan(0)
+    expect(handler.indexOf('isRegisteredRoot(hostPath)')).toBeGreaterThan(0)
+    expect(handler).not.toContain('untrustedWorkspace')
     expect(handler).toContain('dialog.showMessageBox')
     expect(handler).toContain('defaultId: 1')
     expect(handler).toContain('cancelId: 1')
@@ -377,5 +432,23 @@ describe('workspace-trash channel', () => {
   it('is registered through handleSecure and the helper never deletes permanently', () => {
     expect(read('main/background.ts')).toContain("handleSecure('workspace-trash'")
     expect(read('main/helpers/project-trash.ts')).not.toMatch(/\b(rmSync|rmdirSync|rimraf|unlinkSync)\b|fs\.rm\(/)
+  })
+})
+
+describe('exact registered root', () => {
+  it('accepts a registered root itself and refuses a folder inside it', () => {
+    electron.userData = fs.mkdtempSync(path.join(os.tmpdir(), 'trash-trust-'))
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trash-root-'))
+    const inner = path.join(root, 'Inner')
+    fs.mkdirSync(inner)
+    try {
+      registerTrustedRoot(root)
+      expect(isRegisteredRoot(root)).toBe(true)
+      expect(isRegisteredRoot(inner)).toBe(false)
+      expect(isRegisteredRoot(path.dirname(root))).toBe(false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+      fs.rmSync(electron.userData, { recursive: true, force: true })
+    }
   })
 })

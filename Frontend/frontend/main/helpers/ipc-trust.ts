@@ -144,6 +144,14 @@ export const isTrustedRoot = (rawPath: string): boolean => {
   return load().some((root) => target === root || target.startsWith(root + path.sep))
 }
 
+/** Yol, yetkili köklerden birinin KENDİSİ mi (altındaki bir klasör değil)? Win32'de büyük/küçük harf ayırmaz. */
+export const isRegisteredRoot = (rawPath: string): boolean => {
+  const target = normalize(rawPath)
+  if (!target) return false
+  const fold = (s: string) => (process.platform === 'win32' ? s.toLowerCase() : s)
+  return load().some((root) => fold(normalize(root) ?? root) === fold(target))
+}
+
 /**
  * Bu sürümden ÖNCE seçilmiş bir workspace kütükte yok; kullanıcı hiçbir şey
  * yapmadığı hâlde dosya ağacı ölürdü. Migrasyon o yüzden gerekli — ama BEDAVA

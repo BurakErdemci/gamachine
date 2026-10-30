@@ -27,8 +27,8 @@ export interface TrashDeps {
   protectedDirs: string[]
   /** userData and the install dirs: neither they, anything above them nor anything inside may go. */
   appDirs: string[]
-  /** The workspace open in the app; null when the app has none. */
-  openWorkspace: string | null
+  /** Workspaces the app has open (the one the renderer names); empty when none. */
+  openWorkspaces: string[]
   probeLock: (file: string) => LockProbe
   /** Command lines of the running processes; null when they cannot be listed. */
   processCommands: () => Promise<string[] | null>
@@ -52,12 +52,22 @@ export function trashPrompt(real: string, platform: string) {
   }
 }
 
-/** A Unity command line that names the project, or whose -projectPath cannot be compared (relative). */
-const unityNames = (command: string, paths: string[], fold: (s: string) => string, isAbsolute: (s: string) => boolean): boolean => {
+/** The -projectPath values of a command line, quoted or not (an unquoted one runs to the next flag). */
+const projectPathArgs = (command: string): string[] =>
+  [...command.matchAll(/-projectpath\s+(?:"([^"]*)"|'([^']*)'|(.*?)(?=\s-[A-Za-z]|$))/gi)]
+    .map(m => (m[1] ?? m[2] ?? m[3] ?? '').trim()).filter(Boolean)
+
+/**
+ * A Unity command line that opens this project: it names its path, or its -projectPath resolves to the same
+ * folder (same canonical path or same dev+ino, so any alias counts), or the -projectPath cannot be compared (relative).
+ */
+const unityNames = (
+  command: string, paths: string[], fold: (s: string) => string, isAbsolute: (s: string) => boolean,
+  sameFolder: (arg: string) => boolean,
+): boolean => {
   if (!/unity/i.test(command)) return false
   if (paths.some(x => fold(command).includes(fold(x)))) return true
-  const arg = /-projectpath\s+(.*)/i.exec(command)?.[1]?.replace(/^["']/, '')
-  return !!arg && !isAbsolute(arg)
+  return projectPathArgs(command).some(arg => !isAbsolute(arg) || sameFolder(arg))
 }
 
 const resolved = (deps: TrashDeps, p: string): string => {
@@ -76,7 +86,7 @@ const suspiciousWindowsPath = (s: string): boolean => {
  * Every check runs on the resolved path, and the folder that passes is the one trashed, so a link
  * to a protected folder is judged as that folder. Anything undecidable refuses.
  */
-export async function checkTrashable(dir: unknown, deps: TrashDeps): Promise<{ error: TrashError } | { real: string }> {
+export async function checkTrashable(dir: unknown, deps: TrashDeps): Promise<{ error: TrashError } | { real: string; id: string | null }> {
   const p = flavor(deps.platform)
   if (typeof dir !== 'string' || !dir || !p.isAbsolute(dir)) return { error: 'invalid-path' }
   if (deps.platform === 'win32' && suspiciousWindowsPath(dir)) return { error: 'invalid-path' }
@@ -109,7 +119,7 @@ export async function checkTrashable(dir: unknown, deps: TrashDeps): Promise<{ e
   const inside = (other: string) => { const id = deps.identity?.(resolved(deps, other)); return !!id && chain(real).includes(id) }
   if (guard(deps.protectedDirs).some(d => within(target, d)) || deps.protectedDirs.some(above)) return { error: 'protected' }
   if (guard(deps.appDirs).some(d => within(target, d) || within(d, target)) || deps.appDirs.some(d => above(d) || inside(d))) return { error: 'protected' }
-  if (deps.openWorkspace && (within(target, norm(resolved(deps, deps.openWorkspace))) || above(deps.openWorkspace))) return { error: 'open-workspace' }
+  if (deps.openWorkspaces.some(w => within(target, norm(resolved(deps, w))) || above(w))) return { error: 'open-workspace' }
 
   if (!deps.isDirectory(p.join(real, 'Assets')) || !deps.isDirectory(p.join(real, 'ProjectSettings'))) {
     return { error: 'not-a-unity-project' }
@@ -121,9 +131,14 @@ export async function checkTrashable(dir: unknown, deps: TrashDeps): Promise<{ e
   } else if (deps.exists(lock)) {
     const commands = await deps.processCommands().catch(() => null)
     if (!commands) return { error: 'unity-open' }
-    if (commands.some(c => unityNames(c, [real, dir], fold, p.isAbsolute))) return { error: 'unity-open' }
+    const sameFolder = (arg: string) => {
+      const there = resolved(deps, arg)
+      const id = deps.identity?.(there)
+      return norm(there) === target || (!!id && id === targetId)
+    }
+    if (commands.some(c => unityNames(c, [real, dir], fold, p.isAbsolute, sameFolder))) return { error: 'unity-open' }
   }
-  return { real }
+  return { real, id: targetId }
 }
 
 // Canonical paths with a trash request under way; a second request for one of them is refused.
@@ -137,11 +152,13 @@ export async function trashProject(dir: unknown, deps: TrashDeps): Promise<Trash
   try {
     const checked = await checkTrashable(dir, deps)
     if ('error' in checked) return checked
+    // The same directory must still be there after the box: without an identity to compare, nothing can be told apart.
+    if (!checked.id) return { error: 'not-found' }
     if (!(await deps.confirm(checked.real).catch(() => false))) return { error: 'cancelled' }
     // The box stayed open for as long as the user took: judge the folder again before moving it.
     const again = await checkTrashable(dir, deps)
     if ('error' in again) return again
-    if (again.real !== checked.real) return { error: 'not-found' }
+    if (again.real !== checked.real || !again.id || again.id !== checked.id) return { error: 'not-found' }
     try {
       await deps.trashItem(checked.real)
       return { ok: true }
