@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { translations } from '../renderer/lib/i18n'
 import { BrowserPanel } from '../renderer/components/home/BrowserPanel'
 import { suggest, suggestedSites, tabShortcutOf, type HistoryItem } from '../renderer/lib/browserSuggest'
+import { BrowserTabs } from '../renderer/components/home/BrowserTabs'
+import { tabShortcut } from '../main/helpers/browser-host'
 
 const tr = translations.tr
 
@@ -43,7 +45,7 @@ beforeEach(() => {
   platform = 'Win32'
   setPlatform(platform)
   invoke = vi.fn(async (_channel: string, req: any) => {
-    if (req?.op === 'status') return { active: false }
+    if (req?.op === 'panel-status') return { active: false }
     if (req?.op === 'history') return { entries }
     return { ok: true }
   })
@@ -161,6 +163,16 @@ describe('BrowserPanel tab shortcuts', () => {
     expect(tabShortcutOf(k('5', { ctrlKey: true }), false)).toEqual({ action: 'select', index: 5 })
     expect(tabShortcutOf(k('0', { ctrlKey: true }), false)).toBeNull()
     expect(tabShortcutOf(k('t', { ctrlKey: true, metaKey: true }), false)).toBeNull()
+  })
+
+  it('decides exactly like the page-side policy in the host for every key and modifier', () => {
+    const keys = ['t', 'T', 'w', 'W', '0', '1', '5', '9', 'c', 'v', 'x', 'a', 'z', 'Tab', 'Enter']
+    for (const mac of [false, true]) for (const key of keys) for (const ctrl of [false, true]) for (const meta of [false, true])
+      for (const shift of [false, true]) for (const alt of [false, true]) {
+        const panel = tabShortcutOf({ key, ctrlKey: ctrl, metaKey: meta, shiftKey: shift, altKey: alt }, mac)
+        const page = tabShortcut({ type: 'keyDown', key, control: ctrl, meta, shift, alt }, mac ? 'darwin' : 'win32')
+        expect(page, `${mac ? 'mac' : 'win'} ${key} ctrl=${ctrl} meta=${meta} shift=${shift} alt=${alt}`).toEqual(panel)
+      }
   })
 })
 
@@ -286,5 +298,14 @@ describe('browserSuggest', () => {
     const sites = suggestedSites(history, 2, now)
     expect(sites.map(s => s.label)).toEqual(['new.example', 'mid.example'])
     expect(sites[0].url).toBe('https://new.example/')
+  })
+})
+
+describe('BrowserTabs icons', () => {
+  it('draws only an icon the host fetched (a data: image); a remote address gets the letter tile', () => {
+    const icon = 'data:image/png;base64,AQID'
+    const { container } = render(<BrowserTabs activeId={1} mac={false} onSelect={() => {}} onClose={() => {}} onNew={() => {}}
+      tabs={[tab(1, { favicon: icon }), tab(2, { favicon: 'https://tracker.example/pixel.png' }), tab(3, { favicon: 'javascript:alert(1)' })]} />)
+    expect(Array.from(container.querySelectorAll('img')).map(img => img.getAttribute('src'))).toEqual([icon])
   })
 })

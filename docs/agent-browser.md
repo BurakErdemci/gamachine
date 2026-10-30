@@ -55,7 +55,8 @@ no Playwright, no browser extension.
 - **Privacy.** The session now holds the user's logins and cookies on disk. Anything the
   agent opens can use them, which is why submit, buy and password steps still need a card
   that names the host, and why clearing browsing data is one click away. Remote devices can
-  only `status`, `halt` and `answer-card`; they cannot open, navigate or take over a tab.
+  only `status` (the agent tab's url, title and loading, never the user's tabs), `halt` and
+  `answer-card`; they cannot open, navigate or take over a tab.
 
 ## Several tabs per chat (v3, 30 Oct 2026)
 
@@ -77,25 +78,50 @@ the **agent tab**, and it is the only page the agent can reach.
   command makes a fresh blank one. A reopened tab is always a user tab.
 - **Selection and visibility.** `select` chooses the tab a chat shows; only the shown chat's
   selected tab is visible. Closing a tab selects its left neighbour, else the right one.
-  Per chat at most 10 tabs (`too_many_tabs`); globally 8 views: beyond that the least recently
-  used tab of a hidden chat goes, user tabs included, but never a tab under user control and
-  never one with an agent command in flight (the host has no other notion of "running").
+  Per chat at most 8 tabs and globally 8 views (`MAX_CHAT_TABS` never exceeds `MAX_TABS`); at the
+  global cap the least recently used tab of a hidden chat goes, user tabs included, but never a
+  tab under user control and never one with an agent command in flight (the host has no other
+  notion of "running"). When no tab may go, or the chat is at its cap, creating a tab (the agent's
+  too) fails with `too_many_tabs`; a refused reopen leaves its entry on the reopen stack.
+- **Agent tab follows the user's message.** There is no "give to agent" button. The renderer sends
+  `release` when the user sends a message; the host then makes the tab selected in that chat at
+  that moment the agent tab (the old agent tab becomes a user tab; a chat with no agent tab yet
+  gets the selected one) and clears user control. While the agent runs, switching or opening tabs
+  does not move it, and user input on the agent tab still sets user control. The one exception
+  that keeps the current agent tab: a command is running on it.
 - **Same filters everywhere.** Navigation, redirect and frame checks, the request gate, the
   connected-IP check and `navigationAllowed` (open, navigate, reopen, link-in-new-tab) apply to
   every tab. `clear-browsing-data` closes every tab of every chat, empties the reopen stacks and
   the history, then clears the session. Deleting a chat (`close`) closes all its tabs.
-- **Halt and echoes.** Every halt bumps a counter; a navigate that awaited its hostname check
-  returns `halted` without loading when a halt arrived meanwhile (also a global one, and a
-  tab closed meanwhile returns `tab_closed`). The keys of a `press` are expected back as exact
+- **Halt and echoes.** Every halt bumps a counter; every agent command compares it after its awaits
+  and answers `halted` instead of a result when a halt arrived meanwhile (also a global one). A
+  chat's deletion (`close`) and a clear count as a halt for that work: `close` also calls `onHalt`
+  for the chat so its queued commands are dropped, and an `open` or user `navigate` that awaited
+  its hostname check creates or loads nothing when the chat was closed or a clear ran meanwhile.
+  Closing the agent tab ends a navigate that is still in its hostname check as `halted` at once. The keys of a `press` are expected back as exact
   events (type and key name per channel, one each, one second); any other key or mouse event, or a
   repeat of the same key, is the user and takes the agent tab over.
 - **History** (`main/helpers/browser-history.ts`): http(s) pages only, hash removed, pages whose
-  query carries a token-like parameter or credentials not kept, at most 500 entries, address,
-  title, icon address, last visit and count, no page content. File
-  `path.join(app.getPath('userData'), 'browser-history.json')`, written after 2 s of quiet and
-  on shutdown through a temp file and rename (retried on Windows `EPERM`/`EBUSY`, direct write
-  as the last resort); `clear-browsing-data` empties it and writes at once. Visits of the agent
-  tab are remembered like the user's.
+  query has a name containing token, secret, password, auth, session, jwt, bearer, key,
+  signature, ticket or nonce (or the whole words sid, sig, otp, code, state), or that carry
+  credentials, are not kept (`q` and ordinary names are); at most 500 entries, address, title,
+  icon (a small `data:` image, never a remote address), last visit and count, no page content.
+  File `path.join(app.getPath('userData'), 'browser-history.json')`, written after 2 s of quiet
+  and on shutdown: temp file, fsync, rename, so the old file is never opened for writing. A rename
+  Windows refuses (`EPERM`/`EBUSY`/`EACCES`) is retried after 50, 100, 200 and 400 ms without
+  blocking; if it still fails the old file stays, the data stays in memory and the next flush tries
+  again. `clear-browsing-data` empties it and writes at once; when that write fails the op returns
+  an error (the settings page shows its failure text) and not `cleared`.
+- **Favicons.** The page's icon address is not given to the renderer (its CSP allows no remote
+  images). Main fetches it through the hardened session: `http(s)` only, no credentials in the
+  address, the same allow-list and private-address check as navigation (also for each of up to 3
+  redirects, followed by hand), no cookies, 5 s, an `image/*` type and at most 32 KB, and keeps the
+  result as a `data:` URL on the tab and in the history. Anything else leaves the letter tile.
+- **Pages opening tabs.** A page in a user tab may open a tab (`window.open`, a `target=_blank`
+  link) only within 1 s after a real key or mouse press in that page (the host's own `press` echoes
+  do not count), while its chat is the one on screen, and at most 3 per 10 s per chat; the new tab
+  is a user tab and never brings another chat forward. Everything else is denied. The agent tab
+  keeps reporting the pop-up as `popup_blocked`.
 - **IPC additions** (`browser-live`): `open {conversationId, url?}` (new user tab, selected),
   `select`, `close-tab`, `reopen-tab`, `history {}` -> `{entries}`; `navigate`, `back`,
   `forward`, `reload` accept an optional `tabId` (default: the selected tab). Live payloads
@@ -130,8 +156,8 @@ page, zoom, history and site management pages.
    `localhost`, `*.localhost`). The Gamachine backend and MCP servers live on loopback;
    the page must not reach them. The check runs in `will-navigate`, `will-redirect` and
    `will-frame-navigate`, and in `session.webRequest.onBeforeRequest` for sub-resources.
-4. `setWindowOpenHandler` denies pop-ups; the URL is offered to the agent as a link, not
-   opened.
+4. `setWindowOpenHandler` denies pop-ups; the agent's pop-up URL is offered to it as a link, not
+   opened. A user tab's page can open a tab only after genuine input (see "Pages opening tabs").
 5. On-screen page text is data, never instructions. The MCP tool descriptions say so,
    with the same sentence the computer-use tools use.
 6. The Stop shortcut and button halt the browser too (same `_computer_halted` set). The host
@@ -199,7 +225,8 @@ never in the page's main world.
 The host shows the panel (`browser-live` event `{active, conversationId, url, title,
 loading, userControl}`, always for one tab; the panel ignores other chats' events) whenever
 a command runs, and accepts renderer invokes on channel `browser-live`: `{op, conversationId,
-...}` with op `status`, `set-bounds`, `visible`, `open`, `navigate`, `back`, `forward`,
+...}` with op `status` (the agent tab's page only; the one tab op a remote device may call),
+`panel-status` (every tab, desktop only), `set-bounds`, `visible`, `open`, `navigate`, `back`, `forward`,
 `reload`, `take-over`, `release`, `close`, `halt` (without an id it halts every tab) and
 `clear-browsing-data`. `set-bounds` positions the native view over the panel's placeholder;
 `visible:false` hides it (a native view paints above the DOM, so menus and cards must not

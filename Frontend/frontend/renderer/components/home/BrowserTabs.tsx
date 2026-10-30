@@ -23,7 +23,7 @@ export function SiteIcon({ favicon, label }: { favicon: string; label: string })
   useEffect(() => setFailed(false), [favicon]);
   return (
     <span className="bp-ico" aria-hidden="true">
-      {favicon && !failed
+      {favicon.startsWith('data:image/') && !failed
         ? <img src={favicon} alt="" width={14} height={14} referrerPolicy="no-referrer" onError={() => setFailed(true)} />
         : <span className="bp-ico-ch">{(label.trim()[0] || '·').toUpperCase()}</span>}
     </span>

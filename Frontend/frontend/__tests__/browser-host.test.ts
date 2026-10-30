@@ -72,13 +72,14 @@ function fixture(platform?: string) {
   const fromPartition = vi.fn(() => session)
   const onHalt = vi.fn()
   const clock = { now: 1_000 }
+  const fetch = vi.fn(async (_url: string, _init: unknown): Promise<Response> => { throw new Error('no network in tests') })
   const history = { visit: vi.fn(), update: vi.fn(), list: vi.fn(() => [{ url: 'https://a.example/', title: 'A', favicon: '', lastVisit: 1, visits: 1 }]), clear: vi.fn(), flush: vi.fn() }
   const deps: BrowserHostDeps = {
     window: () => win, createView, fromPartition, http, baseUrl: () => 'http://127.0.0.1:9', appToken: 'tok', uiSecret: 'secret',
-    lookup, onHalt, now: () => clock.now, history, platform,
+    lookup, onHalt, now: () => clock.now, history, platform, fetch,
   }
   const host = new BrowserHost(deps)
-  return { host, wc, view, views, session, win, http, lookup, createView, fromPartition, onHalt, clock, history }
+  return { host, wc, view, views, session, win, http, lookup, createView, fromPartition, onHalt, clock, history, fetch }
 }
 
 async function navigate(f: ReturnType<typeof fixture>, url = 'https://example.com/', html = '', conversationId = 4) {
@@ -478,9 +479,9 @@ describe('BrowserHost tabs per chat', () => {
     expect(f.win.contentView.removeChildView).toHaveBeenCalledWith(two)
     expect(livePayloads(f)).toContainEqual(expect.objectContaining({ active: false, conversationId: 2 }))
     expect(f.views[0].webContents.close).not.toHaveBeenCalled()
-    expect(await f.host.invoke({ op: 'status', conversationId: 1 })).toMatchObject({ active: true, visible: true })
-    expect(await f.host.invoke({ op: 'status', conversationId: 2 })).toMatchObject({ active: false, conversationId: 2 })
-    for (let id = 3; id <= 9; id++) expect((await f.host.invoke({ op: 'status', conversationId: id }) as any).active).toBe(true)
+    expect(await f.host.invoke({ op: 'panel-status', conversationId: 1 })).toMatchObject({ active: true, visible: true })
+    expect(await f.host.invoke({ op: 'panel-status', conversationId: 2 })).toMatchObject({ active: false, conversationId: 2 })
+    for (let id = 3; id <= 9; id++) expect((await f.host.invoke({ op: 'panel-status', conversationId: id }) as any).active).toBe(true)
   })
 
   it('never evicts a tab under user control, even when the cap is exceeded', async () => {
@@ -667,7 +668,7 @@ const press = (wc: any, input: any) => {
   wc.emit('before-input-event', event, input)
   return event
 }
-const status = async (f: ReturnType<typeof fixture>, conversationId = 4) => (await f.host.invoke({ op: 'status', conversationId })) as any
+const status = async (f: ReturnType<typeof fixture>, conversationId = 4) => (await f.host.invoke({ op: 'panel-status', conversationId })) as any
 
 describe('BrowserHost agent tab and user tabs', () => {
   async function withUserTab() {
@@ -741,7 +742,9 @@ describe('BrowserHost agent tab and user tabs', () => {
     expect(user.setWindowOpenHandler).toBeDefined()
     expect(user.openHandler({ url: 'https://x.example/', disposition: 'new-window' })).toEqual({ action: 'deny' })
     expect(f.createView).toHaveBeenCalledTimes(1)
-    // A link opened in a new tab becomes a user tab, after the same check.
+    // A link opened in a new tab becomes a user tab, after the same check, when the user just clicked in the visible chat.
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    user.emit('input-event', {}, { type: 'mouseDown' })
     user.openHandler({ url: 'https://link.example/', disposition: 'foreground-tab' })
     await vi.waitFor(() => expect(f.createView).toHaveBeenCalledTimes(2))
     user.openHandler({ url: 'http://127.0.0.1/', disposition: 'foreground-tab' })
@@ -911,9 +914,10 @@ describe('BrowserHost eviction and clearing with several tabs', () => {
     await navigate(f, 'https://a.example/', '', 4)
     f.wc.emit('did-navigate', {}, 'https://a.example/')
     expect(f.history.visit).toHaveBeenCalledWith('https://a.example/', 'Page')
+    f.fetch.mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } }))
     f.wc.emit('page-favicon-updated', {}, ['data:image/png;base64,AA', 'https://a.example/fav.ico'])
-    expect(f.history.update).toHaveBeenCalledWith('https://a.example/', { favicon: 'https://a.example/fav.ico' })
-    expect((await status(f)).tabs[0].favicon).toBe('https://a.example/fav.ico')
+    await vi.waitFor(() => expect(f.history.update).toHaveBeenCalledWith('https://a.example/', { favicon: 'data:image/png;base64,AQID' }))
+    expect((await status(f)).tabs[0].favicon).toBe('data:image/png;base64,AQID')
     expect(await f.host.invoke({ op: 'history' })).toEqual({ entries: [expect.objectContaining({ url: 'https://a.example/' })] })
   })
 })
@@ -982,5 +986,357 @@ describe('BrowserHost halt during the address lookup and synthetic keys', () => 
     f.clock.now += 1_500
     wc.emit('input-event', {}, { type: 'rawKeyDown' })
     expect((await status(f)).userControl).toBe(true)
+  })
+})
+
+const later = () => new Promise<void>((resolve) => setTimeout(resolve, 5))
+const pendingLookup = (f: ReturnType<typeof fixture>) => {
+  let release: (v: any) => void = () => {}
+  f.lookup.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+  return () => release([{ address: '93.184.216.34', family: 4 }])
+}
+
+describe('BrowserHost tab caps', () => {
+  it('keeps the per-chat cap within the global one and refuses opens past it', async () => {
+    const f = fixture('win32')
+    expect(MAX_CHAT_TABS).toBeLessThanOrEqual(MAX_TABS)
+    for (let n = 0; n < MAX_CHAT_TABS; n++) expect(await f.host.invoke({ op: 'open', conversationId: 4 })).not.toHaveProperty('error')
+    expect(await f.host.invoke({ op: 'open', conversationId: 4 })).toEqual({ error: 'too_many_tabs' })
+    expect(f.views.filter((v: any) => !v.webContents.destroyed)).toHaveLength(MAX_CHAT_TABS)
+  })
+
+  it('refuses an agent tab when the visible chat fills the cap, instead of exceeding it', async () => {
+    const f = fixture('win32')
+    for (let n = 0; n < MAX_TABS; n++) await f.host.invoke({ op: 'open', conversationId: 4 })
+    expect(await f.host.handle({ op: 'press', conversation_id: 4, args: { key: 'Tab' } })).toMatchObject({ ok: false, error: 'too_many_tabs' })
+    // Another chat has no tab to give up either: every tab belongs to the chat on screen.
+    expect(await f.host.handle({ op: 'press', conversation_id: 5, args: { key: 'Tab' } })).toMatchObject({ ok: false, error: 'too_many_tabs' })
+    expect(f.views.filter((v: any) => !v.webContents.destroyed)).toHaveLength(MAX_TABS)
+  })
+})
+
+describe('BrowserHost work that outlives its chat or a clear', () => {
+  it.each(['close', 'clear-browsing-data'])('an open still in its lookup makes no tab after %s', async (op) => {
+    const f = fixture('win32')
+    const finish = pendingLookup(f)
+    const pending = f.host.invoke({ op: 'open', conversationId: 4, url: 'https://old.example/' })
+    await vi.waitFor(() => expect(f.lookup).toHaveBeenCalled())
+    await f.host.invoke({ op, conversationId: 4 })
+    finish()
+    expect(await pending).toHaveProperty('error')
+    expect(f.createView).not.toHaveBeenCalled()
+    expect(((await f.host.invoke({ op: 'panel-status', conversationId: 4 })) as any).tabs).toEqual([])
+  })
+
+  it('a user navigate still in its lookup does not load after the chat was closed', async () => {
+    const f = fixture('win32')
+    await f.host.invoke({ op: 'open', conversationId: 4 })
+    const finish = pendingLookup(f)
+    const pending = f.host.invoke({ op: 'navigate', conversationId: 4, url: 'https://old.example/' })
+    await vi.waitFor(() => expect(f.lookup).toHaveBeenCalled())
+    await f.host.invoke({ op: 'close', conversationId: 4 })
+    finish()
+    expect(await pending).toEqual({ error: 'chat_closed' })
+    expect(f.views[0].webContents.loadURL).not.toHaveBeenCalled()
+  })
+
+  it('closing a chat ends its running command as halted and tells the command server to drop the queue', async () => {
+    const f = fixture('win32')
+    const running = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://busy.example/' } })
+    await vi.waitFor(() => expect(f.views[0]?.webContents.loadURL).toHaveBeenCalled())
+    await f.host.invoke({ op: 'close', conversationId: 4 })
+    expect(f.onHalt).toHaveBeenCalledWith(4)
+    expect(await running).toMatchObject({ ok: false, error: 'halted' })
+    expect(((await f.host.invoke({ op: 'panel-status', conversationId: 4 })) as any).tabs).toEqual([])
+  })
+
+  it('closing the agent tab settles a navigate that is still in its lookup as halted, at once', async () => {
+    const f = fixture('win32')
+    const finish = pendingLookup(f)
+    let settled = false
+    const pending = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://slow.example/' } }).then((r) => { settled = true; return r })
+    await vi.waitFor(() => expect(f.lookup).toHaveBeenCalled())
+    const id = (await status(f)).tabs[0].id
+    await f.host.invoke({ op: 'close-tab', conversationId: 4, tabId: id })
+    await later()
+    expect(settled).toBe(true)
+    finish()
+    expect(await pending).toMatchObject({ ok: false, error: 'halted' })
+    expect(f.views[0].webContents.loadURL).not.toHaveBeenCalled()
+  })
+
+  it('an agent command that awaited a script answers halted when Stop came meanwhile', async () => {
+    const f = fixture('win32')
+    await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    const wc = f.views[0].webContents
+    let finish: (v: unknown) => void = () => {}
+    wc.executeJavaScriptInIsolatedWorld.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const pending = f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
+    await vi.waitFor(() => expect(wc.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(2))
+    await f.host.invoke({ op: 'halt', conversationId: 4 })
+    finish({ text: 'late', elements: [] })
+    expect(await pending).toMatchObject({ ok: false, error: 'halted' })
+  })
+
+  it('a clear that fails to erase the history file reports an error, not cleared', async () => {
+    const f = fixture('win32')
+    f.history.clear.mockResolvedValue(false)
+    expect(await f.host.invoke({ op: 'clear-browsing-data' })).toEqual({ error: 'Clearing browsing data failed.' })
+    expect(f.session.clearStorageData).toHaveBeenCalled()
+    f.history.clear.mockResolvedValue(true)
+    expect(await f.host.invoke({ op: 'clear-browsing-data' })).toEqual({ cleared: true })
+  })
+
+  it('reopening puts the entry back when the tab cannot be opened', async () => {
+    const f = fixture('win32')
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://gone.example/' })
+    f.views[0].webContents.finish('https://gone.example/')
+    await f.host.invoke({ op: 'close-tab', conversationId: 4, tabId: 1 })
+    for (let n = 0; n < MAX_CHAT_TABS; n++) await f.host.invoke({ op: 'open', conversationId: 4 })
+    expect(await f.host.invoke({ op: 'reopen-tab', conversationId: 4 })).toEqual({ error: 'too_many_tabs' })
+    const last = (await status(f)).tabs.at(-1)
+    await f.host.invoke({ op: 'close-tab', conversationId: 4, tabId: last.id })
+    expect(await f.host.invoke({ op: 'reopen-tab', conversationId: 4 })).not.toHaveProperty('error')
+    expect(f.views.at(-1).webContents.loadURL).toHaveBeenCalledWith('https://gone.example/')
+    expect(await f.host.invoke({ op: 'reopen-tab', conversationId: 4 })).toEqual({ error: 'nothing_to_reopen' })
+  })
+})
+
+describe('BrowserHost tabs a page opens', () => {
+  async function withPage() {
+    const f = fixture('win32')
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://page.example/' })
+    const page = f.views[0].webContents
+    page.finish('https://page.example/')
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    const popup = (url = 'https://link.example/') => page.openHandler({ url, disposition: 'foreground-tab' })
+    const count = () => f.createView.mock.calls.length
+    return { f, page, popup, count }
+  }
+
+  it('is denied without a recent key or mouse press in that page', async () => {
+    const { f, page, popup, count } = await withPage()
+    expect(popup()).toEqual({ action: 'deny' })
+    await later()
+    expect(count()).toBe(1)
+    page.emit('input-event', {}, { type: 'mouseDown' })
+    f.clock.now += 1_001
+    popup()
+    await later()
+    expect(count()).toBe(1)
+    page.emit('before-input-event', { preventDefault: vi.fn() }, { type: 'keyDown', key: 'a' })
+    f.clock.now += 900
+    popup()
+    await vi.waitFor(() => expect(count()).toBe(2))
+  })
+
+  it('is denied while its chat is not the one on screen', async () => {
+    const { f, page, popup, count } = await withPage()
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+    page.emit('input-event', {}, { type: 'mouseDown' })
+    popup()
+    await later()
+    expect(count()).toBe(1)
+    await f.host.invoke({ op: 'visible', conversationId: 9, visible: true })
+    popup()
+    await later()
+    expect(count()).toBe(1)
+  })
+
+  it('does not bring its chat forward when another chat came on screen during the check', async () => {
+    const { f, page, popup, count } = await withPage()
+    page.emit('input-event', {}, { type: 'mouseDown' })
+    const finish = pendingLookup(f)
+    popup()
+    await vi.waitFor(() => expect(f.lookup).toHaveBeenCalled())
+    await f.host.invoke({ op: 'visible', conversationId: 9, visible: true })
+    finish()
+    await vi.waitFor(() => expect(count()).toBe(2))
+    expect(((await f.host.invoke({ op: 'panel-status', conversationId: 9 })) as any).visible).toBe(true)
+    expect(((await f.host.invoke({ op: 'panel-status', conversationId: 4 })) as any).visible).toBe(false)
+  })
+
+  it('is limited to three per ten seconds in a chat', async () => {
+    const { f, page, popup, count } = await withPage()
+    for (let n = 0; n < 5; n++) {
+      page.emit('input-event', {}, { type: 'mouseDown' })
+      popup()
+      await later()
+    }
+    expect(count()).toBe(4)
+    f.clock.now += 10_001
+    page.emit('input-event', {}, { type: 'mouseDown' })
+    popup()
+    await vi.waitFor(() => expect(count()).toBe(5))
+  })
+
+  it('is only a gesture when it was not the host\'s own key echo', async () => {
+    const { f, popup, count } = await withPage()
+    await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    const agent = f.views[1].webContents
+    agent.sendInputEvent.mockImplementation((e: { type: string; keyCode: string }) => {
+      agent.emit('before-input-event', { preventDefault: vi.fn() }, { type: e.type, key: e.keyCode })
+    })
+    await f.host.handle({ op: 'press', conversation_id: 4, args: { key: 'Tab' } })
+    expect(agent.openHandler({ url: 'https://x.example/', disposition: 'foreground-tab' })).toEqual({ action: 'deny' })
+    await later()
+    expect(count()).toBe(2)
+    expect(popup()).toEqual({ action: 'deny' })
+  })
+})
+
+describe('BrowserHost favicons', () => {
+  const png = (bytes = 3, type = 'image/png') => new Response(new Uint8Array(bytes).fill(7), { headers: { 'content-type': type } })
+  async function withPage() {
+    const f = fixture('win32')
+    await navigate(f, 'https://a.example/', '', 4)
+    f.wc.emit('did-navigate', {}, 'https://a.example/')
+    const icons = async (...hrefs: string[]) => {
+      f.wc.emit('page-favicon-updated', {}, hrefs)
+      await later()
+      return ((await status(f)).tabs[0].favicon) as string
+    }
+    return { f, icons }
+  }
+
+  it('is fetched without credentials through the session, as a small data: image', async () => {
+    const { f, icons } = await withPage()
+    f.fetch.mockResolvedValue(png())
+    expect(await icons('https://a.example/f.png')).toBe('data:image/png;base64,BwcH')
+    expect(f.fetch).toHaveBeenCalledWith('https://a.example/f.png', expect.objectContaining({ credentials: 'omit', redirect: 'manual' }))
+  })
+
+  it.each([
+    ['an address with credentials', 'https://u:p@a.example/f.png', png()],
+    ['a private address', 'https://internal.corp/f.png', png()],
+    ['a non-image type', 'https://a.example/f.png', png(3, 'text/html')],
+    ['a large image', 'https://a.example/f.png', png(32 * 1024 + 1)],
+    ['an empty body', 'https://a.example/f.png', png(0)],
+  ])('is not stored for %s', async (_name, href, response) => {
+    const { f, icons } = await withPage()
+    f.fetch.mockResolvedValue(response)
+    expect(await icons(href)).toBe('')
+    expect(f.history.update).not.toHaveBeenCalled()
+  })
+
+  it('follows a redirect only to an address that passes the same check', async () => {
+    const { f, icons } = await withPage()
+    f.fetch.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'https://internal.corp/f.png' } }))
+    expect(await icons('https://a.example/f.png')).toBe('')
+    expect(f.fetch).toHaveBeenCalledTimes(1)
+    f.fetch.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: '/real.png' } })).mockResolvedValueOnce(png())
+    expect(await icons('https://a.example/f.png')).toBe('data:image/png;base64,BwcH')
+    expect(f.fetch).toHaveBeenLastCalledWith('https://a.example/real.png', expect.anything())
+  })
+
+  it('is dropped when the page navigated away while it loaded', async () => {
+    const { f, icons } = await withPage()
+    let finish: (r: Response) => void = () => {}
+    f.fetch.mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve }))
+    const pending = icons('https://a.example/f.png')
+    await vi.waitFor(() => expect(f.fetch).toHaveBeenCalled())
+    f.wc.emit('did-navigate', {}, 'https://a.example/next')
+    finish(png())
+    expect(await pending).toBe('')
+  })
+})
+
+describe('BrowserHost status for a paired phone and the agent tab after a message', () => {
+  it('status carries only the agent tab\'s page, panel-status every tab', async () => {
+    const f = fixture('win32')
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://private-account.example/' })
+    f.views[0].webContents.finish('https://private-account.example/', 'Account')
+    await navigate(f, 'https://agent.example/', '', 4)
+    const remote = (await f.host.invoke({ op: 'status', conversationId: 4 })) as any
+    expect(remote).toMatchObject({ active: true, url: 'https://agent.example/', title: 'Page', loading: false, userControl: false })
+    expect(remote).not.toHaveProperty('tabs')
+    expect(JSON.stringify(remote)).not.toContain('private-account')
+    expect(((await f.host.invoke({ op: 'panel-status', conversationId: 4 })) as any).tabs).toHaveLength(2)
+    expect(((await f.host.invoke({ op: 'status', conversationId: 6 })) as any)).toMatchObject({ active: false, url: '' })
+  })
+
+  async function twoTabs() {
+    const f = fixture('win32')
+    await navigate(f, 'https://agent.example/', '', 4)
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://mine.example/' })
+    const agent = f.views[0].webContents
+    const mine = f.views[1].webContents
+    mine.finish('https://mine.example/')
+    return { f, agent, mine }
+  }
+
+  it('the tab selected when the user sends becomes the agent tab, and the old one the user\'s', async () => {
+    const { f, agent, mine } = await twoTabs()
+    expect((await status(f)).tabs.map((t: any) => t.agent)).toEqual([true, false])
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    expect((await status(f)).tabs.map((t: any) => t.agent)).toEqual([false, true])
+    agent.loadURL.mockClear()
+    await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    expect(mine.executeJavaScriptInIsolatedWorld).toHaveBeenCalled()
+    expect((await f.host.handle({ op: 'snapshot', conversation_id: 4 })).url).toBe('https://mine.example/')
+    expect(agent.loadURL).not.toHaveBeenCalled()
+  })
+
+  it('switching tabs while the agent works does not move it; the next message does', async () => {
+    const { f, agent, mine } = await twoTabs()
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    const [first, second] = (await status(f)).tabs
+    await f.host.invoke({ op: 'select', conversationId: 4, tabId: first.id })
+    const before = mine.executeJavaScriptInIsolatedWorld.mock.calls.length
+    const oldAgentBefore = agent.executeJavaScriptInIsolatedWorld.mock.calls.length
+    await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    expect(mine.executeJavaScriptInIsolatedWorld.mock.calls.length).toBeGreaterThan(before)
+    expect(agent.executeJavaScriptInIsolatedWorld.mock.calls.length).toBe(oldAgentBefore)
+    expect((await status(f)).tabs.find((t: any) => t.agent).id).toBe(second.id)
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    expect((await status(f)).tabs.find((t: any) => t.agent).id).toBe(first.id)
+  })
+
+  it('user input on the adopted tab takes it over', async () => {
+    const { f, mine } = await twoTabs()
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    mine.emit('before-input-event', { preventDefault: vi.fn() }, { type: 'keyDown', key: 'a' })
+    expect((await status(f)).userControl).toBe(true)
+    expect(await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })).toMatchObject({ error: 'user_control' })
+  })
+
+  it('adopts the selected tab even when the user had taken the old agent tab over', async () => {
+    const { f, agent, mine } = await twoTabs()
+    agent.emit('before-input-event', { preventDefault: vi.fn() }, { type: 'keyDown', key: 'a' })
+    expect((await status(f)).userControl).toBe(true)
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    const live = await status(f)
+    expect(live.userControl).toBe(false)
+    expect(live.tabs.map((t: any) => t.agent)).toEqual([false, true])
+    const before = agent.executeJavaScriptInIsolatedWorld.mock.calls.length
+    await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    expect(mine.executeJavaScriptInIsolatedWorld).toHaveBeenCalled()
+    expect(agent.executeJavaScriptInIsolatedWorld.mock.calls.length).toBe(before)
+  })
+
+  it('does not adopt while a command runs on the old agent tab, even after user control', async () => {
+    const { f, agent } = await twoTabs()
+    const running = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://busy.example/' } })
+    await vi.waitFor(() => expect(agent.loadURL).toHaveBeenLastCalledWith('https://busy.example/'))
+    await f.host.invoke({ op: 'take-over', conversationId: 4 })
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    expect((await status(f)).tabs.map((t: any) => t.agent)).toEqual([true, false])
+    agent.finish('https://busy.example/')
+    await running
+  })
+
+  it('a chat without an agent tab yet gets the selected one; a running command keeps its tab', async () => {
+    const f = fixture('win32')
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://mine.example/' })
+    f.views[0].webContents.finish('https://mine.example/')
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    expect((await status(f)).tabs.map((t: any) => t.agent)).toEqual([true])
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://other.example/' })
+    const running = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://busy.example/' } })
+    await vi.waitFor(() => expect(f.views[0].webContents.loadURL).toHaveBeenLastCalledWith('https://busy.example/'))
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    expect((await status(f)).tabs.map((t: any) => t.agent)).toEqual([true, false])
+    f.views[0].webContents.finish('https://busy.example/')
+    await running
   })
 })

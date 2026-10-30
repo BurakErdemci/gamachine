@@ -29,7 +29,7 @@ beforeEach(() => {
   listeners = new Map()
   observers = []
   rect = { left: 10, top: 20, width: 300, height: 200 }
-  invoke = vi.fn(async (_channel: string, req: any) => (req?.op === 'status' ? { active: false } : { ok: true }))
+  invoke = vi.fn(async (_channel: string, req: any) => (req?.op === 'panel-status' ? { active: false } : { ok: true }))
   vi.stubGlobal('ipc', {
     invoke,
     on: vi.fn((channel: string, cb: (payload: unknown) => void) => { listeners.set(channel, cb); return () => listeners.delete(channel) }),
@@ -67,14 +67,14 @@ describe('BrowserPanel', () => {
 
   it('asks status for the open chat on mount and again when the chat changes', async () => {
     const { rerender } = render(<BrowserPanel visible conversationId={3} {...props()} />)
-    await waitFor(() => expect(calls('status')).toEqual([{ op: 'status', conversationId: 3 }]))
+    await waitFor(() => expect(calls('panel-status')).toEqual([{ op: 'panel-status', conversationId: 3 }]))
     rerender(<BrowserPanel visible conversationId={4} {...props()} />)
-    await waitFor(() => expect(calls('status').at(-1)).toEqual({ op: 'status', conversationId: 4 }))
+    await waitFor(() => expect(calls('panel-status').at(-1)).toEqual({ op: 'panel-status', conversationId: 4 }))
   })
 
   it('without a chat it sends no status, and Open is enabled', () => {
     render(<BrowserPanel visible conversationId={null} {...props()} />)
-    expect(calls('status')).toHaveLength(0)
+    expect(calls('panel-status')).toHaveLength(0)
     expect(screen.getByText(tr['bp.idle'])).toBeTruthy()
     expect((screen.getByRole('button', { name: tr['bp.open'] }) as HTMLButtonElement).disabled).toBe(false)
   })
@@ -192,7 +192,7 @@ describe('BrowserPanel', () => {
 
   it('Stop halts the page and stops the chat turn, then shows Durduruldu until the next turn', async () => {
     invoke.mockImplementation(async (_c: string, req: any) =>
-      (req?.op === 'status' ? { active: false } : req?.op === 'halt' ? { ok: true, halted: true } : { ok: true }))
+      (req?.op === 'panel-status' ? { active: false } : req?.op === 'halt' ? { ok: true, halted: true } : { ok: true }))
     const onStop = vi.fn(async () => {})
     const { rerender } = render(<BrowserPanel visible conversationId={3} {...props({ onStop })} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
@@ -217,7 +217,7 @@ describe('BrowserPanel', () => {
 
   it('a refused halt with a successful chat Stop is no failure', async () => {
     invoke.mockImplementation(async (_c: string, req: any) =>
-      (req?.op === 'status' ? { active: false } : req?.op === 'halt' ? { ok: true, halted: false } : { ok: true }))
+      (req?.op === 'panel-status' ? { active: false } : req?.op === 'halt' ? { ok: true, halted: false } : { ok: true }))
     const onStop = vi.fn(async () => {})
     render(<BrowserPanel visible conversationId={3} {...props({ onStop })} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
@@ -229,7 +229,7 @@ describe('BrowserPanel', () => {
   })
 
   it('a throwing chat Stop shows an alert that the next turn clears', async () => {
-    invoke.mockImplementation(async (_c: string, req: any) => (req?.op === 'status' ? { active: false } : { ok: true, halted: true }))
+    invoke.mockImplementation(async (_c: string, req: any) => (req?.op === 'panel-status' ? { active: false } : { ok: true, halted: true }))
     const onStop = vi.fn(async () => { throw new Error('x') })
     const { rerender } = render(<BrowserPanel visible conversationId={3} {...props({ onStop })} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))

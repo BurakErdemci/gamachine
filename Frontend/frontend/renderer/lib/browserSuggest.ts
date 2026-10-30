@@ -119,7 +119,11 @@ export function isMacPlatform(): boolean {
   return typeof navigator !== 'undefined' && /mac|iphone|ipad/i.test(navigator.platform || '');
 }
 
-/** The tab shortcut a key press asks for; copy, paste, undo and every other key are left alone. */
+/**
+ * The tab shortcut a key press asks for; copy, paste, undo and every other key are left alone. The page
+ * side (`tabShortcut` in main/helpers/browser-host.ts) applies the same rule to Electron's key events; the
+ * two cannot share code because nextron's main build does not compile files under renderer/.
+ */
 export function tabShortcutOf(e: KeyLike, mac: boolean): TabAction | null {
   if (e.altKey || !(mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey)) return null;
   const key = e.key.toLowerCase();

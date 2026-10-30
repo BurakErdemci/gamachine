@@ -64,7 +64,7 @@ export function useBrowserLive(conversationId: number | null): BrowserState {
     if (!ipc || conversationId == null) return;
     let alive = true;
     let heard = false;
-    Promise.resolve(ipc.invoke?.(BROWSER_CHANNEL, { op: 'status', conversationId }))
+    Promise.resolve(ipc.invoke?.(BROWSER_CHANNEL, { op: 'panel-status', conversationId }))
       .then((raw: any) => { if (alive && !heard && raw && !raw.error) setState(toState(raw)); })
       .catch(() => {});
     const off = ipc.on?.(BROWSER_CHANNEL, (raw: any) => {
@@ -259,13 +259,13 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
     if (handled) e.preventDefault();
   };
 
-  const submit = (op: 'navigate', text: string) => {
+  const submit = (text: string) => {
     const target = addressToUrl(text);
     if (!target) return;
-    send(op, { url: target });
+    send('navigate', { url: target });
   };
 
-  const keyOf = (op: 'navigate', url: string) => (e: React.KeyboardEvent) => {
+  const keyOf = (url: string) => (e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && rows.length > 0) {
       e.preventDefault();
@@ -277,8 +277,10 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
     if (e.key !== 'Enter') return;
     e.preventDefault();
     if (rows[row]) { pick(rows[row].url); return; }
-    submit(op, url);
-    if (op === 'navigate') { setEditing(false); setTyped(false); (e.currentTarget as HTMLInputElement).blur(); }
+    submit(url);
+    setEditing(false);
+    setTyped(false);
+    (e.currentTarget as HTMLInputElement).blur();
   };
 
   const nav = (op: 'back' | 'forward' | 'reload', glyph: string) => (
@@ -309,7 +311,7 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
               onFocus={e => { setDraft(state.url); setEditing(true); setTyped(false); loadHistory(); e.currentTarget.select(); }}
               onBlur={() => { setEditing(false); setTyped(false); }}
               onChange={e => { setDraft(e.target.value); setTyped(true); }}
-              onKeyDown={keyOf('navigate', draft)} />
+              onKeyDown={keyOf(draft)} />
             {state.userControl && agentShown && (
               <span className="bp-control-t" role="status" title={t('bp.userControl')}>{t('bp.userControlShort')}</span>
             )}

@@ -12,12 +12,20 @@ export const BROWSER_LIVE_CHANNEL = 'browser-live'
 export const BROWSER_WORLD_ID = 1777
 export const NAVIGATION_TIMEOUT_MS = 30_000
 export const MAX_TABS = 8
-export const MAX_CHAT_TABS = 10
+// A chat never holds more tabs than the app does, so the per-chat cap is the global one.
+export const MAX_CHAT_TABS = MAX_TABS
 const MAX_CLOSED_TABS = 10
 // How long the key events a `press` is about to send back to the host stay expected.
 const SYNTHETIC_INPUT_MS = 1_000
 const SCRIPT_TIMEOUT_MS = 10_000
 const HOST_CACHE_MS = 60_000
+// A page may open a tab only within this long after its own click or key, and only so often.
+const GESTURE_MS = 1_000
+const PAGE_TAB_WINDOW_MS = 10_000
+const MAX_PAGE_TABS = 3
+const MAX_FAVICON_BYTES = 32 * 1024
+const FAVICON_TIMEOUT_MS = 5_000
+const MAX_FAVICON_REDIRECTS = 3
 const SCREENSHOT_MAX_WIDTH = 1280
 const MAX_TEXT_CHARS = 100_000
 const MAX_FILL_CHARS = 10_000
@@ -48,6 +56,8 @@ export interface BrowserHostDeps {
   /** Called on every halt so the command server can drop what is still queued: one chat, or every chat with null. */
   onHalt?: (conversationId: number | null) => void
   now?: () => number
+  /** The favicon request; defaults to the hardened session's own network stack. */
+  fetch?: (url: string, init: { credentials: 'omit'; redirect: 'manual'; signal: AbortSignal }) => Promise<Response>
   setTimeout?: typeof setTimeout
   clearTimeout?: typeof clearTimeout
   log?: (...args: unknown[]) => void
@@ -285,6 +295,28 @@ function positiveInt(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
 }
 
+/** The response body, or null as soon as it is larger than `max` bytes. */
+async function readCapped(response: Response, max: number): Promise<Buffer | null> {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    const whole = Buffer.from(await response.arrayBuffer())
+    return whole.length > max ? null : whole
+  }
+  const chunks: Buffer[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.length
+    if (size > max) {
+      void reader.cancel().catch(() => {})
+      return null
+    }
+    chunks.push(Buffer.from(value))
+  }
+  return Buffer.concat(chunks)
+}
+
 /** A key event the host's own `press` is about to send back through one of the input channels. */
 interface ExpectedEcho {
   channel: 'before' | 'input'
@@ -296,7 +328,12 @@ interface ExpectedEcho {
 
 export type TabShortcut = { action: 'new' | 'close' | 'reopen' } | { action: 'select'; index: number }
 
-/** Ctrl on Windows and Linux, Cmd on macOS; only T, W, Shift+T and 1-9 are claimed, never copy/paste/undo. */
+/**
+ * Ctrl on Windows and Linux, Cmd on macOS; only T, W, Shift+T and 1-9 are claimed, never copy/paste/undo.
+ * The panel's tabShortcutOf (renderer/lib/browserSuggest.ts) applies the same rule to DOM key events. They
+ * stay two functions because nextron's main build does not compile files under renderer/ (and the renderer
+ * cannot import main/); browser-tabs.test.tsx checks both against one table of keys.
+ */
 export function tabShortcut(input: { type?: string; key?: string; control?: boolean; meta?: boolean; shift?: boolean; alt?: boolean; isAutoRepeat?: boolean },
   platform: string): TabShortcut | null {
   if (input.type !== 'keyDown' || input.isAutoRepeat || typeof input.key !== 'string' || input.alt) return null
@@ -320,6 +357,13 @@ interface Tab {
   loadWaiter: ((result: LoadResult) => void) | null
   popupBlocked: string | null
   userControl: boolean
+  /** When the user last pressed a key or mouse button in this page (not the host's own `press`); null if never. */
+  lastGesture: number | null
+  /** Bumped by every navigation, so a favicon fetched for an earlier page is dropped. */
+  faviconSeq: number
+  /** Settles when the tab is closed, so a command waiting on something else can stop at once. */
+  gone: Promise<void>
+  markGone: () => void
   /** Key events the host sent with `press` and has not yet seen come back. */
   expected: ExpectedEcho[]
   /** Agent commands running on this tab. */
@@ -349,6 +393,12 @@ export class BrowserHost {
   private readonly actedIn = new Set<number>()
   /** True while clear-browsing-data is awaited: no tab may be created or navigated meanwhile. */
   private clearing = false
+  /** Bumped when a clear starts: an open or navigation that awaited across it must not act. */
+  private clearGen = 0
+  /** Bumped when a chat is closed (deleted), for the same reason. */
+  private readonly closeGen = new Map<number, number>()
+  /** When each chat's pages last opened a tab, for the rate limit. */
+  private readonly pageOpens = new Map<number, number[]>()
   private clock = 0
   private bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
   private readonly hostCache = new Map<string, { blocked: true; at: number }>()
@@ -420,11 +470,11 @@ export class BrowserHost {
   shutdown(): Promise<void> {
     if (this.stopped) return this.reports.then(() => undefined)
     this.stopped = true
-    this.deps.history?.flush()
+    const saved = this.deps.history?.flush()
     if (this.pollTimer) this.clear(this.pollTimer)
     this.pollTimer = null
     this.destroyView()
-    return this.report().then(() => undefined)
+    return Promise.all([saved, this.report()]).then(() => undefined)
   }
 
   // ---- tabs and session ----
@@ -542,7 +592,8 @@ export class BrowserHost {
   private createTab(conversationId: number, agent: boolean): Tab {
     const win = this.deps.window()
     if (!win || win.isDestroyed()) throw new Error('no_window')
-    if (this.tabs.size >= MAX_TABS) this.evict()
+    if (this.tabsOf(conversationId).length >= MAX_CHAT_TABS) throw new Error('too_many_tabs')
+    if (this.tabs.size >= MAX_TABS && !this.evict()) throw new Error('too_many_tabs')
     const session = this.session()
     this.harden(session)
     const view = this.deps.createView({
@@ -558,8 +609,10 @@ export class BrowserHost {
         safeDialogs: true,
       },
     })
+    let markGone = () => {}
+    const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotSeq: 0, loadWaiter: null,
-      popupBlocked: null, userControl: false, expected: [], busy: 0, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -574,21 +627,23 @@ export class BrowserHost {
     return tab
   }
 
-  /** Beyond the cap the least recently used hidden tab goes (never one the user controls or one mid-command; the cap may be exceeded). */
-  private evict(): void {
+  /** At the cap the least recently used hidden tab goes (never one the user controls or one mid-command); false when none may. */
+  private evict(): boolean {
     let oldest: Tab | null = null
     for (const tab of this.tabs.values()) {
       if (tab.conversationId !== this.visibleId && !tab.userControl && tab.busy === 0 && (!oldest || tab.lastUsed < oldest.lastUsed)) oldest = tab
     }
     if (oldest) this.closeTab(oldest)
+    return oldest !== null
   }
 
   private wire(tab: Tab): void {
     const wc = tab.view.webContents
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (tab.agent) tab.popupBlocked = url
-      // A link the user opens in a new tab becomes a tab of theirs; the agent's pop-ups are only reported.
-      else if (disposition === 'foreground-tab' || disposition === 'background-tab') this.openUserTab(tab.conversationId, url).catch(() => { /* refused or no window */ })
+      else if ((disposition === 'foreground-tab' || disposition === 'background-tab') && this.pageMayOpenTab(tab)) {
+        this.openUserTab(tab.conversationId, url, true).catch(() => { /* refused or no window */ })
+      }
       return { action: 'deny' }
     })
     const refuse = (event: { url: string; isMainFrame: boolean; preventDefault(): void }) => {
@@ -612,15 +667,13 @@ export class BrowserHost {
     }
     wc.on('did-navigate', (_event, url) => {
       tab.favicon = ''
+      tab.faviconSeq++
       this.deps.history?.visit(url, wc.getTitle())
     })
     wc.on('page-title-updated', (_event, title) => this.deps.history?.update(wc.getURL(), { title }))
     wc.on('page-favicon-updated', (_event, favicons) => {
       const icon = Array.isArray(favicons) ? favicons.find((href) => typeof href === 'string' && /^https?:\/\//i.test(href)) : undefined
-      if (!icon) return
-      tab.favicon = icon
-      this.deps.history?.update(wc.getURL(), { favicon: icon })
-      this.emitLive(tab.conversationId)
+      if (icon) void this.loadFavicon(tab, icon)
     })
     // Keys inside the page never reach the renderer, so the tab shortcuts are claimed here.
     wc.on('before-input-event', (event, input) => {
@@ -651,9 +704,27 @@ export class BrowserHost {
     }
   }
 
-  /** A key or mouse event inside a tab. Only the chat's agent tab can be taken over, and only by input the host did not send itself. */
+  /**
+   * The user sent a message in this chat: control goes back to the agent, and the tab selected right now becomes
+   * the chat's agent tab (the old one turns into a user tab; a chat without an agent tab yet gets this one).
+   * The agent stays where it is while a command still runs on it.
+   */
+  private release(conversationId: number): void {
+    const agent = this.agentTab(conversationId)
+    if (agent) this.setUserControl(agent, false)
+    const next = this.selectedTab(conversationId)
+    if (!next || next === agent || (agent?.busy ?? 0) > 0) return
+    if (agent) agent.agent = false
+    next.agent = true
+    next.expected = []
+    this.emitLive(conversationId)
+  }
+
+  /**
+   * A key or mouse event inside a tab. It counts as the user's unless it is one the host sent itself; the
+   * user's input lets that page open a tab, and on the chat's agent tab it also takes the tab over.
+   */
   private userInput(tab: Tab, channel: ExpectedEcho['channel'], input: { type?: string; key?: string; keyCode?: string }): void {
-    if (!tab.agent) return
     const type = input.type ?? ''
     if (type !== 'keyDown' && type !== 'rawKeyDown' && type !== 'mouseDown') return
     const now = this.now()
@@ -665,7 +736,18 @@ export class BrowserHost {
       tab.expected.splice(at, 1)
       return
     }
-    this.setUserControl(tab, true)
+    tab.lastGesture = now
+    if (tab.agent) this.setUserControl(tab, true)
+  }
+
+  /** A page opens a tab only just after its own user input, while its chat is on screen, and only a few per window. */
+  private pageMayOpenTab(tab: Tab): boolean {
+    const now = this.now()
+    if (tab.lastGesture === null || now - tab.lastGesture > GESTURE_MS || tab.conversationId !== this.visibleId) return false
+    const recent = (this.pageOpens.get(tab.conversationId) ?? []).filter((at) => now - at < PAGE_TAB_WINDOW_MS)
+    if (recent.length >= MAX_PAGE_TABS) return false
+    this.pageOpens.set(tab.conversationId, [...recent, now])
+    return true
   }
 
   private setUserControl(tab: Tab, on: boolean): void {
@@ -680,6 +762,7 @@ export class BrowserHost {
       if (this.selected.get(tab.conversationId) === tab.id) this.reselect(tab)
     }
     this.settleLoad(tab, { ok: false, error: 'halted' })
+    tab.markGone()
     const win = this.deps.window()
     try { if (win && !win.isDestroyed()) win.contentView.removeChildView(tab.view) } catch { /* window closing */ }
     try { if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close() } catch { /* already closed */ }
@@ -735,27 +818,80 @@ export class BrowserHost {
     }
   }
 
-  /** A new tab of the user's own, selected and shown; with an address it is checked like every navigation. */
-  private async openUserTab(conversationId: number, url?: unknown): Promise<Record<string, unknown>> {
+  /**
+   * A new tab of the user's own, selected; with an address it is checked like every navigation. A tab a page
+   * opened (`fromPage`) leaves the panel as it is: the chat is already on screen, and nothing may bring another forward.
+   */
+  private async openUserTab(conversationId: number, url?: unknown, fromPage = false): Promise<Record<string, unknown>> {
     if (this.clearing) return { error: 'clearing' }
+    const epoch = this.lifecycleEpoch(conversationId)
     if (url !== undefined && !(await this.navigationAllowed(url))) return { error: 'url_not_allowed' }
-    // A clear can start during the lookup above.
-    if (this.clearing) return { error: 'clearing' }
-    if (this.tabsOf(conversationId).length >= MAX_CHAT_TABS) return { error: 'too_many_tabs' }
+    // A clear or the chat's deletion can happen during the lookup above.
+    const stale = this.staleReply(conversationId, epoch)
+    if (stale) return stale
     let tab: Tab
     try { tab = this.createTab(conversationId, false) } catch (error) { return { error: error instanceof Error ? error.message : 'no_window' } }
     this.selected.set(conversationId, tab.id)
-    this.show(conversationId)
+    if (fromPage) this.layout()
+    else this.show(conversationId)
     if (str(url)) tab.view.webContents.loadURL(url).catch(() => { /* reported by did-fail-load */ })
     this.emitLive(conversationId)
     return { ...this.livePayload(conversationId) }
   }
 
+  /** The refusal for work that began before a clear started or its chat was closed, or null when it may go on. */
+  private staleReply(conversationId: number, epoch: number): { error: string } | null {
+    if (this.clearing) return { error: 'clearing' }
+    return this.lifecycleEpoch(conversationId) === epoch ? null : { error: 'chat_closed' }
+  }
+
+  /** The tab goes back on the stack when it could not be reopened (too many tabs, address refused). */
   private async reopenTab(conversationId: number): Promise<Record<string, unknown>> {
-    const stack = this.closed.get(conversationId)
-    const last = stack?.pop()
+    const last = this.closed.get(conversationId)?.pop()
     if (!last) return { error: 'nothing_to_reopen' }
-    return this.openUserTab(conversationId, last.url)
+    const epoch = this.lifecycleEpoch(conversationId)
+    const result = await this.openUserTab(conversationId, last.url)
+    if (result.error && this.lifecycleEpoch(conversationId) === epoch) {
+      this.closed.set(conversationId, [...(this.closed.get(conversationId) ?? []), last].slice(-MAX_CLOSED_TABS))
+    }
+    return result
+  }
+
+  /** Fetches a page's icon through the hardened session and keeps it as a small data: URL; anything else leaves the letter tile. */
+  private async loadFavicon(tab: Tab, href: string): Promise<void> {
+    const seq = tab.faviconSeq
+    const page = tab.view.webContents.getURL()
+    const icon = await this.fetchFavicon(href).catch(() => '')
+    if (!icon || !this.isLive(tab) || tab.faviconSeq !== seq || this.tabs.get(tab.id) !== tab) return
+    tab.favicon = icon
+    this.deps.history?.update(page, { favicon: icon })
+    this.emitLive(tab.conversationId)
+  }
+
+  private async fetchFavicon(href: string): Promise<string> {
+    const get = this.deps.fetch ?? ((url, init) => this.session().fetch(url, init))
+    const controller = new AbortController()
+    const timer = this.later(() => controller.abort(), FAVICON_TIMEOUT_MS)
+    try {
+      let url = href
+      for (let hop = 0; hop <= MAX_FAVICON_REDIRECTS; hop++) {
+        const parsed = new URL(url)
+        if (parsed.username || parsed.password || !(await this.navigationAllowed(url))) return ''
+        const response = await get(url, { credentials: 'omit', redirect: 'manual', signal: controller.signal })
+        const location = response.headers.get('location')
+        if (response.status >= 300 && response.status < 400 && location) {
+          url = new URL(location, url).toString()
+          continue
+        }
+        const type = (response.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+        if (!response.ok || !/^image\/[a-z0-9.+-]+$/.test(type) || Number(response.headers.get('content-length')) > MAX_FAVICON_BYTES) return ''
+        const bytes = await readCapped(response, MAX_FAVICON_BYTES)
+        return bytes && bytes.length > 0 ? `data:${type};base64,${bytes.toString('base64')}` : ''
+      }
+      return ''
+    } finally {
+      this.clear(timer)
+    }
   }
 
   // ---- renderer channel ----
@@ -793,13 +929,22 @@ export class BrowserHost {
   async invoke(req: unknown): Promise<unknown> {
     if (!req || typeof req !== 'object' || Array.isArray(req)) return { error: 'Invalid browser-live request.' }
     const { op, conversationId: id, bounds, visible, url, gateId, approved, tabId } = req as Record<string, unknown>
-    const tabOps = ['status', 'set-bounds', 'visible', 'open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close',
+    const tabOps = ['status', 'panel-status', 'set-bounds', 'visible', 'open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close',
       'select', 'close-tab', 'reopen-tab']
     if (typeof op === 'string' && tabOps.includes(op) && !positiveInt(id)) return { error: 'Unknown operation or malformed browser-live arguments.' }
     if (tabId !== undefined && !positiveInt(tabId)) return { error: 'Unknown operation or malformed browser-live arguments.' }
     const conversationId = id as number
     switch (op) {
-      case 'status':
+      // The one op a paired phone may call (renderer/lib/remote/desktopRunner.ts): the agent's page only, never the user's tabs.
+      case 'status': {
+        const agent = this.agentTab(conversationId)
+        const wc = agent?.view.webContents
+        return { active: agent !== null, conversationId, url: wc ? wc.getURL() : '', title: wc ? wc.getTitle() : '',
+          loading: wc ? wc.isLoading() : false, userControl: agent?.userControl ?? false,
+          visible: this.visibleId === conversationId, bounds: this.bounds }
+      }
+      // The panel's own read: every tab of the chat.
+      case 'panel-status':
         return { ...this.livePayload(conversationId), visible: this.visibleId === conversationId, bounds: this.bounds }
       case 'set-bounds': {
         const b = bounds as Record<string, unknown> | null
@@ -835,9 +980,11 @@ export class BrowserHost {
         return this.openUserTab(conversationId, url)
       case 'navigate': {
         if (this.clearing) return { error: 'clearing' }
+        const epoch = this.lifecycleEpoch(conversationId)
         if (!(await this.navigationAllowed(url))) return { error: 'url_not_allowed' }
-        // A clear can start during the lookup above.
-        if (this.clearing) return { error: 'clearing' }
+        // A clear or the chat's deletion can happen during the lookup above.
+        const stale = this.staleReply(conversationId, epoch)
+        if (stale) return stale
         const tab = this.chatTab(conversationId, tabId)
         if (!tab) return tabId === undefined ? this.openUserTab(conversationId, url) : { error: 'no_tab' }
         this.touch(tab)
@@ -859,23 +1006,21 @@ export class BrowserHost {
         else history.goForward()
         return this.livePayload(conversationId)
       }
-      case 'take-over':
-      case 'release': {
+      case 'take-over': {
         const tab = this.agentTab(conversationId)
-        if (!tab) return op === 'release' ? this.livePayload(conversationId) : { error: 'no_tab' }
-        this.setUserControl(tab, op === 'take-over')
+        if (!tab) return { error: 'no_tab' }
+        this.setUserControl(tab, true)
         return this.livePayload(conversationId)
       }
-      case 'select': {
-        const tab = this.chatTab(conversationId, tabId)
-        if (!tab || tabId === undefined) return { error: 'no_tab' }
-        this.selectTab(tab)
+      case 'release':
+        this.release(conversationId)
         return this.livePayload(conversationId)
-      }
+      case 'select':
       case 'close-tab': {
-        const tab = this.chatTab(conversationId, tabId)
-        if (!tab || tabId === undefined) return { error: 'no_tab' }
-        this.closeByUser(tab)
+        const tab = tabId === undefined ? null : this.chatTab(conversationId, tabId)
+        if (!tab) return { error: 'no_tab' }
+        if (op === 'select') this.selectTab(tab)
+        else this.closeByUser(tab)
         return this.livePayload(conversationId)
       }
       case 'reopen-tab':
@@ -883,7 +1028,11 @@ export class BrowserHost {
       case 'history':
         return { entries: this.deps.history?.list() ?? [] }
       case 'close': {
+        this.closeGen.set(conversationId, (this.closeGen.get(conversationId) ?? 0) + 1)
+        // Like a Stop: the chat's running and queued agent commands end without making a new tab.
+        this.stopLocal(conversationId)
         for (const tab of [...this.tabs.values()]) if (tab.conversationId === conversationId) this.closeTab(tab)
+        this.pageOpens.delete(conversationId)
         this.closed.delete(conversationId)
         // Only a deleted chat is closed; evict and clear keep the id so a Stop still reaches the backend.
         this.actedIn.delete(conversationId)
@@ -892,11 +1041,12 @@ export class BrowserHost {
       case 'clear-browsing-data': {
         if (this.clearing) return { error: 'clearing' }
         this.clearing = true
+        this.clearGen++
         // Tabs go first so no page writes new cookies between the clear and its close.
         this.destroyView()
         this.closed.clear()
-        this.deps.history?.clear()
-        let failed = false
+        // A history file that could not be erased is a failed clear: the visits would return after a restart.
+        let failed = !((await this.deps.history?.clear()) ?? true)
         try {
           const session = this.session()
           await session.clearStorageData()
@@ -959,7 +1109,12 @@ export class BrowserHost {
 
   /** Halts count what happened to an agent command while it awaited: the sum only ever grows. */
   private haltEpoch(conversationId: number): number {
-    return this.haltAll + (this.haltChat.get(conversationId) ?? 0)
+    return this.haltAll + (this.haltChat.get(conversationId) ?? 0) + this.lifecycleEpoch(conversationId)
+  }
+
+  /** Changes when this chat is closed or any browsing data is cleared: pending work for it is void. */
+  private lifecycleEpoch(conversationId: number): number {
+    return this.clearGen + (this.closeGen.get(conversationId) ?? 0)
   }
 
   /** Stops the agent's tab(s); tabs the user opened are theirs and keep loading. */
@@ -1057,7 +1212,10 @@ export class BrowserHost {
     let reply: Reply
     tab.busy++
     try {
-      const extra = await this.run(tab, cmd.op, cmd.args && typeof cmd.args === 'object' ? cmd.args : {}, () => this.haltEpoch(id) !== epoch)
+      const halted = () => this.haltEpoch(id) !== epoch
+      const result = await this.run(tab, cmd.op, cmd.args && typeof cmd.args === 'object' ? cmd.args : {}, halted)
+      // A Stop (or the chat's deletion) that arrived while the command awaited wins over whatever it came back with.
+      const extra = halted() ? { error: 'halted' } : result
       reply = { ok: !extra.error, ...extra, ...this.base(wc) } as Reply
       if (!extra.error) delete reply.error
     } catch (error) {
@@ -1081,7 +1239,10 @@ export class BrowserHost {
     switch (op) {
       case 'navigate': {
         const url = args.url
-        if (!(await this.navigationAllowed(url))) return { error: 'url_not_allowed' }
+        // A closed tab ends the wait at once instead of when the lookup finishes.
+        const allowed = await Promise.race([this.navigationAllowed(url), tab.gone.then(() => 'closed' as const)])
+        if (allowed === 'closed') return { error: 'halted' }
+        if (!allowed) return { error: 'url_not_allowed' }
         if (halted()) return { error: 'halted' }
         if (this.clearing) return { error: 'clearing' }
         if (!this.isLive(tab)) return { error: 'tab_closed' }

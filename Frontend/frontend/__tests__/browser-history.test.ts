@@ -59,13 +59,38 @@ describe('BrowserHistory', () => {
     expect(history.list()).toEqual([])
   })
 
+  it('skips any query name that looks like a secret, and keeps ordinary ones', () => {
+    for (const name of ['reset_token', 'auth_token', 'session_token', 'sessionToken', 'csrf_token', 'access-token', 'client_secret',
+      'api-key', 'apiKey', 'jwt', 'bearer', 'authorization', 'X-Amz-Signature', 'sig', 'sid', 'otp', 'ticket', 'nonce', 'state', 'code', 'oauth_verifier', 'PASSWORD'])
+      expect(historyUrl(`https://a.example/p?${name}=PRIVATE`), name).toBeNull()
+    for (const name of ['q', 'query', 'page', 'keywords', 'lang', 'design', 'estate', 'v'])
+      expect(historyUrl(`https://a.example/p?${name}=1`), name).not.toBeNull()
+    expect(historyUrl('https://www.google.com/search?q=unity+shader')).toBe('https://www.google.com/search?q=unity+shader')
+  })
+
+  it('keeps a fetched icon (a data: image) and drops a remote address or an oversized one', () => {
+    const { history } = make()
+    const icon = 'data:image/png;base64,AQID'
+    history.visit('https://a.example/', 'A', 'https://a.example/f.ico')
+    expect(history.list()[0].favicon).toBe('')
+    history.update('https://a.example/', { favicon: icon })
+    expect(history.list()[0].favicon).toBe(icon)
+    history.update('https://a.example/', { favicon: 'data:image/png;base64,' + 'A'.repeat(60_000) })
+    history.update('https://a.example/', { favicon: 'data:text/html;base64,AAAA' })
+    expect(history.list()[0].favicon).toBe(icon)
+    const saved = make({ initial: JSON.stringify({ version: 1, entries: [
+      { url: 'https://a.example/', title: '', favicon: icon, lastVisit: 2, visits: 1 },
+      { url: 'https://b.example/', title: '', favicon: 'https://b.example/f.ico', lastVisit: 1, visits: 1 }] }) })
+    expect(saved.history.list().map(e => e.favicon)).toEqual([icon, ''])
+  })
+
   it('updates the title and icon of a remembered page only', () => {
     const { history } = make()
     history.update('https://a.example/', { title: 'ignored' })
     expect(history.list()).toEqual([])
     history.visit('https://a.example/')
-    history.update('https://a.example/', { title: '  Hello \n world ', favicon: 'https://a.example/f.ico' })
-    expect(history.list()[0]).toMatchObject({ title: 'Hello world', favicon: 'https://a.example/f.ico', visits: 1 })
+    history.update('https://a.example/', { title: '  Hello \n world ', favicon: 'data:image/png;base64,AQID' })
+    expect(history.list()[0]).toMatchObject({ title: 'Hello world', favicon: 'data:image/png;base64,AQID', visits: 1 })
   })
 
   it('saves after a delay and on flush, and loads what it saved', () => {
@@ -98,16 +123,66 @@ describe('BrowserHistory', () => {
     expect(history.list().map(e => e.url)).toEqual(['https://two.example/', 'https://ok.example/'])
   })
 
-  it('clear forgets everything and writes the empty file at once', () => {
+  it('clear forgets everything and writes the empty file at once', async () => {
     vi.useFakeTimers()
     const { history, state } = make()
     history.visit('https://a.example/')
-    history.clear()
+    expect(await history.clear()).toBe(true)
     expect(history.list()).toEqual([])
     expect(JSON.parse(state.file!).entries).toEqual([])
     expect(state.writes).toBe(1)
     vi.advanceTimersByTime(5_000)
     expect(state.writes).toBe(1)
+  })
+
+  it('reports a failed write, keeps the data in memory and writes it again on the next flush', async () => {
+    const state = { file: null as string | null, fail: true, writes: 0 }
+    const io: HistoryIo = {
+      read: () => state.file,
+      write: (_file, data) => { state.writes++; if (state.fail) throw Object.assign(new Error('locked'), { code: 'EACCES' }); state.file = data },
+    }
+    const history = new BrowserHistory('history.json', { io, now: () => 5 })
+    history.visit('https://a.example/', 'A')
+    expect(await history.flush()).toBe(false)
+    expect(history.list()).toHaveLength(1)
+    state.fail = false
+    expect(await history.flush()).toBe(true)
+    expect(JSON.parse(state.file!).entries).toHaveLength(1)
+    expect(await history.flush()).toBe(true)
+    expect(state.writes).toBe(2)
+  })
+
+  it('clear returns false when the file could not be erased', async () => {
+    const io: HistoryIo = { read: () => null, write: () => false }
+    const history = new BrowserHistory('history.json', { io })
+    history.visit('https://a.example/')
+    expect(await history.clear()).toBe(false)
+    expect(history.list()).toEqual([])
+  })
+
+  it('never has two writes in flight: a flush during a slow write waits for it', async () => {
+    const order: string[] = []
+    let release!: () => void
+    const io: HistoryIo = {
+      read: () => null,
+      write: (_file, data) => {
+        const n = JSON.parse(data).entries.length
+        order.push(`start${n}`)
+        return new Promise<boolean>((resolve) => {
+          const done = () => { order.push(`end${n}`); resolve(true) }
+          if (n === 1) release = done; else done()
+        })
+      },
+    }
+    const history = new BrowserHistory('history.json', { io })
+    history.visit('https://a.example/')
+    const first = history.flush()
+    history.visit('https://b.example/')
+    const second = history.flush()
+    expect(order).toEqual(['start1'])
+    release()
+    await Promise.all([first, second])
+    expect(order).toEqual(['start1', 'end1', 'start2', 'end2'])
   })
 })
 
@@ -120,15 +195,16 @@ describe('fileIo (atomic write)', () => {
   }
   afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }) })
 
-  it('writes through a temp file and leaves none behind', () => {
+  it('writes through a temp file and leaves none behind', async () => {
     const file = tmp()
-    fileIo.write(file, '{"a":1}')
+    expect(await fileIo.write(file, '{"a":1}')).toBe(true)
     expect(fileIo.read(file)).toBe('{"a":1}')
     expect(fs.readdirSync(path.dirname(file))).toEqual(['browser-history.json'])
     expect(fileIo.read(file + '.missing')).toBeNull()
   })
 
-  it('retries a rename that Windows refuses with EPERM or EBUSY, then falls back to a direct write', () => {
+  it('retries a rename that Windows refuses with EPERM or EBUSY after a growing pause', async () => {
+    vi.useFakeTimers()
     const file = tmp()
     const real = fs.renameSync
     let calls = 0
@@ -136,20 +212,38 @@ describe('fileIo (atomic write)', () => {
       if (++calls <= 2) throw Object.assign(new Error('busy'), { code: calls === 1 ? 'EPERM' : 'EBUSY' })
       real(from, to)
     })
-    fileIo.write(file, 'retried')
+    const written = fileIo.write(file, 'retried')
+    expect(calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(calls).toBe(2)
+    await vi.advanceTimersByTimeAsync(99)
+    expect(calls).toBe(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await written).toBe(true)
     expect(calls).toBe(3)
     expect(fs.readFileSync(file, 'utf8')).toBe('retried')
-    calls = -100
-    vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('locked'), { code: 'EPERM' }) })
-    fileIo.write(file, 'direct')
-    expect(fs.readFileSync(file, 'utf8')).toBe('direct')
-    expect(fs.readdirSync(path.dirname(file))).toEqual(['browser-history.json'])
   })
 
-  it('still lands the data when the rename fails for another reason', () => {
+  it('leaves the existing file untouched and no temp file when the rename keeps failing', async () => {
+    vi.useFakeTimers()
     const file = tmp()
-    vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('no'), { code: 'ENOSPC' }) })
-    fileIo.write(file, 'x')
-    expect(fs.readFileSync(file, 'utf8')).toBe('x')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, 'old')
+    const direct = vi.spyOn(fs, 'writeFileSync')
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('locked'), { code: 'EPERM' }) })
+    const written = fileIo.write(file, 'new')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await written).toBe(false)
+    expect(fs.readFileSync(file, 'utf8')).toBe('old')
+    expect(fs.readdirSync(path.dirname(file))).toEqual(['browser-history.json'])
+    expect(direct.mock.calls.some(([target]) => target === file)).toBe(false)
+  })
+
+  it('does not retry a rename that fails for another reason', async () => {
+    const file = tmp()
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw Object.assign(new Error('no'), { code: 'ENOSPC' }) })
+    expect(await fileIo.write(file, 'x')).toBe(false)
+    expect(rename).toHaveBeenCalledTimes(1)
+    expect(fs.readdirSync(path.dirname(file))).toEqual([])
   })
 })
