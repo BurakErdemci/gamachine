@@ -194,6 +194,35 @@ export function isAllowedWorkspacePath(targetPath: string, workspacePath: string
   }
 }
 
+/**
+ * Destructive file operations (delete, rename, move-out): true only for a path
+ * strictly INSIDE the workspace, never the workspace root itself.
+ * `isAllowedWorkspacePath` accepts the root, which is right for reading and
+ * wrong for deleting the project. Same symlink resolution; on Windows the
+ * comparison ignores case (`platform` is a parameter so the branch is testable).
+ */
+export function isInsideWorkspace(
+  targetPath: string,
+  workspacePath: string,
+  platform: string = process.platform,
+): boolean {
+  try {
+    if (!targetPath || !workspacePath) return false
+
+    let resolvedTarget = safeResolve(targetPath)
+    let resolvedWorkspace = safeResolve(workspacePath)
+    if (platform === 'win32') {
+      resolvedTarget = resolvedTarget.toLowerCase()
+      resolvedWorkspace = resolvedWorkspace.toLowerCase()
+    }
+    const relativePath = path.relative(resolvedWorkspace, resolvedTarget)
+
+    return !!relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)
+  } catch {
+    return false
+  }
+}
+
 /** Çözülmüş iki yol arasında kapsama kontrolü — ikisi de ÇÖZÜLMÜŞ olmalı. */
 function icerideMi(cozulmusHedef: string, cozulmusWorkspace: string): boolean {
   const rel = path.relative(cozulmusWorkspace, cozulmusHedef)

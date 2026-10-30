@@ -14,6 +14,7 @@ import { setupAutoUpdate, type AutoUpdateHandle } from './helpers/auto-update'
 import {
   TEXT_MAX_BYTES,
   isAllowedWorkspacePath,
+  isInsideWorkspace,
   okumaKarariVer,
   readExactly,
   taniticiKapsamdaMi,
@@ -698,9 +699,10 @@ handleSecure('delete-file', async (_event, relativePath: string, workspacePath?:
     if (!isAllowedWorkspacePath(fullPath, workspacePath)) {
       return { success: false, error: 'Dosya workspace dışında.' };
     }
+    if (!isInsideWorkspace(fullPath, workspacePath)) return { success: false, error: 'Proje klasörünün kendisi silinemez/taşınamaz.' };
     const exists = fs.existsSync(fullPath);
     if (exists) {
-      fs.unlinkSync(fullPath);
+      await shell.trashItem(fullPath);
       return { success: true };
     }
     return { success: false, error: 'Dosya bulunamadı' };
@@ -724,6 +726,7 @@ handleSecure('rename-entry', async (_event, oldPath: string, newName: string, wo
   const _ws = untrustedWorkspace(workspacePath); if (_ws) return { success: false, error: _ws };
   const fullOldPath = path.isAbsolute(oldPath) ? oldPath : path.join(workspacePath, oldPath)
   if (!isAllowedWorkspacePath(fullOldPath, workspacePath)) return { success: false, error: 'Dosya workspace dışında.' }
+  if (!isInsideWorkspace(fullOldPath, workspacePath)) return { success: false, error: 'Proje klasörünün kendisi silinemez/taşınamaz.' }
   if (!fs.existsSync(fullOldPath)) return { success: false, error: 'Dosya bulunamadı.' }
   // `newName` bir AD olmalı, yol değil. Doğrulanmadığında Node traversal
   // segmentlerini normalize ediyordu ve dosya workspace dışına taşınıyordu:
@@ -747,8 +750,13 @@ handleSecure('delete-entry', async (_event, entryPath: string, workspacePath?: s
   const _ws = untrustedWorkspace(workspacePath); if (_ws) return { success: false, error: _ws };
   const fullPath = path.isAbsolute(entryPath) ? entryPath : path.join(workspacePath, entryPath)
   if (!isAllowedWorkspacePath(fullPath, workspacePath)) return { success: false, error: 'Dosya workspace dışında.' }
+  if (!isInsideWorkspace(fullPath, workspacePath)) return { success: false, error: 'Proje klasörünün kendisi silinemez/taşınamaz.' }
   if (!fs.existsSync(fullPath)) return { success: false, error: 'Dosya bulunamadı.' }
-  fs.rmSync(fullPath, { recursive: true, force: true })
+  try {
+    await shell.trashItem(fullPath)
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Çöp kutusuna taşınamadı.' }
+  }
   return { success: true }
 })
 
@@ -760,6 +768,7 @@ handleSecure('move-entry', async (_event, sourcePath: string, targetDir: string,
   if (!isAllowedWorkspacePath(fullSource, workspacePath) || !isAllowedWorkspacePath(fullTarget, workspacePath)) {
     return { success: false, error: 'Dosya workspace dışında.' }
   }
+  if (!isInsideWorkspace(fullSource, workspacePath)) return { success: false, error: 'Proje klasörünün kendisi silinemez/taşınamaz.' }
   const newPath = path.join(fullTarget, path.basename(fullSource))
   if (fs.existsSync(newPath)) return { success: false, error: 'Hedef konumda aynı isimde bir dosya var.' }
   fs.renameSync(fullSource, newPath)

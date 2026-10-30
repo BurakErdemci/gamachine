@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, it, expect } from 'vitest'
 import {
   isAllowedUnityScriptPath,
   isAllowedWorkspacePath,
+  isInsideWorkspace,
   okumaKarariVer,
 } from '../main/helpers/file-security'
 
@@ -172,5 +173,51 @@ describe('okumaKarariVer — dosya okuma sınırı', () => {
 
   it('workspace dışındaki .cs dosyasını reddeder', () => {
     expect(okumaKarariVer('/tmp/Hack.cs', WS).izinli).toBe(false)
+  })
+})
+
+describe('isInsideWorkspace — strictly inside, never the root', () => {
+  it('accepts a file and a nested folder', () => {
+    fs.mkdirSync(path.join(tempRoot, 'Assets'))
+    fs.writeFileSync(path.join(tempRoot, 'Assets', 'a.txt'), 'a')
+    expect(isInsideWorkspace(path.join(tempRoot, 'Assets', 'a.txt'), tempRoot)).toBe(true)
+    expect(isInsideWorkspace(path.join(tempRoot, 'Assets'), tempRoot)).toBe(true)
+  })
+
+  it('refuses the root, with a trailing separator, and with a dot segment', () => {
+    fs.mkdirSync(path.join(tempRoot, 'Assets'))
+    expect(isInsideWorkspace(tempRoot, tempRoot)).toBe(false)
+    expect(isInsideWorkspace(tempRoot + path.sep, tempRoot)).toBe(false)
+    expect(isInsideWorkspace(path.join(tempRoot, 'Assets', '..'), tempRoot)).toBe(false)
+  })
+
+  it('refuses a parent, a sibling and empty input', () => {
+    expect(isInsideWorkspace(path.dirname(tempRoot), tempRoot)).toBe(false)
+    expect(isInsideWorkspace(`${tempRoot}-sibling`, tempRoot)).toBe(false)
+    expect(isInsideWorkspace('', tempRoot)).toBe(false)
+    expect(isInsideWorkspace(tempRoot, '')).toBe(false)
+  })
+
+  it('refuses a symlink that resolves to the root', () => {
+    const link = path.join(os.tmpdir(), `unity-root-link-${path.basename(tempRoot)}`)
+    try {
+      fs.symlinkSync(tempRoot, link, 'junction')
+    } catch {
+      return
+    }
+    try {
+      expect(isInsideWorkspace(link, tempRoot)).toBe(false)
+    } finally {
+      fs.unlinkSync(link)
+    }
+  })
+
+  it('on win32 a case-different spelling of the root is still the root', () => {
+    expect(isInsideWorkspace(tempRoot.toUpperCase(), tempRoot.toLowerCase(), 'win32')).toBe(false)
+    expect(isInsideWorkspace(`${tempRoot.toUpperCase()}/x.txt`, tempRoot.toLowerCase(), 'win32')).toBe(true)
+  })
+
+  it('isAllowedWorkspacePath still accepts the root for reads', () => {
+    expect(isAllowedWorkspacePath(tempRoot, tempRoot)).toBe(true)
   })
 })
