@@ -283,7 +283,7 @@ export class BrowserHost {
   private readonly tabs = new Map<number, Tab>()
   private hardened = false
   private visibleId: number | null = null
-  /** Chats the agent has acted in. Outlives the tab (evict, close, clear) so a Stop still reaches the backend halt. */
+  /** Chats the agent has acted in. Outlives the tab on evict and clear so a Stop still reaches the backend halt; close (a deleted chat) drops it. */
   private readonly actedIn = new Set<number>()
   /** True while clear-browsing-data is awaited: no tab may be created or navigated meanwhile. */
   private clearing = false
