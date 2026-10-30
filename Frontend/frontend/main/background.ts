@@ -35,6 +35,7 @@ import { findUnityHub } from './helpers/unity-hub'
 import { listEditors, listTemplates, templatesDir, EditorDeps } from './helpers/unity-editors'
 import { createProject, cancelCreate } from './helpers/unity-create'
 import { openProject } from './helpers/unity-launch'
+import { trashProject } from './helpers/project-trash'
 import { readUnityVersion } from './helpers/unity-project'
 import * as pty from 'node-pty'
 import {
@@ -430,6 +431,29 @@ handleSecure('hub-open-project', async (_event, arg: any) => {
     isProject: isUnityProjectDir,
     readVersion: readUnityVersion,
     spawn: (command, args, options) => spawn(command, args, options),
+  })
+})
+
+// Moves a Unity project to the Trash / Recycle Bin; never a permanent delete. The open workspace is
+// not tracked here, so the renderer names it and project-trash re-checks it against the folder.
+handleSecure('workspace-trash', async (_event, hostPath: unknown, openWorkspace: unknown) => {
+  const known = (name: Parameters<typeof app.getPath>[0]) => { try { return app.getPath(name) } catch { return '' } }
+  return trashProject(hostPath, {
+    platform: process.platform,
+    realpath: fs.realpathSync,
+    isDirectory: (p) => { try { return fs.statSync(p).isDirectory() } catch { return false } },
+    exists: fs.existsSync,
+    protectedDirs: [os.homedir(), known('home'), known('desktop'), known('documents'), known('downloads')].filter(Boolean),
+    appDirs: [known('userData'), app.getAppPath(), path.dirname(process.execPath), process.resourcesPath ?? ''].filter(Boolean),
+    openWorkspace: typeof openWorkspace === 'string' && openWorkspace ? openWorkspace : null,
+    // Anything but a clean open or a missing file counts as Unity holding it.
+    probeLock: (file) => {
+      try { fs.closeSync(fs.openSync(file, 'r+')); return 'free' } catch (e: any) { return e?.code === 'ENOENT' ? 'absent' : 'busy' }
+    },
+    processCommands: async () => {
+      try { return (await promisify(execFile)('ps', ['-axww', '-o', 'command='], { maxBuffer: 16 * 1024 * 1024 })).stdout.split('\n') } catch { return null }
+    },
+    trashItem: (p) => shell.trashItem(p),
   })
 })
 

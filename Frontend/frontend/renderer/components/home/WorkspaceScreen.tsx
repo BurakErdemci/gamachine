@@ -12,6 +12,7 @@ import type { UserData } from './types';
 import { BrandLogo, MascotHead } from './BrandLogo';
 import { GamachineFigure } from './GamachineMascot';
 import { APP_VERSION } from './settings/SettingsPages';
+import { confirmDialog } from '../ui/ConfirmDialog';
 import { HubPanel } from './hub/HubPanel';
 import { useHub } from './hub/useHub';
 import { clearRun } from '../../lib/hub';
@@ -98,6 +99,7 @@ export const WorkspaceScreen = ({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const rootRef = useRef<HTMLElement>(null);
   const mac = useMemo(isMacPlatform, []);
+  const bin = t(/Win/.test(navigator.platform || navigator.userAgent || '') ? 'welcome.binWin' : 'welcome.binOther');
   const name = displayName(userName);
   const first = load === 'ok' && items.length === 0;
   // A created project is listed at once; openCreated saves it again through selectWorkspace, which is harmless.
@@ -159,6 +161,23 @@ export const WorkspaceScreen = ({
   const dropItem = async (it: RecentWorkspace) => {
     setMenuFor(null);
     if (!(await remove(it))) showToast(t('welcome.removeFailed'), 'error');
+  };
+  // The main process re-checks everything and answers {ok} or {error: code}. This screen shows only while no
+  // workspace is open, so it names none. Only the desktop bridge has the channel.
+  const trashItem = async (it: RecentWorkspace) => {
+    setMenuFor(null);
+    const ipc = (window as any).ipc;
+    if (!it.hostPath || !ipc) return;
+    if (!(await confirmDialog(t('welcome.trashConfirm', { name: it.name, path: it.hostPath, bin }), t('welcome.trashGo', { bin }), t('welcome.trashCancel')))) return;
+    let res: any = null;
+    try { res = await ipc.invoke('workspace-trash', it.hostPath); } catch { res = null; }
+    if (res?.ok) {
+      await remove(it);
+      showToast(t('welcome.trashDone', { name: it.name, bin }), 'success');
+      return;
+    }
+    const known = ['not-a-unity-project', 'unity-open', 'open-workspace', 'protected', 'not-found'];
+    showToast(t(known.includes(res?.error) ? `welcome.trashErr.${res.error}` as 'welcome.trashErr.protected' : 'welcome.trashErr.other', { bin }), 'error');
   };
   const locate = async (it: RecentWorkspace) => {
     const chosen = await onOpenFolder(it.hostPath ? parentDir(it.hostPath) : undefined);
@@ -273,6 +292,9 @@ export const WorkspaceScreen = ({
               </button>
             )}
             <button type="button" role="menuitem" onClick={() => dropItem(it)}>{t('welcome.remove')}</button>
+            {it.hostPath && (window as any).ipc && (
+              <button type="button" role="menuitem" className="wl-menu-danger" onClick={() => trashItem(it)}>{t('welcome.trash')}</button>
+            )}
           </div>
         )}
       </li>
