@@ -41,8 +41,17 @@ CI, the repo, or a synced folder; the owner signs the draft release locally.
    signature against `update-keys.ts` BEFORE uploading `latest.yml.sig` and
    `latest-mac.yml.sig` (`--clobber`); a key that is not embedded uploads
    nothing. Check that the printed version and hashes are the release you built.
+   It also refuses an unencrypted key and a key path inside the repo or a synced folder.
 3. Publish the draft in the GitHub UI. Sign BEFORE publishing: clients that
    see a published release without `.sig` files refuse it.
+
+## What the app does with an update
+
+Nothing downloads or installs on its own. After the signed manifest checked out the app
+downloads the update, hashes the file itself and only then offers "Şimdi yeniden başlat" /
+"Sonra". Install-on-quit is armed only when "Sonra" is chosen for a file whose hash matched
+(on macOS that is also the moment Squirrel is asked to stage it); a file that does not match
+is deleted and nothing can install it later.
 
 ## Rotating to the backup key
 

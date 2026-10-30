@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import type { BrowserWindow, MessageBoxOptions, MessageBoxReturnValue } from 'electron'
 import { UPDATE_PUBLIC_KEYS } from './update-keys'
 import { checkAvailable, verifyManifest } from './update-signature'
@@ -56,6 +57,10 @@ export interface AutoUpdateDeps {
   platform?: string
   fetchBytes?: (url: string) => Promise<Uint8Array>
   hashFile?: (file: string) => Promise<string>
+  removeFile?: (file: string) => Promise<void>
+  // macOS: asks Squirrel (electron's native autoUpdater) to fetch and stage the update from
+  // electron-updater's local proxy, so it installs on the next quit.
+  stageNative?: () => void
 }
 
 export interface AutoUpdateHandle {
@@ -72,10 +77,11 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   const platform = deps.platform ?? process.platform
   const getBytes = deps.fetchBytes ?? fetchBytes
   const hashFile = deps.hashFile ?? sha512Base64
+  const removeFile = deps.removeFile ?? ((file: string) => rm(file, { force: true }))
 
   // Nothing downloads or installs on its own: an update is downloaded only after
-  // its signed manifest checked out (update-available), and installs on quit only
-  // while autoInstallOnAppQuit mirrors a verified update (see update-downloaded).
+  // its signed manifest checked out (update-available), and install-on-quit is armed
+  // only after the app hashed the downloaded file itself (see update-downloaded).
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
 
@@ -129,6 +135,19 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     downloaded = false
     autoUpdater.autoInstallOnAppQuit = false
   }
+  // Install-on-quit for the hash-checked file, armed only after the user picked "later".
+  // NSIS/Linux: BaseUpdater.addQuitHandler registers the quit-time install only if the flag is
+  // true at that moment (it is protected, so reached by name). macOS: MacUpdater has no quit
+  // handler; Squirrel installs a staged update on quit, so staging is asked for here.
+  const armInstallOnQuit = () => {
+    const register = platform === 'darwin' ? deps.stageNative : (autoUpdater as any).addQuitHandler?.bind(autoUpdater)
+    autoUpdater.autoInstallOnAppQuit = register !== undefined
+    if (!register) {
+      logger.error('[updater] çıkışta kurulum kaydedilemedi, güncelleme çıkışta kurulmayacak')
+      return
+    }
+    register()
+  }
   // Bumped per update-available so only the latest one proceeds after its async check.
   let latestCheck = 0
 
@@ -165,10 +184,6 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     }
     logger.log('[updater] imzalı güncelleme bulundu, indiriliyor:', result.version)
     verified = result
-    // Armed before the download: electron-updater reads the flag once, right after
-    // the download finishes, to register its quit-time install (NSIS) or to let
-    // Squirrel stage the update (macOS).
-    autoUpdater.autoInstallOnAppQuit = verified !== null
     Promise.resolve(autoUpdater.downloadUpdate()).catch((e: any) => {
       logger.error('[updater] indirme başarısız:', e?.message || e)
       if (verified === result) forget()
@@ -179,20 +194,21 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     if (disposed || !generation || downloaded) return
     downloaded = true
     logger.log('[updater] güncelleme indirildi:', info?.version)
-    // electron-updater has just read the flag (synchronously after this event); from
-    // here to the hash check below nothing may install on quit.
-    await Promise.resolve()
-    autoUpdater.autoInstallOnAppQuit = false
     try {
-      const actual = info?.downloadedFile ? await hashFile(info.downloadedFile) : ''
+      let matches = false
+      try {
+        matches = info?.version === generation.version && !!info?.downloadedFile && generation.sha512.includes(await hashFile(info.downloadedFile))
+      } catch (e) {
+        logger.error('[updater] indirilen dosya okunamadı:', (e as any)?.message || e)
+      }
       if (disposed) return
-      if (info?.version !== generation.version || !generation.sha512.includes(actual)) {
+      if (!matches) {
         logger.error('[updater] indirilen dosya doğrulanan güncellemeyle uyuşmuyor, kurulmayacak')
         forget()
+        if (info?.downloadedFile) await removeFile(info.downloadedFile).catch((e: any) => logger.error('[updater] dosya silinemedi:', e?.message || e))
         await showFailure(generation.version)
         return
       }
-      autoUpdater.autoInstallOnAppQuit = verified === generation
       const { response } = await ask({
         type: 'info',
         buttons: ['Şimdi yeniden başlat', 'Sonra'],
@@ -203,7 +219,9 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
         detail: 'Şimdi yeniden başlatırsan güncelleme kurulur. "Sonra" dersen uygulamayı kapattığında kurulur.',
       })
       if (disposed) return
-      if (response === 0) {
+      if (response !== 0) {
+        if (verified === generation) armInstallOnQuit()
+      } else {
         if (installing || verified !== generation) return
         installing = true
         // Armed before stopBackend so a hung stop still ends in a relaunch.

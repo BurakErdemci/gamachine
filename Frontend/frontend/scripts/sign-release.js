@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { promptHidden } = require('./update-keygen');
+const { checkKeyLocation, promptHidden } = require('./update-keygen');
 
 const REPO = 'BurakErdemci/gamachine';
 const MANIFESTS = ['latest.yml', 'latest-mac.yml'];
@@ -59,7 +59,9 @@ async function signRelease(tag, keyPath, io = {}) {
   if (!release) throw new Error(`release ${tag} not found`);
   if (!release.isDraft) throw new Error(`release ${tag} is already published; refusing to sign it`);
 
-  const privateKey = crypto.createPrivateKey({ key: fs.readFileSync(path.resolve(keyPath), 'utf8'), passphrase: await ask('Passphrase: ') });
+  const keyText = fs.readFileSync(checkKeyLocation(keyPath), 'utf8');
+  if (!keyText.includes('-----BEGIN ENCRYPTED PRIVATE KEY-----')) throw new Error('the private key must be an encrypted PKCS#8 PEM (made by update-keygen.js); refusing an unencrypted key');
+  const privateKey = crypto.createPrivateKey({ key: keyText, passphrase: await ask('Passphrase: ') });
   if (privateKey.asymmetricKeyType !== 'ed25519') throw new Error('not an Ed25519 key');
 
   const dir = fs.mkdtempSync(path.join(io.tmpDir || os.tmpdir(), 'gamachine-sign-'));

@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import net from 'net'
 import { randomUUID, createHash, randomBytes } from 'crypto'
-import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer, WebContentsView, session } from 'electron'
+import { app, autoUpdater as nativeUpdater, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer, WebContentsView, session } from 'electron'
 import serve from 'electron-serve'
 import { createWindow, applyNavigationPolicy } from './helpers'
 import { spawn, ChildProcess, execFile } from 'child_process'
@@ -1613,6 +1613,7 @@ if (!gotTheLock) {
           relaunch: () => { app.relaunch(); app.exit(0) },
           openExternal: (url) => shell.openExternal(url),
           getMainWindow: () => BrowserWindow.getAllWindows()[0],
+          stageNative: () => nativeUpdater.checkForUpdates(),
         })
       }
     })()

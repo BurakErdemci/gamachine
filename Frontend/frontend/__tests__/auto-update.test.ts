@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -23,6 +23,7 @@ function setup(response = 0, quitImpl?: () => void, stopImpl?: () => Promise<voi
   const updater: any = new EventEmitter()
   updater.checkForUpdates = vi.fn(() => Promise.resolve(null))
   updater.downloadUpdate = vi.fn(() => Promise.resolve([]))
+  updater.addQuitHandler = vi.fn()
   const order: string[] = []
   updater.quitAndInstall = vi.fn(() => { order.push('quitAndInstall'); quitImpl?.() })
   const stopBackend = vi.fn(stopImpl ?? (async () => { order.push('stopBackend') }))
@@ -35,6 +36,7 @@ function setup(response = 0, quitImpl?: () => void, stopImpl?: () => Promise<voi
   const sig = sign64(manifest, privateKey)
   const fetchBytes = vi.fn(async (url: string) => (url.endsWith('.sig') ? sig : manifest))
   const hashFile = vi.fn(async (_file: string) => 'HASH==')
+  const removeFile = vi.fn(async (_file: string) => {})
   const handle = setupAutoUpdate({
     autoUpdater: updater, dialog: dialog as any, stopBackend, logger, getMainWindow: () => null, relaunch,
     openExternal,
@@ -42,8 +44,9 @@ function setup(response = 0, quitImpl?: () => void, stopImpl?: () => Promise<voi
     platform: 'win32',
     fetchBytes,
     hashFile,
+    removeFile,
   })
-  return { updater, order, stopBackend, dialog, logger, handle, relaunch, openExternal, fetchBytes, hashFile }
+  return { updater, order, stopBackend, dialog, logger, handle, relaunch, openExternal, fetchBytes, hashFile, removeFile }
 }
 
 describe('setupAutoUpdate', () => {
@@ -66,20 +69,30 @@ describe('setupAutoUpdate', () => {
       const urls = fetchBytes.mock.calls.map((c) => c[0])
       expect(urls).toContain('https://github.com/BurakErdemci/gamachine/releases/download/v9.9.9/latest.yml')
       expect(urls).toContain('https://github.com/BurakErdemci/gamachine/releases/download/v9.9.9/latest.yml.sig')
-      expect(updater.autoInstallOnAppQuit).toBe(true)
+      expect(updater.autoInstallOnAppQuit).toBe(false)
       handle.dispose()
     })
 
-    it('arms install-on-quit only for the verified download, and holds it until the file hash matched', async () => {
+    it('never arms install-on-quit before the hash matched and the user chose "later"', async () => {
       const { updater, dialog, hashFile, handle } = setup(1)
       let release!: (h: string) => void
+      let answer!: (v: any) => void
       hashFile.mockImplementation(() => new Promise<string>((r) => { release = r }))
-      await setupDownload(updater)
+      dialog.showMessageBox.mockImplementation(() => new Promise((r) => { answer = r }) as any)
+      updater.emit('update-available', AVAILABLE)
+      await vi.waitFor(() => expect(updater.downloadUpdate).toHaveBeenCalled())
+      expect(updater.autoInstallOnAppQuit).toBe(false)
+      updater.emit('update-downloaded', INFO)
+      await vi.waitFor(() => expect(hashFile).toHaveBeenCalled())
       expect(updater.autoInstallOnAppQuit).toBe(false)
       release('HASH==')
-      await vi.waitFor(() => expect(dialog.showMessageBox).toHaveBeenCalledTimes(1))
-      expect(updater.autoInstallOnAppQuit).toBe(true)
+      await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
       expect(dialog.showMessageBox.mock.calls[0]![0].title).toBe('Güncelleme hazır')
+      expect(updater.autoInstallOnAppQuit).toBe(false)
+      expect(updater.addQuitHandler).not.toHaveBeenCalled()
+      answer({ response: 1 })
+      await vi.waitFor(() => expect(updater.autoInstallOnAppQuit).toBe(true))
+      expect(updater.addQuitHandler).toHaveBeenCalledTimes(1)
       handle.dispose()
     })
 
@@ -139,11 +152,13 @@ describe('setupAutoUpdate', () => {
     })
 
     it('a downloaded file that differs from the verified hash installs nothing', async () => {
-      const { updater, dialog, hashFile, stopBackend, handle } = setup(0)
+      const { updater, dialog, hashFile, stopBackend, removeFile, handle } = setup(0)
       hashFile.mockResolvedValue('OTHER==')
       await setupDownload(updater)
       await vi.waitFor(() => expect(dialog.showMessageBox).toHaveBeenCalledTimes(1))
       expect(dialog.showMessageBox.mock.calls[0]![0].title).toBe('Güncelleme doğrulanamadı')
+      expect(removeFile).toHaveBeenCalledWith(INFO.downloadedFile)
+      expect(updater.addQuitHandler).not.toHaveBeenCalled()
       expect(updater.autoInstallOnAppQuit).toBe(false)
       expect(updater.quitAndInstall).not.toHaveBeenCalled()
       expect(stopBackend).not.toHaveBeenCalled()
@@ -151,13 +166,25 @@ describe('setupAutoUpdate', () => {
     })
 
     it('a download for another version than the verified one installs nothing', async () => {
-      const { updater, dialog, handle } = setup(0)
+      const { updater, dialog, removeFile, handle } = setup(0)
       updater.emit('update-available', AVAILABLE)
       await vi.waitFor(() => expect(updater.downloadUpdate).toHaveBeenCalled())
       updater.emit('update-downloaded', { ...INFO, version: '10.0.0' })
       await vi.waitFor(() => expect(dialog.showMessageBox).toHaveBeenCalledTimes(1))
+      expect(removeFile).toHaveBeenCalledWith(INFO.downloadedFile)
       expect(dialog.showMessageBox.mock.calls[0]![0].title).toBe('Güncelleme doğrulanamadı')
       expect(updater.autoInstallOnAppQuit).toBe(false)
+      expect(updater.quitAndInstall).not.toHaveBeenCalled()
+      handle.dispose()
+    })
+
+    it('an unreadable downloaded file is treated as a mismatch', async () => {
+      const { updater, dialog, hashFile, removeFile, handle } = setup(0)
+      hashFile.mockRejectedValue(new Error('EACCES'))
+      await setupDownload(updater)
+      await vi.waitFor(() => expect(dialog.showMessageBox).toHaveBeenCalledTimes(1))
+      expect(dialog.showMessageBox.mock.calls[0]![0].title).toBe('Güncelleme doğrulanamadı')
+      expect(removeFile).toHaveBeenCalledWith(INFO.downloadedFile)
       expect(updater.quitAndInstall).not.toHaveBeenCalled()
       handle.dispose()
     })
@@ -229,16 +256,29 @@ describe('setupAutoUpdate', () => {
     await vi.waitFor(() => expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true))
     expect(dialog.showMessageBox).toHaveBeenCalledTimes(1)
     expect(order).toEqual(['stopBackend', 'quitAndInstall'])
+    expect(updater.autoInstallOnAppQuit).toBe(false)
+    expect(updater.addQuitHandler).not.toHaveBeenCalled()
     handle.dispose()
   })
 
-  it('"later" does not quit', async () => {
+  it('"later" does not quit and arms install-on-quit', async () => {
     const { updater, stopBackend, dialog, handle } = setup(1)
     await setupDownload(updater)
     await vi.waitFor(() => expect(dialog.showMessageBox).toHaveBeenCalledTimes(1))
-    await Promise.resolve()
+    await vi.waitFor(() => expect(updater.addQuitHandler).toHaveBeenCalledTimes(1))
+    expect(updater.autoInstallOnAppQuit).toBe(true)
     expect(stopBackend).not.toHaveBeenCalled()
     expect(updater.quitAndInstall).not.toHaveBeenCalled()
+    handle.dispose()
+  })
+
+  it('"later" stays disarmed when the library has no quit handler to register', async () => {
+    const { updater, dialog, logger, handle } = setup(1)
+    delete updater.addQuitHandler
+    await setupDownload(updater)
+    await vi.waitFor(() => expect(dialog.showMessageBox).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('çıkışta kurulum kaydedilemedi')))
+    expect(updater.autoInstallOnAppQuit).toBe(false)
     handle.dispose()
   })
 
@@ -414,23 +454,27 @@ describe('with the real electron-updater classes', () => {
     const handle = setupAutoUpdate({
       autoUpdater: updater, dialog: dialog as any, stopBackend, logger: { log() {}, error() {} }, getMainWindow: () => null,
       relaunch: vi.fn(), openExternal: vi.fn(), platform: kind === 'nsis' ? 'win32' : 'darwin',
+      stageNative: () => native.checkForUpdates(),
       publicKeys: [publicKey.export({ type: 'spki', format: 'pem' }).toString()], fetchBytes,
       hashFile: async (file) => { await opts.hashGate; return sha512(readFileSync(file)) },
     })
     return {
-      updater, quitHandlers, dialog, stopBackend, handle, realCheck, answer: (r: number) => answer!(r),
+      updater, quitHandlers, dialog, stopBackend, handle, realCheck, served, answer: (r: number) => answer!(r),
       offer: (version: string, content: string) => { served.content = content; latest = releaseInfo(version, sha512(content)) },
       dialogTitle: (n = 0) => (dialog.showMessageBox.mock.calls[n] as any)[0].title,
       installerCalls: () => updater.spawnLog.mock.calls.map((c: any[]) => ({ file: c[0], args: c[1] })),
     }
   }
 
-  it('NSIS, "later": the library registers its quit handler and installs on quit', async () => {
-    const r = await rig('nsis', { response: 1 })
+  it('NSIS, "later": no quit handler until the hash matched and "later" was chosen, then it installs the verified file on quit', async () => {
+    const r = await rig('nsis', { response: -1 })
     await r.realCheck()
     await vi.waitFor(() => expect(r.dialog.showMessageBox).toHaveBeenCalledTimes(1))
     expect(r.dialogTitle()).toBe('Güncelleme hazır')
-    expect(r.quitHandlers).toHaveLength(1)
+    expect(r.quitHandlers).toHaveLength(0)
+    expect(r.updater.autoInstallOnAppQuit).toBe(false)
+    r.answer(1)
+    await vi.waitFor(() => expect(r.quitHandlers).toHaveLength(1))
     expect(r.updater.autoInstallOnAppQuit).toBe(true)
     expect(r.installerCalls()).toEqual([])
     r.quitHandlers[0]!(0)
@@ -456,22 +500,52 @@ describe('with the real electron-updater classes', () => {
     await vi.waitFor(() => expect(r.dialog.showMessageBox).toHaveBeenCalledTimes(1))
     expect(r.dialogTitle()).toBe('Güncelleme doğrulanamadı')
     expect(r.updater.autoInstallOnAppQuit).toBe(false)
-    r.quitHandlers.forEach((h) => h(0))
+    expect(r.quitHandlers).toHaveLength(0)
+    expect(existsSync(r.updater.downloadedUpdateHelper.file)).toBe(false)
     expect(r.installerCalls()).toEqual([])
     expect(r.stopBackend).not.toHaveBeenCalled()
     r.handle.dispose()
+  })
+
+  it('NSIS: after a mismatch, a later verified download in flight cannot make quit install the old file', async () => {
+    for (const newerRelease of [true, false]) {
+      const r = await rig('nsis', { response: 1, content: 'tampered', signedAs: 'installer-v2' })
+      await r.realCheck()
+      await vi.waitFor(() => expect(r.dialog.showMessageBox).toHaveBeenCalledTimes(1))
+      expect(r.dialogTitle()).toBe('Güncelleme doğrulanamadı')
+      const stale = r.updater.downloadedUpdateHelper.file
+      let release!: () => void
+      r.updater.httpExecutor.download = async (_u: URL, dest: string) => {
+        await new Promise<void>((res) => { release = res })
+        writeFileSync(dest, r.served.content)
+      }
+      r.offer(newerRelease ? '3.0.0' : '2.0.0', newerRelease ? 'installer-v3' : 'installer-v2')
+      await r.realCheck()
+      await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+      expect(r.updater.autoInstallOnAppQuit).toBe(false)
+      r.quitHandlers.forEach((h) => h(0))
+      expect(r.installerCalls()).toEqual([])
+      expect(existsSync(stale) && readFileSync(stale, 'utf8') === 'tampered').toBe(false)
+      release()
+      await vi.waitFor(() => expect(r.dialog.showMessageBox).toHaveBeenCalledTimes(2))
+      expect(r.dialogTitle(1)).toBe('Güncelleme hazır')
+      expect(r.installerCalls()).toEqual([])
+      r.handle.dispose()
+    }
   })
 
   it('NSIS: quitting while the downloaded file is still being hashed installs nothing', async () => {
     let release!: () => void
     const r = await rig('nsis', { response: 1, hashGate: new Promise<void>((res) => { release = res }) })
     await r.realCheck()
-    await vi.waitFor(() => expect(r.quitHandlers).toHaveLength(1))
-    await vi.waitFor(() => expect(r.updater.autoInstallOnAppQuit).toBe(false))
-    r.quitHandlers[0]!(0)
-    expect(r.installerCalls()).toEqual([])
+    await vi.waitFor(() => expect(r.updater.downloadedUpdateHelper?.file).toBeTruthy())
+    await new Promise((res) => setTimeout(res, 20))
+    expect(r.quitHandlers).toHaveLength(0)
+    expect(r.updater.autoInstallOnAppQuit).toBe(false)
     release()
-    await vi.waitFor(() => expect(r.updater.autoInstallOnAppQuit).toBe(true))
+    await vi.waitFor(() => expect(r.quitHandlers).toHaveLength(1))
+    expect(r.installerCalls()).toEqual([])
+    expect(r.updater.autoInstallOnAppQuit).toBe(true)
     r.handle.dispose()
   })
 
@@ -489,12 +563,15 @@ describe('with the real electron-updater classes', () => {
     r.handle.dispose()
   })
 
-  it('macOS, "later": Squirrel is asked to stage the verified file while install-on-quit is armed', async () => {
-    const r = await rig('mac', { response: 1 })
+  it('macOS, "later": nothing is staged before the hash matched and "later" was chosen', async () => {
+    const r = await rig('mac', { response: -1 })
     await r.realCheck()
     await vi.waitFor(() => expect(r.dialog.showMessageBox).toHaveBeenCalledTimes(1))
     expect(r.dialogTitle()).toBe('Güncelleme hazır')
-    expect(native.checkForUpdates).toHaveBeenCalledTimes(1)
+    expect(native.checkForUpdates).not.toHaveBeenCalled()
+    expect(r.updater.autoInstallOnAppQuit).toBe(false)
+    r.answer(1)
+    await vi.waitFor(() => expect(native.checkForUpdates).toHaveBeenCalledTimes(1))
     expect(r.updater.autoInstallOnAppQuit).toBe(true)
     expect(native.quitAndInstall).not.toHaveBeenCalled()
     r.updater.closeServerIfExists()
@@ -506,6 +583,7 @@ describe('with the real electron-updater classes', () => {
     await r.realCheck()
     await vi.waitFor(() => expect(r.stopBackend).toHaveBeenCalledTimes(1))
     await vi.waitFor(() => expect(native.listenerCount('update-downloaded')).toBeGreaterThan(1))
+    expect(native.checkForUpdates).toHaveBeenCalledTimes(1)
     expect(native.quitAndInstall).not.toHaveBeenCalled()
     native.emit('update-downloaded')
     expect(native.quitAndInstall).toHaveBeenCalledTimes(1)
@@ -520,6 +598,7 @@ describe('with the real electron-updater classes', () => {
     expect(r.dialogTitle()).toBe('Güncelleme doğrulanamadı')
     expect(r.updater.autoInstallOnAppQuit).toBe(false)
     expect(r.stopBackend).not.toHaveBeenCalled()
+    expect(native.checkForUpdates).not.toHaveBeenCalled()
     expect(native.quitAndInstall).not.toHaveBeenCalled()
     r.updater.closeServerIfExists()
     r.handle.dispose()
