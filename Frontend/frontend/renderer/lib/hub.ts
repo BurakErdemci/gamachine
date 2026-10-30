@@ -172,5 +172,8 @@ export async function cancelRun(): Promise<void> {
 /** Leaves a finished run (done, failed, cancelled); a run in progress stays. */
 export const clearRun = () => { if (run.state !== 'creating') setRun({ state: 'idle' }); };
 
+/** Leaves `finished` only if it is still the run in the store; a late answer must not consume a newer run. */
+export const clearRunIf = (finished: HubRun) => { if (run === finished) clearRun(); };
+
 /** Test hook: forgets any run and its listener. */
 export const resetHubStore = () => { dropProgress(); setRun({ state: 'idle' }); };

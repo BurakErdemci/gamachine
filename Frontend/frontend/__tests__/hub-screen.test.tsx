@@ -15,7 +15,9 @@ vi.mock('axios', () => ({ default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), 
 import axios from 'axios'
 import { WorkspaceScreen, UNITY_DOWNLOAD_URL } from '../renderer/components/home/WorkspaceScreen'
 import { LangContext, ceviriUygula, translations } from '../renderer/lib/i18n'
-import { nameProblem, templateName, joinTarget, clock, resetHubStore } from '../renderer/lib/hub'
+import { renderHook } from '@testing-library/react'
+import { useFileSystem } from '../renderer/hooks/home/useFileSystem'
+import { nameProblem, templateName, joinTarget, clock, resetHubStore, getRun } from '../renderer/lib/hub'
 
 const en = translations.en
 const EDITORS = [
@@ -44,7 +46,7 @@ const ipc = async (channel: string, arg: any) => {
 
 const props = () => ({
   api: 'http://backend', user: { id: 7, name: 'Burak', sessionToken: 'tok' }, userName: 'Burak',
-  onOpenFolder: vi.fn(async () => null as string | null), onSelectWorkspace: vi.fn(async () => {}),
+  onOpenFolder: vi.fn(async () => null as string | null), onSelectWorkspace: vi.fn(async () => true),
   onLogout: vi.fn(), showToast: vi.fn(),
 })
 const view = (p = props()) => {
@@ -320,6 +322,117 @@ describe('hub: the run outlives the screen', () => {
     fireEvent.click(screen.getByTestId('hub-create'))
     await screen.findByTestId('hub-result-failed')
     expect(mocks.listeners.has('hub-create-progress')).toBe(false)
+  })
+})
+
+describe('hub: consuming a finished run', () => {
+  const finishedRun = async (p: ReturnType<typeof props>) => {
+    const finish = pending()
+    view(p)
+    await fillForm()
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-progress')
+    await finish({ ok: true, path: '/Users/me/Games/Night Run' })
+    await screen.findByTestId('hub-result-done')
+  }
+
+  it('Open here keeps the finished run when the workspace did not open', async () => {
+    const p = props()
+    p.onSelectWorkspace = vi.fn(async () => false)
+    await finishedRun(p)
+    fireEvent.click(screen.getByTestId('hub-open-created'))
+    await waitFor(() => expect(p.onSelectWorkspace).toHaveBeenCalledTimes(1))
+    await act(async () => {})
+    cleanup()
+    view(p)
+    expect(screen.getByTestId('hub-result-done')).toBeTruthy()
+  })
+
+  it('a late Open here answer does not consume a newer run', async () => {
+    const p = props()
+    let answer!: (v: boolean) => void
+    p.onSelectWorkspace = vi.fn(() => new Promise<boolean>(r => { answer = r }))
+    await finishedRun(p)
+    fireEvent.click(screen.getByTestId('hub-open-created'))
+    await waitFor(() => expect(p.onSelectWorkspace).toHaveBeenCalledTimes(1))
+    // Another run takes the store before the answer lands.
+    fireEvent.click(screen.getByText(en['hub.another']))
+    const finishSecond = pending()
+    await fillForm('Second')
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-progress')
+    await finishSecond({ ok: true, path: '/Users/me/Games/Second' })
+    await screen.findByTestId('hub-result-done')
+    await act(async () => { answer(true) })
+    expect(getRun().state).toBe('done')
+    expect((getRun() as any).path).toBe('/Users/me/Games/Second')
+  })
+
+  it('a late launch answer does not consume a newer run', async () => {
+    const p = props()
+    let answer!: (v: unknown) => void
+    await finishedRun(p)
+    mocks.invoke.mockImplementation(async (channel: string, arg: any) => (
+      channel === 'hub-open-project' ? new Promise(r => { answer = r }) : ipc(channel, arg)))
+    fireEvent.click(screen.getByTestId('hub-launch-created'))
+    await waitFor(() => expect(answer).toBeTypeOf('function'))
+    fireEvent.click(screen.getByText(en['hub.another']))
+    const finishSecond = pending()
+    await fillForm('Second')
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-progress')
+    await finishSecond({ ok: true, path: '/Users/me/Games/Night Run' })
+    await screen.findByTestId('hub-result-done')
+    const second = getRun()
+    await act(async () => { answer({ opened: true }) })
+    expect(getRun()).toBe(second)
+  })
+
+  it('logging out drops a finished run; a run still creating stays', async () => {
+    const p = props()
+    await finishedRun(p)
+    fireEvent.click(screen.getByText(en['welcome.logout']))
+    expect(p.onLogout).toHaveBeenCalledTimes(1)
+    expect(getRun().state).toBe('idle')
+    cleanup()
+    const finish = pending()
+    view(p)
+    await fillForm('Third')
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-progress')
+    fireEvent.click(screen.getByText(en['welcome.logout']))
+    expect(getRun().state).toBe('creating')
+    await finish({ ok: true, path: '/Users/me/Games/Third' })
+  })
+})
+
+describe('useFileSystem.selectWorkspace result', () => {
+  const mount = () => renderHook(() => useFileSystem('', null, () => {}))
+
+  it('is true for a normal selection, false for a missing folder', async () => {
+    mocks.invoke.mockImplementation(async (channel: string, arg: any) => (
+      channel === 'path-exists' ? arg === '/here' : channel === 'read-directory' ? [] : null))
+    const { result } = mount()
+    let ok: boolean | undefined, missing: boolean | undefined
+    await act(async () => { ok = await result.current.selectWorkspace('/here') })
+    await act(async () => { missing = await result.current.selectWorkspace('/gone') })
+    expect(ok).toBe(true)
+    expect(missing).toBe(false)
+  })
+
+  it('is false for a selection a newer one superseded', async () => {
+    let release!: (v: boolean) => void
+    mocks.invoke.mockImplementation((channel: string, arg: any) => {
+      if (channel === 'path-exists') return arg === '/first' ? new Promise(r => { release = r }) : Promise.resolve(true)
+      return Promise.resolve(channel === 'read-directory' ? [] : null)
+    })
+    const { result } = mount()
+    let first!: Promise<boolean>
+    act(() => { first = result.current.selectWorkspace('/first') })
+    await act(async () => { await result.current.selectWorkspace('/second') })
+    let got: boolean | undefined
+    await act(async () => { release(true); got = await first })
+    expect(got).toBe(false)
   })
 })
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import { useLang } from '../../../lib/i18n';
 import {
-  cancelRun, clearRun, getRun, launchProject, listEditors, listTemplates, nameProblem, pickParentDir, sortTemplates,
+  cancelRun, clearRun, clearRunIf, getRun, launchProject, listEditors, listTemplates, nameProblem, pickParentDir, sortTemplates,
   startCreate, subscribeRun, type HubEditor, type HubRun, type HubTemplate, type NameProblem,
 } from '../../../lib/hub';
 import type { RecentWorkspace } from '../../../hooks/home/useRecentWorkspaces';
@@ -18,7 +18,7 @@ type ToastKind = 'success' | 'error' | 'warning' | 'info';
 
 export interface HubDeps {
   recent: RecentWorkspace[];
-  onSelectWorkspace: (hostPath: string) => Promise<void> | void;
+  onSelectWorkspace: (hostPath: string) => Promise<boolean | void> | boolean | void;
   showToast: (message: string, type: ToastKind) => void;
 }
 
@@ -99,12 +99,18 @@ export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
   /** A fresh form for another project. */
   const another = () => { clearRun(); setName(''); setNameTouched(false); setTried(false); };
 
-  // An opened run is consumed: a later mount must not offer the same finished project again.
-  const openCreated = async () => { if (run.state === 'done') { await onSelectWorkspace(run.path); clearRun(); } };
+  // An opened run is consumed, but only when the workspace really opened (false = refused or superseded)
+  // and only the run the press was for: the store may hold a newer one by the time the answer lands.
+  const openCreated = async () => {
+    if (run.state !== 'done') return;
+    const started = run;
+    if ((await onSelectWorkspace(started.path)) === true) clearRunIf(started);
+  };
 
   const launch = async (path: string, v?: string) => {
+    const started = run;
     const res = await launchProject(path, v);
-    if (res.opened) { showToast(t('hub.launched'), 'success'); if (run.state === 'done' && run.path === path) clearRun(); }
+    if (res.opened) { showToast(t('hub.launched'), 'success'); if (started.state === 'done' && started.path === path) clearRunIf(started); }
     else showToast(t('hub.launchFailed', { error: res.error || t('hub.failedUnknown') }), 'error');
   };
 

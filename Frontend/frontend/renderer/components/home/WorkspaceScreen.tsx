@@ -11,6 +11,7 @@ import { GamachineFigure } from './GamachineMascot';
 import { APP_VERSION } from './settings/SettingsPages';
 import { HubPanel } from './hub/HubPanel';
 import { useHub } from './hub/useHub';
+import { clearRun } from '../../lib/hub';
 
 type ToastKind = 'success' | 'error' | 'warning' | 'info';
 
@@ -20,7 +21,7 @@ export interface WorkspaceScreenProps {
   userName: string;
   /** Native folder dialog (optionally preselected); opens the choice and returns it. */
   onOpenFolder: (defaultPath?: string) => Promise<string | null>;
-  onSelectWorkspace: (hostPath: string) => Promise<void> | void;
+  onSelectWorkspace: (hostPath: string) => Promise<boolean | void> | boolean | void;
   onLogout: () => void;
   showToast: (message: string, type: ToastKind) => void;
   /** The guide on this screen (home.tsx passes the same GuideScreen / GuideTour the project uses). */
@@ -368,7 +369,7 @@ export const WorkspaceScreen = ({
               <Ic><circle cx="10" cy="10" r="7" /><path d="M7.9 8a2.2 2.2 0 114.2.9c-.5 1-2.1 1.3-2.1 2.7" /><path d="M10 14.2v.1" /></Ic>
             </button>
           )}
-          <button type="button" className="wl-foot-btn wl-logout" onClick={onLogout}>
+          <button type="button" className="wl-foot-btn wl-logout" onClick={() => { clearRun(); onLogout(); }}>
             <Ic><path d="M8 4.5H4.5v11H8M12 6.5L15.5 10 12 13.5M15.5 10H8" /></Ic><span>{t('welcome.logout')}</span>
           </button>
         </footer>
