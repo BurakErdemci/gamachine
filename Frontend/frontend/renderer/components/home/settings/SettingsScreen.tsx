@@ -72,6 +72,7 @@ const NAV_ICON: Record<SettingsPage, React.ReactNode> = {
   unity: <><path d="M10 2.5l6.5 3.75v7.5L10 17.5l-6.5-3.75v-7.5z" /><path d="M10 10l6.5-3.75M10 10v7.5M10 10L3.5 6.25" /></>,
   onay: <><path d="M10 2.8l5.6 2.2v4.4c0 3.6-2.4 6.2-5.6 7.6-3.2-1.4-5.6-4-5.6-7.6V5z" /><path d="M7.6 10l1.7 1.7 3.2-3.4" /></>,
   bilgisayar: <><rect x="2.5" y="3.5" width="15" height="10" rx="1.2" /><path d="M7.5 16.5h5M10 13.5v3" /><path d="M8.6 6.6l3.6 2.2-1.6.4-.7 1.5z" /></>,
+  tarayici: <><circle cx="10" cy="10" r="7" /><path d="M3 10h14M10 3c2 2 3 4.5 3 7s-1 5-3 7c-2-2-3-4.5-3-7s1-5 3-7z" /></>,
   ajan: <><rect x="4.5" y="2.5" width="11" height="15" rx="1.5" /><path d="M7.5 7h5M7.5 10h5M7.5 13h3" /></>,
   uzak: <><rect x="6" y="2.5" width="8" height="15" rx="1.6" /><path d="M9 15h2" /></>,
   hesap: <><circle cx="10" cy="7" r="3" /><path d="M4 17c.8-3.2 3.3-5 6-5s5.2 1.8 6 5" /></>,
@@ -87,14 +88,16 @@ const SEARCH_KEYS: Record<SettingsPage, TKey[]> = {
   gorunum: ['set.nav.gorunum', 'settings.appearance.theme', 'settings.appearance.readingFont', 'settings.appearance.codeFont', 'settings.appearance.textSize', 'settings.appearance.intro'],
   unity: ['set.unity.conn', 'set.unity.trouble'],
   onay: ['set.nav.onay', 'set.mode.stepTitle', 'set.mode.balancedTitle', 'set.mode.autoTitle'],
-  bilgisayar: ['set.nav.bilgisayar', 'cu.set.master', 'cu.set.ax', 'cu.set.screen', 'cu.set.driver', 'cu.set.apps', 'bp.set.master'],
+  bilgisayar: ['set.nav.bilgisayar', 'cu.set.master', 'cu.set.ax', 'cu.set.screen', 'cu.set.driver', 'cu.set.apps'],
+  tarayici: ['set.nav.tarayici', 'bp.set.master'],
   ajan: ['set.nav.ajan', 'set.ajan.base', 'set.ajan.addendum'],
   uzak: ['set.nav.uzak', 'set.uzak.phones', 'set.uzak.pairNew', 'remote.relay', 'remote.keepAwake', 'remote.forget'],
   hesap: ['set.nav.hesap', 'set.hesap.logout', 'set.hesap.version', 'set.hesap.profile', 'set.hesap.reset'],
 };
 const EXTRA_TERMS: Partial<Record<SettingsPage, string[]>> = {
   ajan: ['agent', 'guide', 'kılavuz', 'brief', 'prompt'],
-  bilgisayar: ['computer use', 'mac', 'macos', 'cua', 'tarayıcı', 'tarayici', 'browser'],
+  bilgisayar: ['computer use', 'mac', 'macos', 'cua'],
+  tarayici: ['tarayıcı', 'tarayici', 'browser', 'çerez', 'cerez', 'cookie', 'oturum', 'giriş', 'session'],
   unity: ['unity', 'mcp'], modeller: ['api', 'claude', 'codex', 'antigravity', 'ollama', 'openrouter'], uzak: ['qr', 'relay'],
 };
 
@@ -242,7 +245,8 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
               projectName={props.unityProjectName} saved={saved} />
           )}
           {page === 'onay' && <ApprovalPage mode={props.approvalMode} onChange={props.onApprovalModeChange} saved={saved} />}
-          {page === 'bilgisayar' && <><ComputerUsePage saved={saved} showToast={props.showToast} /><BrowserUsePage saved={saved} showToast={props.showToast} /></>}
+          {page === 'bilgisayar' && <ComputerUsePage saved={saved} showToast={props.showToast} />}
+          {page === 'tarayici' && <BrowserUsePage saved={saved} showToast={props.showToast} />}
           {page === 'ajan' && <AgentGuidePage lang={lang} API={props.API} http={props.http} token={user?.sessionToken} saved={saved} />}
           {page === 'uzak' && (
             <>

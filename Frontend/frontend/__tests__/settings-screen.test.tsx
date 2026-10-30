@@ -64,7 +64,7 @@ describe('settings screen · navigation', () => {
     expect(heading()).toBe(cevir('set.nav.genel'))
     const names: Record<string, string> = {
       modeller: cevir('set.nav.modeller'), gorunum: cevir('set.nav.gorunum'), unity: 'Unity',
-      onay: cevir('set.nav.onay'), bilgisayar: cevir('set.nav.bilgisayar'), ajan: cevir('set.nav.ajan'), uzak: cevir('set.nav.uzak'), genel: cevir('set.nav.genel'),
+      onay: cevir('set.nav.onay'), bilgisayar: cevir('set.nav.bilgisayar'), tarayici: cevir('set.nav.tarayici'), ajan: cevir('set.nav.ajan'), uzak: cevir('set.nav.uzak'), genel: cevir('set.nav.genel'),
     }
     for (const [page, label] of Object.entries(names)) {
       nav(label)
@@ -75,8 +75,9 @@ describe('settings screen · navigation', () => {
     // Hesap sits in the rail foot (the user row), not in the list.
     fireEvent.click(document.querySelector('.set-me') as HTMLElement)
     expect(heading()).toBe(cevir('set.nav.hesap'))
-    expect(SETTINGS_PAGES).toHaveLength(9)
+    expect(SETTINGS_PAGES).toHaveLength(10)
     expect(SETTINGS_PAGES.indexOf('bilgisayar')).toBe(SETTINGS_PAGES.indexOf('onay') + 1)
+    expect(SETTINGS_PAGES.indexOf('tarayici')).toBe(SETTINGS_PAGES.indexOf('bilgisayar') + 1)
   })
 
   it('a controlled page follows the prop and reports clicks', () => {
