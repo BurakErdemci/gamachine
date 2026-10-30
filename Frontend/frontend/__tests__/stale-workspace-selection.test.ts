@@ -63,7 +63,7 @@ describe('stale-workspace-selection', () => {
     })
 
     const { result } = mount()
-    let seciliyor!: Promise<void>
+    let seciliyor!: Promise<boolean>
     await act(async () => {
       seciliyor = result.current.selectWorkspace('/workspace')
       await Promise.resolve()

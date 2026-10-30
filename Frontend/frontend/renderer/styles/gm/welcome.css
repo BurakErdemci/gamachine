@@ -4,6 +4,9 @@
    .welcome instead of :root; `.wl-live` and the Salon theme are gone; `.is-drag` is the dragover
    state (the mockup had no live drop). Colours come only from tokens.css roles. */
 
+/* The mini Unity Hub that fills the right side (components/home/hub). */
+@import './hub.css';
+
 /* ======================= tokens ======================= */
 :root {
   --mascot-full: none;                       /* welcome: full mascot (block) or the head mark */
