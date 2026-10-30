@@ -96,6 +96,12 @@ def test_disabled_and_halt_precedence(env, halted):
     assert activity.snapshot()["active"] is False
 
 
+def test_a_failing_chat_lookup_halts_the_step(env):
+    env.db.get_conversation_owner.side_effect = RuntimeError("db down")
+    assert heartbeat(env).json() == {"stop": "halted"}
+    assert activity.snapshot()["active"] is False
+
+
 @pytest.mark.parametrize("cid", [None, 7, True, "1"])
 def test_unverified_owner_cannot_create_activity(env, cid):
     assert heartbeat(env, {"conversation_id": cid, "params": PARAMS}).json() == {"stop": None}

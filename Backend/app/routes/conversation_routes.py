@@ -2970,10 +2970,7 @@ Max 300 kelime. Türkçe yaz.
                   or (claimed is None and bool(_computer_halted)))
         if not halted and type(claimed) is int:
             # An approval granted before Stop can arrive after the chat was deleted; nothing may run for it.
-            try:
-                halted = db.get_conversation_owner(claimed) is None
-            except Exception:
-                pass
+            halted = _names_missing_chat(claimed, fail_closed=True)
         enabled = computer_settings.enabled(db)
         if enabled and not halted and body.get("check") is not True:
             computer_activity.record(None if owner is _UNKNOWN_OWNER else owner,
