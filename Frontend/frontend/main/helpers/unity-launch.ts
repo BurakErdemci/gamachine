@@ -9,8 +9,13 @@ export interface LaunchDeps {
     {
       unref: () => void
       on: (event: 'error', listener: (err: Error) => void) => unknown
-      once: (event: 'spawn', listener: () => void) => unknown
+      once: (event: 'spawn' | 'exit', listener: (code?: number | null) => void) => unknown
     }
+}
+
+// <...>/Unity.app/Contents/MacOS/Unity -> <...>/Unity.app, or null when the path is not inside a bundle.
+export function bundleOf(editorPath: string): string | null {
+  return /^(.+\.app)\/Contents\/MacOS\/[^/]+$/.exec(editorPath)?.[1] ?? null
 }
 
 export async function openProject(
@@ -24,10 +29,22 @@ export async function openProject(
   const editor = listEditors(deps.editors).editors.find(e => e.version === version)
   if (!editor) return { opened: false, error: `Unity ${version} is not installed.` }
   try {
-    const child = deps.spawn(editor.path, ['-projectPath', opts.path], { detached: true, stdio: 'ignore' })
+    // macOS: a direct child stays in Gamachine's responsibility group, so Dock keeps listing Gamachine after quit; open hands it to LaunchServices.
+    const bundle = deps.editors.platform === 'darwin' ? bundleOf(editor.path) : null
+    const child = bundle
+      ? deps.spawn('/usr/bin/open', ['-n', '-a', bundle, '--args', '-projectPath', opts.path], { detached: true, stdio: 'ignore' })
+      : deps.spawn(editor.path, ['-projectPath', opts.path], { detached: true, stdio: 'ignore' })
     return await new Promise(resolve => {
       // EACCES/ENOENT arrive as an async 'error'; the listener stays so a late one cannot crash main.
       child.on('error', (err: Error) => resolve({ opened: false, error: `Could not start Unity: ${err?.message || err}` }))
+      if (bundle) {
+        // open exits right after handing the app to LaunchServices; non-zero means it could not.
+        child.once('spawn', () => child.unref())
+        child.once('exit', code => resolve(code === 0
+          ? { opened: true }
+          : { opened: false, error: `Could not start Unity: open exited with code ${code}` }))
+        return
+      }
       child.once('spawn', () => {
         child.unref()
         resolve({ opened: true })
