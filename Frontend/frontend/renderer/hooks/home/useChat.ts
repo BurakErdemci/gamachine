@@ -874,6 +874,9 @@ export const useChat = (
       patchConv(created, r => ({ loading: true, queue: [...waiting, ...r.queue] }));
     }
     const targetConvId: number = requested || created!;
+    // A user message hands the chat's browser tab back to the agent (a queued one does the
+    // same when it is drained, since the drain sends it through here).
+    if (origin === 'user') void (window as any).ipc?.invoke?.('browser-live', { op: 'release', conversationId: targetConvId });
     // Yeni tur: bu sohbetin önceki turundan kalmış bekleyen onay/soru ve
     // kuyruklarını temizle - yalnız bu sohbetin; başka sohbetin kartı onun.
     patchConv(targetConvId, () => ({
