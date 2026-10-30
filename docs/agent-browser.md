@@ -57,6 +57,66 @@ no Playwright, no browser extension.
   that names the host, and why clearing browsing data is one click away. Remote devices can
   only `status`, `halt` and `answer-card`; they cannot open, navigate or take over a tab.
 
+## Several tabs per chat (v3, 30 Oct 2026)
+
+Supersedes "One tab per chat" above: a chat now owns several tabs, but exactly one of them is
+the **agent tab**, and it is the only page the agent can reach.
+
+- **Agent-tab rule (safety property).** `BrowserHost.handle` and `userControlReply` resolve a
+  command only through `ensureAgentTab(conversation_id)` / `agentTab(conversation_id)`: the
+  tab flagged `agent` for that chat. No field of a command (a `tab_id` smuggled into the body
+  or its args included) selects a tab, and no code path from the command server reads a user
+  tab. Tabs the user opens (`open`, Ctrl/Cmd+T, a link opened in a new tab, reopen) are
+  `agent: false` and are navigated, closed or selected only by renderer ops that name their
+  `tabId` (checked to belong to that chat). `take-over`, `release`, user-input take-over, a
+  `press` echo and `halt` also concern the agent tab only: typing in a user tab never takes the
+  agent tab over, and Stop leaves the user's own tabs loading.
+- **Agent tab lifecycle.** Created lazily by the first agent command for the chat, selected
+  only when the chat had no selected tab (it never steals the tab the user is looking at).
+  Closing it (Ctrl/Cmd+W, `close-tab`) settles a waiting navigation as `halted`; the next agent
+  command makes a fresh blank one. A reopened tab is always a user tab.
+- **Selection and visibility.** `select` chooses the tab a chat shows; only the shown chat's
+  selected tab is visible. Closing a tab selects its left neighbour, else the right one.
+  Per chat at most 10 tabs (`too_many_tabs`); globally 8 views: beyond that the least recently
+  used tab of a hidden chat goes, user tabs included, but never a tab under user control and
+  never one with an agent command in flight (the host has no other notion of "running").
+- **Same filters everywhere.** Navigation, redirect and frame checks, the request gate, the
+  connected-IP check and `navigationAllowed` (open, navigate, reopen, link-in-new-tab) apply to
+  every tab. `clear-browsing-data` closes every tab of every chat, empties the reopen stacks and
+  the history, then clears the session. Deleting a chat (`close`) closes all its tabs.
+- **Halt and echoes.** Every halt bumps a counter; a navigate that awaited its hostname check
+  returns `halted` without loading when a halt arrived meanwhile (also a global one, and a
+  tab closed meanwhile returns `tab_closed`). The keys of a `press` are expected back as exact
+  events (type and key name per channel, one each, one second); any other key or mouse event, or a
+  repeat of the same key, is the user and takes the agent tab over.
+- **History** (`main/helpers/browser-history.ts`): http(s) pages only, hash removed, pages whose
+  query carries a token-like parameter or credentials not kept, at most 500 entries, address,
+  title, icon address, last visit and count, no page content. File
+  `path.join(app.getPath('userData'), 'browser-history.json')`, written after 2 s of quiet and
+  on shutdown through a temp file and rename (retried on Windows `EPERM`/`EBUSY`, direct write
+  as the last resort); `clear-browsing-data` empties it and writes at once. Visits of the agent
+  tab are remembered like the user's.
+- **IPC additions** (`browser-live`): `open {conversationId, url?}` (new user tab, selected),
+  `select`, `close-tab`, `reopen-tab`, `history {}` -> `{entries}`; `navigate`, `back`,
+  `forward`, `reload` accept an optional `tabId` (default: the selected tab). Live payloads
+  add `tabs[{id,url,title,loading,favicon,agent}]` and `activeTabId`; the top-level
+  `url/title/loading` are the selected tab's and `userControl` is the agent tab's.
+- **Keyboard.** Inside a page the host claims the keys in `before-input-event` (`preventDefault`);
+  in the panel chrome the renderer does. Ctrl on Windows and Linux, Cmd on macOS (the other
+  modifier is ignored): T new tab, Shift+T reopen the last closed one, W close, 1-9 select
+  (9 = last). Copy, paste, cut, select all and undo are never claimed. A claimed key is not
+  counted as the user taking over.
+- **Panel.** Tab strip with `+`, the agent tab carries an "Ajan" mark and an accent top edge;
+  one toolbar row (back, forward, reload, address field with the take-over badge, Stop whose
+  explanation is its tooltip); the page-title row and the note line are gone. While typing,
+  `browserSuggest.suggest` lists "search the web" or "open address" first and matching
+  history after it (arrows, Enter, Esc, click); the list is a `role=listbox`, so the native
+  view hides while it is open. A tab with no page yet (and the idle panel) shows "Önerilen",
+  tiles of the most visited sites, and keeps the native view hidden.
+
+Not in this round: ad blocker, extensions, downloads, full screen, quick-access bar, find in
+page, zoom, history and site management pages.
+
 ## Non-negotiables
 
 1. The view never loads `preload.js` and gets `nodeIntegration: false`,

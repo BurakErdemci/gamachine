@@ -19,7 +19,8 @@ function push(payload: unknown) {
   act(() => { listeners.get('browser-live')?.(payload) })
 }
 const live = (over: Record<string, unknown> = {}) =>
-  ({ active: true, conversationId: 3, url: 'https://itch.io/game-assets', title: 'Free assets', loading: false, ...over })
+  ({ active: true, conversationId: 3, url: 'https://itch.io/game-assets', title: 'Free assets', loading: false,
+    tabs: [{ id: 1, url: 'https://itch.io/game-assets', title: 'Free assets', loading: false, favicon: '', agent: true }], activeTabId: 1, ...over })
 const props = (over: Record<string, unknown> = {}) =>
   ({ running: true, onStop: vi.fn(async () => {}), onNeedChat: vi.fn(async () => 9), ...over }) as any
 const calls = (op: string) => invoke.mock.calls.filter(c => c[0] === 'browser-live' && c[1]?.op === op).map(c => c[1])
@@ -128,7 +129,9 @@ describe('BrowserPanel', () => {
     expect(address.value).toBe('itch.io')
     expect(address.title).toBe('https://itch.io/game-assets')
     expect(address.readOnly).toBe(false)
-    expect(screen.getByText('Free assets')).toBeTruthy()
+    // The title lives in the tab strip; there is no title row and no loading line any more.
+    expect(screen.getByRole('tab', { name: /Free assets/ })).toBeTruthy()
+    expect(document.querySelector('.bp-title')).toBeNull()
     expect(screen.getByText(tr['bp.loading'])).toBeTruthy()
     push(live({ loading: false, url: 'https://itch.io/next' }))
     expect(address.title).toBe('https://itch.io/next')
@@ -259,9 +262,12 @@ describe('BrowserPanel', () => {
     render(<BrowserPanel visible conversationId={3} {...props()} />)
     await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
     push(live())
-    expect(screen.queryByText(tr['bp.userControl'])).toBeNull()
+    expect(screen.queryByText(tr['bp.userControlShort'])).toBeNull()
     push(live({ userControl: true }))
-    expect(screen.getByText(tr['bp.userControl'])).toBeTruthy()
+    // The badge sits in the address bar; the long sentence is its tooltip.
+    const badge = screen.getByText(tr['bp.userControlShort'])
+    expect(badge.closest('.bp-omni')).toBeTruthy()
+    expect(badge.getAttribute('title')).toBe(tr['bp.userControl'])
     expect(screen.queryByText(/Devral|Ajana bırak/)).toBeNull()
     expect(screen.queryByRole('button', { name: /take over|release/i })).toBeNull()
     expect(calls('take-over')).toHaveLength(0)
@@ -307,6 +313,18 @@ describe('BrowserPanel', () => {
     const { unmount } = render(<BrowserPanel visible conversationId={3} {...props()} />)
     unmount()
     expect(calls('visible').at(-1)).toEqual({ op: 'visible', conversationId: 3, visible: false })
+  })
+})
+
+describe('BrowserPanel compact chrome', () => {
+  it('has no page-title row or note paragraph; the Stop explanation is its tooltip', async () => {
+    const { container } = render(<BrowserPanel visible conversationId={3} {...props()} />)
+    await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
+    push(live())
+    expect(container.querySelector('.bp-title')).toBeNull()
+    expect(container.querySelector('.bp-note')).toBeNull()
+    expect(screen.queryByText(tr['bp.stopNote'])).toBeNull()
+    expect(screen.getByRole('button', { name: new RegExp(tr['bp.stop']) }).getAttribute('title')).toBe(tr['bp.stopNote'])
   })
 })
 

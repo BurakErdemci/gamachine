@@ -56,6 +56,7 @@ import { reopenMain } from './helpers/reopen-main'
 import { createProfileReset } from './helpers/profile-reset'
 import { collectMtimes } from './helpers/stat-mtimes'
 import { BrowserHost } from './helpers/browser-host'
+import { BrowserHistory } from './helpers/browser-history'
 import { startCommandServer, type CommandServer } from './helpers/browser-server'
 
 const useDockerBackend = process.env.USE_DOCKER_BACKEND === 'true'
@@ -930,6 +931,7 @@ const browserHost = new BrowserHost({
   fromPartition: partition => session.fromPartition(partition),
   http: axios, baseUrl: getBackendBaseUrl, appToken: localAppToken, uiSecret,
   onHalt: conversationId => browserServer?.cancelPending(conversationId ?? undefined),
+  history: new BrowserHistory(path.join(app.getPath('userData'), 'browser-history.json')),
   log: (...args) => console.log(...args),
 })
 handleSecure('browser-live', (_event, req: unknown) => browserHost.invoke(req))
