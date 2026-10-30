@@ -2372,6 +2372,14 @@ Max 300 kelime. Türkçe yaz.
         _check_token(x_session_token)
         return await stop_chat(conversation_id)
 
+    def _is_ordinary_chat(conversation_id: int) -> bool | None:
+        """True for a chat with a row that is not a side chat; None when the lookup fails."""
+        try:
+            return (db.get_conversation_owner(conversation_id) is not None
+                    and _side_main_of(conversation_id) is None)
+        except Exception:
+            return None
+
     async def stop_chat(conversation_id: int) -> dict:
         """The desktop Stop, shared with the phone's `stop` (remote bridge)."""
         turn_events.note_stop(conversation_id)
@@ -2402,10 +2410,8 @@ Max 300 kelime. Türkçe yaz.
             # hit the main chat's. A chat with no row (a swept side chat, a
             # deleted one) had its own cards purged already: its Stop must
             # not reach anyone's unowned cards either (Codex sideaudit).
-            try:
-                ordinary = (db.get_conversation_owner(conversation_id) is not None
-                            and _side_main_of(conversation_id) is None)
-            except Exception:
+            ordinary = _is_ordinary_chat(conversation_id)
+            if ordinary is None:
                 # Unknown: keep the Stop rule that held before side chats,
                 # or an ordinary chat's own pending card outlives its Stop.
                 logger.warning("[chat-stop] chat lookup failed for %s", conversation_id)
@@ -2902,7 +2908,7 @@ Max 300 kelime. Türkçe yaz.
                   or (type(claimed) is int and claimed in _computer_halted)
                   or (claimed is None and bool(_computer_halted)))
         enabled = computer_settings.enabled(db)
-        if enabled and not halted:
+        if enabled and not halted and body.get("check") is not True:
             computer_activity.record(None if owner is _UNKNOWN_OWNER else owner,
                                      "computer_run_steps", params, "allow")
         return {"stop": "halted" if halted else "disabled" if not enabled else None}
@@ -2980,7 +2986,9 @@ Max 300 kelime. Türkçe yaz.
 
     async def halt_computer(conversation_id: int) -> dict:
         """The desktop's computer-use halt, shared with the phone's `halt_computer` (remote bridge)."""
-        _computer_halted.add(conversation_id)
+        # Only an ordinary chat can be un-halted by its next user message; any other id would stay in the set for good.
+        if _is_ordinary_chat(conversation_id) is True:
+            _computer_halted.add(conversation_id)
         _reject_computer_use_pending(conversation_id, computer_gate.HALTED_REASON, "computer_halt")
         _reject_computer_use_pending(conversation_id, BROWSER_HALTED_REASON, "computer_halt", flag="browser_use")
         for key in [k for k in _browser_grants if k[0] == conversation_id]:

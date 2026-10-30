@@ -45,6 +45,18 @@ def _computer_use_legacy_platform(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _computer_use_no_backend_stop_check(request, monkeypatch):
+    # The computer-use server asks the backend before every driver call whether the chat was stopped and
+    # refuses when it cannot tell. Tests that build ComputerServer have no backend; a test that measures
+    # that check itself calls the method it saved at import.
+    if not request.path.name.startswith("test_computer_use"):
+        return
+    from unittest.mock import AsyncMock
+    from computer_use import server
+    monkeypatch.setattr(server.BackendApprovals, "dispatch_refusal", AsyncMock(return_value=None))
+
+
+@pytest.fixture(autouse=True)
 def _allow_tokenless_local_api(monkeypatch):
     monkeypatch.setenv("UNITYAI_ALLOW_NO_TOKEN", "1")
     monkeypatch.delenv("LOCAL_APP_TOKEN", raising=False)

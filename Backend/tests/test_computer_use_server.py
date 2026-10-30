@@ -11,7 +11,7 @@ from mcp.types import CallToolResult, TextContent
 
 from computer_use.driver_client import DriverClient, DriverError, DriverUnavailable
 from computer_use.server import ComputerServer, create_server
-from computer_use import driver_client, server
+from computer_use import driver_client, gate, server
 from computer_use.platform import macos
 
 
@@ -19,6 +19,9 @@ from computer_use.platform import macos
 def no_real_cg_windows(monkeypatch):
     monkeypatch.setattr(macos, "_cg_window_list", lambda: [])
     monkeypatch.setattr(macos, "_lsappinfo_front", AsyncMock(return_value=(False, None)))
+
+
+REAL_DISPATCH_REFUSAL = server.BackendApprovals.dispatch_refusal
 
 
 @pytest.fixture
@@ -1231,3 +1234,15 @@ def test_launch_url_refusal_makes_no_driver_call_for_the_name(fake, tmp_path):
     assert result.is_error
     approval.assert_not_awaited()
     assert calls(log) == []
+
+
+@pytest.mark.parametrize("stop,expected", [
+    (None, None), ("halted", gate.HALTED_REASON), ("disabled", gate.INACTIVE_REASON),
+    ("unverified", "Durdurma durumu doğrulanamadı; işlem çalıştırılmadı."),
+])
+def test_backend_approvals_refuse_dispatch_after_stop(monkeypatch, stop, expected):
+    check = AsyncMock(return_value=stop)
+    monkeypatch.setattr(server, "_batch_stop", check)
+    refusal = asyncio.run(REAL_DISPATCH_REFUSAL(server.BackendApprovals(), {"bundle_id": "com.apple.TextEdit"}))
+    assert refusal == expected
+    assert check.await_args.kwargs == {"check_only": True}

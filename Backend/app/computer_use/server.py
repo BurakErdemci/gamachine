@@ -16,6 +16,7 @@ from mcp.types import CallToolResult, TextContent
 from spawn_env import read_only_refusal
 from unity_ai_mcp import approval_bridge
 from . import platform, policy
+from .gate import HALTED_REASON, INACTIVE_REASON
 from .driver_client import DriverClient, DriverError, DriverUnavailable
 from .platform.base import WindowListUnavailable
 from .platform.macos import fetch_runtime
@@ -159,9 +160,11 @@ async def _merge_panel_windows(result, pid):
         return result
 
 
-async def _batch_stop(params) -> str | None:
+async def _batch_stop(params, check_only=False) -> str | None:
     try:
         body = {"params": {key: params.get(key) for key in ("bundle_id", "app_name", "pid", "window_id")}}
+        if check_only:
+            body["check"] = True
         conversation_id = approval_bridge._conversation_id_from_env()
         if type(conversation_id) is int:
             body["conversation_id"] = conversation_id
@@ -340,6 +343,14 @@ class BackendApprovals:
         return None
 
     async def dispatch_refusal(self, params) -> str | None:
+        # An approval granted before Stop can be delivered after it; ask the backend again right before the driver call.
+        stop = await _batch_stop(params, check_only=True)
+        if stop == "halted":
+            return HALTED_REASON
+        if stop == "disabled":
+            return INACTIVE_REASON
+        if stop == "unverified":
+            return "Durdurma durumu doğrulanamadı; işlem çalıştırılmadı."
         return None
 
     async def request(self, tool, params):
