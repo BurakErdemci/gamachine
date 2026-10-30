@@ -1,5 +1,6 @@
 """Navigation allow-list and the critical-step classifier for the agent browser."""
 import ipaddress
+import json
 import re
 import socket
 import unicodedata
@@ -73,8 +74,10 @@ def _clean(value) -> str:
 def fingerprint(element) -> str:
     """Role + name + form action + a link's href: what a one-time grant is keyed on. The
     human-facing role and name are case-folded; URLs stay exact, a changed path is another target."""
-    return "|".join((_clean(element.get("role")).casefold(), _clean(element.get("name")).casefold(),
-                     _clean(element.get("form_action")), _clean(element.get("href"))))
+    # JSON, not a joined string: a page-controlled name holding "|" must not shift text between fields.
+    return json.dumps([_clean(element.get("role")).casefold(), _clean(element.get("name")).casefold(),
+                       _clean(element.get("form_action")), _clean(element.get("href"))],
+                      ensure_ascii=False, separators=(",", ":"))
 
 
 def _is_download(element) -> bool:
