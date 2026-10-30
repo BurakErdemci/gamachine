@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { addressToUrl, displayAddress } from '../../lib/browserAddress';
-import { cleanHistory, isMacPlatform, suggest, suggestedSites, tabShortcutOf, type HistoryItem } from '../../lib/browserSuggest';
+import { cleanHistory, isMacPlatform, shortcutLabel, suggest, suggestedSites, tabShortcutOf, type HistoryItem } from '../../lib/browserSuggest';
 import { BrowserTabs, NewTabGrid, SuggestionList, type BrowserTab } from './BrowserTabs';
 
 /** Main-process event and invoke channel for the agent browser (docs/agent-browser.md). */
@@ -84,6 +84,13 @@ const intersects = (a: DOMRect, b: DOMRect) =>
   a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0
   && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 
+const FULL_ICON = (
+  <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8V4h4M12 4h4v4M16 12v4h-4M8 16H4v-4" /></svg>
+);
+const FULL_LEAVE_ICON = (
+  <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M8 4v4H4M16 8h-4V4M12 16v-4h4M4 12h4v4" /></svg>
+);
+
 const STOP_ICON = <svg className="bp-stop-ic" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1" /></svg>;
 
 /**
@@ -93,7 +100,7 @@ const STOP_ICON = <svg className="bp-stop-ic" viewBox="0 0 12 12" aria-hidden="t
  * has no page yet (the Suggested grid shows instead). It shows the tabs of the chat open in the
  * UI (`conversationId`); every op names that chat.
  */
-export function BrowserPanel({ visible, conversationId, running, onStop, onNeedChat }: {
+export function BrowserPanel({ visible, conversationId, running, onStop, onNeedChat, full = false, onToggleFull }: {
   visible: boolean;
   conversationId: number | null;
   /** The chat on screen has a turn in flight. */
@@ -102,6 +109,9 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
   onStop: () => Promise<void>;
   /** Creates the chat for an `open` from a fresh, unsaved chat; null when it failed. */
   onNeedChat: () => Promise<number | null>;
+  /** Full-screen mode is on (the page fills the window); the toggle shows only with a handler. */
+  full?: boolean;
+  onToggleFull?: () => void;
 }) {
   const { t } = useLang();
   const state = useBrowserLive(conversationId);
@@ -140,6 +150,13 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
       .some(o => !el.contains(o) && intersects(r, o.getBoundingClientRect()));
     setCovered(hit);
   }, []);
+
+  // Entering or leaving full screen moves the page area: measure at once and once the layout has settled.
+  useEffect(() => {
+    measure();
+    const frame = requestAnimationFrame(() => measure());
+    return () => cancelAnimationFrame(frame);
+  }, [full, measure]);
 
   // A new chat has its own tab, so its bounds are sent again.
   useEffect(() => { lastBounds.current = ''; measure(); }, [conversationId, measure]);
@@ -290,9 +307,14 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
 
   const agentShown = state.tabs.find(tab => tab.id === state.activeTabId)?.agent === true;
   const listId = 'bp-suggest';
+  const fullLabel = t(full ? 'bp.fullLeave' : 'bp.fullEnter', { kisayol: shortcutLabel('Shift+F', mac) });
+  const fullToggle = onToggleFull && (
+    <button type="button" className="bp-full" onClick={onToggleFull} aria-pressed={full}
+      aria-label={fullLabel} title={fullLabel}>{full ? FULL_LEAVE_ICON : FULL_ICON}</button>
+  );
 
   return (
-    <section className="bp-panel" data-state={state.active ? 'active' : 'idle'} aria-label={t('ws.tabBrowser')} onKeyDown={onShortcut}>
+    <section className="bp-panel" data-state={state.active ? 'active' : 'idle'} data-full={full ? 'true' : undefined} aria-label={t('ws.tabBrowser')} onKeyDown={onShortcut}>
       {state.tabs.length > 0 && (
         <BrowserTabs tabs={state.tabs} activeId={state.activeTabId} mac={mac}
           onSelect={tabId => send('select', { tabId })} onClose={tabId => send('close-tab', { tabId })} onNew={() => void openTab()} />
@@ -321,12 +343,14 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
           <button type="button" className="bp-stop" onClick={doStop} disabled={stop !== 'idle' || !running} title={t('bp.stopNote')}>
             {STOP_ICON}<span>{t(stop === 'busy' || stop === 'sent' ? 'bp.stopping' : stop === 'stopped' ? 'bp.stopped' : 'bp.stop')}</span>
           </button>
+          {fullToggle}
         </header>
       )}
       {stopFailed && <p className="bp-stop-failed" role="alert">{t('bp.stopFailed')}</p>}
       <div className="bp-view" ref={hostRef} data-testid="bp-view">
         {!state.active && (
           <div className="bp-idle">
+            {fullToggle}
             <p className="bp-idle-title">{t('bp.idle')}</p>
             <div className="bp-open">
               <input className="bp-address" type="text" value={openUrl} placeholder={t('bp.addressHint')}

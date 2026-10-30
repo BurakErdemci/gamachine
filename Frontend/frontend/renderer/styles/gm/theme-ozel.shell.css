@@ -459,3 +459,6 @@
   clip-path: none; overflow: hidden; border-radius: var(--radius-md); box-shadow: inset 0 0 0 3px var(--mascot-line);
 }
 :root[data-theme="ozel"] .intro-overlay .s2-slab::after { background: var(--mascot-line); box-shadow: 0 8px 0 var(--mascot-line); }
+
+/* browser full screen: flat like Sade, a hairline above the docked chat */
+[data-theme="ozel"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-top-color: var(--paper-line); }

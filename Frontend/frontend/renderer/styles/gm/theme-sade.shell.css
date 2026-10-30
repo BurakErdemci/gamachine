@@ -1,5 +1,8 @@
 /* Sade shell touches, ported from maket/theme-sade.css (game ornaments off, same DOM). */
 
+/* browser full screen: a hairline above the docked chat */
+[data-theme="sade"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-top-color: var(--paper-line); }
+
 /* sidebar meters: hairline progress */
 [data-theme="sade"] .xp-mini { height: 2px; border-radius: 1px; }
 [data-theme="sade"] .xp-mini span { border-radius: 1px; }
