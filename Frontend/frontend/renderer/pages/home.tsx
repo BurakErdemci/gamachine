@@ -407,9 +407,11 @@ export default function Home() {
     return () => { if (typeof off === 'function') off(); };
   }, [ipc, wsReveal]);
   // The agent browser opens its tab the same way: once per run, when main reports it active.
+  const openConvRef = useRef<number | null>(null);
+  openConvRef.current = chat.activeConvId;
   useEffect(() => {
     if (!ipc) return;
-    const tracker = createLiveRevealTracker(() => wsReveal('tarayici'));
+    const tracker = createLiveRevealTracker(() => wsReveal('tarayici'), id => id === openConvRef.current);
     const off = ipc.on('browser-live', tracker);
     return () => { if (typeof off === 'function') off(); };
   }, [ipc, wsReveal]);
@@ -1317,7 +1319,7 @@ export default function Home() {
               />
             ),
             bilgisayar: <ComputerLivePanel visible={ws.open && ws.tab === 'bilgisayar'} />,
-            tarayici: <BrowserPanel visible={ws.open && ws.tab === 'tarayici'} />,
+            tarayici: <BrowserPanel visible={ws.open && ws.tab === 'tarayici'} conversationId={chat.activeConvId} />,
           }}
           drawer={(
             <TerminalPanel
