@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { describe, it, expect, vi } from 'vitest'
 
-import { checkTrashable, trashProject, type TrashDeps } from '../main/helpers/project-trash'
+import { checkTrashable, trashProject, trashPrompt, type TrashDeps } from '../main/helpers/project-trash'
 import { ALLOWED_INVOKE_CHANNELS } from '../main/helpers/ipc-whitelist'
 
 // A fake disk: `dirs` exist, `links` map a path to its target.
@@ -23,6 +23,7 @@ const fake = (platform: 'win32' | 'darwin' | 'linux', dirs: string[], over: Part
     openWorkspace: null,
     probeLock: () => 'absent',
     processCommands: async () => [],
+    confirm: vi.fn(async () => true),
     trashItem: vi.fn(async () => {}),
     ...over,
   }
@@ -183,12 +184,121 @@ describe('project-trash guards', () => {
       expect(await trashProject(MAC, deps)).toEqual({ ok: true })
     })
 
+    it('treats a differently-cased or relative -projectPath as open (refuse when unsure)', async () => {
+      const cases = [
+        { cmd: editor(MAC.toLowerCase()), open: platform === 'darwin' },
+        { cmd: editor('.'), open: true },
+        { cmd: editor('../Arena'), open: true },
+        { cmd: editor('"/Users/me/Games/Arena"'), open: true },
+        { cmd: editor('/Users/me/Games/Other'), open: false },
+      ]
+      for (const { cmd, open } of cases) {
+        const { deps, files } = fake(platform, unity(MAC, '/'), { processCommands: async () => [cmd] })
+        files.add(`${MAC}/Temp/UnityLockfile`)
+        expect(await trashProject(MAC, deps), cmd).toEqual(open ? { error: 'unity-open' } : { ok: true })
+      }
+    })
+
     it.each(['null', 'throw'])('refuses when the process list cannot be read (%s)', async (how) => {
       const processCommands = how === 'null' ? async () => null : async () => { throw new Error('ps failed') }
       const { deps, files } = fake(platform, unity(MAC, '/'), { processCommands })
       files.add(`${MAC}/Temp/UnityLockfile`)
       expect(await trashProject(MAC, deps)).toEqual({ error: 'unity-open' })
       expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('confirmation', () => {
+    it('asks about the resolved folder once, after the checks, and trashes only on yes', async () => {
+      const { deps } = fake('darwin', unity(MAC, '/'))
+      expect(await trashProject(MAC, deps)).toEqual({ ok: true })
+      expect(deps.confirm).toHaveBeenCalledTimes(1)
+      expect(deps.confirm).toHaveBeenCalledWith(MAC)
+    })
+
+    it.each([['no', async () => false], ['throw', async () => { throw new Error('x') }]])('does not trash when the answer is %s', async (_n, confirm) => {
+      const { deps } = fake('darwin', unity(MAC, '/'), { confirm })
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'cancelled' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('never asks when a guard already refuses', async () => {
+      const { deps } = fake('darwin', [MAC])
+      await trashProject(MAC, deps)
+      expect(deps.confirm).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['win32', 'Geri Dönüşüm Kutusu', 'C:\\Users\\me\\Games\\Arena'],
+      ['darwin', 'Çöp Kutusu', MAC],
+      ['linux', 'Çöp Kutusu', MAC],
+    ])('words the box for %s with the name, full path and a default of Vazgeç', (platform, bin, real) => {
+      const prompt = trashPrompt(real, platform)
+      expect(prompt.message).toContain('"Arena"')
+      expect(prompt.detail).toContain(real)
+      expect(prompt.detail).toContain(bin)
+      expect([prompt.go, prompt.cancel]).toEqual([`${bin}'na taşı`, 'Vazgeç'])
+    })
+  })
+
+  describe('Windows path forms', () => {
+    const win = (dir: string, extra: string[] = [], over: Partial<TrashDeps> = {}, links: Record<string, string> = {}) =>
+      fake('win32', [...unity(WIN, '\\'), ...extra], over, links)
+
+    it.each([
+      ['\\\\?\\C:\\Users\\me\\Games\\Arena'],
+      ['\\\\.\\C:\\Users\\me\\Games\\Arena'],
+      ['C:\\Users\\me\\Games\\Arena.'],
+      ['C:\\Users\\me\\Games\\Arena '],
+      ['C:\\Users\\me\\Games\\Arena::$DATA'],
+      ['C:\\Users\\me\\Games\\Arena:stream'],
+    ])('refuses the input form %j', async (dir) => {
+      const { deps } = win(dir, [], {}, { [dir]: WIN })
+      expect(await trashProject(dir, deps)).toEqual({ error: 'invalid-path' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('refuses an 8.3 name that realpath did not expand, but accepts the expanded form', async () => {
+      const short = 'C:\\Users\\BURAKE~1\\Games\\Arena'
+      const { deps } = fake('win32', unity(short, '\\'), { protectedDirs: ['C:\\Users\\burakemre'] })
+      expect(await trashProject(short, deps)).toEqual({ error: 'invalid-path' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+      const { deps: expanded } = fake('win32', unity(WIN, '\\'), {}, { [short]: WIN })
+      expect(await trashProject(short, expanded)).toEqual({ error: 'invalid-path' })
+      const { deps: ok } = fake('win32', unity(WIN, '\\'))
+      expect(await trashProject(WIN, ok)).toEqual({ ok: true })
+    })
+
+    it('allows a drive letter colon and a dotted folder name inside the path', async () => {
+      const dir = 'D:\\My.Games\\Arena'
+      const { deps } = fake('win32', unity(dir, '\\'))
+      expect(await trashProject(dir, deps)).toEqual({ ok: true })
+    })
+  })
+
+  describe('identity (dev+ino)', () => {
+    const ids: Record<string, string> = { '/a/Docs': '1:1', '/a': '1:2', '/': '1:3', '/b/Alias': '1:1', '/b': '1:4' }
+    const identity = (p: string) => ids[p] ?? null
+
+    it('refuses a folder that is the same inode as a protected dir under another name', async () => {
+      const { deps } = fake('linux', [...unity('/b/Alias', '/'), '/a/Docs'], { identity: (p) => (p === '/b/Alias' ? '1:1' : identity(p)), protectedDirs: ['/a/Docs'] })
+      expect(await trashProject('/b/Alias', deps)).toEqual({ error: 'protected' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('refuses a folder that is an ancestor of a protected dir by inode', async () => {
+      const { deps } = fake('linux', [...unity('/x/Up', '/'), '/a/Docs'], { identity: (p) => (p === '/x/Up' ? '1:2' : identity(p)), protectedDirs: ['/a/Docs'] })
+      expect(await trashProject('/x/Up', deps)).toEqual({ error: 'protected' })
+    })
+
+    it('refuses a project that sits inside an app dir by inode', async () => {
+      const { deps } = fake('linux', [...unity('/x/Proj', '/'), '/x'], { identity: (p) => ({ '/x/Proj': '9:9', '/x': '1:4', '/y': '1:4' } as Record<string, string>)[p] ?? null, appDirs: ['/y'] })
+      expect(await trashProject('/x/Proj', deps)).toEqual({ error: 'protected' })
+    })
+
+    it('refuses the open workspace by inode', async () => {
+      const { deps } = fake('linux', [...unity('/b/Alias', '/'), '/a/Docs'], { identity: (p) => (p === '/b/Alias' ? '1:1' : identity(p)), openWorkspace: '/a/Docs' })
+      expect(await trashProject('/b/Alias', deps)).toEqual({ error: 'open-workspace' })
     })
   })
 
@@ -207,6 +317,16 @@ describe('workspace-trash channel', () => {
   it('is whitelisted for the desktop renderer and absent from the web remote shim', () => {
     expect(ALLOWED_INVOKE_CHANNELS.has('workspace-trash')).toBe(true)
     expect(read('renderer/lib/remote/ipcShim.ts')).not.toContain('workspace-trash')
+  })
+
+  it('authorizes the root and confirms natively in main before trashing', () => {
+    const src = read('main/background.ts')
+    const handler = src.slice(src.indexOf("handleSecure('workspace-trash'"), src.indexOf("handleSecure('register-dropped-folder'"))
+    expect(handler.indexOf('untrustedWorkspace(hostPath)')).toBeGreaterThan(0)
+    expect(handler).toContain('dialog.showMessageBox')
+    expect(handler).toContain('defaultId: 1')
+    expect(handler).toContain('cancelId: 1')
+    expect(handler).toContain('realpathSync.native')
   })
 
   it('is registered through handleSecure and the helper never deletes permanently', () => {

@@ -5,10 +5,9 @@ import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-li
 const mocks = vi.hoisted(() => {
   const invoke = vi.fn()
   ;(globalThis as any).window.ipc = { invoke, registerDroppedFolder: vi.fn(), on: vi.fn(() => () => {}) }
-  return { invoke, confirm: vi.fn() }
+  return { invoke }
 })
 vi.mock('axios', () => ({ default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), defaults: { headers: { common: {} } } } }))
-vi.mock('../renderer/components/ui/ConfirmDialog', () => ({ confirmDialog: mocks.confirm }))
 
 import axios from 'axios'
 import { WorkspaceScreen } from '../renderer/components/home/WorkspaceScreen'
@@ -47,7 +46,6 @@ const platform = (value: string) => vi.spyOn(window.navigator, 'platform', 'get'
 
 beforeEach(() => {
   mocks.invoke.mockReset().mockImplementation(ipcDefault)
-  mocks.confirm.mockReset().mockResolvedValue(true)
   vi.mocked(axios.get).mockReset().mockResolvedValue({ data: { workspaces: ROWS } })
   vi.mocked(axios.post).mockReset().mockResolvedValue({ data: { removed: true } })
 })
@@ -78,40 +76,6 @@ describe('welcome screen: delete project', () => {
     }
   })
 
-  it.each([
-    ['MacIntel', 'Trash'],
-    ['Linux x86_64', 'Trash'],
-    ['Win32', 'Recycle Bin'],
-  ])('confirms with the name, full path and the bin on %s', async (nav, bin) => {
-    platform(nav)
-    view()
-    await openMenu('Arena')
-    fireEvent.click(screen.getByRole('menuitem', { name: en['welcome.trash'] }))
-    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledTimes(1))
-    const [message, go, cancel] = mocks.confirm.mock.calls[0]
-    expect(message).toContain('"Arena"')
-    expect(message).toContain('/h/Arena')
-    expect(message).toContain(`moved to the ${bin}`)
-    expect(message).toContain(`restore it from the ${bin}`)
-    expect([go, cancel]).toEqual([`Move to ${bin}`, 'Cancel'])
-  })
-
-  it.each([
-    ['Win32', "Geri Dönüşüm Kutusu'na taşı"],
-    ['MacIntel', "Çöp Kutusu'na taşı"],
-  ])('uses the Turkish wording on %s', async (nav, go) => {
-    platform(nav)
-    view('tr')
-    await openMenu('Arena', 'Arena için seçenekler')
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Projeyi sil…' }))
-    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledTimes(1))
-    const [message, goLabel, cancel] = mocks.confirm.mock.calls[0]
-    expect(goLabel).toBe(go)
-    expect(cancel).toBe('Vazgeç')
-    expect(message).toContain('/h/Arena')
-    expect(message).toContain(nav === 'Win32' ? 'Geri Dönüşüm Kutusu' : 'Çöp Kutusu')
-  })
-
   it('on success trashes through the channel, removes the entry and toasts', async () => {
     mocks.invoke.mockImplementation(async (c: string, a: any) => c === 'workspace-trash' ? { ok: true } : ipcDefault(c, a))
     const p = view()
@@ -123,15 +87,58 @@ describe('welcome screen: delete project', () => {
     expect(p.showToast).toHaveBeenCalledWith(expect.stringContaining('"Arena" was moved to the'), 'success')
   })
 
-  it('does nothing when the confirmation is declined', async () => {
-    mocks.confirm.mockResolvedValue(false)
+  it('does nothing visible when the user declines the native confirmation in main', async () => {
+    mocks.invoke.mockImplementation(async (c: string, a: any) => c === 'workspace-trash' ? { error: 'cancelled' } : ipcDefault(c, a))
     const p = view()
     await openMenu('Arena')
     fireEvent.click(screen.getByRole('menuitem', { name: en['welcome.trash'] }))
-    await waitFor(() => expect(mocks.confirm).toHaveBeenCalled())
-    expect(mocks.invoke.mock.calls.some(c => c[0] === 'workspace-trash')).toBe(false)
+    await waitFor(() => expect(mocks.invoke.mock.calls.some(c => c[0] === 'workspace-trash')).toBe(true))
     expect(axios.post).not.toHaveBeenCalled()
     expect(p.showToast).not.toHaveBeenCalled()
+    expect(card('Arena')).toBeTruthy()
+  })
+
+  it('renders no confirmation of its own: main asks', async () => {
+    view()
+    await openMenu('Arena')
+    fireEvent.click(screen.getByRole('menuitem', { name: en['welcome.trash'] }))
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('workspace-trash', '/h/Arena'))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it.each([['MacIntel', 'Trash'], ['Win32', 'Recycle Bin']])('names the %s bin in the success toast', async (nav, bin) => {
+    platform(nav)
+    mocks.invoke.mockImplementation(async (c: string, a: any) => c === 'workspace-trash' ? { ok: true } : ipcDefault(c, a))
+    const p = view()
+    await openMenu('Arena')
+    fireEvent.click(screen.getByRole('menuitem', { name: en['welcome.trash'] }))
+    await waitFor(() => expect(p.showToast).toHaveBeenCalledWith(`"Arena" was moved to the ${bin}.`, 'success'))
+  })
+
+  it('warns and refreshes instead of a success toast when the list entry could not be removed', async () => {
+    mocks.invoke.mockImplementation(async (c: string, a: any) => c === 'workspace-trash' ? { ok: true } : ipcDefault(c, a))
+    vi.mocked(axios.post).mockRejectedValue(new Error('down'))
+    const p = view()
+    await openMenu('Arena')
+    const loads = vi.mocked(axios.get).mock.calls.length
+    fireEvent.click(screen.getByRole('menuitem', { name: en['welcome.trash'] }))
+    await waitFor(() => expect(p.showToast).toHaveBeenCalledWith(expect.stringContaining("couldn't be removed from the list"), 'warning'))
+    expect(vi.mocked(axios.get).mock.calls.length).toBeGreaterThan(loads)
+    expect(p.showToast).not.toHaveBeenCalledWith(expect.anything(), 'success')
+  })
+
+  it('hides the item on the web remote, which also provides window.ipc', async () => {
+    const original = window.location
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, protocol: 'https:', hostname: 'relay.example.com' } })
+    try {
+      view()
+      await waitFor(() => expect(card('Arena')).toBeTruthy())
+      fireEvent.click(within(card('Arena')).getByRole('button', { name: 'Options for Arena' }))
+      expect(screen.getByRole('menuitem', { name: en['welcome.remove'] })).toBeTruthy()
+      expect(screen.queryByRole('menuitem', { name: en['welcome.trash'] })).toBeNull()
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original })
+    }
   })
 
   it.each([
@@ -140,6 +147,7 @@ describe('welcome screen: delete project', () => {
     ['open-workspace', 'welcome.trashErr.open-workspace'],
     ['protected', 'welcome.trashErr.protected'],
     ['not-found', 'welcome.trashErr.not-found'],
+    ['untrusted', 'welcome.trashErr.untrusted'],
     ['trash-failed', 'welcome.trashErr.other'],
     ['something-new', 'welcome.trashErr.other'],
   ])('refusal %s shows its reason and keeps the entry', async (code, key) => {

@@ -77,6 +77,8 @@ export function ConfirmDialogHost() {
   useEffect(() => {
     if (!state) return;
     const onKey = (e: KeyboardEvent) => {
+      // A held key must not answer a dialog it opened.
+      if (e.repeat) return;
       if (e.key === 'Escape') { e.preventDefault(); resolve(false); }
       else if (e.key === 'Enter') { e.preventDefault(); resolve(true); }
     };
