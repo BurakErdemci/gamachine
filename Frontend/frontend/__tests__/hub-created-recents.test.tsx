@@ -50,7 +50,7 @@ describe('a created project reaches the recents list', () => {
     await act(async () => { await startCreate({ parentDir: '/h', name: 'Night Run', version: '6000.2.4f1' }) })
     expect(getRun().state).toBe('done')
     await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1))
-    expect(axios.post).toHaveBeenCalledWith('http://backend/save-workspace', { user_id: 7, path: '/b/Night Run' }, { headers: { 'X-Session-Token': 'tok' } })
+    expect(axios.post).toHaveBeenCalledWith('http://backend/remember-workspace', { user_id: 7, path: '/b/Night Run' }, { headers: { 'X-Session-Token': 'tok' } })
     await waitFor(() => expect(recentCalls().length).toBe(2))
     // An unrelated re-render of the same done run saves nothing more.
     cleanup()

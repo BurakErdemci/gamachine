@@ -106,7 +106,7 @@ export const WorkspaceScreen = ({
     const backendPath = await backendWorkspacePath(hostPath);
     if (backendPath === null) return;
     try {
-      await axios.post(`${api}/save-workspace`, { user_id: user.id, path: backendPath }, { headers: { 'X-Session-Token': user.sessionToken } });
+      await axios.post(`${api}/remember-workspace`, { user_id: user.id, path: backendPath }, { headers: { 'X-Session-Token': user.sessionToken } });
       refresh();
     } catch (err) { console.error('Created project save failed:', err); }
   }, [api, user, refresh]);

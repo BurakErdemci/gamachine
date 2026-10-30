@@ -1375,6 +1375,30 @@ class DatabaseManager:
                 )
             conn.commit()
 
+    def remember_workspace(self, user_id: int, path: str) -> None:
+        """List a workspace without making it the current one (get_last_workspace is unchanged)."""
+        self._ensure_workspace_table()
+        fmt = "%Y-%m-%d %H:%M:%S.%f"
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            if conn.execute(
+                'SELECT 1 FROM workspaces WHERE user_id = ? AND path = ?', (user_id, path)
+            ).fetchone():
+                return
+            newest = conn.execute(
+                'SELECT MAX(last_accessed) FROM workspaces WHERE user_id = ?', (user_id,)
+            ).fetchone()[0]
+            stamp = datetime.now()
+            if newest:
+                try:
+                    stamp = datetime.strptime(newest, fmt) - timedelta(milliseconds=1)
+                except ValueError:
+                    stamp = datetime.strptime(newest[:19], "%Y-%m-%d %H:%M:%S") - timedelta(milliseconds=1)
+            conn.execute(
+                'INSERT INTO workspaces (user_id, path, last_accessed) VALUES (?, ?, ?)',
+                (user_id, path, stamp.strftime(fmt))
+            )
+            conn.commit()
+
     def get_last_workspace(self, user_id: int) -> Optional[str]:
         """Kullanıcının en son açtığı workspace yolunu döndürür."""
         self._ensure_workspace_table()

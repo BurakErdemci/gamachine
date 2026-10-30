@@ -73,6 +73,14 @@ def create_workspace_router(db):
                 logger.debug("[Workspace] Autoconnect reset skipped: %s", e)
         return {"status": "success"}
 
+    @router.post("/remember-workspace")
+    async def remember_workspace(req: WorkspaceRequest, x_session_token: str = Header(alias="X-Session-Token")):
+        """Lists a created project in the recents without switching MCP or the agent's workspace."""
+        user_id, _ = require_user(db, x_session_token, req.user_id)
+        require_saved_workspace_when_remote(req.path, x_session_token)
+        db.remember_workspace(user_id, req.path)
+        return {"status": "success"}
+
     @router.get("/last-workspace/{user_id}")
     async def get_last_workspace(user_id: int, x_session_token: str = Header(alias="X-Session-Token")):
         require_user(db, x_session_token, user_id)
