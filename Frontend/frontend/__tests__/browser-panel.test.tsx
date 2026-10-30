@@ -224,3 +224,20 @@ describe('BrowserUsePage', () => {
     expect(screen.getByTestId('bp-privacy').textContent).toBe(tr['bp.set.privacy'])
   })
 })
+
+describe('deleting a chat closes its browser tab', () => {
+  it('sends close for the chat once the delete succeeded', async () => {
+    vi.resetModules()
+    vi.doMock('axios', () => ({ default: { get: vi.fn(async () => ({ data: [] })), put: vi.fn(), post: vi.fn(), delete: vi.fn(async () => ({ data: { deleted_ids: [5] } })) } }))
+    const fresh = (await import('../renderer/components/ui/ConfirmDialog')).confirmDialog as unknown as ReturnType<typeof vi.fn>
+    fresh.mockResolvedValue(true)
+    const { renderHook } = await import('@testing-library/react')
+    const { useChat } = await import('../renderer/hooks/home/useChat')
+    const { result } = renderHook(() => useChat('http://127.0.0.1:8000', { id: 1, name: 't', sessionToken: 't' } as any,
+      { provider_type: 'subscription', model_name: 'claude-opus-5' } as any, '/ws', vi.fn(), vi.fn(), (s: string) => s))
+    invoke.mockClear()
+    await act(async () => { await result.current.deleteConversation({ stopPropagation() {} } as any, 5) })
+    expect(calls('close')).toEqual([{ op: 'close', conversationId: 5 }])
+    vi.doUnmock('axios')
+  })
+})
