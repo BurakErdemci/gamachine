@@ -409,8 +409,37 @@ def test_a_dispatch_refusal_mid_batch_reports_what_already_ran(batch_driver, mon
     assert result.is_error
     report = json.loads(result.content[0].text)
     assert (report["executed"], report["total"], len(report["steps"])) == (1, 3, 1)
-    assert report["halted"] is True and "Durduruldu." in report["halt_reason"]
+    assert report["halted"] is True and report["stop_reason"] == "halted"
     assert state["steps"] == 1
+
+
+@pytest.mark.parametrize("text,code", [
+    ("Durduruldu.", "halted"),
+    (server.HALTED_REASON, "halted"),
+    (server.INACTIVE_REASON, "disabled"),
+    (server.UNVERIFIED_REASON, "unverified"),
+])
+def test_a_dispatch_refusal_maps_to_a_known_stop_reason(batch_driver, monkeypatch, text, code):
+    handler, _, state, _ = batch_driver
+    monkeypatch.setattr(server.BackendApprovals, "dispatch_refusal", AsyncMock(side_effect=[None, text]))
+    report = json.loads(asyncio.run(handler.call("computer_run_steps", foreground_batch())).content[0].text)
+    assert report["stop_reason"] == code
+    assert report["executed"] == 1 and state["steps"] == 1
+    assert "işlem çalıştırılmadı" not in report["halt_reason"]
+    assert "1/3 adım çalıştı" in report["halt_reason"]
+
+
+def test_a_target_change_does_not_count_as_an_executed_step(batch_driver, monkeypatch):
+    handler, _, state, _ = batch_driver
+    state["locked"] = False
+    monkeypatch.setattr(server.platform.current(), "identify",
+                        AsyncMock(side_effect=[("com.apple.finder", "Finder", None)] * 2
+                                  + [("com.apple.TextEdit", "TextEdit", None)]), raising=False)
+    batch = {"pid": 4242, "window_id": 7, "steps": [
+        {"tool": "press_key", "args": {"key": "tab"}}, {"tool": "press_key", "args": {"key": "return"}}]}
+    report = json.loads(asyncio.run(handler.call("computer_run_steps", batch)).content[0].text)
+    assert state["steps"] == 1
+    assert (report["executed"], report["failed_step"], len(report["steps"])) == (1, 1, 2)
 
 
 def test_a_background_batch_skips_the_backend_question_that_nothing_separates(batch_driver):

@@ -21,6 +21,17 @@ from .driver_client import DriverClient, DriverError, DriverUnavailable
 from .platform.base import WindowListUnavailable
 from .platform.macos import fetch_runtime
 
+UNVERIFIED_REASON = "Durdurma durumu doğrulanamadı; işlem çalıştırılmadı."
+
+
+def _refusal_code(text: str) -> str:
+    """The stop code for a dispatch refusal; every text but the two named ones is a stop."""
+    if text == INACTIVE_REASON:
+        return "disabled"
+    if text == UNVERIFIED_REASON:
+        return "unverified"
+    return "halted"
+
 
 _TOOL_HINTS = {
     "computer_list_windows": (
@@ -359,7 +370,7 @@ class BackendApprovals:
         if stop == "disabled":
             return INACTIVE_REASON
         if stop == "unverified":
-            return "Durdurma durumu doğrulanamadı; işlem çalıştırılmadı."
+            return UNVERIFIED_REASON
         return None
 
     async def request(self, tool, params):
@@ -659,7 +670,7 @@ class ComputerServer:
         entries = []
         failed_step = None
         stop_reason = None
-        stop_text = None
+        driver_steps = 0
         observation = {}
         non_text = []
         has_foreground = any(_foreground({**base, **step}) for step in steps)
@@ -702,7 +713,7 @@ class ComputerServer:
 
                     refusal = await _front_guard(driver, base["pid"], window_id, recheck)
                     if dispatch_refused:
-                        stop_reason, stop_text = "refused", dispatch_refused[0]
+                        stop_reason = _refusal_code(dispatch_refused[0])
                         break
                     if refusal is not None:
                         entries.append({"index": i, "ok": False, "code": "foreground_unverified",
@@ -714,7 +725,7 @@ class ComputerServer:
                 if i > 0 or _foreground({**base, **step}):
                     refusal = await self._dispatch_refusal(params)
                     if refusal is not None:
-                        stop_reason, stop_text = "refused", refusal
+                        stop_reason = _refusal_code(refusal)
                         break
                 result = await driver.call("run_steps", call_args)
                 report = result.structured_content
@@ -732,12 +743,13 @@ class ComputerServer:
                 self._cache_snapshot(result, call_args)
                 entry = {**report["steps"][0], "index": i}
                 entries.append(entry)
+                driver_steps += 1
                 observation = {"observation": report["observation"]} if "observation" in report else {}
                 non_text = [block for block in result.content if not isinstance(block, TextContent)]
                 if result.is_error is True or report.get("ok") is not True or entry.get("ok") is not True:
                     failed_step = i
                     break
-        executed = len(entries)
+        executed = driver_steps
         report = {"executed": executed, "total": total, "failed_step": failed_step,
                   "ok": executed == total and failed_step is None and stop_reason is None,
                   "steps": entries, **observation}
@@ -751,7 +763,7 @@ class ComputerServer:
                 "unverified": (
                     f"Durdurma durumu doğrulanamadı; {executed}/{total} adım çalıştı, kalanlar çalıştırılmadı."),
             }
-            reason = reasons.get(stop_reason) or f"{stop_text} {executed}/{total} adım çalıştı, kalanlar çalıştırılmadı."
+            reason = reasons[stop_reason]
             report = {"halted": True, "stop_reason": stop_reason, "halt_reason": reason, **report}
         return CallToolResult(content=[TextContent(type="text", text=json.dumps(report, ensure_ascii=False))]
                               + non_text, is_error=not report["ok"])
