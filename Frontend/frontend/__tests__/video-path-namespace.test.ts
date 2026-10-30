@@ -69,11 +69,15 @@ const gonder = async (result: any, videos: any[]) => {
   })
 }
 
+// A user send also hands the chat's browser tab back (browser-live release); only path translations count here.
+const pathCalls = (invoke: { mock: { calls: unknown[][] } }) => invoke.mock.calls.filter(([ch]) => ch !== 'browser-live')
+
 describe('D4-02 — video path namespace', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
   it('mount İÇİNDEKİ video: çevrilmiş yol gönderiliyor', async () => {
-    (window as any).ipc = { invoke: async (_ch: string, hostPath: string) => {
+    (window as any).ipc = { invoke: async (ch: string, hostPath: string) => {
+      if (ch === 'browser-live') return {}
       expect(hostPath).toBe('C:\\Users\\me\\Game\\clip.mp4')
       return '/workspace/clip.mp4'
     } }
@@ -124,7 +128,7 @@ describe('D4-02 — video path namespace', () => {
 
     const body = gonderilenGovde(fetchMock)
     expect(body.videos).toEqual([urlGirdisi])
-    expect(invoke).not.toHaveBeenCalled()
+    expect(pathCalls(invoke)).toEqual([])
     expect(showToast).not.toHaveBeenCalled()
   })
 
@@ -193,7 +197,7 @@ describe('D4-02 — video path namespace', () => {
 
     const body = gonderilenGovde(fetchMock)
     expect(body.videos).toBeUndefined()
-    expect(invoke).not.toHaveBeenCalled()
+    expect(pathCalls(invoke)).toEqual([])
     expect(showToast).not.toHaveBeenCalled()
   })
 })

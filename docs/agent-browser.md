@@ -31,14 +31,22 @@ no Playwright, no browser extension.
 - **User ops.** The user can `open` a tab and type an address at any time, and use
   `navigate` (same allow-list as the agent, no card), `back`, `forward`, `reload`, `close`.
 - **Take-over.** A user mouse-down or key-down in a tab sets `userControl` for that tab
-  ("Sen kullanıyorsun - Ajana bırak"); the panel's Take over button sets it too, Release
-  clears it. While it is set the host answers every agent command for that tab at once with
+  (the panel shows a "Sen kullanıyorsun" badge; there are no take-over or release buttons).
+  While it is set the host answers every agent command for that tab at once with
   `{ok:false, error:'user_control'}` (no queue, no timeout) and the backend turns that into
   the agent text: "The user is using this chat's browser tab. Do not call browser tools
-  until the user says they are done; tell the user what you are waiting for." It is not a
-  page change and drops nothing. After a release the next reply carries the tab's current
-  URL, so the per-chat page check drops that chat's cards and grants if the user moved the
-  page.
+  again in this turn; tell the user you will continue after their next message." It is not a
+  page change and drops nothing. The user's next message in that chat releases the tab
+  automatically (the renderer sends the `release` op when a user turn starts, including a
+  queued message when it is drained). After a release the next reply carries the tab's
+  current URL, so the per-chat page check drops that chat's cards and grants if the user
+  moved the page. The `take-over` and `release` ops stay in the host.
+- **Stop.** The panel's Stop ends the whole agent turn: it sends `halt` (the page stops at
+  once) and runs the chat's own stop (`/chat-stop/{id}`) together. It reads "Durduruluyor"
+  while in flight and "Durduruldu" once the turn has ended; a failure shows a visible line
+  and re-enables the button.
+- **Fresh chat.** From an unsaved new chat the panel's address input and Open button work:
+  the chat is created first, then `open` is sent with its id.
 - **Clear browsing data.** The settings button "Tarayıcı oturumlarını temizle" clears the
   session's storage and cache and closes every tab. The host reports it as one
   `POST /browser/runtime` with the current `running`, `port`, `token` and `"cleared": true`;

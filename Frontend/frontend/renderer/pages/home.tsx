@@ -1319,7 +1319,7 @@ export default function Home() {
               />
             ),
             bilgisayar: <ComputerLivePanel visible={ws.open && ws.tab === 'bilgisayar'} />,
-            tarayici: <BrowserPanel visible={ws.open && ws.tab === 'tarayici'} conversationId={chat.activeConvId} />,
+            tarayici: <BrowserPanel visible={ws.open && ws.tab === 'tarayici'} conversationId={chat.activeConvId} running={chat.loading} onStop={chat.stopMessage} onNeedChat={() => chat.createNewConversation()} />,
           }}
           drawer={(
             <TerminalPanel

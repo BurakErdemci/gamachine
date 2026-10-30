@@ -293,7 +293,7 @@ def test_a_user_control_reply_gives_the_wait_text_and_keeps_the_grant(live):
             assert reply["ok"] is False and reply["error"] == gateway.USER_CONTROL
     finally:
         browser_gateway._host = host_call
-    assert "Do not call browser tools until the user says they are done" in gateway.USER_CONTROL
+    assert "Do not call browser tools again in this turn" in gateway.USER_CONTROL
     assert len(grants_of(live)) == 1
     assert command(live)["ok"] is True
 
