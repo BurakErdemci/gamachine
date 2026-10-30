@@ -2551,7 +2551,7 @@ Max 300 kelime. Türkçe yaz.
     # eski yorum öyle diyordu ve yanlıştı) → kullanıcı karar verir →
     # /mcp-approval-respond/{gate_id} → köprü /mcp-approval-result ile öğrenir.
 
-    def _verified_mcp_owner(claimed: Any, token: str) -> tuple:
+    def _verified_mcp_owner(claimed: Any, token: str, lookup_failed: Optional[list] = None) -> tuple:
         """(owner, "") when the claimed chat can be trusted, else (_UNKNOWN_OWNER, why).
 
         The claim arrives from another process, and a card shown in the wrong
@@ -2559,6 +2559,8 @@ Max 300 kelime. Türkçe yaz.
         this chat it would never show). So the chat must exist, be the local
         user's, and have a turn in flight now: a card only comes out of a
         running turn, and a claim naming an idle chat is stale or wrong.
+        A caller that must tell a failed lookup from a missing chat passes a list
+        and finds it non-empty after the call.
         """
         if claimed is None:
             return _UNKNOWN_OWNER, "no conversation_id in the body"
@@ -2567,6 +2569,8 @@ Max 300 kelime. Türkçe yaz.
         try:
             owner = db.get_conversation_owner(claimed)
         except Exception as exc:
+            if lookup_failed is not None:
+                lookup_failed.append(exc)
             return _UNKNOWN_OWNER, f"conversation {claimed} lookup failed ({type(exc).__name__})"
         local_user, _ = get_current_user(db, token)
         if type(owner) is not int or owner != local_user:
@@ -2969,7 +2973,8 @@ Max 300 kelime. Türkçe yaz.
     ):
         _check_token(x_session_token)
         claimed = body.get("conversation_id")
-        owner, _ = _verified_mcp_owner(claimed, x_session_token)
+        lookup_failed: list = []
+        owner, _ = _verified_mcp_owner(claimed, x_session_token, lookup_failed)
         params = body.get("params")
         if not isinstance(params, dict):
             params = {}
@@ -2978,7 +2983,8 @@ Max 300 kelime. Türkçe yaz.
                   or (claimed is None and bool(_computer_halted)))
         if not halted and type(claimed) is int:
             # An approval granted before Stop can arrive after the chat was deleted; nothing may run for it.
-            halted = _names_missing_chat(claimed, fail_closed=True)
+            # A lookup that raised stays a refusal even when a later lookup recovers.
+            halted = bool(lookup_failed) or _names_missing_chat(claimed, fail_closed=True)
         enabled = computer_settings.enabled(db)
         if enabled and not halted and body.get("check") is not True:
             computer_activity.record(None if owner is _UNKNOWN_OWNER else owner,
