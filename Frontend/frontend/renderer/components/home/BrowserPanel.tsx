@@ -73,12 +73,23 @@ const STOP_ICON = <svg className="bp-stop-ic" viewBox="0 0 12 12" aria-hidden="t
  * be shown: never while the tab is hidden or something in the DOM overlaps it. It shows the tab
  * of the chat open in the UI (`conversationId`); every op names that chat.
  */
-export function BrowserPanel({ visible, conversationId }: { visible: boolean; conversationId: number | null }) {
+export function BrowserPanel({ visible, conversationId, running, onStop, onNeedChat }: {
+  visible: boolean;
+  conversationId: number | null;
+  /** The chat on screen has a turn in flight. */
+  running: boolean;
+  /** The chat's own Stop: ends the whole turn, not only the browser tools. */
+  onStop: () => Promise<void>;
+  /** Creates the chat for an `open` from a fresh, unsaved chat; null when it failed. */
+  onNeedChat: () => Promise<number | null>;
+}) {
   const { t } = useLang();
   const state = useBrowserLive(conversationId);
   const hostRef = useRef<HTMLDivElement>(null);
   const [covered, setCovered] = useState(false);
-  const [stopping, setStopping] = useState(false);
+  // idle -> busy (calls in flight) -> sent (waiting for the turn to end) -> stopped (until the next turn).
+  const [stop, setStop] = useState<'idle' | 'busy' | 'sent' | 'stopped'>('idle');
+  const [stopFailed, setStopFailed] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [openUrl, setOpenUrl] = useState('');
@@ -136,27 +147,52 @@ export function BrowserPanel({ visible, conversationId }: { visible: boolean; co
   useEffect(() => () => {
     if (conversationId != null) void invoke({ op: 'visible', conversationId, visible: false });
   }, [conversationId]);
-  useEffect(() => { setStopping(false); setEditing(false); }, [state.active, conversationId]);
+  useEffect(() => { setStop('idle'); setStopFailed(false); setEditing(false); }, [state.active, conversationId]);
+  useEffect(() => {
+    if (stop === 'sent' && !running) setStop('stopped');
+    else if (stop === 'stopped' && running) setStop('idle');
+  }, [stop, running]);
   useEffect(() => { setOpenUrl(''); }, [conversationId]);
 
   const send = (op: string, extra: Record<string, unknown> = {}) => {
     if (conversationId != null) void invoke({ op, conversationId, ...extra });
   };
 
-  const stop = async () => {
-    if (stopping || conversationId == null) return;
-    setStopping(true);
-    await invoke({ op: 'halt', conversationId });
-    setStopping(false);
+  // The page stops at once (halt); the chat's Stop ends the turn itself.
+  const doStop = async () => {
+    if (stop !== 'idle' || !running || conversationId == null) return;
+    const id = conversationId;
+    setStop('busy');
+    setStopFailed(false);
+    try {
+      const [halt] = await Promise.all([
+        Promise.resolve(ipcOf()?.invoke?.(BROWSER_CHANNEL, { op: 'halt', conversationId: id })),
+        onStop(),
+      ]);
+      if (chatId.current !== id) return;
+      if (halt?.halted === false) throw new Error('halt refused');
+      setStop('sent');
+    } catch {
+      if (chatId.current !== id) return;
+      setStopFailed(true);
+      setStop('idle');
+    }
   };
 
-  const submit = (op: 'navigate' | 'open', text: string) => {
+  const openFromIdle = async (text: string) => {
+    const target = addressToUrl(text);
+    if (!target) return;
+    const id = conversationId ?? await onNeedChat();
+    if (id) void invoke({ op: 'open', conversationId: id, url: target });
+  };
+
+  const submit = (op: 'navigate', text: string) => {
     const target = addressToUrl(text);
     if (!target) return;
     send(op, { url: target });
   };
 
-  const keyOf = (op: 'navigate' | 'open', url: string) => (e: React.KeyboardEvent) => {
+  const keyOf = (op: 'navigate', url: string) => (e: React.KeyboardEvent) => {
     // IME Enter commits the composition first.
     if (e.key !== 'Enter' || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     e.preventDefault();
@@ -184,20 +220,12 @@ export function BrowserPanel({ visible, conversationId }: { visible: boolean; co
               onBlur={() => setEditing(false)}
               onChange={e => setDraft(e.target.value)}
               onKeyDown={keyOf('navigate', draft)} />
-            <button type="button" className="bp-stop" onClick={stop} disabled={stopping}>
-              {STOP_ICON}<span>{t(stopping ? 'bp.stopping' : 'bp.stop')}</span>
+            {state.userControl && <span className="bp-control-t" role="status">{t('bp.userControl')}</span>}
+            <button type="button" className="bp-stop" onClick={doStop} disabled={stop !== 'idle' || !running}>
+              {STOP_ICON}<span>{t(stop === 'busy' || stop === 'sent' ? 'bp.stopping' : stop === 'stopped' ? 'bp.stopped' : 'bp.stop')}</span>
             </button>
           </header>
-          <div className="bp-control" data-user={state.userControl ? 'true' : 'false'}>
-            {state.userControl ? (
-              <>
-                <span className="bp-control-t" role="status">{t('bp.userControl')}</span>
-                <button type="button" className="bp-take bp-take-on" onClick={() => send('release')}>{t('bp.release')}</button>
-              </>
-            ) : (
-              <button type="button" className="bp-take" onClick={() => send('take-over')}>{t('bp.takeOver')}</button>
-            )}
-          </div>
+          {stopFailed && <p className="bp-stop-failed" role="alert">{t('bp.stopFailed')}</p>}
           <p className="bp-title" title={state.title}>
             <span className="bp-title-t">{state.title || state.url}</span>
             {state.loading && <span className="bp-loading" role="status">{t('bp.loading')}</span>}
@@ -207,14 +235,18 @@ export function BrowserPanel({ visible, conversationId }: { visible: boolean; co
       <div className="bp-view" ref={hostRef} data-testid="bp-view">
         {!state.active && (
           <div className="bp-idle">
-            <p className="bp-idle-title">{t(conversationId == null ? 'bp.noChat' : 'bp.idle')}</p>
+            <p className="bp-idle-title">{t('bp.idle')}</p>
             <div className="bp-open">
               <input className="bp-address" type="text" value={openUrl} placeholder={t('bp.addressHint')}
-                aria-label={t('bp.address')} spellCheck={false} disabled={conversationId == null}
+                aria-label={t('bp.address')} spellCheck={false}
                 onChange={e => setOpenUrl(e.target.value)}
-                onKeyDown={keyOf('open', openUrl)} />
-              <button type="button" className="bp-open-go" disabled={conversationId == null}
-                onClick={() => submit('open', openUrl)}>{t('bp.open')}</button>
+                onKeyDown={e => {
+                  if (e.key !== 'Enter' || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+                  e.preventDefault();
+                  void openFromIdle(openUrl);
+                }} />
+              <button type="button" className="bp-open-go"
+                onClick={() => void openFromIdle(openUrl)}>{t('bp.open')}</button>
             </div>
           </div>
         )}
