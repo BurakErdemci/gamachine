@@ -8,6 +8,8 @@ export const MAX_CONTEXT_CHARS = 6000;
 
 export interface BrowserNoteData {
   id: string;
+  /** The note's number: drawn on its pin, shown on its chip and used in the message (stable per tab while the note exists). */
+  n?: number;
   comment: string;
   kind: 'element' | 'area';
   tag?: string;
@@ -35,6 +37,7 @@ export function toNote(raw: unknown): BrowserNoteData | null {
   const comment = typeof r.comment === 'string' ? r.comment.trim().slice(0, 1000) : '';
   if (!id || !comment || (r.kind !== 'element' && r.kind !== 'area')) return null;
   const note: BrowserNoteData = { id, comment, kind: r.kind };
+  if (Number.isInteger(r.n) && r.n > 0) note.n = r.n;
   for (const [field, max] of [['tag', 40], ['role', 40], ['name', 200], ['href', 300], ['path', 200], ['text', 500]] as const) {
     const v = text(r[field], max);
     if (v) note[field] = v;
@@ -56,6 +59,9 @@ const fenced = (value: unknown): string => {
 
 /** How much of the page's own wording a note keeps: 0 everything, 3 only its kind and position. */
 type Detail = 0 | 1 | 2 | 3;
+
+/** The number a note carries everywhere; a note without one (older event) falls back to its place among the sent ones. */
+export const noteNumber = (note: BrowserNoteData, place: number): number => note.n ?? place + 1;
 
 function pageNote(n: number, note: BrowserNoteData, detail: Detail) {
   const out: Record<string, unknown> = { n, kind: note.kind };
@@ -85,10 +91,10 @@ function buildContext(chips: readonly BrowserChip[], detail: Detail | 'none'): s
   }
   for (const group of noteTabs.values()) {
     // Only the user's own words are plain text; everything the page supplied sits inside the fence after them.
-    const lines = group.map((chip, i) => `${i + 1}. "${text(chip.note.comment, 1000)}"`);
+    const lines = group.map((chip, i) => `${noteNumber(chip.note, i)}. "${text(chip.note.comment, 1000)}"`);
     const head = `[Tarayıcı notları — sekme ${group[0].tabId}]\n${lines.join('\n')}`;
     blocks.push(detail === 'none' ? head
-      : `${head}\n${fenced({ tab: pageTab(group[0], detail), notes: group.map((chip, i) => pageNote(i + 1, chip.note, detail)) })}`);
+      : `${head}\n${fenced({ tab: pageTab(group[0], detail), notes: group.map((chip, i) => pageNote(noteNumber(chip.note, i), chip.note, detail)) })}`);
   }
   for (const chip of chips) {
     if (chip.type !== 'page') continue;
@@ -182,6 +188,16 @@ const ipcOf = (): any => (typeof window !== 'undefined' ? (window as any).ipc : 
 const invoke = (payload: Record<string, unknown>) => {
   try { return Promise.resolve(ipcOf()?.invoke?.('browser-live', payload)).catch(() => undefined); } catch { return Promise.resolve(undefined); }
 };
+
+/** Resolves with the promise or, after `ms`, with undefined: a send never waits longer than this on the browser. */
+export function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** The longest a send waits for the browser to hand its tab back before it goes on. */
+export const RELEASE_WAIT_MS = 2000;
 
 /** The chip's ×: the chip goes and so does its pin in the page. */
 export function dismissBrowserChip(conversationId: number | null | undefined, chip: BrowserChip): void {

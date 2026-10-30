@@ -21,8 +21,9 @@ import { AnimatedChatInput } from '../renderer/components/ui/animated-ai-chat'
 import { useChat } from '../renderer/hooks/home/useChat'
 import {
   addBrowserChips, addNotesFromEvent, addPageChip, formatBrowserContext, getBrowserChips, isAnnotateShortcut, parseBrowserContext,
-  takeBrowserChips, MAX_CONTEXT_CHARS, type BrowserChip,
+  takeBrowserChips, withinMs, MAX_CONTEXT_CHARS, type BrowserChip,
 } from '../renderer/lib/browserNotes'
+import { ceviriUygula } from '../renderer/lib/i18n'
 
 const mockedAxios = axios as unknown as { post: ReturnType<typeof vi.fn>; get: ReturnType<typeof vi.fn>; delete: ReturnType<typeof vi.fn> }
 
@@ -82,6 +83,46 @@ describe('formatBrowserContext', () => {
     for (let i = 0; i < 40; i++) expect(out).toContain(`"yorum ${i}"`)
     expect(out.match(/<page_data /g)?.length ?? 0).toBe(out.match(/<\/page_data>/g)?.length ?? 0)
     expect(formatBrowserContext([])).toBe('')
+  })
+})
+
+describe('note numbers', () => {
+  it('uses the note\'s own number in the message block, page data and chip, not its place among the sent ones', () => {
+    const block = formatBrowserContext([noteChip({ id: 'b', comment: 'ikinci', n: 2 }), noteChip({ id: 'd', comment: 'dördüncü', n: 4 })])
+    expect(block).toContain('2. "ikinci"\n4. "dördüncü"')
+    const data = JSON.parse(block.split('trust="untrusted">\n')[1].split('\n</page_data>')[0])
+    expect(data.notes.map((n: any) => n.n)).toEqual([2, 4])
+    expect(formatBrowserContext([noteChip({ id: 'b', comment: 'tek', n: 2 })])).toContain('2. "tek"')
+    // a note from an older event has no number: its place among the sent ones
+    expect(formatBrowserContext([noteChip({ comment: 'eski' })])).toContain('1. "eski"')
+  })
+
+  it('keeps the number a browser-notes event carries and drops one that is not a positive integer', () => {
+    addNotesFromEvent({ conversationId: 4, tabId: 2, url: 'https://a.example/', title: 'A', notes: [note({ n: 3 }), note({ id: 'n2', n: 0 }), note({ id: 'n3', n: 1.5 })] })
+    expect(getBrowserChips(4).map(c => (c as any).note.n)).toEqual([3, undefined, undefined])
+  })
+
+  it('writes English counts in the singular and the plural, Turkish unchanged', () => {
+    expect(ceviriUygula('en', 'chat.noteSummaryOne', { n: 1 })).toBe('📝 1 note')
+    expect(ceviriUygula('en', 'chat.noteSummary', { n: 2 })).toBe('📝 2 notes')
+    expect(ceviriUygula('tr', 'chat.noteSummaryOne', { n: 1 })).toBe('📝 1 not')
+    expect(ceviriUygula('tr', 'chat.noteSummary', { n: 2 })).toBe('📝 2 not')
+  })
+})
+
+describe('withinMs', () => {
+  afterEach(() => { vi.useRealTimers() })
+  it('resolves with the promise, or with undefined once the time is up', async () => {
+    expect(await withinMs(Promise.resolve(5), 2000)).toBe(5)
+    vi.useFakeTimers()
+    const pending = withinMs(new Promise<number>(() => {}), 2000)
+    await vi.advanceTimersByTimeAsync(1999)
+    let done = false
+    void pending.then(() => { done = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await pending).toBeUndefined()
   })
 })
 
@@ -154,12 +195,10 @@ function fakeHostFixture(platform = 'win32') {
     executeJavaScriptInIsolatedWorld: vi.fn(async (_w: number, scripts: { code: string }[]) => {
       const code = scripts[0].code
       if (code.includes('.takePick(')) return wc.pickState()
-      if (code.includes('.takeNotes(')) return wc.takeResult()
       if (code.includes('.annotateOn(')) return { active: true }
       if (code.includes('.commitPin(')) return wc.commitResult()
       return {}
     }),
-    takeResult: () => ({ notes: [], active: true }),
     commitResult: () => ({ ok: true }),
   })
   const view: any = { webContents: wc, setBounds: vi.fn(), setVisible: vi.fn() }
@@ -213,6 +252,8 @@ const boxSays = (f: ReturnType<typeof fakeHostFixture>, message: Record<string, 
 
 /** Annotate mode on, a target picked and the comment box open next to it. */
 async function pickTarget(f: ReturnType<typeof fakeHostFixture>) {
+  // The box needs a panel to sit in; a test that set its own bounds keeps them.
+  if ((f.host as any).bounds.width === 0) await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
   await openPage(f)
   await annotate(f, true)
   f.wc.pickState = () => pickState({ pick: PICK })
@@ -238,6 +279,35 @@ describe('placeNoteBox', () => {
       expect(r.x + r.width).toBeLessThanOrEqual(panel.x + panel.width)
       expect(r.y).toBeGreaterThanOrEqual(panel.y)
       expect(r.y + r.height).toBeLessThanOrEqual(panel.y + panel.height)
+    }
+  })
+})
+
+describe('placeNoteBox bounds', () => {
+  const panel = { x: 300, y: 50, width: 800, height: 600 }
+  const size = { width: 320, height: 56 }
+  const inside = (b: { x: number; y: number; width: number; height: number }) =>
+    b.x >= panel.x && b.y >= panel.y && b.x + b.width <= panel.x + panel.width && b.y + b.height <= panel.y + panel.height
+
+  it('stays fully inside the panel for a wide target scrolled above or below the view', () => {
+    expect(inside(placeNoteBox({ x: 10, y: -600, width: 700, height: 40 }, panel, size))).toBe(true)
+    expect(inside(placeNoteBox({ x: 10, y: 1500, width: 700, height: 40 }, panel, size))).toBe(true)
+    expect(placeNoteBox({ x: 10, y: -600, width: 700, height: 40 }, panel, size).y).toBe(50 + 8)
+    expect(placeNoteBox({ x: 10, y: 1500, width: 700, height: 40 }, panel, size).y).toBe(50 + 600 - 8 - 56)
+  })
+
+  it('never leaves the panel for any target, and still keeps off the target when a side has room', () => {
+    let seed = 7
+    const rnd = (n: number) => { seed = (seed * 1664525 + 1013904223) % 4294967296; return Math.floor((seed / 4294967296) * n) }
+    for (let i = 0; i < 5000; i++) {
+      const rect = { x: rnd(1800) - 500, y: rnd(1800) - 600, width: 1 + rnd(900), height: 1 + rnd(700) }
+      const b = placeNoteBox(rect, panel, size)
+      expect(inside(b), JSON.stringify(rect)).toBe(true)
+      const l = panel.x + rect.x, t = panel.y + rect.y, r = l + rect.width, bt = t + rect.height
+      const room = r + 10 + 320 <= panel.x + panel.width - 8 || l - 10 - 320 >= panel.x + 8 || bt + 10 + 56 <= panel.y + panel.height - 8 || t - 10 - 56 >= panel.y + 8
+      const overlap = b.x < r && b.x + b.width > l && b.y < bt && b.y + b.height > t
+      // Room beside a target that is partly off the panel is not the same as room in view: only check targets inside it.
+      if (room && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= panel.width && rect.y + rect.height <= panel.height) expect(overlap, JSON.stringify(rect)).toBe(false)
     }
   })
 })
@@ -307,14 +377,14 @@ describe('host annotate ops', () => {
     const f = fakeHostFixture()
     await pickTarget(f)
     boxSays(f, { t: 'submit', text: '  Bunu mavi yap  ' })
-    // synchronously: the toolbar and the chord already read "off"
-    expect(await live(f)).toBeUndefined()
+    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
+    // the note is delivered first; the toolbar and the chord read "off" with it
+    await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
     expect(f.sent('browser-live').at(-1)).not.toHaveProperty('annotating')
     expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
     expect(f.sent('browser-notes')[0]).toEqual({
       conversationId: 4, tabId: 1, url: 'https://example.com/', title: 'Example', viewport: { width: 1000, height: 700 },
-      notes: [{ ...PICK, comment: 'Bunu mavi yap' }],
+      notes: [{ ...PICK, comment: 'Bunu mavi yap', n: 1 }],
     })
     expect(f.pageCalls('commitPin')).toEqual([expect.stringContaining('.commitPin({"pickId":"p1","n":1})')])
     for (const code of f.wc.executeJavaScriptInIsolatedWorld.mock.calls.map((c: any) => c[1][0].code as string)) expect(code).not.toContain('Bunu mavi yap')
@@ -343,7 +413,7 @@ describe('host annotate ops', () => {
     const f = fakeHostFixture()
     await pickTarget(f)
     boxSays(f, { t: 'draft', text: 'yarım yorum', h: 56 })
-    f.wc.pickState = () => pickState({ scroll: [0, 120], rect: { x: 100, y: -20, width: 50, height: 20 } })
+    f.wc.pickState = () => pickState({ scroll: [0, 120], rect: { x: 100, y: -5, width: 50, height: 20 } })
     await f.poll()
     expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
     await f.poll()
@@ -374,7 +444,7 @@ describe('host annotate ops', () => {
     await f.poll()
     expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("kalsın")')
     // full-screen toggle: bounds change
-    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
+    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1200, height: 800 } })
     expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
     f.wc.emit('did-navigate', {}, 'https://example.com/next')
     expect(await live(f)).toBeUndefined()
@@ -391,6 +461,127 @@ describe('host annotate ops', () => {
     await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
     expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
     expect(chord(f, { key: 'G' }, f.boxWc).preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('keeps the box hidden, unfocused, while the target is outside the panel, and shows it again with the draft once the target is back', async () => {
+    const f = fakeHostFixture()
+    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 300, y: 50, width: 800, height: 600 } })
+    await pickTarget(f)
+    boxSays(f, { t: 'draft', text: 'taslak', h: 56 })
+    const focusCalls = f.boxWc.focus.mock.calls.length
+    const gone = { x: 10, y: -600, width: 700, height: 40 }
+    f.wc.pickState = () => pickState({ scroll: [0, 700], rect: gone })
+    await f.poll()
+    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
+    const boundsCalls = f.boxView.setBounds.mock.calls.length
+    await f.poll()
+    await f.poll()
+    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
+    expect(f.boxView.setBounds.mock.calls.length).toBe(boundsCalls)
+    expect(f.boxWc.focus.mock.calls.length).toBe(focusCalls)
+    expect(f.win.contentView.addChildView.mock.calls.length).toBe(2)
+    // below the panel as well
+    f.wc.pickState = () => pickState({ scroll: [0, -1400], rect: { x: 10, y: 1500, width: 700, height: 40 } })
+    await f.poll()
+    await f.poll()
+    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
+    expect(f.boxWc.focus.mock.calls.length).toBe(focusCalls)
+    // the user scrolls back and rests: the box returns inside the panel with the draft
+    f.wc.pickState = () => pickState({ scroll: [0, 0], rect: PICK.rect })
+    await f.poll()
+    await f.poll()
+    await vi.waitFor(() => expect(f.boxView.setVisible).toHaveBeenLastCalledWith(true))
+    expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("taslak")')
+    const b = f.boxView.setBounds.mock.calls.at(-1)[0]
+    expect(b.y).toBeGreaterThanOrEqual(50)
+    expect(b.y + b.height).toBeLessThanOrEqual(650)
+    await vi.waitFor(() => expect(f.boxWc.focus.mock.calls.length).toBeGreaterThan(focusCalls))
+  })
+
+  it('a refused pin keeps the box, the draft and the mode, tells the user, and a later save goes through', async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    f.wc.commitResult = () => ({ error: 'too_many_notes' })
+    boxSays(f, { t: 'submit', text: 'önemli yorum' })
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("En fazla 50 not")'))
+    expect(f.sent('browser-notes')).toHaveLength(0)
+    expect(await live(f)).toBe(true)
+    expect(f.boxView.setVisible).not.toHaveBeenLastCalledWith(false)
+    // the error comes back with the box when it is closed and reopened
+    boxSays(f, { t: 'draft', text: 'önemli yorum', h: 56 })
+    f.wc.commitResult = () => ({ error: 'no_pick' })
+    boxSays(f, { t: 'submit', text: 'önemli yorum' })
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("Not kaydedilemedi, tekrar dene")'))
+    f.wc.commitResult = () => ({ ok: true })
+    boxSays(f, { t: 'submit', text: 'önemli yorum' })
+    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
+    expect(f.sent('browser-notes')[0].notes[0]).toMatchObject({ comment: 'önemli yorum', n: 1 })
+    expect(await live(f)).toBeUndefined()
+  })
+
+  it('shows the last error again when the box is reopened with the same pick', async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    f.wc.commitResult = () => ({ error: 'too_many_notes' })
+    boxSays(f, { t: 'submit', text: 'x' })
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("En fazla 50 not")'))
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    await f.poll()
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("En fazla 50 not")'))
+    // typing clears it
+    boxSays(f, { t: 'draft', text: 'xy', h: 56 })
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    await f.poll()
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("xy")'))
+  })
+
+  it('takes the pin back and keeps the box open when the note cannot be delivered', async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    f.win.webContents.send.mockImplementation((channel: string) => { if (channel === 'browser-notes') throw new Error('window closing') })
+    boxSays(f, { t: 'submit', text: 'kayıp olmasın' })
+    await vi.waitFor(() => expect(f.pageCalls('uncommitPin')).toEqual([expect.stringContaining('"pickId":"p1"')]))
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("Not kaydedilemedi, tekrar dene")'))
+    expect(await live(f)).toBe(true)
+    // a retry once the window answers again delivers it
+    f.win.webContents.send.mockImplementation(() => undefined)
+    boxSays(f, { t: 'submit', text: 'kayıp olmasın' })
+    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
+    expect(f.sent('browser-notes')[0].notes[0]).toMatchObject({ comment: 'kayıp olmasın', n: 1 })
+  })
+
+  it('delivers the note even when the page cannot leave the mode afterwards', async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    const base = f.wc.executeJavaScriptInIsolatedWorld.getMockImplementation()!
+    f.wc.executeJavaScriptInIsolatedWorld.mockImplementation(async (w: number, scripts: any) => {
+      if (scripts[0].code.includes('.annotateOff(')) throw new Error('timeout')
+      return base(w, scripts)
+    })
+    boxSays(f, { t: 'submit', text: 'yine de gitsin' })
+    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
+    await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
+    expect(f.pageCalls('uncommitPin')).toHaveLength(0)
+  })
+
+  it('numbers the notes of a tab 1, 2, ... and ignores a second Enter while a save is running', async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    boxSays(f, { t: 'submit', text: 'bir' })
+    boxSays(f, { t: 'submit', text: 'bir' })
+    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
+    expect(f.pageCalls('commitPin')).toHaveLength(1)
+    await annotate(f, true)
+    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
+    await f.poll()
+    f.wc.pickState = () => pickState({ picking: 'p2' })
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenCalledTimes(2))
+    boxSays(f, { t: 'submit', text: 'iki' })
+    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(2))
+    expect(f.sent('browser-notes').map(e => e.notes[0].n)).toEqual([1, 2])
+    expect(f.pageCalls('commitPin')[1]).toContain('"n":2')
   })
 
   it('ends the mode when the page leaves it itself (Esc)', async () => {
@@ -418,11 +609,10 @@ describe('host annotate ops', () => {
     expect(f.hasPoll()).toBe(false)
   })
 
-  it('returns notes and clears pins through the notes and clear-notes ops', async () => {
+  it('clears pins through the clear-notes op, and has no separate op to fetch notes', async () => {
     const f = fakeHostFixture()
     await openPage(f)
-    f.wc.takeResult = () => ({ notes: [note()], active: true })
-    expect(await f.host.invoke({ op: 'notes', conversationId: 4 })).toEqual({ notes: [note()], tabId: 1, url: 'https://example.com/', title: 'Example' })
+    expect(await f.host.invoke({ op: 'notes', conversationId: 4 })).toHaveProperty('error')
     await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: ['n1'] })
     expect(f.pageCalls('clearNotes').at(-1)).toContain('.clearNotes({"ids":["n1"]})')
     expect(await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: [5] })).toHaveProperty('error')
@@ -622,8 +812,6 @@ describe('page script', () => {
     expect(roots[0].querySelector('.pin')!.textContent).toBe('1')
     const mark = roots[0].querySelector('.mark') as HTMLElement
     expect([mark.style.left, mark.style.top, mark.style.width, mark.style.height]).toEqual(['10px', '20px', '100px', '30px'])
-    expect(lib().takeNotes().notes).toEqual([p])
-    expect(lib().takeNotes().notes).toEqual([])
     lib().annotateOff()
     expect(document.documentElement.style.cursor).toBe('')
     expect(document.querySelector('[data-gm-annotate]')).not.toBeNull()
@@ -683,6 +871,65 @@ describe('page script', () => {
     expect(dump).toContain('kilitli-ama-okunur')
   })
 
+  it('draws the number the host gave on the pin, refuses a missing number, and uncommitPin takes the pin back as a pending target', () => {
+    start(BUTTON)
+    click(document.getElementById('buy')!, 20, 30)
+    const id = pick().pick.id
+    expect(lib().commitPin({ pickId: id })).toEqual({ error: 'bad_number' })
+    expect(lib().commitPin({ pickId: id, n: 7 })).toEqual({ ok: true })
+    expect(roots[0].querySelector('.pin')!.textContent).toBe('7')
+    expect(lib().uncommitPin({ pickId: 'other' })).toEqual({ error: 'no_note' })
+    expect(lib().uncommitPin({ pickId: id })).toEqual({ ok: true })
+    expect(roots[0].querySelectorAll('.pin')).toHaveLength(0)
+    expect(pick()).toMatchObject({ picking: id, pick: null })
+    expect(lib().commitPin({ pickId: id, n: 7 })).toEqual({ ok: true })
+    expect(roots[0].querySelector('.pin')!.textContent).toBe('7')
+  })
+
+  it('keeps the numbers of the notes apart: a later note shows its own number, whatever else is pinned', () => {
+    start('<button id="a" data-r="10,20,100,30">Alpha</button><button id="b" data-r="10,80,100,30">Beta</button>')
+    click(document.getElementById('a')!, 20, 30)
+    const a = pick().pick
+    lib().commitPin({ pickId: a.id, n: 1 })
+    lib().annotateOff(); lib().annotateOn()
+    click(document.getElementById('b')!, 20, 90)
+    const b = pick().pick
+    lib().commitPin({ pickId: b.id, n: 2 })
+    expect([...roots[0].querySelectorAll('.pin')].map(p => p.textContent)).toEqual(['1', '2'])
+    // the first note leaves; the second keeps its number
+    expect(lib().clearNotes({ ids: [a.id] })).toEqual({ cleared: 1 })
+    expect([...roots[0].querySelectorAll('.pin')].map(p => p.textContent)).toEqual(['2'])
+  })
+
+  it('treats any token of a role list as a field in element and area picks', () => {
+    const variants: [string, string][] = [
+      ['S-roleLeadingSpace', '<div role=" textbox">S-roleLeadingSpace</div>'],
+      ['S-roleTwoTokens', '<div role="textbox searchbox">S-roleTwoTokens</div>'],
+      ['S-roleFallbackFirst', '<div role="presentation textbox">S-roleFallbackFirst</div>'],
+      ['S-roleTab', '<div role="none\ttextbox">S-roleTab</div>'],
+      ['S-roleUpper', '<div role="TEXTBOX Foo">S-roleUpper</div>'],
+      ['S-combobox', '<div role="x combobox">S-combobox</div>'],
+      ['S-spinbutton', '<div role="spinbutton">S-spinbutton</div>'],
+      ['S-searchbox', '<div role="searchbox">S-searchbox</div>'],
+    ]
+    const html = variants.map(([, h], i) => h.replace('>', ` data-r="10,${i * 30},300,25">`)).join('') + '<p data-r="10,300,300,25">S-plain</p><div role="textboxes" data-r="10,330,300,25">S-notAToken</div>'
+    start(html)
+    const leaked: string[] = []
+    for (const el of document.body.querySelectorAll('div, p')) {
+      click(el, 20, 5)
+      const json = JSON.stringify(pick().pick)
+      for (const [tag] of variants) if (json.includes(tag)) leaked.push(tag)
+      if (el.tagName === 'P') expect(json).toContain('S-plain')
+      if (el.getAttribute('role') === 'textboxes') expect(json).toContain('S-notAToken')
+      lib().dropPick()
+    }
+    dragArea(0, 0, 400, 400)
+    const area = JSON.stringify(pick().pick)
+    for (const [tag] of variants) if (area.includes(tag)) leaked.push(`area:${tag}`)
+    expect(area).toContain('S-plain')
+    expect(leaked).toEqual([])
+  })
+
   it('ignores every event the page itself made up', () => {
     start(BUTTON)
     trust = false
@@ -718,14 +965,14 @@ describe('page script', () => {
 
   it('keeps pins after the mode ends and removes the overlay with the last cleared note', () => {
     start(BUTTON)
-    const save = () => { click(document.getElementById('buy')!, 20, 30); lib().commitPin({ pickId: pick().pick.id, n: 1 }) }
-    save()
+    const ids: string[] = []
+    const save = (n: number) => { click(document.getElementById('buy')!, 20, 30); const id = pick().pick.id; ids.push(id); lib().commitPin({ pickId: id, n }) }
+    save(1)
     lib().annotateOn()
-    save()
+    save(2)
     expect(roots[0].querySelectorAll('.pin')).toHaveLength(2)
     lib().annotateOff()
     expect(document.querySelector('[data-gm-annotate]')).not.toBeNull()
-    const ids = lib().takeNotes().notes.map((n: any) => n.id)
     expect(lib().clearNotes({ ids: ['nope'] })).toEqual({ cleared: 0 })
     expect(lib().clearNotes({ ids: [ids[0]] })).toEqual({ cleared: 1 })
     expect(roots[0].querySelectorAll('.pin')).toHaveLength(1)
@@ -829,6 +1076,12 @@ describe('composer chips', () => {
     expect(getBrowserChips(5)).toHaveLength(1)
   })
 
+  it('numbers a note chip with the note\'s own number', () => {
+    addBrowserChips(4, [noteChip({ id: 'b', comment: 'ikinci', n: 2 }), noteChip({ id: 'c', comment: 'üçüncü', n: 3 })])
+    render(<Composer onSend={() => {}} />)
+    expect(Array.from(screen.getByTestId('browser-chips').querySelectorAll('.composer-chip-n')).map(n => n.textContent)).toEqual(['2', '3'])
+  })
+
   it('lets a message go out with chips and no typed text', () => {
     addBrowserChips(4, [noteChip()])
     const onSend = vi.fn()
@@ -924,6 +1177,35 @@ describe('sendMessage with browser chips', () => {
     expect(userMsg(result).content.startsWith('[Tarayıcı notları — sekme 1]')).toBe(true)
     await waitFor(() => expect(ops()).toContain('release'))
     expect(ops()).not.toContain('select')
+  })
+
+  it('a message for one note says the note\'s real number', async () => {
+    addBrowserChips(null, [noteChip({ id: 'b', comment: 'sadece bu', n: 2 }, 7)])
+    const { result } = hook()
+    await act(async () => { await result.current.sendMessage('x', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn()) })
+    expect(userMsg(result).content).toContain('[Tarayıcı notları — sekme 7]\n2. "sadece bu"')
+  })
+
+  it('goes on after 2 s when the browser release never answers, and the capture still follows', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      invoke.mockImplementation((_c: string, req: any) => (req?.op === 'release' ? new Promise(() => {}) : req?.op === 'panel-status' ? Promise.resolve({ activeTabId: 1 }) : req?.op === 'capture-notes' ? Promise.resolve({ image: SHOT }) : Promise.resolve({ ok: true })))
+      addBrowserChips(null, [noteChip({}, 1)])
+      const { result } = hook()
+      let sending: Promise<unknown> = Promise.resolve()
+      await act(async () => { sending = result.current.sendMessage('x', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn()) })
+      expect(ops()).toContain('release')
+      expect(ops()).not.toContain('capture-notes')
+      await act(async () => { await vi.advanceTimersByTimeAsync(1999) })
+      expect(ops()).not.toContain('capture-notes')
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      await act(async () => { await sending })
+      expect(ops().indexOf('release')).toBeLessThan(ops().indexOf('capture-notes'))
+      expect(userMsg(result).images).toEqual([SHOT])
+      expect(userMsg(result).content).toContain('[Tarayıcı notları — sekme 1]')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a message without notes captures nothing and clears no pins', async () => {

@@ -34,11 +34,12 @@ const MAX_TEXT_CHARS = 100_000
 const MAX_FILL_CHARS = 10_000
 // How often the page is asked for a new pick while annotate mode is on and visible.
 const PICK_POLL_MS = 150
-const MAX_NOTES_PER_POLL = 50
 const NOTE_COMMENT_CHARS = 1000
+const NOTE_MAX_NOTES = 50
+const NOTE_SAVE_FAILED = 'Not kaydedilemedi, tekrar dene'
 const NOTE_BOX_WIDTH = 320
 const NOTE_BOX_MIN_HEIGHT = 56
-const NOTE_BOX_MAX_HEIGHT = 168
+const NOTE_BOX_MAX_HEIGHT = 192
 const NOTE_BOX_GAP = 10
 const NOTE_BOX_MARGIN = 8
 const MAX_CAPTURE_SIDE = 1600
@@ -194,8 +195,8 @@ export const PAGE_LIB = String.raw`(() => {
   const NOTE_PATH_CHARS = 200;
   const NOTE_AREA_CHARS = 500;
   const DRAG_PX = 6;
-  // Text a person typed or chose never leaves the page: every place that reads text skips fields and editors (any contenteditable value except "false", in any case).
-  const FIELD_SELECTOR = 'input, textarea, select, option, [contenteditable]:not([contenteditable="false" i]), [role="textbox" i], [role="searchbox" i], [role="combobox" i], [aria-multiline="true" i]';
+  // Text a person typed or chose never leaves the page: every place that reads text skips fields and editors (any contenteditable value except "false", in any case; a role attribute is a token list, so one field token anywhere in it counts).
+  const FIELD_SELECTOR = 'input, textarea, select, option, [contenteditable]:not([contenteditable="false" i]), [role~="textbox" i], [role~="searchbox" i], [role~="combobox" i], [role~="spinbutton" i], [aria-multiline="true" i]';
   const SKIPPED_TEXT = FIELD_SELECTOR + ', script, style, noscript, template';
   const isField = (el) => !!el.isContentEditable || !!(el.closest && el.closest(FIELD_SELECTOR));
   const isSkipped = (el) => !!el.isContentEditable || !!el.closest(SKIPPED_TEXT);
@@ -290,7 +291,7 @@ export const PAGE_LIB = String.raw`(() => {
   const drawPins = () => {
     if (!anno) return;
     anno.pins.replaceChildren();
-    saved.forEach((note, i) => {
+    saved.forEach((note) => {
       const r = anchorRect(note);
       if (r.x + r.width < 0 || r.y + r.height < 0 || r.x > innerWidth || r.y > innerHeight) return;
       const mark = document.createElement('div');
@@ -299,7 +300,7 @@ export const PAGE_LIB = String.raw`(() => {
       anno.pins.appendChild(mark);
       const pin = document.createElement('div');
       pin.className = 'pin';
-      pin.textContent = String(i + 1);
+      pin.textContent = String(note.n);
       pin.style.left = clamp(r.x, 10, innerWidth - 10) + 'px';
       pin.style.top = clamp(r.y, 10, innerHeight - 10) + 'px';
       anno.pins.appendChild(pin);
@@ -592,12 +593,23 @@ export const PAGE_LIB = String.raw`(() => {
         pick: fresh ? fresh.data : null,
       };
     },
-    // The host saved the comment: the pending pick becomes a pinned, framed note.
+    // The host saved the comment: the pending pick becomes a pinned, framed note carrying the host's number (the one the message uses).
     commitPin(a) {
       if (!pending || pending.id !== (a && a.pickId)) return { error: 'no_pick' };
       if (saved.length >= NOTE_MAX_NOTES) return { error: 'too_many_notes' };
+      if (!Number.isInteger(a.n) || a.n < 1) return { error: 'bad_number' };
       saved.push({ data: pending.data, taken: false, anchor: pending.anchor, n: a.n });
       pending = null;
+      drawPins();
+      drawPick();
+      return { ok: true };
+    },
+    // The note was not delivered: its pin goes and the target is pending again, so the comment can be saved once more.
+    uncommitPin(a) {
+      const at = saved.findIndex((note) => note.data.id === (a && a.pickId));
+      if (at < 0) return { error: 'no_note' };
+      const [note] = saved.splice(at, 1);
+      if (!pending) pending = { id: note.data.id, kind: note.data.kind, data: note.data, anchor: note.anchor, reported: true };
       drawPins();
       drawPick();
       return { ok: true };
@@ -607,7 +619,7 @@ export const PAGE_LIB = String.raw`(() => {
       dropOverlayIfIdle();
       return { ok: true };
     },
-    // Pinned notes not handed over yet (they carry no comment: the host holds it); the pins stay until clearNotes.
+    // Kept because probes/annotate.py (the architect's static check) requires it in PAGE_LIB; the host no longer calls it.
     takeNotes() {
       const fresh = saved.filter((note) => !note.taken);
       for (const note of fresh) note.taken = true;
@@ -642,12 +654,14 @@ body{padding:6px}
 #t::placeholder{color:#9aa1ad}
 #s{flex:none;width:32px;height:32px;border:0;border-radius:50%;background:#f2f3f5;color:#1e2126;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
 #s:disabled{opacity:.35;cursor:default}
-</style></head><body><div id="b"><textarea id="t" rows="1" maxlength="1000" placeholder="Yorum ekle…" aria-label="Yorum ekle"></textarea><button id="s" type="button" aria-label="Gönder" disabled><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></button></div><script>
-const ta=document.getElementById('t'),send=document.getElementById('s'),box=document.getElementById('b');
+#e{margin:6px 16px 0;color:#ff9b9b;font-size:12px}
+</style></head><body><div id="w"><div id="b"><textarea id="t" rows="1" maxlength="1000" placeholder="Yorum ekle…" aria-label="Yorum ekle"></textarea><button id="s" type="button" aria-label="Gönder" disabled><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></button></div><div id="e" role="alert" hidden></div></div><script>
+const ta=document.getElementById('t'),send=document.getElementById('s'),wrap=document.getElementById('w'),err=document.getElementById('e');
 let seq=0;
 const post=(o)=>{o.q=++seq;document.title=JSON.stringify(o)};
 const fit=()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,112)+'px';send.disabled=!ta.value.trim()};
-const draft=()=>{fit();post({t:'draft',text:ta.value,h:box.offsetHeight+12})};
+const report=(t)=>post({t,text:ta.value,h:wrap.offsetHeight+12});
+const draft=()=>{err.hidden=true;fit();report('draft')};
 const submit=()=>{if(ta.value.trim())post({t:'submit',text:ta.value})};
 ta.addEventListener('input',draft);
 ta.addEventListener('keydown',(e)=>{
@@ -655,7 +669,8 @@ ta.addEventListener('keydown',(e)=>{
   else if(e.key==='Escape'){e.preventDefault();post({t:'cancel'})}
 });
 send.addEventListener('click',submit);
-window.__set=(v)=>{ta.value=v;draft();ta.focus()};
+window.__set=(v)=>{err.hidden=true;ta.value=v;fit();report('size');ta.focus()};
+window.__error=(m)=>{err.textContent=m;err.hidden=false;fit();report('size')};
 ta.focus();
 </script></body></html>`
 
@@ -681,7 +696,13 @@ export function placeNoteBox(rect: { x: number; y: number; width: number; height
   else if (left - NOTE_BOX_GAP - size.width >= minX) x = left - NOTE_BOX_GAP - size.width
   else if (bottom + NOTE_BOX_GAP <= maxY) y = bottom + NOTE_BOX_GAP
   else if (top - NOTE_BOX_GAP - size.height >= minY) y = top - NOTE_BOX_GAP - size.height
-  return { x: Math.round(x), y: Math.round(y), width: size.width, height: size.height }
+  // The side chosen above can lie outside the panel (a target scrolled away): the box itself never does.
+  return { x: Math.round(clampX(x)), y: Math.round(clampY(y)), width: size.width, height: size.height }
+}
+
+/** Whether any part of the picked rect (viewport CSS px) is inside the panel: only then does the box have a target to sit next to. */
+function targetShown(rect: { x: number; y: number; width: number; height: number }, panel: Rectangle): boolean {
+  return rect.x + rect.width > 0 && rect.y + rect.height > 0 && rect.x < panel.width && rect.y < panel.height
 }
 
 function str(value: unknown): value is string {
@@ -828,6 +849,8 @@ interface HostPick {
   data: Record<string, unknown> & { id: string }
   /** What the user has typed into the comment box so far. */
   draft: string
+  /** Why the last save failed, shown in the box (it comes back with the draft). */
+  error: string
   scroll: [number, number]
   viewport: { width: number; height: number }
 }
@@ -874,6 +897,8 @@ export class BrowserHost {
   private noteBox: { view: WebContentsView; ready: Promise<void> } | null = null
   private boxTab: Tab | null = null
   private boxRect = { x: 0, y: 0, width: 0, height: 0 }
+  /** The pick whose save is in flight, so a second Enter does not pin it twice. */
+  private saving: HostPick | null = null
   private boxHeight = NOTE_BOX_MIN_HEIGHT
   private boxSeq = 0
   private reports: Promise<unknown> = Promise.resolve()
@@ -1415,7 +1440,7 @@ export class BrowserHost {
     const fresh = state.pick
     if (fresh && typeof fresh === 'object' && !Array.isArray(fresh) && typeof (fresh as Record<string, unknown>).id === 'string') {
       const data = fresh as HostPick['data']
-      tab.pick = { data, draft: '', scroll, viewport }
+      tab.pick = { data, draft: '', error: '', scroll, viewport }
       this.hideBox()
       void this.showBox(tab, rect ?? toRect(data.rect))
       return
@@ -1465,7 +1490,8 @@ export class BrowserHost {
 
   private async showBox(tab: Tab, rect: { x: number; y: number; width: number; height: number } | null): Promise<void> {
     const win = this.deps.window()
-    if (!win || win.isDestroyed() || !rect || !tab.pick) return
+    // A target outside the panel has nothing to sit next to: the box stays hidden (its draft kept) until the target is shown again.
+    if (!win || win.isDestroyed() || !rect || !tab.pick || !targetShown(rect, this.bounds)) return
     const token = ++this.boxSeq
     let box: ReturnType<BrowserHost['ensureBox']>
     try { box = this.ensureBox() } catch { return }
@@ -1482,6 +1508,7 @@ export class BrowserHost {
       box.view.setVisible(true)
       const wc = box.view.webContents
       await wc.executeJavaScript(`window.__set(${JSON.stringify(tab.pick.draft)})`)
+      if (tab.pick.error) await wc.executeJavaScript(`window.__error(${JSON.stringify(tab.pick.error)})`)
       if (token === this.boxSeq) wc.focus()
     } catch {
       this.log('[browser] note box failed')
@@ -1523,8 +1550,12 @@ export class BrowserHost {
       message = parsed
     } catch { return }
     const text = typeof message.text === 'string' ? message.text.slice(0, NOTE_COMMENT_CHARS) : ''
-    if (message.t === 'draft') {
-      tab.pick.draft = text
+    if (message.t === 'draft' || message.t === 'size') {
+      // Typing is a draft (and clears the last error); a resize reports only the height.
+      if (message.t === 'draft') {
+        tab.pick.draft = text
+        tab.pick.error = ''
+      }
       if (typeof message.h === 'number' && Number.isFinite(message.h)) {
         this.boxHeight = Math.max(NOTE_BOX_MIN_HEIGHT, Math.min(Math.round(message.h), NOTE_BOX_MAX_HEIGHT))
         this.placeBox()
@@ -1545,38 +1576,65 @@ export class BrowserHost {
     try { tab.view.webContents.focus() } catch { /* destroyed */ }
   }
 
-  /** Saving ends annotate mode here first (the one place that knows), then pins the target and hands the note to the renderer. */
+  /**
+   * Saving is all or nothing: the pin is drawn, the note reaches the renderer, and only then does annotate end. A
+   * failure before the note is delivered takes the pin back and leaves the box open with the draft and the reason.
+   */
   private async savePick(tab: Tab, text: string): Promise<void> {
     const pick = tab.pick
     const comment = text.trim()
-    if (!pick || !comment) return
-    tab.pick = null
-    tab.annotating = false
-    this.hideBox()
-    this.focusTab(tab)
-    this.emitLive(tab.conversationId)
+    if (!pick || !comment || this.saving === pick) return
+    this.saving = pick
     try {
-      const pinned = await this.page(tab, 'commitPin', { pickId: pick.data.id, n: ++tab.pinSeq })
-      if (pinned.error) return
-      await this.page(tab, 'annotateOff', {})
-    } catch {
-      return
+      const n = tab.pinSeq + 1
+      let pinned = false
+      let failure = ''
+      try {
+        const result = await this.page(tab, 'commitPin', { pickId: pick.data.id, n })
+        if (result.error) failure = result.error === 'too_many_notes' ? `En fazla ${NOTE_MAX_NOTES} not` : NOTE_SAVE_FAILED
+        else pinned = true
+      } catch {
+        failure = NOTE_SAVE_FAILED
+      }
+      if (pinned && tab.pick !== pick) {
+        // The target went (cancel, navigation) while the page answered: nothing is left to attach the note to.
+        void this.page(tab, 'clearNotes', { ids: [pick.data.id] }).catch(() => { /* the page is gone */ })
+        return
+      }
+      if (pinned && !this.emitNotes(tab, [{ ...pick.data, comment, n }], pick.viewport)) {
+        pinned = false
+        failure = NOTE_SAVE_FAILED
+        void this.page(tab, 'uncommitPin', { pickId: pick.data.id }).catch(() => { /* the page is gone */ })
+      }
+      if (!pinned) {
+        pick.error = failure
+        if (this.boxTab === tab) void this.noteBox?.view.webContents.executeJavaScript(`window.__error(${JSON.stringify(failure)})`).catch(() => { /* box closing */ })
+        return
+      }
+      tab.pinSeq = n
+      tab.pick = null
+      tab.annotating = false
+      this.hideBox()
+      this.focusTab(tab)
+      this.emitLive(tab.conversationId)
+      // The note is delivered; a page that cannot be told to leave the mode only keeps an overlay the host no longer polls.
+      try { await this.page(tab, 'annotateOff', {}) } catch { /* the page is gone */ }
+    } finally {
+      this.saving = null
     }
-    this.emitNotes(tab, [{ ...pick.data, comment }], pick.viewport)
   }
 
-  private emitNotes(tab: Tab, notes: unknown[], viewport?: { width: number; height: number }): void {
+  /** Sends the notes to the renderer; false when nothing could receive them. */
+  private emitNotes(tab: Tab, notes: unknown[], viewport?: { width: number; height: number }): boolean {
     const win = this.deps.window()
-    if (!win || win.isDestroyed()) return
+    if (!win || win.isDestroyed()) return false
     const wc = tab.view.webContents
     try {
       win.webContents.send(BROWSER_NOTES_CHANNEL, { conversationId: tab.conversationId, tabId: tab.id, url: wc.getURL(), title: wc.getTitle(), notes, ...(viewport ? { viewport } : {}) })
-    } catch { /* window closing */ }
-  }
-
-  private async collectNotes(tab: Tab): Promise<{ notes: unknown[]; active: boolean }> {
-    const result = await this.page(tab, 'takeNotes', {})
-    return { notes: Array.isArray(result.notes) ? result.notes.slice(0, MAX_NOTES_PER_POLL) : [], active: result.active !== false }
+      return true
+    } catch {
+      return false
+    }
   }
 
   /**
@@ -1723,7 +1781,7 @@ export class BrowserHost {
     if (!req || typeof req !== 'object' || Array.isArray(req)) return { error: 'Invalid browser-live request.' }
     const { op, conversationId: id, bounds, visible, url, gateId, approved, tabId, on, ids } = req as Record<string, unknown>
     const tabOps = ['status', 'panel-status', 'set-bounds', 'visible', 'open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close',
-      'select', 'close-tab', 'reopen-tab', 'annotate', 'notes', 'clear-notes', 'capture-notes']
+      'select', 'close-tab', 'reopen-tab', 'annotate', 'clear-notes', 'capture-notes']
     if (typeof op === 'string' && tabOps.includes(op) && !positiveInt(id)) return { error: 'Unknown operation or malformed browser-live arguments.' }
     if (tabId !== undefined && !positiveInt(tabId)) return { error: 'Unknown operation or malformed browser-live arguments.' }
     const conversationId = id as number
@@ -1833,17 +1891,6 @@ export class BrowserHost {
         const failed = await this.setAnnotate(tab, on)
         if (failed) return failed
         return this.livePayload(conversationId)
-      }
-      case 'notes': {
-        const tab = this.chatTab(conversationId, tabId)
-        if (!tab) return { error: 'no_tab' }
-        try {
-          const { notes } = await this.collectNotes(tab)
-          const wc = tab.view.webContents
-          return { notes, tabId: tab.id, url: wc.getURL(), title: wc.getTitle() }
-        } catch {
-          return { error: 'notes_failed' }
-        }
       }
       case 'capture-notes': {
         const tab = this.chatTab(conversationId, tabId)

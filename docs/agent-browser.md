@@ -176,7 +176,7 @@ page, zoom, history and site management pages.
 ## Annotate mode (30 Oct 2026)
 
 The user can pin a comment on an element or an area of the live page, like "add comment" in a document editor. The page side
-(`PAGE_LIB`: `annotateOn` / `annotateOff` / `takePick` / `commitPin` / `dropPick` / `takeNotes` / `clearNotes`) only picks and
+(`PAGE_LIB`: `annotateOn` / `annotateOff` / `takePick` / `commitPin` / `dropPick` / `uncommitPin` / `clearNotes`) only picks and
 draws, in one host element with a closed shadow root at the highest z-index. It has no text input: the comment is typed into an
 app-owned layer, so no comment text and none of its keystrokes ever enter the page.
 
@@ -187,13 +187,16 @@ app-owned layer, so no comment text and none of its keystrokes ever enter the pa
   The page records a pending target (`takePick`) and the host, polling every 150 ms while the mode is on and the tab is visible,
   opens the **comment box**: a second `WebContentsView` above the tab (sandboxed, no preload, no node, transparent background)
   that loads a self-contained `data:` page, a dark rounded pill with "Yorum ekle…" and a send button, placed next to the target
-  and inside the panel (right, else left, else below, else above; `placeNoteBox`). Enter or the button saves, Shift+Enter is a new
+  and always fully inside the panel (right, else left, else below, else above, then clamped; `placeNoteBox`). While the target is outside the panel (scrolled away) the box stays hidden with its draft and is never focused; it returns once the target is shown again. Enter or the button saves, Shift+Enter is a new
   line, Esc cancels (the target is dropped, the mode stays). The box tells the host through `document.title` (JSON with a
   counter: `draft`, `submit`, `cancel`); the host listens to `page-title-updated` on the box's own `webContents`. Esc in the page
   drops a pending target, then leaves the mode.
-- **Save:** the host ends the mode first and synchronously (one source of truth: toolbar and chord are right at once), then asks
-  the page to pin the target (`commitPin`) and sends the note, with the comment the host held, to the renderer. The page never
-  receives the comment. Saved notes stay in the page as numbered pins, each with a blue frame around the noted element or area
+- **Save:** saving is all or nothing. The host numbers the note (per tab, increasing, never reused while the note exists), asks
+  the page to pin the target (`commitPin`), sends the note, with the comment the host held, to the renderer, and only then ends
+  the mode (toolbar and chord are right at once). If the pin is refused or the note cannot be delivered, the pin is taken back
+  (`uncommitPin`) and the box stays open with the draft and a short error ("Not kaydedilemedi, tekrar dene", or "En fazla 50 not");
+  a page that cannot leave the mode after delivery only keeps an overlay the host no longer polls. The page never
+  receives the comment. The number is the same on the pin, the chip and in the sent message (a message carrying only some notes uses their real numbers). Saved notes stay in the page as numbered pins, each with a blue frame around the noted element or area
   that follows scroll like the pin, until the message is sent or the chip is removed. Every pointer and key handler in the page
   ignores events with `isTrusted === false`.
 - **Draft:** if the page scrolls, the panel hides, the tab changes or the panel is resized (full screen), the box closes and its
@@ -217,7 +220,7 @@ app-owned layer, so no comment text and none of its keystrokes ever enter the pa
   mode is ended first so no hover outline is). Longer side at most 1600 px, JPEG quality 80, added to the message's `images`. A tab
   that is not shown, an empty capture, a failure or a 4 s hang only leaves the picture out; the send never waits on it.
 - **Privacy:** a note never contains form values. Text is read with fields skipped (`input`, `textarea`, `select`, `option`, any
-  `contenteditable` except `"false"` in any case, `role=textbox/searchbox/combobox`, `aria-multiline`); labels, placeholders and
+  `contenteditable` except `"false"` in any case, any token of `role` being textbox/searchbox/combobox/spinbutton, `aria-multiline`); labels, placeholders and
   button captions are fine. Rects are in CSS px relative to the viewport at the time of the note. The screenshot shows whatever is
   on screen, field values included, like the existing screenshot tool.
 

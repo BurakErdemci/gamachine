@@ -47,7 +47,7 @@ function UserBrowserChips({ content }: { content: string }) {
     <div className="msg-browser-chips" data-testid="msg-browser-chips">
       {blocks.map((block, i) => (
         <span key={i} className="msg-browser-chip">
-          {block.kind === 'note' ? t('chat.noteSummary', { n: String(block.count) }) : t('chat.pageSummary')}
+          {block.kind === 'note' ? t(block.count === 1 ? 'chat.noteSummaryOne' : 'chat.noteSummary', { n: String(block.count) }) : t('chat.pageSummary')}
           {block.site ? ` · ${stripBidi(block.site)}` : ''}
         </span>
       ))}

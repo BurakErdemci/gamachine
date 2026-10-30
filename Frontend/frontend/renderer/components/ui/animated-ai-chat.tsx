@@ -16,7 +16,7 @@ import { useLang } from "../../lib/i18n";
 import { useVoiceInput, formatElapsed } from "../../hooks/home/useVoiceInput";
 import type { Conversation } from "../home/types";
 import { mentionQueryAt, mentionTargets, findMentions, mentionLabel } from "../../lib/chatMentions";
-import { chipLabel, dismissBrowserChip, useBrowserChips } from "../../lib/browserNotes";
+import { chipLabel, dismissBrowserChip, noteNumber, useBrowserChips } from "../../lib/browserNotes";
 import { MessageQueue, type MessageQueueProps, type QueueItemView } from "./message-queue";
 
 interface UseAutoResizeTextareaProps {
@@ -846,7 +846,7 @@ export function AnimatedChatInput({
                 <div className="composer-chips" data-testid="browser-chips">
                     {chips.map((chip, i) => (
                         <span key={chip.key} className="composer-chip" title={chip.type === 'note' ? chip.note.comment : chip.url}>
-                            <span className="composer-chip-n" aria-hidden="true">{i + 1}</span>
+                            <span className="composer-chip-n" aria-hidden="true">{chip.type === 'note' ? noteNumber(chip.note, i) : i + 1}</span>
                             <span className="composer-chip-label">{chipLabel(chip)}</span>
                             <button
                                 type="button"
