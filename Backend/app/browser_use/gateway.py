@@ -30,8 +30,8 @@ FOCUS_CHANGED = "The focused element changed after the approval, so Enter was no
 TARGET_CHANGED = "The element or the page changed after the approval, so nothing was done. Look at the page again."
 CHAT_DELETED = "This chat was deleted, so the browser step was not run."
 USER_CONTROL = (
-    "The user is using this chat's browser tab. "
-    "Do not call browser tools until the user says they are done; tell the user what you are waiting for."
+    "The user is using this chat's browser tab. Do not call browser tools again in this turn; "
+    "tell the user you will continue after their next message."
 )
 _ELEMENT_OPS = frozenset({"click", "fill", "select"})
 _NAVIGATION_OPS = frozenset({"navigate", "back", "forward", "reload"})
