@@ -9,8 +9,8 @@ export function createLiveRevealTracker(reveal: () => void, isOpenChat?: (conver
     }
     const payload = raw as { active?: unknown; conversationId?: unknown };
     const conversationId = payload.conversationId;
-    // Another chat going idle must not re-arm the reveal for the open chat.
-    if (payload.active !== true && isOpenChat && typeof conversationId === 'number' && !isOpenChat(conversationId)) return;
+    // Only the tracked chat going idle re-arms the reveal; another chat's idle event changes nothing.
+    if (payload.active !== true && isOpenChat && typeof conversationId === 'number' && conversationId !== activeConversationId) return;
     if (payload.active !== true) {
       activeConversationId = null;
       return;
