@@ -295,6 +295,16 @@ function positiveInt(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
 }
 
+/** scheme://host[:port] of a web address, or '' for anything else (blank pages, unparsable text). */
+function originOf(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : ''
+  } catch {
+    return ''
+  }
+}
+
 /** The response body, or null as soon as it is larger than `max` bytes. */
 async function readCapped(response: Response, max: number): Promise<Buffer | null> {
   const reader = response.body?.getReader()
@@ -1215,10 +1225,11 @@ export class BrowserHost {
       this.stopLocal(id)
       return { ok: true, ...this.base(this.agentTab(id)?.view.webContents) }
     }
-    const refused = this.userControlReply({ ...cmd, conversation_id: id })
-    if (refused) return refused
+    // Listing and switching stay open while the user holds the agent tab: the agent may move away from it.
     if (cmd.op === 'tabs') return this.tabsReply(id)
     if (cmd.op === 'use_tab') return this.useTab(id, cmd.args)
+    const refused = this.userControlReply({ ...cmd, conversation_id: id })
+    if (refused) return refused
     // Every agent command lands on the chat's agent tab, never on a tab the user opened.
     let tab: Tab
     try {
@@ -1253,11 +1264,14 @@ export class BrowserHost {
     return reply
   }
 
-  /** The agent's read of its own chat's tabs; the page in the reply is the agent tab's. */
+  /**
+   * The agent's read of its own chat's tabs; the page in the reply is the agent tab's. Only the agent tab shows its
+   * full address: another tab's path and query can carry secrets the agent has no other way to know.
+   */
   private tabsReply(conversationId: number): Reply {
     const shown = this.selectedTab(conversationId)
     const tabs = this.tabsOf(conversationId).map((tab) => ({ id: tab.id, title: tab.view.webContents.getTitle(),
-      url: tab.view.webContents.getURL(), active: tab === shown, agent: tab.agent, userTouched: tab.userTouched }))
+      url: tab.agent ? tab.view.webContents.getURL() : originOf(tab.view.webContents.getURL()), active: tab === shown, agent: tab.agent, userTouched: tab.userTouched }))
     return { ok: true, tabs, ...this.base(this.agentTab(conversationId)?.view.webContents) }
   }
 
@@ -1276,7 +1290,10 @@ export class BrowserHost {
     if (next === agent) return { ok: true, ...this.base(next.view.webContents) }
     if (next.userTouched) return failed('user_control')
     if ((agent?.busy ?? 0) > 0) return failed('busy')
-    if (agent) agent.agent = false
+    if (agent) {
+      agent.agent = false
+      this.setUserControl(agent, false)
+    }
     next.agent = true
     next.expected = []
     this.touch(next)

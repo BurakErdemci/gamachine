@@ -171,6 +171,7 @@ def test_use_tab_takes_a_number_and_the_page_tools_name_the_agent_tab():
     for name in ("browser_navigate", "browser_snapshot"):
         assert "agent tab" in tools[name].description and "browser_use_tab" in tools[name].description
     assert "user has used" in tools["browser_use_tab"].description
+    assert "only their site and title" in tools["browser_tabs"].description
     bad = Fake()
     with pytest.raises(Exception):
         call_tool(bad, "browser_use_tab", {"tab_id": "x"})

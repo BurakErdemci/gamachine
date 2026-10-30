@@ -1453,8 +1453,8 @@ describe('BrowserHost tabs and use_tab ops', () => {
     expect(reply).toMatchObject({ ok: true, url: 'https://github.example/' })
     expect(reply.tabs).toEqual([
       { id: ids[0], title: 'Page', url: 'https://github.example/', active: false, agent: true, userTouched: false },
-      { id: ids[1], title: 'Epic library', url: 'https://epic.example/', active: false, agent: false, userTouched: true },
-      { id: ids[2], title: 'News', url: 'https://news.example/', active: true, agent: false, userTouched: false },
+      { id: ids[1], title: 'Epic library', url: 'https://epic.example', active: false, agent: false, userTouched: true },
+      { id: ids[2], title: 'News', url: 'https://news.example', active: true, agent: false, userTouched: false },
     ])
     expect(JSON.stringify(reply)).not.toContain('other-chat')
     expect((await f.host.handle({ op: 'tabs', conversation_id: 5, args: {} })).tabs).toHaveLength(1)
@@ -1532,12 +1532,32 @@ describe('BrowserHost tabs and use_tab ops', () => {
     expect((await f.host.handle({ op: 'tabs', conversation_id: 4, args: {} })).tabs[0].userTouched).toBe(false)
   })
 
-  it('use_tab refuses while the agent tab is under user control and while a clear runs', async () => {
-    const { f, agent, ids } = await chatWithTabs()
+  it('tabs and use_tab to an untouched tab stay allowed while the user holds the agent tab, a touched one is refused', async () => {
+    const { f, agent, epic, ids } = await chatWithTabs()
+    epic.emit('input-event', {}, { type: 'mouseDown' })
     agent.emit('input-event', {}, { type: 'mouseDown' })
+    expect(await f.host.handle({ op: 'tabs', conversation_id: 4, args: {} })).toMatchObject({ ok: true })
     expect(await useTab(f, ids[1])).toMatchObject({ ok: false, error: 'user_control' })
-    expect(await f.host.handle({ op: 'tabs', conversation_id: 4, args: {} })).toMatchObject({ ok: false, error: 'user_control' })
+    expect(await useTab(f, ids[2])).toMatchObject({ ok: true, url: 'https://news.example/' })
+    expect((await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })).ok).toBe(true)
     await f.host.invoke({ op: 'release', conversationId: 4 })
+  })
+
+  it('tabs shows only the origin and title of tabs that are not the agent tab', async () => {
+    const f = fixture('win32')
+    await navigate(f, 'https://github.example/pulls?token=a1', '<p>github</p>', 4)
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://docs.example:8443/doc/SECRET?x=1#frag' })
+    f.views[1].webContents.finish('https://docs.example:8443/doc/SECRET?x=1#frag', 'Shared doc')
+    const reply = await f.host.handle({ op: 'tabs', conversation_id: 4, args: {} })
+    expect((reply.tabs as any[]).map((t: any) => [t.title, t.url])).toEqual([
+      ['Page', 'https://github.example/pulls?token=a1'],
+      ['Shared doc', 'https://docs.example:8443'],
+    ])
+    expect(JSON.stringify(reply.tabs)).not.toContain('SECRET')
+  })
+
+  it('use_tab refuses while a clear runs', async () => {
+    const { f, ids } = await chatWithTabs()
     let done: () => void = () => {}
     f.session.clearStorageData.mockImplementationOnce(() => new Promise<void>((resolve) => { done = resolve }))
     const clearing = f.host.invoke({ op: 'clear-browsing-data' })

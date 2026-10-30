@@ -108,6 +108,7 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
 
     @tool("browser_tabs", "List this chat's open browser tabs: id, title, url, which one is in front (active), which "
           "one is your agent tab (agent) and which ones the user has used since their last message (userTouched). "
+          "Tabs other than your agent tab show only their site and title, not the full url. "
           "Call it first when the user refers to a page that may already be open, then switch with browser_use_tab.")
     async def browser_tabs() -> CallToolResult:
         return await handler.call("tabs", {})
