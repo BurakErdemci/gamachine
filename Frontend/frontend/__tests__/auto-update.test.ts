@@ -31,7 +31,7 @@ function setup(response = 0, quitImpl?: () => void, stopImpl?: () => Promise<voi
   const logger = { log: vi.fn(), error: vi.fn() }
   const relaunch = vi.fn()
   const openExternal = vi.fn(async () => {})
-  const manifest = Buffer.from('version: 9.9.9\nfiles:\n  - url: a.exe\n    sha512: HASH==\npath: a.exe\nsha512: HASH==\n')
+  const manifest = Buffer.from('version: 9.9.9\nfiles:\n  - url: Gamachine-Setup-9.9.9.exe\n    sha512: HASH==\npath: Gamachine-Setup-9.9.9.exe\nsha512: HASH==\n')
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
   const sig = sign64(manifest, privateKey)
   const fetchBytes = vi.fn(async (url: string) => (url.endsWith('.sig') ? sig : manifest))
@@ -135,6 +135,49 @@ describe('setupAutoUpdate', () => {
         expect(s.updater.autoInstallOnAppQuit).toBe(false)
         s.handle.dispose()
       }
+    })
+
+    it('turns the NSIS web installer off and refuses an update that lists packages', async () => {
+      const s = setup(1)
+      expect(s.updater.disableWebInstaller).toBe(true)
+      s.updater.emit('update-available', { ...AVAILABLE, packages: { x64: { path: 'p.7z', sha512: 'PKG==' } } })
+      await vi.waitFor(() => expect(s.dialog.showMessageBox).toHaveBeenCalledTimes(1))
+      expect(s.dialog.showMessageBox.mock.calls[0]![0].title).toBe('Güncelleme doğrulanamadı')
+      expect(s.updater.downloadUpdate).not.toHaveBeenCalled()
+      s.handle.dispose()
+    })
+
+    it('refuses a file name that is not in the signed manifest even with a signed hash', async () => {
+      const s = setup(1)
+      s.updater.emit('update-available', { ...AVAILABLE, files: [{ url: 'other.exe', sha512: 'HASH==' }], path: 'other.exe' })
+      await vi.waitFor(() => expect(s.dialog.showMessageBox).toHaveBeenCalledTimes(1))
+      expect(s.updater.downloadUpdate).not.toHaveBeenCalled()
+      s.handle.dispose()
+    })
+
+    it('a failing dialog or release page never becomes an unhandled rejection', async () => {
+      const unhandled: unknown[] = []
+      const onUnhandled = (e: unknown) => unhandled.push(e)
+      process.on('unhandledRejection', onUnhandled)
+      try {
+        const a = setup(0, undefined, undefined, false)
+        a.dialog.showMessageBox.mockRejectedValue(new Error('dialog failed'))
+        a.updater.emit('update-available', AVAILABLE)
+        await vi.waitFor(() => expect(a.logger.error).toHaveBeenCalledWith(expect.stringContaining('gösterilemedi'), 'dialog failed'))
+        const b = setup(0, undefined, undefined, false)
+        b.openExternal.mockRejectedValue(new Error('browser failed'))
+        b.updater.emit('update-available', AVAILABLE)
+        await vi.waitFor(() => expect(b.logger.error).toHaveBeenCalledWith(expect.stringContaining('gösterilemedi'), 'browser failed'))
+        await vi.advanceTimersByTimeAsync(10)
+        a.handle.dispose()
+        b.handle.dispose()
+      } finally {
+        await vi.advanceTimersByTimeAsync(0)
+        vi.useRealTimers()
+        await new Promise((r) => setTimeout(r, 20))
+        process.off('unhandledRejection', onUnhandled)
+      }
+      expect(unhandled).toEqual([])
     })
 
     it('refuses when the updater sees a file hash or version the signed manifest does not carry', async () => {

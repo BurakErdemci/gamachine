@@ -48,6 +48,19 @@ describe('update-keygen key path guard', () => {
     expect(guard(path.join(dir, 'fresh', 'k.pem'))).toMatch(/fresh/)
   })
 
+  it('refuses a final-component symlink to a file in the repository or a synced folder', () => {
+    const inside = path.join(repo, 'k.pem')
+    writeFileSync(inside, 'x')
+    const alias = path.join(dir, 'alias.pem')
+    symlinkSync(inside, alias)
+    expect(() => keygen.checkKeyLocation(alias, repo)).toThrow(/inside the repository/)
+    mkdirSync(path.join(dir, 'Dropbox'))
+    writeFileSync(path.join(dir, 'Dropbox', 'k.pem'), 'x')
+    const alias2 = path.join(dir, 'alias2.pem')
+    symlinkSync(path.join(dir, 'Dropbox', 'k.pem'), alias2)
+    expect(() => keygen.checkKeyLocation(alias2, repo)).toThrow(/synced folder/)
+  })
+
   it('checkKeyLocation accepts an existing file outside the repo', () => {
     const existing = path.join(dir, 'k.pem')
     writeFileSync(existing, 'x')
@@ -178,6 +191,15 @@ describe('sign-release', () => {
     mkdirSync(synced)
     writeFileSync(path.join(synced, 'key.pem'), readFileSync(r.keyPath))
     await expect(run(r, path.join(synced, 'key.pem'))).rejects.toThrow(/synced folder/)
+    expect(r.deps.promptHidden).not.toHaveBeenCalled()
+  })
+
+  it('refuses a key file that is a symlink into the repository', async () => {
+    const r = rig()
+    // sign-release guards the real repository, so the link targets a file inside it (never written).
+    const alias = path.join(dir, 'innocent.pem')
+    symlinkSync(__filename, alias)
+    await expect(run(r, alias)).rejects.toThrow(/inside the repository/)
     expect(r.deps.promptHidden).not.toHaveBeenCalled()
   })
 

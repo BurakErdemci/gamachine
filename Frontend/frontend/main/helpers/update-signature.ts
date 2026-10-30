@@ -20,23 +20,51 @@ export interface CheckResult { ok: boolean; reason?: string }
 
 const unquote = (s: string) => s.trim().replace(/^(['"])(.*)\1$/, '$2')
 
-// Reads the fixed shape electron-builder writes: a top-level `version:` and
-// `sha512:` values (top-level and per `files:` entry). Anything else is ignored.
-export function parseManifest(text: string): { version: string; sha512: string[] } {
-  const versions = [...text.matchAll(/^version:[ \t]*(.+?)[ \t]*$/gm)].map((m) => unquote(m[1]))
-  const sha512 = [...text.matchAll(/^[ \t]*(?:-[ \t]+)?sha512:[ \t]*(.+?)[ \t]*$/gm)].map((m) => unquote(m[1]))
-  return { version: versions.length === 1 ? versions[0] : '', sha512 }
+const baseName = (p: string) => {
+  let name = p.trim()
+  try { name = decodeURIComponent(name) } catch { /* keep the raw spelling */ }
+  return name.split(/[\\/]/).pop() ?? ''
 }
 
-// `info.sha512` lists the hash of every file electron-updater may download for
-// this update (the `files:` entries of the manifest it fetched). The signed
-// manifest must carry that version and every one of those hashes.
-export function checkAvailable(info: { version: string; sha512: unknown[] }, manifestText: string): CheckResult {
+export interface ManifestFile { name: string; sha512: string }
+
+// Reads the fixed shape electron-builder writes: a top-level `version:`, the `files:` entries
+// (`url` + `sha512`) and the top-level `path` + `sha512`. Other sections (`packages:` ...) are ignored.
+export function parseManifest(text: string): { version: string; files: ManifestFile[] } {
+  const versions = [...text.matchAll(/^version:[ \t]*(.+?)[ \t]*$/gm)].map((m) => unquote(m[1]))
+  const files: ManifestFile[] = []
+  const top: Record<string, string> = {}
+  let section = ''
+  let cur: ManifestFile | null = null
+  for (const line of text.split(/\r?\n/)) {
+    const key = /^([A-Za-z]\w*):[ \t]*(.*)$/.exec(line)
+    if (key) {
+      section = key[1]
+      cur = null
+      top[section] = unquote(key[2])
+      continue
+    }
+    if (section !== 'files') continue
+    const field = /^[ \t]*(-[ \t]+)?(url|sha512):[ \t]*(.*?)[ \t]*$/.exec(line)
+    if (!field) continue
+    if (field[1]) files.push((cur = { name: '', sha512: '' }))
+    if (!cur) continue
+    if (field[2] === 'url') cur.name = baseName(unquote(field[3]))
+    else cur.sha512 = unquote(field[3])
+  }
+  if (top.path && top.sha512) files.push({ name: baseName(top.path), sha512: top.sha512 })
+  return { version: versions.length === 1 ? versions[0] : '', files }
+}
+
+// `info.files` lists every file electron-updater may download for this update (name and
+// sha512, from the manifest it fetched). The signed manifest must carry the same version and,
+// for each of them, an entry with that same file name and sha512.
+export function checkAvailable(info: { version: string; files: { name: unknown; sha512: unknown }[] }, manifestText: string): CheckResult {
   const signed = parseManifest(manifestText)
   if (!signed.version) return { ok: false, reason: 'imzalı manifestte sürüm yok' }
   if (info.version !== signed.version) return { ok: false, reason: `sürüm uyuşmuyor (${info.version} / ${signed.version})` }
-  if (!info.sha512.length || !info.sha512.every((h) => typeof h === 'string' && h !== '' && signed.sha512.includes(h))) {
-    return { ok: false, reason: 'indirilecek dosyanın sha512 değeri imzalı manifestte yok' }
-  }
-  return { ok: true }
+  const listed = info.files.length > 0 && info.files.every((f) =>
+    typeof f.name === 'string' && typeof f.sha512 === 'string' && f.name !== '' && f.sha512 !== '' &&
+    signed.files.some((s) => s.name === baseName(f.name as string) && s.sha512 === f.sha512))
+  return listed ? { ok: true } : { ok: false, reason: 'indirilecek dosyanın adı ve sha512 değeri imzalı manifestte yok' }
 }

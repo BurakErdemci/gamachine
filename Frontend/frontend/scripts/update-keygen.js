@@ -27,10 +27,12 @@ function isInside(child, parent) {
   return rel === '' || (rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel));
 }
 
-// Resolves symlinks/junctions (and the on-disk case and 8.3 names, via the native realpath) of the
+// Resolves symlinks/junctions, including a link as the final component (and the on-disk case and 8.3 names, via the native realpath) of the
 // deepest existing ancestor, so a link or a respelled path into the repo is caught.
 function realTarget(target) {
   const abs = path.resolve(target);
+  // An existing file may itself be a link (even a dangling one, which makes this throw: refused).
+  if (fs.lstatSync(abs, { throwIfNoEntry: false })) return fs.realpathSync.native(abs);
   let dir = path.dirname(abs);
   const tail = [path.basename(abs)];
   while (!fs.existsSync(dir)) {
