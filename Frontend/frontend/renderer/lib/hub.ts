@@ -23,8 +23,10 @@ const call = async (channel: string, arg?: unknown): Promise<any> => {
   if (!channelIpc) return null;
   try {
     return arg === undefined ? await channelIpc.invoke(channel) : await channelIpc.invoke(channel, arg);
-  } catch {
-    return null;
+  } catch (e) {
+    // The thrown message travels as the answer's error so the UI can show it; readers that expect
+    // another shape treat it like any failed answer.
+    return { error: e instanceof Error ? e.message : typeof e === 'string' ? e : '' };
   }
 };
 
@@ -118,12 +120,15 @@ export const joinTarget = (parent: string, name: string) => {
   return `${parent.replace(/[\\/]+$/, '')}${sep}${name}`;
 };
 
+export interface HubRequest { parentDir: string; name: string; version: string; templateId?: string }
+/** What the run was started with; every non-idle state carries it so a card or a retry never reads the form. */
+interface RunOf { name: string; req: HubRequest; template?: HubTemplate }
 export type HubRun =
   | { state: 'idle' }
-  | { state: 'creating'; name: string; progress: HubProgress; cancelling: boolean }
-  | { state: 'done'; name: string; path: string; version: string }
-  | { state: 'failed'; name: string; error: string }
-  | { state: 'cancelled'; name: string };
+  | ({ state: 'creating'; progress: HubProgress; cancelling: boolean } & RunOf)
+  | ({ state: 'done'; path: string; version: string } & RunOf)
+  | ({ state: 'failed'; error: string } & RunOf)
+  | ({ state: 'cancelled' } & RunOf);
 
 /**
  * The creation run, kept outside any component: the engine runs one creation per process, so a
@@ -142,17 +147,18 @@ export const subscribeRun = (cb: () => void): (() => void) => {
   return () => { watchers.delete(cb); };
 };
 
-export async function startCreate(arg: { parentDir: string; name: string; version: string; templateId?: string }): Promise<void> {
+export async function startCreate(arg: HubRequest, template?: HubTemplate): Promise<void> {
   if (run.state === 'creating') return;
   const made = arg.name;
-  setRun({ state: 'creating', name: made, progress: { phase: 'starting', elapsedMs: 0 }, cancelling: false });
+  const of: RunOf = { name: made, req: arg, template };
+  setRun({ state: 'creating', ...of, progress: { phase: 'starting', elapsedMs: 0 }, cancelling: false });
   dropProgress();
   stopProgress = onCreateProgress(p => setRun(run.state === 'creating' ? { ...run, progress: p } : run));
   const res = await createProject(arg);
   dropProgress();
-  if ('path' in res) setRun({ state: 'done', name: made, path: res.path, version: arg.version });
-  else if (isCancelled(res.error)) setRun({ state: 'cancelled', name: made });
-  else setRun({ state: 'failed', name: made, error: res.error });
+  if ('path' in res) setRun({ state: 'done', ...of, path: res.path, version: arg.version });
+  else if (isCancelled(res.error)) setRun({ state: 'cancelled', ...of });
+  else setRun({ state: 'failed', ...of, error: res.error });
 }
 
 export async function cancelRun(): Promise<void> {

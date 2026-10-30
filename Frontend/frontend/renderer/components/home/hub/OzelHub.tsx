@@ -19,20 +19,24 @@ export const OzelHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
   const { t } = useLang();
   const result = useResult(h);
   const r = h.run;
+  // A run describes itself; only the idle card follows the form.
   const shownName = r.state === 'idle' ? h.name.trim() : r.name;
+  const cardTemplate = r.state === 'idle' ? h.template : r.template;
+  const cardVersion = r.state === 'idle' ? h.version : r.req.version;
+  const cardParent = r.state === 'idle' ? h.parent : r.req.parentDir;
   const fill = r.state === 'creating' ? estimate(r.progress.elapsedMs) : r.state === 'done' ? 1 : 0;
   const card = (
     <figure className={`oz-card is-${r.state}`} style={{ ['--fill' as any]: fill }} data-testid="hub-ozel-card">
       <span className="oz-card-fill" aria-hidden="true" />
       <MascotHead className="mascot oz-card-head" />
-      <span className="oz-card-glyph"><TemplateGlyph t={h.template} /></span>
+      <span className="oz-card-glyph"><TemplateGlyph t={cardTemplate} /></span>
       <figcaption>
         <b className="oz-card-name">{shownName || t('hub.untitled')}</b>
         <span className="oz-card-meta">
-          {h.template ? templateName(h.template) : '—'}<span aria-hidden="true"> · </span><span className="num">{h.version || '—'}</span>
+          {cardTemplate ? templateName(cardTemplate) : '—'}<span aria-hidden="true"> · </span><span className="num">{cardVersion || '—'}</span>
         </span>
-        <span className="oz-card-path" title={h.parent ?? undefined}>
-          {h.parent ? joinTarget(h.parent, shownName || '…') : t('hub.folderNone')}
+        <span className="oz-card-path" title={cardParent ?? undefined}>
+          {cardParent ? joinTarget(cardParent, shownName || '…') : t('hub.folderNone')}
         </span>
       </figcaption>
     </figure>

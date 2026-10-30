@@ -15,11 +15,12 @@ import { resetHubStore } from '../renderer/lib/hub'
 import { LangContext, ceviriUygula, translations } from '../renderer/lib/i18n'
 
 const en = translations.en
+let create: () => Promise<any> = () => new Promise(() => {})
 const ipc = async (channel: string, arg: any) => {
-  if (channel === 'hub-list-editors') return { editors: [{ version: '6000.2.4f1', path: '/U/Unity' }] }
+  if (channel === 'hub-list-editors') return { editors: [{ version: '6000.2.4f1', path: '/U/Unity' }, { version: '2022.3.55f1', path: '/U2/Unity' }] }
   if (channel === 'hub-list-templates') return { templates: [{ id: 'com.unity.template.3d-cross-platform-17.0.6', label: '3d', file: 'a.tgz' }] }
   if (channel === 'hub-pick-parent-dir') return { path: '/Users/me/Games' }
-  if (channel === 'hub-create-project') return new Promise(() => {})
+  if (channel === 'hub-create-project') return create()
   if (channel === 'workspace-info') return arg.map((path: string) => ({ path, status: 'ok', unityVersion: null }))
   return null
 }
@@ -45,7 +46,7 @@ const view = (theme: Theme) => {
   )
 }
 
-beforeEach(() => { resetHubStore(); mocks.invoke.mockReset().mockImplementation(ipc) })
+beforeEach(() => { create = () => new Promise(() => {}); resetHubStore(); mocks.invoke.mockReset().mockImplementation(ipc) })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('hub: one composition per theme', () => {
@@ -80,5 +81,37 @@ describe('hub: one composition per theme', () => {
     const before = mocks.invoke.mock.calls.filter(c => c[0] === 'hub-list-editors').length
     fireEvent.click(screen.getByRole('button', { name: en['hub.refresh'] }))
     await waitFor(() => expect(mocks.invoke.mock.calls.filter(c => c[0] === 'hub-list-editors').length).toBe(before + 1))
+  })
+})
+
+describe('hub: run cards and captions', () => {
+  it('the Ozel card describes the run after a remount, not the reset form', async () => {
+    view('ozel')
+    fireEvent.click(screen.getByTestId('hub-tab-new'))
+    await waitFor(() => expect(screen.getByRole('radio').getAttribute('aria-checked')).toBe('true'))
+    fireEvent.change(screen.getByTestId('hub-version'), { target: { value: '2022.3.55f1' } })
+    await waitFor(() => expect(screen.getByRole('radio').getAttribute('aria-checked')).toBe('true'))
+    fireEvent.change(screen.getByTestId('hub-name'), { target: { value: 'Game' } })
+    fireEvent.click(screen.getByTestId('hub-folder'))
+    await waitFor(() => expect(screen.getByTestId('hub-folder').textContent).toContain('/Users/me/Games'))
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-progress')
+    cleanup()
+    view('ozel')
+    const card = await screen.findByTestId('hub-ozel-card')
+    expect(card.textContent).toContain('3D')
+    expect(card.textContent).toContain('2022.3.55f1')
+    expect(card.textContent).not.toContain('6000.2.4f1')
+    expect(card.textContent).toContain('/Users/me/Games/Game')
+    expect(card.textContent).not.toContain(en['hub.folderNone'])
+  })
+
+  it('Atolye words its order number through the i18n table in both languages', async () => {
+    expect(translations.tr['hub.orderNo']).toBeTruthy()
+    expect(translations.en['hub.orderNo']).toBeTruthy()
+    const { container } = view('atolye')
+    fireEvent.click(screen.getByTestId('hub-tab-new'))
+    await waitFor(() => expect(container.querySelector('.at-stub-no')).not.toBeNull())
+    expect(container.querySelector('.at-stub-no')!.textContent).toBe(en['hub.orderNo'].replace('{no}', '001'))
   })
 })

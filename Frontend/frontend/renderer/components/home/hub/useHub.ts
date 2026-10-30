@@ -81,21 +81,30 @@ export function useHub({ recent, onSelectWorkspace, showToast }: HubDeps) {
     setNameTouched(true);
     setTried(true);
     if (!canCreate || !parent) return;
-    void startCreate({ parentDir: parent, name, version, ...(templateId ? { templateId } : {}) });
+    void startCreate({ parentDir: parent, name, version, ...(templateId ? { templateId } : {}) }, template);
   };
 
   const cancel = () => cancelRun();
 
-  /** Back to the form with the same answers (after a failure or a cancel). */
-  const back = () => clearRun();
+  /** Back to the form with the run's own answers, so Create sends the same request again (also after a remount). */
+  const back = () => {
+    if (run.state === 'failed' || run.state === 'cancelled') {
+      const { name: n, parentDir, version: v, templateId: tid } = run.req;
+      setName(n); setNameTouched(false); setTried(false); setParent(parentDir);
+      if (tid) setTemplateId(tid);
+      if (v !== versionRef.current) setVersion(v);
+    }
+    clearRun();
+  };
   /** A fresh form for another project. */
   const another = () => { clearRun(); setName(''); setNameTouched(false); setTried(false); };
 
-  const openCreated = async () => { if (run.state === 'done') await onSelectWorkspace(run.path); };
+  // An opened run is consumed: a later mount must not offer the same finished project again.
+  const openCreated = async () => { if (run.state === 'done') { await onSelectWorkspace(run.path); clearRun(); } };
 
   const launch = async (path: string, v?: string) => {
     const res = await launchProject(path, v);
-    if (res.opened) showToast(t('hub.launched'), 'success');
+    if (res.opened) { showToast(t('hub.launched'), 'success'); if (run.state === 'done' && run.path === path) clearRun(); }
     else showToast(t('hub.launchFailed', { error: res.error || t('hub.failedUnknown') }), 'error');
   };
 

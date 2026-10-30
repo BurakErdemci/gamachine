@@ -171,9 +171,6 @@ describe('hub: creating a project', () => {
     expect(done.textContent).toContain(en['hub.doneTitle'].replace('{name}', 'Night Run'))
     fireEvent.click(screen.getByTestId('hub-open-created'))
     await waitFor(() => expect(p.onSelectWorkspace).toHaveBeenCalledWith('/Users/me/Games/Night Run'))
-    fireEvent.click(screen.getByTestId('hub-launch-created'))
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('hub-open-project', { path: '/Users/me/Games/Night Run', version: '6000.2.4f1' }))
-    await waitFor(() => expect(p.showToast).toHaveBeenCalledWith(en['hub.launched'], 'success'))
   })
 
   it('Cancel asks the engine to stop and the cancelled result offers the form back', async () => {
@@ -250,11 +247,54 @@ describe('hub: the run outlives the screen', () => {
     expect(screen.getByTestId('hub-elapsed').textContent).toBe('00:42')
     expect(create).toHaveBeenCalledTimes(1)
     await finish({ ok: true, path: '/Users/me/Games/Night Run' })
-    fireEvent.click(screen.getByTestId('hub-open-created'))
-    await waitFor(() => expect(p.onSelectWorkspace).toHaveBeenCalledWith('/Users/me/Games/Night Run'))
+    // A finished run that was not opened is still offered after a remount.
     cleanup()
     view(p)
     expect(screen.getByTestId('hub-result-done')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('hub-open-created'))
+    await waitFor(() => expect(p.onSelectWorkspace).toHaveBeenCalledWith('/Users/me/Games/Night Run'))
+    // Opened: consumed, so a later mount shows the plain form.
+    cleanup()
+    view(p)
+    expect(screen.queryByTestId('hub-result-done')).toBeNull()
+    expect(screen.getByTestId('hub-tab-projects').getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('a project launched from the result is consumed too', async () => {
+    const finish = pending()
+    const p = props()
+    view(p)
+    await fillForm()
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-progress')
+    await finish({ ok: true, path: '/Users/me/Games/Night Run' })
+    fireEvent.click(screen.getByTestId('hub-launch-created'))
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('hub-open-project', { path: '/Users/me/Games/Night Run', version: '6000.2.4f1' }))
+    await waitFor(() => expect(p.showToast).toHaveBeenCalledWith(en['hub.launched'], 'success'))
+    cleanup()
+    view(p)
+    expect(screen.queryByTestId('hub-result-done')).toBeNull()
+  })
+
+  it('a failed creation can be retried after a remount with the same request', async () => {
+    create = vi.fn(async () => ({ ok: false, error: 'boom' }))
+    const p = props()
+    view(p)
+    await fillForm('Night Run')
+    fireEvent.click(screen.getByRole('radio', { name: /URP/ }))
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-result-failed')
+    const first = (create as any).mock.calls[0][0]
+    cleanup()
+    view(p)
+    await screen.findByTestId('hub-result-failed')
+    fireEvent.click(screen.getByTestId('hub-back'))
+    expect(nameBox().value).toBe('Night Run')
+    expect(screen.getByTestId('hub-folder').textContent).toContain('/Users/me/Games')
+    await waitFor(() => expect(screen.getByRole('radio', { name: /URP/ }).getAttribute('aria-checked')).toBe('true'))
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await waitFor(() => expect((create as any).mock.calls.length).toBe(2))
+    expect((create as any).mock.calls[1][0]).toEqual(first)
   })
 
   it('unmounting drops the screen from the run; the only progress listener is the store\'s and ends with the run', async () => {
@@ -280,6 +320,34 @@ describe('hub: the run outlives the screen', () => {
     fireEvent.click(screen.getByTestId('hub-create'))
     await screen.findByTestId('hub-result-failed')
     expect(mocks.listeners.has('hub-create-progress')).toBe(false)
+  })
+})
+
+describe('hub: a rejected invoke', () => {
+  it('shows the thrown message for a creation instead of "no error"', async () => {
+    create = vi.fn(async () => { throw new Error('main exploded') })
+    view()
+    await fillForm()
+    fireEvent.click(screen.getByTestId('hub-create'))
+    const failed = await screen.findByTestId('hub-result-failed')
+    expect(within(failed).getByRole('alert').textContent).toBe('main exploded')
+  })
+
+  it('shows the thrown message for a launch', async () => {
+    mocks.invoke.mockImplementation(async (c: string, a: any) => { if (c === 'hub-open-project') throw new Error('launch exploded'); return ipc(c, a) })
+    const p = view()
+    fireEvent.click(await screen.findByRole('button', { name: 'Options for Arena' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: en['hub.launchWith'].replace('{version}', '6000.2.4f1') }))
+    await waitFor(() => expect(p.showToast).toHaveBeenCalledWith(en['hub.launchFailed'].replace('{error}', 'launch exploded'), 'error'))
+  })
+
+  it('keeps the old text for a failure with no message', async () => {
+    create = vi.fn(async () => { throw new Error('') })
+    view()
+    await fillForm()
+    fireEvent.click(screen.getByTestId('hub-create'))
+    const failed = await screen.findByTestId('hub-result-failed')
+    expect(within(failed).getByRole('alert').textContent).toBe(en['hub.failedUnknown'])
   })
 })
 
