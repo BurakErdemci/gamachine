@@ -51,6 +51,7 @@ export const viewSide = (side: LiveSide, shown: Record<LiveSide, boolean>): Live
 
 export function useLiveSide() {
   const store = useMemo(createLiveSideState, []);
-  const snap = useSyncExternalStore(store.subscribe, store.snapshot);
+  // The third argument is the server snapshot: without it the static export's prerender of /home fails (React #407).
+  const snap = useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
   return { ...snap, pick: store.pick, setRunning: store.setRunning, autoReveal: store.autoReveal };
 }
