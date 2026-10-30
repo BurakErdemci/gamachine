@@ -530,3 +530,50 @@ def test_a_failed_chat_lookup_after_the_describe_refuses_the_step(live):
     live.host.after_describe = lookup_breaks
     reply = command(live, ref="7")
     assert reply["ok"] is False and "click" not in live.host.ops()
+
+
+def test_a_pipe_in_the_name_cannot_move_text_into_the_form_action():
+    from browser_use import policy
+    first = {"role": "button", "name": "Buy now|x", "form_action": "y"}
+    second = {"role": "button", "name": "Buy now", "form_action": "x|y"}
+    assert policy.fingerprint(first) != policy.fingerprint(second)
+
+
+def test_a_pipe_shifted_between_name_and_form_action_in_the_wait_is_not_clicked(waiting):
+    waiting.host.elements["9"] = {"role": "button", "name": "Buy now|x", "tag": "button", "form_action": "y"}
+
+    async def shift_then_approve(gate_id, routes):
+        waiting.host.elements["9"] = {"role": "button", "name": "Buy now", "tag": "button", "form_action": "x|y"}
+        await desktop_approve(gate_id, routes)
+
+    reply = run_with_answer(waiting, shift_then_approve)
+    assert reply["error"] == gateway.TARGET_CHANGED and waiting.host.ops().count("click") == 0
+
+
+def test_the_chats_stop_route_refuses_a_call_queued_behind_another_chats_wait(waiting):
+    routes = endpoints(waiting)
+
+    async def main():
+        other = asyncio.ensure_future(routes["browser_command"](
+            {"tool": "browser_click", "args": {"snapshot_id": "s1", "ref": "9"}, "conversation_id": 2},
+            x_session_token=""))
+        gate_id = await first_open_card()
+        queued = asyncio.ensure_future(routes["browser_command"](
+            {"tool": "browser_click", "args": {"snapshot_id": "s1", "ref": "7"}, "conversation_id": 1},
+            x_session_token=""))
+        await asyncio.sleep(0.05)
+        await waiting.router.stop_chat(1)
+        await desktop_approve(gate_id, routes)
+        await other
+        return await queued
+
+    reply = asyncio.run(main())
+    assert reply["ok"] is False
+    assert all(not (cmd[0] == "click" and cmd[1] == 1) for cmd in waiting.host.cmds)
+
+
+def test_a_new_click_after_the_chats_stop_is_refused_until_the_next_message(live):
+    asyncio.run(live.router.stop_chat(1))
+    assert 1 in browser_store(live.router, "_computer_halted")
+    reply = command(live, ref="7")
+    assert reply["ok"] is False and "click" not in live.host.ops()

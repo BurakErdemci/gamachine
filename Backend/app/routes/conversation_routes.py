@@ -2384,6 +2384,7 @@ Max 300 kelime. Türkçe yaz.
     async def stop_chat(conversation_id: int) -> dict:
         """The desktop Stop, shared with the phone's `stop` (remote bridge)."""
         turn_events.note_stop(conversation_id)
+        _computer_halted.add(conversation_id)
         _stop_browser_for_chat(conversation_id)
         # A stopped mail wake turn's text is not its answer: nothing is forwarded.
         _owed = _reply_owed.get(conversation_id)
