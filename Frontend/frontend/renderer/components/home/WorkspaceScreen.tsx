@@ -180,7 +180,7 @@ export const WorkspaceScreen = ({
       showToast(t('welcome.trashDone', { name: it.name, bin }), 'success');
       return;
     }
-    const known = ['not-a-unity-project', 'unity-open', 'open-workspace', 'protected', 'not-found', 'untrusted'];
+    const known = ['not-a-unity-project', 'unity-open', 'open-workspace', 'protected', 'not-found', 'untrusted', 'busy'];
     showToast(t(known.includes(res?.error) ? `welcome.trashErr.${res.error}` as 'welcome.trashErr.protected' : 'welcome.trashErr.other', { bin }), 'error');
   };
   const locate = async (it: RecentWorkspace) => {

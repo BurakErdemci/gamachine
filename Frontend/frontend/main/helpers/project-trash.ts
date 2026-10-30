@@ -9,6 +9,7 @@ export type TrashError =
   | 'unity-open'
   | 'untrusted'
   | 'cancelled'
+  | 'busy'
   | 'trash-failed'
 
 export type TrashResult = { ok: true } | { error: TrashError }
@@ -125,14 +126,29 @@ export async function checkTrashable(dir: unknown, deps: TrashDeps): Promise<{ e
   return { real }
 }
 
+// Canonical paths with a trash request under way; a second request for one of them is refused.
+const inFlight = new Set<string>()
+
 export async function trashProject(dir: unknown, deps: TrashDeps): Promise<TrashResult> {
-  const checked = await checkTrashable(dir, deps)
-  if ('error' in checked) return checked
-  if (!(await deps.confirm(checked.real).catch(() => false))) return { error: 'cancelled' }
+  const key = typeof dir === 'string' ? resolved(deps, dir) : null
+  const slot = key && (deps.platform === 'win32' || deps.platform === 'darwin' ? key.toLowerCase() : key)
+  if (slot && inFlight.has(slot)) return { error: 'busy' }
+  if (slot) inFlight.add(slot)
   try {
-    await deps.trashItem(checked.real)
-    return { ok: true }
-  } catch {
-    return { error: 'trash-failed' }
+    const checked = await checkTrashable(dir, deps)
+    if ('error' in checked) return checked
+    if (!(await deps.confirm(checked.real).catch(() => false))) return { error: 'cancelled' }
+    // The box stayed open for as long as the user took: judge the folder again before moving it.
+    const again = await checkTrashable(dir, deps)
+    if ('error' in again) return again
+    if (again.real !== checked.real) return { error: 'not-found' }
+    try {
+      await deps.trashItem(checked.real)
+      return { ok: true }
+    } catch {
+      return { error: 'trash-failed' }
+    }
+  } finally {
+    if (slot) inFlight.delete(slot)
   }
 }

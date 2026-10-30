@@ -22,6 +22,19 @@ describe('ConfirmDialog keyboard', () => {
     expect(screen.getByText('Sure?')).toBeTruthy()
   })
 
+  it.each(['Enter', ' '])('cancels the default action of a repeated %j on the focused button', async (key) => {
+    const answer = await open()
+    const go = screen.getByText('Go') as HTMLButtonElement
+    expect(document.activeElement).toBe(go)
+    let clicked = 0
+    go.addEventListener('click', () => { clicked++ })
+    let notPrevented = true
+    await act(async () => { notPrevented = fireEvent.keyDown(go, { key, repeat: true }) })
+    expect(notPrevented).toBe(false)
+    expect(clicked).toBe(0)
+    expect(answer()).toBeNull()
+  })
+
   it('still confirms on a fresh Enter', async () => {
     const answer = await open()
     await act(async () => { fireEvent.keyDown(window, { key: 'Enter' }) })

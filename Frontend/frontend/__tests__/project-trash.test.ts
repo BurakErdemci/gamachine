@@ -241,6 +241,51 @@ describe('project-trash guards', () => {
     })
   })
 
+  describe('concurrent and stale requests', () => {
+    it('refuses a second request for the same folder while the first waits on its confirmation', async () => {
+      let answer: (v: boolean) => void = () => {}
+      const { deps } = fake('darwin', unity(MAC, '/'), { confirm: vi.fn(() => new Promise<boolean>(r => { answer = r })) })
+      const first = trashProject(MAC, deps)
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'busy' })
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      expect(deps.confirm).toHaveBeenCalledTimes(1)
+      answer(true)
+      expect(await first).toEqual({ ok: true })
+      expect(deps.trashItem).toHaveBeenCalledTimes(1)
+    })
+
+    it('frees the folder after a refusal or a no', async () => {
+      const { deps } = fake('darwin', unity(MAC, '/'), { confirm: vi.fn(async () => false) })
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'cancelled' })
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'cancelled' })
+    })
+
+    it('refuses when the folder is gone after the user confirmed', async () => {
+      const dirs = new Set(unity(MAC, '/'))
+      const { deps } = fake('darwin', [], { confirm: vi.fn(async () => { dirs.delete(MAC); return true }) })
+      deps.realpath = (p) => { if (!dirs.has(p)) throw new Error('ENOENT'); return p }
+      deps.isDirectory = (p) => dirs.has(p)
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'not-found' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('refuses when it stopped being a Unity project after the user confirmed', async () => {
+      const dirs = new Set(unity(MAC, '/'))
+      const { deps } = fake('darwin', [], { confirm: vi.fn(async () => { dirs.delete(`${MAC}/Assets`); return true }) })
+      deps.realpath = (p) => p
+      deps.isDirectory = (p) => dirs.has(p)
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'not-a-unity-project' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('refuses when Unity opened it after the user confirmed', async () => {
+      const state = { locked: false }
+      const { deps } = fake('win32', unity(WIN, '\\'), { probeLock: () => (state.locked ? 'busy' : 'free'), confirm: vi.fn(async () => { state.locked = true; return true }) })
+      expect(await trashProject(WIN, deps)).toEqual({ error: 'unity-open' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+  })
+
   describe('Windows path forms', () => {
     const win = (dir: string, extra: string[] = [], over: Partial<TrashDeps> = {}, links: Record<string, string> = {}) =>
       fake('win32', [...unity(WIN, '\\'), ...extra], over, links)

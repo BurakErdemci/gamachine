@@ -144,6 +144,7 @@ describe('welcome screen: delete project', () => {
   it.each([
     ['not-a-unity-project', 'welcome.trashErr.not-a-unity-project'],
     ['unity-open', 'welcome.trashErr.unity-open'],
+    ['busy', 'welcome.trashErr.busy'],
     ['open-workspace', 'welcome.trashErr.open-workspace'],
     ['protected', 'welcome.trashErr.protected'],
     ['not-found', 'welcome.trashErr.not-found'],
