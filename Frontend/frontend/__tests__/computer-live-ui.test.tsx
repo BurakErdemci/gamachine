@@ -249,16 +249,16 @@ describe('ComputerLiveIndicator', () => {
   })
 })
 
-describe('Workspace: the Bilgisayar tab', () => {
+describe('Workspace: the Canlı tab', () => {
   it('is the fifth tab and selects its pane', () => {
     const onTab = vi.fn()
-    const panes = { sahne: <p>scene</p>, dosyalar: <p>files</p>, kod: <p>code</p>, onizleme: <p>preview</p>, bilgisayar: <p>computer</p> }
-    const { container } = render(<Workspace open tab="bilgisayar" onTab={onTab} width="dar" onWidth={vi.fn()} onClose={vi.fn()} panes={panes} drawer={null} />)
+    const panes = { sahne: <p>scene</p>, dosyalar: <p>files</p>, kod: <p>code</p>, onizleme: <p>preview</p>, canli: <p>computer</p> }
+    const { container } = render(<Workspace open tab="canli" onTab={onTab} width="dar" onWidth={vi.fn()} onClose={vi.fn()} panes={panes} drawer={null} />)
     const tabs = screen.getAllByRole('tab')
     expect(tabs).toHaveLength(5)
-    expect(tabs[4].textContent).toBe(tr['ws.tabComputer'])
+    expect(tabs[4].textContent).toBe(tr['ws.tabLive'])
     expect(tabs[4].getAttribute('aria-selected')).toBe('true')
-    expect(container.querySelector('[data-pane="bilgisayar"]')!.textContent).toBe('computer')
+    expect(container.querySelector('[data-pane="canli"]')!.textContent).toBe('computer')
     fireEvent.click(tabs[0])
     expect(onTab).toHaveBeenCalledWith('sahne')
   })

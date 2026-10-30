@@ -59,6 +59,7 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
       } else {
         setEnabled(r.enabled);
         saved();
+        window.dispatchEvent(new CustomEvent('app-live-features-changed'));
       }
     } finally {
       if (alive.current) setBusy(false);

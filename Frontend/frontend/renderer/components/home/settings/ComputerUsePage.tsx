@@ -111,6 +111,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
     const on = (r as { enabled?: unknown })?.enabled;
     if (typeof on === 'boolean' && on === enabled) { fail(); return; }
     saved();
+    window.dispatchEvent(new CustomEvent('app-live-features-changed'));
   });
 
   const masterHint = !desktop ? t('cu.set.desktopOnly')

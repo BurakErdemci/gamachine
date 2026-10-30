@@ -148,12 +148,11 @@ it('F3: the tree follows the hierarchy counter and the inspector follows props o
   h.unmount()
 })
 
-it('F4: the changed-files step opens Files when the scene editor is on, Scene when off', () => {
-  expect(guideWorkspaceTab('scene', false)).toBe('scene')
-  expect(guideWorkspaceTab('scene', true)).toBe('files')
-  expect(guideWorkspaceTab('code', true)).toBe('code')
+it('F4: the changed-files step always opens Files', () => {
+  expect(guideWorkspaceTab('scene')).toBe('files')
+  expect(guideWorkspaceTab('code')).toBe('code')
   const home = readFileSync('renderer/pages/home.tsx', 'utf8')
-  expect(home).toMatch(/'workspace\.tab':\s*\(tab\)\s*=>\s*\{[^}]*GUIDE_TABS\[guideWorkspaceTab\(tab,\s*editorOn\)\]/)
+  expect(home).toMatch(/'workspace\.tab':\s*\(tab\)\s*=>\s*\{[^}]*GUIDE_TABS\[guideWorkspaceTab\(tab\)\]/)
 })
 
 const deep: SceneTree = {
