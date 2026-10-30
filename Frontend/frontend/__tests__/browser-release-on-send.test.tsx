@@ -74,6 +74,16 @@ describe('browser tab release on a user send', () => {
     expect(releases()).toHaveLength(0)
   })
 
+  it('a throwing release does not abort the send', async () => {
+    ipcInvoke.mockImplementation(() => { throw new Error('bridge down') })
+    const { result } = hook()
+    await act(async () => {
+      await result.current.sendMessage('selam', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn())
+    })
+    expect(result.current.messages.some((m: any) => m.role === 'user')).toBe(true)
+    expect(mockedAxios.post.mock.calls.length + (fetch as any).mock.calls.length).toBeGreaterThan(0)
+  })
+
   it('a send without window.ipc still works', async () => {
     vi.stubGlobal('ipc', undefined)
     const { result } = hook()
