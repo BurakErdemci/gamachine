@@ -721,7 +721,10 @@ export class BrowserHost {
       if (shortcut.action === 'select') {
         const tabs = this.tabsOf(id)
         const target = shortcut.index === 9 ? tabs[tabs.length - 1] : tabs[shortcut.index - 1]
-        if (target) this.selectTab(target)
+        if (target) {
+          target.userTouched = true
+          this.selectTab(target)
+        }
       } else if (shortcut.action === 'new') await this.openUserTab(id)
       else if (shortcut.action === 'close') this.closeByUser(tab)
       else await this.reopenTab(id)
@@ -1239,6 +1242,7 @@ export class BrowserHost {
       return { ok: true, ...this.base(this.agentTab(id)?.view.webContents) }
     }
     // Listing and switching stay open while the user holds the agent tab: the agent may move away from it.
+    if (cmd.op === 'tabs' || cmd.op === 'use_tab') this.actedIn.add(id)
     if (cmd.op === 'tabs') return this.tabsReply(id)
     if (cmd.op === 'use_tab') return this.useTab(id, cmd.args)
     const refused = this.userControlReply({ ...cmd, conversation_id: id })

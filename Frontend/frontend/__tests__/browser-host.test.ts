@@ -1670,6 +1670,24 @@ describe('BrowserHost tabs and use_tab ops', () => {
     expect(await f.host.handle({ op: 'click', conversation_id: 4, args: { snapshot_id: 's999', ref } })).toMatchObject({ ok: false, error: 'stale_snapshot' })
   })
 
+  it('a tab the user selects with the Ctrl+number shortcut counts as used, so use_tab refuses it', async () => {
+    const { f, agent, ids } = await chatWithTabs()
+    press(agent, key('2', { control: true }))
+    const listed = (await f.host.handle({ op: 'tabs', conversation_id: 4, args: {} })).tabs as any[]
+    expect(listed.map((t) => t.userTouched)).toEqual([false, true, false])
+    expect(await useTab(f, ids[1])).toMatchObject({ ok: false, error: 'user_control' })
+    expect(await useTab(f, ids[2])).toMatchObject({ ok: true })
+  })
+
+  it('a global Stop also halts the backend of a chat whose only agent ops were tabs and use_tab', async () => {
+    const { f, ids } = await chatWithTabs()
+    await f.host.handle({ op: 'tabs', conversation_id: 4, args: {} })
+    await useTab(f, ids[2])
+    f.http.request.mockClear()
+    expect(await f.host.invoke({ op: 'halt' })).toEqual({ halted: true })
+    expect(f.http.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'post', url: 'http://127.0.0.1:9/computer-use/halt/4' }))
+  })
+
   it('has step labels for tabs and use_tab', () => {
     expect(browserStepLabel('browser_tabs')).toBe('Sekmeleri listeledi')
     expect(browserStepLabel('mcp__gamachineBrowser__browser_use_tab')).toBe('Başka bir sekmeye geçti')
