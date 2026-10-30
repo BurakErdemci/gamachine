@@ -20,7 +20,7 @@ import { BrowserPanel } from '../renderer/components/home/BrowserPanel'
 import { AnimatedChatInput } from '../renderer/components/ui/animated-ai-chat'
 import { useChat } from '../renderer/hooks/home/useChat'
 import {
-  addBrowserChips, addNotesFromEvent, addPageChip, formatBrowserContext, getBrowserChips, isAnnotateShortcut, parseBrowserContext,
+  addBrowserChips, addNotesFromEvent, addPageChip, captureNoteShots, formatBrowserContext, notesTab, getBrowserChips, isAnnotateShortcut, parseBrowserContext,
   takeBrowserChips, withinMs, MAX_CONTEXT_CHARS, type BrowserChip,
 } from '../renderer/lib/browserNotes'
 import { ceviriUygula } from '../renderer/lib/i18n'
@@ -716,10 +716,13 @@ describe('host capture-notes', () => {
     await vi.waitFor(() => expect(f.timers.some(t => t.ms === 4000)).toBe(true))
     f.timers.find(t => t.ms === 4000)!.fn()
     expect(await hung).toEqual({ image: '' })
+    // A tab that is not shown is captured where it is, never brought forward.
     f.wc.capturePage.mockClear()
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-    expect(await capture(f)).toEqual({ image: '' })
-    expect(f.wc.capturePage).not.toHaveBeenCalled()
+    expect((await capture(f)).image).toMatch(/^data:image\/jpeg;base64,/)
+    expect(f.wc.capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true })
+    f.wc.destroyed = true
+    expect(await capture(f)).toEqual({ error: 'no_tab' })
     expect(await f.host.invoke({ op: 'capture-notes', conversationId: 4, tabId: 9 })).toEqual({ error: 'no_tab' })
   })
 })
@@ -906,6 +909,18 @@ describe('page script', () => {
     expect(dump).toContain('görünen')
     expect(dump).toContain('Kullanıcı')
     expect(dump).toContain('kilitli-ama-okunur')
+  })
+
+  it('T5 a referenced label that is a field, or sits inside an editor, never becomes the note name', () => {
+    start('<div contenteditable="true"><span id="p1">PRIVATE_EDITOR_TEXT</span></div><textarea id="p2">PRIVATE_AREA</textarea>'
+      + '<span id="ok">Genel etiket</span><button id="b" aria-labelledby="p1 p2 ok" data-r="0,0,50,10">Kaydet</button>'
+      + '<button id="b2" aria-labelledby="p1" data-r="0,20,50,10"></button>'
+      + '<label for="i2"><span contenteditable="true">PRIVATE_LABEL</span></label><input id="i2" data-r="0,40,50,10">')
+    for (const el of document.querySelectorAll('[contenteditable]')) Object.defineProperty(el, 'isContentEditable', { value: true })
+    const names = ['b', 'b2', 'i2'].map((id) => { click(document.getElementById(id)!, 5, 5); return pick().pick.name })
+    const dump = JSON.stringify(names)
+    expect(dump).not.toContain('PRIVATE')
+    expect(names[0]).toBe('Genel etiket')
   })
 
   it('draws the number the host gave on the pin, refuses a missing number, and uncommitPin takes the pin back as a pending target', () => {
@@ -1375,10 +1390,99 @@ describe('the sent message in the bubble', () => {
     expect(parseBrowserContext(block).text).toBe('')
   })
 
-  it('still reads a block that was cut down to the comments', () => {
+  it('shows a block that was cut down to the comments (no fence left) as typed', () => {
     const big = Array.from({ length: 60 }, (_, i) => noteChip({ id: `n${i}`, comment: 'k'.repeat(120) }))
-    const parsed = parseBrowserContext(formatBrowserContext(big))
-    expect(parsed.blocks[0].kind).toBe('note')
-    expect(parsed.blocks[0].count).toBeGreaterThan(0)
+    const block = formatBrowserContext(big)
+    expect(parseBrowserContext(block)).toEqual({ text: block, blocks: [] })
+  })
+})
+
+// ---- turn 5: the Codex audit ----
+
+describe('T5 notes tab and captures', () => {
+  const chipsOn = (...tabs: number[]) => tabs.map((tabId, i) => noteChip({ id: `a${i}` }, tabId))
+
+  it('T5 the notes tab is the one with the most notes, a tie goes to the first note', () => {
+    expect(notesTab([])).toBeNull()
+    expect(notesTab(chipsOn(1, 2))).toBe(1)
+    expect(notesTab(chipsOn(2, 1))).toBe(2)
+    expect(notesTab(chipsOn(1, 2, 2, 3))).toBe(2)
+    expect(notesTab([{ type: 'page', key: 'page:7', tabId: 7, url: '', title: '' }, ...chipsOn(3)])).toBe(3)
+  })
+
+  it('T5 every notes tab gets a capture request and a failed one is skipped', async () => {
+    const invoke = vi.fn(async (_c: string, p: any) => (p.tabId === 2 ? { error: 'no_tab' } : { image: `data:image/jpeg;base64,t${p.tabId}` }))
+    ;(window as any).ipc = { invoke }
+    try {
+      const shots = await captureNoteShots(4, chipsOn(1, 2, 3, 1))
+      expect(shots).toEqual(['data:image/jpeg;base64,t1', 'data:image/jpeg;base64,t3'])
+      expect(invoke.mock.calls.map(c => c[1].tabId)).toEqual([1, 2, 3])
+    } finally { delete (window as any).ipc }
+  })
+})
+
+describe('T5 comment box guards', () => {
+  it('T5 a poll answer for a tab that is no longer shown keeps the pick and does not open the box', async () => {
+    const f = fakeHostFixture()
+    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
+    await openPage(f)
+    await annotate(f, true)
+    let answer: (v: unknown) => void = () => {}
+    f.wc.pickState = () => new Promise(resolve => { answer = resolve })
+    await f.poll()
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+    answer(pickState({ pick: PICK }))
+    await new Promise(r => setImmediate(r))
+    await new Promise(r => setImmediate(r))
+    expect(f.boxWc.executeJavaScript).not.toHaveBeenCalled()
+    expect((f.host as any).tabs.get(1).pick?.data.id).toBe('p1')
+  })
+
+  it('T5 the box is as wide as a narrow panel allows and stays hidden when that is unusably small', async () => {
+    for (const [width, expected] of [[1400, 320], [200, 184]] as const) {
+      const f = fakeHostFixture()
+      await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 50, y: 50, width, height: 400 } })
+      await pickTarget(f)
+      const b = f.boxView.setBounds.mock.calls.at(-1)![0]
+      expect(b.width).toBe(expected)
+      expect(b.x).toBeGreaterThanOrEqual(50)
+      expect(b.x + b.width).toBeLessThanOrEqual(50 + width)
+    }
+    const f = fakeHostFixture()
+    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 50, y: 50, width: 150, height: 400 } })
+    await openPage(f)
+    await annotate(f, true)
+    f.wc.pickState = () => pickState({ pick: PICK, rect: { x: 10, y: 10, width: 40, height: 20 } })
+    await f.poll()
+    expect(f.boxWc.executeJavaScript).not.toHaveBeenCalled()
+    expect(f.boxView.setBounds).not.toHaveBeenCalled()
+    expect((f.host as any).tabs.get(1).pick?.data.id).toBe('p1')
+  })
+})
+
+describe('T5 one block per tab and plain text', () => {
+  const pageChip = (tabId: number): BrowserChip => ({ type: 'page', key: `page:${tabId}`, tabId, url: 'https://shop.example/', title: 'Shop' })
+  const fences = (text: string) => [...text.matchAll(/<page_data[^>]*>\n([^]*?)\n<\/page_data>/g)].map(m => JSON.parse(m[1]))
+
+  it('T5 a note chip and a page chip of one tab share one fence with askedAboutPage', () => {
+    const out = formatBrowserContext([noteChip({ id: 'a' }, 2), pageChip(2), pageChip(3)])
+    const bodies = fences(out)
+    expect(bodies).toHaveLength(2)
+    expect(bodies[0]).toMatchObject({ tab: { tabId: 2 }, askedAboutPage: true })
+    expect(bodies[0].notes).toHaveLength(1)
+    expect(bodies[1]).not.toHaveProperty('askedAboutPage')
+    expect(fences(formatBrowserContext([noteChip({ id: 'a' }, 2)]))[0]).not.toHaveProperty('askedAboutPage')
+  })
+
+  it('T5 the bubble strips only a trailing block with a fence and keeps the user\'s own heading text', () => {
+    const typed = 'Bak:\n[Tarayıcı notları — sekme 2]\nBu satır görünmeli.'
+    expect(parseBrowserContext(typed)).toEqual({ text: typed, blocks: [] })
+    const block = formatBrowserContext([noteChip({ id: 'a' }, 2)])
+    expect(parseBrowserContext(`${typed}\n\n${block}`)).toMatchObject({ text: typed, blocks: [{ kind: 'note', count: 1, site: 'shop.example' }] })
+    // Text after the block, or a heading without a fence, is the user's.
+    const after = `${block}\n\nve sonra bu`
+    expect(parseBrowserContext(after)).toEqual({ text: after, blocks: [] })
+    const bare = 'x\n\n[Bu sayfa hakkında — sekme 2]'
+    expect(parseBrowserContext(bare)).toEqual({ text: bare, blocks: [] })
   })
 })

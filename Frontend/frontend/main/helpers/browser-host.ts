@@ -38,6 +38,7 @@ const NOTE_COMMENT_CHARS = 1000
 const NOTE_MAX_NOTES = 50
 const NOTE_SAVE_FAILED = 'Not kaydedilemedi, tekrar dene'
 const NOTE_BOX_WIDTH = 320
+const NOTE_BOX_MIN_WIDTH = 160
 const NOTE_BOX_MIN_HEIGHT = 56
 const NOTE_BOX_MAX_HEIGHT = 192
 const NOTE_BOX_GAP = 10
@@ -230,9 +231,11 @@ export const PAGE_LIB = String.raw`(() => {
     return clean(out, max);
   };
   const noteName = (el) => {
+    // A referenced label that is a field, or sits inside one (an editor), is a person's own text: it is skipped.
+    const refText = (n) => (n && !isField(n) ? textOf(n, NOTE_NAME_CHARS) : '');
     const by = el.getAttribute('aria-labelledby');
-    const byText = by ? by.split(/\s+/).map((id) => { const n = document.getElementById(id); return n ? textOf(n, NOTE_NAME_CHARS) : ''; }).join(' ') : '';
-    const labels = el.labels && el.labels.length ? Array.from(el.labels).map((l) => textOf(l, NOTE_NAME_CHARS)).join(' ') : '';
+    const byText = by ? by.split(/\s+/).map((id) => refText(document.getElementById(id))).join(' ') : '';
+    const labels = el.labels && el.labels.length ? Array.from(el.labels).map(refText).join(' ') : '';
     const field = isField(el);
     const buttonValue = tag(el) === 'input' && BUTTON_TYPES.includes(inputType(el)) ? el.value : '';
     const img = !field && el.querySelector ? el.querySelector('img[alt]') : null;
@@ -692,6 +695,12 @@ export function placeNoteBox(rect: { x: number; y: number; width: number; height
   else if (top - NOTE_BOX_GAP - size.height >= minY) y = top - NOTE_BOX_GAP - size.height
   // The side chosen above can lie outside the panel (a target scrolled away): the box itself never does.
   return { x: Math.round(clampX(x)), y: Math.round(clampY(y)), width: size.width, height: size.height }
+}
+
+/** The box is as wide as the panel allows, up to its normal width; 0 when the panel is too narrow for a usable box. */
+function noteBoxWidth(panel: Rectangle): number {
+  const width = Math.min(NOTE_BOX_WIDTH, panel.width - 2 * NOTE_BOX_MARGIN)
+  return width >= NOTE_BOX_MIN_WIDTH ? width : 0
 }
 
 /** Whether any part of the picked rect (viewport CSS px) is inside the panel: only then does the box have a target to sit next to. */
@@ -1484,7 +1493,9 @@ export class BrowserHost {
   private async showBox(tab: Tab, rect: { x: number; y: number; width: number; height: number } | null): Promise<void> {
     const win = this.deps.window()
     // A target outside the panel has nothing to sit next to: the box stays hidden (its draft kept) until the target is shown again.
-    if (!win || win.isDestroyed() || !rect || !tab.pick || !targetShown(rect, this.bounds)) return
+    // Nor does it open for a tab that stopped being the shown, selected, annotating one while the page was answering: the pick and draft stay.
+    if (!win || win.isDestroyed() || !rect || !tab.pick || !targetShown(rect, this.bounds) || !noteBoxWidth(this.bounds) ||
+      !this.annotatingVisible().includes(tab)) return
     const token = ++this.boxSeq
     let box: ReturnType<BrowserHost['ensureBox']>
     try { box = this.ensureBox() } catch { return }
@@ -1510,7 +1521,9 @@ export class BrowserHost {
 
   private placeBox(): void {
     if (!this.noteBox) return
-    this.noteBox.view.setBounds(placeNoteBox(this.boxRect, this.bounds, { width: NOTE_BOX_WIDTH, height: this.boxHeight }))
+    const width = noteBoxWidth(this.bounds)
+    if (!width) { this.hideBox(); return }
+    this.noteBox.view.setBounds(placeNoteBox(this.boxRect, this.bounds, { width, height: this.boxHeight }))
   }
 
   /** The box goes; the pick and its draft stay on the tab. */
@@ -1634,10 +1647,12 @@ export class BrowserHost {
 
   /**
    * A picture of a tab on screen for a message that carries its notes: frames and pins are in the page, the comment box
-   * is a separate view and the hover outline goes with the mode. Empty when the tab is not shown or the capture fails.
+   * is a separate view and the hover outline goes with the mode. A tab that is not shown is captured where it is
+   * (stayHidden), never brought forward. Empty when the tab is gone or the capture fails.
    */
   private async captureTab(tab: Tab): Promise<string> {
-    if (this.visibleId !== tab.conversationId || this.selected.get(tab.conversationId) !== tab.id || !this.isLive(tab)) return ''
+    if (!this.isLive(tab)) return ''
+    const shown = this.visibleId === tab.conversationId && this.selected.get(tab.conversationId) === tab.id
     if (this.boxTab === tab) this.hideBox()
     if (tab.annotating) {
       tab.annotating = false
@@ -1647,7 +1662,7 @@ export class BrowserHost {
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<never>((_resolve, reject) => { timer = this.later(() => reject(new Error('capture_timeout')), CAPTURE_TIMEOUT_MS) })
     try {
-      const image = await Promise.race([tab.view.webContents.capturePage(), timeout])
+      const image = await Promise.race([shown ? tab.view.webContents.capturePage() : tab.view.webContents.capturePage(undefined, { stayHidden: true }), timeout])
       if (image.isEmpty()) return ''
       const { width, height } = image.getSize()
       const longer = Math.max(width, height)

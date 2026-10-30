@@ -93,11 +93,13 @@ function buildContext(chips: readonly BrowserChip[], detail: Detail | 'none'): s
     // Only the user's own words are plain text; everything the page supplied sits inside the fence after them.
     const lines = group.map((chip, i) => `${noteNumber(chip.note, i)}. "${text(chip.note.comment, 1000)}"`);
     const head = `[Tarayıcı notları — sekme ${group[0].tabId}]\n${lines.join('\n')}`;
+    const asked = chips.some(c => c.type === 'page' && c.tabId === group[0].tabId);
     blocks.push(detail === 'none' ? head
-      : `${head}\n${fenced({ tab: pageTab(group[0], detail), notes: group.map((chip, i) => pageNote(noteNumber(chip.note, i), chip.note, detail)) })}`);
+      : `${head}\n${fenced({ tab: pageTab(group[0], detail), notes: group.map((chip, i) => pageNote(noteNumber(chip.note, i), chip.note, detail)), ...(asked ? { askedAboutPage: true } : {}) })}`);
   }
   for (const chip of chips) {
-    if (chip.type !== 'page') continue;
+    // A tab with notes already carries its page in the notes' fence.
+    if (chip.type !== 'page' || noteTabs.has(chip.tabId)) continue;
     const head = `[Bu sayfa hakkında — sekme ${chip.tabId}]`;
     blocks.push(detail === 'none' ? head : `${head}\n${fenced({ tab: pageTab(chip, detail) })}`);
   }
@@ -222,15 +224,18 @@ export function dropChatBrowser(conversationId: number): void {
   clearBrowserPins(conversationId, takeBrowserChips(conversationId));
 }
 
-/** The one tab all of these note chips come from, or null when there are none or they span tabs. */
+/** The tab with the most notes among these chips (a tie goes to the tab of the first note), or null when there are no notes. */
 export function notesTab(chips: readonly BrowserChip[]): number | null {
-  const tabs = new Set(chips.filter(c => c.type === 'note').map(c => c.tabId));
-  return tabs.size === 1 ? [...tabs][0] : null;
+  const counts = new Map<number, number>();
+  for (const chip of chips) if (chip.type === 'note') counts.set(chip.tabId, (counts.get(chip.tabId) ?? 0) + 1);
+  let best: number | null = null;
+  for (const [tabId, count] of counts) if (best == null || count > counts.get(best)!) best = tabId;
+  return best;
 }
 
 /**
- * Hands the chat's browser back to the agent after a user message. When the message carries notes from one tab
- * that is not the selected one, that tab is selected first so the release adopts it as the agent tab.
+ * Hands the chat's browser back to the agent after a user message. When the message carries notes, their main tab
+ * (`notesTab`) is selected first when it is not the selected one, so the release adopts it as the agent tab.
  * Resolves once the release is done.
  */
 export function releaseBrowser(conversationId: number, noteTab: number | null): Promise<unknown> {
@@ -259,20 +264,27 @@ export async function captureNoteShots(conversationId: number, chips: readonly B
  * (notes or a page asked about, with the site). The stored message keeps the whole block.
  */
 export function parseBrowserContext(content: string): { text: string; blocks: { kind: 'note' | 'page'; count: number; site: string }[] } {
-  const heads = [...content.matchAll(/^\[(Tarayıcı notları|Bu sayfa hakkında) — sekme \d+\]$/gm)];
-  if (heads.length === 0) return { text: content, blocks: [] };
-  const blocks = heads.map((head, i) => {
-    const segment = content.slice(head.index, heads[i + 1]?.index ?? content.length);
-    const kind: 'note' | 'page' = head[1] === 'Bu sayfa hakkında' ? 'page' : 'note';
-    let site = '';
-    try {
-      const json = segment.match(/<page_data[^>]*>\n([\s\S]*?)\n<\/page_data>/)?.[1];
-      const url = json ? JSON.parse(json)?.tab?.url : '';
-      site = url ? new URL(url).hostname : '';
-    } catch { /* trimmed or malformed: no site */ }
-    return { kind, count: kind === 'note' ? (segment.match(/^\d+\. "/gm) ?? []).length : 1, site };
-  });
-  return { text: content.slice(0, heads[0].index).trim(), blocks };
+  const HEAD = /^\[(Tarayıcı notları|Bu sayfa hakkında) — sekme \d+\]$/;
+  // The appended block starts after a blank line (or the very start), runs to the end and is made only of
+  // blocks that each open with a heading and carry a page_data fence; anything else is the user's own text.
+  for (const start of [0, ...[...content.matchAll(/\n\n(?=\[)/g)].map(m => m.index! + 2)]) {
+    const tail = content.slice(start);
+    const segments = tail.split(/\n\n(?=\[(?:Tarayıcı notları|Bu sayfa hakkında) — sekme \d+\]$)/m);
+    const heads = segments.map(seg => seg.split('\n', 1)[0].match(HEAD));
+    if (!heads.every(Boolean) || !segments.every(seg => /<page_data[^>]*>\n[\s\S]*\n<\/page_data>$/.test(seg))) continue;
+    const blocks = segments.map((segment, i) => {
+      const kind: 'note' | 'page' = heads[i]![1] === 'Bu sayfa hakkında' ? 'page' : 'note';
+      let site = '';
+      try {
+        const json = segment.match(/<page_data[^>]*>\n([\s\S]*?)\n<\/page_data>/)?.[1];
+        const url = json ? JSON.parse(json)?.tab?.url : '';
+        site = url ? new URL(url).hostname : '';
+      } catch { /* trimmed or malformed: no site */ }
+      return { kind, count: kind === 'note' ? (segment.match(/^\d+\. "/gm) ?? []).length : 1, site };
+    });
+    return { text: content.slice(0, start).trim(), blocks };
+  }
+  return { text: content, blocks: [] };
 }
 
 /** The short text on a chip: the user's own comment for a note, the page title for a page. */
