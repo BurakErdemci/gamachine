@@ -37,6 +37,7 @@ const INFO: Record<string, { status: string; unityVersion: string | null }> = {
 
 const ipcDefault = async (channel: string, arg: any) => {
   if (channel === 'host-workspace-path') return arg === '/b/nomap' ? '' : arg.replace('/b/', '/h/')
+  if (channel === 'backend-workspace-path') return arg.replace('/h/', '/b/')
   if (channel === 'workspace-info') return arg.map((path: string) => ({ path, ...INFO[path] }))
   if (channel === 'open-unity-hub') return { opened: true }
   if (channel === 'authorize-workspace') return { trusted: true }

@@ -176,3 +176,49 @@ def test_halt_survives_without_a_new_message(env):
     env.client.post("/chat-stop/1")
     assert halted(env) == [1]
     assert request(env)["approved"] is False
+
+
+def _batch(env, conversation_id=None, check=False):
+    body = {"params": {"bundle_id": "com.apple.TextEdit"}}
+    if conversation_id is not None:
+        body["conversation_id"] = conversation_id
+    if check:
+        body["check"] = True
+    return env.client.post("/computer-use/batch-step", json=body).json()["stop"]
+
+
+def test_check_only_batch_step_records_no_activity(env):
+    with patch("routes.conversation_routes.computer_activity.record") as record:
+        assert _batch(env, 1, check=True) is None
+        record.assert_not_called()
+        assert _batch(env, 1) is None
+        assert record.call_count == 1
+    halt(env, 1)
+    assert _batch(env, 1, check=True) == "halted"
+
+
+def test_halt_only_sticks_to_an_ordinary_chat(env):
+    from routes import conversation_routes
+    env.db.get_conversation_owner.side_effect = lambda cid: 1 if cid in (1, 5) else None
+    env.db.get_conversation_parent.side_effect = lambda cid: 1 if cid == 5 else None
+    env.db.get_side_of.side_effect = lambda cid: 1 if cid == 5 else None
+    for conversation_id in (5, 99999):
+        assert halt(env, conversation_id).json() == {"halted": True, "conversation_id": conversation_id}
+    assert halted(env) == []
+    assert _batch(env) is None
+    assert halt(env, 1).status_code == 200
+    assert halted(env) == [1]
+    assert _batch(env) == "halted"
+
+
+def test_a_failed_chat_lookup_still_halts(env):
+    env.db.get_conversation_owner.side_effect = RuntimeError("db locked")
+    assert halt(env, 1).json() == {"halted": True, "conversation_id": 1}
+    assert halted(env) == [1]
+
+
+def test_batch_step_for_a_deleted_chat_is_halted(env):
+    env.db.get_conversation_owner.side_effect = lambda cid: None if cid == 7 else 1
+    assert _batch(env, 7) == "halted"
+    assert _batch(env, 7, check=True) == "halted"
+    assert _batch(env, 1) is None

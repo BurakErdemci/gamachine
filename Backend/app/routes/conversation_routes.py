@@ -2423,21 +2423,25 @@ Max 300 kelime. Türkçe yaz.
         _check_token(x_session_token)
         return await stop_chat(conversation_id)
 
+    def _is_ordinary_chat(conversation_id: int) -> bool | None:
+        """True for a chat with a row that is not a side chat; None when the lookup fails."""
+        try:
+            return (db.get_conversation_owner(conversation_id) is not None
+                    and _side_main_of(conversation_id) is None)
+        except Exception:
+            return None
+
     async def stop_chat(conversation_id: int) -> dict:
         """The desktop Stop, shared with the phone's `stop` (remote bridge)."""
         turn_events.note_stop(conversation_id)
         # A side chat, a deleted chat or an id that never existed gets no user message to lift a halt,
         # and one stale id would halt every unowned computer-use batch; only an ordinary chat is halted.
-        # A failed lookup is unknown: the card rule below keeps its old fallback, the halt is not added.
-        lookup_failed = False
-        try:
-            ordinary = (db.get_conversation_owner(conversation_id) is not None
-                        and _side_main_of(conversation_id) is None)
-        except Exception:
-            lookup_failed = True
-            ordinary = True
+        # A failed lookup is unknown: the halt fails closed (added, a user message lifts it) and the card rule
+        # below keeps its old fallback.
+        ordinary = _is_ordinary_chat(conversation_id)
+        if ordinary is None:
             logger.warning("[chat-stop] chat lookup failed for %s", conversation_id)
-        if ordinary and not lookup_failed:
+        if ordinary is not False:
             _computer_halted.add(conversation_id)
         _stop_browser_for_chat(conversation_id)
         # A stopped mail wake turn's text is not its answer: nothing is forwarded.
@@ -2467,7 +2471,8 @@ Max 300 kelime. Türkçe yaz.
             # hit the main chat's. A chat with no row (a swept side chat, a
             # deleted one) had its own cards purged already: its Stop must
             # not reach anyone's unowned cards either (Codex sideaudit).
-            if ordinary and _abort_pending_mcp_approvals(conversation_id):
+            # Unknown keeps the Stop rule that held before side chats, or an ordinary chat's own pending card outlives its Stop.
+            if ordinary is not False and _abort_pending_mcp_approvals(conversation_id):
                 stopped = True
             return {"status": "ok" if stopped else "no_session"}
         except Exception as e:
@@ -2963,8 +2968,11 @@ Max 300 kelime. Türkçe yaz.
         halted = ((owner is not _UNKNOWN_OWNER and owner in _computer_halted)
                   or (type(claimed) is int and claimed in _computer_halted)
                   or (claimed is None and bool(_computer_halted)))
+        if not halted and type(claimed) is int:
+            # An approval granted before Stop can arrive after the chat was deleted; nothing may run for it.
+            halted = _names_missing_chat(claimed, fail_closed=True)
         enabled = computer_settings.enabled(db)
-        if enabled and not halted:
+        if enabled and not halted and body.get("check") is not True:
             computer_activity.record(None if owner is _UNKNOWN_OWNER else owner,
                                      "computer_run_steps", params, "allow")
         return {"stop": "halted" if halted else "disabled" if not enabled else None}
@@ -3049,7 +3057,10 @@ Max 300 kelime. Türkçe yaz.
 
     async def halt_computer(conversation_id: int) -> dict:
         """The desktop's computer-use halt, shared with the phone's `halt_computer` (remote bridge)."""
-        _computer_halted.add(conversation_id)
+        # Only a definitely non-ordinary id (side, deleted, unknown) is skipped: it could never be un-halted by a
+        # user message. A failed lookup fails closed.
+        if _is_ordinary_chat(conversation_id) is not False:
+            _computer_halted.add(conversation_id)
         _reject_computer_use_pending(conversation_id, computer_gate.HALTED_REASON, "computer_halt")
         _stop_browser_for_chat(conversation_id)
         return {"halted": True, "conversation_id": conversation_id}

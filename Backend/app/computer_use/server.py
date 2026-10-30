@@ -16,9 +16,21 @@ from mcp.types import CallToolResult, TextContent
 from spawn_env import read_only_refusal
 from unity_ai_mcp import approval_bridge
 from . import platform, policy
+from .gate import HALTED_REASON, INACTIVE_REASON
 from .driver_client import DriverClient, DriverError, DriverUnavailable
 from .platform.base import WindowListUnavailable
 from .platform.macos import fetch_runtime
+
+UNVERIFIED_REASON = "Durdurma durumu doğrulanamadı; işlem çalıştırılmadı."
+
+
+def _refusal_code(text: str) -> str:
+    """The stop code for a dispatch refusal; every text but the two named ones is a stop."""
+    if text == INACTIVE_REASON:
+        return "disabled"
+    if text == UNVERIFIED_REASON:
+        return "unverified"
+    return "halted"
 
 
 _TOOL_HINTS = {
@@ -159,9 +171,11 @@ async def _merge_panel_windows(result, pid):
         return result
 
 
-async def _batch_stop(params) -> str | None:
+async def _batch_stop(params, check_only=False) -> str | None:
     try:
         body = {"params": {key: params.get(key) for key in ("bundle_id", "app_name", "pid", "window_id")}}
+        if check_only:
+            body["check"] = True
         conversation_id = approval_bridge._conversation_id_from_env()
         if type(conversation_id) is int:
             body["conversation_id"] = conversation_id
@@ -249,10 +263,15 @@ def _window_rows(result):
     return rows
 
 
-async def _front_guard(driver, pid, window_id) -> str | None:
+async def _front_guard(driver, pid, window_id, recheck=None) -> str | None:
     if type(window_id) is not int:
         return "Foreground input needs window_id; nothing was sent."
     for attempt in range(2):
+        # Stop can land while the first bring_to_front runs; no further input-side call may follow it.
+        if attempt > 0 and recheck is not None:
+            refusal = await recheck()
+            if refusal is not None:
+                return refusal
         result = await driver.call("bring_to_front", {"pid": pid, "window_id": window_id})
         if result.is_error is not True:
             report = result.structured_content
@@ -272,6 +291,10 @@ async def _front_guard(driver, pid, window_id) -> str | None:
     except Exception:
         is_panel = False
     if is_panel:
+        if recheck is not None:
+            refusal = await recheck()
+            if refusal is not None:
+                return refusal
         try:
             await driver.call("bring_to_front", {"pid": pid})
             for attempt in range(2):
@@ -340,6 +363,14 @@ class BackendApprovals:
         return None
 
     async def dispatch_refusal(self, params) -> str | None:
+        # An approval granted before Stop can be delivered after it; ask the backend again right before the driver call.
+        stop = await _batch_stop(params, check_only=True)
+        if stop == "halted":
+            return HALTED_REASON
+        if stop == "disabled":
+            return INACTIVE_REASON
+        if stop == "unverified":
+            return UNVERIFIED_REASON
         return None
 
     async def request(self, tool, params):
@@ -621,7 +652,7 @@ class ComputerServer:
             refusal = await self._dispatch_refusal(params or {})
             if refusal is not None:
                 return refusal, None
-            refusal = await _front_guard(driver, pid, window_id)
+            refusal = await _front_guard(driver, pid, window_id, lambda: self._dispatch_refusal(params or {}))
             if refusal is not None:
                 return refusal, None
             refusal = await self._dispatch_refusal(params or {})
@@ -639,6 +670,7 @@ class ComputerServer:
         entries = []
         failed_step = None
         stop_reason = None
+        driver_steps = 0
         observation = {}
         non_text = []
         has_foreground = any(_foreground({**base, **step}) for step in steps)
@@ -647,6 +679,8 @@ class ComputerServer:
                 if i > 0:
                     if isinstance(delay_ms, int) and delay_ms > 0:
                         await asyncio.sleep(delay_ms / 1000)
+                # The step's one recorded backend question; steps after the first and foreground steps ask once more, check-only,
+                # after the front guard.
                 stop_reason = await self.approvals.batch_stop(params)
                 if stop_reason is not None:
                     break
@@ -669,18 +703,30 @@ class ComputerServer:
                     window_id = step_args.get("window_id")
                     if type(window_id) is not int:
                         window_id = base.get("window_id")
-                    refusal = await self._dispatch_refusal(params)
-                    if refusal is not None:
-                        return _text(refusal, True)
-                    refusal = await _front_guard(driver, base["pid"], window_id)
+                    dispatch_refused = []
+
+                    async def recheck():
+                        text = await self._dispatch_refusal(params)
+                        if text is not None:
+                            dispatch_refused.append(text)
+                        return text
+
+                    refusal = await _front_guard(driver, base["pid"], window_id, recheck)
+                    if dispatch_refused:
+                        stop_reason = _refusal_code(dispatch_refused[0])
+                        break
                     if refusal is not None:
                         entries.append({"index": i, "ok": False, "code": "foreground_unverified",
                                         "message": refusal})
                         failed_step = i
                         break
-                refusal = await self._dispatch_refusal(params)
-                if refusal is not None:
-                    return _text(refusal, True)
+                # batch_stop above predates the identity read (steps after the first) and the front guard
+                # (foreground); ask check-only again before the input. Nothing runs between the two for step 0.
+                if i > 0 or _foreground({**base, **step}):
+                    refusal = await self._dispatch_refusal(params)
+                    if refusal is not None:
+                        stop_reason = _refusal_code(refusal)
+                        break
                 result = await driver.call("run_steps", call_args)
                 report = result.structured_content
                 try:
@@ -697,12 +743,13 @@ class ComputerServer:
                 self._cache_snapshot(result, call_args)
                 entry = {**report["steps"][0], "index": i}
                 entries.append(entry)
+                driver_steps += 1
                 observation = {"observation": report["observation"]} if "observation" in report else {}
                 non_text = [block for block in result.content if not isinstance(block, TextContent)]
                 if result.is_error is True or report.get("ok") is not True or entry.get("ok") is not True:
                     failed_step = i
                     break
-        executed = len(entries)
+        executed = driver_steps
         report = {"executed": executed, "total": total, "failed_step": failed_step,
                   "ok": executed == total and failed_step is None and stop_reason is None,
                   "steps": entries, **observation}
@@ -716,8 +763,8 @@ class ComputerServer:
                 "unverified": (
                     f"Durdurma durumu doğrulanamadı; {executed}/{total} adım çalıştı, kalanlar çalıştırılmadı."),
             }
-            report = {"halted": True, "stop_reason": stop_reason,
-                      "halt_reason": reasons[stop_reason], **report}
+            reason = reasons[stop_reason]
+            report = {"halted": True, "stop_reason": stop_reason, "halt_reason": reason, **report}
         return CallToolResult(content=[TextContent(type="text", text=json.dumps(report, ensure_ascii=False))]
                               + non_text, is_error=not report["ok"])
 

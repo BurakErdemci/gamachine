@@ -34,6 +34,7 @@ let editors: unknown
 let create: (arg: any) => Promise<any>
 const ipc = async (channel: string, arg: any) => {
   if (channel === 'host-workspace-path') return arg.replace('/b/', '/h/')
+  if (channel === 'backend-workspace-path') return arg.replace('/h/', '/b/')
   if (channel === 'workspace-info') return arg.map((path: string) => ({ path, status: 'ok', unityVersion: '6000.2.4f1' }))
   if (channel === 'hub-list-editors') return editors
   if (channel === 'hub-list-templates') return { templates: arg.version === '6000.2.4f1' ? TEMPLATES : [] }
@@ -433,6 +434,47 @@ describe('useFileSystem.selectWorkspace result', () => {
     let got: boolean | undefined
     await act(async () => { release(true); got = await first })
     expect(got).toBe(false)
+  })
+})
+
+describe('hub: Locate', () => {
+  const locateRow = async (chosen: string | null, nullChannel = '') => {
+    mocks.invoke.mockImplementation(async (channel: string, arg: any) => (
+      channel === 'workspace-info' ? arg.map((path: string) => ({ path, status: 'missing', unityVersion: null }))
+        : channel === nullChannel ? null : ipc(channel, arg)))
+    vi.mocked(axios.post).mockReset().mockResolvedValue({ data: { removed: true } })
+    const p = props()
+    p.onOpenFolder = vi.fn(async () => chosen)
+    view(p)
+    fireEvent.click(await screen.findByText(en['welcome.locate']))
+    await waitFor(() => expect(p.onOpenFolder).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+  }
+  const removed = () => vi.mocked(axios.post).mock.calls.filter(c => String(c[0]).endsWith('/remove-workspace'))
+
+  it('keeps the old record when the selection was refused', async () => {
+    await locateRow(null)
+    expect(removed()).toHaveLength(0)
+  })
+
+  it('keeps the record when the same folder is chosen again', async () => {
+    await locateRow('/h/Arena/')
+    expect(removed()).toHaveLength(0)
+  })
+
+  it('keeps the record of an unmapped entry when its original folder is chosen again', async () => {
+    await locateRow('/h/Arena', 'host-workspace-path')
+    expect(removed()).toHaveLength(0)
+  })
+
+  it('keeps the old record when the saved key cannot be known', async () => {
+    await locateRow('/h/Elsewhere', 'backend-workspace-path')
+    expect(removed()).toHaveLength(0)
+  })
+
+  it('removes the old record when a different folder replaced it', async () => {
+    await locateRow('/h/Elsewhere')
+    await waitFor(() => expect(removed()).toHaveLength(1))
   })
 })
 

@@ -11,7 +11,7 @@ from mcp.types import CallToolResult, TextContent
 
 from computer_use.driver_client import DriverClient, DriverError, DriverUnavailable
 from computer_use.server import ComputerServer, create_server
-from computer_use import driver_client, server
+from computer_use import driver_client, gate, server
 from computer_use.platform import macos
 
 
@@ -19,6 +19,9 @@ from computer_use.platform import macos
 def no_real_cg_windows(monkeypatch):
     monkeypatch.setattr(macos, "_cg_window_list", lambda: [])
     monkeypatch.setattr(macos, "_lsappinfo_front", AsyncMock(return_value=(False, None)))
+
+
+REAL_DISPATCH_REFUSAL = server.BackendApprovals.dispatch_refusal
 
 
 @pytest.fixture
@@ -396,6 +399,69 @@ def test_batch_preserves_early_exit_without_fronting_another_app(batch_driver, m
         assert result.content[0].text == "Adım 1/3 sonucu okunamadı; kalan adımlar çalıştırılmadı."
     driver.frontmost_pid.assert_not_called()
     assert not handler._front_lock.locked()
+
+
+def test_a_dispatch_refusal_mid_batch_reports_what_already_ran(batch_driver, monkeypatch):
+    handler, _, state, _ = batch_driver
+    monkeypatch.setattr(server.BackendApprovals, "dispatch_refusal",
+                        AsyncMock(side_effect=[None, "Durduruldu."]))
+    result = asyncio.run(handler.call("computer_run_steps", foreground_batch()))
+    assert result.is_error
+    report = json.loads(result.content[0].text)
+    assert (report["executed"], report["total"], len(report["steps"])) == (1, 3, 1)
+    assert report["halted"] is True and report["stop_reason"] == "halted"
+    assert state["steps"] == 1
+
+
+@pytest.mark.parametrize("text,code", [
+    ("Durduruldu.", "halted"),
+    (server.HALTED_REASON, "halted"),
+    (server.INACTIVE_REASON, "disabled"),
+    (server.UNVERIFIED_REASON, "unverified"),
+])
+def test_a_dispatch_refusal_maps_to_a_known_stop_reason(batch_driver, monkeypatch, text, code):
+    handler, _, state, _ = batch_driver
+    monkeypatch.setattr(server.BackendApprovals, "dispatch_refusal", AsyncMock(side_effect=[None, text]))
+    report = json.loads(asyncio.run(handler.call("computer_run_steps", foreground_batch())).content[0].text)
+    assert report["stop_reason"] == code
+    assert report["executed"] == 1 and state["steps"] == 1
+    assert "işlem çalıştırılmadı" not in report["halt_reason"]
+    assert "1/3 adım çalıştı" in report["halt_reason"]
+
+
+def test_a_target_change_does_not_count_as_an_executed_step(batch_driver, monkeypatch):
+    handler, _, state, _ = batch_driver
+    state["locked"] = False
+    monkeypatch.setattr(server.platform.current(), "identify",
+                        AsyncMock(side_effect=[("com.apple.finder", "Finder", None)] * 2
+                                  + [("com.apple.TextEdit", "TextEdit", None)]), raising=False)
+    batch = {"pid": 4242, "window_id": 7, "steps": [
+        {"tool": "press_key", "args": {"key": "tab"}}, {"tool": "press_key", "args": {"key": "return"}}]}
+    report = json.loads(asyncio.run(handler.call("computer_run_steps", batch)).content[0].text)
+    assert state["steps"] == 1
+    assert (report["executed"], report["failed_step"], len(report["steps"])) == (1, 1, 2)
+
+
+def test_a_background_batch_skips_the_backend_question_that_nothing_separates(batch_driver):
+    handler, _, state, _ = batch_driver
+    state["locked"] = False
+    batch = {"pid": 4242, "window_id": 7, "steps": [
+        {"tool": "press_key", "args": {"key": "return"}}, {"tool": "press_key", "args": {"key": "tab"}}]}
+    result = asyncio.run(handler.call("computer_run_steps", batch))
+    assert not result.is_error
+    assert state["steps"] == 2
+    # Step 0: one question. Step 1: the top one plus a check-only one after the identity read (was 2 + 2).
+    assert server._batch_stop.await_count == 2
+    assert server.BackendApprovals.dispatch_refusal.await_count == 1
+
+
+def test_front_guard_does_not_retry_bring_to_front_after_a_refusal():
+    driver = AsyncMock()
+    driver.call.return_value = CallToolResult(content=[], structured_content={
+        "exact_window_effect": {"verified": False}})
+    recheck = AsyncMock(return_value="Durduruldu.")
+    assert asyncio.run(server._front_guard(driver, 4242, 7, recheck)) == "Durduruldu."
+    assert driver.call.await_count == 1
 
 
 def test_batch_preserves_report_and_leaves_target_in_front(batch_driver):
@@ -1231,3 +1297,15 @@ def test_launch_url_refusal_makes_no_driver_call_for_the_name(fake, tmp_path):
     assert result.is_error
     approval.assert_not_awaited()
     assert calls(log) == []
+
+
+@pytest.mark.parametrize("stop,expected", [
+    (None, None), ("halted", gate.HALTED_REASON), ("disabled", gate.INACTIVE_REASON),
+    ("unverified", "Durdurma durumu doğrulanamadı; işlem çalıştırılmadı."),
+])
+def test_backend_approvals_refuse_dispatch_after_stop(monkeypatch, stop, expected):
+    check = AsyncMock(return_value=stop)
+    monkeypatch.setattr(server, "_batch_stop", check)
+    refusal = asyncio.run(REAL_DISPATCH_REFUSAL(server.BackendApprovals(), {"bundle_id": "com.apple.TextEdit"}))
+    assert refusal == expected
+    assert check.await_args.kwargs == {"check_only": True}

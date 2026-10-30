@@ -594,10 +594,10 @@ def test_a_stop_for_a_side_chat_or_a_missing_chat_halts_nothing(live):
     assert batch["stop"] is None
 
 
-def test_a_stop_whose_chat_lookup_fails_adds_no_halt(live):
+def test_a_stop_whose_chat_lookup_fails_still_halts(live):
     live.db.get_conversation_owner.side_effect = RuntimeError("db locked")
     assert live.client.post("/chat-stop/1").status_code == 200
-    assert halted_ids(live) == []
+    assert halted_ids(live) == [1]
 
 
 def test_a_call_queued_before_a_stop_is_refused_after_the_next_message_cleared_the_halt(waiting):
