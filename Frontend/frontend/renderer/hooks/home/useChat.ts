@@ -16,7 +16,7 @@ import {
   type ModeChanged, type RemoteMessage,
 } from '../../lib/remoteControl';
 import { handleRemoteIpcFrame } from '../../lib/remote/desktopRunner';
-import { addBrowserChips, captureNoteShots, clearBrowserPins, dropChatBrowser, formatBrowserContext, notesTab, releaseBrowser, RELEASE_WAIT_MS, takeBrowserChips, withinMs, type BrowserChip } from '../../lib/browserNotes';
+import { addBrowserChips, captureNoteShots, clearBrowserPins, dropChatBrowser, formatBrowserContext, notesTab, releaseBrowser, CAPTURE_WAIT_MS, RELEASE_WAIT_MS, takeBrowserChips, withinMs, type BrowserChip } from '../../lib/browserNotes';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -893,7 +893,7 @@ export const useChat = (
         if (chips.length > 0) {
           await withinMs(released, RELEASE_WAIT_MS);
           // The picture is taken while the notes' frames and pins are still drawn; the pins of the sent notes go after it.
-          const shots = await captureNoteShots(targetConvId, chips);
+          const shots = (await withinMs(captureNoteShots(targetConvId, chips), CAPTURE_WAIT_MS)) ?? [];
           if (shots.length > 0) images = [...(images ?? []), ...shots];
           clearBrowserPins(targetConvId, chips);
         }

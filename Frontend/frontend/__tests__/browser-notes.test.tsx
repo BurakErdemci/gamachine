@@ -584,6 +584,43 @@ describe('host annotate ops', () => {
     expect(f.pageCalls('commitPin')[1]).toContain('"n":2')
   })
 
+  it('T4 numbers stay unique across a navigation in one tab', async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    boxSays(f, { t: 'submit', text: 'ilk' })
+    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
+    f.wc.emit('did-navigate', {}, 'https://example.com/next')
+    await annotate(f, true)
+    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
+    await f.poll()
+    f.wc.pickState = () => pickState({ picking: 'p2' })
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenCalledTimes(2))
+    boxSays(f, { t: 'submit', text: 'ikinci' })
+    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(2))
+    expect(f.sent('browser-notes').map(e => e.notes[0].n)).toEqual([1, 2])
+  })
+
+  it("T4 a stale save failure does not reach another pick's box", async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    let fail: (e: Error) => void = () => {}
+    const commits = f.wc.executeJavaScriptInIsolatedWorld.getMockImplementation()!
+    f.wc.executeJavaScriptInIsolatedWorld.mockImplementation((w: number, scripts: { code: string }[]) =>
+      (scripts[0].code.includes('.commitPin(') ? new Promise((_r, rej) => { fail = rej }) : commits(w, scripts)))
+    boxSays(f, { t: 'submit', text: 'eski' })
+    await vi.waitFor(() => expect(f.pageCalls('commitPin')).toHaveLength(1))
+    boxSays(f, { t: 'cancel' })
+    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
+    await f.poll()
+    f.wc.pickState = () => pickState({ picking: 'p2' })
+    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenCalledTimes(2))
+    fail(new Error('slow page'))
+    await new Promise(r => setImmediate(r))
+    await new Promise(r => setImmediate(r))
+    expect(f.boxWc.executeJavaScript.mock.calls.some((c: any[]) => String(c[0]).includes('__error'))).toBe(false)
+    expect(f.sent('browser-notes')).toHaveLength(0)
+  })
+
   it('ends the mode when the page leaves it itself (Esc)', async () => {
     const f = fakeHostFixture()
     await openPage(f)
@@ -1203,6 +1240,28 @@ describe('sendMessage with browser chips', () => {
       expect(ops().indexOf('release')).toBeLessThan(ops().indexOf('capture-notes'))
       expect(userMsg(result).images).toEqual([SHOT])
       expect(userMsg(result).content).toContain('[Tarayıcı notları — sekme 1]')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('T4 a hung capture does not block the send', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      captureReply = () => new Promise(() => {})
+      addBrowserChips(null, [noteChip({}, 1)])
+      const { result } = hook()
+      let sending: Promise<unknown> = Promise.resolve()
+      await act(async () => { sending = result.current.sendMessage('x', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn()) })
+      expect(ops()).toContain('capture-notes')
+      expect((fetch as any).mock.calls.some((c: any[]) => String(c[1]?.body).includes('conversation_id'))).toBe(false)
+      await act(async () => { await vi.advanceTimersByTimeAsync(4999) })
+      expect((fetch as any).mock.calls.some((c: any[]) => String(c[1]?.body).includes('conversation_id'))).toBe(false)
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      await act(async () => { await sending })
+      expect(userMsg(result).content).toContain('[Tarayıcı notları — sekme 1]')
+      expect(userMsg(result).images ?? []).toEqual([])
+      expect(body().images ?? []).toEqual([])
     } finally {
       vi.useRealTimers()
     }

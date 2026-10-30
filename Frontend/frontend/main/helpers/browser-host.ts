@@ -190,7 +190,7 @@ export const PAGE_LIB = String.raw`(() => {
   };
   // ---- annotation overlay (docs/agent-browser.md "Annotate mode") ----
   // The page side only picks and draws. The comment is typed into an app-owned view (BrowserHost.openBox), so no text input exists here and the page never sees the comment.
-  const NOTE_MAX_NOTES = 50;
+  const NOTE_MAX_NOTES = ${NOTE_MAX_NOTES};
   const NOTE_NAME_CHARS = 200;
   const NOTE_PATH_CHARS = 200;
   const NOTE_AREA_CHARS = 500;
@@ -598,7 +598,7 @@ export const PAGE_LIB = String.raw`(() => {
       if (!pending || pending.id !== (a && a.pickId)) return { error: 'no_pick' };
       if (saved.length >= NOTE_MAX_NOTES) return { error: 'too_many_notes' };
       if (!Number.isInteger(a.n) || a.n < 1) return { error: 'bad_number' };
-      saved.push({ data: pending.data, taken: false, anchor: pending.anchor, n: a.n });
+      saved.push({ data: pending.data, anchor: pending.anchor, n: a.n });
       pending = null;
       drawPins();
       drawPick();
@@ -618,12 +618,6 @@ export const PAGE_LIB = String.raw`(() => {
       if (pending && (!a || !a.pickId || a.pickId === pending.id)) dropPending();
       dropOverlayIfIdle();
       return { ok: true };
-    },
-    // Kept because probes/annotate.py (the architect's static check) requires it in PAGE_LIB; the host no longer calls it.
-    takeNotes() {
-      const fresh = saved.filter((note) => !note.taken);
-      for (const note of fresh) note.taken = true;
-      return { notes: fresh.map((note) => note.data), active: modeOn };
     },
     clearNotes(a) {
       const ids = Array.isArray(a && a.ids) ? a.ids : null;
@@ -1371,7 +1365,6 @@ export class BrowserHost {
   /** A new document has no pick: the target, the draft and the box go. */
   private forgetPick(tab: Tab, removeOverlay = false): void {
     tab.pick = null
-    tab.pinSeq = 0
     if (this.boxTab === tab) this.hideBox()
     this.endAnnotate(tab, removeOverlay)
   }
@@ -1607,6 +1600,8 @@ export class BrowserHost {
         void this.page(tab, 'uncommitPin', { pickId: pick.data.id }).catch(() => { /* the page is gone */ })
       }
       if (!pinned) {
+        // A result for a pick that is no longer the tab's (cancelled, replaced while the page answered) must not touch the box.
+        if (tab.pick !== pick) return
         pick.error = failure
         if (this.boxTab === tab) void this.noteBox?.view.webContents.executeJavaScript(`window.__error(${JSON.stringify(failure)})`).catch(() => { /* box closing */ })
         return

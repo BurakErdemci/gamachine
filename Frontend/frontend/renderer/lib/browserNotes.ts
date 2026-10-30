@@ -199,6 +199,9 @@ export function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | undefi
 /** The longest a send waits for the browser to hand its tab back before it goes on. */
 export const RELEASE_WAIT_MS = 2000;
 
+/** The longest a send waits for the notes' picture before it goes without one. */
+export const CAPTURE_WAIT_MS = 5000;
+
 /** The chip's ×: the chip goes and so does its pin in the page. */
 export function dismissBrowserChip(conversationId: number | null | undefined, chip: BrowserChip): void {
   removeBrowserChip(conversationId, chip.key);
