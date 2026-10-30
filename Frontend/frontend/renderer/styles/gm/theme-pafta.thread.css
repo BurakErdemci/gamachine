@@ -69,6 +69,9 @@
 [data-theme="pafta"] .empty-hero { grid-template-columns: 150px minmax(0, 1fr); gap: 24px; }
 [data-theme="pafta"] .empty-head { display: none; }
 [data-theme="pafta"] .empty-mascot { display: block; width: 150px; height: auto; }
+@container stage (max-width: 720px) {
+  [data-theme="pafta"] .empty-hero { grid-template-columns: minmax(0, 1fr); }
+}
 /* narrow chat (focus width): the revision head keeps two cells - the source cell
    ("Unity · SampleScene") is the third one and wrapped the row; the panel already names it */
 @container stage (max-width: 520px) {
@@ -100,4 +103,4 @@
 }
 [data-theme="pafta"] .confirm-msg { padding: 13px 18px 14px; }
 [data-theme="pafta"] .confirm-actions { padding: 10px 12px; }
-[data-theme="pafta"] .confirm .btn { height: 32px; padding: 0 14px; font-size: 13px; }
+[data-theme="pafta"] .confirm .btn { min-height: 32px; padding: 0 14px; font-size: 13px; }

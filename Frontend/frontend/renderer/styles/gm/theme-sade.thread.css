@@ -73,4 +73,4 @@
 }
 [data-theme="sade"] .confirm-mark { width: 16px; height: 22px; margin-top: 0; background: transparent; }
 [data-theme="sade"] .confirm-msg { padding-top: 0; font-size: 14px; }
-[data-theme="sade"] .confirm .btn { height: 32px; padding: 0 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); }
+[data-theme="sade"] .confirm .btn { min-height: 32px; padding: 0 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); }

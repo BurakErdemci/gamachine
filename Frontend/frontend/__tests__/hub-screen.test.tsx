@@ -263,7 +263,7 @@ describe('hub: the run outlives the screen', () => {
     expect(screen.getByTestId('hub-tab-projects').getAttribute('aria-selected')).toBe('true')
   })
 
-  it('a project launched from the result is consumed too', async () => {
+  it('a project launched from the result keeps the done screen', async () => {
     const finish = pending()
     const p = props()
     view(p)
@@ -274,9 +274,9 @@ describe('hub: the run outlives the screen', () => {
     fireEvent.click(screen.getByTestId('hub-launch-created'))
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('hub-open-project', { path: '/Users/me/Games/Night Run', version: '6000.2.4f1' }))
     await waitFor(() => expect(p.showToast).toHaveBeenCalledWith(en['hub.launched'], 'success'))
-    cleanup()
-    view(p)
-    expect(screen.queryByTestId('hub-result-done')).toBeNull()
+    expect(screen.getByTestId('hub-result-done')).toBeTruthy()
+    expect(screen.getByTestId('hub-open-created')).toBeTruthy()
+    expect(getRun().state).toBe('done')
   })
 
   it('a failed creation can be retried after a remount with the same request', async () => {

@@ -380,13 +380,13 @@
 /* ---------- composer ---------- */
 .composer-wrap { position: relative; z-index: 1; flex: none; width: 100%; max-width: 800px; margin: 0 auto; padding: 2px 40px 12px; }
 .composer {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 6px 6px 8px;
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; padding: 6px 6px 6px 8px;
   background: var(--paper-raised); border: var(--line-w) solid var(--paper-line-strong);
   border-radius: var(--radius-lg); box-shadow: var(--shadow-card); color: var(--ink-dim);
 }
 .composer:focus-within { border-color: var(--ink-dim); }
 .composer textarea {
-  flex: 1; min-width: min(100%, 220px); resize: none; border: 0; outline: 0; background: transparent; color: var(--ink);
+  flex: 1; min-width: 0; resize: none; border: 0; outline: 0; background: transparent; color: var(--ink);
   font-size: var(--fs-body); line-height: 1.5; padding: 7px 6px; min-height: 36px; max-height: 160px;
 }
 .composer textarea::placeholder { color: var(--ink-faint); white-space: nowrap; }
@@ -507,6 +507,13 @@
 /* a narrow chat (the panel open beside it below 1100 px, lib/workspacePanel.ts): less air */
 @container stage (max-width: 640px) {
   .empty { gap: 22px; padding-top: 24px; padding-bottom: 20px; }
+}
+/* the right panel open leaves the text beside the mascot a sliver: stack it, drop the figure, break only between words
+   (the themes that size the figure column repeat the stacking after their own rules) */
+@container stage (max-width: 720px) {
+  .empty-hero { grid-template-columns: minmax(0, 1fr); }
+  .empty-figure { display: none; }
+  .empty-say, .empty-title { overflow-wrap: normal; word-break: normal; }
 }
 
 
@@ -1078,8 +1085,9 @@
   font-size: var(--fs-body); line-height: 1.5; color: var(--ink);
   overflow-wrap: anywhere; white-space: pre-line;
 }
-.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.confirm .btn { height: 34px; padding: 0 16px; font-size: 13.5px; cursor: pointer; }
+.confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+/* a long label wraps inside the button instead of pushing the row past the box */
+.confirm .btn { max-width: 100%; white-space: normal; height: auto; min-height: 34px; text-align: center; padding: 0 16px; font-size: 13.5px; cursor: pointer; }
 .confirm-go {
   --btn-bg: var(--cf-risk);
   --btn-text: var(--cf-risk-ink);

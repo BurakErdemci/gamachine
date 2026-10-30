@@ -109,6 +109,9 @@
   [data-theme="arena"] .empty-hero { grid-template-columns: 150px minmax(0, 1fr); }
   [data-theme="arena"] .empty-mascot { width: 150px; }
 }
+@container stage (max-width: 720px) {
+  [data-theme="arena"] .empty-hero { grid-template-columns: minmax(0, 1fr); }
+}
 [data-theme="arena"] .empty-say {
   --c: 14px;
   position: relative; margin-bottom: 34px; padding: 26px 26px 20px;
@@ -178,6 +181,6 @@
 }
 [data-theme="arena"] .confirm-msg { padding-top: 0; font-size: 15px; }
 [data-theme="arena"] .confirm-actions { gap: 10px; }
-[data-theme="arena"] .confirm .btn { height: 38px; padding: 0 20px; font-size: 13px; font-weight: 700; }
+[data-theme="arena"] .confirm .btn { min-height: 38px; padding: 0 20px; font-size: 13px; font-weight: 700; }
 [data-theme="arena"] .confirm .btn-ghost { border: 0; box-shadow: inset 0 0 0 1.5px var(--ink); }
 [data-theme="arena"] .confirm .btn-ghost:focus-visible { outline-offset: -5px; }
