@@ -191,6 +191,26 @@ describe('browser command server', () => {
     expect((await queuedB).body.ok).toBe(true)
   })
 
+  it('passes tabs and use_tab with their args, and a Stop drops a queued use_tab before it runs', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const seen: BrowserCommand[] = []
+    server = await startCommandServer({ token: TOKEN, immediate: (c) => c.op === 'halt',
+      handle: async (c) => { seen.push(c); if (c.op === 'navigate') await gate; return { ok: true } } })
+    expect((await send(server.port, { body: cmd('tabs') })).body.ok).toBe(true)
+    expect((await send(server.port, { body: cmd('use_tab', { tab_id: 2 }) })).body.ok).toBe(true)
+    expect(seen.map((c) => [c.op, c.args])).toEqual([['tabs', {}], ['use_tab', { tab_id: 2 }]])
+    const nav = send(server.port, { body: cmd('navigate') })
+    await tick()
+    const queued = send(server.port, { body: cmd('use_tab', { tab_id: 3 }) })
+    await tick()
+    await send(server.port, { body: cmd('halt') })
+    release()
+    await nav
+    expect((await queued).body.error).toBe('halted')
+    expect(seen.some((c) => c.op === 'use_tab' && (c.args as any).tab_id === 3)).toBe(false)
+  })
+
   it('a refused command is answered at once without waiting in the queue', async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })

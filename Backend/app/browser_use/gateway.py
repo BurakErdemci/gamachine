@@ -35,12 +35,15 @@ USER_CONTROL = (
 )
 _ELEMENT_OPS = frozenset({"click", "fill", "select"})
 _NAVIGATION_OPS = frozenset({"navigate", "back", "forward", "reload"})
+# A successful one of these puts the agent on another page, even at the same URL.
+_PAGE_CHANGE_OPS = _NAVIGATION_OPS | {"use_tab"}
 # The host command contract: what each op may forward. Anything else in args is dropped.
 _ARGS = {
     "navigate": ("url",), "snapshot": ("max_chars",),
     "click": ("snapshot_id", "ref"), "fill": ("snapshot_id", "ref", "value"),
     "select": ("snapshot_id", "ref", "option"), "press": ("key",),
     "scroll": ("direction", "amount"), "back": (), "forward": (), "reload": (), "screenshot": (),
+    "tabs": (), "use_tab": ("tab_id",),
 }
 _TEXT_ARG = {"fill": "value", "select": "option", "press": "key"}
 
@@ -73,6 +76,8 @@ def _has_target(args) -> bool:
 
 
 def _valid_args(op, args) -> bool:
+    if op == "use_tab":
+        return type(args.get("tab_id")) is int and args["tab_id"] > 0
     if op in _ELEMENT_OPS and not _has_target(args):
         return False
     return op not in _TEXT_ARG or isinstance(args.get(_TEXT_ARG[op]), str)
@@ -175,7 +180,7 @@ class BrowserGateway:
         url = reply.get("url")
         known = self._page_url.get(conversation_id)
         moved = isinstance(url, str) and known is not None and url != known
-        if (moved or (op in _NAVIGATION_OPS and reply.get("ok") is True)) and self._drop_grants is not None:
+        if (moved or (op in _PAGE_CHANGE_OPS and reply.get("ok") is True)) and self._drop_grants is not None:
             self._drop_grants(conversation_id)
         if isinstance(url, str):
             self._page_url[conversation_id] = url

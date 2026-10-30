@@ -359,6 +359,8 @@ interface Tab {
   userControl: boolean
   /** When the user last pressed a key or mouse button in this page (not the host's own `press`); null if never. */
   lastGesture: number | null
+  /** The user pressed a key or mouse button in this page since the chat's last message; the agent may not switch to it. */
+  userTouched: boolean
   /** Bumped by every navigation, so a favicon fetched for an earlier page is dropped. */
   faviconSeq: number
   /** Settles when the tab is closed, so a command waiting on something else can stop at once. */
@@ -623,7 +625,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotSeq: 0, loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -721,6 +723,7 @@ export class BrowserHost {
    * The agent stays where it is while a command still runs on it.
    */
   private release(conversationId: number): void {
+    for (const tab of this.tabsOf(conversationId)) tab.userTouched = false
     const agent = this.agentTab(conversationId)
     if (agent) this.setUserControl(agent, false)
     const next = this.selectedTab(conversationId)
@@ -748,6 +751,7 @@ export class BrowserHost {
       return
     }
     tab.lastGesture = now
+    tab.userTouched = true
     if (tab.agent) this.setUserControl(tab, true)
   }
 
@@ -1213,6 +1217,8 @@ export class BrowserHost {
     }
     const refused = this.userControlReply({ ...cmd, conversation_id: id })
     if (refused) return refused
+    if (cmd.op === 'tabs') return this.tabsReply(id)
+    if (cmd.op === 'use_tab') return this.useTab(id, cmd.args)
     // Every agent command lands on the chat's agent tab, never on a tab the user opened.
     let tab: Tab
     try {
@@ -1245,6 +1251,37 @@ export class BrowserHost {
     }
     this.emitLive(id)
     return reply
+  }
+
+  /** The agent's read of its own chat's tabs; the page in the reply is the agent tab's. */
+  private tabsReply(conversationId: number): Reply {
+    const shown = this.selectedTab(conversationId)
+    const tabs = this.tabsOf(conversationId).map((tab) => ({ id: tab.id, title: tab.view.webContents.getTitle(),
+      url: tab.view.webContents.getURL(), active: tab === shown, agent: tab.agent, userTouched: tab.userTouched }))
+    return { ok: true, tabs, ...this.base(this.agentTab(conversationId)?.view.webContents) }
+  }
+
+  /**
+   * The agent moves its tab to another tab of this chat, the way a user message does in `release`: the chosen
+   * tab becomes the agent tab, the old one the user's. A tab the user used since their last message is refused,
+   * and what the user sees (the selected tab) does not change.
+   */
+  private useTab(conversationId: number, args: unknown): Reply {
+    const agent = this.agentTab(conversationId)
+    const failed = (error: string): Reply => ({ ok: false, error, ...this.base(agent?.view.webContents) })
+    const tabId = args && typeof args === 'object' ? (args as Record<string, unknown>).tab_id : undefined
+    if (!positiveInt(tabId)) return failed('bad_args')
+    const next = this.chatTab(conversationId, tabId)
+    if (!next) return failed('no_tab')
+    if (next === agent) return { ok: true, ...this.base(next.view.webContents) }
+    if (next.userTouched) return failed('user_control')
+    if ((agent?.busy ?? 0) > 0) return failed('busy')
+    if (agent) agent.agent = false
+    next.agent = true
+    next.expected = []
+    this.touch(next)
+    this.emitLive(conversationId)
+    return { ok: true, ...this.base(next.view.webContents) }
   }
 
   /** `halted` tells whether a Stop arrived since the command began; checked after every await that precedes an action. */
