@@ -259,8 +259,12 @@ def test_grant_is_keyed_on_op_url_and_element(live, change):
     else:
         other = command(live, ref="8")
     assert other["needs_approval"] is True
-    # The original key is still granted.
-    assert command(live)["ok"] is True
+    if change == "url":
+        # Seeing another URL is a page change, which drops the original grant as well.
+        assert command(live)["needs_approval"] is True
+    else:
+        # The original key is still granted.
+        assert command(live)["ok"] is True
 
 
 def test_grant_is_bound_to_the_exact_value(live):

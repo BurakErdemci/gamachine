@@ -19,7 +19,8 @@ class Fake:
     card function (a consumed grant or a denial); "wait" opens a card nobody answers;
     ("answer", result) opens a card that is answered during the wait."""
 
-    def __init__(self, elements=None, state=None, answer=None):
+    def __init__(self, elements=None, state=None, answer=None, focused=None):
+        self.focused = focused
         self.state = state if state is not None else STATE
         self.elements = elements or {}
         self.cmds = []
@@ -31,7 +32,7 @@ class Fake:
         assert runtime == RUNTIME
         self.cmds.append((op, conversation_id, args))
         if op == "describe":
-            element = self.elements.get(args["ref"])
+            element = self.focused if args.get("focused") is True else self.elements.get(args["ref"])
             if element is None:
                 return {"ok": False, "error": "stale_snapshot", "url": PAGE}
             return {"ok": True, "url": PAGE, "title": "t", "element": element}
@@ -167,13 +168,14 @@ def test_critical_click_returns_needs_approval_within_the_wait_and_card_fields_c
     assert params["value_preview"] == ""
     assert params["risky"] is True and "Buy now" in params["risk_reason"] and "shop.example" in params["risk_reason"]
     assert set(params) == {"element_name", "page_url", "value_preview", "risky", "risk_reason", "fingerprint", "value_hash"}
-    assert params["fingerprint"] == policy.fingerprint(fake.elements["9"]) and params["value_hash"] == ""
+    assert params["fingerprint"] == policy.fingerprint(fake.elements["9"]) + "|s1|9" and params["value_hash"] == ""
 
 
 def test_card_answered_during_the_wait_lets_the_step_run():
     fake = Fake({"9": BUY}, answer=("answer", {"status": "resolved", "approved": True}))
     reply = run(fake, "click", {"snapshot_id": "s1", "ref": "9"})
-    assert reply["ok"] is True and fake.ops() == ["describe", "click"] and fake.polls == 3
+    # The second describe checks that the approved element is still the one on the page.
+    assert reply["ok"] is True and fake.ops() == ["describe", "describe", "click"] and fake.polls == 3
 
 
 def test_consumed_grant_lets_the_retry_through_without_waiting():
@@ -254,19 +256,19 @@ def test_stale_snapshot_on_describe_is_reported_not_run():
 
 def test_focusing_a_post_form_field_is_free_but_enter_in_it_needs_a_card():
     field = {**POST_FORM, "type": "text", "submits_form": True}
-    fake = Fake({"6": field})
+    fake = Fake({"6": field}, focused=field)
     assert run(fake, "click", {"snapshot_id": "s1", "ref": "6"})["ok"] is True
     assert fake.cards == []
-    run(fake, "press", {"key": "Enter", "snapshot_id": "s1", "ref": "6"})
+    run(fake, "press", {"key": "Enter"})
     assert [tool for _, tool, _ in fake.cards] == ["browser_press"]
 
 
 def test_enter_in_a_get_search_form_is_free_but_post_form_needs_a_card():
-    fake = Fake({"5": SEARCH_FORM})
-    assert run(fake, "press", {"key": "Enter", "snapshot_id": "s1", "ref": "5"})["ok"] is True
-    assert fake.cmds[-1] == ("press", 3, {"key": "Enter"})  # classification ids are not forwarded
-    fake = Fake({"6": POST_FORM})
-    run(fake, "press", {"key": "Enter", "snapshot_id": "s1", "ref": "6"})
+    fake = Fake(focused=SEARCH_FORM)
+    assert run(fake, "press", {"key": "Enter"})["ok"] is True
+    assert fake.cmds[-1] == ("press", 3, {"key": "Enter"})
+    fake = Fake(focused=POST_FORM)
+    run(fake, "press", {"key": "Enter"})
     assert fake.cards and fake.cards[0][1] == "browser_press"
     assert fake.cards[0][2]["value_hash"] == hashlib.sha256(b"Enter").hexdigest()
 
@@ -280,32 +282,12 @@ def test_enter_with_no_known_target_needs_a_card_but_other_keys_do_not():
     assert fake.cards == [] and fake.ops() == ["press"]
 
 
-def test_enter_after_a_fill_checks_the_filled_field_until_the_page_changes():
-    fake = Fake({"6": SEARCH_FORM})
+def test_enter_ignores_the_ref_and_the_last_touched_element():
+    fake = Fake({"6": POST_FORM, "5": SEARCH_FORM}, focused=SEARCH_FORM)
     replies = run_many(fake, ("fill", {"snapshot_id": "s1", "ref": "6", "value": "x"}),
-                       ("press", {"key": "Enter"}))
-    assert all(r["ok"] for r in replies) and fake.ops() == ["describe", "fill", "describe", "press"]
-    fake = Fake({"6": SEARCH_FORM})
-    run_many(fake, ("fill", {"snapshot_id": "s1", "ref": "6", "value": "x"}),
-             ("navigate", {"url": "https://example.com/"}), ("press", {"key": "Enter"}))
-    assert fake.cards and "no known target" in fake.cards[0][2]["risk_reason"]
-
-
-def test_enter_after_a_post_form_fill_opens_a_submit_card():
-    fake = Fake({"6": {**POST_FORM, "name": "Search"}})
-    run_many(fake, ("fill", {"snapshot_id": "s1", "ref": "6", "value": "a@b.c"}), ("press", {"key": "Enter"}))
-    assert "submits a form" in fake.cards[-1][2]["risk_reason"]
-
-
-def test_last_target_is_per_chat():
-    fake = Fake({"6": SEARCH_FORM})
-    handler = fake.gateway()
-
-    async def go():
-        await handler.call(3, "fill", {"snapshot_id": "s1", "ref": "6", "value": "x"}, lambda: fake.state)
-        return await handler.call(4, "press", {"key": "Enter"}, lambda: fake.state)
-    asyncio.run(go())
-    assert fake.cards and "no known target" in fake.cards[0][2]["risk_reason"]
+                       ("press", {"key": "Enter", "snapshot_id": "s1", "ref": "6"}))
+    assert all(r["ok"] for r in replies) and fake.cards == []
+    assert fake.cmds[-2] == ("describe", 3, {"focused": True})
 
 
 def test_screenshot_returns_the_image_apart_from_the_text():
@@ -337,7 +319,8 @@ def test_state_is_read_again_for_every_call():
     handler = fake.gateway()
     asyncio.run(handler.call(3, "snapshot", {}, state))
     asyncio.run(handler.call(3, "snapshot", {}, lambda: {**STATE, "halted": True}))
-    assert len(reads) == 1 and fake.ops() == ["snapshot"]
+    # One read at entry (before the lock queue) and one under the lock.
+    assert len(reads) == 2 and fake.ops() == ["snapshot"]
 
 
 def test_post_cmd_sends_the_bearer_token_to_the_host_port(monkeypatch):

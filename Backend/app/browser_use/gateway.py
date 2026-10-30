@@ -25,7 +25,12 @@ NEEDS_APPROVAL = (
 )
 HALTED = ("The user stopped the browser for this turn. Do not use browser tools "
           "again until the user's next message.")
+PAGE_CHANGED = "The page changed while the approval card was open, so nothing was done. Look at the page again."
+FOCUS_CHANGED = "The focused element changed after the approval, so Enter was not pressed."
+TARGET_CHANGED = "The element or the page changed after the approval, so nothing was done. Look at the page again."
+CHAT_DELETED = "This chat was deleted, so the browser step was not run."
 _ELEMENT_OPS = frozenset({"click", "fill", "select"})
+_NAVIGATION_OPS = frozenset({"navigate", "back", "forward", "reload"})
 # The host command contract: what each op may forward. Anything else in args is dropped.
 _ARGS = {
     "navigate": ("url",), "snapshot": ("max_chars",),
@@ -75,6 +80,8 @@ def _usable(state) -> tuple:
         return None, "The agent browser is turned off in Settings."
     if state.get("halted"):
         return None, HALTED
+    if state.get("deleted"):
+        return None, CHAT_DELETED
     runtime = state.get("runtime")
     if (not isinstance(runtime, dict) or runtime.get("running") is not True
             or type(runtime.get("port")) is not int or not isinstance(runtime.get("token"), str)):
@@ -83,28 +90,87 @@ def _usable(state) -> tuple:
     return runtime, None
 
 
+def _recheck(first, now, same_page=True) -> tuple:
+    """(runtime, refusal) for a state read again before dispatch: still usable, on the same browser
+    runtime as `first` and, with same_page, under the same page generation."""
+    runtime, refusal = _usable(now)
+    if refusal:
+        return None, refusal
+    if now.get("stop_gen") != first.get("stop_gen"):
+        # A Stop of this chat, even one whose halt a new user message has already cleared.
+        return None, HALTED
+    if runtime != first.get("runtime") or (same_page and now.get("page_gen") != first.get("page_gen")):
+        return None, PAGE_CHANGED
+    return runtime, None
+
+
+def _target_fingerprint(op, args, element) -> str:
+    """What a grant is keyed on: one element of one snapshot; Enter has no ref, so it uses the
+    element's own fingerprint plus the page's id for that element when the host sends one."""
+    fingerprint = policy.fingerprint(element)
+    if op != "press":
+        return fingerprint + f"|{args['snapshot_id']}|{args['ref']}"
+    element_id = element.get("element_id")
+    if isinstance(element_id, str) or type(element_id) is int:
+        fingerprint += f"|{element_id}"
+    return fingerprint
+
+
+def _seen(described, op, args):
+    """(url, fingerprint, element id or None) of a describe reply, or None when it described nothing."""
+    element = described.get("element") if described.get("ok") is True else None
+    if element is None:
+        return None
+    element = element if isinstance(element, dict) else {}
+    element_id = element.get("element_id")
+    if not (isinstance(element_id, str) or type(element_id) is int):
+        element_id = None
+    return str(described.get("url") or ""), _target_fingerprint(op, args, element), element_id
+
+
+def _same_target(first, second) -> bool:
+    """Whether two _seen results name the same page and element; ids are compared when both carry one."""
+    if first is None or second is None:
+        return first is second
+    return first[:2] == second[:2] and (first[2] is None or second[2] is None or first[2] == second[2])
+
+
 class BrowserGateway:
     """host_transport(runtime, op, conversation_id, args) -> host reply;
     open_card(conversation_id, tool, params) -> the card decision ({"status": "resolved",
     "approved", "error"?} or {"status": "ok", "gate_id"}); wait_card(gate_id) -> the card's
-    result once answered, else None; now() -> monotonic seconds."""
+    result once answered, else None; drop_grants(conversation_id) reports that the one shared page
+    changed (a navigation, or any reply that shows another URL) so every approval given before it is
+    forgotten; now() -> monotonic seconds."""
 
-    def __init__(self, host_transport, open_card, wait_card, now=time.monotonic):
+    def __init__(self, host_transport, open_card, wait_card, drop_grants=None, now=time.monotonic):
         self._host = host_transport
         self._open_card = open_card
         self._wait_card = wait_card
+        self._drop_grants = drop_grants
         self._now = now
+        # The URL of the one view every chat shares, as the last host reply showed it.
+        self._page_url = None
         # One command at a time, like the host's own queue: a step's describe must see its own page.
         self._lock = asyncio.Lock()
-        # Element the last click/fill/select touched: what a bare Enter would act on.
-        self._last_target: dict[int, dict] = {}
 
     async def _cmd(self, runtime, conversation_id, op, args):
         try:
             reply = await self._host(runtime, op, conversation_id, args)
         except Exception:
             return {"ok": False, "error": "The browser did not answer."}
-        return reply if isinstance(reply, dict) else {"ok": False, "error": "The browser sent an invalid reply."}
+        if not isinstance(reply, dict):
+            return {"ok": False, "error": "The browser sent an invalid reply."}
+        # Any reply that shows another URL, failed ones included (a load error or a click's navigation
+        # timeout still leaves the view on the new page), is a page change; it is reported before the
+        # new URL becomes the baseline. A successful navigation op is one even on the same URL.
+        url = reply.get("url")
+        moved = isinstance(url, str) and self._page_url is not None and url != self._page_url
+        if (moved or (op in _NAVIGATION_OPS and reply.get("ok") is True)) and self._drop_grants is not None:
+            self._drop_grants(conversation_id)
+        if isinstance(url, str):
+            self._page_url = url
+        return reply
 
     async def _card_result(self, decision):
         if not isinstance(decision, dict):
@@ -118,26 +184,34 @@ class BrowserGateway:
                 return result
             await asyncio.sleep(_POLL_S)
 
-    async def _gate(self, runtime, conversation_id, op, args):
-        """Refusal (dict) for a step that needs a card, or None when it may run."""
-        target = args if op in _ELEMENT_OPS else self._last_target.get(conversation_id)
+    async def _gate(self, before, conversation_id, op, args, state):
+        """(refusal, runtime): a refusal (dict) for a step that may not run, or None and the runtime to
+        send it to, taken from a state read after the describe and after any approval wait."""
+        runtime, _ = _usable(before)
         if op == "press":
             if args["key"].casefold() != "enter":
-                return None
-            target = args if _has_target(args) else target
+                return None, runtime
+            # The host sends the key to whatever has focus, so that is what gets described.
+            target = {"focused": True}
+        else:
+            target = {"snapshot_id": args["snapshot_id"], "ref": args["ref"]}
         element, url = None, ""
-        if target is not None:
-            described = await self._cmd(runtime, conversation_id, "describe",
-                                        {"snapshot_id": target["snapshot_id"], "ref": target["ref"]})
-            if described.get("ok") is not True:
-                if op != "press":
-                    return _refusal(str(described.get("error") or "The element could not be described."))
-            else:
-                element, url = described.get("element"), str(described.get("url") or "")
+        described = await self._cmd(runtime, conversation_id, "describe", target)
+        # A Stop, a switch-off, a deletion or a host restart can land while the describe is out. The
+        # generation is not compared here: the describe itself may have reported a page change.
+        mark = state()
+        runtime, refusal = _recheck(before, mark, same_page=False)
+        if refusal:
+            return _refusal(refusal), None
+        if described.get("ok") is not True:
+            if op != "press":
+                return _refusal(str(described.get("error") or "The element could not be described.")), None
+        else:
+            element, url = described.get("element"), str(described.get("url") or "")
         reason = (policy.critical_reason(op, element) if element is not None
                   else "Enter was pressed with no known target, so it could submit a form")
         if not reason:
-            return None
+            return None, runtime
         host = _host_of(url)
         shown = f"{reason} (page {host})" if host else reason
         element = element if isinstance(element, dict) else {}
@@ -145,29 +219,54 @@ class BrowserGateway:
         if op in {"fill", "select"}:
             preview = "••••" if element.get("is_password") is True else policy.display_name(
                 args[_TEXT_ARG[op]], _PREVIEW_LIMIT)
+        fingerprint = _target_fingerprint(op, args, element)
         # The exact string the step will send, so a card approved for one value cannot cover another.
         value_hash = hashlib.sha256(args[_TEXT_ARG[op]].encode("utf-8")).hexdigest() if op in _TEXT_ARG else ""
-        result = await self._card_result(self._open_card(conversation_id, f"browser_{op}", {
+        decision = self._open_card(conversation_id, f"browser_{op}", {
             "element_name": policy.display_name(element.get("name")), "page_url": url,
             "value_preview": preview, "risky": True, "risk_reason": shown,
             # Not shown: the backend keys the one-time grant on it.
-            "fingerprint": policy.fingerprint(element), "value_hash": value_hash,
-        }))
+            "fingerprint": fingerprint, "value_hash": value_hash,
+        })
+        result = await self._card_result(decision)
         if result is None:
-            return _refusal(NEEDS_APPROVAL.format(reason=shown), needs_approval=True)
+            return _refusal(NEEDS_APPROVAL.format(reason=shown), needs_approval=True), None
         if not isinstance(result, dict) or result.get("approved") is not True:
             error = result.get("error") if isinstance(result, dict) else None
-            return _refusal(str(error or "The user did not approve this step."))
-        return None
+            return _refusal(str(error or "The user did not approve this step.")), None
+        if isinstance(decision, dict) and decision.get("status") != "resolved":
+            # The page, the element or the focus can change while the card waits; the step goes only
+            # to what was approved. A grant needs no second look: nothing runs between its describe
+            # and the step.
+            again = await self._cmd(runtime, conversation_id, "describe", target)
+            if not _same_target(_seen(again, op, args), _seen(described, op, args)):
+                return _refusal(FOCUS_CHANGED if op == "press" else TARGET_CHANGED), None
+        # The wait can outlast a Stop, a switch-off (even one turned back on), a deleted chat, a host
+        # restart or another chat's page change.
+        runtime, refusal = _recheck(mark, state())
+        if refusal:
+            return _refusal(refusal), None
+        return None, runtime
 
     async def call(self, conversation_id: int, op: str, args, state) -> dict:
-        """Run one tool call for a verified chat; state() -> {enabled, halted, runtime}, read under the lock."""
+        """Run one tool call for a verified chat; state() -> {enabled, halted, deleted, runtime, page_gen, stop_gen},
+        read under the lock and again after every describe and approval wait."""
         if op not in _ARGS:
             return _refusal(f"Unknown browser tool browser_{op}.")
         if not isinstance(args, dict) or not _valid_args(op, args):
             return _refusal(f"Invalid arguments for browser_{op}.")
+        # Read before queueing: a Stop that lands while this call waits for the lock must still refuse it,
+        # even after a new user message has cleared the halt. A call that arrives already halted is refused
+        # here for the same reason: the halt may be lifted before the lock frees.
+        entry = state()
+        if isinstance(entry, dict) and entry.get("halted"):
+            return _refusal(HALTED)
+        entry_stop_gen = entry.get("stop_gen") if isinstance(entry, dict) else None
         async with self._lock:
-            runtime, refusal = _usable(state())
+            before = state()
+            if isinstance(before, dict) and before.get("stop_gen") != entry_stop_gen:
+                return _refusal(HALTED)
+            runtime, refusal = _usable(before)
             if refusal:
                 return _refusal(refusal)
             if op == "navigate":
@@ -175,16 +274,12 @@ class BrowserGateway:
                 if refusal:
                     return _refusal(f"Refused: {refusal}")
             if op in _ELEMENT_OPS or op == "press":
-                refusal = await self._gate(runtime, conversation_id, op, args)
+                refusal, runtime = await self._gate(before, conversation_id, op, args, state)
                 if refusal:
                     return refusal
             forward = {key: args[key] for key in _ARGS[op] if key in args}
             reply = await self._cmd(runtime, conversation_id, op, forward)
             ok = reply.get("ok") is True
-            if ok and op in _ELEMENT_OPS:
-                self._last_target[conversation_id] = {"snapshot_id": args["snapshot_id"], "ref": args["ref"]}
-            elif ok and op in {"navigate", "back", "forward", "reload"}:
-                self._last_target.pop(conversation_id, None)
             if ok and op == "screenshot" and isinstance(reply.get("image"), str):
                 meta = {key: value for key, value in reply.items() if key != "image"}
                 return {"ok": True, "text": json.dumps(meta, ensure_ascii=False), "image": reply["image"]}
