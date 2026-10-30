@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useLang } from '../../../lib/i18n';
 import { confirmDialog } from '../../ui/ConfirmDialog';
-import { Lamp, SetCard, SetGroup, SetRow, SetSwitch } from './controls';
+import { Lamp, SetCard, SetGroup, SetPageHead, SetRow, SetSwitch } from './controls';
 
 type Toast = (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 
@@ -89,38 +89,41 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
     : enabled ? t('bp.set.masterOn') : t('bp.set.masterOff');
 
   return (
-    <SetGroup title={t('bp.set.title')} testId="bp-settings">
-      <SetCard>
-        <SetRow
-          className="set-row-hero"
-          testId="bp-master-row"
-          name={t('bp.set.master')}
-          hint={<><Lamp tone={enabled ? 'ok' : undefined} /><span data-testid="bp-master-state">{hint}</span></>}
-          control={(
-            <SetSwitch
-              checked={enabled === true}
-              onToggle={() => { void toggle(); }}
-              label={t('bp.set.master')}
-              disabled={!desktop || enabled === null || busy}
-              busy={busy}
-              testId="bp-switch"
-            />
-          )}
-        />
-        <SetRow
-          testId="bp-clear-row"
-          name={t('bp.set.clear')}
-          hint={t('bp.set.clearHint')}
-          control={(
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void clearData(); }}
-              disabled={!desktop || clearing} data-testid="bp-clear">
-              {t('bp.set.clear')}
-            </button>
-          )}
-        />
-      </SetCard>
-      <p className="set-hint" data-testid="bp-privacy">{t('bp.set.privacy')}</p>
-      {msg && <p data-testid="bp-msg" className="set-msg set-msg-err" role="alert">{msg}</p>}
-    </SetGroup>
+    <>
+      <SetPageHead title={t('set.nav.tarayici')} lede={t('bp.set.lede')} />
+      <SetGroup title={t('bp.set.title')} testId="bp-settings">
+        <SetCard>
+          <SetRow
+            className="set-row-hero cu-master-row"
+            testId="bp-master-row"
+            name={t('bp.set.master')}
+            hint={<><Lamp tone={enabled ? 'ok' : undefined} /><span data-testid="bp-master-state">{hint}</span></>}
+            control={(
+              <SetSwitch
+                checked={enabled === true}
+                onToggle={() => { void toggle(); }}
+                label={t('bp.set.master')}
+                disabled={!desktop || enabled === null || busy}
+                busy={busy}
+                testId="bp-switch"
+              />
+            )}
+          />
+          <SetRow
+            testId="bp-clear-row"
+            name={t('bp.set.clear')}
+            hint={t('bp.set.clearHint')}
+            control={(
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void clearData(); }}
+                disabled={!desktop || clearing} data-testid="bp-clear">
+                {t('bp.set.clear')}
+              </button>
+            )}
+          />
+        </SetCard>
+        <p className="set-hint" data-testid="bp-privacy">{t('bp.set.privacy')}</p>
+        {msg && <p data-testid="bp-msg" className="set-msg set-msg-err" role="alert">{msg}</p>}
+      </SetGroup>
+    </>
   );
 };
