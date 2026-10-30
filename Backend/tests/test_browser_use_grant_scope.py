@@ -376,6 +376,27 @@ def test_an_approval_inside_the_wait_runs_the_step(waiting):
     assert waiting.host.ops().count("click") == 1
 
 
+def test_user_control_on_the_redescribe_after_the_wait_gives_the_wait_text(waiting):
+    endpoint = next(route.endpoint for route in waiting.router.routes if route.name == "browser_command")
+    browser_gateway = closure_var(endpoint, "_browser_gateway")
+    host_call = browser_gateway._host
+
+    async def approve_then_take_over(gate_id, routes):
+        await desktop_approve(gate_id, routes)
+
+        async def user_holds_the_tab(runtime, op, conversation_id, args):
+            return {"ok": False, "error": "user_control"}
+
+        browser_gateway._host = user_holds_the_tab
+
+    try:
+        reply = run_with_answer(waiting, approve_then_take_over)
+    finally:
+        browser_gateway._host = host_call
+    assert reply["ok"] is False and reply["error"] == gateway.USER_CONTROL
+    assert waiting.host.ops().count("click") == 0
+
+
 def test_a_switch_cycle_during_the_wait_refuses_the_approved_step(waiting):
     async def approve_then_cycle(gate_id, routes):
         await desktop_approve(gate_id, routes)

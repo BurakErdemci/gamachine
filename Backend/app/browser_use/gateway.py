@@ -250,6 +250,8 @@ class BrowserGateway:
             # to what was approved. A grant needs no second look: nothing runs between its describe
             # and the step.
             again = await self._cmd(runtime, conversation_id, "describe", target)
+            if again.get("error") == USER_CONTROL:
+                return _refusal(USER_CONTROL), None
             if not _same_target(_seen(again, op, args), _seen(described, op, args)):
                 return _refusal(FOCUS_CHANGED if op == "press" else TARGET_CHANGED), None
         # The wait can outlast a Stop, a switch-off (even one turned back on), a deleted chat, a host
