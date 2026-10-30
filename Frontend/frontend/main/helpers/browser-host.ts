@@ -285,6 +285,8 @@ export class BrowserHost {
   private visibleId: number | null = null
   /** Chats the agent has acted in. Outlives the tab (evict, close, clear) so a Stop still reaches the backend halt. */
   private readonly actedIn = new Set<number>()
+  /** True while clear-browsing-data is awaited: no tab may be created or navigated meanwhile. */
+  private clearing = false
   private clock = 0
   private bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
   private readonly hostCache = new Map<string, { blocked: true; at: number }>()
@@ -317,17 +319,10 @@ export class BrowserHost {
     return { running, port: running ? this.runtime!.port : null, token: running ? this.runtime!.token : null }
   }
 
-  private report() {
+  /** `cleared` makes the backend drop every chat's cards and grants in the same report. */
+  private report(cleared = false) {
     const data = this.runtimeBody()
-    this.reports = this.reports.then(() => this.request('post', '/browser/runtime', data, true))
-      .catch(() => { this.log('[browser] runtime report failed') })
-    return this.reports
-  }
-
-  /** One report that also carries `cleared`, so the backend drops every chat's cards and grants. */
-  private reportCleared() {
-    const data = this.runtimeBody()
-    this.reports = this.reports.then(() => this.request('post', '/browser/runtime', { ...data, cleared: true }, true))
+    this.reports = this.reports.then(() => this.request('post', '/browser/runtime', cleared ? { ...data, cleared } : data, true))
       .catch(() => { this.log('[browser] runtime report failed') })
     return this.reports
   }
@@ -485,11 +480,11 @@ export class BrowserHost {
     return tab
   }
 
-  /** Beyond the cap the least recently used hidden tab goes; its logins stay in the session. */
+  /** Beyond the cap the least recently used hidden tab goes (never one the user controls; the cap may be exceeded). */
   private evict(): void {
     let oldest: Tab | null = null
     for (const tab of this.tabs.values()) {
-      if (tab.conversationId !== this.visibleId && (!oldest || tab.lastUsed < oldest.lastUsed)) oldest = tab
+      if (tab.conversationId !== this.visibleId && !tab.userControl && (!oldest || tab.lastUsed < oldest.lastUsed)) oldest = tab
     }
     if (oldest) this.closeTab(oldest)
   }
@@ -630,6 +625,7 @@ export class BrowserHost {
       }
       case 'open':
       case 'navigate': {
+        if (this.clearing) return { error: 'clearing' }
         if (op === 'navigate' || url !== undefined) {
           if (!(await this.navigationAllowed(url))) return { error: 'url_not_allowed' }
         }
@@ -664,9 +660,13 @@ export class BrowserHost {
       case 'close': {
         const tab = this.tabs.get(conversationId)
         if (tab) this.closeTab(tab)
+        // Only a deleted chat is closed; evict and clear keep the id so a Stop still reaches the backend.
+        this.actedIn.delete(conversationId)
         return this.livePayload(conversationId)
       }
       case 'clear-browsing-data': {
+        if (this.clearing) return { error: 'clearing' }
+        this.clearing = true
         // Tabs go first so no page writes new cookies between the clear and its close.
         this.destroyView()
         try {
@@ -676,8 +676,11 @@ export class BrowserHost {
         } catch {
           this.log('[browser] clearing browsing data failed')
           return { error: 'Clearing browsing data failed.' }
+        } finally {
+          this.destroyView()
+          this.clearing = false
         }
-        await this.reportCleared()
+        await this.report(true)
         return { cleared: true }
       }
       case 'answer-card':
@@ -796,6 +799,7 @@ export class BrowserHost {
   async handle(cmd: BrowserCommand): Promise<Reply> {
     const id = this.commandConversation(cmd)
     if (id === null) return { ok: false, error: 'no_conversation', url: '', title: '' }
+    if (cmd.op !== 'halt' && this.clearing) return { ok: false, error: 'clearing', url: '', title: '' }
     if (cmd.op === 'halt') {
       this.stopLocal(id)
       return { ok: true, ...this.base(this.liveTab(id)?.view.webContents) }

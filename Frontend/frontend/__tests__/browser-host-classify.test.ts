@@ -273,13 +273,14 @@ describe('every Stop path reaches the backend halt', () => {
     expect(haltPosts(f.request).map((c: any[]) => c[0].url)).toEqual([expect.stringContaining('/computer-use/halt/4')])
   })
 
-  it('a halt without an id posts for every chat the agent acted in, closed tabs included', async () => {
+  it('a halt without an id posts for every chat the agent acted in except a deleted (closed) one', async () => {
     const f = fixture()
     await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} }).catch(() => {})
     await f.host.handle({ op: 'snapshot', conversation_id: 5, args: {} }).catch(() => {})
     await f.host.invoke({ op: 'close', conversationId: 4 })
     f.host.halt()
-    await vi.waitFor(() => expect(haltPosts(f.request)).toHaveLength(2))
+    await vi.waitFor(() => expect(haltPosts(f.request)).toHaveLength(1))
+    expect(haltPosts(f.request)[0][0].url).toContain('/computer-use/halt/5')
   })
 
   it('a command without a conversation id is refused and never routed to the last chat', async () => {

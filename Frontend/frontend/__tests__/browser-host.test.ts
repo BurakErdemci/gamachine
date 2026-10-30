@@ -480,6 +480,29 @@ describe('BrowserHost tabs per chat', () => {
     expect(await f.host.invoke({ op: 'status', conversationId: 2 })).toMatchObject({ active: false, conversationId: 2 })
     for (let id = 3; id <= 9; id++) expect((await f.host.invoke({ op: 'status', conversationId: id }) as any).active).toBe(true)
   })
+
+  it('never evicts a tab under user control, even when the cap is exceeded', async () => {
+    const f = fixture()
+    for (let id = 1; id <= 8; id++) await f.host.handle({ op: 'scroll', conversation_id: id, args: { direction: 'down' } })
+    await f.host.invoke({ op: 'take-over', conversationId: 1 })
+    await f.host.handle({ op: 'scroll', conversation_id: 9, args: { direction: 'down' } })
+    expect(f.views[0].webContents.close).not.toHaveBeenCalled()
+    expect(f.views[1].webContents.close).toHaveBeenCalled()
+    for (let id = 1; id <= 9; id++) await f.host.invoke({ op: 'take-over', conversationId: id })
+    await f.host.handle({ op: 'scroll', conversation_id: 10, args: { direction: 'down' } }).catch(() => {})
+    f.views.forEach((v: any, i: number) => { if (i !== 1) expect(v.webContents.close).not.toHaveBeenCalled() })
+  })
+
+  it('close forgets a deleted chat for the global halt; evict keeps it', async () => {
+    const f = fixture()
+    await navigate(f, 'https://a.example/', '', 4)
+    await navigate(f, 'https://b.example/', '', 7)
+    await f.host.invoke({ op: 'close', conversationId: 4 })
+    f.http.request.mockClear()
+    f.host.halt()
+    await vi.waitFor(() => expect(f.http.request).toHaveBeenCalledTimes(1))
+    expect(f.http.request.mock.calls.map(([c]: [any]) => c.url)).toEqual(['http://127.0.0.1:9/computer-use/halt/7'])
+  })
 })
 
 describe('BrowserHost user operations', () => {
@@ -589,5 +612,21 @@ describe('BrowserHost user operations', () => {
     expect(posts[0].headers).toEqual({ 'X-Session-Token': 'tok', 'X-Gamachine-UI-Secret': 'secret' })
     f.session.clearCache.mockRejectedValueOnce(new Error('disk'))
     expect(await f.host.invoke({ op: 'clear-browsing-data' })).toEqual({ error: 'Clearing browsing data failed.' })
+  })
+
+  it('refuses open, navigate and agent commands while a clear runs and leaves no tab afterwards', async () => {
+    const f = fixture()
+    let release: () => void = () => {}
+    f.session.clearStorageData.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve }))
+    const clearing = f.host.invoke({ op: 'clear-browsing-data' })
+    await vi.waitFor(() => expect(f.session.clearStorageData).toHaveBeenCalled())
+    expect(await f.host.invoke({ op: 'open', conversationId: 5 })).toEqual({ error: 'clearing' })
+    expect(await f.host.invoke({ op: 'navigate', conversationId: 5, url: 'https://example.com/' })).toEqual({ error: 'clearing' })
+    expect(await f.host.handle({ op: 'scroll', conversation_id: 5, args: { direction: 'down' } })).toMatchObject({ ok: false, error: 'clearing' })
+    release()
+    expect(await clearing).toEqual({ cleared: true })
+    expect(f.createView).not.toHaveBeenCalled()
+    expect(await f.host.invoke({ op: 'status', conversationId: 5 })).toMatchObject({ active: false })
+    expect(await f.host.invoke({ op: 'open', conversationId: 5 })).toMatchObject({ active: true })
   })
 })
