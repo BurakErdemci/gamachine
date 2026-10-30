@@ -16,15 +16,20 @@ const os = require('node:os');
 const path = require('node:path');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
-const SYNCED_FOLDER = /^(onedrive.*|dropbox|icloud.*|google ?drive|mobile documents|jarvanvault)$/i;
+const SYNCED_FOLDER = /^(onedrive.*|dropbox.*|icloud.*|google ?drive.*|mobile documents|pcloud.*|nextcloud.*|box|jarvanvault)$/i;
+const ESCAPE_SEQUENCE = /\u001b(?:\[[0-9;?]*[ -/]*[@-~]|O.)/g;
 const MIN_PASSPHRASE = 12;
 
+// macOS and Windows volumes are case-insensitive by default.
+const foldCase = (p) => (process.platform === 'darwin' || process.platform === 'win32' ? p.toLowerCase() : p);
+
 function isInside(child, parent) {
-  const rel = path.relative(parent, child);
+  const rel = path.relative(foldCase(parent), foldCase(child));
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-// Resolves symlinks/junctions of the deepest existing ancestor, so a link into the repo is caught.
+// Resolves symlinks/junctions (and the on-disk case and 8.3 names, via the native realpath) of the
+// deepest existing ancestor, so a link or a respelled path into the repo is caught.
 function realTarget(target) {
   const abs = path.resolve(target);
   let dir = path.dirname(abs);
@@ -35,12 +40,12 @@ function realTarget(target) {
     if (up === dir) break;
     dir = up;
   }
-  return path.join(fs.realpathSync(dir), ...tail);
+  return path.join(fs.realpathSync.native(dir), ...tail);
 }
 
 function checkKeyPath(target, root = repoRoot) {
   const real = realTarget(target);
-  if (isInside(real, fs.realpathSync(root))) throw new Error(`refusing a key path inside the repository: ${real}`);
+  if (isInside(real, fs.realpathSync.native(root))) throw new Error(`refusing a key path inside the repository: ${real}`);
   const synced = real.split(path.sep).find((part) => SYNCED_FOLDER.test(part));
   if (synced) throw new Error(`refusing a key path inside a synced folder (${synced}): ${real}`);
   if (fs.existsSync(real)) throw new Error(`refusing to overwrite an existing file: ${real}`);
@@ -64,7 +69,8 @@ function promptHidden(question, input = process.stdin, output = process.stderr) 
       fn(arg);
     };
     const onData = (chunk) => {
-      for (const ch of chunk) {
+      // Arrow and function keys arrive as escape sequences; they are not part of the passphrase.
+      for (const ch of chunk.replace(ESCAPE_SEQUENCE, '')) {
         if (ch === '\r' || ch === '\n') return finish(resolve, value);
         if (ch === '\u0003') return finish(reject, new Error('cancelled'));
         if (ch === '\b' || ch === '\u007f') value = value.slice(0, -1);

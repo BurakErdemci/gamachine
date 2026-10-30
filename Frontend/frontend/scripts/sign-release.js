@@ -6,8 +6,9 @@
  *
  * Downloads latest.yml and latest-mac.yml with the gh CLI, signs each with the
  * Ed25519 private key (passphrase asked, hidden), uploads <name>.sig back to the
- * draft, then verifies the signatures against the public keys embedded in
- * main/helpers/update-keys.ts. Publishing the release stays a manual step.
+ * draft. Each signature is first verified against the public keys embedded in
+ * main/helpers/update-keys.ts and a manifest whose version differs from the tag
+ * is refused; nothing is uploaded otherwise. Publishing the release stays a manual step.
  * See docs/releasing.md.
  */
 const crypto = require('node:crypto');
@@ -25,10 +26,11 @@ function gh(args) {
   return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 }
 
-// update-keys.ts is TypeScript, so the PEM blocks are read out of its text.
+// update-keys.ts is TypeScript, so the PEM blocks are read out of its text; only
+// template literals count, so a key mentioned in a comment is not one.
 function embeddedPublicKeys(file = KEYS_FILE) {
   const text = fs.readFileSync(file, 'utf8');
-  return text.match(/-----BEGIN PUBLIC KEY-----[\s\S]*?-----END PUBLIC KEY-----/g) || [];
+  return [...text.matchAll(/`\s*(-----BEGIN PUBLIC KEY-----[\s\S]*?-----END PUBLIC KEY-----)\s*`/g)].map((m) => m[1]);
 }
 
 // Same check as verifyManifest in main/helpers/update-signature.ts.
@@ -67,20 +69,22 @@ async function signRelease(tag, keyPath, io = {}) {
     for (const name of MANIFESTS) {
       const file = path.join(dir, name);
       if (!fs.existsSync(file)) throw new Error(`${name} is missing from the release`);
+      const bytes = fs.readFileSync(file);
+      const text = bytes.toString('utf8');
+      const version = (text.match(/^version:[ \t]*['"]?([^\s'"]+)/m) || [])[1];
+      if (`v${version}` !== tag) throw new Error(`${name} says version ${version}, which does not match tag ${tag}; refusing to sign`);
+      log(`${name}: version ${version}, sha512 ${[...text.matchAll(/^[ \t]*(?:-[ \t]+)?sha512:[ \t]*(\S+)/gm)].map((m) => m[1].slice(0, 12)).join(' ')}...`);
+      const signature = crypto.sign(null, bytes, privateKey).toString('base64');
+      if (!verifies(bytes, signature, publicKeys)) {
+        throw new Error(publicKeys.length ? `${name}: this key is not one of the public keys in update-keys.ts; nothing uploaded` : 'update-keys.ts holds no public key yet; nothing uploaded');
+      }
       const sigFile = `${file}.sig`;
-      fs.writeFileSync(sigFile, crypto.sign(null, fs.readFileSync(file), privateKey).toString('base64'));
+      fs.writeFileSync(sigFile, signature);
       sigFiles.push(sigFile);
     }
     run(['release', 'upload', tag, '--repo', REPO, '--clobber', ...sigFiles]);
-
-    let allOk = true;
-    for (const name of MANIFESTS) {
-      const ok = verifies(fs.readFileSync(path.join(dir, name)), fs.readFileSync(path.join(dir, `${name}.sig`), 'utf8'), publicKeys);
-      allOk = allOk && ok;
-      log(`${name}.sig uploaded; verification against update-keys.ts: ${ok ? 'OK' : 'FAILED'}`);
-    }
-    if (!publicKeys.length) log('update-keys.ts holds no public key yet; the app would refuse every update.');
-    return allOk;
+    MANIFESTS.forEach((name) => log(`${name}.sig uploaded; verified against update-keys.ts`));
+    return true;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

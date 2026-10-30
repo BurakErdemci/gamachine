@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import type { BrowserWindow, MessageBoxOptions, MessageBoxReturnValue } from 'electron'
 import { UPDATE_PUBLIC_KEYS } from './update-keys'
-import { checkDownloaded, verifyManifest } from './update-signature'
+import { checkAvailable, verifyManifest } from './update-signature'
 
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const INSTALL_TIMEOUT_MS = 30 * 1000
@@ -34,6 +34,7 @@ export interface UpdaterLike {
   autoInstallOnAppQuit: boolean
   on(event: string, listener: (...args: any[]) => void): unknown
   checkForUpdates(): Promise<unknown>
+  downloadUpdate(): Promise<unknown>
   quitAndInstall: (isSilent?: boolean, isForceRunAfter?: boolean) => void
 }
 
@@ -62,6 +63,9 @@ export interface AutoUpdateHandle {
   dispose: () => void
 }
 
+// The update this session verified and is downloading or holding for the user.
+interface VerifiedUpdate { version: string; sha512: string[] }
+
 export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   const { autoUpdater, dialog, stopBackend, logger, getMainWindow, relaunch, openExternal } = deps
   const publicKeys = deps.publicKeys ?? UPDATE_PUBLIC_KEYS
@@ -69,47 +73,64 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   const getBytes = deps.fetchBytes ?? fetchBytes
   const hashFile = deps.hashFile ?? sha512Base64
 
-  // Turned on only for a downloaded update whose signed manifest checked out.
-  const setInstallOnQuit = (on: boolean) => { autoUpdater.autoInstallOnAppQuit = on }
-  autoUpdater.autoDownload = true
-  setInstallOnQuit(false)
+  // Nothing downloads or installs on its own: an update is downloaded only after
+  // its signed manifest checked out (update-available), and installs on quit only
+  // while autoInstallOnAppQuit mirrors a verified update (see update-downloaded).
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = false
 
-  // Returns null when the downloaded file matches the signed manifest, else the reason.
-  const verifyDownload = async (info: any): Promise<string | null> => {
+  const ask = (options: MessageBoxOptions) => {
+    const win = getMainWindow()
+    return win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options)
+  }
+
+  // Returns the verified update, or the reason it cannot be trusted.
+  const verifyAvailable = async (info: any): Promise<VerifiedUpdate | string> => {
     try {
       if (publicKeys.length === 0) return 'imza anahtarı tanımlı değil'
       const version = String(info?.version ?? '')
       if (!VERSION_RE.test(version)) return `geçersiz sürüm: ${version}`
-      if (!info?.downloadedFile) return 'indirilen dosya yolu yok'
       const name = platform === 'darwin' ? 'latest-mac.yml' : 'latest.yml'
       const base = `${DOWNLOAD_BASE}/v${version}`
       const [manifest, sig] = await Promise.all([getBytes(`${base}/${name}`), getBytes(`${base}/${name}.sig`)])
       if (!verifyManifest(manifest, Buffer.from(sig).toString('utf8'), publicKeys)) return 'manifest imzası geçersiz'
-      const result = checkDownloaded(
-        { version, sha512: await hashFile(info.downloadedFile) },
-        Buffer.from(manifest).toString('utf8'),
-      )
-      return result.ok ? null : result.reason ?? 'doğrulama başarısız'
+      // electron-updater downloads (and hash-checks) the file named by its own copy of the manifest.
+      const files: any[] = Array.isArray(info.files) && info.files.length ? info.files : [info]
+      const sha512 = files.map((f) => f?.sha512)
+      const result = checkAvailable({ version, sha512 }, Buffer.from(manifest).toString('utf8'))
+      return result.ok ? { version, sha512 } : result.reason!
     } catch (e) {
       return String((e as any)?.message || e)
     }
   }
 
-  const showFailure = async () => {
-    const options: MessageBoxOptions = {
+  // At most one failure dialog per version, however often the check repeats.
+  const warned = new Set<string>()
+  const showFailure = async (version: string) => {
+    if (warned.has(version)) return
+    warned.add(version)
+    const { response } = await ask({
       type: 'warning',
       buttons: ['Sürüm sayfasını aç', 'Kapat'],
       defaultId: 0,
       cancelId: 1,
       title: 'Güncelleme doğrulanamadı',
-      message: 'İndirilen güncelleme doğrulanamadı, bu yüzden kurulmadı.',
+      message: 'Yeni sürümün imzası doğrulanamadı, bu yüzden indirilip kurulmadı.',
       detail: 'Yeni sürümü sürüm sayfasından elle indirebilirsin.',
-    }
-    const win = getMainWindow()
-    const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+    })
     if (disposed) return
     if (response === 0) await openExternal(RELEASES_URL)
   }
+
+  let verified: VerifiedUpdate | null = null
+  let downloaded = false
+  const forget = () => {
+    verified = null
+    downloaded = false
+    autoUpdater.autoInstallOnAppQuit = false
+  }
+  // Bumped per update-available so only the latest one proceeds after its async check.
+  let latestCheck = 0
 
   // The backend is gone once an install attempt starts; if the app does not quit,
   // relaunch (once) so it does not keep running without its backend.
@@ -131,33 +152,59 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     failInstall(String(err?.message || err))
   })
   autoUpdater.on('update-not-available', () => logger.log('[updater] uygulama güncel'))
+  autoUpdater.on('update-available', async (info: any) => {
+    // While a verified update is downloading or waiting for the user, no other one is considered.
+    if (disposed || verified) return
+    const mine = ++latestCheck
+    const result = await verifyAvailable(info)
+    if (disposed || verified || mine !== latestCheck) return
+    if (typeof result === 'string') {
+      logger.error('[updater] güncelleme doğrulanamadı, indirilmeyecek:', result)
+      await showFailure(String(info?.version))
+      return
+    }
+    logger.log('[updater] imzalı güncelleme bulundu, indiriliyor:', result.version)
+    verified = result
+    // Armed before the download: electron-updater reads the flag once, right after
+    // the download finishes, to register its quit-time install (NSIS) or to let
+    // Squirrel stage the update (macOS).
+    autoUpdater.autoInstallOnAppQuit = verified !== null
+    Promise.resolve(autoUpdater.downloadUpdate()).catch((e: any) => {
+      logger.error('[updater] indirme başarısız:', e?.message || e)
+      if (verified === result) forget()
+    })
+  })
   autoUpdater.on('update-downloaded', async (info: any) => {
-    if (disposed) return
+    const generation = verified
+    if (disposed || !generation || downloaded) return
+    downloaded = true
     logger.log('[updater] güncelleme indirildi:', info?.version)
-    setInstallOnQuit(false)
+    // electron-updater has just read the flag (synchronously after this event); from
+    // here to the hash check below nothing may install on quit.
+    await Promise.resolve()
+    autoUpdater.autoInstallOnAppQuit = false
     try {
-      const failure = await verifyDownload(info)
+      const actual = info?.downloadedFile ? await hashFile(info.downloadedFile) : ''
       if (disposed) return
-      if (failure) {
-        logger.error('[updater] güncelleme doğrulanamadı, kurulmayacak:', failure)
-        await showFailure()
+      if (info?.version !== generation.version || !generation.sha512.includes(actual)) {
+        logger.error('[updater] indirilen dosya doğrulanan güncellemeyle uyuşmuyor, kurulmayacak')
+        forget()
+        await showFailure(generation.version)
         return
       }
-      setInstallOnQuit(true)
-      const options: MessageBoxOptions = {
+      autoUpdater.autoInstallOnAppQuit = verified === generation
+      const { response } = await ask({
         type: 'info',
         buttons: ['Şimdi yeniden başlat', 'Sonra'],
         defaultId: 0,
         cancelId: 1,
         title: 'Güncelleme hazır',
-        message: `Yeni sürüm hazır: v${info?.version}`,
+        message: `Yeni sürüm hazır: v${generation.version}`,
         detail: 'Şimdi yeniden başlatırsan güncelleme kurulur. "Sonra" dersen uygulamayı kapattığında kurulur.',
-      }
-      const win = getMainWindow()
-      const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+      })
       if (disposed) return
       if (response === 0) {
-        if (installing) return
+        if (installing || verified !== generation) return
         installing = true
         // Armed before stopBackend so a hung stop still ends in a relaunch.
         installTimer = setTimeout(() => failInstall('30 sn içinde çıkış olmadı'), INSTALL_TIMEOUT_MS)
@@ -172,6 +219,7 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   })
 
   const check = () => {
+    if (verified) return
     // checkForUpdates can throw synchronously or reject; neither may crash the app.
     try {
       Promise.resolve(autoUpdater.checkForUpdates()).catch((e: any) =>

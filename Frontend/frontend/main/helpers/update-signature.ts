@@ -28,15 +28,15 @@ export function parseManifest(text: string): { version: string; sha512: string[]
   return { version: versions.length === 1 ? versions[0] : '', sha512 }
 }
 
-// `info.sha512` is the base64 SHA-512 of the file that was actually downloaded.
-export function checkDownloaded(info: { version?: string; sha512?: string }, manifestText: string): CheckResult {
+// `info.sha512` lists the hash of every file electron-updater may download for
+// this update (the `files:` entries of the manifest it fetched). The signed
+// manifest must carry that version and every one of those hashes.
+export function checkAvailable(info: { version: string; sha512: unknown[] }, manifestText: string): CheckResult {
   const signed = parseManifest(manifestText)
   if (!signed.version) return { ok: false, reason: 'imzalı manifestte sürüm yok' }
-  if (!info?.version || info.version !== signed.version) {
-    return { ok: false, reason: `sürüm uyuşmuyor (${info?.version} / ${signed.version})` }
-  }
-  if (!info.sha512 || !signed.sha512.includes(info.sha512)) {
-    return { ok: false, reason: 'indirilen dosyanın sha512 değeri imzalı manifestte yok' }
+  if (info.version !== signed.version) return { ok: false, reason: `sürüm uyuşmuyor (${info.version} / ${signed.version})` }
+  if (!info.sha512.length || !info.sha512.every((h) => typeof h === 'string' && h !== '' && signed.sha512.includes(h))) {
+    return { ok: false, reason: 'indirilecek dosyanın sha512 değeri imzalı manifestte yok' }
   }
   return { ok: true }
 }

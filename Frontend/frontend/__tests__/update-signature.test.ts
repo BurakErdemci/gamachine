@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { checkDownloaded, parseManifest, verifyManifest } from '../main/helpers/update-signature'
+import { checkAvailable, parseManifest, verifyManifest } from '../main/helpers/update-signature'
 
 function keyPair() {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
@@ -57,34 +57,37 @@ describe('verifyManifest', () => {
   })
 })
 
-describe('checkDownloaded', () => {
+describe('checkAvailable', () => {
   const text = manifest.toString()
 
   it('accepts the signed version and sha512', () => {
-    expect(checkDownloaded({ version: '4.1.0', sha512: 'AAAA+/bb==' }, text)).toEqual({ ok: true })
+    expect(checkAvailable({ version: '4.1.0', sha512: ['AAAA+/bb=='] }, text)).toEqual({ ok: true })
   })
 
-  it('refuses a sha512 mismatch', () => {
-    expect(checkDownloaded({ version: '4.1.0', sha512: 'BBBB' }, text).ok).toBe(false)
-    expect(checkDownloaded({ version: '4.1.0' }, text).ok).toBe(false)
+  it('refuses a sha512 mismatch, a missing hash or an empty list', () => {
+    expect(checkAvailable({ version: '4.1.0', sha512: ['BBBB'] }, text).ok).toBe(false)
+    expect(checkAvailable({ version: '4.1.0', sha512: ['AAAA+/bb==', undefined] }, text).ok).toBe(false)
+    expect(checkAvailable({ version: '4.1.0', sha512: [''] }, 'version: 4.1.0\nsha512: \n').ok).toBe(false)
+    expect(checkAvailable({ version: '4.1.0', sha512: [] }, text).ok).toBe(false)
   })
 
   it('refuses a version mismatch', () => {
-    expect(checkDownloaded({ version: '4.0.9', sha512: 'AAAA+/bb==' }, text).ok).toBe(false)
+    expect(checkAvailable({ version: '4.0.9', sha512: ['AAAA+/bb=='] }, text).ok).toBe(false)
   })
 
   it('refuses a manifest without a version or a hash', () => {
-    expect(checkDownloaded({ version: '4.1.0', sha512: 'x' }, 'files: []').ok).toBe(false)
-    expect(checkDownloaded({ version: '4.1.0', sha512: '' }, 'version: 4.1.0\n').ok).toBe(false)
+    expect(checkAvailable({ version: '4.1.0', sha512: ['x'] }, 'files: []').ok).toBe(false)
+    expect(checkAvailable({ version: '4.1.0', sha512: ['x'] }, 'version: 4.1.0\n').ok).toBe(false)
   })
 
-  it('accepts any file entry of a multi-file manifest (mac)', () => {
+  it('needs every file the updater may download in the manifest (mac)', () => {
     const mac = `version: 4.1.0\nfiles:\n  - url: a.zip\n    sha512: ZIP==\n    size: 1\n  - url: a.dmg\n    sha512: "DMG=="\n    size: 2\npath: a.zip\nsha512: ZIP==\n`
-    expect(checkDownloaded({ version: '4.1.0', sha512: 'DMG==' }, mac).ok).toBe(true)
+    expect(checkAvailable({ version: '4.1.0', sha512: ['ZIP==', 'DMG=='] }, mac).ok).toBe(true)
+    expect(checkAvailable({ version: '4.1.0', sha512: ['ZIP==', 'EVIL=='] }, mac).ok).toBe(false)
     expect(parseManifest(mac).sha512).toEqual(['ZIP==', 'DMG==', 'ZIP=='])
   })
 
   it('refuses an ambiguous version line', () => {
-    expect(checkDownloaded({ version: '4.1.0', sha512: 'AAAA+/bb==' }, 'version: 4.1.0\nversion: 4.1.0\nsha512: AAAA+/bb==\n').ok).toBe(false)
+    expect(checkAvailable({ version: '4.1.0', sha512: ['AAAA+/bb=='] }, 'version: 4.1.0\nversion: 4.1.0\nsha512: AAAA+/bb==\n').ok).toBe(false)
   })
 })

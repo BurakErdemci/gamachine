@@ -2,9 +2,12 @@
 
 The app updates itself from GitHub Releases (electron-updater). Windows builds are
 not code-signed, so an update installs only when the release's update manifest
-(`latest.yml`, `latest-mac.yml`) carries an Ed25519 signature made with OUR key
-and the downloaded file matches that signed manifest. Otherwise nothing is
-installed and the user is offered the release page. The private key is never in
+(`latest.yml`, `latest-mac.yml`) carries an Ed25519 signature made with OUR key.
+The app checks the signature first and downloads the update only if the files
+electron-updater is about to fetch match that signed manifest; the downloaded
+file's sha512 is checked again before the install is offered. Otherwise nothing
+is downloaded or installed and the user is offered the release page (once per
+version). The private key is never in
 CI, the repo, or a synced folder; the owner signs the draft release locally.
 
 ## One-time setup
@@ -33,9 +36,11 @@ CI, the repo, or a synced folder; the owner signs the draft release locally.
 2. On the Windows PC, with the GitHub CLI logged in (`gh auth status`):
    `node scripts/sign-release.js v4.0.0 C:\Users\<you>\gamachine-update-primary.pem`
    It refuses a release that is not a draft, downloads both manifests, asks the
-   passphrase (hidden), uploads `latest.yml.sig` and `latest-mac.yml.sig`
-   (`--clobber`) and prints `OK` for each signature checked against
-   `update-keys.ts`. Anything other than two `OK` lines: do not publish.
+   passphrase (hidden), prints each manifest's version and sha512 prefixes, and
+   refuses a manifest whose version differs from the tag. It verifies each
+   signature against `update-keys.ts` BEFORE uploading `latest.yml.sig` and
+   `latest-mac.yml.sig` (`--clobber`); a key that is not embedded uploads
+   nothing. Check that the printed version and hashes are the release you built.
 3. Publish the draft in the GitHub UI. Sign BEFORE publishing: clients that
    see a published release without `.sig` files refuse it.
 
@@ -54,8 +59,9 @@ If the primary key is lost or exposed:
 
 `electron-builder.yml` and the app set no `disableDifferentialDownload`, and the
 workflow uploads every `*.blockmap`, so electron-updater's differential download
-stays on for the NSIS installer and the mac zip. The final file's sha512 is still
-checked against the signed manifest before install.
+stays on for the NSIS installer and the mac zip. electron-updater verifies the
+result against the sha512 the app already matched to the signed manifest, and the
+app hashes the final file once more before offering the install.
 
 ## Not covered by tests
 
