@@ -36,6 +36,7 @@ import { findUnityHub } from './helpers/unity-hub'
 import { listEditors, listTemplates, templatesDir, EditorDeps } from './helpers/unity-editors'
 import { createProject, cancelCreate } from './helpers/unity-create'
 import { openProject } from './helpers/unity-launch'
+import { trashProject, trashPrompt } from './helpers/project-trash'
 import { readUnityVersion } from './helpers/unity-project'
 import * as pty from 'node-pty'
 import {
@@ -431,6 +432,45 @@ handleSecure('hub-open-project', async (_event, arg: any) => {
     isProject: isUnityProjectDir,
     readVersion: readUnityVersion,
     spawn: (command, args, options) => spawn(command, args, options),
+  })
+})
+
+// Moves a Unity project to the Trash / Recycle Bin; never a permanent delete. Only a root the user
+// authorized may go, and the confirmation is this process's own box, not something the renderer answers.
+// The open workspace is not tracked here, so the renderer names it and project-trash re-checks it.
+handleSecure('workspace-trash', async (event, hostPath: unknown, openWorkspace: unknown) => {
+  if (typeof hostPath !== 'string' || untrustedWorkspace(hostPath)) return { error: 'untrusted' }
+  const known = (name: Parameters<typeof app.getPath>[0]) => { try { return app.getPath(name) } catch { return '' } }
+  const win = BrowserWindow.fromWebContents(event.sender)
+  const identity = (p: string) => {
+    try { const s = fs.statSync(p, { bigint: true }); return s.ino ? `${s.dev}:${s.ino}` : null } catch { return null }
+  }
+  return trashProject(hostPath, {
+    platform: process.platform,
+    realpath: fs.realpathSync.native,
+    isDirectory: (p) => { try { return fs.statSync(p).isDirectory() } catch { return false } },
+    exists: fs.existsSync,
+    identity,
+    protectedDirs: [os.homedir(), known('home'), known('desktop'), known('documents'), known('downloads')].filter(Boolean),
+    appDirs: [known('userData'), app.getAppPath(), path.dirname(process.execPath), process.resourcesPath ?? ''].filter(Boolean),
+    openWorkspace: typeof openWorkspace === 'string' && openWorkspace ? openWorkspace : null,
+    // Anything but a clean open or a missing file counts as Unity holding it.
+    probeLock: (file) => {
+      try { fs.closeSync(fs.openSync(file, 'r+')); return 'free' } catch (e: any) { return e?.code === 'ENOENT' ? 'absent' : 'busy' }
+    },
+    processCommands: async () => {
+      try { return (await promisify(execFile)('ps', ['-axww', '-o', 'command='], { maxBuffer: 16 * 1024 * 1024 })).stdout.split('\n') } catch { return null }
+    },
+    confirm: async (real) => {
+      const prompt = trashPrompt(real, process.platform)
+      const options = {
+        type: 'warning' as const, message: prompt.message, detail: prompt.detail,
+        buttons: [prompt.go, prompt.cancel], defaultId: 1, cancelId: 1, noLink: true,
+      }
+      const { response } = await (win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options))
+      return response === 0
+    },
+    trashItem: (p) => shell.trashItem(p),
   })
 })
 
