@@ -629,4 +629,29 @@ describe('BrowserHost user operations', () => {
     expect(await f.host.invoke({ op: 'status', conversationId: 5 })).toMatchObject({ active: false })
     expect(await f.host.invoke({ op: 'open', conversationId: 5 })).toMatchObject({ active: true })
   })
+
+  it('does not create a tab for an open whose address lookup was still running when a clear began', async () => {
+    const f = fixture()
+    let resolveLookup: (v: any) => void = () => {}
+    f.lookup.mockImplementationOnce(() => new Promise((resolve) => { resolveLookup = resolve }))
+    const opening = f.host.invoke({ op: 'open', conversationId: 5, url: 'https://slow.example/' })
+    await vi.waitFor(() => expect(f.lookup).toHaveBeenCalled())
+    let release: () => void = () => {}
+    f.session.clearStorageData.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve }))
+    const clearing = f.host.invoke({ op: 'clear-browsing-data' })
+    await vi.waitFor(() => expect(f.session.clearStorageData).toHaveBeenCalled())
+    resolveLookup([{ address: '93.184.216.34', family: 4 }])
+    expect(await opening).toEqual({ error: 'clearing' })
+    release()
+    await clearing
+    expect(f.createView).not.toHaveBeenCalled()
+  })
+
+  it('reports a failed clear as cleared, since the logins may already be gone', async () => {
+    const f = fixture()
+    f.session.clearCache.mockRejectedValueOnce(new Error('disk'))
+    expect(await f.host.invoke({ op: 'clear-browsing-data' })).toEqual({ error: 'Clearing browsing data failed.' })
+    const posts = f.http.request.mock.calls.map(([c]: [any]) => c).filter((c: any) => c.url.endsWith('/browser/runtime'))
+    expect(posts.map((c: any) => c.data.cleared)).toEqual([true])
+  })
 })

@@ -629,6 +629,8 @@ export class BrowserHost {
         if (op === 'navigate' || url !== undefined) {
           if (!(await this.navigationAllowed(url))) return { error: 'url_not_allowed' }
         }
+        // A clear can start during the lookup above.
+        if (this.clearing) return { error: 'clearing' }
         let tab: Tab
         try { tab = this.ensureTab(conversationId) } catch (error) { return { error: error instanceof Error ? error.message : 'no_window' } }
         if (op === 'open') this.show(conversationId)
@@ -669,19 +671,21 @@ export class BrowserHost {
         this.clearing = true
         // Tabs go first so no page writes new cookies between the clear and its close.
         this.destroyView()
+        let failed = false
         try {
           const session = this.session()
           await session.clearStorageData()
           await session.clearCache()
         } catch {
           this.log('[browser] clearing browsing data failed')
-          return { error: 'Clearing browsing data failed.' }
+          failed = true
         } finally {
           this.destroyView()
           this.clearing = false
         }
+        // Even a failed clear may have wiped logins, so the backend drops every chat's grants either way.
         await this.report(true)
-        return { cleared: true }
+        return failed ? { error: 'Clearing browsing data failed.' } : { cleared: true }
       }
       case 'answer-card':
         if (typeof gateId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(gateId) || typeof approved !== 'boolean') break
