@@ -6,6 +6,7 @@ docs/agent-browser.md). This process never learns where the host listens.
 """
 import os
 from typing import Literal
+from urllib.parse import quote_plus
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -13,6 +14,9 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 
 from spawn_env import CONVERSATION_ENV, read_only_refusal
 from unity_ai_mcp import approval_bridge
+
+# Same engine as the address bar (renderer/lib/browserAddress.ts).
+SEARCH_URL = "https://www.google.com/search?q="
 
 # The gateway may run two host commands (describe, then the step) of up to 90 s each.
 _COMMAND_TIMEOUT_S = 190.0
@@ -80,9 +84,18 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
             return fn
         return register
 
-    @tool("browser_navigate", "Open an http(s) page in the agent browser. Local and private addresses are refused.")
+    @tool("browser_navigate", "Open an http(s) page in the agent browser. Local and private addresses are refused. "
+          "Use it for an address you know; when you would have to guess a URL, use browser_search instead.")
     async def browser_navigate(url: str) -> CallToolResult:
         return await handler.call("navigate", {"url": url})
+
+    @tool("browser_search", "Search the web for query and open the results page in the agent browser; read it "
+          "with browser_snapshot and follow a result.")
+    async def browser_search(query: str) -> CallToolResult:
+        # A guessed store or account URL often 404s; a results page needs no guess.
+        if not query.strip():
+            return _text("query is empty.", True)
+        return await handler.call("navigate", {"url": SEARCH_URL + quote_plus(query.strip())})
 
     @tool("browser_snapshot", "Read the current page: readable text plus numbered elements (links, buttons, inputs). "
           "Returns a snapshot_id that the element tools need.")
