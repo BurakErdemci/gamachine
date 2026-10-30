@@ -141,12 +141,21 @@ export function readExactly(fd: number, size: number): Uint8Array | null {
 }
 
 /**
+ * True when any segment of the RAW path is exactly '..'. safeResolve removes '..'
+ * lexically before a preceding symlink is resolved, so the checked and the
+ * acted-on location could differ (Codex 30 Oct); guards refuse such targets.
+ */
+export function hasDotDotSegment(p: string): boolean {
+  return p.split(/[\\/]/).some((segment) => segment === '..')
+}
+
+/**
  * Yazma/okuma izni sadece workspace içindeki Assets/Scripts/*.cs dosyalarına verilir.
  * Path traversal, symlink ve dışarı çıkış girişimlerini engeller.
  */
 export function isAllowedUnityScriptPath(filePath: string, workspacePath: string): boolean {
   try {
-    if (!filePath || !workspacePath) return false
+    if (!filePath || !workspacePath || hasDotDotSegment(filePath)) return false
 
     // Eğer yol absolute değilse, önce workspace ile birleştirip öyle kontrol etmeliyiz
     const absoluteFilePath = path.isAbsolute(filePath) ? filePath : path.resolve(workspacePath, filePath)
@@ -178,7 +187,7 @@ export function isAllowedUnityScriptPath(filePath: string, workspacePath: string
  */
 export function isAllowedWorkspacePath(targetPath: string, workspacePath: string): boolean {
   try {
-    if (!targetPath || !workspacePath) return false
+    if (!targetPath || !workspacePath || hasDotDotSegment(targetPath)) return false
 
     const resolvedTarget = safeResolve(targetPath)
     const resolvedWorkspace = safeResolve(workspacePath)
@@ -207,7 +216,7 @@ export function isInsideWorkspace(
   platform: string = process.platform,
 ): boolean {
   try {
-    if (!targetPath || !workspacePath) return false
+    if (!targetPath || !workspacePath || hasDotDotSegment(targetPath)) return false
 
     let resolvedTarget = safeResolve(targetPath)
     let resolvedWorkspace = safeResolve(workspacePath)
@@ -304,7 +313,7 @@ export function okumaKarariVer(
   const reddet = (yol: string, sebep: RedSebebi = 'denied'): OkumaKarari =>
     ({ izinli: false, cozulmusYol: yol, sebep })
   try {
-    if (!filePath || !workspacePath) return reddet('')
+    if (!filePath || !workspacePath || hasDotDotSegment(filePath)) return reddet('')
 
     const cozulmus = safeResolve(filePath)
     const cozulmusWs = safeResolve(workspacePath)
@@ -511,7 +520,7 @@ export function readBinaryFileFromWorkspace(
  */
 export function isAllowedWorkspaceWriteFile(filePath: string, workspacePath: string): boolean {
   try {
-    if (!filePath || !workspacePath) return false
+    if (!filePath || !workspacePath || hasDotDotSegment(filePath)) return false
 
     const absoluteFilePath = path.isAbsolute(filePath) ? filePath : path.resolve(workspacePath, filePath)
     const ext = path.extname(safeResolve(absoluteFilePath)).toLowerCase()
