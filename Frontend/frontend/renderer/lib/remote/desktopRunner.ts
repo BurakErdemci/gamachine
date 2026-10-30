@@ -93,11 +93,24 @@ function unsubscribe(channel: string): void {
   off?.();
 }
 
+/** The phone sees the agent's page only, as in `status`: the panel's other tabs (their addresses, titles, icons) stay on the desktop. */
+export function remoteEventArgs(channel: string, args: unknown[]): unknown[] {
+  if (channel !== 'browser-live') return args;
+  const live = (args[0] ?? {}) as Record<string, any>;
+  const agent = Array.isArray(live.tabs) ? live.tabs.find((tab: any) => tab?.agent) : null;
+  const reduced: Record<string, unknown> = {
+    active: !!agent, conversationId: live.conversationId, url: agent?.url ?? '', title: agent?.title ?? '',
+    loading: agent?.loading ?? false, userControl: live.userControl ?? false,
+  };
+  if (typeof live.error === 'string') reduced.error = live.error;
+  return [reduced];
+}
+
 export function subscribeRemoteEvents(channel: string, api: string, token: string): void {
   const ipc = desktopIpc();
   if (!remoteEventAllowed(channel) || subscriptions.has(channel) || !ipc?.on) return;
   const off = ipc.on(channel, (...args: unknown[]) => {
-    axios.post(`${api}/remote/ui-ipc-event`, { channel, args }, { headers: { 'X-Session-Token': token } })
+    axios.post(`${api}/remote/ui-ipc-event`, { channel, args: remoteEventArgs(channel, args) }, { headers: { 'X-Session-Token': token } })
       // No browser wants it any more (its session ended): stop listening.
       .then(res => { if (res?.data?.subscribed === false) unsubscribe(channel); })
       .catch(err => console.warn('[remote] forwarding an IPC event failed', err));

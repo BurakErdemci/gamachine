@@ -8,8 +8,15 @@ const MAX_URL_CHARS = 1_000
 // A favicon is stored as the data: URL main fetched (32 KB of image is about 44k characters).
 const MAX_FAVICON_CHARS = 48_000
 // A visited URL may carry a login or reset token; such pages are not remembered at all. Any query name that
-// contains one of these words counts; the short words only count as a whole word (sid, sig, otp, state, code).
-const SENSITIVE_PARAM = /token|secret|passw(or)?d|pwd|auth|session|jwt|bearer|key(?!words?)|signature|ticket|nonce|(^|[^a-z0-9])(sid|sig|otp|code|state)([^a-z0-9]|$)/i
+// contains one of these words counts; the short words would also hit ordinary words (inside, design, decode),
+// so they only count as a whole word of the name (sid in sid or sessionSid, code in oobCode or code_verifier).
+const SENSITIVE_PARAM = /token|secret|passw(or)?d|pwd|auth|session|sessid|jwt|bearer|key(?!words?)|signature|ticket|nonce|credential|saml/i
+const SENSITIVE_WORDS = new Set(['sid', 'sig', 'otp', 'code', 'state'])
+const NAME_WORDS = /[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/
+
+function sensitiveName(name: string): boolean {
+  return SENSITIVE_PARAM.test(name) || name.split(NAME_WORDS).some((word) => SENSITIVE_WORDS.has(word.toLowerCase()))
+}
 
 export interface HistoryEntry {
   url: string
@@ -23,6 +30,8 @@ export interface HistoryEntry {
 export interface HistoryIo {
   read(file: string): string | null
   write(file: string, data: string): boolean | void | Promise<boolean | void>
+  /** Removes what an earlier process left next to the file (its temp files). */
+  sweep?(file: string): void
 }
 
 const RETRYABLE = new Set(['EPERM', 'EBUSY', 'EACCES'])
@@ -37,6 +46,17 @@ const RENAME_RETRY_DELAYS_MS = [50, 100, 200, 400]
 export const fileIo: HistoryIo = {
   read(file) {
     try { return fs.readFileSync(file, 'utf8') } catch { return null }
+  },
+  sweep(file) {
+    const base = path.basename(file)
+    const dir = path.dirname(file)
+    let names: string[]
+    try { names = fs.readdirSync(dir) } catch { return }
+    for (const name of names) {
+      const pid = name.startsWith(`${base}.`) && name.endsWith('.tmp') ? name.slice(base.length + 1, -4) : ''
+      if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue
+      try { fs.unlinkSync(path.join(dir, name)) } catch { /* locked leftover: the next start tries again */ }
+    }
   },
   async write(file, data) {
     const temp = `${file}.${process.pid}.tmp`
@@ -73,7 +93,7 @@ export function historyUrl(raw: unknown): string | null {
   try { parsed = new URL(raw) } catch { return null }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
   if (parsed.username || parsed.password) return null
-  for (const name of parsed.searchParams.keys()) if (SENSITIVE_PARAM.test(name)) return null
+  for (const name of parsed.searchParams.keys()) if (sensitiveName(name)) return null
   parsed.hash = ''
   return parsed.toString()
 }
@@ -105,15 +125,19 @@ export class BrowserHistory {
   }
 
   private load(): void {
+    this.io.sweep?.(this.file)
     const text = this.io.read(this.file)
     if (!text) return
     try {
       const data = JSON.parse(text)
       const list: unknown[] = Array.isArray(data?.entries) ? data.entries : []
       const seen = new Set<string>()
+      let refused = false
       for (const raw of list) {
         const item = raw as Partial<HistoryEntry>
         const url = historyUrl(item?.url)
+        // The file holds a URL the filter now refuses: write it again without it.
+        if (!url && typeof item?.url === 'string') refused = true
         if (!url || seen.has(url) || !Number.isFinite(item.lastVisit) || !Number.isFinite(item.visits)) continue
         seen.add(url)
         this.entries.push({ url, title: clean(item.title, MAX_TITLE_CHARS), favicon: cleanFavicon(item.favicon),
@@ -121,6 +145,7 @@ export class BrowserHistory {
       }
       this.entries.sort((a, b) => b.lastVisit - a.lastVisit)
       this.entries.length = Math.min(this.entries.length, this.cap)
+      if (refused) this.touched()
     } catch {
       this.entries = []
     }
