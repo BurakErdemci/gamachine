@@ -29,6 +29,8 @@ def switch(monkeypatch):
 
 
 def _prepare(provider, monkeypatch, read_only=False):
+    # CI has no copilot binary; without one _build_cmd returns before it adds the MCP config.
+    monkeypatch.setattr("providers.copilot_provider.resolve_copilot_cmd", lambda: ["copilot"])
     monkeypatch.setattr(provider, "_launcher_path", lambda name: "test-launcher")
     monkeypatch.setattr(provider, "_ensure_exec", lambda path: None)
     provider._conversation_id = CHAT
