@@ -55,8 +55,10 @@ no Playwright, no browser extension.
 - **Privacy.** The session now holds the user's logins and cookies on disk. Anything the
   agent opens can use them, which is why submit, buy and password steps still need a card
   that names the host, and why clearing browsing data is one click away. Remote devices can
-  only `status` (the agent tab's url, title and loading, never the user's tabs), `halt` and
-  `answer-card`; they cannot open, navigate or take over a tab.
+  only `status` (the agent tab's url, title, loading and user control, never the user's tabs or
+  the panel geometry), `halt` and `answer-card`; they cannot open, navigate or take over a tab.
+  The `browser-live` events the desktop forwards to a paired phone are cut down to the same
+  agent-tab shape in `renderer/lib/remote/desktopRunner.ts`; the desktop panel keeps the full payload.
 
 ## Several tabs per chat (v3, 30 Oct 2026)
 
@@ -98,16 +100,23 @@ the **agent tab**, and it is the only page the agent can reach.
   chat's deletion (`close`) and a clear count as a halt for that work: `close` also calls `onHalt`
   for the chat so its queued commands are dropped, and an `open` or user `navigate` that awaited
   its hostname check creates or loads nothing when the chat was closed or a clear ran meanwhile.
-  Closing the agent tab ends a navigate that is still in its hostname check as `halted` at once. The keys of a `press` are expected back as exact
+  Closing the agent tab (close-tab, Ctrl+W) and a clear are halts as well: they bump the epoch and
+  call `onHalt` (for that chat, or for every chat), so a running script op answers `halted` and a
+  queued command never makes a new agent tab. A Stop or a closed tab ends a navigate that is still
+  in its hostname check as `halted` at once, and a command that throws after a Stop answers `halted`
+  too. `shutdown` returns the one history write to every caller; a failed write is tried again by
+  the next caller. The keys of a `press` are expected back as exact
   events (type and key name per channel, one each, one second); any other key or mouse event, or a
   repeat of the same key, is the user and takes the agent tab over.
 - **History** (`main/helpers/browser-history.ts`): http(s) pages only, hash removed, pages whose
   query has a name containing token, secret, password, auth, session, jwt, bearer, key,
-  signature, ticket or nonce (or the whole words sid, sig, otp, code, state), or that carry
+  signature, ticket, nonce, credential or saml (or the whole words sid, sig, otp, code, state, also
+  inside camelCase and snake_case names such as oobCode or RelayState), or that carry
   credentials, are not kept (`q` and ordinary names are); at most 500 entries, address, title,
   icon (a small `data:` image, never a remote address), last visit and count, no page content.
   File `path.join(app.getPath('userData'), 'browser-history.json')`, written after 2 s of quiet
-  and on shutdown: temp file, fsync, rename, so the old file is never opened for writing. A rename
+  and on shutdown: temp file, fsync, rename, so the old file is never opened for writing. A file that
+  held a URL the filter now refuses is rewritten at load, and temp files of earlier processes are removed. A rename
   Windows refuses (`EPERM`/`EBUSY`/`EACCES`) is retried after 50, 100, 200 and 400 ms without
   blocking; if it still fails the old file stays, the data stays in memory and the next flush tries
   again. `clear-browsing-data` empties it and writes at once; when that write fails the op returns

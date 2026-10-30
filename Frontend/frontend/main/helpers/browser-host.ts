@@ -397,6 +397,8 @@ export class BrowserHost {
   private clearGen = 0
   /** Bumped when a chat is closed (deleted), for the same reason. */
   private readonly closeGen = new Map<number, number>()
+  /** Commands waiting on a lookup listen here; a halt of their chat (or of every chat) wakes them. */
+  private readonly haltListeners = new Set<{ conversationId: number; wake: () => void }>()
   /** When each chat's pages last opened a tab, for the rate limit. */
   private readonly pageOpens = new Map<number, number[]>()
   private clock = 0
@@ -404,6 +406,7 @@ export class BrowserHost {
   private readonly hostCache = new Map<string, { blocked: true; at: number }>()
   private runtime: { port: number; token: string } | null = null
   private stopped = false
+  private historySaved: Promise<boolean> | null = null
   private pollTimer: ReturnType<typeof setTimeout> | null = null
   private reports: Promise<unknown> = Promise.resolve()
   private readonly now: () => number
@@ -468,13 +471,21 @@ export class BrowserHost {
 
   /** Reports running=false, stops polling and destroys every tab. */
   shutdown(): Promise<void> {
-    if (this.stopped) return this.reports.then(() => undefined)
-    this.stopped = true
-    const saved = this.deps.history?.flush()
-    if (this.pollTimer) this.clear(this.pollTimer)
-    this.pollTimer = null
-    this.destroyView()
-    return Promise.all([saved, this.report()]).then(() => undefined)
+    if (!this.stopped) {
+      this.stopped = true
+      if (this.pollTimer) this.clear(this.pollTimer)
+      this.pollTimer = null
+      this.destroyView()
+      void this.report()
+    }
+    // Every caller waits for the same write; one that failed is tried again by the next caller.
+    if (!this.historySaved) {
+      this.historySaved = Promise.resolve(this.deps.history?.flush() ?? true).then((ok) => {
+        if (!ok) this.historySaved = null
+        return ok
+      })
+    }
+    return Promise.all([this.historySaved, this.reports]).then(() => undefined)
   }
 
   // ---- tabs and session ----
@@ -787,6 +798,8 @@ export class BrowserHost {
       stack.push({ url, title: wc.getTitle() })
       this.closed.set(tab.conversationId, stack.slice(-MAX_CLOSED_TABS))
     }
+    // Work running or queued for the agent's tab ends with it instead of recreating the tab.
+    if (tab.agent) this.stopLocal(tab.conversationId)
     this.closeTab(tab)
   }
 
@@ -940,8 +953,7 @@ export class BrowserHost {
         const agent = this.agentTab(conversationId)
         const wc = agent?.view.webContents
         return { active: agent !== null, conversationId, url: wc ? wc.getURL() : '', title: wc ? wc.getTitle() : '',
-          loading: wc ? wc.isLoading() : false, userControl: agent?.userControl ?? false,
-          visible: this.visibleId === conversationId, bounds: this.bounds }
+          loading: wc ? wc.isLoading() : false, userControl: agent?.userControl ?? false }
       }
       // The panel's own read: every tab of the chat.
       case 'panel-status':
@@ -1042,6 +1054,8 @@ export class BrowserHost {
         if (this.clearing) return { error: 'clearing' }
         this.clearing = true
         this.clearGen++
+        // Every chat's running and queued agent commands end with the clear.
+        this.stopLocal(null)
         // Tabs go first so no page writes new cookies between the clear and its close.
         this.destroyView()
         this.closed.clear()
@@ -1122,6 +1136,7 @@ export class BrowserHost {
     if (only === null) this.haltAll++
     else this.haltChat.set(only, (this.haltChat.get(only) ?? 0) + 1)
     this.deps.onHalt?.(only)
+    for (const listener of [...this.haltListeners]) if (only === null || listener.conversationId === only) listener.wake()
     for (const tab of [...this.tabs.values()]) {
       if (!tab.agent || (only !== null && tab.conversationId !== only)) continue
       this.settleLoad(tab, { ok: false, error: 'halted' })
@@ -1210,16 +1225,17 @@ export class BrowserHost {
     const wc = tab.view.webContents
     const epoch = this.haltEpoch(id)
     let reply: Reply
+    const halted = () => this.haltEpoch(id) !== epoch
     tab.busy++
     try {
-      const halted = () => this.haltEpoch(id) !== epoch
       const result = await this.run(tab, cmd.op, cmd.args && typeof cmd.args === 'object' ? cmd.args : {}, halted)
       // A Stop (or the chat's deletion) that arrived while the command awaited wins over whatever it came back with.
       const extra = halted() ? { error: 'halted' } : result
       reply = { ok: !extra.error, ...extra, ...this.base(wc) } as Reply
       if (!extra.error) delete reply.error
     } catch (error) {
-      reply = { ok: false, error: error instanceof Error ? error.message : String(error), ...this.base(wc) }
+      // After a Stop the failure is the Stop's: the page was cut off, not broken.
+      reply = { ok: false, error: halted() ? 'halted' : error instanceof Error ? error.message : String(error), ...this.base(wc) }
     } finally {
       tab.busy--
     }
@@ -1239,9 +1255,9 @@ export class BrowserHost {
     switch (op) {
       case 'navigate': {
         const url = args.url
-        // A closed tab ends the wait at once instead of when the lookup finishes.
-        const allowed = await Promise.race([this.navigationAllowed(url), tab.gone.then(() => 'closed' as const)])
-        if (allowed === 'closed') return { error: 'halted' }
+        // A Stop or a closed tab ends the wait at once instead of when the lookup finishes.
+        const allowed = await this.untilHalted(tab, this.navigationAllowed(url))
+        if (allowed === 'halted') return { error: 'halted' }
         if (!allowed) return { error: 'url_not_allowed' }
         if (halted()) return { error: 'halted' }
         if (this.clearing) return { error: 'clearing' }
@@ -1306,6 +1322,15 @@ export class BrowserHost {
       default:
         return { error: 'unknown_op' }
     }
+  }
+
+  private untilHalted<T>(tab: Tab, work: Promise<T>): Promise<T | 'halted'> {
+    let listener: { conversationId: number; wake: () => void } | undefined
+    const stopped = new Promise<'halted'>((resolve) => {
+      listener = { conversationId: tab.conversationId, wake: () => resolve('halted') }
+      this.haltListeners.add(listener)
+    })
+    return Promise.race([work, stopped, tab.gone.then(() => 'halted' as const)]).finally(() => { this.haltListeners.delete(listener!) })
   }
 
   private loadResult(result: LoadResult): Record<string, unknown> {

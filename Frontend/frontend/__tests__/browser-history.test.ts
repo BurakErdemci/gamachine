@@ -186,6 +186,35 @@ describe('BrowserHistory', () => {
   })
 })
 
+describe('BrowserHistory sensitive names', () => {
+  it('drops camelCase, SAML and AWS style secrets and keeps ordinary queries', () => {
+    for (const name of ['oobCode', 'codeVerifier', 'RelayState', 'sessid', 'SAMLResponse', 'SAMLRequest', 'X-Amz-Credential', 'X-Amz-Signature', 'credential', 'code_challenge', 'sid'])
+      expect(historyUrl(`https://a.example/p?${name}=v`), name).toBeNull()
+    for (const name of ['q', 'keyword', 'keywords', 'inside', 'design', 'decode', 'estate', 'page'])
+      expect(historyUrl(`https://a.example/p?${name}=v`), name).not.toBeNull()
+  })
+
+  it('rewrites a file that held a URL the filter now refuses', () => {
+    vi.useFakeTimers()
+    const stored = JSON.stringify({ version: 1, entries: [
+      { url: 'https://a.example/p?oobCode=SECRET', title: 'x', favicon: '', lastVisit: 2, visits: 1 },
+      { url: 'https://b.example/', title: 'b', favicon: '', lastVisit: 1, visits: 1 },
+    ] })
+    const { history, state } = make({ initial: stored })
+    expect(history.list().map(e => e.url)).toEqual(['https://b.example/'])
+    vi.advanceTimersByTime(2_000)
+    expect(state.writes).toBe(1)
+    expect(state.file).not.toContain('SECRET')
+  })
+
+  it('does not write a file it has nothing to remove from', () => {
+    vi.useFakeTimers()
+    const { state } = make({ initial: JSON.stringify({ version: 1, entries: [{ url: 'https://b.example/', title: 'b', favicon: '', lastVisit: 1, visits: 1 }] }) })
+    vi.advanceTimersByTime(5_000)
+    expect(state.writes).toBe(0)
+  })
+})
+
 describe('fileIo (atomic write)', () => {
   const dirs: string[] = []
   const tmp = () => {
@@ -201,6 +230,16 @@ describe('fileIo (atomic write)', () => {
     expect(fileIo.read(file)).toBe('{"a":1}')
     expect(fs.readdirSync(path.dirname(file))).toEqual(['browser-history.json'])
     expect(fileIo.read(file + '.missing')).toBeNull()
+  })
+
+  it('sweeps temp files an earlier process left and keeps the history and foreign files', () => {
+    const file = tmp()
+    const dir = path.dirname(file)
+    fs.mkdirSync(dir, { recursive: true })
+    for (const name of ['browser-history.json', 'browser-history.json.99999.tmp', 'browser-history.json.4242.tmp', 'other.json.1.tmp', 'browser-history.json.bak'])
+      fs.writeFileSync(path.join(dir, name), 'x')
+    fileIo.sweep!(file)
+    expect(fs.readdirSync(dir).sort()).toEqual(['browser-history.json', 'browser-history.json.bak', 'other.json.1.tmp'])
   })
 
   it('retries a rename that Windows refuses with EPERM or EBUSY after a growing pause', async () => {

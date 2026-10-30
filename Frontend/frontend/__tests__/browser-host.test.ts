@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { remoteEventArgs } from '../renderer/lib/remote/desktopRunner'
 import { BROWSER_PARTITION, BROWSER_WORLD_ID, BrowserHost, MAX_CHAT_TABS, MAX_TABS, NAVIGATION_TIMEOUT_MS, type BrowserHostDeps } from '../main/helpers/browser-host'
 
 // The isolated-world script runs for real against jsdom. jsdom lays nothing out and
@@ -368,7 +369,7 @@ describe('BrowserHost halt and renderer channel', () => {
     expect(f.view.setVisible).toHaveBeenCalledWith(true)
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
     expect(f.view.setVisible).toHaveBeenLastCalledWith(false)
-    expect(await f.host.invoke({ op: 'status', conversationId: 4 })).toMatchObject({ active: true, conversationId: 4, visible: false, userControl: false })
+    expect(await f.host.invoke({ op: 'panel-status', conversationId: 4 })).toMatchObject({ active: true, conversationId: 4, visible: false, userControl: false })
     expect(await f.host.invoke({ op: 'status', conversationId: 5 })).toMatchObject({ active: false, conversationId: 5 })
     for (const conversationId of [undefined, 0, -3, 2.5, '4'])
       expect(await f.host.invoke({ op: 'status', conversationId })).toHaveProperty('error')
@@ -432,7 +433,7 @@ describe('BrowserHost tabs per chat', () => {
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
     expect(a.setVisible).toHaveBeenLastCalledWith(true)
     expect(b.setVisible).toHaveBeenLastCalledWith(false)
-    expect(await f.host.invoke({ op: 'status', conversationId: 7 })).toMatchObject({ active: true, conversationId: 7, url: 'https://b.example/', visible: false })
+    expect(await f.host.invoke({ op: 'panel-status', conversationId: 7 })).toMatchObject({ active: true, conversationId: 7, url: 'https://b.example/', visible: false })
   })
 
   it('halting chat A leaves chat B loading and posts only A to the backend', async () => {
@@ -1076,6 +1077,93 @@ describe('BrowserHost work that outlives its chat or a clear', () => {
     await f.host.invoke({ op: 'halt', conversationId: 4 })
     finish({ text: 'late', elements: [] })
     expect(await pending).toMatchObject({ ok: false, error: 'halted' })
+  })
+
+  it('closing the agent tab ends a running script op as halted and tells the command server', async () => {
+    const f = fixture('win32')
+    await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    const wc = f.views[0].webContents
+    let finish: (v: unknown) => void = () => {}
+    wc.executeJavaScriptInIsolatedWorld.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const pending = f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
+    await vi.waitFor(() => expect(wc.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(2))
+    await f.host.invoke({ op: 'close-tab', conversationId: 4, tabId: (await status(f)).tabs[0].id })
+    expect(f.onHalt).toHaveBeenCalledWith(4)
+    finish({ text: 'late', elements: [] })
+    expect(await pending).toMatchObject({ ok: false, error: 'halted' })
+  })
+
+  it('a script that rejects after Stop answers halted, not the script error', async () => {
+    const f = fixture('win32')
+    await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    const wc = f.views[0].webContents
+    let fail: (e: Error) => void = () => {}
+    wc.executeJavaScriptInIsolatedWorld.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+    const pending = f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
+    await vi.waitFor(() => expect(wc.executeJavaScriptInIsolatedWorld).toHaveBeenCalledTimes(2))
+    await f.host.invoke({ op: 'halt', conversationId: 4 })
+    fail(new Error('page execution rejected'))
+    expect(await pending).toMatchObject({ ok: false, error: 'halted' })
+  })
+
+  it('a Stop settles an agent navigate that is still in its lookup at once', async () => {
+    const f = fixture('win32')
+    const finish = pendingLookup(f)
+    let settled = false
+    const pending = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://slow.example/' } }).then((r) => { settled = true; return r })
+    await vi.waitFor(() => expect(f.lookup).toHaveBeenCalled())
+    await f.host.invoke({ op: 'halt', conversationId: 4 })
+    await later()
+    expect(settled).toBe(true)
+    finish()
+    expect(await pending).toMatchObject({ ok: false, error: 'halted' })
+    expect(f.views[0].webContents.loadURL).not.toHaveBeenCalled()
+  })
+
+  it('clearing browsing data tells the command server to drop every chat\'s queue', async () => {
+    const f = fixture('win32')
+    await f.host.invoke({ op: 'clear-browsing-data' })
+    expect(f.onHalt).toHaveBeenCalledWith(null)
+  })
+
+  it('the remote-allowed status reply carries the agent page only, without panel geometry', async () => {
+    const f = fixture('win32')
+    await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    const reply = await f.host.invoke({ op: 'status', conversationId: 4 }) as Record<string, unknown>
+    expect(Object.keys(reply).sort()).toEqual(['active', 'conversationId', 'loading', 'title', 'url', 'userControl'])
+  })
+
+  it('the phone gets the agent tab of a browser-live event, never the user tabs', async () => {
+    const f = fixture('win32')
+    await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    f.views[0].webContents.url = 'https://agent.example/'
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://private.example/PRIVATE_MARKER' })
+    f.views[1].webContents.finish('https://private.example/PRIVATE_MARKER')
+    const live = await f.host.invoke({ op: 'panel-status', conversationId: 4 })
+    expect(JSON.stringify(live)).toContain('PRIVATE_MARKER')
+    const [forwarded] = remoteEventArgs('browser-live', [live]) as Record<string, unknown>[]
+    expect(JSON.stringify(forwarded)).not.toContain('PRIVATE_MARKER')
+    expect(forwarded).toEqual({ active: true, conversationId: 4, url: 'https://agent.example/', title: '', loading: false, userControl: false })
+    expect(remoteEventArgs('open-conversation', [live])).toEqual([live])
+  })
+
+  it('every shutdown caller waits for the same history write, and a failed one is tried again', async () => {
+    const f = fixture('win32')
+    let done: (ok: boolean) => void = () => {}
+    f.history.flush.mockImplementationOnce(() => new Promise<boolean>((resolve) => { done = resolve }))
+    let second = false
+    const first = f.host.shutdown()
+    const again = f.host.shutdown().then(() => { second = true })
+    await later()
+    expect(second).toBe(false)
+    done(false)
+    await Promise.all([first, again])
+    expect(f.history.flush).toHaveBeenCalledTimes(1)
+    f.history.flush.mockResolvedValue(true)
+    await f.host.shutdown()
+    expect(f.history.flush).toHaveBeenCalledTimes(2)
+    await f.host.shutdown()
+    expect(f.history.flush).toHaveBeenCalledTimes(2)
   })
 
   it('a clear that fails to erase the history file reports an error, not cleared', async () => {
