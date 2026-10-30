@@ -52,22 +52,33 @@ export function trashPrompt(real: string, platform: string) {
   }
 }
 
-/** The -projectPath values of a command line, quoted or not (an unquoted one runs to the next flag). */
-const projectPathArgs = (command: string): string[] =>
-  [...command.matchAll(/-projectpath\s+(?:"([^"]*)"|'([^']*)'|(.*?)(?=\s-[A-Za-z]|$))/gi)]
-    .map(m => (m[1] ?? m[2] ?? m[3] ?? '').trim()).filter(Boolean)
+/**
+ * The -projectPath values of a command line, as candidate lists (longest first). A quoted value is one candidate;
+ * an unquoted one may contain " -x" (a folder called "Alias -Design"), so every " -" boundary and the end are cut points.
+ */
+const projectPathArgs = (command: string): string[][] =>
+  [...command.matchAll(/-projectpath\s+(?:"([^"]*)"|'([^']*)'|(?=(.*)$))/gi)].map(m => {
+    const quoted = m[1] ?? m[2]
+    if (quoted !== undefined) return [quoted.trim()].filter(Boolean)
+    const rest = m[3] ?? ''
+    const cuts = [...[...rest.matchAll(/\s-/g)].map(c => c.index ?? 0), rest.length]
+    return cuts.map(i => rest.slice(0, i).trim()).filter(Boolean).reverse()
+  }).filter(list => list.length > 0)
 
 /**
- * A Unity command line that opens this project: it names its path, or its -projectPath resolves to the same
- * folder (same canonical path or same dev+ino, so any alias counts), or the -projectPath cannot be compared (relative).
+ * A Unity command line that opens this project: a -projectPath resolves to the same folder (same canonical path
+ * or same dev+ino, so any alias counts), or cannot be compared (relative). Of an unquoted value's candidates the
+ * longest one that resolves is the value. The target path appearing elsewhere in the text does not count.
  */
 const unityNames = (
-  command: string, paths: string[], fold: (s: string) => string, isAbsolute: (s: string) => boolean,
+  command: string, isAbsolute: (s: string) => boolean, resolves: (arg: string) => boolean,
   sameFolder: (arg: string) => boolean,
 ): boolean => {
   if (!/unity/i.test(command)) return false
-  if (paths.some(x => fold(command).includes(fold(x)))) return true
-  return projectPathArgs(command).some(arg => !isAbsolute(arg) || sameFolder(arg))
+  return projectPathArgs(command).some(list => {
+    const arg = list.find(a => !isAbsolute(a) || resolves(a))
+    return arg !== undefined && (!isAbsolute(arg) || sameFolder(arg))
+  })
 }
 
 const resolved = (deps: TrashDeps, p: string): string => {
@@ -131,12 +142,13 @@ export async function checkTrashable(dir: unknown, deps: TrashDeps): Promise<{ e
   } else if (deps.exists(lock)) {
     const commands = await deps.processCommands().catch(() => null)
     if (!commands) return { error: 'unity-open' }
+    const resolvable = (arg: string) => { try { deps.realpath(arg); return true } catch { return false } }
     const sameFolder = (arg: string) => {
       const there = resolved(deps, arg)
       const id = deps.identity?.(there)
       return norm(there) === target || (!!id && id === targetId)
     }
-    if (commands.some(c => unityNames(c, [real, dir], fold, p.isAbsolute, sameFolder))) return { error: 'unity-open' }
+    if (commands.some(c => unityNames(c, p.isAbsolute, resolvable, sameFolder))) return { error: 'unity-open' }
   }
   return { real, id: targetId }
 }
@@ -159,6 +171,9 @@ export async function trashProject(dir: unknown, deps: TrashDeps): Promise<Trash
     const again = await checkTrashable(dir, deps)
     if ('error' in again) return again
     if (again.real !== checked.real || !again.id || again.id !== checked.id) return { error: 'not-found' }
+    // The checks above awaited; the folder is looked at once more right before the move.
+    const last = deps.identity?.(checked.real)
+    if (!last || last !== checked.id) return { error: 'not-found' }
     try {
       await deps.trashItem(checked.real)
       return { ok: true }

@@ -199,7 +199,8 @@ describe('project-trash guards', () => {
         { cmd: editor('/Users/me/Games/Other'), open: false },
       ]
       for (const { cmd, open } of cases) {
-        const { deps, files } = fake(platform, unity(MAC, '/'), { processCommands: async () => [cmd] })
+        // A case-insensitive disk (macOS) resolves the lowercase spelling to the same folder.
+        const { deps, files } = fake(platform, unity(MAC, '/'), { processCommands: async () => [cmd] }, platform === 'darwin' ? { [MAC.toLowerCase()]: MAC } : {})
         files.add(`${MAC}/Temp/UnityLockfile`)
         expect(await trashProject(MAC, deps), cmd).toEqual(open ? { error: 'unity-open' } : { ok: true })
       }
@@ -226,6 +227,23 @@ describe('project-trash guards', () => {
       const spaced = fake(platform, unity(SPACED, '/'), { processCommands: async () => [`${editor(SPACED)} -batchmode`] })
       spaced.files.add(`${SPACED}/Temp/UnityLockfile`)
       expect(await trashProject(SPACED, spaced.deps)).toEqual({ error: 'unity-open' })
+    })
+
+    it('finds an unquoted alias whose folder name holds " -x", and picks the longest value that resolves', async () => {
+      const ALIAS = '/Volumes/Alias -Design'
+      const { deps, files } = fake(platform, unity(MAC, '/'), { processCommands: async () => [`${editor(ALIAS)} -batchmode`] }, { [ALIAS]: MAC })
+      files.add(`${MAC}/Temp/UnityLockfile`)
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'unity-open' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('does not let an editor for Arena2 block Arena, nor a path only mentioned in the command text', async () => {
+      const cases = [editor(`${MAC}2`), `${editor('/Users/me/Games/Other')} -logFile ${MAC}/log.txt`, `/Applications/Unity/Unity ${MAC}`]
+      for (const cmd of cases) {
+        const { deps, files } = fake(platform, [...unity(MAC, '/'), ...unity(`${MAC}2`, '/')], { processCommands: async () => [cmd] })
+        files.add(`${MAC}/Temp/UnityLockfile`)
+        expect(await trashProject(MAC, deps), cmd).toEqual({ ok: true })
+      }
     })
 
     it.each(['null', 'throw'])('refuses when the process list cannot be read (%s)', async (how) => {
@@ -401,6 +419,30 @@ describe('project-trash guards', () => {
     })
   })
 
+  describe('identity right before the move', () => {
+    it('refuses when the folder is swapped while the second check awaits the process list', async () => {
+      const { deps, files } = fake('darwin', unity(MAC, '/'), { })
+      files.add(`${MAC}/Temp/UnityLockfile`)
+      let id = '1:1', reads = 0
+      deps.identity = (p) => (p === MAC ? id : `id:${p}`)
+      deps.processCommands = async () => { if (++reads === 2) id = '2:2'; return [] }
+      expect(await trashProject(MAC, deps)).toEqual({ error: 'not-found' })
+      expect(reads).toBe(2)
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('refuses when the identity cannot be taken at the last moment', async () => {
+      const { deps } = fake('darwin', unity(MAC, '/'))
+      let calls = 0
+      const base = deps.identity!
+      deps.identity = (p) => (p === MAC && ++calls > 2 ? null : base(p))
+      deps.confirm = vi.fn(async () => true)
+      const r = await trashProject(MAC, deps)
+      expect(r).toEqual({ error: 'not-found' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+  })
+
   it('reports trash-failed when the OS refuses, and checkTrashable alone never trashes', async () => {
     const { deps } = fake('darwin', unity(MAC, '/'), { trashItem: vi.fn(async () => { throw new Error('denied') }) })
     expect(await trashProject(MAC, deps)).toEqual({ error: 'trash-failed' })
@@ -448,6 +490,24 @@ describe('exact registered root', () => {
       expect(isRegisteredRoot(path.dirname(root))).toBe(false)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
+      fs.rmSync(electron.userData, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('registered roots are compared as stored', () => {
+  it('does not grant a folder a retargeted saved path now points at', () => {
+    electron.userData = fs.mkdtempSync(path.join(os.tmpdir(), 'trash-trust-'))
+    const box = fs.mkdtempSync(path.join(os.tmpdir(), 'trash-retarget-'))
+    const saved = path.join(box, 'Saved'), other = path.join(box, 'Other')
+    fs.mkdirSync(saved); fs.mkdirSync(other)
+    try {
+      registerTrustedRoot(saved)
+      fs.renameSync(saved, path.join(box, 'Moved'))
+      fs.symlinkSync(other, saved, 'dir')
+      expect(isRegisteredRoot(other)).toBe(false)
+    } finally {
+      fs.rmSync(box, { recursive: true, force: true })
       fs.rmSync(electron.userData, { recursive: true, force: true })
     }
   })

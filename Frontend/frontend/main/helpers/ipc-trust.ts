@@ -149,7 +149,8 @@ export const isRegisteredRoot = (rawPath: string): boolean => {
   const target = normalize(rawPath)
   if (!target) return false
   const fold = (s: string) => (process.platform === 'win32' ? s.toLowerCase() : s)
-  return load().some((root) => fold(normalize(root) ?? root) === fold(target))
+  // Stored roots were canonical when registered: compare them as stored, never re-resolved against the disk now.
+  return load().some((root) => fold(root) === fold(target))
 }
 
 /**
