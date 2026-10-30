@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BROWSER_PARTITION, BROWSER_WORLD_ID, BrowserHost, NAVIGATION_TIMEOUT_MS, type BrowserHostDeps } from '../main/helpers/browser-host'
+import { BROWSER_PARTITION, BROWSER_WORLD_ID, BrowserHost, MAX_TABS, NAVIGATION_TIMEOUT_MS, type BrowserHostDeps } from '../main/helpers/browser-host'
 
 // The isolated-world script runs for real against jsdom. jsdom lays nothing out and
 // has no innerText or scrollBy, so every element reports one client rect, innerText
@@ -40,12 +40,22 @@ function fakeWebContents() {
   return wc
 }
 
-function fixture() {
+function fakeView(id: number) {
   const wc = fakeWebContents()
-  const view: any = { webContents: wc, setBounds: vi.fn(), setVisible: vi.fn() }
+  wc.id = id
+  return { webContents: wc, setBounds: vi.fn(), setVisible: vi.fn() } as any
+}
+
+function fixture() {
+  // Each createView call hands out the next view; `view`/`wc` are the first tab's.
+  const views: any[] = [fakeView(1)]
+  const view = views[0]
+  const wc = view.webContents
   const session: any = new EventEmitter()
   session.setPermissionRequestHandler = vi.fn()
   session.setPermissionCheckHandler = vi.fn()
+  session.clearStorageData = vi.fn(async () => {})
+  session.clearCache = vi.fn(async () => {})
   session.webRequest = { onBeforeRequest: vi.fn(), onResponseStarted: vi.fn(), onCompleted: vi.fn() }
   const win: any = { isDestroyed: () => false, contentView: { addChildView: vi.fn(), removeChildView: vi.fn() }, webContents: { send: vi.fn() } }
   const http = { request: vi.fn(async (config: any) => {
@@ -54,28 +64,43 @@ function fixture() {
     return { data: {} }
   }) }
   const lookup = vi.fn(async (host: string) => [{ address: host.startsWith('internal') ? '10.0.0.8' : '93.184.216.34', family: 4 }])
-  const createView = vi.fn(() => view)
+  let made = 0
+  const createView = vi.fn(() => {
+    if (!views[made]) views.push(fakeView(made + 1))
+    return views[made++]
+  })
   const fromPartition = vi.fn(() => session)
   const onHalt = vi.fn()
+  const clock = { now: 1_000 }
   const deps: BrowserHostDeps = {
     window: () => win, createView, fromPartition, http, baseUrl: () => 'http://127.0.0.1:9', appToken: 'tok', uiSecret: 'secret',
-    lookup, onHalt,
+    lookup, onHalt, now: () => clock.now,
   }
   const host = new BrowserHost(deps)
-  return { host, wc, view, session, win, http, lookup, createView, fromPartition, onHalt }
+  return { host, wc, view, views, session, win, http, lookup, createView, fromPartition, onHalt, clock }
 }
 
-async function navigate(f: ReturnType<typeof fixture>, url = 'https://example.com/', html = '') {
-  const reply = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url } })
-  await vi.waitFor(() => expect(f.wc.loadURL).toHaveBeenCalledWith(url))
+async function navigate(f: ReturnType<typeof fixture>, url = 'https://example.com/', html = '', conversationId = 4) {
+  const tab = f.views.length
+  const reply = f.host.handle({ op: 'navigate', conversation_id: conversationId, args: { url } })
+  let wc: any
+  await vi.waitFor(() => {
+    wc = f.views.find((v: any) => v.webContents.loadURL.mock.calls.some(([u]: [string]) => u === url) && v.webContents.pending === url)?.webContents
+    expect(wc, `tab ${tab} loading ${url}`).toBeTruthy()
+  })
   delete (globalThis as any).__gmBrowser
   document.body.innerHTML = html
-  f.wc.finish(url)
+  wc.pending = undefined
+  wc.finish(url)
   return reply
 }
 
+const livePayloads = (f: ReturnType<typeof fixture>) =>
+  f.win.webContents.send.mock.calls.filter(([channel]: [string]) => channel === 'browser-live').map(([, p]: [string, any]) => p)
+
 describe('BrowserHost view and session', () => {
-  it('creates one hardened view on its own partition on the first command', async () => {
+  it('creates one hardened view on the persistent shared partition on the first command', async () => {
+    expect(BROWSER_PARTITION).toBe('persist:gamachine-agent-browser')
     const f = fixture()
     expect(f.createView).not.toHaveBeenCalled()
     expect(await navigate(f)).toEqual({ ok: true, url: 'https://example.com/', title: 'Page' })
@@ -114,9 +139,9 @@ describe('BrowserHost view and session', () => {
     const f = fixture()
     await navigate(f)
     expect(f.wc.openHandler({ url: 'https://ads.example/' })).toEqual({ action: 'deny' })
-    const reply = await f.host.handle({ op: 'scroll', args: { direction: 'down' } })
+    const reply = await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
     expect(reply.popup_blocked).toBe('https://ads.example/')
-    expect((await f.host.handle({ op: 'scroll', args: { direction: 'down' } })).popup_blocked).toBeUndefined()
+    expect((await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })).popup_blocked).toBeUndefined()
   })
 })
 
@@ -124,7 +149,7 @@ describe('BrowserHost navigation refusal', () => {
   it('refuses disallowed URLs before loading and hosts that resolve privately', async () => {
     const f = fixture()
     for (const url of ['file:///etc/passwd', 'http://127.0.0.1:8000/', 'http://localhost/', 'javascript:alert(1)', 'https://internal.corp/']) {
-      expect(await f.host.handle({ op: 'navigate', args: { url } })).toMatchObject({ ok: false, error: 'url_not_allowed' })
+      expect(await f.host.handle({ op: 'navigate', conversation_id: 4, args: { url } })).toMatchObject({ ok: false, error: 'url_not_allowed' })
     }
     expect(f.wc.loadURL).not.toHaveBeenCalled()
   })
@@ -144,7 +169,7 @@ describe('BrowserHost navigation refusal', () => {
 
   it('ends a navigation whose redirect is refused instead of waiting for the timeout', async () => {
     const f = fixture()
-    const reply = f.host.handle({ op: 'navigate', args: { url: 'https://example.com/' } })
+    const reply = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://example.com/' } })
     await vi.waitFor(() => expect(f.wc.loadURL).toHaveBeenCalled())
     f.wc.emit('will-redirect', { url: 'http://127.0.0.1:8000/', isMainFrame: true, preventDefault: vi.fn() })
     expect(await reply).toMatchObject({ ok: false, error: 'url_not_allowed' })
@@ -173,7 +198,7 @@ describe('BrowserHost navigation refusal', () => {
     const f = fixture()
     await navigate(f, 'https://rebind.example/')
     f.lookup.mockImplementation(async () => [{ address: '127.0.0.1', family: 4 }])
-    expect(await f.host.handle({ op: 'navigate', args: { url: 'https://rebind.example/again' } })).toMatchObject({ ok: false, error: 'url_not_allowed' })
+    expect(await f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://rebind.example/again' } })).toMatchObject({ ok: false, error: 'url_not_allowed' })
   })
 
   it('aborts the page and reports private_address when the connected IP is private', async () => {
@@ -186,7 +211,7 @@ describe('BrowserHost navigation refusal', () => {
     started({ url: 'https://example.com/cached.js' })
     started({ url: 'http://93.184.216.34/literal', ip: '10.0.0.1' })
     expect(f.wc.stop).not.toHaveBeenCalled()
-    const pending = f.host.handle({ op: 'navigate', args: { url: 'https://rebind.example/' } })
+    const pending = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://rebind.example/' } })
     await vi.waitFor(() => expect(f.wc.loadURL).toHaveBeenCalledWith('https://rebind.example/'))
     started({ url: 'https://rebind.example/', ip: '127.0.0.1' })
     expect(await pending).toMatchObject({ ok: false, error: 'private_address' })
@@ -195,7 +220,7 @@ describe('BrowserHost navigation refusal', () => {
     const payloads = f.win.webContents.send.mock.calls.filter(([channel]: [string]) => channel === 'browser-live').map(([, p]: [string, any]) => p)
     expect(payloads.some((p: any) => p.error === 'private_address')).toBe(true)
     // The host is now blocked even though its lookup answers publicly again.
-    expect(await f.host.handle({ op: 'navigate', args: { url: 'https://rebind.example/' } })).toMatchObject({ ok: false, error: 'url_not_allowed' })
+    expect(await f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://rebind.example/' } })).toMatchObject({ ok: false, error: 'url_not_allowed' })
     f.wc.loadURL.mockClear()
     completed({ url: 'https://other.example/', ip: '[::1]' })
     expect(f.wc.loadURL).toHaveBeenCalledWith('about:blank')
@@ -205,7 +230,7 @@ describe('BrowserHost navigation refusal', () => {
     vi.useFakeTimers()
     try {
       const f = fixture()
-      const reply = f.host.handle({ op: 'navigate', args: { url: 'https://slow.example/' } })
+      const reply = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://slow.example/' } })
       await vi.waitFor(() => expect(f.wc.loadURL).toHaveBeenCalled())
       await vi.advanceTimersByTimeAsync(NAVIGATION_TIMEOUT_MS)
       expect(await reply).toMatchObject({ ok: false, error: 'navigation_timeout' })
@@ -223,7 +248,7 @@ describe('BrowserHost page scripts', () => {
   it('snapshots in the isolated world and clicks, fills and selects by ref', async () => {
     const f = fixture()
     await navigate(f, 'https://example.com/', PAGE)
-    const snap = await f.host.handle({ op: 'snapshot', args: {} })
+    const snap = await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
     expect(snap.ok).toBe(true)
     expect(f.wc.executeJavaScriptInIsolatedWorld.mock.calls[0][0]).toBe(BROWSER_WORLD_ID)
     const elements = snap.elements as { ref: string; name: string; kind: string; role: string; value?: string }[]
@@ -232,14 +257,14 @@ describe('BrowserHost page scripts', () => {
     expect(byName('Password').value).toBeUndefined()
     const clicked = vi.fn()
     document.getElementById('b')!.addEventListener('click', clicked)
-    expect(await f.host.handle({ op: 'click', args: { snapshot_id: snap.snapshot_id, ref: byName('Search').ref } })).toMatchObject({ ok: true })
+    expect(await f.host.handle({ op: 'click', conversation_id: 4, args: { snapshot_id: snap.snapshot_id, ref: byName('Search').ref } })).toMatchObject({ ok: true })
     expect(clicked).toHaveBeenCalled()
     expect(f.wc.executeJavaScriptInIsolatedWorld.mock.calls.at(-1)[2]).toBe(true)
-    await f.host.handle({ op: 'fill', args: { snapshot_id: snap.snapshot_id, ref: byName('User').ref, value: 'walker' } })
+    await f.host.handle({ op: 'fill', conversation_id: 4, args: { snapshot_id: snap.snapshot_id, ref: byName('User').ref, value: 'walker' } })
     expect((document.getElementById('u') as HTMLInputElement).value).toBe('walker')
-    await f.host.handle({ op: 'select', args: { snapshot_id: snap.snapshot_id, ref: byName('License').ref, option: 'CC-BY' } })
+    await f.host.handle({ op: 'select', conversation_id: 4, args: { snapshot_id: snap.snapshot_id, ref: byName('License').ref, option: 'CC-BY' } })
     expect((document.getElementById('s') as HTMLSelectElement).value).toBe('by')
-    const described = await f.host.handle({ op: 'describe', args: { snapshot_id: snap.snapshot_id, ref: byName('Sign in').ref } })
+    const described = await f.host.handle({ op: 'describe', conversation_id: 4, args: { snapshot_id: snap.snapshot_id, ref: byName('Sign in').ref } })
     expect(described.element).toMatchObject({ submits_form: true, form_method: 'post', form_has_password: true, is_password: false })
   })
 
@@ -250,9 +275,9 @@ describe('BrowserHost page scripts', () => {
       '<form action="/two"><input aria-label="First"><input aria-label="Second"></form>' +
       '<form method="post" action="/two-btn"><input aria-label="Name"><input aria-label="Tick" type="checkbox"><button>Go</button></form>' +
       '<input aria-label="Loose">')
-    const snap = await f.host.handle({ op: 'snapshot', args: {} })
+    const snap = await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
     const refOf = (name: string) => (snap.elements as { ref: string; name: string }[]).find((e) => e.name === name)!.ref
-    const describe = async (name: string) => (await f.host.handle({ op: 'describe', args: { snapshot_id: snap.snapshot_id, ref: refOf(name) } })).element
+    const describe = async (name: string) => (await f.host.handle({ op: 'describe', conversation_id: 4, args: { snapshot_id: snap.snapshot_id, ref: refOf(name) } })).element
     expect(await describe('User')).toMatchObject({ tag: 'input', submits_form: true, form_method: 'post', form_has_password: true })
     expect(await describe('Password')).toMatchObject({ is_password: true, submits_form: true, form_has_password: true })
     expect(await describe('Query')).toMatchObject({ submits_form: true, form_method: 'get', form_has_password: false })
@@ -268,12 +293,12 @@ describe('BrowserHost page scripts', () => {
   it('returns stale_snapshot for an old snapshot id and after the page changed', async () => {
     const f = fixture()
     await navigate(f, 'https://example.com/', PAGE)
-    const first = await f.host.handle({ op: 'snapshot', args: {} })
+    const first = await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
     const ref = (first.elements as { ref: string }[])[0].ref
-    const second = await f.host.handle({ op: 'snapshot', args: {} })
-    expect(await f.host.handle({ op: 'click', args: { snapshot_id: first.snapshot_id, ref } })).toMatchObject({ ok: false, error: 'stale_snapshot' })
+    const second = await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
+    expect(await f.host.handle({ op: 'click', conversation_id: 4, args: { snapshot_id: first.snapshot_id, ref } })).toMatchObject({ ok: false, error: 'stale_snapshot' })
     await navigate(f, 'https://example.org/', PAGE)
-    expect(await f.host.handle({ op: 'click', args: { snapshot_id: second.snapshot_id, ref } })).toMatchObject({ ok: false, error: 'stale_snapshot' })
+    expect(await f.host.handle({ op: 'click', conversation_id: 4, args: { snapshot_id: second.snapshot_id, ref } })).toMatchObject({ ok: false, error: 'stale_snapshot' })
   })
 })
 
@@ -281,22 +306,25 @@ describe('BrowserHost halt and renderer channel', () => {
   it('halt stops loading, wakes the waiting navigation and drops queued commands', async () => {
     const f = fixture()
     await navigate(f)
-    const pending = f.host.handle({ op: 'navigate', args: { url: 'https://slow.example/' } })
+    const pending = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://slow.example/' } })
     await vi.waitFor(() => expect(f.wc.loadURL).toHaveBeenCalledTimes(2))
-    expect(await f.host.invoke({ op: 'halt' })).toEqual({ halted: true })
+    expect(await f.host.invoke({ op: 'halt', conversationId: 4 })).toEqual({ halted: true })
     expect(f.http.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'post', url: 'http://127.0.0.1:9/computer-use/halt/4',
       headers: { 'X-Session-Token': 'tok', 'X-Gamachine-UI-Secret': 'secret' } }))
     expect(await pending).toMatchObject({ ok: false, error: 'halted' })
     expect(f.wc.stop).toHaveBeenCalled()
-    expect(f.onHalt).toHaveBeenCalled()
-    expect(await f.host.handle({ op: 'halt', args: {} })).toMatchObject({ ok: true })
+    expect(f.onHalt).toHaveBeenCalledWith(4)
+    expect(await f.host.handle({ op: 'halt', conversation_id: 4, args: {} })).toMatchObject({ ok: true })
     expect(f.onHalt).toHaveBeenCalledTimes(2)
   })
 
   it('halt with no active conversation does not call the backend', async () => {
     const f = fixture()
+    expect(await f.host.invoke({ op: 'halt', conversationId: 4 })).toEqual({ halted: true })
     expect(await f.host.invoke({ op: 'halt' })).toEqual({ halted: true })
     expect(f.http.request).not.toHaveBeenCalled()
+    for (const conversationId of [0, -1, 1.5, '4'])
+      expect(await f.host.invoke({ op: 'halt', conversationId })).toHaveProperty('error')
   })
 
   it('answer-card posts the decision with the UI secret and returns the backend reply', async () => {
@@ -318,23 +346,27 @@ describe('BrowserHost halt and renderer channel', () => {
   it('emits browser-live to the main window while commands run', async () => {
     const f = fixture()
     await navigate(f)
-    const payloads = f.win.webContents.send.mock.calls.filter(([channel]: [string]) => channel === 'browser-live').map(([, p]: [string, unknown]) => p)
-    expect(payloads.at(-1)).toEqual({ active: true, conversationId: 4, url: 'https://example.com/', title: 'Page', loading: false })
+    expect(livePayloads(f).at(-1)).toEqual({ active: true, conversationId: 4, url: 'https://example.com/', title: 'Page', loading: false, userControl: false })
   })
 
   it('validates bounds and visibility before touching the view', async () => {
     const f = fixture()
-    expect(await f.host.invoke({ op: 'set-bounds', bounds: { x: 1, y: 2, width: 300.4, height: 200 } })).toEqual({ bounds: { x: 1, y: 2, width: 300, height: 200 } })
+    expect(await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 1, y: 2, width: 300.4, height: 200 } })).toEqual({ bounds: { x: 1, y: 2, width: 300, height: 200 } })
     for (const bounds of [{ x: -1, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: Infinity, height: 1 }, { x: 0, y: 0, width: '5', height: 1 }, null])
-      expect(await f.host.invoke({ op: 'set-bounds', bounds })).toHaveProperty('error')
-    expect(await f.host.invoke({ op: 'visible', visible: 'yes' })).toHaveProperty('error')
-    expect(await f.host.invoke({ op: 'visible', visible: true })).toEqual({ visible: true })
+      expect(await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds })).toHaveProperty('error')
+    expect(await f.host.invoke({ op: 'set-bounds', bounds: { x: 1, y: 2, width: 3, height: 4 } })).toHaveProperty('error')
+    expect(await f.host.invoke({ op: 'visible', conversationId: 4, visible: 'yes' })).toHaveProperty('error')
+    expect(await f.host.invoke({ op: 'visible', visible: true })).toHaveProperty('error')
+    expect(await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })).toEqual({ visible: true })
     await navigate(f)
     expect(f.view.setBounds).toHaveBeenCalledWith({ x: 1, y: 2, width: 300, height: 200 })
     expect(f.view.setVisible).toHaveBeenCalledWith(true)
-    await f.host.invoke({ op: 'visible', visible: false })
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
     expect(f.view.setVisible).toHaveBeenLastCalledWith(false)
-    expect(await f.host.invoke({ op: 'status' })).toMatchObject({ active: true, visible: false })
+    expect(await f.host.invoke({ op: 'status', conversationId: 4 })).toMatchObject({ active: true, conversationId: 4, visible: false, userControl: false })
+    expect(await f.host.invoke({ op: 'status', conversationId: 5 })).toMatchObject({ active: false, conversationId: 5 })
+    for (const conversationId of [undefined, 0, -3, 2.5, '4'])
+      expect(await f.host.invoke({ op: 'status', conversationId })).toHaveProperty('error')
     expect(await f.host.invoke('halt')).toHaveProperty('error')
   })
 
@@ -371,5 +403,189 @@ describe('BrowserHost runtime report', () => {
     expect(f.http.request).toHaveBeenLastCalledWith(expect.objectContaining({ method: 'post', url: 'http://127.0.0.1:9/browser/runtime', data: { running: false, port: null, token: null } }))
     expect(f.wc.close).toHaveBeenCalled()
     expect(f.win.contentView.removeChildView).toHaveBeenCalledWith(f.view)
+  })
+})
+
+describe('BrowserHost tabs per chat', () => {
+  it('gives two chats two views on one session, each with its own snapshot ids and visibility', async () => {
+    const f = fixture()
+    await navigate(f, 'https://a.example/', '<button>A</button>', 4)
+    await navigate(f, 'https://b.example/', '<button>B</button>', 7)
+    expect(f.createView).toHaveBeenCalledTimes(2)
+    expect(new Set((f.fromPartition.mock.calls as unknown as [string][]).map(([p]) => p))).toEqual(new Set(['persist:gamachine-agent-browser']))
+    expect((f.createView.mock.calls[1] as any)[0].webPreferences.session).toBe(f.session)
+    // Hardening is session-wide and runs once.
+    expect(f.session.setPermissionRequestHandler).toHaveBeenCalledTimes(1)
+    const [a, b] = f.views
+    expect(a.webContents.loadURL).toHaveBeenCalledWith('https://a.example/')
+    expect(a.webContents.loadURL).not.toHaveBeenCalledWith('https://b.example/')
+    expect((await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })).snapshot_id).toBe('s1')
+    expect((await f.host.handle({ op: 'snapshot', conversation_id: 7, args: {} })).snapshot_id).toBe('s1')
+    expect(await f.host.invoke({ op: 'visible', conversationId: 7, visible: true })).toEqual({ visible: true })
+    expect(b.setVisible).toHaveBeenLastCalledWith(true)
+    expect(a.setVisible).toHaveBeenLastCalledWith(false)
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    expect(a.setVisible).toHaveBeenLastCalledWith(true)
+    expect(b.setVisible).toHaveBeenLastCalledWith(false)
+    expect(await f.host.invoke({ op: 'status', conversationId: 7 })).toMatchObject({ active: true, conversationId: 7, url: 'https://b.example/', visible: false })
+  })
+
+  it('halting chat A leaves chat B loading and posts only A to the backend', async () => {
+    const f = fixture()
+    await navigate(f, 'https://a.example/', '', 4)
+    await navigate(f, 'https://b.example/', '', 7)
+    const [a, b] = f.views
+    const pendingA = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://slow-a.example/' } })
+    const pendingB = f.host.handle({ op: 'navigate', conversation_id: 7, args: { url: 'https://slow-b.example/' } })
+    await vi.waitFor(() => expect(b.webContents.loadURL).toHaveBeenCalledWith('https://slow-b.example/'))
+    await vi.waitFor(() => expect(a.webContents.loadURL).toHaveBeenCalledWith('https://slow-a.example/'))
+    f.http.request.mockClear()
+    expect(await f.host.invoke({ op: 'halt', conversationId: 4 })).toEqual({ halted: true })
+    expect(await pendingA).toMatchObject({ ok: false, error: 'halted' })
+    expect(f.onHalt).toHaveBeenLastCalledWith(4)
+    expect(a.webContents.stop).toHaveBeenCalled()
+    expect(b.webContents.stop).not.toHaveBeenCalled()
+    expect(f.http.request.mock.calls.map(([c]: [any]) => c.url)).toEqual(['http://127.0.0.1:9/computer-use/halt/4'])
+    b.webContents.finish('https://slow-b.example/')
+    expect(await pendingB).toMatchObject({ ok: true, url: 'https://slow-b.example/' })
+  })
+
+  it('host.halt() without an id stops every tab the agent used', async () => {
+    const f = fixture()
+    await navigate(f, 'https://a.example/', '', 4)
+    await navigate(f, 'https://b.example/', '', 7)
+    await f.host.invoke({ op: 'open', conversationId: 9 })
+    f.http.request.mockClear()
+    f.host.halt()
+    await vi.waitFor(() => expect(f.http.request).toHaveBeenCalledTimes(2))
+    expect(f.http.request.mock.calls.map(([c]: [any]) => c.url).sort()).toEqual(['http://127.0.0.1:9/computer-use/halt/4', 'http://127.0.0.1:9/computer-use/halt/7'])
+    expect(f.onHalt).toHaveBeenLastCalledWith(null)
+  })
+
+  it('caps live tabs, destroying the least recently used hidden one', async () => {
+    const f = fixture()
+    expect(MAX_TABS).toBe(8)
+    await f.host.invoke({ op: 'open', conversationId: 1 })
+    // Chat 1 stays shown and is the oldest; agent commands do not change what is shown.
+    for (let id = 2; id <= 9; id++) await f.host.handle({ op: 'scroll', conversation_id: id, args: { direction: 'down' } })
+    expect(f.createView).toHaveBeenCalledTimes(9)
+    const two = f.views[1]
+    expect(two.webContents.close).toHaveBeenCalled()
+    expect(f.win.contentView.removeChildView).toHaveBeenCalledWith(two)
+    expect(livePayloads(f)).toContainEqual(expect.objectContaining({ active: false, conversationId: 2 }))
+    expect(f.views[0].webContents.close).not.toHaveBeenCalled()
+    expect(await f.host.invoke({ op: 'status', conversationId: 1 })).toMatchObject({ active: true, visible: true })
+    expect(await f.host.invoke({ op: 'status', conversationId: 2 })).toMatchObject({ active: false, conversationId: 2 })
+    for (let id = 3; id <= 9; id++) expect((await f.host.invoke({ op: 'status', conversationId: id }) as any).active).toBe(true)
+  })
+})
+
+describe('BrowserHost user operations', () => {
+  it('open creates and shows the chat tab and emits it as active; close emits it inactive', async () => {
+    const f = fixture()
+    expect(await f.host.invoke({ op: 'open', conversationId: 3 })).toMatchObject({ active: true, conversationId: 3, userControl: false })
+    expect(f.createView).toHaveBeenCalledTimes(1)
+    expect(f.view.setVisible).toHaveBeenLastCalledWith(true)
+    expect(f.wc.loadURL).not.toHaveBeenCalled()
+    expect(livePayloads(f).at(-1)).toMatchObject({ active: true, conversationId: 3 })
+    expect(await f.host.invoke({ op: 'open', conversationId: 3, url: 'https://example.com/' })).toMatchObject({ active: true })
+    expect(f.createView).toHaveBeenCalledTimes(1)
+    expect(f.wc.loadURL).toHaveBeenCalledWith('https://example.com/')
+    expect(await f.host.invoke({ op: 'close', conversationId: 3 })).toMatchObject({ active: false, conversationId: 3 })
+    expect(f.wc.close).toHaveBeenCalled()
+    expect(livePayloads(f).at(-1)).toEqual({ active: false, conversationId: 3, url: '', title: '', loading: false, userControl: false })
+  })
+
+  it('navigate applies the agent URL policy and needs no card', async () => {
+    const f = fixture()
+    for (const url of ['file:///etc/passwd', 'http://127.0.0.1:8000/', 'javascript:alert(1)', 'https://internal.corp/', '', 5]) {
+      expect(await f.host.invoke({ op: 'navigate', conversationId: 3, url })).toEqual({ error: 'url_not_allowed' })
+      expect(await f.host.invoke({ op: 'open', conversationId: 3, url })).toEqual({ error: 'url_not_allowed' })
+    }
+    expect(f.createView).not.toHaveBeenCalled()
+    expect(await f.host.invoke({ op: 'navigate', conversationId: 3, url: 'https://example.com/' })).toMatchObject({ active: true, conversationId: 3 })
+    expect(f.wc.loadURL).toHaveBeenCalledWith('https://example.com/')
+    expect(livePayloads(f).at(-1)).toMatchObject({ active: true, conversationId: 3 })
+    expect(f.http.request).not.toHaveBeenCalled()
+    expect(await f.host.invoke({ op: 'navigate', url: 'https://example.com/' })).toHaveProperty('error')
+  })
+
+  it('back, forward and reload act on the chat tab only', async () => {
+    const f = fixture()
+    expect(await f.host.invoke({ op: 'back', conversationId: 3 })).toEqual({ error: 'no_tab' })
+    await f.host.invoke({ op: 'open', conversationId: 3 })
+    expect(await f.host.invoke({ op: 'back', conversationId: 3 })).toEqual({ error: 'no_history' })
+    f.wc.navigationHistory.canGoBack = () => true
+    expect(await f.host.invoke({ op: 'back', conversationId: 3 })).toMatchObject({ active: true })
+    expect(f.wc.navigationHistory.goBack).toHaveBeenCalled()
+    expect(await f.host.invoke({ op: 'forward', conversationId: 3 })).toEqual({ error: 'no_history' })
+    await f.host.invoke({ op: 'reload', conversationId: 3 })
+    expect(f.wc.reload).toHaveBeenCalled()
+  })
+
+  it('user input takes the tab over and agent commands get user_control until release', async () => {
+    const f = fixture()
+    await navigate(f)
+    f.wc.emit('input-event', {}, { type: 'mouseMove' })
+    expect((await f.host.invoke({ op: 'status', conversationId: 4 }) as any).userControl).toBe(false)
+    f.wc.emit('input-event', {}, { type: 'mouseDown' })
+    expect(livePayloads(f).at(-1)).toMatchObject({ conversationId: 4, userControl: true })
+    f.wc.loadURL.mockClear()
+    f.wc.executeJavaScriptInIsolatedWorld.mockClear()
+    expect(await f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://example.org/' } }))
+      .toEqual({ ok: false, error: 'user_control', url: 'https://example.com/', title: 'Page' })
+    expect(await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })).toMatchObject({ ok: false, error: 'user_control' })
+    expect(f.host.userControlReply({ op: 'click', conversation_id: 4 })).toMatchObject({ ok: false, error: 'user_control' })
+    expect(f.host.userControlReply({ op: 'halt', conversation_id: 4 })).toBeNull()
+    expect(f.host.userControlReply({ op: 'click', conversation_id: 7 })).toBeNull()
+    expect(f.wc.loadURL).not.toHaveBeenCalled()
+    expect(f.wc.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled()
+    expect(await f.host.invoke({ op: 'release', conversationId: 4 })).toMatchObject({ userControl: false })
+    expect(livePayloads(f).at(-1)).toMatchObject({ conversationId: 4, userControl: false })
+    expect(await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })).toMatchObject({ ok: true })
+    f.wc.emit('before-input-event', {}, { type: 'keyDown' })
+    expect((await f.host.invoke({ op: 'status', conversationId: 4 }) as any).userControl).toBe(true)
+    await f.host.invoke({ op: 'release', conversationId: 4 })
+    expect(await f.host.invoke({ op: 'take-over', conversationId: 4 })).toMatchObject({ userControl: true })
+    expect(await f.host.invoke({ op: 'take-over', conversationId: 5 })).toEqual({ error: 'no_tab' })
+  })
+
+  it("the agent's own key presses do not count as the user taking over", async () => {
+    const f = fixture()
+    await navigate(f)
+    f.wc.sendInputEvent.mockImplementation((e: { type: string }) => {
+      f.wc.emit('before-input-event', {}, { type: e.type })
+      f.wc.emit('input-event', {}, { type: e.type === 'keyDown' ? 'rawKeyDown' : e.type })
+    })
+    expect(await f.host.handle({ op: 'press', conversation_id: 4, args: { key: 'Enter' } })).toMatchObject({ ok: true })
+    expect(f.wc.focus).toHaveBeenCalled()
+    expect((await f.host.invoke({ op: 'status', conversationId: 4 }) as any).userControl).toBe(false)
+    f.clock.now += 5_000
+    f.wc.emit('before-input-event', {}, { type: 'keyDown' })
+    expect((await f.host.invoke({ op: 'status', conversationId: 4 }) as any).userControl).toBe(true)
+    f.wc.focus.mockClear()
+    expect(await f.host.handle({ op: 'press', conversation_id: 4, args: { key: 'Tab' } })).toMatchObject({ ok: false, error: 'user_control' })
+    expect(f.wc.focus).not.toHaveBeenCalled()
+  })
+
+  it('clear-browsing-data clears the session, closes every tab and reports a runtime change', async () => {
+    const f = fixture()
+    f.host.setRuntime({ port: 4321, token: 'tkn' })
+    await navigate(f, 'https://a.example/', '', 4)
+    await f.host.invoke({ op: 'open', conversationId: 7 })
+    f.http.request.mockClear()
+    expect(await f.host.invoke({ op: 'clear-browsing-data' })).toEqual({ cleared: true })
+    expect(f.session.clearStorageData).toHaveBeenCalled()
+    expect(f.session.clearCache).toHaveBeenCalled()
+    expect(f.views[0].webContents.close).toHaveBeenCalled()
+    expect(f.views[1].webContents.close).toHaveBeenCalled()
+    expect(livePayloads(f)).toContainEqual(expect.objectContaining({ active: false, conversationId: 4 }))
+    expect(livePayloads(f)).toContainEqual(expect.objectContaining({ active: false, conversationId: 7 }))
+    expect(await f.host.invoke({ op: 'status', conversationId: 4 })).toMatchObject({ active: false })
+    const posts = f.http.request.mock.calls.map(([c]: [any]) => c).filter((c: any) => c.url.endsWith('/browser/runtime'))
+    expect(posts.map((c: any) => c.data)).toEqual([{ running: false, port: null, token: null }, { running: true, port: 4321, token: 'tkn' }])
+    expect(posts[0].headers).toEqual({ 'X-Session-Token': 'tok', 'X-Gamachine-UI-Secret': 'secret' })
+    f.session.clearCache.mockRejectedValueOnce(new Error('disk'))
+    expect(await f.host.invoke({ op: 'clear-browsing-data' })).toEqual({ error: 'Clearing browsing data failed.' })
   })
 })

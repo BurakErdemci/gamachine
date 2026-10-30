@@ -25,7 +25,8 @@ function send(port: number, options: { method?: string; path?: string; auth?: st
   })
 }
 
-const cmd = (op: string, args: Record<string, unknown> = {}) => JSON.stringify({ op, conversation_id: 1, args })
+const cmd = (op: string, args: Record<string, unknown> = {}, conversationId = 1) => JSON.stringify({ op, conversation_id: conversationId, args })
+const tick = () => new Promise((r) => setTimeout(r, 50))
 
 describe('browser command server', () => {
   it('runs authorized commands and refuses everything else before the handler', async () => {
@@ -117,6 +118,93 @@ describe('browser command server', () => {
     release()
     await nav
     expect((await queued).body.error).toBe('halted')
+    expect(ran).toEqual(['navigate'])
+  })
+
+  it('each conversation has its own queue: a slow command in one does not hold up another', async () => {
+    const log: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    server = await startCommandServer({
+      token: TOKEN,
+      handle: async (c) => {
+        log.push(`start ${c.conversation_id} ${c.op}`)
+        if (c.op === 'navigate') await gate
+        log.push(`end ${c.conversation_id} ${c.op}`)
+        return { ok: true, url: '', title: '' }
+      },
+    })
+    const slow = send(server.port, { body: cmd('navigate', {}, 1) })
+    await tick()
+    const queuedA = send(server.port, { body: cmd('snapshot', {}, 1) })
+    const other = await send(server.port, { body: cmd('snapshot', {}, 2) })
+    expect(other.body.ok).toBe(true)
+    expect(log).toEqual(['start 1 navigate', 'start 2 snapshot', 'end 2 snapshot'])
+    release()
+    await Promise.all([slow, queuedA])
+    expect(log.slice(3)).toEqual(['end 1 navigate', 'start 1 snapshot', 'end 1 snapshot'])
+  })
+
+  it('halting conversation A drops only A\'s queued commands; B\'s queued command still runs', async () => {
+    const ran: string[] = []
+    const gates: Record<number, () => void> = {}
+    server = await startCommandServer({
+      token: TOKEN,
+      immediate: (c) => c.op === 'halt',
+      handle: async (c) => {
+        ran.push(`${c.conversation_id} ${c.op}`)
+        if (c.op === 'navigate') await new Promise<void>((r) => { gates[c.conversation_id as number] = r })
+        if (c.op === 'halt') gates[c.conversation_id as number]?.()
+        return { ok: true, url: '', title: '' }
+      },
+    })
+    const navA = send(server.port, { body: cmd('navigate', {}, 1) })
+    const navB = send(server.port, { body: cmd('navigate', {}, 2) })
+    await tick()
+    const queuedA = send(server.port, { body: cmd('click', {}, 1) })
+    const queuedB = send(server.port, { body: cmd('click', {}, 2) })
+    await tick()
+    expect((await send(server.port, { body: cmd('halt', {}, 1) })).body.ok).toBe(true)
+    await navA
+    expect((await queuedA).body).toEqual({ ok: false, error: 'halted', url: '', title: '' })
+    gates[2]()
+    await navB
+    expect((await queuedB).body.ok).toBe(true)
+    expect(ran).toEqual(['1 navigate', '2 navigate', '1 halt', '2 click'])
+  })
+
+  it('cancelPending with an id drops only that conversation\'s queue', async () => {
+    const gates: (() => void)[] = []
+    server = await startCommandServer({ token: TOKEN, handle: async (c) => {
+      if (c.op === 'navigate') await new Promise<void>((r) => gates.push(r))
+      return { ok: true }
+    } })
+    const navs = [send(server.port, { body: cmd('navigate', {}, 1) }), send(server.port, { body: cmd('navigate', {}, 2) })]
+    await tick()
+    const queuedA = send(server.port, { body: cmd('fill', {}, 1) })
+    const queuedB = send(server.port, { body: cmd('fill', {}, 2) })
+    await tick()
+    server.cancelPending(1)
+    gates.forEach((g) => g())
+    await Promise.all(navs)
+    expect((await queuedA).body.error).toBe('halted')
+    expect((await queuedB).body.ok).toBe(true)
+  })
+
+  it('a refused command is answered at once without waiting in the queue', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const ran: string[] = []
+    server = await startCommandServer({
+      token: TOKEN,
+      refuse: (c) => (c.op === 'click' ? { ok: false, error: 'user_control', url: '', title: '' } : null),
+      handle: async (c) => { ran.push(c.op); if (c.op === 'navigate') await gate; return { ok: true } },
+    })
+    const nav = send(server.port, { body: cmd('navigate') })
+    await tick()
+    expect((await send(server.port, { body: cmd('click') })).body).toEqual({ ok: false, error: 'user_control', url: '', title: '' })
+    release()
+    await nav
     expect(ran).toEqual(['navigate'])
   })
 })
