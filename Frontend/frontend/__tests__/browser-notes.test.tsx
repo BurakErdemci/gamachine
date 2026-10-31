@@ -188,14 +188,20 @@ function fakeHostFixture(platform = 'win32') {
   const wc = fakeWc()
   const boxWc = fakeWc()
   Object.assign(wc, {
-    // The page script's answers; tests replace them.
+    // The page script's answers; tests replace them. Like the page, each reply is stamped with the document and a seq
+    // taken when the page answers (a test's own docId, seq or cancelled wins).
     pickState: () => pickState({ picking: null, rect: null }),
+    docId: 'd1',
+    replySeq: 0,
     image: { isEmpty: () => false, getSize: () => ({ width: 800, height: 600 }), resize: vi.fn(function (this: any, size: any) { return { ...this, size } }), toJPEG: vi.fn(() => Buffer.from('jpeg-bytes')) },
     capturePage: vi.fn(async () => wc.image),
     executeJavaScriptInIsolatedWorld: vi.fn(async (_w: number, scripts: { code: string }[]) => {
       const code = scripts[0].code
-      if (code.includes('.takePick(')) return wc.pickState()
-      if (code.includes('.annotateOn(')) return { active: true }
+      if (code.includes('.takePick(')) {
+        const stamp = { docId: wc.docId, seq: ++wc.replySeq, cancelled: 0 }
+        return { ...stamp, ...await wc.pickState() }
+      }
+      if (code.includes('.annotateOn(')) return { active: true, docId: wc.docId }
       if (code.includes('.commitPin(')) return wc.commitResult()
       return {}
     }),
@@ -420,7 +426,7 @@ describe('host annotate ops', () => {
     expect(f.boxView.setVisible).toHaveBeenLastCalledWith(true)
     expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("yarım yorum")')
     // the page dropped the target (Esc in the page): box and draft are gone
-    f.wc.pickState = () => pickState({ picking: null, rect: null, scroll: [0, 120] })
+    f.wc.pickState = () => pickState({ picking: null, rect: null, scroll: [0, 120], cancelled: 1 })
     await f.poll()
     expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
     f.wc.pickState = () => pickState({ picking: 'p1', scroll: [0, 120] })
@@ -787,7 +793,7 @@ describe('page script', () => {
   const start = (html: string) => {
     document.body.innerHTML = html
     ;(0, eval)(PAGE_LIB)
-    expect(lib().annotateOn()).toEqual({ active: true })
+    expect(lib().annotateOn()).toMatchObject({ active: true, docId: expect.any(String) })
   }
   const at = (el: Element | null) => { (document as any).elementFromPoint = () => el }
   const ptr = (target: Element | Document | Window, type: string, x: number, y: number, buttons = 0) =>
@@ -821,9 +827,10 @@ describe('page script', () => {
     expect(PAGE_LIB).not.toMatch(/createElement\(\s*['"](input|textarea)['"]/)
   })
 
-  it('a click records a pending target the host takes once, with the element description and viewport', () => {
+  it('T8 every reply is the whole state: the document, a rising seq, the outlined pick with its description and the last cancel', () => {
     start(BUTTON)
-    expect(pick()).toMatchObject({ active: true, picking: null, pick: null, rect: null })
+    const empty = pick()
+    expect(empty).toMatchObject({ active: true, picking: null, pick: null, rect: null, cancelled: 0, docId: expect.any(String) })
     click(document.getElementById('buy')!, 20, 30)
     const first = pick()
     expect(first.pick).toMatchObject({
@@ -833,8 +840,12 @@ describe('page script', () => {
     expect(first.pick).not.toHaveProperty('comment')
     expect(first.picking).toBe(first.pick.id)
     expect(first.viewport).toEqual({ width: window.innerWidth, height: window.innerHeight })
+    expect(first.docId).toBe(empty.docId)
+    expect(first.seq).toBeGreaterThan(empty.seq)
+    // the same state again, so a lost reply is made up by the next one
     const again = pick()
-    expect(again.pick).toBeNull()
+    expect(again.seq).toBeGreaterThan(first.seq)
+    expect(again.pick).toEqual(first.pick)
     expect(again.picking).toBe(first.pick.id)
     expect(again.rect).toEqual({ x: 10, y: 20, width: 100, height: 30 })
     // the pending target is outlined while the host shows the box
@@ -940,15 +951,57 @@ describe('page script', () => {
   it('T7 a newer click does not lose the pick the host keeps open', () => {
     start('<button id="a" data-r="10,20,100,30">Alpha</button><button id="b" data-r="10,80,100,30">Beta</button>')
     click(document.getElementById('a')!, 20, 30)
-    const a = pick().pick.id
+    const { pick: { id: a }, docId } = pick()
     click(document.getElementById('b')!, 20, 90)
     const b = pick().pick.id
     expect(b).not.toBe(a)
-    expect(lib().keepPick({ pickId: a })).toEqual({ ok: true })
-    expect(pick()).toMatchObject({ picking: a, pick: null })
-    expect(lib().keepPick({ pickId: b })).toEqual({ error: 'no_pick' })
+    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
+    expect(pick()).toMatchObject({ picking: a, pick: { id: a } })
+    // a command for another document does nothing
+    expect(lib().keepPick({ pickId: b, docId: 'other' })).toEqual({ error: 'stale_document' })
+    expect(pick().picking).toBe(a)
     expect(lib().commitPin({ pickId: a, n: 1 })).toEqual({ ok: true })
     expect(pick()).toMatchObject({ picking: null, pick: null })
+  })
+
+  it('T8 eviction never drops the open pick, also on a rollback', () => {
+    start('<button id="a" data-r="10,20,100,30">Alpha</button><button id="b" data-r="10,80,100,30">Beta</button>')
+    click(document.getElementById('a')!, 20, 30)
+    const { pick: { id: a }, docId } = pick()
+    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
+    const later: string[] = []
+    for (let i = 0; i < 25; i++) { click(document.getElementById('b')!, 20, 90); later.push(pick().pick.id) }
+    // the open pick still has its record; only the oldest other ones went
+    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
+    expect(lib().keepPick({ pickId: later[0], docId })).toEqual({ error: 'no_pick' })
+    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
+    expect(lib().commitPin({ pickId: a, n: 1 })).toEqual({ ok: true })
+    // the note could not be delivered: the pick comes back as the open one and the bound still holds
+    expect(lib().uncommitPin({ pickId: a })).toEqual({ ok: true })
+    for (let i = 0; i < 25; i++) { click(document.getElementById('b')!, 20, 90); later.push(pick().pick.id) }
+    const committed = [a, ...later].filter((id, n) => lib().commitPin({ pickId: id, n: n + 2 }).ok)
+    expect(committed[0]).toBe(a)
+    expect(committed).toHaveLength(20)
+  })
+
+  it('T8 Esc after a delayed outline command wins', () => {
+    start('<button id="a" data-r="10,20,100,30">Alpha</button><button id="b" data-r="10,80,100,30">Beta</button>')
+    click(document.getElementById('a')!, 20, 30)
+    const { pick: { id: a }, docId } = pick()
+    click(document.getElementById('b')!, 20, 90)
+    const before = pick().cancelled
+    // the host asked for "a" before the Esc, the page runs the command after it
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
+    const state = pick()
+    expect(state.picking).toBeNull()
+    expect(state.cancelled).toBeGreaterThan(before)
+    // a pick proposed after the Esc is outlined again by the same command
+    click(document.getElementById('a')!, 20, 30)
+    const c = pick().pick.id
+    click(document.getElementById('b')!, 20, 90)
+    expect(lib().keepPick({ pickId: c, docId })).toEqual({ ok: true })
+    expect(pick().picking).toBe(c)
   })
 
   it('T7 nested-editor text is absent from names via label for, aria-labelledby, own text and a wrapping label', () => {
@@ -964,6 +1017,30 @@ describe('page script', () => {
     }
     expect(JSON.stringify(names)).not.toContain('PRIVATE')
     expect(names.slice(-4)).toEqual(['Ad', 'Kaydet', 'Git', 'Notlar'])
+  })
+
+  it('T8 spinbutton text is absent from names', () => {
+    start('<label for="f">Tutar <span role="spinbutton" tabindex="0">PRIVATE_SPIN</span></label><input id="f">'
+      + '<span id="ref">Aktar <span role="spinbutton" tabindex="0">PRIVATE_SPIN</span></span><button id="b" aria-labelledby="ref">Gönder</button>'
+      + '<div id="d" role="button" tabindex="0">Bakiye <span role="SpinButton" tabindex="0">PRIVATE_SPIN</span></div>'
+      + '<label>Sarılı <input type="number" value="4242"><span role="spinbutton">PRIVATE_SPIN</span></label>'
+      + '<div id="n" role="spinbutton" tabindex="0">PRIVATE_SPIN</div>')
+    const names = lib().snapshot({ snapshotId: 't8s', maxChars: 4000 }).elements.map((e: any) => e.name)
+    for (const id of ['f', 'b', 'd', 'n']) {
+      document.getElementById(id)!.focus()
+      names.push(lib().describe({ focused: true }).element.name)
+    }
+    expect(JSON.stringify(names)).not.toMatch(/PRIVATE_SPIN|4242/)
+    expect(names.slice(-4)).toEqual(['Tutar', 'Aktar', 'Bakiye', ''])
+  })
+
+  it('T8 a wrapping label keeps inline text together ("E-mail"), and blocks stay apart', () => {
+    start('<label><b>E</b>-mail <input id="m"></label><label><span>Pass</span>word <input id="p" type="password"></label>'
+      + '<button id="b"><div>Sepete</div><div>ekle</div></button>')
+    for (const id of ['m', 'p', 'b']) {
+      document.getElementById(id)!.focus()
+      expect(lib().describe({ focused: true }).element.name).toBe({ m: 'E-mail', p: 'Password', b: 'Sepete ekle' }[id])
+    }
   })
 
   it('T7 select and combobox names are unchanged', () => {
@@ -984,7 +1061,7 @@ describe('page script', () => {
     expect(lib().uncommitPin({ pickId: 'other' })).toEqual({ error: 'no_note' })
     expect(lib().uncommitPin({ pickId: id })).toEqual({ ok: true })
     expect(roots[0].querySelectorAll('.pin')).toHaveLength(0)
-    expect(pick()).toMatchObject({ picking: id, pick: null })
+    expect(pick()).toMatchObject({ picking: id, pick: { id } })
     expect(lib().commitPin({ pickId: id, n: 7 })).toEqual({ ok: true })
     expect(roots[0].querySelector('.pin')!.textContent).toBe('7')
   })
@@ -1060,7 +1137,7 @@ describe('page script', () => {
     expect(document.querySelector('[data-gm-annotate]')).not.toBeNull()
     expect((roots[0].querySelector('.hl') as HTMLElement).style.display).toBe('none')
     lib().annotateOn()
-    expect(pick()).toMatchObject({ picking: id, pick: null })
+    expect(pick()).toMatchObject({ picking: id, pick: { id } })
     expect((roots[0].querySelector('.hl') as HTMLElement).style.display).toBe('block')
     expect(lib().dropPick({ pickId: id })).toEqual({ ok: true })
     expect(pick().picking).toBeNull()
@@ -1579,9 +1656,9 @@ describe('T6 host races', () => {
     f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
     await f.poll()
     expect(f.pageCalls('keepPick').at(-1)).toContain('"pickId":"p1"')
-    // the page took p2 as reported: later polls carry no fresh pick
-    f.wc.pickState = () => pickState({ picking: 'p2', pick: null })
+    // the page has not applied it yet: the same state comes again and the host asks again
     await f.poll()
+    expect(f.pageCalls('keepPick')).toHaveLength(3)
     f.wc.pickState = () => pickState()
     await f.poll()
     const pick = (f.host as any).tabs.get(1).pick
@@ -1590,23 +1667,99 @@ describe('T6 host races', () => {
     expect((f.host as any).boxTab).toBe((f.host as any).tabs.get(1))
   })
 
-  it('T7 out-of-order poll replies keep the pick', async () => {
+  /** `count` polls whose page answers are held; `reply(i, state)` answers the i-th of them (0-based) whenever the test wants. */
+  async function holdReplies(f: ReturnType<typeof fakeHostFixture>, count: number) {
+    const answers: ((v: unknown) => void)[] = []
+    f.wc.pickState = () => new Promise(resolve => { answers.push(resolve) })
+    for (let i = 0; i < count; i++) {
+      await f.poll()
+      // a hide/show schedules the next poll while the earlier one is still waiting
+      await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+      await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    }
+    return async (i: number, state: Record<string, unknown>) => { answers[i](state); await settle() }
+  }
+  async function heldReplies(count: number) {
     const f = fakeHostFixture()
     await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
     await openPage(f)
     await annotate(f, true)
-    let answerOld: (v: unknown) => void = () => {}
-    f.wc.pickState = () => new Promise(resolve => { answerOld = resolve })
+    return { f, reply: await holdReplies(f, count), tab: () => (f.host as any).tabs.get(1) }
+  }
+  const P2 = { ...PICK, id: 'p2', name: 'İkinci' }
+
+  it('T8 reordered or lost replies converge on the page state', async () => {
+    // newest first, the older reply after it: the older one is dropped
+    const a = await heldReplies(2)
+    await a.reply(1, pickState({ picking: 'p2', pick: P2 }))
+    await a.reply(0, pickState({ pick: PICK }))
+    expect(a.tab().pick.data.id).toBe('p2')
+    // a lost reply (never answered) changes nothing: the next one carries the same state
+    const b = await heldReplies(2)
+    await b.reply(1, pickState({ pick: PICK }))
+    expect(b.tab().pick.data.id).toBe('p1')
+    await vi.waitFor(() => expect(b.f.boxView.setVisible).toHaveBeenLastCalledWith(true))
+    // the page moved to p2 in between: the host follows once a reply says so, in any order
+    const c = await heldReplies(3)
+    await c.reply(2, pickState({ picking: 'p2', pick: P2 }))
+    await c.reply(0, pickState({ pick: PICK }))
+    await c.reply(1, pickState({ pick: PICK }))
+    expect(c.tab().pick.data.id).toBe('p2')
+  })
+
+  it('T8 a draft survives any reply order', async () => {
+    const orders = [[0, 1, 2], [2, 1, 0], [1, 0, 2], [0, 2, 1]]
+    for (const order of orders) {
+      const f = fakeHostFixture()
+      await pickTarget(f)
+      boxSays(f, { t: 'draft', text: 'KEEP ME' })
+      // three later replies: the page outlined newer clicks, then nothing (no Esc); they arrive in this order
+      const reply = await holdReplies(f, 3)
+      const states = [pickState({ picking: 'p2', pick: P2 }), pickState({ picking: 'p3', pick: { ...PICK, id: 'p3' } }), pickState({ picking: null, rect: null })]
+      for (const i of order) await reply(i, states[i])
+      expect((f.host as any).tabs.get(1).pick, String(order)).toMatchObject({ data: { id: 'p1' }, draft: 'KEEP ME' })
+      expect(f.pageCalls('keepPick').at(-1)).toContain('"pickId":"p1"')
+    }
+  })
+
+  it('T8 a reply from an earlier document is ignored', async () => {
+    const { f, reply, tab } = await heldReplies(1)
+    f.wc.emit('did-navigate', {}, 'https://example.com/next')
+    f.wc.docId = 'd2'
+    f.wc.pickState = () => pickState({ picking: null, rect: null })
+    await annotate(f, true)
+    await reply(0, { ...pickState({ pick: PICK }), docId: 'd1', seq: 99 })
+    expect(tab().pick).toBeNull()
+    expect(f.boxWc.executeJavaScript).not.toHaveBeenCalled()
+    // the new document's own state still counts, its seq starting again
+    f.wc.replySeq = 0
+    f.wc.pickState = () => pickState({ picking: 'p2', pick: P2 })
     await f.poll()
-    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
-    // the older poll carries the only report of p1; the newer one already sees it outlined
-    f.wc.pickState = () => pickState({ picking: 'p1', pick: null })
+    expect(tab().pick.data.id).toBe('p2')
+  })
+
+  it('T8 Esc in the page clears the open pick and its draft, unless the pick is being saved', async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    boxSays(f, { t: 'draft', text: 'KEEP ME' })
+    f.wc.pickState = () => pickState({ picking: null, rect: null, cancelled: 3 })
     await f.poll()
-    answerOld(pickState({ pick: PICK }))
-    await settle()
-    expect((f.host as any).tabs.get(1).pick?.data.id).toBe('p1')
-    await vi.waitFor(() => expect(f.boxView.setVisible).toHaveBeenLastCalledWith(true))
+    expect((f.host as any).tabs.get(1).pick).toBeNull()
+    expect(f.pageCalls('dropPick').at(-1)).toContain('"pickId":"p1"')
+    // a save on its way: the cancel is seen but the note still goes out
+    const g = fakeHostFixture()
+    await pickTarget(g)
+    let commit: (v: unknown) => void = () => {}
+    const base = g.wc.executeJavaScriptInIsolatedWorld.getMockImplementation()!
+    g.wc.executeJavaScriptInIsolatedWorld.mockImplementation((w: number, scripts: { code: string }[]) =>
+      (scripts[0].code.includes('.commitPin(') ? new Promise(resolve => { commit = resolve }) : base(w, scripts)))
+    boxSays(g, { t: 'submit', text: 'gitsin' })
+    await vi.waitFor(() => expect(g.pageCalls('commitPin')).toHaveLength(1))
+    g.wc.pickState = () => pickState({ picking: null, rect: null, cancelled: 3 })
+    await g.poll()
+    commit({ ok: true })
+    await vi.waitFor(() => expect(g.sent('browser-notes')).toHaveLength(1))
+    expect(g.pageCalls('dropPick')).toHaveLength(0)
   })
 
   it('T7 a late reply does not bring back a pick the page dropped', async () => {

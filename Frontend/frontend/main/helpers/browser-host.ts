@@ -155,18 +155,15 @@ export const PAGE_LIB = String.raw`(() => {
   };
   // A referenced label that is a field, or sits inside one (an editor), is a person's own text: it is skipped.
   const refName = (n, read) => (n && !isField(n) ? read(n) : '');
-  // Text inside anything typed into (or a select's chosen option) is never part of a name, wherever the name is read from;
-  // a select's or combobox's own text still names it, as before.
-  const TYPED = 'input, textarea, [contenteditable]:not([contenteditable="false" i]), [role~="textbox" i], [role~="searchbox" i], [aria-multiline="true" i]';
-  const VALUE_TEXT = TYPED + ', select';
-  const nameText = (n) => (n.querySelector(VALUE_TEXT) ? textOf(n, 120, VALUE_TEXT + ', script, style, noscript, template') : n.innerText);
+  // Text inside anything typed into is never part of a name, wherever the name is read from; a select's or combobox's own text still names it.
+  const nameText = (n) => textOf(n, 120, EDITABLE + ', script, style, noscript, template');
   const nameOf = (el) => {
     const by = el.getAttribute('aria-labelledby');
     const byText = by ? by.split(/\s+/).map((id) => refName(document.getElementById(id), nameText)).join(' ') : '';
     const labels = el.labels && el.labels.length ? Array.from(el.labels).map((l) => refName(l, nameText)).join(' ') : '';
     const img = el.querySelector ? el.querySelector('img[alt]') : null;
     const buttonValue = tag(el) === 'input' && BUTTON_TYPES.includes(inputType(el)) ? el.value : '';
-    const typed = el.isContentEditable || !!(el.closest && el.closest(TYPED));
+    const typed = el.isContentEditable || !!(el.closest && el.closest(EDITABLE));
     return clean(el.getAttribute('aria-label') || byText || labels || buttonValue || (typed ? '' : nameText(el)) ||
       el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || (img ? img.alt : ''), 120);
   };
@@ -205,7 +202,8 @@ export const PAGE_LIB = String.raw`(() => {
   const NOTE_AREA_CHARS = 500;
   const DRAG_PX = 6;
   // Text a person typed or chose never leaves the page: every place that reads text skips fields and editors (any contenteditable value except "false", in any case; a role attribute is a token list, so one field token anywhere in it counts).
-  const FIELD_SELECTOR = 'input, textarea, select, option, [contenteditable]:not([contenteditable="false" i]), [role~="textbox" i], [role~="searchbox" i], [role~="combobox" i], [role~="spinbutton" i], [aria-multiline="true" i]';
+  const EDITABLE = 'input, textarea, [contenteditable]:not([contenteditable="false" i]), [role~="textbox" i], [role~="searchbox" i], [role~="spinbutton" i], [aria-multiline="true" i]';
+  const FIELD_SELECTOR = EDITABLE + ', select, option, [role~="combobox" i]';
   const SKIPPED_TEXT = FIELD_SELECTOR + ', script, style, noscript, template';
   const isField = (el) => !!el.isContentEditable || !!(el.closest && el.closest(FIELD_SELECTOR));
   const isSkipped = (el) => !!el.isContentEditable || !!el.closest(SKIPPED_TEXT);
@@ -229,11 +227,15 @@ export const PAGE_LIB = String.raw`(() => {
     let visited = 0;
     const walk = (node, depth) => {
       if (out.length >= max || visited++ > 3000 || depth > 80) return;
-      if (node.nodeType === 3) { out += node.nodeValue + ' '; return; }
+      if (node.nodeType === 3) { out += node.nodeValue; return; }
       if (node.nodeType !== 1 || node.isContentEditable || node.matches(skip)) return;
       const st = getComputedStyle(node);
       if (st.display === 'none' || st.visibility === 'hidden') return;
+      // Inline text runs on as in innerText ("E-mail", not "E -mail"); a block or a line break separates.
+      const gap = node.tagName === 'BR' || !st.display.startsWith('inline') ? ' ' : '';
+      out += gap;
       for (const child of node.childNodes) walk(child, depth + 1);
+      out += gap;
     };
     walk(root, 0);
     return clean(out, max);
@@ -284,13 +286,18 @@ export const PAGE_LIB = String.raw`(() => {
     }
     return clean(out, NOTE_AREA_CHARS);
   };
-  // saved: committed notes (frame and pin drawn); pending: the outlined pick; picks: every pick the host has not settled yet,
-  // so the one whose box holds a draft can be restored after a newer click (keepPick).
+  // saved: committed notes (frame and pin drawn); pending: the outlined pick; held: the pick the host keeps open (keepPick);
+  // picks: records the host may still need, the oldest other than held and pending going past MAX_PICKS.
+  // step counts proposals and cancels, so a keepPick for a pick proposed before the last Esc does not outline it again.
   const saved = [];
   let pending = null;
+  let held = null;
   const picks = new Map();
   const MAX_PICKS = 20;
   let pickSeq = 0;
+  let step = 0;
+  let cancelledAt = 0;
+  let replySeq = 0;
   // The overlay (anno) outlives the mode while pins or a pending pick are drawn; modeOn is the mode itself.
   let anno = null;
   let modeOn = false;
@@ -329,10 +336,18 @@ export const PAGE_LIB = String.raw`(() => {
     placeAt(node, anchorRect(pending));
     node.style.display = 'block';
   };
+  // The held record stays: a save of it may be on its way, and the host drops it itself.
   const dropPending = () => {
-    if (pending) picks.delete(pending.id);
+    if (pending && pending.id !== held) picks.delete(pending.id);
     pending = null;
     drawPick();
+  };
+  const keepRecord = (pick) => {
+    picks.set(pick.id, pick);
+    for (const id of picks.keys()) {
+      if (picks.size <= MAX_PICKS) break;
+      if (id !== held && id !== (pending && pending.id)) picks.delete(id);
+    }
   };
   const setPending = (kind, el, rect) => {
     const id = 'n' + documentToken.slice(0, 5) + '.' + (++pickSeq);
@@ -340,9 +355,8 @@ export const PAGE_LIB = String.raw`(() => {
     const data = Object.assign(base, kind === 'area' ? { rect, text: areaText(rect) } : describeElement(el));
     const anchor = { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height };
     if (el) anchor.el = new WeakRef(el);
-    pending = { id, kind, data, anchor, reported: false };
-    picks.set(id, pending);
-    if (picks.size > MAX_PICKS) picks.delete(picks.keys().next().value);
+    pending = { id, kind, data, anchor, at: ++step };
+    keepRecord(pending);
     drawPick();
   };
   const buildOverlay = () => {
@@ -445,7 +459,7 @@ export const PAGE_LIB = String.raw`(() => {
       if (!e.isTrusted || e.target === anno.host || e.key !== 'Escape') return;
       stop(e);
       if (anno.drag) { anno.drag = null; drawPick(); return; }
-      if (pending) { dropPending(); return; }
+      if (pending) { dropPending(); cancelledAt = ++step; return; }
       stopAnnotate();
     });
     const redraw = () => {
@@ -588,37 +602,38 @@ export const PAGE_LIB = String.raw`(() => {
       return { element };
     },
     annotateOn() {
-      if (modeOn) return { active: true };
-      if (!document.body) return { error: 'no_page' };
-      startAnnotate();
-      return { active: true };
+      if (!modeOn && !document.body) return { error: 'no_page' };
+      if (!modeOn) startAnnotate();
+      return { active: true, docId: documentToken };
     },
     annotateOff() {
       stopAnnotate();
       return { active: false };
     },
-    // The host polls this while the mode is on. "pick" is a new target not reported yet; "picking" and "rect" describe the pending one (null once it is gone); "active" is false once the page left the mode itself (Esc).
+    // The host polls this while the mode is on; every reply is the whole state (see Tab.docId in the host).
     takePick() {
-      const fresh = pending && !pending.reported ? pending : null;
-      if (fresh) fresh.reported = true;
       return {
+        docId: documentToken,
+        seq: ++replySeq,
         active: modeOn,
+        cancelled: cancelledAt,
         scroll: [Math.round(scrollX), Math.round(scrollY)],
         viewport: { width: innerWidth, height: innerHeight },
         picking: pending ? pending.id : null,
         rect: pending ? anchorRect(pending) : null,
-        pick: fresh ? fresh.data : null,
+        pick: pending ? pending.data : null,
       };
     },
-    // The host keeps this pick open (its box may hold a draft): it is outlined again and every other unsettled pick goes.
+    // The host keeps this pick open (its box holds a draft): it is never evicted, and outlined again unless Esc came after it was proposed.
     keepPick(a) {
-      const pick = picks.get(a && a.pickId);
+      if (!a || a.docId !== documentToken) return { error: 'stale_document' };
+      const pick = picks.get(a.pickId);
       if (!pick) return { error: 'no_pick' };
-      picks.clear();
-      picks.set(pick.id, pick);
-      pick.reported = true;
-      pending = pick;
-      drawPick();
+      held = pick.id;
+      if (pick.at > cancelledAt) {
+        pending = pick;
+        drawPick();
+      }
       return { ok: true };
     },
     // The host saved the comment: the pick becomes a pinned, framed note carrying the host's number (the one the message uses).
@@ -629,18 +644,20 @@ export const PAGE_LIB = String.raw`(() => {
       if (!Number.isInteger(a.n) || a.n < 1) return { error: 'bad_number' };
       saved.push({ data: pick.data, anchor: pick.anchor, n: a.n });
       picks.delete(pick.id);
+      if (held === pick.id) held = null;
       if (pending === pick) pending = null;
       drawPins();
       drawPick();
       return { ok: true };
     },
-    // The note was not delivered: its pin goes and the target is pending again, so the comment can be saved once more.
+    // The note was not delivered: its pin goes and the target is the host's open pick again, so the comment can be saved once more.
     uncommitPin(a) {
       const at = saved.findIndex((note) => note.data.id === (a && a.pickId));
       if (at < 0) return { error: 'no_note' };
       const [note] = saved.splice(at, 1);
-      const pick = { id: note.data.id, kind: note.data.kind, data: note.data, anchor: note.anchor, reported: true };
-      picks.set(pick.id, pick);
+      const pick = { id: note.data.id, kind: note.data.kind, data: note.data, anchor: note.anchor, at: ++step };
+      held = pick.id;
+      keepRecord(pick);
       if (!pending) pending = pick;
       drawPins();
       drawPick();
@@ -649,6 +666,7 @@ export const PAGE_LIB = String.raw`(() => {
     dropPick(a) {
       const id = a && a.pickId;
       if (id) picks.delete(id);
+      if (id && id === held) held = null;
       if (pending && (!id || id === pending.id)) dropPending();
       dropOverlayIfIdle();
       return { ok: true };
@@ -765,12 +783,13 @@ function toViewport(value: unknown): { width: number; height: number } {
   return { width: side(r.width), height: side(r.height) }
 }
 
-/** The parts of a takePick reply the host uses; `fresh` is a newly proposed pick, if any. */
+/** The parts of a takePick reply the host uses; `outlined` is the record of the pick the page outlines, if any. */
 function readPickState(state: Record<string, unknown>) {
   const scroll: [number, number] = Array.isArray(state.scroll) ? [Number(state.scroll[0]) || 0, Number(state.scroll[1]) || 0] : [0, 0]
+  const picking = typeof state.picking === 'string' ? state.picking : null
   const p = state.pick
-  const fresh = p && typeof p === 'object' && !Array.isArray(p) && typeof (p as Record<string, unknown>).id === 'string' ? p as HostPick['data'] : null
-  return { scroll, viewport: toViewport(state.viewport), rect: toRect(state.rect), fresh }
+  const outlined = picking && p && typeof p === 'object' && !Array.isArray(p) && (p as Record<string, unknown>).id === picking ? p as HostPick['data'] : null
+  return { scroll, viewport: toViewport(state.viewport), rect: toRect(state.rect), picking, outlined, cancelled: Number(state.cancelled) || 0 }
 }
 
 /** scheme://host[:port] of a web address, or '' for anything else (blank pages, unparsable text). */
@@ -868,16 +887,17 @@ interface Tab {
   userTouched: boolean
   /** The user is placing notes on this page (annotate mode); ends with any navigation. */
   annotating: boolean
-  /** Pick polls issued and the newest one whose reply was applied: an older reply must not overwrite a newer one. */
-  pollSeq: number
-  pollApplied: number
-  /** The pick the newest applied poll saw outlined in the page (null: none). */
-  pagePicking: string | null
   /**
-   * The target waiting for its comment (held here so a closed box can come back). One rule: the host owns which pick is
-   * open and a page report only proposes one; a proposal opens only while the open pick has no draft, and the open pick
-   * ends only by a user action (save, cancel or Esc in the box or the page) or with its document or tab.
+   * Page/host pick sync. Every takePick reply is the page's whole state, so one rule reconciles it (onPickState): a reply
+   * counts only for this document (docId, learnt from annotateOn, null after a navigation) and only if its seq is above
+   * replySeq, so a lost, late or reordered reply changes nothing the next one would not. A cancel above cancelSeen (Esc in
+   * the page) closes the open pick unless it is being saved. An open pick with a draft (or being saved) is the host's: if
+   * the page outlines anything else, keepPick tells it to outline this one again. Any other open pick follows the page's outline.
    */
+  docId: string | null
+  replySeq: number
+  cancelSeen: number
+  /** The target waiting for its comment (held here so a closed box can come back). */
   pick: HostPick | null
   /** Notes committed in this document, for the pin numbers. */
   pinSeq: number
@@ -1169,7 +1189,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, pollSeq: 0, pollApplied: 0, pagePicking: null, pick: null, pinSeq: 0, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, docId: null, replySeq: 0, cancelSeen: 0, pick: null, pinSeq: 0, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -1422,7 +1442,7 @@ export class BrowserHost {
   /** A new document has no pick: the target, the draft and the box go. */
   private forgetPick(tab: Tab, removeOverlay = false): void {
     tab.pick = null
-    tab.pagePicking = null
+    tab.docId = null
     if (this.boxTab === tab) this.hideBox()
     this.endAnnotate(tab, removeOverlay)
   }
@@ -1436,6 +1456,9 @@ export class BrowserHost {
         try {
           const result = await this.page(tab, 'annotateOn', {})
           if (result.error) return { error: String(result.error) }
+          // A document that started going away while it answered must not become the one replies are matched against.
+          if (typeof result.docId !== 'string' || wc.isLoading()) return { error: 'no_page' }
+          if (result.docId !== tab.docId) Object.assign(tab, { docId: result.docId, replySeq: 0, cancelSeen: 0 })
         } catch {
           return { error: 'annotate_failed' }
         }
@@ -1470,14 +1493,8 @@ export class BrowserHost {
     try {
       for (const tab of this.annotatingVisible()) {
         try {
-          const seq = ++tab.pollSeq
           const state = await this.page(tab, 'takePick', {})
-          if (!tab.annotating) continue
-          if (seq < tab.pollApplied) { this.onLatePick(tab, state); continue }
-          tab.pollApplied = seq
-          // The page left the mode itself (Esc), or it is a new document without the overlay.
-          if (state.active === false) this.endAnnotate(tab)
-          else this.onPickState(tab, state)
+          if (tab.annotating) this.onPickState(tab, state)
         } catch {
           this.endAnnotate(tab)
         }
@@ -1488,24 +1505,31 @@ export class BrowserHost {
   }
 
   private onPickState(tab: Tab, state: Record<string, unknown>): void {
-    const { scroll, viewport, rect, fresh } = readPickState(state)
-    tab.pagePicking = typeof state.picking === 'string' ? state.picking : null
+    const seq = Number(state.seq)
+    if (state.docId !== tab.docId || !(seq > tab.replySeq)) return
+    tab.replySeq = seq
+    // The page left the mode itself (Esc with nothing outlined).
+    if (state.active === false) { this.endAnnotate(tab); return }
+    const { scroll, viewport, rect, picking, outlined, cancelled } = readPickState(state)
+    if (cancelled > tab.cancelSeen) {
+      tab.cancelSeen = cancelled
+      if (tab.pick && this.saving !== tab.pick) this.cancelPick(tab)
+    }
     const pick = tab.pick
-    if (fresh && fresh.id !== pick?.data.id) {
-      // A newer click while the user is typing: the open pick stays and the page outlines it again.
-      if (pick && pick.draft !== '') void this.page(tab, 'keepPick', { pickId: pick.data.id }).catch(() => { /* the page is gone */ })
-      else this.openPick(tab, fresh, rect ?? toRect(fresh.rect), scroll, viewport)
+    const owned = !!pick && (pick.draft !== '' || this.saving === pick)
+    if (owned && picking !== pick.data.id) {
+      if (this.saving !== pick) this.keepPick(tab, pick)
+      return
+    }
+    if (!owned && picking !== (pick ? pick.data.id : null)) {
+      if (outlined) this.openPick(tab, outlined, rect ?? toRect(outlined.rect), scroll, viewport)
+      else if (pick && !picking) {
+        tab.pick = null
+        if (this.boxTab === tab) this.hideBox()
+      }
       return
     }
     if (!pick) return
-    // Only Esc in the page leaves it with no pick (a save in flight does too, and settles the pick itself).
-    if (tab.pagePicking === null) {
-      if (this.saving === pick) return
-      tab.pick = null
-      if (this.boxTab === tab) this.hideBox()
-      return
-    }
-    if (tab.pagePicking !== pick.data.id) return
     const moved = scroll[0] !== pick.scroll[0] || scroll[1] !== pick.scroll[1]
     pick.scroll = scroll
     pick.viewport = viewport
@@ -1517,17 +1541,14 @@ export class BrowserHost {
     }
   }
 
-  /** An older reply carries the only report of a pick the page took as reported; it opens if no pick is open and the newest reply still saw it outlined. */
-  private onLatePick(tab: Tab, state: Record<string, unknown>): void {
-    const { scroll, viewport, rect, fresh } = readPickState(state)
-    if (fresh && !tab.pick && fresh.id === tab.pagePicking) this.openPick(tab, fresh, rect ?? toRect(fresh.rect), scroll, viewport)
-  }
-
   private openPick(tab: Tab, data: HostPick['data'], rect: ReturnType<typeof toRect>, scroll: [number, number], viewport: HostPick['viewport']): void {
     tab.pick = { data, draft: '', error: '', scroll, viewport }
     this.hideBox()
-    void this.page(tab, 'keepPick', { pickId: data.id }).catch(() => { /* the page is gone */ })
     void this.showBox(tab, rect)
+  }
+
+  private keepPick(tab: Tab, pick: HostPick): void {
+    void this.page(tab, 'keepPick', { pickId: pick.data.id, docId: tab.docId }).catch(() => { /* the page is gone */ })
   }
 
   // ---- comment box ----
@@ -1623,6 +1644,8 @@ export class BrowserHost {
     if (message.t === 'draft' || message.t === 'size') {
       // Typing is a draft (and clears the last error); a resize reports only the height.
       if (message.t === 'draft') {
+        // From the first typed letter the page must keep this pick's record, whatever is clicked next.
+        if (tab.pick.draft === '' && text !== '') this.keepPick(tab, tab.pick)
         tab.pick.draft = text
         tab.pick.error = ''
       }
