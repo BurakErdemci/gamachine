@@ -1,22 +1,6 @@
 import fs from 'fs'
 import path from 'path'
 
-/**
- * Symlink-safe path resolver.
- * An existing path is canonicalised; a path that does not exist yet is resolved
- * down to its nearest existing ancestor, with the missing segments appended, so
- * that writing a NEW file under a symlinked directory is caught as well.
- *
- * ⚠️ `realpathSync.native`, not `realpathSync`. The JS implementation resolves
- * links but leaves an NTFS 8.3 short name as it found it — measured on this
- * repo's Windows: `<ws>\HARVES~1.GLB` came back as itself, while the native call
- * returned `<ws>\harvested-credentials.glbx`. Every caller here decides on the
- * resolved string and then opens it, so the two spellings have to collapse into
- * one before the decision. It cut both ways: the extension whitelist judged the
- * alias (`.GLB`) while `openSync` opened the real `.glbx`, and a workspace named
- * through its OWN short path was refused because it no longer matched itself.
- * The two calls throw the same errors, so the surrounding fallbacks are unchanged.
- */
 // Only ENOENT/ENOTDIR mean "missing"; any other error (EIO, EACCES, ELOOP) propagates so
 // safeResolve refuses. fs.existsSync is not used: it returns false for those errors too.
 function isMissingError(err: unknown): boolean {
@@ -43,6 +27,22 @@ function isSymlinkEntry(p: string): boolean {
   }
 }
 
+/**
+ * Symlink-safe path resolver.
+ * An existing path is canonicalised; a path that does not exist yet is resolved
+ * down to its nearest existing ancestor, with the missing segments appended, so
+ * that writing a NEW file under a symlinked directory is caught as well.
+ *
+ * ⚠️ `realpathSync.native`, not `realpathSync`. The JS implementation resolves
+ * links but leaves an NTFS 8.3 short name as it found it — measured on this
+ * repo's Windows: `<ws>\HARVES~1.GLB` came back as itself, while the native call
+ * returned `<ws>\harvested-credentials.glbx`. Every caller here decides on the
+ * resolved string and then opens it, so the two spellings have to collapse into
+ * one before the decision. It cut both ways: the extension whitelist judged the
+ * alias (`.GLB`) while `openSync` opened the real `.glbx`, and a workspace named
+ * through its OWN short path was refused because it no longer matched itself.
+ * The two calls throw the same errors, so the surrounding fallbacks are unchanged.
+ */
 function safeResolve(filePath: string): string | null {
   try {
     let absolutePath = path.resolve(filePath)
