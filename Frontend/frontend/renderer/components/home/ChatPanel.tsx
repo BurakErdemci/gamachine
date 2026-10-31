@@ -318,9 +318,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           showToast(t('chat.fixNoTarget'), 'warning');
           return;
         }
+        // Shown at once so edits typed during the write are kept; put back if the write fails.
         if (isOpenTarget()) setCode(fixedCode);
         const res = await invokeVia(ipc, 'write-file', target.path, fixedCode, target.workspace);
         if (!res?.success) {
+          if (isOpenTarget() && typeof pendingFix.data?.original_code === 'string') setCode(pendingFix.data.original_code);
           showToast(writeErrorText(target.path.split(/[\\/]/).pop() || target.path, res), 'error');
           return;
         }
