@@ -1,9 +1,9 @@
-import type { NativeImage, Rectangle, Session, WebContents, WebContentsView, WebContentsViewConstructorOptions } from 'electron'
+import type { Cookie, NativeImage, Rectangle, Session, WebContents, WebContentsView, WebContentsViewConstructorOptions } from 'electron'
 import type { HttpClient } from './remote-control'
 import type { BrowserCommand } from './browser-server'
 import { isIP } from 'net'
 import { isAllowedNavigation, isPrivateAddress, resolvesToPrivate, type LookupAll } from './browser-url-policy'
-import type { BrowserHistory } from './browser-history'
+import { historyUrl, type BrowserHistory } from './browser-history'
 
 // persist: keeps one login for every chat's tab and across app restarts.
 export const BROWSER_PARTITION = 'persist:gamachine-agent-browser'
@@ -16,6 +16,8 @@ export const MAX_TABS = 8
 // A chat never holds more tabs than the app does, so the per-chat cap is the global one.
 export const MAX_CHAT_TABS = MAX_TABS
 const MAX_CLOSED_TABS = 10
+/** site-remove repeats while a cookie of the site is still there after a pass; then it gives up as partial. */
+const MAX_SITE_REMOVE_PASSES = 3
 // How long the key events a `press` is about to send back to the host stay expected.
 const SYNTHETIC_INPUT_MS = 1_000
 const SCRIPT_TIMEOUT_MS = 10_000
@@ -41,6 +43,48 @@ export interface BrowserHostWindow {
   webContents: { send(channel: string, payload: unknown): void }
 }
 
+// Second-level labels under a two-letter country code (co.uk, com.tr): refused as a site on their own.
+const SECOND_LEVEL = new Set(['co', 'com', 'org', 'net', 'gov', 'edu', 'ac'])
+const SITE_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/
+const STORAGES = ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage', 'websql', 'filesystem']
+
+/** A cookie's own domain as a host: leading dot dropped, lower case. */
+export function siteOf(domain: string): string {
+  return domain.replace(/^\.+/, '').toLowerCase()
+}
+
+/**
+ * The listed site a cookie host belongs to: its highest ancestor (or itself) that is some cookie's own domain.
+ * Never a guessed registrable domain, so alice.github.io and bob.github.io stay two sites.
+ */
+function rowOf(host: string, domains: Set<string>): string {
+  if (isIP(host) || host.includes(':')) return host
+  const labels = host.split('.')
+  for (let i = labels.length - 1; i > 0; i--) {
+    const parent = labels.slice(i).join('.')
+    if (domains.has(parent)) return parent
+  }
+  return host
+}
+
+function siteRows(cookies: Cookie[]): Map<string, Cookie[]> {
+  const domains = new Set(cookies.filter((c) => c.domain).map((c) => siteOf(c.domain!)))
+  const rows = new Map<string, Cookie[]>()
+  for (const cookie of cookies) {
+    if (!cookie.domain) continue
+    const row = rowOf(siteOf(cookie.domain), domains)
+    rows.set(row, [...(rows.get(row) ?? []), cookie])
+  }
+  return rows
+}
+
+/** A bare public suffix (com, co.uk) or the like: removing it would wipe every site under it. */
+function isPublicSuffix(site: string): boolean {
+  const labels = site.split('.')
+  if (labels.length === 1) return site !== 'localhost'
+  return labels.length === 2 && SECOND_LEVEL.has(labels[0]) && labels[1].length === 2
+}
+
 export interface BrowserHostDeps {
   window: () => BrowserHostWindow | null
   createView: (options: WebContentsViewConstructorOptions) => WebContentsView
@@ -51,7 +95,7 @@ export interface BrowserHostDeps {
   uiSecret: string
   lookup?: LookupAll
   /** Visited-page store behind the omnibox and the Suggested grid; absent in tests that do not need it. */
-  history?: Pick<BrowserHistory, 'visit' | 'update' | 'list' | 'clear' | 'flush'>
+  history?: Pick<BrowserHistory, 'visit' | 'update' | 'list' | 'clear' | 'flush'> & Partial<Pick<BrowserHistory, 'remove' | 'clearSince'>>
   /** Decides which modifier the tab shortcuts use (Cmd on darwin, Ctrl elsewhere); defaults to process.platform. */
   platform?: string
   /** Called on every halt so the command server can drop what is still queued: one chat, or every chat with null. */
@@ -306,6 +350,16 @@ function originOf(url: string): string {
   }
 }
 
+function inSite(host: string, site: string): boolean {
+  return host === site || host.endsWith(`.${site}`)
+}
+
+/** The http(s) origin of `url` when its host is `site` or a subdomain of it, else ''. */
+function siteOrigin(url: string, site: string): string {
+  const origin = originOf(url)
+  return origin && inSite(new URL(origin).hostname, site) ? origin : ''
+}
+
 /** The response body, or null as soon as it is larger than `max` bytes. */
 async function readCapped(response: Response, max: number): Promise<Buffer | null> {
   const reader = response.body?.getReader()
@@ -383,6 +437,8 @@ interface Tab {
   userTouched: boolean
   /** Bumped by every navigation, so a favicon fetched for an earlier page is dropped. */
   faviconSeq: number
+  /** The main-frame address being loaded and not yet committed (getURL still shows the old page); null once it commits. */
+  target: string | null
   /** Settles when the tab is closed, so a command waiting on something else can stop at once. */
   gone: Promise<void>
   markGone: () => void
@@ -393,7 +449,9 @@ interface Tab {
   lastUsed: number
 }
 
-interface ClosedTab { url: string; title: string }
+interface ClosedTab { url: string; title: string; closedAt: number }
+/** A closed tab a reopen popped; `forgotten` is set by the first removal or forget that matches it. */
+interface Reopen { tab: ClosedTab; conversationId: number; forgotten: boolean }
 
 /**
  * Hardened WebContentsViews over the main window, all on one persistent session: per chat one agent tab
@@ -408,6 +466,11 @@ export class BrowserHost {
   private readonly selected = new Map<number, number>()
   /** Tabs the user closed, newest last, for reopen. */
   private readonly closed = new Map<number, ClosedTab[]>()
+  /**
+   * Closed tabs a reopen has popped and is still checking. A removal or forget that matches one marks it `forgotten`
+   * at that moment: the reopen then neither opens it nor puts it back.
+   */
+  private readonly reopening = new Set<Reopen>()
   /** Bumped by every halt (one chat, or all): an agent command that awaited across a bump must not act. */
   private haltAll = 0
   private readonly haltChat = new Map<number, number>()
@@ -415,9 +478,14 @@ export class BrowserHost {
   private visibleId: number | null = null
   /** Chats the agent has acted in. Outlives the tab on evict and clear so a Stop still reaches the backend halt; close (a deleted chat) drops it. */
   private readonly actedIn = new Set<number>()
-  /** True while clear-browsing-data is awaited: no tab may be created or navigated meanwhile. */
+  /** True while clear-browsing-data or site-remove is awaited: no tab may be created or navigated meanwhile. */
   private clearing = false
-  /** Bumped when a clear starts: an open or navigation that awaited across it must not act. */
+  /** The site a site-remove holding the lock is removing: a page's own navigation onto it is dropped. */
+  private removing: string | null = null
+  /**
+   * Bumped when a clear-browsing-data starts: an open or navigation that awaited across it must not act. A site-remove
+   * leaves it alone: work already running goes on, and what acts during the lock meets `clearing`.
+   */
   private clearGen = 0
   /** Bumped when a chat is closed (deleted), for the same reason. */
   private readonly closeGen = new Map<number, number>()
@@ -497,6 +565,8 @@ export class BrowserHost {
   shutdown(): Promise<void> {
     if (!this.stopped) {
       this.stopped = true
+      // A reopen still checking its address must not make a tab after the views are gone.
+      this.forgetClosed(() => true)
       if (this.pollTimer) this.clear(this.pollTimer)
       this.pollTimer = null
       this.destroyView()
@@ -625,6 +695,8 @@ export class BrowserHost {
   }
 
   private createTab(conversationId: number, agent: boolean): Tab {
+    // An agent command queued before a shutdown must not bring a view back.
+    if (this.stopped) throw new Error('closed')
     const win = this.deps.window()
     if (!win || win.isDestroyed()) throw new Error('no_window')
     if (this.tabsOf(conversationId).length >= MAX_CHAT_TABS) throw new Error('too_many_tabs')
@@ -647,7 +719,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, faviconSeq: 0, target: null, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -676,12 +748,22 @@ export class BrowserHost {
     const wc = tab.view.webContents
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (tab.agent) tab.popupBlocked = url
-      else if ((disposition === 'foreground-tab' || disposition === 'background-tab') && this.pageMayOpenTab(tab)) {
-        this.openUserTab(tab.conversationId, url, true).catch(() => { /* refused or no window */ })
+      // A page-open the lock refuses does not spend the page's tab budget.
+      else if ((disposition === 'foreground-tab' || disposition === 'background-tab') && !this.clearing && this.pageMayOpenTab(tab)) {
+        // The slot is spent only by a tab that was created: any refusal gives it back.
+        this.openUserTab(tab.conversationId, url, true)
+          .then((result) => { if (result.error) this.refundPageOpen(tab.conversationId) })
+          .catch(() => { this.refundPageOpen(tab.conversationId); /* refused or no window */ })
       }
       return { action: 'deny' }
     })
     const refuse = (event: { url: string; isMainFrame: boolean; preventDefault(): void }) => {
+      if (event.isMainFrame && this.isBeingRemoved(event.url)) {
+        event.preventDefault()
+        // Like a refused address: an agent command waiting on this load must not wait for its timeout.
+        this.settleLoad(tab, { ok: false, error: 'clearing' })
+        return
+      }
       if (isAllowedNavigation(event.url)) return
       event.preventDefault()
       // A refused main-frame navigation ends as ERR_ABORTED, which waitForLoad ignores.
@@ -691,16 +773,36 @@ export class BrowserHost {
     wc.on('will-redirect', refuse)
     wc.on('will-frame-navigate', refuse)
     wc.on('will-attach-webview', (event) => event.preventDefault())
+    // Every main-frame load, the host's own and back/forward/reload included, starts here.
+    wc.on('did-start-navigation', (details) => {
+      if (!details.isMainFrame) return
+      // History navigations the page starts itself (history.back()) skip will-navigate, so they are dropped here.
+      const dropped = this.isBeingRemoved(details.url)
+      tab.target = dropped ? null : details.url
+      if (!dropped) return
+      if (!wc.isDestroyed()) wc.stop()
+      this.settleLoad(tab, { ok: false, error: 'clearing' })
+    })
     wc.on('did-finish-load', () => this.settleLoad(tab, { ok: true }))
     wc.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
       // -3 is ERR_ABORTED: a new navigation replaced this one, and its own load event will follow.
-      if (isMainFrame && code !== -3) this.settleLoad(tab, { ok: false, error: `load_failed: ${description || code}` })
+      if (isMainFrame && code !== -3) {
+        tab.target = null
+        this.settleLoad(tab, { ok: false, error: `load_failed: ${description || code}` })
+      }
+    })
+    // Loading ended: a navigation that did not commit by now (aborted, refused on redirect) is no longer pending.
+    wc.on('did-stop-loading', () => {
+      tab.target = null
+      this.emitLive(tab.conversationId)
     })
     wc.on('render-process-gone', () => this.settleLoad(tab, { ok: false, error: 'page_crashed' }))
-    for (const name of ['did-start-loading', 'did-stop-loading', 'page-title-updated', 'did-navigate', 'did-navigate-in-page'] as const) {
+    for (const name of ['did-start-loading', 'page-title-updated', 'did-navigate', 'did-navigate-in-page'] as const) {
       wc.on(name as 'did-start-loading', () => this.emitLive(tab.conversationId))
     }
     wc.on('did-navigate', (_event, url) => {
+      tab.target = null
+      if (this.tabs.get(tab.id) !== tab) return
       tab.favicon = ''
       tab.faviconSeq++
       this.deps.history?.visit(url, wc.getTitle())
@@ -803,6 +905,11 @@ export class BrowserHost {
     return true
   }
 
+  private refundPageOpen(conversationId: number): void {
+    const opens = this.pageOpens.get(conversationId)
+    if (opens) this.pageOpens.set(conversationId, opens.slice(0, -1))
+  }
+
   private setUserControl(tab: Tab, on: boolean): void {
     if (tab.userControl === on) return
     tab.userControl = on
@@ -837,7 +944,7 @@ export class BrowserHost {
     const url = wc.isDestroyed() ? '' : wc.getURL()
     if (/^https?:\/\//i.test(url)) {
       const stack = this.closed.get(tab.conversationId) ?? []
-      stack.push({ url, title: wc.getTitle() })
+      stack.push({ url, title: wc.getTitle(), closedAt: this.now() })
       this.closed.set(tab.conversationId, stack.slice(-MAX_CLOSED_TABS))
     }
     // Work running or queued for the agent's tab ends with it instead of recreating the tab.
@@ -877,11 +984,13 @@ export class BrowserHost {
    * A new tab of the user's own, selected; with an address it is checked like every navigation. A tab a page
    * opened (`fromPage`) leaves the panel as it is: the chat is already on screen, and nothing may bring another forward.
    */
-  private async openUserTab(conversationId: number, url?: unknown, fromPage = false): Promise<Record<string, unknown>> {
-    if (this.clearing) return { error: 'clearing' }
+  private async openUserTab(conversationId: number, url?: unknown, fromPage = false, reopen?: Reopen): Promise<Record<string, unknown>> {
     const epoch = this.lifecycleEpoch(conversationId)
+    const refused = this.staleReply(conversationId, epoch)
+    if (refused) return refused
     if (url !== undefined && !(await this.navigationAllowed(url))) return { error: 'url_not_allowed' }
-    // A clear or the chat's deletion can happen during the lookup above.
+    // A clear, a site-remove, the chat's deletion, a shutdown or a forget of the reopened page can happen during the lookup.
+    if (reopen?.forgotten && !this.stopped) return { error: 'nothing_to_reopen' }
     const stale = this.staleReply(conversationId, epoch)
     if (stale) return stale
     let tab: Tab
@@ -889,25 +998,133 @@ export class BrowserHost {
     this.selected.set(conversationId, tab.id)
     if (fromPage) this.layout()
     else this.show(conversationId)
-    if (str(url)) tab.view.webContents.loadURL(url).catch(() => { /* reported by did-fail-load */ })
+    if (str(url)) this.load(tab, url)
     this.emitLive(conversationId)
     return { ...this.livePayload(conversationId) }
   }
 
+  /** The host's own navigation of a tab; the address is its target until it commits. */
+  private load(tab: Tab, url: string): void {
+    tab.target = url
+    tab.view.webContents.loadURL(url).catch(() => { /* reported by did-fail-load */ })
+  }
+
+  /** The committed address and the one still loading. */
+  private tabUrls(tab: Tab): string[] {
+    const wc = tab.view.webContents
+    return [wc.isDestroyed() ? '' : wc.getURL(), tab.target ?? '']
+  }
+
+  /** Whether `url` is on the site a site-remove holding the lock is removing. */
+  private isBeingRemoved(url: string): boolean {
+    return this.removing !== null && siteOrigin(url, this.removing) !== ''
+  }
+
   /** The refusal for work that began before a clear started or its chat was closed, or null when it may go on. */
   private staleReply(conversationId: number, epoch: number): { error: string } | null {
+    if (this.stopped) return { error: 'closed' }
     if (this.clearing) return { error: 'clearing' }
     return this.lifecycleEpoch(conversationId) === epoch ? null : { error: 'chat_closed' }
   }
 
-  /** The tab goes back on the stack when it could not be reopened (too many tabs, address refused). */
+  /**
+   * The clear lock for clear-browsing-data and site-remove, taken before `work`'s first await: while it is held every
+   * point that would open or load refuses with 'clearing'. Refused when another holder has it.
+   */
+  private async locked<T>(work: () => Promise<T>): Promise<T | { error: 'clearing' }> {
+    if (this.clearing) return { error: 'clearing' }
+    this.clearing = true
+    try {
+      return await work()
+    } finally {
+      this.clearing = false
+    }
+  }
+
+  /** Drops closed tabs from every chat's reopen stack and marks the reopens in flight that it matches. */
+  private forgetClosed(drop: (tab: ClosedTab, conversationId: number) => boolean): void {
+    for (const [id, stack] of this.closed) this.closed.set(id, stack.filter((tab) => !drop(tab, id)))
+    for (const entry of this.reopening) entry.forgotten ||= drop(entry.tab, entry.conversationId)
+  }
+
+  /**
+   * Logs the agent browser out of `site` and its subdomains; the caller holds the clear lock, so nothing opens or
+   * loads meanwhile. The site's tabs close and its closed and reopening pages are forgotten first, their exact
+   * origins recorded; then cookies and storage go. A pass repeats while a cookie of the site is still there.
+   * `accepted` is set once the removal passed its checks: from then on the login may be gone, whatever the outcome.
+   */
+  private async removeSite(site: string, accepted: { value: boolean }): Promise<Record<string, unknown>> {
+    const ofSite = (list: Cookie[]) => list.filter((cookie) => inSite(siteOf(cookie.domain ?? ''), site))
+    const origins = new Set<string>()
+    // Pages on other ports or subdomains: the exact origin, port included.
+    const claim = (url: string) => {
+      const origin = siteOrigin(url, site)
+      if (origin) origins.add(origin)
+      return origin !== ''
+    }
+    // Run at lock start and at acceptance: a chat deleted or a history entry dropped during the read takes its record with it.
+    const snapshot = () => {
+      for (const tab of this.tabs.values()) if (this.isLive(tab)) this.tabUrls(tab).forEach(claim)
+      for (const stack of this.closed.values()) for (const tab of stack) claim(tab.url)
+      for (const entry of this.reopening) claim(entry.tab.url)
+      for (const entry of this.deps.history?.list() ?? []) claim(entry.url)
+    }
+    snapshot()
+    const session = this.session()
+    const all = await session.cookies.get({})
+    // One removal takes one listed site: a parent of several (github.io over alice. and bob.github.io) is refused.
+    if ([...siteRows(all).keys()].filter((row) => inSite(row, site)).length > 1) return { error: 'bad_args' }
+    accepted.value = true
+    for (const host of [site, `www.${site}`]) for (const scheme of ['https', 'http']) origins.add(`${scheme}://${host}`)
+    // Open pages of the site go first: a live page would write the login back after the cookies are gone.
+    snapshot()
+    const doomed = [...this.tabs.values()].filter((tab) => this.isLive(tab) && this.tabUrls(tab).filter(claim).length > 0)
+    for (const tab of doomed) this.closeTab(tab)
+    // A reopen of the site still in flight, forgotten here, is neither opened nor put back.
+    this.forgetClosed((tab) => claim(tab.url))
+    let removed = 0
+    let failed = 0
+    let cookies = ofSite(all)
+    for (let pass = 1; ; pass++) {
+      for (const cookie of cookies) {
+        const domain = siteOf(cookie.domain ?? '')
+        // Storage of a subdomain (app.site) is not covered by the origins of site itself.
+        for (const scheme of ['https', 'http']) origins.add(`${scheme}://${domain}`)
+        try {
+          await session.cookies.remove(`${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path ?? '/'}`, cookie.name)
+          removed++
+        } catch { failed++ }
+      }
+      for (const origin of origins) {
+        try { await session.clearStorageData({ origin, storages: STORAGES as any }) } catch { failed++ }
+      }
+      cookies = ofSite(await session.cookies.get({}))
+      if (cookies.length === 0 || failed > 0) break
+      if (pass === MAX_SITE_REMOVE_PASSES) { failed++; break }
+    }
+    return failed > 0 ? { ok: false, error: 'site_remove_partial', removed, failed } : { ok: true, removed }
+  }
+
+  /**
+   * The tab goes back on the stack when it could not be reopened (too many tabs, address refused, a site-remove of
+   * another site meanwhile), unless a removal or forget marked it; a marked one is not opened either.
+   */
   private async reopenTab(conversationId: number): Promise<Record<string, unknown>> {
+    // A refusal by the lock comes from openUserTab, and the popped page goes back below.
+    if (this.stopped) return { error: 'closed' }
     const last = this.closed.get(conversationId)?.pop()
     if (!last) return { error: 'nothing_to_reopen' }
-    const epoch = this.lifecycleEpoch(conversationId)
-    const result = await this.openUserTab(conversationId, last.url)
-    if (result.error && this.lifecycleEpoch(conversationId) === epoch) {
-      this.closed.set(conversationId, [...(this.closed.get(conversationId) ?? []), last].slice(-MAX_CLOSED_TABS))
+    const pending: Reopen = { tab: last, conversationId, forgotten: false }
+    this.reopening.add(pending)
+    let result: Record<string, unknown> = { error: 'nothing_to_reopen' }
+    try {
+      result = await this.openUserTab(conversationId, last.url, false, pending)
+    } finally {
+      this.reopening.delete(pending)
+      // A clear, the chat's deletion and a shutdown forget every reopen they void, so `forgotten` covers them too.
+      if (result.error && !pending.forgotten) {
+        this.closed.set(conversationId, [...(this.closed.get(conversationId) ?? []), last].slice(-MAX_CLOSED_TABS))
+      }
     }
     return result
   }
@@ -1043,13 +1260,14 @@ export class BrowserHost {
         if (!tab) return tabId === undefined ? this.openUserTab(conversationId, url) : { error: 'no_tab' }
         this.touch(tab)
         tab.userTouched = true
-        tab.view.webContents.loadURL(url as string).catch(() => { /* reported by did-fail-load */ })
+        this.load(tab, url as string)
         this.emitLive(conversationId)
         return this.livePayload(conversationId)
       }
       case 'back':
       case 'forward':
       case 'reload': {
+        if (this.clearing) return { error: 'clearing' }
         const tab = this.chatTab(conversationId, tabId)
         if (!tab) return { error: 'no_tab' }
         this.touch(tab)
@@ -1083,41 +1301,102 @@ export class BrowserHost {
       }
       case 'reopen-tab':
         return this.reopenTab(conversationId)
-      case 'history':
-        return { entries: this.deps.history?.list() ?? [] }
+      case 'history': {
+        const { query } = req as { query?: unknown }
+        const needle = typeof query === 'string' ? query.slice(0, 200).trim().toLowerCase() : ''
+        const entries = this.deps.history?.list() ?? []
+        return { entries: (needle ? entries.filter((e) => e.url.toLowerCase().includes(needle) || e.title.toLowerCase().includes(needle)) : entries).slice(0, 500) }
+      }
+      case 'history-remove': {
+        if (!str(url) || !this.deps.history?.remove) return { error: 'bad_args' }
+        // Reopening a closed tab would bring the page back into history.
+        this.forgetClosed((tab) => tab.url === url || historyUrl(tab.url) === url)
+        // An entry already gone (another window, a clear) is not an error; a false from remove() is then a failed write.
+        if (!this.deps.history.list().some((entry) => entry.url === url)) return { ok: true, removed: false }
+        return (await this.deps.history.remove(url)) ? { ok: true, removed: true } : { error: 'history_remove_failed' }
+      }
+      case 'history-clear': {
+        const { range } = req as { range?: unknown }
+        if (range !== 'hour' && range !== 'day' && range !== 'all') return { error: 'bad_args' }
+        const history = this.deps.history
+        if (!history?.clearSince) return { error: 'bad_args' }
+        const now = this.now()
+        // 'day' is since the local midnight, not the last 24 hours.
+        const since = range === 'hour' ? now - 3_600_000 : range === 'day' ? new Date(now).setHours(0, 0, 0, 0) : -Infinity
+        this.forgetClosed((tab) => tab.closedAt >= since)
+        return (await (range === 'all' ? history.clear() : history.clearSince(since))) ? { ok: true } : { error: 'history_clear_failed' }
+      }
+      // Sites only: counts and expiry, never a cookie's name or value.
+      case 'sites': {
+        try {
+          const sites: { site: string; cookies: number; lastExpiry?: number }[] = []
+          for (const [site, cookies] of siteRows(await this.session().cookies.get({}))) {
+            const entry: { site: string; cookies: number; lastExpiry?: number } = { site, cookies: cookies.length }
+            for (const cookie of cookies) {
+              if (cookie.expirationDate !== undefined && cookie.expirationDate > (entry.lastExpiry ?? 0)) entry.lastExpiry = cookie.expirationDate
+            }
+            sites.push(entry)
+          }
+          return { sites: sites.sort((a, b) => a.site.localeCompare(b.site)) }
+        } catch {
+          return { error: 'sites_failed' }
+        }
+      }
+      case 'site-remove': {
+        const { site } = req as { site?: unknown }
+        if (typeof site !== 'string' || site.length > 253 || !SITE_RE.test(site) || !/[a-z0-9]/.test(site) || isPublicSuffix(site)) return { error: 'bad_args' }
+        // Work already running goes on (no clearGen bump, no halt); the lock only refuses new work.
+        const accepted = { value: false }
+        const result = await this.locked(async () => {
+          this.removing = site
+          try {
+            return await this.removeSite(site, accepted)
+          } catch {
+            this.log('[browser] removing a site failed')
+            return { error: 'site_remove_failed' }
+          } finally {
+            this.removing = null
+          }
+        })
+        // The login may be gone whatever the outcome, so the backend drops the chats' grants like after a full clear.
+        if (accepted.value) await this.report(true)
+        return result
+      }
       case 'close': {
         this.closeGen.set(conversationId, (this.closeGen.get(conversationId) ?? 0) + 1)
         // Like a Stop: the chat's running and queued agent commands end without making a new tab.
         this.stopLocal(conversationId)
         for (const tab of [...this.tabs.values()]) if (tab.conversationId === conversationId) this.closeTab(tab)
         this.pageOpens.delete(conversationId)
+        this.forgetClosed((_tab, chat) => chat === conversationId)
         this.closed.delete(conversationId)
         // Only a deleted chat is closed; evict and clear keep the id so a Stop still reaches the backend.
         this.actedIn.delete(conversationId)
         return this.livePayload(conversationId)
       }
       case 'clear-browsing-data': {
-        if (this.clearing) return { error: 'clearing' }
-        this.clearing = true
-        this.clearGen++
-        // Every chat's running and queued agent commands end with the clear.
-        this.stopLocal(null)
-        // Tabs go first so no page writes new cookies between the clear and its close.
-        this.destroyView()
-        this.closed.clear()
-        // A history file that could not be erased is a failed clear: the visits would return after a restart.
-        let failed = !((await this.deps.history?.clear()) ?? true)
-        try {
-          const session = this.session()
-          await session.clearStorageData()
-          await session.clearCache()
-        } catch {
-          this.log('[browser] clearing browsing data failed')
-          failed = true
-        } finally {
+        const failed = await this.locked(async () => {
+          this.clearGen++
+          // Every chat's running and queued agent commands end with the clear.
+          this.stopLocal(null)
+          // Tabs go first so no page writes new cookies between the clear and its close.
           this.destroyView()
-          this.clearing = false
-        }
+          this.forgetClosed(() => true)
+          // A history file that could not be erased is a failed clear: the visits would return after a restart.
+          let failed = !((await this.deps.history?.clear()) ?? true)
+          try {
+            const session = this.session()
+            await session.clearStorageData()
+            await session.clearCache()
+          } catch {
+            this.log('[browser] clearing browsing data failed')
+            failed = true
+          } finally {
+            this.destroyView()
+          }
+          return failed
+        })
+        if (typeof failed === 'object') return failed
         // Even a failed clear may have wiped logins, so the backend drops every chat's grants either way.
         await this.report(true)
         return failed ? { error: 'Clearing browsing data failed.' } : { cleared: true }
@@ -1354,7 +1633,7 @@ export class BrowserHost {
         if (halted()) return { error: 'halted' }
         if (this.clearing) return { error: 'clearing' }
         if (!this.isLive(tab)) return { error: 'tab_closed' }
-        return this.loadResult(await this.waitForLoad(tab, () => { wc.loadURL(url as string).catch(() => { /* reported by did-fail-load */ }) }))
+        return this.loadResult(await this.waitForLoad(tab, () => this.load(tab, url as string)))
       }
       case 'back':
       case 'forward': {
