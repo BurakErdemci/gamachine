@@ -214,7 +214,9 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
   clicks and drags are ignored; with an empty one a click picks again from the same frozen frame, without a page call. No later
   frame, page event or navigation changes an open pick. Enter or the button saves, Shift+Enter is a new line, Esc cancels.
 - **Box messages:** the host gives the box the pick's id with its draft (`__set(draft, pickId)`), and every message the box
-  posts (`draft`, `size`, `submit`, `cancel`) carries it as `p`; one whose `p` is not the open pick's id is dropped.
+  posts (`draft`, `size`, `submit`, `cancel`) carries it as `p`. A message goes to the tab whose open pick has that id, whether
+  the box still shows it or not (a draft typed just before the panel hid still reaches its pick); one whose `p` matches no open
+  pick changes nothing. `__error(message, pickId)` carries the id too, and the box ignores an error for a pick it is not showing.
 - **Save:** saving is all or nothing and never touches the page. The note gets the tab's next number (per tab, increasing,
   never reused, across navigations too), is built from the pick (`{id, n, comment, kind, tag, role, name, href, path, rect,
   text}`) and stored with the tab (at most 50: "En fazla 50 not"), and the new note goes to the renderer (one note per event,
@@ -223,6 +225,10 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
   the pick closes, the overlay goes back to the live page and the mode stays on. The page never receives the comment. The
   number is the same on the pin, the chip and in the sent message. Saved notes are drawn as numbered pins on the overlay (from
   the note's place in its document less the frame's scroll) until the message is sent or the chip is removed (`clear-notes`).
+  The pins have one source: the tab's notes of the document the overlay shows, which is the open pick's frozen frame while a pick
+  is open (after a navigation too) and otherwise the latest frame.
+- **Note origin:** a frame records the tab's address and title when it is accepted, and a pick keeps them: the saved note (and
+  its `browser-notes` event) names the page it was picked on, even when the tab navigated while the comment was open.
 - **Draft and tabs:** hiding the panel or switching tabs hides the overlay and the box and stops the refresh; the pick and its
   draft stay and come back with the tab. A resize places the overlay and the box again. Turning the mode off (or Esc in the box
   or the overlay) drops the pick and its draft; the saved notes stay. Closing the tab or deleting the chat drops the overlay, the

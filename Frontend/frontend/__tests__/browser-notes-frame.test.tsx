@@ -6,7 +6,7 @@
  */
 import { EventEmitter } from 'events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BrowserHost, OVERLAY_HTML, PAGE_LIB, areaText, hitElement, type BrowserHostDeps } from '../main/helpers/browser-host'
+import { BrowserHost, NOTE_BOX_HTML, OVERLAY_HTML, PAGE_LIB, areaText, hitElement, type BrowserHostDeps } from '../main/helpers/browser-host'
 
 function fakeWc(): any {
   const wc: any = new EventEmitter()
@@ -241,7 +241,7 @@ describe('frame picks live only in the host', () => {
     boxSays(f, { t: 'submit', text: 'kayıp olmasın' })
     expect(f.tab().pick).toBe(pick)
     expect(pick).toMatchObject({ draft: 'kayıp olmasın', error: 'Not kaydedilemedi, tekrar dene' })
-    expect(f.boxCalls().at(-1)).toBe('window.__error("Not kaydedilemedi, tekrar dene")')
+    expect(f.boxCalls().at(-1)).toBe(`window.__error("Not kaydedilemedi, tekrar dene",${JSON.stringify(pick.id)})`)
     expect(f.tab().notes).toHaveLength(0)
     expect(f.pageCalls()).toHaveLength(calls)
     // The window answers again: the retry delivers this one note, numbered 1, and still asks nothing of the page.
@@ -346,6 +346,101 @@ describe('frame picks live only in the host', () => {
     // The page is only ever read: no call but frame() and mark() reached it.
     expect(f.pageCalls().every((code: string) => /\.(frame|mark)\(\{\}\)$/.test(code))).toBe(true)
   })
+
+  it('a note names the page its pick was made on: saved after the tab navigated, it keeps the frame\'s address and title', async () => {
+    const f = fixture()
+    const pick = await pickBuy(f)
+    expect(pick.frame).toMatchObject({ url: 'https://example.com/', title: 'Example' })
+    boxSays(f, { t: 'draft', text: 'ilk sayfa', h: 56 })
+    f.wc.emit('did-start-navigation', { isMainFrame: true })
+    f.wc.url = 'https://other.example/'
+    f.wc.title = 'Başka sayfa'
+    f.wc.emit('did-navigate', {}, 'https://other.example/')
+    f.wc.emit('did-finish-load')
+    await settle()
+    boxSays(f, { t: 'submit', text: 'ilk sayfa' })
+    expect(f.sent('browser-notes')).toHaveLength(1)
+    expect(f.sent('browser-notes')[0]).toMatchObject({ url: 'https://example.com/', title: 'Example', tabId: 1, viewport: { width: 1000, height: 700 } })
+    expect(f.tab().notes[0]).toMatchObject({ url: 'https://example.com/', title: 'Example' })
+  })
+
+  it('a draft typed just before the box was hidden reaches its pick, and showing the box again restores that draft', async () => {
+    const f = fixture()
+    const pick = await pickBuy(f)
+    boxSays(f, { t: 'draft', text: 'önce', h: 56 })
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+    // The box posted this before the hide was processed; it arrives after.
+    boxSays(f, { t: 'draft', text: 'önce ve sonra', h: 56, p: pick.id })
+    expect(pick.draft).toBe('önce ve sonra')
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    await vi.waitFor(() => expect(setCalls(f).at(-1)).toBe(`window.__set("önce ve sonra",${JSON.stringify(pick.id)})`))
+    expect(f.tab().pick).toBe(pick)
+  })
+
+  it('a box message for a pick whose tab was closed changes nothing', async () => {
+    const f = fixture()
+    const pick = await pickBuy(f)
+    boxSays(f, { t: 'draft', text: 'kapanmadan', h: 56 })
+    await f.host.invoke({ op: 'close-tab', conversationId: 4, tabId: 1 })
+    expect(f.tab()).toBeUndefined()
+    for (const t of ['draft', 'submit', 'cancel', 'size']) f.box().webContents.emit('page-title-updated', {}, JSON.stringify({ q: 1, t, text: 'geç', h: 190, p: pick.id }))
+    expect(pick.draft).toBe('kapanmadan')
+    expect(f.sent('browser-notes')).toHaveLength(0)
+  })
+
+  it('the box shows an error only for the pick it is showing', () => {
+    const body = NOTE_BOX_HTML.slice(NOTE_BOX_HTML.indexOf('<body>') + 6, NOTE_BOX_HTML.indexOf('<script>'))
+    const script = NOTE_BOX_HTML.slice(NOTE_BOX_HTML.indexOf('<script>') + 8, NOTE_BOX_HTML.indexOf('</script>'))
+    document.body.innerHTML = body
+    const title = Object.getOwnPropertyDescriptor(Document.prototype, 'title')!
+    Object.defineProperty(document, 'title', { configurable: true, get: () => '', set: () => {} })
+    try {
+      ;(0, eval)(`(() => {${script}})()`)
+      const w = window as any
+      const err = document.getElementById('e') as HTMLElement
+      w.__set('', 'n2')
+      w.__error('A için hata', 'n1')
+      expect(err.hidden).toBe(true)
+      w.__error('B için hata', 'n2')
+      expect([err.hidden, err.textContent]).toEqual([false, 'B için hata'])
+    } finally {
+      Object.defineProperty(document, 'title', title)
+      document.body.innerHTML = ''
+    }
+  })
+
+  it('clear-notes takes a removed note\'s pin off the frozen picture of a pick kept across a navigation', async () => {
+    const f = fixture()
+    const first = await pickBuy(f)
+    boxSays(f, { t: 'submit', text: 'bir' })
+    await settle()
+    overlaySays(f, { t: 'pick', x: 310, y: 105 })
+    await vi.waitFor(() => expect(f.tab().pick).not.toBeNull())
+    boxSays(f, { t: 'draft', text: 'açık kalsın', h: 56 })
+    await settle()
+    expect(f.overlayCalls().filter((c) => c.startsWith('window.__pins(')).at(-1)).toBe('window.__pins([{"n":1,"x":100,"y":100}])')
+    f.wc.emit('did-start-navigation', { isMainFrame: true })
+    f.wc.emit('did-finish-load')
+    await settle()
+    expect(await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: [first.id] })).toEqual({ cleared: 1 })
+    await settle()
+    expect(f.overlayCalls().filter((c) => c.startsWith('window.__pins(')).at(-1)).toBe('window.__pins([])')
+  })
+
+  it('with no pick open, clear-notes still draws the pins of the notes left on the live frame', async () => {
+    const f = fixture()
+    const first = await pickBuy(f)
+    boxSays(f, { t: 'submit', text: 'bir' })
+    await settle()
+    overlaySays(f, { t: 'pick', x: 310, y: 105 })
+    await vi.waitFor(() => expect(f.tab().pick).not.toBeNull())
+    boxSays(f, { t: 'submit', text: 'iki' })
+    await settle()
+    expect(f.tab().pick).toBeNull()
+    expect(await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: [first.id] })).toEqual({ cleared: 1 })
+    await settle()
+    expect(f.overlayCalls().at(-1)).toBe('window.__pins([{"n":2,"x":300,"y":100}])')
+  })
 })
 
 describe('T11 hit-test rule', () => {
@@ -442,7 +537,7 @@ describe('T8 the page script frames', () => {
     expect(frame.elements[3].text).toBe('Dışarıda kalın')
     const buy = frame.elements[1]
     expect(buy).toEqual({
-      box: { x: 10, y: 20, width: 100, height: 30 }, id: expect.stringMatching(/^d.+-el\d+$/), kind: 'element', tag: 'button', role: 'button',
+      box: { x: 10, y: 20, width: 100, height: 30 }, id: expect.stringMatching(/^d.+-el\d+$/), tag: 'button', role: 'button',
       name: 'Satın al', href: 'https://shop.example/buy', path: 'button#buy', text: 'Satın al',
     })
     expect(frame.elements[2]).toMatchObject({ tag: 'input', name: 'Parola', text: '' })
