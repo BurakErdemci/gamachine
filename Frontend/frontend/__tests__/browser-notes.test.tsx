@@ -2,6 +2,7 @@
  * Annotate mode: notes the user pins on the live page reach the next chat message. Covers the message
  * format (comments plain, page-derived text fenced as untrusted), the chip store, the host ops and the
  * Ctrl/Cmd+Shift+E toggle, the page script run for real in jsdom, the panel, the composer chips and the send.
+ * The frame rule itself (seq, navigation, the page's place, pick ids) is in browser-notes-frame.test.tsx.
  */
 import { EventEmitter } from 'events'
 import React, { useState } from 'react'
@@ -15,7 +16,7 @@ vi.mock('axios', () => {
 })
 
 import axios from 'axios'
-import { BrowserHost, PAGE_LIB, isAnnotateChord, placeNoteBox, type BrowserHostDeps } from '../main/helpers/browser-host'
+import { BrowserHost, OVERLAY_HTML, PAGE_LIB, areaText, isAnnotateChord, placeNoteBox, type BrowserHostDeps } from '../main/helpers/browser-host'
 import { BrowserPanel } from '../renderer/components/home/BrowserPanel'
 import { AnimatedChatInput } from '../renderer/components/ui/animated-ai-chat'
 import { useChat } from '../renderer/hooks/home/useChat'
@@ -179,36 +180,38 @@ function fakeWc(): any {
   return wc
 }
 
-const PICK = { id: 'p1', kind: 'element', tag: 'button', role: 'button', name: 'Satın al', href: 'https://shop.example/buy', path: 'button#buy', rect: { x: 100, y: 100, width: 50, height: 20 } }
-const pickState = (over: Record<string, unknown> = {}) => ({
-  active: true, scroll: [0, 0], viewport: { width: 1000, height: 700 }, picking: 'p1', rect: PICK.rect, pick: null, ...over,
+const fakeImage = (bytes: string) => ({
+  isEmpty: () => false, getSize: () => ({ width: 800, height: 600 }),
+  resize: vi.fn(function (this: any, size: any) { return { ...this, size } }), toJPEG: vi.fn(() => Buffer.from(bytes)),
 })
+const BUY = { box: { x: 100, y: 100, width: 50, height: 20 }, id: 'dT-el2', kind: 'element', tag: 'button', role: 'button', name: 'Satın al', href: 'https://shop.example/buy', path: 'button#buy', text: 'Satın al' }
+const BODY = { box: { x: 0, y: 0, width: 1000, height: 700 }, id: 'dT-el1', kind: 'element', tag: 'body', role: 'body', name: '', path: 'body', text: 'Satın al' }
+const frameOf = (over: Record<string, unknown> = {}) => ({ docId: 'd1', scroll: [0, 0], viewport: { width: 1000, height: 700 }, elements: [BODY, BUY], ...over })
+const { box: BUY_RECT, ...BUY_DATA } = BUY
 
 function fakeHostFixture(platform = 'win32') {
-  const wc = fakeWc()
-  const boxWc = fakeWc()
+  const views: any[] = []
+  const makeView = () => {
+    const view: any = { webContents: fakeWc(), setBounds: vi.fn(), setVisible: vi.fn(), setBackgroundColor: vi.fn() }
+    view.webContents.capturePage = vi.fn(async () => fakeImage('overlay-bytes'))
+    views.push(view)
+    return view
+  }
+  const view = makeView()
+  const wc = view.webContents
   Object.assign(wc, {
-    // The page script's answers; tests replace them. Like the page, each reply is stamped with the document and a seq
-    // taken when the page answers (a test's own docId, seq or cancelled wins).
-    pickState: () => pickState({ picking: null, rect: null }),
-    docId: 'd1',
-    replySeq: 0,
-    image: { isEmpty: () => false, getSize: () => ({ width: 800, height: 600 }), resize: vi.fn(function (this: any, size: any) { return { ...this, size } }), toJPEG: vi.fn(() => Buffer.from('jpeg-bytes')) },
+    // The page script's answers (frame() and mark()); tests replace them.
+    frameReply: (): any => frameOf(),
+    lastFrame: null as any,
+    image: fakeImage('tab-bytes'),
     capturePage: vi.fn(async () => wc.image),
     executeJavaScriptInIsolatedWorld: vi.fn(async (_w: number, scripts: { code: string }[]) => {
       const code = scripts[0].code
-      if (code.includes('.takePick(')) {
-        const stamp = { docId: wc.docId, seq: ++wc.replySeq, cancelled: 0 }
-        return { ...stamp, ...await wc.pickState() }
-      }
-      if (code.includes('.annotateOn(')) return { active: true, docId: wc.docId }
-      if (code.includes('.commitPin(')) return wc.commitResult()
+      if (code.includes('.frame(')) { wc.lastFrame = await wc.frameReply(); return wc.lastFrame }
+      if (code.includes('.mark(')) return { docId: wc.lastFrame?.docId, scroll: wc.lastFrame?.scroll, viewport: wc.lastFrame?.viewport }
       return {}
     }),
-    commitResult: () => ({ ok: true }),
   })
-  const view: any = { webContents: wc, setBounds: vi.fn(), setVisible: vi.fn() }
-  const boxView: any = { webContents: boxWc, setBounds: vi.fn(), setVisible: vi.fn(), setBackgroundColor: vi.fn() }
   const created: any[] = []
   const session: any = new EventEmitter()
   Object.assign(session, { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), webRequest: { onBeforeRequest: vi.fn(), onResponseStarted: vi.fn(), onCompleted: vi.fn() } })
@@ -216,7 +219,7 @@ function fakeHostFixture(platform = 'win32') {
   const timers: { fn: () => void; ms: number; id: number }[] = []
   let nextTimer = 0
   const deps: BrowserHostDeps = {
-    window: () => win, createView: (options: any) => { created.push(options); return (created.length === 1 ? view : boxView) }, fromPartition: () => session,
+    window: () => win, createView: (options: any) => { created.push(options); return created.length === 1 ? view : makeView() }, fromPartition: () => session,
     http: { request: vi.fn(async () => ({ data: {} })) } as any,
     baseUrl: () => 'http://127.0.0.1:9', appToken: 't', uiSecret: 's', lookup: async () => [{ address: '93.184.216.34', family: 4 }],
     platform, now: () => 1000,
@@ -224,17 +227,25 @@ function fakeHostFixture(platform = 'win32') {
     clearTimeout: ((id: number) => { const at = timers.findIndex(t => t.id === id); if (at >= 0) timers.splice(at, 1) }) as any,
   }
   const host = new BrowserHost(deps)
-  const poll = async () => {
-    const at = timers.findIndex(t => t.ms === 150)
-    expect(at, 'a pick poll is scheduled').toBeGreaterThanOrEqual(0)
+  const loaded = (marker: string) => views.filter((v) => v.webContents.loadURL.mock.calls.some((c: any[]) => decodeURIComponent(String(c[0])).includes(marker)))
+  const overlay = () => loaded('İşaretleme · bir öğeye').at(-1)
+  const box = () => loaded('Yorum ekle…')[0]
+  /** Runs the due timer of this length (a frame refresh is 250 ms). */
+  const fire = async (ms: number) => {
+    const at = timers.findIndex(t => t.ms === ms)
+    expect(at, `a ${ms} ms timer is due`).toBeGreaterThanOrEqual(0)
     timers.splice(at, 1)[0].fn()
-    await new Promise(r => setImmediate(r))
-    await new Promise(r => setImmediate(r))
+    await settle()
   }
   const sent = (channel: string) => win.webContents.send.mock.calls.filter(([c]: [string]) => c === channel).map(([, p]: [string, any]) => p)
-  const pageCalls = (name: string) => wc.executeJavaScriptInIsolatedWorld.mock.calls.map((c: any) => c[1][0].code as string).filter((code: string) => code.includes(`.${name}(`))
-  return { host, wc, boxWc, boxView, view, win, timers, poll, sent, pageCalls, created, hasPoll: () => timers.some(t => t.ms === 150) }
+  const pageCalls = (name?: string) => wc.executeJavaScriptInIsolatedWorld.mock.calls.map((c: any) => c[1][0].code as string).filter((code: string) => !name || code.includes(`.${name}(`))
+  const boxCalls = () => (box()?.webContents.executeJavaScript.mock.calls ?? []).map((c: any[]) => String(c[0]))
+  const overlayCalls = () => (overlay()?.webContents.executeJavaScript.mock.calls ?? []).map((c: any[]) => String(c[0]))
+  const tab = () => (host as any).tabs.get(1)
+  return { host, wc, view, win, timers, fire, sent, pageCalls, boxCalls, overlayCalls, created, box, overlay, tab, hasRefresh: () => timers.some(t => t.ms === 250 || t.ms === 0) }
 }
+
+const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r)) }
 
 async function openPage(f: ReturnType<typeof fakeHostFixture>, conversationId = 4) {
   const reply = f.host.handle({ op: 'navigate', conversation_id: conversationId, args: { url: 'https://example.com/' } })
@@ -254,18 +265,21 @@ const chord = (f: ReturnType<typeof fakeHostFixture>, init: Record<string, unkno
   wc.emit('before-input-event', event, { type: 'keyDown', key: 'E', control: true, shift: true, ...init })
   return event
 }
-const boxSays = (f: ReturnType<typeof fakeHostFixture>, message: Record<string, unknown>) => f.boxWc.emit('page-title-updated', {}, JSON.stringify({ q: 1, ...message }))
+/** A message from the comment box; it names the open pick unless the test says otherwise. */
+const boxSays = (f: ReturnType<typeof fakeHostFixture>, message: Record<string, unknown>) =>
+  f.box().webContents.emit('page-title-updated', {}, JSON.stringify({ q: 1, p: f.tab().pick?.id ?? null, ...message }))
+const overlaySays = (f: ReturnType<typeof fakeHostFixture>, message: Record<string, unknown>) => f.overlay().webContents.emit('page-title-updated', {}, JSON.stringify({ q: 1, ...message }))
+const setCalls = (f: ReturnType<typeof fakeHostFixture>) => f.boxCalls().filter((c) => c.startsWith('window.__set('))
 
-/** Annotate mode on, a target picked and the comment box open next to it. */
+/** Annotate mode on, a click on the button and the comment box open next to it. */
 async function pickTarget(f: ReturnType<typeof fakeHostFixture>) {
   // The box needs a panel to sit in; a test that set its own bounds keeps them.
   if ((f.host as any).bounds.width === 0) await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
   await openPage(f)
   await annotate(f, true)
-  f.wc.pickState = () => pickState({ pick: PICK })
-  await f.poll()
-  f.wc.pickState = () => pickState()
-  await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenCalled())
+  overlaySays(f, { t: 'pick', x: 110, y: 105 })
+  await vi.waitFor(() => expect(setCalls(f).length).toBeGreaterThan(0))
+  return f.tab().pick
 }
 
 describe('placeNoteBox', () => {
@@ -319,16 +333,25 @@ describe('placeNoteBox bounds', () => {
 })
 
 describe('host annotate ops', () => {
-  it('turns the mode on in the tab, marks it touched and reports it in the live payload', async () => {
+  it('turns the mode on with an overlay over the tab, marks it touched and reports it in the live payload', async () => {
     const f = fakeHostFixture()
     await openPage(f)
     const reply = await annotate(f, true)
     expect(reply.annotating).toBe(true)
-    expect(f.pageCalls('annotateOn')).toHaveLength(1)
+    expect(f.overlay()).toBeDefined()
+    expect(f.created[1].webPreferences).toMatchObject({ sandbox: true, nodeIntegration: false, contextIsolation: true })
+    expect(f.created[1].webPreferences.preload).toBeUndefined()
+    expect(f.overlay().setBackgroundColor).toHaveBeenCalledWith('#00000000')
+    expect(f.overlay().setVisible).toHaveBeenLastCalledWith(true)
+    expect(f.win.contentView.addChildView).toHaveBeenLastCalledWith(f.overlay())
+    // Turning it on asks nothing of the page.
+    expect(f.pageCalls()).toHaveLength(0)
     const tabs = await f.host.handle({ op: 'tabs', conversation_id: 4 }) as any
     expect(tabs.tabs[0].userTouched).toBe(true)
     expect(await live(f)).toBe(true)
     expect(await annotate(f, false)).not.toHaveProperty('annotating')
+    expect(f.overlay().webContents.close).toHaveBeenCalled()
+    expect(f.win.contentView.removeChildView).toHaveBeenCalledWith(f.overlay())
   })
 
   it('refuses a page that is not loaded and a tab that does not exist', async () => {
@@ -339,67 +362,78 @@ describe('host annotate ops', () => {
     expect(await annotate(f, true)).toEqual({ error: 'no_page' })
   })
 
-  it('polls the page every 150 ms only while the mode is on and the tab is visible', async () => {
+  it('reads frames every 250 ms only while the mode is on, the tab is shown and no comment is open', async () => {
     const f = fakeHostFixture()
     await openPage(f)
-    expect(f.hasPoll()).toBe(false)
+    expect(f.hasRefresh()).toBe(false)
     await annotate(f, true)
-    expect(f.hasPoll()).toBe(true)
-    await f.poll()
-    expect(f.pageCalls('takePick')).toHaveLength(1)
-    expect(f.hasPoll()).toBe(true)
+    await f.fire(0)
+    expect(f.pageCalls('frame')).toHaveLength(1)
+    expect(f.pageCalls('mark')).toHaveLength(0)
+    expect(f.overlayCalls()).toContain(`window.__boxes(${JSON.stringify(frameOf().elements.map(({ box, id, kind }) => ({ ...box, id, kind })))},[0,0])`)
+    await f.fire(250)
+    expect(f.pageCalls('frame')).toHaveLength(2)
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-    await f.poll()
-    expect(f.pageCalls('takePick')).toHaveLength(1)
-    expect(f.hasPoll()).toBe(false)
+    expect(f.hasRefresh()).toBe(false)
+    expect(f.overlay().setVisible).toHaveBeenLastCalledWith(false)
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
-    expect(f.hasPoll()).toBe(true)
+    expect(f.overlay().setVisible).toHaveBeenLastCalledWith(true)
+    await f.fire(0)
+    expect(f.pageCalls('frame')).toHaveLength(3)
+    // A failed frame clears the boxes until the next good one.
+    f.wc.frameReply = () => ({})
+    await f.fire(250)
+    expect(f.overlayCalls().at(-1)).toBe('window.__boxes([],[0,0])')
+    f.wc.frameReply = () => frameOf()
+    await f.fire(250)
+    // While a comment is open there is no refresh at all.
+    overlaySays(f, { t: 'pick', x: 110, y: 105 })
+    await vi.waitFor(() => expect(f.tab().pick).not.toBeNull())
+    expect(f.hasRefresh()).toBe(false)
     await annotate(f, false)
-    await f.poll()
-    expect(f.pageCalls('takePick')).toHaveLength(1)
-    expect(f.hasPoll()).toBe(false)
+    expect(f.hasRefresh()).toBe(false)
   })
 
   it('opens an app-owned comment box next to the picked target, in its own sandboxed view', async () => {
     const f = fakeHostFixture()
     await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 300, y: 50, width: 800, height: 600 } })
-    await pickTarget(f)
-    expect(f.created).toHaveLength(2)
-    expect(f.created[1].webPreferences).toMatchObject({ sandbox: true, nodeIntegration: false, contextIsolation: true })
-    expect(f.created[1].webPreferences.preload).toBeUndefined()
-    expect(f.boxWc.loadURL.mock.calls[0][0]).toMatch(/^data:text\/html/)
-    expect(decodeURIComponent(f.boxWc.loadURL.mock.calls[0][0])).toContain('Yorum ekle…')
-    expect(f.boxView.setBounds).toHaveBeenLastCalledWith({ x: 460, y: 150, width: 320, height: 56 })
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(true)
-    expect(f.win.contentView.addChildView).toHaveBeenLastCalledWith(f.boxView)
-    expect(f.boxWc.focus).toHaveBeenCalled()
-    expect(f.boxView.setBackgroundColor).toHaveBeenCalledWith('#00000000')
+    const pick = await pickTarget(f)
+    expect(f.created).toHaveLength(3)
+    expect(f.created[2].webPreferences).toMatchObject({ sandbox: true, nodeIntegration: false, contextIsolation: true })
+    expect(f.created[2].webPreferences.preload).toBeUndefined()
+    expect(f.box().webContents.loadURL.mock.calls[0][0]).toMatch(/^data:text\/html/)
+    expect(f.box().setBounds).toHaveBeenLastCalledWith({ x: 460, y: 150, width: 320, height: 56 })
+    expect(f.box().setVisible).toHaveBeenLastCalledWith(true)
+    expect(f.win.contentView.addChildView).toHaveBeenLastCalledWith(f.box())
+    expect(f.box().webContents.focus).toHaveBeenCalled()
+    expect(f.box().setBackgroundColor).toHaveBeenCalledWith('#00000000')
+    expect(setCalls(f)).toEqual([`window.__set("",${JSON.stringify(pick.id)})`])
+    // The frame's picture is frozen under the target's outline while the comment is open.
+    expect(f.overlayCalls()).toContain(`window.__freeze(${JSON.stringify(pick.frame.image)},${JSON.stringify(BUY_RECT)})`)
+    expect(pick.frame.image).toMatch(/^data:image\/jpeg;base64,/)
     // the box resizes with its text
     boxSays(f, { t: 'draft', text: 'a\nb\nc', h: 100 })
-    expect(f.boxView.setBounds).toHaveBeenLastCalledWith({ x: 460, y: 150, width: 320, height: 100 })
+    expect(f.box().setBounds).toHaveBeenLastCalledWith({ x: 460, y: 150, width: 320, height: 100 })
   })
 
-  it('saves the note with the comment held in the host, ends the mode at once, and the page never sees the comment', async () => {
+  it('saves the note with the comment held in the host, keeps the mode on, and the page never sees the comment', async () => {
     const f = fakeHostFixture()
-    await pickTarget(f)
+    const pick = await pickTarget(f)
     boxSays(f, { t: 'submit', text: '  Bunu mavi yap  ' })
-    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
-    // the note is delivered first; the toolbar and the chord read "off" with it
-    await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
-    expect(f.sent('browser-live').at(-1)).not.toHaveProperty('annotating')
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    expect(f.sent('browser-notes')[0]).toEqual({
+    expect(f.sent('browser-notes')).toEqual([{
       conversationId: 4, tabId: 1, url: 'https://example.com/', title: 'Example', viewport: { width: 1000, height: 700 },
-      notes: [{ ...PICK, comment: 'Bunu mavi yap', n: 1 }],
-    })
-    expect(f.pageCalls('commitPin')).toEqual([expect.stringContaining('.commitPin({"pickId":"p1","n":1})')])
-    for (const code of f.wc.executeJavaScriptInIsolatedWorld.mock.calls.map((c: any) => c[1][0].code as string)) expect(code).not.toContain('Bunu mavi yap')
-    // the poll already scheduled runs once more and finds nothing to ask
-    await f.poll()
-    expect(f.hasPoll()).toBe(false)
-    // the chord now turns it on again, not off
+      notes: [{ ...BUY_DATA, id: pick.id, comment: 'Bunu mavi yap', n: 1, rect: BUY_RECT }],
+    }])
+    expect(f.box().setVisible).toHaveBeenLastCalledWith(false)
+    expect(f.tab().pick).toBeNull()
+    expect(await live(f)).toBe(true)
+    for (const code of f.pageCalls()) expect(code).not.toContain('Bunu mavi yap')
+    await settle()
+    expect(f.overlayCalls()).toContain('window.__freeze(null,null)')
+    // the live page is read again, and the chord now turns the mode off
+    expect(f.hasRefresh()).toBe(true)
     chord(f)
-    await vi.waitFor(async () => expect(await live(f)).toBe(true))
+    await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
   })
 
   it('ignores an empty comment, and Esc in the box drops the pick but keeps the mode', async () => {
@@ -408,256 +442,165 @@ describe('host annotate ops', () => {
     boxSays(f, { t: 'submit', text: '   ' })
     expect(await live(f)).toBe(true)
     expect(f.sent('browser-notes')).toHaveLength(0)
+    const calls = f.pageCalls().length
     boxSays(f, { t: 'cancel' })
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
+    expect(f.box().setVisible).toHaveBeenLastCalledWith(false)
+    expect(f.tab().pick).toBeNull()
     expect(await live(f)).toBe(true)
-    await vi.waitFor(() => expect(f.pageCalls('dropPick')).toEqual([expect.stringContaining('"pickId":"p1"')]))
+    expect(f.pageCalls()).toHaveLength(calls)
     expect(f.sent('browser-notes')).toHaveLength(0)
   })
 
-  it('closes the box on a scroll and brings it back with the draft once the page rests; the draft goes with the pick', async () => {
+  it('forwards a wheel over the overlay to the page and reads the boxes again 80 ms later; a frozen pick does not scroll', async () => {
     const f = fakeHostFixture()
-    await pickTarget(f)
-    boxSays(f, { t: 'draft', text: 'yarım yorum', h: 56 })
-    f.wc.pickState = () => pickState({ scroll: [0, 120], rect: { x: 100, y: -5, width: 50, height: 20 } })
-    await f.poll()
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    await f.poll()
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(true)
-    expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("yarım yorum")')
-    // the page dropped the target (Esc in the page): box and draft are gone
-    f.wc.pickState = () => pickState({ picking: null, rect: null, scroll: [0, 120], cancelled: 1 })
-    await f.poll()
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    f.wc.pickState = () => pickState({ picking: 'p1', scroll: [0, 120] })
-    const shown = f.boxView.setVisible.mock.calls.length
-    await f.poll()
-    expect(f.boxView.setVisible.mock.calls.length).toBe(shown)
+    await openPage(f)
+    await annotate(f, true)
+    overlaySays(f, { t: 'wheel', x: 200, y: 300, dx: 0, dy: 120 })
+    expect(f.wc.sendInputEvent).toHaveBeenCalledWith({ type: 'mouseWheel', x: 200, y: 300, deltaX: -0, deltaY: -120, canScroll: true })
+    await f.fire(80)
+    expect(f.pageCalls('frame')).toHaveLength(1)
+    overlaySays(f, { t: 'wheel', x: 'a', y: 300, dx: 0, dy: 1 })
+    expect(f.wc.sendInputEvent).toHaveBeenCalledTimes(1)
+    overlaySays(f, { t: 'pick', x: 110, y: 105 })
+    await vi.waitFor(() => expect(f.tab().pick).not.toBeNull())
+    overlaySays(f, { t: 'wheel', x: 200, y: 300, dx: 0, dy: 120 })
+    expect(f.wc.sendInputEvent).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps the draft when the mode is turned off and on again, drops it on a navigation, a tab change and a hidden panel closes the box', async () => {
+  it('keeps the pick and its draft while the panel is hidden or resized and brings the box back; turning the mode off drops them', async () => {
     const f = fakeHostFixture()
-    await pickTarget(f)
+    const pick = await pickTarget(f)
     boxSays(f, { t: 'draft', text: 'kalsın', h: 56 })
-    await annotate(f, false)
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    await annotate(f, true)
-    await f.poll()
-    expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("kalsın")')
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
+    expect(f.box().setVisible).toHaveBeenLastCalledWith(false)
+    expect(f.overlay().setVisible).toHaveBeenLastCalledWith(false)
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
-    await f.poll()
-    expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("kalsın")')
-    // full-screen toggle: bounds change
+    await vi.waitFor(() => expect(setCalls(f).at(-1)).toBe(`window.__set("kalsın",${JSON.stringify(pick.id)})`))
+    expect(f.box().setVisible).toHaveBeenLastCalledWith(true)
+    // full-screen toggle: the bounds change, the overlay follows and the box is placed again
     await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1200, height: 800 } })
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    f.wc.emit('did-navigate', {}, 'https://example.com/next')
-    expect(await live(f)).toBeUndefined()
+    expect(f.overlay().setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1200, height: 800 })
+    await vi.waitFor(() => expect(setCalls(f)).toHaveLength(3))
+    expect(f.tab().pick).toBe(pick)
+    await annotate(f, false)
+    expect(f.box().setVisible).toHaveBeenLastCalledWith(false)
+    expect(f.tab().pick).toBeNull()
     await annotate(f, true)
-    await f.poll()
-    expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("kalsın")')
-    f.wc.pickState = () => pickState({ picking: null, rect: null })
+    await settle()
+    expect(setCalls(f)).toHaveLength(3)
   })
 
-  it('the annotate chord also works with the focus in the comment box', async () => {
+  it('the annotate chord also works with the focus in the comment box or the overlay', async () => {
     const f = fakeHostFixture()
     await pickTarget(f)
-    expect(chord(f, {}, f.boxWc).preventDefault).toHaveBeenCalled()
+    expect(chord(f, {}, f.box().webContents).preventDefault).toHaveBeenCalled()
     await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    expect(chord(f, { key: 'G' }, f.boxWc).preventDefault).not.toHaveBeenCalled()
+    expect(f.box().setVisible).toHaveBeenLastCalledWith(false)
+    expect(chord(f, { key: 'G' }, f.box().webContents).preventDefault).not.toHaveBeenCalled()
+    await annotate(f, true)
+    expect(chord(f, {}, f.overlay().webContents).preventDefault).toHaveBeenCalled()
+    await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
   })
 
   it('keeps the box hidden, unfocused, while the target is outside the panel, and shows it again with the draft once the target is back', async () => {
     const f = fakeHostFixture()
     await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 300, y: 50, width: 800, height: 600 } })
-    await pickTarget(f)
+    const pick = await pickTarget(f)
     boxSays(f, { t: 'draft', text: 'taslak', h: 56 })
-    const focusCalls = f.boxWc.focus.mock.calls.length
-    const gone = { x: 10, y: -600, width: 700, height: 40 }
-    f.wc.pickState = () => pickState({ scroll: [0, 700], rect: gone })
-    await f.poll()
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    const boundsCalls = f.boxView.setBounds.mock.calls.length
-    await f.poll()
-    await f.poll()
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    expect(f.boxView.setBounds.mock.calls.length).toBe(boundsCalls)
-    expect(f.boxWc.focus.mock.calls.length).toBe(focusCalls)
-    expect(f.win.contentView.addChildView.mock.calls.length).toBe(2)
-    // below the panel as well
-    f.wc.pickState = () => pickState({ scroll: [0, -1400], rect: { x: 10, y: 1500, width: 700, height: 40 } })
-    await f.poll()
-    await f.poll()
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    expect(f.boxWc.focus.mock.calls.length).toBe(focusCalls)
-    // the user scrolls back and rests: the box returns inside the panel with the draft
-    f.wc.pickState = () => pickState({ scroll: [0, 0], rect: PICK.rect })
-    await f.poll()
-    await f.poll()
-    await vi.waitFor(() => expect(f.boxView.setVisible).toHaveBeenLastCalledWith(true))
-    expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("taslak")')
-    const b = f.boxView.setBounds.mock.calls.at(-1)[0]
+    const focusCalls = f.box().webContents.focus.mock.calls.length
+    // The panel shrinks above the target: nothing for the box to sit next to.
+    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 300, y: 50, width: 800, height: 90 } })
+    await settle()
+    expect(f.box().setVisible).toHaveBeenLastCalledWith(false)
+    expect(f.box().webContents.focus.mock.calls.length).toBe(focusCalls)
+    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 300, y: 50, width: 800, height: 600 } })
+    await vi.waitFor(() => expect(f.box().setVisible).toHaveBeenLastCalledWith(true))
+    expect(setCalls(f).at(-1)).toBe(`window.__set("taslak",${JSON.stringify(pick.id)})`)
+    const b = f.box().setBounds.mock.calls.at(-1)[0]
     expect(b.y).toBeGreaterThanOrEqual(50)
     expect(b.y + b.height).toBeLessThanOrEqual(650)
-    await vi.waitFor(() => expect(f.boxWc.focus.mock.calls.length).toBeGreaterThan(focusCalls))
+    await vi.waitFor(() => expect(f.box().webContents.focus.mock.calls.length).toBeGreaterThan(focusCalls))
   })
 
-  it('a refused pin keeps the box, the draft and the mode, tells the user, and a later save goes through', async () => {
+  it('a full tab refuses a new note, keeps the box, the draft and the mode, tells the user, and a later save goes through', async () => {
     const f = fakeHostFixture()
-    await pickTarget(f)
-    f.wc.commitResult = () => ({ error: 'too_many_notes' })
+    const pick = await pickTarget(f)
+    f.tab().notes = Array.from({ length: 50 }, (_v, i) => ({ note: { id: `old${i}`, n: i + 1 }, docId: 'd1', docRect: BUY_RECT }))
     boxSays(f, { t: 'submit', text: 'önemli yorum' })
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("En fazla 50 not")'))
+    expect(f.boxCalls().at(-1)).toBe('window.__error("En fazla 50 not")')
     expect(f.sent('browser-notes')).toHaveLength(0)
     expect(await live(f)).toBe(true)
-    expect(f.boxView.setVisible).not.toHaveBeenLastCalledWith(false)
-    // the error comes back with the box when it is closed and reopened
-    boxSays(f, { t: 'draft', text: 'önemli yorum', h: 56 })
-    f.wc.commitResult = () => ({ error: 'no_pick' })
+    expect(f.tab().pick).toBe(pick)
+    expect(f.box().setVisible).not.toHaveBeenLastCalledWith(false)
+    // the chips were sent: their notes leave the tab, and the same comment saves now
+    await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1 })
     boxSays(f, { t: 'submit', text: 'önemli yorum' })
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("Not kaydedilemedi, tekrar dene")'))
-    f.wc.commitResult = () => ({ ok: true })
-    boxSays(f, { t: 'submit', text: 'önemli yorum' })
-    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
-    expect(f.sent('browser-notes')[0].notes[0]).toMatchObject({ comment: 'önemli yorum', n: 1 })
-    expect(await live(f)).toBeUndefined()
+    expect(f.sent('browser-notes')).toHaveLength(1)
+    expect(f.sent('browser-notes')[0].notes).toEqual([expect.objectContaining({ comment: 'önemli yorum', n: 1 })])
   })
 
   it('shows the last error again when the box is reopened with the same pick', async () => {
     const f = fakeHostFixture()
-    await pickTarget(f)
-    f.wc.commitResult = () => ({ error: 'too_many_notes' })
+    const pick = await pickTarget(f)
+    f.win.webContents.send.mockImplementation((channel: string) => { if (channel === 'browser-notes') throw new Error('window closing') })
     boxSays(f, { t: 'submit', text: 'x' })
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("En fazla 50 not")'))
+    expect(f.boxCalls().at(-1)).toBe('window.__error("Not kaydedilemedi, tekrar dene")')
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
-    await f.poll()
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("En fazla 50 not")'))
+    await vi.waitFor(() => expect(f.boxCalls().slice(-2)).toEqual([`window.__set("",${JSON.stringify(pick.id)})`, 'window.__error("Not kaydedilemedi, tekrar dene")']))
     // typing clears it
     boxSays(f, { t: 'draft', text: 'xy', h: 56 })
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
-    await f.poll()
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("xy")'))
+    await vi.waitFor(() => expect(f.boxCalls().at(-1)).toBe(`window.__set("xy",${JSON.stringify(pick.id)})`))
   })
 
-  it('takes the pin back and keeps the box open when the note cannot be delivered', async () => {
+  it('numbers the notes of a tab 1, 2, ... and a second Enter after the save changes nothing', async () => {
     const f = fakeHostFixture()
-    await pickTarget(f)
-    f.win.webContents.send.mockImplementation((channel: string) => { if (channel === 'browser-notes') throw new Error('window closing') })
-    boxSays(f, { t: 'submit', text: 'kayıp olmasın' })
-    await vi.waitFor(() => expect(f.pageCalls('uncommitPin')).toEqual([expect.stringContaining('"pickId":"p1"')]))
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__error("Not kaydedilemedi, tekrar dene")'))
-    expect(await live(f)).toBe(true)
-    // a retry once the window answers again delivers it
-    f.win.webContents.send.mockImplementation(() => undefined)
-    boxSays(f, { t: 'submit', text: 'kayıp olmasın' })
-    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
-    expect(f.sent('browser-notes')[0].notes[0]).toMatchObject({ comment: 'kayıp olmasın', n: 1 })
-  })
-
-  it('delivers the note even when the page cannot leave the mode afterwards', async () => {
-    const f = fakeHostFixture()
-    await pickTarget(f)
-    const base = f.wc.executeJavaScriptInIsolatedWorld.getMockImplementation()!
-    f.wc.executeJavaScriptInIsolatedWorld.mockImplementation(async (w: number, scripts: any) => {
-      if (scripts[0].code.includes('.annotateOff(')) throw new Error('timeout')
-      return base(w, scripts)
-    })
-    boxSays(f, { t: 'submit', text: 'yine de gitsin' })
-    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
-    await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
-    expect(f.pageCalls('uncommitPin')).toHaveLength(0)
-  })
-
-  it('numbers the notes of a tab 1, 2, ... and ignores a second Enter while a save is running', async () => {
-    const f = fakeHostFixture()
-    await pickTarget(f)
+    const first = await pickTarget(f)
     boxSays(f, { t: 'submit', text: 'bir' })
-    boxSays(f, { t: 'submit', text: 'bir' })
-    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
-    expect(f.pageCalls('commitPin')).toHaveLength(1)
-    await annotate(f, true)
-    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
-    await f.poll()
-    f.wc.pickState = () => pickState({ picking: 'p2' })
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenCalledTimes(2))
+    f.box().webContents.emit('page-title-updated', {}, JSON.stringify({ q: 2, t: 'submit', text: 'bir', p: first.id }))
+    expect(f.sent('browser-notes')).toHaveLength(1)
+    overlaySays(f, { t: 'pick', x: 110, y: 105 })
+    await vi.waitFor(() => expect(setCalls(f)).toHaveLength(2))
     boxSays(f, { t: 'submit', text: 'iki' })
-    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(2))
-    expect(f.sent('browser-notes').map(e => e.notes[0].n)).toEqual([1, 2])
-    expect(f.pageCalls('commitPin')[1]).toContain('"n":2')
+    // Each event carries only the note just saved, with its number.
+    expect(f.sent('browser-notes').map(e => e.notes.map((n: any) => n.n))).toEqual([[1], [2]])
+    expect(f.sent('browser-notes')[1].notes[0].id).not.toBe(first.id)
   })
 
-  it('T4 numbers stay unique across a navigation in one tab', async () => {
-    const f = fakeHostFixture()
-    await pickTarget(f)
-    boxSays(f, { t: 'submit', text: 'ilk' })
-    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(1))
-    f.wc.emit('did-navigate', {}, 'https://example.com/next')
-    await annotate(f, true)
-    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
-    await f.poll()
-    f.wc.pickState = () => pickState({ picking: 'p2' })
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenCalledTimes(2))
-    boxSays(f, { t: 'submit', text: 'ikinci' })
-    await vi.waitFor(() => expect(f.sent('browser-notes')).toHaveLength(2))
-    expect(f.sent('browser-notes').map(e => e.notes[0].n)).toEqual([1, 2])
-  })
-
-  it("T4 a stale save failure does not reach another pick's box", async () => {
-    const f = fakeHostFixture()
-    await pickTarget(f)
-    let fail: (e: Error) => void = () => {}
-    const commits = f.wc.executeJavaScriptInIsolatedWorld.getMockImplementation()!
-    f.wc.executeJavaScriptInIsolatedWorld.mockImplementation((w: number, scripts: { code: string }[]) =>
-      (scripts[0].code.includes('.commitPin(') ? new Promise((_r, rej) => { fail = rej }) : commits(w, scripts)))
-    boxSays(f, { t: 'submit', text: 'eski' })
-    await vi.waitFor(() => expect(f.pageCalls('commitPin')).toHaveLength(1))
-    boxSays(f, { t: 'cancel' })
-    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
-    await f.poll()
-    f.wc.pickState = () => pickState({ picking: 'p2' })
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenCalledTimes(2))
-    fail(new Error('slow page'))
-    await new Promise(r => setImmediate(r))
-    await new Promise(r => setImmediate(r))
-    expect(f.boxWc.executeJavaScript.mock.calls.some((c: any[]) => String(c[0]).includes('__error'))).toBe(false)
-    expect(f.sent('browser-notes')).toHaveLength(0)
-  })
-
-  it('ends the mode when the page leaves it itself (Esc)', async () => {
+  it('Esc in the overlay with nothing picked ends the mode', async () => {
     const f = fakeHostFixture()
     await openPage(f)
     await annotate(f, true)
-    f.wc.pickState = () => pickState({ active: false, picking: null, rect: null })
-    await f.poll()
-    expect(await live(f)).toBeUndefined()
-    expect(f.hasPoll()).toBe(false)
+    overlaySays(f, { t: 'cancel' })
+    await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
+    expect(f.hasRefresh()).toBe(false)
+    expect(f.tab().overlay).toBeNull()
   })
 
-  it('ends the mode on a navigation, a reload and a tab close', async () => {
+  it('keeps the mode across a navigation and a reload, ends it with a tab close', async () => {
     const f = fakeHostFixture()
     await openPage(f)
     await annotate(f, true)
+    f.wc.emit('did-start-navigation', { isMainFrame: true })
     f.wc.emit('did-navigate', {}, 'https://example.com/next')
-    expect(await live(f)).toBeUndefined()
-    await annotate(f, true)
+    expect(await live(f)).toBe(true)
+    await settle()
+    expect(f.overlayCalls()).toContain('window.__boxes([],[0,0])')
     await f.host.invoke({ op: 'reload', conversationId: 4 })
-    expect(await live(f)).toBeUndefined()
-    await annotate(f, true)
+    expect(await live(f)).toBe(true)
     await f.host.invoke({ op: 'close-tab', conversationId: 4, tabId: 1 })
-    await f.poll()
-    expect(f.hasPoll()).toBe(false)
+    expect(f.hasRefresh()).toBe(false)
+    expect(f.overlay().webContents.close).toHaveBeenCalled()
   })
 
-  it('clears pins through the clear-notes op, and has no separate op to fetch notes', async () => {
+  it('clears notes through the clear-notes op without a page call, and has no separate op to fetch notes', async () => {
     const f = fakeHostFixture()
     await openPage(f)
     expect(await f.host.invoke({ op: 'notes', conversationId: 4 })).toHaveProperty('error')
-    await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: ['n1'] })
-    expect(f.pageCalls('clearNotes').at(-1)).toContain('.clearNotes({"ids":["n1"]})')
+    expect(await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: ['n1'] })).toEqual({ cleared: 0 })
+    expect(f.pageCalls()).toHaveLength(0)
     expect(await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: [5] })).toHaveProperty('error')
   })
 
@@ -683,33 +626,40 @@ describe('host annotate ops', () => {
 
 describe('host capture-notes', () => {
   const capture = (f: ReturnType<typeof fakeHostFixture>) => f.host.invoke({ op: 'capture-notes', conversationId: 4, tabId: 1 }) as Promise<any>
+  /** The overlay's own capture (the frame's picture with the pins on it), as the next overlay made will return it. */
+  const overlayImage = (f: ReturnType<typeof fakeHostFixture>, image: any) => {
+    const create = (f.host as any).deps.createView
+    ;(f.host as any).deps.createView = (options: any) => { const view = create(options); view.webContents.capturePage = vi.fn(async () => image); return view }
+  }
 
-  it('captures the shown tab once, scales the longer side to 1600 and returns a JPEG data URL', async () => {
+  it('captures the tab once for the frame and the overlay once, scales the longer side to 1600 and returns a JPEG data URL', async () => {
     const f = fakeHostFixture()
     await openPage(f)
-    f.wc.image.getSize = () => ({ width: 3200, height: 1800 })
+    const shot = fakeImage('overlay-bytes')
+    shot.getSize = () => ({ width: 3200, height: 1800 })
+    overlayImage(f, shot)
     const reply = await capture(f)
     expect(f.wc.capturePage).toHaveBeenCalledTimes(1)
-    expect(f.wc.image.resize).toHaveBeenCalledWith(expect.objectContaining({ width: 1600, height: 900 }))
-    expect(f.wc.image.toJPEG).toHaveBeenCalledWith(80)
-    expect(reply).toEqual({ image: `data:image/jpeg;base64,${Buffer.from('jpeg-bytes').toString('base64')}` })
+    expect(f.overlay().webContents.capturePage).toHaveBeenCalledTimes(1)
+    expect(shot.resize).toHaveBeenCalledWith(expect.objectContaining({ width: 1600, height: 900 }))
+    expect(shot.toJPEG).toHaveBeenCalledWith(80)
+    expect(reply).toEqual({ image: `data:image/jpeg;base64,${Buffer.from('overlay-bytes').toString('base64')}` })
+    // The mode was off: the overlay made for the picture is gone again.
+    expect(f.tab().overlay).toBeNull()
   })
 
-  it('does not resize a small page, and hides the hover outline and the box by ending the mode first', async () => {
+  it('does not resize a small page, and leaves the box, the pick and the mode as they were', async () => {
     const f = fakeHostFixture()
-    await pickTarget(f)
-    const order: string[] = []
-    f.wc.executeJavaScriptInIsolatedWorld.mockImplementation(async (_w: number, scripts: { code: string }[]) => { if (scripts[0].code.includes('.annotateOff(')) order.push('off'); return {} })
-    f.wc.capturePage.mockImplementation(async () => { order.push('capture'); return f.wc.image })
+    const pick = await pickTarget(f)
     const reply = await capture(f)
     expect(f.wc.image.resize).not.toHaveBeenCalled()
-    expect(order).toEqual(['off', 'capture'])
-    expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
-    expect(await live(f)).toBeUndefined()
+    expect(f.box().setVisible).toHaveBeenLastCalledWith(true)
+    expect(f.tab().pick).toBe(pick)
+    expect(await live(f)).toBe(true)
     expect(reply.image).toMatch(/^data:image\/jpeg;base64,/)
   })
 
-  it('sends no image for a tab that is not shown, an empty capture, a failure or a hang', async () => {
+  it('sends no image for an empty capture, a failure or a hang; a tab that is not shown is captured where it is', async () => {
     const f = fakeHostFixture()
     await openPage(f)
     f.wc.image.isEmpty = () => true
@@ -722,11 +672,12 @@ describe('host capture-notes', () => {
     await vi.waitFor(() => expect(f.timers.some(t => t.ms === 4000)).toBe(true))
     f.timers.find(t => t.ms === 4000)!.fn()
     expect(await hung).toEqual({ image: '' })
-    // A tab that is not shown is captured where it is, never brought forward.
+    // A tab that is not shown is captured where it is, never brought forward; so is its overlay.
     f.wc.capturePage.mockClear()
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
     expect((await capture(f)).image).toMatch(/^data:image\/jpeg;base64,/)
     expect(f.wc.capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true })
+    expect(f.overlay().webContents.capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true })
     f.wc.destroyed = true
     expect(await capture(f)).toEqual({ error: 'no_tab' })
     expect(await f.host.invoke({ op: 'capture-notes', conversationId: 4, tabId: 9 })).toEqual({ error: 'no_tab' })
@@ -736,40 +687,7 @@ describe('host capture-notes', () => {
 // ---- the page script in jsdom ----
 
 describe('page script', () => {
-  let roots: ShadowRoot[]
-  let hosts: Element[]
-  const realAttach = Element.prototype.attachShadow
-  let restore: (() => void)[] = []
-  let trust = true
-  const wrapped = new WeakMap<object, EventListener>()
-
   beforeEach(() => {
-    roots = []
-    hosts = []
-    restore = []
-    trust = true
-    // jsdom cannot make a trusted event; the wrapper hands the script one that says it is.
-    // window carries its own copies of the two methods in jsdom, so both places are wrapped.
-    for (const target of [EventTarget.prototype, window] as any[]) {
-      const add = target.addEventListener
-      const remove = target.removeEventListener
-      restore.push(() => { target.addEventListener = add; target.removeEventListener = remove })
-      target.addEventListener = function (this: EventTarget, type: string, fn: any, opts?: any) {
-        if (typeof fn !== 'function') return add.call(this, type, fn, opts)
-        const wrap: EventListener = (e) => fn(trust ? new Proxy(e, { get: (t: any, k) => (k === 'isTrusted' ? true : typeof t[k] === 'function' ? t[k].bind(t) : t[k]) }) : e)
-        wrapped.set(fn, wrap)
-        return add.call(this, type, wrap, opts)
-      }
-      target.removeEventListener = function (this: EventTarget, type: string, fn: any, opts?: any) {
-        return remove.call(this, type, wrapped.get(fn) ?? fn, opts)
-      }
-    }
-    Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
-      const root = realAttach.call(this, init)
-      roots.push(root)
-      hosts.push(this)
-      return root
-    }
     vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(() => [{}] as unknown as DOMRectList)
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
       const [x, y, w, h] = (this.getAttribute('data-r') || '0,0,0,0').split(',').map(Number)
@@ -779,10 +697,6 @@ describe('page script', () => {
     delete (globalThis as any).__gmBrowser
   })
   afterEach(() => {
-    Element.prototype.attachShadow = realAttach
-    // A mode left on would keep its window listeners into the next test.
-    ;(globalThis as any).__gmBrowser?.annotateOff()
-    restore.forEach(fn => fn())
     vi.restoreAllMocks()
     delete (globalThis as any).__gmBrowser
     document.body.innerHTML = ''
@@ -793,107 +707,21 @@ describe('page script', () => {
   const start = (html: string) => {
     document.body.innerHTML = html
     ;(0, eval)(PAGE_LIB)
-    expect(lib().annotateOn()).toMatchObject({ active: true, docId: expect.any(String) })
   }
-  const at = (el: Element | null) => { (document as any).elementFromPoint = () => el }
-  const ptr = (target: Element | Document | Window, type: string, x: number, y: number, buttons = 0) =>
-    target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, buttons, button: 0 }))
-  const click = (el: Element, x: number, y: number) => {
-    at(el)
-    ptr(el, 'pointermove', x, y)
-    ptr(el, 'pointerdown', x, y, 1)
-    ptr(el, 'mousedown', x, y, 1)
-    ptr(el, 'pointerup', x, y)
-    ptr(el, 'mouseup', x, y)
-  }
-  const BUTTON = '<a href="https://shop.example/buy"><button id="buy" class="cta" data-r="10,20,100,30">Satın al</button></a><p data-r="300,300,50,20">Dışarıda</p>'
-  const pick = () => lib().takePick()
-  const dragArea = (x1: number, y1: number, x2: number, y2: number) => {
-    at(document.body)
-    ptr(document.body, 'pointerdown', x1, y1, 1)
-    ptr(document.body, 'pointermove', x2, y2, 1)
-    ptr(document.body, 'pointerup', x2, y2)
-  }
+  const elements = () => lib().frame().elements as any[]
+  const byPath = (path: string) => elements().find((e) => e.path === path)
 
-  it('keeps the overlay in one closed shadow root with no text input and no comment text', () => {
-    start(BUTTON)
-    expect(roots).toHaveLength(1)
-    expect((hosts[0] as HTMLElement).style.pointerEvents).toBe('none')
-    expect(roots[0].mode).toBe('closed')
-    expect(hosts[0].shadowRoot).toBeNull()
-    click(document.getElementById('buy')!, 20, 30)
-    expect(roots[0].querySelector('input, textarea, [contenteditable]')).toBeNull()
+  it('draws nothing in the page and has no text input anywhere the page or the overlay could reach', () => {
+    const attach = vi.spyOn(Element.prototype, 'attachShadow')
+    start('<button id="buy" data-r="10,20,100,30">Satın al</button>')
+    lib().frame()
+    lib().mark()
+    expect(attach).not.toHaveBeenCalled()
+    expect(document.body.innerHTML).toBe('<button id="buy" data-r="10,20,100,30">Satın al</button>')
+    expect(PAGE_LIB).not.toMatch(/createElement|attachShadow|appendChild|setProperty/)
     expect(PAGE_LIB).not.toContain('Yorum ekle')
-    expect(PAGE_LIB).not.toMatch(/createElement\(\s*['"](input|textarea)['"]/)
-  })
-
-  it('T8 every reply is the whole state: the document, a rising seq, the outlined pick with its description and the last cancel', () => {
-    start(BUTTON)
-    const empty = pick()
-    expect(empty).toMatchObject({ active: true, picking: null, pick: null, rect: null, cancelled: 0, docId: expect.any(String) })
-    click(document.getElementById('buy')!, 20, 30)
-    const first = pick()
-    expect(first.pick).toMatchObject({
-      kind: 'element', tag: 'button', role: 'button', name: 'Satın al',
-      href: 'https://shop.example/buy', path: 'button#buy', rect: { x: 10, y: 20, width: 100, height: 30 },
-    })
-    expect(first.pick).not.toHaveProperty('comment')
-    expect(first.picking).toBe(first.pick.id)
-    expect(first.viewport).toEqual({ width: window.innerWidth, height: window.innerHeight })
-    expect(first.docId).toBe(empty.docId)
-    expect(first.seq).toBeGreaterThan(empty.seq)
-    // the same state again, so a lost reply is made up by the next one
-    const again = pick()
-    expect(again.seq).toBeGreaterThan(first.seq)
-    expect(again.pick).toEqual(first.pick)
-    expect(again.picking).toBe(first.pick.id)
-    expect(again.rect).toEqual({ x: 10, y: 20, width: 100, height: 30 })
-    // the pending target is outlined while the host shows the box
-    expect((roots[0].querySelector('.hl') as HTMLElement).style.display).toBe('block')
-  })
-
-  it('commitPin turns the pick into a numbered pin with a blue frame that stays after the mode ends', () => {
-    start(BUTTON)
-    click(document.getElementById('buy')!, 20, 30)
-    const { pick: p } = pick()
-    expect(lib().commitPin({ pickId: 'other', n: 1 })).toEqual({ error: 'no_pick' })
-    expect(lib().commitPin({ pickId: p.id, n: 1 })).toEqual({ ok: true })
-    expect(pick().picking).toBeNull()
-    expect(roots[0].querySelectorAll('.pin')).toHaveLength(1)
-    expect(roots[0].querySelector('.pin')!.textContent).toBe('1')
-    const mark = roots[0].querySelector('.mark') as HTMLElement
-    expect([mark.style.left, mark.style.top, mark.style.width, mark.style.height]).toEqual(['10px', '20px', '100px', '30px'])
-    lib().annotateOff()
-    expect(document.documentElement.style.cursor).toBe('')
-    expect(document.querySelector('[data-gm-annotate]')).not.toBeNull()
-    expect(roots[0].querySelectorAll('.mark')).toHaveLength(1)
-    // the mode is over: a further click is the page's own
-    click(document.getElementById('buy')!, 20, 30)
-    expect(pick().picking).toBeNull()
-  })
-
-  it('frames follow the page: after a scroll the frame and pin are drawn where the element now is', () => {
-    start(BUTTON)
-    click(document.getElementById('buy')!, 20, 30)
-    lib().commitPin({ pickId: pick().pick.id, n: 1 })
-    lib().annotateOff()
-    document.getElementById('buy')!.setAttribute('data-r', '10,220,100,30')
-    // clearNotes redraws the remaining pins, as the scroll handler does
-    lib().clearNotes({ ids: ['nope'] })
-    const mark = roots[0].querySelector('.mark') as HTMLElement
-    expect(mark.style.top).toBe('220px')
-    expect((roots[0].querySelector('.pin') as HTMLElement).style.top).toBe('220px')
-  })
-
-  it('records a dragged area with the visible text inside it only', () => {
-    start('<h1 data-r="20,20,100,20">Başlık</h1><p data-r="30,60,100,20">Fiyat 10 TL</p><p data-r="500,500,100,20">Uzakta</p>')
-    dragArea(10, 10, 200, 120)
-    const n = pick().pick
-    expect(n).toMatchObject({ kind: 'area', rect: { x: 10, y: 10, width: 190, height: 110 } })
-    expect(n.text).toContain('Başlık')
-    expect(n.text).toContain('Fiyat 10 TL')
-    expect(n.text).not.toContain('Uzakta')
-    expect((roots[0].querySelector('.frame') as HTMLElement).style.display).toBe('block')
+    expect(OVERLAY_HTML).not.toMatch(/<(input|textarea)|contenteditable|createElement\(\s*['"](input|textarea)['"]/)
+    expect(OVERLAY_HTML).not.toMatch(/innerHTML/)
   })
 
   it('never reads a field value, password, textarea or editable content, whatever the contenteditable casing', () => {
@@ -904,22 +732,16 @@ describe('page script', () => {
       + '<div id="c4" contenteditable="plaintext-only" data-r="0,80,80,10">DUZ-EDITOR</div><div id="c5" role="textbox" data-r="0,90,80,10">ROL-EDITOR</div>'
       + '<div id="c6" aria-multiline="true" data-r="0,100,80,10">COK-SATIR-EDITOR</div><div id="c7" role="TextBox" data-r="0,110,80,10">KARISIK-ROL</div>'
       + '<p data-r="0,120,80,10">görünen</p><div contenteditable="false" data-r="0,130,80,10">kilitli-ama-okunur</div>')
-    const all = document.querySelectorAll<HTMLElement>('#u, #p, #t, #c, #s, #c2, #c3, #c4, #c5, #c6, #c7')
     // jsdom does not compute isContentEditable.
     for (const id of ['c', 'c2', 'c3', 'c4']) Object.defineProperty(document.getElementById(id), 'isContentEditable', { value: true })
-    const seen: unknown[] = []
-    for (const el of all) {
-      click(el, 5, 5)
-      seen.push(pick().pick)
-    }
-    dragArea(0, 0, 300, 300)
-    seen.push(pick().pick)
-    expect(seen).toHaveLength(12)
-    const dump = JSON.stringify(seen)
+    const all = elements()
+    expect(all).toHaveLength(14)
+    const dump = JSON.stringify([all, areaText(all, { x: 0, y: 0, width: 300, height: 300 })])
     for (const secret of ['hunter2', 's3cret-pass', 'gizli metin', 'özel yazı', 'seçili-deger', 'BÜYÜK-EDITOR', 'BOS-EDITOR', 'DUZ-EDITOR', 'ROL-EDITOR', 'COK-SATIR-EDITOR', 'KARISIK-ROL']) expect(dump).not.toContain(secret)
     expect(dump).toContain('görünen')
     expect(dump).toContain('Kullanıcı')
     expect(dump).toContain('kilitli-ama-okunur')
+    expect(byPath('input#u')).toMatchObject({ name: 'Kullanıcı', text: '' })
   })
 
   it('T5 a referenced label that is a field, or sits inside an editor, never becomes the note name', () => {
@@ -928,9 +750,8 @@ describe('page script', () => {
       + '<button id="b2" aria-labelledby="p1" data-r="0,20,50,10"></button>'
       + '<label for="i2"><span contenteditable="true">PRIVATE_LABEL</span></label><input id="i2" data-r="0,40,50,10">')
     for (const el of document.querySelectorAll('[contenteditable]')) Object.defineProperty(el, 'isContentEditable', { value: true })
-    const names = ['b', 'b2', 'i2'].map((id) => { click(document.getElementById(id)!, 5, 5); return pick().pick.name })
-    const dump = JSON.stringify(names)
-    expect(dump).not.toContain('PRIVATE')
+    const names = ['button#b', 'button#b2', 'input#i2'].map((path) => byPath(path).name)
+    expect(JSON.stringify(names)).not.toContain('PRIVATE')
     expect(names[0]).toBe('Genel etiket')
   })
 
@@ -946,62 +767,6 @@ describe('page script', () => {
     }
     expect(JSON.stringify(names)).not.toContain('PRIVATE')
     expect(names).toContain('Save')
-  })
-
-  it('T7 a newer click does not lose the pick the host keeps open', () => {
-    start('<button id="a" data-r="10,20,100,30">Alpha</button><button id="b" data-r="10,80,100,30">Beta</button>')
-    click(document.getElementById('a')!, 20, 30)
-    const { pick: { id: a }, docId } = pick()
-    click(document.getElementById('b')!, 20, 90)
-    const b = pick().pick.id
-    expect(b).not.toBe(a)
-    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
-    expect(pick()).toMatchObject({ picking: a, pick: { id: a } })
-    // a command for another document does nothing
-    expect(lib().keepPick({ pickId: b, docId: 'other' })).toEqual({ error: 'stale_document' })
-    expect(pick().picking).toBe(a)
-    expect(lib().commitPin({ pickId: a, n: 1 })).toEqual({ ok: true })
-    expect(pick()).toMatchObject({ picking: null, pick: null })
-  })
-
-  it('T8 eviction never drops the open pick, also on a rollback', () => {
-    start('<button id="a" data-r="10,20,100,30">Alpha</button><button id="b" data-r="10,80,100,30">Beta</button>')
-    click(document.getElementById('a')!, 20, 30)
-    const { pick: { id: a }, docId } = pick()
-    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
-    const later: string[] = []
-    for (let i = 0; i < 25; i++) { click(document.getElementById('b')!, 20, 90); later.push(pick().pick.id) }
-    // the open pick still has its record; only the oldest other ones went
-    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
-    expect(lib().keepPick({ pickId: later[0], docId })).toEqual({ error: 'no_pick' })
-    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
-    expect(lib().commitPin({ pickId: a, n: 1 })).toEqual({ ok: true })
-    // the note could not be delivered: the pick comes back as the open one and the bound still holds
-    expect(lib().uncommitPin({ pickId: a })).toEqual({ ok: true })
-    for (let i = 0; i < 25; i++) { click(document.getElementById('b')!, 20, 90); later.push(pick().pick.id) }
-    const committed = [a, ...later].filter((id, n) => lib().commitPin({ pickId: id, n: n + 2 }).ok)
-    expect(committed[0]).toBe(a)
-    expect(committed).toHaveLength(20)
-  })
-
-  it('T8 Esc after a delayed outline command wins', () => {
-    start('<button id="a" data-r="10,20,100,30">Alpha</button><button id="b" data-r="10,80,100,30">Beta</button>')
-    click(document.getElementById('a')!, 20, 30)
-    const { pick: { id: a }, docId } = pick()
-    click(document.getElementById('b')!, 20, 90)
-    const before = pick().cancelled
-    // the host asked for "a" before the Esc, the page runs the command after it
-    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
-    expect(lib().keepPick({ pickId: a, docId })).toEqual({ ok: true })
-    const state = pick()
-    expect(state.picking).toBeNull()
-    expect(state.cancelled).toBeGreaterThan(before)
-    // a pick proposed after the Esc is outlined again by the same command
-    click(document.getElementById('a')!, 20, 30)
-    const c = pick().pick.id
-    click(document.getElementById('b')!, 20, 90)
-    expect(lib().keepPick({ pickId: c, docId })).toEqual({ ok: true })
-    expect(pick().picking).toBe(c)
   })
 
   it('T7 nested-editor text is absent from names via label for, aria-labelledby, own text and a wrapping label', () => {
@@ -1051,37 +816,7 @@ describe('page script', () => {
     expect(lib().describe({ focused: true }).element.name).toBe('One')
   })
 
-  it('draws the number the host gave on the pin, refuses a missing number, and uncommitPin takes the pin back as a pending target', () => {
-    start(BUTTON)
-    click(document.getElementById('buy')!, 20, 30)
-    const id = pick().pick.id
-    expect(lib().commitPin({ pickId: id })).toEqual({ error: 'bad_number' })
-    expect(lib().commitPin({ pickId: id, n: 7 })).toEqual({ ok: true })
-    expect(roots[0].querySelector('.pin')!.textContent).toBe('7')
-    expect(lib().uncommitPin({ pickId: 'other' })).toEqual({ error: 'no_note' })
-    expect(lib().uncommitPin({ pickId: id })).toEqual({ ok: true })
-    expect(roots[0].querySelectorAll('.pin')).toHaveLength(0)
-    expect(pick()).toMatchObject({ picking: id, pick: { id } })
-    expect(lib().commitPin({ pickId: id, n: 7 })).toEqual({ ok: true })
-    expect(roots[0].querySelector('.pin')!.textContent).toBe('7')
-  })
-
-  it('keeps the numbers of the notes apart: a later note shows its own number, whatever else is pinned', () => {
-    start('<button id="a" data-r="10,20,100,30">Alpha</button><button id="b" data-r="10,80,100,30">Beta</button>')
-    click(document.getElementById('a')!, 20, 30)
-    const a = pick().pick
-    lib().commitPin({ pickId: a.id, n: 1 })
-    lib().annotateOff(); lib().annotateOn()
-    click(document.getElementById('b')!, 20, 90)
-    const b = pick().pick
-    lib().commitPin({ pickId: b.id, n: 2 })
-    expect([...roots[0].querySelectorAll('.pin')].map(p => p.textContent)).toEqual(['1', '2'])
-    // the first note leaves; the second keeps its number
-    expect(lib().clearNotes({ ids: [a.id] })).toEqual({ cleared: 1 })
-    expect([...roots[0].querySelectorAll('.pin')].map(p => p.textContent)).toEqual(['2'])
-  })
-
-  it('treats any token of a role list as a field in element and area picks', () => {
+  it('treats any token of a role list as a field in element and area notes', () => {
     const variants: [string, string][] = [
       ['S-roleLeadingSpace', '<div role=" textbox">S-roleLeadingSpace</div>'],
       ['S-roleTwoTokens', '<div role="textbox searchbox">S-roleTwoTokens</div>'],
@@ -1094,70 +829,18 @@ describe('page script', () => {
     ]
     const html = variants.map(([, h], i) => h.replace('>', ` data-r="10,${i * 30},300,25">`)).join('') + '<p data-r="10,300,300,25">S-plain</p><div role="textboxes" data-r="10,330,300,25">S-notAToken</div>'
     start(html)
+    const all = elements()
     const leaked: string[] = []
-    for (const el of document.body.querySelectorAll('div, p')) {
-      click(el, 20, 5)
-      const json = JSON.stringify(pick().pick)
+    for (const one of all) {
+      const json = JSON.stringify(one)
       for (const [tag] of variants) if (json.includes(tag)) leaked.push(tag)
-      if (el.tagName === 'P') expect(json).toContain('S-plain')
-      if (el.getAttribute('role') === 'textboxes') expect(json).toContain('S-notAToken')
-      lib().dropPick()
     }
-    dragArea(0, 0, 400, 400)
-    const area = JSON.stringify(pick().pick)
+    expect(JSON.stringify(all.find((e) => e.tag === 'p'))).toContain('S-plain')
+    expect(JSON.stringify(all.find((e) => e.role === 'textboxes'))).toContain('S-notAToken')
+    const area = areaText(all, { x: 0, y: 0, width: 400, height: 400 })
     for (const [tag] of variants) if (area.includes(tag)) leaked.push(`area:${tag}`)
     expect(area).toContain('S-plain')
     expect(leaked).toEqual([])
-  })
-
-  it('ignores every event the page itself made up', () => {
-    start(BUTTON)
-    trust = false
-    click(document.getElementById('buy')!, 20, 30)
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    expect(pick()).toMatchObject({ active: true, picking: null, pick: null })
-  })
-
-  it('Esc drops a pending target first and only then leaves the mode', () => {
-    start(BUTTON)
-    click(document.getElementById('buy')!, 20, 30)
-    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
-    expect(pick()).toMatchObject({ active: true, picking: null })
-    expect((roots[0].querySelector('.hl') as HTMLElement).style.display).toBe('none')
-    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
-    expect(pick().active).toBe(false)
-    expect(document.querySelector('[data-gm-annotate]')).toBeNull()
-  })
-
-  it('keeps a pending target when the mode ends and offers it again when it starts; dropPick removes it', () => {
-    start(BUTTON)
-    click(document.getElementById('buy')!, 20, 30)
-    const id = pick().pick.id
-    lib().annotateOff()
-    expect(document.querySelector('[data-gm-annotate]')).not.toBeNull()
-    expect((roots[0].querySelector('.hl') as HTMLElement).style.display).toBe('none')
-    lib().annotateOn()
-    expect(pick()).toMatchObject({ picking: id, pick: { id } })
-    expect((roots[0].querySelector('.hl') as HTMLElement).style.display).toBe('block')
-    expect(lib().dropPick({ pickId: id })).toEqual({ ok: true })
-    expect(pick().picking).toBeNull()
-  })
-
-  it('keeps pins after the mode ends and removes the overlay with the last cleared note', () => {
-    start(BUTTON)
-    const ids: string[] = []
-    const save = (n: number) => { click(document.getElementById('buy')!, 20, 30); const id = pick().pick.id; ids.push(id); lib().commitPin({ pickId: id, n }) }
-    save(1)
-    lib().annotateOn()
-    save(2)
-    expect(roots[0].querySelectorAll('.pin')).toHaveLength(2)
-    lib().annotateOff()
-    expect(document.querySelector('[data-gm-annotate]')).not.toBeNull()
-    expect(lib().clearNotes({ ids: ['nope'] })).toEqual({ cleared: 0 })
-    expect(lib().clearNotes({ ids: [ids[0]] })).toEqual({ cleared: 1 })
-    expect(roots[0].querySelectorAll('.pin')).toHaveLength(1)
-    expect(lib().clearNotes({})).toEqual({ cleared: 1 })
-    expect(document.querySelector('[data-gm-annotate]')).toBeNull()
   })
 })
 
@@ -1550,41 +1233,50 @@ describe('T5 notes tab and captures', () => {
 })
 
 describe('T5 comment box guards', () => {
-  it('T5 a poll answer for a tab that is no longer shown keeps the pick and does not open the box', async () => {
+  it('T5 a frame answer for a tab that is no longer shown keeps the pick and does not open the box', async () => {
     const f = fakeHostFixture()
     await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
     await openPage(f)
     await annotate(f, true)
     let answer: (v: unknown) => void = () => {}
-    f.wc.pickState = () => new Promise(resolve => { answer = resolve })
-    await f.poll()
+    f.wc.frameReply = () => new Promise(resolve => { answer = resolve })
+    overlaySays(f, { t: 'pick', x: 110, y: 105 })
+    await settle()
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-    answer(pickState({ pick: PICK }))
-    await new Promise(r => setImmediate(r))
-    await new Promise(r => setImmediate(r))
-    expect(f.boxWc.executeJavaScript).not.toHaveBeenCalled()
-    expect((f.host as any).tabs.get(1).pick?.data.id).toBe('p1')
+    answer(frameOf())
+    await settle()
+    expect(f.box()).toBeUndefined()
+    expect(f.tab().pick?.data.name).toBe('Satın al')
+    // Hidden, the page was captured where it is; shown again, the box opens for that pick.
+    expect(f.wc.capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true })
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    await vi.waitFor(() => expect(setCalls(f)).toEqual([`window.__set("",${JSON.stringify(f.tab().pick.id)})`]))
   })
 
   it('T5 the box is as wide as a narrow panel allows and stays hidden when that is unusably small', async () => {
     for (const [width, expected] of [[1400, 320], [200, 184]] as const) {
       const f = fakeHostFixture()
       await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 50, y: 50, width, height: 400 } })
-      await pickTarget(f)
-      const b = f.boxView.setBounds.mock.calls.at(-1)![0]
+      f.wc.frameReply = () => frameOf({ elements: [BODY, { ...BUY, box: { x: 10, y: 10, width: 40, height: 20 } }] })
+      await openPage(f)
+      await annotate(f, true)
+      overlaySays(f, { t: 'pick', x: 20, y: 15 })
+      await vi.waitFor(() => expect(setCalls(f).length).toBeGreaterThan(0))
+      const b = f.box().setBounds.mock.calls.at(-1)![0]
       expect(b.width).toBe(expected)
       expect(b.x).toBeGreaterThanOrEqual(50)
       expect(b.x + b.width).toBeLessThanOrEqual(50 + width)
     }
     const f = fakeHostFixture()
     await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 50, y: 50, width: 150, height: 400 } })
+    f.wc.frameReply = () => frameOf({ elements: [BODY, { ...BUY, box: { x: 10, y: 10, width: 40, height: 20 } }] })
     await openPage(f)
     await annotate(f, true)
-    f.wc.pickState = () => pickState({ pick: PICK, rect: { x: 10, y: 10, width: 40, height: 20 } })
-    await f.poll()
-    expect(f.boxWc.executeJavaScript).not.toHaveBeenCalled()
-    expect(f.boxView.setBounds).not.toHaveBeenCalled()
-    expect((f.host as any).tabs.get(1).pick?.data.id).toBe('p1')
+    overlaySays(f, { t: 'pick', x: 20, y: 15 })
+    await vi.waitFor(() => expect(f.tab().pick).not.toBeNull())
+    await settle()
+    expect(f.box()).toBeUndefined()
+    expect(f.tab().pick.data.name).toBe('Satın al')
   })
 })
 
@@ -1616,182 +1308,19 @@ describe('T5 one block per tab and plain text', () => {
 })
 
 describe('T6 host races', () => {
-  const settle = async () => { await new Promise(r => setImmediate(r)); await new Promise(r => setImmediate(r)) }
-
-  it('T6 an older pick poll answering late never replaces a newer pick or its draft', async () => {
-    const f = fakeHostFixture()
-    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
-    await openPage(f)
-    await annotate(f, true)
-    let answerOld: (v: unknown) => void = () => {}
-    f.wc.pickState = () => new Promise(resolve => { answerOld = resolve })
-    await f.poll()
-    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
-    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
-    await f.poll()
-    await vi.waitFor(() => expect(f.boxWc.executeJavaScript).toHaveBeenCalled())
-    boxSays(f, { t: 'draft', text: 'NEW DRAFT' })
-    answerOld(pickState({ pick: PICK }))
-    await settle()
-    const pick = (f.host as any).tabs.get(1).pick
-    expect(pick.data.id).toBe('p2')
-    expect(pick.draft).toBe('NEW DRAFT')
-  })
-
-  it('T6 a pick with a draft is not replaced by another pick', async () => {
-    const f = fakeHostFixture()
-    await pickTarget(f)
-    boxSays(f, { t: 'draft', text: 'KEEP ME' })
-    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
-    await f.poll()
-    expect((f.host as any).tabs.get(1).pick.data.id).toBe('p1')
-    expect((f.host as any).tabs.get(1).pick.draft).toBe('KEEP ME')
-  })
-
-  it('T7 a draft survives a later poll after a rejected pick', async () => {
-    const f = fakeHostFixture()
-    await pickTarget(f)
-    boxSays(f, { t: 'draft', text: 'KEEP ME' })
-    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
-    await f.poll()
-    expect(f.pageCalls('keepPick').at(-1)).toContain('"pickId":"p1"')
-    // the page has not applied it yet: the same state comes again and the host asks again
-    await f.poll()
-    expect(f.pageCalls('keepPick')).toHaveLength(3)
-    f.wc.pickState = () => pickState()
-    await f.poll()
-    const pick = (f.host as any).tabs.get(1).pick
-    expect(pick.data.id).toBe('p1')
-    expect(pick.draft).toBe('KEEP ME')
-    expect((f.host as any).boxTab).toBe((f.host as any).tabs.get(1))
-  })
-
-  /** `count` polls whose page answers are held; `reply(i, state)` answers the i-th of them (0-based) whenever the test wants. */
-  async function holdReplies(f: ReturnType<typeof fakeHostFixture>, count: number) {
-    const answers: ((v: unknown) => void)[] = []
-    f.wc.pickState = () => new Promise(resolve => { answers.push(resolve) })
-    for (let i = 0; i < count; i++) {
-      await f.poll()
-      // a hide/show schedules the next poll while the earlier one is still waiting
-      await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-      await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
-    }
-    return async (i: number, state: Record<string, unknown>) => { answers[i](state); await settle() }
-  }
-  async function heldReplies(count: number) {
-    const f = fakeHostFixture()
-    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
-    await openPage(f)
-    await annotate(f, true)
-    return { f, reply: await holdReplies(f, count), tab: () => (f.host as any).tabs.get(1) }
-  }
-  const P2 = { ...PICK, id: 'p2', name: 'İkinci' }
-
-  it('T8 reordered or lost replies converge on the page state', async () => {
-    // newest first, the older reply after it: the older one is dropped
-    const a = await heldReplies(2)
-    await a.reply(1, pickState({ picking: 'p2', pick: P2 }))
-    await a.reply(0, pickState({ pick: PICK }))
-    expect(a.tab().pick.data.id).toBe('p2')
-    // a lost reply (never answered) changes nothing: the next one carries the same state
-    const b = await heldReplies(2)
-    await b.reply(1, pickState({ pick: PICK }))
-    expect(b.tab().pick.data.id).toBe('p1')
-    await vi.waitFor(() => expect(b.f.boxView.setVisible).toHaveBeenLastCalledWith(true))
-    // the page moved to p2 in between: the host follows once a reply says so, in any order
-    const c = await heldReplies(3)
-    await c.reply(2, pickState({ picking: 'p2', pick: P2 }))
-    await c.reply(0, pickState({ pick: PICK }))
-    await c.reply(1, pickState({ pick: PICK }))
-    expect(c.tab().pick.data.id).toBe('p2')
-  })
-
-  it('T8 a draft survives any reply order', async () => {
-    const orders = [[0, 1, 2], [2, 1, 0], [1, 0, 2], [0, 2, 1]]
-    for (const order of orders) {
-      const f = fakeHostFixture()
-      await pickTarget(f)
-      boxSays(f, { t: 'draft', text: 'KEEP ME' })
-      // three later replies: the page outlined newer clicks, then nothing (no Esc); they arrive in this order
-      const reply = await holdReplies(f, 3)
-      const states = [pickState({ picking: 'p2', pick: P2 }), pickState({ picking: 'p3', pick: { ...PICK, id: 'p3' } }), pickState({ picking: null, rect: null })]
-      for (const i of order) await reply(i, states[i])
-      expect((f.host as any).tabs.get(1).pick, String(order)).toMatchObject({ data: { id: 'p1' }, draft: 'KEEP ME' })
-      expect(f.pageCalls('keepPick').at(-1)).toContain('"pickId":"p1"')
-    }
-  })
-
-  it('T8 a reply from an earlier document is ignored', async () => {
-    const { f, reply, tab } = await heldReplies(1)
-    f.wc.emit('did-navigate', {}, 'https://example.com/next')
-    f.wc.docId = 'd2'
-    f.wc.pickState = () => pickState({ picking: null, rect: null })
-    await annotate(f, true)
-    await reply(0, { ...pickState({ pick: PICK }), docId: 'd1', seq: 99 })
-    expect(tab().pick).toBeNull()
-    expect(f.boxWc.executeJavaScript).not.toHaveBeenCalled()
-    // the new document's own state still counts, its seq starting again
-    f.wc.replySeq = 0
-    f.wc.pickState = () => pickState({ picking: 'p2', pick: P2 })
-    await f.poll()
-    expect(tab().pick.data.id).toBe('p2')
-  })
-
-  it('T8 Esc in the page clears the open pick and its draft, unless the pick is being saved', async () => {
-    const f = fakeHostFixture()
-    await pickTarget(f)
-    boxSays(f, { t: 'draft', text: 'KEEP ME' })
-    f.wc.pickState = () => pickState({ picking: null, rect: null, cancelled: 3 })
-    await f.poll()
-    expect((f.host as any).tabs.get(1).pick).toBeNull()
-    expect(f.pageCalls('dropPick').at(-1)).toContain('"pickId":"p1"')
-    // a save on its way: the cancel is seen but the note still goes out
-    const g = fakeHostFixture()
-    await pickTarget(g)
-    let commit: (v: unknown) => void = () => {}
-    const base = g.wc.executeJavaScriptInIsolatedWorld.getMockImplementation()!
-    g.wc.executeJavaScriptInIsolatedWorld.mockImplementation((w: number, scripts: { code: string }[]) =>
-      (scripts[0].code.includes('.commitPin(') ? new Promise(resolve => { commit = resolve }) : base(w, scripts)))
-    boxSays(g, { t: 'submit', text: 'gitsin' })
-    await vi.waitFor(() => expect(g.pageCalls('commitPin')).toHaveLength(1))
-    g.wc.pickState = () => pickState({ picking: null, rect: null, cancelled: 3 })
-    await g.poll()
-    commit({ ok: true })
-    await vi.waitFor(() => expect(g.sent('browser-notes')).toHaveLength(1))
-    expect(g.pageCalls('dropPick')).toHaveLength(0)
-  })
-
-  it('T7 a late reply does not bring back a pick the page dropped', async () => {
-    const f = fakeHostFixture()
-    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
-    await openPage(f)
-    await annotate(f, true)
-    let answerOld: (v: unknown) => void = () => {}
-    f.wc.pickState = () => new Promise(resolve => { answerOld = resolve })
-    await f.poll()
-    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
-    f.wc.pickState = () => pickState({ picking: null, rect: null })
-    await f.poll()
-    answerOld(pickState({ pick: PICK }))
-    await settle()
-    expect((f.host as any).tabs.get(1).pick).toBeNull()
-  })
-
-  it('T6 a tab hidden while the mode is ended is captured with stayHidden', async () => {
+  it('T6 a tab hidden while its frame is read is captured with stayHidden', async () => {
     const f = fakeHostFixture()
     await openPage(f)
     await annotate(f, true)
     let release: (v: unknown) => void = () => {}
-    f.wc.executeJavaScriptInIsolatedWorld.mockImplementation(async (_w: number, scripts: { code: string }[]) =>
-      (scripts[0].code.includes('.annotateOff(') ? new Promise(resolve => { release = resolve }) : {}))
+    f.wc.frameReply = () => new Promise(resolve => { release = resolve })
     const pending = f.host.invoke({ op: 'capture-notes', conversationId: 4, tabId: 1 }) as Promise<any>
     await settle()
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-    release({})
+    release(frameOf())
     await pending
     expect(f.wc.capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true })
+    expect(f.overlay().webContents.capturePage).toHaveBeenCalledWith(undefined, { stayHidden: true })
   })
 
   it('T6 a background page popup keeps the selected tab, a foreground one selects the new tab', async () => {
@@ -1800,7 +1329,6 @@ describe('T6 host races', () => {
       await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://example.com/' })
       await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
       const first = f.wc
-      // the fixture's second view is the comment box: the popup tab gets its own
       const second = fakeWc()
       Object.assign(second, { executeJavaScriptInIsolatedWorld: vi.fn(async () => ({})) })
       ;(f.host as any).deps.createView = () => ({ webContents: second, setBounds: vi.fn(), setVisible: vi.fn() })
