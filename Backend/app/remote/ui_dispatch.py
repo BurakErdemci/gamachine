@@ -483,6 +483,11 @@ class UiDispatcher:
         token = read_local_app_token()
         if token:
             headers.append((b"x-session-token", token.encode("utf-8")))
+        # The phone page follows the desktop's language, so the backend's
+        # error texts must too (the desktop renderer sends this header itself).
+        lang = (getattr(self.bridge, "current_desktop_ui", lambda: None)() or {}).get("lang")
+        if lang:
+            headers.append((b"x-ui-lang", lang.encode("ascii")))
         if secret_elevated(method, path):
             secret = approval_mode.ui_secret()
             if secret:
