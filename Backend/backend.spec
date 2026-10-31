@@ -53,7 +53,7 @@ a = Analysis(
     # GÖMÜLMEZ — PyInstaller 6.x datas'ı _internal/ altına koyuyor, oysa scriptlerin
     # frozen 'backend' binary'sinin YANINDA (Backend kökünde) olması gerekiyor.
     # Bu yüzden electron-builder.yml extraResources ile doğrudan Backend köküne kopyalanır.
-    datas=_cas_datas,
+    datas=_cas_datas + [(_os.path.join('app', 'harness_notes', '*.md'), 'harness_notes')],
     hiddenimports=[
         # Claude Agent SDK (kalıcı interaktif session)
         'claude_agent_sdk',

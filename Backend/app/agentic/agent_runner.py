@@ -44,6 +44,7 @@ from tools.tool_registry import (
 )
 from prompts import SYSTEM_PROMPT
 import agent_guide
+import harness_notes
 from agent_guide import compose as compose_agent_guide, get_addendum
 from providers.unity_script_tools import DISALLOWED_UNITY_TOOLS
 
@@ -866,6 +867,7 @@ _READ_ONLY_BUILTIN_TOOLS = frozenset({
     "capture_unity_screenshot",
     # Lists chat titles only; `send_chat_message` stays out (a side row never mails).
     "list_chats",
+    "harness_search", "harness_read", "harness_status",
 })
 # Built-in Claude Code tools kept out of a read-only session at connect time;
 # `_can_use_tool` denies them too, this only keeps them out of the model's view.
@@ -1627,8 +1629,14 @@ class AgentRunner:
                           getattr(self, "conversation_id", None),
                           getattr(self, "mail_depth", 0)):
             await self._prepare_agent_guide()
-            async for _event in self._run_inner(user_message):
-                yield _event
+            _harness_token = harness_notes.set_run_context(
+                provider_type=self.provider_type, model_name=self.model_name,
+                language=getattr(self, "language", "tr"), read_only=bool(getattr(self, "read_only", False)))
+            try:
+                async for _event in self._run_inner(user_message):
+                    yield _event
+            finally:
+                harness_notes.reset_run_context(_harness_token)
 
     async def _run_inner(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
         """

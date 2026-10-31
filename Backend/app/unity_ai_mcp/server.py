@@ -29,9 +29,13 @@ import os
 import sys
 import argparse
 import asyncio
+import json
 
+import httpx
 from mcp.server.mcpserver import MCPServer
 
+import harness_notes
+from unity_ai_mcp.approval_bridge import BACKEND_URL, _get_headers
 from unity_ai_mcp.tools.file_tools import register_file_tools
 from unity_ai_mcp.tools.bash_tool import register_bash_tool
 from unity_ai_mcp.tools.mailbox_tools import register_mailbox_tools
@@ -41,6 +45,45 @@ _workspace_path: str = ""
 
 def get_workspace() -> str:
     return _workspace_path or os.getcwd()
+
+
+async def _backend_json(path: str):
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{BACKEND_URL}{path}", headers=_get_headers())
+        return resp.json() if resp.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def register_harness_tools(mcp: MCPServer) -> None:
+    @mcp.tool(name=harness_notes.TOOL_SEARCH)
+    async def harness_search(query: str) -> str:
+        """Gamachine'in kendi araçları, özellikleri, ayarları ve sınırları hakkındaki kısa notlarda arar (Türkçe ya da İngilizce kelime, ya da bir araç adı). Kullanıcı bunlardan birini sorduğunda cevaplamadan önce çağır; sonuçtaki bir notu harness_read ile oku."""
+        return harness_notes.format_search(harness_notes.search(query))
+
+    @mcp.tool(name=harness_notes.TOOL_READ)
+    async def harness_read(note_id: str) -> str:
+        """harness_search'ün döndürdüğü bir notun tamamını okur (note_id: sonuçtaki id)."""
+        result = harness_notes.read(note_id)
+        return result["content"] if result["success"] else result["error"]
+
+    @mcp.tool(name=harness_notes.TOOL_STATUS)
+    async def harness_status() -> str:
+        """Bu turun canlı durumunu verir: onay modu, bilgisayar ve tarayıcı kullanımı açık mı, Unity MCP durumu ve bu sunucunun araç adları. Sağlayıcı, model, dil ve salt okunur bilgisi bu süreçte yoktur (null). Anahtar ya da token içermez."""
+        approval = await _backend_json("/approval-mode")
+        computer = await _backend_json("/computer-use/settings")
+        browser = await _backend_json("/browser/settings")
+        unity = await _backend_json("/unity/status")
+        state = {
+            "provider": None, "model": None, "language": None, "read_only": None,
+            "approval_mode": approval.get("mode") if approval else None,
+            "computer_use_enabled": computer.get("enabled") if computer else None,
+            "browser_use_enabled": browser.get("enabled") if browser else None,
+            "unity_mcp": unity.get("status") if unity else None,
+            "enabled_tools": sorted(tool.name for tool in await mcp.list_tools()),
+        }
+        return json.dumps(state, ensure_ascii=False)
 
 
 def create_server(workspace: str = "") -> MCPServer:
@@ -63,6 +106,7 @@ def create_server(workspace: str = "") -> MCPServer:
     register_file_tools(mcp, get_workspace)
     register_bash_tool(mcp, get_workspace)
     register_mailbox_tools(mcp)
+    register_harness_tools(mcp)
 
     return mcp
 

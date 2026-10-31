@@ -10,6 +10,7 @@ from typing import Any, Dict, Callable
 from tools.file_tools import read_file, write_file, list_directory, delete_file, run_command
 from tools.search_tools import search_in_project, find_files
 from tools.screenshot_tool import capture_unity_screenshot
+import harness_notes
 from tools.unity_mcp_tools import (
     call_unity_tool_with_arguments, get_unity_tool_definitions, get_unity_tool_functions,
     is_unity_tool,
@@ -191,6 +192,51 @@ TOOL_DEFINITIONS = [
             "required": ["to_chat_id", "message"]
         }
     },
+    {
+        "name": "harness_search",
+        "description": (
+            "Gamachine'in kendi araçları, özellikleri, ayarları ve sınırları hakkındaki kısa notlarda arar "
+            "(Türkçe ya da İngilizce kelime, ya da bir araç adı). Kullanıcı bunlardan birini sorduğunda "
+            "cevaplamadan önce çağır; sonuçtaki bir notu harness_read ile oku."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Aranacak kelimeler ya da araç adı"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "harness_read",
+        "description": "harness_search'ün döndürdüğü bir notun tamamını okur (note_id: sonuçtaki id).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "note_id": {
+                    "type": "string",
+                    "description": "Okunacak notun id'si"
+                }
+            },
+            "required": ["note_id"]
+        }
+    },
+    {
+        "name": "harness_status",
+        "description": (
+            "Bu turun canlı durumunu verir: sağlayıcı ve model, onay modu, salt okunur mu, dil, bilgisayar "
+            "ve tarayıcı kullanımı açık mı, Unity MCP durumu ve bu tur için açık araç adları. "
+            "Anahtar ya da token içermez."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
 ]
 
 
@@ -208,6 +254,9 @@ _TOOL_FUNCTIONS: Dict[str, Callable] = {
     "delete_file": delete_file,
     "run_command": run_command,
     "capture_unity_screenshot": capture_unity_screenshot,
+    "harness_search": lambda query: {
+        "success": True, "content": harness_notes.format_search(harness_notes.search(query))},
+    "harness_read": lambda note_id: harness_notes.read(note_id),
 }
 
 # Hangi tool'lar conversation_id parametresi alıyor
@@ -235,11 +284,21 @@ async def _send_chat_message(to_chat_id=None, message=None, conversation_id=None
     return {"success": False, "error": text}
 
 
+async def _harness_status() -> Dict[str, Any]:
+    definitions = _all_tool_definitions()
+    if harness_notes.run_context().get("read_only"):
+        from agentic.agent_runner import _read_only_tool_declared
+        definitions = [t for t in definitions if _read_only_tool_declared(t["name"])]
+    state = await harness_notes.status(tools=[t["name"] for t in definitions])
+    return {"success": True, "content": json.dumps(state, ensure_ascii=False)}
+
+
 # Awaited on the event loop, not in a worker thread: the step-mode card they
 # wait on is resolved by a route on that same loop.
 _ASYNC_TOOL_FUNCTIONS: Dict[str, Callable] = {
     "list_chats": _list_chats,
     "send_chat_message": _send_chat_message,
+    "harness_status": _harness_status,
 }
 
 
