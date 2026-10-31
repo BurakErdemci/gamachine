@@ -31,6 +31,7 @@ import { McpActiveGate } from '../../hooks/home/useMCPApproval';
 import { McpApprovalCards } from './McpApprovalCards';
 import { MessageNotices } from './MessageNotices';
 import { modelFamily } from '../../lib/modelFamily';
+import { invokeVia } from '../../hooks/home/useFileSystem';
 
 /**
  * hh:mm for a message's author line. The backend stores naive local "YYYY-MM-DD HH:MM:SS" (no
@@ -224,14 +225,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     [conversations]);
 
   /**
-   * IPC yazma reddinin kullanıcıya gösterilecek metni.
+   * The text shown to the user when a write is refused.
    *
-   * `ipc.invoke('write-file')` ASLA throw etmiyor; `{success:false, error}`
-   * dönüyor (main/background.ts:397-418) ve reddetme gerçek — örneğin
-   * `Assets/Scripts` dışındaki bir `.cs` `isAllowedWorkspaceWriteFile` tarafından
-   * reddediliyor. Ham `error` alanı AYNEN taşınıyor: "bir hata oldu" kullanıcıya
-   * ne yapacağını söylemiyor, "workspace içindeki kod/metin dosyalarına
-   * yazılabilir" söylüyor.
+   * A refusal arrives as `{success:false, error}` (main/background.ts:397-418);
+   * invokeVia maps a rejected call (remote mode) to the same shape. The
+   * refusal is real, for example a `.cs` outside `Assets/Scripts` is rejected by
+   * `isAllowedWorkspaceWriteFile`. The raw `error` is carried VERBATIM:
+   * "something went wrong" tells the user nothing, "code/text files inside the
+   * workspace can be written" does.
    */
   const writeErrorText = (name: string, res: any) =>
     t('chat.writeFailed', { ad: name, hata: res?.error || t('common.unknownError') });
@@ -318,7 +319,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           return;
         }
         if (isOpenTarget()) setCode(fixedCode);
-        const res = await ipc.invoke('write-file', target.path, fixedCode, target.workspace);
+        const res = await invokeVia(ipc, 'write-file', target.path, fixedCode, target.workspace);
         if (!res?.success) {
           showToast(writeErrorText(target.path.split(/[\\/]/).pop() || target.path, res), 'error');
           return;
@@ -511,7 +512,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                       autoAccept={false}
                       onAcceptOne={async (file) => {
                         if (!ipc || !workspacePath) return false;
-                        const res = await ipc.invoke('write-file', file.suggestedPath, file.code, workspacePath);
+                        const res = await invokeVia(ipc, 'write-file', file.suggestedPath, file.code, workspacePath);
                         if (!res?.success) { showToast(writeErrorText(file.name, res), 'error'); return false; }
                         if (file.suggestedPath === openedFilePath) setCode(file.code);
                         refreshFileTree();
@@ -522,7 +523,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                         if (!ipc || !workspacePath) return false;
                         let allWritten = true;
                         for (const file of files) {
-                          const res = await ipc.invoke('write-file', file.suggestedPath, file.code, workspacePath);
+                          const res = await invokeVia(ipc, 'write-file', file.suggestedPath, file.code, workspacePath);
                           if (!res?.success) {
                             // Kalanları yazmaya devam et: bir dosyanın reddedilmesi
                             // (ör. `Assets/Scripts` dışındaki bir `.cs`) diğerlerini

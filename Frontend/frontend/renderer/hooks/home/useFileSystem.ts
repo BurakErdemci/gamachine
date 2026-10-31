@@ -13,13 +13,16 @@ const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 type OpResult = { success?: boolean; error?: string; newPath?: string };
 
 // A rejected IPC call is normalised to the same shape as a refused one.
-async function invokeChecked(channel: string, ...args: unknown[]): Promise<OpResult> {
+// `client` is explicit so ChatPanel can use the ipc handle it was given.
+export async function invokeVia(client: any, channel: string, ...args: unknown[]): Promise<OpResult> {
   try {
-    return (await ipc?.invoke(channel, ...args)) ?? { success: false };
+    return (await client?.invoke(channel, ...args)) ?? { success: false };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+const invokeChecked = (channel: string, ...args: unknown[]) => invokeVia(ipc, channel, ...args);
 
 // One file reaches this hook under several legitimate spellings: the tree hands
 // out absolute host paths, an approved agent operation names the file relative
