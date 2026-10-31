@@ -674,6 +674,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {/* Resim lightbox (uygulama içi tam ekran önizleme) */}
       {lightboxSrc && (
         <div
+          role="dialog" aria-modal="true"
           className="fixed inset-0 z-[300] bg-black/90 backdrop-blur-sm flex items-center justify-center cursor-zoom-out"
           onClick={() => setLightboxSrc(null)}
         >

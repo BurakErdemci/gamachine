@@ -8,6 +8,7 @@ import type { BrowserHistory } from './browser-history'
 // persist: keeps one login for every chat's tab and across app restarts.
 export const BROWSER_PARTITION = 'persist:gamachine-agent-browser'
 export const BROWSER_LIVE_CHANNEL = 'browser-live'
+export const BROWSER_FULL_TOGGLE_CHANNEL = 'browser-full-toggle'
 // Electron reserves 0 (page) and 999 (its own isolated world); any other id up to 2^29 is free.
 export const BROWSER_WORLD_ID = 1777
 export const NAVIGATION_TIMEOUT_MS = 30_000
@@ -354,6 +355,14 @@ export function tabShortcut(input: { type?: string; key?: string; control?: bool
   if (input.shift) return null
   if (key === 'w') return { action: 'close' }
   return /^[1-9]$/.test(key) ? { action: 'select', index: Number(key) } : null
+}
+
+/** Ctrl+Shift+F (Cmd+Shift+F on macOS): the renderer's full-screen toggle, claimed here because keys in the page never reach it. */
+export function isFullChord(input: { type?: string; key?: string; control?: boolean; meta?: boolean; shift?: boolean; alt?: boolean; isAutoRepeat?: boolean },
+  platform: string): boolean {
+  if (input.type !== 'keyDown' || input.isAutoRepeat || typeof input.key !== 'string' || input.alt || !input.shift) return false
+  if (input.key.toLowerCase() !== 'f') return false
+  return platform === 'darwin' ? !!input.meta && !input.control : !!input.control && !input.meta
 }
 
 /** One page: a chat's agent tab, or a tab the user opened. */
@@ -703,6 +712,14 @@ export class BrowserHost {
     })
     // Keys inside the page never reach the renderer, so the tab shortcuts are claimed here.
     wc.on('before-input-event', (event, input) => {
+      if (isFullChord(input, this.platform)) {
+        event.preventDefault()
+        const win = this.deps.window()
+        if (win && !win.isDestroyed()) {
+          try { win.webContents.send(BROWSER_FULL_TOGGLE_CHANNEL, null) } catch { /* window closing */ }
+        }
+        return
+      }
       const shortcut = tabShortcut(input, this.platform)
       if (shortcut) {
         event.preventDefault()

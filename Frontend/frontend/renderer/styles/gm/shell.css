@@ -84,6 +84,24 @@
 .app[data-screen="rehber"] > .app-body { display: none; }
 
 .shell { background: var(--shell-bg); color: var(--shell-text); position: relative; }
+
+/* Browser full screen (lib/browserFull.ts): the page fills the window, the chat docks under it as a
+   strip. Nothing unmounts: the sidebar, the panel head and the tabs are only hidden, and the
+   browser's own measure (BrowserPanel) sends the new bounds to the native view. */
+.app[data-browser-full]:not([data-screen]) { --bf-strip: clamp(180px, 30dvh, 360px); }
+.app[data-browser-full]:not([data-screen]) > .sidebar-slot { display: none; }
+.app[data-browser-full]:not([data-screen]) .app-body {
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) var(--bf-strip);
+}
+.app[data-browser-full]:not([data-screen]) .app-body > .app-right {
+  position: relative; inset: auto; grid-column: 1; grid-row: 1; max-width: none; box-shadow: none; z-index: auto;
+}
+.app[data-browser-full]:not([data-screen]) .app-body > .app-right > .workspace { width: 100%; transition: none; border-left: 0; animation: none; }
+.app[data-browser-full]:not([data-screen]) .workspace :is(.ws-head, .ws-tabs, .live-tabs) { display: none; }
+.app[data-browser-full]:not([data-screen]) .app-body > .app-main {
+  grid-column: 1; grid-row: 2; border-top: var(--line-w) solid var(--paper-line-strong);
+}
+.app[data-browser-full]:not([data-screen]) .app-main :is(.title-block, .thread-tabs) { display: none; }
 .shell > *:not(.tex) { position: relative; z-index: 1; }
 
 /* ---------- sidebar ---------- */
