@@ -141,6 +141,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
         field.blur();
         return;
       }
+      e.preventDefault();
       onClose();
     };
     document.addEventListener('keydown', onKey);

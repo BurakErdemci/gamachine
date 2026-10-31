@@ -192,15 +192,24 @@ the **agent tab**, and it is the only page the agent can reach.
   `visibility: hidden`, so the thread keeps its scroll and the composer its draft); the page takes the whole width.
   The toolbar's Sohbet button, which only exists in full screen and pulses while a turn runs, opens it again.
   Toggling full screen or the chat re-measures at once and after the layout settles. Leaving full screen restores the
-  normal layout: every full-screen rule hangs off the attribute.
-- **Esc** is one rule in main (`BrowserHost.escape`), in every `before-input-event` the host sees (tab views, the
-  annotate overlay, the comment box) and in the main window's (`background.ts` → `windowKeys`). An Esc keyDown with
-  no modifier and not a repeat: if the shown chat's selected tab is annotating, it drops the open pick (or the click
-  still waiting on its frame) or else leaves the mode, and is claimed; else if full screen is on, main sends
-  `browser-full-toggle` with `{on: false}` and claims it; else it passes untouched (pages and renderer dialogs keep
-  their Esc). The renderer tells main the state over `browser-live` op `full` (`{on, owned}`): `owned` is true while
-  a dialog, a menu or a list popup is open, or a field of the browser panel (the address box) has focus; then an Esc
-  pressed in the main window passes to the renderer. The overlay and the box no longer listen for Esc themselves.
+  normal layout: every full-screen rule hangs off the attribute. Nothing inside the collapsed chat counts as covering
+  the page in BrowserPanel's measure (its boxes stay, hidden). While the chat has a waiting card (an approval, a
+  command, a question, a gate, or the unknown-source tray) the chat opens by itself and stays open; once the card is
+  answered the user can collapse it again, so a card the agent waits for is never invisible.
+- **Esc** has one order, in main (`BrowserHost.escapeStep`): if the shown chat's selected tab is annotating, drop the
+  open pick (or the click still waiting on its frame) or else leave the mode; else if full screen is on, end it
+  (`browser-full-toggle` with `{on: false}`); else do nothing. Where the key is pressed decides who runs it:
+  - **Native views** (tab views, the annotate overlay, the comment box): keys there never reach the renderer
+    (measured in the packaged app on macOS), so main claims an Esc keyDown with no modifier and not a repeat from
+    their `before-input-event` when the order acts, and passes it to the page otherwise. Main knows full screen is
+    on from `browser-live` op `full` (`{on}`); closing the main window (`destroyView`) resets it to off.
+  - **The main window** (the app's own document): the renderer gets Esc first. Main no longer listens to the main
+    window's keys. Every renderer handler that uses Esc (closes a popup or dialog, cancels an edit or a recording,
+    clears a field) calls `preventDefault`; `useBrowserFull` listens on `window` in the bubble phase and, once every
+    listener has run (a 0 ms timer, since window listeners added later run after it), hands an Esc nobody used,
+    without modifiers, not a repeat and not composing, to main as `browser-live` op `escape` (`{claimed}`). A new
+    Esc handler in the renderer must call `preventDefault`, or the same key also leaves full screen.
+  The overlay and the box do not listen for Esc themselves.
 
 Not in this round: ad blocker, extensions, downloads, quick-access bar, find in
 page, zoom, history and site management pages.

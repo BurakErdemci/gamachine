@@ -63,6 +63,7 @@ export const ProfileView = ({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
       if (document.querySelector('[data-confirm-dialog], [role="alertdialog"], [data-testid="settings-screen"]')) return;
+      e.preventDefault();
       onClose();
     };
     document.addEventListener('keydown', onKey);

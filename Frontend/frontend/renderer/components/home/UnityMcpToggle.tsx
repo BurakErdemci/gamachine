@@ -132,7 +132,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
     const onDown = (e: MouseEvent) => {
       if (bayRef.current && !bayRef.current.contains(e.target as Node)) setWhyOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setWhyOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); setWhyOpen(false); } };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {

@@ -253,7 +253,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   useEffect(() => {
     if (!lightboxSrc) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightboxSrc(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); setLightboxSrc(null); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [lightboxSrc]);

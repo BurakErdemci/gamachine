@@ -808,7 +808,11 @@ export default function Home() {
   const { closeGuide, dismiss: dismissGuide } = guide;
   // Opening or closing a project swaps the screen under the guide and its topic list.
   useEffect(() => { dismissGuide(); }, [guideScreenId, dismissGuide]);
-  const browserFull = useBrowserFull(ws.open && ws.tab === 'canli' && liveView === 'tarayici' && !ai.showSettings && !profileOpen && !guide.guideOpen, chat.activeConvId);
+  // A request waits in this chat (the title block's approval cell).
+  const cardWaiting = !!(chat.pendingCommand || chat.pendingQuestion || fs.pendingDelete || fs.pendingGenFiles || chat.pendingFix || mcp.activeGate);
+  // A waiting card (or the unknown-source tray, also inside the chat) keeps the floating chat open in full screen.
+  const browserFull = useBrowserFull(ws.open && ws.tab === 'canli' && liveView === 'tarayici' && !ai.showSettings && !profileOpen && !guide.guideOpen, chat.activeConvId,
+    cardWaiting || mcp.unknownGates.length > 0);
   const sceneFrameVisible = !!fs.workspacePath && !backendError && !ai.showSettings;
   const sceneEditor = useSceneEditor({ api: API, token: auth.user?.sessionToken, editorOn,
     projectPath: fs.workspacePath ?? null,
@@ -933,8 +937,6 @@ export default function Home() {
     && !ai.unityMcpProjects.includes(projectName);
   // Same predicate ChatPanel uses for "nothing to draw": the empty new chat takes its place.
   const chatEmpty = isChatEmpty(chat.activeConvId, chat.messages.length, chat.loading, !!mcp.activeGate);
-  // A request waits in this chat (the title block's approval cell).
-  const cardWaiting = !!(chat.pendingCommand || chat.pendingQuestion || fs.pendingDelete || fs.pendingGenFiles || chat.pendingFix || mcp.activeGate);
   // A mission-board card fills the composer; nothing is sent until the user presses Enter. A draft
   // already in the box is kept (questDraft).
   // The composer applies it to the text it really holds: the parent's copy is not updated while

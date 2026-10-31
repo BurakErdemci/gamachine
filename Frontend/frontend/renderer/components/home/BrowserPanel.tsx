@@ -83,6 +83,8 @@ export function useBrowserLive(conversationId: number | null): BrowserState {
 
 // Anything that can sit above the native view: menus, modals and the approval card stack.
 const OVERLAY_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], .approval-slot, .approval';
+// The collapsed floating chat (home.tsx, shell.css) is hidden but keeps its boxes: nothing inside it covers the page.
+const COLLAPSED_CHAT = '[data-bf-chat="closed"] .app-main';
 
 const intersects = (a: DOMRect, b: DOMRect) =>
   a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0
@@ -167,7 +169,7 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
       void invoke({ op: 'set-bounds', conversationId: chatId.current, bounds });
     }
     const hit = Array.from(document.querySelectorAll(OVERLAY_SELECTOR))
-      .some(o => !el.contains(o) && intersects(r, o.getBoundingClientRect()));
+      .some(o => !el.contains(o) && !o.closest(COLLAPSED_CHAT) && intersects(r, o.getBoundingClientRect()));
     setCovered(hit);
   }, []);
 
@@ -369,6 +371,8 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
       {running && <span className="bp-chat-run" aria-hidden="true" />}
     </button>
   );
+  // The chat and full-screen toggles end the toolbar, or sit at the top of the empty view.
+  const endTools = <>{chatToggle}{fullToggle}</>;
 
   return (
     <section className="bp-panel" data-state={state.active ? 'active' : 'idle'} data-full={full ? 'true' : undefined} aria-label={t('ws.tabBrowser')} onKeyDown={onShortcut}>
@@ -404,16 +408,14 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
           <button type="button" className="bp-stop" onClick={doStop} disabled={stop !== 'idle' || !running} title={t('bp.stopNote')}>
             {STOP_ICON}<span className="bp-label">{t(stop === 'busy' || stop === 'sent' ? 'bp.stopping' : stop === 'stopped' ? 'bp.stopped' : 'bp.stop')}</span>
           </button>
-          {chatToggle}
-          {fullToggle}
+          {endTools}
         </header>
       )}
       {stopFailed && <p className="bp-stop-failed" role="alert">{t('bp.stopFailed')}</p>}
       <div className="bp-view" ref={hostRef} data-testid="bp-view">
         {!state.active && (
           <div className="bp-idle">
-            {fullToggle}
-            {chatToggle}
+            {(fullToggle || chatToggle) && <div className="bp-idle-tools">{endTools}</div>}
             <p className="bp-idle-title">{t('bp.idle')}</p>
             <div className="bp-open">
               <input className="bp-address" type="text" value={openUrl} placeholder={t('bp.addressHint')}

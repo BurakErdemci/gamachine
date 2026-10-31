@@ -16,35 +16,33 @@ export function isBrowserFullShortcut(e: KeyLike, mac: boolean): boolean {
 export const BROWSER_FULL_TOGGLE_CHANNEL = 'browser-full-toggle';
 
 const MODAL = '[aria-modal="true"], [role="dialog"], [role="alertdialog"]';
-// Kept-mounted popups (the strip's More menu) sit in the DOM with `hidden` while closed; only an open one counts.
-const isOpen = (selector: string) => [...document.querySelectorAll(selector)].some(el => !el.closest('[hidden], [aria-hidden="true"]'));
-const hasOpenModal = () => isOpen(MODAL);
-// What keeps its own Esc in this window: a dialog, a menu or list popup, or a field of the browser panel (the address
-// box drops an edit on Esc).
-const ESC_OWNERS = `${MODAL}, [role="menu"], [role="listbox"]`;
-const FIELD = 'input, textarea, select, [contenteditable]';
-export function escOwnedHere(): boolean {
-  if (isOpen(ESC_OWNERS)) return true;
-  const t = document.activeElement;
-  return t instanceof Element && !!t.closest('.bp-panel') && t.matches(FIELD);
-}
+// Kept-mounted popups sit in the DOM with `hidden` while closed; only an open one counts.
+const hasOpenModal = () => [...document.querySelectorAll(MODAL)].some(el => !el.closest('[hidden], [aria-hidden="true"]'));
 
 const ipcOf = (): any => (typeof window !== 'undefined' ? (window as any).ipc : null);
+const live = (req: Record<string, unknown>) => {
+  void Promise.resolve(ipcOf()?.invoke?.('browser-live', req)).catch(() => undefined);
+};
 
 /**
  * The agent browser's full-screen mode. `shown` is whether the browser view is on screen: the shortcut only acts then,
- * and the mode ends by itself the moment it is not. Esc is main's (browser-host.ts escape()), wherever focus is: this
- * hook tells it whether full screen is on and whether something in this window owns Esc right now, over the browser
- * channel's `full` op. `chatOpen` is the floating chat over the full-screen page (collapsed to a toolbar button).
+ * and the mode ends by itself the moment it is not. Esc pressed in this window reaches the renderer first: a control
+ * that uses it (closes a popup, cancels an edit) calls preventDefault, and only an Esc nobody used goes to main's Esc
+ * rule (op 'escape': drop the pick, leave annotate mode, else leave full screen). Main claims Esc itself in the native
+ * page, overlay and box, where the renderer sees no keys; it knows full screen is on from op 'full'. `chatOpen` is the
+ * floating chat over the full-screen page (collapsed to a toolbar button); `cardWaiting` (a request waits in the chat)
+ * keeps it open, so the card is never hidden while the agent waits for it.
  */
-export function useBrowserFull(shown: boolean, chatId?: number | null) {
+export function useBrowserFull(shown: boolean, chatId?: number | null, cardWaiting = false) {
   const [on, setOn] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
   const full = on && shown;
-  const [owned, setOwned] = useState(false);
+  const waiting = useRef(cardWaiting);
+  waiting.current = cardWaiting;
 
   useEffect(() => { if (!shown) setOn(false); }, [shown]);
   useEffect(() => { setOn(false); }, [chatId]);
+  useEffect(() => { if (cardWaiting) setChatOpen(true); }, [cardWaiting]);
 
   useEffect(() => {
     if (!shown) return;
@@ -54,51 +52,37 @@ export function useBrowserFull(shown: boolean, chatId?: number | null) {
       e.preventDefault();
       setOn(v => !v);
     };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      // Window listeners added after this one (ConfirmDialog, the image lightbox) run after it in the same phase, so
+      // whether anything used the key is read once the event has been through all of them.
+      clearTimeout(timer);
+      timer = setTimeout(() => { if (!e.defaultPrevented) live({ op: 'escape' }); }, 0);
+    };
     window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keydown', onEsc);
     const off = ipcOf()?.on?.(BROWSER_FULL_TOGGLE_CHANNEL, (p: any) => {
       if (p && p.on === false) { setOn(false); return; }
       if (!hasOpenModal()) setOn(v => !v);
     });
     return () => {
       window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keydown', onEsc);
+      clearTimeout(timer);
       if (typeof off === 'function') off();
     };
   }, [shown]);
 
-  // Who owns Esc changes with the DOM (a popup opens) and with focus (the address box).
+  // Main hears full screen on, and off when it ends or the app (or this hook) goes away.
   useEffect(() => {
-    if (!shown) { setOwned(false); return; }
-    let frame = 0;
-    const check = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(() => { frame = 0; setOwned(escOwnedHere()); });
-    };
-    setOwned(escOwnedHere());
-    const mo = new MutationObserver(check);
-    mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['role', 'aria-modal', 'open', 'hidden'] });
-    document.addEventListener('focusin', check);
-    document.addEventListener('focusout', check);
-    return () => {
-      mo.disconnect();
-      if (frame) cancelAnimationFrame(frame);
-      document.removeEventListener('focusin', check);
-      document.removeEventListener('focusout', check);
-    };
-  }, [shown]);
-
-  const last = useRef('');
-  useEffect(() => {
-    const key = `${full}:${owned}`;
-    if (key === last.current) return;
-    last.current = key;
-    void Promise.resolve(ipcOf()?.invoke?.('browser-live', { op: 'full', on: full, owned })).catch(() => undefined);
-  }, [full, owned]);
-  // The app going away (or this hook) leaves main with full screen off.
-  useEffect(() => () => {
-    void Promise.resolve(ipcOf()?.invoke?.('browser-live', { op: 'full', on: false, owned: false })).catch(() => undefined);
-  }, []);
+    if (!full) return;
+    live({ op: 'full', on: true });
+    return () => live({ op: 'full', on: false });
+  }, [full]);
 
   const toggle = useCallback(() => setOn(v => !v), []);
-  const toggleChat = useCallback(() => setChatOpen(v => !v), []);
-  return { full, toggle, chatOpen, toggleChat };
+  // A waiting card keeps the chat open; once it is answered the user can collapse it again.
+  const toggleChat = useCallback(() => setChatOpen(v => !v || waiting.current), []);
+  return { full, toggle, chatOpen: chatOpen || cardWaiting, toggleChat };
 }

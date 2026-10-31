@@ -28,7 +28,7 @@ const useDismiss = (open: boolean, ref: React.RefObject<HTMLElement | null>, clo
     if (!open) return;
     const shut = () => closeRef.current();
     const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) shut(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') shut(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); shut(); } };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     window.addEventListener('blur', shut);
@@ -186,7 +186,7 @@ export const ChatTabs: React.FC<ChatTabsProps> = ({
                   onFocus={e => e.currentTarget.select()}
                   onKeyDown={e => {
                     if (e.key === 'Enter') void commitRename();
-                    if (e.key === 'Escape') { renamingRef.current = null; setRenaming(null); }
+                    if (e.key === 'Escape') { e.preventDefault(); renamingRef.current = null; setRenaming(null); }
                   }}
                   onBlur={() => { void commitRename(); }}
                   className="flex-1 min-w-0 bg-[color:var(--paper-bg)] text-[color:var(--ink)] text-[12px] px-1.5 py-0.5 rounded border border-[color:var(--focus)] outline-none"

@@ -112,7 +112,7 @@ export const FileTree: React.FC<FileTreeProps> = (props) => {
                 <Glyph d={entry.isDirectory ? FT_ICON.folder : fileGlyph(entry.extension)} />
                 <input
                   autoFocus value={renameValue} onChange={e => setRenameValue(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setRenamingPath(null); }}
+                  onKeyDown={e => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') { e.preventDefault(); setRenamingPath(null); } }}
                   onBlur={() => setRenamingPath(null)}
                   className="ft-input"
                 />
@@ -163,7 +163,7 @@ export const FileTree: React.FC<FileTreeProps> = (props) => {
                 {treeCreating?.parentPath === entry.path && (
                   <div className="ft-row" style={{ '--lv': depth + 1 } as React.CSSProperties}>
                     <Glyph d={treeCreating.type === 'file' ? FT_ICON.file : FT_ICON.folder} />
-                    <input autoFocus value={treeCreateValue} onChange={e => setTreeCreateValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submitTreeCreate(); if (e.key === 'Escape') setTreeCreating(null); }} onBlur={() => setTreeCreating(null)} className="ft-input" />
+                    <input autoFocus value={treeCreateValue} onChange={e => setTreeCreateValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submitTreeCreate(); if (e.key === 'Escape') { e.preventDefault(); setTreeCreating(null); } }} onBlur={() => setTreeCreating(null)} className="ft-input" />
                   </div>
                 )}
                 {dirContents[entry.path] && <FileTree {...props} entries={dirContents[entry.path]} depth={depth + 1} />}
@@ -249,7 +249,7 @@ export const ProjectFiles: React.FC<ProjectFilesProps> = (props) => {
           {treeCreating?.parentPath === rootFolderPath && (
             <div className="ft-row">
               <Glyph d={treeCreating.type === 'file' ? FT_ICON.file : FT_ICON.folder} />
-              <input autoFocus value={treeCreateValue} onChange={e => setTreeCreateValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submitTreeCreate(); if (e.key === 'Escape') setTreeCreating(null); }} onBlur={() => setTreeCreating(null)} className="ft-input" />
+              <input autoFocus value={treeCreateValue} onChange={e => setTreeCreateValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submitTreeCreate(); if (e.key === 'Escape') { e.preventDefault(); setTreeCreating(null); } }} onBlur={() => setTreeCreating(null)} className="ft-input" />
             </div>
           )}
           <FileTree {...props} entries={fileTree} />

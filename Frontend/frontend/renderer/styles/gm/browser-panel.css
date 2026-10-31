@@ -151,7 +151,6 @@
 .bp-full:hover { background: var(--paper-sunk, var(--paper-bg-2)); }
 .bp-full[aria-pressed="true"] { background: var(--paper-sunk, var(--paper-bg-2)); box-shadow: inset 0 0 0 1px var(--paper-line-strong); }
 .bp-full:focus-visible { outline: 2px solid var(--accent-text, var(--ink)); outline-offset: 1px; }
-.bp-idle > .bp-full { float: right; }
 /* annotate and ask-about-page: compact text buttons next to Stop */
 .bp-tool {
   flex: none; height: 26px; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px;

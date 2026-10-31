@@ -1527,8 +1527,6 @@ if (!gotTheLock) {
         },
       })
       mainWindowRef = mainWindow
-      // Esc in the app's own document goes through the browser host's one Esc rule too (annotate, full screen).
-      mainWindow.webContents.on('before-input-event', (event, input) => browserHost.windowKeys(event, input))
       for (const ev of ['minimize', 'restore', 'hide', 'show'] as const) {
         mainWindow.on(ev as any, () => computerLive.mainVisibilityChanged())
       }

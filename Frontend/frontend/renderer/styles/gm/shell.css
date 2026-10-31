@@ -139,12 +139,14 @@
    the action buttons drop their words (still their accessible names); below 400 px the address takes a row of its own
    with back/forward/reload and the actions move to a second row on the right. */
 .bp-panel { container: bp / inline-size; min-width: 0; }
-.bp-head :is(.bp-tool, .bp-stop) { position: relative; }
+/* .bp-chat too: its run dot sits inside the button in the empty view as well */
+.bp-head :is(.bp-tool, .bp-stop), .bp-chat { position: relative; }
 .bp-chat-run {
   position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%;
   background: var(--run); animation: run-pulse 1.6s ease-in-out infinite;
 }
-.bp-idle > .bp-chat { float: right; margin-right: 6px; }
+/* the empty view's chat and full-screen toggles, top right */
+.bp-idle-tools { float: right; display: flex; gap: 6px; }
 @container bp (max-width: 560px) {
   .bp-head .bp-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .bp-head :is(.bp-tool, .bp-stop) { width: 26px; padding: 0; justify-content: center; }

@@ -787,8 +787,8 @@ export function isAnnotateChord(input: { type?: string; key?: string; control?: 
 }
 
 /**
- * Esc with no modifier, not a repeat: the one key the host routes by state (BrowserHost.escape), wherever focus is,
- * because a key pressed in a tab, its overlay or the box never reaches the renderer.
+ * Esc with no modifier, not a repeat: the one key the host routes by state (BrowserHost.escape) when it is pressed in a
+ * tab, its overlay or the box, because a key there never reaches the renderer.
  */
 export function isEscape(input: { type?: string; key?: string; control?: boolean; meta?: boolean; shift?: boolean; alt?: boolean; isAutoRepeat?: boolean }): boolean {
   return input.type === 'keyDown' && input.key === 'Escape' && !input.isAutoRepeat && !input.control && !input.meta && !input.shift && !input.alt
@@ -928,11 +928,8 @@ export class BrowserHost {
   private boxRect = { x: 0, y: 0, width: 0, height: 0 }
   private boxHeight = NOTE_BOX_MIN_HEIGHT
   private boxSeq = 0
-  /**
-   * What the renderer last said (op 'full'): whether browser full screen is on, and whether something in the window
-   * (a dialog, a menu, the address field being edited) owns Esc right now, so an Esc pressed in the window is its own.
-   */
-  private full = { on: false, owned: false }
+  /** What the renderer last said (op 'full'): whether browser full screen is on. */
+  private full = false
   /** Pick ids count across all tabs, so an id never means two picks. */
   private pickSeq = 0
   private reports: Promise<unknown> = Promise.resolve()
@@ -1259,24 +1256,21 @@ export class BrowserHost {
   }
 
   /**
-   * Esc, one rule for every view the host sees keys in (tabs, overlays, the box) and for the main window: the shown
-   * chat's selected tab, when annotating, drops its open pick (or the click waiting on a frame), else leaves the mode;
-   * else full screen ends; else the key passes untouched (pages and the renderer's dialogs keep their Esc). In the main
-   * window it also passes while the renderer says something there owns Esc. True when the key was claimed.
+   * Esc, one rule for every view the host sees keys in (tabs, overlays, the box) and for the main window's document
+   * (op 'escape', sent by the renderer only when none of its own controls used the key): the shown chat's selected tab,
+   * when annotating, drops its open pick (or the click waiting on a frame), else leaves the mode; else full screen ends;
+   * else nothing happens. True when it acted.
    */
-  private escape(event: { preventDefault(): void }, input: Input, fromWindow: boolean): boolean {
-    if (!isEscape(input) || (fromWindow && this.full.owned)) return false
+  private escapeStep(): boolean {
     const tab = this.visibleId === null ? null : this.selectedTab(this.visibleId)
     if (tab?.annotating) {
-      event.preventDefault()
       if (tab.pick || tab.waiting > 0) this.cancelPick(tab)
       else void this.setAnnotate(tab, false)
       return true
     }
-    if (!this.full.on) return false
-    event.preventDefault()
+    if (!this.full) return false
     // Off at once, so a second Esc before the renderer's next report passes through.
-    this.full = { on: false, owned: false }
+    this.full = false
     const win = this.deps.window()
     if (win && !win.isDestroyed()) {
       try { win.webContents.send(BROWSER_FULL_TOGGLE_CHANNEL, { on: false }) } catch { /* window closing */ }
@@ -1284,14 +1278,19 @@ export class BrowserHost {
     return true
   }
 
-  /** A key pressed in the main window's own document (background.ts wires its before-input-event here). */
-  windowKeys(event: { preventDefault(): void }, input: Input): void {
-    this.escape(event, input, true)
+  /**
+   * Esc pressed in a native view (a tab, its overlay, the box): keys there never reach the renderer, so the host
+   * claims the key when the Esc rule acts and passes it to the page otherwise.
+   */
+  private escape(event: { preventDefault(): void }, input: Input): boolean {
+    if (!isEscape(input) || !this.escapeStep()) return false
+    event.preventDefault()
+    return true
   }
 
   /** The browser's own keys (Esc, full screen, annotate, tab shortcuts) pressed in a tab or its overlay; true when one was claimed. */
   private browserKeys(tab: Tab, event: { preventDefault(): void }, input: Input): boolean {
-    if (this.escape(event, input, false)) return true
+    if (this.escape(event, input)) return true
     if (isFullChord(input, this.platform)) {
       event.preventDefault()
       const win = this.deps.window()
@@ -1441,6 +1440,8 @@ export class BrowserHost {
     for (const tab of [...this.tabs.values()]) this.closeTab(tab)
     this.selected.clear()
     this.destroyBox()
+    // The window's renderer went with it; the next one reports its own state.
+    this.full = false
   }
 
   private selectTab(tab: Tab): void {
@@ -1783,7 +1784,7 @@ export class BrowserHost {
   private ensureBox(): AppView {
     if (!this.noteBox) {
       this.noteBox = this.createAppView(NOTE_BOX_HTML, (message) => this.onBoxMessage(message), (event, input) => {
-        if (this.escape(event, input, false) || !isAnnotateChord(input, this.platform)) return
+        if (this.escape(event, input) || !isAnnotateChord(input, this.platform)) return
         event.preventDefault()
         const tab = this.boxTab
         if (tab) void this.setAnnotate(tab, !tab.annotating)
@@ -1826,14 +1827,18 @@ export class BrowserHost {
       }
       if (token !== this.boxSeq) return
       if (typeof height === 'number' && Number.isFinite(height)) {
-        this.boxHeight = Math.max(NOTE_BOX_MIN_HEIGHT, Math.min(Math.round(height), NOTE_BOX_MAX_HEIGHT))
-        this.placeBox()
+        this.setBoxHeight(height)
       }
       box.view.setVisible(true)
       wc.focus()
     } catch {
       this.log('[browser] note box failed')
     }
+  }
+
+  private setBoxHeight(height: number): void {
+    this.boxHeight = Math.max(NOTE_BOX_MIN_HEIGHT, Math.min(Math.round(height), NOTE_BOX_MAX_HEIGHT))
+    this.placeBox()
   }
 
   private placeBox(): void {
@@ -1878,8 +1883,7 @@ export class BrowserHost {
         tab.pick.error = ''
       }
       if (this.boxTab === tab && typeof message.h === 'number' && Number.isFinite(message.h)) {
-        this.boxHeight = Math.max(NOTE_BOX_MIN_HEIGHT, Math.min(Math.round(message.h), NOTE_BOX_MAX_HEIGHT))
-        this.placeBox()
+        this.setBoxHeight(message.h)
       }
     } else if (message.t === 'submit') this.savePick(tab, text)
   }
@@ -2258,11 +2262,14 @@ export class BrowserHost {
           this.show(null)
         }
         return { visible }
-      // The renderer's full-screen state and whether its window owns Esc right now (escape()).
+      // The renderer's full-screen state, for Esc pressed in the native views (escape()).
       case 'full':
         if (typeof on !== 'boolean') break
-        this.full = { on, owned: (req as Record<string, unknown>).owned === true }
+        this.full = on
         return { full: on }
+      // Esc in the main window that none of the renderer's own controls used (renderer/lib/browserFull.ts).
+      case 'escape':
+        return { claimed: this.escapeStep() }
       case 'halt': {
         if (id !== undefined && !positiveInt(id)) break
         const only = id === undefined ? null : conversationId

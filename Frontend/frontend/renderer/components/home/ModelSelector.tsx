@@ -117,7 +117,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // Esc closes the menu (the settings screen has its own Esc).
   useEffect(() => {
     if (!isModelDropdownOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setIsModelDropdownOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); setIsModelDropdownOpen(false); } };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [isModelDropdownOpen, setIsModelDropdownOpen]);

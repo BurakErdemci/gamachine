@@ -19,8 +19,12 @@ const live = () => ({
   tabs: [{ id: 1, url: 'https://itch.io/game-assets', title: 'Free assets', loading: false, favicon: '', agent: true }], activeTabId: 1,
 })
 const bounds = () => invoke.mock.calls.filter(c => c[1]?.op === 'set-bounds').map(c => c[1].bounds)
-/** What the hook told main for its Esc rule (browser-host.ts escape()). */
-const fullReports = () => invoke.mock.calls.filter(c => c[1]?.op === 'full').map(c => ({ on: c[1].on, owned: c[1].owned }))
+/** What the hook told main for its Esc rule in the native views (browser-host.ts escape()). */
+const fullReports = () => invoke.mock.calls.filter(c => c[1]?.op === 'full').map(c => ({ on: c[1].on }))
+/** Esc in this window that no control used, handed to main's rule (op 'escape'). */
+const escapes = () => invoke.mock.calls.filter(c => c[1]?.op === 'escape').length
+/** The hook reads whether the key was used once every listener has run (a 0 ms timer). */
+const flush = () => act(() => new Promise(r => setTimeout(r, 0)))
 
 let mounts: { chat: number; panel: number }
 function Chat() {
@@ -126,25 +130,27 @@ describe('browser full screen', () => {
     expect(app().getAttribute('data-browser-full')).toBe('true')
   })
 
-  it('tells main full screen is on, and that the address box owns Esc while it is focused', async () => {
+  it('tells main when full screen goes on and off, and an Esc that drops an address edit stays the box\'s', async () => {
     render(<Frame browserShown />)
     const address = await screen.findByRole('combobox')
     fireEvent.click(toggleBtn())
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
+    await waitFor(() => expect(fullReports()).toEqual([{ on: true }]))
     act(() => { address.focus() })
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: true }))
-    act(() => { address.blur() })
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
+    fireEvent.keyDown(address, { key: 'Escape' })
+    await flush()
+    expect(escapes()).toBe(0)
     fireEvent.click(toggleBtn())
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: false, owned: false }))
+    await waitFor(() => expect(fullReports()).toEqual([{ on: true }, { on: false }]))
   })
 
   it('leaves when main ends full screen on Esc, and only then', async () => {
     render(<Frame browserShown />)
     await screen.findByRole('combobox')
     fireEvent.click(toggleBtn())
-    // Esc is main's: the renderer's own keydown no longer ends the mode.
+    // An unused Esc goes to main's rule; the mode ends when main says so.
     key({ key: 'Escape' })
+    await flush()
+    expect(escapes()).toBe(1)
     expect(app().getAttribute('data-browser-full')).toBe('true')
     act(() => { listeners.get('browser-full-toggle')?.({ on: false }) })
     expect(app().getAttribute('data-browser-full')).toBeNull()
@@ -235,51 +241,39 @@ describe('browser full screen keyboard rules', () => {
     let answer: boolean | undefined
     await act(async () => { void confirmDialog('delete?').then(v => { answer = v }) })
     expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: true }))
     await act(async () => { key({ key: 'Escape' }) })
+    await flush()
     expect(answer).toBe(false)
     expect(full()).toBe(true)
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
+    expect(escapes()).toBe(0)
   })
 
   it('keeps full mode when Esc closes a document-level popup with focus in the composer', async () => {
     render(<Frame browserShown />)
     await enter()
     let open = true
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') open = false }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); open = false } }
     document.addEventListener('keydown', onKey)
     fireEvent.keyDown(screen.getByLabelText('composer'), { key: 'Escape' })
     document.removeEventListener('keydown', onKey)
+    await flush()
     expect(open).toBe(false)
     expect(full()).toBe(true)
+    expect(escapes()).toBe(0)
   })
 
-  it('leaves Esc in the composer to main: the composer alone does not own it', async () => {
+  it('hands an Esc nothing used in the composer to main, and never a modified, repeated or composing one', async () => {
     render(<Frame browserShown />)
     await enter()
-    act(() => { (screen.getByLabelText('composer') as HTMLElement).focus() })
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
-    const list = document.createElement('div')
-    list.setAttribute('role', 'listbox')
-    document.body.appendChild(list)
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: true }))
-    list.remove()
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
-  })
-
-  it('does not count a kept-mounted closed menu as owning Esc (the strip\'s More menu)', async () => {
-    const menu = document.createElement('div')
-    menu.setAttribute('role', 'menu')
-    menu.hidden = true
-    document.body.appendChild(menu)
-    render(<Frame browserShown />)
-    await enter()
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
-    menu.hidden = false
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: true }))
-    menu.hidden = true
-    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
-    menu.remove()
+    const composer = screen.getByLabelText('composer')
+    for (const init of [{ shiftKey: true }, { ctrlKey: true }, { altKey: true }, { metaKey: true }, { repeat: true }, { isComposing: true }]) {
+      fireEvent.keyDown(composer, { key: 'Escape', ...init })
+    }
+    await flush()
+    expect(escapes()).toBe(0)
+    fireEvent.keyDown(composer, { key: 'Escape' })
+    await flush()
+    expect(escapes()).toBe(1)
   })
 
   it('ignores the chord while a modal dialog is open and on key auto-repeat', async () => {
@@ -329,17 +323,10 @@ describe('browser full screen keyboard rules', () => {
     hooked.unmount()
   })
 
-  it('keeps full mode when Esc closes the chat image lightbox', async () => {
+  it('keeps full mode when Esc closes the chat image lightbox (its handler uses the key)', () => {
     const src = readFileSync(join(__dirname, '../renderer/components/home/ChatPanel.tsx'), 'utf8')
     expect(src).toMatch(/\{lightboxSrc && \(\s*<div\s+role="dialog" aria-modal="true"/)
-    render(<Frame browserShown />)
-    await enter()
-    const lightbox = document.createElement('div')
-    lightbox.setAttribute('role', 'dialog')
-    lightbox.setAttribute('aria-modal', 'true')
-    document.body.appendChild(lightbox)
-    fireEvent.keyDown(document.body, { key: 'Escape' })
-    expect(full()).toBe(true)
+    expect(src).toContain("if (e.key === 'Escape') { e.preventDefault(); setLightboxSrc(null); }")
   })
 
   it('names Esc in the leave tooltip, now that it works wherever focus is', () => {
@@ -353,7 +340,7 @@ describe('browser full screen keyboard rules', () => {
 
   it('home.tsx passes the screen rule into the hook', () => {
     const src = readFileSync(join(__dirname, '../renderer/pages/home.tsx'), 'utf8')
-    expect(src).toMatch(/useBrowserFull\([^)]*!ai\.showSettings && !profileOpen && !guide\.guideOpen, chat\.activeConvId\)/)
+    expect(src).toMatch(/useBrowserFull\([^)]*!ai\.showSettings && !profileOpen && !guide\.guideOpen, chat\.activeConvId,\s*cardWaiting/)
   })
 })
 

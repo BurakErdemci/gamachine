@@ -1,8 +1,8 @@
 /**
- * The one Esc rule in main (browser-host.ts escape()): in a tab view, the annotate overlay, the comment box and the main
- * window, an Esc keyDown without modifiers first drops the open pick (or the click waiting on its frame) or else leaves
- * annotate mode, then ends browser full screen, and otherwise passes untouched. In the main window it also passes while
- * the renderer says something there owns Esc (op 'full', owned).
+ * The one Esc rule in main (browser-host.ts escapeStep()): in a tab view, the annotate overlay and the comment box an
+ * Esc keyDown without modifiers first drops the open pick (or the click waiting on its frame) or else leaves annotate
+ * mode, then ends browser full screen, and otherwise passes untouched. The main window's renderer runs the same rule
+ * through op 'escape', for an Esc none of its own controls used (browser-esc-window.test.tsx).
  */
 import { EventEmitter } from 'events'
 import { describe, expect, it, vi } from 'vitest'
@@ -72,12 +72,8 @@ function fixture() {
     target.emit('before-input-event', event, { type: 'keyDown', key: 'Escape', ...init })
     return event.preventDefault.mock.calls.length > 0
   }
-  /** The same in the main window's document (background.ts wires it to windowKeys). */
-  const pressWindow = (init: Record<string, unknown> = {}) => {
-    const event = { preventDefault: vi.fn() }
-    host.windowKeys(event, { type: 'keyDown', key: 'Escape', ...init } as any)
-    return event.preventDefault.mock.calls.length > 0
-  }
+  /** An Esc the main window's renderer did not use (op 'escape'): whether main's rule acted. */
+  const pressWindow = async () => ((await host.invoke({ op: 'escape' })) as any).claimed === true
   const annotating = async () => ((await host.invoke({ op: 'panel-status', conversationId: 4 })) as any).annotating === true
   return { host, wc, win, overlay, box, tab, fullSends, press, pressWindow, annotating }
 }
@@ -97,7 +93,7 @@ async function openPage(f: F) {
   await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
 }
 const annotate = (f: F, on: boolean) => f.host.invoke({ op: 'annotate', conversationId: 4, tabId: 1, on })
-const full = (f: F, on: boolean, owned = false) => f.host.invoke({ op: 'full', on, owned })
+const full = (f: F, on: boolean) => f.host.invoke({ op: 'full', on })
 async function pick(f: F) {
   f.overlay().webContents.emit('page-title-updated', {}, JSON.stringify({ q: 1, t: 'pick', x: 110, y: 105 }))
   await vi.waitFor(() => expect(f.tab().pick).not.toBeNull())
@@ -196,31 +192,27 @@ describe('the Esc rule in main', () => {
     expect(f.fullSends()).toEqual([])
   })
 
-  it('in the main window, Esc ends full screen unless the renderer says something there owns Esc', async () => {
+  it('in the main window, an unused Esc (op escape) ends full screen once', async () => {
     const f = fixture()
     await openPage(f)
-    await full(f, true, true)
-    expect(f.pressWindow()).toBe(false)
-    expect(f.fullSends()).toEqual([])
-    await full(f, true, false)
-    expect(f.pressWindow()).toBe(true)
+    expect(await f.pressWindow()).toBe(false)
+    await full(f, true)
+    expect(await f.pressWindow()).toBe(true)
     expect(f.fullSends()).toEqual([{ on: false }])
-    expect(f.pressWindow()).toBe(false)
+    expect(await f.pressWindow()).toBe(false)
+    expect(f.fullSends()).toHaveLength(1)
   })
 
-  it('in the main window, Esc leaves annotate mode unless the renderer owns Esc, and never acts for a hidden panel', async () => {
+  it('in the main window, an unused Esc leaves annotate mode, and never acts for a hidden panel', async () => {
     const f = fixture()
     await openPage(f)
     await annotate(f, true)
-    await full(f, false, true)
-    expect(f.pressWindow()).toBe(false)
-    expect(await f.annotating()).toBe(true)
     // A dialog over the panel hides the view: the chat is no longer shown, so its tab is not the one Esc is about.
-    await full(f, false, false)
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
-    expect(f.pressWindow()).toBe(false)
+    expect(await f.pressWindow()).toBe(false)
+    expect(await f.annotating()).toBe(true)
     await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
-    expect(f.pressWindow()).toBe(true)
+    expect(await f.pressWindow()).toBe(true)
     await vi.waitFor(async () => expect(await f.annotating()).toBe(false))
   })
 

@@ -134,7 +134,7 @@ export const WorkspaceScreen = ({
     const button = () => [...(root?.querySelectorAll<HTMLElement>('.wl-proj') ?? [])]
       .find(li => li.dataset.key === menuFor)?.querySelector<HTMLElement>('.wl-proj-more');
     root?.querySelector<HTMLElement>('.wl-menu button')?.focus();
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setMenuFor(null); button()?.focus(); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); setMenuFor(null); button()?.focus(); } };
     const onDown = (e: MouseEvent) => {
       const el = e.target as Element | null;
       if (!el?.closest?.('.wl-menu, .wl-proj-more')) setMenuFor(null);
