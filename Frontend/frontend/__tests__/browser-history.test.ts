@@ -286,3 +286,69 @@ describe('fileIo (atomic write)', () => {
     expect(fs.readdirSync(path.dirname(file))).toEqual([])
   })
 })
+
+describe('BrowserHistory visit times', () => {
+  it('a bounded clear takes only the visits inside the range and keeps the older one', async () => {
+    const { history, clock, state } = make()
+    clock.now = 100
+    history.visit('https://a.example/', 'A')
+    clock.now = 900
+    history.visit('https://a.example/', 'A')
+    expect(await history.clearSince(500)).toBe(true)
+    expect(history.list()).toEqual([{ url: 'https://a.example/', title: 'A', favicon: '', lastVisit: 100, visits: 1 }])
+    expect(JSON.parse(state.file!).entries[0].times).toEqual([100])
+  })
+
+  it('reorders by the recomputed last visit', async () => {
+    const { history, clock } = make()
+    for (const [url, at] of [['https://a.example/', 100], ['https://b.example/', 300], ['https://a.example/', 900]] as const) {
+      clock.now = at
+      history.visit(url)
+    }
+    await history.clearSince(500)
+    expect(history.list().map((e) => [e.url, e.lastVisit])).toEqual([['https://b.example/', 300], ['https://a.example/', 100]])
+  })
+
+  it('reads a file without visit times as one known visit at lastVisit', async () => {
+    const initial = JSON.stringify({ version: 1, entries: [
+      { url: 'https://new.example/', title: 'n', favicon: '', lastVisit: 700, visits: 4 },
+      { url: 'https://old.example/', title: 'o', favicon: '', lastVisit: 300, visits: 2 },
+    ] })
+    const { history, state } = make({ initial })
+    expect(history.list().map((e) => e.visits)).toEqual([4, 2])
+    expect(await history.clearSince(500)).toBe(true)
+    expect(history.list().map((e) => e.url)).toEqual(['https://old.example/'])
+    expect(JSON.parse(state.file!).entries[0]).toMatchObject({ url: 'https://old.example/', lastVisit: 300, visits: 2, times: [300] })
+  })
+
+  it('keeps at most 50 visit times, newest first, and still counts every visit', async () => {
+    const { history, clock, state } = make()
+    for (let i = 1; i <= 60; i++) {
+      clock.now = i
+      history.visit('https://a.example/')
+    }
+    await history.flush()
+    const stored = JSON.parse(state.file!).entries[0]
+    expect(stored.times).toHaveLength(50)
+    expect(stored.times[0]).toBe(60)
+    expect(stored.visits).toBe(60)
+    await history.clearSince(51)
+    expect(history.list()[0]).toMatchObject({ lastVisit: 50, visits: 50 })
+  })
+
+  it('clearSince(0) and clear() remove entries with odd timestamps too', async () => {
+    const initial = JSON.stringify({ version: 1, entries: [-5, 0, 7].map((t, i) => ({ url: `https://t${i}.example/`, title: '', favicon: '', lastVisit: t, visits: 1 })) })
+    const a = make({ initial })
+    expect(await a.history.clearSince(0)).toBe(true)
+    expect(a.history.list()).toEqual([])
+    const b = make({ initial })
+    expect(await b.history.clear()).toBe(true)
+    expect(b.history.list()).toEqual([])
+  })
+
+  it('list() does not hand out the visit times', () => {
+    const { history } = make()
+    history.visit('https://a.example/')
+    expect(Object.keys(history.list()[0]).sort()).toEqual(['favicon', 'lastVisit', 'title', 'url', 'visits'])
+  })
+})

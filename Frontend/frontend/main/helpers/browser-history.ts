@@ -7,6 +7,8 @@ const MAX_TITLE_CHARS = 200
 const MAX_URL_CHARS = 1_000
 // A favicon is stored as the data: URL main fetched (32 KB of image is about 44k characters).
 const MAX_FAVICON_CHARS = 48_000
+/** Visit times kept per page, newest first, so a bounded clear can take only the visits inside its range. */
+const MAX_VISIT_TIMES = 50
 // A visited URL may carry a login or reset token; such pages are not remembered at all. Any query name that
 // contains one of these words counts; the short words would also hit ordinary words (inside, design, decode),
 // so they only count as a whole word of the name (sid in sid or sessionSid, code in oobCode or code_verifier).
@@ -24,6 +26,11 @@ export interface HistoryEntry {
   favicon: string
   lastVisit: number
   visits: number
+}
+
+/** The stored form: an entry plus its known visit times (newest first, lastVisit is the first). */
+interface StoredEntry extends HistoryEntry {
+  times: number[]
 }
 
 /** The file boundary, so tests (and Windows rename failures) stay out of the real disk. A write that reports false (or throws) did not land. */
@@ -109,7 +116,7 @@ function cleanFavicon(value: unknown): string {
 
 /** Visited http(s) pages: address, title, icon address, last visit and count. No page content. */
 export class BrowserHistory {
-  private entries: HistoryEntry[] = []
+  private entries: StoredEntry[] = []
   private dirty = false
   private inflight: Promise<boolean> | null = null
   private timer: ReturnType<typeof setTimeout> | null = null
@@ -134,14 +141,19 @@ export class BrowserHistory {
       const seen = new Set<string>()
       let refused = false
       for (const raw of list) {
-        const item = raw as Partial<HistoryEntry>
+        const item = raw as Partial<StoredEntry>
         const url = historyUrl(item?.url)
         // The file holds a URL the filter now refuses: write it again without it.
         if (!url && typeof item?.url === 'string') refused = true
         if (!url || seen.has(url) || !Number.isFinite(item.lastVisit) || !Number.isFinite(item.visits)) continue
         seen.add(url)
+        // A file from before visit times were kept: its last visit is the only one known. A negative time
+        // counts as 0 so that clearing since 0 still takes everything.
+        const known = Array.isArray(item.times) ? item.times.filter((t): t is number => Number.isFinite(t)) : []
+        const times = (known.length ? known : [item.lastVisit as number]).map((t) => Math.max(0, t))
+          .sort((a, b) => b - a).slice(0, MAX_VISIT_TIMES)
         this.entries.push({ url, title: clean(item.title, MAX_TITLE_CHARS), favicon: cleanFavicon(item.favicon),
-          lastVisit: item.lastVisit as number, visits: Math.max(1, Math.floor(item.visits as number)) })
+          lastVisit: times[0], visits: Math.max(times.length, Math.floor(item.visits as number)), times })
       }
       this.entries.sort((a, b) => b.lastVisit - a.lastVisit)
       this.entries.length = Math.min(this.entries.length, this.cap)
@@ -153,7 +165,7 @@ export class BrowserHistory {
 
   /** Newest first. */
   list(limit = this.cap): HistoryEntry[] {
-    return this.entries.slice(0, Math.max(0, limit)).map((entry) => ({ ...entry }))
+    return this.entries.slice(0, Math.max(0, limit)).map(({ url, title, favicon, lastVisit, visits }) => ({ url, title, favicon, lastVisit, visits }))
   }
 
   /** A page was opened: counts a visit and moves it to the front. */
@@ -162,12 +174,14 @@ export class BrowserHistory {
     if (!url) return
     const at = this.entries.findIndex((entry) => entry.url === url)
     const found = at >= 0 ? this.entries.splice(at, 1)[0] : null
+    const now = this.now()
     this.entries.unshift({
       url,
       title: clean(title, MAX_TITLE_CHARS) || found?.title || '',
       favicon: cleanFavicon(favicon) || found?.favicon || '',
-      lastVisit: this.now(),
+      lastVisit: now,
       visits: (found?.visits ?? 0) + 1,
+      times: [now, ...(found?.times ?? [])].slice(0, MAX_VISIT_TIMES),
     })
     if (this.entries.length > this.cap) this.entries.length = this.cap
     this.touched()
@@ -188,9 +202,7 @@ export class BrowserHistory {
 
   /** Forgets everything and writes the empty file at once; false when the old file could not be replaced. */
   clear(): Promise<boolean> {
-    this.entries = []
-    this.dirty = true
-    return this.flush()
+    return this.clearSince(-Infinity)
   }
 
   /** Forgets one page by its stored address; true when it was there. The file is rewritten at once. */
@@ -203,11 +215,17 @@ export class BrowserHistory {
   }
 
   /**
-   * Forgets every page last visited at or after `ms` and writes the file at once. One entry keeps only its newest
-   * visit, so "the last hour" also takes a page visited in that hour together with its older visits.
+   * Forgets every visit at or after `ms` and writes the file at once. A page with older known visits stays with
+   * those; one whose known visits all fall in the range goes.
    */
   clearSince(ms: number): Promise<boolean> {
-    this.entries = this.entries.filter((entry) => entry.lastVisit < ms)
+    const kept: StoredEntry[] = []
+    for (const entry of this.entries) {
+      const times = entry.times.filter((t) => t < ms)
+      if (times.length === entry.times.length) kept.push(entry)
+      else if (times.length) kept.push({ ...entry, times, lastVisit: times[0], visits: Math.max(times.length, entry.visits - (entry.times.length - times.length)) })
+    }
+    this.entries = kept.sort((a, b) => b.lastVisit - a.lastVisit)
     this.dirty = true
     return this.flush()
   }
