@@ -235,7 +235,7 @@ describe('site-remove, turn 2', () => {
     expect(new Set(origins).size).toBe(origins.length)
   })
 
-  it('closes the open tabs of the site (any chat), stops those chats and leaves other tabs', async () => {
+  it('closes the open tabs of the site (any chat) without stopping those chats, and leaves other tabs', async () => {
     const f = tabFixture()
     await f.open(4, 'https://app.example.com/home')
     await f.open(7, 'https://example.com/')
@@ -244,7 +244,7 @@ describe('site-remove, turn 2', () => {
     expect(f.views[0].webContents.close).toHaveBeenCalled()
     expect(f.views[1].webContents.close).toHaveBeenCalled()
     expect(f.views[2].webContents.close).not.toHaveBeenCalled()
-    expect(f.onHalt.mock.calls.map((c) => c[0]).sort()).toEqual([4, 7])
+    expect(f.onHalt).not.toHaveBeenCalled()
   })
 
   it('reports to the backend so the grants drop', async () => {
@@ -725,7 +725,7 @@ describe('site removal lock', () => {
     expect(origins(f)).toEqual(expect.arrayContaining(['https://app.example.com:8443', 'https://late.example.com:9443', 'https://closed.example.com:7443']))
     expect(origins(f).some((origin: string) => origin.includes('other.org'))).toBe(false)
     expect(stack(f, 3)).toEqual(['https://other.org/stacked'])
-    expect(f.onHalt.mock.calls.map((c) => c[0]).sort()).toEqual([1, 2])
+    expect(f.onHalt).not.toHaveBeenCalled()
   })
 
   for (const when of ['during', 'after'] as const) {
@@ -854,6 +854,87 @@ describe('site removal lock', () => {
     expect((f.host as any).pageOpens.get(1) ?? []).toEqual([])
     handler({ url: 'https://other.org/after', disposition: 'foreground-tab' })
     await vi.waitFor(() => expect(f.views).toHaveLength(2))
+  })
+
+  it('a removal that closes only a chat\'s user tab leaves the command running on that chat\'s agent tab', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    await agentOn(f)
+    await f.open(4, 'https://example.com/account')
+    const wc = f.views[0].webContents
+    let finish!: (result: unknown) => void
+    wc.executeJavaScriptInIsolatedWorld = vi.fn(() => new Promise((resolve) => { finish = resolve }))
+    ;(f.host as any).tabs.get(1).snapshotId = 's1'
+    const click = f.host.handle({ op: 'click', conversation_id: 4, args: { snapshot_id: 's1', ref: 'r1' } })
+    await vi.waitFor(() => expect(wc.executeJavaScriptInIsolatedWorld).toHaveBeenCalled())
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 1 })
+    expect(f.views[1].webContents.destroyed).toBe(true)
+    expect(wc.destroyed).toBe(false)
+    finish({ clicked: true })
+    expect(await click).toMatchObject({ ok: true, clicked: true })
+    expect(f.onHalt).not.toHaveBeenCalled()
+  })
+
+  it('a command waiting on an agent tab that is on the site ends when the removal closes that tab', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    await agentOn(f)
+    const wc = f.views[0].webContents
+    wc.loadURL.mockImplementation(async () => {})
+    let ended: any = null
+    const waiting = f.host.handle({ op: 'navigate', conversation_id: 4, args: { url: 'https://example.com/slow' } }).then((r) => { ended = r })
+    await vi.waitFor(() => expect(wc.loadURL).toHaveBeenCalledWith('https://example.com/slow'))
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 1 })
+    await waiting
+    expect(ended).toMatchObject({ ok: false, error: 'halted' })
+    expect(wc.destroyed).toBe(true)
+  })
+
+  it('clears the exact origin of a history entry dropped by a history clear during the first read', async () => {
+    const mem = memoryHistory(() => 1_000)
+    mem.history.visit('https://past.example.com:9443/account', 'Past')
+    const f = tabFixture(mem.history)
+    f.jar.push(login())
+    const release = holdFirstRead(f)
+    const removal = f.host.invoke({ op: 'site-remove', site: 'example.com' })
+    expect(await f.host.invoke({ op: 'history-clear', range: 'all' })).toMatchObject({ ok: true })
+    expect(mem.history.list()).toEqual([])
+    release()
+    expect(await removal).toEqual({ ok: true, removed: 1 })
+    expect(origins(f)).toContain('https://past.example.com:9443')
+  })
+
+  it('a page-open the lock refuses after its address lookup gives its budget slot back', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    await f.open(1, 'https://other.org/')
+    const handler = f.views[0].webContents.setWindowOpenHandler.mock.calls[0][0]
+    await f.host.invoke({ op: 'visible', conversationId: 1, visible: true })
+    ;(f.host as any).tabs.get(1).lastGesture = Date.now()
+    let answer!: (addresses: { address: string; family: number }[]) => void
+    f.net.lookup = () => new Promise((resolve) => { answer = resolve })
+    handler({ url: 'https://other.org/p', disposition: 'foreground-tab' })
+    await vi.waitFor(() => expect(answer).toBeDefined())
+    expect((f.host as any).pageOpens.get(1)).toHaveLength(1)
+    const release = holdFirstRead(f)
+    const removal = f.host.invoke({ op: 'site-remove', site: 'example.com' })
+    answer(await addresses())
+    await flush()
+    expect((f.host as any).pageOpens.get(1)).toEqual([])
+    release()
+    await removal
+    expect(f.views).toHaveLength(1)
+  })
+
+  it('a page-open that succeeds spends its budget slot', async () => {
+    const f = tabFixture()
+    await f.open(1, 'https://other.org/')
+    const handler = f.views[0].webContents.setWindowOpenHandler.mock.calls[0][0]
+    await f.host.invoke({ op: 'visible', conversationId: 1, visible: true })
+    ;(f.host as any).tabs.get(1).lastGesture = Date.now()
+    handler({ url: 'https://other.org/p', disposition: 'foreground-tab' })
+    await vi.waitFor(() => expect(f.views).toHaveLength(2))
+    expect((f.host as any).pageOpens.get(1)).toHaveLength(1)
   })
 
   it('releases the lock before the backend report', async () => {

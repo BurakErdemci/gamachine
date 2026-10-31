@@ -750,7 +750,10 @@ export class BrowserHost {
       if (tab.agent) tab.popupBlocked = url
       // A page-open the lock refuses does not spend the page's tab budget.
       else if ((disposition === 'foreground-tab' || disposition === 'background-tab') && !this.clearing && this.pageMayOpenTab(tab)) {
-        this.openUserTab(tab.conversationId, url, true).catch(() => { /* refused or no window */ })
+        // The slot is spent only by a tab that was created: any refusal gives it back.
+        this.openUserTab(tab.conversationId, url, true)
+          .then((result) => { if (result.error) this.refundPageOpen(tab.conversationId) })
+          .catch(() => { this.refundPageOpen(tab.conversationId); /* refused or no window */ })
       }
       return { action: 'deny' }
     })
@@ -897,6 +900,11 @@ export class BrowserHost {
     if (recent.length >= MAX_PAGE_TABS) return false
     this.pageOpens.set(tab.conversationId, [...recent, now])
     return true
+  }
+
+  private refundPageOpen(conversationId: number): void {
+    const opens = this.pageOpens.get(conversationId)
+    if (opens) this.pageOpens.set(conversationId, opens.slice(0, -1))
   }
 
   private setUserControl(tab: Tab, on: boolean): void {
@@ -1051,10 +1059,14 @@ export class BrowserHost {
       if (origin) origins.add(origin)
       return origin !== ''
     }
-    // Recorded before the first await too: a chat deleted during the read takes its tabs and stack with it.
-    for (const tab of this.tabs.values()) if (this.isLive(tab)) this.tabUrls(tab).forEach(claim)
-    for (const stack of this.closed.values()) for (const tab of stack) claim(tab.url)
-    for (const entry of this.reopening) claim(entry.tab.url)
+    // Run at lock start and at acceptance: a chat deleted or a history entry dropped during the read takes its record with it.
+    const snapshot = () => {
+      for (const tab of this.tabs.values()) if (this.isLive(tab)) this.tabUrls(tab).forEach(claim)
+      for (const stack of this.closed.values()) for (const tab of stack) claim(tab.url)
+      for (const entry of this.reopening) claim(entry.tab.url)
+      for (const entry of this.deps.history?.list() ?? []) claim(entry.url)
+    }
+    snapshot()
     const session = this.session()
     const all = await session.cookies.get({})
     // One removal takes one listed site: a parent of several (github.io over alice. and bob.github.io) is refused.
@@ -1062,12 +1074,11 @@ export class BrowserHost {
     accepted.value = true
     for (const host of [site, `www.${site}`]) for (const scheme of ['https', 'http']) origins.add(`${scheme}://${host}`)
     // Open pages of the site go first: a live page would write the login back after the cookies are gone.
+    snapshot()
     const doomed = [...this.tabs.values()].filter((tab) => this.isLive(tab) && this.tabUrls(tab).filter(claim).length > 0)
-    for (const id of new Set(doomed.map((tab) => tab.conversationId))) this.stopLocal(id)
     for (const tab of doomed) this.closeTab(tab)
     // A reopen of the site still in flight, forgotten here, is neither opened nor put back.
     this.forgetClosed((tab) => claim(tab.url))
-    for (const entry of this.deps.history?.list() ?? []) claim(entry.url)
     let removed = 0
     let failed = 0
     let cookies = ofSite(all)
