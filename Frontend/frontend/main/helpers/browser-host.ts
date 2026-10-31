@@ -1593,7 +1593,16 @@ export class BrowserHost {
     })
     // Keys inside these views never reach the renderer either: the browser's own keys are claimed here like in a tab.
     wc.on('before-input-event', (event, input) => onKey(event, input))
-    const ready = Promise.resolve(wc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)).then(() => undefined, () => undefined)
+    // The app's CSP (script-src 'self', csp.ts) also reaches these data: pages and refuses their inline <script>
+    // (measured in the packaged app, 31 Oct: the overlay drew its bar but no script ran). The markup loads without
+    // it and the script runs through executeJavaScript, which the page's CSP does not govern.
+    const at = html.lastIndexOf('<script>')
+    const end = html.indexOf('</script>', at)
+    const script = at < 0 || end < 0 ? '' : html.slice(at + '<script>'.length, end)
+    const markup = at < 0 || end < 0 ? html : html.slice(0, at) + html.slice(end + '</script>'.length)
+    const ready = Promise.resolve(wc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(markup)}`))
+      .then(() => (script ? wc.executeJavaScript(script) : undefined))
+      .then(() => undefined, () => undefined)
     return { view, ready }
   }
 
