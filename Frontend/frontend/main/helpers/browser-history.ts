@@ -28,9 +28,13 @@ export interface HistoryEntry {
   visits: number
 }
 
-/** The stored form: an entry plus its known visit times (newest first, lastVisit is the first). */
+/**
+ * The stored form: an entry plus its known visit times (newest first). The cap drops the oldest times; those
+ * `visits - times.length` visits are only known to be no newer than `evictedNewest`.
+ */
 interface StoredEntry extends HistoryEntry {
   times: number[]
+  evictedNewest?: number
 }
 
 /** The file boundary, so tests (and Windows rename failures) stay out of the real disk. A write that reports false (or throws) did not land. */
@@ -150,10 +154,17 @@ export class BrowserHistory {
         // A file from before visit times were kept: its last visit is the only one known. A negative time
         // counts as 0 so that clearing since 0 still takes everything.
         const known = Array.isArray(item.times) ? item.times.filter((t): t is number => Number.isFinite(t)) : []
-        const times = (known.length ? known : [item.lastVisit as number]).map((t) => Math.max(0, t))
-          .sort((a, b) => b - a).slice(0, MAX_VISIT_TIMES)
-        this.entries.push({ url, title: clean(item.title, MAX_TITLE_CHARS), favicon: cleanFavicon(item.favicon),
-          lastVisit: times[0], visits: Math.max(times.length, Math.floor(item.visits as number)), times })
+        const sorted = (known.length ? known : [item.lastVisit as number]).map((t) => Math.max(0, t)).sort((a, b) => b - a)
+        const times = sorted.slice(0, MAX_VISIT_TIMES)
+        const visits = Math.max(sorted.length, Math.floor(item.visits as number))
+        const entry: StoredEntry = { url, title: clean(item.title, MAX_TITLE_CHARS), favicon: cleanFavicon(item.favicon),
+          lastVisit: times[0], visits, times }
+        // A file from before evictedNewest was kept: its visits without a time are no newer than the oldest known one.
+        if (visits > times.length) {
+          const stored = Number.isFinite(item.evictedNewest) ? item.evictedNewest as number : times[times.length - 1]
+          entry.evictedNewest = Math.max(0, stored, sorted[MAX_VISIT_TIMES] ?? -Infinity)
+        }
+        this.entries.push(entry)
       }
       this.entries.sort((a, b) => b.lastVisit - a.lastVisit)
       this.entries.length = Math.min(this.entries.length, this.cap)
@@ -175,13 +186,17 @@ export class BrowserHistory {
     const at = this.entries.findIndex((entry) => entry.url === url)
     const found = at >= 0 ? this.entries.splice(at, 1)[0] : null
     const now = this.now()
+    const times = [now, ...(found?.times ?? [])]
+    const dropped = times.length > MAX_VISIT_TIMES ? times[MAX_VISIT_TIMES] : undefined
+    const evictedNewest = dropped === undefined ? found?.evictedNewest : Math.max(dropped, found?.evictedNewest ?? -Infinity)
     this.entries.unshift({
       url,
       title: clean(title, MAX_TITLE_CHARS) || found?.title || '',
       favicon: cleanFavicon(favicon) || found?.favicon || '',
       lastVisit: now,
       visits: (found?.visits ?? 0) + 1,
-      times: [now, ...(found?.times ?? [])].slice(0, MAX_VISIT_TIMES),
+      times: times.slice(0, MAX_VISIT_TIMES),
+      ...(evictedNewest === undefined ? {} : { evictedNewest }),
     })
     if (this.entries.length > this.cap) this.entries.length = this.cap
     this.touched()
@@ -215,15 +230,17 @@ export class BrowserHistory {
   }
 
   /**
-   * Forgets every visit at or after `ms` and writes the file at once. A page with older known visits stays with
-   * those; one whose known visits all fall in the range goes.
+   * Forgets every visit at or after `ms` and writes the file at once. A page with older visits stays with those.
+   * A page whose visits without a known time may fall in the range goes whole: it errs toward forgetting.
    */
   clearSince(ms: number): Promise<boolean> {
     const kept: StoredEntry[] = []
     for (const entry of this.entries) {
+      const untimed = entry.visits - entry.times.length
+      if (untimed > 0 && (entry.evictedNewest ?? Infinity) >= ms) continue
       const times = entry.times.filter((t) => t < ms)
       if (times.length === entry.times.length) kept.push(entry)
-      else if (times.length) kept.push({ ...entry, times, lastVisit: times[0], visits: Math.max(times.length, entry.visits - (entry.times.length - times.length)) })
+      else if (times.length || untimed > 0) kept.push({ ...entry, times, lastVisit: times[0] ?? entry.evictedNewest!, visits: times.length + untimed })
     }
     this.entries = kept.sort((a, b) => b.lastVisit - a.lastVisit)
     this.dirty = true
