@@ -18,30 +18,55 @@ import path from 'path'
  * The two calls throw the same errors, so the surrounding fallbacks are unchanged.
  */
 function safeResolve(filePath: string): string {
+  // A value every containment guard refuses (relative to any workspace it starts with '..').
+  const refused = path.parse(path.resolve(filePath)).root
   try {
-    const absolutePath = path.resolve(filePath)
-    if (fs.existsSync(absolutePath)) {
-      return fs.realpathSync.native(absolutePath)
-    }
+    let absolutePath = path.resolve(filePath)
+    let hops = 0
 
-    let currentPath = absolutePath
-    const missingSegments: string[] = []
-
-    while (!fs.existsSync(currentPath)) {
-      const parentPath = path.dirname(currentPath)
-      if (parentPath === currentPath) {
-        return absolutePath
+    // Restarts only when a dangling symlink is followed to its target.
+    for (;;) {
+      if (fs.existsSync(absolutePath)) {
+        return fs.realpathSync.native(absolutePath)
       }
-      missingSegments.unshift(path.basename(currentPath))
-      currentPath = parentPath
-    }
 
-    const resolvedExistingPath = fs.realpathSync.native(currentPath)
-    return path.join(resolvedExistingPath, ...missingSegments)
+      let currentPath = absolutePath
+      const missingSegments: string[] = []
+      let followed = false
+
+      while (!fs.existsSync(currentPath)) {
+        // existsSync follows links, so a dangling symlink looks "missing". Its bytes
+        // would still land at the link target, so the target replaces the link here
+        // (measured 31 Oct: a dangling link let write-file and create-file land outside).
+        let isLink = false
+        try {
+          isLink = fs.lstatSync(currentPath).isSymbolicLink()
+        } catch {
+          // not there at all — a plain missing segment
+        }
+        if (isLink) {
+          if (++hops > 40) return refused
+          const target = path.resolve(path.dirname(currentPath), fs.readlinkSync(currentPath))
+          absolutePath = path.join(target, ...missingSegments)
+          followed = true
+          break
+        }
+        const parentPath = path.dirname(currentPath)
+        if (parentPath === currentPath) {
+          return absolutePath
+        }
+        missingSegments.unshift(path.basename(currentPath))
+        currentPath = parentPath
+      }
+      if (followed) continue
+
+      const resolvedExistingPath = fs.realpathSync.native(currentPath)
+      return path.join(resolvedExistingPath, ...missingSegments)
+    }
   } catch {
-    // realpath failed — fall through to the plain resolve below
+    // any failure: refuse, never fall back to the lexical path (it looks inside)
   }
-  return path.resolve(filePath)
+  return refused
 }
 
 /**
@@ -543,7 +568,8 @@ export function isAllowedWorkspaceWriteFile(filePath: string, workspacePath: str
  * read policy already refuses `nlink > 1` and the write path has to agree
  * (Codex audit 30 Oct: write-file changed an outside file through a hard link).
  * A missing target is fine. Follows symlinks on purpose: the containment guard
- * already resolved them, and the bytes written are the target's.
+ * already resolved them, and the bytes written are the target's. A dangling
+ * link is acceptable here only because safeResolve already judged its real destination.
  */
 export function isWritableExistingTarget(filePath: string): boolean {
   try {
