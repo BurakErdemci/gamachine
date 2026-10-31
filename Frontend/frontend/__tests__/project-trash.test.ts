@@ -274,6 +274,37 @@ describe('project-trash guards', () => {
       }
     })
 
+    it('refuses the parent of a nested project an editor has open, directly or through an alias', async () => {
+      const NESTED = `${MAC}/Embedded`
+      const ALIAS = '/Volumes/Alias/Embedded'
+      for (const arg of [NESTED, `"${NESTED}"`, ALIAS]) {
+        const { deps, files } = fake(platform, [...unity(MAC, '/'), ...unity(NESTED, '/')], { processCommands: async () => [editor(arg)] }, { [ALIAS]: NESTED })
+        files.add(`${MAC}/Temp/UnityLockfile`)
+        expect(await trashProject(MAC, deps), arg).toEqual({ error: 'unity-open' })
+        expect(deps.trashItem).not.toHaveBeenCalled()
+      }
+    })
+
+    it('blocks nothing with flag-like text inside a -logFile value (double-quoted, single-quoted and unquoted)', async () => {
+      const OTHER = '/Users/me/Games/Other'
+      const logs = ['/logs/build-projectPath editor.log', '"/logs/build-projectPath editor.log"', "'/logs/build-projectPath editor.log'",
+        `"/logs/build -projectPath ${MAC}"`, `'/logs/build -projectPath ${MAC}'`]
+      for (const log of logs) {
+        const { deps, files } = fake(platform, [...unity(MAC, '/'), ...unity(OTHER, '/')], { processCommands: async () => [`${editor(OTHER)} -logFile ${log}`] })
+        files.add(`${MAC}/Temp/UnityLockfile`)
+        expect(await trashProject(MAC, deps), log).toEqual({ ok: true })
+        expect(deps.trashItem).toHaveBeenCalledTimes(1)
+      }
+    })
+
+    it('does not take "x-projectPath" glued to other text for the option', async () => {
+      for (const flag of ['x-projectPath', 'build-projectPath']) {
+        const { deps, files } = fake(platform, unity(MAC, '/'), { processCommands: async () => [`/Applications/Unity/Unity ${flag} ${MAC}`] })
+        files.add(`${MAC}/Temp/UnityLockfile`)
+        expect(await trashProject(MAC, deps), flag).toEqual({ ok: true })
+      }
+    })
+
     it.each(['null', 'throw'])('refuses when the process list cannot be read (%s)', async (how) => {
       const processCommands = how === 'null' ? async () => null : async () => { throw new Error('ps failed') }
       const { deps, files } = fake(platform, unity(MAC, '/'), { processCommands })

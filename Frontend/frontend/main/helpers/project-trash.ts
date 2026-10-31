@@ -54,31 +54,36 @@ export function trashPrompt(real: string, platform: string) {
 
 /**
  * The -projectPath values of a command line, as candidate lists (longest first), never trimmed: folder names may
- * begin, end or be full of whitespace. A quoted value is exactly the text between the quotes (one candidate). An
- * unquoted value runs from its start up to each whitespace character and up to the line end (CR/LF dropped).
+ * begin, end or be full of whitespace. The flag counts only as a whole token followed by whitespace; a token that
+ * begins with a quote runs to its closing quote, so flag-like text inside another option's value is no flag. A
+ * quoted value is exactly the text between the quotes (one candidate). An unquoted value runs from its start up to
+ * each whitespace character and up to the line end (CR/LF dropped).
  */
 const projectPathArgs = (command: string): string[][] =>
-  [...command.matchAll(/-projectpath\s+(?:"([^"]*)"|'([^']*)'|(?=([^\r\n]*)))/gi)].map(m => {
-    const quoted = m[1] ?? m[2]
-    if (quoted !== undefined) return [quoted].filter(Boolean)
-    const rest = m[3] ?? ''
-    const cuts = [...[...rest.matchAll(/\s/g)].map(c => c.index ?? 0), rest.length]
-    return cuts.map(i => rest.slice(0, i)).filter(Boolean).reverse()
-  }).filter(list => list.length > 0)
+  [...command.matchAll(/"[^"]*"\S*|'[^']*'\S*|\S+/g)]
+    .filter(t => t[0].toLowerCase() === '-projectpath' && /\s/.test(command[(t.index ?? 0) + t[0].length] ?? ''))
+    .map(t => {
+      const m = command.slice((t.index ?? 0) + t[0].length).match(/^\s+(?:"([^"]*)"|'([^']*)'|(?=([^\r\n]*)))/)
+      const quoted = m?.[1] ?? m?.[2]
+      if (quoted !== undefined) return [quoted].filter(Boolean)
+      const rest = m?.[3] ?? ''
+      const cuts = [...[...rest.matchAll(/\s/g)].map(c => c.index ?? 0), rest.length]
+      return cuts.map(i => rest.slice(0, i)).filter(Boolean).reverse()
+    }).filter(list => list.length > 0)
 
 /**
- * A Unity command line that opens this project: a -projectPath resolves to the same folder (same canonical path
- * or same dev+ino, so any alias counts), or cannot be compared (relative). Of an unquoted value's candidates the
- * longest one that resolves is the value. The target path appearing elsewhere in the text does not count.
+ * A Unity command line that opens this project or one nested in it: a -projectPath resolves to the folder or to a
+ * folder inside it (by canonical path or dev+ino, so any alias counts), or cannot be compared (relative). Of an
+ * unquoted value's candidates the longest one that resolves is the value. The target path appearing elsewhere in the text does not count.
  */
 const unityNames = (
   command: string, isAbsolute: (s: string) => boolean, resolves: (arg: string) => boolean,
-  sameFolder: (arg: string) => boolean,
+  inTarget: (arg: string) => boolean,
 ): boolean => {
   if (!/unity/i.test(command)) return false
   return projectPathArgs(command).some(list => {
     const arg = list.find(a => !isAbsolute(a) || resolves(a))
-    return arg !== undefined && (!isAbsolute(arg) || sameFolder(arg))
+    return arg !== undefined && (!isAbsolute(arg) || inTarget(arg))
   })
 }
 
@@ -131,7 +136,8 @@ export async function checkTrashable(dir: unknown, deps: TrashDeps): Promise<{ e
   const inside = (other: string) => { const id = deps.identity?.(resolved(deps, other)); return !!id && chain(real).includes(id) }
   if (guard(deps.protectedDirs).some(d => within(target, d)) || deps.protectedDirs.some(above)) return { error: 'protected' }
   if (guard(deps.appDirs).some(d => within(target, d) || within(d, target)) || deps.appDirs.some(d => above(d) || inside(d))) return { error: 'protected' }
-  if (deps.openWorkspaces.some(w => within(target, norm(resolved(deps, w))) || above(w))) return { error: 'open-workspace' }
+  const inTarget = (other: string) => within(target, norm(resolved(deps, other))) || above(other)
+  if (deps.openWorkspaces.some(inTarget)) return { error: 'open-workspace' }
 
   if (!deps.isDirectory(p.join(real, 'Assets')) || !deps.isDirectory(p.join(real, 'ProjectSettings'))) {
     return { error: 'not-a-unity-project' }
@@ -144,12 +150,7 @@ export async function checkTrashable(dir: unknown, deps: TrashDeps): Promise<{ e
     const commands = await deps.processCommands().catch(() => null)
     if (!commands) return { error: 'unity-open' }
     const resolvable = (arg: string) => { try { deps.realpath(arg); return true } catch { return false } }
-    const sameFolder = (arg: string) => {
-      const there = resolved(deps, arg)
-      const id = deps.identity?.(there)
-      return norm(there) === target || (!!id && id === targetId)
-    }
-    if (commands.some(c => unityNames(c, p.isAbsolute, resolvable, sameFolder))) return { error: 'unity-open' }
+    if (commands.some(c => unityNames(c, p.isAbsolute, resolvable, inTarget))) return { error: 'unity-open' }
   }
   return { real, id: targetId }
 }
