@@ -59,4 +59,13 @@ describe('submitTreeCreate name normalization', () => {
     expect(h.result.current.treeCreating).not.toBeNull()
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('boom'), 'error')
   })
+
+  it.each(['file', 'folder'] as const)('shows the error and keeps the form open when %s create rejects', async (type) => {
+    invoke.mockRejectedValue(Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' }))
+    const { h, toast } = await submit('blocked/child', type)
+    expect(created()).toHaveLength(1)
+    expect(invoke.mock.calls.every(c => c[0] === 'create-file' || c[0] === 'create-folder')).toBe(true)
+    expect(h.result.current.treeCreating).not.toBeNull()
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('EEXIST'), 'error')
+  })
 })

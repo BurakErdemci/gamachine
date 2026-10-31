@@ -638,7 +638,13 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
       return;
     }
     const newPath = `${parentPath}/${segments.join('/')}`;
-    const res = await ipc.invoke(type === 'file' ? 'create-file' : 'create-folder', newPath, workspacePath);
+    let res: { success?: boolean; error?: string } | undefined;
+    try {
+      res = await ipc.invoke(type === 'file' ? 'create-file' : 'create-folder', newPath, workspacePath);
+    } catch (err) {
+      // The main-process handler can throw (e.g. EEXIST from mkdir when a parent segment is a file).
+      res = { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
     if (!res?.success) {
       showToast(cevir('file.createError', { hata: res?.error || cevir('common.unknown') }), 'error');
       return;
