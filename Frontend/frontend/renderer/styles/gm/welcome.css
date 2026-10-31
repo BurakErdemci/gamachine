@@ -134,6 +134,7 @@
 }
 .wl-menu button { display: flex; width: 100%; align-items: center; height: 32px; padding: 0 10px; border-radius: var(--radius-sm); font-size: 13px; text-align: left; }
 .wl-menu button:hover, .wl-menu button:focus-visible { background: var(--shell-bg-2); }
+.wl-menu .wl-menu-danger { margin-top: 4px; border-top: var(--line-w) solid var(--menu-line); border-radius: 0 0 var(--radius-sm) var(--radius-sm); color: var(--del-text); }
 
 /* ======================= drop zones ======================= */
 .wl-drop {

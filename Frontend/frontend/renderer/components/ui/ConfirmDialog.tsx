@@ -77,6 +77,9 @@ export function ConfirmDialogHost() {
   useEffect(() => {
     if (!state) return;
     const onKey = (e: KeyboardEvent) => {
+      // A held key must not answer a dialog it opened, nor click the focused button through the
+      // browser's own Enter/Space activation.
+      if (e.repeat) { if (e.key === 'Enter' || e.key === ' ') e.preventDefault(); return; }
       if (e.key === 'Escape') { e.preventDefault(); resolve(false); }
       else if (e.key === 'Enter') { e.preventDefault(); resolve(true); }
     };

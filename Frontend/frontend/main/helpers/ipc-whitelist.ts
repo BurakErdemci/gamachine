@@ -40,6 +40,7 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'hub-cancel-create',
   'hub-open-project',
   'hub-pick-parent-dir',
+  'workspace-trash',
 ])
 
 export const PRELOAD_ONLY_CHANNELS = new Set(['register-dropped-folder'])
