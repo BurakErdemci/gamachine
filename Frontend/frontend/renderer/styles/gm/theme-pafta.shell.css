@@ -6,8 +6,9 @@
 /* m14: the sidebar lockup sits in the smallest title block - one hairline box, nothing inside changes */
 [data-theme="pafta"] .brand-logo { box-sizing: content-box; padding: 5px 9px; border: 1px solid var(--shell-line); }
 
-/* browser full screen: the chat strip is a sheet below a double rule, as the drawing's title block */
-[data-theme="pafta"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-top: 3px double var(--ink); }
+/* browser full screen: the floating chat is a sheet laid on the drawing, its bar ruled off as the title block */
+[data-theme="pafta"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-radius: 0; border-color: var(--ink); box-shadow: 5px 5px 0 var(--paper-line-strong); }
+[data-theme="pafta"] .app[data-browser-full]:not([data-screen]) .bf-chat-bar { border-bottom: 3px double var(--ink); }
 
 /* the breaker: the handle rides a vertical slot; off = down, any "on" intent = up */
 [data-theme="pafta"] .unity-switch { padding: 3px 6px; gap: 7px; }

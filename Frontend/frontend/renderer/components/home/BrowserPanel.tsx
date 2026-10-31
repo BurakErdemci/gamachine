@@ -102,6 +102,10 @@ const ASK_ICON = (
   <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" /><path d="M8.2 8.2a1.9 1.9 0 1 1 2.6 1.8c-.6.3-.8.6-.8 1.2M10 13.6v.1" /></svg>
 );
 
+const CHAT_ICON = (
+  <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 4.5h13v8h-7l-3.5 3v-3H3.5z" /><path d="M7 8.5h6" /></svg>
+);
+
 const STOP_ICON = <svg className="bp-stop-ic" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1" /></svg>;
 
 /**
@@ -111,7 +115,7 @@ const STOP_ICON = <svg className="bp-stop-ic" viewBox="0 0 12 12" aria-hidden="t
  * has no page yet (the Suggested grid shows instead). It shows the tabs of the chat open in the
  * UI (`conversationId`); every op names that chat.
  */
-export function BrowserPanel({ visible, conversationId, running, onStop, onNeedChat, full = false, onToggleFull }: {
+export function BrowserPanel({ visible, conversationId, running, onStop, onNeedChat, full = false, onToggleFull, chatOpen = true, onToggleChat }: {
   visible: boolean;
   conversationId: number | null;
   /** The chat on screen has a turn in flight. */
@@ -123,6 +127,9 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
   /** Full-screen mode is on (the page fills the window); the toggle shows only with a handler. */
   full?: boolean;
   onToggleFull?: () => void;
+  /** Full screen only: the floating chat over the page is open; its toolbar toggle shows only with a handler. */
+  chatOpen?: boolean;
+  onToggleChat?: () => void;
 }) {
   const { t } = useLang();
   const state = useBrowserLive(conversationId);
@@ -164,12 +171,13 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
     setCovered(hit);
   }, []);
 
-  // Entering or leaving full screen moves the page area: measure at once and once the layout has settled.
+  // Entering or leaving full screen, or opening or collapsing the floating chat, moves the page area: measure at once
+  // and once the layout has settled.
   useEffect(() => {
     measure();
     const frame = requestAnimationFrame(() => measure());
     return () => cancelAnimationFrame(frame);
-  }, [full, measure]);
+  }, [full, chatOpen, measure]);
 
   // A new chat has its own tab, so its bounds are sent again.
   useEffect(() => { lastBounds.current = ''; measure(); }, [conversationId, measure]);
@@ -353,6 +361,14 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
     <button type="button" className="bp-full" onClick={onToggleFull} aria-pressed={full}
       aria-label={fullLabel} title={fullLabel}>{full ? FULL_LEAVE_ICON : FULL_ICON}</button>
   );
+  const chatLabel = t(chatOpen ? 'bf.chatHide' : 'bf.chatShow');
+  const chatToggle = full && onToggleChat && (
+    <button type="button" className="bp-tool bp-chat" onClick={onToggleChat} aria-pressed={chatOpen}
+      aria-label={chatLabel} title={chatLabel}>
+      {CHAT_ICON}<span className="bp-label">{t('bf.chat')}</span>
+      {running && <span className="bp-chat-run" aria-hidden="true" />}
+    </button>
+  );
 
   return (
     <section className="bp-panel" data-state={state.active ? 'active' : 'idle'} data-full={full ? 'true' : undefined} aria-label={t('ws.tabBrowser')} onKeyDown={onShortcut}>
@@ -382,12 +398,13 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
             {rows.length > 0 && <SuggestionList id={listId} items={rows} active={row} onPick={pick} />}
           </div>
           <button type="button" className="bp-tool bp-mark" onClick={toggleAnnotate} aria-pressed={state.annotating}
-            aria-label={markLabel} title={markLabel}>{MARK_ICON}<span>{t('bp.mark')}</span></button>
+            aria-label={markLabel} title={markLabel}>{MARK_ICON}<span className="bp-label">{t('bp.mark')}</span></button>
           <button type="button" className="bp-tool bp-ask" onClick={askAboutPage}
-            aria-label={t('bp.askPage')} title={t('bp.askPageHint')}>{ASK_ICON}<span>{t('bp.askPage')}</span></button>
+            aria-label={t('bp.askPage')} title={t('bp.askPageHint')}>{ASK_ICON}<span className="bp-label">{t('bp.askPage')}</span></button>
           <button type="button" className="bp-stop" onClick={doStop} disabled={stop !== 'idle' || !running} title={t('bp.stopNote')}>
-            {STOP_ICON}<span>{t(stop === 'busy' || stop === 'sent' ? 'bp.stopping' : stop === 'stopped' ? 'bp.stopped' : 'bp.stop')}</span>
+            {STOP_ICON}<span className="bp-label">{t(stop === 'busy' || stop === 'sent' ? 'bp.stopping' : stop === 'stopped' ? 'bp.stopped' : 'bp.stop')}</span>
           </button>
+          {chatToggle}
           {fullToggle}
         </header>
       )}
@@ -396,6 +413,7 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
         {!state.active && (
           <div className="bp-idle">
             {fullToggle}
+            {chatToggle}
             <p className="bp-idle-title">{t('bp.idle')}</p>
             <div className="bp-open">
               <input className="bp-address" type="text" value={openUrl} placeholder={t('bp.addressHint')}

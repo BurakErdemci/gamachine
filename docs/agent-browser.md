@@ -169,8 +169,40 @@ the **agent tab**, and it is the only page the agent can reach.
   history after it (arrows, Enter, Esc, click); the list is a `role=listbox`, so the native
   view hides while it is open. A tab with no page yet (and the idle panel) shows "Önerilen",
   tiles of the most visited sites, and keeps the native view hidden.
+- **Narrow panel.** `.bp-panel` is its own width container (`container: bp`, rules in `shell.css`), so the toolbar
+  can never push the panel, or the page view measured inside it, past the panel's edges. Below 560 px the action
+  buttons (İşaretle, Bu sayfayı sor, Durdur, the chat toggle) drop their words: the word is clipped, not removed,
+  so it stays the button's accessible name. Below 400 px the address takes the first row with back/forward/reload
+  and the actions move to a second row on the right.
 
-Not in this round: ad blocker, extensions, downloads, full screen, quick-access bar, find in
+## Full screen and Esc (31 Oct 2026)
+
+- **Full screen** (`renderer/lib/browserFull.ts`, toggle in the toolbar or Ctrl/Cmd+Shift+F): the page fills the
+  whole area under the window's top bar; the sidebar, the panel head and the tabs are hidden, never unmounted. The
+  chat becomes a floating window anchored on the right (`.app[data-browser-full]` in `shell.css`, a per-theme edge in
+  each `theme-*.shell.css`), with its own title bar (the model's colour mark, the chat's name, the run lamp, a
+  minimize button), recent messages and the composer.
+- **Why a right column:** the page is a native `WebContentsView`, and nothing the renderer draws can appear above
+  it; a view is one rectangle. So the page view's bounds leave the chat's rectangle uncovered: while the chat is open
+  the browser panel keeps a right gutter of exactly the chat's width and margins (`--bf-chat-w`, `--bf-gap` feed
+  both), and BrowserPanel's own measure sends the narrower bounds. The page keeps its full height, which a site needs
+  more than width. Drawing the chat in a view of its own would mean a second copy of the chat app kept in sync; the
+  gutter needs none.
+- **Collapse:** the minimize button (or the toolbar's Sohbet button) hides the chat (`data-bf-chat="closed"`,
+  `visibility: hidden`, so the thread keeps its scroll and the composer its draft); the page takes the whole width.
+  The toolbar's Sohbet button, which only exists in full screen and pulses while a turn runs, opens it again.
+  Toggling full screen or the chat re-measures at once and after the layout settles. Leaving full screen restores the
+  normal layout: every full-screen rule hangs off the attribute.
+- **Esc** is one rule in main (`BrowserHost.escape`), in every `before-input-event` the host sees (tab views, the
+  annotate overlay, the comment box) and in the main window's (`background.ts` → `windowKeys`). An Esc keyDown with
+  no modifier and not a repeat: if the shown chat's selected tab is annotating, it drops the open pick (or the click
+  still waiting on its frame) or else leaves the mode, and is claimed; else if full screen is on, main sends
+  `browser-full-toggle` with `{on: false}` and claims it; else it passes untouched (pages and renderer dialogs keep
+  their Esc). The renderer tells main the state over `browser-live` op `full` (`{on, owned}`): `owned` is true while
+  a dialog, a menu or a list popup is open, or a field of the browser panel (the address box) has focus; then an Esc
+  pressed in the main window passes to the renderer. The overlay and the box no longer listen for Esc themselves.
+
+Not in this round: ad blocker, extensions, downloads, quick-access bar, find in
 page, zoom, history and site management pages.
 
 ## Annotate mode (30 Oct 2026; frame design 31 Oct 2026)
@@ -194,7 +226,7 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
   node, navigation blocked, like the comment box) lies exactly over the tab, above it and below the comment box. The page gets
   no pointer or key event from the user meanwhile. The overlay outlines the element under the cursor itself, from the boxes of
   the latest frame (the smallest box containing the point wins, a tie goes to the later one; `hitElement`), with no host round
-  trip. A click posts `pick`, a drag of 6 px or more posts `area`, Esc posts `cancel`, a wheel posts `wheel`, which the host
+  trip. A click posts `pick`, a drag of 6 px or more posts `area` (Esc is main's, see "Full screen and Esc"), a wheel posts `wheel`, which the host
   forwards to the tab (`sendInputEvent` `mouseWheel`) and reads the boxes again 80 ms later. No other key reaches the page.
   It talks to the host like the box: `document.title` JSON with a counter. The overlay's `before-input-event` claims the same
   browser keys as a tab (full screen Ctrl/Cmd+Shift+F, the tab shortcuts T, W, Shift+T, 1-9, and the annotate chord).
@@ -206,18 +238,22 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
   are drawn from that value only. A navigation turns a live look into nothing; a frozen one stays.
 - **Toggle:** the panel's "İşaretle" button, or Ctrl+Shift+E (Cmd+Shift+E on macOS). The chord is claimed in the host's
   `before-input-event` (focus inside the page, the overlay or the comment box) and in the renderer (window keydown, only while
-  the browser panel is shown, never under a dialog, never on key repeat). No other key is claimed. Esc in the overlay with
-  nothing picked also leaves the mode.
+  the browser panel is shown, never under a dialog, never on key repeat). Esc anywhere, with nothing picked, also leaves the
+  mode (main's Esc rule).
 - **Picking:** on a click or drag with no comment open, the host reads a fresh frame with its picture and, only if that frame is
   still current when it arrives, opens the pick from it: the element under the point (same rule as the hover), or the area
   (the drag rect, with the texts of the elements lying fully inside it, up to 500 chars). The overlay then shows the frame's
-  picture frozen under the target's outline, the refresh stops, and the **comment box** opens: a second app-owned view, a dark
-  rounded pill with "Yorum ekle…" and a send button, placed next to the target and always fully inside the panel (right, else
+  picture frozen under the target's outline, the refresh stops, and the **comment box** opens: a second app-owned view in
+  Gamachine's own look (the mascot's slate plate with two cut corners, an orange visor mark on its left edge that grows while
+  it has focus, "Yorum ekle…", key hints and an orange cut-corner "↵ Kaydet" button), placed next to the target and always fully inside the panel (right, else
   left, else below, else above, then clamped; `placeNoteBox`). Each pick gets a new host id. While a comment with text is open,
   clicks and drags are ignored; with an empty one a click picks again from the same frozen frame, without a page call. No later
   frame, page event or navigation changes an open pick. Enter or the button saves, Shift+Enter is a new line, Esc cancels.
+  The box opens at its real height: the host keeps it hidden, gives it the width it will have (`__width`), takes the height
+  `__set` returns, places it and only then shows it (a box not laid out yet measured its text at 0 px and opened ~130 px
+  tall).
 - **Box messages:** the host gives the box the pick's id with its draft (`__set(draft, pickId)`), and every message the box
-  posts (`draft`, `size`, `submit`, `cancel`) carries it as `p`. A message goes to the tab whose open pick has that id, whether
+  posts (`draft`, `size`, `submit`) carries it as `p`. A message goes to the tab whose open pick has that id, whether
   the box still shows it or not (a draft typed just before the panel hid still reaches its pick); one whose `p` matches no open
   pick changes nothing. `__error(message, pickId)` carries the id too, and the box ignores an error for a pick it is not showing.
 - **Save:** saving is all or nothing and never touches the page. The note gets the tab's next number (per tab, increasing,
@@ -233,8 +269,8 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
 - **Note origin:** a frame records the tab's address and title when it is accepted, and a pick keeps them: the saved note (and
   its `browser-notes` event) names the page it was picked on, even when the tab navigated while the comment was open.
 - **Draft and tabs:** hiding the panel or switching tabs hides the overlay and the box and stops the refresh; the pick and its
-  draft stay and come back with the tab. A resize places the overlay and the box again. Turning the mode off (or Esc in the box
-  or the overlay) drops the pick and its draft; the saved notes stay. Closing the tab or deleting the chat drops the overlay, the
+  draft stay and come back with the tab. A resize places the overlay and the box again. Turning the mode off (or Esc with
+  nothing picked) drops the pick and its draft; the saved notes stay. Closing the tab or deleting the chat drops the overlay, the
   pick and the notes. A navigation or reload keeps the mode and any open pick. The box only ever shows or hides for the shown
   annotating tab: a click whose frame read finishes after its tab was hidden opens the pick there, and the box comes with the tab. The mode marks the tab `userTouched`, and the tab
   carrying the notes becomes the agent's tab when the message is sent (the renderer selects it before `release`).

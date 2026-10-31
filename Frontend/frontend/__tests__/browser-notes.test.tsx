@@ -443,7 +443,9 @@ describe('host annotate ops', () => {
     expect(await live(f)).toBe(true)
     expect(f.sent('browser-notes')).toHaveLength(0)
     const calls = f.pageCalls().length
-    boxSays(f, { t: 'cancel' })
+    const esc = { preventDefault: vi.fn() }
+    f.box().webContents.emit('before-input-event', esc, { type: 'keyDown', key: 'Escape' })
+    expect(esc.preventDefault).toHaveBeenCalled()
     expect(f.box().setVisible).toHaveBeenLastCalledWith(false)
     expect(f.tab().pick).toBeNull()
     expect(await live(f)).toBe(true)
@@ -573,7 +575,7 @@ describe('host annotate ops', () => {
     const f = fakeHostFixture()
     await openPage(f)
     await annotate(f, true)
-    overlaySays(f, { t: 'cancel' })
+    f.overlay().webContents.emit('before-input-event', { preventDefault: vi.fn() }, { type: 'keyDown', key: 'Escape' })
     await vi.waitFor(async () => expect(await live(f)).toBeUndefined())
     expect(f.hasRefresh()).toBe(false)
     expect(f.tab().overlay).toBeNull()

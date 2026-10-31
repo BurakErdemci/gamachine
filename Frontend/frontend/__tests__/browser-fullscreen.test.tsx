@@ -19,6 +19,8 @@ const live = () => ({
   tabs: [{ id: 1, url: 'https://itch.io/game-assets', title: 'Free assets', loading: false, favicon: '', agent: true }], activeTabId: 1,
 })
 const bounds = () => invoke.mock.calls.filter(c => c[1]?.op === 'set-bounds').map(c => c[1].bounds)
+/** What the hook told main for its Esc rule (browser-host.ts escape()). */
+const fullReports = () => invoke.mock.calls.filter(c => c[1]?.op === 'full').map(c => ({ on: c[1].on, owned: c[1].owned }))
 
 let mounts: { chat: number; panel: number }
 function Chat() {
@@ -35,10 +37,11 @@ function Panel(props: React.ComponentProps<typeof BrowserPanel>) {
 function Frame({ browserShown }: { browserShown: boolean }) {
   const bf = useBrowserFull(browserShown)
   return (
-    <div className="app" data-testid="app" data-browser-full={bf.full ? 'true' : undefined}>
+    <div className="app" data-testid="app" data-browser-full={bf.full ? 'true' : undefined}
+      data-bf-chat={bf.full && !bf.chatOpen ? 'closed' : undefined}>
       <aside className="sidebar-slot" />
       <Panel visible={browserShown} conversationId={3} running={false} onStop={async () => {}} onNeedChat={async () => 3}
-        full={bf.full} onToggleFull={bf.toggle} />
+        full={bf.full} onToggleFull={bf.toggle} chatOpen={bf.chatOpen} onToggleChat={bf.toggleChat} />
       <Chat />
     </div>
   )
@@ -123,15 +126,29 @@ describe('browser full screen', () => {
     expect(app().getAttribute('data-browser-full')).toBe('true')
   })
 
-  it('leaves on Esc from the app chrome, but not when the address box used the Esc', async () => {
+  it('tells main full screen is on, and that the address box owns Esc while it is focused', async () => {
     render(<Frame browserShown />)
     const address = await screen.findByRole('combobox')
     fireEvent.click(toggleBtn())
-    fireEvent.focus(address)
-    fireEvent.keyDown(address, { key: 'Escape' })
-    expect(app().getAttribute('data-browser-full')).toBe('true')
-    address.blur()
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
+    act(() => { address.focus() })
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: true }))
+    act(() => { address.blur() })
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
+    fireEvent.click(toggleBtn())
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: false, owned: false }))
+  })
+
+  it('leaves when main ends full screen on Esc, and only then', async () => {
+    render(<Frame browserShown />)
+    await screen.findByRole('combobox')
+    fireEvent.click(toggleBtn())
+    // Esc is main's: the renderer's own keydown no longer ends the mode.
     key({ key: 'Escape' })
+    expect(app().getAttribute('data-browser-full')).toBe('true')
+    act(() => { listeners.get('browser-full-toggle')?.({ on: false }) })
+    expect(app().getAttribute('data-browser-full')).toBeNull()
+    act(() => { listeners.get('browser-full-toggle')?.({ on: false }) })
     expect(app().getAttribute('data-browser-full')).toBeNull()
   })
 
@@ -171,6 +188,29 @@ describe('browser full screen', () => {
     await waitFor(() => expect(bounds().at(-1)).toEqual({ x: 10, y: 20, width: 300, height: 200 }))
   })
 
+  it('collapses the floating chat to a toolbar button and back, sending the page bounds each time', async () => {
+    render(<Frame browserShown />)
+    await screen.findByRole('combobox')
+    expect(screen.queryByRole('button', { name: tr['bf.chatHide'] })).toBeNull()
+    rect = { left: 0, top: 52, width: 800, height: 700 }
+    fireEvent.click(toggleBtn())
+    await waitFor(() => expect(bounds().at(-1)).toEqual({ x: 0, y: 52, width: 800, height: 700 }))
+    const hide = screen.getByRole('button', { name: tr['bf.chatHide'] })
+    expect(hide.getAttribute('aria-pressed')).toBe('true')
+    rect = { left: 0, top: 52, width: 1240, height: 700 }
+    fireEvent.click(hide)
+    expect(app().getAttribute('data-bf-chat')).toBe('closed')
+    await waitFor(() => expect(bounds().at(-1)).toEqual({ x: 0, y: 52, width: 1240, height: 700 }))
+    rect = { left: 0, top: 52, width: 800, height: 700 }
+    fireEvent.click(screen.getByRole('button', { name: tr['bf.chatShow'] }))
+    expect(app().getAttribute('data-bf-chat')).toBeNull()
+    await waitFor(() => expect(bounds().at(-1)).toEqual({ x: 0, y: 52, width: 800, height: 700 }))
+    // Leaving full screen takes the button away; the normal layout carries no chat attribute.
+    fireEvent.click(toggleBtn())
+    expect(screen.queryByRole('button', { name: tr['bf.chatHide'] })).toBeNull()
+    expect(app().getAttribute('data-browser-full')).toBeNull()
+  })
+
   it('shows the toggle in the empty browser too, so Esc is not the only way out', async () => {
     invoke.mockImplementation(async (_c: string, req: any) => (req?.op === 'panel-status' ? { active: false } : { ok: true }))
     render(<Frame browserShown />)
@@ -195,9 +235,11 @@ describe('browser full screen keyboard rules', () => {
     let answer: boolean | undefined
     await act(async () => { void confirmDialog('delete?').then(v => { answer = v }) })
     expect(document.querySelector('[role="alertdialog"]')).not.toBeNull()
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: true }))
     await act(async () => { key({ key: 'Escape' }) })
     expect(answer).toBe(false)
     expect(full()).toBe(true)
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
   })
 
   it('keeps full mode when Esc closes a document-level popup with focus in the composer', async () => {
@@ -212,15 +254,17 @@ describe('browser full screen keyboard rules', () => {
     expect(full()).toBe(true)
   })
 
-  it('leaves on Esc with focus inside the browser panel or on the body', async () => {
+  it('leaves Esc in the composer to main: the composer alone does not own it', async () => {
     render(<Frame browserShown />)
     await enter()
-    fireEvent.keyDown(document.querySelector('.bp-view') as Element, { key: 'Escape' })
-    expect(full()).toBe(false)
-    fireEvent.click(toggleBtn())
-    expect(full()).toBe(true)
-    fireEvent.keyDown(document.body, { key: 'Escape' })
-    expect(full()).toBe(false)
+    act(() => { (screen.getByLabelText('composer') as HTMLElement).focus() })
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
+    const list = document.createElement('div')
+    list.setAttribute('role', 'listbox')
+    document.body.appendChild(list)
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: true }))
+    list.remove()
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
   })
 
   it('ignores the chord while a modal dialog is open and on key auto-repeat', async () => {
@@ -283,12 +327,12 @@ describe('browser full screen keyboard rules', () => {
     expect(full()).toBe(true)
   })
 
-  it('does not promise Esc everywhere in the leave tooltip', () => {
+  it('names Esc in the leave tooltip, now that it works wherever focus is', () => {
     for (const lang of ['tr', 'en'] as const) {
       const text = translations[lang]['bp.fullLeave']
       expect(text).toContain('{kisayol}')
-      expect(text).not.toMatch(/(ya da|or) Esc/)
-      expect(text).toMatch(lang === 'tr' ? /sayfanın dışındayken/ : /outside the page/)
+      expect(text).toMatch(/(ya da|or) Esc/)
+      expect(text).not.toMatch(lang === 'tr' ? /sayfanın dışındayken/ : /outside the page/)
     }
   })
 
@@ -306,19 +350,27 @@ describe('browser full screen styles', () => {
     return at < 0 ? '' : text.slice(at, text.indexOf('}', at) + 1)
   }
 
-  it('lays the page over a docked chat strip of 30% of the window, 180 to 360 px', () => {
-    expect(css('shell.css')).toContain('--bf-strip: clamp(180px, 30dvh, 360px)')
-    expect(rule('shell.css', '.app[data-browser-full]:not([data-screen]) .app-body {')).toContain('grid-template-rows: minmax(0, 1fr) var(--bf-strip)')
+  it('lays the page over the whole area, the chat floating on the right in a gutter the page view leaves', () => {
+    expect(css('shell.css')).toContain('--bf-chat-w: clamp(300px, 30vw, 420px); --bf-gap: 10px;')
+    expect(rule('shell.css', '.app[data-browser-full]:not([data-screen]) .app-body {')).toContain('grid-template-rows: minmax(0, 1fr)')
+    const chat = rule('shell.css', '.app[data-browser-full]:not([data-screen]) .app-body > .app-main {')
+    expect(chat).toContain('position: absolute')
+    expect(chat).toContain('right: var(--bf-gap)')
+    expect(chat).toContain('width: var(--bf-chat-w)')
+    // The page view's panel keeps exactly the chat's width and both margins free; collapsed, it takes the whole width.
+    expect(rule('shell.css', '.app[data-browser-full]:not([data-screen]):not([data-bf-chat="closed"]) .bp-panel[data-full="true"] {'))
+      .toContain('padding-right: calc(var(--bf-chat-w) + 2 * var(--bf-gap))')
+    expect(rule('shell.css', '.app[data-browser-full][data-bf-chat="closed"]:not([data-screen]) .app-body > .app-main {')).toContain('visibility: hidden')
     expect(css('shell.css')).toMatch(/\[data-browser-full\]:not\(\[data-screen\]\) > \.sidebar-slot \{ display: none; \}/)
     expect(css('shell.css')).toMatch(/\.workspace :is\(\.ws-head, \.ws-tabs, \.live-tabs\) \{ display: none; \}/)
   })
 
   it.each([['sade', 'theme-sade.shell.css'], ['pafta', 'theme-pafta.shell.css'], ['atolye', 'theme-atolye.shell.css'],
-    ['ozel', 'theme-ozel.shell.css'], ['arena', 'theme-arena.shell.css']])('%s styles the strip', (theme, file) => {
+    ['ozel', 'theme-ozel.shell.css'], ['arena', 'theme-arena.shell.css']])('%s styles the floating chat', (theme, file) => {
     const text = css(file)
     const selector = `[data-theme="${theme}"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main`
     expect(text).toContain(selector)
-    expect(rule(file, selector)).toMatch(/border-top/)
+    expect(rule(file, selector)).toMatch(/border|box-shadow|clip-path/)
   })
 
   it('adds no colour literal of its own', () => {

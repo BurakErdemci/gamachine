@@ -45,5 +45,5 @@
   --intro-energy: #9B8368;
 }
 
-/* browser full screen: the chat strip is a board on the bench, a hard shadow up over the page */
-[data-theme="atolye"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-top: 2px solid var(--paper-line-strong); box-shadow: 0 -2px 0 var(--paper-line-strong); }
+/* browser full screen: the floating chat is a board propped on the bench, a hard shadow under it */
+[data-theme="atolye"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-width: 2px; box-shadow: 0 4px 0 var(--paper-line-strong), 0 20px 36px -16px color-mix(in srgb, var(--shell-bg) 80%, transparent); }

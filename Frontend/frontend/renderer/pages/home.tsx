@@ -90,6 +90,7 @@ import { useLiveFeatures } from '../lib/liveFeatures';
 import { browserRunningIn, useBrowserActiveChats, useComputerRunning } from '../lib/liveRunning';
 import { LivePane } from '../components/home/LivePane';
 import { useBrowserFull } from '../lib/browserFull';
+import { stripBidi } from '../lib/modelText';
 
 // The guide's prepare-action arguments (REHBER-KAYITLARI.md section 4) in this app's own ids.
 const GUIDE_SETTINGS: Record<Parameters<PrepareHandlers['settings']>[0], SettingsPage> = {
@@ -953,8 +954,9 @@ export default function Home() {
       // Panel width mode (workspace.css): none = dar; the sidebar's state feeds the half / focus math.
       data-ws={ws.open && ws.width !== 'dar' ? ws.width : undefined}
       data-side={isSidebarOpen ? undefined : 'closed'}
-      // The agent browser fills the window above a docked chat strip (shell.css).
+      // The agent browser fills the window, the chat floats over it on the right; collapsed, only the page shows (shell.css).
       data-browser-full={browserFull.full ? 'true' : undefined}
+      data-bf-chat={browserFull.full && !browserFull.chatOpen ? 'closed' : undefined}
       // While the settings screen shows, the rest of the frame is hidden (settings.css), not
       // unmounted: running chats, the terminal and the editor keep their state.
       data-screen={ai.showSettings ? 'ayarlar' : profileOpen ? 'profil' : guide.guideOpen ? 'rehber' : undefined}
@@ -1108,6 +1110,19 @@ export default function Home() {
       >
         {/* #9 model light: a pool of the current model's colour at the top of the stage. */}
         <div className="lamp" aria-hidden="true" />
+
+        {/* Browser full screen: the floating chat's own title bar, in place of the title block and tabs. */}
+        {browserFull.full && (
+          <div className="bf-chat-bar">
+            <span className="bf-chat-mark" aria-hidden="true" />
+            <span className="bf-chat-t">{stripBidi(activeConversation?.title || '') || t('bf.chat')}</span>
+            {chat.loading && <span className="status status-running" aria-hidden="true" />}
+            <button type="button" className="bf-chat-min" onClick={browserFull.toggleChat}
+              aria-label={t('bf.chatHide')} title={t('bf.chatHide')}>
+              <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 13.5h10" /></svg>
+            </button>
+          </div>
+        )}
 
         {!chatEmpty && (
           <ThreadHeader
@@ -1335,7 +1350,7 @@ export default function Home() {
                 running={live.running}
                 shown={liveShown}
                 computer={<ComputerLivePanel visible={ws.open && ws.tab === 'canli' && liveView === 'bilgisayar'} />}
-                browser={<BrowserPanel visible={ws.open && ws.tab === 'canli' && liveView === 'tarayici'} conversationId={chat.activeConvId} running={chat.loading} onStop={chat.stopMessage} onNeedChat={() => chat.createNewConversation()} full={browserFull.full} onToggleFull={browserFull.toggle} />}
+                browser={<BrowserPanel visible={ws.open && ws.tab === 'canli' && liveView === 'tarayici'} conversationId={chat.activeConvId} running={chat.loading} onStop={chat.stopMessage} onNeedChat={() => chat.createNewConversation()} full={browserFull.full} onToggleFull={browserFull.toggle} chatOpen={browserFull.chatOpen} onToggleChat={browserFull.toggleChat} />}
               />
             ) } : {}),
           }}

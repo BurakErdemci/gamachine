@@ -85,23 +85,75 @@
 
 .shell { background: var(--shell-bg); color: var(--shell-text); position: relative; }
 
-/* Browser full screen (lib/browserFull.ts): the page fills the window, the chat docks under it as a
-   strip. Nothing unmounts: the sidebar, the panel head and the tabs are only hidden, and the
-   browser's own measure (BrowserPanel) sends the new bounds to the native view. */
-.app[data-browser-full]:not([data-screen]) { --bf-strip: clamp(180px, 30dvh, 360px); }
+/* Browser full screen (lib/browserFull.ts): the page fills the area under the top bar and the chat floats over it as a
+   window anchored on the right. The page is a native view: nothing drawn here can sit above it, and a view is one
+   rectangle. So while the chat is open the browser panel keeps a right gutter of exactly the chat's width and margins
+   (--bf-chat-w and --bf-gap feed both), and the panel's own measure (BrowserPanel) sends the narrower bounds; the page
+   keeps its full height, which a site needs more than width. Collapsed (data-bf-chat="closed") the chat is only hidden
+   and the page takes the whole width; the toolbar's chat button brings it back. Nothing unmounts: the sidebar, the
+   panel head and the tabs are only hidden. */
+.app[data-browser-full]:not([data-screen]) { --bf-chat-w: clamp(300px, 30vw, 420px); --bf-gap: 10px; }
 .app[data-browser-full]:not([data-screen]) > .sidebar-slot { display: none; }
-.app[data-browser-full]:not([data-screen]) .app-body {
-  grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) var(--bf-strip);
-}
+.app[data-browser-full]:not([data-screen]) .app-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .app[data-browser-full]:not([data-screen]) .app-body > .app-right {
   position: relative; inset: auto; grid-column: 1; grid-row: 1; max-width: none; box-shadow: none; z-index: auto;
 }
 .app[data-browser-full]:not([data-screen]) .app-body > .app-right > .workspace { width: 100%; transition: none; border-left: 0; animation: none; }
 .app[data-browser-full]:not([data-screen]) .workspace :is(.ws-head, .ws-tabs, .live-tabs) { display: none; }
-.app[data-browser-full]:not([data-screen]) .app-body > .app-main {
-  grid-column: 1; grid-row: 2; border-top: var(--line-w) solid var(--paper-line-strong);
+.app[data-browser-full]:not([data-screen]):not([data-bf-chat="closed"]) .bp-panel[data-full="true"] {
+  padding-right: calc(var(--bf-chat-w) + 2 * var(--bf-gap));
 }
+.app[data-browser-full]:not([data-screen]) .app-body > .app-main {
+  position: absolute; z-index: 6; top: var(--bf-gap); right: var(--bf-gap); bottom: var(--bf-gap); width: var(--bf-chat-w);
+  grid-column: 1; grid-row: 1; overflow: hidden;
+  border: var(--line-w) solid var(--paper-line-strong); border-radius: var(--radius-md);
+  box-shadow: 0 22px 44px -16px color-mix(in srgb, var(--shell-bg) 80%, transparent), var(--shadow-card);
+  animation: bf-chat-in var(--g-dur-base) var(--g-ease-enter);
+}
+/* hidden, not display:none: the thread keeps its scroll and the composer its draft */
+.app[data-browser-full][data-bf-chat="closed"]:not([data-screen]) .app-body > .app-main { visibility: hidden; animation: none; }
 .app[data-browser-full]:not([data-screen]) .app-main :is(.title-block, .thread-tabs) { display: none; }
+@keyframes bf-chat-in { from { opacity: 0; transform: translateX(16px); } }
+@media (prefers-reduced-motion: reduce) { .app[data-browser-full]:not([data-screen]) .app-body > .app-main { animation: none; } }
+
+/* the floating chat's title bar: the model's colour mark, the chat's name, its run lamp, minimize */
+.bf-chat-bar {
+  position: relative; z-index: 2; flex: none; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 5px 0 12px;
+  background: var(--paper-bg-2); color: var(--ink); border-bottom: var(--line-w) solid var(--paper-line);
+}
+.bf-chat-mark { flex: none; width: 8px; height: 8px; background: var(--model); }
+.bf-chat-t {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight, 600);
+  text-transform: var(--label-case); letter-spacing: var(--label-track);
+}
+.bf-chat-min {
+  flex: none; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; cursor: pointer;
+  color: var(--ink-dim); background: transparent; border: 0; border-radius: var(--radius-md);
+}
+.bf-chat-min:hover { color: var(--ink); background: var(--paper-sunk, var(--paper-bg-2)); }
+.bf-chat-min:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* Browser panel toolbar (BrowserPanel.tsx; its base rules are in browser-panel.css). The panel is its own width
+   container, so the toolbar never pushes it (or the page view measured inside it) past the panel's edges. Below 560 px
+   the action buttons drop their words (still their accessible names); below 400 px the address takes a row of its own
+   with back/forward/reload and the actions move to a second row on the right. */
+.bp-panel { container: bp / inline-size; min-width: 0; }
+.bp-head :is(.bp-tool, .bp-stop) { position: relative; }
+.bp-chat-run {
+  position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--run); animation: run-pulse 1.6s ease-in-out infinite;
+}
+.bp-idle > .bp-chat { float: right; margin-right: 6px; }
+@container bp (max-width: 560px) {
+  .bp-head .bp-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .bp-head :is(.bp-tool, .bp-stop) { width: 26px; padding: 0; justify-content: center; }
+}
+@container bp (max-width: 400px) {
+  .bp-head { flex-wrap: wrap; row-gap: 6px; }
+  .bp-head .bp-omni { flex: 1 0 calc(100% - 3 * 30px); }
+  .bp-head .bp-mark { margin-left: auto; }
+}
 .shell > *:not(.tex) { position: relative; z-index: 1; }
 
 /* ---------- sidebar ---------- */

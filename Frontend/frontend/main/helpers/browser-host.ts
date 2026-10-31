@@ -448,30 +448,45 @@ export const PAGE_LIB = String.raw`(() => {
  */
 export const NOTE_BOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"><style>
 *{box-sizing:border-box}
-html,body{margin:0;background:transparent;overflow:hidden;font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+html,body{margin:0;background:transparent;overflow:hidden;font:13.5px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 body{padding:6px}
-#b{display:flex;align-items:flex-end;gap:8px;padding:6px 6px 6px 16px;border-radius:24px;background:#1e2126;color:#f2f3f5;border:1px solid rgba(255,255,255,.14);box-shadow:0 8px 24px rgba(0,0,0,.4)}
-#t{flex:1;min-width:0;height:24px;max-height:112px;margin:5px 0;padding:0;border:0;outline:0;resize:none;background:transparent;color:inherit;font:inherit;caret-color:#f2f3f5}
-#t::placeholder{color:#9aa1ad}
-#s{flex:none;width:32px;height:32px;border:0;border-radius:50%;background:#f2f3f5;color:#1e2126;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
-#s:disabled{opacity:.35;cursor:default}
-#e{margin:6px 16px 0;color:#ff9b9b;font-size:12px}
-</style></head><body><div id="w"><div id="b"><textarea id="t" rows="1" maxlength="1000" placeholder="Yorum ekle…" aria-label="Yorum ekle"></textarea><button id="s" type="button" aria-label="Gönder" disabled><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></button></div><div id="e" role="alert" hidden></div></div><script>
+/* Gamachine's own plate, not a chat pill: the mascot's slate and cream with its orange visor as the edge mark, two
+   chamfered corners as in the app's cut-corner chips. The border is a 1px outer plate, since clip-path cuts a box-shadow. */
+#w{filter:drop-shadow(0 8px 14px rgba(6,8,16,.5))}
+#b{padding:1px;background:#3b4359;clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+#i{position:relative;padding:9px 10px 8px 15px;background:#191e2b;color:#F1EEE6;clip-path:polygon(9.6px 0,100% 0,100% calc(100% - 9.6px),calc(100% - 9.6px) 100%,0 100%,0 9.6px)}
+#i::before{content:"";position:absolute;left:0;top:12px;width:3px;height:16px;background:#FF6B3D;transition:top .14s,bottom .14s,height .14s}
+#i:focus-within::before{top:8px;bottom:8px;height:auto}
+#t{display:block;width:100%;height:20px;max-height:112px;margin:0;padding:0;border:0;outline:0;resize:none;background:transparent;color:inherit;font:inherit;caret-color:#FF6B3D}
+#t::placeholder{color:#7f879b}
+#f{display:flex;align-items:center;gap:8px;margin-top:7px;font:10.5px/1 ui-monospace,"JetBrains Mono",Consolas,monospace;color:#7f879b}
+#f .h{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k{display:inline-block;padding:2px 4px;margin-right:3px;border:1px solid #3b4359;color:#b9bfcd}
+#s{flex:none;display:flex;align-items:center;gap:6px;height:24px;padding:0 10px 0 7px;border:0;cursor:pointer;background:#FF6B3D;color:#141826;font:600 11px/1 ui-monospace,"JetBrains Mono",Consolas,monospace;letter-spacing:.03em;clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px)}
+#s .k{margin:0;border-color:rgba(20,24,38,.45);color:inherit}
+#s:hover:not(:disabled){background:#ff8259}
+#s:focus-visible{outline:0;box-shadow:inset 0 0 0 2px #F1EEE6}
+#s:disabled{background:#2a3041;color:#6d7488;cursor:default}
+#s:disabled .k{border-color:#3b4359}
+#e{margin:6px 2px 0;color:#ff9d88;font:11.5px/1.35 ui-monospace,"JetBrains Mono",Consolas,monospace}
+@media (prefers-reduced-motion:reduce){#i::before{transition:none}}
+</style></head><body><div id="w"><div id="b"><div id="i"><textarea id="t" rows="1" maxlength="1000" placeholder="Yorum ekle…" aria-label="Yorum ekle"></textarea><div id="f"><span class="h"><span class="k">⇧↵</span>satır <span class="k">Esc</span>vazgeç</span><button id="s" type="button" disabled><span class="k" aria-hidden="true">↵</span>Kaydet</button></div></div></div><div id="e" role="alert" hidden></div></div><script>
 const ta=document.getElementById('t'),send=document.getElementById('s'),wrap=document.getElementById('w'),err=document.getElementById('e');
 let seq=0,pick=null;
 const post=(o)=>{o.q=++seq;o.p=pick;document.title=JSON.stringify(o)};
 const fit=()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,112)+'px';send.disabled=!ta.value.trim()};
-const report=(t)=>post({t,text:ta.value,h:wrap.offsetHeight+12});
+const height=()=>wrap.offsetHeight+12;
+const report=(t)=>post({t,text:ta.value,h:height()});
 const draft=()=>{err.hidden=true;fit();report('draft')};
 const submit=()=>{if(ta.value.trim())post({t:'submit',text:ta.value})};
 ta.addEventListener('input',draft);
-ta.addEventListener('keydown',(e)=>{
-  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();submit()}
-  else if(e.key==='Escape'){e.preventDefault();post({t:'cancel'})}
-});
+// Esc never arrives here: the host claims it (escape()) and drops the pick.
+ta.addEventListener('keydown',(e)=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();submit()}});
 send.addEventListener('click',submit);
-window.__set=(v,p)=>{pick=p;err.hidden=true;ta.value=v;fit();report('size');ta.focus()};
-window.__error=(m,p)=>{if(p!==pick)return;err.textContent=m;err.hidden=false;fit();report('size')};
+// The view's width before it is shown: a box not laid out yet measured its text at 0 px and opened ~130 px tall.
+window.__width=(w)=>{wrap.style.width=Math.max(0,w-12)+'px'};
+window.__set=(v,p)=>{pick=p;err.hidden=true;ta.value=v;fit();report('size');ta.focus();return height()};
+window.__error=(m,p)=>{if(p!==pick)return;err.textContent=m;err.hidden=false;fit();report('size');return height()};
 ta.focus();
 </script></body></html>`
 
@@ -479,8 +494,8 @@ ta.focus();
  * The annotate overlay: a self-contained page in its own transparent view exactly over the annotating tab, above it and
  * below the comment box. The page under it gets no pointer or key event from the user while the mode is on; the overlay
  * outlines the element under the cursor from the boxes of the latest frame (__boxes; no host round trip), and tells the
- * host through document.title (JSON with a counter, like the box) about a click (pick), a drag (area), a wheel and Esc
- * (cancel). __freeze shows a frame's picture over the live page (null goes back to the live look), __pins draws the
+ * host through document.title (JSON with a counter, like the box) about a click (pick), a drag (area) and a wheel; Esc
+ * never reaches it (the host claims it, escape()). __freeze shows a frame's picture over the live page (null goes back to the live look), __pins draws the
  * numbered pins. Page-derived strings only ever reach it as data, drawn with textContent.
  */
 export const OVERLAY_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"><style>
@@ -506,7 +521,7 @@ addEventListener('pointerdown',(e)=>{if(e.button!==0)return;down={x:e.clientX,y:
 addEventListener('pointerup',(e)=>{const d=down;down=null;place(frame,null);if(d&&e.button===0)post(d.area?{t:'area',rect:dragRect(d,e)}:{t:'pick',x:e.clientX,y:e.clientY});outline()});
 document.addEventListener('mouseleave',()=>{at=null;outline()});
 addEventListener('wheel',(e)=>{e.preventDefault();post({t:'wheel',x:e.clientX,y:e.clientY,dx:e.deltaX,dy:e.deltaY})},{passive:false});
-addEventListener('keydown',(e)=>{e.preventDefault();if(e.key!=='Escape'||e.repeat)return;if(down){down=null;place(frame,null);outline();return}post({t:'cancel'})});
+addEventListener('keydown',(e)=>e.preventDefault());
 addEventListener('contextmenu',(e)=>e.preventDefault());
 window.__boxes=(list)=>{boxes=Array.isArray(list)?list:[];outline()};
 // A picture with a rect is a comment being written (its target outlined); one without is a capture: no hover, no bar.
@@ -771,6 +786,14 @@ export function isAnnotateChord(input: { type?: string; key?: string; control?: 
   return platform === 'darwin' ? !!input.meta && !input.control : !!input.control && !input.meta
 }
 
+/**
+ * Esc with no modifier, not a repeat: the one key the host routes by state (BrowserHost.escape), wherever focus is,
+ * because a key pressed in a tab, its overlay or the box never reaches the renderer.
+ */
+export function isEscape(input: { type?: string; key?: string; control?: boolean; meta?: boolean; shift?: boolean; alt?: boolean; isAutoRepeat?: boolean }): boolean {
+  return input.type === 'keyDown' && input.key === 'Escape' && !input.isAutoRepeat && !input.control && !input.meta && !input.shift && !input.alt
+}
+
 /** One page: a chat's agent tab, or a tab the user opened. */
 interface Tab {
   id: number
@@ -905,6 +928,11 @@ export class BrowserHost {
   private boxRect = { x: 0, y: 0, width: 0, height: 0 }
   private boxHeight = NOTE_BOX_MIN_HEIGHT
   private boxSeq = 0
+  /**
+   * What the renderer last said (op 'full'): whether browser full screen is on, and whether something in the window
+   * (a dialog, a menu, the address field being edited) owns Esc right now, so an Esc pressed in the window is its own.
+   */
+  private full = { on: false, owned: false }
   /** Pick ids count across all tabs, so an id never means two picks. */
   private pickSeq = 0
   private reports: Promise<unknown> = Promise.resolve()
@@ -1230,8 +1258,40 @@ export class BrowserHost {
     wc.on('input-event', (_event, input) => this.userInput(tab, 'input', input))
   }
 
-  /** The browser's own keys (full screen, annotate, tab shortcuts) pressed in a tab or its overlay; true when one was claimed. */
+  /**
+   * Esc, one rule for every view the host sees keys in (tabs, overlays, the box) and for the main window: the shown
+   * chat's selected tab, when annotating, drops its open pick (or the click waiting on a frame), else leaves the mode;
+   * else full screen ends; else the key passes untouched (pages and the renderer's dialogs keep their Esc). In the main
+   * window it also passes while the renderer says something there owns Esc. True when the key was claimed.
+   */
+  private escape(event: { preventDefault(): void }, input: Input, fromWindow: boolean): boolean {
+    if (!isEscape(input) || (fromWindow && this.full.owned)) return false
+    const tab = this.visibleId === null ? null : this.selectedTab(this.visibleId)
+    if (tab?.annotating) {
+      event.preventDefault()
+      if (tab.pick || tab.waiting > 0) this.cancelPick(tab)
+      else void this.setAnnotate(tab, false)
+      return true
+    }
+    if (!this.full.on) return false
+    event.preventDefault()
+    // Off at once, so a second Esc before the renderer's next report passes through.
+    this.full = { on: false, owned: false }
+    const win = this.deps.window()
+    if (win && !win.isDestroyed()) {
+      try { win.webContents.send(BROWSER_FULL_TOGGLE_CHANNEL, { on: false }) } catch { /* window closing */ }
+    }
+    return true
+  }
+
+  /** A key pressed in the main window's own document (background.ts wires its before-input-event here). */
+  windowKeys(event: { preventDefault(): void }, input: Input): void {
+    this.escape(event, input, true)
+  }
+
+  /** The browser's own keys (Esc, full screen, annotate, tab shortcuts) pressed in a tab or its overlay; true when one was claimed. */
   private browserKeys(tab: Tab, event: { preventDefault(): void }, input: Input): boolean {
+    if (this.escape(event, input, false)) return true
     if (isFullChord(input, this.platform)) {
       event.preventDefault()
       const win = this.deps.window()
@@ -1648,16 +1708,11 @@ export class BrowserHost {
     try { tab.overlay.view.webContents.focus() } catch { /* destroyed */ }
   }
 
-  /** What the overlay reported: a click, a drag, a wheel or Esc. */
+  /** What the overlay reported: a click, a drag or a wheel (Esc is the host's own, escape()). */
   private onOverlayMessage(tab: Tab, message: Record<string, unknown>): void {
     if (!tab.annotating || this.tabs.get(tab.id) !== tab) return
     if (message.t === 'pick' || message.t === 'area') void this.pickAt(tab, message)
     else if (message.t === 'wheel') this.forwardWheel(tab, message)
-    // Esc drops the open pick, or the click still waiting on its frame; with neither it leaves the mode.
-    else if (message.t === 'cancel') {
-      if (tab.pick || tab.waiting > 0) this.cancelPick(tab)
-      else void this.setAnnotate(tab, false)
-    }
   }
 
   /** The page scrolls under the overlay as if the wheel had been turned over it; its boxes are read again just after. */
@@ -1704,7 +1759,7 @@ export class BrowserHost {
     void this.showBox(tab, pick)
   }
 
-  /** The open pick and its draft go (box Esc, overlay Esc); a frame read for a click on its way is dropped. */
+  /** The open pick and its draft go (Esc, escape()); a frame read for a click on its way is dropped. */
   private cancelPick(tab: Tab): void {
     tab.frameSeq++
     this.closePick(tab)
@@ -1728,7 +1783,7 @@ export class BrowserHost {
   private ensureBox(): AppView {
     if (!this.noteBox) {
       this.noteBox = this.createAppView(NOTE_BOX_HTML, (message) => this.onBoxMessage(message), (event, input) => {
-        if (!isAnnotateChord(input, this.platform)) return
+        if (this.escape(event, input, false) || !isAnnotateChord(input, this.platform)) return
         event.preventDefault()
         const tab = this.boxTab
         if (tab) void this.setAnnotate(tab, !tab.annotating)
@@ -1757,14 +1812,25 @@ export class BrowserHost {
     if (token !== this.boxSeq || this.boxTab !== tab || tab.pick !== pick || this.stopped) return
     try {
       this.placeBox()
-      // Re-added each time so the box sits above the overlay and any tab view added since.
+      // Re-added each time so the box sits above the overlay and any tab view added since. It stays hidden until it has
+      // measured itself at its real width, so it never shows at a wrong height first.
       win.contentView.removeChildView(box.view)
+      box.view.setVisible(false)
       win.contentView.addChildView(box.view)
-      box.view.setVisible(true)
       const wc = box.view.webContents
-      await wc.executeJavaScript(`window.__set(${JSON.stringify(pick.draft)},${JSON.stringify(pick.id)})`)
-      if (pick.error) await wc.executeJavaScript(errorCall(pick))
-      if (token === this.boxSeq) wc.focus()
+      await wc.executeJavaScript(`window.__width(${noteBoxWidth(this.bounds)})`)
+      let height: unknown = await wc.executeJavaScript(`window.__set(${JSON.stringify(pick.draft)},${JSON.stringify(pick.id)})`)
+      if (pick.error) {
+        const withError: unknown = await wc.executeJavaScript(errorCall(pick))
+        if (typeof withError === 'number') height = withError
+      }
+      if (token !== this.boxSeq) return
+      if (typeof height === 'number' && Number.isFinite(height)) {
+        this.boxHeight = Math.max(NOTE_BOX_MIN_HEIGHT, Math.min(Math.round(height), NOTE_BOX_MAX_HEIGHT))
+        this.placeBox()
+      }
+      box.view.setVisible(true)
+      wc.focus()
     } catch {
       this.log('[browser] note box failed')
     }
@@ -1797,7 +1863,7 @@ export class BrowserHost {
   }
 
   /**
-   * What the box reported: the draft so far, its height, a submit or a cancel. It goes to the tab whose open pick has
+   * What the box reported: the draft so far, its height or a submit (Esc is the host's own, escape()). It goes to the tab whose open pick has
    * the message's pick id (p), shown or not: a draft typed just before the box was hidden still reaches its pick. A
    * message for a pick that is no longer open changes nothing.
    */
@@ -1815,8 +1881,7 @@ export class BrowserHost {
         this.boxHeight = Math.max(NOTE_BOX_MIN_HEIGHT, Math.min(Math.round(message.h), NOTE_BOX_MAX_HEIGHT))
         this.placeBox()
       }
-    } else if (message.t === 'cancel') this.cancelPick(tab)
-    else if (message.t === 'submit') this.savePick(tab, text)
+    } else if (message.t === 'submit') this.savePick(tab, text)
   }
 
   private focusTab(tab: Tab): void {
@@ -2193,6 +2258,11 @@ export class BrowserHost {
           this.show(null)
         }
         return { visible }
+      // The renderer's full-screen state and whether its window owns Esc right now (escape()).
+      case 'full':
+        if (typeof on !== 'boolean') break
+        this.full = { on, owned: (req as Record<string, unknown>).owned === true }
+        return { full: on }
       case 'halt': {
         if (id !== undefined && !positiveInt(id)) break
         const only = id === undefined ? null : conversationId
