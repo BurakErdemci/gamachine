@@ -204,17 +204,18 @@ function tabFixture(history?: unknown, now?: () => number) {
   const win: any = { isDestroyed: () => false, contentView: { addChildView: vi.fn(), removeChildView: vi.fn() }, webContents: { send: vi.fn() } }
   const http = { request: vi.fn(async () => ({ data: {} })) }
   const onHalt = vi.fn()
+  const net = { lookup: async (): Promise<{ address: string; family: number }[]> => [{ address: '93.184.216.34', family: 4 }] }
   const host = new BrowserHost({
     window: () => win, createView: vi.fn(() => { const v = fakeTabView(views.length + 1); views.push(v); return v }), fromPartition: () => session,
     http, baseUrl: () => 'http://127.0.0.1:9', appToken: 't', uiSecret: 's', history, onHalt, now,
-    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    lookup: () => net.lookup(),
   } as unknown as BrowserHostDeps)
   const open = async (conversationId: number, url: string) => {
     await host.invoke({ op: 'open', conversationId, url })
     await vi.waitFor(() => expect(views.length).toBeGreaterThan(0))
     views[views.length - 1].webContents.url = url
   }
-  return { host, session, views, http, onHalt, open, jar }
+  return { host, session, views, http, onHalt, open, jar, net }
 }
 
 describe('site-remove, turn 2', () => {
@@ -395,6 +396,114 @@ describe('site identity, origins, races and the reopen stack, turn 3', () => {
       await reopen(f, 1)
       expect(f.views[f.views.length - 1].webContents.loadURL).toHaveBeenCalledWith('https://other.org/')
       expect(await reopen(f, 1)).toEqual({ error: 'nothing_to_reopen' })
+    })
+  })
+})
+
+describe('the removal window and the reopen stack, turn 4', () => {
+  const login = (value = 'v') => ({ name: 'login', value, domain: 'example.com', path: '/', secure: true })
+  /** Starts site-remove for example.com and holds its first storage clear until `release`. */
+  const holdRemoval = async (f: ReturnType<typeof tabFixture>) => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let reached!: () => void
+    const started = new Promise<void>((resolve) => { reached = resolve })
+    f.session.clearStorageData.mockImplementationOnce(async () => { reached(); await gate })
+    const removal = f.host.invoke({ op: 'site-remove', site: 'example.com' })
+    await started
+    return { removal, release }
+  }
+  const origins = (f: ReturnType<typeof tabFixture>) => f.session.clearStorageData.mock.calls.map((c: any) => c[0].origin)
+
+  it('closes a tab whose navigation onto the site starts while the removal runs, before it commits', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    await f.open(1, 'https://other.org/')
+    const wc = f.views[0].webContents
+    const { removal, release } = await holdRemoval(f)
+    wc.emit('did-start-navigation', { url: 'https://app.example.com:8443/next', isMainFrame: true })
+    expect(wc.destroyed).toBe(true)
+    release()
+    expect(await removal).toEqual({ ok: true, removed: 1 })
+    expect(origins(f)).toContain('https://app.example.com:8443')
+  })
+
+  it('closes a tab the host navigates onto the site while the removal runs, though getURL still shows the old page', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    const payload = (await f.host.invoke({ op: 'open', conversationId: 1, url: 'https://other.org/' })) as any
+    const wc = f.views[0].webContents
+    wc.loadURL.mockImplementation(async () => {})
+    const { removal, release } = await holdRemoval(f)
+    await f.host.invoke({ op: 'navigate', conversationId: 1, tabId: payload.activeTabId, url: 'https://example.com/pending' })
+    expect(wc.loadURL).toHaveBeenLastCalledWith('https://example.com/pending')
+    expect(wc.destroyed).toBe(true)
+    release()
+    expect(await removal).toEqual({ ok: true, removed: 1 })
+  })
+
+  it('a site tab the user closes during the removal cannot be reopened and its exact origin is cleared', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    const payload = (await f.host.invoke({ op: 'open', conversationId: 2, url: 'https://other.org/' })) as any
+    const { removal, release } = await holdRemoval(f)
+    // Committed without a navigation event the host saw.
+    f.views[0].webContents.url = 'https://late.example.com:8443/?token=x'
+    await f.host.invoke({ op: 'close-tab', conversationId: 2, tabId: payload.activeTabId })
+    release()
+    expect(await removal).toEqual({ ok: true, removed: 1 })
+    expect(origins(f)).toContain('https://late.example.com:8443')
+    expect(await f.host.invoke({ op: 'reopen-tab', conversationId: 2 })).toEqual({ error: 'nothing_to_reopen' })
+  })
+
+  it('removes an identical cookie written back during the removal', async () => {
+    const f = tabFixture()
+    f.jar.push(login('same'))
+    f.session.clearStorageData.mockImplementationOnce(async () => { f.jar.push(login('same')) })
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 2 })
+    expect(f.jar).toEqual([])
+  })
+
+  it('reports partial when a cookie of the site is still in the session after every pass', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    f.session.cookies.remove.mockImplementation(async () => {})
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toMatchObject({ ok: false, error: 'site_remove_partial', removed: 3 })
+  })
+
+  describe('a reopen whose address check fails', () => {
+    const pendingReopen = async (f: ReturnType<typeof tabFixture>) => {
+      const payload = (await f.host.invoke({ op: 'open', conversationId: 1, url: 'https://example.com/secret' })) as any
+      await f.host.invoke({ op: 'close-tab', conversationId: 1, tabId: payload.activeTabId })
+      let answer!: (addresses: { address: string; family: number }[]) => void
+      f.net.lookup = () => new Promise((resolve) => { answer = resolve })
+      const reopening = f.host.invoke({ op: 'reopen-tab', conversationId: 1 })
+      await vi.waitFor(() => expect(answer).toBeDefined())
+      return { reopening, refuse: () => answer([{ address: '10.0.0.8', family: 4 }]) }
+    }
+
+    for (const [name, request] of [
+      ['history-remove', { op: 'history-remove', url: 'https://example.com/secret' }],
+      ['history-clear', { op: 'history-clear', range: 'all' }],
+      ['site-remove', { op: 'site-remove', site: 'example.com' }],
+    ] as const) {
+      it(`does not put the page back after ${name} forgot it meanwhile`, async () => {
+        const mem = memoryHistory(() => 1_000)
+        const f = tabFixture(mem.history)
+        const { reopening, refuse } = await pendingReopen(f)
+        expect(await f.host.invoke(request)).toMatchObject({ ok: true })
+        refuse()
+        expect(await reopening).toEqual({ error: 'url_not_allowed' })
+        expect(await f.host.invoke({ op: 'reopen-tab', conversationId: 1 })).toEqual({ error: 'nothing_to_reopen' })
+      })
+    }
+
+    it('puts the page back when nothing was forgotten meanwhile', async () => {
+      const f = tabFixture(memoryHistory(() => 1_000).history)
+      const { reopening, refuse } = await pendingReopen(f)
+      refuse()
+      expect(await reopening).toEqual({ error: 'url_not_allowed' })
+      expect(await f.host.invoke({ op: 'reopen-tab', conversationId: 1 })).not.toEqual({ error: 'nothing_to_reopen' })
     })
   })
 })

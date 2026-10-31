@@ -16,7 +16,7 @@ export const MAX_TABS = 8
 // A chat never holds more tabs than the app does, so the per-chat cap is the global one.
 export const MAX_CHAT_TABS = MAX_TABS
 const MAX_CLOSED_TABS = 10
-/** site-remove repeats while a tab or cookie of the site came back during its awaits; then it gives up as partial. */
+/** site-remove repeats while a cookie or tab of the site is still there after a pass; then it gives up as partial. */
 const MAX_SITE_REMOVE_PASSES = 3
 // How long the key events a `press` is about to send back to the host stay expected.
 const SYNTHETIC_INPUT_MS = 1_000
@@ -350,6 +350,16 @@ function originOf(url: string): string {
   }
 }
 
+function inSite(host: string, site: string): boolean {
+  return host === site || host.endsWith(`.${site}`)
+}
+
+/** The http(s) origin of `url` when its host is `site` or a subdomain of it, else ''. */
+function siteOrigin(url: string, site: string): string {
+  const origin = originOf(url)
+  return origin && inSite(new URL(origin).hostname, site) ? origin : ''
+}
+
 /** The response body, or null as soon as it is larger than `max` bytes. */
 async function readCapped(response: Response, max: number): Promise<Buffer | null> {
   const reader = response.body?.getReader()
@@ -427,6 +437,8 @@ interface Tab {
   userTouched: boolean
   /** Bumped by every navigation, so a favicon fetched for an earlier page is dropped. */
   faviconSeq: number
+  /** The main-frame address being loaded and not yet committed (getURL still shows the old page); null once it commits. */
+  target: string | null
   /** Settles when the tab is closed, so a command waiting on something else can stop at once. */
   gone: Promise<void>
   markGone: () => void
@@ -452,6 +464,10 @@ export class BrowserHost {
   private readonly selected = new Map<number, number>()
   /** Tabs the user closed, newest last, for reopen. */
   private readonly closed = new Map<number, ClosedTab[]>()
+  /** Bumped whenever entries are dropped from the closed stacks, so a reopen that failed after a drop does not put its entry back. */
+  private forgetGen = 0
+  /** Sites being removed right now, each with the origins its removal still has to clear. */
+  private readonly removals = new Set<{ site: string; origins: Set<string> }>()
   /** Bumped by every halt (one chat, or all): an agent command that awaited across a bump must not act. */
   private haltAll = 0
   private readonly haltChat = new Map<number, number>()
@@ -691,7 +707,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, faviconSeq: 0, target: null, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -726,6 +742,11 @@ export class BrowserHost {
       return { action: 'deny' }
     })
     const refuse = (event: { url: string; isMainFrame: boolean; preventDefault(): void }) => {
+      if (event.isMainFrame && this.claimForRemoval(event.url)) {
+        event.preventDefault()
+        this.closeForRemoval(tab)
+        return
+      }
       if (isAllowedNavigation(event.url)) return
       event.preventDefault()
       // A refused main-frame navigation ends as ERR_ABORTED, which waitForLoad ignores.
@@ -735,6 +756,12 @@ export class BrowserHost {
     wc.on('will-redirect', refuse)
     wc.on('will-frame-navigate', refuse)
     wc.on('will-attach-webview', (event) => event.preventDefault())
+    // Every main-frame load, the host's own and back/forward/reload included, starts here.
+    wc.on('did-start-navigation', (details) => {
+      if (!details.isMainFrame) return
+      tab.target = details.url
+      if (this.claimForRemoval(details.url)) this.closeForRemoval(tab)
+    })
     wc.on('did-finish-load', () => this.settleLoad(tab, { ok: true }))
     wc.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
       // -3 is ERR_ABORTED: a new navigation replaced this one, and its own load event will follow.
@@ -745,6 +772,8 @@ export class BrowserHost {
       wc.on(name as 'did-start-loading', () => this.emitLive(tab.conversationId))
     }
     wc.on('did-navigate', (_event, url) => {
+      tab.target = null
+      if (this.tabs.get(tab.id) !== tab) return
       tab.favicon = ''
       tab.faviconSeq++
       this.deps.history?.visit(url, wc.getTitle())
@@ -851,6 +880,7 @@ export class BrowserHost {
   }
 
   private closeTab(tab: Tab): void {
+    for (const url of this.tabUrls(tab)) this.claimForRemoval(url)
     if (this.tabs.get(tab.id) === tab) {
       this.tabs.delete(tab.id)
       if (this.selected.get(tab.conversationId) === tab.id) this.reselect(tab)
@@ -876,7 +906,7 @@ export class BrowserHost {
   private closeByUser(tab: Tab): void {
     const wc = tab.view.webContents
     const url = wc.isDestroyed() ? '' : wc.getURL()
-    if (/^https?:\/\//i.test(url)) {
+    if (/^https?:\/\//i.test(url) && !this.claimForRemoval(url)) {
       const stack = this.closed.get(tab.conversationId) ?? []
       stack.push({ url, title: wc.getTitle(), closedAt: this.now() })
       this.closed.set(tab.conversationId, stack.slice(-MAX_CLOSED_TABS))
@@ -930,9 +960,39 @@ export class BrowserHost {
     this.selected.set(conversationId, tab.id)
     if (fromPage) this.layout()
     else this.show(conversationId)
-    if (str(url)) tab.view.webContents.loadURL(url).catch(() => { /* reported by did-fail-load */ })
+    if (str(url)) this.load(tab, url)
     this.emitLive(conversationId)
     return { ...this.livePayload(conversationId) }
+  }
+
+  /** The host's own navigation of a tab; one onto a site being removed closes the tab instead of keeping it. */
+  private load(tab: Tab, url: string): void {
+    tab.target = url
+    tab.view.webContents.loadURL(url).catch(() => { /* reported by did-fail-load */ })
+    if (this.claimForRemoval(url)) this.closeForRemoval(tab)
+  }
+
+  /** The committed address and the one still loading. */
+  private tabUrls(tab: Tab): string[] {
+    const wc = tab.view.webContents
+    return [wc.isDestroyed() ? '' : wc.getURL(), tab.target ?? '']
+  }
+
+  /** True when `url` is on a site being removed; its origin then joins that removal's clear list. */
+  private claimForRemoval(url: string): boolean {
+    let hit = false
+    for (const { site, origins } of this.removals) {
+      const origin = siteOrigin(url, site)
+      if (origin) origins.add(origin)
+      hit ||= origin !== ''
+    }
+    return hit
+  }
+
+  private closeForRemoval(tab: Tab): void {
+    if (!this.isLive(tab) || this.tabs.get(tab.id) !== tab) return
+    if (tab.agent) this.stopLocal(tab.conversationId)
+    this.closeTab(tab)
   }
 
   /** The refusal for work that began before a clear started or its chat was closed, or null when it may go on. */
@@ -944,77 +1004,76 @@ export class BrowserHost {
   /** Drops closed tabs from every chat's reopen stack. */
   private forgetClosed(drop: (tab: ClosedTab) => boolean): void {
     for (const [id, stack] of this.closed) this.closed.set(id, stack.filter((tab) => !drop(tab)))
+    this.forgetGen++
   }
 
   /**
-   * Logs the agent browser out of `site` and its subdomains: their tabs close, then cookies and storage go. A tab
-   * can open or navigate onto the site while this awaits, so a pass repeats while one ends with a tab of the site
-   * open or a cookie of it this removal had not seen.
+   * Logs the agent browser out of `site` and its subdomains: their tabs close, then cookies and storage go. Until it
+   * resolves the site is in `removals`: a tab that loads it closes, and a tab of it that closes is not kept for
+   * reopen; both add their origin to the clear list. A pass repeats while the session still has a cookie or a tab
+   * of the site, or an origin came in after the clear began.
    */
   private async removeSite(site: string): Promise<Record<string, unknown>> {
-    const inSite = (host: string) => host === site || host.endsWith(`.${site}`)
-    const originOf = (url: string): string | null => {
-      try {
-        const u = new URL(url)
-        return (u.protocol === 'https:' || u.protocol === 'http:') && inSite(u.hostname.toLowerCase()) ? u.origin : null
-      } catch { return null }
-    }
-    const liveTabs = () => [...this.tabs.values()].filter((tab) => !tab.view.webContents.isDestroyed() && originOf(tab.view.webContents.getURL()))
+    const ofSite = (list: Cookie[]) => list.filter((cookie) => inSite(siteOf(cookie.domain ?? ''), site))
+    const siteTabs = () => [...this.tabs.values()].filter((tab) => this.isLive(tab) && this.tabUrls(tab).some((url) => siteOrigin(url, site)))
     const session = this.session()
     const all = await session.cookies.get({})
     // One removal takes one listed site: a parent of several (github.io over alice. and bob.github.io) is refused.
-    if ([...siteRows(all).keys()].filter(inSite).length > 1) return { error: 'bad_args' }
-    const ofSite = (list: Cookie[]) => list.filter((cookie) => inSite(siteOf(cookie.domain ?? '')))
-    const key = (cookie: Cookie) => JSON.stringify([cookie.domain, cookie.path, cookie.name, cookie.value])
-    let cookies = ofSite(all)
-    const seen = new Set(cookies.map(key))
+    if ([...siteRows(all).keys()].filter((row) => inSite(row, site)).length > 1) return { error: 'bad_args' }
     const origins = new Set<string>()
+    const removal = { site, origins }
+    this.removals.add(removal)
     for (const host of [site, `www.${site}`]) for (const scheme of ['https', 'http']) origins.add(`${scheme}://${host}`)
+    let cookies = ofSite(all)
     let removed = 0
     let failed = 0
-    for (let pass = 1; ; pass++) {
-      // Open pages of the site go first: a live page would write the login back after the cookies are gone.
-      const doomed = liveTabs()
-      for (const tab of doomed) origins.add(originOf(tab.view.webContents.getURL())!)
-      for (const id of new Set(doomed.map((tab) => tab.conversationId))) this.stopLocal(id)
-      for (const tab of doomed) this.closeTab(tab)
-      for (const cookie of cookies) {
-        const domain = siteOf(cookie.domain ?? '')
-        // Storage of a subdomain (app.site) is not covered by the origins of site itself.
-        for (const scheme of ['https', 'http']) origins.add(`${scheme}://${domain}`)
-        try {
-          await session.cookies.remove(`${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path ?? '/'}`, cookie.name)
-          removed++
-        } catch { failed++ }
+    try {
+      for (let pass = 1; ; pass++) {
+        // Open pages of the site go first: a live page would write the login back after the cookies are gone.
+        const doomed = siteTabs()
+        for (const id of new Set(doomed.map((tab) => tab.conversationId))) this.stopLocal(id)
+        for (const tab of doomed) this.closeTab(tab)
+        for (const cookie of cookies) {
+          const domain = siteOf(cookie.domain ?? '')
+          // Storage of a subdomain (app.site) is not covered by the origins of site itself.
+          for (const scheme of ['https', 'http']) origins.add(`${scheme}://${domain}`)
+          try {
+            await session.cookies.remove(`${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path ?? '/'}`, cookie.name)
+            removed++
+          } catch { failed++ }
+        }
+        // Pages visited or closed on other ports or subdomains: the exact origin, port included.
+        for (const url of [...(this.deps.history?.list() ?? []).map((entry) => entry.url), ...[...this.closed.values()].flat().map((tab) => tab.url)]) {
+          const origin = siteOrigin(url, site)
+          if (origin) origins.add(origin)
+        }
+        this.forgetClosed((tab) => siteOrigin(tab.url, site) !== '')
+        const clearing = [...origins]
+        for (const origin of clearing) {
+          try { await session.clearStorageData({ origin, storages: STORAGES as any }) } catch { failed++ }
+        }
+        // The login is gone whatever the outcome, so the backend drops the chats' grants like after a full clear.
+        if (pass === 1) await this.report(true)
+        cookies = ofSite(await session.cookies.get({}))
+        // Checked after the last await, so nothing can reopen the site before the reply.
+        const left = cookies.length > 0 || siteTabs().length > 0 || origins.size > clearing.length
+        if (!left || failed > 0) break
+        if (pass === MAX_SITE_REMOVE_PASSES) { failed++; break }
       }
-      // Pages visited or closed on other ports or subdomains: the exact origin, port included.
-      for (const url of [...(this.deps.history?.list() ?? []).map((entry) => entry.url), ...[...this.closed.values()].flat().map((tab) => tab.url)]) {
-        const origin = originOf(url)
-        if (origin) origins.add(origin)
-      }
-      this.forgetClosed((tab) => originOf(tab.url) !== null)
-      for (const origin of origins) {
-        try { await session.clearStorageData({ origin, storages: STORAGES as any }) } catch { failed++ }
-      }
-      // The login is gone whatever the outcome, so the backend drops the chats' grants like after a full clear.
-      if (pass === 1) await this.report(true)
-      cookies = ofSite(await session.cookies.get({})).filter((cookie) => !seen.has(key(cookie)))
-      for (const cookie of cookies) seen.add(key(cookie))
-      // Checked after the last await, so nothing can reopen the site before the reply.
-      const back = cookies.length > 0 || liveTabs().length > 0
-      if (!back || failed > 0) break
-      if (pass === MAX_SITE_REMOVE_PASSES) { failed++; break }
+    } finally {
+      this.removals.delete(removal)
     }
     return failed > 0 ? { ok: false, error: 'site_remove_partial', removed, failed } : { ok: true, removed }
   }
 
-  /** The tab goes back on the stack when it could not be reopened (too many tabs, address refused). */
+  /** The tab goes back on the stack when it could not be reopened (too many tabs, address refused), unless it was forgotten meanwhile. */
   private async reopenTab(conversationId: number): Promise<Record<string, unknown>> {
     const last = this.closed.get(conversationId)?.pop()
     if (!last) return { error: 'nothing_to_reopen' }
     const epoch = this.lifecycleEpoch(conversationId)
+    const gen = this.forgetGen
     const result = await this.openUserTab(conversationId, last.url)
-    if (result.error && this.lifecycleEpoch(conversationId) === epoch) {
+    if (result.error && this.lifecycleEpoch(conversationId) === epoch && this.forgetGen === gen && !this.claimForRemoval(last.url)) {
       this.closed.set(conversationId, [...(this.closed.get(conversationId) ?? []), last].slice(-MAX_CLOSED_TABS))
     }
     return result
@@ -1151,7 +1210,7 @@ export class BrowserHost {
         if (!tab) return tabId === undefined ? this.openUserTab(conversationId, url) : { error: 'no_tab' }
         this.touch(tab)
         tab.userTouched = true
-        tab.view.webContents.loadURL(url as string).catch(() => { /* reported by did-fail-load */ })
+        this.load(tab, url as string)
         this.emitLive(conversationId)
         return this.livePayload(conversationId)
       }
@@ -1510,7 +1569,7 @@ export class BrowserHost {
         if (halted()) return { error: 'halted' }
         if (this.clearing) return { error: 'clearing' }
         if (!this.isLive(tab)) return { error: 'tab_closed' }
-        return this.loadResult(await this.waitForLoad(tab, () => { wc.loadURL(url as string).catch(() => { /* reported by did-fail-load */ }) }))
+        return this.loadResult(await this.waitForLoad(tab, () => this.load(tab, url as string)))
       }
       case 'back':
       case 'forward': {
