@@ -17,9 +17,7 @@ import path from 'path'
  * through its OWN short path was refused because it no longer matched itself.
  * The two calls throw the same errors, so the surrounding fallbacks are unchanged.
  */
-function safeResolve(filePath: string): string {
-  // A value every containment guard refuses (relative to any workspace it starts with '..').
-  const refused = path.parse(path.resolve(filePath)).root
+function safeResolve(filePath: string): string | null {
   try {
     let absolutePath = path.resolve(filePath)
     let hops = 0
@@ -45,8 +43,11 @@ function safeResolve(filePath: string): string {
           // not there at all — a plain missing segment
         }
         if (isLink) {
-          if (++hops > 40) return refused
-          const target = path.resolve(path.dirname(currentPath), fs.readlinkSync(currentPath))
+          if (++hops > 40) return null
+          const linkTarget = fs.readlinkSync(currentPath)
+          // The kernel follows links inside the target before applying '..'; resolving it as text would not.
+          if (hasDotDotSegment(linkTarget)) return null
+          const target = path.resolve(path.dirname(currentPath), linkTarget)
           absolutePath = path.join(target, ...missingSegments)
           followed = true
           break
@@ -66,7 +67,7 @@ function safeResolve(filePath: string): string {
   } catch {
     // any failure: refuse, never fall back to the lexical path (it looks inside)
   }
-  return refused
+  return null
 }
 
 /**
@@ -187,6 +188,7 @@ export function isAllowedUnityScriptPath(filePath: string, workspacePath: string
 
     const resolvedFile = safeResolve(absoluteFilePath)
     const resolvedWorkspace = safeResolve(workspacePath)
+    if (resolvedFile === null || resolvedWorkspace === null) return false
     const relativePath = path.relative(resolvedWorkspace, resolvedFile)
 
     // Workspace dışına çıkış kontrolü
@@ -216,6 +218,7 @@ export function isAllowedWorkspacePath(targetPath: string, workspacePath: string
 
     const resolvedTarget = safeResolve(targetPath)
     const resolvedWorkspace = safeResolve(workspacePath)
+    if (resolvedTarget === null || resolvedWorkspace === null) return false
     const relativePath = path.relative(resolvedWorkspace, resolvedTarget)
 
     if (!relativePath) {
@@ -245,6 +248,7 @@ export function isInsideWorkspace(
 
     let resolvedTarget = safeResolve(targetPath)
     let resolvedWorkspace = safeResolve(workspacePath)
+    if (resolvedTarget === null || resolvedWorkspace === null) return false
     if (platform === 'win32') {
       resolvedTarget = resolvedTarget.toLowerCase()
       resolvedWorkspace = resolvedWorkspace.toLowerCase()
@@ -342,6 +346,7 @@ export function okumaKarariVer(
 
     const cozulmus = safeResolve(filePath)
     const cozulmusWs = safeResolve(workspacePath)
+    if (cozulmus === null || cozulmusWs === null) return reddet('')
 
     if (!icerideMi(cozulmus, cozulmusWs)) return reddet(cozulmus)
 
@@ -548,7 +553,9 @@ export function isAllowedWorkspaceWriteFile(filePath: string, workspacePath: str
     if (!filePath || !workspacePath || hasDotDotSegment(filePath)) return false
 
     const absoluteFilePath = path.isAbsolute(filePath) ? filePath : path.resolve(workspacePath, filePath)
-    const ext = path.extname(safeResolve(absoluteFilePath)).toLowerCase()
+    const resolvedForExt = safeResolve(absoluteFilePath)
+    if (resolvedForExt === null) return false
+    const ext = path.extname(resolvedForExt).toLowerCase()
 
     if (ext === '.cs') {
       return isAllowedUnityScriptPath(filePath, workspacePath)

@@ -3,9 +3,12 @@ import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, it, expect } from 'vitest'
 import {
+  isAllowedUnityScriptPath,
   isAllowedWorkspacePath,
   isAllowedWorkspaceWriteFile,
+  isInsideWorkspace,
   isWritableExistingTarget,
+  okumaKarariVer,
 } from '../main/helpers/file-security'
 
 let root = ''
@@ -78,5 +81,39 @@ describe('dangling symlinks', () => {
     fs.writeFileSync(path.join(outside, 'real.md'), 'x')
     if (!link(path.join(outside, 'real.md'), path.join(ws, 'alias.md'))) return
     expect(canWrite(path.join(ws, 'alias.md'))).toBe(false)
+  })
+
+  it("refuses a dangling link whose target goes through '..' past a directory link", () => {
+    fs.mkdirSync(path.join(outside, 'deep'))
+    if (!link(path.join(outside, 'deep'), path.join(ws, 'd'), 'dir')) return
+    if (!link('d/../escaped.md', path.join(ws, 'dotdot.md'))) return
+    expect(canWrite(path.join(ws, 'dotdot.md'))).toBe(false)
+    expect(isAllowedWorkspacePath(path.join(ws, 'dotdot.md'), ws)).toBe(false)
+  })
+
+  it('refuses a dangling link reached through an inside directory link whose target climbs out', () => {
+    if (!link('.', path.join(ws, 'inl'), 'dir')) return
+    if (!link('../zz.md', path.join(ws, 'dl.md'))) return
+    expect(canWrite(path.join(ws, 'inl', 'dl.md'))).toBe(false)
+  })
+
+  it('refuses everything when the workspace itself is a link cycle', () => {
+    const a = path.join(root, 'wsA')
+    const b = path.join(root, 'wsB')
+    if (!link(b, a, 'dir') || !link(a, b, 'dir')) return
+    const c1 = path.join(root, 'c1')
+    const c2 = path.join(root, 'c2')
+    if (!link(c2, c1) || !link(c1, c2)) return
+    const target = path.join(c1, 'x.md')
+    expect(isAllowedWorkspacePath(target, a)).toBe(false)
+    expect(isAllowedWorkspaceWriteFile(target, a)).toBe(false)
+    expect(isAllowedUnityScriptPath(path.join(c1, 'x.cs'), a)).toBe(false)
+    expect(isInsideWorkspace(target, a)).toBe(false)
+  })
+
+  it('refuses a cycle target in the read policy', () => {
+    if (!link(path.join(ws, 'r2.md'), path.join(ws, 'r1.md'))) return
+    if (!link(path.join(ws, 'r1.md'), path.join(ws, 'r2.md'))) return
+    expect(okumaKarariVer(path.join(ws, 'r1.md'), ws).izinli).toBe(false)
   })
 })
