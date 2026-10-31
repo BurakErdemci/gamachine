@@ -1,4 +1,6 @@
 import React from 'react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { translations } from '../renderer/lib/i18n'
@@ -325,6 +327,58 @@ describe('BrowserPanel compact chrome', () => {
     expect(container.querySelector('.bp-note')).toBeNull()
     expect(screen.queryByText(tr['bp.stopNote'])).toBeNull()
     expect(screen.getByRole('button', { name: new RegExp(tr['bp.stop']) }).getAttribute('title')).toBe(tr['bp.stopNote'])
+  })
+})
+
+describe('BrowserPanel narrow toolbar', () => {
+  const css = () => readFileSync(join(__dirname, '../renderer/styles/gm/shell.css'), 'utf8')
+  const block = (text: string, head: string) => {
+    const at = text.indexOf(head)
+    if (at < 0) return ''
+    let depth = 0
+    for (let i = text.indexOf('{', at); i < text.length; i++) {
+      if (text[i] === '{') depth++
+      else if (text[i] === '}' && --depth === 0) return text.slice(at, i + 1)
+    }
+    return ''
+  }
+
+  it('puts every action word in a label the narrow layout can hide, keeping it as the button name', async () => {
+    const { container } = render(<BrowserPanel visible conversationId={3} {...props()} full onToggleFull={() => {}} onToggleChat={() => {}} />)
+    await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
+    push(live())
+    const head = container.querySelector('.bp-head')!
+    const labelled = Array.from(head.querySelectorAll('.bp-tool, .bp-stop'))
+    expect(labelled).toHaveLength(4)
+    for (const button of labelled) expect(button.querySelector('.bp-label')?.textContent).toBeTruthy()
+    // The Stop button has no aria-label: its name is the label text, which the narrow layout clips rather than removes.
+    expect(screen.getByRole('button', { name: tr['bp.stop'] })).toBeTruthy()
+    expect(screen.getByRole('button', { name: tr['bf.chatHide'] })).toBeTruthy()
+  })
+
+  it('is its own width container: icon-only below 560 px, a second row below 400 px', () => {
+    const text = css()
+    expect(text).toContain('.bp-panel { container: bp / inline-size; min-width: 0; }')
+    const icons = block(text, '@container bp (max-width: 560px)')
+    expect(icons).toMatch(/\.bp-head \.bp-label \{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect\(0 0 0 0\)/)
+    expect(icons).not.toContain('display: none')
+    expect(icons).toContain('.bp-head :is(.bp-tool, .bp-stop) { width: 26px;')
+    const rows = block(text, '@container bp (max-width: 400px)')
+    expect(rows).toContain('.bp-head { flex-wrap: wrap;')
+    expect(rows).toContain('.bp-head .bp-omni { flex: 1 0 calc(100% - 3 * 30px); }')
+  })
+
+  it('shows the chat toggle only in full screen', async () => {
+    const { rerender } = render(<BrowserPanel visible conversationId={3} {...props()} onToggleFull={() => {}} onToggleChat={() => {}} />)
+    await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
+    push(live())
+    expect(screen.queryByRole('button', { name: tr['bf.chatHide'] })).toBeNull()
+    const onToggleChat = vi.fn()
+    rerender(<BrowserPanel visible conversationId={3} {...props()} full onToggleFull={() => {}} chatOpen={false} onToggleChat={onToggleChat} />)
+    const show = screen.getByRole('button', { name: tr['bf.chatShow'] })
+    expect(show.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(show)
+    expect(onToggleChat).toHaveBeenCalledTimes(1)
   })
 })
 

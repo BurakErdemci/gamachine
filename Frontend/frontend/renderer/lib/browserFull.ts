@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { isMacPlatform } from './browserSuggest';
 
 type KeyLike = Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>;
@@ -9,22 +9,37 @@ export function isBrowserFullShortcut(e: KeyLike, mac: boolean): boolean {
   return mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
 }
 
-/** Main sends this when the chord is pressed with focus inside the native page, where the renderer sees no keys. */
+/**
+ * Main sends this when the chord is pressed with focus inside the native page, where the renderer sees no keys (no
+ * payload: toggle), and when its Esc rule ends full screen (`{ on: false }`).
+ */
 export const BROWSER_FULL_TOGGLE_CHANNEL = 'browser-full-toggle';
 
 const MODAL = '[aria-modal="true"], [role="dialog"], [role="alertdialog"]';
 const hasOpenModal = () => !!document.querySelector(MODAL);
+// What keeps its own Esc in this window: a dialog, a menu or list popup, or a field of the browser panel (the address
+// box drops an edit on Esc).
+const ESC_OWNERS = `${MODAL}, [role="menu"], [role="listbox"]`;
+const FIELD = 'input, textarea, select, [contenteditable]';
+export function escOwnedHere(): boolean {
+  if (document.querySelector(ESC_OWNERS)) return true;
+  const t = document.activeElement;
+  return t instanceof Element && !!t.closest('.bp-panel') && t.matches(FIELD);
+}
+
+const ipcOf = (): any => (typeof window !== 'undefined' ? (window as any).ipc : null);
 
 /**
- * The agent browser's full-screen mode. `shown` is whether the browser view is on screen: the
- * shortcut only acts then, and the mode ends by itself the moment it is not. Esc leaves only when
- * nothing else owns it: no open dialog, and focus on the page body or inside the browser panel
- * (a popup or the composer closes itself on Esc without marking the event). The listener runs in
- * the capture phase so the DOM is read before such a popup removes itself.
+ * The agent browser's full-screen mode. `shown` is whether the browser view is on screen: the shortcut only acts then,
+ * and the mode ends by itself the moment it is not. Esc is main's (browser-host.ts escape()), wherever focus is: this
+ * hook tells it whether full screen is on and whether something in this window owns Esc right now, over the browser
+ * channel's `full` op. `chatOpen` is the floating chat over the full-screen page (collapsed to a toolbar button).
  */
 export function useBrowserFull(shown: boolean, chatId?: number | null) {
   const [on, setOn] = useState(false);
+  const [chatOpen, setChatOpen] = useState(true);
   const full = on && shown;
+  const [owned, setOwned] = useState(false);
 
   useEffect(() => { if (!shown) setOn(false); }, [shown]);
   useEffect(() => { setOn(false); }, [chatId]);
@@ -33,30 +48,55 @@ export function useBrowserFull(shown: boolean, chatId?: number | null) {
     if (!shown) return;
     const mac = isMacPlatform();
     const onKey = (e: KeyboardEvent) => {
-      if (e.isComposing || e.defaultPrevented || e.repeat) return;
-      if (isBrowserFullShortcut(e, mac)) {
-        if (hasOpenModal()) return;
-        e.preventDefault();
-        setOn(v => !v);
-        return;
-      }
-      if (e.key !== 'Escape' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || hasOpenModal()) return;
-      const t = e.target;
-      if (t instanceof Element && t !== document.body && t !== document.documentElement) {
-        // The address box uses Esc to drop an edit, so a field inside the panel keeps its Esc.
-        if (!t.closest('.bp-panel') || t.matches('input, textarea, select, [contenteditable]')) return;
-      }
-      setOn(false);
+      if (e.isComposing || e.defaultPrevented || e.repeat || !isBrowserFullShortcut(e, mac) || hasOpenModal()) return;
+      e.preventDefault();
+      setOn(v => !v);
     };
     window.addEventListener('keydown', onKey, true);
-    const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
-    const off = ipc?.on?.(BROWSER_FULL_TOGGLE_CHANNEL, () => { if (!hasOpenModal()) setOn(v => !v); });
+    const off = ipcOf()?.on?.(BROWSER_FULL_TOGGLE_CHANNEL, (p: any) => {
+      if (p && p.on === false) { setOn(false); return; }
+      if (!hasOpenModal()) setOn(v => !v);
+    });
     return () => {
       window.removeEventListener('keydown', onKey, true);
       if (typeof off === 'function') off();
     };
   }, [shown]);
 
+  // Who owns Esc changes with the DOM (a popup opens) and with focus (the address box).
+  useEffect(() => {
+    if (!shown) { setOwned(false); return; }
+    let frame = 0;
+    const check = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; setOwned(escOwnedHere()); });
+    };
+    setOwned(escOwnedHere());
+    const mo = new MutationObserver(check);
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['role', 'aria-modal', 'open', 'hidden'] });
+    document.addEventListener('focusin', check);
+    document.addEventListener('focusout', check);
+    return () => {
+      mo.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+      document.removeEventListener('focusin', check);
+      document.removeEventListener('focusout', check);
+    };
+  }, [shown]);
+
+  const last = useRef('');
+  useEffect(() => {
+    const key = `${full}:${owned}`;
+    if (key === last.current) return;
+    last.current = key;
+    void Promise.resolve(ipcOf()?.invoke?.('browser-live', { op: 'full', on: full, owned })).catch(() => undefined);
+  }, [full, owned]);
+  // The app going away (or this hook) leaves main with full screen off.
+  useEffect(() => () => {
+    void Promise.resolve(ipcOf()?.invoke?.('browser-live', { op: 'full', on: false, owned: false })).catch(() => undefined);
+  }, []);
+
   const toggle = useCallback(() => setOn(v => !v), []);
-  return { full, toggle };
+  const toggleChat = useCallback(() => setChatOpen(v => !v), []);
+  return { full, toggle, chatOpen, toggleChat };
 }

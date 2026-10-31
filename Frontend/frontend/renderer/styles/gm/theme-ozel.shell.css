@@ -460,5 +460,5 @@
 }
 :root[data-theme="ozel"] .intro-overlay .s2-slab::after { background: var(--mascot-line); box-shadow: 0 8px 0 var(--mascot-line); }
 
-/* browser full screen: flat like Sade, a hairline above the docked chat */
-[data-theme="ozel"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-top-color: var(--paper-line); }
+/* browser full screen: flat like Sade, a hairline edge around the floating chat */
+[data-theme="ozel"] .app[data-browser-full]:not([data-screen]) .app-body > .app-main { border-color: var(--paper-line); }

@@ -260,7 +260,7 @@ describe('frame picks live only in the host', () => {
     f.wc.frameReply = () => held.promise
     overlaySays(f, { t: 'pick', x: 110, y: 105 })
     await settle()
-    overlaySays(f, { t: 'cancel' })
+    f.overlay().webContents.emit('before-input-event', { preventDefault: vi.fn() }, { type: 'keyDown', key: 'Escape' })
     held.resolve(frameOf())
     await settle()
     expect(f.tab().pick).toBeNull()
@@ -695,12 +695,14 @@ describe('T11 hit-test rule', () => {
       move(10, 10)
       expect(hover.style.width).toBe('400px')
       expect(titles).toHaveLength(0)
-      // A click posts the point; Esc posts a cancel; pins are drawn with their number as text.
+      // A click posts the point; Esc posts nothing (the host claims it before the overlay sees it); pins are drawn with
+      // their number as text.
       window.dispatchEvent(new MouseEvent('pointerdown', { clientX: 10, clientY: 10, button: 0 }))
       window.dispatchEvent(new MouseEvent('pointerup', { clientX: 10, clientY: 10, button: 0 }))
       expect(JSON.parse(titles.at(-1)!)).toMatchObject({ t: 'pick', x: 10, y: 10 })
+      const posted = titles.length
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-      expect(JSON.parse(titles.at(-1)!)).toMatchObject({ t: 'cancel' })
+      expect(titles).toHaveLength(posted)
       w.__pins([{ n: '<b>7</b>', x: 40, y: 40 }])
       expect(document.querySelector('.pin')!.textContent).toBe('<b>7</b>')
       expect(document.querySelector('.pin b')).toBeNull()
@@ -757,5 +759,66 @@ describe('T8 the page script frames', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(lib.mark()).toEqual(mark)
     expect(document.documentElement.outerHTML).not.toBe(before)
+  })
+})
+
+describe('the comment box opens at its measured height', () => {
+  it('stays hidden until it has measured itself at the width it will have, then shows at that height', async () => {
+    const f = fixture()
+    await openPage(f)
+    await annotate(f, true)
+    // The box answers __set with its height, as the real page does.
+    const order: string[] = []
+    const answering = (wc: any) => wc.executeJavaScript.mockImplementation(async (code: string) => {
+      order.push(code.startsWith('window.__width(') ? 'width' : code.startsWith('window.__set(') ? 'set' : 'other')
+      return code.startsWith('window.__set(') ? 90 : undefined
+    })
+    // The next view made is the box: it answers from the start.
+    const deps = (f.host as any).deps
+    const make = deps.createView
+    deps.createView = (options: any) => { const v = make(options); answering(v.webContents); return v }
+    overlaySays(f, { t: 'pick', x: 110, y: 105 })
+    await vi.waitFor(() => expect(f.box()).toBeDefined())
+    await vi.waitFor(() => expect(f.box().setVisible).toHaveBeenLastCalledWith(true))
+    expect(f.boxCalls()).toContain('window.__width(320)')
+    expect(order.indexOf('width')).toBeLessThan(order.indexOf('set'))
+    // Shown once, after the measured bounds were set: never at the minimum first.
+    const shows = f.box().setVisible.mock.calls.map((c: any[]) => c[0])
+    expect(shows.filter((v: boolean) => v)).toHaveLength(1)
+    expect(f.box().setBounds.mock.calls.at(-1)[0].height).toBe(90)
+  })
+
+  it('the box page measures at the width it is given, returns its height, saves on Enter and leaves Esc to the host', () => {
+    expect(NOTE_BOX_HTML).not.toContain('M8 13V3M3.5 7.5 8 3l4.5 4.5')
+    expect(NOTE_BOX_HTML).not.toMatch(/border-radius:50%/)
+    const body = NOTE_BOX_HTML.slice(NOTE_BOX_HTML.indexOf('<body>') + 6, NOTE_BOX_HTML.indexOf('<script>'))
+    const script = NOTE_BOX_HTML.slice(NOTE_BOX_HTML.indexOf('<script>') + 8, NOTE_BOX_HTML.indexOf('</script>'))
+    document.body.innerHTML = body
+    const titles: string[] = []
+    const title = Object.getOwnPropertyDescriptor(Document.prototype, 'title')!
+    Object.defineProperty(document, 'title', { configurable: true, get: () => titles.at(-1) ?? '', set: (v: string) => { titles.push(v) } })
+    try {
+      ;(0, eval)(`(() => {${script}})()`)
+      const w = window as any
+      w.__width(320)
+      expect((document.getElementById('w') as HTMLElement).style.width).toBe('308px')
+      expect(typeof w.__set('ilk', 'n1')).toBe('number')
+      expect(JSON.parse(titles.at(-1)!)).toMatchObject({ t: 'size', p: 'n1', text: 'ilk' })
+      const ta = document.getElementById('t') as HTMLTextAreaElement
+      const posted = titles.length
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      expect(titles).toHaveLength(posted)
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }))
+      expect(titles).toHaveLength(posted)
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      expect(JSON.parse(titles.at(-1)!)).toMatchObject({ t: 'submit', text: 'ilk', p: 'n1' })
+      // An error is drawn as text only.
+      w.__error('<b>kayıt</b>', 'n1')
+      expect(document.getElementById('e')!.textContent).toBe('<b>kayıt</b>')
+      expect(document.querySelector('#e b')).toBeNull()
+    } finally {
+      Object.defineProperty(document, 'title', title)
+      document.body.innerHTML = ''
+    }
   })
 })

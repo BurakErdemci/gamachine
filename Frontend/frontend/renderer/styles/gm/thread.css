@@ -566,10 +566,11 @@
 .tb-actions .tb-act:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-faint); }
 .tb-actions .tb-act[aria-pressed="true"] { color: var(--focus); border-color: var(--focus); }
 .tb-actions .tb-act:disabled { opacity: .45; cursor: not-allowed; }
-/* the chat docked under the full-screen browser: the thread scrolls in what the strip leaves, the composer keeps its place */
-.app[data-browser-full]:not([data-screen]) .app-main .thread-col { padding: 10px 20px 12px; gap: 10px; }
-.app[data-browser-full]:not([data-screen]) .app-main .composer-wrap { padding: 2px 20px 8px; }
-.app[data-browser-full]:not([data-screen]) .app-main .thread-wrap { min-height: 56px; }
+/* the chat floating over the full-screen browser (shell.css): a narrow window, so the thread and the composer take
+   tighter margins; the thread scrolls in what the composer leaves */
+.app[data-browser-full]:not([data-screen]) .app-main .thread-col { padding: 10px 14px 12px; gap: 10px; }
+.app[data-browser-full]:not([data-screen]) .app-main .composer-wrap { padding: 4px 10px 10px; }
+.app[data-browser-full]:not([data-screen]) .app-main .thread-wrap { min-height: 96px; }
 /* branch tabs keep their own shell-toned bar until they are ported (their text is light) */
 .thread-tabs { position: relative; z-index: 2; flex: none; background: var(--shell-bg); color: var(--shell-text); }
 .thread-tabs:empty { display: none; }
