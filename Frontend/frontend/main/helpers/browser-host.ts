@@ -482,7 +482,10 @@ export class BrowserHost {
   private clearing = false
   /** The site a site-remove holding the lock is removing: a page's own navigation onto it is dropped. */
   private removing: string | null = null
-  /** Bumped when a clear starts: an open or navigation that awaited across it must not act. */
+  /**
+   * Bumped when a clear-browsing-data starts: an open or navigation that awaited across it must not act. A site-remove
+   * leaves it alone: work already running goes on, and what acts during the lock meets `clearing`.
+   */
   private clearGen = 0
   /** Bumped when a chat is closed (deleted), for the same reason. */
   private readonly closeGen = new Map<number, number>()
@@ -745,7 +748,8 @@ export class BrowserHost {
     const wc = tab.view.webContents
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (tab.agent) tab.popupBlocked = url
-      else if ((disposition === 'foreground-tab' || disposition === 'background-tab') && this.pageMayOpenTab(tab)) {
+      // A page-open the lock refuses does not spend the page's tab budget.
+      else if ((disposition === 'foreground-tab' || disposition === 'background-tab') && !this.clearing && this.pageMayOpenTab(tab)) {
         this.openUserTab(tab.conversationId, url, true).catch(() => { /* refused or no window */ })
       }
       return { action: 'deny' }
@@ -753,6 +757,8 @@ export class BrowserHost {
     const refuse = (event: { url: string; isMainFrame: boolean; preventDefault(): void }) => {
       if (event.isMainFrame && this.isBeingRemoved(event.url)) {
         event.preventDefault()
+        // Like a refused address: an agent command waiting on this load must not wait for its timeout.
+        this.settleLoad(tab, { ok: false, error: 'clearing' })
         return
       }
       if (isAllowedNavigation(event.url)) return
@@ -770,7 +776,9 @@ export class BrowserHost {
       // History navigations the page starts itself (history.back()) skip will-navigate, so they are dropped here.
       const dropped = this.isBeingRemoved(details.url)
       tab.target = dropped ? null : details.url
-      if (dropped && !wc.isDestroyed()) wc.stop()
+      if (!dropped) return
+      if (!wc.isDestroyed()) wc.stop()
+      this.settleLoad(tab, { ok: false, error: 'clearing' })
     })
     wc.on('did-finish-load', () => this.settleLoad(tab, { ok: true }))
     wc.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
@@ -1008,6 +1016,20 @@ export class BrowserHost {
     return this.lifecycleEpoch(conversationId) === epoch ? null : { error: 'chat_closed' }
   }
 
+  /**
+   * The clear lock for clear-browsing-data and site-remove, taken before `work`'s first await: while it is held every
+   * point that would open or load refuses with 'clearing'. Refused when another holder has it.
+   */
+  private async locked<T>(work: () => Promise<T>): Promise<T | { error: 'clearing' }> {
+    if (this.clearing) return { error: 'clearing' }
+    this.clearing = true
+    try {
+      return await work()
+    } finally {
+      this.clearing = false
+    }
+  }
+
   /** Drops closed tabs from every chat's reopen stack and marks the reopens in flight that it matches. */
   private forgetClosed(drop: (tab: ClosedTab, conversationId: number) => boolean): void {
     for (const [id, stack] of this.closed) this.closed.set(id, stack.filter((tab) => !drop(tab, id)))
@@ -1018,13 +1040,10 @@ export class BrowserHost {
    * Logs the agent browser out of `site` and its subdomains; the caller holds the clear lock, so nothing opens or
    * loads meanwhile. The site's tabs close and its closed and reopening pages are forgotten first, their exact
    * origins recorded; then cookies and storage go. A pass repeats while a cookie of the site is still there.
+   * `accepted` is set once the removal passed its checks: from then on the login may be gone, whatever the outcome.
    */
-  private async removeSite(site: string): Promise<Record<string, unknown>> {
+  private async removeSite(site: string, accepted: { value: boolean }): Promise<Record<string, unknown>> {
     const ofSite = (list: Cookie[]) => list.filter((cookie) => inSite(siteOf(cookie.domain ?? ''), site))
-    const session = this.session()
-    const all = await session.cookies.get({})
-    // One removal takes one listed site: a parent of several (github.io over alice. and bob.github.io) is refused.
-    if ([...siteRows(all).keys()].filter((row) => inSite(row, site)).length > 1) return { error: 'bad_args' }
     const origins = new Set<string>()
     // Pages on other ports or subdomains: the exact origin, port included.
     const claim = (url: string) => {
@@ -1032,12 +1051,21 @@ export class BrowserHost {
       if (origin) origins.add(origin)
       return origin !== ''
     }
+    // Recorded before the first await too: a chat deleted during the read takes its tabs and stack with it.
+    for (const tab of this.tabs.values()) if (this.isLive(tab)) this.tabUrls(tab).forEach(claim)
+    for (const stack of this.closed.values()) for (const tab of stack) claim(tab.url)
+    for (const entry of this.reopening) claim(entry.tab.url)
+    const session = this.session()
+    const all = await session.cookies.get({})
+    // One removal takes one listed site: a parent of several (github.io over alice. and bob.github.io) is refused.
+    if ([...siteRows(all).keys()].filter((row) => inSite(row, site)).length > 1) return { error: 'bad_args' }
+    accepted.value = true
     for (const host of [site, `www.${site}`]) for (const scheme of ['https', 'http']) origins.add(`${scheme}://${host}`)
     // Open pages of the site go first: a live page would write the login back after the cookies are gone.
     const doomed = [...this.tabs.values()].filter((tab) => this.isLive(tab) && this.tabUrls(tab).filter(claim).length > 0)
     for (const id of new Set(doomed.map((tab) => tab.conversationId))) this.stopLocal(id)
     for (const tab of doomed) this.closeTab(tab)
-    // A reopen of the site still in flight is refused through clearGen and, forgotten here, not put back.
+    // A reopen of the site still in flight, forgotten here, is neither opened nor put back.
     this.forgetClosed((tab) => claim(tab.url))
     for (const entry of this.deps.history?.list() ?? []) claim(entry.url)
     let removed = 0
@@ -1056,8 +1084,6 @@ export class BrowserHost {
       for (const origin of origins) {
         try { await session.clearStorageData({ origin, storages: STORAGES as any }) } catch { failed++ }
       }
-      // The login is gone whatever the outcome, so the backend drops the chats' grants like after a full clear.
-      if (pass === 1) await this.report(true)
       cookies = ofSite(await session.cookies.get({}))
       if (cookies.length === 0 || failed > 0) break
       if (pass === MAX_SITE_REMOVE_PASSES) { failed++; break }
@@ -1070,8 +1096,8 @@ export class BrowserHost {
    * another site meanwhile), unless a removal or forget marked it; a marked one is not opened either.
    */
   private async reopenTab(conversationId: number): Promise<Record<string, unknown>> {
-    const refused = this.staleReply(conversationId, this.lifecycleEpoch(conversationId))
-    if (refused) return refused
+    // A refusal by the lock comes from openUserTab, and the popped page goes back below.
+    if (this.stopped) return { error: 'closed' }
     const last = this.closed.get(conversationId)?.pop()
     if (!last) return { error: 'nothing_to_reopen' }
     const pending: Reopen = { tab: last, conversationId, forgotten: false }
@@ -1305,20 +1331,22 @@ export class BrowserHost {
       case 'site-remove': {
         const { site } = req as { site?: unknown }
         if (typeof site !== 'string' || site.length > 253 || !SITE_RE.test(site) || !/[a-z0-9]/.test(site) || isPublicSuffix(site)) return { error: 'bad_args' }
-        // The clear lock, taken before the first await: while it is held the browser opens and loads nothing.
-        if (this.clearing) return { error: 'clearing' }
-        this.clearing = true
-        this.clearGen++
-        this.removing = site
-        try {
-          return await this.removeSite(site)
-        } catch {
-          this.log('[browser] removing a site failed')
-          return { error: 'site_remove_failed' }
-        } finally {
-          this.clearing = false
-          this.removing = null
-        }
+        // Work already running goes on (no clearGen bump, no halt); the lock only refuses new work.
+        const accepted = { value: false }
+        const result = await this.locked(async () => {
+          this.removing = site
+          try {
+            return await this.removeSite(site, accepted)
+          } catch {
+            this.log('[browser] removing a site failed')
+            return { error: 'site_remove_failed' }
+          } finally {
+            this.removing = null
+          }
+        })
+        // The login may be gone whatever the outcome, so the backend drops the chats' grants like after a full clear.
+        if (accepted.value) await this.report(true)
+        return result
       }
       case 'close': {
         this.closeGen.set(conversationId, (this.closeGen.get(conversationId) ?? 0) + 1)
@@ -1333,27 +1361,28 @@ export class BrowserHost {
         return this.livePayload(conversationId)
       }
       case 'clear-browsing-data': {
-        if (this.clearing) return { error: 'clearing' }
-        this.clearing = true
-        this.clearGen++
-        // Every chat's running and queued agent commands end with the clear.
-        this.stopLocal(null)
-        // Tabs go first so no page writes new cookies between the clear and its close.
-        this.destroyView()
-        this.forgetClosed(() => true)
-        // A history file that could not be erased is a failed clear: the visits would return after a restart.
-        let failed = !((await this.deps.history?.clear()) ?? true)
-        try {
-          const session = this.session()
-          await session.clearStorageData()
-          await session.clearCache()
-        } catch {
-          this.log('[browser] clearing browsing data failed')
-          failed = true
-        } finally {
+        const failed = await this.locked(async () => {
+          this.clearGen++
+          // Every chat's running and queued agent commands end with the clear.
+          this.stopLocal(null)
+          // Tabs go first so no page writes new cookies between the clear and its close.
           this.destroyView()
-          this.clearing = false
-        }
+          this.forgetClosed(() => true)
+          // A history file that could not be erased is a failed clear: the visits would return after a restart.
+          let failed = !((await this.deps.history?.clear()) ?? true)
+          try {
+            const session = this.session()
+            await session.clearStorageData()
+            await session.clearCache()
+          } catch {
+            this.log('[browser] clearing browsing data failed')
+            failed = true
+          } finally {
+            this.destroyView()
+          }
+          return failed
+        })
+        if (typeof failed === 'object') return failed
         // Even a failed clear may have wiped logins, so the backend drops every chat's grants either way.
         await this.report(true)
         return failed ? { error: 'Clearing browsing data failed.' } : { cleared: true }
