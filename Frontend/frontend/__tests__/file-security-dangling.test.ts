@@ -1,7 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, beforeEach, describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import {
   isAllowedUnityScriptPath,
   isAllowedWorkspacePath,
@@ -24,6 +24,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   if (root) fs.rmSync(root, { recursive: true, force: true })
   root = ''
 })
@@ -115,5 +116,56 @@ describe('dangling symlinks', () => {
     if (!link(path.join(ws, 'r2.md'), path.join(ws, 'r1.md'))) return
     if (!link(path.join(ws, 'r1.md'), path.join(ws, 'r2.md'))) return
     expect(okumaKarariVer(path.join(ws, 'r1.md'), ws).izinli).toBe(false)
+  })
+})
+
+function failOn(name: 'lstatSync' | 'statSync', victim: string, code = 'EIO'): void {
+  const original = fs[name] as (...args: any[]) => any
+  vi.spyOn(fs, name).mockImplementation(((p: fs.PathLike, ...rest: any[]) => {
+    if (String(p) === victim) throw Object.assign(new Error(`injected ${code}`), { code })
+    return original(p, ...rest)
+  }) as any)
+}
+
+const everyGuard = (target: string) => [
+  isAllowedWorkspacePath(target, ws),
+  isAllowedWorkspaceWriteFile(target, ws),
+  isInsideWorkspace(target, ws),
+  okumaKarariVer(target, ws).izinli,
+]
+
+describe('metadata errors other than ENOENT/ENOTDIR refuse', () => {
+  it('refuses a dangling outside link when lstat on it fails with EIO', () => {
+    const alias = path.join(ws, 'alias.md')
+    if (!link(path.join(outside, 'escaped.md'), alias)) return
+    failOn('lstatSync', alias)
+    expect(everyGuard(alias)).toEqual([false, false, false, false])
+  })
+
+  it('refuses when lstat fails with EIO on a parent segment (a dangling dir link)', () => {
+    const dir = path.join(ws, 'dir')
+    if (!link(path.join(outside, 'newdir'), dir, 'dir')) return
+    failOn('lstatSync', dir)
+    expect(everyGuard(path.join(dir, 'a.md'))).toEqual([false, false, false, false])
+  })
+
+  it('refuses when stat fails with EACCES on an existing parent directory', () => {
+    const sub = path.join(ws, 'sub')
+    fs.mkdirSync(sub)
+    const target = path.join(sub, 'new.md')
+    expect(isAllowedWorkspacePath(target, ws)).toBe(true)
+    failOn('statSync', sub, 'EACCES')
+    expect(isAllowedWorkspacePath(target, ws)).toBe(false)
+    expect(isAllowedWorkspaceWriteFile(target, ws)).toBe(false)
+  })
+
+  it('refuses when stat fails with EIO on the workspace itself', () => {
+    failOn('statSync', ws)
+    expect(isAllowedWorkspacePath(path.join(ws, 'new.md'), ws)).toBe(false)
+  })
+
+  it('still treats ENOTDIR under a regular file as missing', () => {
+    fs.writeFileSync(path.join(ws, 'plain'), 'x')
+    expect(isAllowedWorkspacePath(path.join(ws, 'plain', 'child.md'), ws)).toBe(true)
   })
 })

@@ -17,6 +17,32 @@ import path from 'path'
  * through its OWN short path was refused because it no longer matched itself.
  * The two calls throw the same errors, so the surrounding fallbacks are unchanged.
  */
+// Only ENOENT/ENOTDIR mean "missing"; any other error (EIO, EACCES, ELOOP) propagates so
+// safeResolve refuses. fs.existsSync is not used: it returns false for those errors too.
+function isMissingError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+function pathExists(p: string): boolean {
+  try {
+    fs.statSync(p)
+    return true
+  } catch (err) {
+    if (isMissingError(err)) return false
+    throw err
+  }
+}
+
+function isSymlinkEntry(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isSymbolicLink()
+  } catch (err) {
+    if (isMissingError(err)) return false
+    throw err
+  }
+}
+
 function safeResolve(filePath: string): string | null {
   try {
     let absolutePath = path.resolve(filePath)
@@ -24,7 +50,7 @@ function safeResolve(filePath: string): string | null {
 
     // Restarts only when a dangling symlink is followed to its target.
     for (;;) {
-      if (fs.existsSync(absolutePath)) {
+      if (pathExists(absolutePath)) {
         return fs.realpathSync.native(absolutePath)
       }
 
@@ -32,17 +58,11 @@ function safeResolve(filePath: string): string | null {
       const missingSegments: string[] = []
       let followed = false
 
-      while (!fs.existsSync(currentPath)) {
-        // existsSync follows links, so a dangling symlink looks "missing". Its bytes
+      while (!pathExists(currentPath)) {
+        // stat follows links, so a dangling symlink looks "missing". Its bytes
         // would still land at the link target, so the target replaces the link here
         // (measured 31 Oct: a dangling link let write-file and create-file land outside).
-        let isLink = false
-        try {
-          isLink = fs.lstatSync(currentPath).isSymbolicLink()
-        } catch {
-          // not there at all — a plain missing segment
-        }
-        if (isLink) {
+        if (isSymlinkEntry(currentPath)) {
           if (++hops > 40) return null
           const linkTarget = fs.readlinkSync(currentPath)
           // The kernel follows links inside the target before applying '..'; resolving it as text would not.
