@@ -551,10 +551,12 @@ interface FrameReply {
   image: string
   url: string
   title: string
+  /** The tab's navGen when the frame was read: once the tab's moved on, the frame is of a page the tab no longer shows. */
+  navGen: number
 }
 
-/** What the page's frame() gives; readFrame adds the picture and the tab's address and title. */
-type PageFrame = Omit<FrameReply, 'image' | 'url' | 'title'>
+/** What the page's frame() gives; readFrame adds the picture, the tab's address and title and its navGen. */
+type PageFrame = Omit<FrameReply, 'image' | 'url' | 'title' | 'navGen'>
 
 function toScroll(value: unknown): [number, number] {
   return Array.isArray(value) ? [Number(value[0]) || 0, Number(value[1]) || 0] : [0, 0]
@@ -603,6 +605,16 @@ export function hitElement<T extends { box: Box }>(elements: readonly T[], x: nu
 export function areaText(elements: readonly { box: Box; text: string }[], rect: Box): string {
   return elements.filter(({ box: b }) => b.x >= rect.x && b.y >= rect.y && b.x + b.width <= rect.x + rect.width && b.y + b.height <= rect.y + rect.height)
     .map((element) => element.text).filter(Boolean).join(' ').slice(0, NOTE_AREA_CHARS)
+}
+
+/** The overlay's look while a pick is open: its frame's picture, its target outlined. */
+function lookOf(pick: HostPick): Look {
+  return { by: 'pick', frame: pick.frame, rect: pick.rect }
+}
+
+/** The box call that shows a pick's last save error (the box drops it unless it shows that pick). */
+function errorCall(pick: HostPick): string {
+  return `window.__error(${JSON.stringify(pick.error)},${JSON.stringify(pick.id)})`
 }
 
 /** What a click (pick) or a drag (area) from the overlay chooses in a frame: the element's description, or the area's. */
@@ -742,8 +754,8 @@ interface Tab {
   waiting: number
   refreshing: boolean
   refreshTimer: ReturnType<typeof setTimeout> | null
-  /** The document and scroll of the latest frame drawn on the overlay while no pick is open, or null since a navigation. */
-  drawn: { docId: string; scroll: [number, number] } | null
+  /** What the overlay shows; set only by setLook(). */
+  shows: Look | null
   /** Bumped by every navigation, so a favicon fetched for an earlier page is dropped. */
   faviconSeq: number
   /** Settles when the tab is closed, so a command waiting on something else can stop at once. */
@@ -760,6 +772,13 @@ interface ClosedTab { url: string; title: string }
 
 /** A self-contained app page in its own view over the tabs (the comment box, an overlay) and its first load. */
 interface AppView { view: WebContentsView; ready: Promise<void> }
+
+/**
+ * What a tab's overlay shows: a frame's boxes (the hover) and the pins of its document's notes at its scroll, on the live
+ * page ('live': the latest refresh) or over the frame's picture ('pick': an open comment, its target outlined by rect;
+ * 'capture': a capture being taken). null: the live page with nothing outlined or pinned.
+ */
+interface Look { by: 'live' | 'pick' | 'capture'; frame: FrameReply; rect: Box | null }
 
 interface HostPick {
   /** The host's id for this pick, never reused: the box's messages carry it, and the saved note keeps it. */
@@ -1035,7 +1054,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, drawn: null, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, shows: null, faviconSeq: 0, gone, markGone, expected: [], busy: 0, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -1348,10 +1367,8 @@ export class BrowserHost {
   /** A main-frame navigation started: frames read before it are void and the overlay outlines nothing until the next one. */
   private navigated(tab: Tab): void {
     tab.navGen++
-    tab.drawn = null
-    this.overlayCall(tab, 'window.__boxes([],[0,0])')
-    // An open pick keeps its frozen picture, and the pins drawn on it.
-    this.pushPins(tab)
+    // A frozen picture (an open pick's, a capture's) stays as it is: the capture puts back what fits once it is done.
+    if (!tab.shows || tab.shows.by === 'live') this.setLook(tab, null)
   }
 
   // ---- frames ----
@@ -1367,7 +1384,7 @@ export class BrowserHost {
     const navGen = tab.navGen
     const current = () => tab.frameSeq === seq && tab.navGen === navGen && this.tabs.get(tab.id) === tab && this.isLive(tab)
     const wc = tab.view.webContents
-    const accept = (frame: PageFrame, image: string): FrameReply => ({ ...frame, image, url: wc.getURL(), title: wc.getTitle() })
+    const accept = (frame: PageFrame, image: string): FrameReply => ({ ...frame, image, url: wc.getURL(), title: wc.getTitle(), navGen })
     try {
       for (let attempt = 0; attempt < FRAME_TRIES; attempt++) {
         const frame = toFrame(await this.page(tab, 'frame', {}))
@@ -1385,9 +1402,10 @@ export class BrowserHost {
     return null
   }
 
-  /** While the tab is annotating, shown, with no comment open and no click or capture waiting on a frame. */
+  /** While the tab is annotating, shown, with no comment open, no capture on the overlay and no click or capture waiting on a frame. */
   private refreshable(tab: Tab): boolean {
-    return tab.annotating && !!tab.overlay && !tab.pick && tab.waiting === 0 && !this.stopped && this.isLive(tab) && this.isShown(tab)
+    return tab.annotating && !!tab.overlay && !tab.pick && tab.shows?.by !== 'capture' && tab.waiting === 0 && !this.stopped && this.isLive(tab) &&
+      this.isShown(tab)
   }
 
   /** The tab's next refresh in `ms` (it replaces one already due); nothing when the tab is not refreshable. */
@@ -1416,32 +1434,35 @@ export class BrowserHost {
       tab.refreshing = false
     }
     if (!this.refreshable(tab)) return
-    this.drawFrame(tab, frame)
+    // A failed frame shows nothing (no hover, no pins) until the next good one.
+    this.setLook(tab, frame && { by: 'live', frame, rect: null })
     if (!tab.refreshTimer) this.scheduleRefresh(tab)
   }
 
-  /** The overlay outlines from this frame's boxes and draws its pins; a null frame clears the boxes until the next good one. */
-  private drawFrame(tab: Tab, frame: FrameReply | null): void {
-    const boxes = frame ? frame.elements.map(({ box, id, kind }) => ({ ...box, id, kind })) : []
-    this.overlayCall(tab, `window.__boxes(${JSON.stringify(boxes)},${JSON.stringify(frame ? frame.scroll : [0, 0])})`)
-    if (!frame) return
-    tab.drawn = { docId: frame.docId, scroll: frame.scroll }
-    this.pushPins(tab)
-  }
-
-  /** The pins of the tab's notes made in this document, where they are at this scroll (viewport CSS px). */
-  private pinsAt(tab: Tab, at: { docId: string; scroll: [number, number] }): { n: number; x: number; y: number }[] {
-    return tab.notes.filter((one) => one.docId === at.docId)
-      .map((one) => ({ n: one.note.n, x: one.docRect.x - at.scroll[0], y: one.docRect.y - at.scroll[1] }))
-  }
-
   /**
-   * The one source of the overlay's pins: the tab's notes of the document the overlay shows, which is the open pick's
-   * frozen frame while a pick is open and otherwise the latest frame (none right after a navigation).
+   * The one way the overlay's look changes (refresh, a pick opening or closing, a capture, a navigation): `tab.shows` is
+   * set and drawn: its boxes, its pins, and its picture only when that changed. Settles once the overlay drew it all
+   * (the picture decoded).
    */
-  private pushPins(tab: Tab): void {
-    const shown = tab.pick ? tab.pick.frame : tab.drawn
-    this.overlayCall(tab, `window.__pins(${JSON.stringify(shown ? this.pinsAt(tab, shown) : [])})`)
+  private setLook(tab: Tab, look: Look | null): Promise<unknown> {
+    const frozen = (one: Look | null | undefined) => one && one.by !== 'live' ? one : null
+    const was = frozen(tab.shows)
+    const now = frozen(look)
+    tab.shows = look
+    const boxes = look ? look.frame.elements.map(({ box, id, kind }) => ({ ...box, id, kind })) : []
+    const drawn = [this.overlayCall(tab, `window.__boxes(${JSON.stringify(boxes)},${JSON.stringify(look ? look.frame.scroll : [0, 0])})`), this.pushPins(tab)]
+    if (was?.frame !== now?.frame || was?.rect !== now?.rect) {
+      drawn.push(this.overlayCall(tab, `window.__freeze(${JSON.stringify(now ? now.frame.image : null)},${JSON.stringify(now ? now.rect : null)})`))
+    }
+    return Promise.all(drawn)
+  }
+
+  /** The overlay's pins: the tab's notes made in the document it shows, where they are at its scroll (viewport CSS px). */
+  private pushPins(tab: Tab): Promise<unknown> {
+    const look = tab.shows
+    const pins = look ? tab.notes.filter((one) => one.docId === look.frame.docId)
+      .map((one) => ({ n: one.note.n, x: one.docRect.x - look.frame.scroll[0], y: one.docRect.y - look.frame.scroll[1] })) : []
+    return this.overlayCall(tab, `window.__pins(${JSON.stringify(pins)})`)
   }
 
   // ---- overlay ----
@@ -1490,7 +1511,7 @@ export class BrowserHost {
     const overlay = tab.overlay
     if (!overlay) return
     tab.overlay = null
-    tab.drawn = null
+    tab.shows = null
     const win = this.deps.window()
     try { if (win && !win.isDestroyed()) win.contentView.removeChildView(overlay.view) } catch { /* window closing */ }
     try { if (!overlay.view.webContents.isDestroyed()) overlay.view.webContents.close() } catch { /* already closed */ }
@@ -1560,9 +1581,7 @@ export class BrowserHost {
     const id = `n${++this.pickSeq}`
     const pick: HostPick = { id, frame, data: target.data.kind === 'area' ? { ...target.data, id } : target.data, rect: target.rect, draft: '', error: '' }
     tab.pick = pick
-    this.drawFrame(tab, frame)
-    this.overlayCall(tab, `window.__freeze(${JSON.stringify(frame.image)},${JSON.stringify(pick.rect)})`)
-    this.hideBox()
+    this.setLook(tab, lookOf(pick))
     void this.showBox(tab, pick)
   }
 
@@ -1572,12 +1591,15 @@ export class BrowserHost {
     this.closePick(tab)
   }
 
-  /** After a cancel or a save: the pick closes, its box goes if it shows it, and the overlay goes back to the live page. */
+  /**
+   * After a cancel or a save: the pick closes, its box goes if it shows it, and the overlay goes back to the live page,
+   * outlined from the pick's frame while that is still of the page the tab shows.
+   */
   private closePick(tab: Tab): void {
+    const pick = tab.pick
     tab.pick = null
     if (this.boxTab === tab) this.hideBox()
-    this.overlayCall(tab, 'window.__freeze(null,null)')
-    this.pushPins(tab)
+    if (pick) this.setLook(tab, pick.frame.navGen === tab.navGen ? { by: 'live', frame: pick.frame, rect: null } : null)
     if (this.isShown(tab)) this.focusOverlay(tab)
     this.scheduleRefresh(tab, 0)
   }
@@ -1596,12 +1618,16 @@ export class BrowserHost {
     return this.noteBox
   }
 
-  /** Opens the box next to the pick's target with its draft (and its last error), unless the tab stopped being the shown annotating one. */
+  /**
+   * Opens the box next to the pick's target with its draft (and its last error). Only for the shown annotating tab: a
+   * pick opened on a hidden tab leaves the box alone, and gets it when the tab is shown (syncAnnotate).
+   */
   private async showBox(tab: Tab, pick: HostPick): Promise<void> {
     const win = this.deps.window()
-    // A target outside the panel has nothing to sit next to: the box stays hidden with its draft.
-    if (!win || win.isDestroyed() || tab.pick !== pick || !targetShown(pick.rect, this.bounds) || !noteBoxWidth(this.bounds) ||
-      !this.annotatingVisible().includes(tab)) return
+    if (!win || win.isDestroyed() || tab.pick !== pick || !this.annotatingVisible().includes(tab)) return
+    // The box of this tab's earlier pick goes. A target outside the panel has nothing to sit next to: the box stays hidden with its draft.
+    this.hideBox()
+    if (!targetShown(pick.rect, this.bounds) || !noteBoxWidth(this.bounds)) return
     const token = ++this.boxSeq
     let box: AppView
     try { box = this.ensureBox() } catch { return }
@@ -1618,7 +1644,7 @@ export class BrowserHost {
       box.view.setVisible(true)
       const wc = box.view.webContents
       await wc.executeJavaScript(`window.__set(${JSON.stringify(pick.draft)},${JSON.stringify(pick.id)})`)
-      if (pick.error) await wc.executeJavaScript(`window.__error(${JSON.stringify(pick.error)},${JSON.stringify(pick.id)})`)
+      if (pick.error) await wc.executeJavaScript(errorCall(pick))
       if (token === this.boxSeq) wc.focus()
     } catch {
       this.log('[browser] note box failed')
@@ -1689,7 +1715,7 @@ export class BrowserHost {
     if (!pick || !comment) return
     const failed = (error: string) => {
       pick.error = error
-      if (this.boxTab === tab) void this.noteBox?.view.webContents.executeJavaScript(`window.__error(${JSON.stringify(error)},${JSON.stringify(pick.id)})`).catch(() => { /* box closing */ })
+      if (this.boxTab === tab) void this.noteBox?.view.webContents.executeJavaScript(errorCall(pick)).catch(() => { /* box closing */ })
     }
     if (tab.notes.length >= NOTE_MAX_NOTES) return failed(`En fazla ${NOTE_MAX_NOTES} not`)
     const n = tab.pinSeq + 1
@@ -1744,16 +1770,17 @@ export class BrowserHost {
   }
 
   /**
-   * A picture of a tab with its pins for a message that carries its notes: a fresh frame's picture is shown on the tab's
-   * overlay with the pins, and the overlay is captured (the comment box is a separate view, so it is never in it). The
-   * overlay then goes back to what it showed (the open pick's frozen picture, or the live page), or away when the mode
-   * is off. Empty when the tab is gone or any step fails.
+   * A picture of a tab with its pins for a message that carries its notes: a fresh frame is shown on the tab's overlay
+   * with its pins, and the overlay is captured (the comment box is a separate view, so it is never in it). The overlay
+   * then goes back (restoreOverlay). Empty when the tab is gone or any step fails.
    */
   private async captureTab(tab: Tab): Promise<string> {
     if (!this.isLive(tab)) return ''
     const overlay = this.ensureOverlay(tab)
     if (!overlay) return ''
     this.stopRefresh(tab)
+    const before = tab.shows
+    const navGen = tab.navGen
     tab.waiting++
     let frame: FrameReply | null = null
     try {
@@ -1763,28 +1790,23 @@ export class BrowserHost {
     }
     try {
       if (!frame || tab.overlay !== overlay) return ''
-      await this.overlayCall(tab, `window.__pins(${JSON.stringify(this.pinsAt(tab, frame))})`)
-      await this.overlayCall(tab, `window.__freeze(${JSON.stringify(frame.image)},null)`)
+      await this.setLook(tab, { by: 'capture', frame, rect: null })
       if (tab.overlay !== overlay) return ''
       // Visibility can change while the frame was read: it is read right before the capture.
       return await this.captureImage(overlay.view.webContents, this.isShown(tab))
     } finally {
-      this.restoreOverlay(tab, frame)
+      this.restoreOverlay(tab, before, navGen)
     }
   }
 
-  /** After a capture: the overlay shows the open pick's frozen picture again, or the live page with this frame's pins, or goes with the mode off. */
-  private restoreOverlay(tab: Tab, frame: FrameReply | null): void {
+  /**
+   * After a capture the overlay goes with the mode off. Otherwise it shows the open pick's frozen picture, or the live
+   * look it had before the capture if the tab did not navigate since (`navGen` is the tab's at the start); after a
+   * navigation, nothing until the next refresh draws the new page.
+   */
+  private restoreOverlay(tab: Tab, before: Look | null, navGen: number): void {
     if (!tab.annotating) { this.destroyOverlay(tab); return }
-    const pick = tab.pick
-    if (pick) {
-      this.pushPins(tab)
-      this.overlayCall(tab, `window.__freeze(${JSON.stringify(pick.frame.image)},${JSON.stringify(pick.rect)})`)
-      return
-    }
-    this.overlayCall(tab, 'window.__freeze(null,null)')
-    if (frame) this.drawFrame(tab, frame)
-    else this.pushPins(tab)
+    this.setLook(tab, tab.pick ? lookOf(tab.pick) : before?.by === 'live' && tab.navGen === navGen ? before : null)
     this.scheduleRefresh(tab, 0)
   }
 

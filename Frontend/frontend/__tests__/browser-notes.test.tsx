@@ -380,10 +380,10 @@ describe('host annotate ops', () => {
     expect(f.overlay().setVisible).toHaveBeenLastCalledWith(true)
     await f.fire(0)
     expect(f.pageCalls('frame')).toHaveLength(3)
-    // A failed frame clears the boxes until the next good one.
+    // A failed frame shows nothing (no hover, no pins) until the next good one.
     f.wc.frameReply = () => ({})
     await f.fire(250)
-    expect(f.overlayCalls().at(-1)).toBe('window.__boxes([],[0,0])')
+    expect(f.overlayCalls().slice(-2)).toEqual(['window.__boxes([],[0,0])', 'window.__pins([])'])
     f.wc.frameReply = () => frameOf()
     await f.fire(250)
     // While a comment is open there is no refresh at all.

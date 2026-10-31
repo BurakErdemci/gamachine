@@ -200,7 +200,10 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
   browser keys as a tab (full screen Ctrl/Cmd+Shift+F, the tab shortcuts T, W, Shift+T, 1-9, and the annotate chord).
 - **Refresh:** while the tab is annotating, shown and has no comment open, the host reads a frame without a picture every
   250 ms (one in flight at most), and also after a forwarded wheel, on `did-finish-load` and on a layout change, and pushes its
-  boxes and the pins to the overlay. A failed frame clears the boxes until the next good one.
+  boxes and the pins to the overlay. A failed frame shows nothing (no hover, no pins) until the next good one.
+- **One look:** what the overlay shows is one per-tab value set through one function (`setLook`): the live look of the latest
+  refresh, an open pick's frozen frame, or a capture's frame, or nothing. Its boxes, its picture and the pins of its document
+  are drawn from that value only. A navigation turns a live look into nothing; a frozen one stays.
 - **Toggle:** the panel's "İşaretle" button, or Ctrl+Shift+E (Cmd+Shift+E on macOS). The chord is claimed in the host's
   `before-input-event` (focus inside the page, the overlay or the comment box) and in the renderer (window keydown, only while
   the browser panel is shown, never under a dialog, never on key repeat). No other key is claimed. Esc in the overlay with
@@ -225,14 +228,15 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
   the pick closes, the overlay goes back to the live page and the mode stays on. The page never receives the comment. The
   number is the same on the pin, the chip and in the sent message. Saved notes are drawn as numbered pins on the overlay (from
   the note's place in its document less the frame's scroll) until the message is sent or the chip is removed (`clear-notes`).
-  The pins have one source: the tab's notes of the document the overlay shows, which is the open pick's frozen frame while a pick
-  is open (after a navigation too) and otherwise the latest frame.
+  The pins are the tab's notes of the document the overlay's look shows: the open pick's frozen frame while a pick is open
+  (after a navigation too), a capture's frame while it is taken, otherwise the latest frame.
 - **Note origin:** a frame records the tab's address and title when it is accepted, and a pick keeps them: the saved note (and
   its `browser-notes` event) names the page it was picked on, even when the tab navigated while the comment was open.
 - **Draft and tabs:** hiding the panel or switching tabs hides the overlay and the box and stops the refresh; the pick and its
   draft stay and come back with the tab. A resize places the overlay and the box again. Turning the mode off (or Esc in the box
   or the overlay) drops the pick and its draft; the saved notes stay. Closing the tab or deleting the chat drops the overlay, the
-  pick and the notes. A navigation or reload keeps the mode and any open pick. The mode marks the tab `userTouched`, and the tab
+  pick and the notes. A navigation or reload keeps the mode and any open pick. The box only ever shows or hides for the shown
+  annotating tab: a click whose frame read finishes after its tab was hidden opens the pick there, and the box comes with the tab. The mode marks the tab `userTouched`, and the tab
   carrying the notes becomes the agent's tab when the message is sent (the renderer selects it before `release`).
 - **Known limits:** pins follow the document's scroll only, not inner scroll containers; the frozen picture is shown only while
   a comment is open (the live page runs under the overlay otherwise, so animations and hover styles of the page do not react to
@@ -251,8 +255,9 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
 - **Picture:** a send that carries notes also attaches a screenshot per tab the notes come from (host op `capture-notes`): the
   host reads a fresh frame with its picture, shows it on the tab's overlay (made for the capture when the mode is off) with the
   pins and no hover outline, and captures the overlay (`stayHidden` when the tab is not shown); the comment box is a separate
-  view, so it is never in it. The overlay then goes back to what it showed (the open pick's frozen picture or the live page), or
-  away when the mode is off; the mode is not changed. Longer side at most 1600 px, JPEG quality 80, added to the message's
+  view, so it is never in it. The overlay then goes back to the open pick's frozen picture, or to the live look it had if the
+  tab did not navigate during the capture (after a navigation: nothing until the next refresh draws the new page), or away
+  when the mode is off; the mode is not changed. Longer side at most 1600 px, JPEG quality 80, added to the message's
   `images`. An empty capture, a failure or a 4 s hang only leaves the picture out; the send never waits on it.
 - **Privacy:** a note never contains form values. Text is read with fields skipped (`input`, `textarea`, `select`, `option`, any
   `contenteditable` except `"false"` in any case, any token of `role` being textbox/searchbox/combobox/spinbutton, `aria-multiline`); labels, placeholders and

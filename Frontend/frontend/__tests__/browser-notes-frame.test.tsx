@@ -45,10 +45,8 @@ function fixture() {
     views.push(view)
     return view
   }
-  const view = makeView()
-  const wc = view.webContents
-  Object.assign(wc, {
-    // The page script's answers; a test replaces them. mark() follows the last frame() unless a test says otherwise.
+  // A tab's page script answers; a test replaces them. mark() follows the last frame() unless a test says otherwise.
+  const answers = (wc: any) => Object.assign(wc, {
     frameReply: (): any => frameOf(),
     markReply: (): any => markOf(wc.lastFrame),
     lastFrame: null as any,
@@ -60,6 +58,8 @@ function fixture() {
     }),
     capturePage: vi.fn(async () => fakeImage('tab-bytes')),
   })
+  const view = makeView()
+  const wc = answers(view.webContents)
   const created: any[] = []
   const session: any = new EventEmitter()
   Object.assign(session, { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), webRequest: { onBeforeRequest: vi.fn(), onResponseStarted: vi.fn(), onCompleted: vi.fn() } })
@@ -90,7 +90,7 @@ function fixture() {
     timers.splice(at, 1)[0].fn()
     await settle()
   }
-  return { host, wc, view, win, timers, created, overlay, overlays, box, tab, pageCalls, overlayCalls, boxCalls, sent, fire }
+  return { host, wc, view, win, timers, created, overlay, overlays, box, tab, pageCalls, overlayCalls, boxCalls, sent, fire, answers }
 }
 type F = ReturnType<typeof fixture>
 
@@ -320,7 +320,7 @@ describe('frame picks live only in the host', () => {
     const first = await pickBuy(f)
     boxSays(f, { t: 'submit', text: 'bir' })
     await settle()
-    expect(f.overlayCalls().at(-1)).toBe('window.__pins([{"n":1,"x":100,"y":100}])')
+    expect(f.overlayCalls().filter((c) => c.startsWith('window.__pins(')).at(-1)).toBe('window.__pins([{"n":1,"x":100,"y":100}])')
     f.wc.emit('did-start-navigation', { isMainFrame: true })
     f.wc.frameReply = () => frameOf({ docId: 'd2', scroll: [0, 50] })
     f.wc.emit('did-finish-load')
@@ -332,7 +332,7 @@ describe('frame picks live only in the host', () => {
     expect(f.sent('browser-notes').map((e: any) => e.notes.map((n: any) => [n.id, n.n]))).toEqual([[[first.id, 1]], [[second.id, 2]]])
     await settle()
     // Only the second note is of this document: its pin, at its place in the document less the scroll.
-    expect(f.overlayCalls().at(-1)).toBe('window.__pins([{"n":2,"x":100,"y":100}])')
+    expect(f.overlayCalls().filter((c) => c.startsWith('window.__pins(')).at(-1)).toBe('window.__pins([{"n":2,"x":100,"y":100}])')
     expect(await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: [second.id] })).toEqual({ cleared: 1 })
     await settle()
     expect(f.overlayCalls().at(-1)).toBe('window.__pins([])')
@@ -440,6 +440,132 @@ describe('frame picks live only in the host', () => {
     expect(await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: [first.id] })).toEqual({ cleared: 1 })
     await settle()
     expect(f.overlayCalls().at(-1)).toBe('window.__pins([{"n":2,"x":300,"y":100}])')
+  })
+})
+
+describe('the overlay shows one look at a time', () => {
+  const pinCalls = (f: F) => f.overlayCalls().filter((c) => c.startsWith('window.__pins('))
+  /** The overlay's next capturePage waits until `release` is called. */
+  function holdCapture(f: F) {
+    const entered = deferred<void>()
+    const gate = deferred<void>()
+    f.overlay().webContents.capturePage = vi.fn(async () => { entered.resolve(); await gate.promise; return fakeImage('overlay-bytes') })
+    return { entered: entered.promise, release: () => gate.resolve() }
+  }
+
+  it('a capture draws only its own frame\'s pins: a note cleared while it is taken does not bring an open pick\'s older document\'s pins onto it', async () => {
+    const f = fixture()
+    const first = await pickBuy(f)
+    boxSays(f, { t: 'submit', text: 'bir' })
+    await settle()
+    overlaySays(f, { t: 'pick', x: 310, y: 105 })
+    await vi.waitFor(() => expect(f.tab().pick).not.toBeNull())
+    boxSays(f, { t: 'submit', text: 'iki' })
+    await settle()
+    overlaySays(f, { t: 'pick', x: 10, y: 400 })
+    await vi.waitFor(() => expect(f.tab().pick).not.toBeNull())
+    const open = f.tab().pick
+    boxSays(f, { t: 'draft', text: 'açık kalsın', h: 56 })
+    // The tab moves to another document while the comment stays open on d1's frozen picture.
+    f.wc.emit('did-start-navigation', { isMainFrame: true })
+    f.wc.frameReply = () => frameOf({ docId: 'd2' })
+    f.wc.emit('did-finish-load')
+    await settle()
+    const held = holdCapture(f)
+    const capture = f.host.invoke({ op: 'capture-notes', conversationId: 4, tabId: 1 }) as Promise<any>
+    await held.entered
+    expect(pinCalls(f).at(-1)).toBe('window.__pins([])')
+    expect(await f.host.invoke({ op: 'clear-notes', conversationId: 4, tabId: 1, ids: [first.id] })).toEqual({ cleared: 1 })
+    await settle()
+    // What the capture is taking is d2 with d2's pins (none), not d1's note 2.
+    expect(pinCalls(f).at(-1)).toBe('window.__pins([])')
+    held.release()
+    expect(await capture).toEqual({ image: jpeg('overlay-bytes') })
+    await settle()
+    // Afterwards the open pick's frozen d1 picture is back, with d1's remaining pin.
+    expect(f.tab().pick).toBe(open)
+    expect(pinCalls(f).at(-1)).toBe('window.__pins([{"n":2,"x":300,"y":100}])')
+  })
+
+  it('a navigation during a capture leaves the overlay on the live look with nothing drawn: the captured document\'s pins do not come back', async () => {
+    const f = fixture()
+    await pickBuy(f)
+    boxSays(f, { t: 'submit', text: 'bir' })
+    await settle()
+    expect(pinCalls(f).at(-1)).toBe('window.__pins([{"n":1,"x":100,"y":100}])')
+    const held = holdCapture(f)
+    const capture = f.host.invoke({ op: 'capture-notes', conversationId: 4, tabId: 1 }) as Promise<any>
+    await held.entered
+    f.wc.url = 'https://other.example/'
+    f.wc.emit('did-start-navigation', { isMainFrame: true })
+    await settle()
+    held.release()
+    expect(await capture).toEqual({ image: jpeg('overlay-bytes') })
+    await settle()
+    const calls = f.overlayCalls()
+    expect(calls.slice(-3)).toEqual(['window.__boxes([],[0,0])', 'window.__pins([])', 'window.__freeze(null,null)'])
+    // The next refresh draws the new page.
+    f.wc.frameReply = () => frameOf({ docId: 'd2' })
+    await f.fire(0)
+    expect(f.overlayCalls().at(-1)).toBe('window.__pins([])')
+    expect(f.overlayCalls()).toContain(`window.__boxes(${JSON.stringify(frameOf().elements.map(({ box, id, kind }) => ({ ...box, id, kind })))},[0,0])`)
+  })
+
+  it('a click read that finishes on a hidden tab opens its pick there and leaves the shown tab\'s comment box alone', async () => {
+    const f = fixture()
+    await openPage(f)
+    await annotate(f, true)
+    const read = deferred<any>()
+    f.wc.frameReply = () => read.promise
+    overlaySays(f, { t: 'pick', x: 110, y: 105 })
+    await settle()
+    // The user opens a second tab in the same chat (tab 1 is now hidden), annotates it and picks there.
+    await f.host.invoke({ op: 'open', conversationId: 4, url: 'https://two.example/' })
+    const b = [...(f.host as any).tabs.values()].at(-1)
+    expect(b.id).not.toBe(1)
+    const bwc = f.answers(b.view.webContents)
+    bwc.pending = undefined
+    bwc.url = 'https://two.example/'
+    bwc.title = 'Two'
+    bwc.emit('did-finish-load')
+    await settle()
+    expect(await f.host.invoke({ op: 'annotate', conversationId: 4, tabId: b.id, on: true })).not.toHaveProperty('error')
+    f.overlay().webContents.emit('page-title-updated', {}, JSON.stringify({ q: 1, t: 'pick', x: 110, y: 105 }))
+    await vi.waitFor(() => expect(setCalls(f).length).toBeGreaterThan(0))
+    const pb = b.pick
+    expect((f.host as any).boxTab).toBe(b)
+    const hides = f.box().setVisible.mock.calls.filter((c: any[]) => c[0] === false).length
+    read.resolve(frameOf())
+    await settle()
+    await settle()
+    expect(f.tab().pick).not.toBeNull()
+    expect((f.host as any).boxTab).toBe(b)
+    expect(b.pick).toBe(pb)
+    expect(f.box().setVisible.mock.calls.filter((c: any[]) => c[0] === false)).toHaveLength(hides)
+  })
+
+  it('a capture with no navigation puts the open pick\'s frozen picture, outline and pins back as they were', async () => {
+    const f = fixture()
+    await pickBuy(f)
+    boxSays(f, { t: 'submit', text: 'bir' })
+    await settle()
+    overlaySays(f, { t: 'pick', x: 310, y: 105 })
+    await vi.waitFor(() => expect(f.tab().pick).not.toBeNull())
+    const pick = f.tab().pick
+    boxSays(f, { t: 'draft', text: 'açık kalsın', h: 56 })
+    await settle()
+    const pickFreeze = `window.__freeze(${JSON.stringify(pick.frame.image)},${JSON.stringify(pick.rect)})`
+    const pinsBefore = pinCalls(f).at(-1)
+    expect(pinsBefore).toBe('window.__pins([{"n":1,"x":100,"y":100}])')
+    expect(await f.host.invoke({ op: 'capture-notes', conversationId: 4, tabId: 1 })).toEqual({ image: jpeg('overlay-bytes') })
+    await settle()
+    const calls = f.overlayCalls()
+    const captured = calls.lastIndexOf(`window.__freeze(${JSON.stringify(jpeg('tab-bytes'))},null)`)
+    expect(captured).toBeGreaterThanOrEqual(0)
+    expect(calls.slice(captured + 1).filter((c) => c.startsWith('window.__freeze('))).toEqual([pickFreeze])
+    expect(pinCalls(f).at(-1)).toBe(pinsBefore)
+    expect(f.tab().pick).toBe(pick)
+    expect(pick.draft).toBe('açık kalsın')
   })
 })
 
