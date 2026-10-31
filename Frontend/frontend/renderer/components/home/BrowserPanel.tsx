@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLang } from '../../lib/i18n';
 import { addressToUrl, displayAddress } from '../../lib/browserAddress';
 import { cleanHistory, isMacPlatform, shortcutLabel, suggest, suggestedSites, tabShortcutOf, type HistoryItem } from '../../lib/browserSuggest';
+import { addNotesFromEvent, addPageChip, BROWSER_NOTES_CHANNEL, isAnnotateShortcut } from '../../lib/browserNotes';
 import { BrowserTabs, NewTabGrid, SuggestionList, type BrowserTab } from './BrowserTabs';
 
 /** Main-process event and invoke channel for the agent browser (docs/agent-browser.md). */
@@ -17,9 +18,11 @@ export interface BrowserState {
   userControl: boolean;
   tabs: BrowserTab[];
   activeTabId: number | null;
+  /** The selected tab is in annotate mode. */
+  annotating: boolean;
 }
 
-const EMPTY: BrowserState = { active: false, conversationId: null, url: '', title: '', loading: false, userControl: false, tabs: [], activeTabId: null };
+const EMPTY: BrowserState = { active: false, conversationId: null, url: '', title: '', loading: false, userControl: false, tabs: [], activeTabId: null, annotating: false };
 
 function toTabs(raw: unknown): BrowserTab[] {
   if (!Array.isArray(raw)) return [];
@@ -49,6 +52,7 @@ function toState(raw: any): BrowserState {
     userControl: raw.userControl === true,
     tabs: toTabs(raw.tabs),
     activeTabId: Number.isInteger(raw.activeTabId) ? raw.activeTabId : null,
+    annotating: raw.annotating === true,
   };
 }
 
@@ -91,6 +95,13 @@ const FULL_LEAVE_ICON = (
   <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M8 4v4H4M16 8h-4V4M12 16v-4h4M4 12h4v4" /></svg>
 );
 
+const MARK_ICON = (
+  <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h12v9H9l-3 3v-3H4z" /></svg>
+);
+const ASK_ICON = (
+  <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" /><path d="M8.2 8.2a1.9 1.9 0 1 1 2.6 1.8c-.6.3-.8.6-.8 1.2M10 13.6v.1" /></svg>
+);
+
 const STOP_ICON = <svg className="bp-stop-ic" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1" /></svg>;
 
 /**
@@ -131,6 +142,8 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
   const lastBounds = useRef('');
   const chatId = useRef(conversationId);
   chatId.current = conversationId;
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const prevRunning = useRef(running);
   const runningNow = useRef(running);
   const stopGen = useRef(0);
@@ -305,8 +318,36 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
       aria-label={t(`bp.${op}`)} title={t(`bp.${op}`)}>{glyph}</button>
   );
 
+  const toggleAnnotate = useCallback(() => {
+    const { active, activeTabId, annotating } = stateRef.current;
+    const id = chatId.current;
+    if (id != null && active && activeTabId != null) void invoke({ op: 'annotate', conversationId: id, tabId: activeTabId, on: !annotating });
+  }, []);
+  const askAboutPage = () => {
+    const tab = state.tabs.find(one => one.id === state.activeTabId);
+    if (conversationId != null && tab && /^https?:\/\//i.test(tab.url)) addPageChip(conversationId, { tabId: tab.id, url: tab.url, title: tab.title });
+  };
+
+  // Notes saved in the page arrive from main; the same chord in the page itself is claimed there.
+  useEffect(() => {
+    const off = ipcOf()?.on?.(BROWSER_NOTES_CHANNEL, addNotesFromEvent);
+    return () => { if (typeof off === 'function') off(); };
+  }, []);
+  useEffect(() => {
+    if (!visible || !state.active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.defaultPrevented || e.repeat || !isAnnotateShortcut(e, mac)) return;
+      if (document.querySelector('[aria-modal="true"], [role="dialog"], [role="alertdialog"]')) return;
+      e.preventDefault();
+      toggleAnnotate();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [visible, state.active, mac, toggleAnnotate]);
+
   const agentShown = state.tabs.find(tab => tab.id === state.activeTabId)?.agent === true;
   const listId = 'bp-suggest';
+  const markLabel = t('bp.markHint', { kisayol: shortcutLabel('Shift+E', mac) });
   const fullLabel = t(full ? 'bp.fullLeave' : 'bp.fullEnter', { kisayol: shortcutLabel('Shift+F', mac) });
   const fullToggle = onToggleFull && (
     <button type="button" className="bp-full" onClick={onToggleFull} aria-pressed={full}
@@ -340,6 +381,10 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
             {state.loading && <span className="bp-sr" role="status">{t('bp.loading')}</span>}
             {rows.length > 0 && <SuggestionList id={listId} items={rows} active={row} onPick={pick} />}
           </div>
+          <button type="button" className="bp-tool bp-mark" onClick={toggleAnnotate} aria-pressed={state.annotating}
+            aria-label={markLabel} title={markLabel}>{MARK_ICON}<span>{t('bp.mark')}</span></button>
+          <button type="button" className="bp-tool bp-ask" onClick={askAboutPage}
+            aria-label={t('bp.askPage')} title={t('bp.askPageHint')}>{ASK_ICON}<span>{t('bp.askPage')}</span></button>
           <button type="button" className="bp-stop" onClick={doStop} disabled={stop !== 'idle' || !running} title={t('bp.stopNote')}>
             {STOP_ICON}<span>{t(stop === 'busy' || stop === 'sent' ? 'bp.stopping' : stop === 'stopped' ? 'bp.stopped' : 'bp.stop')}</span>
           </button>

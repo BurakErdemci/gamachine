@@ -17,6 +17,7 @@ import { ModelAvatar } from './ModelAvatar';
 import { messageAgent } from './messageAgent';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { stripBidi } from '../../lib/modelText';
+import { parseBrowserContext } from '../../lib/browserNotes';
 import { SlashCommandCard } from './SlashCommandCard';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolGroup } from './ToolGroup';
@@ -37,6 +38,23 @@ import { modelFamily } from '../../lib/modelFamily';
  * that form is read literally; ISO stamps from the live stream go through Date. An unparsable
  * stamp shows no time rather than a wrong one.
  */
+/** The browser notes a sent message carried, as compact chips instead of the raw block. */
+function UserBrowserChips({ content }: { content: string }) {
+  const { t } = useLang();
+  const { blocks } = parseBrowserContext(content);
+  if (blocks.length === 0) return null;
+  return (
+    <div className="msg-browser-chips" data-testid="msg-browser-chips">
+      {blocks.map((block, i) => (
+        <span key={i} className="msg-browser-chip">
+          {block.kind === 'note' ? t(block.count === 1 ? 'chat.noteSummaryOne' : 'chat.noteSummary', { n: String(block.count) }) : t('chat.pageSummary')}
+          {block.site ? ` · ${stripBidi(block.site)}` : ''}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export const clockOf = (stamp?: string | null): string => {
   if (!stamp) return '';
   const naive = /^\d{4}-\d{2}-\d{2}[ T](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(stamp);
@@ -621,8 +639,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                         burada da geçiliyor: aksi halde link ölü kalırdı ve
                         "bazı linkler açılıyor, bazıları hiçbir şey yapmıyor"
                         diye açıklaması olmayan bir davranış doğardı. */}
-                    <MarkdownRenderer content={msg.content} onOpenFile={openFile} mentionTitles={mentionTitles} />
+                    <MarkdownRenderer content={parseBrowserContext(msg.content).text} onOpenFile={openFile} mentionTitles={mentionTitles} />
                   </div>
+                  <UserBrowserChips content={msg.content} />
                 </div>
               </article>
             )}

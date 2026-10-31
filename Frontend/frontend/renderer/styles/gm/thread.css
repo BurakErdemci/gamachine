@@ -884,6 +884,22 @@
   border-radius: 50%; background: var(--btn-bg); color: var(--btn-text); opacity: 0; transition: opacity var(--g-dur-tap) var(--ease);
 }
 .composer-att:hover .composer-att-x, .composer-att-x:focus-visible { opacity: 1; }
+/* browser notes and pages waiting to go with the message */
+.composer-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px; }
+.composer-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 4px 3px 8px;
+  font-size: var(--fs-meta); color: var(--ink); background: var(--paper-raised);
+  border: var(--line-w) solid var(--paper-line-strong); border-radius: 999px;
+}
+.composer-chip-n {
+  flex: none; min-width: 16px; height: 16px; padding: 0 4px; display: inline-grid; place-items: center;
+  border-radius: 999px; background: var(--btn-bg); color: var(--btn-text); font-size: 10px; font-weight: 600;
+}
+.composer-chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-chip-x { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; color: var(--ink-dim); }
+.composer-chip-x:hover, .composer-chip-x:focus-visible { color: var(--ink); background: var(--paper-sunk, var(--paper-bg-2)); }
+.msg-browser-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.msg-browser-chip { padding: 2px 8px; border-radius: 999px; font-size: var(--fs-meta); color: var(--ink); background: var(--paper-raised); border: var(--line-w) solid var(--paper-line-strong); }
 /* slash palette and @ menu: a menu over the box */
 .composer-pop {
   position: absolute; left: 8px; right: 8px; bottom: calc(100% + 6px); z-index: 50; overflow: hidden;

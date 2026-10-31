@@ -16,6 +16,7 @@ import {
   type ModeChanged, type RemoteMessage,
 } from '../../lib/remoteControl';
 import { handleRemoteIpcFrame } from '../../lib/remote/desktopRunner';
+import { addBrowserChips, captureNoteShots, clearBrowserPins, dropChatBrowser, formatBrowserContext, MAX_MESSAGE_IMAGES, notesTab, releaseBrowser, CAPTURE_WAIT_MS, RELEASE_WAIT_MS, takeBrowserChips, withinMs, type BrowserChip } from '../../lib/browserNotes';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
@@ -44,6 +45,8 @@ export type QueuedMessage = {
   images?: string[]; videos?: any[]; ultracode: boolean;
   /** Written on a phone (remote control); the bubble shows its device. */
   remote?: RemoteOrigin;
+  /** The browser notes and pages the composer held when it was queued; they join the message (text, tab, picture) only when it is sent. */
+  chips?: readonly BrowserChip[];
 };
 
 /** A message that came from a paired phone (`remote_message` frame). */
@@ -646,6 +649,7 @@ export const useChat = (
         controllersRef.current.get(id)?.abort();
         controllersRef.current.delete(id);
         dropConv(id);
+        dropChatBrowser(id);
         // Its browser tab goes with it; a failure only leaves an idle tab behind.
         Promise.resolve(ipc?.invoke?.('browser-live', { op: 'close', conversationId: id })).catch(() => {});
       }
@@ -836,9 +840,13 @@ export const useChat = (
     draft?: string,
     // Set for a message written on a paired phone (remote control).
     remote?: RemoteOrigin,
+    // Set when a queued message is sent: the chips it was queued with (the composer's belong to the next message).
+    queuedChips?: readonly BrowserChip[],
   ) => {
     if (!user || !API) return;
     const requested = targetOverride ?? activeConvIdRef.current;
+    // The composer's browser chips (page notes, pages asked about) ride along with the user's own message.
+    const chips = origin === 'user' && !remote ? (queuedChips ?? takeBrowserChips(requested)) : [];
     const slot = rt(keyOf(requested));
     // Only THIS chat's running turn blocks a send; other chats run independently.
     if (slot.loading) {
@@ -848,7 +856,7 @@ export const useChat = (
         const item: QueuedMessage = {
           id: ++eventSeqRef.current, text: messageContent, draft: draft ?? messageContent,
           code, lang, genMode, thinkingLevel, setPendingGenFiles, setPendingDelete,
-          images, videos, ultracode, remote,
+          images, videos, ultracode, remote, ...(chips.length > 0 ? { chips } : {}),
         };
         patchConv(keyOf(requested), r => ({ queue: [...r.queue, item] }));
         if (targetOverride == null) setChatInput('');
@@ -857,6 +865,8 @@ export const useChat = (
     }
     // A wake never jumps a queued user message (see `startWake`).
     if (origin === 'wake' && slot.queue.length > 0) return;
+    const browserContext = formatBrowserContext(chips);
+    if (browserContext) messageContent = messageContent.trim() ? `${messageContent}\n\n${browserContext}` : browserContext;
     patchConv(keyOf(requested), () => ({ loading: true }));
     if (origin === 'user') {
       lastSendArgsRef.current = { lang, genMode, thinkingLevel, setPendingGenFiles, setPendingDelete };
@@ -870,7 +880,7 @@ export const useChat = (
       created = await createNewConversation();
       const waiting = rt(NO_CONV).queue;
       patchConv(NO_CONV, () => ({ loading: false, ...(created ? { queue: [] } : { queuePaused: waiting.length > 0 }) }));
-      if (!created) return;
+      if (!created) { addBrowserChips(requested, chips); return; }
       patchConv(created, r => ({ loading: true, queue: [...waiting, ...r.queue] }));
     }
     const targetConvId: number = requested || created!;
@@ -878,7 +888,16 @@ export const useChat = (
     // same when it is drained, since the drain sends it through here).
     if (origin === 'user') {
       try {
-        Promise.resolve((window as any).ipc?.invoke?.('browser-live', { op: 'release', conversationId: targetConvId })).catch(() => {});
+        // Notes from one tab make that tab the agent's: it is selected before the release adopts the selection.
+        const released = releaseBrowser(targetConvId, notesTab(chips));
+        if (chips.length > 0) {
+          await withinMs(released, RELEASE_WAIT_MS);
+          // The picture is taken while the notes' frames and pins are still drawn; the pins of the sent notes go after it.
+          // The backend refuses more than MAX_MESSAGE_IMAGES: the user's own pictures come first, the agent tab's shot next.
+          const shots = (await withinMs(captureNoteShots(targetConvId, chips), CAPTURE_WAIT_MS)) ?? [];
+          const room = Math.max(0, MAX_MESSAGE_IMAGES - (images?.length ?? 0));
+          if (shots.length > 0 && room > 0) images = [...(images ?? []), ...shots.slice(0, room)];
+        }
       } catch { /* the send must not depend on the browser */ }
     }
     // Yeni tur: bu sohbetin önceki turundan kalmış bekleyen onay/soru ve
@@ -980,6 +999,14 @@ export const useChat = (
       videosToSend = resolved;
     }
 
+    // The chips and pins go only once the server took the message; a refused or failed send gives them back.
+    let chipsSettled = chips.length === 0;
+    const settleChips = (accepted: boolean) => {
+      if (chipsSettled) return;
+      chipsSettled = true;
+      if (accepted) clearBrowserPins(targetConvId, chips);
+      else addBrowserChips(targetConvId, chips);
+    };
     try {
       const response = await fetch(`${API}/chat-stream`, {
         method: 'POST',
@@ -1004,6 +1031,7 @@ export const useChat = (
         }),
       });
 
+      settleChips(response.ok);
       const reader = response.body?.getReader();
       const decoder = new TextDecoder('utf-8');
       if (reader) {
@@ -1258,6 +1286,7 @@ export const useChat = (
       }
       fetchConversations(user.id);
     } catch (err: any) {
+      settleChips(false);
       // After `done`/`response` the answer is complete and the server has it;
       // a later failure is not the user's to see, and must not block the refetch.
       if (err?.name !== 'AbortError' && ownsTurn() && !finishedCleanly) {
@@ -1319,7 +1348,7 @@ export const useChat = (
     void sendMessageRef.current(
       next.text, next.code, next.lang, next.genMode, next.thinkingLevel,
       next.setPendingGenFiles, next.setPendingDelete,
-      next.images, next.ultracode, next.videos, 'user', convId, undefined, next.remote,
+      next.images, next.ultracode, next.videos, 'user', convId, undefined, next.remote, next.chips ?? [],
     );
     return true;
   }, [patchConv, rt]);
@@ -1574,12 +1603,19 @@ export const useChat = (
   }, [patchConv, rt]);
 
   const deleteQueued = useCallback((itemId: number) => {
-    removeQueued(keyOf(activeConvIdRef.current), itemId);
+    const key = keyOf(activeConvIdRef.current);
+    const item = removeQueued(key, itemId);
+    // A message that will never be sent takes its notes' pins with it.
+    if (item?.chips?.length && key) clearBrowserPins(key, item.chips);
   }, [removeQueued]);
 
-  // Takes the message out of the queue and hands it back for the composer.
-  const editQueued = useCallback((itemId: number) =>
-    removeQueued(keyOf(activeConvIdRef.current), itemId), [removeQueued]);
+  // Takes the message out of the queue and hands it back for the composer (its notes go back into the composer's chips).
+  const editQueued = useCallback((itemId: number) => {
+    const key = keyOf(activeConvIdRef.current);
+    const item = removeQueued(key, itemId);
+    if (item?.chips?.length) addBrowserChips(key, item.chips);
+    return item;
+  }, [removeQueued]);
 
   // "Send next" on a paused queue. While the chat is busy the message stays
   // at the head and goes out at the next clean turn end.
