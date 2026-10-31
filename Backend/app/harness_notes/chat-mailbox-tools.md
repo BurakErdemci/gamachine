@@ -1,6 +1,6 @@
 ---
 title: How do list_chats and send_chat_message let me leave a note in another chat?
-keywords: sohbet, not, posta, dal, mention, @, başka sohbet, mailbox, chat, note, message, branch, send
+keywords: sohbet, not, mesaj, posta, dal, mention, @, başka sohbet, mailbox, chat, note, message, branch, send
 covers: list_chats, send_chat_message
 ---
 list_chats and send_chat_message let one chat's agent leave a note for another chat or branch of the same user.

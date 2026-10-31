@@ -115,6 +115,8 @@ a = Analysis(
         'unity_ai_mcp.tools.bash_tool',
         #   backend mail-mcp-server   → unity_ai_mcp.mail_server.main
         'unity_ai_mcp.mail_server',
+        #   backend mcp-server --harness-only → unity_ai_mcp.harness_server (Claude chats' harness tools)
+        'unity_ai_mcp.harness_server',
         'unity_ai_mcp.tools.mailbox_tools',
         'unityai_cli',
         'providers.codex_unitymcp_bridge',

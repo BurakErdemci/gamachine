@@ -177,10 +177,17 @@ def main():
 
     parser = argparse.ArgumentParser(description="UnityAI MCP Server")
     parser.add_argument("--workspace", default=os.environ.get("WORKSPACE_PATH", ""))
+    # Claude chats' harness-only server (harness_notes.claude_server_entry): reusing this
+    # subcommand keeps the frozen binary's dispatch list in main.py unchanged.
+    parser.add_argument("--harness-only", action="store_true")
     args, _ = parser.parse_known_args()
     _workspace_path = args.workspace or os.getcwd()
 
-    mcp = create_server()
+    if args.harness_only:
+        from unity_ai_mcp.harness_server import create_server as create_harness_server
+        mcp = create_harness_server()
+    else:
+        mcp = create_server()
     mcp.run(transport="stdio")
 
 

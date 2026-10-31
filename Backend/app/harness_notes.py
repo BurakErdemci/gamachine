@@ -8,6 +8,7 @@ only the fields named in `_STATUS_CONTEXT_FIELDS` are copied from the run contex
 """
 import contextvars
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -30,6 +31,9 @@ TOOL_SEARCH = "harness_search"
 TOOL_READ = "harness_read"
 TOOL_STATUS = "harness_status"
 HARNESS_TOOLS = (TOOL_SEARCH, TOOL_READ, TOOL_STATUS)
+# Claude SDK chats get the three tools from their own stdio server (unity_ai_mcp/harness_server.py).
+CLAUDE_SERVER_NAME = "gamachineHarness"
+CLAUDE_TOOL_NAMES = frozenset(f"mcp__{CLAUDE_SERVER_NAME}__{name}" for name in HARNESS_TOOLS)
 
 _FOLD = str.maketrans("ıİşŞğĞüÜöÖçÇ", "iissgguuoocc")
 _WORD = re.compile(r"[a-z0-9_]+")
@@ -40,6 +44,10 @@ _WEIGHT_TITLE = 5
 _WEIGHT_KEYWORD = 4
 _WEIGHT_BODY = 1
 _BODY_HITS_CAP = 3
+# An exact token match counts twice a prefix match, so the word itself outranks its inflections.
+_EXACT = 2
+_PREFIX = 1
+_MIN_PREFIX = 4
 
 _STATUS_CONTEXT_FIELDS = ("provider_type", "model_name", "language", "read_only")
 _RUN_CONTEXT: contextvars.ContextVar = contextvars.ContextVar("harness_run_context", default={})
@@ -110,10 +118,27 @@ def notes() -> dict:
     return _notes
 
 
-def _matches(word: str, tokens: set) -> bool:
-    if word in tokens:
-        return True
-    return len(word) >= 4 and any(token.startswith(word) for token in tokens)
+def _prefix_pair(a: str, b: str) -> bool:
+    """One is a prefix of the other and the shorter has at least `_MIN_PREFIX` letters, so an inflected
+    Turkish word meets its stem ("tarayicida" / "tarayici", "sohbetler" / "sohbet") both ways round."""
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= _MIN_PREFIX and long.startswith(short)
+
+
+def _strength(word: str, token: str) -> int:
+    if word == token:
+        return _EXACT
+    return _PREFIX if _prefix_pair(word, token) else 0
+
+
+def _best(word: str, tokens) -> int:
+    return max((_strength(word, token) for token in tokens), default=0)
+
+
+def _hits(word: str, tokens, cap: Optional[int] = None) -> int:
+    """Summed match strength over the tokens, strongest first, at most `cap` of them."""
+    found = sorted((s for s in (_strength(word, token) for token in tokens) if s), reverse=True)
+    return sum(found[:cap])
 
 
 def _score(note: Note, words: list) -> int:
@@ -121,22 +146,22 @@ def _score(note: Note, words: list) -> int:
     keywords = set(_words(" ".join(note.keywords)))
     covers = {fold(name) for name in note.covers}
     body = _words(note.body)
-    body_set = set(body)
     score = 0
     for word in words:
         if word in covers:
-            score += _WEIGHT_COVERS
-        if _matches(word, title):
-            score += _WEIGHT_TITLE
-        if _matches(word, keywords):
-            score += _WEIGHT_KEYWORD
-        if _matches(word, body_set):
-            score += _WEIGHT_BODY * min(_BODY_HITS_CAP, sum(1 for token in body if token.startswith(word)))
+            score += _WEIGHT_COVERS * _EXACT
+        score += _WEIGHT_TITLE * _best(word, title)
+        # Every keyword the word meets counts: a note listing "görüntü" next to "ekran görüntüsü" is the
+        # closer answer to "ekran görüntüsü" than one listing only the phrase.
+        score += _WEIGHT_KEYWORD * _hits(word, keywords)
+        score += _WEIGHT_BODY * _hits(word, body, _BODY_HITS_CAP)
     return score
 
 
 def search(query: str, limit: int = 5) -> list:
     """Best notes for the query: [{id, title, summary}], best first; empty when nothing matches."""
+    if not isinstance(query, str):
+        return []
     words = [word for word in _words(query) if len(word) > 1]
     if not words:
         return []
@@ -217,3 +242,38 @@ async def status(context: Optional[dict] = None, tools: Optional[list] = None) -
     except Exception:
         logger.exception("[harness_notes] unity mcp state unavailable")
     return result
+
+
+def harness_server_argv() -> list:
+    """argv of the harness-only stdio MCP server (dev and frozen builds differ).
+
+    It rides the existing `mcp-server` subcommand with `--harness-only`, so the frozen
+    binary needs no new dispatch entry in main.py.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "mcp-server", "--harness-only"]
+    main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
+    return [sys.executable, main_py, "mcp-server", "--harness-only"]
+
+
+def claude_server_entry(conversation_id) -> Optional[dict]:
+    """The Claude SDK `mcp_servers` entry for the harness tools, or None without a chat.
+
+    Same shape as `agentic.mailbox.claude_server_entry`, and built only from values that do not change between
+    turns of a chat, because the session is rebuilt whenever its `mcp_servers` differ. No token: harness_status
+    reads it from the 0600 token file, like the other bridges.
+    """
+    from spawn_env import CONVERSATION_ENV
+    if type(conversation_id) is not int or conversation_id <= 0:
+        return None
+    argv = harness_server_argv()
+    return {
+        "type": "stdio",
+        "command": argv[0],
+        "args": argv[1:],
+        "env": {
+            CONVERSATION_ENV: str(conversation_id),
+            "UNITYAI_URL": os.environ.get(
+                "UNITYAI_URL", os.environ.get("ANTIGRAVITY_URL", "http://localhost:8000")),
+        },
+    }

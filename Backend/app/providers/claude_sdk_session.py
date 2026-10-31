@@ -242,6 +242,8 @@ _AUTO_ALLOW_TOOLS = {
 }
 # The chat-mailbox server's tools, allowed without a card (see `_can_use_tool`).
 from agentic.mailbox import CLAUDE_TOOL_NAMES as _MAIL_TOOLS  # noqa: E402
+# The harness-notes server's tools, allowed without a card, read-only sessions included.
+from harness_notes import CLAUDE_TOOL_NAMES as _HARNESS_TOOLS  # noqa: E402
 from computer_use import registration  # noqa: E402
 from browser_use import registration as browser_registration  # noqa: E402
 
@@ -1091,6 +1093,10 @@ class ClaudeSDKSession:
         # Kütük kaynağa karşı bir ayrışma testiyle bağlı; buraya kopyalamak
         # kütüğün kapatmak için var olduğu sapma sınıfını geri getirirdi.
         if is_unity_mcp_read_only(tool_name, input_data):
+            return PermissionResultAllow(updated_input=input_data)
+        # harness_search / harness_read / harness_status only read notes and
+        # state, so they pass in every mode and before the read-only branch.
+        if tool_name in _HARNESS_TOOLS:
             return PermissionResultAllow(updated_input=input_data)
 
         # Read-only (side chat): every other tool is denied here, BEFORE the

@@ -284,11 +284,21 @@ async def _send_chat_message(to_chat_id=None, message=None, conversation_id=None
     return {"success": False, "error": text}
 
 
+def _read_only_status_lists(name: str) -> bool:
+    """A read-only run lists a tool only when it can run at least one call of it: a built-in the runner
+    allows, or a Unity tool the ledger reads at tool level or gives a read action (execute_code's
+    get_history counts). Other tools are not offered to a read-only turn."""
+    from agentic.agent_runner import _BUILTIN_TOOL_NAMES, _read_only_tool_allowed
+    from unity_tool_policy import has_read_call, strip_prefix
+    if name in _BUILTIN_TOOL_NAMES:
+        return _read_only_tool_allowed(name, {})
+    return has_read_call(strip_prefix(name) or name)
+
+
 async def _harness_status() -> Dict[str, Any]:
     definitions = _all_tool_definitions()
     if harness_notes.run_context().get("read_only"):
-        from agentic.agent_runner import _read_only_tool_declared
-        definitions = [t for t in definitions if _read_only_tool_declared(t["name"])]
+        definitions = [t for t in definitions if _read_only_status_lists(t["name"])]
     state = await harness_notes.status(tools=[t["name"] for t in definitions])
     return {"success": True, "content": json.dumps(state, ensure_ascii=False)}
 

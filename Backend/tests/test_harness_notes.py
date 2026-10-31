@@ -210,3 +210,185 @@ def test_notes_resolve_from_source_and_from_a_packaged_layout(monkeypatch, tmp_p
     monkeypatch.setattr(harness_notes, "NOTES_DIR", harness_notes._notes_dir())
     monkeypatch.setattr(harness_notes, "_notes", None)
     assert list(harness_notes.notes()) == ["only"]
+
+
+def _claude_session_servers(monkeypatch, tmp_path, read_only):
+    import subprocess
+    import types
+    from agentic import agent_runner
+    from providers import claude_sdk_session
+    captured = []
+
+    class _Sess:
+        session_id = None
+        auto_approve = False
+
+        def __init__(self, kw):
+            captured.append(kw)
+
+        async def stream(self, _m):
+            return
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(unity_mcp_manager, "mcp_url", lambda host="localhost": None)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0))
+    monkeypatch.setattr(claude_sdk_session, "get_session", lambda cid, **kw: _Sess(kw))
+    runner = agent_runner.AgentRunner(provider_type="subscription", api_key="", model_name="claude-x",
+                                      workspace_path=str(tmp_path), conversation_id=9,
+                                      generation_mode="auto", read_only=read_only)
+
+    async def run():
+        async for _ in runner._run_claude_session("hi"):
+            pass
+
+    asyncio.run(run())
+    return captured[0]["mcp_servers"]
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_claude_sessions_mount_the_harness_server_in_both_modes(monkeypatch, tmp_path, read_only):
+    from unity_ai_mcp import harness_server
+    servers = _claude_session_servers(monkeypatch, tmp_path, read_only)
+    entry = servers[harness_notes.CLAUDE_SERVER_NAME]
+    assert entry["type"] == "stdio" and entry["args"][-2:] == ["mcp-server", "--harness-only"]
+    names = sorted(tool.name for tool in asyncio.run(harness_server.create_server().list_tools()))
+    assert names == sorted(harness_notes.HARNESS_TOOLS)
+    assert harness_notes.CLAUDE_TOOL_NAMES == {
+        f"mcp__gamachineHarness__{name}" for name in harness_notes.HARNESS_TOOLS}
+
+
+def test_harness_server_entry_matches_dev_and_frozen_builds(monkeypatch):
+    import sys
+    assert harness_notes.claude_server_entry(None) is None
+    assert harness_notes.claude_server_entry(0) is None
+    entry = harness_notes.claude_server_entry(5)
+    assert entry == harness_notes.claude_server_entry(5), "must not change between turns"
+    assert entry["env"]["GAMACHINE_CONVERSATION_ID"] == "5"
+    assert not any(word in key.lower() for key in entry["env"] for word in SECRET_WORDS)
+    assert entry["args"][0].endswith("main.py") and Path(entry["args"][0]).is_file()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert harness_notes.harness_server_argv() == [sys.executable, "mcp-server", "--harness-only"]
+    spec = (ROOT / "Backend" / "backend.spec").read_text(encoding="utf-8")
+    assert "'unity_ai_mcp.harness_server'" in spec
+
+
+def test_the_mcp_server_subcommand_starts_the_harness_server_with_its_flag(monkeypatch):
+    from unity_ai_mcp import harness_server, server
+    started = []
+
+    class _Fake:
+        def __init__(self, name):
+            self.name = name
+
+        def run(self, transport):
+            started.append((self.name, transport))
+
+    monkeypatch.setattr(server, "_redirect_stderr_to_log", lambda: None)
+    monkeypatch.setattr(harness_server, "create_server", lambda: _Fake("harness"))
+    monkeypatch.setattr(server, "create_server", lambda: _Fake("unityai"))
+    monkeypatch.setattr("sys.argv", ["backend", "--harness-only"])
+    server.main()
+    monkeypatch.setattr("sys.argv", ["backend", "--workspace", "."])
+    server.main()
+    assert started == [("harness", "stdio"), ("unityai", "stdio")]
+
+
+@pytest.mark.parametrize("mode", ["auto", "balanced", "step"])
+def test_claude_allows_the_harness_tools_in_read_only_and_still_denies_writes(monkeypatch, tmp_path, mode):
+    import os
+    from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+    from agentic import approval_mode
+    from providers.claude_sdk_session import ClaudeSDKSession
+    monkeypatch.setattr(approval_mode, "current_mode", lambda: mode)
+    ws = str(tmp_path)
+    for read_only in (False, True):
+        sess = ClaudeSDKSession(77, cwd=ws, auto_approve=(mode == "auto"), read_only=read_only)
+        for name in sorted(harness_notes.CLAUDE_TOOL_NAMES):
+            decision = asyncio.run(sess._can_use_tool(name, {"query": "browser"}, None))
+            assert isinstance(decision, PermissionResultAllow), (mode, read_only, name)
+    read_only = ClaudeSDKSession(78, cwd=ws, auto_approve=True, read_only=True)
+    for tool, args in (("Write", {"file_path": os.path.join(ws, "a.cs"), "content": "x"}),
+                       ("Bash", {"command": "echo hi"}),
+                       ("mcp__gamachineHarness__write_file", {"file_path": "a"})):
+        assert isinstance(asyncio.run(read_only._can_use_tool(tool, args, None)), PermissionResultDeny), tool
+
+
+def test_notes_state_the_balanced_write_card_rule_and_the_harness_sources():
+    for note_id in ("approval-modes", "file-write-delete-tools"):
+        lines = [line for line in harness_notes.read(note_id)["content"].splitlines() if "write_file" in line]
+        rule = [line for line in lines if "balanced" in line]
+        assert rule, note_id
+        assert all(word in rule[0] for word in (".git", "ProjectSettings", "Packages", ".mcp.json")), note_id
+    offered = next(line for line in harness_notes.read("read-only-runs")["content"].splitlines()
+                   if line.startswith("- Offered built-in tools"))
+    assert all(name in offered for name in harness_notes.HARNESS_TOOLS)
+    for note_id in ("harness-tools", "providers-api-vs-cli"):
+        assert "gamachineHarness" in harness_notes.read(note_id)["content"], note_id
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("tarayıcıda", "browser"),
+    ("sohbetler", "chat-mailbox-tools"),
+    ("mesaj", "chat-mailbox-tools"),
+    ("telefondan", "remote-phone-limits"),
+    ("araçlar", "harness-tools"),
+    ("dosyaları silebilir miyim", "file-write-delete-tools"),
+    ("ekran görüntüsü alabilir miyim", "unity-screenshot-tools"),
+])
+def test_search_meets_inflected_turkish_words(query, expected):
+    ids = [item["id"] for item in harness_notes.search(query, limit=2)]
+    assert any(note_id.startswith(expected) for note_id in ids), (query, ids)
+
+
+def test_search_prefers_the_exact_word_and_rejects_non_strings():
+    for query in (None, 3, ["browser"], {"q": "x"}):
+        assert harness_notes.search(query) == []
+    assert harness_notes._strength("sohbet", "sohbet") > harness_notes._strength("sohbet", "sohbetler") > 0
+    assert harness_notes._strength("sohbetler", "sohbet") > 0
+    assert harness_notes._strength("dal", "dallar") == 0, "a stem under 4 letters must not prefix-match"
+
+
+def test_read_only_status_lists_only_tools_with_a_runnable_call(monkeypatch, unity_stub):
+    from types import SimpleNamespace
+    from agentic import agent_runner
+    from tools import unity_mcp_tools as unity
+    manifest = json.loads((ROOT / "unity-mcp" / "manifest.json").read_text(encoding="utf-8"))
+    names = [tool["name"] for tool in manifest["tools"]]
+    monkeypatch.setattr(unity, "_cached_tools", [])
+    monkeypatch.setattr(unity, "_cached_functions", {})
+    monkeypatch.setattr(unity, "_cached_generation", unity._generation)
+    tools = [SimpleNamespace(name=name, description="manifest tool", input_schema={},
+                             meta={"fastmcp": {"tags": [f"group:{unity.EXPORTED_GROUPS[0]}"]}})
+             for name in names]
+    assert unity._apply_tool_list(tools, unity._generation)
+    offered = {t["name"] for t in unity.get_unity_tool_definitions()}
+    assert "execute_code" in offered and "apply_text_edits" in offered
+
+    token = harness_notes.set_run_context(read_only=True)
+    try:
+        listed = set(json.loads(asyncio.run(
+            tool_registry.execute_tool_async("harness_status", {}, ".", 1))["content"])["enabled_tools"])
+    finally:
+        harness_notes.reset_run_context(token)
+
+    ledger = json.loads((ROOT / "unity-mcp" / "Server" / "src" / "services" / "registry"
+                         / "tool_actions.json").read_text(encoding="utf-8"))["tools"]
+    readable = {name for name, entry in ledger.items()
+                if entry.get("tool_level") == "read" or entry.get("read_actions")}
+    assert "execute_code" in listed, "its get_history action is runnable read-only"
+    assert "apply_text_edits" not in listed, "write-only Unity tool"
+    assert listed & offered == readable & offered
+    builtins = agent_runner._BUILTIN_TOOL_NAMES
+    assert listed & builtins == set(agent_runner._READ_ONLY_BUILTIN_TOOLS)
+    for name in builtins - agent_runner._READ_ONLY_BUILTIN_TOOLS:
+        assert name not in listed, name
+
+
+def test_has_read_call_reads_the_ledger_and_fails_closed(monkeypatch):
+    import unity_tool_policy
+    assert unity_tool_policy.has_read_call("execute_code")
+    assert unity_tool_policy.has_read_call("compile_status")
+    assert not unity_tool_policy.has_read_call("apply_text_edits")
+    assert not unity_tool_policy.has_read_call("no_such_tool")
+    monkeypatch.setattr(unity_tool_policy, "_load", lambda: None)
+    assert not unity_tool_policy.has_read_call("compile_status")

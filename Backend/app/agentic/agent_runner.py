@@ -2376,6 +2376,11 @@ Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş.""
         # chat never mails, so its read-only session does not get it.
         from computer_use import registration
         from browser_use import registration as browser_registration
+        # Harness notes: the guide tells every chat to call harness_search, and
+        # the three tools only read, so read-only sessions get them too.
+        _harness_entry = harness_notes.claude_server_entry(self.conversation_id)
+        if _harness_entry is not None:
+            mcp_servers_cfg[harness_notes.CLAUDE_SERVER_NAME] = _harness_entry
         if not getattr(self, "read_only", False):
             from agentic import mailbox as _mailbox
             _mail_entry = _mailbox.claude_server_entry(self.conversation_id)

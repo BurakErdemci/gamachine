@@ -307,8 +307,9 @@ def test_claude_session_names_its_conversation_to_the_unity_mcp_server(monkeypat
     assert unity["headers"] == {"X-API-Key": "k", "X-Gamachine-Conversation": "7"}
     assert unity["type"] == "http"
     # The backend's own unityai server stays out of the Claude session; only
-    # the mail-only server (two tools, test_mailbox.py) joins unityMCP.
-    assert set(kwargs["mcp_servers"]) == {"unityMCP", "gamachineMail"}
+    # the mail-only server (two tools, test_mailbox.py) and the harness-notes
+    # server (three read-only tools, test_harness_notes.py) join unityMCP.
+    assert set(kwargs["mcp_servers"]) == {"unityMCP", "gamachineMail", "gamachineHarness"}
 
 
 @pytest.mark.parametrize("conversation_id", [None, 0])

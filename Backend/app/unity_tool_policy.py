@@ -146,6 +146,22 @@ def is_unity_mcp_read_only(tool_name: str, params: Mapping[str, Any] | None = No
         return False
 
 
+def has_read_call(bare_name: str) -> bool:
+    """Can some call of this unityMCP tool pass as read-only? True when the ledger reads it at tool
+    level or lists at least one read action. A missing ledger or an unknown tool answers False."""
+    module = _load()
+    if module is None:
+        return False
+    try:
+        entry = module.tool_entry(bare_name)
+        if entry is None:
+            return False
+        return entry.get("tool_level") == "read" or bool(module._action_list(entry, "read_actions"))
+    except Exception as e:
+        logger.warning(f"[unityMCP politika] '{bare_name}' okuma sorgusu yapılamadı: {e}")
+        return False
+
+
 def unity_action_risk(bare_name: str, params: Mapping[str, Any] | None = None) -> str:
     """"read", "routine" (a write the balanced mode runs without a card),
     "critical", or "unknown" (a tool the ledger does not know). A missing
