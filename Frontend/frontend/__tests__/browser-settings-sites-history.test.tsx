@@ -508,6 +508,120 @@ describe('the removal window and the reopen stack, turn 4', () => {
   })
 })
 
+describe('the edges of the removal window, turn 5', () => {
+  const login = () => ({ name: 'login', value: 'v', domain: 'example.com', path: '/', secure: true })
+  const origins = (f: ReturnType<typeof tabFixture>) => f.session.clearStorageData.mock.calls.map((c: any) => c[0].origin)
+  const addresses = async () => [{ address: '93.184.216.34', family: 4 }]
+  /** Opens and closes `url` in chat 1, then starts its reopen with the address check held until `refuse`. */
+  const pendingReopen = async (f: ReturnType<typeof tabFixture>, url: string) => {
+    const payload = (await f.host.invoke({ op: 'open', conversationId: 1, url })) as any
+    f.views[f.views.length - 1].webContents.url = url
+    await f.host.invoke({ op: 'close-tab', conversationId: 1, tabId: payload.activeTabId })
+    let answer!: (addresses: { address: string; family: number }[]) => void
+    f.net.lookup = () => new Promise((resolve) => { answer = resolve })
+    const reopening = f.host.invoke({ op: 'reopen-tab', conversationId: 1 })
+    await vi.waitFor(() => expect(answer).toBeDefined())
+    return {
+      refused: async () => {
+        answer([{ address: '10.0.0.8', family: 4 }])
+        expect(await reopening).toEqual({ error: 'url_not_allowed' })
+        f.net.lookup = addresses
+        return f.host.invoke({ op: 'reopen-tab', conversationId: 1 })
+      },
+    }
+  }
+
+  it('closes a tab that reaches the site between the call and the first cookie read, and clears its origin', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const read = f.session.cookies.get.getMockImplementation()
+    f.session.cookies.get.mockImplementationOnce(async () => { await gate; return read() })
+    const removal = f.host.invoke({ op: 'site-remove', site: 'example.com' })
+    await f.host.invoke({ op: 'open', conversationId: 7, url: 'https://early.example.com:8443/?token=x' })
+    expect(f.views[0].webContents.destroyed).toBe(true)
+    release()
+    expect(await removal).toEqual({ ok: true, removed: 1 })
+    expect(origins(f)).toContain('https://early.example.com:8443')
+  })
+
+  it('a refused site-remove closes its window, so the site loads normally afterwards', async () => {
+    const f = tabFixture()
+    f.jar.push({ ...login(), domain: 'alice.github.io' }, { ...login(), domain: 'bob.github.io' })
+    expect(await f.host.invoke({ op: 'site-remove', site: 'github.io' })).toEqual({ error: 'bad_args' })
+    await f.open(1, 'https://alice.github.io/')
+    expect(f.views[0].webContents.destroyed).toBe(false)
+  })
+
+  it('clears the origin of a closed tab whose reopen is still checking its address', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    const { refused } = await pendingReopen(f, 'https://hidden.example.com:8443/?token=x')
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 1 })
+    expect(origins(f)).toContain('https://hidden.example.com:8443')
+    expect(await refused()).toEqual({ error: 'nothing_to_reopen' })
+  })
+
+  for (const ending of ['did-fail-load', 'did-stop-loading'] as const) {
+    it(`a main-frame navigation that ends in ${ending} without a commit no longer makes its tab a site tab`, async () => {
+      const f = tabFixture()
+      f.jar.push(login())
+      const payload = (await f.host.invoke({ op: 'open', conversationId: 1, url: 'https://unrelated.example/keep' })) as any
+      const wc = f.views[0].webContents
+      wc.loadURL.mockImplementation(async () => {})
+      await f.host.invoke({ op: 'navigate', conversationId: 1, tabId: payload.activeTabId, url: 'https://example.com/unreachable' })
+      if (ending === 'did-fail-load') wc.emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'https://example.com/unreachable', true)
+      else wc.emit('did-stop-loading')
+      expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 1 })
+      expect(wc.destroyed).toBe(false)
+    })
+  }
+
+  it('an aborted navigation (-3) that another one replaced keeps the new target', async () => {
+    const f = tabFixture()
+    f.jar.push(login())
+    await f.open(1, 'https://other.org/')
+    const wc = f.views[0].webContents
+    wc.emit('did-start-navigation', { url: 'https://example.com/next', isMainFrame: true })
+    wc.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'https://other.org/old', true)
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 1 })
+    expect(wc.destroyed).toBe(true)
+  })
+
+  describe('a failed reopen and a forget that ran while it was in flight', () => {
+    const clock = { now: 10_000_000 }
+    const reopenAfter = async (request: Record<string, unknown> | null, laterBy = 0) => {
+      const f = tabFixture(memoryHistory(() => clock.now).history, () => clock.now)
+      f.jar.push(login())
+      const { refused } = await pendingReopen(f, 'https://unrelated.example/keep')
+      clock.now += laterBy
+      if (request) expect(await f.host.invoke(request)).toMatchObject({ ok: true })
+      return refused()
+    }
+
+    for (const [name, request, laterBy] of [
+      ['an unrelated site-remove', { op: 'site-remove', site: 'example.com' }, 0],
+      ['a history-remove of another url', { op: 'history-remove', url: 'https://absent.example/deleted' }, 0],
+      ['a history-clear hour that does not reach back to the close', { op: 'history-clear', range: 'hour' }, 3_600_001],
+    ] as const) {
+      it(`keeps the page after ${name}`, async () => {
+        expect(await reopenAfter(request, laterBy)).not.toEqual({ error: 'nothing_to_reopen' })
+      })
+    }
+
+    for (const [name, request] of [
+      ['a history-remove of its url', { op: 'history-remove', url: 'https://unrelated.example/keep' }],
+      ['a history-clear hour that covers the close', { op: 'history-clear', range: 'hour' }],
+      ['a site-remove of its site', { op: 'site-remove', site: 'unrelated.example' }],
+    ] as const) {
+      it(`drops the page after ${name}`, async () => {
+        expect(await reopenAfter(request)).toEqual({ error: 'nothing_to_reopen' })
+      })
+    }
+  })
+})
+
 describe('BrowserUsePage sites and history', () => {
   let invoke: ReturnType<typeof vi.fn>
   const calls = (op: string) => invoke.mock.calls.filter((c) => c[1]?.op === op).map((c) => c[1])
