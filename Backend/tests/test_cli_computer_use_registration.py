@@ -174,7 +174,12 @@ def test_kimi_keeps_a_legacy_block(tmp_path, monkeypatch):
     with open(path, "w", encoding="utf-8") as f:
         f.write(legacy)
     provider._write_kimi_permissions()
-    assert open(path, encoding="utf-8").read() == legacy
+    text = open(path, encoding="utf-8").read()
+    assert text.startswith(legacy)
+    for pattern in provider._KIMI_NEWER_ALLOW_PATTERNS:
+        assert text.count(f'"{pattern}"') == 1
+    provider._write_kimi_permissions()
+    assert open(path, encoding="utf-8").read() == text
 
 
 def _opencode_mcp(provider, ws):

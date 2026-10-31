@@ -31,6 +31,7 @@ class KimiProvider(BaseCLIProvider):
     # kodu bu sağlayıcıda CANLI SINANAMIYOR (abonelik yok, CLI kurulu değil), ve
     # sınanmamış bir dosya-değiştirme kolu kullanıcının config'inde çalıştırılmaz.
     _KIMI_LEGACY_MARKER = "# >>> unity-architect managed (permission rules) >>>"
+    _KIMI_NEWER_ALLOW_PATTERNS = ("mcp__gamachineComputer__*", "mcp__gamachineBrowser__*")
     _KIMI_PERMISSION_BLOCK = (
         "\n" + _KIMI_MANAGED_MARKER + "\n"
         "# Built-in yazma/shell araçları DENY (deny mutlak — --print/--yolo bunu ezmez).\n"
@@ -146,12 +147,21 @@ class KimiProvider(BaseCLIProvider):
                     except OSError:
                         pass
             return
+        to_write = self._KIMI_PERMISSION_BLOCK
         if self._KIMI_LEGACY_MARKER in existing:
-            return  # zaten yazılı — idempotent
+            # The old block stays; only the allow rules it predates are appended.
+            to_write = "".join(
+                f'\n[[permission.rules]]\ndecision = "allow"\npattern = "{pattern}"\n'
+                for pattern in self._KIMI_NEWER_ALLOW_PATTERNS
+                if f'"{pattern}"' not in existing)
+            if not to_write:
+                return  # zaten yazılı — idempotent
+            if existing and not existing.endswith("\n"):
+                to_write = "\n" + to_write
         try:
             # Created here only when absent; keep a new config.toml private.
             with open(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a", encoding="utf-8") as f:
-                f.write(self._KIMI_PERMISSION_BLOCK)
+                f.write(to_write)
             logger.info(f"[KimiProvider] permission.rules yazıldı: {path}")
         except Exception as e:
             logger.warning(f"[KimiProvider] config.toml yazılamadı: {e}")
