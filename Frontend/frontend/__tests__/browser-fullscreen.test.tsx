@@ -267,6 +267,21 @@ describe('browser full screen keyboard rules', () => {
     await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
   })
 
+  it('does not count a kept-mounted closed menu as owning Esc (the strip\'s More menu)', async () => {
+    const menu = document.createElement('div')
+    menu.setAttribute('role', 'menu')
+    menu.hidden = true
+    document.body.appendChild(menu)
+    render(<Frame browserShown />)
+    await enter()
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
+    menu.hidden = false
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: true }))
+    menu.hidden = true
+    await waitFor(() => expect(fullReports().at(-1)).toEqual({ on: true, owned: false }))
+    menu.remove()
+  })
+
   it('ignores the chord while a modal dialog is open and on key auto-repeat', async () => {
     render(<Frame browserShown />)
     await screen.findByRole('combobox')

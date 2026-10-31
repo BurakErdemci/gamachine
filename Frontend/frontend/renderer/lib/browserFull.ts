@@ -16,13 +16,15 @@ export function isBrowserFullShortcut(e: KeyLike, mac: boolean): boolean {
 export const BROWSER_FULL_TOGGLE_CHANNEL = 'browser-full-toggle';
 
 const MODAL = '[aria-modal="true"], [role="dialog"], [role="alertdialog"]';
-const hasOpenModal = () => !!document.querySelector(MODAL);
+// Kept-mounted popups (the strip's More menu) sit in the DOM with `hidden` while closed; only an open one counts.
+const isOpen = (selector: string) => [...document.querySelectorAll(selector)].some(el => !el.closest('[hidden], [aria-hidden="true"]'));
+const hasOpenModal = () => isOpen(MODAL);
 // What keeps its own Esc in this window: a dialog, a menu or list popup, or a field of the browser panel (the address
 // box drops an edit on Esc).
 const ESC_OWNERS = `${MODAL}, [role="menu"], [role="listbox"]`;
 const FIELD = 'input, textarea, select, [contenteditable]';
 export function escOwnedHere(): boolean {
-  if (document.querySelector(ESC_OWNERS)) return true;
+  if (isOpen(ESC_OWNERS)) return true;
   const t = document.activeElement;
   return t instanceof Element && !!t.closest('.bp-panel') && t.matches(FIELD);
 }
