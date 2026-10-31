@@ -544,6 +544,88 @@ describe('the overlay shows one look at a time', () => {
     expect(f.box().setVisible.mock.calls.filter((c: any[]) => c[0] === false)).toHaveLength(hides)
   })
 
+  /** The overlay's next picture-decoding call (a __freeze with the captured frame) waits until `release` is called. */
+  function holdDecode(f: F) {
+    const entered = deferred<void>()
+    const gate = deferred<void>()
+    const run = f.overlay().webContents.executeJavaScript
+    let held = false
+    f.overlay().webContents.executeJavaScript = vi.fn(async (code: string) => {
+      if (!held && code.startsWith('window.__freeze(') && code.includes(JSON.stringify(jpeg('tab-bytes')))) {
+        held = true
+        entered.resolve()
+        await gate.promise
+      }
+      return run(code)
+    })
+    return { entered: entered.promise, release: () => gate.resolve() }
+  }
+  const capture = (f: F) => f.host.invoke({ op: 'capture-notes', conversationId: 4, tabId: 1 }) as Promise<any>
+
+  it('a submit during a capture\'s decode: the capture returns nothing and the live look the submit left stays', async () => {
+    const f = fixture()
+    await pickBuy(f)
+    boxSays(f, { t: 'draft', text: 'bir', h: 56 })
+    await settle()
+    const held = holdDecode(f)
+    const taking = capture(f)
+    await held.entered
+    boxSays(f, { t: 'submit', text: 'bir' })
+    await settle()
+    expect(f.tab().pick).toBeNull()
+    const look = f.tab().shows
+    expect(look?.by).not.toBe('capture')
+    const calls = f.overlayCalls().length
+    held.release()
+    expect(await taking).toEqual({ image: '' })
+    await settle()
+    expect(f.overlay().webContents.capturePage).not.toHaveBeenCalled()
+    expect(f.tab().shows).toBe(look)
+    expect(f.overlayCalls().length).toBe(calls)
+  })
+
+  it('a click during a capture\'s decode: the capture returns nothing and the new pick\'s look stays', async () => {
+    const f = fixture()
+    const first = await pickBuy(f)
+    const held = holdDecode(f)
+    const taking = capture(f)
+    await held.entered
+    overlaySays(f, { t: 'pick', x: 10, y: 400 })
+    await vi.waitFor(() => expect(f.tab().pick).not.toBe(first))
+    await settle()
+    const look = f.tab().shows
+    expect(look?.by).toBe('pick')
+    const calls = f.overlayCalls().length
+    held.release()
+    expect(await taking).toEqual({ image: '' })
+    await settle()
+    expect(f.overlay().webContents.capturePage).not.toHaveBeenCalled()
+    expect(f.tab().shows).toBe(look)
+    expect(f.overlayCalls().length).toBe(calls)
+  })
+
+  it('two overlapping captures: the one whose look was replaced returns nothing and restores nothing', async () => {
+    const f = fixture()
+    await openPage(f)
+    await annotate(f, true)
+    await settle()
+    const held = holdDecode(f)
+    const first = capture(f)
+    await held.entered
+    const second = await capture(f)
+    expect(second).toEqual({ image: jpeg('overlay-bytes') })
+    await settle()
+    const look = f.tab().shows
+    expect(look?.by).not.toBe('capture')
+    const calls = f.overlayCalls().length
+    held.release()
+    expect(await first).toEqual({ image: '' })
+    await settle()
+    expect(f.overlay().webContents.capturePage).toHaveBeenCalledTimes(1)
+    expect(f.tab().shows).toBe(look)
+    expect(f.overlayCalls().length).toBe(calls)
+  })
+
   it('a capture with no navigation puts the open pick\'s frozen picture, outline and pins back as they were', async () => {
     const f = fixture()
     await pickBuy(f)

@@ -1772,7 +1772,7 @@ export class BrowserHost {
   /**
    * A picture of a tab with its pins for a message that carries its notes: a fresh frame is shown on the tab's overlay
    * with its pins, and the overlay is captured (the comment box is a separate view, so it is never in it). The overlay
-   * then goes back (restoreOverlay). Empty when the tab is gone or any step fails.
+   * then goes back (restoreOverlay). Empty when the tab is gone, any step fails, or the shown look was replaced meanwhile.
    */
   private async captureTab(tab: Tab): Promise<string> {
     if (!this.isLive(tab)) return ''
@@ -1788,15 +1788,17 @@ export class BrowserHost {
     } finally {
       tab.waiting--
     }
-    try {
-      if (!frame || tab.overlay !== overlay) return ''
-      await this.setLook(tab, { by: 'capture', frame, rect: null })
-      if (tab.overlay !== overlay) return ''
-      // Visibility can change while the frame was read: it is read right before the capture.
-      return await this.captureImage(overlay.view.webContents, this.isShown(tab))
-    } finally {
-      this.restoreOverlay(tab, before, navGen)
-    }
+    if (!frame || tab.overlay !== overlay) { this.restoreOverlay(tab, before, navGen); return '' }
+    // The capture owns the look it sets: once anything else replaced it (a submit, a click, another capture), that
+    // replacer owns the overlay, so the capture returns nothing and restores nothing.
+    const look: Look = { by: 'capture', frame, rect: null }
+    await this.setLook(tab, look)
+    if (tab.shows !== look) return ''
+    // Visibility can change while the frame was read: it is read right before the capture.
+    const image = await this.captureImage(overlay.view.webContents, this.isShown(tab))
+    if (tab.shows !== look) return ''
+    this.restoreOverlay(tab, before, navGen)
+    return image
   }
 
   /**
