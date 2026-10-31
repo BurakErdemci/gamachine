@@ -59,10 +59,24 @@ describe('BrowserHistory remove and clearSince', () => {
   })
 })
 
+/** A cookie store whose remove(url, name) deletes the matching cookie, like Electron's. */
+function cookieJar() {
+  const jar: any[] = []
+  const store = {
+    get: vi.fn(async () => jar.slice()),
+    remove: vi.fn(async (url: string, name: string) => {
+      const host = new URL(url).hostname
+      const at = jar.findIndex((c) => c.domain.replace(/^\./, '') === host && c.name === name)
+      if (at >= 0) jar.splice(at, 1)
+    }),
+  }
+  return { jar, store }
+}
+
 function hostFixture(clockNow = 1_000) {
-  const cookies: any[] = []
+  const { jar: cookies, store } = cookieJar()
   const session: any = {
-    cookies: { get: vi.fn(async () => cookies), remove: vi.fn(async () => {}) },
+    cookies: store,
     clearStorageData: vi.fn(async () => {}),
     setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(),
     on: vi.fn(), webRequest: { onBeforeRequest: vi.fn(), onResponseStarted: vi.fn(), onCompleted: vi.fn() },
@@ -117,10 +131,10 @@ describe('browser-live history ops', () => {
 })
 
 describe('browser-live sites ops', () => {
-  it('siteOf keeps the last two labels, three under a country second level, and drops leading dots', () => {
-    expect(siteOf('.accounts.google.com')).toBe('google.com')
-    expect(siteOf('www.example.co.uk')).toBe('example.co.uk')
-    expect(siteOf('.shop.example.com.tr')).toBe('example.com.tr')
+  it('siteOf is the cookie domain itself without leading dots, never a guessed parent', () => {
+    expect(siteOf('.accounts.google.com')).toBe('accounts.google.com')
+    expect(siteOf('www.example.co.uk')).toBe('www.example.co.uk')
+    expect(siteOf('.Shop.Example.com.tr')).toBe('shop.example.com.tr')
     expect(siteOf('example.com')).toBe('example.com')
     expect(siteOf('localhost')).toBe('localhost')
     expect(siteOf('127.0.0.1')).toBe('127.0.0.1')
@@ -137,8 +151,8 @@ describe('browser-live sites ops', () => {
     const reply = (await f.host.invoke({ op: 'sites' })) as any
     expect(reply.sites).toEqual([
       { site: 'example.co.uk', cookies: 1 },
-      { site: 'example.com.tr', cookies: 1 },
       { site: 'github.com', cookies: 2, lastExpiry: 300 },
+      { site: 'shop.example.com.tr', cookies: 1 },
     ])
     expect(JSON.stringify(reply)).not.toMatch(/SECRET|sid|tok/)
   })
@@ -180,10 +194,11 @@ function fakeTabView(id: number) {
 }
 
 /** A host with real open tabs (fake views) and a recorder for the backend reports. */
-function tabFixture(history?: unknown) {
+function tabFixture(history?: unknown, now?: () => number) {
   const views: any[] = []
+  const { jar, store } = cookieJar()
   const session: any = Object.assign(new EventEmitter(), {
-    cookies: { get: vi.fn(async () => [] as any[]), remove: vi.fn(async () => {}) }, clearStorageData: vi.fn(async () => {}),
+    cookies: store, clearStorageData: vi.fn(async () => {}),
     setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), webRequest: { onBeforeRequest: vi.fn(), onResponseStarted: vi.fn(), onCompleted: vi.fn() },
   })
   const win: any = { isDestroyed: () => false, contentView: { addChildView: vi.fn(), removeChildView: vi.fn() }, webContents: { send: vi.fn() } }
@@ -191,7 +206,7 @@ function tabFixture(history?: unknown) {
   const onHalt = vi.fn()
   const host = new BrowserHost({
     window: () => win, createView: vi.fn(() => { const v = fakeTabView(views.length + 1); views.push(v); return v }), fromPartition: () => session,
-    http, baseUrl: () => 'http://127.0.0.1:9', appToken: 't', uiSecret: 's', history, onHalt,
+    http, baseUrl: () => 'http://127.0.0.1:9', appToken: 't', uiSecret: 's', history, onHalt, now,
     lookup: async () => [{ address: '93.184.216.34', family: 4 }],
   } as unknown as BrowserHostDeps)
   const open = async (conversationId: number, url: string) => {
@@ -199,7 +214,7 @@ function tabFixture(history?: unknown) {
     await vi.waitFor(() => expect(views.length).toBeGreaterThan(0))
     views[views.length - 1].webContents.url = url
   }
-  return { host, session, views, http, onHalt, open }
+  return { host, session, views, http, onHalt, open, jar }
 }
 
 describe('site-remove, turn 2', () => {
@@ -210,7 +225,7 @@ describe('site-remove, turn 2', () => {
       { url: 'https://notexample.com/', title: '', favicon: '', lastVisit: 1, visits: 1 },
     ], clear: async () => true, remove: async () => true, clearSince: async () => true, visit() {}, update() {}, flush: async () => true }
     const f = tabFixture(history)
-    f.session.cookies.get.mockResolvedValue([{ name: 'sid', value: 'v', domain: '.app.example.com', path: '/', secure: true }])
+    f.jar.push({ name: 'sid', value: 'v', domain: '.app.example.com', path: '/', secure: true })
     expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 1 })
     const origins = f.session.clearStorageData.mock.calls.map((c: any) => c[0].origin)
     expect(origins).toEqual(expect.arrayContaining(['https://example.com', 'http://www.example.com', 'https://app.example.com', 'http://app.example.com', 'http://dev.example.com:3000']))
@@ -239,10 +254,10 @@ describe('site-remove, turn 2', () => {
 
   it('keeps going when one cookie removal throws and says partial', async () => {
     const f = tabFixture()
-    f.session.cookies.get.mockResolvedValue([
+    f.jar.push(
       { name: 'a', value: 'v', domain: 'example.com', path: '/', secure: true },
       { name: 'b', value: 'v', domain: 'example.com', path: '/', secure: true },
-    ])
+    )
     f.session.cookies.remove.mockRejectedValueOnce(new Error('boom'))
     expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: false, error: 'site_remove_partial', removed: 1, failed: 1 })
     expect(f.session.cookies.remove).toHaveBeenCalledTimes(2)
@@ -251,12 +266,136 @@ describe('site-remove, turn 2', () => {
 
   it('refuses a bare public suffix or a value without letters', async () => {
     const f = tabFixture()
-    f.session.cookies.get.mockResolvedValue([{ name: 'a', value: 'v', domain: 'x.co.uk', path: '/', secure: true }])
+    f.jar.push({ name: 'a', value: 'v', domain: 'x.co.uk', path: '/', secure: true })
     for (const site of ['com', 'co.uk', 'com.tr', '-', '--', 'uk']) expect(await f.host.invoke({ op: 'site-remove', site })).toEqual({ error: 'bad_args' })
     expect(f.session.cookies.remove).not.toHaveBeenCalled()
     expect(f.session.clearStorageData).not.toHaveBeenCalled()
     expect(await f.host.invoke({ op: 'site-remove', site: 'localhost' })).toMatchObject({ ok: true })
     expect(await f.host.invoke({ op: 'site-remove', site: 'example.co.uk' })).toMatchObject({ ok: true })
+  })
+})
+
+describe('site identity, origins, races and the reopen stack, turn 3', () => {
+  it('lists github.io tenants as two sites and refuses the shared parent', async () => {
+    const f = hostFixture()
+    f.cookies.push(
+      { name: 'login', value: 'a', domain: 'alice.github.io', path: '/', secure: true },
+      { name: 'login', value: 'b', domain: 'bob.github.io', path: '/', secure: true },
+    )
+    expect(((await f.host.invoke({ op: 'sites' })) as any).sites.map((r: any) => r.site)).toEqual(['alice.github.io', 'bob.github.io'])
+    expect(await f.host.invoke({ op: 'site-remove', site: 'github.io' })).toEqual({ error: 'bad_args' })
+    expect(f.session.cookies.remove).not.toHaveBeenCalled()
+    expect(f.session.clearStorageData).not.toHaveBeenCalled()
+    expect(await f.host.invoke({ op: 'site-remove', site: 'alice.github.io' })).toEqual({ ok: true, removed: 1 })
+    expect(f.cookies.map((c) => c.domain)).toEqual(['bob.github.io'])
+    const origins = f.session.clearStorageData.mock.calls.map(([o]: [any]) => o.origin)
+    expect(origins.some((o: string) => o.includes('bob.github.io'))).toBe(false)
+  })
+
+  it('groups a subdomain cookie under a cookie of its parent domain only', async () => {
+    const f = hostFixture()
+    f.cookies.push(
+      { name: 'a', value: 'x', domain: '.example.com', path: '/', secure: true },
+      { name: 'b', value: 'x', domain: 'app.example.com', path: '/', secure: true },
+      { name: 'c', value: 'x', domain: 'shop.other.com', path: '/', secure: true },
+    )
+    expect(((await f.host.invoke({ op: 'sites' })) as any).sites).toEqual([{ site: 'example.com', cookies: 2 }, { site: 'shop.other.com', cookies: 1 }])
+  })
+
+  it('clears the storage of an open tab origin that history never saw', async () => {
+    const f = tabFixture()
+    f.jar.push({ name: 'login', value: 'v', domain: '.example.com', path: '/', secure: true })
+    await f.open(1, 'https://app.example.com:8443/?token=x')
+    await f.open(2, 'https://notexample.com/')
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toEqual({ ok: true, removed: 1 })
+    const origins = f.session.clearStorageData.mock.calls.map((c: any) => c[0].origin)
+    expect(origins).toContain('https://app.example.com:8443')
+    expect(origins).not.toContain('https://notexample.com')
+  })
+
+  it('a tab that opens the site while the removal awaits is closed and its new login removed', async () => {
+    const f = tabFixture()
+    f.jar.push({ name: 'login', value: 'old', domain: 'example.com', path: '/', secure: true })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let reached!: () => void
+    const started = new Promise<void>((resolve) => { reached = resolve })
+    f.session.clearStorageData.mockImplementationOnce(async () => { reached(); await gate })
+    const removal = f.host.invoke({ op: 'site-remove', site: 'example.com' })
+    await started
+    await f.open(2, 'https://example.com/')
+    f.jar.push({ name: 'login', value: 'new', domain: 'example.com', path: '/', secure: true })
+    release()
+    expect(await removal).toEqual({ ok: true, removed: 2 })
+    expect(f.views.every((v) => v.webContents.destroyed)).toBe(true)
+    expect(f.jar).toEqual([])
+  })
+
+  it('gives up as partial when the site keeps coming back', async () => {
+    const f = tabFixture()
+    f.jar.push({ name: 'login', value: 'v0', domain: 'example.com', path: '/', secure: true })
+    let n = 0
+    // A page that writes a fresh login back after every removal.
+    f.session.cookies.remove.mockImplementation(async () => { f.jar.splice(0, 1, { name: 'login', value: `v${++n}`, domain: 'example.com', path: '/', secure: true }) })
+    expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toMatchObject({ ok: false, error: 'site_remove_partial', removed: 3 })
+    expect(f.session.cookies.remove).toHaveBeenCalledTimes(3)
+  })
+
+  it('history-clear hour keeps the older visit of a page revisited in the hour', async () => {
+    const f = hostFixture(10 * 3_600_000)
+    f.clock.now = 7 * 3_600_000
+    f.history.visit('https://a.example/', 'A')
+    f.clock.now = 10 * 3_600_000 - 60_000
+    f.history.visit('https://a.example/', 'A')
+    f.clock.now = 10 * 3_600_000
+    expect(await f.host.invoke({ op: 'history-clear', range: 'hour' })).toEqual({ ok: true })
+    expect(f.history.list()).toMatchObject([{ url: 'https://a.example/', lastVisit: 7 * 3_600_000, visits: 1 }])
+  })
+
+  describe('the recently closed tab stack', () => {
+    const closeOne = async (f: ReturnType<typeof tabFixture>, conversationId: number, url: string) => {
+      const payload = (await f.host.invoke({ op: 'open', conversationId, url })) as any
+      await vi.waitFor(() => expect(f.views.length).toBeGreaterThan(0))
+      f.views[f.views.length - 1].webContents.url = url
+      await f.host.invoke({ op: 'close-tab', conversationId, tabId: payload.activeTabId })
+    }
+    const reopen = (f: ReturnType<typeof tabFixture>, conversationId: number) => f.host.invoke({ op: 'reopen-tab', conversationId })
+    const historyStub = { list: () => [], clear: async () => true, remove: async () => true, clearSince: async () => true, visit() {}, update() {}, flush: async () => true }
+
+    it('history-remove drops the page so reopen cannot bring it back', async () => {
+      const f = tabFixture(historyStub)
+      await closeOne(f, 1, 'https://example.com/secret#part')
+      await f.host.invoke({ op: 'history-remove', url: 'https://example.com/secret' })
+      expect(await reopen(f, 1)).toEqual({ error: 'nothing_to_reopen' })
+    })
+
+    it('history-clear drops tabs closed inside the range and keeps older ones', async () => {
+      const clock = { now: 10 * 3_600_000 }
+      const f = tabFixture(historyStub, () => clock.now)
+      await closeOne(f, 1, 'https://old.example/')
+      clock.now += 2 * 3_600_000
+      await closeOne(f, 1, 'https://recent.example/')
+      expect(await f.host.invoke({ op: 'history-clear', range: 'hour' })).toEqual({ ok: true })
+      const views = f.views.length
+      expect(((await reopen(f, 1)) as any).error).toBeUndefined()
+      expect(f.views.length).toBe(views + 1)
+      expect(f.views[f.views.length - 1].webContents.loadURL).toHaveBeenCalledWith('https://old.example/')
+      expect(await reopen(f, 1)).toEqual({ error: 'nothing_to_reopen' })
+      await closeOne(f, 1, 'https://again.example/')
+      await f.host.invoke({ op: 'history-clear', range: 'all' })
+      expect(await reopen(f, 1)).toEqual({ error: 'nothing_to_reopen' })
+    })
+
+    it('site-remove drops the site pages from the stack and clears their origins', async () => {
+      const f = tabFixture(historyStub)
+      await closeOne(f, 1, 'https://other.org/')
+      await closeOne(f, 1, 'https://dev.example.com:3000/x')
+      await f.host.invoke({ op: 'site-remove', site: 'example.com' })
+      expect(f.session.clearStorageData.mock.calls.map((c: any) => c[0].origin)).toContain('https://dev.example.com:3000')
+      await reopen(f, 1)
+      expect(f.views[f.views.length - 1].webContents.loadURL).toHaveBeenCalledWith('https://other.org/')
+      expect(await reopen(f, 1)).toEqual({ error: 'nothing_to_reopen' })
+    })
   })
 })
 

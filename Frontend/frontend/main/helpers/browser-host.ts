@@ -1,9 +1,9 @@
-import type { NativeImage, Rectangle, Session, WebContents, WebContentsView, WebContentsViewConstructorOptions } from 'electron'
+import type { Cookie, NativeImage, Rectangle, Session, WebContents, WebContentsView, WebContentsViewConstructorOptions } from 'electron'
 import type { HttpClient } from './remote-control'
 import type { BrowserCommand } from './browser-server'
 import { isIP } from 'net'
 import { isAllowedNavigation, isPrivateAddress, resolvesToPrivate, type LookupAll } from './browser-url-policy'
-import type { BrowserHistory } from './browser-history'
+import { historyUrl, type BrowserHistory } from './browser-history'
 
 // persist: keeps one login for every chat's tab and across app restarts.
 export const BROWSER_PARTITION = 'persist:gamachine-agent-browser'
@@ -16,6 +16,8 @@ export const MAX_TABS = 8
 // A chat never holds more tabs than the app does, so the per-chat cap is the global one.
 export const MAX_CHAT_TABS = MAX_TABS
 const MAX_CLOSED_TABS = 10
+/** site-remove repeats while a tab or cookie of the site came back during its awaits; then it gives up as partial. */
+const MAX_SITE_REMOVE_PASSES = 3
 // How long the key events a `press` is about to send back to the host stay expected.
 const SYNTHETIC_INPUT_MS = 1_000
 const SCRIPT_TIMEOUT_MS = 10_000
@@ -41,18 +43,39 @@ export interface BrowserHostWindow {
   webContents: { send(channel: string, payload: unknown): void }
 }
 
-// Second-level labels under a two-letter country code (example.com.tr, example.co.uk): the site is one label further up.
+// Second-level labels under a two-letter country code (co.uk, com.tr): refused as a site on their own.
 const SECOND_LEVEL = new Set(['co', 'com', 'org', 'net', 'gov', 'edu', 'ac'])
 const SITE_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)*$/
 const STORAGES = ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage', 'websql', 'filesystem']
 
-/** A cookie domain as a site: leading dot dropped, then the last two labels (three under co.uk style). No public-suffix list. */
+/** A cookie's own domain as a host: leading dot dropped, lower case. */
 export function siteOf(domain: string): string {
-  const host = domain.replace(/^\.+/, '').toLowerCase()
+  return domain.replace(/^\.+/, '').toLowerCase()
+}
+
+/**
+ * The listed site a cookie host belongs to: its highest ancestor (or itself) that is some cookie's own domain.
+ * Never a guessed registrable domain, so alice.github.io and bob.github.io stay two sites.
+ */
+function rowOf(host: string, domains: Set<string>): string {
   if (isIP(host) || host.includes(':')) return host
   const labels = host.split('.')
-  const keep = labels.length >= 3 && SECOND_LEVEL.has(labels[labels.length - 2]) && labels[labels.length - 1].length === 2 ? 3 : 2
-  return labels.slice(-keep).join('.')
+  for (let i = labels.length - 1; i > 0; i--) {
+    const parent = labels.slice(i).join('.')
+    if (domains.has(parent)) return parent
+  }
+  return host
+}
+
+function siteRows(cookies: Cookie[]): Map<string, Cookie[]> {
+  const domains = new Set(cookies.filter((c) => c.domain).map((c) => siteOf(c.domain!)))
+  const rows = new Map<string, Cookie[]>()
+  for (const cookie of cookies) {
+    if (!cookie.domain) continue
+    const row = rowOf(siteOf(cookie.domain), domains)
+    rows.set(row, [...(rows.get(row) ?? []), cookie])
+  }
+  return rows
 }
 
 /** A bare public suffix (com, co.uk) or the like: removing it would wipe every site under it. */
@@ -414,7 +437,7 @@ interface Tab {
   lastUsed: number
 }
 
-interface ClosedTab { url: string; title: string }
+interface ClosedTab { url: string; title: string; closedAt: number }
 
 /**
  * Hardened WebContentsViews over the main window, all on one persistent session: per chat one agent tab
@@ -855,7 +878,7 @@ export class BrowserHost {
     const url = wc.isDestroyed() ? '' : wc.getURL()
     if (/^https?:\/\//i.test(url)) {
       const stack = this.closed.get(tab.conversationId) ?? []
-      stack.push({ url, title: wc.getTitle() })
+      stack.push({ url, title: wc.getTitle(), closedAt: this.now() })
       this.closed.set(tab.conversationId, stack.slice(-MAX_CLOSED_TABS))
     }
     // Work running or queued for the agent's tab ends with it instead of recreating the tab.
@@ -916,6 +939,73 @@ export class BrowserHost {
   private staleReply(conversationId: number, epoch: number): { error: string } | null {
     if (this.clearing) return { error: 'clearing' }
     return this.lifecycleEpoch(conversationId) === epoch ? null : { error: 'chat_closed' }
+  }
+
+  /** Drops closed tabs from every chat's reopen stack. */
+  private forgetClosed(drop: (tab: ClosedTab) => boolean): void {
+    for (const [id, stack] of this.closed) this.closed.set(id, stack.filter((tab) => !drop(tab)))
+  }
+
+  /**
+   * Logs the agent browser out of `site` and its subdomains: their tabs close, then cookies and storage go. A tab
+   * can open or navigate onto the site while this awaits, so a pass repeats while one ends with a tab of the site
+   * open or a cookie of it this removal had not seen.
+   */
+  private async removeSite(site: string): Promise<Record<string, unknown>> {
+    const inSite = (host: string) => host === site || host.endsWith(`.${site}`)
+    const originOf = (url: string): string | null => {
+      try {
+        const u = new URL(url)
+        return (u.protocol === 'https:' || u.protocol === 'http:') && inSite(u.hostname.toLowerCase()) ? u.origin : null
+      } catch { return null }
+    }
+    const liveTabs = () => [...this.tabs.values()].filter((tab) => !tab.view.webContents.isDestroyed() && originOf(tab.view.webContents.getURL()))
+    const session = this.session()
+    const all = await session.cookies.get({})
+    // One removal takes one listed site: a parent of several (github.io over alice. and bob.github.io) is refused.
+    if ([...siteRows(all).keys()].filter(inSite).length > 1) return { error: 'bad_args' }
+    const ofSite = (list: Cookie[]) => list.filter((cookie) => inSite(siteOf(cookie.domain ?? '')))
+    const key = (cookie: Cookie) => JSON.stringify([cookie.domain, cookie.path, cookie.name, cookie.value])
+    let cookies = ofSite(all)
+    const seen = new Set(cookies.map(key))
+    const origins = new Set<string>()
+    for (const host of [site, `www.${site}`]) for (const scheme of ['https', 'http']) origins.add(`${scheme}://${host}`)
+    let removed = 0
+    let failed = 0
+    for (let pass = 1; ; pass++) {
+      // Open pages of the site go first: a live page would write the login back after the cookies are gone.
+      const doomed = liveTabs()
+      for (const tab of doomed) origins.add(originOf(tab.view.webContents.getURL())!)
+      for (const id of new Set(doomed.map((tab) => tab.conversationId))) this.stopLocal(id)
+      for (const tab of doomed) this.closeTab(tab)
+      for (const cookie of cookies) {
+        const domain = siteOf(cookie.domain ?? '')
+        // Storage of a subdomain (app.site) is not covered by the origins of site itself.
+        for (const scheme of ['https', 'http']) origins.add(`${scheme}://${domain}`)
+        try {
+          await session.cookies.remove(`${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path ?? '/'}`, cookie.name)
+          removed++
+        } catch { failed++ }
+      }
+      // Pages visited or closed on other ports or subdomains: the exact origin, port included.
+      for (const url of [...(this.deps.history?.list() ?? []).map((entry) => entry.url), ...[...this.closed.values()].flat().map((tab) => tab.url)]) {
+        const origin = originOf(url)
+        if (origin) origins.add(origin)
+      }
+      this.forgetClosed((tab) => originOf(tab.url) !== null)
+      for (const origin of origins) {
+        try { await session.clearStorageData({ origin, storages: STORAGES as any }) } catch { failed++ }
+      }
+      // The login is gone whatever the outcome, so the backend drops the chats' grants like after a full clear.
+      if (pass === 1) await this.report(true)
+      cookies = ofSite(await session.cookies.get({})).filter((cookie) => !seen.has(key(cookie)))
+      for (const cookie of cookies) seen.add(key(cookie))
+      // Checked after the last await, so nothing can reopen the site before the reply.
+      const back = cookies.length > 0 || liveTabs().length > 0
+      if (!back || failed > 0) break
+      if (pass === MAX_SITE_REMOVE_PASSES) { failed++; break }
+    }
+    return failed > 0 ? { ok: false, error: 'site_remove_partial', removed, failed } : { ok: true, removed }
   }
 
   /** The tab goes back on the stack when it could not be reopened (too many tabs, address refused). */
@@ -1109,6 +1199,8 @@ export class BrowserHost {
       }
       case 'history-remove': {
         if (!str(url) || !this.deps.history?.remove) return { error: 'bad_args' }
+        // Reopening a closed tab would bring the page back into history.
+        this.forgetClosed((tab) => tab.url === url || historyUrl(tab.url) === url)
         // An entry already gone (another window, a clear) is not an error; a false from remove() is then a failed write.
         if (!this.deps.history.list().some((entry) => entry.url === url)) return { ok: true, removed: false }
         return (await this.deps.history.remove(url)) ? { ok: true, removed: true } : { error: 'history_remove_failed' }
@@ -1120,22 +1212,22 @@ export class BrowserHost {
         if (!history?.clearSince) return { error: 'bad_args' }
         const now = this.now()
         // 'day' is since the local midnight, not the last 24 hours.
-        const since = range === 'hour' ? now - 3_600_000 : range === 'day' ? new Date(now).setHours(0, 0, 0, 0) : 0
-        return (await history.clearSince(since)) ? { ok: true } : { error: 'history_clear_failed' }
+        const since = range === 'hour' ? now - 3_600_000 : range === 'day' ? new Date(now).setHours(0, 0, 0, 0) : -Infinity
+        this.forgetClosed((tab) => tab.closedAt >= since)
+        return (await (range === 'all' ? history.clear() : history.clearSince(since))) ? { ok: true } : { error: 'history_clear_failed' }
       }
       // Sites only: counts and expiry, never a cookie's name or value.
       case 'sites': {
         try {
-          const sites = new Map<string, { site: string; cookies: number; lastExpiry?: number }>()
-          for (const cookie of await this.session().cookies.get({})) {
-            if (!cookie.domain) continue
-            const site = siteOf(cookie.domain)
-            const entry = sites.get(site) ?? { site, cookies: 0 }
-            entry.cookies++
-            if (cookie.expirationDate !== undefined && cookie.expirationDate > (entry.lastExpiry ?? 0)) entry.lastExpiry = cookie.expirationDate
-            sites.set(site, entry)
+          const sites: { site: string; cookies: number; lastExpiry?: number }[] = []
+          for (const [site, cookies] of siteRows(await this.session().cookies.get({}))) {
+            const entry: { site: string; cookies: number; lastExpiry?: number } = { site, cookies: cookies.length }
+            for (const cookie of cookies) {
+              if (cookie.expirationDate !== undefined && cookie.expirationDate > (entry.lastExpiry ?? 0)) entry.lastExpiry = cookie.expirationDate
+            }
+            sites.push(entry)
           }
-          return { sites: [...sites.values()].sort((a, b) => a.site.localeCompare(b.site)) }
+          return { sites: sites.sort((a, b) => a.site.localeCompare(b.site)) }
         } catch {
           return { error: 'sites_failed' }
         }
@@ -1143,47 +1235,8 @@ export class BrowserHost {
       case 'site-remove': {
         const { site } = req as { site?: unknown }
         if (typeof site !== 'string' || site.length > 253 || !SITE_RE.test(site) || !/[a-z0-9]/.test(site) || isPublicSuffix(site)) return { error: 'bad_args' }
-        const inSite = (host: string) => host === site || host.endsWith(`.${site}`)
         try {
-          // Open pages of the site go first: a live page would write the login back after the cookies are gone.
-          const chats = new Set<number>()
-          const doomed = [...this.tabs.values()].filter((tab) => {
-            try {
-              if (tab.view.webContents.isDestroyed() || !inSite(new URL(tab.view.webContents.getURL()).hostname.toLowerCase())) return false
-            } catch { return false }
-            return true
-          })
-          for (const tab of doomed) chats.add(tab.conversationId)
-          for (const id of chats) this.stopLocal(id)
-          for (const tab of doomed) this.closeTab(tab)
-          const session = this.session()
-          const origins = new Set<string>()
-          for (const host of [site, `www.${site}`]) for (const scheme of ['https', 'http']) origins.add(`${scheme}://${host}`)
-          let removed = 0
-          let failed = 0
-          for (const cookie of await session.cookies.get({})) {
-            const domain = (cookie.domain ?? '').replace(/^\.+/, '').toLowerCase()
-            if (!inSite(domain)) continue
-            // Storage of a subdomain (app.site) is not covered by the origins of site itself.
-            for (const scheme of ['https', 'http']) origins.add(`${scheme}://${domain}`)
-            try {
-              await session.cookies.remove(`${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path ?? '/'}`, cookie.name)
-              removed++
-            } catch { failed++ }
-          }
-          // Pages visited on other ports or subdomains: the exact origin, port included.
-          for (const entry of this.deps.history?.list() ?? []) {
-            try {
-              const u = new URL(entry.url)
-              if ((u.protocol === 'https:' || u.protocol === 'http:') && inSite(u.hostname.toLowerCase())) origins.add(u.origin)
-            } catch { /* not a URL */ }
-          }
-          for (const origin of origins) {
-            try { await session.clearStorageData({ origin, storages: STORAGES as any }) } catch { failed++ }
-          }
-          // The login is gone whatever the outcome, so the backend drops the chats' grants like after a full clear.
-          await this.report(true)
-          return failed > 0 ? { ok: false, error: 'site_remove_partial', removed, failed } : { ok: true, removed }
+          return await this.removeSite(site)
         } catch {
           this.log('[browser] removing a site failed')
           return { error: 'site_remove_failed' }
