@@ -1,6 +1,32 @@
 import fs from 'fs'
 import path from 'path'
 
+// Only ENOENT/ENOTDIR mean "missing"; any other error (EIO, EACCES, ELOOP) propagates so
+// safeResolve refuses. fs.existsSync is not used: it returns false for those errors too.
+function isMissingError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+function pathExists(p: string): boolean {
+  try {
+    fs.statSync(p)
+    return true
+  } catch (err) {
+    if (isMissingError(err)) return false
+    throw err
+  }
+}
+
+function isSymlinkEntry(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isSymbolicLink()
+  } catch (err) {
+    if (isMissingError(err)) return false
+    throw err
+  }
+}
+
 /**
  * Symlink-safe path resolver.
  * An existing path is canonicalised; a path that does not exist yet is resolved
@@ -17,31 +43,51 @@ import path from 'path'
  * through its OWN short path was refused because it no longer matched itself.
  * The two calls throw the same errors, so the surrounding fallbacks are unchanged.
  */
-function safeResolve(filePath: string): string {
+function safeResolve(filePath: string): string | null {
   try {
-    const absolutePath = path.resolve(filePath)
-    if (fs.existsSync(absolutePath)) {
-      return fs.realpathSync.native(absolutePath)
-    }
+    let absolutePath = path.resolve(filePath)
+    let hops = 0
 
-    let currentPath = absolutePath
-    const missingSegments: string[] = []
-
-    while (!fs.existsSync(currentPath)) {
-      const parentPath = path.dirname(currentPath)
-      if (parentPath === currentPath) {
-        return absolutePath
+    // Restarts only when a dangling symlink is followed to its target.
+    for (;;) {
+      if (pathExists(absolutePath)) {
+        return fs.realpathSync.native(absolutePath)
       }
-      missingSegments.unshift(path.basename(currentPath))
-      currentPath = parentPath
-    }
 
-    const resolvedExistingPath = fs.realpathSync.native(currentPath)
-    return path.join(resolvedExistingPath, ...missingSegments)
+      let currentPath = absolutePath
+      const missingSegments: string[] = []
+      let followed = false
+
+      while (!pathExists(currentPath)) {
+        // stat follows links, so a dangling symlink looks "missing". Its bytes
+        // would still land at the link target, so the target replaces the link here
+        // (measured 31 Oct: a dangling link let write-file and create-file land outside).
+        if (isSymlinkEntry(currentPath)) {
+          if (++hops > 40) return null
+          const linkTarget = fs.readlinkSync(currentPath)
+          // The kernel follows links inside the target before applying '..'; resolving it as text would not.
+          if (hasDotDotSegment(linkTarget)) return null
+          const target = path.resolve(path.dirname(currentPath), linkTarget)
+          absolutePath = path.join(target, ...missingSegments)
+          followed = true
+          break
+        }
+        const parentPath = path.dirname(currentPath)
+        if (parentPath === currentPath) {
+          return absolutePath
+        }
+        missingSegments.unshift(path.basename(currentPath))
+        currentPath = parentPath
+      }
+      if (followed) continue
+
+      const resolvedExistingPath = fs.realpathSync.native(currentPath)
+      return path.join(resolvedExistingPath, ...missingSegments)
+    }
   } catch {
-    // realpath failed — fall through to the plain resolve below
+    // any failure: refuse, never fall back to the lexical path (it looks inside)
   }
-  return path.resolve(filePath)
+  return null
 }
 
 /**
@@ -141,18 +187,28 @@ export function readExactly(fd: number, size: number): Uint8Array | null {
 }
 
 /**
+ * True when any segment of the RAW path is exactly '..'. safeResolve removes '..'
+ * lexically before a preceding symlink is resolved, so the checked and the
+ * acted-on location could differ (Codex 30 Oct); guards refuse such targets.
+ */
+export function hasDotDotSegment(p: string): boolean {
+  return p.split(/[\\/]/).some((segment) => segment === '..')
+}
+
+/**
  * Yazma/okuma izni sadece workspace içindeki Assets/Scripts/*.cs dosyalarına verilir.
  * Path traversal, symlink ve dışarı çıkış girişimlerini engeller.
  */
 export function isAllowedUnityScriptPath(filePath: string, workspacePath: string): boolean {
   try {
-    if (!filePath || !workspacePath) return false
+    if (!filePath || !workspacePath || hasDotDotSegment(filePath)) return false
 
     // Eğer yol absolute değilse, önce workspace ile birleştirip öyle kontrol etmeliyiz
     const absoluteFilePath = path.isAbsolute(filePath) ? filePath : path.resolve(workspacePath, filePath)
 
     const resolvedFile = safeResolve(absoluteFilePath)
     const resolvedWorkspace = safeResolve(workspacePath)
+    if (resolvedFile === null || resolvedWorkspace === null) return false
     const relativePath = path.relative(resolvedWorkspace, resolvedFile)
 
     // Workspace dışına çıkış kontrolü
@@ -178,10 +234,11 @@ export function isAllowedUnityScriptPath(filePath: string, workspacePath: string
  */
 export function isAllowedWorkspacePath(targetPath: string, workspacePath: string): boolean {
   try {
-    if (!targetPath || !workspacePath) return false
+    if (!targetPath || !workspacePath || hasDotDotSegment(targetPath)) return false
 
     const resolvedTarget = safeResolve(targetPath)
     const resolvedWorkspace = safeResolve(workspacePath)
+    if (resolvedTarget === null || resolvedWorkspace === null) return false
     const relativePath = path.relative(resolvedWorkspace, resolvedTarget)
 
     if (!relativePath) {
@@ -207,10 +264,11 @@ export function isInsideWorkspace(
   platform: string = process.platform,
 ): boolean {
   try {
-    if (!targetPath || !workspacePath) return false
+    if (!targetPath || !workspacePath || hasDotDotSegment(targetPath)) return false
 
     let resolvedTarget = safeResolve(targetPath)
     let resolvedWorkspace = safeResolve(workspacePath)
+    if (resolvedTarget === null || resolvedWorkspace === null) return false
     if (platform === 'win32') {
       resolvedTarget = resolvedTarget.toLowerCase()
       resolvedWorkspace = resolvedWorkspace.toLowerCase()
@@ -304,10 +362,11 @@ export function okumaKarariVer(
   const reddet = (yol: string, sebep: RedSebebi = 'denied'): OkumaKarari =>
     ({ izinli: false, cozulmusYol: yol, sebep })
   try {
-    if (!filePath || !workspacePath) return reddet('')
+    if (!filePath || !workspacePath || hasDotDotSegment(filePath)) return reddet('')
 
     const cozulmus = safeResolve(filePath)
     const cozulmusWs = safeResolve(workspacePath)
+    if (cozulmus === null || cozulmusWs === null) return reddet('')
 
     if (!icerideMi(cozulmus, cozulmusWs)) return reddet(cozulmus)
 
@@ -511,10 +570,12 @@ export function readBinaryFileFromWorkspace(
  */
 export function isAllowedWorkspaceWriteFile(filePath: string, workspacePath: string): boolean {
   try {
-    if (!filePath || !workspacePath) return false
+    if (!filePath || !workspacePath || hasDotDotSegment(filePath)) return false
 
     const absoluteFilePath = path.isAbsolute(filePath) ? filePath : path.resolve(workspacePath, filePath)
-    const ext = path.extname(safeResolve(absoluteFilePath)).toLowerCase()
+    const resolvedForExt = safeResolve(absoluteFilePath)
+    if (resolvedForExt === null) return false
+    const ext = path.extname(resolvedForExt).toLowerCase()
 
     if (ext === '.cs') {
       return isAllowedUnityScriptPath(filePath, workspacePath)
@@ -525,6 +586,24 @@ export function isAllowedWorkspaceWriteFile(filePath: string, workspacePath: str
     return isAllowedWorkspacePath(absoluteFilePath, workspacePath)
   } catch {
     return false
+  }
+}
+
+/**
+ * An EXISTING write target must be a regular file with a single name. A second
+ * hard link is another name for bytes that may live outside the workspace; the
+ * read policy already refuses `nlink > 1` and the write path has to agree
+ * (Codex audit 30 Oct: write-file changed an outside file through a hard link).
+ * A missing target is fine. Follows symlinks on purpose: the containment guard
+ * already resolved them, and the bytes written are the target's. A dangling
+ * link is acceptable here only because safeResolve already judged its real destination.
+ */
+export function isWritableExistingTarget(filePath: string): boolean {
+  try {
+    const st = fs.statSync(filePath)
+    return st.isFile() && st.nlink <= 1
+  } catch (err: any) {
+    return err?.code === 'ENOENT'
   }
 }
 

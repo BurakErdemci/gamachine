@@ -10,6 +10,17 @@ import { routeForFile } from '../../components/model-viewer/extensions';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 
+type OpResult = { success?: boolean; error?: string; newPath?: string };
+
+// A rejected IPC call is normalised to the same shape as a refused one.
+async function invokeChecked(channel: string, ...args: unknown[]): Promise<OpResult> {
+  try {
+    return (await ipc?.invoke(channel, ...args)) ?? { success: false };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // One file reaches this hook under several legitimate spellings: the tree hands
 // out absolute host paths, an approved agent operation names the file relative
 // to the workspace, and Windows accepts either separator for the same entry.
@@ -292,8 +303,8 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   const saveFile = useCallback(async () => {
     if (!ipc || !openedFilePath || !workspacePath) return false;
     const halaGecerli = contentRequest.observe();
-    const res = await ipc.invoke('write-file', openedFilePath, code, workspacePath);
-    if (res?.success) {
+    const res = await invokeChecked('write-file', openedFilePath, code, workspacePath);
+    if (res.success) {
       // The write itself succeeded and is still reported as such, but the
       // baseline it establishes belongs to the file that was open when the save
       // started: applying it to a file opened since would mark that other file's
@@ -305,7 +316,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
       showToast(cevir('file.saved'), 'success');
       return true;
     } else {
-      showToast(cevir('file.saveError', { hata: res?.error || cevir('common.unknown') }), 'error');
+      showToast(cevir('file.saveError', { hata: res.error || cevir('common.unknown') }), 'error');
       return false;
     }
   }, [code, openedFilePath, workspacePath, showToast, contentRequest]);
@@ -591,26 +602,42 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     setExpandedDirs(next);
   }, [dirContents, expandedDirs, workspacePath, workspaceRequest]);
 
+  // One failure path for every tree-changing IPC call: a rejection and a success:false
+  // result both toast the error and return null, so callers keep their form open and skip the refresh.
+  const runTreeOp = useCallback(async (
+    errorKey: 'file.createError' | 'file.deleteError' | 'file.renameError' | 'file.moveError',
+    channel: string,
+    ...args: unknown[]
+  ): Promise<OpResult | null> => {
+    const res = await invokeChecked(channel, ...args);
+    if (!res.success) {
+      showToast(cevir(errorKey, { hata: res.error || cevir('common.unknown') }), 'error');
+      return null;
+    }
+    return res;
+  }, [showToast]);
+
   const handleTreeDelete = useCallback(async (entry: FileEntry) => {
     setTreeContextMenu(null);
     // The confirmation dialog is open for as long as the user takes to answer,
     // so the workspace can change entirely while the question is on screen.
     const halaGecerli = pathOperationScope();
     if (!(await confirmDialog(cevir('file.deleteConfirm', { ad: entry.name })))) return;
-    const res = await ipc.invoke('delete-entry', entry.path, workspacePath);
+    const res = await runTreeOp('file.deleteError', 'delete-entry', entry.path, workspacePath);
+    if (!res) return;
     // This entry point can also delete a FOLDER, so descendants go with it —
     // which `applyContentPathChange` handles as part of "the path is gone".
-    if (res?.success && halaGecerli()) applyContentPathChange(entry.path, null);
+    if (halaGecerli()) applyContentPathChange(entry.path, null);
     refreshFileTree();
-  }, [refreshFileTree, workspacePath, applyContentPathChange, pathOperationScope]);
+  }, [refreshFileTree, workspacePath, applyContentPathChange, pathOperationScope, runTreeOp]);
 
   const submitRename = useCallback(async () => {
     if (!renamingPath || !renameValue.trim()) { setRenamingPath(null); return; }
     const oldPath = renamingPath;
     const halaGecerli = pathOperationScope();
-    const res = await ipc.invoke('rename-entry', oldPath, renameValue.trim(), workspacePath);
+    const res = await runTreeOp('file.renameError', 'rename-entry', oldPath, renameValue.trim(), workspacePath);
+    if (!res) return;
     setRenamingPath(null);
-    if (!res?.success) return;
     // The main handler renames to `path.join(dirname(old), newName)` and returns
     // exactly that path, so the reported `newPath` is followable.
     const newPath: string | null = typeof res.newPath === 'string' ? res.newPath : null;
@@ -619,20 +646,30 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     // workspace's occupant onto an old workspace's path.
     if (halaGecerli()) applyContentPathChange(oldPath, newPath);
     refreshFileTree();
-  }, [refreshFileTree, renameValue, renamingPath, workspacePath, applyContentPathChange, pathOperationScope]);
+  }, [refreshFileTree, renameValue, renamingPath, workspacePath, applyContentPathChange, pathOperationScope, runTreeOp]);
 
   const submitTreeCreate = useCallback(async () => {
     if (!treeCreating || !treeCreateValue.trim()) { setTreeCreating(null); return; }
     const { parentPath, type } = treeCreating;
-    const newPath = `${parentPath}/${treeCreateValue.trim()}`;
-    setTreeCreating(null);
-    if (type === 'file') {
-      await ipc.invoke('create-file', newPath, workspacePath);
-    } else {
-      await ipc.invoke('create-folder', newPath, workspacePath);
+    // Resolve '.' and 'x/..' here: the main process refuses any '..' segment, so a
+    // typed name must reach it already normalized and still inside parentPath.
+    const segments: string[] = [];
+    let escapes = false;
+    for (const seg of treeCreateValue.trim().split(/[\\/]+/)) {
+      if (seg === '' || seg === '.') continue;
+      if (seg === '..') { if (segments.pop() === undefined) escapes = true; continue; }
+      segments.push(seg);
     }
+    if (escapes || segments.length === 0) {
+      showToast(cevir('file.invalidName'), 'warning');
+      return;
+    }
+    const newPath = `${parentPath}/${segments.join('/')}`;
+    const res = await runTreeOp('file.createError', type === 'file' ? 'create-file' : 'create-folder', newPath, workspacePath);
+    if (!res) return;
+    setTreeCreating(null);
     refreshFileTree();
-  }, [refreshFileTree, treeCreateValue, treeCreating, workspacePath]);
+  }, [refreshFileTree, showToast, treeCreateValue, treeCreating, workspacePath, runTreeOp]);
 
   const suggestFilePath = useCallback((name: string) => {
     const ext = name.split('.').pop()?.toLowerCase();
@@ -651,17 +688,14 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   const deleteFile = useCallback(async (relativePath: string) => {
     if (!ipc || !workspacePath) return;
     const halaGecerli = pathOperationScope();
-    const res = await ipc.invoke('delete-file', relativePath, workspacePath);
-    if (res.success) {
-      showToast(cevir('file.deleted'), 'success');
-      refreshFileTree();
-      // Only the workspace this delete started in: after a workspace switch the
-      // same relative path can name a different, still-present file.
-      if (halaGecerli()) applyContentPathChange(relativePath, null);
-    } else {
-      showToast(cevir('file.deleteError', { hata: res.error }), 'error');
-    }
-  }, [ipc, workspacePath, showToast, refreshFileTree, applyContentPathChange, pathOperationScope]);
+    const res = await runTreeOp('file.deleteError', 'delete-file', relativePath, workspacePath);
+    if (!res) return;
+    showToast(cevir('file.deleted'), 'success');
+    refreshFileTree();
+    // Only the workspace this delete started in: after a workspace switch the
+    // same relative path can name a different, still-present file.
+    if (halaGecerli()) applyContentPathChange(relativePath, null);
+  }, [ipc, workspacePath, showToast, refreshFileTree, applyContentPathChange, pathOperationScope, runTreeOp]);
 
   const handleExportToUnity = useCallback(async (codeString: string) => {
     if (!workspacePath) return;
@@ -717,16 +751,16 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     // between; the moved path then belongs to a workspace the content area has
     // already left.
     const halaGecerli = pathOperationScope();
-    const res = await ipc?.invoke('move-entry', sourcePath, targetEntry.path, workspacePath);
+    const res = await runTreeOp('file.moveError', 'move-entry', sourcePath, targetEntry.path, workspacePath);
     setTreeDragSource(null);
-    if (!res?.success) return;
+    if (!res) return;
     // `move-entry` reports the destination the same way `rename-entry` does, so
     // the content area follows the file it was showing into its new directory.
     if (halaGecerli()) {
       applyContentPathChange(sourcePath, typeof res.newPath === 'string' ? res.newPath : null);
     }
     refreshFileTree();
-  }, [refreshFileTree, treeDragSource, workspacePath, applyContentPathChange, pathOperationScope]);
+  }, [refreshFileTree, treeDragSource, workspacePath, applyContentPathChange, pathOperationScope, runTreeOp]);
 
   const handleTreeContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault();
@@ -760,8 +794,8 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     const fileName = exportModal.suggestedName;
     const content = exportModal.codeString;
     const targetPath = `${exportModal.targetDir}/${fileName}`;
-    const res = await ipc.invoke('write-file', targetPath, content, workspacePath);
-    if (res?.success) {
+    const res = await invokeChecked('write-file', targetPath, content, workspacePath);
+    if (res.success) {
       setExportModal({ ...exportModal, exportResult: { success: true, message: cevir('export.fileDone', { ad: fileName }) } });
       refreshFileTree();
       showToast(cevir('export.toUnity'), 'success');
@@ -773,14 +807,26 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   const exportMultipleFiles = useCallback(async () => {
     if (!ipc || !workspacePath || !exportModal) return;
     let successCount = 0;
+    let firstError = '';
     for (const f of exportModal.files) {
       const targetPath = `${exportModal.targetDir}/${f.name}`;
-      const res = await ipc.invoke('write-file', targetPath, f.code, workspacePath);
-      if (res?.success) successCount++;
+      const res = await invokeChecked('write-file', targetPath, f.code, workspacePath);
+      if (res.success) successCount++;
+      else if (!firstError) firstError = res.error || cevir('common.unknown');
     }
-    setExportModal({ ...exportModal, exportResult: { success: true, message: cevir('export.multiDone', { sayi: successCount }) } });
-    refreshFileTree();
-    showToast(cevir('export.multiToUnity', { sayi: successCount }), 'success');
+    const failed = exportModal.files.length - successCount;
+    if (failed === 0) {
+      setExportModal({ ...exportModal, exportResult: { success: true, message: cevir('export.multiDone', { sayi: successCount }) } });
+      refreshFileTree();
+      showToast(cevir('export.multiToUnity', { sayi: successCount }), 'success');
+      return;
+    }
+    const message = successCount === 0
+      ? cevir('export.multiFailed', { hata: firstError })
+      : cevir('export.multiPartial', { ok: successCount, sayi: failed, hata: firstError });
+    setExportModal({ ...exportModal, exportResult: { success: false, message } });
+    if (successCount > 0) refreshFileTree();
+    showToast(message, 'error');
   }, [exportModal, refreshFileTree, showToast, workspacePath]);
 
   return {

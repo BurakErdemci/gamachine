@@ -3,9 +3,12 @@ import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, it, expect } from 'vitest'
 import {
+  hasDotDotSegment,
   isAllowedUnityScriptPath,
+  isAllowedWorkspaceWriteFile,
   isAllowedWorkspacePath,
   isInsideWorkspace,
+  isWritableExistingTarget,
   okumaKarariVer,
 } from '../main/helpers/file-security'
 
@@ -219,5 +222,79 @@ describe('isInsideWorkspace — strictly inside, never the root', () => {
 
   it('isAllowedWorkspacePath still accepts the root for reads', () => {
     expect(isAllowedWorkspacePath(tempRoot, tempRoot)).toBe(true)
+  })
+})
+
+describe("'..' segments are refused (symlink + '..' alias)", () => {
+  it('hasDotDotSegment finds exact .. segments in both separator forms', () => {
+    expect(hasDotDotSegment('/a/../b')).toBe(true)
+    expect(hasDotDotSegment('a\\..\\b')).toBe(true)
+    expect(hasDotDotSegment('/a/b/..')).toBe(true)
+    expect(hasDotDotSegment('..\\x')).toBe(true)
+    expect(hasDotDotSegment('/a/..b/c...d/b..')).toBe(false)
+    expect(hasDotDotSegment('/a/b/c.txt')).toBe(false)
+  })
+
+  it.each([
+    ['middle posix', (r: string) => `${r}/sub/../x.txt`],
+    ['trailing posix', (r: string) => `${r}/sub/..`],
+    ['middle backslash', (r: string) => `${r}\\sub\\..\\x.txt`],
+    ['trailing backslash', (r: string) => `${r}\\sub\\..`],
+  ])('every guard refuses a target with %s ..', (_name, build) => {
+    fs.mkdirSync(path.join(tempRoot, 'sub'))
+    const target = build(tempRoot)
+    expect(isAllowedWorkspacePath(target, tempRoot)).toBe(false)
+    expect(isInsideWorkspace(target, tempRoot)).toBe(false)
+    expect(isAllowedWorkspaceWriteFile(target, tempRoot)).toBe(false)
+    expect(isAllowedUnityScriptPath(target, tempRoot)).toBe(false)
+    expect(okumaKarariVer(target, tempRoot).izinli).toBe(false)
+  })
+
+  it('a plain inner path is still allowed', () => {
+    const inner = path.join(tempRoot, 'sub', 'x.txt')
+    expect(isAllowedWorkspacePath(inner, tempRoot)).toBe(true)
+    expect(isInsideWorkspace(inner, tempRoot)).toBe(true)
+    expect(isAllowedWorkspaceWriteFile(inner, tempRoot)).toBe(true)
+  })
+
+  it('refuses workspace/nested/root-link/../workspace (link to the root, then ..)', () => {
+    const nested = path.join(tempRoot, 'workspace', 'nested')
+    fs.mkdirSync(nested, { recursive: true })
+    const ws = path.join(tempRoot, 'workspace')
+    try {
+      fs.symlinkSync(ws, path.join(nested, 'root-link'), 'junction')
+    } catch {
+      return
+    }
+    const alias = `${nested}/root-link/../workspace`
+    expect(isInsideWorkspace(alias, ws)).toBe(false)
+    expect(isAllowedWorkspacePath(alias, ws)).toBe(false)
+    expect(isAllowedWorkspaceWriteFile(`${alias}/x.txt`, ws)).toBe(false)
+  })
+})
+
+describe('isWritableExistingTarget (hard-link write refusal)', () => {
+  it('allows a missing target and a single-name regular file', () => {
+    expect(isWritableExistingTarget(path.join(tempRoot, 'new.txt'))).toBe(true)
+    const f = path.join(tempRoot, 'one.txt')
+    fs.writeFileSync(f, 'x')
+    expect(isWritableExistingTarget(f)).toBe(true)
+  })
+
+  it('refuses a file with a second hard link, like the read policy', () => {
+    const outside = path.join(tempRoot, 'outside.txt')
+    const alias = path.join(tempRoot, 'ws-linked.txt')
+    fs.writeFileSync(outside, 'secret')
+    try {
+      fs.linkSync(outside, alias)
+    } catch {
+      return
+    }
+    expect(isWritableExistingTarget(alias)).toBe(false)
+    expect(isWritableExistingTarget(outside)).toBe(false)
+  })
+
+  it('refuses a directory', () => {
+    expect(isWritableExistingTarget(tempRoot)).toBe(false)
   })
 })

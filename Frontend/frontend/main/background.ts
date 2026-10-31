@@ -19,6 +19,7 @@ import {
   readExactly,
   taniticiKapsamdaMi,
   isAllowedWorkspaceWriteFile,
+  isWritableExistingTarget,
   readModelFileGuarded,
   readImageFileGuarded,
 } from './helpers/file-security'
@@ -699,6 +700,10 @@ handleSecure('write-file', async (_event, filePath: string, content: string, wor
 
     if (!isAllowedWorkspaceWriteFile(fullPath, workspacePath || "")) {
       return { success: false, error: 'Dosya yalnızca seçili workspace içindeki kod/metin dosyalarına yazılabilir (.cs için Assets/Scripts altı).' }
+    }
+    // Same single-name rule as the read policy: a hard link would write the outside file.
+    if (!isWritableExistingTarget(fullPath)) {
+      return { success: false, error: 'Dosya düzenli bir dosya değil ya da birden fazla bağlantısı var.' }
     }
     const dir = path.dirname(fullPath)
     if (!fs.existsSync(dir)) {
