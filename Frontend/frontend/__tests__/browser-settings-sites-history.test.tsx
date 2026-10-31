@@ -540,9 +540,12 @@ describe('the edges of the removal window, turn 5', () => {
     f.session.cookies.get.mockImplementationOnce(async () => { await gate; return read() })
     const removal = f.host.invoke({ op: 'site-remove', site: 'example.com' })
     await f.host.invoke({ op: 'open', conversationId: 7, url: 'https://early.example.com:8443/?token=x' })
-    expect(f.views[0].webContents.destroyed).toBe(true)
+    // Not yet accepted (turn 6): the load is refused and the tab waits for the verdict.
+    expect(f.views[0].webContents.loadURL).not.toHaveBeenCalled()
+    expect(f.views[0].webContents.destroyed).toBe(false)
     release()
     expect(await removal).toEqual({ ok: true, removed: 1 })
+    expect(f.views[0].webContents.destroyed).toBe(true)
     expect(origins(f)).toContain('https://early.example.com:8443')
   })
 
@@ -619,6 +622,150 @@ describe('the edges of the removal window, turn 5', () => {
         expect(await reopenAfter(request)).toEqual({ error: 'nothing_to_reopen' })
       })
     }
+  })
+})
+
+describe('turn 6', () => {
+  const login = () => ({ name: 'login', value: 'v', domain: 'example.com', path: '/', secure: true })
+  const origins = (f: ReturnType<typeof tabFixture>) => f.session.clearStorageData.mock.calls.map((c: any) => c[0].origin)
+  const addresses = async () => [{ address: '93.184.216.34', family: 4 }]
+  const loads = (f: ReturnType<typeof tabFixture>) => f.views.flatMap((v: any) => v.webContents.loadURL.mock.calls.map((c: any) => c[0]))
+  /** Holds the first cookie read of the next site-remove until the returned release is called. */
+  const holdFirstRead = (f: ReturnType<typeof tabFixture>) => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const read = f.session.cookies.get.getMockImplementation()
+    f.session.cookies.get.mockImplementationOnce(async () => { await gate; return read() })
+    return release
+  }
+  /** Opens and closes `url` in chat 1, then starts its reopen with the address check held. */
+  const pendingReopen = async (f: ReturnType<typeof tabFixture>, url: string) => {
+    const payload = (await f.host.invoke({ op: 'open', conversationId: 1, url })) as any
+    f.views[f.views.length - 1].webContents.url = url
+    await f.host.invoke({ op: 'close-tab', conversationId: 1, tabId: payload.activeTabId })
+    let answer!: (addresses: { address: string; family: number }[]) => void
+    f.net.lookup = () => new Promise((resolve) => { answer = resolve })
+    const reopening = f.host.invoke({ op: 'reopen-tab', conversationId: 1 })
+    await vi.waitFor(() => expect(answer).toBeDefined())
+    const viewsBefore = f.views.length
+    const settle = async (ok: boolean) => {
+      answer([{ address: ok ? '93.184.216.34' : '10.0.0.8', family: 4 }])
+      const result = await reopening
+      f.net.lookup = addresses
+      return result
+    }
+    return { settle, opened: () => f.views.slice(viewsBefore), reopenLoads: () => f.views.slice(viewsBefore).flatMap((v: any) => v.webContents.loadURL.mock.calls.map((c: any) => c[0])) }
+  }
+
+  describe('a removal not yet past its refusal checks', () => {
+    it('a refused parent leaves a tenant tab opened during its first read open, without loading the tenant', async () => {
+      const f = tabFixture()
+      f.jar.push({ ...login(), domain: 'alice.github.io' }, { ...login(), domain: 'bob.github.io' })
+      const release = holdFirstRead(f)
+      const removal = f.host.invoke({ op: 'site-remove', site: 'github.io' })
+      await f.host.invoke({ op: 'open', conversationId: 1, url: 'https://alice.github.io/' })
+      release()
+      expect(await removal).toEqual({ error: 'bad_args' })
+      expect(f.views[0].webContents.destroyed).toBe(false)
+      expect(loads(f)).not.toContain('https://alice.github.io/')
+      expect(f.session.clearStorageData).not.toHaveBeenCalled()
+    })
+
+    it('a refused parent stops a tenant navigation that starts during its first read and keeps the tab on its page', async () => {
+      const f = tabFixture()
+      f.jar.push({ ...login(), domain: 'alice.github.io' }, { ...login(), domain: 'bob.github.io' })
+      await f.open(1, 'https://other.org/')
+      const wc = f.views[0].webContents
+      const release = holdFirstRead(f)
+      const removal = f.host.invoke({ op: 'site-remove', site: 'github.io' })
+      wc.emit('did-start-navigation', { url: 'https://alice.github.io/', isMainFrame: true })
+      expect(wc.stop).toHaveBeenCalled()
+      release()
+      expect(await removal).toEqual({ error: 'bad_args' })
+      expect(wc.destroyed).toBe(false)
+      expect(wc.getURL()).toBe('https://other.org/')
+    })
+
+    it('an accepted removal closes a tab whose navigation onto the site started during its first read', async () => {
+      const f = tabFixture()
+      f.jar.push(login())
+      await f.open(1, 'https://other.org/')
+      const wc = f.views[0].webContents
+      const release = holdFirstRead(f)
+      const removal = f.host.invoke({ op: 'site-remove', site: 'example.com' })
+      wc.emit('did-start-navigation', { url: 'https://late.example.com:9443/x', isMainFrame: true })
+      release()
+      expect(await removal).toEqual({ ok: true, removed: 1 })
+      expect(wc.destroyed).toBe(true)
+      expect(origins(f)).toContain('https://late.example.com:9443')
+    })
+  })
+
+  describe('a reopen in flight that a removal or forget matched', () => {
+    for (const [name, forget] of [
+      ['a history-remove of its url', { op: 'history-remove', url: 'https://hidden.example.com:8443/?token=x' }],
+      ['the deletion of its chat', { op: 'close', conversationId: 1 }],
+    ] as const) {
+      it(`hands its exact origin to the removal running when it fails after ${name}`, async () => {
+        const f = tabFixture(memoryHistory(() => 1_000).history)
+        f.jar.push(login())
+        const reopen = await pendingReopen(f, 'https://hidden.example.com:8443/?token=x')
+        const release = holdFirstRead(f)
+        const removal = f.host.invoke({ op: 'site-remove', site: 'example.com' })
+        expect((await f.host.invoke(forget) as any).error).toBeUndefined()
+        expect(await reopen.settle(false)).toEqual({ error: 'url_not_allowed' })
+        release()
+        expect(await removal).toEqual({ ok: true, removed: 1 })
+        expect(origins(f)).toContain('https://hidden.example.com:8443')
+        expect(await f.host.invoke({ op: 'reopen-tab', conversationId: 1 })).toEqual({ error: 'nothing_to_reopen' })
+      })
+    }
+
+    for (const [name, forget] of [
+      ['a site-remove of its site that finished', { op: 'site-remove', site: 'example.com' }],
+      ['a history-remove of its url', { op: 'history-remove', url: 'https://hidden.example.com/p' }],
+    ] as const) {
+      it(`is not opened when its address check passes after ${name}`, async () => {
+        const f = tabFixture(memoryHistory(() => 1_000).history)
+        f.jar.push(login())
+        const reopen = await pendingReopen(f, 'https://hidden.example.com/p')
+        expect(await f.host.invoke(forget)).toMatchObject({ ok: true })
+        expect(await reopen.settle(true)).toEqual({ error: 'nothing_to_reopen' })
+        expect(reopen.opened()).toEqual([])
+        expect(await f.host.invoke({ op: 'reopen-tab', conversationId: 1 })).toEqual({ error: 'nothing_to_reopen' })
+      })
+    }
+
+    it('is not opened after shutdown, and reopen and open refuse once the host stopped', async () => {
+      const f = tabFixture(memoryHistory(() => 1_000).history)
+      const reopen = await pendingReopen(f, 'https://unrelated.example/keep')
+      await f.host.shutdown()
+      expect(await reopen.settle(true)).toEqual({ error: 'closed' })
+      expect(reopen.opened()).toEqual([])
+      expect(await f.host.invoke({ op: 'reopen-tab', conversationId: 1 })).toEqual({ error: 'closed' })
+      expect(await f.host.invoke({ op: 'open', conversationId: 1, url: 'https://unrelated.example/' })).toEqual({ error: 'closed' })
+      expect(f.views.every((v: any) => v.webContents.destroyed)).toBe(true)
+    })
+  })
+
+  describe('a reopen in flight that nothing matched', () => {
+    it('still opens its page when its address check passes', async () => {
+      const f = tabFixture(memoryHistory(() => 1_000).history)
+      f.jar.push(login())
+      const reopen = await pendingReopen(f, 'https://unrelated.example/keep')
+      expect(await f.host.invoke({ op: 'site-remove', site: 'example.com' })).toMatchObject({ ok: true })
+      expect((await reopen.settle(true) as any).error).toBeUndefined()
+      expect(reopen.reopenLoads()).toEqual(['https://unrelated.example/keep'])
+      expect(reopen.opened().every((v: any) => !v.webContents.destroyed)).toBe(true)
+    })
+
+    it('is still put back when its address check fails', async () => {
+      const f = tabFixture(memoryHistory(() => 1_000).history)
+      const reopen = await pendingReopen(f, 'https://unrelated.example/keep')
+      expect(await reopen.settle(false)).toEqual({ error: 'url_not_allowed' })
+      // The refused address stays cached as blocked, so the stack itself is what shows the page came back.
+      expect((f.host as any).closed.get(1).map((tab: any) => tab.url)).toEqual(['https://unrelated.example/keep'])
+    })
   })
 })
 
