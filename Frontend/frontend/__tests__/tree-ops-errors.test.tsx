@@ -80,3 +80,91 @@ describe.each(OPS)('%s failure handling', (channel) => {
     if (channel === 'rename-entry') expect(h.result.current.renamingPath).toBeNull()
   })
 })
+
+describe('write-file failure handling (saveFile and export)', () => {
+  type WriteMode = 'ok' | 'failed' | 'rejected'
+  const writeImpl = (modes: WriteMode[]) => {
+    let i = 0
+    invoke.mockReset()
+    invoke.mockImplementation(async (ch: string) => {
+      if (ch === 'path-exists') return true
+      if (ch === 'read-directory') return []
+      if (ch === 'read-file') return { content: 'x', path: '/ws/a.md' }
+      if (ch !== 'write-file') return undefined
+      const m = modes[i++] ?? 'ok'
+      if (m === 'rejected') throw new Error('injected EIO-write')
+      if (m === 'failed') return { success: false, error: 'injected EACCES' }
+      return { success: true }
+    })
+  }
+  const mount = async (modes: WriteMode[]) => {
+    writeImpl(modes)
+    const toast = vi.fn()
+    const h = renderHook(() => useFileSystem('http://x', null, toast))
+    await act(async () => { await h.result.current.selectWorkspace('/ws') })
+    invoke.mockClear()
+    return { h, toast }
+  }
+  const openModal = (h: any, multi: boolean) => {
+    const files = [{ name: 'A.cs', code: 'a', path: '/ws/Assets/Scripts/A.cs' }, { name: 'B.cs', code: 'b', path: '/ws/Assets/Scripts/B.cs' }]
+    act(() => {
+      h.result.current.setExportModal({
+        isOpen: true, codeString: 'a', suggestedName: 'A.cs', targetDir: '/ws/Assets/Scripts',
+        existingFile: false, multiFile: multi, files: multi ? files : [files[0]], exportResult: null,
+      })
+    })
+  }
+  const writes = () => invoke.mock.calls.filter(c => c[0] === 'write-file').length
+
+  it.each(['failed', 'rejected'] as WriteMode[])('saveFile %s: returns false and toasts the error', async (mode) => {
+    const { h, toast } = await mount([mode])
+    await act(async () => { await h.result.current.openFile('/ws/a.md') })
+    toast.mockClear()
+    act(() => { h.result.current.setCode('edited') })
+    let ok: any
+    await act(async () => { ok = await h.result.current.saveFile() })
+    expect(ok).toBe(false)
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining(mode === 'failed' ? 'injected EACCES' : 'injected EIO-write'), 'error')
+  })
+
+  it.each(['failed', 'rejected'] as WriteMode[])('exportSingleFile %s: failed result, no toast, no refresh', async (mode) => {
+    const { h, toast } = await mount([mode])
+    openModal(h, false)
+    await act(async () => { await h.result.current.exportSingleFile() })
+    expect(h.result.current.exportModal.exportResult.success).toBe(false)
+    expect(toast).not.toHaveBeenCalled()
+    expect(refreshed()).toBe(false)
+  })
+
+  it('exportMultipleFiles all fail: error result and toast, no refresh', async () => {
+    const { h, toast } = await mount(['failed', 'rejected'])
+    openModal(h, true)
+    await act(async () => { await h.result.current.exportMultipleFiles() })
+    expect(writes()).toBe(2)
+    expect(h.result.current.exportModal.exportResult.success).toBe(false)
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('injected EACCES'), 'error')
+    expect(refreshed()).toBe(false)
+  })
+
+  it('exportMultipleFiles some fail: failure count reported, tree refreshed', async () => {
+    const { h, toast } = await mount(['ok', 'failed'])
+    openModal(h, true)
+    await act(async () => { await h.result.current.exportMultipleFiles() })
+    expect(h.result.current.exportModal.exportResult.success).toBe(false)
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/1.*injected EACCES/), 'error')
+    expect(refreshed()).toBe(true)
+  })
+
+  it('exportMultipleFiles none fail: success result, success toast, refresh', async () => {
+    const { h, toast } = await mount(['ok', 'ok'])
+    openModal(h, true)
+    await act(async () => { await h.result.current.exportMultipleFiles() })
+    expect(h.result.current.exportModal.exportResult.success).toBe(true)
+    expect(toast).toHaveBeenCalledTimes(1)
+    expect(toast).toHaveBeenCalledWith(expect.any(String), 'success')
+    expect(refreshed()).toBe(true)
+  })
+})

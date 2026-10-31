@@ -10,6 +10,17 @@ import { routeForFile } from '../../components/model-viewer/extensions';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
 
+type OpResult = { success?: boolean; error?: string; newPath?: string };
+
+// A rejected IPC call is normalised to the same shape as a refused one.
+async function invokeChecked(channel: string, ...args: unknown[]): Promise<OpResult> {
+  try {
+    return (await ipc?.invoke(channel, ...args)) ?? { success: false };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // One file reaches this hook under several legitimate spellings: the tree hands
 // out absolute host paths, an approved agent operation names the file relative
 // to the workspace, and Windows accepts either separator for the same entry.
@@ -292,8 +303,8 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   const saveFile = useCallback(async () => {
     if (!ipc || !openedFilePath || !workspacePath) return false;
     const halaGecerli = contentRequest.observe();
-    const res = await ipc.invoke('write-file', openedFilePath, code, workspacePath);
-    if (res?.success) {
+    const res = await invokeChecked('write-file', openedFilePath, code, workspacePath);
+    if (res.success) {
       // The write itself succeeded and is still reported as such, but the
       // baseline it establishes belongs to the file that was open when the save
       // started: applying it to a file opened since would mark that other file's
@@ -305,7 +316,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
       showToast(cevir('file.saved'), 'success');
       return true;
     } else {
-      showToast(cevir('file.saveError', { hata: res?.error || cevir('common.unknown') }), 'error');
+      showToast(cevir('file.saveError', { hata: res.error || cevir('common.unknown') }), 'error');
       return false;
     }
   }, [code, openedFilePath, workspacePath, showToast, contentRequest]);
@@ -597,15 +608,10 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     errorKey: 'file.createError' | 'file.deleteError' | 'file.renameError' | 'file.moveError',
     channel: string,
     ...args: unknown[]
-  ): Promise<{ success?: boolean; error?: string; newPath?: string } | null> => {
-    let res: { success?: boolean; error?: string; newPath?: string } | undefined;
-    try {
-      res = await ipc?.invoke(channel, ...args);
-    } catch (err) {
-      res = { success: false, error: err instanceof Error ? err.message : String(err) };
-    }
-    if (!res?.success) {
-      showToast(cevir(errorKey, { hata: res?.error || cevir('common.unknown') }), 'error');
+  ): Promise<OpResult | null> => {
+    const res = await invokeChecked(channel, ...args);
+    if (!res.success) {
+      showToast(cevir(errorKey, { hata: res.error || cevir('common.unknown') }), 'error');
       return null;
     }
     return res;
@@ -788,8 +794,8 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     const fileName = exportModal.suggestedName;
     const content = exportModal.codeString;
     const targetPath = `${exportModal.targetDir}/${fileName}`;
-    const res = await ipc.invoke('write-file', targetPath, content, workspacePath);
-    if (res?.success) {
+    const res = await invokeChecked('write-file', targetPath, content, workspacePath);
+    if (res.success) {
       setExportModal({ ...exportModal, exportResult: { success: true, message: cevir('export.fileDone', { ad: fileName }) } });
       refreshFileTree();
       showToast(cevir('export.toUnity'), 'success');
@@ -801,14 +807,26 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   const exportMultipleFiles = useCallback(async () => {
     if (!ipc || !workspacePath || !exportModal) return;
     let successCount = 0;
+    let firstError = '';
     for (const f of exportModal.files) {
       const targetPath = `${exportModal.targetDir}/${f.name}`;
-      const res = await ipc.invoke('write-file', targetPath, f.code, workspacePath);
-      if (res?.success) successCount++;
+      const res = await invokeChecked('write-file', targetPath, f.code, workspacePath);
+      if (res.success) successCount++;
+      else if (!firstError) firstError = res.error || cevir('common.unknown');
     }
-    setExportModal({ ...exportModal, exportResult: { success: true, message: cevir('export.multiDone', { sayi: successCount }) } });
-    refreshFileTree();
-    showToast(cevir('export.multiToUnity', { sayi: successCount }), 'success');
+    const failed = exportModal.files.length - successCount;
+    if (failed === 0) {
+      setExportModal({ ...exportModal, exportResult: { success: true, message: cevir('export.multiDone', { sayi: successCount }) } });
+      refreshFileTree();
+      showToast(cevir('export.multiToUnity', { sayi: successCount }), 'success');
+      return;
+    }
+    const message = successCount === 0
+      ? cevir('export.multiFailed', { hata: firstError })
+      : cevir('export.multiPartial', { ok: successCount, sayi: failed, hata: firstError });
+    setExportModal({ ...exportModal, exportResult: { success: false, message } });
+    if (successCount > 0) refreshFileTree();
+    showToast(message, 'error');
   }, [exportModal, refreshFileTree, showToast, workspacePath]);
 
   return {
