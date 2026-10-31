@@ -53,16 +53,17 @@ export function trashPrompt(real: string, platform: string) {
 }
 
 /**
- * The -projectPath values of a command line, as candidate lists (longest first). A quoted value is one candidate;
- * an unquoted one may contain " -x" (a folder called "Alias -Design"), so every " -" boundary and the end are cut points.
+ * The -projectPath values of a command line, as candidate lists (longest first), never trimmed: folder names may
+ * begin, end or be full of whitespace. A quoted value is exactly the text between the quotes (one candidate). An
+ * unquoted value runs from its start up to each whitespace character and up to the line end (CR/LF dropped).
  */
 const projectPathArgs = (command: string): string[][] =>
-  [...command.matchAll(/-projectpath\s+(?:"([^"]*)"|'([^']*)'|(?=(.*)$))/gi)].map(m => {
+  [...command.matchAll(/-projectpath\s+(?:"([^"]*)"|'([^']*)'|(?=([^\r\n]*)))/gi)].map(m => {
     const quoted = m[1] ?? m[2]
-    if (quoted !== undefined) return [quoted.trim()].filter(Boolean)
+    if (quoted !== undefined) return [quoted].filter(Boolean)
     const rest = m[3] ?? ''
-    const cuts = [...[...rest.matchAll(/\s-/g)].map(c => c.index ?? 0), rest.length]
-    return cuts.map(i => rest.slice(0, i).trim()).filter(Boolean).reverse()
+    const cuts = [...[...rest.matchAll(/\s/g)].map(c => c.index ?? 0), rest.length]
+    return cuts.map(i => rest.slice(0, i)).filter(Boolean).reverse()
   }).filter(list => list.length > 0)
 
 /**

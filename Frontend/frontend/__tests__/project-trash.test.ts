@@ -237,6 +237,34 @@ describe('project-trash guards', () => {
       expect(deps.trashItem).not.toHaveBeenCalled()
     })
 
+    it('keeps a trailing space in the -projectPath value (double-quoted, single-quoted and unquoted)', async () => {
+      const TRAIL = '/Users/me/Games/Arena '
+      for (const arg of [`"${TRAIL}"`, `'${TRAIL}'`, TRAIL]) {
+        const { deps, files } = fake(platform, [...unity(TRAIL, '/'), ...unity(MAC, '/')], { processCommands: async () => [`${editor(arg)} -batchmode`] })
+        files.add(`${TRAIL}/Temp/UnityLockfile`)
+        expect(await trashProject(TRAIL, deps), arg).toEqual({ error: 'unity-open' })
+        expect(deps.trashItem).not.toHaveBeenCalled()
+      }
+    })
+
+    it('cuts an unquoted value at any whitespace, so "-projectPath /w/Game /extra" blocks Game', async () => {
+      const GAME = '/w/Game'
+      const { deps, files } = fake(platform, unity(GAME, '/'), { processCommands: async () => [editor(`${GAME} /extra`)] })
+      files.add(`${GAME}/Temp/UnityLockfile`)
+      expect(await trashProject(GAME, deps)).toEqual({ error: 'unity-open' })
+      expect(deps.trashItem).not.toHaveBeenCalled()
+    })
+
+    it('blocks a folder whose name holds two consecutive spaces when it is open', async () => {
+      const DOUBLE = '/Users/me/Games/My  Game'
+      for (const arg of [DOUBLE, `"${DOUBLE}"`]) {
+        const { deps, files } = fake(platform, [...unity(DOUBLE, '/'), '/Users/me/Games/My'], { processCommands: async () => [`${editor(arg)} -batchmode\r\n`] })
+        files.add(`${DOUBLE}/Temp/UnityLockfile`)
+        expect(await trashProject(DOUBLE, deps), arg).toEqual({ error: 'unity-open' })
+        expect(deps.trashItem).not.toHaveBeenCalled()
+      }
+    })
+
     it('does not let an editor for Arena2 block Arena, nor a path only mentioned in the command text', async () => {
       const cases = [editor(`${MAC}2`), `${editor('/Users/me/Games/Other')} -logFile ${MAC}/log.txt`, `/Applications/Unity/Unity ${MAC}`]
       for (const cmd of cases) {
