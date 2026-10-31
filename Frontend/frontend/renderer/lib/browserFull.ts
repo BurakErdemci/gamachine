@@ -22,11 +22,12 @@ const hasOpenModal = () => !!document.querySelector(MODAL);
  * (a popup or the composer closes itself on Esc without marking the event). The listener runs in
  * the capture phase so the DOM is read before such a popup removes itself.
  */
-export function useBrowserFull(shown: boolean) {
+export function useBrowserFull(shown: boolean, chatId?: number | null) {
   const [on, setOn] = useState(false);
   const full = on && shown;
 
   useEffect(() => { if (!shown) setOn(false); }, [shown]);
+  useEffect(() => { setOn(false); }, [chatId]);
 
   useEffect(() => {
     if (!shown) return;

@@ -90,7 +90,7 @@ describe('browser full screen', () => {
     await screen.findByRole('combobox')
     expect(toggleBtn().getAttribute('title')).toBe(tr['bp.fullEnter'].replace('{kisayol}', 'Ctrl+Shift+F'))
     expect(translations.en['bp.fullEnter']).toContain('{kisayol}')
-    expect(translations.en['bp.fullLeave']).toContain('Esc')
+    expect(translations.en['bp.fullLeave']).toContain('{kisayol}')
   })
 
   it('uses Ctrl+Shift+F on Windows and Cmd+Shift+F on macOS', () => {
@@ -257,9 +257,44 @@ describe('browser full screen keyboard rules', () => {
     expect(screen.getByTestId('s').dataset.full).toBe('n')
   })
 
+  it('leaves when the conversation changes', async () => {
+    function ByChat({ chat }: { chat: number }) {
+      const bf = useBrowserFull(true, chat)
+      return <div data-testid="c" data-full={bf.full ? 'y' : 'n'}><button onClick={bf.toggle}>t</button></div>
+    }
+    const hooked = render(<ByChat chat={3} />)
+    fireEvent.click(screen.getByText('t'))
+    expect(screen.getByTestId('c').dataset.full).toBe('y')
+    hooked.rerender(<ByChat chat={4} />)
+    expect(screen.getByTestId('c').dataset.full).toBe('n')
+    hooked.unmount()
+  })
+
+  it('keeps full mode when Esc closes the chat image lightbox', async () => {
+    const src = readFileSync(join(__dirname, '../renderer/components/home/ChatPanel.tsx'), 'utf8')
+    expect(src).toMatch(/\{lightboxSrc && \(\s*<div\s+role="dialog" aria-modal="true"/)
+    render(<Frame browserShown />)
+    await enter()
+    const lightbox = document.createElement('div')
+    lightbox.setAttribute('role', 'dialog')
+    lightbox.setAttribute('aria-modal', 'true')
+    document.body.appendChild(lightbox)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(full()).toBe(true)
+  })
+
+  it('does not promise Esc everywhere in the leave tooltip', () => {
+    for (const lang of ['tr', 'en'] as const) {
+      const text = translations[lang]['bp.fullLeave']
+      expect(text).toContain('{kisayol}')
+      expect(text).not.toMatch(/(ya da|or) Esc/)
+      expect(text).toMatch(lang === 'tr' ? /sayfanın dışındayken/ : /outside the page/)
+    }
+  })
+
   it('home.tsx passes the screen rule into the hook', () => {
     const src = readFileSync(join(__dirname, '../renderer/pages/home.tsx'), 'utf8')
-    expect(src).toMatch(/useBrowserFull\([^)]*!ai\.showSettings && !profileOpen && !guide\.guideOpen\)/)
+    expect(src).toMatch(/useBrowserFull\([^)]*!ai\.showSettings && !profileOpen && !guide\.guideOpen, chat\.activeConvId\)/)
   })
 })
 

@@ -806,7 +806,7 @@ export default function Home() {
   const { closeGuide, dismiss: dismissGuide } = guide;
   // Opening or closing a project swaps the screen under the guide and its topic list.
   useEffect(() => { dismissGuide(); }, [guideScreenId, dismissGuide]);
-  const browserFull = useBrowserFull(ws.open && ws.tab === 'canli' && liveView === 'tarayici' && !ai.showSettings && !profileOpen && !guide.guideOpen);
+  const browserFull = useBrowserFull(ws.open && ws.tab === 'canli' && liveView === 'tarayici' && !ai.showSettings && !profileOpen && !guide.guideOpen, chat.activeConvId);
   const sceneFrameVisible = !!fs.workspacePath && !backendError && !ai.showSettings;
   const sceneEditor = useSceneEditor({ api: API, token: auth.user?.sessionToken, editorOn,
     projectPath: fs.workspacePath ?? null,
