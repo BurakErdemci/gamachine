@@ -419,7 +419,7 @@ describe('host annotate ops', () => {
     await f.poll()
     expect(f.boxView.setVisible).toHaveBeenLastCalledWith(true)
     expect(f.boxWc.executeJavaScript).toHaveBeenLastCalledWith('window.__set("yarım yorum")')
-    // the page dropped the target (a new click): box and draft are gone
+    // the page dropped the target (Esc in the page): box and draft are gone
     f.wc.pickState = () => pickState({ picking: null, rect: null, scroll: [0, 120] })
     await f.poll()
     expect(f.boxView.setVisible).toHaveBeenLastCalledWith(false)
@@ -935,6 +935,43 @@ describe('page script', () => {
     }
     expect(JSON.stringify(names)).not.toContain('PRIVATE')
     expect(names).toContain('Save')
+  })
+
+  it('T7 a newer click does not lose the pick the host keeps open', () => {
+    start('<button id="a" data-r="10,20,100,30">Alpha</button><button id="b" data-r="10,80,100,30">Beta</button>')
+    click(document.getElementById('a')!, 20, 30)
+    const a = pick().pick.id
+    click(document.getElementById('b')!, 20, 90)
+    const b = pick().pick.id
+    expect(b).not.toBe(a)
+    expect(lib().keepPick({ pickId: a })).toEqual({ ok: true })
+    expect(pick()).toMatchObject({ picking: a, pick: null })
+    expect(lib().keepPick({ pickId: b })).toEqual({ error: 'no_pick' })
+    expect(lib().commitPin({ pickId: a, n: 1 })).toEqual({ ok: true })
+    expect(pick()).toMatchObject({ picking: null, pick: null })
+  })
+
+  it('T7 nested-editor text is absent from names via label for, aria-labelledby, own text and a wrapping label', () => {
+    start('<label for="f1">Ad <span class="ed" contenteditable="true">PRIVATE_LABEL_FOR</span></label><input id="f1">'
+      + '<span id="ref">Kaydet <span role="textbox">PRIVATE_LABELLEDBY</span></span><button id="b1" aria-labelledby="ref"></button>'
+      + '<div id="d1" role="button" tabindex="0">Git <span class="ed" contenteditable="true">PRIVATE_SELF</span></div>'
+      + '<label>Notlar <textarea id="t1">PRIVATE_WRAPPED</textarea></label>')
+    for (const el of document.querySelectorAll('.ed')) Object.defineProperty(el, 'isContentEditable', { value: true })
+    const names = lib().snapshot({ snapshotId: 't7', maxChars: 4000 }).elements.map((e: any) => e.name)
+    for (const id of ['f1', 'b1', 'd1', 't1']) {
+      document.getElementById(id)!.focus()
+      names.push(lib().describe({ focused: true }).element.name)
+    }
+    expect(JSON.stringify(names)).not.toContain('PRIVATE')
+    expect(names.slice(-4)).toEqual(['Ad', 'Kaydet', 'Git', 'Notlar'])
+  })
+
+  it('T7 select and combobox names are unchanged', () => {
+    start('<select id="s"><option>One</option></select><div role="combobox">Pick</div><label for="s2">Ülke</label><select id="s2"><option>Türkiye</option></select>')
+    const names = lib().snapshot({ snapshotId: 't7b', maxChars: 4000 }).elements.map((e: any) => e.name)
+    expect(names).toEqual(['One', 'Pick', 'Ülke'])
+    document.getElementById('s')!.focus()
+    expect(lib().describe({ focused: true }).element.name).toBe('One')
   })
 
   it('draws the number the host gave on the pin, refuses a missing number, and uncommitPin takes the pin back as a pending target', () => {
@@ -1533,6 +1570,60 @@ describe('T6 host races', () => {
     await f.poll()
     expect((f.host as any).tabs.get(1).pick.data.id).toBe('p1')
     expect((f.host as any).tabs.get(1).pick.draft).toBe('KEEP ME')
+  })
+
+  it('T7 a draft survives a later poll after a rejected pick', async () => {
+    const f = fakeHostFixture()
+    await pickTarget(f)
+    boxSays(f, { t: 'draft', text: 'KEEP ME' })
+    f.wc.pickState = () => pickState({ picking: 'p2', pick: { ...PICK, id: 'p2' } })
+    await f.poll()
+    expect(f.pageCalls('keepPick').at(-1)).toContain('"pickId":"p1"')
+    // the page took p2 as reported: later polls carry no fresh pick
+    f.wc.pickState = () => pickState({ picking: 'p2', pick: null })
+    await f.poll()
+    f.wc.pickState = () => pickState()
+    await f.poll()
+    const pick = (f.host as any).tabs.get(1).pick
+    expect(pick.data.id).toBe('p1')
+    expect(pick.draft).toBe('KEEP ME')
+    expect((f.host as any).boxTab).toBe((f.host as any).tabs.get(1))
+  })
+
+  it('T7 out-of-order poll replies keep the pick', async () => {
+    const f = fakeHostFixture()
+    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
+    await openPage(f)
+    await annotate(f, true)
+    let answerOld: (v: unknown) => void = () => {}
+    f.wc.pickState = () => new Promise(resolve => { answerOld = resolve })
+    await f.poll()
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    // the older poll carries the only report of p1; the newer one already sees it outlined
+    f.wc.pickState = () => pickState({ picking: 'p1', pick: null })
+    await f.poll()
+    answerOld(pickState({ pick: PICK }))
+    await settle()
+    expect((f.host as any).tabs.get(1).pick?.data.id).toBe('p1')
+    await vi.waitFor(() => expect(f.boxView.setVisible).toHaveBeenLastCalledWith(true))
+  })
+
+  it('T7 a late reply does not bring back a pick the page dropped', async () => {
+    const f = fakeHostFixture()
+    await f.host.invoke({ op: 'set-bounds', conversationId: 4, bounds: { x: 0, y: 0, width: 1400, height: 900 } })
+    await openPage(f)
+    await annotate(f, true)
+    let answerOld: (v: unknown) => void = () => {}
+    f.wc.pickState = () => new Promise(resolve => { answerOld = resolve })
+    await f.poll()
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: false })
+    await f.host.invoke({ op: 'visible', conversationId: 4, visible: true })
+    f.wc.pickState = () => pickState({ picking: null, rect: null })
+    await f.poll()
+    answerOld(pickState({ pick: PICK }))
+    await settle()
+    expect((f.host as any).tabs.get(1).pick).toBeNull()
   })
 
   it('T6 a tab hidden while the mode is ended is captured with stayHidden', async () => {
