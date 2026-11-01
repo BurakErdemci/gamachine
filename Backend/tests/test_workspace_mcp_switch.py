@@ -1,7 +1,9 @@
 """Project switches hand MCP over without leaving the old editor on autoconnect."""
 
 import asyncio
+import json
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -16,9 +18,11 @@ from unity_ai_mcp import unity_project_presence
 from tools import unity_mcp_tools
 
 
-SCRIPT = "Assets/Editor/UnityArchitectAIMCPSetup.cs"
-ON = '"MCPForUnity.AutoStartOnLoad", true'
-OFF = '"MCPForUnity.AutoStartOnLoad", false'
+SCRIPT = "UserSettings/Gamachine/autoconnect.json"
+ON = '"autoStart": true'
+OFF = '"autoStart": false'
+BOOTSTRAP = (Path(__file__).parents[2] / "unity-mcp" / "MCPForUnity" / "Editor" / "Gamachine"
+             / "GamachineAutoConnect.cs")
 
 
 @pytest.fixture
@@ -173,38 +177,51 @@ def test_toggle_off_clears_active_workspace(switch):
 
 
 @pytest.mark.parametrize("language,expected", [("tr", "tr"), ("en", "en"), ("other", "en")])
-def test_setup_script_probes_server_and_falls_back_to_off(tmp_path, monkeypatch, language, expected):
+def test_settings_file_carries_what_the_bootstrap_applies(tmp_path, monkeypatch, language, expected):
     manager = manager_module.UnityMCPManager()
     manager.language = language
     uvx = tmp_path / "uvx.exe"
     uvx.write_bytes(b"test")
     monkeypatch.setattr(manager, "_get_uvx", lambda: str(uvx))
     manager._write_autoconnect_script(str(tmp_path), auto_start=True)
-    text = (tmp_path / SCRIPT).read_text(encoding="utf-8")
-    assert "namespace UnityArchitectAI" in text
-    assert "static MCPAutoSetup()" in text
-    assert "using (var client = new System.Net.Sockets.TcpClient())" in text
-    assert 'client.ConnectAsync("127.0.0.1", 8080)' in text
-    assert "connection.Wait(150) && client.Connected" in text
-    assert "catch { }" in text
-    assert "if (serverReachable)" in text
-    fallback = text.split("else", 1)[1]
-    assert OFF in fallback
-    assert '"MCPForUnity.ResumeHttpAfterReload", false' in fallback
-    assert f'EditorPrefs.SetString("Gamachine.UiLanguage", "{expected}");' in text
-    assert f'EditorPrefs.SetString("MCPForUnity.UvxPath", "{uvx.as_posix()}");' in text
+    settings = json.loads((tmp_path / SCRIPT).read_text(encoding="utf-8"))
+    assert set(settings) == {"autoStart", "port", "language", "uvxPath", "revision"}
+    assert settings["autoStart"] is True and settings["port"] == 8080
+    assert settings["language"] == expected
+    assert settings["uvxPath"] == uvx.as_posix()
+    assert not (tmp_path / "Assets").exists()
     manager._write_autoconnect_script(str(tmp_path), auto_start=False)
-    off_text = (tmp_path / SCRIPT).read_text(encoding="utf-8")
-    assert OFF in off_text and ON not in off_text
-    assert "ConnectAsync" not in off_text
+    off = json.loads((tmp_path / SCRIPT).read_text(encoding="utf-8"))
+    assert off["autoStart"] is False and off["revision"] != settings["revision"]
 
 
-def test_setup_script_defaults_to_english(tmp_path, monkeypatch):
+def test_bootstrap_probes_server_and_falls_back_to_off():
+    text = BOOTSTRAP.read_text(encoding="utf-8")
+    assert "[InitializeOnLoad]" in text
+    assert '"UserSettings", "Gamachine", "autoconnect.json"' in text
+    assert "if (!File.Exists(SettingsPath)) return;" in text
+    assert "using (var client = new TcpClient())" in text
+    assert 'client.ConnectAsync("127.0.0.1", port)' in text
+    assert "connection.Wait(150) && client.Connected" in text
+    assert "bool connect = settings.autoStart && ServerReachable(settings.port);" in text
+    assert "EditorPrefs.SetBool(EditorPrefKeys.AutoStartOnLoad, connect);" in text
+    assert "EditorPrefs.SetBool(EditorPrefKeys.ResumeHttpAfterReload, connect);" in text
+    assert "EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, true);" in text
+    assert 'EditorPrefs.SetString(EditorPrefKeys.HttpBaseUrl, $"http://127.0.0.1:{settings.port}");' in text
+    assert 'EditorPrefs.SetString(UiLanguageKey, settings.language == "tr" ? "tr" : "en");' in text
+    assert "if (!string.IsNullOrEmpty(settings.uvxPath))" in text
+    assert "EditorApplication.update += Poll;" in text
+    assert "EditorUtility.RequestScriptReload()" in text
+    assert (BOOTSTRAP.parent / "GamachineAutoConnect.cs.meta").is_file()
+    assert (BOOTSTRAP.parent.parent / "Gamachine.meta").is_file()
+
+
+def test_settings_file_defaults_to_english(tmp_path, monkeypatch):
     manager = manager_module.UnityMCPManager()
     monkeypatch.setattr(manager, "_get_uvx", lambda: "uvx")
     manager._write_autoconnect_script(str(tmp_path))
-    assert 'EditorPrefs.SetString("Gamachine.UiLanguage", "en");' in (
-        tmp_path / SCRIPT).read_text(encoding="utf-8")
+    settings = json.loads((tmp_path / SCRIPT).read_text(encoding="utf-8"))
+    assert settings["language"] == "en" and settings["uvxPath"] == ""
 
 
 def test_old_readiness_task_cannot_reenable_previous_workspace(monkeypatch):

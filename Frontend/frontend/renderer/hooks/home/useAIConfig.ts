@@ -42,6 +42,23 @@ export const UNITY_MCP_DURUMLARI = [
 
 export type UnityMCPStatus = typeof UNITY_MCP_DURUMLARI[number];
 
+/** `GET /mcp/unity/status` `dialog`: a native Unity dialog of the active project holding the connection. */
+export interface UnityMCPDialog {
+  title: string;
+  buttons: string[];
+}
+
+/** The status `dialog` field; absent, null or malformed reads as no dialog. */
+export function unityMcpDialogOku(ham: unknown): UnityMCPDialog | null {
+  if (!ham || typeof ham !== 'object') return null;
+  const { title, buttons } = ham as { title?: unknown; buttons?: unknown };
+  if (typeof title !== 'string' || title.length === 0) return null;
+  return {
+    title,
+    buttons: Array.isArray(buttons) ? buttons.filter((b): b is string => typeof b === 'string') : [],
+  };
+}
+
 /**
  * Backend'den gelen ham `status` alanını birliğin İÇİNE zorlar.
  *
@@ -132,6 +149,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
   const [unityMcpReason, setUnityMcpReason] = useState<string | null>(null);
   const [unityMcpReasonCode, setUnityMcpReasonCode] = useState<string | null>(null);
   const [unityMcpReasonLines, setUnityMcpReasonLines] = useState<string[]>([]);
+  const [unityMcpDialog, setUnityMcpDialog] = useState<UnityMCPDialog | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Yoklama kuşağı sayacı + montaj bayrağı; ikisi de `fetchUnityMcpStatus`'ta
   // kullanılıyor, gerekçe orada.
@@ -193,6 +211,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
         ? res.data.reason_code : null);
       setUnityMcpReasonLines(status === 'running' && Array.isArray(res.data?.reason_lines)
         ? res.data.reason_lines.filter((line: unknown): line is string => typeof line === 'string') : []);
+      setUnityMcpDialog(status === 'connected' ? null : unityMcpDialogOku(res.data?.dialog));
       if (status === 'connected') {
         stopPolling();
         pollRef.current = setInterval(fetchUnityMcpStatus, 15000);
@@ -227,6 +246,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       setUnityMcpReason(null);
       setUnityMcpReasonCode(null);
       setUnityMcpReasonLines([]);
+      setUnityMcpDialog(null);
       stopPolling();
       pollRef.current = setInterval(fetchUnityMcpStatus, 5000);
     }
@@ -252,7 +272,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     try {
       // Backend'in ADRESLEYEBILECEGI yol gonderilir. Docker modunda bu
       // konteynerdeki mount; ana makinenin yolu orada yok ve kurulum
-      // `Packages/manifest.json`'i o yola gore cozuyor (denetim, 31 Agu 2026:
+      // paketi o yoldaki projeye kopyaliyor (denetim, 31 Agu 2026:
       // iki `/save-workspace` cagrisi cevrildi ama bu ucuncusu atlanmisti).
       const mcpWorkspace = workspacePath ? await backendWorkspacePath(workspacePath) : null;
       // Iki ayri `null` var ve karistirilmamalari lazim: acik klasor YOK (once
@@ -610,6 +630,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     unityMcpReason,
     unityMcpReasonCode,
     unityMcpReasonLines,
+    unityMcpDialog,
     toggleUnityMcp,
     // Durumu dışarıdan tazelemek için. İki tüketicisi var ve ikisi de aynı
     // soruyu soruyor: "şu an gerçekten ne durumda" — hata sonrası ölçüm, ve

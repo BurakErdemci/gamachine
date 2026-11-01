@@ -1,4 +1,5 @@
 import ast
+import json
 import logging
 from pathlib import Path
 from unittest.mock import Mock
@@ -12,9 +13,9 @@ from unity_ai_mcp import mcp_port_guard
 from unity_ai_mcp import unity_mcp_manager as manager_module
 
 
-SCRIPT = Path("Assets") / "Editor" / "UnityArchitectAIMCPSetup.cs"
-ON = '"MCPForUnity.AutoStartOnLoad", true'
-OFF = '"MCPForUnity.AutoStartOnLoad", false'
+SCRIPT = Path("UserSettings") / "Gamachine" / "autoconnect.json"
+ON = '"autoStart": true'
+OFF = '"autoStart": false'
 
 
 @pytest.fixture
@@ -28,10 +29,11 @@ def manager(monkeypatch):
 
 def test_reset_existing_on_script(manager, tmp_path):
     manager._write_autoconnect_script(str(tmp_path), auto_start=True)
+    before = json.loads((tmp_path / SCRIPT).read_text(encoding="utf-8"))
     assert manager.reset_autoconnect_off(str(tmp_path)) is True
     text = (tmp_path / SCRIPT).read_text(encoding="utf-8")
     assert OFF in text and ON not in text
-    assert '"MCPForUnity.ResumeHttpAfterReload", false' in text
+    assert json.loads(text)["revision"] != before["revision"]
 
 
 @pytest.mark.parametrize("kind", ["missing", "off", "empty", "none", "file", "absent", "path_object"])
@@ -59,6 +61,7 @@ def test_reset_noop_never_writes(manager, tmp_path, monkeypatch, kind):
     assert before == {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.rglob("*") if p.is_file()}
     if kind != "off":
         assert not (tmp_path / "Assets").exists()
+        assert not (tmp_path / "UserSettings").exists()
 
 
 @pytest.mark.parametrize("operation", ["read", "write"])

@@ -1062,6 +1062,7 @@ export default function Home() {
             targetProject={projectName}
             projectMismatch={projectMismatch}
             slowConnect={ai.unityMcpSlow}
+            dialog={ai.unityMcpDialog}
           />
           {/* Not in the mockup: the sidebar toggle. The editor's controls that shared this spot (the
               terminal button, the open file's name / save / close) moved into the workspace: the

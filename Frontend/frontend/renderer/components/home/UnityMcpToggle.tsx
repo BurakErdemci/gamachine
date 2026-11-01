@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 
 import { useLang, type LangContextValue } from '../../lib/i18n';
-import type { UnityMCPStatus } from '../../hooks/home/useAIConfig';
+import type { UnityMCPDialog, UnityMCPStatus } from '../../hooks/home/useAIConfig';
 
 type Anahtar = Parameters<LangContextValue['t']>[0];
 
@@ -72,6 +72,8 @@ interface UnityMcpToggleProps {
   targetProject?: string | null;
   projectMismatch?: boolean;
   slowConnect?: boolean;
+  /** A Unity dialog of this project that holds the connection until the user closes it. */
+  dialog?: UnityMCPDialog | null;
 }
 
 const PlugGlyph = () => (
@@ -105,12 +107,15 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   targetProject = null,
   projectMismatch = false,
   slowConnect = false,
+  dialog = null,
 }) => {
   const { t } = useLang();
   const state = STATE[status];
   const hint = state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch'
+    : state.visual === 'connecting' && dialog ? 'unity.dialogBlocking'
     : state.visual === 'connecting' && slowConnect ? 'unity.hintBringForward' : null);
-  const hintText = hint === 'unity.hintBringForward'
+  const hintText = hint === 'unity.dialogBlocking' && dialog ? t('unity.dialogBlocking', { title: dialog.title })
+    : hint === 'unity.hintBringForward'
     ? typeof targetProject === 'string' && targetProject.length > 0
       ? t('unity.hintBringForward', { name: targetProject }) : t('unity.hintBringForwardGeneric')
     : hint ? t(hint) : null;

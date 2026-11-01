@@ -69,7 +69,7 @@ async def start_mcp_for(workspace_path, background_tasks, language=None):
     unity_mcp_manager.active_workspace = workspace_path
     package_installed = False
     if workspace_path:
-        # Manifest'i hemen kur ama autoconnect scriptini server hazır olunca yaz.
+        # Copy the package now, but turn autoconnect on only once the server is ready.
         # Böylece Unity plugin bağlanmaya çalıştığında server zaten ayakta olur
         # ve Unity Console'da "Connection failed" hatası çıkmaz.
         package_installed = unity_mcp_manager.install_package(workspace_path, write_autoconnect=False)
