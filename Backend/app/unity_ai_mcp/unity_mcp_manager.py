@@ -8,7 +8,13 @@ import json
 import secrets
 import hashlib
 import fnmatch
+import importlib.util
+import re
+import shutil
+import stat
 import tempfile
+import time
+from pathlib import Path
 from typing import Optional
 
 from spawn_env import build_spawn_env
@@ -28,6 +34,55 @@ _EXCLUDE_MARKER = "# Gamachine (local, not committed)"
 
 class _ManifestChanged(Exception):
     """The live manifest changed while its replacement was being staged."""
+
+
+class _Refused(Exception):
+    """A path Gamachine would write is a link or resolves outside the folder it belongs to."""
+
+
+def _is_link(path: str) -> bool:
+    return os.path.islink(path) or (hasattr(os.path, "isjunction") and os.path.isjunction(path))
+
+
+def _require_plain(root: str, *paths: str) -> None:
+    """Raise _Refused when a path is a link/junction or its real location leaves root."""
+    real_root = os.path.normcase(os.path.realpath(root))
+    for path in paths:
+        if _is_link(path):
+            raise _Refused(f"{path} is a link")
+        real = os.path.normcase(os.path.realpath(path))
+        try:
+            inside = os.path.commonpath([real, real_root]) == real_root
+        except ValueError:  # another drive
+            inside = False
+        if not inside:
+            raise _Refused(f"{path} resolves outside {root}")
+
+
+_PACKAGE_DIR = ("Packages", _PACKAGE_NAME)
+_LEGACY_SCRIPT_NAME = "UnityArchitectAIMCPSetup.cs"
+
+
+def _legacy_paths(workspace_path: str) -> list:
+    """Assets, Assets/Editor, the old script and its .meta."""
+    assets = os.path.join(workspace_path, "Assets")
+    editor = os.path.join(assets, "Editor")
+    script = os.path.join(editor, _LEGACY_SCRIPT_NAME)
+    return [assets, editor, script, script + ".meta"]
+
+
+def _settings_paths(workspace_path: str) -> list:
+    folder = os.path.join(workspace_path, "UserSettings", "Gamachine")
+    return [os.path.dirname(folder), folder, os.path.join(folder, "autoconnect.json")]
+
+
+def _package_paths(workspace_path: str) -> list:
+    packages = os.path.join(workspace_path, "Packages")
+    return [packages, os.path.join(packages, "manifest.json"), os.path.join(workspace_path, *_PACKAGE_DIR)]
+
+
+def _is_unity_project(workspace_path: str) -> bool:
+    return all(os.path.isdir(os.path.join(workspace_path, name)) for name in ("Assets", "ProjectSettings"))
 
 
 def _atomic_write_text(path, text, *, expected_bytes=None, newline=None):
@@ -167,9 +222,8 @@ class UnityMCPManager:
         self.last_error: Optional[str] = None
         # Windows dialog probe (unity-mcp/Server/src/transport/unity_dialog_probe.py), loaded once.
         self._dialog_probe = None
-        self._dialog_cache_ts = 0.0
-        self._dialog_cache_key: Optional[str] = None
-        self._dialog_cache_val: Optional[dict] = None
+        self._dialog_cache: dict[str, dict] = {}  # project -> {project, value, time}
+        self._dialog_inflight: dict[str, asyncio.Future] = {}
         import sys
         if getattr(sys, "frozen", False):
             # Frozen build: backend.exe = .../resources/Backend/backend.exe →
@@ -191,15 +245,8 @@ class UnityMCPManager:
         in a measured install. Stage each refresh before replacing the old copy.
         Keep the previous destination usable on failure. Never raises.
         """
-        import sys
         if not getattr(sys, "frozen", False):
             return  # Dev: kaynak repo zaten yazılabilir
-        import shutil
-        import stat
-        import time
-        from pathlib import Path
-
-        complete_digest = _complete_digest
 
         def remove_leftover(path):
             def retry(operation, target, error):
@@ -222,28 +269,28 @@ class UnityMCPManager:
             try:
                 backups = sorted((path for path in Path(base).glob(sub + ".old*") if path.is_dir()),
                                  key=lambda path: path.stat().st_mtime_ns, reverse=True)
-                if backups and complete_digest(dst) is None:
-                    recovered = next((path for path in backups if complete_digest(path) is not None), None)
+                if backups and _complete_digest(dst) is None:
+                    recovered = next((path for path in backups if _complete_digest(path) is not None), None)
                     if recovered is not None:
                         if os.path.exists(dst):
                             os.replace(dst, old)
                         os.replace(recovered, dst)
                 if not os.path.isdir(src):
-                    if complete_digest(dst) is not None:
+                    if _complete_digest(dst) is not None:
                         setattr(self, attr, dst)
                     continue
                 source_digest = _tree_digest(src)
-                if complete_digest(dst) != source_digest:
+                if _complete_digest(dst) != source_digest:
                     shutil.copytree(src, staged)
                     with open(os.path.join(staged, ".gamachine-source-digest"), "w", encoding="utf-8") as stored:
                         stored.write(source_digest)
-                    if complete_digest(staged) is None:
+                    if _complete_digest(staged) is None:
                         raise OSError("Staged resources do not match the source digest")
                     if os.path.isdir(dst):
                         old = dst + f".old-{os.getpid()}-{time.time_ns()}"
                         os.replace(dst, old)
                     os.replace(staged, dst)
-                if complete_digest(dst) is None:
+                if _complete_digest(dst) is None:
                     raise OSError("Destination resources are incomplete")
                 setattr(self, attr, dst)
                 # Only retire backups after a usable destination has been retained or promoted.
@@ -258,7 +305,7 @@ class UnityMCPManager:
                         os.replace(old, dst)
                     except Exception:
                         logger.warning("[UnityMCP] Could not restore %s", dst, exc_info=True)
-                if complete_digest(dst) is not None:
+                if _complete_digest(dst) is not None:
                     setattr(self, attr, dst)
                 elif getattr(self, attr) == dst:
                     # An earlier refresh selected dst, but it is no longer complete.
@@ -762,7 +809,6 @@ class UnityMCPManager:
 
     def _load_dialog_probe(self):
         if self._dialog_probe is None:
-            import importlib.util
             path = os.path.join(self.server_dir, "src", "transport", "unity_dialog_probe.py")
             spec = importlib.util.spec_from_file_location("gamachine_unity_dialog_probe", path)
             module = importlib.util.module_from_spec(spec)
@@ -770,16 +816,8 @@ class UnityMCPManager:
             self._dialog_probe = module
         return self._dialog_probe
 
-    async def _blocking_dialog(self) -> Optional[dict]:
-        """A native Unity dialog of the active project, which holds the connection silently (measured 2 Nov 2026)."""
-        if sys.platform != "win32" or not self.enabled or not self.active_workspace:
-            return None
-        import time
-        project = os.path.basename(os.path.normpath(self.active_workspace))
-        now = time.monotonic()
-        if project == self._dialog_cache_key and now - self._dialog_cache_ts < 2.0:
-            return self._dialog_cache_val
-        self._dialog_cache_key, self._dialog_cache_ts = project, now
+    async def _probe_dialog(self, project: str) -> Optional[dict]:
+        """One probe run; the cache entry is stored only after it returns, under its own project."""
         dialog = None
         try:
             probe = self._load_dialog_probe()
@@ -788,8 +826,23 @@ class UnityMCPManager:
                 dialog = {"title": str(found[0].get("title", "")), "buttons": list(found[0].get("buttons") or [])}
         except Exception:
             logger.debug("[UnityMCP] Unity dialog probe failed.", exc_info=True)
-        self._dialog_cache_val = dialog
+        self._dialog_cache[project] = {"project": project, "value": dialog, "time": time.monotonic()}
         return dialog
+
+    async def _blocking_dialog(self) -> Optional[dict]:
+        """A native Unity dialog of the active project, which holds the connection silently (measured 2 Nov 2026)."""
+        if sys.platform != "win32" or not self.enabled or not self.active_workspace:
+            return None
+        project = os.path.basename(os.path.normpath(self.active_workspace))
+        cached = self._dialog_cache.get(project)
+        if cached and time.monotonic() - cached["time"] < 2.0:
+            return cached["value"]
+        # Concurrent polls of one project share a single probe; shield keeps it alive if one poll is cancelled.
+        probe = self._dialog_inflight.get(project)
+        if probe is None:
+            probe = self._dialog_inflight[project] = asyncio.ensure_future(self._probe_dialog(project))
+            probe.add_done_callback(lambda _done: self._dialog_inflight.pop(project, None))
+        return await asyncio.shield(probe)
 
     async def get_status(self) -> dict:
         """_status() plus `dialog`: {title, buttons} of a Unity dialog blocking the connection.
@@ -892,7 +945,7 @@ class UnityMCPManager:
                     self.active_workspace is not None and self.active_workspace != workspace_path
                 ):
                     return False
-                self._write_autoconnect_script(workspace_path, auto_start=True)
+                self._write_autoconnect_settings(workspace_path, auto_start=True)
                 _bring_editor_forward(workspace_path)
                 logger.info("[UnityMCP] Server hazır — autoconnect scripti yazıldı.")
                 return True
@@ -902,13 +955,18 @@ class UnityMCPManager:
     def install_package(self, workspace_path: str, write_autoconnect: bool = True) -> bool:
         """
         Puts the unity-mcp package into the Unity project without touching its tracked files.
-        1. Migration: drop the manifest entry and the Assets script older Gamachines wrote.
-        2. Packages/com.coplaydev.unity-mcp/ = a copy of our MCPForUnity (embedded package;
+        1. Packages/com.coplaydev.unity-mcp/ = a copy of our MCPForUnity (embedded package;
            Unity records only a machine-independent "file:com.coplaydev.unity-mcp" lock entry).
+        2. Only once that copy is in place: drop the manifest entry and the Assets script older
+           Gamachines wrote (a failed copy leaves manifest.json and Assets exactly as they were).
         3. The package folder and UserSettings/Gamachine/ are excluded in .git/info/exclude.
         The package's GamachineAutoConnect.cs applies UserSettings/Gamachine/autoconnect.json.
         """
         if not workspace_path:
+            return False
+        if not _is_unity_project(workspace_path):
+            logger.debug("[UnityMCP] %s is not a Unity project (no Assets and ProjectSettings); not touched.",
+                         workspace_path)
             return False
         self._ensure_writable_resources()  # frozen: MCPForUnity'yi yazılabilir dizine taşı
         manifest_path = os.path.join(workspace_path, "Packages", "manifest.json")
@@ -916,39 +974,67 @@ class UnityMCPManager:
             logger.error(f"[UnityMCP] manifest.json bulunamadı: {manifest_path}")
             return False
         try:
-            self._ensure_git_exclude(workspace_path)
-            if not self._migrate_manifest(manifest_path):
+            _require_plain(workspace_path, *_legacy_paths(workspace_path), *_settings_paths(workspace_path),
+                           *_package_paths(workspace_path))
+            source = self._manifest_dependency(manifest_path)
+            if source is not None and not self._is_our_manifest_source(source):
+                # An embedded copy would override the user's own choice of the package.
+                logger.warning("[UnityMCP] %s comes from %r in the manifest; the user chose it, so the "
+                               "Gamachine copy is not installed.", _PACKAGE_NAME, source)
                 return False
-            self._remove_legacy_script(workspace_path)
+            self._sweep_staging(workspace_path)
+            self._ensure_git_exclude(workspace_path)
             # The bootstrap does nothing without the data file, so it must exist before the package
             # loads; a later change of it is what reloads the editor.
             if write_autoconnect:
-                self._write_autoconnect_script(workspace_path, auto_start=True)
+                self._write_autoconnect_settings(workspace_path, auto_start=True)
             elif not os.path.isfile(self._autoconnect_path(workspace_path)):
-                self._write_autoconnect_script(workspace_path, auto_start=False)
+                self._write_autoconnect_settings(workspace_path, auto_start=False)
             if not self._ensure_package_copy(workspace_path):
                 return False
+            if not self._migrate_manifest(manifest_path):
+                return False
+            self._remove_legacy_script(workspace_path)
             logger.info(f"[UnityMCP] Paket + auto-connect ayarları kuruldu: {workspace_path}")
             return True
+        except _Refused as error:
+            logger.error("[UnityMCP] Package install refused: %s", error)
+            return False
         except Exception as e:
             logger.error(f"[UnityMCP] Paket kurulumu hatası: {e}")
             return False
 
     def _is_our_manifest_source(self, value) -> bool:
+        """A `file:` value Gamachine wrote: this install's sources, the writable copy, or an older Gamachine checkout."""
         if not isinstance(value, str) or not value.startswith("file:"):
             return False
         path = value[len("file:"):].replace("\\", "/").rstrip("/")
+        if not os.path.isabs(path):
+            return False
+        path = os.path.normpath(path)
         ours = {os.path.normcase(os.path.abspath(source)) for source in (
             self.local_mcp_source,
             os.path.join(self.project_root, "unity-mcp", "MCPForUnity"),
             os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity-mcp", "MCPForUnity"),
         )}
-        if os.path.isabs(path) and os.path.normcase(os.path.abspath(path)) in ours:
+        if os.path.normcase(path) in ours:
             return True
-        return path.lower().endswith("unity-mcp/mcpforunity")
+        # Any other clone is the user's own, unless a Gamachine backend sits at its root.
+        parent = os.path.dirname(path)
+        if os.path.normcase(os.path.basename(path)) != os.path.normcase("MCPForUnity") \
+                or os.path.normcase(os.path.basename(parent)) != os.path.normcase("unity-mcp"):
+            return False
+        return os.path.isfile(os.path.join(os.path.dirname(parent), "Backend", "app", "unity_ai_mcp",
+                                           "unity_mcp_manager.py"))
+
+    @staticmethod
+    def _manifest_dependency(manifest_path: str):
+        with open(manifest_path, "rb") as source:
+            dependencies = json.loads(source.read()).get("dependencies")
+        return dependencies.get(_PACKAGE_NAME) if isinstance(dependencies, dict) else None
 
     def _migrate_manifest(self, manifest_path: str) -> bool:
-        """Removes only a dependency Gamachine wrote; False = the copy must not be made."""
+        """Removes only a dependency Gamachine wrote, keeping the file's formatting; False = not removed."""
         for attempt in range(3):
             with open(manifest_path, "rb") as source:
                 original_bytes = source.read()
@@ -958,17 +1044,19 @@ class UnityMCPManager:
             if value is None:
                 return True
             if not self._is_our_manifest_source(value):
-                # An embedded copy would override the user's own choice of the package.
-                logger.warning("[UnityMCP] %s comes from %r in the manifest; the user chose it, so the "
-                               "Gamachine copy is not installed.", _PACKAGE_NAME, value)
+                logger.warning("[UnityMCP] %s comes from %r in the manifest; it is left as it is.",
+                               _PACKAGE_NAME, value)
                 return False
             del dependencies[_PACKAGE_NAME]
             original_text = original_bytes.decode("utf-8-sig")
-            text = json.dumps(manifest, indent=2, ensure_ascii=False)
+            indent = re.search(r"^([ \t]+)\S", original_text, re.M)
+            text = json.dumps(manifest, indent=indent.group(1) if indent else 2, ensure_ascii=False)
             if original_text.endswith("\n"):
                 text += "\n"
             if "\r\n" in original_text:
                 text = text.replace("\n", "\r\n")
+            if original_bytes.startswith(b"\xef\xbb\xbf"):
+                text = "﻿" + text
             try:
                 _atomic_write_text(manifest_path, text, expected_bytes=original_bytes, newline="")
                 logger.info("[UnityMCP] Removed the machine-specific %s entry from %s.", _PACKAGE_NAME, manifest_path)
@@ -979,28 +1067,46 @@ class UnityMCPManager:
         return False
 
     @staticmethod
-    def _remove_legacy_script(workspace_path: str) -> None:
-        script_path = os.path.join(workspace_path, "Assets", "Editor", "UnityArchitectAIMCPSetup.cs")
-        if not os.path.isfile(script_path) or _is_link(script_path):
-            return
+    def _remove_legacy_script(workspace_path: str, only_if_autostart: bool = False) -> bool:
+        """Deletes the Assets script (and .meta) an older Gamachine wrote; only_if_autostart limits it to one that connects on load."""
+        script_path = _legacy_paths(workspace_path)[2]
+        try:
+            _require_plain(workspace_path, *_legacy_paths(workspace_path))
+        except _Refused as error:
+            logger.error("[UnityMCP] Old autoconnect script left in place: %s", error)
+            return False
+        if not os.path.isfile(script_path):
+            return False
         with open(script_path, "r", encoding="utf-8-sig", errors="replace") as script:
-            if not script.readline().startswith(_LEGACY_SCRIPT_HEADER):
-                return
+            text = script.read()
+        if not text.startswith(_LEGACY_SCRIPT_HEADER):
+            return False
+        if only_if_autostart and '"MCPForUnity.AutoStartOnLoad", true' not in text:
+            return False
         os.remove(script_path)
-        meta_path = script_path + ".meta"
-        if os.path.isfile(meta_path) and not _is_link(meta_path):
-            os.remove(meta_path)
+        if os.path.isfile(script_path + ".meta"):
+            os.remove(script_path + ".meta")
         logger.info("[UnityMCP] Removed the old Gamachine autoconnect script: %s", script_path)
+        return True
+
+    @staticmethod
+    def _sweep_staging(workspace_path: str) -> None:
+        """Removes staging folders of earlier installs (ours: package.new-*, package.old-*), nowhere but UserSettings/Gamachine."""
+        stage_dir = os.path.join(workspace_path, "UserSettings", "Gamachine")
+        if not os.path.isdir(stage_dir):
+            return
+        installed = os.path.lexists(os.path.join(workspace_path, *_PACKAGE_DIR))
+        for name in os.listdir(stage_dir):
+            path = os.path.join(stage_dir, name)
+            # An .old folder is the only copy left when a replace died halfway, so it goes only beside a package.
+            if (name.startswith("package.new-") or (installed and name.startswith("package.old-"))) \
+                    and os.path.isdir(path) and not _is_link(path):
+                shutil.rmtree(path, ignore_errors=True)
 
     def _ensure_package_copy(self, workspace_path: str) -> bool:
-        """Packages/com.coplaydev.unity-mcp = our MCPForUnity; a folder without our digest is the user's."""
-        import shutil
-        import time
-        packages_dir = os.path.join(workspace_path, "Packages")
-        target = os.path.join(packages_dir, _PACKAGE_NAME)
-        if _is_link(packages_dir) or _is_link(target):
-            logger.error("[UnityMCP] %s is a link; the package is not copied through it.", target)
-            return False
+        """Packages/com.coplaydev.unity-mcp = our MCPForUnity; a folder without our digest, or edited by the user, is left alone."""
+        target = os.path.join(workspace_path, *_PACKAGE_DIR)
+        stored_digest = None
         if os.path.lexists(target):
             stored_path = os.path.join(target, _DIGEST_FILE)
             if not os.path.isdir(target) or not os.path.isfile(stored_path) or _is_link(stored_path):
@@ -1008,12 +1114,17 @@ class UnityMCPManager:
                 return False
             with open(stored_path, encoding="utf-8") as stored:
                 stored_digest = stored.read()
-        else:
-            stored_digest = None
         source = self.local_mcp_source
         source_digest = _tree_digest(source)
-        if stored_digest == source_digest:
-            return True
+        if stored_digest is not None:
+            installed_digest = _tree_digest(target)
+            if stored_digest == source_digest:
+                if installed_digest == stored_digest:
+                    return True
+                logger.warning("[UnityMCP] %s is incomplete; copying the package again.", target)
+            elif installed_digest != stored_digest:
+                logger.error("[UnityMCP] %s was changed after Gamachine installed it; it is not replaced.", target)
+                return False
         # Staged in our excluded settings folder, not in Packages/ where Unity would see a half copy.
         stage_dir = os.path.join(workspace_path, "UserSettings", "Gamachine")
         os.makedirs(stage_dir, exist_ok=True)
@@ -1050,6 +1161,8 @@ class UnityMCPManager:
     @staticmethod
     def _ensure_git_exclude(workspace_path: str) -> bool:
         """Lists our two folders in the repo's local info/exclude; no git process, never .gitignore."""
+        if not _is_unity_project(workspace_path):
+            return False
         project = os.path.abspath(workspace_path)
         work_tree = project
         while True:
@@ -1075,12 +1188,11 @@ class UnityMCPManager:
                 git_dir = os.path.normpath(os.path.join(git_dir, pointer.readline().strip()))
         if not os.path.isdir(git_dir):
             return False
+        exclude = os.path.join(git_dir, "info", "exclude")
+        _require_plain(git_dir, git_dir, os.path.dirname(exclude), exclude)
         relative = os.path.relpath(project, work_tree).replace(os.sep, "/")
         prefix = "" if relative == "." else "".join("\\" + c if c in "\\*?[" else c for c in relative) + "/"
         patterns = [f"/{prefix}Packages/{_PACKAGE_NAME}/", f"/{prefix}UserSettings/Gamachine/"]
-        exclude = os.path.join(git_dir, "info", "exclude")
-        if _is_link(exclude):
-            return False
         existing = ""
         if os.path.isfile(exclude):
             with open(exclude, encoding="utf-8", errors="replace", newline="") as current:
@@ -1116,31 +1228,38 @@ class UnityMCPManager:
                 if isinstance(workspace_path, str):
                     self._autoconnect_workspaces.discard(workspace_path)
                 return False
+            # A failed install leaves the script of an older Gamachine, which would autostart against a dead server.
+            legacy_removed = self._remove_legacy_script(workspace_path, only_if_autostart=True)
             try:
                 data = self._read_autoconnect(workspace_path)
             except ValueError:
                 data = None
             if not data or data.get("autoStart") is not True:
                 self._autoconnect_workspaces.discard(workspace_path)
-                return False
-            self._write_autoconnect_script(workspace_path, auto_start=False)
+                return legacy_removed
+            self._write_autoconnect_settings(workspace_path, auto_start=False)
             return True
         except Exception as e:
             logger.debug("[UnityMCP] Autoconnect reset skipped: %s", e)
             return False
 
-    def _write_autoconnect_script(self, workspace_path: str, auto_start: bool = False):
+    def _write_autoconnect_settings(self, workspace_path: str, auto_start: bool = False):
         """
         Writes UserSettings/Gamachine/autoconnect.json, read by the package's GamachineAutoConnect.cs.
         auto_start=True → the editor connects when our server answers on the port.
         auto_start=False → the editor does not connect on load.
         Unity compiles a changed script only when its window is focused but notices this file while
         unfocused (measured 2 Nov 2026), so every changing value lives here.
+        Nothing is written for a folder that is not a Unity project or whose path crosses a link.
         """
+        if not _is_unity_project(workspace_path):
+            logger.debug("[UnityMCP] %s is not a Unity project; no autoconnect settings written.", workspace_path)
+            return
         try:
-            self._ensure_git_exclude(workspace_path)
-        except Exception:
-            logger.debug("[UnityMCP] Git exclusion skipped for %s.", workspace_path, exc_info=True)
+            _require_plain(workspace_path, *_settings_paths(workspace_path))
+        except _Refused as error:
+            logger.error("[UnityMCP] Autoconnect settings not written: %s", error)
+            return
         path = self._autoconnect_path(workspace_path)
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
@@ -1172,10 +1291,6 @@ class UnityMCPManager:
         else:
             self._autoconnect_workspaces.discard(workspace_path)
         logger.info(f"[UnityMCP] Auto-connect ayarları yazıldı (auto_start={auto_start}): {path}")
-
-
-def _is_link(path: str) -> bool:
-    return os.path.islink(path) or (hasattr(os.path, "isjunction") and os.path.isjunction(path))
 
 
 # Global singleton

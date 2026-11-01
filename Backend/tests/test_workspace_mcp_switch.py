@@ -25,14 +25,28 @@ BOOTSTRAP = (Path(__file__).parents[2] / "unity-mcp" / "MCPForUnity" / "Editor" 
              / "GamachineAutoConnect.cs")
 
 
+@pytest.fixture(autouse=True)
+def unity_project(tmp_path):
+    """Gamachine writes only into a Unity project: Assets and ProjectSettings."""
+    (tmp_path / "Assets").mkdir()
+    (tmp_path / "ProjectSettings").mkdir()
+
+
+def unity(path):
+    """A Unity project folder: Assets and ProjectSettings."""
+    (path / "Assets").mkdir(parents=True)
+    (path / "ProjectSettings").mkdir()
+    return path
+
+
 @pytest.fixture
 def switch(monkeypatch, tmp_path):
     manager = manager_module.UnityMCPManager()
     manager.language = "tr"
-    old = tmp_path / "old"
-    new = tmp_path / "new"
+    old = unity(tmp_path / "old")
+    new = unity(tmp_path / "new")
     manager._get_uvx = Mock(return_value="uvx")
-    manager._write_autoconnect_script(str(old), auto_start=True)
+    manager._write_autoconnect_settings(str(old), auto_start=True)
     manager.active_workspace = str(old)
     state = SimpleNamespace(running=True)
     events = []
@@ -50,7 +64,7 @@ def switch(monkeypatch, tmp_path):
         return True
 
     async def write(workspace, generation=None):
-        manager._write_autoconnect_script(workspace, auto_start=True)
+        manager._write_autoconnect_settings(workspace, auto_start=True)
 
     monkeypatch.setattr(manager_module, "unity_mcp_manager", manager)
     monkeypatch.setattr(mcp_routes, "unity_mcp_manager", manager)
@@ -183,14 +197,14 @@ def test_settings_file_carries_what_the_bootstrap_applies(tmp_path, monkeypatch,
     uvx = tmp_path / "uvx.exe"
     uvx.write_bytes(b"test")
     monkeypatch.setattr(manager, "_get_uvx", lambda: str(uvx))
-    manager._write_autoconnect_script(str(tmp_path), auto_start=True)
+    manager._write_autoconnect_settings(str(tmp_path), auto_start=True)
     settings = json.loads((tmp_path / SCRIPT).read_text(encoding="utf-8"))
     assert set(settings) == {"autoStart", "port", "language", "uvxPath", "revision"}
     assert settings["autoStart"] is True and settings["port"] == 8080
     assert settings["language"] == expected
     assert settings["uvxPath"] == uvx.as_posix()
-    assert not (tmp_path / "Assets").exists()
-    manager._write_autoconnect_script(str(tmp_path), auto_start=False)
+    assert not (tmp_path / "Assets" / "Editor").exists()
+    manager._write_autoconnect_settings(str(tmp_path), auto_start=False)
     off = json.loads((tmp_path / SCRIPT).read_text(encoding="utf-8"))
     assert off["autoStart"] is False and off["revision"] != settings["revision"]
 
@@ -219,7 +233,7 @@ def test_bootstrap_probes_server_and_falls_back_to_off():
 def test_settings_file_defaults_to_english(tmp_path, monkeypatch):
     manager = manager_module.UnityMCPManager()
     monkeypatch.setattr(manager, "_get_uvx", lambda: "uvx")
-    manager._write_autoconnect_script(str(tmp_path))
+    manager._write_autoconnect_settings(str(tmp_path))
     settings = json.loads((tmp_path / SCRIPT).read_text(encoding="utf-8"))
     assert settings["language"] == "en" and settings["uvxPath"] == ""
 
@@ -235,7 +249,7 @@ def test_old_readiness_task_cannot_reenable_previous_workspace(monkeypatch):
     monkeypatch.setattr(manager_module.asyncio, "sleep", sleep)
     monkeypatch.setattr(manager, "is_running", Mock(return_value=True))
     writer = Mock()
-    monkeypatch.setattr(manager, "_write_autoconnect_script", writer)
+    monkeypatch.setattr(manager, "_write_autoconnect_settings", writer)
     forward = Mock()
     monkeypatch.setattr(manager_module, "_bring_editor_forward", forward)
     assert asyncio.run(manager.write_autoconnect_when_ready("old", timeout=1)) is False
@@ -257,7 +271,7 @@ async def _post_save(client, path):
 
 
 def test_overlapping_saves_leave_mcp_on_the_last_saved_workspace(switch, tmp_path):
-    b, c = tmp_path / "b", tmp_path / "c"
+    b, c = unity(tmp_path / "b"), unity(tmp_path / "c")
     entered, release = threading.Event(), threading.Event()
 
     def presence(workspace):
@@ -328,7 +342,7 @@ def test_readiness_task_from_before_a_restart_is_ignored(monkeypatch):
     monkeypatch.setattr(manager_module.asyncio, "sleep", sleep)
     monkeypatch.setattr(manager, "is_running", Mock(return_value=True))
     writer = Mock()
-    monkeypatch.setattr(manager, "_write_autoconnect_script", writer)
+    monkeypatch.setattr(manager, "_write_autoconnect_settings", writer)
     forward = Mock()
     monkeypatch.setattr(manager_module, "_bring_editor_forward", forward)
     assert asyncio.run(manager.write_autoconnect_when_ready("old", timeout=1, generation=1)) is False

@@ -72,7 +72,9 @@ async def start_mcp_for(workspace_path, background_tasks, language=None):
         # Copy the package now, but turn autoconnect on only once the server is ready.
         # Böylece Unity plugin bağlanmaya çalıştığında server zaten ayakta olur
         # ve Unity Console'da "Connection failed" hatası çıkmaz.
-        package_installed = unity_mcp_manager.install_package(workspace_path, write_autoconnect=False)
+        # Off the event loop: the first copy took 2.8 s and an update 4.8 s (measured 2 Nov 2026).
+        package_installed = await asyncio.to_thread(
+            unity_mcp_manager.install_package, workspace_path, write_autoconnect=False)
         background_tasks.add_task(unity_mcp_manager.write_autoconnect_when_ready,
                                   workspace_path, generation=generation)
 
@@ -91,7 +93,7 @@ def stop_mcp(workspace_path=None):
     from tools.unity_mcp_tools import unload_unity_tools
     unload_unity_tools()
     if workspace_path:
-        unity_mcp_manager._write_autoconnect_script(workspace_path, auto_start=False)
+        unity_mcp_manager._write_autoconnect_settings(workspace_path, auto_start=False)
     return {"status": "stopped"}
 
 

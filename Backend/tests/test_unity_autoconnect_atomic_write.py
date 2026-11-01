@@ -6,6 +6,13 @@ import pytest
 from unity_ai_mcp import unity_mcp_manager as module
 
 
+@pytest.fixture(autouse=True)
+def unity_project(tmp_path):
+    """Gamachine writes only into a Unity project: Assets and ProjectSettings."""
+    (tmp_path / "Assets").mkdir()
+    (tmp_path / "ProjectSettings").mkdir()
+
+
 def auto_start(settings):
     return json.loads(settings.read_text(encoding="utf-8"))["autoStart"]
 
@@ -63,14 +70,14 @@ def test_autoconnect_write_preserves_original_and_cleans_stage(tmp_path, monkeyp
         monkeypatch.setattr(module.os, "replace", denied)
     if failure:
         with pytest.raises(Interrupted if failure == "interrupt" else OSError):
-            manager._write_autoconnect_script(str(tmp_path), auto_start=True)
+            manager._write_autoconnect_settings(str(tmp_path), auto_start=True)
         assert script.read_bytes() == original
         assert str(tmp_path) not in manager._autoconnect_workspaces
     else:
-        manager._write_autoconnect_script(str(tmp_path), auto_start=True)
+        manager._write_autoconnect_settings(str(tmp_path), auto_start=True)
         assert auto_start(script) is True
         assert str(tmp_path) in manager._autoconnect_workspaces
-        manager._write_autoconnect_script(str(tmp_path), auto_start=False)
+        manager._write_autoconnect_settings(str(tmp_path), auto_start=False)
         assert auto_start(script) is False
         assert str(tmp_path) not in manager._autoconnect_workspaces
     assert list(script.parent.iterdir()) == [script]
@@ -80,7 +87,7 @@ def test_stop_server_keeps_workspace_when_autoconnect_off_write_fails(tmp_path, 
     script = tmp_path / "UserSettings" / "Gamachine" / "autoconnect.json"
     manager = module.UnityMCPManager()
     monkeypatch.setattr(manager, "_get_uvx", lambda: "uvx")
-    manager._write_autoconnect_script(str(tmp_path), auto_start=True)
+    manager._write_autoconnect_settings(str(tmp_path), auto_start=True)
     workspace = str(tmp_path)
     assert workspace in manager._autoconnect_workspaces
 
@@ -107,7 +114,9 @@ def test_stop_server_resets_readable_workspaces_after_first_read_fails(tmp_path,
     scripts = {}
     for index in range(3):
         workspace = tmp_path / f"workspace-{index}"
-        manager._write_autoconnect_script(str(workspace), auto_start=True)
+        (workspace / "Assets").mkdir(parents=True)
+        (workspace / "ProjectSettings").mkdir()
+        manager._write_autoconnect_settings(str(workspace), auto_start=True)
         scripts[str(workspace)] = workspace / "UserSettings" / "Gamachine" / "autoconnect.json"
 
     unreadable_workspace = next(iter(manager._autoconnect_workspaces))

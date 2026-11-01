@@ -1,10 +1,19 @@
 import json
+import os
 
 import pytest
 
 from unity_ai_mcp import unity_mcp_manager as module
 
-OURS = "file:C:\\Users\\someone\\Downloads\\Gamachine\\unity-mcp\\MCPForUnity"
+# The writable copy Gamachine itself puts in the user profile; only the string is compared.
+OURS = "file:" + os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity-mcp", "MCPForUnity")
+
+
+@pytest.fixture(autouse=True)
+def unity_project(tmp_path):
+    """Gamachine writes only into a Unity project: Assets and ProjectSettings."""
+    (tmp_path / "Assets").mkdir()
+    (tmp_path / "ProjectSettings").mkdir()
 
 
 def prepared(tmp_path, monkeypatch, text):
@@ -16,6 +25,7 @@ def prepared(tmp_path, monkeypatch, text):
     monkeypatch.setattr(manager, "_get_uvx", lambda: "uvx")
     # The package copy has its own tests (test_unity_out_of_git.py); here only the manifest is under test.
     monkeypatch.setattr(manager, "_ensure_package_copy", lambda workspace: True)
+    monkeypatch.setattr(manager, "_write_autoconnect_settings", lambda *args, **kwargs: None)
     return manifest, manager
 
 

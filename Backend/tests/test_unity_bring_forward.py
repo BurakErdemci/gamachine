@@ -117,7 +117,7 @@ def test_readiness_brings_forward_only_after_a_successful_write(monkeypatch, sto
     monkeypatch.setattr(module.asyncio, "sleep", AsyncMock())
     monkeypatch.setattr(manager, "is_running", Mock(side_effect=[True, not stopped]))
     actions = Mock()
-    monkeypatch.setattr(manager, "_write_autoconnect_script", actions.write)
+    monkeypatch.setattr(manager, "_write_autoconnect_settings", actions.write)
     monkeypatch.setattr(module, "_bring_editor_forward", actions.forward)
     assert asyncio.run(manager.write_autoconnect_when_ready("GameA", timeout=1)) is (not stopped)
     assert actions.mock_calls == ([] if stopped else [call.write("GameA", auto_start=True), call.forward("GameA")])
@@ -127,7 +127,7 @@ def test_failed_write_does_not_bring_forward(monkeypatch):
     manager = module.UnityMCPManager()
     monkeypatch.setattr(module.asyncio, "sleep", AsyncMock())
     monkeypatch.setattr(manager, "is_running", Mock(return_value=True))
-    monkeypatch.setattr(manager, "_write_autoconnect_script", Mock(side_effect=OSError("write failed")))
+    monkeypatch.setattr(manager, "_write_autoconnect_settings", Mock(side_effect=OSError("write failed")))
     forward = Mock()
     monkeypatch.setattr(module, "_bring_editor_forward", forward)
     with pytest.raises(OSError, match="write failed"):
