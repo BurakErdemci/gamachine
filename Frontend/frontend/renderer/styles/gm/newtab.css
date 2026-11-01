@@ -1,0 +1,257 @@
+/* The agent browser's empty tab (components/home/newtab). Like the mini Hub, each theme lays it out
+   its own way, so the rules are scoped by data-nt (arena / sade / pafta / atolye / ozel), not by
+   :root[data-theme]; colours come only from the theme's tokens, so light and dark follow them.
+   Widths follow the panel's container (`bp`, shell.css): 560px and 400px, like its header. */
+
+/* ======================= shared ======================= */
+.nt {
+  align-self: stretch; flex: 1; min-height: 0; width: 100%; box-sizing: border-box;
+  overflow-y: auto; scrollbar-gutter: stable; color: var(--ink);
+}
+.nt ul { margin: 0; padding: 0; list-style: none; }
+.nt h2, .nt p { margin: 0; }
+.nt-site { min-width: 0; padding: 0; font: inherit; color: inherit; text-align: left; background: none; border: 0; cursor: pointer; }
+.nt-site:focus-visible { outline: 2px solid var(--focus, var(--accent-text, var(--ink))); outline-offset: 2px; }
+.nt-name, .nt-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nt-path { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+
+/* ======================= arena: stage select ======================= */
+[data-nt="arena"] {
+  display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 20px;
+  /* faint scanlines: the HUD glass */
+  background-image: repeating-linear-gradient(0deg, transparent 0 3px, color-mix(in srgb, var(--ink) 3%, transparent) 3px 4px);
+}
+.nt-ar-hud { position: relative; display: flex; align-items: center; gap: 12px; padding-bottom: 10px; border-bottom: 2px solid var(--paper-line-strong); }
+.nt-ar-hud::after { content: ''; position: absolute; left: 0; bottom: -2px; width: 64px; height: 2px; background: var(--accent); }
+.nt-ar-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-display); font-stretch: var(--label-stretch); font-size: 18px; font-weight: 700; letter-spacing: .02em;
+}
+.nt-ar-meter { flex: none; display: inline-flex; align-items: center; gap: 8px; }
+.nt-ar-pips { display: inline-flex; gap: 5px; }
+.nt-ar-pips i { width: 7px; height: 7px; transform: rotate(45deg); border: 1px solid var(--paper-line-strong); }
+.nt-ar-pips i.is-on { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 6px var(--accent-soft); }
+.nt-ar-count { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+
+.nt-ar-stages { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.nt-ar-feature { grid-column: 1 / -1; }
+/* chamfered plates clip their outline, so focus is drawn inside */
+[data-nt="arena"] .nt-site:focus-visible { outline-offset: -3px; }
+.nt-ar-hero {
+  position: relative; width: 100%; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 16px 16px 16px 14px; box-sizing: border-box; background: var(--paper-raised); clip-path: var(--clip-md);
+  border-left: 3px solid var(--accent);
+}
+/* the selected stage's hazard band, behind the Start plate */
+.nt-ar-hero::before {
+  content: ''; position: absolute; top: 0; right: 0; bottom: 0; width: 120px; pointer-events: none;
+  background: repeating-linear-gradient(135deg, var(--accent-soft) 0 6px, transparent 6px 13px);
+}
+.nt-ar-hero > * { position: relative; }
+.nt-ar-hero .nt-ar-rank { font-family: var(--font-display); font-size: 28px; font-weight: 700; line-height: 1; color: var(--accent-text, var(--accent)); }
+.nt-ar-hero .bp-ico { width: 34px; height: 34px; font-size: 16px; font-weight: 700; background: var(--paper-sunk); clip-path: var(--clip-sm); }
+.nt-ar-hero .bp-ico img { width: 20px; height: 20px; }
+.nt-ar-hero-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.nt-ar-hero-name { font-family: var(--font-display); font-stretch: var(--label-stretch); font-size: 17px; font-weight: 700; }
+.nt-ar-start {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px 6px 10px; font-family: var(--font-label); font-size: 12px; font-weight: 700;
+  color: var(--accent-ink); background: var(--accent); clip-path: var(--clip-sm);
+}
+.nt-ar-play { width: 10px; height: 10px; fill: currentColor; }
+.nt-ar-hero:hover .nt-ar-start, .nt-ar-hero:focus-visible .nt-ar-start { filter: brightness(1.12); }
+
+.nt-ar-stage {
+  position: relative; width: 100%; display: flex; align-items: center; gap: 9px; padding: 11px 12px 11px 14px; box-sizing: border-box;
+  font-size: 12.5px; background: var(--paper-raised); clip-path: var(--clip-sm);
+  transition: background var(--g-dur-tap, .12s) var(--ease, ease);
+}
+.nt-ar-stage::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: var(--paper-line-strong); }
+.nt-ar-stage .nt-ar-rank { flex: none; font-family: var(--font-display); font-size: 11px; font-weight: 700; color: var(--ink-faint); }
+.nt-ar-stage:hover, .nt-ar-stage:focus-visible { background: var(--accent-soft); }
+.nt-ar-stage:hover::before, .nt-ar-stage:focus-visible::before { background: var(--accent); }
+.nt-ar-stage:hover .nt-ar-rank, .nt-ar-stage:focus-visible .nt-ar-rank { color: var(--accent-text, var(--accent)); }
+
+.nt-ar-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 12px; text-align: center; }
+/* an empty stage slot: a diamond socket with the mascot waiting in it */
+.nt-ar-empty-slot { width: 74px; height: 74px; display: grid; place-items: center; margin-bottom: 14px; transform: rotate(45deg); border: 1px dashed var(--paper-line-strong); background: var(--paper-raised); }
+.nt-ar-mascot { width: 46px; height: 46px; transform: rotate(-45deg); }
+.nt-ar-empty-t { font-family: var(--font-display); font-size: 14px; font-weight: 700; }
+.nt-ar-empty-h { max-width: 36ch; font-size: 12px; color: var(--ink-dim); }
+
+/* ======================= sade: editor welcome page ======================= */
+[data-nt="sade"] { display: flex; justify-content: center; padding: 30px 20px; }
+.nt-sd-col { width: 100%; max-width: 560px; }
+.nt-sd-title { font-family: var(--font-title, var(--font-label)); font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+.nt-sd-title::after { content: ''; display: block; width: 28px; height: 2px; margin-top: 10px; border-radius: 1px; background: var(--accent); }
+.nt-sd-hint { margin: 10px 0 18px; font-size: 12.5px; color: var(--ink-dim); }
+.nt-sd-list { border-top: var(--line-w, 1px) solid var(--paper-line); }
+.nt-sd-list li { border-bottom: var(--line-w, 1px) solid var(--paper-line); }
+.nt-sd-row {
+  position: relative; width: 100%; display: grid; grid-template-columns: 22px minmax(0, auto) minmax(0, 1fr); align-items: center; column-gap: 10px;
+  padding: 9px 10px; box-sizing: border-box; font-size: 13px; border-radius: var(--radius-md);
+  transition: background var(--g-dur-tap, .12s) var(--ease, ease);
+}
+.nt-sd-row .nt-path { justify-self: end; text-align: right; }
+.nt-sd-row::before {
+  content: ''; position: absolute; top: 8px; bottom: 8px; left: 0; width: 2px; border-radius: 1px; background: var(--accent);
+  opacity: 0; transition: opacity var(--g-dur-tap, .12s) var(--ease, ease);
+}
+.nt-sd-row:hover { background: var(--paper-raised); }
+.nt-sd-row:hover::before, .nt-sd-row:focus-visible::before { opacity: 1; }
+/* the one place Sade spends colour: each site's mark sits on the accent tint */
+.nt-sd-row .bp-ico { width: 22px; height: 22px; font-size: 11px; font-weight: 600; color: var(--accent-text, var(--accent)); background: var(--accent-soft); border-radius: 6px; }
+.nt-sd-empty { padding: 14px 12px; font-size: 12.5px; color: var(--ink-dim); border: var(--line-w, 1px) dashed var(--paper-line-strong); border-radius: var(--radius-md); }
+
+/* ======================= pafta: drawing sheet ======================= */
+[data-nt="pafta"] { display: flex; flex-direction: column; padding: 14px; }
+.nt-pf-sheet {
+  position: relative; flex: 1 0 auto; display: grid; grid-template-rows: 1fr auto; padding: 16px 10px 10px 16px; box-sizing: border-box;
+  background-color: var(--paper-bg);
+  background-image: linear-gradient(var(--pafta-grid, transparent) 1px, transparent 1px), linear-gradient(90deg, var(--pafta-grid, transparent) 1px, transparent 1px);
+  background-size: 16px 16px; border: 1px solid var(--paper-line-strong);
+}
+/* the inner frame line; the zone marks live in the margin outside it */
+.nt-pf-sheet::before { content: ''; position: absolute; inset: 16px 10px 10px 16px; border: 1.5px solid var(--ink-dim); pointer-events: none; }
+.nt-pf-zones { position: absolute; display: flex; font-family: var(--font-mono); font-size: 9px; color: var(--ink-faint); }
+.nt-pf-zones i { flex: 1; display: grid; place-items: center; font-style: normal; }
+.nt-pf-zones.is-top { top: 0; left: 16px; right: 10px; height: 16px; }
+.nt-pf-zones.is-top i + i { border-left: 1px solid var(--paper-line-strong); }
+.nt-pf-zones.is-left { top: 16px; bottom: 10px; left: 0; width: 16px; flex-direction: column; }
+.nt-pf-zones.is-left i + i { border-top: 1px solid var(--paper-line-strong); }
+.nt-pf-field { min-width: 0; padding: 22px 18px 18px; }
+.nt-pf-details { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 20px 16px; }
+.nt-pf-detail {
+  position: relative; width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 8px; row-gap: 6px;
+  padding: 14px 12px 10px; box-sizing: border-box; font-size: 12.5px; background: var(--paper-bg);
+  border: 1px solid var(--paper-line-strong);
+  transition: border-color var(--g-dur-tap, .12s) var(--ease, ease);
+}
+.nt-pf-detail .nt-name { font-family: var(--font-label); font-weight: 600; }
+/* the page written under the detail like a dimension note */
+.nt-pf-detail .nt-path { grid-column: 1 / -1; padding-top: 5px; font-size: 10.5px; border-top: 1px solid var(--paper-line); }
+.nt-pf-callout {
+  position: absolute; top: -10px; left: -9px; width: 19px; height: 19px; display: grid; place-items: center;
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink); background: var(--paper-bg); border: 1px solid var(--ink-dim); border-radius: 50%;
+}
+.nt-pf-detail:hover, .nt-pf-detail:focus-visible { border-color: var(--accent); }
+.nt-pf-detail:hover .nt-pf-callout, .nt-pf-detail:focus-visible .nt-pf-callout { color: var(--accent-text, var(--accent)); border-color: var(--accent); }
+.nt-pf-empty { height: 100%; min-height: 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; }
+/* a blank detail with its centre lines */
+.nt-pf-blank {
+  width: 120px; height: 70px; border: 1px dashed var(--ink-faint);
+  background: linear-gradient(var(--paper-line-strong), var(--paper-line-strong)) center / 1px 100% no-repeat,
+    linear-gradient(var(--paper-line-strong), var(--paper-line-strong)) center / 100% 1px no-repeat;
+}
+.nt-pf-empty-t { max-width: 34ch; font-size: 12px; color: var(--ink-dim); }
+/* the title block: bottom-right, sitting on the frame line */
+.nt-pf-tb {
+  justify-self: end; width: min(100%, 340px); display: grid; grid-template-columns: minmax(0, 1fr) auto auto; margin: 0;
+  background: var(--paper-bg); border-top: 1.5px solid var(--ink-dim); border-left: 1.5px solid var(--ink-dim);
+}
+.nt-pf-cell { min-width: 0; padding: 4px 9px 5px; }
+.nt-pf-cell + .nt-pf-cell { border-left: 1px solid var(--paper-line-strong); }
+.nt-pf-cell dt { font-family: var(--font-label); font-size: 9.5px; color: var(--ink-faint); }
+.nt-pf-cell dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.nt-pf-cell.is-name dd { font-family: var(--font-display); }
+
+/* ======================= atolye: work orders on a pegboard ======================= */
+[data-nt="atolye"] {
+  display: flex; flex-direction: column; padding: 14px 16px 22px;
+  background-color: var(--paper-sunk);
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--ink) 16%, transparent) 1.6px, transparent 2.2px);
+  background-size: 22px 22px; background-position: 11px 11px;
+}
+/* the brass rail, screwed on at both ends */
+.nt-at-rail {
+  position: relative; padding: 7px 26px; color: var(--accent-ink); background: var(--accent); border-radius: 3px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 35%, transparent), inset 0 -2px 0 color-mix(in srgb, #000 18%, transparent);
+}
+.nt-at-rail::before, .nt-at-rail::after {
+  content: ''; position: absolute; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 60%, #000); box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 30%, transparent);
+}
+.nt-at-rail::before { left: 9px; }
+.nt-at-rail::after { right: 9px; }
+.nt-at-title { font-family: var(--font-display); font-size: 14px; font-weight: 700; letter-spacing: .02em; }
+.nt-at-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 24px 16px; padding-top: 26px; }
+.nt-at-ticket {
+  position: relative; width: 100%; min-height: 76px; display: grid; grid-template-columns: 30px minmax(0, 1fr); box-sizing: border-box;
+  background: var(--paper-raised); border: 1px solid var(--paper-line-strong); border-radius: 3px;
+  box-shadow: 0 3px 6px color-mix(in srgb, var(--ink) 12%, transparent);
+  transform: rotate(var(--tilt, 0deg)); transform-origin: 50% -8px;
+  transition: transform var(--g-dur-base, .2s) var(--ease, ease), box-shadow var(--g-dur-base, .2s) var(--ease, ease);
+}
+.nt-site.nt-at-ticket:hover, .nt-site.nt-at-ticket:focus-visible { transform: translateY(-2px); box-shadow: 0 6px 12px color-mix(in srgb, var(--ink) 16%, transparent); }
+/* the brass grommet the peg goes through, and the peg itself */
+.nt-at-peg {
+  position: absolute; top: 7px; left: 50%; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%;
+  background: var(--paper-sunk); box-shadow: 0 0 0 2px var(--accent);
+}
+.nt-at-peg::before { content: ''; position: absolute; left: 3px; bottom: 4px; width: 2px; height: 16px; border-radius: 1px; background: var(--ink-dim); }
+/* the tear-off stub with the order number, behind a perforation */
+.nt-at-stub {
+  display: grid; place-items: center; writing-mode: vertical-rl; transform: rotate(180deg);
+  font-family: var(--font-mono); font-size: 10px; color: var(--accent-text, var(--accent));
+  border-left: 1.5px dashed var(--paper-line-strong);
+}
+.nt-at-body { min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 20px 10px 10px; }
+.nt-at-head { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.nt-at-ticket .nt-name { font-family: var(--font-display); font-size: 13.5px; font-weight: 700; }
+.nt-at-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 34px; text-align: center; }
+.nt-at-ticket.is-blank { width: 170px; margin-bottom: 14px; --tilt: -2deg; }
+.nt-at-lines { margin: 24px 12px 12px; background: repeating-linear-gradient(transparent 0 11px, var(--paper-line) 11px 12px); }
+.nt-at-empty-t { font-family: var(--font-display); font-size: 14px; font-weight: 700; }
+.nt-at-empty-h { max-width: 34ch; font-size: 12px; color: var(--ink-dim); }
+
+/* ======================= ozel: the user's words ======================= */
+[data-nt="ozel"] { display: flex; flex-direction: column; gap: 20px; padding: 24px 22px; font-family: var(--u-font-ui, var(--font-body)); }
+.nt-oz-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding-bottom: 8px; border-bottom: 2px solid var(--oz-acc, var(--accent)); }
+.nt-oz-title {
+  min-width: 0; font-family: var(--u-font-ui, var(--font-display)); font-size: clamp(28px, 8cqi, 46px); font-weight: 700;
+  line-height: 1; letter-spacing: -.02em;
+}
+.nt-oz-mascot { flex: none; width: 56px; height: 56px; margin-bottom: -2px; }
+.nt-oz-words { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 0; }
+.nt-oz-words li { min-width: 0; max-width: 100%; display: flex; align-items: center; }
+/* the sites read as one run of words, split by slashes in the faint tone */
+.nt-oz-words li:not(:last-child)::after { content: '/'; padding: 0 14px; font-size: clamp(16px, 4cqi, 22px); color: var(--oz-faint, var(--ink-faint)); }
+.nt-oz-word { min-width: 0; display: inline-flex; align-items: center; gap: 8px; padding: 2px 0; font-size: clamp(17px, 4.2cqi, 24px); font-weight: 600; line-height: 1.3; }
+.nt-oz-word .nt-name {
+  text-decoration: underline 3px; text-decoration-color: transparent; text-underline-offset: 6px;
+  transition: text-decoration-color var(--g-dur-tap, .12s) var(--ease, ease);
+}
+.nt-oz-word:hover .nt-name, .nt-oz-word:focus-visible .nt-name { text-decoration-color: var(--oz-acc, var(--accent)); }
+/* em here is the mark's own (smaller) size: 1.3em of .6em is about the word's x-height */
+.nt-oz-word .bp-ico { width: 1.3em; height: 1.3em; font-size: .6em; font-weight: 700; color: var(--oz-acc-text, var(--oz-acc, var(--accent))); }
+.nt-oz-word .bp-ico img { width: 1.1em; height: 1.1em; }
+.nt-oz-empty { font-size: 15px; color: var(--oz-dim, var(--ink-dim)); }
+
+/* ======================= narrow panel ======================= */
+@container bp (max-width: 560px) {
+  .nt-ar-hero { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .nt-ar-hero .nt-ar-rank { display: none; }
+  :is(.nt-ar-stages, .nt-pf-details) { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+  .nt-at-board { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  [data-nt="sade"] { padding: 22px 14px; }
+}
+@container bp (max-width: 400px) {
+  :is([data-nt="arena"], [data-nt="ozel"]) { padding: 12px; }
+  .nt-ar-pips, .nt-ar-start { display: none; }
+  .nt-ar-hero { grid-template-columns: auto minmax(0, 1fr); }
+  :is(.nt-ar-stages, .nt-pf-details, .nt-at-board) { grid-template-columns: minmax(0, 1fr); }
+  .nt-sd-row { grid-template-columns: 22px minmax(0, 1fr); }
+  .nt-sd-row .nt-path { display: none; }
+  [data-nt="pafta"] { padding: 8px; }
+  .nt-pf-sheet { padding: 6px; }
+  .nt-pf-sheet::before { inset: 6px; }
+  .nt-pf-zones { display: none; }
+  .nt-pf-tb { width: 100%; }
+  [data-nt="atolye"] { padding: 12px 12px 18px; }
+  .nt-oz-mascot { width: 42px; height: 42px; }
+}
+
+/* ======================= reduced motion ======================= */
+@media (prefers-reduced-motion: reduce) {
+  .nt *, .nt *::before { transition: none !important; }
+}
+:root[data-motion="reduced"] :is(.nt *, .nt *::before) { transition: none !important; }

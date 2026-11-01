@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { displayAddress } from '../../lib/browserAddress';
-import { shortcutLabel, type Site, type Suggestion } from '../../lib/browserSuggest';
+import { shortcutLabel, type Suggestion } from '../../lib/browserSuggest';
 
 export interface BrowserTab {
   id: number;
@@ -98,29 +98,5 @@ export function SuggestionList({ id, items, active, onPick }: {
         </li>
       ))}
     </ul>
-  );
-}
-
-/** "Önerilen": tiles of the sites visited most, on a tab that has no page yet. */
-export function NewTabGrid({ sites, onPick }: { sites: Site[]; onPick: (url: string) => void }) {
-  const { t } = useLang();
-  return (
-    <div className="bp-grid-wrap">
-      <p className="bp-grid-title">{t('bp.suggested')}</p>
-      {sites.length === 0
-        ? <p className="bp-grid-empty">{t('bp.suggestedEmpty')}</p>
-        : (
-          <ul className="bp-grid">
-            {sites.map(site => (
-              <li key={site.label}>
-                <button type="button" className="bp-tile" title={site.url} onClick={() => onPick(site.url)}>
-                  <SiteIcon favicon={site.favicon} label={site.label} />
-                  <span className="bp-tile-t">{site.label}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-    </div>
   );
 }

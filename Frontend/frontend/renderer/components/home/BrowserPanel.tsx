@@ -3,7 +3,8 @@ import { useLang } from '../../lib/i18n';
 import { addressToUrl, displayAddress } from '../../lib/browserAddress';
 import { cleanHistory, isMacPlatform, shortcutLabel, suggest, suggestedSites, tabShortcutOf, type HistoryItem } from '../../lib/browserSuggest';
 import { addNotesFromEvent, addPageChip, BROWSER_NOTES_CHANNEL, isAnnotateShortcut } from '../../lib/browserNotes';
-import { BrowserTabs, NewTabGrid, SuggestionList, type BrowserTab } from './BrowserTabs';
+import { BrowserTabs, SuggestionList, type BrowserTab } from './BrowserTabs';
+import { NewTabPanel } from './newtab/NewTabPanel';
 
 /** Main-process event and invoke channel for the agent browser (docs/agent-browser.md). */
 export const BROWSER_CHANNEL = 'browser-live';
@@ -432,7 +433,7 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
           </div>
         )}
         {emptyView && (
-          <NewTabGrid sites={suggestedSites(history)} onPick={url => (state.active ? send('navigate', { url }) : void openTab(url))} />
+          <NewTabPanel sites={suggestedSites(history)} onPick={url => (state.active ? send('navigate', { url }) : void openTab(url))} />
         )}
       </div>
     </section>

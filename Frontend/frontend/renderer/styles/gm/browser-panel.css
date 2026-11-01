@@ -1,6 +1,9 @@
 /* Agent browser: the right panel's "Tarayıcı" tab. The page is a native view laid over .bp-view,
    so the placeholder only reserves the space. Same tokens as the computer live panel. */
 
+/* What an empty tab shows in place of the page, one layout per theme (components/home/newtab). */
+@import './newtab.css';
+
 .workspace[data-tab="tarayici"] .ws-pane[data-pane="tarayici"] { display: flex; }
 
 .bp-panel { display: flex; flex: 1; flex-direction: column; gap: 6px; padding: 8px 8px 10px; min-height: 100%; box-sizing: border-box; color: var(--ink); }
@@ -115,22 +118,7 @@
 }
 .bp-tab-new { align-self: center; width: 24px; height: 24px; font-size: 16px; }
 .bp-tab-x:hover, .bp-tab-new:hover { background: var(--paper-line); color: var(--ink); }
-.bp-tab-main:focus-visible, .bp-tab-x:focus-visible, .bp-tab-new:focus-visible, .bp-tile:focus-visible { outline: 2px solid var(--accent-text, var(--ink)); outline-offset: -2px; }
-
-/* "Önerilen": what an empty tab shows in place of the page. */
-.bp-grid-wrap { align-self: stretch; width: 100%; padding: 16px; box-sizing: border-box; overflow-y: auto; scrollbar-gutter: stable; }
-.bp-grid-title { margin: 0 0 10px; font-family: var(--font-label); font-size: var(--fs-meta); font-weight: var(--label-weight, 600); text-transform: var(--label-case); letter-spacing: var(--label-track); color: var(--ink-dim); }
-.bp-grid-empty { margin: 0; font-size: 12.5px; color: var(--ink-faint); }
-.bp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
-.bp-tile {
-  width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 6px; box-sizing: border-box;
-  font: inherit; font-size: 12px; color: var(--ink); background: var(--paper-bg, transparent); cursor: pointer;
-  border: var(--line-w, 1px) solid var(--paper-line); border-radius: var(--radius-md);
-}
-.bp-tile:hover { border-color: var(--paper-line-strong, var(--ink-dim)); background: var(--paper-bg-2, transparent); }
-.bp-tile .bp-ico { width: 28px; height: 28px; font-size: 15px; background: var(--paper-sunk, var(--paper-bg-2)); border-radius: var(--radius-md); }
-.bp-tile .bp-ico img { width: 18px; height: 18px; }
-.bp-tile-t { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-tab-main:focus-visible, .bp-tab-x:focus-visible, .bp-tab-new:focus-visible { outline: 2px solid var(--accent-text, var(--ink)); outline-offset: -2px; }
 
 /* The placeholder: the native view is laid exactly over this box. */
 .bp-view {

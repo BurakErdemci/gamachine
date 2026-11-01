@@ -235,9 +235,9 @@ describe('BrowserPanel empty tab', () => {
     entries = [item('https://a.example/x', 'A one', 1, 100), item('https://a.example/y', 'A two', 4, 200), item('https://b.example/', 'B', 3, 150)]
     await mount()
     push(live({ tabs: [tab(1, { agent: true }), tab(2, { url: '', title: '' })], activeTabId: 2 }))
-    expect(await screen.findByText(tr['bp.suggested'])).toBeTruthy()
+    expect(await screen.findByText(tr['nt.arena.title'])).toBeTruthy()
     const tiles = await screen.findAllByRole('button', { name: /example/ })
-    expect(tiles.map(t => t.querySelector('.bp-tile-t')!.textContent)).toEqual(['a.example', 'b.example'])
+    expect(tiles.map(t => t.querySelector('.nt-name')!.textContent)).toEqual(['a.example', 'b.example'])
     await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', conversationId: 3, visible: false }))
     fireEvent.click(tiles[0])
     expect(calls('navigate')).toEqual([{ op: 'navigate', conversationId: 3, url: 'https://a.example/y' }])
@@ -246,9 +246,9 @@ describe('BrowserPanel empty tab', () => {
   it('says so when there is no history yet, and shows the grid again once a page loads and is left', async () => {
     await mount()
     push(live({ tabs: [tab(1, { url: 'about:blank', title: '', agent: true })], activeTabId: 1 }))
-    expect(await screen.findByText(tr['bp.suggestedEmpty'])).toBeTruthy()
+    expect(await screen.findByText(tr['nt.arena.empty'])).toBeTruthy()
     push(live({ tabs: [tab(1, { agent: true })], activeTabId: 1 }))
-    expect(screen.queryByText(tr['bp.suggested'])).toBeNull()
+    expect(document.querySelector('[data-nt]')).toBeNull()
     await waitFor(() => expect(calls('visible').at(-1)).toEqual({ op: 'visible', conversationId: 3, visible: true }))
   })
 
