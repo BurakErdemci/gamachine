@@ -25,7 +25,8 @@ from .editor_log import bridge_compile_errors, editor_log_path
 logger = logging.getLogger(__name__)
 
 _GENERATED_DIR_PATTERNS = ("__pycache__", "*.egg-info", "build", ".venv")
-_DIGEST_FILE = ".gamachine-source-digest"
+_DIGEST_FILE = ".gamachine-source-digest"  # turn 1/2 builds: one digest of the whole copied tree
+_FILES_RECORD = ".gamachine-files.json"  # {sourceDigest, files: {relative path: sha256}} of what we copied
 _PACKAGE_NAME = "com.coplaydev.unity-mcp"
 # Written by every Gamachine before 2 Nov 2026 as the first line of Assets/Editor/UnityArchitectAIMCPSetup.cs.
 _LEGACY_SCRIPT_HEADER = "// Gamachine — MCP bağlantı yapılandırması"
@@ -34,6 +35,10 @@ _EXCLUDE_MARKER = "# Gamachine (local, not committed)"
 
 class _ManifestChanged(Exception):
     """The live manifest changed while its replacement was being staged."""
+
+
+class _Declined(Exception):
+    """The installed package or the manifest is the user's; the message is the reason shown to them."""
 
 
 class _Refused(Exception):
@@ -130,6 +135,27 @@ def _tree_digest(path) -> str:
     return digest.hexdigest()
 
 
+def _file_hash(path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _installed_files(root) -> dict:
+    """relative path -> full path of every file under root except our two bookkeeping files; links are not followed."""
+    found = {}
+    for directory, directories, files in os.walk(root):
+        directories[:] = [name for name in directories if not _is_link(os.path.join(directory, name))]
+        for name in files:
+            full_path = os.path.join(directory, name)
+            relative = os.path.relpath(full_path, root).replace(os.sep, "/")
+            if relative not in (_DIGEST_FILE, _FILES_RECORD) and not _is_link(full_path):
+                found[relative] = full_path
+    return found
+
+
 def _complete_digest(path) -> Optional[str]:
     """The stored source digest when it still matches the tree, else None."""
     try:
@@ -220,9 +246,11 @@ class UnityMCPManager:
         # gösterilecek metin buradan geliyor; sadece "başlatılamadı" demek
         # kullanıcıyı çözümsüz bırakıyordu.
         self.last_error: Optional[str] = None
+        # Why install_package last returned False (shown to the user by the toggle route).
+        self.last_install_error: Optional[str] = None
         # Windows dialog probe (unity-mcp/Server/src/transport/unity_dialog_probe.py), loaded once.
         self._dialog_probe = None
-        self._dialog_cache: dict[str, dict] = {}  # project -> {project, value, time}
+        self._dialog_cache: dict[str, dict] = {}  # normalised workspace path -> {project, value, time}
         self._dialog_inflight: dict[str, asyncio.Future] = {}
         import sys
         if getattr(sys, "frozen", False):
@@ -816,8 +844,8 @@ class UnityMCPManager:
             self._dialog_probe = module
         return self._dialog_probe
 
-    async def _probe_dialog(self, project: str) -> Optional[dict]:
-        """One probe run; the cache entry is stored only after it returns, under its own project."""
+    async def _probe_dialog(self, key: str, project: str) -> Optional[dict]:
+        """One probe run for a workspace; its cache entry is stored only after it returns, under that workspace."""
         dialog = None
         try:
             probe = self._load_dialog_probe()
@@ -826,22 +854,24 @@ class UnityMCPManager:
                 dialog = {"title": str(found[0].get("title", "")), "buttons": list(found[0].get("buttons") or [])}
         except Exception:
             logger.debug("[UnityMCP] Unity dialog probe failed.", exc_info=True)
-        self._dialog_cache[project] = {"project": project, "value": dialog, "time": time.monotonic()}
+        self._dialog_cache[key] = {"project": project, "value": dialog, "time": time.monotonic()}
         return dialog
 
     async def _blocking_dialog(self) -> Optional[dict]:
         """A native Unity dialog of the active project, which holds the connection silently (measured 2 Nov 2026)."""
         if sys.platform != "win32" or not self.enabled or not self.active_workspace:
             return None
+        # The editor title carries only the folder name, but two workspaces may share it: cache per full path.
+        key = os.path.normcase(os.path.realpath(self.active_workspace))
         project = os.path.basename(os.path.normpath(self.active_workspace))
-        cached = self._dialog_cache.get(project)
+        cached = self._dialog_cache.get(key)
         if cached and time.monotonic() - cached["time"] < 2.0:
             return cached["value"]
-        # Concurrent polls of one project share a single probe; shield keeps it alive if one poll is cancelled.
-        probe = self._dialog_inflight.get(project)
+        # Concurrent polls of one workspace share a single probe; shield keeps it alive if one poll is cancelled.
+        probe = self._dialog_inflight.get(key)
         if probe is None:
-            probe = self._dialog_inflight[project] = asyncio.ensure_future(self._probe_dialog(project))
-            probe.add_done_callback(lambda _done: self._dialog_inflight.pop(project, None))
+            probe = self._dialog_inflight[key] = asyncio.ensure_future(self._probe_dialog(key, project))
+            probe.add_done_callback(lambda _done: self._dialog_inflight.pop(key, None))
         return await asyncio.shield(probe)
 
     async def get_status(self) -> dict:
@@ -962,16 +992,19 @@ class UnityMCPManager:
         3. The package folder and UserSettings/Gamachine/ are excluded in .git/info/exclude.
         The package's GamachineAutoConnect.cs applies UserSettings/Gamachine/autoconnect.json.
         """
+        self.last_install_error = None
         if not workspace_path:
             return False
         if not _is_unity_project(workspace_path):
             logger.debug("[UnityMCP] %s is not a Unity project (no Assets and ProjectSettings); not touched.",
                          workspace_path)
+            self.last_install_error = f"{workspace_path} is not a Unity project (no Assets and ProjectSettings)."
             return False
         self._ensure_writable_resources()  # frozen: MCPForUnity'yi yazılabilir dizine taşı
         manifest_path = os.path.join(workspace_path, "Packages", "manifest.json")
         if not os.path.exists(manifest_path):
             logger.error(f"[UnityMCP] manifest.json bulunamadı: {manifest_path}")
+            self.last_install_error = f"Packages/manifest.json was not found in {workspace_path}."
             return False
         try:
             _require_plain(workspace_path, *_legacy_paths(workspace_path), *_settings_paths(workspace_path),
@@ -979,29 +1012,35 @@ class UnityMCPManager:
             source = self._manifest_dependency(manifest_path)
             if source is not None and not self._is_our_manifest_source(source):
                 # An embedded copy would override the user's own choice of the package.
-                logger.warning("[UnityMCP] %s comes from %r in the manifest; the user chose it, so the "
-                               "Gamachine copy is not installed.", _PACKAGE_NAME, source)
-                return False
+                raise _Declined(f"manifest.json uses another {_PACKAGE_NAME} ({source}); "
+                                "Gamachine left it as it is.")
             self._sweep_staging(workspace_path)
             self._ensure_git_exclude(workspace_path)
             # The bootstrap does nothing without the data file, so it must exist before the package
             # loads; a later change of it is what reloads the editor.
             if write_autoconnect:
                 self._write_autoconnect_settings(workspace_path, auto_start=True)
-            elif not os.path.isfile(self._autoconnect_path(workspace_path)):
-                self._write_autoconnect_settings(workspace_path, auto_start=False)
-            if not self._ensure_package_copy(workspace_path):
-                return False
+            else:
+                self._write_autoconnect_settings(workspace_path, auto_start=False, create_only=True)
+            self._ensure_package_copy(workspace_path)
             if not self._migrate_manifest(manifest_path):
+                self.last_install_error = (f"manifest.json uses another {_PACKAGE_NAME}; "
+                                           "Gamachine left it as it is.")
                 return False
             self._remove_legacy_script(workspace_path)
             logger.info(f"[UnityMCP] Paket + auto-connect ayarları kuruldu: {workspace_path}")
             return True
+        except _Declined as reason:
+            logger.warning("[UnityMCP] %s", reason)
+            self.last_install_error = str(reason)
+            return False
         except _Refused as error:
             logger.error("[UnityMCP] Package install refused: %s", error)
+            self.last_install_error = f"{error}; Gamachine did not write there."
             return False
         except Exception as e:
             logger.error(f"[UnityMCP] Paket kurulumu hatası: {e}")
+            self.last_install_error = f"Package install failed: {e}"
             return False
 
     def _is_our_manifest_source(self, value) -> bool:
@@ -1107,28 +1146,47 @@ class UnityMCPManager:
                     and os.path.isdir(path) and not _is_link(path):
                 shutil.rmtree(path, ignore_errors=True)
 
-    def _ensure_package_copy(self, workspace_path: str) -> bool:
-        """Packages/com.coplaydev.unity-mcp = our MCPForUnity; a folder without our digest, or edited by the user, is left alone."""
+    def _ensure_package_copy(self, workspace_path: str) -> None:
+        """Packages/com.coplaydev.unity-mcp = our MCPForUnity. Raises _Declined when the folder is not ours
+        or the user changed a file we copied; anything the user or Unity added is carried into a new copy."""
         target = os.path.join(workspace_path, *_PACKAGE_DIR)
-        stored_digest = None
-        if os.path.lexists(target):
-            stored_path = os.path.join(target, _DIGEST_FILE)
-            if not os.path.isdir(target) or not os.path.isfile(stored_path) or _is_link(stored_path):
-                logger.error("[UnityMCP] %s exists and was not made by Gamachine; it is left as it is.", target)
-                return False
-            with open(stored_path, encoding="utf-8") as stored:
-                stored_digest = stored.read()
+        manifest_path = os.path.join(workspace_path, "Packages", "manifest.json")
         source = self.local_mcp_source
         source_digest = _tree_digest(source)
-        if stored_digest is not None:
-            installed_digest = _tree_digest(target)
-            if stored_digest == source_digest:
-                if installed_digest == stored_digest:
-                    return True
-                logger.warning("[UnityMCP] %s is incomplete; copying the package again.", target)
-            elif installed_digest != stored_digest:
-                logger.error("[UnityMCP] %s was changed after Gamachine installed it; it is not replaced.", target)
-                return False
+        changed = f"Packages/{_PACKAGE_NAME} was changed by hand; Gamachine left it as it is."
+        extras = {}  # relative path -> full path of files that are not ours
+        exists = os.path.lexists(target)
+        if exists:
+            record_path = os.path.join(target, _FILES_RECORD)
+            marker_path = os.path.join(target, _DIGEST_FILE)
+            if not os.path.isdir(target) or _is_link(record_path) or _is_link(marker_path) \
+                    or not (os.path.isfile(record_path) or os.path.isfile(marker_path)):
+                raise _Declined(f"Packages/{_PACKAGE_NAME} was not made by Gamachine; Gamachine left it as it is.")
+            installed = _installed_files(target)
+            if os.path.isfile(record_path):
+                try:
+                    with open(record_path, encoding="utf-8") as stored:
+                        record = json.load(stored)
+                    recorded, stored_digest = dict(record["files"]), record["sourceDigest"]
+                except (OSError, ValueError, KeyError, TypeError):
+                    raise _Declined(changed)
+                if any(path in installed and _file_hash(installed[path]) != digest
+                       for path, digest in recorded.items()):
+                    raise _Declined(changed)
+                missing = [path for path in recorded if path not in installed]
+                extras = {path: full for path, full in installed.items() if path not in recorded}
+                if stored_digest == source_digest and not missing:
+                    return
+                if missing:
+                    logger.warning("[UnityMCP] %s is incomplete; copying the package again.", target)
+            else:
+                # A turn 1/2 build left one digest for the whole tree and no per-file record.
+                with open(marker_path, encoding="utf-8") as stored:
+                    stored_digest = stored.read()
+                if _tree_digest(target) != stored_digest:
+                    raise _Declined(changed)
+                if stored_digest == source_digest:
+                    return
         # Staged in our excluded settings folder, not in Packages/ where Unity would see a half copy.
         stage_dir = os.path.join(workspace_path, "UserSettings", "Gamachine")
         os.makedirs(stage_dir, exist_ok=True)
@@ -1137,30 +1195,47 @@ class UnityMCPManager:
         old = os.path.join(stage_dir, "package.old" + suffix)
 
         def skipped(directory, names):
-            return [name for name in names if name == _DIGEST_FILE or _is_link(os.path.join(directory, name))
+            return [name for name in names if name in (_DIGEST_FILE, _FILES_RECORD)
+                    or _is_link(os.path.join(directory, name))
                     or any(fnmatch.fnmatchcase(name, pattern) for pattern in _GENERATED_DIR_PATTERNS)]
 
         try:
             shutil.copytree(source, staged, ignore=skipped)
-            with open(os.path.join(staged, _DIGEST_FILE), "w", encoding="utf-8") as stored:
-                stored.write(source_digest)
-            if _complete_digest(staged) != source_digest:
+            if _tree_digest(staged) != source_digest:
                 raise OSError("Staged package does not match the source digest")
-            if stored_digest is not None:
+            copied = {path: _file_hash(full) for path, full in _installed_files(staged).items()}
+            clashes = sorted(path for path in extras if path in copied)
+            if clashes:
+                raise _Declined(f"Packages/{_PACKAGE_NAME}/{clashes[0]} was added by hand and the new package "
+                                "has a file at the same path; Gamachine left it as it is.")
+            for path, full in extras.items():
+                destination = os.path.join(staged, *path.split("/"))
+                os.makedirs(os.path.dirname(destination), exist_ok=True)
+                shutil.copy2(full, destination)
+            with open(os.path.join(staged, _FILES_RECORD), "w", encoding="utf-8") as stored:
+                json.dump({"sourceDigest": source_digest, "files": copied}, stored, indent=2)
+            # The user may have set their own package in the manifest while the copy ran.
+            current = self._manifest_dependency(manifest_path)
+            if current is not None and not self._is_our_manifest_source(current):
+                raise _Declined(f"manifest.json uses another {_PACKAGE_NAME} ({current}); "
+                                "Gamachine left it as it is.")
+            if exists:
                 os.replace(target, old)
             try:
                 os.replace(staged, target)
             except Exception:
-                if stored_digest is not None and not os.path.lexists(target):
+                if exists and not os.path.lexists(target):
                     os.replace(old, target)
                 raise
+        except _Declined:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise
         except Exception as e:
             logger.error("[UnityMCP] Could not copy the package into %s: %s", target, e)
             shutil.rmtree(staged, ignore_errors=True)
-            return False
+            raise _Declined(f"Could not copy the package into {target}: {e}")
         shutil.rmtree(old, ignore_errors=True)
         logger.info("[UnityMCP] Package copied into %s.", target)
-        return True
 
     @staticmethod
     def _ensure_git_exclude(workspace_path: str) -> bool:
@@ -1185,6 +1260,8 @@ class UnityMCPManager:
             if parent == work_tree:
                 return False
             work_tree = parent
+        # The gitdir the project points at is checked before commondir is followed, then the common dir too.
+        _require_plain(git_dir, git_dir, os.path.join(git_dir, "info"), os.path.join(git_dir, "info", "exclude"))
         # A linked worktree's info/ lives in the common dir: git ignores <worktree gitdir>/info/exclude.
         common = os.path.join(git_dir, "commondir")
         if os.path.isfile(common):
@@ -1232,6 +1309,9 @@ class UnityMCPManager:
                 if isinstance(workspace_path, str):
                     self._autoconnect_workspaces.discard(workspace_path)
                 return False
+            if not _is_unity_project(workspace_path):
+                self._autoconnect_workspaces.discard(workspace_path)
+                return False
             # A failed install leaves the script of an older Gamachine, which would autostart against a dead server.
             legacy_removed = self._remove_legacy_script(workspace_path, only_if_autostart=True)
             try:
@@ -1247,13 +1327,16 @@ class UnityMCPManager:
             logger.debug("[UnityMCP] Autoconnect reset skipped: %s", e)
             return False
 
-    def _write_autoconnect_settings(self, workspace_path: str, auto_start: bool = False):
+    def _write_autoconnect_settings(self, workspace_path: str, auto_start: bool = False,
+                                    create_only: bool = False):
         """
         Writes UserSettings/Gamachine/autoconnect.json, read by the package's GamachineAutoConnect.cs.
         auto_start=True → the editor connects when our server answers on the port.
         auto_start=False → the editor does not connect on load.
         Unity compiles a changed script only when its window is focused but notices this file while
         unfocused (measured 2 Nov 2026), so every changing value lives here.
+        create_only writes the file only when it does not exist yet (exclusive create), so a late
+        install can never overwrite a newer on/off write.
         Nothing is written for a folder that is not a Unity project or whose path crosses a link.
         """
         if not _is_unity_project(workspace_path):
@@ -1289,7 +1372,16 @@ class UnityMCPManager:
             # A new value on every write, so re-enabling always changes the file and reloads the editor.
             "revision": secrets.token_hex(8),
         }
-        _atomic_write_text(path, json.dumps(settings, indent=2) + "\n")
+        text = json.dumps(settings, indent=2) + "\n"
+        if create_only:
+            try:
+                descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                return
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as output:
+                output.write(text)
+        else:
+            _atomic_write_text(path, text)
         if auto_start:
             self._autoconnect_workspaces.add(workspace_path)
         else:

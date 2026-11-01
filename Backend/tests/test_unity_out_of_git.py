@@ -203,7 +203,8 @@ def test_user_chosen_package_source_is_kept_and_copy_skipped(manager, tmp_path, 
         assert manager.install_package(str(project), write_autoconnect=False) is False
     assert manifest.read_bytes() == before
     assert not project.joinpath(*PACKAGE).exists()
-    assert "the user chose it" in caplog.text
+    assert "Gamachine left it as it is" in caplog.text
+    assert manager.last_install_error
 
 
 def test_legacy_script_is_deleted_only_with_gamachines_header(manager, tmp_path):
@@ -239,8 +240,10 @@ def test_fresh_copy_then_up_to_date_then_stale(manager, tmp_path, source):
     manifest_before = (project / "Packages" / "manifest.json").read_bytes()
     assert manager.install_package(str(project), write_autoconnect=False) is True
     package = project.joinpath(*PACKAGE)
-    assert files(package) == [".gamachine-source-digest", "Editor/Gamachine/GamachineAutoConnect.cs", "package.json"]
-    assert (package / ".gamachine-source-digest").read_text(encoding="utf-8") == module._tree_digest(str(source))
+    assert files(package) == [".gamachine-files.json", "Editor/Gamachine/GamachineAutoConnect.cs", "package.json"]
+    record = json.loads((package / ".gamachine-files.json").read_text(encoding="utf-8"))
+    assert record["sourceDigest"] == module._tree_digest(str(source))
+    assert sorted(record["files"]) == ["Editor/Gamachine/GamachineAutoConnect.cs", "package.json"]
     assert (project / "Packages" / "manifest.json").read_bytes() == manifest_before
     assert files(project / "UserSettings") == ["Gamachine/autoconnect.json"]
     assert settings(project)["autoStart"] is False
@@ -253,8 +256,9 @@ def test_fresh_copy_then_up_to_date_then_stale(manager, tmp_path, source):
     (source / "Editor" / "Gamachine" / "GamachineAutoConnect.cs").unlink()
     (source / "Editor" / "New.cs").write_text("// new", encoding="utf-8")
     assert manager.install_package(str(project), write_autoconnect=False) is True
-    assert files(package) == [".gamachine-source-digest", "Editor/New.cs", "package.json"]
-    assert (package / ".gamachine-source-digest").read_text(encoding="utf-8") == module._tree_digest(str(source))
+    assert files(package) == [".gamachine-files.json", "Editor/New.cs", "package.json"]
+    record = json.loads((package / ".gamachine-files.json").read_text(encoding="utf-8"))
+    assert record["sourceDigest"] == module._tree_digest(str(source))
     assert files(project / "UserSettings") == ["Gamachine/autoconnect.json"]
 
 
@@ -279,10 +283,11 @@ def test_foreign_package_folder_is_left_alone(manager, tmp_path, caplog, kind):
     else:
         package.write_text("not a folder", encoding="utf-8")
     before = {p: p.read_bytes() for p in project.joinpath("Packages").rglob("*") if p.is_file()}
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.WARNING):
         assert manager.install_package(str(project), write_autoconnect=False) is False
     assert {p: p.read_bytes() for p in project.joinpath("Packages").rglob("*") if p.is_file()} == before
     assert "not made by Gamachine" in caplog.text
+    assert "not made by Gamachine" in manager.last_install_error
 
 
 def test_failed_copy_keeps_the_previous_package(manager, tmp_path, source, monkeypatch):
@@ -291,7 +296,7 @@ def test_failed_copy_keeps_the_previous_package(manager, tmp_path, source, monke
     package = project.joinpath(*PACKAGE)
     before = {name: (package / name).read_bytes() for name in files(package)}
     (source / "package.json").write_text('{"name": "com.coplaydev.unity-mcp", "v": 2}', encoding="utf-8")
-    monkeypatch.setattr(module, "_complete_digest", lambda path: None)
+    monkeypatch.setattr(module.shutil, "copytree", Mock(side_effect=OSError("disk full")))
     assert manager.install_package(str(project), write_autoconnect=False) is False
     assert {name: (package / name).read_bytes() for name in files(package)} == before
     assert files(project / "UserSettings") == ["Gamachine/autoconnect.json"]
@@ -372,7 +377,7 @@ def test_full_migration_of_an_old_project(manager, tmp_path):
     assert json.loads((project / "Packages" / "manifest.json").read_text(encoding="utf-8")) == {
         "dependencies": {"com.unity.ugui": "2.0.0"}}
     assert not legacy.exists()
-    assert project.joinpath(*PACKAGE, ".gamachine-source-digest").is_file()
+    assert project.joinpath(*PACKAGE, ".gamachine-files.json").is_file()
     assert exclude_lines(project / ".git") == EXCLUDE_BLOCK
 
 
@@ -577,7 +582,8 @@ def test_a_users_own_clone_of_the_package_is_left_alone(manager, tmp_path, caplo
     assert not project.joinpath(*PACKAGE).exists() and project.joinpath(*LEGACY).is_file()
     assert manifest.read_text(encoding="utf-8") == json.dumps(
         {"dependencies": {"com.coplaydev.unity-mcp": "file:" + str(clone)}})
-    assert "the user chose it" in caplog.text
+    assert "Gamachine left it as it is" in caplog.text
+    assert manager.last_install_error
 
 
 def test_a_failed_copy_changes_neither_manifest_nor_assets(manager, tmp_path, monkeypatch):
@@ -613,10 +619,12 @@ def test_a_package_the_user_edited_is_not_replaced(manager, tmp_path, source, ca
     (package / "Mine.cs").write_text("// mine", encoding="utf-8")
     (source / "package.json").write_text('{"name": "com.coplaydev.unity-mcp", "v": 2}', encoding="utf-8")
     before = snapshot(package)
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.WARNING):
         assert manager.install_package(str(project), write_autoconnect=False) is False
     assert snapshot(package) == before
-    assert "was changed after Gamachine installed it" in caplog.text
+    assert "was changed by hand" in caplog.text
+    assert manager.last_install_error == (
+        "Packages/com.coplaydev.unity-mcp was changed by hand; Gamachine left it as it is.")
 
 
 def test_a_deleted_package_file_is_copied_again(manager, tmp_path):
@@ -625,8 +633,8 @@ def test_a_deleted_package_file_is_copied_again(manager, tmp_path):
     package = project.joinpath(*PACKAGE)
     (package / "package.json").unlink()
     assert manager.install_package(str(project), write_autoconnect=False) is True
-    assert files(package) == [".gamachine-source-digest", "Editor/Gamachine/GamachineAutoConnect.cs", "package.json"]
-    assert module._complete_digest(str(package)) == module._tree_digest(str(package))
+    assert files(package) == [".gamachine-files.json", "Editor/Gamachine/GamachineAutoConnect.cs", "package.json"]
+    assert (package / "package.json").read_text(encoding="utf-8") == '{"name": "com.coplaydev.unity-mcp"}'
 
 
 def test_git_exclude_runs_once_per_install_and_the_old_names_are_gone(manager, tmp_path, monkeypatch):
@@ -811,3 +819,202 @@ def test_network_manifest_source_is_never_probed(manager, monkeypatch, value):
     monkeypatch.setattr(module.os.path, "isfile", lambda p: probed.append(p) or False)
     assert manager._is_our_manifest_source(value) is False
     assert probed == []
+
+
+# ── Audit round (turn 3) ─────────────────────────────────────────────────────
+
+def installed_project(manager, tmp_path):
+    project = project_at(tmp_path / "Game")
+    assert manager.install_package(str(project), write_autoconnect=False) is True
+    return project, project.joinpath(*PACKAGE)
+
+
+def new_source_version(source):
+    (source / "package.json").write_text('{"name": "com.coplaydev.unity-mcp", "v": 2}', encoding="utf-8")
+
+
+def test_a_modified_recorded_file_is_kept_and_the_reason_is_reported(manager, tmp_path, source):
+    project, package = installed_project(manager, tmp_path)
+    (package / "package.json").write_text("my own change", encoding="utf-8")
+    new_source_version(source)
+    before = snapshot(package)
+    assert manager.install_package(str(project), write_autoconnect=False) is False
+    assert snapshot(package) == before
+    assert "was changed by hand" in manager.last_install_error
+    # Even with an unchanged source a modified file is reported, not silently accepted.
+    assert manager.install_package(str(project), write_autoconnect=False) is False
+
+
+def test_a_missing_recorded_file_is_restored(manager, tmp_path):
+    project, package = installed_project(manager, tmp_path)
+    (package / "Editor" / "Gamachine" / "GamachineAutoConnect.cs").unlink()
+    assert manager.install_package(str(project), write_autoconnect=False) is True
+    assert (package / "Editor" / "Gamachine" / "GamachineAutoConnect.cs").read_text(encoding="utf-8") == "// bootstrap"
+    assert manager.last_install_error is None
+
+
+def test_extra_files_are_carried_into_an_updated_copy(manager, tmp_path, source):
+    project, package = installed_project(manager, tmp_path)
+    (package / "package.json.meta").write_text("guid: unity", encoding="utf-8")
+    (package / "Docs").mkdir()
+    (package / "Docs" / "notes.md").write_text("mine", encoding="utf-8")
+    new_source_version(source)
+    assert manager.install_package(str(project), write_autoconnect=False) is True
+    assert (package / "package.json.meta").read_text(encoding="utf-8") == "guid: unity"
+    assert (package / "Docs" / "notes.md").read_text(encoding="utf-8") == "mine"
+    assert '"v": 2' in (package / "package.json").read_text(encoding="utf-8")
+    record = json.loads((package / ".gamachine-files.json").read_text(encoding="utf-8"))
+    assert "package.json.meta" not in record["files"] and "Docs/notes.md" not in record["files"]
+    # They stay extras: a second install with the same source changes nothing.
+    stamp = (package / "Docs" / "notes.md").stat().st_mtime_ns
+    assert manager.install_package(str(project), write_autoconnect=False) is True
+    assert (package / "Docs" / "notes.md").stat().st_mtime_ns == stamp
+
+
+def test_an_extra_that_collides_with_a_new_source_file_is_refused(manager, tmp_path, source):
+    project, package = installed_project(manager, tmp_path)
+    (package / "Editor" / "New.cs").write_text("// the user's own", encoding="utf-8")
+    (source / "Editor" / "New.cs").write_text("// from the new version", encoding="utf-8")
+    before = snapshot(package)
+    assert manager.install_package(str(project), write_autoconnect=False) is False
+    assert snapshot(package) == before
+    assert "Editor/New.cs" in manager.last_install_error
+    assert not [p for p in (project / "UserSettings" / "Gamachine").iterdir() if p.name.startswith("package.")]
+
+
+def turn2_package(manager, project, source):
+    """What a turn 1/2 build left: the copy plus one digest marker, no per-file record."""
+    package = project.joinpath(*PACKAGE)
+    shutil.copytree(source, package, ignore=shutil.ignore_patterns("__pycache__"))
+    (package / ".gamachine-source-digest").write_text(module._tree_digest(str(source)), encoding="utf-8")
+    return package
+
+
+def test_a_marker_only_package_updates_when_unmodified(manager, tmp_path, source):
+    project = project_at(tmp_path / "Game")
+    package = turn2_package(manager, project, source)
+    stamp = (package / "package.json").stat().st_mtime_ns
+    assert manager.install_package(str(project), write_autoconnect=False) is True  # same source: nothing to do
+    assert (package / "package.json").stat().st_mtime_ns == stamp
+    new_source_version(source)
+    assert manager.install_package(str(project), write_autoconnect=False) is True
+    assert '"v": 2' in (package / "package.json").read_text(encoding="utf-8")
+    assert (package / ".gamachine-files.json").is_file() and not (package / ".gamachine-source-digest").exists()
+
+
+def test_a_marker_only_package_that_was_changed_is_refused(manager, tmp_path, source):
+    project = project_at(tmp_path / "Game")
+    package = turn2_package(manager, project, source)
+    (package / "package.json").write_text("my own change", encoding="utf-8")
+    new_source_version(source)
+    before = snapshot(package)
+    assert manager.install_package(str(project), write_autoconnect=False) is False
+    assert snapshot(package) == before
+    assert "was changed by hand" in manager.last_install_error
+
+
+def test_a_manifest_changed_to_a_users_value_during_the_copy_discards_the_staged_copy(manager, tmp_path, source,
+                                                                                   monkeypatch):
+    project, package = installed_project(manager, tmp_path)
+    manifest = project / "Packages" / "manifest.json"
+    new_source_version(source)
+    before_package = snapshot(package)
+    real_copytree = shutil.copytree
+
+    def flip(*args, **kwargs):
+        result = real_copytree(*args, **kwargs)
+        manifest.write_text(json.dumps({"dependencies": {"com.coplaydev.unity-mcp": "9.0.1"}}), encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(module.shutil, "copytree", flip)
+    assert manager.install_package(str(project), write_autoconnect=False) is False
+    assert snapshot(package) == before_package
+    assert json.loads(manifest.read_text(encoding="utf-8")) == {"dependencies": {"com.coplaydev.unity-mcp": "9.0.1"}}
+    assert "manifest.json uses another com.coplaydev.unity-mcp (9.0.1)" in manager.last_install_error
+    assert not [p for p in (project / "UserSettings" / "Gamachine").iterdir() if p.name.startswith("package.")]
+
+
+def test_create_only_never_overwrites_an_existing_settings_file(manager, tmp_path):
+    manager.language = "tr"
+    manager._write_autoconnect_settings(str(tmp_path), auto_start=True)
+    before = tmp_path.joinpath(*SETTINGS).read_bytes()
+    # A late install thread finishing after a newer on-write:
+    manager._write_autoconnect_settings(str(tmp_path), auto_start=False, create_only=True)
+    assert tmp_path.joinpath(*SETTINGS).read_bytes() == before
+    assert str(tmp_path) in manager._autoconnect_workspaces
+    tmp_path.joinpath(*SETTINGS).unlink()
+    manager._write_autoconnect_settings(str(tmp_path), auto_start=False, create_only=True)
+    assert settings(tmp_path)["autoStart"] is False
+
+
+def test_workspaces_with_the_same_folder_name_get_separate_dialog_cache_entries(status_manager, tmp_path):
+    status_manager._dialog_probe = stub_probe([{"title": "A", "buttons": [], "hwnd": 1, "project": "Game"}])
+    first, second = tmp_path / "one" / "Game", tmp_path / "two" / "Game"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    status_manager.active_workspace = str(first)
+    assert poll(status_manager)["dialog"]["title"] == "A"
+    status_manager._dialog_probe = stub_probe([])
+    status_manager.active_workspace = str(second)
+    assert "dialog" not in poll(status_manager)
+    assert status_manager._dialog_probe.find_unity_dialogs.call_count == 1
+    assert len(status_manager._dialog_cache) == 2
+    assert {entry["project"] for entry in status_manager._dialog_cache.values()} == {"Game"}
+
+
+def test_reset_in_a_folder_that_is_not_a_unity_project_deletes_nothing(manager, tmp_path):
+    folder = tmp_path / "plain"
+    script = folder / "Assets" / "Editor" / "UnityArchitectAIMCPSetup.cs"
+    script.parent.mkdir(parents=True)
+    script.write_text(LEGACY_TEXT + 'EditorPrefs.SetBool("MCPForUnity.AutoStartOnLoad", true);', encoding="utf-8")
+    (folder / "UserSettings" / "Gamachine").mkdir(parents=True)
+    (folder / "UserSettings" / "Gamachine" / "autoconnect.json").write_text('{"autoStart": true}', encoding="utf-8")
+    before = snapshot(folder)
+    assert manager.reset_autoconnect_off(str(folder)) is False
+    assert snapshot(folder) == before
+
+
+def test_a_gitdir_that_is_itself_a_junction_is_refused(manager, tmp_path, caplog):
+    real_git = tmp_path / "elsewhere" / "real.git"
+    (real_git / "info").mkdir(parents=True)
+    (real_git / "commondir").write_text("../common\n", encoding="utf-8")
+    (tmp_path / "elsewhere" / "common" / "info").mkdir(parents=True)
+    project = project_at(tmp_path / "Game")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    make_link(outside / "gitdir-link", real_git, True)
+    (project / ".git").write_text(f"gitdir: {outside / 'gitdir-link'}\n", encoding="utf-8")
+    before = snapshot(tmp_path / "elsewhere")
+    with caplog.at_level(logging.ERROR):
+        assert manager.install_package(str(project), write_autoconnect=False) is False
+    assert snapshot(tmp_path / "elsewhere") == before
+    assert "is a link" in caplog.text and "did not write there" in manager.last_install_error
+
+
+def test_a_refused_install_stops_the_server_and_answers_409(manager, tmp_path, monkeypatch):
+    project = project_at(tmp_path / "Game")
+    reason = "Packages/com.coplaydev.unity-mcp was changed by hand; Gamachine left it as it is."
+
+    def refuse(workspace, write_autoconnect=True):
+        manager.last_install_error = reason
+        return False
+
+    stopped = []
+    monkeypatch.setattr(mcp_routes, "unity_mcp_manager", manager)
+    monkeypatch.setattr(mcp_routes.unity_project_presence, "mcp_mismatch_detail", lambda workspace: None)
+    monkeypatch.setattr(manager, "is_unity_running", lambda: True)
+    monkeypatch.setattr(manager, "is_running", lambda: False)
+    monkeypatch.setattr(manager, "start_server", lambda: True)
+    monkeypatch.setattr(manager, "stop_server", lambda: stopped.append(True))
+    monkeypatch.setattr(manager, "install_package", refuse)
+    writer = Mock()
+    monkeypatch.setattr(manager, "_write_autoconnect_settings", writer)
+    monkeypatch.setattr(mcp_routes, "stop_mcp", mcp_routes.stop_mcp)
+    tasks = BackgroundTasks()
+    with pytest.raises(mcp_routes.HTTPException) as caught:
+        asyncio.run(mcp_routes.start_mcp_for(str(project), tasks, "tr"))
+    assert caught.value.status_code == 409 and caught.value.detail == reason
+    assert stopped == [True]
+    assert manager.enabled is False and manager.active_workspace is None
+    assert tasks.tasks == []
+    writer.assert_not_called()

@@ -75,6 +75,11 @@ async def start_mcp_for(workspace_path, background_tasks, language=None):
         # Off the event loop: the first copy took 2.8 s and an update 4.8 s (measured 2 Nov 2026).
         package_installed = await asyncio.to_thread(
             unity_mcp_manager.install_package, workspace_path, write_autoconnect=False)
+        if not package_installed:
+            # A refused install must be visible: stop the server again and say why.
+            reason = unity_mcp_manager.last_install_error or "Gamachine could not install the Unity package."
+            stop_mcp()
+            raise HTTPException(status_code=409, detail=reason)
         background_tasks.add_task(unity_mcp_manager.write_autoconnect_when_ready,
                                   workspace_path, generation=generation)
 
