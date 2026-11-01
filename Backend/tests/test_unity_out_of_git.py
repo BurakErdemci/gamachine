@@ -800,3 +800,14 @@ def test_install_refuses_a_file_reported_as_a_link(manager, tmp_path, monkeypatc
         assert manager.install_package(str(project)) is False
     assert snapshot(project) == before
     assert "is a link" in caplog.text
+
+
+@pytest.mark.parametrize("value", [
+    "file://attacker/share/unity-mcp/MCPForUnity",
+    r"file:\\attacker\share\unity-mcp\MCPForUnity",
+])
+def test_network_manifest_source_is_never_probed(manager, monkeypatch, value):
+    probed = []
+    monkeypatch.setattr(module.os.path, "isfile", lambda p: probed.append(p) or False)
+    assert manager._is_our_manifest_source(value) is False
+    assert probed == []

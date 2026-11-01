@@ -1019,6 +1019,10 @@ class UnityMCPManager:
         )}
         if os.path.normcase(path) in ours:
             return True
+        # The manifest comes from the project, so never probe a network path: on Windows a
+        # \\host\share lookup sends the user's NTLM credentials to that host.
+        if path.startswith(("//", "\\\\")) or os.path.splitdrive(path)[0].startswith(("//", "\\\\")):
+            return False
         # Any other clone is the user's own, unless a Gamachine backend sits at its root.
         parent = os.path.dirname(path)
         if os.path.normcase(os.path.basename(path)) != os.path.normcase("MCPForUnity") \
