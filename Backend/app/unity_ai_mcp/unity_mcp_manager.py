@@ -49,6 +49,20 @@ def _is_link(path: str) -> bool:
     return os.path.islink(path) or (hasattr(os.path, "isjunction") and os.path.isjunction(path))
 
 
+def _is_network_path(path: str) -> bool:
+    """\\\\host\\share or //host/share: on Windows any lookup there sends the user's NTLM credentials to that host."""
+    return path.startswith(("//", "\\\\")) or os.path.splitdrive(path)[0].startswith(("//", "\\\\"))
+
+
+def _trusted_git_dir(project: str, git_dir: str) -> bool:
+    """A git dir named by a file inside the project (.git pointer, commondir) is used only when it stays on the
+    project's own share (or off the network) and really is a git dir; checked before anything else touches it."""
+    if _is_network_path(git_dir) and os.path.normcase(os.path.splitdrive(git_dir)[0]) \
+            != os.path.normcase(os.path.splitdrive(project)[0]):
+        return False
+    return os.path.isfile(os.path.join(git_dir, "HEAD"))
+
+
 def _require_plain(root: str, *paths: str) -> None:
     """Raise _Refused when a path is a link/junction or its real location leaves root."""
     real_root = os.path.normcase(os.path.realpath(root))
@@ -1064,9 +1078,8 @@ class UnityMCPManager:
         )}
         if os.path.normcase(path) in ours:
             return True
-        # The manifest comes from the project, so never probe a network path: on Windows a
-        # \\host\share lookup sends the user's NTLM credentials to that host.
-        if path.startswith(("//", "\\\\")) or os.path.splitdrive(path)[0].startswith(("//", "\\\\")):
+        # The manifest comes from the project, so never probe a network path.
+        if _is_network_path(path):
             return False
         # Any other clone is the user's own, unless a Gamachine backend sits at its root.
         parent = os.path.dirname(path)
@@ -1254,6 +1267,8 @@ class UnityMCPManager:
                 if not line.startswith("gitdir:"):
                     return False
                 git_dir = os.path.normpath(os.path.join(work_tree, line[len("gitdir:"):].strip()))
+                if not _trusted_git_dir(project, git_dir):
+                    return False
                 break
             parent = os.path.dirname(work_tree)
             if parent == work_tree:
@@ -1266,6 +1281,8 @@ class UnityMCPManager:
         if os.path.isfile(common):
             with open(common, encoding="utf-8") as pointer:
                 git_dir = os.path.normpath(os.path.join(git_dir, pointer.readline().strip()))
+            if not _trusted_git_dir(project, git_dir):
+                return False
         if not os.path.isdir(git_dir):
             return False
         exclude = os.path.join(git_dir, "info", "exclude")

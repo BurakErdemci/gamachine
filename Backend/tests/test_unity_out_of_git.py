@@ -342,6 +342,8 @@ def test_exclude_for_a_linked_worktree_goes_to_the_common_dir(manager, tmp_path)
     main_git = tmp_path / "main" / ".git"
     worktree_git = main_git / "worktrees" / "feature"
     worktree_git.mkdir(parents=True)
+    for git_dir in (main_git, worktree_git):
+        (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (worktree_git / "commondir").write_text("../..\n", encoding="utf-8")
     project = project_at(tmp_path / "feature")
     (project / ".git").write_text("gitdir: ../main/.git/worktrees/feature\n", encoding="utf-8")
@@ -353,10 +355,60 @@ def test_exclude_for_a_linked_worktree_goes_to_the_common_dir(manager, tmp_path)
 def test_exclude_for_a_submodule_gitdir_file(manager, tmp_path):
     module_git = tmp_path / "super" / ".git" / "modules" / "game"
     module_git.mkdir(parents=True)
+    (module_git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     project = project_at(tmp_path / "super" / "game")
     (project / ".git").write_text(f"gitdir: {module_git}\n", encoding="utf-8")
     assert manager.install_package(str(project), write_autoconnect=False) is True
     assert exclude_lines(module_git) == EXCLUDE_BLOCK
+
+
+def no_network_lookups(monkeypatch):
+    """Fails the test on any stat of a \\\\host\\share path: on Windows that lookup sends NTLM credentials."""
+    looked_up = []
+    # On Windows os.path.isfile/isdir/exists call nt._path_* directly, not os.stat, so each is wrapped.
+    targets = [(os, name) for name in ("stat", "lstat")] + \
+        [(os.path, name) for name in ("isfile", "isdir", "exists", "lexists", "islink", "realpath")]
+    for owner, name in targets:
+        real = getattr(owner, name)
+
+        def spy(path, *args, _real=real, **kwargs):
+            if str(os.fspath(path)).startswith(("\\\\", "//")):
+                looked_up.append(str(path))
+                raise OSError("network lookup in test")
+            return _real(path, *args, **kwargs)
+        monkeypatch.setattr(owner, name, spy)
+    return looked_up
+
+
+@pytest.mark.parametrize("pointer", ["gitdir: \\\\attacker\\share\\repo.git", "gitdir: //attacker/share/repo.git"])
+def test_a_gitdir_on_another_host_is_never_looked_up(tmp_path, monkeypatch, pointer):
+    project = project_at(tmp_path / "Game")
+    (project / ".git").write_text(pointer + "\n", encoding="utf-8")
+    looked_up = no_network_lookups(monkeypatch)
+    assert module.UnityMCPManager._ensure_git_exclude(str(project)) is False
+    assert looked_up == []
+
+
+def test_a_commondir_on_another_host_is_never_looked_up(tmp_path, monkeypatch):
+    worktree_git = tmp_path / "main" / ".git" / "worktrees" / "feature"
+    worktree_git.mkdir(parents=True)
+    (worktree_git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (worktree_git / "commondir").write_text("\\\\attacker\\share\\common\n", encoding="utf-8")
+    project = project_at(tmp_path / "feature")
+    (project / ".git").write_text("gitdir: ../main/.git/worktrees/feature\n", encoding="utf-8")
+    looked_up = no_network_lookups(monkeypatch)
+    assert module.UnityMCPManager._ensure_git_exclude(str(project)) is False
+    assert looked_up == []
+    assert not (worktree_git / "info").exists()
+
+
+def test_a_gitdir_pointer_to_a_folder_that_is_not_a_repository_writes_nothing(tmp_path):
+    elsewhere = tmp_path / "Documents"
+    elsewhere.mkdir()
+    project = project_at(tmp_path / "Game")
+    (project / ".git").write_text(f"gitdir: {elsewhere}\n", encoding="utf-8")
+    assert module.UnityMCPManager._ensure_git_exclude(str(project)) is False
+    assert list(elsewhere.iterdir()) == []
 
 
 def test_no_repository_means_no_exclude(tmp_path):
@@ -995,6 +1047,8 @@ def test_a_gitdir_that_is_itself_a_junction_is_refused(manager, tmp_path, caplog
     (real_git / "info").mkdir(parents=True)
     (real_git / "commondir").write_text("../common\n", encoding="utf-8")
     (tmp_path / "elsewhere" / "common" / "info").mkdir(parents=True)
+    for git_dir in (real_git, tmp_path / "elsewhere" / "common"):
+        (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     project = project_at(tmp_path / "Game")
     outside = tmp_path / "outside"
     outside.mkdir()
