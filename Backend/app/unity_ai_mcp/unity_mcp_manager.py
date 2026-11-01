@@ -156,6 +156,12 @@ def _installed_files(root) -> dict:
     return found
 
 
+def _parent_dirs(relative: str) -> set:
+    """'a/b/c.cs' -> {'a', 'a/b'}."""
+    parts = relative.split("/")
+    return {"/".join(parts[:i]) for i in range(1, len(parts))}
+
+
 def _complete_digest(path) -> Optional[str]:
     """The stored source digest when it still matches the tree, else None."""
     try:
@@ -1195,17 +1201,11 @@ class UnityMCPManager:
             copied = {path: _file_hash(full) for path, full in _installed_files(staged).items()}
             # Casefolded on every platform so a case-only or file/directory clash never merges into the shipped copy.
             staged_files = {path.casefold() for path in copied}
-            staged_paths = set(staged_files)
-            for path in staged_files:
-                parts = path.split("/")
-                staged_paths.update("/".join(parts[:i]) for i in range(1, len(parts)))
-            clashes = sorted(
-                path for path in extras
-                if path.casefold() in staged_paths
-                or any("/".join(parts[:i]) in staged_files
-                       for parts in [path.casefold().split("/")] for i in range(1, len(parts))))
-            if clashes:
-                raise _Declined(f"Packages/{_PACKAGE_NAME}/{clashes[0]} was added by hand and the new package "
+            staged_paths = staged_files.union(*map(_parent_dirs, staged_files))
+            clash = next((path for path in sorted(extras) if path.casefold() in staged_paths
+                          or _parent_dirs(path.casefold()) & staged_files), None)
+            if clash:
+                raise _Declined(f"Packages/{_PACKAGE_NAME}/{clash} was added by hand and the new package "
                                 "has a file at the same path; Gamachine left it as it is.")
             for path, full in extras.items():
                 destination = os.path.join(staged, *path.split("/"))
