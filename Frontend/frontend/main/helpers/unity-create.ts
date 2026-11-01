@@ -5,7 +5,7 @@ export type CreatePhase = 'starting' | 'running' | 'done' | 'failed'
 export interface CreateProgress { phase: CreatePhase; elapsedMs: number; logTail?: string }
 export type HubErrorCode = 'busy' | 'nameInvalid' | 'parentMissing' | 'exists' | 'pathTooLong' |
   'spawnFailed' | 'exited' | 'notCreated' | 'cancelled' | 'notProject' | 'notTrusted' |
-  'versionUnknown' | 'editorMissing' | 'invalidArguments' | 'parentNotPicked' | 'templateUnknown'
+  'versionUnknown' | 'editorMissing' | 'invalidArguments' | 'parentNotPicked' | 'templateUnknown' | 'openExited'
 export type Cleanup = 'removed' | 'notOurs' | 'removeFailed' | 'pathChanged' | 'none'
 export interface HubFailure {
   error: string

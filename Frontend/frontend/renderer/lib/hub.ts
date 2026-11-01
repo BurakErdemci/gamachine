@@ -25,7 +25,7 @@ const ERROR_KEYS: Record<HubErrorCode, TKey> = {
   exited: 'hub.error.exited', notCreated: 'hub.error.notCreated', cancelled: 'hub.error.cancelled',
   notProject: 'hub.error.notProject', notTrusted: 'hub.error.notTrusted', versionUnknown: 'hub.error.versionUnknown',
   editorMissing: 'hub.error.editorMissing', invalidArguments: 'hub.error.invalidArguments',
-  parentNotPicked: 'hub.error.parentNotPicked', templateUnknown: 'hub.error.templateUnknown',
+  parentNotPicked: 'hub.error.parentNotPicked', templateUnknown: 'hub.error.templateUnknown', openExited: 'hub.error.openExited',
 };
 
 /** Translate at render time so a stored result follows a language change. */

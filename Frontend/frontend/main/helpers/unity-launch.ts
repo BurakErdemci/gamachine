@@ -46,7 +46,7 @@ export async function openProject(
         child.once('spawn', () => child.unref())
         child.once('exit', code => resolve(code === 0
           ? { opened: true }
-          : { opened: false, error: `Could not start Unity: open exited with code ${code}`, code: 'spawnFailed', params: { detail: `open exited with code ${code}` } }))
+          : { opened: false, error: `Could not start Unity: open exited with code ${code}`, code: 'openExited', params: { code: String(code) } }))
         return
       }
       child.once('spawn', () => {

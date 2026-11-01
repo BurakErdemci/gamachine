@@ -84,7 +84,7 @@ describe('openProject', () => {
   it('reports a non-zero exit of open as a launch failure', async () => {
     const { deps, child } = setup()
     const spawn = openSpawn(child, 1)
-    expect(await openProject({ path: '/p/Game' }, { ...deps, spawn })).toEqual({ opened: false, error: 'Could not start Unity: open exited with code 1', code: 'spawnFailed', params: { detail: 'open exited with code 1' } })
+    expect(await openProject({ path: '/p/Game' }, { ...deps, spawn })).toEqual({ opened: false, error: 'Could not start Unity: open exited with code 1', code: 'openExited', params: { code: '1' } })
   })
 
   it('on Windows keeps the direct detached spawn', async () => {
