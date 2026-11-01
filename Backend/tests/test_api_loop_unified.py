@@ -229,7 +229,7 @@ def test_shared_system_and_invalid_image(run_case, provider, image, caplog):
     else:
         system = request["messages"][0]["content"]
         parts = request["messages"][1]["content"]
-    assert "[DİL]\nKullanıcıyla Türkçe konuş." in system
+    assert "[DİL]\nKullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değilse Türkçe konuş." in system
     assert "C# kodu yazmak için KULLANMA" not in system
     assert "architect wisdom" in system
     assert len(parts) == 1

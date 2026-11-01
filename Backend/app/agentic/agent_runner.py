@@ -1729,7 +1729,7 @@ Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçl
 {self.context or "Yeni sohbet."}
 
 [DİL]
-Kullanıcıyla {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş."""
+Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değilse {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş."""
         guide = toolset.with_guide(self._agent_guide) if toolset is not None else self._agent_guide
         return (system + "\n\n" + guide
                 + self._get_architect_wisdom() + self._identity_note())

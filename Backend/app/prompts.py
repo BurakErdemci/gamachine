@@ -1,6 +1,3 @@
-def get_language_instr(language: str):
-    return "Lütfen yanıtını tamamen TÜRKÇE olarak ver." if language == "tr" else "Respond in ENGLISH."
-
 # --- SYSTEM PROMPT ---
 SYSTEM_PROMPT = """Sen **Gamachine** adında, SADECE Unity ve C# üzerine uzmanlaşmış bir Mimar ve Otonom Yazılım Ajanısın. 
 
