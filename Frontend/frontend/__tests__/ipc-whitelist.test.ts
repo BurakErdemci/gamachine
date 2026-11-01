@@ -100,8 +100,11 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // 34 -> 35: 'browser-live' positions, shows and halts the agent browser view and keeps its settings secret in main.
   // 35 -> 41: the Mini Hub engine (editors, templates, create, cancel, open, folder picker).
   // 41 -> 42: workspace-trash (move a saved Unity project to the Trash; desktop only).
-  it('contains exactly 42 channels', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(42)
+  // 42 -> 43: ui-language-set announces only the renderer's tr/en choice.
+  it('contains exactly 43 channels', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(43)
+    expect(ALLOWED_INVOKE_CHANNELS.has('ui-language-set')).toBe(true)
+    expect(() => assertAllowedInvokeChannel('ui-language-set')).not.toThrow()
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use')).toBe(true)
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use-live')).toBe(true)
   })

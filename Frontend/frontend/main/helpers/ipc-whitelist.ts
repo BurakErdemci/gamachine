@@ -18,6 +18,7 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'app-token-get',
   'approval-mode-set',
   'app-zoom-set',
+  'ui-language-set',
   'backend-workspace-path',
   'host-workspace-path',
   'path-exists',

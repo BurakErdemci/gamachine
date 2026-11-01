@@ -33,6 +33,7 @@ import {
 } from './helpers/ipc-trust'
 import { applyContentSecurityPolicy } from './helpers/csp'
 import { assertRegistrableChannel } from './helpers/ipc-whitelist'
+import { mt, setUiLanguage } from './helpers/main-i18n'
 import { inspectProject, isUnityProjectDir } from './helpers/unity-project'
 import { findUnityHub } from './helpers/unity-hub'
 import { listEditors, listTemplates, templatesDir, EditorDeps } from './helpers/unity-editors'
@@ -169,10 +170,14 @@ const handleSecure = (
  * Hata döndürürse çağıran handler kendi boş/başarısız değerini vermeli.
  */
 const untrustedWorkspace = (workspacePath?: string): string | null => {
-  if (!workspacePath) return 'Workspace path eksik.'
+  if (!workspacePath) return mt('workspaceMissing')
   if (isTrustedRoot(workspacePath) || confirmLegacyRoot(workspacePath)) return null
-  return 'Bu klasör yetkili değil — klasörü uygulama içinden yeniden seçin.'
+  return mt('workspaceUntrusted')
 }
+
+handleSecure('ui-language-set', (_event, language: unknown) => {
+  setUiLanguage(language)
+})
 
 // --- TERMINAL YÖNETİMİ ---
 const ptyProcesses: Map<string, pty.IPty> = new Map();
@@ -257,7 +262,7 @@ handleSecure('terminal-write', (_event, { id, data }) => {
     ptyProcess.write(data);
     return { success: true };
   }
-  return { success: false, error: 'Terminal bulunamadı' };
+  return { success: false, error: mt('terminalMissing') };
 });
 
 handleSecure('terminal-resize', (_event, { id, cols, rows }) => {
@@ -266,7 +271,7 @@ handleSecure('terminal-resize', (_event, { id, cols, rows }) => {
     ptyProcess.resize(cols, rows);
     return { success: true };
   }
-  return { success: false, error: 'Terminal bulunamadı' };
+  return { success: false, error: mt('terminalMissing') };
 });
 
 function getBackendBaseUrl(): string {
@@ -287,7 +292,7 @@ handleSecure('open-file-dialog', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openFile'],
     filters: [
-      { name: 'Kod ve Metin Dosyaları', extensions: ['cs', 'shader', 'json', 'txt', 'md', 'xml', 'yaml', 'yml', 'compute', 'asmdef', 'cginc', 'hlsl', 'uss', 'uxml'] }
+      { name: mt('codeTextFiles'), extensions: ['cs', 'shader', 'json', 'txt', 'md', 'xml', 'yaml', 'yml', 'compute', 'asmdef', 'cginc', 'hlsl', 'uss', 'uxml'] }
     ]
   })
   if (result.canceled || result.filePaths.length === 0) return null
@@ -693,17 +698,17 @@ handleSecure('write-file', async (_event, filePath: string, content: string, wor
   try {
     const isAbsolute = path.isAbsolute(filePath);
 
-    if (!workspacePath && !isAbsolute) return { success: false, error: 'Workspace path eksik.' };
+    if (!workspacePath && !isAbsolute) return { success: false, error: mt('workspaceMissing') };
     const _ws = untrustedWorkspace(workspacePath); if (_ws) return { success: false, error: _ws };
 
     const fullPath = isAbsolute ? filePath : path.join(workspacePath!, filePath);
 
     if (!isAllowedWorkspaceWriteFile(fullPath, workspacePath || "")) {
-      return { success: false, error: 'Dosya yalnızca seçili workspace içindeki kod/metin dosyalarına yazılabilir (.cs için Assets/Scripts altı).' }
+      return { success: false, error: mt('writeRestricted') }
     }
     // Same single-name rule as the read policy: a hard link would write the outside file.
     if (!isWritableExistingTarget(fullPath)) {
-      return { success: false, error: 'Dosya düzenli bir dosya değil ya da birden fazla bağlantısı var.' }
+      return { success: false, error: mt('fileNotRegular') }
     }
     const dir = path.dirname(fullPath)
     if (!fs.existsSync(dir)) {
@@ -728,11 +733,11 @@ handleSecure('file-exists', async (_event, filePath: string, workspacePath?: str
 
 // --- IPC: DOSYA YÖNETİMİ ---
 handleSecure('create-file', async (_event, filePath: string, workspacePath?: string) => {
-  if (!workspacePath) return { success: false, error: 'Workspace path eksik.' }
+  if (!workspacePath) return { success: false, error: mt('workspaceMissing') }
   const _ws = untrustedWorkspace(workspacePath); if (_ws) return { success: false, error: _ws };
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(workspacePath, filePath)
-  if (!isAllowedWorkspacePath(fullPath, workspacePath)) return { success: false, error: 'Dosya workspace dışında.' }
-  if (fs.existsSync(fullPath)) return { success: false, error: 'Dosya zaten var.' }
+  if (!isAllowedWorkspacePath(fullPath, workspacePath)) return { success: false, error: mt('fileOutside') }
+  if (fs.existsSync(fullPath)) return { success: false, error: mt('fileExists') }
   fs.mkdirSync(path.dirname(fullPath), { recursive: true })
   fs.writeFileSync(fullPath, '', 'utf-8')
   return { success: true, path: fullPath }
@@ -740,41 +745,41 @@ handleSecure('create-file', async (_event, filePath: string, workspacePath?: str
 
 handleSecure('delete-file', async (_event, relativePath: string, workspacePath?: string) => {
   try {
-    if (!workspacePath) return { success: false, error: 'Workspace path eksik.' };
+    if (!workspacePath) return { success: false, error: mt('workspaceMissing') };
     const _ws = untrustedWorkspace(workspacePath); if (_ws) return { success: false, error: _ws };
     const fullPath = path.isAbsolute(relativePath) ? relativePath : path.join(workspacePath, relativePath);
     if (!isAllowedWorkspacePath(fullPath, workspacePath)) {
-      return { success: false, error: 'Dosya workspace dışında.' };
+      return { success: false, error: mt('fileOutside') };
     }
-    if (!isInsideWorkspace(fullPath, workspacePath)) return { success: false, error: 'Proje klasörünün kendisi silinemez/taşınamaz.' };
+    if (!isInsideWorkspace(fullPath, workspacePath)) return { success: false, error: mt('workspaceRootProtected') };
     const exists = fs.existsSync(fullPath);
     if (exists) {
       await shell.trashItem(fullPath);
       return { success: true };
     }
-    return { success: false, error: 'Dosya bulunamadı' };
+    return { success: false, error: mt('fileMissing') };
   } catch (err: any) {
     return { success: false, error: err.message };
   }
 });
 
 handleSecure('create-folder', async (_event, folderPath: string, workspacePath?: string) => {
-  if (!workspacePath) return { success: false, error: 'Workspace path eksik.' }
+  if (!workspacePath) return { success: false, error: mt('workspaceMissing') }
   const _ws = untrustedWorkspace(workspacePath); if (_ws) return { success: false, error: _ws };
   const fullPath = path.isAbsolute(folderPath) ? folderPath : path.join(workspacePath, folderPath)
-  if (!isAllowedWorkspacePath(fullPath, workspacePath)) return { success: false, error: 'Klasör workspace dışında.' }
-  if (fs.existsSync(fullPath)) return { success: false, error: 'Klasör zaten var.' }
+  if (!isAllowedWorkspacePath(fullPath, workspacePath)) return { success: false, error: mt('folderOutside') }
+  if (fs.existsSync(fullPath)) return { success: false, error: mt('folderExists') }
   fs.mkdirSync(fullPath, { recursive: true })
   return { success: true, path: fullPath }
 })
 
 handleSecure('rename-entry', async (_event, oldPath: string, newName: string, workspacePath?: string) => {
-  if (!workspacePath) return { success: false, error: 'Workspace path eksik.' }
+  if (!workspacePath) return { success: false, error: mt('workspaceMissing') }
   const _ws = untrustedWorkspace(workspacePath); if (_ws) return { success: false, error: _ws };
   const fullOldPath = path.isAbsolute(oldPath) ? oldPath : path.join(workspacePath, oldPath)
-  if (!isAllowedWorkspacePath(fullOldPath, workspacePath)) return { success: false, error: 'Dosya workspace dışında.' }
-  if (!isInsideWorkspace(fullOldPath, workspacePath)) return { success: false, error: 'Proje klasörünün kendisi silinemez/taşınamaz.' }
-  if (!fs.existsSync(fullOldPath)) return { success: false, error: 'Dosya bulunamadı.' }
+  if (!isAllowedWorkspacePath(fullOldPath, workspacePath)) return { success: false, error: mt('fileOutside') }
+  if (!isInsideWorkspace(fullOldPath, workspacePath)) return { success: false, error: mt('workspaceRootProtected') }
+  if (!fs.existsSync(fullOldPath)) return { success: false, error: mt('fileMissingPeriod') }
   // `newName` bir AD olmalı, yol değil. Doğrulanmadığında Node traversal
   // segmentlerini normalize ediyordu ve dosya workspace dışına taşınıyordu:
   //   path.join('/trusted/workspace', '../../escaped.txt') → '/escaped.txt'
@@ -783,41 +788,41 @@ handleSecure('rename-entry', async (_event, oldPath: string, newName: string, wo
   // kaynak gibi workspace hapsine sokuluyor (biri yeterli değil: ayraçsız bir
   // sembolik bağ da dışarı çıkabilir).
   if (!newName || newName.includes('/') || newName.includes('\\') || newName === '..' || newName === '.') {
-    return { success: false, error: 'Geçersiz ad: yol ayracı içeremez.' }
+    return { success: false, error: mt('invalidName') }
   }
   const newPath = path.join(path.dirname(fullOldPath), newName)
-  if (!isAllowedWorkspacePath(newPath, workspacePath)) return { success: false, error: 'Hedef workspace dışında.' }
-  if (fs.existsSync(newPath)) return { success: false, error: 'Bu isimde bir dosya zaten var.' }
+  if (!isAllowedWorkspacePath(newPath, workspacePath)) return { success: false, error: mt('targetOutside') }
+  if (fs.existsSync(newPath)) return { success: false, error: mt('nameExists') }
   fs.renameSync(fullOldPath, newPath)
   return { success: true, newPath }
 })
 
 handleSecure('delete-entry', async (_event, entryPath: string, workspacePath?: string) => {
-  if (!workspacePath) return { success: false, error: 'Workspace path eksik.' }
+  if (!workspacePath) return { success: false, error: mt('workspaceMissing') }
   const _ws = untrustedWorkspace(workspacePath); if (_ws) return { success: false, error: _ws };
   const fullPath = path.isAbsolute(entryPath) ? entryPath : path.join(workspacePath, entryPath)
-  if (!isAllowedWorkspacePath(fullPath, workspacePath)) return { success: false, error: 'Dosya workspace dışında.' }
-  if (!isInsideWorkspace(fullPath, workspacePath)) return { success: false, error: 'Proje klasörünün kendisi silinemez/taşınamaz.' }
-  if (!fs.existsSync(fullPath)) return { success: false, error: 'Dosya bulunamadı.' }
+  if (!isAllowedWorkspacePath(fullPath, workspacePath)) return { success: false, error: mt('fileOutside') }
+  if (!isInsideWorkspace(fullPath, workspacePath)) return { success: false, error: mt('workspaceRootProtected') }
+  if (!fs.existsSync(fullPath)) return { success: false, error: mt('fileMissingPeriod') }
   try {
     await shell.trashItem(fullPath)
   } catch (err: any) {
-    return { success: false, error: err?.message || 'Çöp kutusuna taşınamadı.' }
+    return { success: false, error: err?.message || mt('trashFailed') }
   }
   return { success: true }
 })
 
 handleSecure('move-entry', async (_event, sourcePath: string, targetDir: string, workspacePath?: string) => {
-  if (!workspacePath) return { success: false, error: 'Workspace path eksik.' }
+  if (!workspacePath) return { success: false, error: mt('workspaceMissing') }
   const _ws = untrustedWorkspace(workspacePath); if (_ws) return { success: false, error: _ws };
   const fullSource = path.isAbsolute(sourcePath) ? sourcePath : path.join(workspacePath, sourcePath)
   const fullTarget = path.isAbsolute(targetDir) ? targetDir : path.join(workspacePath, targetDir)
   if (!isAllowedWorkspacePath(fullSource, workspacePath) || !isAllowedWorkspacePath(fullTarget, workspacePath)) {
-    return { success: false, error: 'Dosya workspace dışında.' }
+    return { success: false, error: mt('fileOutside') }
   }
-  if (!isInsideWorkspace(fullSource, workspacePath)) return { success: false, error: 'Proje klasörünün kendisi silinemez/taşınamaz.' }
+  if (!isInsideWorkspace(fullSource, workspacePath)) return { success: false, error: mt('workspaceRootProtected') }
   const newPath = path.join(fullTarget, path.basename(fullSource))
-  if (fs.existsSync(newPath)) return { success: false, error: 'Hedef konumda aynı isimde bir dosya var.' }
+  if (fs.existsSync(newPath)) return { success: false, error: mt('targetExists') }
   fs.renameSync(fullSource, newPath)
   return { success: true, newPath }
 })

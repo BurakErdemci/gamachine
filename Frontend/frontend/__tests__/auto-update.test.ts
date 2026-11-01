@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setupAutoUpdate } from '../main/helpers/auto-update'
+import { setUiLanguage } from '../main/helpers/main-i18n'
 
 const AVAILABLE = { version: '9.9.9', files: [{ url: 'Gamachine-Setup-9.9.9.exe', sha512: 'HASH==' }], path: 'Gamachine-Setup-9.9.9.exe', sha512: 'HASH==' }
 const INFO = { version: '9.9.9', downloadedFile: 'C:\\tmp\\Gamachine-Setup-9.9.9.exe' }
@@ -50,7 +51,7 @@ function setup(response = 0, quitImpl?: () => void, stopImpl?: () => Promise<voi
 }
 
 describe('setupAutoUpdate', () => {
-  beforeEach(() => { vi.useFakeTimers() })
+  beforeEach(() => { vi.useFakeTimers(); setUiLanguage('tr') })
   afterEach(() => { vi.useRealTimers() })
 
   it('downloads and installs nothing by itself and checks once at startup', () => {
@@ -62,6 +63,25 @@ describe('setupAutoUpdate', () => {
   })
 
   describe('signature gate', () => {
+    it('uses English for verification failures and ready-to-install dialogs', async () => {
+      setUiLanguage('en')
+      const failed = setup(1, undefined, undefined, false)
+      failed.updater.emit('update-available', AVAILABLE)
+      await vi.waitFor(() => expect(failed.dialog.showMessageBox).toHaveBeenCalled())
+      expect(failed.dialog.showMessageBox.mock.calls[0][0]).toMatchObject({
+        buttons: ['Open release page', 'Close'], title: 'Update verification failed',
+      })
+      failed.handle.dispose()
+      const ready = setup(1)
+      await setupDownload(ready.updater)
+      await vi.waitFor(() => expect(ready.dialog.showMessageBox).toHaveBeenCalled())
+      expect(ready.dialog.showMessageBox.mock.calls[0][0]).toMatchObject({
+        buttons: ['Restart now', 'Later'], title: 'Update ready',
+        message: 'A new version is ready: v9.9.9',
+      })
+      ready.handle.dispose()
+    })
+
     it('fetches the signed manifest of the available version before downloading', async () => {
       const { updater, fetchBytes, handle } = setup(1)
       updater.emit('update-available', AVAILABLE)

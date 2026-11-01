@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises'
 import type { BrowserWindow, MessageBoxOptions, MessageBoxReturnValue } from 'electron'
 import { UPDATE_PUBLIC_KEYS } from './update-keys'
 import { checkAvailable, verifyManifest } from './update-signature'
+import { mt } from './main-i18n'
 
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const INSTALL_TIMEOUT_MS = 30 * 1000
@@ -126,12 +127,12 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     try {
       const { response } = await ask({
         type: 'warning',
-        buttons: ['Sürüm sayfasını aç', 'Kapat'],
+        buttons: [mt('updateRelease'), mt('close')],
         defaultId: 0,
         cancelId: 1,
-        title: 'Güncelleme doğrulanamadı',
-        message: 'Yeni sürümün imzası doğrulanamadı, bu yüzden indirilip kurulmadı.',
-        detail: 'Yeni sürümü sürüm sayfasından elle indirebilirsin.',
+        title: mt('updateFailedTitle'),
+        message: mt('updateFailedMessage'),
+        detail: mt('updateFailedDetail'),
       })
       if (disposed) return
       if (response === 0) await openExternal(RELEASES_URL)
@@ -228,12 +229,12 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
       }
       const { response } = await ask({
         type: 'info',
-        buttons: ['Şimdi yeniden başlat', 'Sonra'],
+        buttons: [mt('updateRestart'), mt('updateLater')],
         defaultId: 0,
         cancelId: 1,
-        title: 'Güncelleme hazır',
-        message: `Yeni sürüm hazır: v${generation.version}`,
-        detail: 'Şimdi yeniden başlatırsan güncelleme kurulur. "Sonra" dersen uygulamayı kapattığında kurulur.',
+        title: mt('updateReadyTitle'),
+        message: mt('updateReadyMessage', { version: generation.version }),
+        detail: mt('updateReadyDetail'),
       })
       if (disposed) return
       if (response !== 0) {

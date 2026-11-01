@@ -1,4 +1,5 @@
 import path from 'path'
+import { mt } from './main-i18n'
 
 export type TrashError =
   | 'invalid-path'
@@ -43,12 +44,12 @@ const flavor = (platform: string) => (platform === 'win32' ? path.win32 : path.p
 
 /** The text of the native confirmation; the default and cancel button is "Vazgeç". */
 export function trashPrompt(real: string, platform: string) {
-  const bin = platform === 'win32' ? 'Geri Dönüşüm Kutusu' : 'Çöp Kutusu'
+  const bin = mt(platform === 'win32' ? 'recycleBin' : 'trash')
   return {
-    message: `"${flavor(platform).basename(real)}" projesinin klasörü taşınacak`,
-    detail: `${real}\n\n${bin}'na taşınacak. İstersen ${bin} içinden geri yükleyebilirsin.`,
-    go: `${bin}'na taşı`,
-    cancel: 'Vazgeç',
+    message: mt('trashMessage', { name: flavor(platform).basename(real) }),
+    detail: mt('trashDetail', { path: real, bin }),
+    go: mt('trashGo', { bin }),
+    cancel: mt('trashCancel'),
   }
 }
 

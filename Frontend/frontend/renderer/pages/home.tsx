@@ -313,6 +313,9 @@ export default function Home() {
   // Storage alone cannot represent the initial English hydration state.
   // boyamadan önce bir toast üretilirse o da doğru dilde olmalı.
   aktifDilAyarla(lang);
+  useEffect(() => {
+    window.ipc?.invoke('ui-language-set', lang)?.catch(() => {});
+  }, [lang]);
 
   // Sohbet kapısı — karar `providerGate`'te, burada DEĞİL: aynı koşul composer'ın
   // `disabled`'ı ve gönderme kapısı tarafından tüketiliyor ve iki kopya ayrışır.

@@ -7,6 +7,29 @@
 import { EventEmitter } from 'events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BrowserHost, NOTE_BOX_HTML, OVERLAY_HTML, PAGE_LIB, areaText, hitElement, type BrowserHostDeps } from '../main/helpers/browser-host'
+import { setUiLanguage } from '../main/helpers/main-i18n'
+
+it('recreates the cached note box and next overlay in the newly selected language', async () => {
+  setUiLanguage('tr')
+  const f = fixture()
+  try {
+    await pickBuy(f)
+    const oldBox = f.box()
+    await annotate(f, false)
+    setUiLanguage('en')
+    await annotate(f, true)
+    const newOverlay = (f.host as any).tabs.get(1).overlay.view
+    expect(decodeURIComponent(newOverlay.webContents.loadURL.mock.calls[0][0])).toContain('Annotate · click an element')
+    newOverlay.webContents.emit('page-title-updated', {}, JSON.stringify({ q: 1, t: 'pick', x: 110, y: 105 }))
+    await vi.waitFor(() => expect(oldBox.webContents.close).toHaveBeenCalledTimes(1))
+    const newBox = (f.host as any).noteBox
+    await vi.waitFor(() => expect(newBox.view.setVisible).toHaveBeenLastCalledWith(true))
+    expect(decodeURIComponent(newBox.view.webContents.loadURL.mock.calls[0][0])).toContain('placeholder="Add a comment…"')
+  } finally {
+    f.host.destroyView()
+    setUiLanguage('tr')
+  }
+})
 
 function fakeWc(): any {
   const wc: any = new EventEmitter()

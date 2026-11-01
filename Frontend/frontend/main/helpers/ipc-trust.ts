@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { app, dialog, BrowserWindow, IpcMainInvokeEvent } from 'electron'
 import { isUnityProjectDir } from './unity-project'
+import { mt } from './main-i18n'
 
 /**
  * IPC güven katmanı — 2026-07-27 denetiminin D grubu bulguları.
@@ -182,10 +183,7 @@ export const confirmLegacyRoot = (rawPath: string): boolean => {
 
   const approved = askAuthorize(
     root,
-    'Uygulama bu klasörün içindeki dosyaları okuyup yazabilecek. ' +
-      'Bu soruyu bir kez görüyorsun: daha önce seçtiğin çalışma klasörü ' +
-      'yeni güvenlik kaydında yok. Emin değilsen İptal de ve klasörü ' +
-      'uygulama içinden yeniden seç.',
+    mt('authorizeLegacy'),
   )
   if (!approved) return false
   registerTrustedRoot(root)
@@ -199,11 +197,11 @@ export const confirmLegacyRoot = (rawPath: string): boolean => {
 const askAuthorize = (root: string, explanation: string, parent?: BrowserWindow): boolean => {
   const options = {
     type: 'question' as const,
-    buttons: ['Yetkilendir', 'İptal'],
+    buttons: [mt('authorize'), mt('cancel')],
     defaultId: 1,
     cancelId: 1,
-    title: 'Çalışma klasörünü yetkilendir',
-    message: 'Bu klasöre erişim izni verilsin mi?',
+    title: mt('authorizeTitle'),
+    message: mt('authorizeMessage'),
     detail: `${root}\n\n${explanation}`,
   }
   const response = dialog.showMessageBoxSync
@@ -225,7 +223,7 @@ export function confirmRecentRoot(rawPath: string, parent?: BrowserWindow): bool
   if (isTrustedRoot(rawPath)) return true
   const root = normalize(rawPath)
   if (!root || !isUnityProjectDir(root)) return false
-  if (!askAuthorize(root, 'Uygulama bu klasörün içindeki dosyaları okuyup yazabilecek.', parent)) return false
+  if (!askAuthorize(root, mt('authorizeDetail'), parent)) return false
   // The modal can stay open for minutes: register only if the path still resolves to the
   // project the user saw, not to whatever was swapped in meanwhile.
   if (normalize(rawPath) !== root || normalize(root) !== root || !isUnityProjectDir(root)) return false

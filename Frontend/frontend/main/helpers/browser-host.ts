@@ -4,6 +4,7 @@ import type { BrowserCommand } from './browser-server'
 import { isIP } from 'net'
 import { isAllowedNavigation, isPrivateAddress, resolvesToPrivate, type LookupAll } from './browser-url-policy'
 import { historyUrl, type BrowserHistory } from './browser-history'
+import { mt, uiLanguage, type UiLang } from './main-i18n'
 
 // persist: keeps one login for every chat's tab and across app restarts.
 export const BROWSER_PARTITION = 'persist:gamachine-agent-browser'
@@ -446,7 +447,10 @@ export const PAGE_LIB = String.raw`(() => {
  * it (p), so the host can route it to that pick, or drop it when that pick is no longer open; __error carries the id of
  * the pick it is about and is ignored when the box shows another one.
  */
-export const NOTE_BOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"><style>
+const escapeHtml = (text: string): string => text.replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
+
+export const noteBoxHtml = (): string => String.raw`<!doctype html><html><head><meta charset="utf-8"><style>
 *{box-sizing:border-box}
 html,body{margin:0;background:transparent;overflow:hidden;font:13.5px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 body{padding:6px}
@@ -470,7 +474,7 @@ body{padding:6px}
 #s:disabled .k{border-color:#3b4359}
 #e{margin:6px 2px 0;color:#ff9d88;font:11.5px/1.35 ui-monospace,"JetBrains Mono",Consolas,monospace}
 @media (prefers-reduced-motion:reduce){#i::before{transition:none}}
-</style></head><body><div id="w"><div id="b"><div id="i"><textarea id="t" rows="1" maxlength="1000" placeholder="Yorum ekle…" aria-label="Yorum ekle"></textarea><div id="f"><span class="h"><span class="k">⇧↵</span>satır <span class="k">Esc</span>vazgeç</span><button id="s" type="button" disabled><span class="k" aria-hidden="true">↵</span>Kaydet</button></div></div></div><div id="e" role="alert" hidden></div></div><script>
+</style></head><body><div id="w"><div id="b"><div id="i"><textarea id="t" rows="1" maxlength="1000" placeholder="${escapeHtml(mt('notePlaceholder'))}" aria-label="${escapeHtml(mt('noteLabel'))}"></textarea><div id="f"><span class="h"><span class="k">⇧↵</span>${escapeHtml(mt('noteLine'))} <span class="k">Esc</span>${escapeHtml(mt('noteCancel'))}</span><button id="s" type="button" disabled><span class="k" aria-hidden="true">↵</span>${escapeHtml(mt('noteSave'))}</button></div></div></div><div id="e" role="alert" hidden></div></div><script>
 const ta=document.getElementById('t'),send=document.getElementById('s'),wrap=document.getElementById('w'),err=document.getElementById('e');
 let seq=0,pick=null;
 const post=(o)=>{o.q=++seq;o.p=pick;document.title=JSON.stringify(o)};
@@ -498,7 +502,7 @@ ta.focus();
  * never reaches it (the host claims it, escape()). __freeze shows a frame's picture over the live page (null goes back to the live look), __pins draws the
  * numbered pins. Page-derived strings only ever reach it as data, drawn with textContent.
  */
-export const OVERLAY_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"><style>
+export const overlayHtml = (): string => String.raw`<!doctype html><html><head><meta charset="utf-8"><style>
 *{box-sizing:border-box}
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;cursor:crosshair;user-select:none;font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 #f{position:fixed;left:0;top:0;width:100%;height:100%;display:none;pointer-events:none}
@@ -506,7 +510,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 #d{border-style:dashed}
 .pin{position:fixed;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;background:#2f6fed;color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px #fff,0 2px 6px rgba(15,23,42,.35);pointer-events:none}
 #bar{position:fixed;top:10px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 24px);padding:5px 12px;border-radius:999px;background:rgba(21,27,38,.88);color:#f4f6fa;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 2px 10px rgba(15,23,42,.3);pointer-events:none}
-</style></head><body><img id="f" alt=""><div id="pins"></div><div id="h" class="o"></div><div id="s" class="o"></div><div id="d" class="o"></div><div id="bar">İşaretleme · bir öğeye tıkla ya da alan çiz · Esc çıkış</div><script>
+</style></head><body><img id="f" alt=""><div id="pins"></div><div id="h" class="o"></div><div id="s" class="o"></div><div id="d" class="o"></div><div id="bar">${escapeHtml(mt('annotateBar'))}</div><script>
 const $=(id)=>document.getElementById(id);
 const img=$('f'),hover=$('h'),chosen=$('s'),frame=$('d'),pins=$('pins'),bar=$('bar');
 let seq=0,boxes=[],quiet=false,down=null,at=null;
@@ -528,6 +532,9 @@ window.__boxes=(list)=>{boxes=Array.isArray(list)?list:[];outline()};
 window.__freeze=(src,r)=>{quiet=!!src&&!r;bar.hidden=quiet;place(chosen,src?r:null);outline();if(!src){img.removeAttribute('src');img.style.display='none';return null}img.src=src;img.style.display='block';return img.decode().then(()=>null,()=>null)};
 window.__pins=(list)=>{pins.replaceChildren();for(const p of Array.isArray(list)?list:[]){if(!(p.x>=0&&p.y>=0&&p.x<=innerWidth&&p.y<=innerHeight))continue;const n=document.createElement('div');n.className='pin';n.textContent=String(p.n);n.style.left=Math.max(10,Math.min(p.x,innerWidth-10))+'px';n.style.top=Math.max(10,Math.min(p.y,innerHeight-10))+'px';pins.appendChild(n)}};
 </script></body></html>`
+
+export const NOTE_BOX_HTML = noteBoxHtml()
+export const OVERLAY_HTML = overlayHtml()
 
 /**
  * Where the comment box goes, in window coordinates: right of the picked rect (viewport CSS px inside the panel),
@@ -924,6 +931,7 @@ export class BrowserHost {
   private pollTimer: ReturnType<typeof setTimeout> | null = null
   /** The one comment box (an app-owned view above the tabs) and the tab whose pick it shows right now. */
   private noteBox: AppView | null = null
+  private noteBoxLanguage: UiLang | null = null
   private boxTab: Tab | null = null
   private boxRect = { x: 0, y: 0, width: 0, height: 0 }
   private boxHeight = NOTE_BOX_MIN_HEIGHT
@@ -1674,7 +1682,7 @@ export class BrowserHost {
     if (!win || win.isDestroyed()) return null
     try {
       // The overlay has the focus while the mode is on: every browser key works there as in the tab.
-      const overlay = this.createAppView(OVERLAY_HTML, (message) => this.onOverlayMessage(tab, message), (event, input) => { this.browserKeys(tab, event, input) })
+      const overlay = this.createAppView(overlayHtml(), (message) => this.onOverlayMessage(tab, message), (event, input) => { this.browserKeys(tab, event, input) })
       // Added after the tab's own view, so it sits above it; the box is re-added above both whenever it shows.
       win.contentView.addChildView(overlay.view)
       overlay.view.setBounds(this.bounds)
@@ -1782,14 +1790,16 @@ export class BrowserHost {
   // ---- comment box ----
 
   private ensureBox(): AppView {
+    if (this.noteBox && this.noteBoxLanguage !== uiLanguage()) this.destroyBox()
     if (!this.noteBox) {
-      this.noteBox = this.createAppView(NOTE_BOX_HTML, (message) => this.onBoxMessage(message), (event, input) => {
+      this.noteBox = this.createAppView(noteBoxHtml(), (message) => this.onBoxMessage(message), (event, input) => {
         if (this.escape(event, input) || !isAnnotateChord(input, this.platform)) return
         event.preventDefault()
         const tab = this.boxTab
         if (tab) void this.setAnnotate(tab, !tab.annotating)
       })
     }
+    this.noteBoxLanguage = uiLanguage()
     return this.noteBox
   }
 
@@ -1803,9 +1813,9 @@ export class BrowserHost {
     // The box of this tab's earlier pick goes. A target outside the panel has nothing to sit next to: the box stays hidden with its draft.
     this.hideBox()
     if (!targetShown(pick.rect, this.bounds) || !noteBoxWidth(this.bounds)) return
-    const token = ++this.boxSeq
     let box: AppView
     try { box = this.ensureBox() } catch { return }
+    const token = ++this.boxSeq
     this.boxTab = tab
     this.boxRect = pick.rect
     this.boxHeight = NOTE_BOX_MIN_HEIGHT

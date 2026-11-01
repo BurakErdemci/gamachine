@@ -12,6 +12,7 @@ const electron = vi.hoisted(() => ({
 vi.mock('electron', () => electron)
 
 import { confirmRecentRoot, isTrustedRoot } from '../main/helpers/ipc-trust'
+import { setUiLanguage } from '../main/helpers/main-i18n'
 
 describe('confirmRecentRoot', () => {
   let base: string
@@ -19,6 +20,7 @@ describe('confirmRecentRoot', () => {
   let plain: string
 
   beforeEach(() => {
+    setUiLanguage('tr')
     base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'authorize-ws-')))
     electron.userData = path.join(base, 'userData')
     fs.mkdirSync(electron.userData)
@@ -40,6 +42,19 @@ describe('confirmRecentRoot', () => {
     expect(options.defaultId).toBe(1)
     expect(options.detail).toContain(project)
     expect(isTrustedRoot(project)).toBe(true)
+  })
+
+  it('shows English authorization text after a language announcement', () => {
+    setUiLanguage('en')
+    electron.dialog.showMessageBoxSync.mockReturnValue(1)
+    expect(confirmRecentRoot(project)).toBe(false)
+    expect(electron.dialog.showMessageBoxSync.mock.calls[0][0]).toMatchObject({
+      buttons: ['Authorize', 'Cancel'],
+      title: 'Authorize workspace folder',
+      message: 'Allow access to this folder?',
+      detail: `${project}\n\nThe app will be able to read and write files in this folder.`,
+    })
+    expect(isTrustedRoot(project)).toBe(false)
   })
 
   it('already trusted returns true without a dialog', () => {

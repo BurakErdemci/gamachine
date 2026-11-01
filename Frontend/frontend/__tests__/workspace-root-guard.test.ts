@@ -2,6 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { setUiLanguage, uiLanguage } from '../main/helpers/main-i18n'
 
 /**
  * delete-entry, delete-file, rename-entry and move-entry must never act on the
@@ -55,6 +56,7 @@ async function handler(channel: string) {
 }
 
 beforeEach(() => {
+  setUiLanguage('tr')
   base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-root-guard-')))
   ws = path.join(base, 'Project')
   fs.mkdirSync(path.join(ws, 'Assets'), { recursive: true })
@@ -79,6 +81,21 @@ const rootForms: Record<string, () => string> = {
 }
 
 describe('workspace root is refused', () => {
+  it('announces English through the guarded channel and translates file-tree errors', async () => {
+    const announce = await handler('ui-language-set')
+    expect(await announce('en')).toBeUndefined()
+    expect(uiLanguage()).toBe('en')
+    expect(await announce({ language: 'tr' })).toBeUndefined()
+    expect(uiLanguage()).toBe('en')
+    expect(await (await handler('delete-entry'))(ws, ws)).toEqual({
+      success: false, error: 'The project folder itself cannot be deleted or moved.',
+    })
+    const listener = handlers.get('ui-language-set')!
+    expect(() => listener({ senderFrame: { url: 'https://example.test' } }, 'tr')).toThrow()
+    expect(uiLanguage()).toBe('en')
+    expect(trashItem).not.toHaveBeenCalled()
+  })
+
   for (const channel of ['delete-entry', 'delete-file']) {
     for (const [name, form] of Object.entries(rootForms)) {
       it(`${channel}: ${name}`, async () => {
