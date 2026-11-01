@@ -230,11 +230,21 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
   }, [stop, running]);
   useEffect(() => { setOpenUrl(''); }, [conversationId]);
 
+  // Only the newest request may fill the list: a slow older reply must not bring back a deleted site.
+  const historySeq = useRef(0);
   const loadHistory = useCallback(() => {
-    void invoke({ op: 'history' }).then((r: any) => setHistory(cleanHistory(r?.entries)));
+    const mine = ++historySeq.current;
+    void invoke({ op: 'history' }).then((r: any) => {
+      if (mine === historySeq.current) setHistory(cleanHistory(r?.entries));
+    });
   }, []);
   const emptyView = !state.active || blank;
   useEffect(() => { if (visible && emptyView) loadHistory(); }, [visible, emptyView, loadHistory]);
+  // Settings deleted history or a site: refresh what an already-mounted empty tab suggests.
+  useEffect(() => {
+    window.addEventListener('gm-browser-history-changed', loadHistory);
+    return () => window.removeEventListener('gm-browser-history-changed', loadHistory);
+  }, [loadHistory]);
 
   const rows = useMemo(() => (editing && typed ? suggest(draft, history) : []), [editing, typed, draft, history]);
   useEffect(() => { setRow(-1); }, [draft]);

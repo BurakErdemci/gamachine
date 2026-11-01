@@ -27,6 +27,9 @@ const SEARCH_DEBOUNCE_MS = 200;
 interface SiteRow { site: string; cookies: number }
 interface HistoryRow { url: string; title: string; lastVisit: number }
 
+/** Tells a mounted browser panel its empty-tab suggestions may be stale. */
+const notifyHistoryChanged = () => window.dispatchEvent(new Event('gm-browser-history-changed'));
+
 const isError = (v: unknown) => !!v && typeof v === 'object' && typeof (v as { error?: unknown }).error === 'string';
 
 /** The sites that left cookies in the agent browser, one "Kaldır" per site (login and site data go together). */
@@ -57,6 +60,7 @@ const SitesCard = ({ showToast, setMsg, reloadKey }: { showToast?: Toast; setMsg
         showToast?.(t('bp.sites.removeFailed'), 'error');
       } else {
         showToast?.(t('bp.sites.removed'), 'success');
+        notifyHistoryChanged();
       }
       await load();
     } finally {
@@ -126,8 +130,9 @@ const HistoryCard = ({ showToast, setMsg, reloadKey }: { showToast?: Toast; setM
       if (isError(r)) {
         setMsg(t(failed as 'bp.hist.removeFailed'));
         showToast?.(t(failed as 'bp.hist.removeFailed'), 'error');
-      } else if (done) {
-        showToast?.(t(done as 'bp.hist.cleared'), 'success');
+      } else {
+        if (done) showToast?.(t(done as 'bp.hist.cleared'), 'success');
+        notifyHistoryChanged();
       }
       await load();
     } finally {
@@ -243,6 +248,7 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
         showToast?.(t('bp.set.clearFailed'), 'error');
       } else {
         showToast?.(t('bp.set.cleared'), 'success');
+        notifyHistoryChanged();
         setReloadKey((n) => n + 1);
       }
     } finally {

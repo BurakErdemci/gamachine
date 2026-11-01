@@ -5,6 +5,7 @@ import { NewTabPanel } from '../renderer/components/home/newtab/NewTabPanel'
 import { AppearanceContext, DEFAULTS, THEMES, type Theme } from '../renderer/lib/appearance'
 import { LangContext, ceviriUygula, translations } from '../renderer/lib/i18n'
 import type { Site } from '../renderer/lib/browserSuggest'
+import { pathOf } from '../renderer/components/home/newtab/parts'
 
 const en = translations.en
 
@@ -112,5 +113,13 @@ describe('empty tab: one composition per theme', () => {
       expect(translations.tr[k]).toBeTruthy()
       expect(translations.en[k]).toBeTruthy()
     }
+  })
+})
+
+describe('pathOf', () => {
+  it('shows only the pathname, never the query or hash', () => {
+    expect(pathOf('https://example.com/cb/?code=SECRET#frag')).toBe('/cb')
+    expect(pathOf('https://example.com/?code=SECRET')).toBe('')
+    expect(pathOf('https://example.com/a/b#hash')).toBe('/a/b')
   })
 })

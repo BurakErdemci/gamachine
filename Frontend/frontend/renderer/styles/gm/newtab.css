@@ -252,6 +252,8 @@
 
 /* ======================= reduced motion ======================= */
 @media (prefers-reduced-motion: reduce) {
-  .nt *, .nt *::before { transition: none !important; }
+  .nt *, .nt *::before, .nt *::after { transition: none !important; }
 }
-:root[data-motion="reduced"] :is(.nt *, .nt *::before) { transition: none !important; }
+:root[data-motion="reduced"] .nt *,
+:root[data-motion="reduced"] .nt *::before,
+:root[data-motion="reduced"] .nt *::after { transition: none !important; }

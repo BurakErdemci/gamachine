@@ -17,8 +17,8 @@ export const NT_SLOTS = 8;
 /** The page under the host, for the small second line ("/game-assets"); empty for a site's root. */
 export function pathOf(url: string): string {
   try {
-    const { pathname, search } = new URL(url);
-    return (pathname === '/' ? '' : pathname.replace(/\/$/, '')) + search;
+    const { pathname } = new URL(url);
+    return (pathname === '/' ? '' : pathname.replace(/\/$/, ''));
   } catch {
     return '';
   }
