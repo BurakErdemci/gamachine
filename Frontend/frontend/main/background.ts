@@ -858,7 +858,7 @@ handleSecure('app-zoom-set', (event, factor: unknown) => {
 
 handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown) => {
   if (mode !== 'auto' && mode !== 'balanced' && mode !== 'step') {
-    throw new Error('Geçersiz çalışma modu.')
+    throw new Error(mt('modeInvalid'))
   }
   const src = source === 'settings' || source === 'chat' || source === 'migrate' ? source : 'ui'
   let response
@@ -883,7 +883,7 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
     }
     const text = typeof detail === 'string' ? detail : undefined
     console.error('[approval-mode] write failed:', text || (error as Error)?.message)
-    throw new Error(text || 'Çalışma modu backend’e iletilemedi.')
+    throw new Error(text || mt('modeSendFailed'))
   }
   try {
     await computerUse.reconcile()

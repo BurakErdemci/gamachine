@@ -47,7 +47,6 @@ const NOTE_DRAG_PX = 6
 const NOTE_AREA_CHARS = 500
 const NOTE_COMMENT_CHARS = 1000
 const NOTE_MAX_NOTES = 50
-const NOTE_SAVE_FAILED = 'Not kaydedilemedi, tekrar dene'
 const NOTE_BOX_WIDTH = 320
 const NOTE_BOX_MIN_WIDTH = 160
 const NOTE_BOX_MIN_HEIGHT = 56
@@ -1915,7 +1914,7 @@ export class BrowserHost {
       pick.error = error
       if (this.boxTab === tab) void this.noteBox?.view.webContents.executeJavaScript(errorCall(pick)).catch(() => { /* box closing */ })
     }
-    if (tab.notes.length >= NOTE_MAX_NOTES) return failed(`En fazla ${NOTE_MAX_NOTES} not`)
+    if (tab.notes.length >= NOTE_MAX_NOTES) return failed(mt('noteLimit', { max: NOTE_MAX_NOTES }))
     const n = tab.pinSeq + 1
     const { frame } = pick
     const saved = { note: { ...pick.data, id: pick.id, comment, n, rect: pick.rect }, docId: frame.docId,
@@ -1925,7 +1924,7 @@ export class BrowserHost {
     // that already left with a queued message.
     if (!this.emitNotes(tab, [saved.note], frame)) {
       tab.notes = tab.notes.filter((one) => one !== saved)
-      return failed(NOTE_SAVE_FAILED)
+      return failed(mt('noteSaveFailed'))
     }
     tab.pinSeq = n
     this.closePick(tab)

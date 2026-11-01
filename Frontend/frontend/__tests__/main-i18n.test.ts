@@ -56,6 +56,16 @@ describe('main process language', () => {
     expect(mt('trashMessage', { name: '{path} $&' })).toContain('"{path} $&"')
   })
 
+  it('translates the note-box errors and approval-mode errors', async () => {
+    const { setUiLanguage, mt } = await import('../main/helpers/main-i18n')
+    expect(mt('noteLimit', { max: 50 })).toBe('En fazla 50 not')
+    setUiLanguage('en')
+    expect(mt('noteLimit', { max: 50 })).toBe('At most 50 notes')
+    expect(mt('noteSaveFailed')).toBe('The note could not be saved, try again')
+    expect(mt('modeInvalid')).toBe('Invalid approval mode.')
+    expect(mt('modeSendFailed')).toBe('The approval mode could not be sent to the backend.')
+  })
+
   it('builds the next note box and annotate overlay in the announced language', async () => {
     const { setUiLanguage } = await import('../main/helpers/main-i18n')
     const { noteBoxHtml, overlayHtml } = await import('../main/helpers/browser-host')
