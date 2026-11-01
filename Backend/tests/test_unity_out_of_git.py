@@ -882,35 +882,51 @@ def test_an_extra_that_collides_with_a_new_source_file_is_refused(manager, tmp_p
     assert not [p for p in (project / "UserSettings" / "Gamachine").iterdir() if p.name.startswith("package.")]
 
 
-def turn2_package(manager, project, source):
-    """What a turn 1/2 build left: the copy plus one digest marker, no per-file record."""
+def test_a_marker_only_package_is_refused_as_not_made_by_gamachine(manager, tmp_path, source):
+    project = project_at(tmp_path / "Game")
     package = project.joinpath(*PACKAGE)
     shutil.copytree(source, package, ignore=shutil.ignore_patterns("__pycache__"))
     (package / ".gamachine-source-digest").write_text(module._tree_digest(str(source)), encoding="utf-8")
-    return package
-
-
-def test_a_marker_only_package_updates_when_unmodified(manager, tmp_path, source):
-    project = project_at(tmp_path / "Game")
-    package = turn2_package(manager, project, source)
-    stamp = (package / "package.json").stat().st_mtime_ns
-    assert manager.install_package(str(project), write_autoconnect=False) is True  # same source: nothing to do
-    assert (package / "package.json").stat().st_mtime_ns == stamp
-    new_source_version(source)
-    assert manager.install_package(str(project), write_autoconnect=False) is True
-    assert '"v": 2' in (package / "package.json").read_text(encoding="utf-8")
-    assert (package / ".gamachine-files.json").is_file() and not (package / ".gamachine-source-digest").exists()
-
-
-def test_a_marker_only_package_that_was_changed_is_refused(manager, tmp_path, source):
-    project = project_at(tmp_path / "Game")
-    package = turn2_package(manager, project, source)
-    (package / "package.json").write_text("my own change", encoding="utf-8")
     new_source_version(source)
     before = snapshot(package)
     assert manager.install_package(str(project), write_autoconnect=False) is False
     assert snapshot(package) == before
-    assert "was changed by hand" in manager.last_install_error
+    assert "was not made by Gamachine" in manager.last_install_error
+
+
+def test_an_extra_that_differs_from_a_new_source_file_only_in_case_is_refused(manager, tmp_path, source):
+    project, package = installed_project(manager, tmp_path)
+    (package / "Editor" / "new.cs").write_text("// the user's own", encoding="utf-8")
+    (source / "Editor" / "New.cs").write_text("// from the new version", encoding="utf-8")
+    before = snapshot(package)
+    assert manager.install_package(str(project), write_autoconnect=False) is False
+    assert snapshot(package) == before
+    assert "Editor/new.cs" in manager.last_install_error
+    assert not [p for p in (project / "UserSettings" / "Gamachine").iterdir() if p.name.startswith("package.")]
+
+
+def test_an_extra_file_where_the_new_source_adds_a_directory_is_refused(manager, tmp_path, source):
+    project, package = installed_project(manager, tmp_path)
+    (package / "Tools").write_text("// the user's own", encoding="utf-8")
+    (source / "Tools").mkdir()
+    (source / "Tools" / "Tool.cs").write_text("// from the new version", encoding="utf-8")
+    before = snapshot(package)
+    assert manager.install_package(str(project), write_autoconnect=False) is False
+    assert snapshot(package) == before
+    assert "Tools" in manager.last_install_error
+    assert not [p for p in (project / "UserSettings" / "Gamachine").iterdir() if p.name.startswith("package.")]
+
+
+def test_an_extra_under_a_path_where_the_new_source_adds_a_file_is_refused(manager, tmp_path, source):
+    project, package = installed_project(manager, tmp_path)
+    (package / "Docs").mkdir()
+    (package / "Docs" / "x.md").write_text("mine", encoding="utf-8")
+    (source / "Docs").write_text("// from the new version", encoding="utf-8")
+    before = snapshot(package)
+    assert manager.install_package(str(project), write_autoconnect=False) is False
+    assert snapshot(package) == before
+    assert "Docs/x.md" in manager.last_install_error
+    assert not [p for p in (project / "UserSettings" / "Gamachine").iterdir() if p.name.startswith("package.")]
 
 
 def test_a_manifest_changed_to_a_users_value_during_the_copy_discards_the_staged_copy(manager, tmp_path, source,

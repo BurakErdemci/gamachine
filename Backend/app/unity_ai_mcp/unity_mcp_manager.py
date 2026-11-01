@@ -25,7 +25,7 @@ from .editor_log import bridge_compile_errors, editor_log_path
 logger = logging.getLogger(__name__)
 
 _GENERATED_DIR_PATTERNS = ("__pycache__", "*.egg-info", "build", ".venv")
-_DIGEST_FILE = ".gamachine-source-digest"  # turn 1/2 builds: one digest of the whole copied tree
+_DIGEST_FILE = ".gamachine-source-digest"  # marks Gamachine's own resource copy
 _FILES_RECORD = ".gamachine-files.json"  # {sourceDigest, files: {relative path: sha256}} of what we copied
 _PACKAGE_NAME = "com.coplaydev.unity-mcp"
 # Written by every Gamachine before 2 Nov 2026 as the first line of Assets/Editor/UnityArchitectAIMCPSetup.cs.
@@ -1158,35 +1158,24 @@ class UnityMCPManager:
         exists = os.path.lexists(target)
         if exists:
             record_path = os.path.join(target, _FILES_RECORD)
-            marker_path = os.path.join(target, _DIGEST_FILE)
-            if not os.path.isdir(target) or _is_link(record_path) or _is_link(marker_path) \
-                    or not (os.path.isfile(record_path) or os.path.isfile(marker_path)):
+            if not os.path.isdir(target) or _is_link(record_path) or not os.path.isfile(record_path):
                 raise _Declined(f"Packages/{_PACKAGE_NAME} was not made by Gamachine; Gamachine left it as it is.")
             installed = _installed_files(target)
-            if os.path.isfile(record_path):
-                try:
-                    with open(record_path, encoding="utf-8") as stored:
-                        record = json.load(stored)
-                    recorded, stored_digest = dict(record["files"]), record["sourceDigest"]
-                except (OSError, ValueError, KeyError, TypeError):
-                    raise _Declined(changed)
-                if any(path in installed and _file_hash(installed[path]) != digest
-                       for path, digest in recorded.items()):
-                    raise _Declined(changed)
-                missing = [path for path in recorded if path not in installed]
-                extras = {path: full for path, full in installed.items() if path not in recorded}
-                if stored_digest == source_digest and not missing:
-                    return
-                if missing:
-                    logger.warning("[UnityMCP] %s is incomplete; copying the package again.", target)
-            else:
-                # A turn 1/2 build left one digest for the whole tree and no per-file record.
-                with open(marker_path, encoding="utf-8") as stored:
-                    stored_digest = stored.read()
-                if _tree_digest(target) != stored_digest:
-                    raise _Declined(changed)
-                if stored_digest == source_digest:
-                    return
+            try:
+                with open(record_path, encoding="utf-8") as stored:
+                    record = json.load(stored)
+                recorded, stored_digest = dict(record["files"]), record["sourceDigest"]
+            except (OSError, ValueError, KeyError, TypeError):
+                raise _Declined(changed)
+            if any(path in installed and _file_hash(installed[path]) != digest
+                   for path, digest in recorded.items()):
+                raise _Declined(changed)
+            missing = [path for path in recorded if path not in installed]
+            extras = {path: full for path, full in installed.items() if path not in recorded}
+            if stored_digest == source_digest and not missing:
+                return
+            if missing:
+                logger.warning("[UnityMCP] %s is incomplete; copying the package again.", target)
         # Staged in our excluded settings folder, not in Packages/ where Unity would see a half copy.
         stage_dir = os.path.join(workspace_path, "UserSettings", "Gamachine")
         os.makedirs(stage_dir, exist_ok=True)
@@ -1204,7 +1193,17 @@ class UnityMCPManager:
             if _tree_digest(staged) != source_digest:
                 raise OSError("Staged package does not match the source digest")
             copied = {path: _file_hash(full) for path, full in _installed_files(staged).items()}
-            clashes = sorted(path for path in extras if path in copied)
+            # Casefolded on every platform so a case-only or file/directory clash never merges into the shipped copy.
+            staged_files = {path.casefold() for path in copied}
+            staged_paths = set(staged_files)
+            for path in staged_files:
+                parts = path.split("/")
+                staged_paths.update("/".join(parts[:i]) for i in range(1, len(parts)))
+            clashes = sorted(
+                path for path in extras
+                if path.casefold() in staged_paths
+                or any("/".join(parts[:i]) in staged_files
+                       for parts in [path.casefold().split("/")] for i in range(1, len(parts))))
             if clashes:
                 raise _Declined(f"Packages/{_PACKAGE_NAME}/{clashes[0]} was added by hand and the new package "
                                 "has a file at the same path; Gamachine left it as it is.")
