@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import { useLang } from '../../../lib/i18n';
 import {
-  cancelRun, clearRun, clearRunIf, getRun, launchProject, listEditors, listTemplates, nameProblem, pickParentDir, sortTemplates,
+  cancelRun, clearRun, clearRunIf, getRun, hubFailureText, launchProject, listEditors, listTemplates, nameProblem, pickParentDir, sortTemplates,
   startCreate, subscribeRun, type HubEditor, type HubRun, type HubTemplate, type NameProblem,
 } from '../../../lib/hub';
 import type { RecentWorkspace } from '../../../hooks/home/useRecentWorkspaces';
@@ -124,7 +124,7 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   const launch = async (path: string, v?: string) => {
     const res = await launchProject(path, v);
     if (res.opened) showToast(t('hub.launched'), 'success');
-    else showToast(t('hub.launchFailed', { error: res.error || t('hub.failedUnknown') }), 'error');
+    else showToast(t('hub.launchFailed', { error: hubFailureText(res, t) }), 'error');
   };
 
   /** How many recent projects were last saved with each editor version. */

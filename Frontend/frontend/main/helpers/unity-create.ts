@@ -3,7 +3,18 @@ import path from 'path'
 
 export type CreatePhase = 'starting' | 'running' | 'done' | 'failed'
 export interface CreateProgress { phase: CreatePhase; elapsedMs: number; logTail?: string }
-export type CreateResult = { ok: true; path: string } | { ok: false; error: string }
+export type HubErrorCode = 'busy' | 'nameInvalid' | 'parentMissing' | 'exists' | 'pathTooLong' |
+  'spawnFailed' | 'exited' | 'notCreated' | 'cancelled' | 'notProject' | 'notTrusted' |
+  'versionUnknown' | 'editorMissing' | 'invalidArguments' | 'parentNotPicked' | 'templateUnknown'
+export type Cleanup = 'removed' | 'notOurs' | 'removeFailed' | 'pathChanged' | 'none'
+export interface HubFailure {
+  error: string
+  code: HubErrorCode
+  params?: Record<string, string | number>
+  cleanup?: Cleanup
+  path?: string
+}
+export type CreateResult = { ok: true; path: string } | ({ ok: false } & HubFailure)
 
 export interface CreateChild {
   kill: () => boolean | void
@@ -16,7 +27,8 @@ export interface CreateDeps {
   platform: NodeJS.Platform
   exists: (p: string) => boolean
   realpath: (p: string) => string
-  removeDir: (dir: string) => void
+  removeDir: (dir: string) => Promise<void>
+  delay?: (ms: number) => Promise<void>
   lstat?: (p: string) => { isDirectory: () => boolean; isSymbolicLink: () => boolean; birthtimeMs: number }
   spawn: (command: string, args: string[]) => CreateChild
   readLogTail: (file: string) => string
@@ -52,23 +64,24 @@ export function cancelCreate(): { cancelled: boolean } {
 
 export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<CreateResult> {
   const p = deps.platform === 'win32' ? path.win32 : path.posix
-  const fail = (error: string): CreateResult => ({ ok: false, error })
-  if (active) return Promise.resolve(fail('Another project is already being created.'))
+  const fail = (error: string, code: HubErrorCode, params?: HubFailure['params']): CreateResult =>
+    ({ ok: false, error, code, ...(params ? { params } : {}) })
+  if (active) return Promise.resolve(fail('Another project is already being created.', 'busy'))
   if (!NAME_PATTERN.test(opts.name) || opts.name !== opts.name.trim()) {
-    return Promise.resolve(fail('Project name may use letters, digits, space, - and _ only (1-64 characters).'))
+    return Promise.resolve(fail('Project name may use letters, digits, space, - and _ only (1-64 characters).', 'nameInvalid'))
   }
-  if (!p.isAbsolute(opts.parentDir)) return Promise.resolve(fail('Parent folder does not exist.'))
+  if (!p.isAbsolute(opts.parentDir)) return Promise.resolve(fail('Parent folder does not exist.', 'parentMissing'))
   // Resolve once so a symlink re-pointed while Unity runs cannot redirect the cleanup.
   let parent: string
   try {
     parent = deps.realpath(opts.parentDir)
   } catch {
-    return Promise.resolve(fail('Parent folder does not exist.'))
+    return Promise.resolve(fail('Parent folder does not exist.', 'parentMissing'))
   }
   const target = p.join(parent, opts.name)
-  if (deps.exists(target)) return Promise.resolve(fail('A folder with this name already exists.'))
+  if (deps.exists(target)) return Promise.resolve(fail('A folder with this name already exists.', 'exists'))
   if (deps.platform === 'win32' && target.length > MAX_WINDOWS_PATH) {
-    return Promise.resolve(fail(`Project path is too long (${target.length} > ${MAX_WINDOWS_PATH}); choose a shorter location.`))
+    return Promise.resolve(fail(`Project path is too long (${target.length} > ${MAX_WINDOWS_PATH}); choose a shorter location.`, 'pathTooLong', { length: target.length, max: MAX_WINDOWS_PATH }))
   }
 
   const logFile = deps.logFile()
@@ -90,7 +103,8 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
     try {
       child = deps.spawn(opts.editorPath, args)
     } catch (err: any) {
-      resolve(fail(String(err?.message || err)))
+      const detail = String(err?.message || err)
+      resolve(fail(detail, 'spawnFailed', { detail }))
       return
     }
     active = child
@@ -98,6 +112,7 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
     const timer = setInterval(() => emit('running'), deps.intervalMs ?? 1000)
 
     let settled = false
+    let cleaning = false
     const finish = (result: CreateResult) => {
       if (settled) return
       settled = true
@@ -107,45 +122,82 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
       resolve(result)
     }
     // A failed run leaves a half-made folder that would block retrying the same name.
-    const failAndClean = (error: string) => {
+    const failAndClean = async (error: string, code: HubErrorCode, params?: HubFailure['params']) => {
+      if (settled || cleaning) return
+      cleaning = true
+      clearInterval(timer)
+      let cleanup: Cleanup = 'none'
+      // The same ownership rule applies after a retry delay: the path may have been replaced.
+      const isOurs = () => {
+        try {
+          const st = (deps.lstat ?? fs.lstatSync)(target)
+          return st.isDirectory() && !st.isSymbolicLink() && st.birthtimeMs > 0 && st.birthtimeMs > startedAt + 1
+        } catch { return false }
+      }
       let resolved: string | null = null
       try { resolved = deps.realpath(target) } catch { /* Nothing at target, so nothing to remove. */ }
       if (resolved === target) {
         // Only a directory born after this attempt began is provably ours; a renamed-in project is not.
         // Date.now() drops the fraction of a millisecond that birthtimeMs keeps, hence the + 1.
-        let ours = false
-        try {
-          const st = (deps.lstat ?? fs.lstatSync)(target)
-          ours = st.isDirectory() && !st.isSymbolicLink() && st.birthtimeMs > 0 && st.birthtimeMs > startedAt + 1
-        } catch { /* Unreadable, so keep it. */ }
-        if (!ours) {
-          error += ` The folder was not removed because it was not created by this attempt: ${target}`
+        if (!isOurs()) {
+          cleanup = 'notOurs'
+          if (code !== 'cancelled') error += ` The folder was not removed because it was not created by this attempt: ${target}`
         } else {
-          try {
-            deps.removeDir(target)
-          } catch {
-            error += ` The partial folder could not be removed: ${target}`
+          const delay = deps.delay ?? (ms => new Promise<void>(done => setTimeout(done, ms)))
+          for (let attempt = 0; attempt < 5; attempt++) {
+            if (attempt > 0) {
+              resolved = null
+              try { resolved = deps.realpath(target) } catch { /* The folder may have disappeared. */ }
+              if (resolved !== target) {
+                cleanup = resolved === null ? 'none' : 'pathChanged'
+                if (resolved !== null && code !== 'cancelled') error += ` The partial folder was not removed because its path changed: ${target}`
+                break
+              }
+              if (!isOurs()) {
+                cleanup = 'notOurs'
+                if (code !== 'cancelled') error += ` The folder was not removed because it was not created by this attempt: ${target}`
+                break
+              }
+            }
+            try {
+              await deps.removeDir(target)
+              cleanup = 'removed'
+              break
+            } catch (err: any) {
+              if (attempt < 4) {
+                await delay(1000)
+              } else {
+                cleanup = 'removeFailed'
+                console.error('[hub] partial folder not moved to Trash:', target, err?.message || err)
+                if (code !== 'cancelled') error += ` The partial folder could not be removed: ${target}`
+              }
+            }
           }
         }
       } else if (resolved !== null) {
-        error += ` The partial folder was not removed because its path changed: ${target}`
+        cleanup = 'pathChanged'
+        if (code !== 'cancelled') error += ` The partial folder was not removed because its path changed: ${target}`
       }
-      finish(fail(error))
+      finish({ ok: false, error, code, ...(params ? { params } : {}), cleanup, ...(cleanup !== 'none' ? { path: target } : {}) })
     }
     // Windows: Unity.exe is a GUI binary, so only the child's own 'exit' is a reliable end.
     // Unity never ran, so a folder at target now is not ours to remove.
-    child.once('error', (err: Error) => finish(fail(`Could not start Unity: ${err?.message || err}`)))
+    child.once('error', (err: Error) => {
+      if (cleaning) return
+      const detail = String(err?.message || err)
+      finish(fail(`Could not start Unity: ${detail}`, 'spawnFailed', { detail }))
+    })
     child.once('exit', (code: number | null) => {
       // An 'error' already ended this attempt and freed the slot; a retry may own the folder now.
-      if (settled) return
+      if (settled || cleaning) return
       // A finished project wins over a cancel that landed after Unity had already exited.
       if (code === 0 && deps.isProject(target)) {
         deps.registerTrusted(target)
         return finish({ ok: true, path: target })
       }
-      if (cancelRequested) return failAndClean('cancelled')
-      if (code !== 0) return failAndClean(`Unity exited with code ${code}.`)
-      failAndClean('Unity finished but the project was not created.')
+      if (cancelRequested) return void failAndClean('cancelled', 'cancelled')
+      if (code !== 0) return void failAndClean(`Unity exited with code ${code}.`, 'exited', { code: code ?? 'null' })
+      void failAndClean('Unity finished but the project was not created.', 'notCreated')
     })
   })
 }

@@ -84,7 +84,7 @@ describe('openProject', () => {
   it('reports a non-zero exit of open as a launch failure', async () => {
     const { deps, child } = setup()
     const spawn = openSpawn(child, 1)
-    expect(await openProject({ path: '/p/Game' }, { ...deps, spawn })).toEqual({ opened: false, error: 'Could not start Unity: open exited with code 1' })
+    expect(await openProject({ path: '/p/Game' }, { ...deps, spawn })).toEqual({ opened: false, error: 'Could not start Unity: open exited with code 1', code: 'spawnFailed', params: { detail: 'open exited with code 1' } })
   })
 
   it('on Windows keeps the direct detached spawn', async () => {
@@ -103,7 +103,7 @@ describe('openProject', () => {
     const projects = new Set(['/p/Game'])
     const { deps, spawn, child } = setup({ isProject: d => projects.has(d) })
     spawn.mockImplementation(() => { queueMicrotask(() => { child.emit('spawn'); child.emit('exit', 0) }); return child })
-    expect(await openProject({ path: '/p/Game/Library' }, deps)).toEqual({ opened: false, error: 'Not a Unity project folder.' })
+    expect(await openProject({ path: '/p/Game/Library' }, deps)).toEqual({ opened: false, error: 'Not a Unity project folder.', code: 'notProject' })
     expect(spawn).not.toHaveBeenCalled()
     expect(await openProject({ path: '/p/Game' }, deps)).toEqual({ opened: true })
   })
@@ -119,29 +119,31 @@ describe('openProject', () => {
     const { deps, spawn } = setup({ isTrusted: () => false })
     const result = await openProject({ path: '/etc' }, deps)
     expect(result.opened).toBe(false)
+    expect(result.code).toBe('notTrusted')
     expect(spawn).not.toHaveBeenCalled()
   })
 
   it('reports an unknown version and a missing editor', async () => {
     const none = setup({ readVersion: () => null })
-    expect((await openProject({ path: '/p' }, none.deps)).opened).toBe(false)
+    expect(await openProject({ path: '/p' }, none.deps)).toMatchObject({ opened: false, code: 'versionUnknown' })
     const missing = setup()
     const result = await openProject({ path: '/p', version: '1.0.0f1' }, missing.deps)
     expect(result.opened).toBe(false)
+    expect(result).toMatchObject({ code: 'editorMissing', params: { version: '1.0.0f1' } })
     expect(result.error).toContain('1.0.0f1')
     expect(missing.spawn).not.toHaveBeenCalled()
   })
 
   it('returns an error when spawn throws', async () => {
     const { deps } = setup({ spawn: () => { throw new Error('boom') } })
-    expect(await openProject({ path: '/p' }, deps)).toEqual({ opened: false, error: 'boom' })
+    expect(await openProject({ path: '/p' }, deps)).toEqual({ opened: false, error: 'boom', code: 'spawnFailed', params: { detail: 'boom' } })
   })
 
   it('reports an async spawn failure instead of claiming success', async () => {
     const { deps, child } = setup({
       spawn: () => { queueMicrotask(() => child.emit('error', new Error('spawn EACCES'))); return child },
     })
-    expect(await openProject({ path: '/p/Game' }, deps)).toEqual({ opened: false, error: 'Could not start Unity: spawn EACCES' })
+    expect(await openProject({ path: '/p/Game' }, deps)).toEqual({ opened: false, error: 'Could not start Unity: spawn EACCES', code: 'spawnFailed', params: { detail: 'spawn EACCES' } })
     expect(() => child.emit('error', new Error('late'))).not.toThrow()
     expect(child.unref).not.toHaveBeenCalled()
   })

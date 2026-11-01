@@ -60,7 +60,7 @@ describe('authorising an untrusted recent project', () => {
   it('approval asks once over the app window, records the trust and unlocks launching', async () => {
     const dir = project()
     expect(await status(dir)).toBe('untrusted')
-    expect(await call('hub-open-project', { path: dir })).toEqual({ opened: false, error: 'Project folder is not trusted.' })
+    expect(await call('hub-open-project', { path: dir })).toEqual({ opened: false, error: 'Project folder is not trusted.', code: 'notTrusted' })
 
     electron.dialog.showMessageBoxSync.mockReturnValue(0)
     expect(await call('authorize-workspace', dir)).toEqual({ trusted: true })

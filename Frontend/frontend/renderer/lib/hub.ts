@@ -4,12 +4,57 @@
  * folder, creating and launching a project. Outside Electron (tests, a plain browser) there is no
  * `window.ipc`; reads answer empty and actions answer an error without throwing.
  */
+import type { Cleanup, HubErrorCode } from '../../main/helpers/unity-create';
+import type { TKey, TValues } from './i18n';
 
 export interface HubEditor { version: string; path: string }
 export interface HubTemplate { id: string; label: '2d' | '3d' | 'hdrp' | 'other'; file: string }
 export type HubPhase = 'starting' | 'running' | 'done' | 'failed';
 export interface HubProgress { phase: HubPhase; elapsedMs: number; logTail?: string }
-export type HubCreateResult = { ok: true; path: string } | { ok: false; error: string };
+export interface HubFailureDetails {
+  code?: string;
+  params?: Record<string, string | number>;
+  cleanup?: Cleanup;
+  path?: string;
+}
+export type HubCreateResult = { ok: true; path: string } | ({ ok: false; error: string } & HubFailureDetails);
+
+const ERROR_KEYS: Record<HubErrorCode, TKey> = {
+  busy: 'hub.error.busy', nameInvalid: 'hub.error.nameInvalid', parentMissing: 'hub.error.parentMissing',
+  exists: 'hub.error.exists', pathTooLong: 'hub.error.pathTooLong', spawnFailed: 'hub.error.spawnFailed',
+  exited: 'hub.error.exited', notCreated: 'hub.error.notCreated', cancelled: 'hub.error.cancelled',
+  notProject: 'hub.error.notProject', notTrusted: 'hub.error.notTrusted', versionUnknown: 'hub.error.versionUnknown',
+  editorMissing: 'hub.error.editorMissing', invalidArguments: 'hub.error.invalidArguments',
+  parentNotPicked: 'hub.error.parentNotPicked', templateUnknown: 'hub.error.templateUnknown',
+};
+
+/** Translate at render time so a stored result follows a language change. */
+export function hubFailureText(result: HubFailureDetails & { error?: string }, t: (key: TKey, values?: TValues) => string): string {
+  const key = Object.prototype.hasOwnProperty.call(ERROR_KEYS, result.code) ? ERROR_KEYS[result.code as HubErrorCode] : undefined;
+  const cancelled = result.code === 'cancelled' || isCancelled(result.error ?? '');
+  if (cancelled) {
+    if (result.cleanup === 'removed') {
+      const bin = t(/Win/.test(navigator.platform || navigator.userAgent || '') ? 'welcome.binWin' : 'welcome.binOther');
+      return t('hub.cancelledRemoved', { bin });
+    }
+    if (result.cleanup === 'removeFailed') return t('hub.cancelledRemoveFailed', { path: result.path ?? '' });
+  }
+  const text = key ? t(key, result.params) : cancelled ? t('hub.error.cancelled') : result.error || t('hub.failedUnknown');
+  if (key || cancelled) {
+    if (result.cleanup === 'notOurs' || result.cleanup === 'pathChanged') {
+      return `${text} ${t(result.cleanup === 'notOurs' ? 'hub.cleanupNotOurs' : 'hub.cleanupPathChanged', { path: result.path ?? '' })}`;
+    }
+    if (result.cleanup === 'removeFailed') return `${text} ${t('hub.cleanupRemoveFailed', { path: result.path ?? '' })}`;
+  }
+  return text;
+}
+
+const failureDetails = (res: any): HubFailureDetails => ({
+  ...(typeof res?.code === 'string' ? { code: res.code } : {}),
+  ...(res?.params && typeof res.params === 'object' ? { params: res.params } : {}),
+  ...(['removed', 'notOurs', 'removeFailed', 'pathChanged', 'none'].includes(res?.cleanup) ? { cleanup: res.cleanup } : {}),
+  ...(typeof res?.path === 'string' ? { path: res.path } : {}),
+});
 
 type Ipc = { invoke: (channel: string, ...a: unknown[]) => Promise<any>; on?: (channel: string, cb: (...a: unknown[]) => void) => () => void };
 
@@ -62,18 +107,18 @@ export async function pickParentDir(): Promise<string | null> {
 export async function createProject(arg: { parentDir: string; name: string; version: string; templateId?: string }): Promise<HubCreateResult> {
   const res = await call('hub-create-project', arg);
   if (res && res.ok === true && typeof res.path === 'string') return { ok: true, path: res.path };
-  return { ok: false, error: res && typeof res.error === 'string' ? res.error : '' };
+  return { ok: false, error: res && typeof res.error === 'string' ? res.error : '', ...failureDetails(res) };
 }
 
 export async function cancelCreate(): Promise<boolean> {
   return !!(await call('hub-cancel-create'))?.cancelled;
 }
 
-/** Launches the Unity editor on a trusted project; the error is the engine's own text. */
-export async function launchProject(path: string, version?: string): Promise<{ opened: boolean; error?: string }> {
+/** Launches the Unity editor on a trusted project, retaining the failure's translation data. */
+export async function launchProject(path: string, version?: string): Promise<{ opened: boolean; error?: string } & HubFailureDetails> {
   const res = await call('hub-open-project', version ? { path, version } : { path });
   if (res && res.opened === true) return { opened: true };
-  return { opened: false, error: res && typeof res.error === 'string' ? res.error : undefined };
+  return { opened: false, error: res && typeof res.error === 'string' ? res.error : undefined, ...failureDetails(res) };
 }
 
 /** Subscribes to creation progress; returns the unsubscribe. */
@@ -127,8 +172,8 @@ export type HubRun =
   | { state: 'idle' }
   | ({ state: 'creating'; progress: HubProgress; cancelling: boolean } & RunOf)
   | ({ state: 'done'; path: string; version: string } & RunOf)
-  | ({ state: 'failed'; error: string } & RunOf)
-  | ({ state: 'cancelled' } & RunOf);
+  | ({ state: 'failed'; error: string } & HubFailureDetails & RunOf)
+  | ({ state: 'cancelled'; error: string } & HubFailureDetails & RunOf);
 
 /**
  * The creation run, kept outside any component: the engine runs one creation per process, so a
@@ -156,9 +201,9 @@ export async function startCreate(arg: HubRequest, template?: HubTemplate): Prom
   stopProgress = onCreateProgress(p => setRun(run.state === 'creating' ? { ...run, progress: p } : run));
   const res = await createProject(arg);
   dropProgress();
-  if ('path' in res) setRun({ state: 'done', ...of, path: res.path, version: arg.version });
-  else if (isCancelled(res.error)) setRun({ state: 'cancelled', ...of });
-  else setRun({ state: 'failed', ...of, error: res.error });
+  if (res.ok === true) setRun({ state: 'done', ...of, path: res.path, version: arg.version });
+  else if (res.code === 'cancelled' || isCancelled(res.error)) setRun({ state: 'cancelled', ...of, ...res });
+  else setRun({ state: 'failed', ...of, ...res });
 }
 
 export async function cancelRun(): Promise<void> {

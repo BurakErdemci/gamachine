@@ -1,7 +1,7 @@
 import React from 'react';
 
 import { useLang, type TKey } from '../../../lib/i18n';
-import { clock, joinTarget, templateName, type HubTemplate } from '../../../lib/hub';
+import { clock, hubFailureText, joinTarget, templateName, type HubTemplate } from '../../../lib/hub';
 import type { Hub, HubView } from './useHub';
 
 export const Ic = ({ children, className = 'ic' }: { children: React.ReactNode; className?: string }) => (
@@ -163,7 +163,7 @@ export const useResult = (h: Hub) => {
   if (r.state === 'failed' || r.state === 'cancelled') {
     return {
       kind: r.state, title: t(r.state === 'failed' ? 'hub.failedTitle' : 'hub.cancelledTitle', { name: r.name }),
-      text: r.state === 'failed' ? r.error || t('hub.failedUnknown') : t('hub.cancelledText'),
+      text: hubFailureText(r, t),
       actions: <button type="button" className="btn btn-primary hub-go" onClick={h.back} data-testid="hub-back">{t('hub.back')}</button>,
     };
   }

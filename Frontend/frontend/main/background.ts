@@ -385,16 +385,16 @@ handleSecure('hub-pick-parent-dir', async () => {
 handleSecure('hub-create-project', async (event, arg: any) => {
   if (!arg || typeof arg.parentDir !== 'string' || typeof arg.name !== 'string' ||
       typeof arg.version !== 'string' || (arg.templateId !== undefined && typeof arg.templateId !== 'string')) {
-    return { ok: false, error: 'Invalid arguments.' }
+    return { ok: false, error: 'Invalid arguments.', code: 'invalidArguments' }
   }
-  if (!pickedParentDirs.has(arg.parentDir)) return { ok: false, error: 'Choose the parent folder with the folder picker.' }
+  if (!pickedParentDirs.has(arg.parentDir)) return { ok: false, error: 'Choose the parent folder with the folder picker.', code: 'parentNotPicked' }
   const deps = editorDeps()
   const editor = listEditors(deps).editors.find(e => e.version === arg.version)
-  if (!editor) return { ok: false, error: `Unity ${arg.version} is not installed.` }
+  if (!editor) return { ok: false, error: `Unity ${arg.version} is not installed.`, code: 'editorMissing', params: { version: arg.version } }
   let templatePath: string | undefined
   if (arg.templateId) {
     const template = listTemplates(arg.version, deps).templates.find(t => t.id === arg.templateId)
-    if (!template) return { ok: false, error: 'Unknown template.' }
+    if (!template) return { ok: false, error: 'Unknown template.', code: 'templateUnknown' }
     const dir = templatesDir(editor.path, process.platform)
     templatePath = (process.platform === 'win32' ? path.win32 : path.posix).join(dir, template.file)
   }
@@ -412,7 +412,7 @@ handleSecure('hub-create-project', async (event, arg: any) => {
     realpath: fs.realpathSync,
     // To the Trash, not deleted: a project copied into the target during the attempt is born
     // after it started too, so no birth-time rule can tell it apart (measured 29 Oct 2026).
-    removeDir: (dir) => { void shell.trashItem(dir).catch((e) => console.error('[hub] partial folder not moved to Trash:', dir, e?.message || e)) },
+    removeDir: (dir) => shell.trashItem(dir),
     spawn: (command, args) => spawn(command, args, { stdio: 'ignore' }),
     readLogTail,
     isProject: isUnityProjectDir,
@@ -426,7 +426,7 @@ handleSecure('hub-cancel-create', () => cancelCreate())
 
 handleSecure('hub-open-project', async (_event, arg: any) => {
   if (!arg || typeof arg.path !== 'string' || (arg.version !== undefined && typeof arg.version !== 'string')) {
-    return { opened: false, error: 'Invalid arguments.' }
+    return { opened: false, error: 'Invalid arguments.', code: 'invalidArguments' }
   }
   return openProject({ path: arg.path, version: arg.version }, {
     editors: editorDeps(),

@@ -17,7 +17,7 @@ import { WorkspaceScreen, UNITY_DOWNLOAD_URL } from '../renderer/components/home
 import { LangContext, ceviriUygula, translations } from '../renderer/lib/i18n'
 import { renderHook } from '@testing-library/react'
 import { useFileSystem } from '../renderer/hooks/home/useFileSystem'
-import { nameProblem, templateName, joinTarget, clock, resetHubStore, getRun } from '../renderer/lib/hub'
+import { nameProblem, templateName, joinTarget, clock, resetHubStore, getRun, hubFailureText } from '../renderer/lib/hub'
 
 const en = translations.en
 const EDITORS = [
@@ -50,8 +50,8 @@ const props = () => ({
   onOpenFolder: vi.fn(async () => null as string | null), onSelectWorkspace: vi.fn(async () => true),
   onLogout: vi.fn(), showToast: vi.fn(),
 })
-const view = (p = props()) => {
-  const value = { lang: 'en' as const, setLang: () => {}, t: (k: any, v?: any) => ceviriUygula('en', k, v) }
+const view = (p = props(), lang: 'en' | 'tr' = 'en') => {
+  const value = { lang, setLang: () => {}, t: (k: any, v?: any) => ceviriUygula(lang, k, v) }
   render(<LangContext.Provider value={value}><WorkspaceScreen {...p} /></LangContext.Provider>)
   return p
 }
@@ -62,12 +62,12 @@ const pending = () => {
   create = vi.fn(() => new Promise(r => { resolve = r }))
   return (v: any) => act(async () => { resolve(v) })
 }
-const fillForm = async (name = 'Night Run') => {
+const fillForm = async (name = 'Night Run', lang: 'en' | 'tr' = 'en') => {
   tab('new')
   await waitFor(() => expect(screen.getByRole('radio', { name: /^3D/ }).getAttribute('aria-checked')).toBe('true'))
   fireEvent.change(nameBox(), { target: { value: name } })
   fireEvent.click(screen.getByTestId('hub-folder'))
-  await waitFor(() => expect(screen.getByTestId('hub-target').textContent).toBe(en['hub.target'].replace('{path}', `/Users/me/Games/${name}`)))
+  await waitFor(() => expect(screen.getByTestId('hub-target').textContent).toBe(ceviriUygula(lang, 'hub.target', { path: `/Users/me/Games/${name}` })))
 }
 const progressSubscriptions = () => mocks.on.mock.calls.filter(c => c[0] === 'hub-create-progress').length
 const progress = (p: unknown) => act(async () => { mocks.listeners.get('hub-create-progress')!(p) })
@@ -186,9 +186,53 @@ describe('hub: creating a project', () => {
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('hub-cancel-create'))
     expect(screen.getByTestId('hub-cancel').textContent).toBe(en['hub.cancelling'])
     await finish({ ok: false, error: 'cancelled' })
-    expect(screen.getByTestId('hub-result-cancelled').textContent).toContain(en['hub.cancelledText'])
+    expect(screen.getByTestId('hub-result-cancelled').textContent).toContain(en['hub.error.cancelled'])
     fireEvent.click(screen.getByTestId('hub-back'))
     expect(nameBox().value).toBe('Night Run')
+  })
+
+  it('a cancelled creation reports a failed move with its path', async () => {
+    const path = '/Users/me/Games/Night Run'
+    create = vi.fn(async () => ({ ok: false, error: 'cancelled', code: 'cancelled', cleanup: 'removeFailed', path }))
+    view()
+    await fillForm()
+    fireEvent.click(screen.getByTestId('hub-create'))
+    expect((await screen.findByTestId('hub-result-cancelled')).textContent).toContain(ceviriUygula('en', 'hub.cancelledRemoveFailed', { path }))
+    expect(getRun().state).toBe('cancelled')
+  })
+
+  it.each([['Win32', 'welcome.binWin'], ['MacIntel', 'welcome.binOther']] as const)('names the bin on %s only after a confirmed move', async (platform, binKey) => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
+    create = vi.fn(async () => ({ ok: false, error: 'cancelled', code: 'cancelled', cleanup: 'removed', path: '/Users/me/Games/Night Run' }))
+    view()
+    await fillForm()
+    fireEvent.click(screen.getByTestId('hub-create'))
+    expect((await screen.findByTestId('hub-result-cancelled')).textContent).toContain(ceviriUygula('en', 'hub.cancelledRemoved', { bin: en[binKey] }))
+  })
+
+  it('translates a structured creation failure and cleanup warning into Turkish', async () => {
+    const path = '/Users/me/Games/Night Run'
+    create = vi.fn(async () => ({ ok: false, error: 'Unity exited with code 3.', code: 'exited', params: { code: 3 }, cleanup: 'removeFailed', path }))
+    view(props(), 'tr')
+    await fillForm('Night Run', 'tr')
+    fireEvent.click(screen.getByTestId('hub-create'))
+    const text = (await screen.findByTestId('hub-result-failed')).textContent
+    expect(text).toContain('Unity 3 çıkış koduyla kapandı.')
+    expect(text).toContain(`Yarım kalan klasör taşınamadı: ${path}`)
+    expect(text).not.toContain('Unity exited')
+  })
+
+  it('translates an untrusted launch failure into Turkish', async () => {
+    mocks.invoke.mockImplementation(async (c: string, a: any) => c === 'hub-open-project'
+      ? { opened: false, error: 'Project folder is not trusted.', code: 'notTrusted' } : ipc(c, a))
+    const p = view(props(), 'tr')
+    await fillForm('Night Run', 'tr')
+    fireEvent.click(screen.getByTestId('hub-create'))
+    await screen.findByTestId('hub-result-done')
+    fireEvent.click(screen.getByTestId('hub-launch-created'))
+    await waitFor(() => expect(p.showToast).toHaveBeenCalledWith(ceviriUygula('tr', 'hub.launchFailed', {
+      error: 'Proje klasörüne erişim izni verilmedi.',
+    }), 'error'))
   })
 
   it('a failure shows the engine text as it came and keeps the answers', async () => {
@@ -214,6 +258,33 @@ describe('hub: creating a project', () => {
     expect(screen.queryByTestId('hub-progress')).toBeNull()
     tab('new')
     expect(screen.getByTestId('hub-progress')).toBeTruthy()
+  })
+})
+
+describe('hub failure translations', () => {
+  it.each(['busy', 'nameInvalid', 'parentMissing', 'exists', 'pathTooLong', 'spawnFailed', 'exited', 'notCreated',
+    'cancelled', 'notProject', 'notTrusted', 'versionUnknown', 'editorMissing', 'invalidArguments', 'parentNotPicked', 'templateUnknown'])
+  ('translates %s in both UI languages and substitutes parameters', code => {
+    for (const lang of ['tr', 'en'] as const) {
+      const key = `hub.error.${code}`
+      const result = hubFailureText({ code, error: 'raw English failure', params: { length: 160, max: 150, detail: 'EACCES', code: 7, version: '6000.2.4f1' } },
+        (k, v) => ceviriUygula(lang, k, v))
+      expect(translations[lang][key]).toBeTruthy()
+      expect(result).toBe(ceviriUygula(lang, key, { length: 160, max: 150, detail: 'EACCES', code: 7, version: '6000.2.4f1' }))
+      expect(result).not.toContain('raw English failure')
+      expect(result).not.toMatch(/\{\w+\}/)
+    }
+  })
+
+  it.each(['notOurs', 'pathChanged'] as const)('explains why a cancelled folder was kept (%s)', cleanup => {
+    const result = hubFailureText({ code: 'cancelled', error: 'cancelled', cleanup, path: '/kept/Game' }, (k, v) => ceviriUygula('tr', k, v))
+    expect(result).toContain('Oluşturma iptal edildi.')
+    expect(result).toContain('yerinde bırakıldı: /kept/Game')
+    expect(result).not.toContain('taşındı')
+  })
+
+  it.each([undefined, 'futureCode', 'toString'])('retains the raw error for an unknown or absent code (%s)', code => {
+    expect(hubFailureText({ code, error: 'legacy failure' }, (k, v) => ceviriUygula('tr', k, v))).toBe('legacy failure')
   })
 })
 
