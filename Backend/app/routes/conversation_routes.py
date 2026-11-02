@@ -746,8 +746,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                 "decision": outcome, "reason": reason,
             })
 
-        if decision.kind == "card" and computer_settings.cards_off(db):
-            # Resolved here, before a card opens, so no grant (persistent or session) is ever written.
+        # Only a verified chat with a turn in flight skips its card: a request nobody can be tied to
+        # keeps the card the user can refuse. Resolved before a card opens, so no grant is ever written.
+        if decision.kind == "card" and owner is not _UNKNOWN_OWNER and computer_settings.cards_off(db):
             decision = computer_gate.Decision("allow", CARDS_OFF_REASON)
         log(decision.kind, decision.reason)
         computer_activity.record(None if owner is _UNKNOWN_OWNER else owner, tool, params, decision.kind)

@@ -157,3 +157,12 @@ def test_halted_chat_still_denies_with_cards_off(env):
     reply = browser_click(env)
     assert reply.get("ok") is False and "stopped the browser" in reply["error"]
     assert cards.list_pending() == []
+
+
+@pytest.mark.parametrize("conversation_id", [None, 999999])
+def test_unverified_sender_keeps_its_card_with_cards_off(env, conversation_id):
+    # A request no chat with a turn in flight can be tied to must not run unasked.
+    set_computer_cards(env, True)
+    result = computer(env, f"cu-unowned-{conversation_id}", conversation_id=conversation_id)
+    assert result.get("approved") is not True
+    assert result["status"] == "ok" and len(cards.list_pending()) == 1
