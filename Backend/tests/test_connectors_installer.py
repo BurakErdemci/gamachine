@@ -270,9 +270,12 @@ def _write_record(installer, entry, version):
     exe = vdir / "venv" / "Scripts" / "mcp-for-blender.exe"
     exe.parent.mkdir(parents=True)
     exe.write_text("")
+    addon = installer.addons_dir(APP) / "blender_mcp.py"
+    addon.parent.mkdir(parents=True, exist_ok=True)
+    addon.write_text("")
     (vdir / "install.json").write_text(json.dumps({
         "version": version, "entry": str(exe), "addon_owner": "gamachine",
-        "addon": {"path": "x/blender_mcp.py"}, "addon_files": [], "finished_at": "t"}), encoding="utf-8")
+        "addon": {"path": str(addon)}, "addon_files": [], "finished_at": "t"}), encoding="utf-8")
     return exe
 
 
@@ -296,7 +299,8 @@ def test_view_ready_update_available_and_broken(make, entry):
     exe = _write_record(installer, entry, "2.2.6")
     view = views.connector_view(entry, db, installer, _detection(), connected=lambda cid: True)
     assert view["state"] == "ready" and view["enabled"] is True and view["connected"] is True
-    assert view["installed"] == {"version": "2.2.6", "addon_path": "x/blender_mcp.py", "addon_owner": "gamachine"}
+    assert view["installed"] == {"version": "2.2.6", "addon_path": str(installer.addons_dir(APP) / "blender_mcp.py"),
+                                 "addon_owner": "gamachine"}
     assert set(view) == {"id", "name", "summary", "capabilities", "risk", "state", "enabled", "connected",
                          "app", "installed", "error"}
     assert set(view["app"]) == {"found", "chosen", "custom_path", "min_version", "download_url"}
@@ -308,6 +312,37 @@ def test_view_ready_update_available_and_broken(make, entry):
     shutil.rmtree(installer.root / "blender")
     _write_record(installer, entry, "2.2.5")
     assert views.connector_view(entry, db, installer, _detection())["state"] == "update_available"
+
+
+def test_view_is_update_available_when_the_selected_build_has_no_addon_of_ours(make, entry, tmp_path):
+    installer, _ = make()
+    _write_record(installer, entry, "2.2.6")
+    assert views.connector_view(entry, _db(), installer, _detection())["state"] == "ready"
+    (installer.addons_dir(APP) / "blender_mcp.py").unlink()
+    assert views.connector_view(entry, _db(), installer, _detection())["state"] == "update_available"
+
+    # Without the scripts override each Blender major.minor has its own add-ons folder.
+    per_build = inst.Installer(root=tmp_path / "root2", runner=installer.runner, uv=lambda: "uv",
+                               blender_overrides={"APPDATA": str(tmp_path / "appdata")}, platform="win32")
+    _write_record(per_build, entry, "2.2.6")
+    assert views.connector_view(entry, _db(), per_build, _detection())["state"] == "ready"
+    other = {"version": "5.3.0", "path": "C:/fake/blender53.exe"}
+    assert views.connector_view(entry, _db(), per_build, _detection(chosen=other))["state"] == "update_available"
+
+
+def test_installing_for_a_newly_selected_build_returns_the_view_to_ready(make, entry, tmp_path):
+    installer = inst.Installer(root=tmp_path / "root", runner=FakeRunner(), uv=lambda: "uv",
+                               blender_overrides={"APPDATA": str(tmp_path / "appdata")}, platform="win32")
+    old_app, new_app = {"version": "4.2.0", "path": "C:/old/blender.exe"}, APP
+    installer.start(entry, old_app)
+    assert _finish(installer, entry).state == "done"
+    assert views.connector_view(entry, _db(), installer, _detection(chosen=old_app))["state"] == "ready"
+    assert views.connector_view(entry, _db(), installer, _detection(chosen=new_app))["state"] == "update_available"
+    installer.start(entry, new_app)
+    assert _finish(installer, entry).state == "done"
+    assert views.connector_view(entry, _db(), installer, _detection(chosen=new_app))["state"] == "ready"
+    paths = [a["path"] for a in installer.installed(entry)["addons"]]
+    assert str(installer.addons_dir(old_app) / "blender_mcp.py") in paths and len(paths) == 2
 
 
 def test_view_installing_and_error_follow_the_job(make, entry):

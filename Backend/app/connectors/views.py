@@ -1,11 +1,12 @@
 """ConnectorView (CONTRACT.md section 3) from catalog, detection, install record and job."""
+import os
 import socket
 from pathlib import Path
 from typing import Callable
 
 from connectors import detect, settings
 from connectors.catalog import STEPS
-from connectors.installer import Installer
+from connectors.installer import Installer, addon_entries
 
 # Where each connector's app-side bridge listens (upstream add-on default port).
 BRIDGE_PORTS = {"blender": 9876}
@@ -26,6 +27,13 @@ def app_view(entry: dict, detection: dict) -> dict:
     return {"found": detection["found"], "chosen": detection["chosen"],
             "custom_path": detection["custom_path"], "min_version": entry["app"]["min_version"],
             "download_url": entry["app"]["download_url"]}
+
+
+def _has_addon_for(installer: Installer, record: dict, chosen: dict) -> bool:
+    # The add-on is per Blender major.minor, so a newly selected build needs its own copy.
+    here = os.path.normcase(os.path.abspath(installer.addons_dir(chosen)))
+    return any(os.path.normcase(os.path.abspath(os.path.dirname(a["path"]))) == here and os.path.isfile(a["path"])
+               for a in addon_entries(record))
 
 
 def state_of(entry: dict, detection: dict, installer: Installer) -> tuple:
@@ -53,7 +61,7 @@ def state_of(entry: dict, detection: dict, installer: Installer) -> tuple:
         return "app_too_old", record, None
     if not record:
         return "not_installed", None, None
-    if record.get("version") != entry["package"]["version"]:
+    if record.get("version") != entry["package"]["version"] or not _has_addon_for(installer, record, chosen):
         return "update_available", record, None
     return "ready", record, None
 
