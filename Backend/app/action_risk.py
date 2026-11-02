@@ -297,7 +297,9 @@ def classify_unity(tool: Any, args: Any, _depth: int = 0) -> Risk:
         args = {}
     if not isinstance(args, Mapping):
         return _critical("unity_unknown_tool", bare)
-    if any(_fold(k) == "commands" for k in args):
+    if bare == "batch_execute":
+        # Only batch_execute runs nested commands; a stray `commands` key elsewhere is an unknown
+        # parameter the handler ignores, so the call is judged by its own action below.
         return _classify_unity_batch(bare, args, _depth)
     import unity_tool_policy  # stdlib-only, loads the ledger by path
     risk = unity_tool_policy.unity_action_risk(bare, args)
@@ -317,7 +319,7 @@ def classify_unity(tool: Any, args: Any, _depth: int = 0) -> Risk:
 
 
 def _classify_unity_batch(bare: str, args: Mapping, depth: int) -> Risk:
-    """batch_execute (or any tool carrying a commands list): each nested call is judged by the same
+    """batch_execute: each nested call is judged by the same
     balanced rules; the batch is critical when one of them is, or when its shape cannot be read."""
     if depth >= _UNITY_MAX_DEPTH:
         return _critical("unity_critical_action", f"{bare}: nested too deep")
@@ -885,6 +887,9 @@ _PERMISSION = frozenset({
     "add-localgroupmember", "remove-localgroupmember", "set-mppreference", "add-mppreference",
     "remove-mppreference", "wmic", "bcdedit", "stop-process", "spps", "kill", "taskkill", "pkill",
     "killall", "restart-computer", "stop-computer", "shutdown",
+    "stop-service", "spsv", "set-service", "new-service", "remove-service", "suspend-service",
+    "new-netfirewallrule", "set-netfirewallrule", "remove-netfirewallrule", "disable-netfirewallrule",
+    "set-netfirewallprofile", "disable-localuser", "vssadmin", "wevtutil", "clear-eventlog",
 })
 _SERVICE_CHANGES = frozenset({"create", "config", "delete", "stop"})
 _REGISTRY_WRITES = frozenset({"set-itemproperty", "sp", "new-itemproperty", "remove-itemproperty", "rp"})
@@ -992,7 +997,7 @@ def _trigger(words: list, *, inline: bool = False) -> Optional[Risk]:
         # Archivers that delete what they packed.
         if v == "tar" and any(w.lower() == "--remove-files" for w in lows[i + 1:]):
             return _critical("shell_delete_move", "tar --remove-files")
-        if v == "zip" and any(re.fullmatch(r"-[A-Za-z]*m[A-Za-z]*", w) for w in lows[i + 1:]):
+        if v == "zip" and any(re.fullmatch(r"-[A-Za-z0-9]*m[A-Za-z0-9]*", w) for w in lows[i + 1:]):
             return _critical("shell_delete_move", "zip -m")
         if v in ("7z", "7za", "7zr") and any(w.lower() == "-sdel" for w in lows[i + 1:]):
             return _critical("shell_delete_move", "7z -sdel")
@@ -1038,7 +1043,7 @@ def _trigger(words: list, *, inline: bool = False) -> Optional[Risk]:
             return _critical("shell_permission", v)
         if v in _CONTAINER_ENGINES and nxt:
             return _critical("shell_installer", f"{v} {nxt}")
-        if (v == "sc" and nxt in _SERVICE_CHANGES) or (v == "net" and nxt in ("user", "localgroup")):
+        if (v == "sc" and nxt in _SERVICE_CHANGES) or (v == "net" and nxt in ("user", "localgroup", "stop")):
             return _critical("shell_permission", f"{v} {nxt}")
         if v in _REGISTRY_WRITES and any(w.lower().startswith(("hklm:", "hkcu:", "registry::"))
                                          for w in lows[i + 1:]):
@@ -1228,6 +1233,9 @@ def _interpreter_risk(raw: str, tokens: Optional[list], verbs: list, cwd: str, w
     for i, tok in enumerate(tokens):
         v = _verb(tok)
         if v == "eval":
+            if not tokens[i + 1:]:
+                # A bare eval runs nothing; this is a word like `npm run eval` or `rg eval`.
+                return None
             # The shell runs the joined words as a command line: judged like one.
             inner = classify_shell(" ".join(tokens[i + 1:]), cwd=cwd, workspace=workspace, _depth=depth + 1)
             return inner if inner.critical else None

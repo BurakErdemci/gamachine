@@ -68,6 +68,11 @@ def shell(command, ws, cwd=""):
     ("C:\\tools\\npm.cmd test", "shell_in_workspace"),
     ("npm test \"--x\"", "shell_in_workspace"),
     ("pytest tests*", "shell_in_workspace"),
+    # A bare trailing eval runs nothing: it is a script or search word.
+    ("npm run eval", "shell_in_workspace"),
+    ("rg eval", "shell_in_workspace"),
+    ("git commit -m eval", "shell_in_workspace"),
+    ("zip -r9 a.zip a", "shell_in_workspace"),
 ])
 def test_routine_commands(command, reason, ws):
     risk = shell(command, ws)
@@ -113,6 +118,15 @@ def test_routine_commands(command, reason, ws):
     ("npm test %PATH%", "shell_outside_workspace"),
     ("", "shell_unparseable"),
     ("   ", "shell_unparseable"),
+    ("eval rm a", "shell_delete_move"),
+    ("zip -rm9 a.zip a", "shell_delete_move"),
+    ("zip -9m a.zip a", "shell_delete_move"),
+    ("net stop foo", "shell_permission"),
+    ("Stop-Service foo", "shell_permission"),
+    ("Set-NetFirewallRule -Name x -Enabled False", "shell_permission"),
+    ("Disable-LocalUser x", "shell_permission"),
+    ("vssadmin delete shadows /all", "shell_permission"),
+    ("wevtutil cl System", "shell_permission"),
 ])
 def test_critical_commands(command, reason, ws):
     risk = shell(command, ws)
@@ -377,6 +391,15 @@ def test_a_batch_with_one_critical_sub_call_is_critical():
     assert batch(routine, critical).verdict == CRITICAL
     nested = {"tool": "batch_execute", "params": {"commands": [critical]}}
     assert batch(routine, nested).verdict == CRITICAL
+
+
+def test_a_stray_commands_key_does_not_turn_a_call_into_a_batch():
+    """Only batch_execute runs nested commands; elsewhere the key is ignored and the action decides."""
+    read = [{"tool": "read_console", "params": {}}]
+    delete = {"action": "delete", "commands": read}
+    assert classify({"kind": "unity", "tool": "manage_gameobject", "args": delete}).verdict == CRITICAL
+    assert classify({"kind": "unity", "tool": "batch_execute", "args": {"commands": [
+        {"tool": "manage_gameobject", "params": delete}]}}).verdict == CRITICAL
 
 
 def test_a_batch_that_hides_its_sub_calls_is_critical():
