@@ -84,9 +84,13 @@ code: `relay/`; PC side: `Backend/app/remote/`.
   it, as a click in its effort panel would), read and change the global
   approval mode, and register its own web-push
   subscription (validated on the PC and stored on that device's own row, so it
-  changes only that phone's push endpoint, nothing else). It
-  cannot change other settings, touch API keys, install
-  CLIs, or run file operations. By owner decision, changing the approval mode
+  changes only that phone's push endpoint, nothing else). Through
+  the remote web UI it can also do what the desktop UI does to keep the game
+  moving: read, write, rename, move and delete files inside trusted roots and
+  use the terminal (the full list and what stays denied is in
+  `docs/remote-control-web.md`). It cannot touch API keys, install CLIs, reset
+  the profile, pair another device or grant computer-use apps. By owner
+  decision, changing the approval mode
   from the phone does **not** need the UI secret that the local
   `POST /approval-mode` route requires; that secret exists to stop the Unity
   MCP server and model-run child processes, which can read the app token, from
