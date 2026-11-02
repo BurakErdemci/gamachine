@@ -418,3 +418,185 @@ def test_route_copy_uses_the_chat_workspace(env):
                                                       "conversation_id": 1}).json()
     assert reply["ok"] is True, reply
     assert (project / "Assets" / "a.wav").read_bytes() == b"wav"
+
+
+# ---- turn 2: blocker fixes ----
+
+class ScriptedHost(Host):
+    """A host whose next non-download reply is merged with `extra` (a URL, a refusal, more notices)."""
+
+    def __init__(self, extra=None, tab_id=None, **kwargs):
+        super().__init__(**kwargs)
+        self.extra = dict(extra or {})
+        self.tab_id = tab_id
+
+    async def __call__(self, runtime, op, conversation_id, args):
+        reply = await super().__call__(runtime, op, conversation_id, args)
+        if op == "describe" and self.tab_id is not None:
+            reply["tab_id"] = self.tab_id
+        if op not in ("describe", "download_resume", "download_cancel", "download_info") and self.extra:
+            reply.update(self.extra)
+            self.extra = {}
+        return reply
+
+
+def tools(deck):
+    return [tool for _, tool, _ in deck.opened]
+
+
+def test_a_page_named_button_does_not_turn_another_approval_into_a_download_pass():
+    # blind SEC-1: the pass comes from the rule that opened the card, not from the card's text.
+    element = {"role": "button", "name": "Delete draft starts a download", "tag": "button"}
+    host = Host(element=element, notice=None)
+    handler, deck = gateway_for(host, {"status": "resolved", "approved": True})
+    assert run(handler, "click", {"snapshot_id": "s1", "ref": "4"})["ok"] is True
+    host.notice = dict(NOTICE)
+    run(handler, "scroll", {"direction": "down"})
+    assert tools(deck) == ["browser_click", "browser_download"]
+    assert policy.download_click("click", DOWNLOAD_LINK) is True
+    assert policy.download_click("click", element) is False
+    assert policy.download_click("click", {**DOWNLOAD_LINK, "name": "Delete"}) is False
+
+
+@pytest.mark.parametrize("case", ["page_change", "stop", "failed_click", "late", "other_tab", "other_file"])
+def test_the_click_pass_is_bound_to_its_click(case):
+    # blind LC-4: valid only for the first agent download within 10 s, on that tab, page and Stop generation.
+    state = dict(STATE)
+    clock = [100.0]
+    host = ScriptedHost(element=DOWNLOAD_LINK, notice=None, tab_id=7,
+                        extra={"ok": False, "error": "timeout"} if case == "failed_click" else None)
+    handler, deck = gateway_for(host, {"status": "resolved", "approved": True}, now=lambda: clock[0])
+    asyncio.run(handler.call(3, "click", {"snapshot_id": "s1", "ref": "4"}, lambda: dict(state)))
+    notice = dict(NOTICE, tab_id=7)
+    if case == "page_change":
+        host.extra = {"url": "https://other.example/"}
+    elif case == "stop":
+        state["stop_gen"] = 1
+    elif case == "late":
+        clock[0] += gateway.DOWNLOAD_CLICK_WINDOW_S + 1
+    elif case == "other_tab":
+        notice["tab_id"] = 8
+    elif case == "other_file":
+        notice.update(filename="other.zip", host="elsewhere.example")
+    host.notice = notice
+    reply = asyncio.run(handler.call(3, "scroll", {"direction": "down"}, lambda: dict(state)))
+    assert tools(deck) == ["browser_click", "browser_download"], (case, body(reply))
+    assert "approved_by" not in body(reply)["download"]
+
+
+def test_the_click_pass_covers_its_own_download_once():
+    host = ScriptedHost(element=DOWNLOAD_LINK, notice=None, tab_id=7)
+    handler, deck = gateway_for(host, {"status": "resolved", "approved": True})
+    run(handler, "click", {"snapshot_id": "s1", "ref": "4"})
+    host.notice = dict(NOTICE, tab_id=7)
+    host.extra = {"downloadsPending": [dict(NOTICE, id="dsecond", tab_id=7)]}
+    reply = body(run(handler, "scroll", {"direction": "down"}))
+    assert reply["download"]["approved_by"] == "the click card"
+    # Only the first: the second download of that reply gets its own card.
+    assert tools(deck) == ["browser_click", "browser_download"]
+    assert "approved_by" not in reply["downloadsPending"][0]
+
+
+def test_every_paused_download_of_one_reply_gets_its_card():
+    # blind LC-1: the host reports several; the gateway settles each.
+    blocked = dict(NOTICE, id="dblocked", filename="x.exe", state="blocked", reason=".exe files are never downloaded")
+    host = ScriptedHost(extra={"downloadsPending": [dict(NOTICE, id="dtwo", filename="two.mp3"), blocked]})
+    handler, deck = gateway_for(host, {"status": "resolved", "approved": True})
+    reply = body(run(handler, "scroll", {"direction": "down"}))
+    assert [params["filename"] for _, _, params in deck.opened] == ["pack.zip", "two.mp3"]
+    assert [(op, args.get("id")) for op, _, args in host.cmds if op == "download_resume"] == [
+        ("download_resume", "dabc123"), ("download_resume", "dtwo")]
+    assert reply["download"]["state"] == "progressing"
+    assert [d["state"] for d in reply["downloadsPending"]] == ["progressing", "blocked"]
+
+
+def test_unanswered_cards_of_several_downloads_all_need_approval():
+    host = ScriptedHost(extra={"downloadsPending": [dict(NOTICE, id="dtwo", filename="two.mp3")]})
+    handler, deck = gateway_for(host, None)
+    reply = body(run(handler, "scroll", {"direction": "down"}))
+    assert reply["needs_approval"] is True
+    assert "note" in reply["download"] and "note" in reply["downloadsPending"][0]
+
+
+def test_a_user_control_refusal_still_opens_the_download_card():
+    # blind LC-2: the refusal drops the reply, not the paused download.
+    host = ScriptedHost(notice=None, extra={"ok": False, "error": "user_control", "download": dict(NOTICE)})
+    handler, deck = gateway_for(host, {"status": "resolved", "approved": False})
+    reply = run(handler, "snapshot", {})
+    assert reply == {"ok": False, "error": gateway.USER_CONTROL}
+    assert tools(deck) == ["browser_download"]
+    assert "download_cancel" in host.ops()
+
+
+def test_blocked_type_list_has_the_windows_launchers_installers_and_images():
+    # blind SEC-4 (the agreed set).
+    for suffix in ("url", "msixbundle", "appxbundle", "appinstaller", "application", "gadget", "vb", "ws", "sct", "chm",
+                   "inf", "msp", "mst", "jnlp", "xll", "xla", "xlam", "scf", "iso", "img", "vhd", "vhdx", "library-ms",
+                   "settingcontent-ms", "diagcab", "website", "lnk", "scr", "hta", "cpl"):
+        assert policy.agent_blocked_suffix(f"file.pdf.{suffix.upper()}. ") == f".{suffix}"
+        assert policy.project_copy_refusal(f"Assets/file.{suffix}")
+    assert policy.agent_blocked_suffix("song.wav") == ""
+
+
+@pytest.mark.parametrize("name,dest", [
+    ("pre-commit", ".git/hooks/pre-commit"),
+    ("tasks.json", ".vscode/tasks.json"),
+    ("a.png", "ProjectSettings/a.png"),
+    ("a.png", "Packages/a.png"),
+    ("a.png", "Assets/.hidden/a.png"),
+    ("a.png", "Assets/.a.png"),
+    ("a.png", "Assets/Plugins./a.png"),
+    ("a.png", "Assets/Editor./a.png"),
+    ("a.png", "Assets/PLUGINS /a.png"),
+    ("a.png", "Assets/Plugins​/a.png"),
+    ("a.png", "Assets/Art/a?.png"),
+    ("a.png", "Assets/Art/a.png."),
+    ("a.png", "Assets/Art/a\u0001.png"),
+    ("readme", "Assets/readme"),
+    ("a.png", "Assets/a"),
+])
+def test_copies_only_into_assets_with_plain_names_and_a_type(places, name, dest):
+    # blind SEC-2, SEC-3: Assets/ only, no dot names, nothing Windows would rename, a file type on both ends.
+    (places.project / ".git" / "hooks").mkdir(parents=True)
+    (places.project / ".vscode").mkdir()
+    reply, host = copy(places, completed(places, name), dest)
+    assert reply["ok"] is False, reply
+    assert not [p for p in places.project.rglob("*") if p.is_file()]
+
+
+def test_copy_into_assets_is_case_insensitive(places):
+    reply, _ = copy(places, completed(places, "a.wav"), "assets/Audio/a.wav")
+    assert reply["ok"] is True, reply
+    assert (places.project / "Assets" / "Audio" / "a.wav").is_file()
+
+
+def test_a_page_change_keeps_an_open_download_card(env, monkeypatch):
+    # blind LC-3: a download often moves the page; its card stays until answered.
+    first = downloads(env)
+    assert json.loads(first["text"])["download"]["state"] == "awaiting_approval"
+    assert len(cards.list_pending()) == 1
+    env.client.post("/browser/command", json={"tool": "browser_scroll", "args": {"direction": "down"}, "conversation_id": 1})
+    original = Host.__call__
+
+    async def moved(self, runtime, op, conversation_id, args):
+        reply = await original(self, runtime, op, conversation_id, args)
+        return {**reply, "url": "https://files.example/thanks"} if "url" in reply else reply
+    monkeypatch.setattr(RouteHost, "__call__", moved)
+    env.client.post("/browser/command", json={"tool": "browser_scroll", "args": {"direction": "down"}, "conversation_id": 1})
+    time.sleep(0.3)
+    [pending] = cards.list_pending()
+    assert "download_cancel" not in env.host.ops()
+    env.client.post(f"/mcp-approval-respond/{pending['card_id']}", json={"approved": True}, headers=UI)
+    assert wait_for(lambda: "download_resume" in env.host.ops()), env.host.ops()
+
+
+@pytest.mark.parametrize("language", ["EN", "TR"])
+def test_the_agent_guide_tells_the_download_rules(language):
+    # blind ADJ-1: the guide injected into every browser turn names the tools and the rules.
+    import agent_guide
+    text = getattr(agent_guide, f"BROWSER_GUIDE_{language}")
+    for needle in ("browser_downloads", "browser_download_to_project", "Assets/", ".exe", ".lnk", ".iso"):
+        assert needle in text, needle
+    card_off = {"EN": "none when the user turned browser cards off", "TR": "kartlarını kapattıysa kart çıkmaz"}
+    one_card = {"EN": "one approval card", "TR": "bir kez onay kartı"}
+    assert card_off[language] in text and one_card[language] in text

@@ -17,7 +17,7 @@ afterEach(() => {
 })
 
 const DIR = path.join('C:', 'Users', 'u', 'Downloads')
-const APPROVAL_MS = 10 * 60_000
+const APPROVAL_MS = 3 * 60_000
 
 function fakeView(id: number) {
   const wc: any = new EventEmitter()
@@ -128,6 +128,16 @@ describe('download file names', () => {
     expect(agentBlockedType('pack.zip')).toBeNull()
     expect(AGENT_BLOCKED_DOWNLOAD_TYPES.has('dll')).toBe(true)
   })
+
+  it('blocks the Windows launcher, installer, disk image and script types too', () => {
+    for (const ext of ['url', 'msixbundle', 'appxbundle', 'appinstaller', 'application', 'gadget', 'vb', 'ws', 'sct', 'chm',
+      'inf', 'msp', 'mst', 'jnlp', 'xll', 'xla', 'xlam', 'scf', 'iso', 'img', 'vhd', 'vhdx', 'library-ms', 'settingcontent-ms',
+      'diagcab', 'website', 'lnk', 'scr', 'hta', 'cpl']) {
+      expect(agentBlockedType(`file.${ext}`)).toBe(ext)
+      expect(agentBlockedType(`file.pdf.${ext.toUpperCase()}. `)).toBe(ext)
+    }
+    expect(agentBlockedType('photo.png')).toBeNull()
+  })
 })
 
 describe('BrowserHost downloads', () => {
@@ -177,7 +187,7 @@ describe('BrowserHost downloads', () => {
     expect(item.pause).toHaveBeenCalled()
     const reply = await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
     expect(reply.download).toEqual({ id: expect.stringMatching(/^d[0-9a-f]{12}$/), filename: 'theme.mp3', bytes: 2048,
-      host: 'cdn.files.example', state: 'awaiting_approval' })
+      host: 'cdn.files.example', state: 'awaiting_approval', tab_id: expect.any(Number) })
     expect(JSON.stringify(reply)).not.toContain('Downloads')
     expect((await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })).download).toBeUndefined()
   })
@@ -204,7 +214,8 @@ describe('BrowserHost downloads', () => {
       expect(item.pause).not.toHaveBeenCalled()
     }
     const reply = await f.host.handle({ op: 'downloads', conversation_id: 4, args: {} })
-    expect(reply.download).toMatchObject({ filename: 'invoice.pdf.exe', state: 'blocked', reason: expect.stringContaining('.exe') })
+    expect(reply.download).toMatchObject({ filename: 'setup.exe', state: 'blocked', reason: expect.stringContaining('.exe') })
+    expect(reply.downloadsPending).toMatchObject([{ filename: 'invoice.pdf.exe', state: 'blocked' }])
     expect((reply.downloads as any[]).map((d) => d.state)).toEqual(['blocked', 'blocked'])
   })
 
@@ -261,14 +272,14 @@ describe('BrowserHost downloads', () => {
     expect(second.item.cancel).toHaveBeenCalled()
   })
 
-  it('cancels a paused agent download nobody answered for 10 minutes', async () => {
+  it('cancels a paused agent download nobody answered for 3 minutes', async () => {
     const f = fixture()
     const wc = await agentTab(f)
     const { item } = download(f, wc, 'late.ogg')
     expect(f.approvals).toHaveLength(1)
     f.approvals[0]()
     expect(item.cancel).toHaveBeenCalled()
-    expect((await list(f))[0]).toMatchObject({ state: 'cancelled', reason: expect.stringContaining('10 minutes') })
+    expect((await list(f))[0]).toMatchObject({ state: 'cancelled', reason: expect.stringContaining('3 minutes') })
   })
 
   it('tracks progress and completion, gives the save path only to download_info, and shows it in the folder', async () => {
@@ -293,6 +304,82 @@ describe('BrowserHost downloads', () => {
     expect(await f.host.invoke({ op: 'download_show', conversationId: 5, id: entry.id })).toEqual({ error: 'no_download' })
     expect(await f.host.invoke({ op: 'download_show', conversationId: 4, id: entry.id })).toEqual({ ok: true })
     expect(f.showItemInFolder).toHaveBeenCalledWith(path.join(DIR, 'pack.zip'))
+  })
+
+  it('reports every agent download of one reply, so none waits for a card that never comes', async () => {
+    const f = fixture()
+    const wc = await agentTab(f)
+    download(f, wc, 'one.mp3')
+    download(f, wc, 'two.mp3')
+    download(f, wc, 'three.exe')
+    const reply = await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    expect(reply.download).toMatchObject({ filename: 'one.mp3', state: 'awaiting_approval' })
+    expect(reply.downloadsPending).toMatchObject([{ filename: 'two.mp3', state: 'awaiting_approval' }, { filename: 'three.exe', state: 'blocked' }])
+    const next = await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    expect(next.download).toBeUndefined()
+    expect(next.downloadsPending).toBeUndefined()
+  })
+
+  it("counts a download after the user's own navigate, reload, back or forward in the agent tab as the user's", async () => {
+    const f = fixture()
+    const wc = await agentTab(f)
+    f.clock.now += 10_000
+    await f.host.invoke({ op: 'navigate', conversationId: 4, url: 'https://files.example/setup.exe' })
+    const typed = download(f, wc, 'setup.exe')
+    expect(typed.item.cancel).not.toHaveBeenCalled()
+    expect(typed.item.pause).not.toHaveBeenCalled()
+    expect(typed.item.setSavePath).toHaveBeenCalledWith(path.join(DIR, 'setup.exe'))
+    f.clock.now += 10_000
+    await f.host.invoke({ op: 'reload', conversationId: 4 })
+    expect(download(f, wc, 'a.mp3').item.pause).not.toHaveBeenCalled()
+    // An agent command still running does not take back a user navigation that came after it started.
+    let release!: () => void
+    wc.executeJavaScriptInIsolatedWorld.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({}) }))
+    f.clock.now += 10_000
+    const running = f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    await f.host.invoke({ op: 'reload', conversationId: 4 })
+    expect(download(f, wc, 'b.exe').item.cancel).not.toHaveBeenCalled()
+    release()
+    await running
+    // Past GESTURE_MS the agent tab is the agent's again.
+    f.clock.now += 10_000
+    expect(download(f, wc, 'c.exe').item.cancel).toHaveBeenCalled()
+  })
+
+  it('keeps notices out of a user_control refusal and hands a paused download to the user who took the tab', async () => {
+    const f = fixture()
+    const wc = await agentTab(f)
+    const paused = download(f, wc, 'one.mp3')
+    const blocked = download(f, wc, 'two.exe')
+    await f.host.invoke({ op: 'take-over', conversationId: 4 })
+    // The user drives now: the paused one goes on as theirs, the blocked one stays blocked.
+    expect(paused.item.resume).toHaveBeenCalled()
+    expect(blocked.item.resume).not.toHaveBeenCalled()
+    const refused = await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })
+    expect(refused).toMatchObject({ ok: false, error: 'user_control' })
+    expect(refused.download).toBeUndefined()
+    const next = await f.host.handle({ op: 'downloads', conversation_id: 4, args: {} })
+    expect(next.download).toMatchObject({ filename: 'one.mp3', state: 'progressing' })
+    expect(next.downloadsPending).toMatchObject([{ filename: 'two.exe', state: 'blocked' }])
+    expect(await f.host.handle({ op: 'download_resume', conversation_id: 4, args: { id: (next.download as any).id } }))
+      .toMatchObject({ ok: false, error: 'not_awaiting_approval' })
+    // A download that lands right after an agent command but after the take-over is the user's at once.
+    const late = download(f, wc, 'three.mp3')
+    expect(late.item.resume).toHaveBeenCalled()
+    expect((await list(f)).find((d) => d.filename === 'three.mp3')).toMatchObject({ state: 'progressing' })
+  })
+
+  it("names the tab in the gateway's describe and in the notice, so a click pass is bound to it", async () => {
+    const f = fixture()
+    const wc = await agentTab(f)
+    document.body.innerHTML = '<a href="https://files.example/pack.zip">Get</a>'
+    const snap = await f.host.handle({ op: 'snapshot', conversation_id: 4, args: {} })
+    const described = await f.host.handle({ op: 'describe', conversation_id: 4, args: { snapshot_id: snap.snapshot_id, ref: '1' } })
+    expect(described.tab_id).toEqual(expect.any(Number))
+    download(f, wc, 'pack.zip')
+    expect((await f.host.handle({ op: 'scroll', conversation_id: 4, args: { direction: 'down' } })).download)
+      .toMatchObject({ filename: 'pack.zip', tab_id: described.tab_id })
   })
 
   it('waits with wait_ms while a download is still progressing', async () => {

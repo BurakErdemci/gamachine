@@ -63,7 +63,9 @@ const MAX_CLEAR_IDS = 200
 // A download that starts this soon after an agent command on its tab is the agent's (unless the user just clicked).
 const AGENT_COMMAND_MS = 3_000
 // A paused agent download nobody answered is cancelled after this long.
-const DOWNLOAD_APPROVAL_MS = 10 * 60_000
+// Just past the backend's 170 s card sweep (MCP_PENDING_TTL), which cancels an unanswered download first;
+// this is the backstop when no backend is listening.
+const DOWNLOAD_APPROVAL_MS = 3 * 60_000
 const MAX_DOWNLOAD_WAIT_MS = 30_000
 const DOWNLOAD_POLL_MS = 250
 const DOWNLOAD_EMIT_MS = 500
@@ -76,7 +78,9 @@ const MAX_DOWNLOAD_NAME = 180
  */
 export const AGENT_BLOCKED_DOWNLOAD_TYPES: ReadonlySet<string> = new Set(['exe', 'msi', 'msix', 'appx', 'bat', 'cmd', 'com',
   'ps1', 'psm1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'scr', 'pif', 'cpl', 'msc', 'hta', 'reg', 'lnk', 'dll', 'sys', 'jar',
-  'py', 'pyw', 'sh', 'bash', 'zsh', 'dmg', 'pkg', 'app', 'appimage', 'deb', 'rpm', 'apk', 'command'])
+  'py', 'pyw', 'sh', 'bash', 'zsh', 'dmg', 'pkg', 'app', 'appimage', 'deb', 'rpm', 'apk', 'command', 'url', 'msixbundle',
+  'appxbundle', 'appinstaller', 'application', 'gadget', 'vb', 'ws', 'sct', 'chm', 'inf', 'msp', 'mst', 'jnlp', 'xll', 'xla',
+  'xlam', 'scf', 'iso', 'img', 'vhd', 'vhdx', 'library-ms', 'settingcontent-ms', 'diagcab', 'website', 'wsc', 'pyz', 'pyc'])
 const DOWNLOAD_OPS = new Set(['downloads', 'download_resume', 'download_cancel', 'download_info'])
 const KEYS: Record<string, string> = {
   Enter: 'Enter', Tab: 'Tab', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left',
@@ -133,6 +137,8 @@ export function uniqueDownloadPath(dir: string, name: string, taken: (file: stri
 interface DownloadEntry {
   id: string
   conversationId: number
+  /** The tab whose page started it. */
+  tabId: number
   origin: 'agent' | 'user'
   filename: string
   savePath: string
@@ -946,6 +952,8 @@ interface Tab {
   busy: number
   /** When the last agent command on this tab ended; null if none ran. */
   lastAgentCommandAt: number | null
+  /** When the user last navigated, reloaded or went back/forward in this tab from the panel; null if never. */
+  lastUserNavigationAt: number | null
   lastUsed: number
 }
 
@@ -1019,8 +1027,8 @@ export class BrowserHost {
   private readonly pageOpens = new Map<number, number[]>()
   /** Every download of this run, by id; an entry names its chat. */
   private readonly downloads = new Map<string, DownloadEntry>()
-  /** Per chat: the newest agent download its next agent reply reports. */
-  private readonly downloadNotices = new Map<number, string>()
+  /** Per chat: the agent downloads its next agent reply reports, oldest first. */
+  private readonly downloadNotices = new Map<number, string[]>()
   private clock = 0
   private bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
   private readonly hostCache = new Map<string, { blocked: true; at: number }>()
@@ -1173,7 +1181,7 @@ export class BrowserHost {
     } catch { return refuse() }
     let host = ''
     try { host = new URL(url).hostname } catch { /* a data: or blob: download has no host */ }
-    const entry: DownloadEntry = { id: `d${randomBytes(6).toString('hex')}`, conversationId: tab.conversationId, origin, filename,
+    const entry: DownloadEntry = { id: `d${randomBytes(6).toString('hex')}`, conversationId: tab.conversationId, tabId: tab.id, origin, filename,
       savePath: '', totalBytes: total > 0 ? total : 0, receivedBytes: 0, host, mime, state: 'progressing', startedAt: now,
       item, timer: null, lastEmit: 0 }
     const blocked = origin === 'agent' ? agentBlockedType(filename) : null
@@ -1188,7 +1196,7 @@ export class BrowserHost {
         try { item.pause() } catch { return refuse() }
         entry.state = 'awaiting_approval'
         entry.timer = this.later(() => {
-          if (entry.state === 'awaiting_approval') this.cancelDownload(entry, 'nobody approved it within 10 minutes')
+          if (entry.state === 'awaiting_approval') this.cancelDownload(entry, 'nobody approved it within 3 minutes')
         }, DOWNLOAD_APPROVAL_MS)
       }
       item.on('updated', (_event, state) => {
@@ -1207,18 +1215,22 @@ export class BrowserHost {
       })
     }
     this.downloads.set(entry.id, entry)
-    if (origin === 'agent') this.downloadNotices.set(entry.conversationId, entry.id)
+    if (origin === 'agent') this.downloadNotices.set(entry.conversationId, [...(this.downloadNotices.get(entry.conversationId) ?? []), entry.id])
     this.trimDownloads(entry.conversationId)
-    this.emitDownloads(entry)
+    // The user already holds the tab: they drive, so a paused agent download is theirs.
+    if (entry.state === 'awaiting_approval' && tab.userControl) this.handToUser(entry)
+    else this.emitDownloads(entry)
   }
 
   /**
    * Agent or user, from host-side tab state only (the page cannot tell an agent click from a user's). The user's
-   * own input just before wins; then an agent command running on the tab or just ended; otherwise the agent tab
-   * is the agent's unless the user has taken it over.
+   * own input just before wins (a key or click in the page, or a navigation from the panel), even over an agent
+   * command still running; then an agent command running on the tab or just ended; otherwise the agent tab is the
+   * agent's unless the user has taken it over.
    */
   private downloadOrigin(tab: Tab, now: number): 'agent' | 'user' {
     if (tab.lastGesture !== null && now - tab.lastGesture <= GESTURE_MS) return 'user'
+    if (tab.lastUserNavigationAt !== null && now - tab.lastUserNavigationAt <= GESTURE_MS) return 'user'
     if (tab.busy > 0 || (tab.lastAgentCommandAt !== null && now - tab.lastAgentCommandAt <= AGENT_COMMAND_MS)) return 'agent'
     return tab.agent && !tab.userControl ? 'agent' : 'user'
   }
@@ -1230,6 +1242,20 @@ export class BrowserHost {
       if (entry.savePath.toLowerCase() === key && (entry.state === 'awaiting_approval' || entry.state === 'progressing')) return true
     }
     return (this.deps.fileExists ?? existsSync)(file)
+  }
+
+  private resumeDownload(entry: DownloadEntry): void {
+    if (entry.timer) this.clear(entry.timer)
+    entry.timer = null
+    entry.state = 'progressing'
+    try { entry.item.resume() } catch { this.cancelDownload(entry, 'the download could not be resumed') }
+    this.emitDownloads(entry)
+  }
+
+  /** A paused agent download in a tab the user took over becomes the user's own: no card, it just goes on. */
+  private handToUser(entry: DownloadEntry): void {
+    entry.origin = 'user'
+    this.resumeDownload(entry)
   }
 
   private cancelDownload(entry: DownloadEntry, reason: string): void {
@@ -1262,14 +1288,16 @@ export class BrowserHost {
     this.emitLive(entry.conversationId)
   }
 
-  /** The newest agent download not yet reported to the agent, once. */
-  private takeDownloadNotice(conversationId: number): Omit<DownloadView, 'received'> | null {
-    const id = this.downloadNotices.get(conversationId)
+  /** Every agent download not yet reported to the agent, oldest first, once each. */
+  private takeDownloadNotices(conversationId: number): (Omit<DownloadView, 'received'> & { tab_id: number })[] {
+    const ids = this.downloadNotices.get(conversationId) ?? []
     this.downloadNotices.delete(conversationId)
-    const entry = id === undefined ? undefined : this.downloads.get(id)
-    if (!entry) return null
-    const { received: _received, ...notice } = this.downloadView(entry)
-    return notice
+    return ids.flatMap((id) => {
+      const entry = this.downloads.get(id)
+      if (!entry) return []
+      const { received: _received, ...notice } = this.downloadView(entry)
+      return [{ ...notice, tab_id: entry.tabId }]
+    })
   }
 
   /** downloads, download_resume, download_cancel, download_info: this chat's entries only. */
@@ -1294,11 +1322,7 @@ export class BrowserHost {
     }
     if (entry.state !== 'awaiting_approval') return { ok: false, error: 'not_awaiting_approval', download: this.downloadView(entry), ...page }
     if (op === 'download_resume') {
-      if (entry.timer) this.clear(entry.timer)
-      entry.timer = null
-      entry.state = 'progressing'
-      try { entry.item.resume() } catch { this.cancelDownload(entry, 'the download could not be resumed') }
-      this.emitDownloads(entry)
+      this.resumeDownload(entry)
     } else {
       this.cancelDownload(entry, 'the user did not approve it')
     }
@@ -1414,7 +1438,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, shows: null, faviconSeq: 0, target: null, gone, markGone, expected: [], busy: 0, lastAgentCommandAt: null, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, shows: null, faviconSeq: 0, target: null, gone, markGone, expected: [], busy: 0, lastAgentCommandAt: null, lastUserNavigationAt: null, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -1655,6 +1679,11 @@ export class BrowserHost {
   private setUserControl(tab: Tab, on: boolean): void {
     if (tab.userControl === on) return
     tab.userControl = on
+    if (on) {
+      for (const entry of this.downloads.values()) {
+        if (entry.tabId === tab.id && entry.origin === 'agent' && entry.state === 'awaiting_approval') this.handToUser(entry)
+      }
+    }
     this.emitLive(tab.conversationId)
   }
 
@@ -2563,6 +2592,7 @@ export class BrowserHost {
         if (!tab) return tabId === undefined ? this.openUserTab(conversationId, url) : { error: 'no_tab' }
         this.touch(tab)
         tab.userTouched = true
+        tab.lastUserNavigationAt = this.now()
         this.load(tab, url as string)
         this.emitLive(conversationId)
         return this.livePayload(conversationId)
@@ -2578,6 +2608,7 @@ export class BrowserHost {
         const wc = tab.view.webContents
         const history = wc.navigationHistory
         if (op !== 'reload' && (op === 'back' ? !history.canGoBack() : !history.canGoForward())) return { error: 'no_history' }
+        tab.lastUserNavigationAt = this.now()
         if (op === 'reload') wc.reload()
         else if (op === 'back') history.goBack()
         else history.goForward()
@@ -2869,16 +2900,20 @@ export class BrowserHost {
   }
 
   /**
-   * Entry point for the command server; always resolves to a reply object. Like a blocked pop-up, an agent download
-   * the host blocked or paused is reported once, in the chat's next reply. Not in the gateway's own describe (its
-   * reply never reaches the agent) nor in resume, cancel and info, whose `download` is the entry they act on.
+   * Entry point for the command server; always resolves to a reply object. Like a blocked pop-up, every agent
+   * download the host blocked or paused is reported once, in the chat's next reply: the oldest as `download`, the
+   * others in `downloadsPending`. Not in the gateway's own describe (its reply never reaches the agent), nor in
+   * resume, cancel and info, whose `download` is the entry they act on, nor in a user_control refusal, which the
+   * gateway turns into a bare error.
    */
   async handle(cmd: BrowserCommand): Promise<Reply> {
     const reply = await this.command(cmd)
     const id = this.commandConversation(cmd)
-    if (id !== null && cmd.op !== 'halt' && cmd.op !== 'describe' && (cmd.op === 'downloads' || !DOWNLOAD_OPS.has(cmd.op))) {
-      const notice = this.takeDownloadNotice(id)
-      if (notice) reply.download = notice
+    if (id !== null && cmd.op !== 'halt' && cmd.op !== 'describe' && reply.error !== 'user_control'
+        && (cmd.op === 'downloads' || !DOWNLOAD_OPS.has(cmd.op))) {
+      const [first, ...rest] = this.takeDownloadNotices(id)
+      if (first) reply.download = first
+      if (rest.length) reply.downloadsPending = rest
     }
     return reply
   }
@@ -2918,6 +2953,7 @@ export class BrowserHost {
       const extra = halted() ? { error: 'halted' } : result
       reply = { ok: !extra.error, ...extra, ...this.base(wc) } as Reply
       if (!extra.error) delete reply.error
+      if (cmd.op === 'describe') reply.tab_id = tab.id
     } catch (error) {
       // After a Stop the failure is the Stop's: the page was cut off, not broken.
       reply = { ok: false, error: halted() ? 'halted' : error instanceof Error ? error.message : String(error), ...this.base(wc) }

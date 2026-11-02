@@ -316,27 +316,35 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
   base name (`downloadName`: last path part, no control/bidi/reserved characters, no leading dots) made unique as
   "name (n).ext" (`uniqueDownloadPath`), never overwriting a file or another running download's path.
 - Origin comes from host-side tab state only, since an agent click and a user click look the same to the page:
-  USER when the user pressed a key or mouse button in that tab within `GESTURE_MS`; else AGENT when an agent
+  USER when the user pressed a key or mouse button in that tab, or navigated, reloaded or went back/forward in it
+  from the panel (`lastUserNavigationAt`), within `GESTURE_MS`, even while an agent command runs; else AGENT when an agent
   command runs on the tab or ended at most 3 s ago (`lastAgentCommandAt`), or the tab is the agent tab and the
   user has not taken it over; else USER.
 - USER downloads start at once, with no card and no type limit.
 - AGENT downloads of a blocked type (`AGENT_BLOCKED_DOWNLOAD_TYPES` in the host, `AGENT_BLOCKED_DOWNLOAD_SUFFIXES` in
   `browser_use/policy.py`; the last extension decides, so `.pdf.exe` is an `.exe`) are cancelled before any card,
-  cards on or off. Any other agent download is paused (`awaiting_approval`) and reported once as `download` in the
-  chat's next agent reply. Unanswered for 10 minutes, it is cancelled.
-- The gateway gives each paused download exactly one approval: a click card approved with a "starts a download"
-  reason within the last 60 s covers it; otherwise `_browser_card(owner, 'browser_download', {filename, bytes, host,
+  cards on or off. Any other agent download is paused (`awaiting_approval`). Every agent download is reported once
+  in the chat's next agent reply that is not a `user_control` refusal: the oldest as `download`, the others in
+  `downloadsPending`, each with the `tab_id` it came from. Its card closes unanswered after about 3 minutes like any card, and the download is cancelled. When the user
+  takes over the tab, its paused agent downloads become USER downloads and resume (blocked ones stay blocked).
+- The gateway gives each paused download exactly one approval. A click whose card opened because the link
+  downloads (`policy.download_click`, the rule that decided, never the card text) leaves a one-time pass once the click
+  succeeds: it covers the first paused download of that chat within 10 s, on the tab of the click's describe
+  (`tab_id`), with the same page and Stop generation, whose host or file name matches the link's. A page change, a
+  Stop or a failed click drops it. Otherwise `_browser_card(owner, 'browser_download', {filename, bytes, host,
   page_url, risky, risk_reason})` opens a card (allowed at once when browser cards are off; no grant is kept). Approve
   sends `download_resume`, reject or deny `download_cancel`. A card still open after the 2 s wait returns
-  `needs_approval`; the gateway keeps polling that card and resumes or cancels when it is answered.
+  `needs_approval`; the gateway keeps polling that card and resumes or cancels when it is answered. A page change
+  leaves an open download card alone (`_drop_browser_grants` keeps `browser_download`); a Stop still rejects it.
 - Host ops: `downloads {wait_ms?}` (agent; waits up to 30 s while one is progressing), `download_resume {id}`,
   `download_cancel {id}` (gateway only, this chat's paused entries only), `download_info {id}` (gateway only,
   completed entries, the only reply with the save path). The panel gets the chat's last 5 downloads in the
   `browser-live` payload and `download_show {id}` opens a completed one with `shell.showItemInFolder`.
-- `browser_download_to_project {id, dest, overwrite?}` runs in the gateway: dest relative to the chat's project
-  (`db.get_last_workspace`), the same file type as the download, no absolute path, `..`, link or junction on the way,
-  no Plugins/Editor folder, no blocked or code type (`AGENT_BLOCKED_PROJECT_SUFFIXES`), the source inside the
-  Downloads folder, overwrite only under `Assets/`. The path checks are `path_containment.resolve_within` and
+- `browser_download_to_project {id, dest, overwrite?}` runs in the gateway: dest under `Assets/` of the chat's
+  project (`db.get_last_workspace`), the same file type as the download (both need one), no absolute path, `..`,
+  link or junction on the way, no name starting with a dot, ending in a dot or space or holding `<>:"|?*` or
+  control/format characters (`policy.project_dest_refusal`), no Plugins/Editor folder, no blocked or code type
+  (`AGENT_BLOCKED_PROJECT_SUFFIXES`), the source inside the Downloads folder. The path checks are `path_containment.resolve_within` and
   `unity_file_guard.check_write`, the same as agent file writes.
 - Windows marks every saved file with a `Zone.Identifier` (ZoneId=3), so SmartScreen still applies (measured 2 Nov
   2026 on Electron 34).

@@ -799,11 +799,13 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
 
     def _reject_computer_use_pending(conversation_id: Optional[int] = None,
                                      reason: str = computer_gate.INACTIVE_REASON,
-                                     decision: str = "mode_switch", flag: str = "computer_use"):
-        """Reject open computer (or, with flag="browser_use", browser) cards: all of them, or one conversation's."""
+                                     decision: str = "mode_switch", flag: str = "computer_use",
+                                     keep_tool: Optional[str] = None):
+        """Reject open computer (or, with flag="browser_use", browser) cards: all of them, or one conversation's;
+        a card for keep_tool stays open."""
         rejected = 0
         for gate_id, entry in list(_mcp_pending.items()):
-            if not entry.get(flag):
+            if not entry.get(flag) or (keep_tool is not None and entry.get("tool") == keep_tool):
                 continue
             if (conversation_id is not None and entry.get("conversation_id") != conversation_id
                     and entry.get("claimed_conversation_id") != conversation_id):
@@ -940,9 +942,11 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
 
     def _drop_browser_grants(conversation_id: int) -> None:
         """The gateway's report that this chat's tab changed page: this chat's browser cards and
-        grants belonged to the old page; other chats' tabs are untouched."""
+        grants belonged to the old page; other chats' tabs are untouched. A download card stays: the
+        paused file does not belong to a page, and a download often moves the page itself."""
         _browser_page_gen[conversation_id] = _browser_page_gen.get(conversation_id, 0) + 1
-        _reject_computer_use_pending(conversation_id, BROWSER_NAVIGATION_REASON, "browser_navigation", flag="browser_use")
+        _reject_computer_use_pending(conversation_id, BROWSER_NAVIGATION_REASON, "browser_navigation", flag="browser_use",
+                                     keep_tool="browser_download")
         _forget_browser_approvals(conversation_id)
 
     def _chat_workspace(conversation_id: int) -> Optional[str]:

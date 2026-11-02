@@ -12,7 +12,7 @@ import os
 import re
 import shutil
 import time
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -43,11 +43,12 @@ DOWNLOAD_NEEDS_APPROVAL = (
     "needs_approval: the download of {name} is paused and an approval card is open in the chat. It starts "
     "as soon as the user approves it; check it with browser_downloads instead of clicking again."
 )
-# A click approved as "starts a download" approves the download it starts, if one arrives this soon.
-DOWNLOAD_CLICK_WINDOW_S = 60.0
+# A click whose card opened because it starts a download approves the first agent download of that chat, if
+# it arrives this soon after the click, on the same tab, page and Stop generation, and fits the link.
+DOWNLOAD_CLICK_WINDOW_S = 10.0
 # How long a card answered after the in-call wait still resumes or cancels its download; the host
-# cancels a paused download on its own after 10 minutes.
-DOWNLOAD_SETTLE_S = 610.0
+# cancels a paused download on its own after 3 minutes (the card itself is swept at 170 s).
+DOWNLOAD_SETTLE_S = 190.0
 _SETTLE_POLL_S = 0.5
 _DOWNLOAD_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _ELEMENT_OPS = frozenset({"click", "fill", "select"})
@@ -85,6 +86,14 @@ def _refusal(text, **extra) -> dict:
 def _host_of(url) -> str:
     try:
         return urlsplit(url).hostname or ""
+    except ValueError:
+        return ""
+
+
+def _file_of(url) -> str:
+    """The last path part of a link ('' for none or an invalid URL)."""
+    try:
+        return unquote(urlsplit(url).path.rsplit("/", 1)[-1])
     except ValueError:
         return ""
 
@@ -186,8 +195,9 @@ class BrowserGateway:
         self._drop_grants = drop_grants
         self._now = now
         self._workspace = workspace
-        # Per chat: when a click approved as "starts a download" ran; the next paused download spends it.
-        self._download_clicks: dict[int, float] = {}
+        # Per chat: the one-time pass of a click approved because it starts a download (see _gate); the
+        # chat's next paused download spends it, a page change or a failed click drops it.
+        self._download_clicks: dict[int, dict] = {}
         # Cards answered after the call returned: kept so the loop does not drop the task.
         self._settling: set = set()
         # Per chat, as the last host reply showed it: every chat has its own tab.
@@ -204,16 +214,20 @@ class BrowserGateway:
         if not isinstance(reply, dict):
             return {"ok": False, "error": "The browser sent an invalid reply."}
         if reply.get("ok") is False and reply.get("error") == "user_control":
-            # The user holds the tab: not a page change, nothing is dropped.
-            return {"ok": False, "error": USER_CONTROL}
+            # The user holds the tab: not a page change, nothing is dropped. Download notices stay, so a
+            # paused download still gets its card.
+            return {"ok": False, "error": USER_CONTROL,
+                    **{key: reply[key] for key in ("download", "downloadsPending") if key in reply}}
         # Any reply that shows another URL, failed ones included (a load error or a click's navigation
         # timeout still leaves the view on the new page), is a page change; it is reported before the
         # new URL becomes the baseline. A successful navigation op is one even on the same URL.
         url = reply.get("url")
         known = self._page_url.get(conversation_id)
         moved = isinstance(url, str) and known is not None and url != known
-        if (moved or (op in _PAGE_CHANGE_OPS and reply.get("ok") is True)) and self._drop_grants is not None:
-            self._drop_grants(conversation_id)
+        if moved or (op in _PAGE_CHANGE_OPS and reply.get("ok") is True):
+            self._download_clicks.pop(conversation_id, None)
+            if self._drop_grants is not None:
+                self._drop_grants(conversation_id)
         if isinstance(url, str):
             self._page_url[conversation_id] = url
         return reply
@@ -231,12 +245,13 @@ class BrowserGateway:
             await asyncio.sleep(_POLL_S)
 
     async def _gate(self, before, conversation_id, op, args, state):
-        """(refusal, runtime): a refusal (dict) for a step that may not run, or None and the runtime to
-        send it to, taken from a state read after the describe and after any approval wait."""
+        """(refusal, runtime, download pass): a refusal (dict) for a step that may not run, or None and the
+        runtime to send it to, taken from a state read after the describe and after any approval wait; the
+        pass is set when the approved card opened because the click starts a download, else None."""
         runtime, _ = _usable(before)
         if op == "press":
             if args["key"].casefold() != "enter":
-                return None, runtime
+                return None, runtime, None
             # The host sends the key to whatever has focus, so that is what gets described.
             target = {"focused": True}
         else:
@@ -248,18 +263,18 @@ class BrowserGateway:
         mark = state()
         runtime, refusal = _recheck(before, mark, same_page=False)
         if refusal:
-            return _refusal(refusal), None
+            return _refusal(refusal), None, None
         if described.get("error") == USER_CONTROL:
-            return _refusal(USER_CONTROL), None
+            return _refusal(USER_CONTROL), None, None
         if described.get("ok") is not True:
             if op != "press":
-                return _refusal(str(described.get("error") or "The element could not be described.")), None
+                return _refusal(str(described.get("error") or "The element could not be described.")), None, None
         else:
             element, url = described.get("element"), str(described.get("url") or "")
         reason = (policy.critical_reason(op, element) if element is not None
                   else "Enter was pressed with no known target, so it could submit a form")
         if not reason:
-            return None, runtime
+            return None, runtime, None
         host = _host_of(url)
         shown = f"{reason} (page {host})" if host else reason
         element = element if isinstance(element, dict) else {}
@@ -278,27 +293,32 @@ class BrowserGateway:
         })
         result = await self._card_result(decision)
         if result is None:
-            return _refusal(NEEDS_APPROVAL.format(reason=shown), needs_approval=True), None
+            return _refusal(NEEDS_APPROVAL.format(reason=shown), needs_approval=True), None, None
         if not isinstance(result, dict) or result.get("approved") is not True:
             error = result.get("error") if isinstance(result, dict) else None
-            return _refusal(str(error or "The user did not approve this step.")), None
+            return _refusal(str(error or "The user did not approve this step.")), None, None
         if isinstance(decision, dict) and decision.get("status") != "resolved":
             # The page, the element or the focus can change while the card waits; the step goes only
             # to what was approved. A grant needs no second look: nothing runs between its describe
             # and the step.
             again = await self._cmd(runtime, conversation_id, "describe", target)
             if again.get("error") == USER_CONTROL:
-                return _refusal(USER_CONTROL), None
+                return _refusal(USER_CONTROL), None, None
             if not _same_target(_seen(again, op, args), _seen(described, op, args)):
-                return _refusal(FOCUS_CHANGED if op == "press" else TARGET_CHANGED), None
+                return _refusal(FOCUS_CHANGED if op == "press" else TARGET_CHANGED), None, None
         # The wait can outlast a Stop, a switch-off (even one turned back on), a deleted chat, a host
         # restart or this chat's page change.
         runtime, refusal = _recheck(mark, state())
         if refusal:
-            return _refusal(refusal), None
-        if "starts a download" in reason:
-            self._download_clicks[conversation_id] = self._now()
-        return None, runtime
+            return _refusal(refusal), None, None
+        if not policy.download_click(op, element):
+            return None, runtime, None
+        # Decided by the rule that opened the card, never by its page-supplied text; bound to the tab and the link.
+        href = element.get("href") if isinstance(element.get("href"), str) else ""
+        tab_id = described.get("tab_id")
+        return None, runtime, {
+            "tab_id": tab_id if type(tab_id) is int else None, "host": _host_of(href).casefold(),
+            "filename": _file_of(href).casefold()}
 
     async def _download_cmd(self, runtime, conversation_id, op, args) -> dict:
         """A download op straight to the host: it never moves the page, so _cmd's page tracking stays out."""
@@ -331,13 +351,29 @@ class BrowserGateway:
         if isinstance(runtime, dict) and type(runtime.get("port")) is int:
             await self._settle(runtime, conversation_id, download_id, approved)
 
+    def _spend_click_pass(self, conversation_id, notice, state) -> bool:
+        """Whether the chat's click pass covers this paused download; any paused download spends it."""
+        click = self._download_clicks.pop(conversation_id, None)
+        if click is None or self._now() - click["at"] > DOWNLOAD_CLICK_WINDOW_S:
+            return False
+        now = state()
+        # A Stop or a page change since the click ends the pass (a halted chat's call never gets here).
+        if (not isinstance(now, dict) or now.get("page_gen") != click["page_gen"]
+                or now.get("stop_gen") != click["stop_gen"]):
+            return False
+        if click["tab_id"] is not None and notice.get("tab_id") != click["tab_id"]:
+            return False
+        if not (click["host"] or click["filename"]):
+            return True
+        host, name = str(notice.get("host") or "").casefold(), str(notice.get("filename") or "").casefold()
+        return bool(click["host"] and host == click["host"]) or bool(click["filename"] and name == click["filename"])
+
     async def _approve_download(self, runtime, conversation_id, notice, state) -> dict:
         """One approval for a paused agent download: the click card that started it, else its own card."""
         download_id = notice.get("id")
         if not isinstance(download_id, str) or _DOWNLOAD_ID.fullmatch(download_id) is None:
             return notice
-        clicked = self._download_clicks.pop(conversation_id, None)
-        if clicked is not None and self._now() - clicked <= DOWNLOAD_CLICK_WINDOW_S:
+        if self._spend_click_pass(conversation_id, notice, state):
             return {**notice, **await self._settle(runtime, conversation_id, download_id, True),
                     "approved_by": "the click card"}
         name = policy.display_name(notice.get("filename")) or "a file"
@@ -363,6 +399,22 @@ class BrowserGateway:
             settled = {**settled, "reason": str(error or "The user did not approve this download.")}
         return {**notice, **settled}
 
+    async def _report_downloads(self, runtime, conversation_id, reply, state) -> dict:
+        """Every paused agent download the host reports in this reply gets its click pass or its own card."""
+        async def settle(notice):
+            if isinstance(notice, dict) and notice.get("state") == "awaiting_approval":
+                return await self._approve_download(runtime, conversation_id, notice, state)
+            return notice
+        reply = dict(reply)
+        if "download" in reply:
+            reply["download"] = await settle(reply["download"])
+        if isinstance(reply.get("downloadsPending"), list):
+            reply["downloadsPending"] = [await settle(notice) for notice in reply["downloadsPending"]]
+        notices = [reply.get("download")] + (reply.get("downloadsPending") or [])
+        if any(isinstance(notice, dict) and "note" in notice for notice in notices):
+            reply["needs_approval"] = True
+        return reply
+
     async def _to_project(self, runtime, conversation_id, args) -> dict:
         """Copy a completed download of this chat into its project, at dest relative to the project root."""
         dest = args["dest"].strip()
@@ -374,7 +426,7 @@ class BrowserGateway:
                 or ".." in parts or any(":" in part for part in parts)):
             return _refusal("dest must be a path inside the project, relative to its root "
                             "(for example Assets/Audio/song.mp3).")
-        refusal = policy.project_copy_refusal(dest)
+        refusal = policy.project_dest_refusal(parts) or policy.project_copy_refusal(dest)
         if refusal:
             return _refusal(f"Refused: {refusal}.")
         info = await self._download_cmd(runtime, conversation_id, "download_info", {"id": args["id"]})
@@ -386,6 +438,8 @@ class BrowserGateway:
         refusal = policy.project_copy_refusal(source) or policy.project_copy_refusal(entry.get("filename"))
         if refusal:
             return _refusal(f"Refused: {refusal}.")
+        if not policy.file_type(source):
+            return _refusal("Refused: a file without an extension is never copied into the project.")
         if policy.file_type(dest) != policy.file_type(source):
             return _refusal(f"Refused: the copy keeps the downloaded file's type, so dest must end in "
                             f"{policy.file_type(source) or 'no extension'}.")
@@ -404,11 +458,8 @@ class BrowserGateway:
             return _refusal("dest is outside the project.")
         if os.path.isdir(target):
             return _refusal("dest is a folder; give the file name too (for example Assets/Audio/song.mp3).")
-        if os.path.lexists(target):
-            if args.get("overwrite") is not True:
-                return _refusal("A file already exists at dest; pass overwrite: true to replace it.")
-            if parts[0].casefold() != "assets":
-                return _refusal("Only a file under Assets/ may be overwritten.")
+        if os.path.lexists(target) and args.get("overwrite") is not True:
+            return _refusal("A file already exists at dest; pass overwrite: true to replace it.")
         refusal = unity_file_guard.check_write(target, workspace)
         if refusal is not None:
             return _refusal(refusal.message)
@@ -452,8 +503,9 @@ class BrowserGateway:
                 refusal = policy.navigation_refusal(args.get("url"))
                 if refusal:
                     return _refusal(f"Refused: {refusal}")
+            click_pass = None
             if op in _ELEMENT_OPS or op == "press":
-                refusal, runtime = await self._gate(before, conversation_id, op, args, state)
+                refusal, runtime, click_pass = await self._gate(before, conversation_id, op, args, state)
                 if refusal:
                     return refusal
             if op == "download_to_project":
@@ -461,14 +513,18 @@ class BrowserGateway:
             forward = {key: args[key] for key in _ARGS[op] if key in args}
             send = self._download_cmd if op == "downloads" else self._cmd
             reply = await send(runtime, conversation_id, op, forward)
+            if click_pass is not None:
+                # Valid only once the click has run; a failed click leaves no pass behind, nor an older one.
+                self._download_clicks.pop(conversation_id, None)
+                after = state()
+                if reply.get("ok") is True and isinstance(after, dict):
+                    self._download_clicks[conversation_id] = {
+                        **click_pass, "at": self._now(), "page_gen": after.get("page_gen"),
+                        "stop_gen": after.get("stop_gen")}
+            # The host reports the agent downloads it paused in the next reply of that chat.
+            reply = await self._report_downloads(runtime, conversation_id, reply, state)
             if reply.get("error") == USER_CONTROL:
                 return _refusal(USER_CONTROL)
-            # The host reports an agent download it paused in the next reply of that chat.
-            notice = reply.get("download")
-            if isinstance(notice, dict) and notice.get("state") == "awaiting_approval":
-                reply = {**reply, "download": await self._approve_download(runtime, conversation_id, notice, state)}
-                if "note" in reply["download"]:
-                    reply["needs_approval"] = True
             ok = reply.get("ok") is True
             if ok and op == "screenshot" and isinstance(reply.get("image"), str):
                 meta = {key: value for key, value in reply.items() if key != "image"}

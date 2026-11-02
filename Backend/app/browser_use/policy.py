@@ -19,7 +19,9 @@ AGENT_BLOCKED_DOWNLOAD_SUFFIXES = (
     ".exe", ".msi", ".msix", ".appx", ".bat", ".cmd", ".com", ".ps1", ".psm1", ".vbs", ".vbe", ".js",
     ".jse", ".wsf", ".wsh", ".scr", ".pif", ".cpl", ".msc", ".hta", ".reg", ".lnk", ".dll", ".sys",
     ".jar", ".py", ".pyw", ".sh", ".bash", ".zsh", ".dmg", ".pkg", ".app", ".appimage", ".deb",
-    ".rpm", ".apk", ".command",
+    ".rpm", ".apk", ".command", ".url", ".msixbundle", ".appxbundle", ".appinstaller", ".application",
+    ".gadget", ".vb", ".ws", ".sct", ".chm", ".inf", ".msp", ".mst", ".jnlp", ".xll", ".xla", ".xlam", ".scf",
+    ".iso", ".img", ".vhd", ".vhdx", ".library-ms", ".settingcontent-ms", ".diagcab", ".website", ".wsc", ".pyz", ".pyc",
 )
 # What browser_download_to_project never puts into a project, whatever the download was: Unity code,
 # compiler input and native plugins would be compiled or loaded by the editor. Shaders are allowed.
@@ -29,6 +31,8 @@ AGENT_BLOCKED_PROJECT_SUFFIXES = (
 )
 # Folders whose contents Unity loads as plugins or editor code.
 _BLOCKED_PROJECT_FOLDERS = frozenset({"plugins", "editor"})
+# Characters Windows rejects in a file or folder name.
+_WINDOWS_REJECTS = re.compile(r'[<>:"|?*]')
 _NAME_LIMIT = 120
 _FILLERS = "\u115f\u1160\u3164\uffa0"
 
@@ -54,8 +58,25 @@ def project_copy_refusal(path) -> str:
     if blocked:
         return f"{blocked} files are never copied into the project"
     parts = re.split(r"[\\/]", path) if isinstance(path, str) else []
-    if any(part.strip().casefold() in _BLOCKED_PROJECT_FOLDERS for part in parts):
+    # Compared the way Windows stores the name: "Editor." and "Editor " are the Editor folder.
+    if any(part.rstrip(". ").strip().casefold() in _BLOCKED_PROJECT_FOLDERS for part in parts):
         return "nothing is copied into a Plugins or Editor folder"
+    return ""
+
+
+def project_dest_refusal(parts) -> str:
+    """Why a copy may not go to the project-relative path made of `parts`, or '': only under Assets/, where Unity
+    imports, with plain names Windows keeps as written, never a hidden (dot) name, and with a file type."""
+    if not parts or parts[0].casefold() != "assets":
+        return "a download is copied into the Assets folder only, so dest must start with Assets/"
+    for part in parts:
+        if part.startswith("."):
+            return "no file or folder name in dest may start with a dot"
+        if (part.endswith((".", " ")) or _WINDOWS_REJECTS.search(part)
+                or any(unicodedata.category(char) in {"Cc", "Cf"} for char in part)):
+            return "dest has a name Windows would change or reject (a trailing dot or space, <>:\"|?* or an invisible character)"
+    if not file_type(parts[-1]):
+        return "dest must end in a file name with an extension"
     return ""
 
 
@@ -149,26 +170,36 @@ def _is_submit_control(element) -> bool:
 
 def critical_reason(op, element) -> str:
     """'' when the step may run without a card, otherwise what makes it critical."""
+    return _critical(op, element)[1]
+
+
+def download_click(op, element) -> bool:
+    """Whether the card for this click opens because it starts a download, and not for an earlier reason."""
+    return op == "click" and _critical(op, element)[0] == "download"
+
+
+def _critical(op, element) -> tuple:
+    """(kind, reason): kind names the rule that made the step critical ('' when it is not)."""
     if not isinstance(element, dict):
-        return "the target element could not be identified"
+        return "unknown", "the target element could not be identified"
     name = _clean(element.get("name"))
     shown = f'"{display_name(name)}"' if name else "an unnamed element"
     if element.get("is_password") is True or element.get("type") == "password":
-        return f"{op} on the password field {shown}"
+        return "password", f"{op} on the password field {shown}"
     for label in (name, _clean(element.get("form_submit_name"))):
         if label:
             keyword = critical_name(label)
             if keyword:
-                return f'{op} on {shown} (matches "{keyword}")'
+                return "keyword", f'{op} on {shown} (matches "{keyword}")'
     if _is_download(element):
-        return f"{op} on {shown} starts a download"
+        return "download", f"{op} on {shown} starts a download"
     # describe marks a text field submits_form too (Enter would submit it), but clicking one only
     # focuses it; Enter in an input has no submit button of its own, so the field's form decides.
     if ((op == "click" and element.get("submits_form") is True and _is_submit_control(element))
             or (op == "press" and (element.get("submits_form") is True
                                    or element.get("form_method") is not None))):
         if element.get("form_has_password") is True:
-            return f"{op} on {shown} submits a form that contains a password field"
+            return "form", f"{op} on {shown} submits a form that contains a password field"
         if element.get("form_method") != "get":
-            return f"{op} on {shown} submits a form"
-    return ""
+            return "form", f"{op} on {shown} submits a form"
+    return "", ""
