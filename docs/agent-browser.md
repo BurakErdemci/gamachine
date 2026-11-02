@@ -329,8 +329,8 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
   takes over the tab, its paused agent downloads become USER downloads and resume (blocked ones stay blocked).
 - The gateway gives each paused download exactly one approval. A click whose card opened because the link
   downloads (`policy.download_click`, the rule that decided, never the card text) leaves a one-time pass once the click
-  succeeds: it covers the first paused download of that chat within 10 s, on the tab of the click's describe
-  (`tab_id`), with the same page and Stop generation, whose host or file name matches the link's. A page change, a
+  succeeds: it covers one notice of the reply within 10 s, on the tab of the click's describe
+  (`tab_id`), with the same page and Stop generation: the one matching the link's file name (else its host, else the first on the tab); a blocked match consumes the pass, and every other paused download gets its own card. A page change, a
   Stop or a failed click drops it. Otherwise `_browser_card(owner, 'browser_download', {filename, bytes, host,
   page_url, risky, risk_reason})` opens a card (allowed at once when browser cards are off; no grant is kept). Approve
   sends `download_resume`, reject or deny `download_cancel`. A card still open after the 2 s wait returns

@@ -132,7 +132,8 @@ describe('download file names', () => {
   it('blocks the Windows launcher, installer, disk image and script types too', () => {
     for (const ext of ['url', 'msixbundle', 'appxbundle', 'appinstaller', 'application', 'gadget', 'vb', 'ws', 'sct', 'chm',
       'inf', 'msp', 'mst', 'jnlp', 'xll', 'xla', 'xlam', 'scf', 'iso', 'img', 'vhd', 'vhdx', 'library-ms', 'settingcontent-ms',
-      'diagcab', 'website', 'lnk', 'scr', 'hta', 'cpl']) {
+      'diagcab', 'website', 'lnk', 'scr', 'hta', 'cpl', 'appref-ms', 'shs', 'msh', 'msh1', 'msh2', 'mshxml', 'rdp', 'search-ms',
+      'theme', 'themepack', 'docm', 'xlsm', 'ade', 'adp', 'mde']) {
       expect(agentBlockedType(`file.${ext}`)).toBe(ext)
       expect(agentBlockedType(`file.pdf.${ext.toUpperCase()}. `)).toBe(ext)
     }

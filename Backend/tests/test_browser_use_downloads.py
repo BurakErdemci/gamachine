@@ -600,3 +600,46 @@ def test_the_agent_guide_tells_the_download_rules(language):
     card_off = {"EN": "none when the user turned browser cards off", "TR": "kartlarını kapattıysa kart çıkmaz"}
     one_card = {"EN": "one approval card", "TR": "bir kez onay kartı"}
     assert card_off[language] in text and one_card[language] in text
+
+
+def test_an_earlier_paused_download_does_not_take_the_click_pass():
+    # The reply lists an older same-host download first; the link's own file takes the pass.
+    host = ScriptedHost(element=DOWNLOAD_LINK, notice=None, tab_id=7)
+    handler, deck = gateway_for(host, {"status": "resolved", "approved": True})
+    run(handler, "click", {"snapshot_id": "s1", "ref": "4"})
+    host.notice = dict(NOTICE, id="dearlier", filename="earlier.zip", tab_id=7)
+    host.extra = {"downloadsPending": [dict(NOTICE, id="dlink", tab_id=7)]}
+    reply = body(run(handler, "scroll", {"direction": "down"}))
+    assert tools(deck) == ["browser_click", "browser_download"]
+    assert deck.opened[1][2]["filename"] == "earlier.zip"
+    assert "approved_by" not in reply["download"]
+    assert reply["downloadsPending"][0]["approved_by"] == "the click card"
+
+
+def test_a_blocked_match_consumes_the_click_pass():
+    blocked = dict(NOTICE, id="dblocked", state="blocked", reason=".zip files are never downloaded", tab_id=7)
+    host = ScriptedHost(element=DOWNLOAD_LINK, notice=None, tab_id=7)
+    handler, deck = gateway_for(host, {"status": "resolved", "approved": True})
+    run(handler, "click", {"snapshot_id": "s1", "ref": "4"})
+    host.notice = blocked
+    reply = body(run(handler, "scroll", {"direction": "down"}))
+    assert reply["download"]["state"] == "blocked"
+    host.notice = dict(NOTICE, id="dlater", filename="later.mp3", tab_id=7)
+    reply = body(run(handler, "scroll", {"direction": "down"}))
+    assert tools(deck) == ["browser_click", "browser_download"]
+    assert "approved_by" not in reply["download"]
+
+
+def test_a_look_alike_assets_folder_is_refused(places):
+    reply, _ = copy(places, completed(places, "x.png"), "Aſſets/x.png")
+    assert reply["ok"] is False, reply
+    assert not [p for p in places.project.rglob("*") if p.is_file()]
+
+
+def test_a_failed_copy_leaves_no_partial_file(places, monkeypatch):
+    def boom(src, dst):
+        raise PermissionError(13, "locked")
+    monkeypatch.setattr(gateway.os, "replace", boom)
+    reply, _ = copy(places, completed(places, "a.wav"), "Assets/Audio/a.wav")
+    assert reply["ok"] is False, reply
+    assert not [p for p in places.project.rglob("*") if p.is_file()]

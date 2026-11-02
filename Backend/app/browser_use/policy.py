@@ -22,6 +22,8 @@ AGENT_BLOCKED_DOWNLOAD_SUFFIXES = (
     ".rpm", ".apk", ".command", ".url", ".msixbundle", ".appxbundle", ".appinstaller", ".application",
     ".gadget", ".vb", ".ws", ".sct", ".chm", ".inf", ".msp", ".mst", ".jnlp", ".xll", ".xla", ".xlam", ".scf",
     ".iso", ".img", ".vhd", ".vhdx", ".library-ms", ".settingcontent-ms", ".diagcab", ".website", ".wsc", ".pyz", ".pyc",
+    ".appref-ms", ".shs", ".msh", ".msh1", ".msh2", ".mshxml", ".rdp", ".search-ms", ".theme", ".themepack",
+    ".docm", ".xlsm", ".ade", ".adp", ".mde",
 )
 # What browser_download_to_project never puts into a project, whatever the download was: Unity code,
 # compiler input and native plugins would be compiled or loaded by the editor. Shaders are allowed.
@@ -67,7 +69,7 @@ def project_copy_refusal(path) -> str:
 def project_dest_refusal(parts) -> str:
     """Why a copy may not go to the project-relative path made of `parts`, or '': only under Assets/, where Unity
     imports, with plain names Windows keeps as written, never a hidden (dot) name, and with a file type."""
-    if not parts or parts[0].casefold() != "assets":
+    if not parts or not (parts[0].isascii() and parts[0].lower() == "assets"):
         return "a download is copied into the Assets folder only, so dest must start with Assets/"
     for part in parts:
         if part.startswith("."):

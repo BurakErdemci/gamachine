@@ -351,29 +351,37 @@ class BrowserGateway:
         if isinstance(runtime, dict) and type(runtime.get("port")) is int:
             await self._settle(runtime, conversation_id, download_id, approved)
 
-    def _spend_click_pass(self, conversation_id, notice, state) -> bool:
-        """Whether the chat's click pass covers this paused download; any paused download spends it."""
-        click = self._download_clicks.pop(conversation_id, None)
-        if click is None or self._now() - click["at"] > DOWNLOAD_CLICK_WINDOW_S:
-            return False
-        now = state()
-        # A Stop or a page change since the click ends the pass (a halted chat's call never gets here).
-        if (not isinstance(now, dict) or now.get("page_gen") != click["page_gen"]
-                or now.get("stop_gen") != click["stop_gen"]):
-            return False
-        if click["tab_id"] is not None and notice.get("tab_id") != click["tab_id"]:
-            return False
-        if not (click["host"] or click["filename"]):
-            return True
-        host, name = str(notice.get("host") or "").casefold(), str(notice.get("filename") or "").casefold()
-        return bool(click["host"] and host == click["host"]) or bool(click["filename"] and name == click["filename"])
+    def _covered_notice(self, conversation_id, notices, state):
+        """The one notice of this reply the chat's click pass covers (or None); pops the pass when the reply has
+        a paused download or a covered one. The link's file name decides, else its host, else the first on the tab."""
+        paused = any(isinstance(n, dict) and n.get("state") == "awaiting_approval" for n in notices)
+        click = self._download_clicks.get(conversation_id)
+        if click is None:
+            return None
+        covered = None
+        if self._now() - click["at"] <= DOWNLOAD_CLICK_WINDOW_S:
+            now = state()
+            # A Stop or a page change since the click ends the pass (a halted chat's call never gets here).
+            if (isinstance(now, dict) and now.get("page_gen") == click["page_gen"]
+                    and now.get("stop_gen") == click["stop_gen"]):
+                field = "filename" if click["filename"] else "host"
+                for notice in notices:
+                    if not isinstance(notice, dict) or (click["tab_id"] is not None
+                                                        and notice.get("tab_id") != click["tab_id"]):
+                        continue
+                    if not (click["filename"] or click["host"]) or str(notice.get(field) or "").casefold() == click[field]:
+                        covered = notice
+                        break
+        if paused or covered is not None:
+            self._download_clicks.pop(conversation_id, None)
+        return covered
 
-    async def _approve_download(self, runtime, conversation_id, notice, state) -> dict:
-        """One approval for a paused agent download: the click card that started it, else its own card."""
+    async def _approve_download(self, runtime, conversation_id, notice, state, covered=False) -> dict:
+        """One approval for a paused agent download: the click card that started it (covered), else its own card."""
         download_id = notice.get("id")
         if not isinstance(download_id, str) or _DOWNLOAD_ID.fullmatch(download_id) is None:
             return notice
-        if self._spend_click_pass(conversation_id, notice, state):
+        if covered:
             return {**notice, **await self._settle(runtime, conversation_id, download_id, True),
                     "approved_by": "the click card"}
         name = policy.display_name(notice.get("filename")) or "a file"
@@ -401,9 +409,14 @@ class BrowserGateway:
 
     async def _report_downloads(self, runtime, conversation_id, reply, state) -> dict:
         """Every paused agent download the host reports in this reply gets its click pass or its own card."""
+        found = [reply["download"]] if "download" in reply else []
+        if isinstance(reply.get("downloadsPending"), list):
+            found += reply["downloadsPending"]
+        covered = self._covered_notice(conversation_id, found, state)
+
         async def settle(notice):
             if isinstance(notice, dict) and notice.get("state") == "awaiting_approval":
-                return await self._approve_download(runtime, conversation_id, notice, state)
+                return await self._approve_download(runtime, conversation_id, notice, state, notice is covered)
             return notice
         reply = dict(reply)
         if "download" in reply:
@@ -467,8 +480,15 @@ class BrowserGateway:
         def copy() -> int:
             os.makedirs(os.path.dirname(target), exist_ok=True)
             partial = target + ".gmpart"
-            shutil.copyfile(source, partial)
-            os.replace(partial, target)
+            try:
+                shutil.copyfile(source, partial)
+                os.replace(partial, target)
+            except Exception:
+                try:
+                    os.remove(partial)
+                except OSError:
+                    pass
+                raise
             return os.path.getsize(target)
 
         try:
