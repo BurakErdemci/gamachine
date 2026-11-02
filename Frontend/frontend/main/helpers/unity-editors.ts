@@ -9,13 +9,16 @@ export interface EditorDeps {
   homedir: string
 }
 
+/** What the install-root lookup needs; the install code has no readdir. */
+export type RootDeps = Pick<EditorDeps, 'exists' | 'readFile' | 'platform' | 'env' | 'homedir'>
+
 export interface UnityEditor { version: string; path: string }
 export interface UnityTemplate { id: string; label: '2d' | '3d' | 'hdrp' | 'other'; file: string }
 
-const pathFor = (platform: NodeJS.Platform) => (platform === 'win32' ? path.win32 : path.posix)
+export const pathFor = (platform: NodeJS.Platform) => (platform === 'win32' ? path.win32 : path.posix)
 
 // The Hub keeps a user-chosen extra install root here; "" means the default root only.
-function secondaryRoot(deps: EditorDeps): string | null {
+function secondaryRoot(deps: RootDeps): string | null {
   const p = pathFor(deps.platform)
   let file: string | null = null
   if (deps.platform === 'win32' && deps.env.APPDATA) {
@@ -35,7 +38,7 @@ function secondaryRoot(deps: EditorDeps): string | null {
   }
 }
 
-function editorRoots(deps: EditorDeps): string[] {
+export function editorRoots(deps: RootDeps): string[] {
   const roots: string[] = []
   if (deps.platform === 'win32') {
     roots.push(path.win32.join(deps.env.ProgramFiles || 'C:\\Program Files', 'Unity', 'Hub', 'Editor'))

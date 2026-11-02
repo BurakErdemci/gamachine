@@ -73,10 +73,13 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
     setTemplateId(prev => (list?.some(x => x.id === prev) ? prev : (list?.find(x => x.label === '3d') ?? list?.[0])?.id ?? ''));
   }, []);
 
+  // Only the newest refresh may answer: an install finishing while the first listing is out must not be overwritten by it.
+  const editorsSeq = useRef(0);
   const refreshEditors = useCallback(async () => {
+    const seq = ++editorsSeq.current;
     setEditors(undefined);
     const list = await listEditors();
-    if (!alive.current) return;
+    if (!alive.current || seq !== editorsSeq.current) return;
     setEditors(list);
     const keep = list?.some(e => e.version === versionRef.current) ? versionRef.current : list?.[0]?.version ?? '';
     versionRef.current = keep;

@@ -1,6 +1,6 @@
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { EditorDeps, listEditors, listTemplates } from '../main/helpers/unity-editors'
+import { EditorDeps, editorRoots, listEditors, listTemplates, pathFor } from '../main/helpers/unity-editors'
 
 function fakeDeps(platform: NodeJS.Platform, files: Record<string, string | string[]>, extra: Partial<EditorDeps> = {}): EditorDeps {
   return {
@@ -81,6 +81,18 @@ describe('listEditors', () => {
 
   it('returns nothing on other platforms', () => {
     expect(listEditors(fakeDeps('linux', {}))).toEqual({ editors: [] })
+  })
+})
+
+describe('editorRoots / pathFor (shared with the install code)', () => {
+  it('lists the default root first, then the secondary one, without needing readdir', () => {
+    const secondFile = 'C:\\Users\\t\\AppData\\Roaming\\UnityHub\\secondaryInstallPath.json'
+    const deps = fakeDeps('win32', { [secondFile]: 'D:\\Editors' }, { env: { APPDATA: 'C:\\Users\\t\\AppData\\Roaming', ProgramFiles: 'E:\\PF' } })
+    expect(editorRoots(deps)).toEqual(['E:\\PF\\Unity\\Hub\\Editor', 'D:\\Editors'])
+    expect(editorRoots(fakeDeps('darwin', {}))).toEqual([macRoot])
+    expect(editorRoots(fakeDeps('linux', {}))).toEqual([])
+    expect(pathFor('win32')).toBe(path.win32)
+    expect(pathFor('darwin')).toBe(path.posix)
   })
 })
 

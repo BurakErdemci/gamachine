@@ -139,6 +139,24 @@ describe('findUnityCli / cliState', () => {
     expect(findUnityCli(s.deps)).toBe('/Users/u/.unity/bin/unity')
   })
 
+  it('ignores a manifest target that is not the CLI binary, but accepts UNITY.EXE in any case on Windows', () => {
+    const s = setup()
+    const manifest = 'C:\\Users\\u\\AppData\\Roaming\\UnityHub\\cli-install.json'
+    s.present.add(manifest)
+    s.present.add('D:\\tools\\evil.exe')
+    s.files.set(manifest, JSON.stringify({ path: 'D:\\tools\\evil.exe' }))
+    expect(findUnityCli(s.deps)).toBeNull()
+    s.present.add('D:\\tools\\UNITY.EXE')
+    s.files.set(manifest, JSON.stringify({ path: 'D:\\tools\\UNITY.EXE' }))
+    expect(findUnityCli(s.deps)).toBe('D:\\tools\\UNITY.EXE')
+    const mac = setup({ platform: 'darwin', homedir: '/Users/u', env: {} })
+    const macManifest = '/Users/u/Library/Application Support/UnityHub/cli-install.json'
+    mac.present.add(macManifest)
+    mac.present.add('/opt/Unity')
+    mac.files.set(macManifest, JSON.stringify({ path: '/opt/Unity' }))
+    expect(findUnityCli(mac.deps)).toBeNull()
+  })
+
   it('reports noHub or openHubOnce when the CLI is absent', () => {
     const s = setup()
     expect(findUnityCli(s.deps)).toBeNull()
@@ -200,7 +218,7 @@ describe('loadCatalog', () => {
   it('flags installed editors and their installed modules, and fetches missing installed versions', async () => {
     const s = setup()
     installed(s)
-    s.files.set(`${ROOT}\\${VERSION}\\modules.json`, JSON.stringify([{ id: 'webgl', selected: true }, { id: 'ios', selected: false }]))
+    s.files.set(`${ROOT}\\${VERSION}\\modules.json`, JSON.stringify([{ id: 'webgl', selected: true }, { id: 'ios', selected: false }, { id: 'android' }]))
     s.state.editors.push({ version: '2022.3.1f1', path: `${ROOT}\\2022.3.1f1\\Editor\\Unity.exe` })
     const old = releaseFixture().results[0]
     old.version = '2022.3.1f1'; old.releaseDate = '2023-01-01T00:00:00.000Z'
@@ -212,7 +230,44 @@ describe('loadCatalog', () => {
     expect(r.installed).toBe(true)
     expect(r.modules.find(m => m.id === 'webgl')!.installed).toBe(true)
     expect(r.modules.find(m => m.id === 'ios')!.installed).toBe(false)
+    expect(r.modules.find(m => m.id === 'android')!.installed).toBe(false)
     expect(s.state.fetchUrls.filter(u => u.includes('version='))).toHaveLength(1)
+  })
+
+  it('drops releases with a bad version, changeset or size and modules with a bad id or size', async () => {
+    const s = setup()
+    const base = releaseFixture().results[0]
+    const variant = (edit: (r: any) => void, version: string) => {
+      const r = JSON.parse(JSON.stringify(base))
+      r.version = version
+      edit(r)
+      return r
+    }
+    const mods = (r: any) => r.downloads[0].modules
+    const results = [
+      variant(() => {}, '6000.3.27f2'),
+      variant(() => {}, '6000.3.26f1; rm'),
+      variant(r => { r.shortRevision = 'ZZZ' }, '6000.3.25f1'),
+      variant(r => { r.shortRevision = '--help' }, '6000.3.24f1'),
+      variant(r => { r.downloads[0].downloadSize.value = -1 }, '6000.3.23f1'),
+      variant(r => { r.downloads[0].installedSize.value = Number.POSITIVE_INFINITY }, '6000.3.22f1'),
+      variant(r => { r.downloads[0].downloadSize = { unit: 'BYTE' } }, '6000.3.21f1'),
+      variant(r => {
+        mods(r).find((m: any) => m.id === 'webgl').id = '--evil'
+        mods(r).find((m: any) => m.id === 'ios').downloadSize.value = -5
+        mods(r).find((m: any) => m.id === 'android').subModules[0].installedSize.value = Number.NaN
+      }, '6000.3.20f1'),
+    ]
+    s.state.fetchImpl = async url => ({ ok: true, status: 200, json: async () =>
+      ({ results: url.includes('stream=LTS') ? results : [] }) })
+    const cat = await loadCatalog(s.deps)
+    if (!cat.ok) throw new Error('catalog failed')
+    expect(cat.releases.map(r => r.version).sort()).toEqual(['6000.3.20f1', '6000.3.27f2'])
+    const kept = cat.releases.find(r => r.version === '6000.3.20f1')!.modules.map(m => m.id)
+    expect(kept).not.toContain('--evil')
+    expect(kept).not.toContain('ios')
+    expect(kept).not.toContain('android')
+    expect(kept).toContain('visualstudio')
   })
 
   it('returns offline on a network error or timeout and catalogFailed on HTTP or JSON errors', async () => {
@@ -239,16 +294,32 @@ describe('planInstall', () => {
     expect(s.calls[0].args).toEqual(['--format', 'ndjson', '--non-interactive', 'install-path'])
   })
 
-  it('does not count the editor for an installed version and skips installed modules', async () => {
+  it('does not count the editor for an installed version and counts a reinstalled module', async () => {
     const s = setup()
     installed(s)
-    s.files.set(`${ROOT}\\${VERSION}\\modules.json`, JSON.stringify([{ id: 'webgl' }]))
+    s.files.set(`${ROOT}\\${VERSION}\\modules.json`, JSON.stringify([{ id: 'webgl', selected: true }]))
     withCli(await withCatalog(s))
     const plan = await planInstall({ version: VERSION, modules: ['webgl', 'ios'] }, s.deps)
     if (!plan.ok) throw new Error('plan failed')
-    expect(plan.downloadBytes).toBe(343770192)
-    expect(await planInstall({ version: VERSION, modules: ['webgl'] }, s.deps)).toMatchObject({ ok: false, code: 'invalidArguments' })
+    expect(plan.downloadBytes).toBe(343770192 + 930219208)
+    expect(await planInstall({ version: VERSION, modules: ['webgl'] }, s.deps)).toMatchObject({ ok: true, downloadBytes: 930219208 })
     expect(await planInstall({ version: VERSION, modules: [] }, s.deps)).toMatchObject({ ok: false, code: 'invalidArguments' })
+  })
+
+  it('measures an installed editor\'s plan on the editor\'s own drive, not the CLI install path', async () => {
+    const free: Record<string, number> = { 'D:\\Unity': 900 * GB }
+    const s = setup({ statfs: async dir => ({ bavail: free[dir] ?? 1, bsize: 1 }) })
+    s.state.editors = [{ version: VERSION, path: `D:\\Unity\\${VERSION}\\Editor\\Unity.exe` }]
+    s.present.add('D:\\Unity')
+    s.present.add(ROOT)
+    withCli(await withCatalog(s))
+    const plan = await planInstall({ version: VERSION, modules: ['webgl'] }, s.deps)
+    expect(plan).toMatchObject({ ok: true, installRoot: `D:\\Unity\\${VERSION}`, freeBytes: 900 * GB, enough: true })
+    expect(s.calls).toHaveLength(0)
+    // A new editor still goes to the CLI install path, which here has no space.
+    const other = setup({ statfs: async () => ({ bavail: 1, bsize: 1 }) })
+    withCli(await withCatalog(other))
+    expect(await planInstall({ version: VERSION, modules: ['webgl'] }, other.deps)).toMatchObject({ ok: true, installRoot: ROOT, enough: false })
   })
 
   it('treats unknown free space as enough and falls back to the default root when install-path fails', async () => {
@@ -332,6 +403,17 @@ describe('startInstall run', () => {
     await promise
   })
 
+  it('passes an installed module to install-modules when the user ticks it again', async () => {
+    const s = setup()
+    installed(s)
+    s.files.set(`${ROOT}\\${VERSION}\\modules.json`, JSON.stringify([{ id: 'webgl', selected: true }]))
+    withCli(await withCatalog(s))
+    const { promise, child, call } = await runInstall(s, { version: VERSION, modules: ['webgl'] })
+    expect(call.args).toEqual(['--format', 'ndjson', '--non-interactive', 'install-modules', '--editor-version', VERSION, '-m', 'webgl'])
+    child.close(1)
+    await promise
+  })
+
   it('uses install-modules for an installed editor and detaches on POSIX', async () => {
     const s = setup({ platform: 'darwin', homedir: '/Users/u', env: {}, arch: 'arm64' })
     s.present.add('/Users/u/.unity/bin/unity')
@@ -366,6 +448,18 @@ describe('startInstall run', () => {
     expect(await promise).toEqual({ ok: true, completed: ['webgl'] })
     expect(events.filter(e => e.phase === 'download')).toHaveLength(1)
     expect(events.find(e => e.phase === 'download')).toMatchObject({ pct: 7, message: 'Downloading A' })
+  })
+
+  it('keeps a multi-byte character that is split across two chunks', async () => {
+    const s = await ready()
+    const { promise, child } = await runInstall(s, { version: VERSION, modules: ['webgl'] })
+    const text = 'Yetersiz alan: \u00fc\u20ac'
+    const line = Buffer.from(JSON.stringify({ type: 'result', success: false, data: {}, errors: [{ code: 'COMMAND_FAILED', message: text }] }) + '\n')
+    const cut = line.indexOf(Buffer.from('\u20ac')) + 1
+    child.stdout.emit('data', line.subarray(0, cut))
+    child.stdout.emit('data', line.subarray(cut))
+    child.close(6)
+    expect(await promise).toEqual({ ok: false, code: 'cliFailed', message: text })
   })
 
   it('maps the android EULA refusal fixture to cliFailed with its message', async () => {
@@ -469,6 +563,32 @@ describe('cancelInstall', () => {
     expect(killed).toEqual([4242])
     expect(await promise).toEqual({ ok: false, code: 'cancelled' })
     expect(cancelInstall(s.deps)).toEqual({ cancelled: false, reason: 'idle' })
+  })
+
+  it('a cancel that arrives while the plan is still awaited stops the start before the spawn', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let asked = false
+    const s = withCli(await withCatalog(setup({ statfs: async () => { asked = true; await gate; return { bavail: 500 * GB, bsize: 1 } } })))
+    const promise = startInstall({ version: VERSION, modules: ['webgl'] }, () => {}, s.deps)
+    await until(() => asked)
+    expect(cancelInstall(s.deps)).toEqual({ cancelled: true })
+    release()
+    expect(await promise).toEqual({ ok: false, code: 'cancelled' })
+    expect(s.installCalls()).toHaveLength(0)
+    expect(cancelInstall(s.deps)).toEqual({ cancelled: false, reason: 'idle' })
+    // The flag does not leak into the next start.
+    const next = await runInstall(s, { version: VERSION, modules: ['webgl'] })
+    next.child.close(1)
+    await next.promise
+  })
+
+  it('a success result wins over a cancel that came after it', async () => {
+    const s = await ready()
+    const { promise, child } = await runInstall(s, { version: VERSION, modules: ['webgl'] })
+    child.out('{"type":"result","success":true,"data":{"completedUids":["webgl"]},"errors":[]}\n')
+    expect(cancelInstall(s.deps)).toEqual({ cancelled: true })
+    expect(await promise).toEqual({ ok: true, completed: ['webgl'] })
   })
 
   it('refuses during the install phase', async () => {

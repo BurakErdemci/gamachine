@@ -391,8 +391,10 @@ describe('install: adding modules to an installed editor', () => {
     fireEvent.click(await screen.findByTestId('hub-add-modules-6000.2.4f1'))
     await screen.findByTestId('hub-install-modules')
     expect(screen.queryByTestId('hub-install-recommended')).toBeNull()
-    expect(checkbox('webgl').checked).toBe(true)
-    expect(checkbox('webgl').disabled).toBe(true)
+    // Installed, but still pickable (a reinstall): unticked by default, labelled, not disabled.
+    expect(checkbox('webgl').checked).toBe(false)
+    expect(checkbox('webgl').disabled).toBe(false)
+    expect(screen.getByTestId('hub-install-mod-webgl').textContent).toContain(en['hub.install.installed'])
     // No other editor is known to have modules, so the API's preselection is ticked.
     expect(checkbox('visualstudio').checked).toBe(true)
     fireEvent.click(checkbox('visualstudio'))
@@ -406,6 +408,56 @@ describe('install: adding modules to an installed editor', () => {
     fireEvent.click(nextBtn())
     await waitFor(() => expect(start).toHaveBeenCalledWith({ version: '6000.2.4f1', modules: ['ios'], acceptedEulas: false }))
     expect((await screen.findByTestId('hub-install-done')).textContent).toContain(tEn('hub.install.doneModules', { version: '6000.2.4f1' }))
+  })
+})
+
+describe('install: audit fixes', () => {
+  it('reinstalls a module the user ticks although it is already installed', async () => {
+    view()
+    tab('editors')
+    fireEvent.click(await screen.findByTestId('hub-add-modules-6000.2.4f1'))
+    await screen.findByTestId('hub-install-modules')
+    fireEvent.click(checkbox('visualstudio'))
+    fireEvent.click(checkbox('webgl'))
+    expect(checkbox('webgl').checked).toBe(true)
+    await waitFor(() => expect(nextBtn().disabled).toBe(false))
+    expect(calls('hub-install-plan').at(-1)![1]).toEqual({ version: '6000.2.4f1', modules: ['webgl'] })
+    fireEvent.click(nextBtn())
+    await waitFor(() => expect(start).toHaveBeenCalledWith({ version: '6000.2.4f1', modules: ['webgl'], acceptedEulas: false }))
+  })
+
+  it('says so when a cancel is refused because main has no install to stop, and re-enables Cancel', async () => {
+    const finish = pendingStart()
+    view()
+    await toModules()
+    fireEvent.click(nextBtn())
+    await screen.findByTestId('hub-install-progress')
+    cancelAnswer = { cancelled: false, reason: 'idle' }
+    fireEvent.click(screen.getByTestId('hub-install-cancel'))
+    const note = await screen.findByTestId('hub-install-cancel-idle')
+    expect(note.textContent).toBe(en['hub.install.cancelIdle'])
+    expect((screen.getByTestId('hub-install-cancel') as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('hub-install-finishing')).toBeNull()
+    await progress({ phase: 'download', pct: 5, message: 'Downloading...' })
+    expect(screen.queryByTestId('hub-install-cancel-idle')).toBeNull()
+    await finish({ ok: false, code: 'cancelled' })
+    expect(await screen.findByTestId('hub-install-cancelled')).toBeTruthy()
+  })
+
+  it('ignores an editor listing that answers after a newer one', async () => {
+    const waiting: ((v: unknown) => void)[] = []
+    mocks.invoke.mockImplementation((channel: string, arg: any) =>
+      channel === 'hub-list-editors' ? new Promise(r => { waiting.push(r) }) : ipc(channel, arg))
+    view()
+    tab('editors')
+    await waitFor(() => expect(waiting).toHaveLength(1))
+    fireEvent.click(await screen.findByText(en['hub.refresh']))
+    await waitFor(() => expect(waiting).toHaveLength(2))
+    await act(async () => { waiting[1]({ editors: [{ version: '6000.6.7f1', path: '/U/new' }] }) })
+    await act(async () => { waiting[0]({ editors: [{ version: '2022.3.55f1', path: '/U/old' }] }) })
+    const table = await screen.findByTestId('hub-editors')
+    expect(table.textContent).toContain('6000.6.7f1')
+    expect(table.textContent).not.toContain('2022.3.55f1')
   })
 })
 

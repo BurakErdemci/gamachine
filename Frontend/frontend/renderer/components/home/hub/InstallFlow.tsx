@@ -261,7 +261,7 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
         {release.modules.map(m => (
           <li key={m.id} className={`hub-inst-mod${m.installed ? ' is-installed' : ''}`} data-testid={`hub-install-mod-${m.id}`}>
             <label className="hub-inst-check">
-              <input type="checkbox" checked={m.installed || picked.has(m.id)} disabled={m.installed} onChange={() => toggle(m.id)} />
+              <input type="checkbox" checked={picked.has(m.id)} onChange={() => toggle(m.id)} />
               <span className="hub-inst-mod-n">{m.name}</span>
               {m.installed && <span className="hub-inst-pill is-installed">{t('hub.install.installed')}</span>}
               {!m.installed && owned.has(m.id) && <span className="hub-inst-pill">{t('hub.install.hadBefore')}</span>}
@@ -326,6 +326,7 @@ const RunView = ({ h, words }: { h: Hub; words: InstallWords }) => {
         {p.stalled && <p className="hub-inst-state" role="status" data-testid="hub-install-stalled">{t('hub.install.stalled')}</p>}
         {p.retrying && <p className="hub-inst-state" role="status" data-testid="hub-install-retrying">{t('hub.install.retrying')}</p>}
         {finishing && <p className="hub-inst-state" role="status" data-testid="hub-install-finishing">{t('hub.install.finishing')}</p>}
+        {r.cancelIdle && <p className="hub-inst-state" role="status" data-testid="hub-install-cancel-idle">{t('hub.install.cancelIdle')}</p>}
         <p className="hub-hint">{t('hub.install.keepsGoing')}</p>
         <footer className="hub-inst-foot">
           <button type="button" className="btn btn-ghost hub-cancel" onClick={h.cancelInstall} disabled={finishing || r.cancelling}

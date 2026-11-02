@@ -363,7 +363,7 @@ export interface InstallTarget {
 }
 export type InstallRun =
   | { state: 'idle' }
-  | { state: 'installing'; target: InstallTarget; progress: InstallProgress; cancelling: boolean; cancelRefused: boolean }
+  | { state: 'installing'; target: InstallTarget; progress: InstallProgress; cancelling: boolean; cancelRefused: boolean; cancelIdle: boolean }
   | { state: 'done'; target: InstallTarget; progress: InstallProgress; completed: string[] }
   | { state: 'failed' | 'cancelled'; target: InstallTarget; progress: InstallProgress; code: InstallErrorCode; message?: string; completed: string[] };
 
@@ -387,10 +387,10 @@ export const subscribeInstall = (cb: () => void): (() => void) => {
 
 export async function runInstall(target: InstallTarget): Promise<void> {
   if (install.state === 'installing') return;
-  setInstall({ state: 'installing', target, progress: START_PROGRESS, cancelling: false, cancelRefused: false });
+  setInstall({ state: 'installing', target, progress: START_PROGRESS, cancelling: false, cancelRefused: false, cancelIdle: false });
   dropInstallProgress();
   stopInstallProgress = onInstallProgress(p => {
-    if (install.state === 'installing') setInstall({ ...install, progress: p, cancelRefused: install.cancelRefused && p.phase === 'install' });
+    if (install.state === 'installing') setInstall({ ...install, progress: p, cancelRefused: install.cancelRefused && p.phase === 'install', cancelIdle: false });
   });
   const res = await startInstall(target.req);
   dropInstallProgress();
@@ -410,8 +410,10 @@ export async function cancelInstallRun(): Promise<void> {
   if (install.state !== 'installing') return;
   setInstall({ ...install, cancelling: true });
   const res = await cancelInstall();
-  // Refused: either the CLI is past the point where stopping works ('installing'), or it already ended.
-  if (!res.cancelled && install.state === 'installing') setInstall({ ...install, cancelling: false, cancelRefused: res.reason === 'installing' });
+  // Refused: either the CLI is past the point where stopping works ('installing'), or main has no install to stop ('idle').
+  if (!res.cancelled && install.state === 'installing') {
+    setInstall({ ...install, cancelling: false, cancelRefused: res.reason === 'installing', cancelIdle: res.reason !== 'installing' });
+  }
 }
 
 /** Leaves a finished install; one in progress stays. */

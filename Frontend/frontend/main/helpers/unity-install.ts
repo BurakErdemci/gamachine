@@ -1,4 +1,6 @@
 import path from 'path'
+import { StringDecoder } from 'string_decoder'
+import { editorRoots, pathFor } from './unity-editors'
 
 // Unity editor install through the Unity CLI. The version catalog comes from Unity's public Release API
 // because the CLI lists only 5 versions and cannot list modules of a version that is not installed
@@ -95,7 +97,14 @@ const STDERR_KEEP = 4096
 const MODULE_ID = /^[a-z0-9][a-z0-9.+_-]*$/
 const CLI_ARGS = ['--format', 'ndjson', '--non-interactive']
 
-const pathFor = (platform: NodeJS.Platform) => (platform === 'win32' ? path.win32 : path.posix)
+// Release API values reach the CLI argv and the UI; anything off-pattern is dropped, never repaired.
+const VERSION_RE = /^\d+\.\d+\.\d+[abfpx]\d+$/
+const CHANGESET_RE = /^[0-9a-f]{12}$/
+
+const isCliBinary = (target: string, deps: InstallDeps) => {
+  const base = pathFor(deps.platform).basename(target)
+  return deps.platform === 'win32' ? base.toLowerCase() === 'unity.exe' : base === 'unity'
+}
 
 export function findUnityCli(deps: InstallDeps): string | null {
   const p = pathFor(deps.platform)
@@ -114,7 +123,8 @@ export function findUnityCli(deps: InstallDeps): string | null {
   try {
     if (manifest && deps.exists(manifest)) {
       const target = JSON.parse(deps.readFile(manifest))?.path
-      if (typeof target === 'string' && target && deps.exists(target)) return target
+      // Only the CLI binary itself: a manifest must not point the install at any other program.
+      if (typeof target === 'string' && target && isCliBinary(target, deps) && deps.exists(target)) return target
     }
   } catch { /* An unreadable manifest falls through to the default location. */ }
   return fallback && deps.exists(fallback) ? fallback : null
@@ -130,20 +140,18 @@ export function cliState(deps: InstallDeps): CliState {
 let lastCatalog: InstallRelease[] | null = null
 
 type Eula = { url?: unknown; label?: unknown }
-const bytes = (size: any): number => (typeof size?.value === 'number' ? size.value : 0)
+// null = not a usable size; the caller drops the release or module that carries it.
+const bytes = (size: any): number | null =>
+  typeof size?.value === 'number' && Number.isFinite(size.value) && size.value >= 0 ? size.value : null
 
-function collectEulas(modules: any[]): InstallEula[] {
+const dedupeEulas = (eulas: InstallEula[]): InstallEula[] => {
   const seen = new Set<string>()
-  const out: InstallEula[] = []
-  for (const m of modules) {
-    for (const e of (Array.isArray(m?.eula) ? m.eula : []) as Eula[]) {
-      if (typeof e.url !== 'string' || seen.has(e.url)) continue
-      seen.add(e.url)
-      out.push({ label: typeof e.label === 'string' ? e.label : e.url, url: e.url })
-    }
-  }
-  return out
+  return eulas.filter(e => !seen.has(e.url) && !!seen.add(e.url))
 }
+
+const collectEulas = (modules: any[]): InstallEula[] => dedupeEulas(modules.flatMap(m =>
+  ((Array.isArray(m?.eula) ? m.eula : []) as Eula[]).filter(e => typeof e.url === 'string')
+    .map(e => ({ label: typeof e.label === 'string' ? e.label : String(e.url), url: String(e.url) }))))
 
 function flattenParts(m: any): any[] {
   const out: any[] = []
@@ -151,17 +159,23 @@ function flattenParts(m: any): any[] {
   return out
 }
 
+const editorDir = (editorBinary: string, deps: InstallDeps): string => {
+  const p = pathFor(deps.platform)
+  return deps.platform === 'win32'
+    ? p.dirname(p.dirname(editorBinary))
+    : p.dirname(p.dirname(p.dirname(p.dirname(editorBinary))))
+}
+
 // The Hub keeps modules.json beside an installed editor; absent or unreadable means "unknown" -> false.
 function installedModuleIds(editorBinary: string, deps: InstallDeps): Set<string> {
   const p = pathFor(deps.platform)
-  const dir = deps.platform === 'win32'
-    ? p.dirname(p.dirname(editorBinary))
-    : p.dirname(p.dirname(p.dirname(p.dirname(editorBinary))))
+  const dir = editorDir(editorBinary, deps)
   const ids = new Set<string>()
   try {
     const list = JSON.parse(deps.readFile(p.join(dir, 'modules.json')))
     for (const entry of Array.isArray(list) ? list : []) {
-      if (typeof entry?.id === 'string' && entry.selected !== false) ids.add(entry.id)
+      // A stale entry (selected false or absent) is not an install.
+      if (typeof entry?.id === 'string' && entry.selected === true) ids.add(entry.id)
     }
   } catch { /* Unknown. */ }
   return ids
@@ -170,34 +184,41 @@ function installedModuleIds(editorBinary: string, deps: InstallDeps): Set<string
 function mapRelease(raw: any, deps: InstallDeps, platform: string, arch: string): InstallRelease | null {
   const downloads: any[] = Array.isArray(raw?.downloads) ? raw.downloads : []
   const dl = downloads.find(d => d?.platform === platform && d?.architecture === arch) ?? downloads[0]
-  if (!dl || typeof raw?.version !== 'string') return null
+  if (!dl || typeof raw?.version !== 'string' || !VERSION_RE.test(raw.version) ||
+      typeof raw.shortRevision !== 'string' || !CHANGESET_RE.test(raw.shortRevision)) return null
+  const downloadBytes = bytes(dl.downloadSize)
+  const installedBytes = bytes(dl.installedSize)
+  if (downloadBytes === null || installedBytes === null) return null
   const editor = deps.editors().find(e => e.version === raw.version)
   const have = editor ? installedModuleIds(editor.path, deps) : new Set<string>()
   const modules: InstallModule[] = []
   for (const m of Array.isArray(dl.modules) ? dl.modules : []) {
-    if (m?.hidden !== false || typeof m?.id !== 'string') continue
+    if (m?.hidden !== false || typeof m?.id !== 'string' || !MODULE_ID.test(m.id)) continue
     const parts = flattenParts(m)
+    const download = [m, ...parts].map(x => bytes(x.downloadSize))
+    const disk = [m, ...parts].map(x => bytes(x.installedSize))
+    if (download.includes(null) || disk.includes(null)) continue
     modules.push({
       id: m.id,
       name: String(m.name ?? m.id),
       category: String(m.category ?? ''),
-      downloadBytes: bytes(m.downloadSize) + parts.reduce((s, x) => s + bytes(x.downloadSize), 0),
-      installedBytes: bytes(m.installedSize) + parts.reduce((s, x) => s + bytes(x.installedSize), 0),
+      downloadBytes: download.reduce((a, b) => a! + b!, 0)!,
+      installedBytes: disk.reduce((a, b) => a! + b!, 0)!,
       preSelected: m.preSelected === true,
       eulas: collectEulas([m, ...parts]),
-      parts: parts.map(x => ({ id: String(x.id), name: String(x.name ?? x.id), downloadBytes: bytes(x.downloadSize) })),
+      parts: parts.map(x => ({ id: String(x.id), name: String(x.name ?? x.id), downloadBytes: bytes(x.downloadSize)! })),
       installed: have.has(m.id),
     })
   }
   return {
     version: raw.version,
-    changeset: String(raw.shortRevision ?? ''),
+    changeset: raw.shortRevision,
     stream: raw.stream === 'SUPPORTED' ? 'SUPPORTED' : 'LTS',
     releaseDate: String(raw.releaseDate ?? ''),
     recommended: raw.recommended === true,
     installed: !!editor,
-    downloadBytes: bytes(dl.downloadSize),
-    installedBytes: bytes(dl.installedSize),
+    downloadBytes,
+    installedBytes,
     modules,
   }
 }
@@ -269,25 +290,16 @@ function resolveSelection(req: InstallRequest, deps: InstallDeps): Selection {
   const release = lastCatalog?.find(r => r.version === req.version)
   if (!release) return { ok: false, code: 'unknownVersion' }
   const ids = [...new Set(req.modules as string[])]
-  let modules: InstallModule[] = []
+  const modules: InstallModule[] = []
   for (const id of ids) {
     const found = release.modules.find(m => m.id === id)
     if (!found) return { ok: false, code: 'unknownModule' }
     modules.push(found)
   }
   const editorInstalled = deps.editors().some(e => e.version === release.version)
-  if (editorInstalled) {
-    modules = modules.filter(m => !m.installed)
-    // install-modules with nothing to add has no meaning.
-    if (modules.length === 0) return { ok: false, code: 'invalidArguments' }
-  }
+  // install-modules with nothing to add has no meaning. Installed modules stay: ticking one reinstalls it.
+  if (editorInstalled && modules.length === 0) return { ok: false, code: 'invalidArguments' }
   return { ok: true, release, modules, editorInstalled }
-}
-
-function defaultInstallRoot(deps: InstallDeps): string {
-  return deps.platform === 'win32'
-    ? path.win32.join(deps.env.ProgramFiles || 'C:\\Program Files', 'Unity', 'Hub', 'Editor')
-    : path.posix.join(path.posix.sep, 'Applications', 'Unity', 'Hub', 'Editor')
 }
 
 function parseJsonLine(line: string): any | null {
@@ -307,6 +319,7 @@ function captureCli(cli: string, args: string[], deps: InstallDeps): Promise<str
       return
     }
     let out = ''
+    const decoder = new StringDecoder('utf8')
     const startedAt = deps.now()
     let done = false
     const finish = (value: string | null) => {
@@ -320,7 +333,7 @@ function captureCli(cli: string, args: string[], deps: InstallDeps): Promise<str
       try { child.kill() } catch { /* Already gone. */ }
       finish(null)
     }, 1000)
-    child.stdout?.on('data', chunk => { out += chunk.toString() })
+    child.stdout?.on('data', chunk => { out += decoder.write(Buffer.from(chunk)) })
     child.once('error', () => finish(null))
     child.once('close', (code: number | null) => finish(code === 0 ? out : null))
   })
@@ -332,7 +345,7 @@ async function resolveInstallRoot(cli: string, deps: InstallDeps): Promise<strin
     const msg = parseJsonLine(line)
     if (msg?.type === 'result' && msg.success === true && typeof msg.data?.path === 'string' && msg.data.path) return msg.data.path
   }
-  return defaultInstallRoot(deps)
+  return editorRoots(deps)[0] ?? ''
 }
 
 async function freeBytesAt(root: string, deps: InstallDeps): Promise<number | null> {
@@ -353,7 +366,9 @@ async function freeBytesAt(root: string, deps: InstallDeps): Promise<number | nu
 }
 
 async function buildPlan(sel: Extract<Selection, { ok: true }>, cli: string, deps: InstallDeps) {
-  const installRoot = await resolveInstallRoot(cli, deps)
+  // Modules go into the editor's own folder, which may sit on another drive than the CLI's install path.
+  const editor = sel.editorInstalled ? deps.editors().find(e => e.version === sel.release.version) : undefined
+  const installRoot = editor ? editorDir(editor.path, deps) : await resolveInstallRoot(cli, deps)
   const freeBytes = await freeBytesAt(installRoot, deps)
   const editorBytes = sel.editorInstalled ? { d: 0, i: 0 } : { d: sel.release.downloadBytes, i: sel.release.installedBytes }
   const downloadBytes = editorBytes.d + sel.modules.reduce((s, m) => s + m.downloadBytes, 0)
@@ -369,10 +384,7 @@ async function buildPlan(sel: Extract<Selection, { ok: true }>, cli: string, dep
   }
 }
 
-const selectionEulas = (modules: InstallModule[]): InstallEula[] => {
-  const seen = new Set<string>()
-  return modules.flatMap(m => m.eulas).filter(e => !seen.has(e.url) && !!seen.add(e.url))
-}
+const selectionEulas = (modules: InstallModule[]): InstallEula[] => dedupeEulas(modules.flatMap(m => m.eulas))
 
 export async function planInstall(req: InstallRequest, deps: InstallDeps): Promise<PlanResult> {
   const cli = findUnityCli(deps)
@@ -392,9 +404,15 @@ interface ActiveInstall {
 
 let busy = false
 let active: ActiveInstall | null = null
+// A start that has not spawned yet (it still awaits the plan or the install path); a cancel then only sets the flag.
+let pending: { cancelRequested: boolean } | null = null
 
 export function cancelInstall(deps: InstallDeps): { cancelled: boolean; reason?: 'installing' | 'idle' } {
-  if (!active) return { cancelled: false, reason: 'idle' }
+  if (!active) {
+    if (!pending) return { cancelled: false, reason: 'idle' }
+    pending.cancelRequested = true
+    return { cancelled: true }
+  }
   // Measured: killing the CLI in its install phase does not stop the install.
   if (active.phase === 'install') return { cancelled: false, reason: 'installing' }
   active.cancelRequested = true
@@ -413,6 +431,8 @@ export async function startInstall(
     ({ ok: false, code, ...(message ? { message } : {}), ...(completed ? { completed } : {}) })
   if (busy) return fail('busy')
   busy = true
+  const mine = { cancelRequested: false }
+  pending = mine
   try {
     const cli = findUnityCli(deps)
     if (!cli) return fail('cliMissing')
@@ -430,10 +450,13 @@ export async function startInstall(
     else args.push('install', version, '--changeset', sel.release.changeset, '--yes')
     for (const m of sel.modules) args.push('-m', m.id)
     if (needsEula) args.push('--accept-eula')
+    // runInstall spawns synchronously, so nothing can slip in between this check and the spawn.
+    if (mine.cancelRequested) return fail('cancelled')
     return await runInstall(cli, args, onProgress, deps, fail)
   } finally {
     busy = false
     active = null
+    pending = null
   }
 }
 
@@ -468,6 +491,8 @@ function runInstall(
     let stderrTail = ''
     let buffer = ''
     let settled = false
+    const outDecoder = new StringDecoder('utf8')
+    const errDecoder = new StringDecoder('utf8')
 
     const emit = (phase: InstallPhase = state.phase) => onProgress({
       phase,
@@ -507,14 +532,14 @@ function runInstall(
     }
 
     child.stdout?.on('data', chunk => {
-      buffer += chunk.toString()
+      buffer += outDecoder.write(Buffer.from(chunk))
       let nl: number
       while ((nl = buffer.indexOf('\n')) >= 0) {
         handleLine(buffer.slice(0, nl))
         buffer = buffer.slice(nl + 1)
       }
     })
-    child.stderr?.on('data', chunk => { stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_KEEP) })
+    child.stderr?.on('data', chunk => { stderrTail = (stderrTail + errDecoder.write(Buffer.from(chunk))).slice(-STDERR_KEEP) })
 
     const finish = (outcome: InstallResult) => {
       if (settled) return
@@ -534,9 +559,10 @@ function runInstall(
       if (settled) return
       handleLine(buffer)
       buffer = ''
-      if (state.cancelRequested) return finish(fail('cancelled'))
       const completed = Array.isArray(result?.data?.completedUids) ? result.data.completedUids.map(String) : undefined
+      // A success line wins over a cancel that came after it (the install did finish), as in unity-create.ts.
       if (result?.success === true) return finish({ ok: true, completed: completed ?? [] })
+      if (state.cancelRequested) return finish(fail('cancelled'))
       if (result?.success === false) {
         const first = result.errors?.[0]
         if (first?.code === 'ELEVATION_REQUIRED') return finish(fail('elevationRefused', first.message, completed))
