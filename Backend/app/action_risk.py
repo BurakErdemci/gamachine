@@ -11,12 +11,13 @@ text (the card shows "Kritik: <reason>"); `detail` names the program, path or
 Unity tool.action behind it. Pure and deterministic apart from resolving paths
 on the real file system (symlinks, 8.3 names), which is the point of it.
 
-Shell commands use a SAFE LIST, not a list of dangerous commands: a
-dangerous-list approach was measured to be bypassable on Windows PowerShell
-(5 of 11 forms, Burak, 27 Sep 2026). A command is routine only when
-command_safety calls it auto-safe or it is one of a few exact build/test forms
-below; the scan for a reason on a critical command only names it, it never
-makes anything routine.
+Owner decision (Burak, 2 Nov 2026, "BALANCED ÖLÇÜTÜ"): like computer use and
+the browser, only irreversible or security-changing work gets a card. Shell
+commands are therefore judged by a list of dangerous forms (delete/move,
+network sends, installs, irreversible git, permissions, tool config paths,
+leaving the workspace, control characters); any other program inside the
+workspace is routine. Such a list was measured to be bypassable by spelling
+(5 of 11 PowerShell forms, 27 Sep 2026); step mode keeps the safe list.
 
 The fixed Unity file rules (unity_file_guard: .meta files, raw writes to Unity
 YAML) run BEFORE this in every mode; nothing here relaxes them.
@@ -29,9 +30,11 @@ actions, which never reach the agy hook.
 from __future__ import annotations
 
 import ast
+import glob
 import ntpath
 import os
 import re
+import shlex
 from typing import Any, Iterable, Mapping, NamedTuple, Optional
 
 from agentic import command_safety
@@ -115,7 +118,28 @@ def _classify(action: dict) -> Risk:
         return _routine("mail")
     if kind == "permission":
         return _critical("permission_request", action.get("tool") or "")
+    if kind == "other":
+        return _classify_other(action.get("tool"))
     return _critical("unknown_action", action.get("tool") or kind or "")
+
+
+# Claude's built-in read, agent and planning tools. Its write and shell tools map
+# to file_write and shell before this; a built-in added later stays critical.
+_CLAUDE_ROUTINE_TOOLS = frozenset({
+    "Task", "Agent", "Skill", "WebFetch", "WebSearch", "Read", "Glob", "Grep", "LS",
+    "TodoWrite", "TodoRead", "NotebookRead", "ToolSearch", "AskUserQuestion", "ExitPlanMode",
+    "EnterPlanMode", "BashOutput", "KillShell", "ListMcpResourcesTool", "ReadMcpResourceTool",
+})
+
+
+def _classify_other(tool: Any) -> Risk:
+    # An MCP tool reaching here belongs to a server Gamachine does not own (its
+    # own servers are allowed or carded before the classifier).
+    if isinstance(tool, str) and tool.startswith("mcp__"):
+        return _critical("mcp_unknown_tool", tool)
+    if tool in _CLAUDE_ROUTINE_TOOLS:
+        return _routine("builtin_tool", tool)
+    return _critical("unknown_action", tool if isinstance(tool, str) else "other")
 
 
 def _first(paths: list) -> str:
@@ -186,8 +210,7 @@ def protected_reason(parts: list) -> Optional[str]:
     names = [_part(p) for p in parts]
     if not names:
         return "workspace root"
-    if names[0].startswith("."):
-        return "/".join(parts)
+    # Other dot files (.gitignore, .editorconfig, .env) are ordinary workspace files.
     if any(n in _PROTECTED_DIRS for n in names) or names[-1] in _PROTECTED_NAMES:
         return "/".join(parts)
     if len(names) >= 2 and names[-2] == "packages" and names[-1] in _PACKAGES_FILES:
@@ -221,6 +244,31 @@ def _classify_read(paths: list, base: str, workspace: str) -> Risk:
 UNITY_PREFIX = "mcp__unityMCP__"
 
 
+# Owner decision (2 Nov 2026): these writes are critical in the shared ledger
+# (tool_actions.json, which step mode and the Unity server also read) but are
+# not destructive, so balanced runs them without a card. Deletes, removes,
+# moves, renames, code, packages, dialogs and Save As stay critical.
+_UNITY_BALANCED_ROUTINE = {
+    "manage_scene": frozenset({"create", "load", "close_scene"}),
+    "manage_build": frozenset({"build", "batch", "cancel", "platform", "profiles",
+                                "settings", "scenes"}),
+    "manage_physics": frozenset({"set_settings", "set_collision_matrix"}),
+    "manage_graphics": frozenset({"pipeline_set_quality", "pipeline_set_settings"}),
+}
+
+
+def _unity_balanced_routine(bare: str, args: Mapping) -> bool:
+    allowed = _UNITY_BALANCED_ROUTINE.get(bare)
+    if not allowed:
+        return False
+    # One spelling of the action key only: the server folds case and underscores.
+    keys = [k for k in args if isinstance(k, str) and k.replace("_", "").lower() == "action"]
+    if keys != ["action"]:
+        return False
+    action = args["action"]
+    return isinstance(action, str) and action.lower() in allowed
+
+
 def classify_unity(tool: Any, args: Any) -> Risk:
     if not isinstance(tool, str) or not tool:
         return _critical("unity_unknown_tool", "")
@@ -237,7 +285,7 @@ def classify_unity(tool: Any, args: Any) -> Risk:
         detail = f"{bare}.{action}"
     if risk == "read":
         return _routine("unity_read", detail)
-    if risk == "routine":
+    if risk == "routine" or (risk == "critical" and _unity_balanced_routine(bare, args)):
         return _routine("unity_routine_write", detail)
     if risk == "unknown":
         return _critical("unity_unknown_tool", detail)
@@ -663,15 +711,20 @@ def _confinement_root(cwd: str, workspace: str) -> "tuple[Optional[str], bool]":
     return _resolve(cwd, workspace), True
 
 
-def classify_shell(command: Any, *, cwd: str = "", workspace: str = "") -> Risk:
+def classify_shell(command: Any, *, cwd: str = "", workspace: str = "", _depth: int = 0) -> Risk:
     if not isinstance(command, str) or not command.strip():
         return _critical("shell_unparseable", "")
+    if _depth > 3:
+        return _critical("shell_inline_code", "nested too deep")
     root, cwd_ok = _confinement_root(cwd, workspace)
-    if cwd_ok and command_safety.is_auto_safe(command, root):
-        return _routine("shell_safe_list", command.strip().split()[0])
     raw = command.strip()
+    tokens = command_safety._tokenize(raw)
+    # Bash expands `{..,x}/secret` to `../secret`; the safe list reads one name.
+    if tokens and root and _brace_escapes(tokens, root):
+        return _critical("shell_outside_workspace", _verb(tokens[0]))
+    if cwd_ok and command_safety.is_auto_safe(command, root):
+        return _routine("shell_safe_list", raw.split()[0])
     if cwd_ok and all(ch in _BUILD_CHARS for ch in raw):
-        tokens = command_safety._tokenize(raw)
         if tokens:
             form = _build_form(tokens)
             # Build/test programs are native executables that take their
@@ -679,21 +732,34 @@ def classify_shell(command: Any, *, cwd: str = "", workspace: str = "") -> Risk:
             # only PowerShell's own cmdlets read `Name:` as a provider.
             if form and command_safety._stays_in_workspace(tokens, root, native=True):
                 return _routine("shell_build_allowlist", form)
-    return _shell_reason(raw, cwd_ok)
+    return _shell_reason(raw, tokens, cwd_ok, root, cwd, workspace, _depth)
 
 
-# Naming a critical command. None of this decides routine; it only picks the
-# reason the card shows, so a miss here costs a vaguer reason, not a hole.
+# Owner decision (Burak, 2 Nov 2026, "BALANCED ÖLÇÜTÜ"): like computer use and
+# the browser, a card only for irreversible or security-changing work. A shell
+# command is critical when it deletes or moves, sends over the network, installs,
+# rewrites git history or the remote, widens permissions, touches a tool config
+# path, leaves the workspace, or chains with control characters; any other
+# program inside the workspace runs. This is a danger list, so it can be
+# bypassed by spelling (measured 27 Sep 2026); the owner accepted that for
+# balanced, and step mode keeps the safe list.
 _WORDS = re.compile(r"[\s;|&(){}<>`,]+")
+_INNER_WORDS = re.compile(r"[\s;|&(){}<>`,\[\]=+:]+")
 _DELETE_MOVE = frozenset({
     "rm", "del", "erase", "rmdir", "rd", "unlink", "shred", "rimraf", "remove-item", "ri",
     "mv", "move", "ren", "rename", "move-item", "mi", "rename-item", "rni", "clear-content",
     "clc", "clear-item", "cli", "diskpart", "cipher", "sdelete",
 })
-_INTERPRETERS = frozenset({
-    "powershell", "pwsh", "cmd", "bash", "sh", "zsh", "dash", "python", "python3", "py",
-    "node", "deno", "bun", "perl", "ruby", "php", "wscript", "cscript", "mshta",
+_FIND_DESTRUCTIVE = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir"})
+_ROBOCOPY_DESTRUCTIVE = frozenset({"/mir", "/purge", "/mov", "/move"})
+_POWERSHELLS = frozenset({"powershell", "pwsh", "powershell_ise"})
+_POSIX_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+_POSIX_SYSTEM_DIRS = ("/bin/", "/usr/bin/", "/usr/local/bin/")
+_CODE_INTERPRETERS = frozenset({
+    "python", "python3", "py", "node", "deno", "bun", "perl", "ruby", "php",
 })
+_SCRIPT_HOSTS = frozenset({"cmd", "wscript", "cscript", "mshta"})
+_INTERPRETERS = _POWERSHELLS | _POSIX_SHELLS | _CODE_INTERPRETERS | _SCRIPT_HOSTS
 _INLINE_FLAGS = frozenset({
     "-c", "-e", "-p", "-r", "-command", "-encodedcommand", "-enc", "-ec", "-en", "-encoded",
     "/c", "/k", "/r", "--eval", "--print", "--command",
@@ -704,10 +770,16 @@ _INLINE_VERBS = frozenset({
     "invoke-item",
 })
 _NETWORK = frozenset({
-    "curl", "wget", "iwr", "irm", "invoke-webrequest", "invoke-restmethod",
     "start-bitstransfer", "certutil", "bitsadmin", "scp", "sftp", "ftp", "ssh", "nc", "ncat",
-    "telnet", "rsync", "net.webclient", "system.net.webclient",
+    "telnet", "rsync", "net.webclient", "system.net.webclient", "send-mailmessage", "gh", "twine",
 })
+# Downloaders: critical only when they send data or upload.
+_HTTP_CLIENTS = frozenset({"curl", "wget", "iwr", "irm", "invoke-webrequest", "invoke-restmethod"})
+_CURL_SEND = frozenset({"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
+                        "--data-ascii", "-F", "--form", "--form-string", "-T", "--upload-file",
+                        "--json"})
+_WGET_SEND = ("--post-data", "--post-file", "--body-data", "--body-file")
+_READ_METHODS = frozenset({"get", "head", "options"})
 _PACKAGE_MANAGERS = frozenset({"npm", "pnpm", "yarn", "bun", "pip", "pip3", "pipx", "uv",
                                "gem", "cargo", "go", "composer", "nuget"})
 _INSTALL_SUBS = frozenset({
@@ -718,6 +790,37 @@ _SYSTEM_INSTALLERS = frozenset({
     "winget", "choco", "scoop", "apt", "apt-get", "brew", "dnf", "yum", "pacman", "snap",
     "install-module", "install-package", "install-script", "npx", "pnpx", "dotnet-install",
 })
+_PERMISSION = frozenset({
+    "chmod", "chown", "chgrp", "icacls", "cacls", "takeown", "set-acl", "sudo", "runas",
+    "gsudo", "netsh", "reg", "setx",
+})
+# git global options that take the next word as their value.
+_GIT_VALUE_OPTIONS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace",
+                                "--config-env", "--exec-path"})
+# Options that make git run another program.
+_GIT_RUNS_PROGRAMS = ("-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack")
+_GIT_HISTORY = frozenset({"rebase", "filter-branch", "filter-repo", "update-ref", "prune",
+                          "send-email"})
+# Inline code: language-level delete, network and outside-path forms.
+_INLINE_API = re.compile(
+    r"\bos\.(?:remove|unlink|rmdir|removedirs|rename|replace)\b|\bshutil\.(?:rmtree|move)\b"
+    r"|\.(?:unlink|rmdir)\s*\(|\b(?:rmtree|rmSync|unlinkSync|rmdirSync|renameSync|send2trash)\b"
+    r"|\bfs\.(?:promises\.)?(?:rm|unlink|rmdir|rename)\b|\b(?:File|Directory)\.(?:Delete|Move)\b"
+    r"|\bunlink\s*\(|\burllib\b|\burlopen\b|\brequests\.|\bhttp\.client\b|\bhttpx\b|\baiohttp\b"
+    r"|\bsocket\b|\bsmtplib\b|\bftplib\b|\bparamiko\b|\bfetch\s*\(|\bXMLHttpRequest\b"
+    r"|\bWebSocket\b|\bhttps?\.(?:get|request)\b|\bnet\.(?:connect|createConnection)\b"
+    r"|\bLWP\b|\bWebClient\b|\bhttps?://|\bensurepip\b|\bpip\.main\b",
+    re.IGNORECASE)
+_INLINE_OUTSIDE = re.compile(
+    r"(?:^|[\s'\"(=,\[])(?:[A-Za-z]:[\\/]|\\\\|//|~[\\/]|/(?![/\s*])|\.\.(?:[\\/]|['\"]|$))")
+_URL = re.compile(r"^https?://", re.IGNORECASE)
+# PowerShell resolves these to provider cmdlets, where `Name:` is a drive.
+_PS_PROVIDER_HEADS = frozenset({
+    "ls", "ll", "la", "cat", "echo", "pwd", "diff", "dir", "gci", "gc", "type", "sc", "ac",
+    "ni", "md", "mkdir", "copy", "cp", "cpi", "cd", "sl", "tee", "sp", "gp", "ii", "write",
+})
+_BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
+_BRACE_MAX = 64
 
 
 def _verb(word: str) -> str:
@@ -728,21 +831,72 @@ def _verb(word: str) -> str:
     return name
 
 
-def _shell_reason(raw: str, cwd_ok: bool) -> Risk:
-    words = [w for w in _WORDS.split(raw) if w]
+def _brace_variants(token: str) -> Optional[list]:
+    """Every word bash makes of `token`'s comma braces; None past _BRACE_MAX."""
+    out, todo = [], [token]
+    while todo:
+        word = todo.pop()
+        m = _BRACE.search(word)
+        if m is None:
+            out.append(word)
+        else:
+            todo.extend(word[:m.start()] + alt + word[m.end():] for alt in m.group(1).split(","))
+        if len(out) + len(todo) > _BRACE_MAX:
+            return None
+    return out
+
+
+def _brace_escapes(tokens: list, root: str) -> bool:
+    for token in tokens[1:]:
+        if "{" not in token:
+            continue
+        variants = _brace_variants(token)
+        if variants is None or not command_safety._stays_in_workspace([tokens[0]] + variants, root):
+            return True
+    return False
+
+
+def _unquoted(raw: str) -> Optional[str]:
+    """`raw` without the inside of '...' and "..." strings; None when a quote is open."""
+    out, quote = [], None
+    for ch in raw:
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        else:
+            out.append(ch)
+    return None if quote else "".join(out)
+
+
+def _trigger(words: list, *, inline: bool = False) -> Optional[Risk]:
+    """The delete, network, install, permission or git-history trigger in `words`.
+    In inline code any download counts, not only a send."""
+    lows = [w.strip("'\"“”‘’") for w in words]
     verbs = [_verb(w) for w in words]
-    lows = [w.lower().strip("'\"“”‘’") for w in words]
-    for v in verbs:
-        if v in _DELETE_MOVE:
+    for i, v in enumerate(verbs):
+        if v in _DELETE_MOVE and not (v == "mv" and i and verbs[i - 1] == "git"):
             return _critical("shell_delete_move", v)
-    interpreter = next((v for v in verbs if v in _INTERPRETERS), None)
-    if interpreter and any(w in _INLINE_FLAGS for w in lows):
-        return _critical("shell_inline_code", interpreter)
+        if v == "find" and any(w.lower() in _FIND_DESTRUCTIVE for w in lows[i + 1:]):
+            return _critical("shell_delete_move", "find")
+        if v == "robocopy" and any(w.lower() in _ROBOCOPY_DESTRUCTIVE for w in lows[i + 1:]):
+            return _critical("shell_delete_move", "robocopy")
+        if v == "pytest" and any(w.lower().startswith("--basetemp") for w in lows[i + 1:]):
+            # pytest empties its --basetemp directory before the run.
+            return _critical("shell_delete_move", "pytest --basetemp")
     for v in verbs:
         if v in _INLINE_VERBS:
             return _critical("shell_inline_code", v)
-    for v, w in zip(verbs, lows):
-        if v in _NETWORK or "http://" in w or "https://" in w or "net.webclient" in w:
+    for i, (v, w) in enumerate(zip(verbs, lows)):
+        if v in _NETWORK or "net.webclient" in w.lower():
+            return _critical("shell_network", v)
+        if v in _HTTP_CLIENTS and (inline or _sends(v, lows[i + 1:])):
+            return _critical("shell_network", v)
+        if inline and _URL.match(w):
+            return _critical("shell_network", w)
+        if v in ("dotnet", "msbuild") and any(re.search(r"https?://", a, re.I) for a in lows[i + 1:]):
+            # -p:RestoreSources=<url> and the like pull packages from that host.
             return _critical("shell_network", v)
     for i, v in enumerate(verbs):
         nxt = verbs[i + 1] if i + 1 < len(verbs) else ""
@@ -754,18 +908,225 @@ def _shell_reason(raw: str, cwd_ok: bool) -> Risk:
             return _critical("shell_installer", f"{v} -m {verbs[i + 2]}")
         if v == "dotnet" and nxt in ("add", "remove", "tool", "new", "workload", "nuget", "restore"):
             return _critical("shell_installer", f"dotnet {nxt}")
-        if v == "git" and nxt and nxt not in _GIT_READS:
-            return _critical("shell_git_write", f"git {nxt}")
-    if any(ch in raw for ch in command_safety._CONTROL_CHARS) or re.search(r"[{}@%^!\"'“”‘’]", raw):
-        return _critical("shell_metachar", verbs[0] if verbs else "")
-    if not cwd_ok:
-        return _critical("shell_outside_workspace", verbs[0] if verbs else "")
+        if v in _PERMISSION:
+            return _critical("shell_permission", v)
+        if v == "git":
+            risk = _git_risk(lows[i + 1:])
+            if risk is not None:
+                return risk
+    return None
+
+
+def _method_of(args: list, i: int, sep: str) -> str:
+    arg = args[i]
+    if sep in arg:
+        return arg.split(sep, 1)[1].lower()
+    return args[i + 1].lower() if i + 1 < len(args) else ""
+
+
+def _sends(verb: str, args: list) -> bool:
+    if verb == "curl":
+        for i, a in enumerate(args):
+            if a in _CURL_SEND or (a.startswith("--") and a.split("=", 1)[0] in _CURL_SEND):
+                return True
+            if re.fullmatch(r"-[A-Za-z]+", a) and set(a[1:]) & {"d", "F", "T"}:
+                return True
+            if a.startswith("-X"):
+                method = a[2:].lower() or _method_of(args, i, "=")
+            elif a.split("=", 1)[0] == "--request":
+                method = _method_of(args, i, "=")
+            else:
+                continue
+            if method not in _READ_METHODS:
+                return True
+        return False
+    if verb == "wget":
+        for i, a in enumerate(args):
+            low = a.lower()
+            if low.startswith(_WGET_SEND):
+                return True
+            if low.startswith("--method") and _method_of(args, i, "=") not in _READ_METHODS:
+                return True
+        return False
+    # Invoke-WebRequest / Invoke-RestMethod; PowerShell accepts any unique prefix.
+    for i, a in enumerate(args):
+        low = a.lower()
+        if low.startswith(("-b", "-inf", "-fo")):
+            return True
+        if low.startswith("-me") and _method_of(args, i, ":") not in _READ_METHODS:
+            return True
+    return False
+
+
+def _git_risk(args: list) -> Optional[Risk]:
+    """Irreversible git, a global config change, or an option that runs a program."""
+    for a in args:
+        low = a.lower()
+        if any(low == o or low.startswith(o + "=") for o in _GIT_RUNS_PROGRAMS) \
+                or low.startswith(("--upload-pack", "--receive-pack")):
+            return _critical("shell_git_write", f"git {low}")
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        i += 2 if args[i] in _GIT_VALUE_OPTIONS else 1
+    if i >= len(args):
+        return None
+    sub = _verb(args[i])
+    rest = [a.lower() if a.startswith("--") else a for a in args[i + 1:]]
+    shorts = "".join(a[1:] for a in rest if re.fullmatch(r"-[A-Za-z]+", a))
+    detail = f"git {sub}"
+    if sub == "push" or sub in _GIT_HISTORY:
+        return _critical("shell_git_write", detail)
+    if sub == "reset" and "--hard" in rest:
+        return _critical("shell_git_write", detail + " --hard")
+    if sub == "clean" and "n" not in shorts and "--dry-run" not in rest:
+        return _critical("shell_git_write", detail)
+    if sub == "branch" and (set(shorts) & {"D", "M", "C"} or (
+            ("d" in shorts or "--delete" in rest) and ("f" in shorts or "--force" in rest))):
+        return _critical("shell_git_write", detail)
+    if sub == "reflog" and rest[:1] and rest[0].lower() in ("expire", "delete"):
+        return _critical("shell_git_write", f"{detail} {rest[0].lower()}")
+    if sub == "gc" and any(a.startswith("--prune") for a in rest):
+        return _critical("shell_git_write", detail + " --prune")
+    if sub == "config" and any(a in ("--global", "--system") for a in rest):
+        return _critical("shell_git_write", detail)
+    return None
+
+
+# Bash, not this module, splits a wrapped script: it removes quotes (`"grep"`),
+# unescapes `.\.` to `..`, expands globs (a match may be a junction out) and
+# binds attached flag values, and the safe list's argv guarantee does not hold.
+_POSIX_SCRIPT_UNSAFE = re.compile(r"[\"'\\*?\[\]]|(?:^|\s)-[A-Za-z]+[.\\/:~]")
+
+
+def _posix_script(raw: str) -> Optional[str]:
+    """The script after a POSIX shell's -c flag, quoted the way the shell reads it
+    (the Windows tokenizer keeps single quotes and drops double ones)."""
+    try:
+        words = shlex.split(raw, posix=True)
+    except ValueError:
+        return None
+    flag = next((i for i, w in enumerate(words) if re.fullmatch(r"-[a-z]*c[a-z]*", w)), None)
+    if flag is None or flag + 1 >= len(words):
+        return None
+    return words[flag + 1]
+
+
+def _posix_script_unreadable(script: str) -> bool:
+    if _POSIX_SCRIPT_UNSAFE.search(script):
+        return True
+    words = script.split()
+    head = _verb(words[0]) if words else ""
+    shorts = "".join(w[1:] for w in words[1:] if re.fullmatch(r"-[A-Za-z]+", w))
+    if head == "tree":
+        # -o writes the listing to a file; -R reruns with -o.
+        return bool(set(shorts) & {"o", "R"}) or any(w.startswith("--output") for w in words)
+    if head in ("grep", "egrep", "fgrep"):
+        # -R follows symlinks out of the tree.
+        return "R" in shorts or "--dereference-recursive" in words
+    return False
+
+
+def _interpreter_risk(raw: str, tokens: Optional[list], verbs: list, cwd: str, workspace: str,
+                      depth: int) -> Optional[Risk]:
+    """Inline code. PowerShell and cmd always ask: their quoting, comma arrays and
+    provider paths differ from what this module reads. A POSIX shell's script is
+    classified by these same rules. Other languages ask only when the code holds a
+    delete, network, install or outside-path trigger."""
+    for v in verbs:
+        if v in _POWERSHELLS:
+            if "-file" in verbs and not any(w in _INLINE_FLAGS for w in verbs):
+                break
+            return _critical("shell_inline_code", v)
+        if v in _SCRIPT_HOSTS:
+            return _critical("shell_inline_code", v)
+    if not tokens:
+        return None
+    for i, tok in enumerate(tokens):
+        v = _verb(tok)
+        if v in _POSIX_SHELLS:
+            flag = next((j for j in range(i + 1, len(tokens))
+                         if re.fullmatch(r"-[a-z]*c[a-z]*", tokens[j])), None)
+            if flag is None:
+                return None
+            if re.search(r"[\\/]", tok) and not tok.startswith(_POSIX_SYSTEM_DIRS):
+                # Not a system shell: a workspace binary may stand behind the path.
+                return _critical("shell_inline_code", v)
+            script = _posix_script(raw)
+            if script is None:
+                return _critical("shell_unparseable", v)
+            if _posix_script_unreadable(script):
+                return _critical("shell_inline_code", v)
+            inner = classify_shell(script, cwd=cwd, workspace=workspace, _depth=depth + 1)
+            return inner if inner.critical else None
+        if v in _CODE_INTERPRETERS:
+            flag = next((j for j in range(i + 1, len(tokens))
+                         if tokens[j].lower() in _INLINE_FLAGS), None)
+            if flag is None:
+                return None
+            code = tokens[flag + 1] if flag + 1 < len(tokens) else ""
+            found = _trigger([w for w in _INNER_WORDS.split(code) if w], inline=True)
+            if found is not None:
+                return _critical("shell_inline_risky", f"{v}: {found.detail}")
+            if _INLINE_API.search(code) or _INLINE_OUTSIDE.search(code):
+                return _critical("shell_inline_risky", v)
+            return None
+    return None
+
+
+def _shell_reason(raw: str, tokens: Optional[list], cwd_ok: bool, root: Optional[str],
+                  cwd: str, workspace: str, depth: int) -> Risk:
+    words = [w for w in _WORDS.split(raw) if w]
+    verbs = [_verb(w) for w in words]
+    interpreted = any(v in _INTERPRETERS for v in verbs)
+    unquoted = _unquoted(raw)
+    if interpreted or tokens is None or unquoted is None:
+        scan = words
+    else:
+        # Quoted text is one argument (a commit message, a file name), not a verb.
+        scan = [w for w in _WORDS.split(unquoted) if w] + tokens
+    found = _trigger(scan)
+    if found is not None:
+        return found
+    if interpreted:
+        found = _interpreter_risk(raw, tokens, verbs, cwd, workspace, depth)
+        if found is not None:
+            return found
     head = verbs[0] if verbs else ""
-    tokens = command_safety._tokenize(raw) or []
-    if tokens and _build_form(tokens) and all(ch in _BUILD_CHARS for ch in raw):
-        # An allow-listed form, so only the confinement can have failed.
+    if unquoted is None or tokens is None:
+        return _critical("shell_unparseable", head)
+    if (any(ch in unquoted for ch in command_safety._CONTROL_CHARS)
+            or any(ch in raw for ch in "$`\n\r")):
+        return _critical("shell_metachar", head)
+    if not cwd_ok:
         return _critical("shell_outside_workspace", head)
-    return _critical("shell_unknown_program", head)
+    args = []
+    for tok in tokens[1:]:
+        if _URL.match(tok):
+            continue
+        args.append(tok)
+        if "%" in tok:
+            args.append(os.path.expandvars(tok))
+        if root and any(ch in tok for ch in "*?["):
+            # A match may be a junction that leads out of the workspace; each
+            # prefix counts, since `lin*/new` names a file that does not exist yet.
+            parts = re.split(r"[\\/]", tok)
+            for k in range(1, len(parts) + 1):
+                prefix = "/".join(parts[:k])
+                if any(ch in prefix for ch in "*?["):
+                    try:
+                        args.extend(glob.glob(prefix, root_dir=root))
+                    except (OSError, ValueError):
+                        pass
+    native = not ("-" in head or head in _PS_PROVIDER_HEADS)
+    if not command_safety._stays_in_workspace([tokens[0]] + args, root, native=native):
+        return _critical("shell_outside_workspace", head)
+    if workspace and head != "git":
+        for tok in args:
+            candidate = command_safety._attached_flag_value(tok) if tok.startswith("-") else tok
+            parts = _relative_parts(candidate, root or workspace, workspace) if candidate else None
+            if parts and protected_reason(parts) is not None:
+                return _critical("shell_tool_config", "/".join(parts))
+    return _routine("shell_in_workspace", head)
 
 
 def classify_many(actions: Iterable[Any]) -> Risk:

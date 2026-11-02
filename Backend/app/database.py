@@ -335,7 +335,13 @@ class DatabaseManager:
                 approval_mode TEXT,
                 decision TEXT,
                 device TEXT,
-                outcome TEXT NOT NULL)''')
+                outcome TEXT NOT NULL,
+                reason TEXT)''')
+            # Databases from before the balanced reason code (2 Nov 2026).
+            try:
+                cursor.execute("ALTER TABLE approval_ledger ADD COLUMN reason TEXT")
+            except sqlite3.OperationalError:
+                pass
             cursor.execute(
                 'CREATE INDEX IF NOT EXISTS idx_approval_ledger_at ON approval_ledger (at)')
             # The ledger sees only carded actions; messages lose history on
@@ -846,7 +852,7 @@ class DatabaseManager:
 
     # ===================== APPROVAL LEDGER =====================
     _LEDGER_COLS = ("at", "card_id", "conversation_id", "kind", "tool", "params_hash",
-                    "approval_mode", "decision", "device", "outcome")
+                    "approval_mode", "decision", "device", "outcome", "reason")
 
     def record_card_resolution(self, row: Dict[str, Any]) -> bool:
         """Queue one ledger row; False when it was dropped. Returns at once:

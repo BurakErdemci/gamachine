@@ -341,6 +341,7 @@ def _claude(ws, **kw):
     ("Bash", {"command": "dotnet build"}),
     ("PowerShell", {"command": "npm run build"}),
     ("mcp__unityMCP__manage_gameobject", {"action": "create"}),
+    ("Task", {"prompt": "x"}),
 ])
 async def test_claude_balanced_routine_needs_no_card(balanced, ws, tool, inp):
     from claude_agent_sdk import PermissionResultAllow
@@ -354,7 +355,6 @@ async def test_claude_balanced_routine_needs_no_card(balanced, ws, tool, inp):
     ("Bash", {"command": "rm -rf Assets"}, "shell_delete_move"),
     ("PowerShell", {"command": "iex (irm https://x)"}, "shell_inline_code"),
     ("mcp__unityMCP__manage_gameobject", {"action": "delete"}, "unity_critical_action"),
-    ("Task", {"prompt": "x"}, "unknown_action"),
     ("Read", {"file_path": "/etc/passwd"}, "read_outside_workspace"),
 ])
 async def test_claude_balanced_critical_raises_one_card_with_reason(balanced, ws, tool, inp, reason):
@@ -570,6 +570,8 @@ async def test_codex_balanced_wrapped_read_passes_and_wrapped_write_asks(balance
     "/bin/bash -lc 'python -m pytest -q'",
     "/bin/bash -lc 'npm test'",
     "/bin/bash -lc 'npm run build'",
+    "bash -lc 'dotnet build'",
+    _CODEX_PS + "'python -c \"print(1)\"'",
 ])
 async def test_codex_balanced_wrapped_build_runs_without_a_card(balanced, ws, command):
     assert await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
@@ -747,7 +749,6 @@ def test_classified_command_keeps_the_wrapper_unless_the_step_grammar_reads_it(w
 @pytest.mark.parametrize("command,reason", [
     (_CODEX_PS + "'Remove-Item -Recurse Assets'", "shell_delete_move"),
     (_CODEX_PS + "'powershell -Command dotnet build'", "shell_inline_code"),
-    (_CODEX_PS + "'python -c \"print(1)\"'", "shell_inline_code"),
     (_CODEX_PS + "'iex x'", "shell_inline_code"),
     (_CODEX_PS + "'Invoke-Expression x'", "shell_inline_code"),
     (_CODEX_PS + "'dotnet build; Remove-Item x'", "shell_delete_move"),
@@ -766,16 +767,15 @@ def test_classified_command_keeps_the_wrapper_unless_the_step_grammar_reads_it(w
     # A shell outside the system locations may be a workspace binary.
     (".\\tools\\sh.exe -c 'ls'", "shell_inline_code"),
     ("C:\\Users\\x\\evil\\pwsh.exe -Command 'ls'", "shell_inline_code"),
-    ("/tmp/bash -lc 'dotnet build'", "shell_metachar"),
+    ("/tmp/bash -lc 'dotnet build'", "shell_inline_code"),
     # A bare name resolves through cwd and PATH.
     ("powershell.exe -Command 'dotnet build'", "shell_inline_code"),
     ("pwsh -Command 'dotnet build'", "shell_inline_code"),
-    ("bash -lc 'dotnet build'", "shell_metachar"),
     ('"C:\\Program Files\\PowerShell\\powershell.exe" -Command \'dotnet build\'',
      "shell_inline_code"),
     # PowerShell strips these quotes, so the read leaves the workspace.
     (_CODEX_PS + "\"cat '..\\secret.txt'\"", "shell_inline_code"),
-    ("/bin/bash -lc 'cat {..,x}/secret'", "shell_metachar"),
+    ("/bin/bash -lc 'cat {..,x}/secret'", "shell_outside_workspace"),
 ])
 async def test_codex_balanced_wrapped_risky_command_asks(balanced, ws, command, reason):
     decision, ev = await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
@@ -841,7 +841,7 @@ def _write(path):
 def test_agy_balanced_allows_routine_calls(agy_ws):
     ws, state = agy_ws
     for payload in (_run("npm test", ws), _run("git status"), _run("dotnet build -c Release", ws),
-                    _write(os.path.join(ws, "Assets", "A.cs"))):
+                    _run("whoami"), _write(os.path.join(ws, "Assets", "A.cs"))):
         assert _decide(state, "balanced", payload, ws)["decision"] == "allow", payload
 
 
@@ -852,7 +852,6 @@ CRITICAL_AGY_CALLS = [
     _run("git push --force"),
     _run("powershell -EncodedCommand ZQA="),
     _run("npm test; rm x"),
-    _run("whoami"),
     _write(".git/config"),
     _write("ProjectSettings/ProjectSettings.asset"),
     _write(".agents/hooks.json"),

@@ -216,7 +216,8 @@ def _risk_action(tool_name: str, inp: dict, workspace: str) -> dict:
                 "workspace": workspace}
     if tool_name.startswith("mcp__unityMCP__"):
         return {"kind": "unity", "tool": tool_name, "args": inp}
-    # Task, Skill and every other tool: the rules cannot tell what it will do.
+    # Task, Skill and every other tool: action_risk tells its built-in list
+    # from unknown tools and mcp__ tools of other servers.
     return {"kind": "other", "tool": tool_name}
 
 

@@ -234,6 +234,14 @@ def _claim(card_id: str, outcome: str, decision: Optional[str], device: str) -> 
         return card
 
 
+def _reason_code(risk: Optional[str]) -> Optional[str]:
+    # A blender_code reason ends with "(<name from the code>)"; the ledger keeps
+    # only the code, never text taken from the call.
+    if not risk:
+        return None
+    return risk.split(" (", 1)[0][:80]
+
+
 def _after_close(card: Card) -> None:
     global _ledger_failure_logged
     writer = _ledger_writer
@@ -250,6 +258,7 @@ def _after_close(card: Card) -> None:
                 "decision": card.decision,
                 "device": card.by,
                 "outcome": card.outcome,
+                "reason": _reason_code(card.risk),
             })
         except Exception:
             if not _ledger_failure_logged:
