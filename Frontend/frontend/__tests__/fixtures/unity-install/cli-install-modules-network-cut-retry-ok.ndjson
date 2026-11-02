@@ -1,0 +1,70 @@
+{"type":"progress","pct":0,"msg":"Starting install...","phase":"download"}
+{"type":"progress","pct":1,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":2,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":4,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":5,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":6,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":7,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":9,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":10,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":12,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":13,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":15,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":17,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":19,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":20,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":22,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":24,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":26,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":27,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":29,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":31,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":32,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":34,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":36,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":37,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":39,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":41,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":43,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":45,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":46,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":47,"msg":"Downloading Mac Build Support (Mono)...","phase":"download"}
+{"type":"progress","pct":47,"msg":"Validating...","phase":"download"}
+{"type":"progress","pct":30,"msg":"Installing Mac Build Support (Mono)...","phase":"install"}
+{"type":"progress","pct":47,"msg":"Queued...","phase":"download"}
+{"type":"progress","pct":49,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":51,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":54,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":56,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":59,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":61,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":63,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":65,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":67,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":70,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":72,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":75,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":77,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":79,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":80,"msg":"Downloading Universal Windows Platform Build Support...","phase":"download"}
+{"type":"progress","pct":80,"msg":"Validating...","phase":"download"}
+{"type":"progress","pct":63,"msg":"Installing Universal Windows Platform Build Support...","phase":"install"}
+{"type":"progress","pct":0,"msg":"Module install failed; retrying (attempt 1 of 2) in 2s...","phase":"download"}
+{"type":"progress","pct":81,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":83,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":84,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":86,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":87,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":89,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":90,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":92,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":93,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":95,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":96,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":98,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":99,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":100,"msg":"Downloading iOS Build Support...","phase":"download"}
+{"type":"progress","pct":100,"msg":"Validating...","phase":"download"}
+{"type":"progress","pct":83,"msg":"Installing iOS Build Support...","phase":"install"}
+{"type":"progress","pct":100,"msg":"Install complete"}
+{"type":"result","success":true,"command":"install-modules","data":{"completedUids":["ios","mac-mono","universal-windows-platform"],"items":[{"uid":"ios","name":"iOS Build Support","kind":"module","status":"installed"},{"uid":"mac-mono","name":"Mac Build Support (Mono)","kind":"module","status":"installed"},{"uid":"universal-windows-platform","name":"Universal Windows Platform Build Support","kind":"module","status":"installed"}]},"errors":[],"warnings":["Module install failed; retrying (attempt 1 of 2) in 2s..."]}

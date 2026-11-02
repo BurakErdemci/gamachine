@@ -1,0 +1,86 @@
+Adding module android-ndk-r27c as dependency of android-sdk-ndk-tools.
+Adding module cmake-3.22.1 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-build-tools-36.0.0 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-platform-tools-37.0.1 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-platforms-34 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-platforms-36 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-platforms-37.0 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-command-line-tools-16.0 as dependency of android-sdk-ndk-tools.
+{
+  "success": true,
+  "command": "install",
+  "data": {
+    "alreadyInstalled": false,
+    "editor": {
+      "version": "6000.6.7f1",
+      "architecture": "x86_64",
+      "downloadSize": 3854250800,
+      "checksum": "md5-dWiAKKZ/Yiu5xQ9tLQvXRA=="
+    },
+    "modules": [
+      {
+        "id": "webgl",
+        "name": "Web Build Support",
+        "downloadSize": 1121136272
+      },
+      {
+        "id": "android",
+        "name": "Android Build Support",
+        "downloadSize": 1331454272
+      },
+      {
+        "id": "android-open-jdk-17.0.18+8",
+        "name": "OpenJDK",
+        "downloadSize": 118110508
+      },
+      {
+        "id": "android-ndk-r27c",
+        "name": "Android NDK",
+        "downloadSize": 781511249
+      },
+      {
+        "id": "cmake-3.22.1",
+        "name": "CMake",
+        "downloadSize": 16116742
+      },
+      {
+        "id": "android-sdk-build-tools-36.0.0",
+        "name": "Android SDK Build Tools",
+        "downloadSize": 58699878
+      },
+      {
+        "id": "android-sdk-platform-tools-37.0.1",
+        "name": "Android SDK Platform Tools",
+        "downloadSize": 8044989
+      },
+      {
+        "id": "android-sdk-platforms-34",
+        "name": "Android SDK Platforms 34",
+        "downloadSize": 63180079
+      },
+      {
+        "id": "android-sdk-platforms-36",
+        "name": "Android SDK Platforms 36",
+        "downloadSize": 65878410
+      },
+      {
+        "id": "android-sdk-platforms-37.0",
+        "name": "Android SDK Platforms 37",
+        "downloadSize": 67281901
+      },
+      {
+        "id": "android-sdk-command-line-tools-16.0",
+        "name": "Android SDK Command Line Tools",
+        "downloadSize": 143481958
+      },
+      {
+        "id": "android-sdk-ndk-tools",
+        "name": "Android SDK & NDK Tools",
+        "downloadSize": 166
+      }
+    ],
+    "totalDownloadSize": 7629147224
+  },
+  "errors": [],
+  "warnings": []
+}

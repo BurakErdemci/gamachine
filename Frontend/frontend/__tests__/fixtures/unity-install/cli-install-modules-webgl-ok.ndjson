@@ -1,0 +1,37 @@
+{"type":"progress","pct":0,"msg":"Starting install...","phase":"download"}
+{"type":"progress","pct":2,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":6,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":9,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":14,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":17,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":21,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":25,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":28,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":32,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":36,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":39,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":42,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":45,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":46,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":49,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":53,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":55,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":58,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":62,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":65,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":68,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":70,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":73,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":75,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":78,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":81,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":85,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":88,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":93,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":96,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":99,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":100,"msg":"Downloading Web Build Support...","phase":"download"}
+{"type":"progress","pct":100,"msg":"Validating...","phase":"download"}
+{"type":"progress","pct":50,"msg":"Installing Web Build Support...","phase":"install"}
+{"type":"progress","pct":100,"msg":"Install complete"}
+{"type":"result","success":true,"command":"install-modules","data":{"completedUids":["webgl"],"items":[{"uid":"webgl","name":"Web Build Support","kind":"module","status":"installed"}]},"errors":[],"warnings":[]}

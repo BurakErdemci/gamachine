@@ -1,0 +1,9 @@
+Adding module android-ndk-r27c as dependency of android-sdk-ndk-tools.
+Adding module cmake-3.22.1 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-build-tools-36.0.0 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-platform-tools-36.0.0 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-platforms-34 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-platforms-35 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-platforms-36 as dependency of android-sdk-ndk-tools.
+Adding module android-sdk-command-line-tools-16.0 as dependency of android-sdk-ndk-tools.
+{"type":"result","success":false,"command":"install-modules","data":null,"errors":[{"code":"COMMAND_FAILED","message":"One or more modules require license acceptance. Pass --accept-eula to accept all module license terms and proceed."}],"warnings":[]}

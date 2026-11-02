@@ -38,6 +38,7 @@ import { inspectProject, isUnityProjectDir } from './helpers/unity-project'
 import { findUnityHub } from './helpers/unity-hub'
 import { listEditors, listTemplates, templatesDir, EditorDeps } from './helpers/unity-editors'
 import { createProject, cancelCreate } from './helpers/unity-create'
+import { loadCatalog, planInstall, startInstall, cancelInstall, type InstallDeps } from './helpers/unity-install'
 import { openProject } from './helpers/unity-launch'
 import { trashProject, trashPrompt } from './helpers/project-trash'
 import { readUnityVersion } from './helpers/unity-project'
@@ -428,6 +429,42 @@ handleSecure('hub-create-project', async (event, arg: any) => {
 })
 
 handleSecure('hub-cancel-create', () => cancelCreate())
+
+// Editor install through the Unity CLI (Hub 3.21+ installs the CLI itself; Gamachine never does).
+const installDeps = (): InstallDeps => ({
+  fetch: (url, init) => fetch(url, init),
+  spawn: (command, args, options) => spawn(command, args, options),
+  exists: fs.existsSync,
+  readFile: (p) => fs.readFileSync(p, 'utf-8'),
+  statfs: (p) => fs.promises.statfs(p),
+  platform: process.platform,
+  arch: process.arch,
+  env: process.env,
+  homedir: os.homedir(),
+  now: Date.now,
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clearInterval: (handle) => clearInterval(handle),
+  killTree: (pid) => {
+    try {
+      if (process.platform === 'win32') execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => {})
+      else process.kill(-pid, 'SIGTERM')
+    } catch { /* The process is already gone. */ }
+  },
+  editors: () => listEditors(editorDeps()).editors,
+  findHub: () => findUnityHub(process.platform, process.env, os.homedir(), fs.existsSync),
+})
+
+handleSecure('hub-install-catalog', () => loadCatalog(installDeps()))
+
+handleSecure('hub-install-plan', (_event, arg: any) =>
+  planInstall({ version: arg?.version, modules: arg?.modules }, installDeps()))
+
+handleSecure('hub-install-start', (event, arg: any) =>
+  startInstall({ version: arg?.version, modules: arg?.modules, acceptedEulas: arg?.acceptedEulas }, (progress) => {
+    if (!event.sender.isDestroyed()) event.sender.send('hub-install-progress', progress)
+  }, installDeps()))
+
+handleSecure('hub-install-cancel', () => cancelInstall(installDeps()))
 
 handleSecure('hub-open-project', async (_event, arg: any) => {
   if (!arg || typeof arg.path !== 'string' || (arg.version !== undefined && typeof arg.version !== 'string')) {
