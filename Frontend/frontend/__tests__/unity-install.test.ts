@@ -157,6 +157,78 @@ describe('findUnityCli / cliState', () => {
     expect(findUnityCli(mac.deps)).toBeNull()
   })
 
+  describe('MSIX Hub', () => {
+    const CACHE = 'C:\\Users\\u\\AppData\\Local\\Packages\\UnityTechnologies.UnityHub_2vrhnee42bhxm\\LocalCache'
+    const MSIX_MANIFEST = `${CACHE}\\Roaming\\UnityHub\\cli-install.json`
+    const MSIX_CLI = `${CACHE}\\Local\\Unity\\bin\\unity.exe`
+    const CLASSIC_MANIFEST = 'C:\\Users\\u\\AppData\\Roaming\\UnityHub\\cli-install.json'
+    const msixManifest = (s: Ctx, target: unknown) => {
+      s.present.add(MSIX_MANIFEST)
+      s.files.set(MSIX_MANIFEST, JSON.stringify({ path: target }))
+    }
+
+    it('maps the virtualized LOCALAPPDATA target into LocalCache', () => {
+      const s = setup()
+      msixManifest(s, CLI)
+      s.present.add(MSIX_CLI)
+      expect(findUnityCli(s.deps)).toBe(MSIX_CLI)
+      expect(cliState(s.deps)).toEqual({ available: true })
+    })
+
+    it('maps a virtualized APPDATA target into LocalCache Roaming, ignoring case', () => {
+      const s = setup()
+      const roamingCli = `${CACHE}\\Roaming\\Tools\\unity.exe`
+      msixManifest(s, 'c:\\users\\u\\appdata\\roaming\\Tools\\unity.exe')
+      s.present.add(roamingCli)
+      expect(findUnityCli(s.deps)).toBe(roamingCli)
+    })
+
+    it('uses a manifest target that exists as-is', () => {
+      const s = setup()
+      msixManifest(s, 'D:\\tools\\unity.exe')
+      s.present.add('D:\\tools\\unity.exe')
+      expect(findUnityCli(s.deps)).toBe('D:\\tools\\unity.exe')
+    })
+
+    it('rejects a manifest target that is not the CLI binary', () => {
+      const s = setup()
+      msixManifest(s, 'C:\\Users\\u\\AppData\\Local\\Unity\\bin\\evil.exe')
+      s.present.add(`${CACHE}\\Local\\Unity\\bin\\evil.exe`)
+      expect(findUnityCli(s.deps)).toBeNull()
+    })
+
+    it('does not map a path that merely shares the LOCALAPPDATA prefix', () => {
+      const s = setup()
+      msixManifest(s, 'C:\\Users\\u\\AppData\\LocalLow\\unity.exe')
+      s.present.add(`${CACHE}\\LocalLow\\unity.exe`)
+      expect(findUnityCli(s.deps)).toBeNull()
+    })
+
+    it('finds the CLI by the LocalCache fallback when no manifest exists', () => {
+      const s = setup()
+      s.present.add(MSIX_CLI)
+      expect(findUnityCli(s.deps)).toBe(MSIX_CLI)
+    })
+
+    it('lets the classic manifest win over the MSIX one', () => {
+      const s = setup()
+      s.present.add(CLASSIC_MANIFEST)
+      s.files.set(CLASSIC_MANIFEST, JSON.stringify({ path: 'D:\\tools\\unity.exe' }))
+      s.present.add('D:\\tools\\unity.exe')
+      msixManifest(s, CLI)
+      s.present.add(MSIX_CLI)
+      expect(findUnityCli(s.deps)).toBe('D:\\tools\\unity.exe')
+    })
+
+    it('falls through an invalid MSIX manifest to the fallbacks', () => {
+      const s = setup()
+      s.present.add(MSIX_MANIFEST)
+      s.files.set(MSIX_MANIFEST, '{not json')
+      s.present.add(MSIX_CLI)
+      expect(findUnityCli(s.deps)).toBe(MSIX_CLI)
+    })
+  })
+
   it('reports noHub or openHubOnce when the CLI is absent', () => {
     const s = setup()
     expect(findUnityCli(s.deps)).toBeNull()

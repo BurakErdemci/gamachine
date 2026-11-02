@@ -1,6 +1,7 @@
 import path from 'path'
 import { StringDecoder } from 'string_decoder'
 import { editorRoots, pathFor } from './unity-editors'
+import { unityHubMsixCache } from './unity-hub'
 
 // Unity editor install through the Unity CLI. The version catalog comes from Unity's public Release API
 // because the CLI lists only 5 versions and cannot list modules of a version that is not installed
@@ -108,26 +109,47 @@ const isCliBinary = (target: string, deps: InstallDeps) => {
 
 export function findUnityCli(deps: InstallDeps): string | null {
   const p = pathFor(deps.platform)
-  let manifest: string
-  let fallback: string
+  // virtualized: the manifest of an MSIX Hub records paths as the Hub saw them, not as they exist outside the package.
+  const manifests: { file: string; cache?: string }[] = []
+  const fallbacks: string[] = []
   if (deps.platform === 'win32') {
     if (!deps.env.APPDATA && !deps.env.LOCALAPPDATA) return null
-    manifest = deps.env.APPDATA ? p.join(deps.env.APPDATA, 'UnityHub', 'cli-install.json') : ''
-    fallback = deps.env.LOCALAPPDATA ? p.join(deps.env.LOCALAPPDATA, 'Unity', 'bin', 'unity.exe') : ''
+    const cache = unityHubMsixCache(deps.env)
+    if (deps.env.APPDATA) manifests.push({ file: p.join(deps.env.APPDATA, 'UnityHub', 'cli-install.json') })
+    if (cache) manifests.push({ file: p.join(cache, 'Roaming', 'UnityHub', 'cli-install.json'), cache })
+    if (deps.env.LOCALAPPDATA) fallbacks.push(p.join(deps.env.LOCALAPPDATA, 'Unity', 'bin', 'unity.exe'))
+    if (cache) fallbacks.push(p.join(cache, 'Local', 'Unity', 'bin', 'unity.exe'))
   } else if (deps.platform === 'darwin') {
-    manifest = p.join(deps.homedir, 'Library', 'Application Support', 'UnityHub', 'cli-install.json')
-    fallback = p.join(deps.homedir, '.unity', 'bin', 'unity')
+    manifests.push({ file: p.join(deps.homedir, 'Library', 'Application Support', 'UnityHub', 'cli-install.json') })
+    fallbacks.push(p.join(deps.homedir, '.unity', 'bin', 'unity'))
   } else {
     return null
   }
-  try {
-    if (manifest && deps.exists(manifest)) {
-      const target = JSON.parse(deps.readFile(manifest))?.path
+  const underPrefix = (target: string, prefix: string | undefined) => {
+    if (!prefix) return null
+    const t = p.normalize(target)
+    const pre = p.normalize(prefix).replace(/\\+$/, '')
+    return t.toLowerCase().startsWith(pre.toLowerCase() + '\\') ? t.slice(pre.length) : null
+  }
+  const resolveVirtualized = (target: string, cache: string): string => {
+    if (deps.exists(target)) return target
+    const local = underPrefix(target, deps.env.LOCALAPPDATA)
+    if (local !== null) return p.join(cache, 'Local') + local
+    const roaming = underPrefix(target, deps.env.APPDATA)
+    if (roaming !== null) return p.join(cache, 'Roaming') + roaming
+    return target
+  }
+  for (const { file, cache } of manifests) {
+    try {
+      if (!deps.exists(file)) continue
+      const raw = JSON.parse(deps.readFile(file))?.path
+      if (typeof raw !== 'string' || !raw) continue
+      const target = cache ? resolveVirtualized(raw, cache) : raw
       // Only the CLI binary itself: a manifest must not point the install at any other program.
-      if (typeof target === 'string' && target && isCliBinary(target, deps) && deps.exists(target)) return target
-    }
-  } catch { /* An unreadable manifest falls through to the default location. */ }
-  return fallback && deps.exists(fallback) ? fallback : null
+      if (isCliBinary(target, deps) && deps.exists(target)) return target
+    } catch { /* An unreadable manifest falls through to the next one, then the default locations. */ }
+  }
+  return fallbacks.find(f => deps.exists(f)) ?? null
 }
 
 export function cliState(deps: InstallDeps): CliState {

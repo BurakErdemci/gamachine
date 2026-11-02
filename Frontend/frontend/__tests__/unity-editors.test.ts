@@ -64,6 +64,15 @@ describe('listEditors', () => {
     expect(listEditors(deps)).toEqual({ editors: [] })
   })
 
+  it('adds the secondaryInstallPath root of an MSIX Hub, the classic file winning when both exist', () => {
+    const env = { APPDATA: 'C:\\Users\\t\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\t\\AppData\\Local', ProgramFiles: 'E:\\PF' }
+    const msixFile = 'C:\\Users\\t\\AppData\\Local\\Packages\\UnityTechnologies.UnityHub_2vrhnee42bhxm\\LocalCache\\Roaming\\UnityHub\\secondaryInstallPath.json'
+    const classicFile = 'C:\\Users\\t\\AppData\\Roaming\\UnityHub\\secondaryInstallPath.json'
+    expect(editorRoots(fakeDeps('win32', { [msixFile]: JSON.stringify('F:\\MsixEditors') }, { env }))).toEqual(['E:\\PF\\Unity\\Hub\\Editor', 'F:\\MsixEditors'])
+    expect(editorRoots(fakeDeps('win32', { [msixFile]: 'F:\\MsixEditors', [classicFile]: 'D:\\Editors' }, { env })))
+      .toEqual(['E:\\PF\\Unity\\Hub\\Editor', 'D:\\Editors'])
+  })
+
   it('finds macOS editors, including a secondary root', () => {
     const secondFile = '/Users/tester/Library/Application Support/UnityHub/secondaryInstallPath.json'
     const deps = fakeDeps('darwin', {

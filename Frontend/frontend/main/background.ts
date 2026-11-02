@@ -35,7 +35,7 @@ import { applyContentSecurityPolicy } from './helpers/csp'
 import { assertRegistrableChannel } from './helpers/ipc-whitelist'
 import { mt, setUiLanguage } from './helpers/main-i18n'
 import { inspectProject, isUnityProjectDir } from './helpers/unity-project'
-import { findUnityHub } from './helpers/unity-hub'
+import { findUnityHub, UNITY_HUB_MSIX_URI } from './helpers/unity-hub'
 import { listEditors, listTemplates, templatesDir, EditorDeps } from './helpers/unity-editors'
 import { createProject, cancelCreate } from './helpers/unity-create'
 import { loadCatalog, planInstall, startInstall, cancelInstall, type InstallDeps } from './helpers/unity-install'
@@ -344,6 +344,11 @@ handleSecure('authorize-workspace', (event, p: unknown) => {
 handleSecure('open-unity-hub', async () => {
   try {
     const hub = findUnityHub(process.platform, process.env, os.homedir(), fs.existsSync)
+    if (hub === UNITY_HUB_MSIX_URI) {
+      // A Store app cannot be started from its exe path; explorer.exe resolves the AppsFolder URI.
+      spawn('explorer.exe', [hub], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+      return { opened: true }
+    }
     return { opened: hub ? await shell.openPath(hub) === '' : false }
   } catch {
     return { opened: false }

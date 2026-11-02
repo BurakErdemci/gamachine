@@ -1,4 +1,5 @@
 import path from 'path'
+import { unityHubMsixCache } from './unity-hub'
 
 export interface EditorDeps {
   exists: (p: string) => boolean
@@ -20,22 +21,31 @@ export const pathFor = (platform: NodeJS.Platform) => (platform === 'win32' ? pa
 // The Hub keeps a user-chosen extra install root here; "" means the default root only.
 function secondaryRoot(deps: RootDeps): string | null {
   const p = pathFor(deps.platform)
-  let file: string | null = null
-  if (deps.platform === 'win32' && deps.env.APPDATA) {
-    file = p.join(deps.env.APPDATA, 'UnityHub', 'secondaryInstallPath.json')
+  const files: string[] = []
+  if (deps.platform === 'win32') {
+    if (deps.env.APPDATA) files.push(p.join(deps.env.APPDATA, 'UnityHub', 'secondaryInstallPath.json'))
+    // The MSIX Hub keeps its AppData virtualized under its package cache.
+    const msix = unityHubMsixCache(deps.env)
+    if (msix) files.push(p.join(msix, 'Roaming', 'UnityHub', 'secondaryInstallPath.json'))
   } else if (deps.platform === 'darwin') {
-    file = p.join(deps.homedir, 'Library', 'Application Support', 'UnityHub', 'secondaryInstallPath.json')
+    files.push(p.join(deps.homedir, 'Library', 'Application Support', 'UnityHub', 'secondaryInstallPath.json'))
   }
-  if (!file) return null
-  try {
-    if (!deps.exists(file)) return null
-    const raw = deps.readFile(file).trim()
-    let value: unknown = raw
-    try { value = JSON.parse(raw) } catch { /* A bare path is accepted too. */ }
-    return typeof value === 'string' && value.trim() ? value.trim() : null
-  } catch {
-    return null
+  const read = (file: string): string | null => {
+    try {
+      if (!deps.exists(file)) return null
+      const raw = deps.readFile(file).trim()
+      let value: unknown = raw
+      try { value = JSON.parse(raw) } catch { /* A bare path is accepted too. */ }
+      return typeof value === 'string' && value.trim() ? value.trim() : null
+    } catch {
+      return null
+    }
   }
+  for (const file of files) {
+    const root = read(file)
+    if (root) return root
+  }
+  return null
 }
 
 export function editorRoots(deps: RootDeps): string[] {
