@@ -256,12 +256,12 @@ describe('the guide screen', () => {
     expect(document.querySelectorAll('mark.gd-hit').length).toBeGreaterThan(0)
   })
 
-  it('without a search: groups in order, an empty group not drawn, the count line', () => {
+  it('without a search: groups in order, the integrations group drawn for Blender, the count line', () => {
     const { host } = mockHost()
     render(<Harness host={host} />)
     act(() => api.openGuide())
     const groups = Array.from(document.querySelectorAll('.gd-group')).map(s => s.getAttribute('data-group'))
-    expect(groups).toEqual(['basics', 'unity', 'workspace', 'phone', 'lesser', 'you'])
+    expect(groups).toEqual(['basics', 'unity', 'workspace', 'phone', 'integrations', 'lesser', 'you'])
     expect(screen.getByTestId('guide-stat').textContent).toBe(`${listedTopics(CTX).length} topics · 0 watched`)
   })
 
