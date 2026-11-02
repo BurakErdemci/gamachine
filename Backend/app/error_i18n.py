@@ -54,6 +54,8 @@ EN: dict[str, str] = {
     "Uygulamada uyumsuz bir eklenti kurulu; değiştirmek için onay gerekli.":
         "An incompatible add-on is installed in the application; replacing it needs your confirmation.",
     "Bağlayıcı kurulurken kaldırılamaz.": "A connector cannot be removed while it is being installed.",
+    "Bağlayıcı kaldırılırken kurulamaz.": "A connector cannot be installed while it is being removed.",
+    "Bağlayıcının kaldırılması zaten sürüyor.": "This connector is already being removed.",
     "Bağlayıcı yalnız kurulu ve hazırken açılabilir.":
         "A connector can only be turned on when it is installed and ready.",
     "path bir metin ya da null olmalı.": "path must be a string or null.",

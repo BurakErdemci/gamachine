@@ -4,6 +4,7 @@ import os
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import anyio
 import pytest
@@ -333,6 +334,50 @@ def test_the_upstream_call_gets_what_the_card_left_of_the_budget_and_says_when_t
     assert len(slow.timeouts) == 1 and 45 < slow.timeouts[0] <= 49.8
     assert result.is_error and "ran out of time after 49 s" in text(result)
     assert "may or may not have finished" in text(result)
+
+
+class DeadUpstream:
+    """A child that died while the card was open: the restart takes `restart_s` of virtual time."""
+    cid = "blender"
+
+    def __init__(self, clock, restart_s):
+        self.clock, self.restart_s, self.timeouts = clock, restart_s, []
+
+    async def responsive(self):
+        return False
+
+    async def stop(self):
+        pass
+
+    async def start(self, task_group):
+        self.clock[0] += self.restart_s
+
+    async def call(self, tool, arguments, timeout_s):
+        self.timeouts.append(timeout_s)
+        self.clock[0] += timeout_s
+        return mcp_server._text("done")
+
+
+@pytest.mark.parametrize("card_s,restart_s,called", [(60.0, 60.0, True), (110.0, 60.0, False)])
+def test_an_upstream_restart_counts_against_the_budget(monkeypatch, card_s, restart_s, called):
+    clock = [0.0]
+    monkeypatch.setattr(mcp_server, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(mcp_server, "read_only_refusal", lambda: None)
+
+    async def gate(*args):
+        clock[0] += card_s
+        return {"ok": True}
+    server = mcp_server.ConnectorsServer({"blender": ENTRY}, {}, gate=gate, conversation_id=1)
+    dead = DeadUpstream(clock, restart_s)
+    server.upstreams["blender"], server._started = dead, True
+    params = SimpleNamespace(name="blender_execute_blender_code", arguments={"code": "print(1)"})
+    result = anyio.run(server.call_tool, None, params)
+    assert clock[0] <= mcp_server._TOOL_BUDGET_S
+    if called:
+        assert dead.timeouts == [mcp_server._TOOL_BUDGET_S - card_s - restart_s] and not result.is_error
+    else:
+        assert dead.timeouts == [] and result.is_error
+        assert "ran out of time" in text(result) and "did not run" in text(result)
 
 
 def test_card_wait_and_upstream_call_fit_the_providers_tool_timeout(monkeypatch):

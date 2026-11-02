@@ -204,6 +204,9 @@ OTHER_CRITICAL = {
     "string module": "import string",
     "dunder name in a string": "getattr(bpy, '__loader__')",
     "dunder name built from strings": "name = '__cla' + 'ss__'",
+    "render with keyword unpacking": "kw = {'animation': True}\nbpy.ops.render.render(**kw)",
+    "viewport render with keyword unpacking": "bpy.ops.render.opengl(**{'write_still': True})",
+    "bake with keyword unpacking": "opts = {'save_mode': 'EXTERNAL'}\nbpy.ops.object.bake(type='DIFFUSE', **opts)",
 }
 
 OTHER_ROUTINE = {

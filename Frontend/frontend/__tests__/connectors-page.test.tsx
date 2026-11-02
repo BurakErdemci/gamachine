@@ -75,6 +75,7 @@ describe('connectors page · one primary action per state', () => {
     ['not_installed', { state: 'not_installed' }, 'install', 'Kur'],
     ['update_available', { state: 'update_available', installed: { version: '2.2.5', addon_owner: 'gamachine' } }, 'update', 'Güncelle'],
     ['error', { state: 'error', error: { code: 'x', message: 'Disk full' } }, 'retry', 'Tekrar dene'],
+    ['remove_incomplete', { state: 'error', error: { code: 'remove_incomplete', message: 'still there: x' } }, 'remove', 'Kaldır'],
     ['ready', { state: 'ready', installed: { version: '2.2.6', addon_owner: 'gamachine' } }, null, null],
   ]
   it.each(cases)('%s', async (_name, over, action, label) => {
@@ -334,6 +335,32 @@ describe('connectors page · install flow', () => {
     await flush()
     expect(f.ops.filter(o => o.op === 'list').length).toBeGreaterThanOrEqual(2)
     expect(screen.getByTestId('conn-status-blender').textContent).toContain('still there: x')
+  })
+
+  it('an incomplete Remove without an install record offers Remove again, not the install plan', async () => {
+    const f = fake({ view: view({ state: 'error', installed: null,
+      error: { code: 'remove_incomplete', message: 'Remove did not finish; still there: not deleted: C:/x' } }) })
+    const invoke = install(f)
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, req: { op: string }) => {
+      if (req.op === 'remove') {
+        f.ops.push(req)
+        f.view = { ...f.view, state: 'not_installed', error: null }
+        return f.view
+      }
+      return base(channel, req)
+    })
+    await mount()
+    expect(screen.getByTestId('conn-remove-blender')).toBeTruthy()
+    expect(screen.queryByTestId('conn-repair-blender')).toBeNull()
+    expect(primary()!.getAttribute('data-action')).toBe('remove')
+    fireEvent.click(primary()!)
+    await flush()
+    await flush()
+    expect(confirm.calls).toHaveLength(1)
+    expect(f.ops.filter(o => o.op === 'remove')).toHaveLength(1)
+    expect(f.ops.some(o => o.op === 'plan')).toBe(false)
+    expect(primary()!.getAttribute('data-action')).toBe('install')
   })
 
   it('leaving and coming back resumes the running job from the backend', async () => {

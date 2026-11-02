@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -234,12 +235,18 @@ def _claim(card_id: str, outcome: str, decision: Optional[str], device: str) -> 
         return card
 
 
-def _reason_code(risk: Optional[str]) -> Optional[str]:
-    # A blender_code reason ends with "(<name from the code>)"; the ledger keeps
-    # only the code, never text taken from the call.
+_REASON_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def _reason_code(risk: Optional[str], kind: Optional[str]) -> Optional[str]:
+    # The ledger keeps only a code, never text taken from the call: "blender_code: system module (os.x)"
+    # keeps "blender_code"; free text (a browser card names the file and host) keeps the card kind.
     if not risk:
         return None
-    return risk.split(" (", 1)[0][:80]
+    code = risk.split(":", 1)[0].strip()
+    if _REASON_CODE.fullmatch(code):
+        return code
+    return kind if kind and _REASON_CODE.fullmatch(kind) else None
 
 
 def _after_close(card: Card) -> None:
@@ -258,7 +265,7 @@ def _after_close(card: Card) -> None:
                 "decision": card.decision,
                 "device": card.by,
                 "outcome": card.outcome,
-                "reason": _reason_code(card.risk),
+                "reason": _reason_code(card.risk, card.kind),
             })
         except Exception:
             if not _ledger_failure_logged:

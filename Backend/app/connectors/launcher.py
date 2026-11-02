@@ -125,13 +125,16 @@ def launch_app(entry: dict, app_path: str) -> int:
 
 
 def _starting(cid: str, now: float) -> bool:
-    """The app Gamachine launched for `cid` within the last OPEN_TIMEOUT_S and not known to have exited."""
+    """The app Gamachine launched for `cid` is still running (its bridge has not answered yet)."""
     pid, at = launched.get(cid), _launched_at.get(cid)
-    if pid is None or at is None or not 0 <= now - at < OPEN_TIMEOUT_S:
+    if pid is None or at is None:
         return False
     proc = _children.get(cid)
+    if proc is not None and proc.pid == pid:
+        # However slow its first start is, a second app is never launched beside it.
+        return proc.poll() is None
     # A pid from another launcher (tests) cannot be polled: within the window it counts as starting.
-    return proc is None or proc.pid != pid or proc.poll() is None
+    return 0 <= now - at < OPEN_TIMEOUT_S
 
 
 def open_app(cid: str, db, launch: Optional[Callable[[dict, str], int]] = None,
@@ -158,10 +161,15 @@ def _open(cid, db, launch, answers, sleep, clock, timeout_s) -> dict:
         return {"ok": True, "already_running": True, "version": version}
     if not chosen:
         return {"ok": False, "error": f"{entry['name']} was not found on this computer (Settings > Connectors)."}
-    if _starting(cid, clock()):
-        # Within the first open's window, so two opens together stay inside one open's time.
+    now = clock()
+    waiting = _starting(cid, now)
+    if waiting:
         logger.info("[connectors] %s is still starting (pid %s); waiting for it", cid, launched[cid])
+        # Within the first open's window, so two opens together stay inside one open's time; past it, one
+        # more wait.
         deadline = _launched_at[cid] + timeout_s
+        if deadline <= now:
+            deadline = now + timeout_s
     else:
         try:
             pid = launch(entry, chosen["path"])
@@ -174,6 +182,11 @@ def _open(cid, db, launch, answers, sleep, clock, timeout_s) -> dict:
         if answers(cid):
             return {"ok": True, "already_running": False, "version": version}
         sleep(1.0)
+    if waiting:
+        return {"ok": False, "error": (f"{entry['name']} {version}, opened earlier by Gamachine, is still starting "
+                                       "and its MCP add-on has not answered yet. Wait a little, then call "
+                                       "blender_open again; if it never answers, ask the user to check that the "
+                                       "add-on is enabled in Blender.")}
     return {"ok": False, "error": (f"{entry['name']} {version} was started but its MCP add-on did not answer "
                                    f"within {int(timeout_s)} s. Ask the user to check that the add-on is "
                                    "enabled in Blender, then call blender_open again.")}

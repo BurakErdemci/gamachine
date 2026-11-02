@@ -255,6 +255,46 @@ def test_remove_that_leaves_files_answers_409_naming_them_and_a_retry_finishes(e
     assert not addon.exists()
 
 
+def test_install_answers_409_while_remove_runs(env, monkeypatch):
+    _install_and_wait(env)
+    inside, release = threading.Event(), threading.Event()
+
+    def slow_disable(addon):
+        inside.set()
+        release.wait(10)
+    monkeypatch.setattr(env.installer, "_disable", slow_disable)
+    replies = []
+    thread = threading.Thread(target=lambda: replies.append(env.client.post("/connectors/blender/remove",
+                                                                            headers=UI)))
+    thread.start()
+    assert inside.wait(5)
+    response = env.client.post("/connectors/blender/install", headers=UI)
+    assert response.status_code == 409 and response.json()["detail"] == "Bağlayıcı kaldırılırken kurulamaz."
+    english = env.client.post("/connectors/blender/install", headers={**UI, "X-UI-Lang": "en"})
+    assert english.json()["detail"] == "A connector cannot be installed while it is being removed."
+    again = env.client.post("/connectors/blender/remove", headers={**UI, "X-UI-Lang": "en"})
+    assert again.status_code == 409 and again.json()["detail"] == "This connector is already being removed."
+    release.set()
+    thread.join(10)
+    assert replies[0].status_code == 200 and replies[0].json()["state"] == "not_installed"
+
+
+def test_remove_whose_folder_stays_answers_409_and_shows_remove_incomplete(env, monkeypatch):
+    _install_and_wait(env)
+    real = inst.shutil.rmtree
+
+    def locked(path, *args, **kwargs):
+        raise PermissionError(32, "in use", str(path))
+    monkeypatch.setattr(inst.shutil, "rmtree", locked)
+    response = env.client.post("/connectors/blender/remove", headers=UI)
+    assert response.status_code == 409 and "kalanlar: not deleted: " in response.json()["detail"]
+    view = env.client.get("/connectors", headers=AUTH).json()["connectors"][0]
+    assert view["state"] == "error" and view["error"]["code"] == "remove_incomplete"
+    monkeypatch.setattr(inst.shutil, "rmtree", real)
+    response = env.client.post("/connectors/blender/remove", headers=UI)
+    assert response.status_code == 200 and response.json()["state"] == "not_installed"
+
+
 def test_plan_reports_another_addons_file_under_our_name(env):
     foreign = env.tmp / "scripts" / "addons" / "blender_mcp.py"
     foreign.parent.mkdir(parents=True)

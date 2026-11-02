@@ -249,9 +249,7 @@ class ConnectorsServer:
         if not isinstance(reply, dict) or reply.get("ok") is not True:
             error = reply.get("error") if isinstance(reply, dict) else None
             return _text(error if isinstance(error, str) and error else "Refused by Gamachine.", True)
-        # What the card wait left of the budget, so the agent hears back before its own timeout.
-        timeout_s = min(_CALL_TIMEOUT_S, max(1.0, _TOOL_BUDGET_S - (time.monotonic() - started)))
-        return await self._forward(cid, name, tool, arguments, timeout_s)
+        return await self._forward(cid, name, tool, arguments, started + _TOOL_BUDGET_S)
 
     async def _open(self, conversation_id: int, cid: str, name: str) -> types.CallToolResult:
         try:
@@ -267,7 +265,7 @@ class ConnectorsServer:
         return _text(f"Started {name} {version}; its add-on answers. The {cid}_ tools work now.")
 
     async def _forward(self, cid: str, name: str, tool: str, arguments: dict,
-                       timeout_s: float = _CALL_TIMEOUT_S) -> types.CallToolResult:
+                       deadline: float) -> types.CallToolResult:
         await self._ensure_started()
         upstream = self.upstreams[cid]
         if not await upstream.responsive():
@@ -277,6 +275,11 @@ class ConnectorsServer:
                 await upstream.start(self._task_group)
             except RuntimeError:
                 return _text(f"The {name} connector is not running. Call {cid}_{OPEN_TOOL}, then try again.", True)
+        # What the card wait and any restart left of the budget, so the agent hears back before its own timeout.
+        timeout_s = min(_CALL_TIMEOUT_S, deadline - time.monotonic())
+        if timeout_s < 1.0:
+            return _text(f"The {name} call ran out of time before it reached {name} (Gamachine's limit for one "
+                         "connector call), so it did not run. Tell the user; do not retry it on your own.", True)
         try:
             return await upstream.call(tool, arguments, timeout_s)
         except Exception as exc:

@@ -17,8 +17,11 @@ const LAMP: Record<ConnectorView['state'], 'ok' | 'warn' | 'danger' | 'busy' | u
 };
 
 /** The one thing to offer for a state; null when the state needs none (the switch or the badge is the answer). */
-type Primary = 'download' | 'downloadSupported' | 'install' | 'update' | 'retry' | null;
+type Primary = 'download' | 'downloadSupported' | 'install' | 'update' | 'retry' | 'remove' | null;
+/** A Remove that left files: the retry is another Remove, with or without an install record left. */
+const removeLeft = (v: ConnectorView) => v.state === 'error' && v.error?.code === 'remove_incomplete';
 function primaryFor(v: ConnectorView): Primary {
+  if (removeLeft(v)) return 'remove';
   switch (v.state) {
     case 'app_missing': return 'download';
     case 'app_too_old': return 'downloadSupported';
@@ -58,7 +61,9 @@ const ConnectorCard = ({ view, onChanged, onView, showToast, saved }: {
   };
 
   const onPrimary = async () => {
-    if (primary === 'download' || primary === 'downloadSupported') {
+    if (primary === 'remove') {
+      await remove();
+    } else if (primary === 'download' || primary === 'downloadSupported') {
       const r = await openDownload(id);
       if (!r.ok) showToast?.(t('conn.downloadFailed'), 'error');
     } else {
@@ -80,6 +85,7 @@ const ConnectorCard = ({ view, onChanged, onView, showToast, saved }: {
     install: t('conn.act.install'),
     update: t('conn.act.update'),
     retry: t('conn.act.retry'),
+    remove: t('conn.remove'),
   };
 
   return (
@@ -179,10 +185,14 @@ const Details = ({ view, busy, run, onRepair, onRemove }: {
           )}
         </>
       )}
-      {canFix && (
+      {(canFix || removeLeft(view)) && (
         <p className="set-hint">
-          <button type="button" className="set-link" disabled={busy} onClick={onRepair} data-testid={`conn-repair-${id}`}>{t('conn.repair')}</button>
-          {' '}
+          {canFix && (
+            <>
+              <button type="button" className="set-link" disabled={busy} onClick={onRepair} data-testid={`conn-repair-${id}`}>{t('conn.repair')}</button>
+              {' '}
+            </>
+          )}
           <button type="button" className="set-link set-link-danger" disabled={busy} onClick={onRemove} data-testid={`conn-remove-${id}`}>{t('conn.remove')}</button>
         </p>
       )}

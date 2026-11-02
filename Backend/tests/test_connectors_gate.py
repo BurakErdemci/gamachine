@@ -356,10 +356,32 @@ def test_a_second_open_waits_for_the_app_still_starting_instead_of_launching_ano
                                   sleep=lambda s: None, clock=clock, timeout_s=3)
         assert reply["ok"] is False
     assert len(launches) == 1
-    # Past the start window it is not starting any more: the next open launches again.
+    # A pid that cannot be polled counts as starting only within the start window; past it, the next open
+    # launches again.
     launcher.open_app("blender", env.db, launch=launch, answers=lambda c: False, sleep=lambda s: None,
                       clock=_virtual_clock(500), timeout_s=3)
     assert len(launches) == 2
+
+
+def test_an_app_gamachine_launched_that_still_runs_is_waited_on_past_the_start_window(env, monkeypatch):
+    launches = []
+
+    def launch(entry, path):
+        launches.append(path)
+        launcher._children["blender"] = SimpleNamespace(pid=4242, poll=lambda: None)
+        return 4242
+    monkeypatch.setattr(launcher, "_children", {})
+    first = launcher.open_app("blender", env.db, launch=launch, answers=lambda c: False, sleep=lambda s: None,
+                              clock=_virtual_clock(), timeout_s=60)
+    assert first["ok"] is False and "was started" in first["error"]
+    late = launcher.open_app("blender", env.db, launch=launch, answers=lambda c: False, sleep=lambda s: None,
+                             clock=_virtual_clock(5000), timeout_s=3)
+    assert len(launches) == 1
+    assert late["ok"] is False and "still starting" in late["error"]
+    answered = iter([False, True])
+    ready = launcher.open_app("blender", env.db, launch=launch, answers=lambda c: next(answered, True),
+                              sleep=lambda s: None, clock=_virtual_clock(9000), timeout_s=3)
+    assert ready["ok"] is True and len(launches) == 1
 
 
 def test_an_app_that_already_exited_is_launched_again(env, monkeypatch):

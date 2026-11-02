@@ -88,4 +88,14 @@ def test_a_blender_reason_keeps_the_code_without_the_name_from_the_code(ledger):
                     risk="blender_code: system module (os.secret_name)")
     assert cards.close_card("card-3", "timed_out")
     [row] = ledger.get_approval_ledger()
-    assert row["reason"] == "blender_code: system module"
+    assert row["reason"] == "blender_code"
+
+
+@pytest.mark.parametrize("risk", ["the agent downloads passwords-2026-Q3.xlsx from files.evil.example",
+                                  "Clicking Send (page mail.google.com)", "Shell_Delete", "a" * 65])
+def test_a_reason_that_is_not_a_code_is_stored_as_the_card_kind(ledger, risk):
+    cards.open_card("card-4", conversation_id=1, kind="browser", tool="browser_download", risk=risk,
+                    params={"filename": "passwords-2026-Q3.xlsx"})
+    assert cards.close_card("card-4", "timed_out")
+    [row] = ledger.get_approval_ledger()
+    assert row["reason"] == row["kind"] == cards.get("card-4").kind == "command"

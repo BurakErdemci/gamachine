@@ -444,20 +444,136 @@ def test_add_ons_written_for_two_blender_builds_are_both_recorded_and_removed(ma
     assert sorted(c[1][0] for c in disabled) == sorted([old_app["path"], APP["path"]])
 
 
+class DyingRunner(FakeRunner):
+    """The app dies at the check step: no undo runs and no install record is written."""
+
+    def __call__(self, argv, family, env, cwd, register):
+        if self.kind(argv) == "check":
+            raise SystemExit()
+        return super().__call__(argv, family, env, cwd, register)
+
+
+def _die_after_writing_the_addon(installer, entry):
+    installer.runner = DyingRunner()
+    installer.start(entry, APP).thread.join(10)
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_an_addon_left_by_an_interrupted_install_is_recognised_as_ours(make, entry, tmp_path):
     installer, runner = make()
-    installer.start(entry, APP)
-    _finish(installer, entry)
+    _die_after_writing_the_addon(installer, entry)
     addon = _addons(tmp_path) / "blender_mcp.py"
-    shutil.rmtree(installer.root)  # the app died after writing the add-on: no install record
     assert addon.is_file() and installer.installed(entry) is None
+    assert (installer.root / "blender" / inst.PENDING_MARKER).is_file()
     fresh, _ = make()
     fresh.start(entry, APP)
     assert _finish(fresh, entry).state == "done"
     record = fresh.installed(entry)
     assert record["addon_owner"] == "gamachine" and record["addon_files"][0]["path"] == str(addon)
+    assert not (fresh.root / "blender" / inst.PENDING_MARKER).exists()
     assert fresh.remove(entry) == []
     assert not addon.exists()
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_remove_after_an_interrupted_install_deletes_the_addon_its_marker_names(make, entry, tmp_path):
+    installer, _ = make()
+    _die_after_writing_the_addon(installer, entry)
+    addon = _addons(tmp_path) / "blender_mcp.py"
+    assert addon.is_file()
+    fresh, _ = make()
+    assert fresh.remove(entry) == []
+    assert not addon.exists() and not (fresh.root / "blender").exists()
+
+
+def test_a_users_own_copy_of_the_bundled_addon_is_theirs_and_kept_by_remove(make, entry, tmp_path):
+    installer, _ = make()
+    mine = _addons(tmp_path) / "my_blender_mcp.py"
+    mine.parent.mkdir(parents=True)
+    mine.write_text(ADDON.format(protocol=15, tag="upstream"), encoding="utf-8")
+    installer.start(entry, APP)
+    assert _finish(installer, entry).state == "done"
+    record = installer.installed(entry)
+    assert record["addon_owner"] == "user" and record["addon_files"] == []
+    assert installer.remove(entry) == []
+    assert mine.read_text(encoding="utf-8") == ADDON.format(protocol=15, tag="upstream")
+
+
+def test_backups_follow_their_own_path_across_blender_builds_and_a_repair(make, entry, tmp_path, monkeypatch):
+    installer, _ = make()
+    apps = [{"version": "4.2.0", "path": "C:/old/blender.exe"}, APP]
+    dirs = {"4.2.0": tmp_path / "b42" / "addons", "5.2.0": tmp_path / "b52" / "addons"}
+    monkeypatch.setattr(installer, "addons_dir", lambda app: dirs[app["version"]])
+    originals = {}
+    for version, folder in dirs.items():
+        folder.mkdir(parents=True)
+        originals[version] = f"# the user's own add-on for {version}\n".encode()
+        (folder / "blender_mcp.py").write_bytes(originals[version])
+    for app in (*apps, apps[0]):  # both builds, then a repair of the first
+        installer.start(entry, app, replace_addon=True)
+        assert _finish(installer, entry).state == "done"
+    backups = {f["path"]: f["backup"] for f in installer.installed(entry)["addon_files"]}
+    for folder in dirs.values():
+        assert backups[str(folder / "blender_mcp.py")] == str(folder / "blender_mcp.py.bak")
+    assert installer.remove(entry) == []
+    for version, folder in dirs.items():
+        assert (folder / "blender_mcp.py").read_bytes() == originals[version]
+
+
+@pytest.mark.parametrize("existing", [None, "ours", "foreign"])
+def test_an_addon_copy_that_fails_part_way_leaves_the_previous_file_byte_identical(make, entry, tmp_path,
+                                                                                   monkeypatch, existing):
+    installer, _ = make()
+    addon = _addons(tmp_path) / "blender_mcp.py"
+    if existing == "ours":
+        installer.start(entry, APP)
+        _finish(installer, entry)
+    elif existing == "foreign":
+        addon.parent.mkdir(parents=True)
+        addon.write_bytes(b"# another add-on's file\n")
+    before = addon.read_bytes() if addon.exists() else None
+    record = installer.installed(entry)
+    real = inst.shutil.copyfile
+
+    def partial(src, dst, *args, **kwargs):
+        if Path(dst) == addon:
+            Path(dst).write_bytes(b"half a file (")
+            raise OSError(28, "No space left on device")
+        return real(src, dst, *args, **kwargs)
+    monkeypatch.setattr(inst.shutil, "copyfile", partial)
+    installer.start(entry, APP, replace_addon=True)
+    assert _finish(installer, entry).state == "failed"
+    assert (addon.read_bytes() if addon.exists() else None) == before
+    assert installer.installed(entry) == record
+    assert not (installer.root / "blender" / inst.PENDING_MARKER).exists()
+    assert not list(addon.parent.glob("*.bak"))
+
+
+def test_install_is_refused_while_remove_runs_and_remove_while_remove_runs(make, entry, monkeypatch):
+    installer, _ = make()
+    installer.start(entry, APP)
+    _finish(installer, entry)
+    inside, release = threading.Event(), threading.Event()
+
+    def slow_disable(addon):
+        inside.set()
+        release.wait(10)
+    monkeypatch.setattr(installer, "_disable", slow_disable)
+    result = {}
+    thread = threading.Thread(target=lambda: result.setdefault("problems", installer.remove(entry)))
+    thread.start()
+    assert inside.wait(5)
+    with pytest.raises(inst.Busy) as busy:
+        installer.start(entry, APP)
+    assert busy.value.removing
+    with pytest.raises(inst.Busy) as busy:
+        installer.remove(entry)
+    assert busy.value.removing
+    release.set()
+    thread.join(10)
+    assert result["problems"] == [] and installer.installed(entry) is None
+    installer.start(entry, APP)
+    assert _finish(installer, entry).state == "done"
 
 
 def test_remove_that_cannot_delete_an_addon_file_keeps_the_records_and_is_retried(make, entry, tmp_path,
@@ -480,8 +596,8 @@ def test_remove_that_cannot_delete_an_addon_file_keeps_the_records_and_is_retrie
     assert views.connector_view(entry, _db(), installer, _detection())["state"] == "not_installed"
 
 
-def test_remove_that_cannot_delete_the_folder_says_so_reads_not_installed_and_is_retried(make, entry,
-                                                                                       monkeypatch):
+def test_remove_that_cannot_delete_the_folder_says_so_stays_remove_incomplete_and_is_retried(make, entry,
+                                                                                            monkeypatch):
     installer, _ = make()
     installer.start(entry, APP)
     _finish(installer, entry)
@@ -493,7 +609,10 @@ def test_remove_that_cannot_delete_the_folder_says_so_reads_not_installed_and_is
     problems = installer.remove(entry)
     assert len(problems) == 1 and "mcp-for-blender.exe" in problems[0]
     assert installer.installed(entry) is None
-    assert views.connector_view(entry, _db(), installer, _detection())["state"] == "not_installed"
+    view = views.connector_view(entry, _db(), installer, _detection())
+    assert view["state"] == "error" and view["error"]["code"] == "remove_incomplete"
+    assert "mcp-for-blender.exe" in view["error"]["message"]
     monkeypatch.setattr(inst.shutil, "rmtree", real)
     assert installer.remove(entry) == []
     assert not (installer.root / "blender").exists()
+    assert views.connector_view(entry, _db(), installer, _detection())["state"] == "not_installed"

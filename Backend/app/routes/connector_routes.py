@@ -77,8 +77,9 @@ def create_connector_router(db, installer: Optional[Installer] = None, entries: 
                                 detail="Uygulamada uyumsuz bir eklenti kurulu; değiştirmek için onay gerekli.")
         try:
             job = installer.start(entry, chosen, replace_addon=replace)
-        except Busy:
-            raise HTTPException(status_code=409, detail="Bu bağlayıcının kurulumu zaten sürüyor.")
+        except Busy as exc:
+            raise HTTPException(status_code=409, detail="Bağlayıcı kaldırılırken kurulamaz." if exc.removing
+                                else "Bu bağlayıcının kurulumu zaten sürüyor.")
         return {"job": job.view()}
 
     @router.post("/connectors/{cid}/install/cancel")
@@ -106,8 +107,9 @@ def create_connector_router(db, installer: Optional[Installer] = None, entries: 
         entry = _entry(cid)
         try:
             problems = installer.remove(entry)
-        except Busy:
-            raise HTTPException(status_code=409, detail="Bağlayıcı kurulurken kaldırılamaz.")
+        except Busy as exc:
+            raise HTTPException(status_code=409, detail="Bağlayıcının kaldırılması zaten sürüyor." if exc.removing
+                                else "Bağlayıcı kurulurken kaldırılamaz.")
         settings.set_enabled(db, cid, False)
         if problems:
             for problem in problems:

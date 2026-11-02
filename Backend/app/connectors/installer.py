@@ -30,8 +30,11 @@ ADDON_MODULE = "blender_mcp"
 _ADDON_NAME_RE = re.compile(r"""["']name["']\s*:\s*["'](?:MCP for Blender|Blender MCP)["']""")
 _PROTOCOL_RE = re.compile(r"ADDON_PROTOCOL_VERSION\s*=\s*(\d+)")
 _OK = "GAMACHINE_OK"
-# Written next to the version folders when Remove could not delete an add-on file.
+# Written next to the version folders when Remove could not delete everything.
 REMOVE_MARKER = "remove-incomplete.json"
+# Names each add-on file a job is about to write, until install.json (or the job's undo) accounts for it:
+# the only proof that a record-less add-on was written by Gamachine and not copied there by the user.
+PENDING_MARKER = "addon-pending.json"
 
 # (argv, spawn_env family, env overrides, cwd, register(proc)) -> (returncode, combined output)
 Runner = Callable[[List[str], Optional[str], Dict[str, str], str, Callable[[subprocess.Popen], None]],
@@ -39,7 +42,9 @@ Runner = Callable[[List[str], Optional[str], Dict[str, str], str, Callable[[subp
 
 
 class Busy(RuntimeError):
-    pass
+    def __init__(self, cid: str, removing: bool = False):
+        super().__init__(cid)
+        self.removing = removing
 
 
 class StepError(RuntimeError):
@@ -160,6 +165,7 @@ class Installer:
         self.catalog_root = catalog_root
         self.platform = platform
         self._jobs: Dict[str, Job] = {}
+        self._removing: set = set()
         self._lock = threading.Lock()
 
     # ---------- layout ----------
@@ -198,19 +204,22 @@ class Installer:
                         bundled_sha: Optional[str] = None) -> dict:
         needed = int(entry["package"].get("addon_protocol") or 0)
         records = self._records(entry) if records is None else records
-        ours = {f.get("sha256"): f for r in records for f in r.get("addon_files", [])}
-        if bundled_sha:
-            # The pinned version's own add-on with no record: an install that died after writing it.
-            ours.setdefault(bundled_sha, {})
+        # By path: every Blender build gets the same bundled bytes, so a hash names no particular file.
+        ours = {f.get("path"): f for r in records for f in r.get("addon_files", [])}
+        pending = {f.get("path"): f for f in self._pending(entry)} if bundled_sha else {}
         others = []
         for path in find_addons(self.addons_dir(app)):
             try:
                 digest = sha256_file(path)
             except OSError:
                 continue
-            if digest in ours:
+            known = ours.get(str(path))
+            if known and known.get("sha256") == digest:
                 # Gamachine's own file from an earlier install: overwritten in place, its backup carried on.
-                return {"ours": path, "backup": ours[digest].get("backup")}
+                return {"ours": path, "backup": known.get("backup")}
+            if str(path) in pending and digest == bundled_sha:
+                # The pinned add-on an install of ours wrote before it died; a copy the user made is theirs.
+                return {"ours": path, "backup": pending[str(path)].get("backup")}
             others.append(path)
         for path in others:
             protocol = read_protocol(path)
@@ -236,6 +245,8 @@ class Installer:
 
     def start(self, entry: dict, app: Optional[dict], replace_addon: bool = False) -> Job:
         with self._lock:
+            if entry["id"] in self._removing:
+                raise Busy(entry["id"], removing=True)
             current = self._jobs.get(entry["id"])
             if current and current.state == "running":
                 raise Busy(entry["id"])
@@ -309,6 +320,8 @@ class Installer:
             tmp = vdir / "install.json.tmp"
             tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
             os.replace(tmp, vdir / "install.json")
+            recorded = {f["path"] for f in record["addon_files"]}
+            self._set_pending(entry, [f for f in self._pending(entry) if f.get("path") not in recorded])
             for older in job.previous:
                 # The record first: a folder a running server still holds may only partly go.
                 try:
@@ -339,7 +352,13 @@ class Installer:
         """Put back the add-on file this job replaced and drop its folder; the previous install, built
         elsewhere, is untouched."""
         for item in reversed(job.written):
-            _remove_written(item["path"], item["sha256"], item.get("undo"))
+            if item["sha256"] is None:
+                _restore_partial(item["path"], item.get("undo"))
+            else:
+                _remove_written(item["path"], item["sha256"], item.get("undo"))
+        if job.written:
+            undone = {item["path"] for item in job.written}
+            self._set_pending(job.entry, [f for f in self._pending(job.entry) if f.get("path") not in undone])
         if vdir is not None and not (vdir / "install.json").is_file():
             shutil.rmtree(vdir, ignore_errors=True)
 
@@ -433,9 +452,14 @@ class Installer:
             else:
                 target = self.addons_dir(job.app) / ADDON_FILENAME
                 target.parent.mkdir(parents=True, exist_ok=True)
+            backup = str(backup) if backup else None
+            self._set_pending(job.entry, [f for f in self._pending(job.entry) if f.get("path") != str(target)]
+                              + [{"path": str(target), "sha256": sha256_file(source), "backup": backup}])
+            # On the undo list before the copy: a write that fails part-way is undone too.
+            item = {"path": str(target), "sha256": None, "backup": backup, "undo": str(undo) if undo else None}
+            job.written.append(item)
             shutil.copyfile(source, target)
-            job.written.append({"path": str(target), "sha256": sha256_file(target),
-                                "backup": str(backup) if backup else None, "undo": str(undo) if undo else None})
+            item["sha256"] = sha256_file(target)
             owner = "gamachine"
         module = module_name(target)
         rc, out = self._blender(job, job.app["path"],
@@ -466,26 +490,53 @@ class Installer:
         problems = data.get("problems") if isinstance(data, dict) else None
         return [str(p) for p in problems] if isinstance(problems, list) else []
 
+    def _pending(self, entry: dict) -> List[dict]:
+        try:
+            data = json.loads((self.root / entry["id"] / PENDING_MARKER).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        items = data.get("addons") if isinstance(data, dict) else None
+        return [f for f in items if isinstance(f, dict) and f.get("path")] if isinstance(items, list) else []
+
+    def _set_pending(self, entry: dict, items: List[dict]) -> None:
+        marker = self.root / entry["id"] / PENDING_MARKER
+        if not items:
+            marker.unlink(missing_ok=True)
+            return
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        tmp = marker.with_name(PENDING_MARKER + ".tmp")
+        tmp.write_text(json.dumps({"addons": items}, indent=2), encoding="utf-8")
+        os.replace(tmp, marker)
+
     def remove(self, entry: dict) -> List[str]:
-        """Disable and delete what Gamachine wrote, then the connector folder. Returns what is left; an
-        add-on file that could not go keeps the records (and a marker the view shows) for the next Remove."""
-        if self.running(entry["id"]):
-            raise Busy(entry["id"])
+        """Disable and delete what Gamachine wrote, then the connector folder. Returns what is left; what
+        could not go is named in a marker the view shows, and the next Remove retries it."""
+        cid = entry["id"]
+        with self._lock:
+            current = self._jobs.get(cid)
+            if cid in self._removing or (current and current.state == "running"):
+                raise Busy(cid, removing=cid in self._removing)
+            self._removing.add(cid)
+        try:
+            return self._remove(entry)
+        finally:
+            with self._lock:
+                self._removing.discard(cid)
+
+    def _remove(self, entry: dict) -> List[str]:
         records = self._records(entry)
         problems = []
         for record in records:
             for addon in addon_entries(record):
                 if addon.get("owner") == "gamachine":  # never disable or delete a user's own add-on
                     self._disable(addon)
-            for item in record.get("addon_files", []):
-                problem = _remove_written(item.get("path", ""), item.get("sha256"), item.get("backup"))
-                if problem:
-                    problems.append(problem)
+        # An interrupted install's add-on has no record yet; its pending marker names it.
+        for item in [f for r in records for f in r.get("addon_files", [])] + self._pending(entry):
+            problem = _remove_written(item.get("path", ""), item.get("sha256"), item.get("backup"))
+            if problem:
+                problems.append(problem)
         folder = self.root / entry["id"]
-        if problems:
-            folder.mkdir(parents=True, exist_ok=True)
-            (folder / REMOVE_MARKER).write_text(json.dumps({"problems": problems}, indent=2), encoding="utf-8")
-        elif folder.exists():
+        if not problems and folder.exists():
             try:
                 # The records first, so a folder a running server still holds reads as not installed.
                 for record in records:
@@ -493,6 +544,13 @@ class Installer:
                 shutil.rmtree(folder)
             except OSError as exc:
                 problems.append(f"not deleted: {getattr(exc, 'filename', None) or folder}")
+        if problems:
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / REMOVE_MARKER).write_text(json.dumps({"problems": problems}, indent=2),
+                                                    encoding="utf-8")
+            except OSError:
+                logger.warning("[connectors] remove marker of %s not written", entry["id"])
         with self._lock:
             job = self._jobs.get(entry["id"])
             if job and job.state != "running":
@@ -530,6 +588,17 @@ def _backup_path(target: Path) -> Path:
     while backup.exists():
         backup, n = target.with_name(f"{target.name}.{n}.bak"), n + 1
     return backup
+
+
+def _restore_partial(path: str, restore: Optional[str]) -> None:
+    """Undo a copy that failed part-way: whatever it left is ours, so the previous file goes back over it."""
+    try:
+        if restore and Path(restore).is_file():
+            os.replace(restore, path)
+        else:
+            Path(path).unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("[connectors] partial add-on write not undone: %s: %s", path, exc)
 
 
 def _remove_written(path: str, sha256: Optional[str], restore: Optional[str]) -> Optional[str]:

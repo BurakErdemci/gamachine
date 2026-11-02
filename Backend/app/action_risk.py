@@ -263,9 +263,18 @@ _UNITY_BALANCED_ROUTINE = {
 _UNITY_DESTRUCTIVE = re.compile(r"(?:^|_)(?:remove|delete|destroy)")
 
 
+# Same nesting limit as the ledger; a deeper batch is critical.
+_UNITY_MAX_DEPTH = 8
+
+
+def _fold(key: Any) -> Optional[str]:
+    # The ledger's collision fold: the layers up to the Unity handler only drop underscores and change case.
+    return key.replace("_", "").lower() if isinstance(key, str) else None
+
+
 def _unity_destructive(args: Mapping) -> bool:
-    return any(isinstance(k, str) and k.replace("_", "").lower() == "action" and isinstance(v, str)
-               and _UNITY_DESTRUCTIVE.search(v.lower()) for k, v in args.items())
+    return any(_fold(k) == "action" and isinstance(v, str) and _UNITY_DESTRUCTIVE.search(v.lower())
+               for k, v in args.items())
 
 
 def _unity_balanced_routine(bare: str, args: Mapping) -> bool:
@@ -273,14 +282,14 @@ def _unity_balanced_routine(bare: str, args: Mapping) -> bool:
     if not allowed:
         return False
     # One spelling of the action key only: the server folds case and underscores.
-    keys = [k for k in args if isinstance(k, str) and k.replace("_", "").lower() == "action"]
+    keys = [k for k in args if _fold(k) == "action"]
     if keys != ["action"]:
         return False
     action = args["action"]
     return isinstance(action, str) and action.lower() in allowed
 
 
-def classify_unity(tool: Any, args: Any) -> Risk:
+def classify_unity(tool: Any, args: Any, _depth: int = 0) -> Risk:
     if not isinstance(tool, str) or not tool:
         return _critical("unity_unknown_tool", "")
     bare = tool[len(UNITY_PREFIX):] if tool.startswith(UNITY_PREFIX) else tool
@@ -288,6 +297,8 @@ def classify_unity(tool: Any, args: Any) -> Risk:
         args = {}
     if not isinstance(args, Mapping):
         return _critical("unity_unknown_tool", bare)
+    if any(_fold(k) == "commands" for k in args):
+        return _classify_unity_batch(bare, args, _depth)
     import unity_tool_policy  # stdlib-only, loads the ledger by path
     risk = unity_tool_policy.unity_action_risk(bare, args)
     detail = bare
@@ -303,6 +314,29 @@ def classify_unity(tool: Any, args: Any) -> Risk:
     if risk == "unknown":
         return _critical("unity_unknown_tool", detail)
     return _critical("unity_critical_action", detail)
+
+
+def _classify_unity_batch(bare: str, args: Mapping, depth: int) -> Risk:
+    """batch_execute (or any tool carrying a commands list): each nested call is judged by the same
+    balanced rules; the batch is critical when one of them is, or when its shape cannot be read."""
+    if depth >= _UNITY_MAX_DEPTH:
+        return _critical("unity_critical_action", f"{bare}: nested too deep")
+    lists = [v for k, v in args.items() if _fold(k) == "commands"]
+    if len(lists) != 1 or not isinstance(lists[0], (list, tuple)) or not lists[0]:
+        return _critical("unity_critical_action", f"{bare}: malformed commands")
+    reads = True
+    for command in lists[0]:
+        if not isinstance(command, Mapping):
+            return _critical("unity_critical_action", f"{bare}: malformed commands")
+        names = [v for k, v in command.items() if _fold(k) == "tool"]
+        inner = [v for k, v in command.items() if _fold(k) == "params"]
+        if len(names) != 1 or not isinstance(names[0], str) or len(inner) > 1:
+            return _critical("unity_critical_action", f"{bare}: malformed commands")
+        risk = classify_unity(names[0], (inner[0] if inner else None) or {}, depth + 1)
+        if risk.critical:
+            return risk
+        reads = reads and risk.reason == "unity_read"
+    return _routine("unity_read" if reads else "unity_routine_write", bare)
 
 
 # ── Blender code ─────────────────────────────────────────────────────────────
@@ -521,7 +555,10 @@ class _BlenderScan(ast.NodeVisitor):
             # A render with animation=True writes every frame to the output path.
             writes = {"write_still"} | ({"animation"} if path in _RENDER_OPS else set())
             for kw in call.keywords:
-                if kw.arg in writes and not (isinstance(kw.value, ast.Constant) and not kw.value.value):
+                if kw.arg is None and (path in _RENDER_OPS or path in _BAKE_OPS):
+                    # **kwargs may carry animation, write_still or save_mode.
+                    self.flag(call, "file write", f"{path}(**)")
+                elif kw.arg in writes and not (isinstance(kw.value, ast.Constant) and not kw.value.value):
                     self.flag(call, "file write", f"{path}({kw.arg})")
                 elif (path in _BAKE_OPS and kw.arg == "save_mode"
                       and not (isinstance(kw.value, ast.Constant) and kw.value.value == "INTERNAL")):
@@ -790,18 +827,20 @@ _INNER_WORDS = re.compile(r"[\s;|&(){}<>`,\[\]=+:]+")
 _DELETE_MOVE = frozenset({
     "rm", "del", "erase", "rmdir", "rd", "unlink", "shred", "rimraf", "remove-item", "ri",
     "mv", "move", "ren", "rename", "move-item", "mi", "rename-item", "rni", "clear-content",
-    "clc", "clear-item", "cli", "diskpart", "cipher", "sdelete",
+    "clc", "clear-item", "cli", "diskpart", "cipher", "sdelete", "format-volume",
 })
 _FIND_DESTRUCTIVE = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir"})
 _ROBOCOPY_DESTRUCTIVE = frozenset({"/mir", "/purge", "/mov", "/move"})
 _POWERSHELLS = frozenset({"powershell", "pwsh", "powershell_ise"})
 _POSIX_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
 _POSIX_SYSTEM_DIRS = ("/bin/", "/usr/bin/", "/usr/local/bin/")
-_CODE_INTERPRETERS = frozenset({
-    "python", "python3", "py", "node", "deno", "bun", "perl", "ruby", "php",
-})
+# Every name a language runtime is installed under: python3.12, pythonw, pypy3, nodejs, luajit...
+_CODE_INTERPRETER = re.compile(
+    r"(?:python|pythonw|pypy)(?:\d+(?:\.\d+)*)?|pyw?|node(?:js)?|deno|bun|tsx|ts-node|perl|ruby|php"
+    r"|lua(?:jit|\d+(?:\.\d+)*)?|rscript")
+_PYTHON = re.compile(r"(?:python|pythonw|pypy)(?:\d+(?:\.\d+)*)?|pyw?")
 _SCRIPT_HOSTS = frozenset({"cmd", "wscript", "cscript", "mshta"})
-_INTERPRETERS = _POWERSHELLS | _POSIX_SHELLS | _CODE_INTERPRETERS | _SCRIPT_HOSTS
+_SHELL_INTERPRETERS = _POWERSHELLS | _POSIX_SHELLS | _SCRIPT_HOSTS
 _INLINE_FLAGS = frozenset({
     "-c", "-e", "-p", "-r", "-command", "-encodedcommand", "-enc", "-ec", "-en", "-encoded",
     "/c", "/k", "/r", "--eval", "--print", "--command",
@@ -817,25 +856,38 @@ _NETWORK = frozenset({
 })
 # Downloaders: critical only when they send data or upload.
 _HTTP_CLIENTS = frozenset({"curl", "wget", "iwr", "irm", "invoke-webrequest", "invoke-restmethod"})
-_CURL_SEND = frozenset({"-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
-                        "--data-ascii", "-F", "--form", "--form-string", "-T", "--upload-file",
-                        "--json"})
+_CURL_SEND_LONG = ("--data", "--form", "--upload-file", "--json")
+# curl short options that take a value: the rest of a cluster (`-Hx`, `-oout`) is that value.
+_CURL_VALUE_SHORTS = frozenset("AbcCDEeHKmoPQrtUuwxYyz")
 _WGET_SEND = ("--post-data", "--post-file", "--body-data", "--body-file")
+# In Windows PowerShell curl and wget are Invoke-WebRequest; these parameters say it is that one.
+_PS_WEB_PARAMS = frozenset({"-uri", "-method", "-body", "-infile", "-outfile", "-headers", "-form",
+                            "-contenttype", "-usebasicparsing", "-websession", "-useragent"})
 _READ_METHODS = frozenset({"get", "head", "options"})
 _PACKAGE_MANAGERS = frozenset({"npm", "pnpm", "yarn", "bun", "pip", "pip3", "pipx", "uv",
-                               "gem", "cargo", "go", "composer", "nuget"})
+                               "gem", "cargo", "go", "composer", "nuget", "poetry", "pipenv", "pdm",
+                               "conda", "mamba", "micromamba", "bundle"})
 _INSTALL_SUBS = frozenset({
     "install", "i", "ci", "add", "update", "up", "upgrade", "uninstall", "remove", "rm", "un",
-    "link", "publish", "exec", "x", "dlx", "get", "sync", "restore", "tool",
+    "link", "publish", "exec", "x", "dlx", "get", "sync", "restore", "tool", "require", "download",
 })
+# `npm create vite` / `npm init vite` download and run a project template.
+_JS_PACKAGE_MANAGERS = frozenset({"npm", "pnpm", "yarn", "bun"})
 _SYSTEM_INSTALLERS = frozenset({
     "winget", "choco", "scoop", "apt", "apt-get", "brew", "dnf", "yum", "pacman", "snap",
-    "install-module", "install-package", "install-script", "npx", "pnpx", "dotnet-install",
+    "install-module", "install-package", "install-script", "npx", "pnpx", "bunx", "uvx",
+    "dotnet-install",
 })
+# Permissions, accounts, security settings, services, boot and processes: security-changing or irreversible.
 _PERMISSION = frozenset({
     "chmod", "chown", "chgrp", "icacls", "cacls", "takeown", "set-acl", "sudo", "runas",
-    "gsudo", "netsh", "reg", "setx",
+    "gsudo", "netsh", "reg", "setx", "new-localuser", "set-localuser", "remove-localuser",
+    "add-localgroupmember", "remove-localgroupmember", "set-mppreference", "add-mppreference",
+    "remove-mppreference", "wmic", "bcdedit", "stop-process", "spps", "kill", "taskkill", "pkill",
+    "killall", "restart-computer", "stop-computer", "shutdown",
 })
+_SERVICE_CHANGES = frozenset({"create", "config", "delete", "stop"})
+_REGISTRY_WRITES = frozenset({"set-itemproperty", "sp", "new-itemproperty", "remove-itemproperty", "rp"})
 # git global options that take the next word as their value.
 _GIT_VALUE_OPTIONS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace",
                                 "--config-env", "--exec-path"})
@@ -843,10 +895,17 @@ _GIT_VALUE_OPTIONS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--names
 _GIT_RUNS_PROGRAMS = ("-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack")
 _GIT_HISTORY = frozenset({"rebase", "filter-branch", "filter-repo", "update-ref", "prune",
                           "send-email"})
+# git config keys that make git run a program, or change its transport or hooks.
+_GIT_RUNNING_KEYS = re.compile(
+    r"core\.(?:sshcommand|hookspath|fsmonitor|pager|editor)|.+\.command|url\..+\.insteadof"
+    r"|credential\.(?:.+\.)?helper")
+# Container engines pull images and run them with their own access to the machine.
+_CONTAINER_ENGINES = frozenset({"docker", "podman", "nerdctl"})
 # Inline code: language-level delete, network and outside-path forms.
 _INLINE_API = re.compile(
-    r"\bos\.(?:remove|unlink|rmdir|removedirs|rename|replace)\b|\bshutil\.(?:rmtree|move)\b"
-    r"|\.(?:unlink|rmdir)\s*\(|\b(?:rmtree|rmSync|unlinkSync|rmdirSync|renameSync|send2trash)\b"
+    r"\bos\.(?:remove|unlink|rmdir|removedirs|rename|replace)\b"
+    r"|\bshutil\.\w+|\bFileUtils\.(?:rm|mv|remove)|\bDeno\.(?:remove|rename)"
+    r"|\.(?:unlink|rmdir|rm|rename)\s*\(|\b(?:rmtree|rmSync|unlinkSync|rmdirSync|renameSync|send2trash)\b"
     r"|\bfs\.(?:promises\.)?(?:rm|unlink|rmdir|rename)\b|\b(?:File|Directory)\.(?:Delete|Move)\b"
     r"|\bunlink\s*\(|\burllib\b|\burlopen\b|\brequests\.|\bhttp\.client\b|\bhttpx\b|\baiohttp\b"
     r"|\bsocket\b|\bsmtplib\b|\bftplib\b|\bparamiko\b|\bfetch\s*\(|\bXMLHttpRequest\b"
@@ -855,6 +914,12 @@ _INLINE_API = re.compile(
     re.IGNORECASE)
 _INLINE_OUTSIDE = re.compile(
     r"(?:^|[\s'\"(=,\[])(?:[A-Za-z]:[\\/]|\\\\|//|~[\\/]|/(?![/\s*])|\.\.(?:[\\/]|['\"]|$))")
+# Inline code that writes a tool config path, as a shell write of the same path would be caught.
+_INLINE_CONFIG = re.compile(
+    r"(?:^|[\s'\"(=,\\/])(?:\.mcp\.json|opencode\.json|\.(?:git|claude|cursor|opencode|agents|gemini|codex"
+    r"|vscode)(?:[\\/'\"]|$)|projectsettings[\\/]|packages[\\/](?:manifest|packages-lock)\.json)", re.IGNORECASE)
+_INLINE_WRITE = re.compile(r"write|append|dump|copy|move|replace|mkdir|touch|['\"][wax]b?\+?['\"]",
+                           re.IGNORECASE)
 _URL = re.compile(r"^https?://", re.IGNORECASE)
 # PowerShell resolves these to provider cmdlets, where `Name:` is a drive.
 _PS_PROVIDER_HEADS = frozenset({
@@ -924,6 +989,13 @@ def _trigger(words: list, *, inline: bool = False) -> Optional[Risk]:
             return _critical("shell_delete_move", "find")
         if v == "robocopy" and any(w.lower() in _ROBOCOPY_DESTRUCTIVE for w in lows[i + 1:]):
             return _critical("shell_delete_move", "robocopy")
+        # Archivers that delete what they packed.
+        if v == "tar" and any(w.lower() == "--remove-files" for w in lows[i + 1:]):
+            return _critical("shell_delete_move", "tar --remove-files")
+        if v == "zip" and any(re.fullmatch(r"-[A-Za-z]*m[A-Za-z]*", w) for w in lows[i + 1:]):
+            return _critical("shell_delete_move", "zip -m")
+        if v in ("7z", "7za", "7zr") and any(w.lower() == "-sdel" for w in lows[i + 1:]):
+            return _critical("shell_delete_move", "7z -sdel")
         if v == "pytest" and any(w.lower().startswith("--basetemp") for w in lows[i + 1:]):
             # pytest empties its --basetemp directory before the run.
             return _critical("shell_delete_move", "pytest --basetemp")
@@ -942,15 +1014,34 @@ def _trigger(words: list, *, inline: bool = False) -> Optional[Risk]:
             return _critical("shell_network", v)
     for i, v in enumerate(verbs):
         nxt = verbs[i + 1] if i + 1 < len(verbs) else ""
+        third = verbs[i + 2] if i + 2 < len(verbs) else ""
         if v in _SYSTEM_INSTALLERS:
             return _critical("shell_installer", v)
         if v in _PACKAGE_MANAGERS and nxt in _INSTALL_SUBS:
             return _critical("shell_installer", f"{v} {nxt}")
-        if v in _PYTHONS and nxt == "-m" and i + 2 < len(verbs) and verbs[i + 2] in ("pip", "venv", "ensurepip"):
-            return _critical("shell_installer", f"{v} -m {verbs[i + 2]}")
+        if v in _JS_PACKAGE_MANAGERS and nxt in ("create", "init"):
+            return _critical("shell_installer", f"{v} {nxt}")
+        if v == "yarn" and (not nxt or nxt.startswith("-")):
+            return _critical("shell_installer", "yarn")  # bare yarn installs
+        if (v == "uv" and nxt == "pip" and third in _INSTALL_SUBS) or (v == "go" and nxt == "mod"
+                                                                       and third == "download"):
+            return _critical("shell_installer", f"{v} {nxt} {third}")
+        if v == "setup.py" and nxt in ("install", "develop"):
+            return _critical("shell_installer", f"setup.py {nxt}")
+        if v == "deno" and (nxt == "install" or (nxt == "run" and any(_URL.match(w) for w in lows[i + 2:]))):
+            return _critical("shell_installer", f"deno {nxt}")
+        if _PYTHON.fullmatch(v) and nxt == "-m" and third in ("pip", "venv", "ensurepip"):
+            return _critical("shell_installer", f"{v} -m {third}")
         if v == "dotnet" and nxt in ("add", "remove", "tool", "new", "workload", "nuget", "restore"):
             return _critical("shell_installer", f"dotnet {nxt}")
         if v in _PERMISSION:
+            return _critical("shell_permission", v)
+        if v in _CONTAINER_ENGINES and nxt:
+            return _critical("shell_installer", f"{v} {nxt}")
+        if (v == "sc" and nxt in _SERVICE_CHANGES) or (v == "net" and nxt in ("user", "localgroup")):
+            return _critical("shell_permission", f"{v} {nxt}")
+        if v in _REGISTRY_WRITES and any(w.lower().startswith(("hklm:", "hkcu:", "registry::"))
+                                         for w in lows[i + 1:]):
             return _critical("shell_permission", v)
         if v == "git":
             risk = _git_risk(lows[i + 1:])
@@ -966,23 +1057,34 @@ def _method_of(args: list, i: int, sep: str) -> str:
     return args[i + 1].lower() if i + 1 < len(args) else ""
 
 
+def _curl_short_sends(args: list, i: int) -> bool:
+    """A curl short-option cluster (`-sSd@f`, `-Ta.txt`, `-XPOST`) that sends data or a non-GET method."""
+    arg = args[i]
+    for k, ch in enumerate(arg[1:], start=1):
+        if ch in "dFT":
+            return True
+        if ch == "X":
+            method = arg[k + 1:].lower() or (args[i + 1].lower() if i + 1 < len(args) else "")
+            return method not in _READ_METHODS
+        if ch in _CURL_VALUE_SHORTS or not ch.isalpha():
+            return False
+    return False
+
+
 def _sends(verb: str, args: list) -> bool:
-    if verb == "curl":
+    powershell = any(a.lower() in _PS_WEB_PARAMS for a in args)
+    if verb == "curl" and not powershell:
         for i, a in enumerate(args):
-            if a in _CURL_SEND or (a.startswith("--") and a.split("=", 1)[0] in _CURL_SEND):
-                return True
-            if re.fullmatch(r"-[A-Za-z]+", a) and set(a[1:]) & {"d", "F", "T"}:
-                return True
-            if a.startswith("-X"):
-                method = a[2:].lower() or _method_of(args, i, "=")
-            elif a.split("=", 1)[0] == "--request":
-                method = _method_of(args, i, "=")
-            else:
-                continue
-            if method not in _READ_METHODS:
+            if a.startswith("--"):
+                name = a.lower().split("=", 1)[0]
+                if name.startswith(_CURL_SEND_LONG):
+                    return True
+                if name == "--request" and _method_of(args, i, "=") not in _READ_METHODS:
+                    return True
+            elif a.startswith("-") and _curl_short_sends(args, i):
                 return True
         return False
-    if verb == "wget":
+    if verb == "wget" and not powershell:
         for i, a in enumerate(args):
             low = a.lower()
             if low.startswith(_WGET_SEND):
@@ -990,7 +1092,7 @@ def _sends(verb: str, args: list) -> bool:
             if low.startswith("--method") and _method_of(args, i, "=") not in _READ_METHODS:
                 return True
         return False
-    # Invoke-WebRequest / Invoke-RestMethod; PowerShell accepts any unique prefix.
+    # Invoke-WebRequest / Invoke-RestMethod (and PowerShell's curl/wget); PowerShell accepts any unique prefix.
     for i, a in enumerate(args):
         low = a.lower()
         if low.startswith(("-b", "-inf", "-fo")):
@@ -1000,8 +1102,9 @@ def _sends(verb: str, args: list) -> bool:
     return False
 
 
-def _git_risk(args: list) -> Optional[Risk]:
-    """Irreversible git, a global config change, or an option that runs a program."""
+def _git_risk(args: list, operands: bool = False) -> Optional[Risk]:
+    """Irreversible git, a global config change, or an option that runs a program. `operands`: `args` are
+    one command's own words (not the trigger scan, which repeats them), so they may be counted."""
     for a in args:
         low = a.lower()
         if any(low == o or low.startswith(o + "=") for o in _GIT_RUNS_PROGRAMS) \
@@ -1024,7 +1127,9 @@ def _git_risk(args: list) -> Optional[Risk]:
         return _critical("shell_git_write", detail)
     # Owner rule (2 Nov 2026): commands that throw away uncommitted work are irreversible.
     force = "f" in shorts or "--force" in rest
-    if sub == "checkout" and ("--" in rest or "." in rest or force):
+    if sub == "checkout" and ("--" in rest or "." in rest or force
+                              or (operands and len(_checkout_operands(rest)) >= 2)):
+        # `git checkout <ref> <path>` overwrites the working copy of that path.
         return _critical("shell_git_write", detail)
     if sub == "switch" and (force or "--discard-changes" in rest):
         return _critical("shell_git_write", detail)
@@ -1040,9 +1145,35 @@ def _git_risk(args: list) -> Optional[Risk]:
         return _critical("shell_git_write", f"{detail} {rest[0].lower()}")
     if sub == "gc" and any(a.startswith("--prune") for a in rest):
         return _critical("shell_git_write", detail + " --prune")
-    if sub == "config" and any(a in ("--global", "--system") for a in rest):
+    if sub == "config" and (any(a in ("--global", "--system") for a in rest) or _git_config_runs(rest)):
         return _critical("shell_git_write", detail)
+    if sub == "tag" and ("d" in shorts or "--delete" in rest):
+        return _critical("shell_git_write", detail + " -d")
     return None
+
+
+def _git_config_runs(rest: list) -> bool:
+    """A `git config` that sets a key running a program, or an alias that runs a shell command (`!...`)."""
+    words = [a for a in rest if not a.startswith("-")]
+    if not words:
+        return False
+    key = words[0].lower()
+    if _GIT_RUNNING_KEYS.fullmatch(key):
+        return True
+    return key.startswith("alias.") and len(words) > 1 and words[1].lstrip("'\"").startswith("!")
+
+
+def _checkout_operands(rest: list) -> list:
+    """The non-option words of a git checkout; a branch-creating option's value is not one."""
+    out, skip = [], False
+    for a in rest:
+        if skip:
+            skip = False
+        elif a in ("-b", "-B", "--orphan"):
+            skip = True
+        elif not a.startswith("-"):
+            out.append(a)
+    return out
 
 
 # Bash, not this module, splits a wrapped script: it removes quotes (`"grep"`),
@@ -1096,6 +1227,10 @@ def _interpreter_risk(raw: str, tokens: Optional[list], verbs: list, cwd: str, w
         return None
     for i, tok in enumerate(tokens):
         v = _verb(tok)
+        if v == "eval":
+            # The shell runs the joined words as a command line: judged like one.
+            inner = classify_shell(" ".join(tokens[i + 1:]), cwd=cwd, workspace=workspace, _depth=depth + 1)
+            return inner if inner.critical else None
         if v in _POSIX_SHELLS:
             flag = next((j for j in range(i + 1, len(tokens))
                          if re.fullmatch(r"-[a-z]*c[a-z]*", tokens[j])), None)
@@ -1111,18 +1246,35 @@ def _interpreter_risk(raw: str, tokens: Optional[list], verbs: list, cwd: str, w
                 return _critical("shell_inline_code", v)
             inner = classify_shell(script, cwd=cwd, workspace=workspace, _depth=depth + 1)
             return inner if inner.critical else None
-        if v in _CODE_INTERPRETERS:
-            flag = next((j for j in range(i + 1, len(tokens))
-                         if tokens[j].lower() in _INLINE_FLAGS), None)
-            if flag is None:
+        if _CODE_INTERPRETER.fullmatch(v):
+            code = _inline_code(v, tokens[i + 1:])
+            if code is None:
                 return None
-            code = tokens[flag + 1] if flag + 1 < len(tokens) else ""
             found = _trigger([w for w in _INNER_WORDS.split(code) if w], inline=True)
             if found is not None:
                 return _critical("shell_inline_risky", f"{v}: {found.detail}")
             if _INLINE_API.search(code) or _INLINE_OUTSIDE.search(code):
                 return _critical("shell_inline_risky", v)
+            if _INLINE_CONFIG.search(code) and _INLINE_WRITE.search(code):
+                return _critical("shell_tool_config", v)
             return None
+    return None
+
+
+def _inline_code(interpreter: str, args: list) -> Optional[str]:
+    """The inline code after an interpreter's code flag, detached (`-c x`), clustered (`-pe x`), attached
+    (`-cx`, `--eval=x`) or deno's `eval`; None when there is none. The tokenizer may split an attached
+    quoted script, so every word after the flag is read as code."""
+    for j, tok in enumerate(args):
+        low = tok.lower()
+        rest = args[j + 1:]
+        if (low in _INLINE_FLAGS or re.fullmatch(r"-[a-z]*[ce]", low)
+                or (interpreter == "deno" and j == 0 and low == "eval")):
+            return " ".join(rest)
+        if "=" in low and low.split("=", 1)[0] in _INLINE_FLAGS:
+            return " ".join([tok.split("=", 1)[1]] + rest)
+        if re.match(r"-[cepr].", tok):
+            return " ".join([tok[2:]] + rest)
     return None
 
 
@@ -1130,7 +1282,7 @@ def _shell_reason(raw: str, tokens: Optional[list], cwd_ok: bool, root: Optional
                   cwd: str, workspace: str, depth: int) -> Risk:
     words = [w for w in _WORDS.split(raw) if w]
     verbs = [_verb(w) for w in words]
-    interpreted = any(v in _INTERPRETERS for v in verbs)
+    interpreted = any(v in _SHELL_INTERPRETERS or v == "eval" or _CODE_INTERPRETER.fullmatch(v) for v in verbs)
     unquoted = _unquoted(raw)
     if interpreted or tokens is None or unquoted is None:
         scan = words
@@ -1152,6 +1304,9 @@ def _shell_reason(raw: str, tokens: Optional[list], cwd_ok: bool, root: Optional
         return _critical("shell_metachar", head)
     if not cwd_ok:
         return _critical("shell_outside_workspace", head)
+    git_at = next((k for k, tok in enumerate(tokens) if _verb(tok) == "git"), None)
+    if git_at is not None and (found := _git_risk(tokens[git_at + 1:], operands=True)) is not None:
+        return found
     args = []
     for tok in tokens[1:]:
         if _URL.match(tok):
