@@ -564,6 +564,7 @@ def test_copies_only_into_assets_with_plain_names_and_a_type(places, name, dest)
     assert not [p for p in places.project.rglob("*") if p.is_file()]
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Linux folders are case-sensitive; Windows and macOS default ones are not")
 def test_copy_into_assets_is_case_insensitive(places):
     reply, _ = copy(places, completed(places, "a.wav"), "assets/Audio/a.wav")
     assert reply["ok"] is True, reply

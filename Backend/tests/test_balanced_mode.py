@@ -765,7 +765,8 @@ def test_classified_command_keeps_the_wrapper_unless_the_step_grammar_reads_it(w
                  "\N{RIGHT SINGLE QUOTATION MARK}'", "shell_inline_code"),
     (_CODEX_PS + "'cat \N{LATIN SMALL LETTER E WITH ACUTE}.txt'", "shell_inline_code"),
     # A shell outside the system locations may be a workspace binary.
-    (".\\tools\\sh.exe -c 'ls'", "shell_inline_code"),
+    pytest.param(".\\tools\\sh.exe -c 'ls'", "shell_inline_code",
+                 marks=pytest.mark.skipif(os.name != "nt", reason="a POSIX shell reads the backslashes as escapes")),
     ("C:\\Users\\x\\evil\\pwsh.exe -Command 'ls'", "shell_inline_code"),
     ("/tmp/bash -lc 'dotnet build'", "shell_inline_code"),
     # A bare name resolves through cwd and PATH.

@@ -174,7 +174,7 @@ def test_routine_unity(tool, args):
     ("cat ../secret", "shell_outside_workspace"), ("copy a.txt ../b.txt", "shell_outside_workspace"),
     ("cat {..,x}/secret", "shell_outside_workspace"),
     ("/bin/bash -lc 'cat {..,x}/secret'", "shell_outside_workspace"),
-    ("mkdir C:/Windows/x", "shell_outside_workspace"),
+    pytest.param("mkdir C:/Windows/x", "shell_outside_workspace", marks=pytest.mark.skipif(os.name != "nt", reason="Windows path or %VAR% syntax")),
     # Tool config paths.
     ("Set-Content .mcp.json x", "shell_tool_config"),
     ("copy a.txt .git/hooks/pre-commit", "shell_tool_config"),
@@ -188,6 +188,7 @@ def test_critical_shell(command, reason, ws):
     assert (risk.verdict, risk.reason) == (CRITICAL, reason), (command, risk)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows path or %VAR% syntax")
 def test_env_expansion_leaving_the_workspace_is_critical(ws, tmp_path, monkeypatch):
     monkeypatch.setenv("GM_OUTSIDE_DIR", str(tmp_path / "elsewhere"))
     risk = shell("copy a.txt %GM_OUTSIDE_DIR%\\b.txt", ws)
@@ -231,6 +232,7 @@ def test_the_workspace_root_itself_is_critical(ws):
     assert write(ws, ws).verdict == CRITICAL
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows path or %VAR% syntax")
 def test_files_delete_move_and_outside_are_critical(ws):
     a = os.path.join(ws, "a.txt")
     assert classify({"kind": "file_delete", "paths": [a], "workspace": ws}).reason == "file_delete"

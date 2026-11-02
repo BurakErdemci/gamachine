@@ -115,7 +115,7 @@ def test_routine_commands(command, reason, ws):
     ("dotnet build /p:Foo=1", "shell_outside_workspace"),
     ("npx tsc", "shell_installer"),
     ("npx some-package", "shell_installer"),
-    ("npm test %PATH%", "shell_outside_workspace"),
+    pytest.param("npm test %PATH%", "shell_outside_workspace", marks=pytest.mark.skipif(os.name != "nt", reason="Windows path or %VAR% syntax")),
     ("", "shell_unparseable"),
     ("   ", "shell_unparseable"),
     ("eval rm a", "shell_delete_move"),
