@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import time
 from urllib.parse import unquote, urlsplit
@@ -195,8 +196,9 @@ class BrowserGateway:
         self._drop_grants = drop_grants
         self._now = now
         self._workspace = workspace
-        # Per chat: the one-time pass of a click approved because it starts a download (see _gate); the
-        # chat's next paused download spends it, a page change or a failed click drops it.
+        # Per chat: the one-time pass of a click approved because it starts a download (see _gate); the next
+        # reply with a paused download spends it on the notice that fits the link (_covered_notice), a page
+        # change or a failed click drops it.
         self._download_clicks: dict[int, dict] = {}
         # Cards answered after the call returned: kept so the loop does not drop the task.
         self._settling: set = set()
@@ -364,12 +366,14 @@ class BrowserGateway:
             # A Stop or a page change since the click ends the pass (a halted chat's call never gets here).
             if (isinstance(now, dict) and now.get("page_gen") == click["page_gen"]
                     and now.get("stop_gen") == click["stop_gen"]):
-                field = "filename" if click["filename"] else "host"
+                # A link path without an extension (/dl/12345) does not name the file; its host decides then.
+                name = click["filename"] if policy.file_type(click["filename"]) else ""
+                field, want = ("filename", name) if name else ("host", click["host"])
                 for notice in notices:
                     if not isinstance(notice, dict) or (click["tab_id"] is not None
                                                         and notice.get("tab_id") != click["tab_id"]):
                         continue
-                    if not (click["filename"] or click["host"]) or str(notice.get(field) or "").casefold() == click[field]:
+                    if not want or str(notice.get(field) or "").casefold() == want:
                         covered = notice
                         break
         if paused or covered is not None:
@@ -413,10 +417,17 @@ class BrowserGateway:
         if isinstance(reply.get("downloadsPending"), list):
             found += reply["downloadsPending"]
         covered = self._covered_notice(conversation_id, found, state)
+        chosen = state() if covered is not None else None
+
+        def still_covered(notice) -> bool:
+            # An earlier card of this reply may have waited: a Stop or page change since then ends the pass.
+            now = state()
+            return (notice is covered and isinstance(now, dict) and isinstance(chosen, dict)
+                    and now.get("page_gen") == chosen.get("page_gen") and now.get("stop_gen") == chosen.get("stop_gen"))
 
         async def settle(notice):
             if isinstance(notice, dict) and notice.get("state") == "awaiting_approval":
-                return await self._approve_download(runtime, conversation_id, notice, state, notice is covered)
+                return await self._approve_download(runtime, conversation_id, notice, state, still_covered(notice))
             return notice
         reply = dict(reply)
         if "download" in reply:
@@ -479,7 +490,8 @@ class BrowserGateway:
 
         def copy() -> int:
             os.makedirs(os.path.dirname(target), exist_ok=True)
-            partial = target + ".gmpart"
+            # Hidden and unique: Unity skips dot names, and no existing file can share the staging path.
+            partial = os.path.join(os.path.dirname(target), f".{os.path.basename(target)}.{secrets.token_hex(6)}.gmpart")
             try:
                 shutil.copyfile(source, partial)
                 os.replace(partial, target)

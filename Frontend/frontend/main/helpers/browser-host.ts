@@ -82,7 +82,8 @@ export const AGENT_BLOCKED_DOWNLOAD_TYPES: ReadonlySet<string> = new Set(['exe',
   'appxbundle', 'appinstaller', 'application', 'gadget', 'vb', 'ws', 'sct', 'chm', 'inf', 'msp', 'mst', 'jnlp', 'xll', 'xla',
   'xlam', 'scf', 'iso', 'img', 'vhd', 'vhdx', 'library-ms', 'settingcontent-ms', 'diagcab', 'website', 'wsc', 'pyz', 'pyc',
   'appref-ms', 'shs', 'msh', 'msh1', 'msh2', 'mshxml', 'rdp', 'search-ms', 'theme', 'themepack', 'docm', 'xlsm', 'ade', 'adp',
-  'mde'])
+  'mde', 'pptm', 'dotm', 'xltm', 'potm', 'ppam', 'sldm', 'ppsm', 'xlsb', 'iqy',
+  'slk', 'psc1', 'psc2', 'msu', 'accde', 'accdr', 'mdb', 'ps2'])
 const DOWNLOAD_OPS = new Set(['downloads', 'download_resume', 'download_cancel', 'download_info'])
 const KEYS: Record<string, string> = {
   Enter: 'Enter', Tab: 'Tab', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left',

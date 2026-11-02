@@ -24,6 +24,7 @@ AGENT_BLOCKED_DOWNLOAD_SUFFIXES = (
     ".iso", ".img", ".vhd", ".vhdx", ".library-ms", ".settingcontent-ms", ".diagcab", ".website", ".wsc", ".pyz", ".pyc",
     ".appref-ms", ".shs", ".msh", ".msh1", ".msh2", ".mshxml", ".rdp", ".search-ms", ".theme", ".themepack",
     ".docm", ".xlsm", ".ade", ".adp", ".mde",
+    ".pptm", ".dotm", ".xltm", ".potm", ".ppam", ".sldm", ".ppsm", ".xlsb", ".iqy", ".slk", ".psc1", ".psc2", ".msu", ".accde", ".accdr", ".mdb", ".ps2",
 )
 # What browser_download_to_project never puts into a project, whatever the download was: Unity code,
 # compiler input and native plugins would be compiled or loaded by the editor. Shaders are allowed.
