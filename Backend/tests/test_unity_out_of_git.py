@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -380,7 +381,12 @@ def no_network_lookups(monkeypatch):
     return looked_up
 
 
-@pytest.mark.parametrize("pointer", ["gitdir: \\\\attacker\\share\\repo.git", "gitdir: //attacker/share/repo.git"])
+@pytest.mark.parametrize("pointer", [
+    "gitdir: \\\\attacker\\share\\repo.git",
+    # On POSIX a leading // is the local root, not a host, so the lookup is harmless there.
+    pytest.param("gitdir: //attacker/share/repo.git",
+                 marks=pytest.mark.skipif(sys.platform != "win32", reason="// names a host only on Windows")),
+])
 def test_a_gitdir_on_another_host_is_never_looked_up(tmp_path, monkeypatch, pointer):
     project = project_at(tmp_path / "Game")
     (project / ".git").write_text(pointer + "\n", encoding="utf-8")
@@ -439,7 +445,8 @@ def test_full_migration_of_an_old_project(manager, tmp_path):
 def status_manager(monkeypatch):
     manager = module.UnityMCPManager()
     manager.enabled = True
-    manager.active_workspace = "C:\\Projects\\Game"
+    # The host separator: the probe matches the folder name, which basename must find on every OS.
+    manager.active_workspace = os.path.join(os.path.abspath(os.sep), "Projects", "Game")
     monkeypatch.setattr(module.sys, "platform", "win32")
     monkeypatch.setattr(manager, "_status", AsyncMock(return_value={
         "status": "running", "pid": 1, "port": 8080, "instances": [], "reason": None}))
