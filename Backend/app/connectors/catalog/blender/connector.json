@@ -1,0 +1,46 @@
+{
+  "id": "blender",
+  "name": "Blender",
+  "summary": {
+    "tr": "3B modeli Blender'da yapar ve düzenler.",
+    "en": "Builds and edits 3D models in Blender."
+  },
+  "app": {
+    "min_version": "4.2",
+    "download_url": "https://www.blender.org/download/"
+  },
+  "package": {
+    "name": "mcp-for-blender",
+    "version": "2.2.6",
+    "python": "3.12",
+    "lock": "requirements.lock",
+    "entry": "mcp-for-blender",
+    "addon_protocol": 15,
+    "approx_download_mb": 45,
+    "approx_install_s": 21
+  },
+  "env": {
+    "DISABLE_TELEMETRY": "true",
+    "BLENDER_MCP_DISABLE_TELEMETRY": "true",
+    "MCP_DISABLE_TELEMETRY": "true"
+  },
+  "tools": {
+    "allow": ["get_scene_info", "get_addon_status", "execute_blender_code", "look"]
+  },
+  "capabilities": {
+    "tr": [
+      "Açık Blender sahnesindeki nesneleri, malzemeleri ve kamerayı okur.",
+      "Blender'da Python (bpy) kodu çalıştırarak model kurar ve düzenler.",
+      "Görünümün ekran görüntüsünü alıp yaptığı işe bakar."
+    ],
+    "en": [
+      "Reads the objects, materials and camera of the open Blender scene.",
+      "Builds and edits models by running Python (bpy) code in Blender.",
+      "Takes viewport screenshots to look at its own work."
+    ]
+  },
+  "risk": {
+    "tr": "Ajan Blender içinde istediği Python kodunu çalıştırabilir; bu kod dosyalarınıza da erişebilir. Kaydetmediğiniz sahneleri önce kaydedin.",
+    "en": "The agent can run any Python code inside Blender, and that code can reach your files too. Save unsaved scenes first."
+  }
+}

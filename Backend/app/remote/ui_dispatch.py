@@ -117,6 +117,7 @@ _ALLOW: List[Tuple[Tuple[str, ...], str]] = [
     (("GET",), r"/approval-mode"),
     (("GET",), r"/computer-use/(settings|activity)"),
     (("GET",), r"/browser/settings"),
+    (("GET",), rf"/connectors(/{_ID}/install)?"),
     (("GET",), r"/(me|health|health/auth|agent-guide|profile/stats)"),
 ]
 
@@ -132,6 +133,7 @@ _DENY: List[Tuple[Optional[Tuple[str, ...]], str]] = [
     (("POST", "PUT", "PATCH", "DELETE"), "/computer-use/settings"),
     (None, "/browser/runtime"),
     (("POST", "PUT", "PATCH", "DELETE"), "/browser/settings"),
+    (("POST", "PUT", "PATCH", "DELETE"), "/connectors"),
     (None, "/remote"),
     (("POST", "PUT", "PATCH", "DELETE"), "/approval-mode"),
 ]

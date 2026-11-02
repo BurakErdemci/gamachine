@@ -157,6 +157,7 @@ from routes import (
     create_usage_router,
 )
 from routes.scene_editor_routes import create_scene_editor_router
+from routes.connector_routes import create_connector_router
 
 
 # Root logger seviyesini explicit INFO yap
@@ -354,10 +355,12 @@ usage_service = UsageService()
 from agentic import approval_mode  # noqa: E402
 from computer_use import settings as computer_use_settings  # noqa: E402
 from browser_use import settings as browser_use_settings  # noqa: E402
+from connectors import settings as connectors_settings  # noqa: E402
 
 approval_mode.bind_store(db)
 computer_use_settings.bind_store(db)
 browser_use_settings.bind_store(db)
+connectors_settings.bind_store(db)
 
 _ALLOWED_ORIGINS = [
     "http://localhost:8888",    # Nextron dev renderer
@@ -389,6 +392,7 @@ app.include_router(create_usage_router(usage_service))
 app.include_router(create_mcp_router())
 app.include_router(create_scene_editor_router(db))
 app.include_router(create_transcribe_router(db))
+app.include_router(create_connector_router(db))
 
 from remote.bridge import RemoteBridge  # noqa: E402
 

@@ -45,6 +45,16 @@ for _exe in _video_exes:
     if _os.path.exists(_vp):
         _video_bins.append((_vp, "bin"))
 
+# Connector catalog: each connector.json with its hash lock, under connectors/catalog/<id>/
+# (connectors/catalog.py reads them from sys._MEIPASS when frozen).
+_connector_datas = []
+_catalog_root = _os.path.join('app', 'connectors', 'catalog')
+for _cid in sorted(_os.listdir(_catalog_root)):
+    for _name in ('connector.json', 'requirements.lock'):
+        _cp = _os.path.join(_catalog_root, _cid, _name)
+        if _os.path.isfile(_cp):
+            _connector_datas.append((_cp, _os.path.join('connectors', 'catalog', _cid)))
+
 a = Analysis(
     ['app/main.py'],
     pathex=['app'],
@@ -53,7 +63,7 @@ a = Analysis(
     # GÖMÜLMEZ — PyInstaller 6.x datas'ı _internal/ altına koyuyor, oysa scriptlerin
     # frozen 'backend' binary'sinin YANINDA (Backend kökünde) olması gerekiyor.
     # Bu yüzden electron-builder.yml extraResources ile doğrudan Backend köküne kopyalanır.
-    datas=_cas_datas + [(_os.path.join('app', 'harness_notes', '*.md'), 'harness_notes')],
+    datas=_cas_datas + [(_os.path.join('app', 'harness_notes', '*.md'), 'harness_notes')] + _connector_datas,
     hiddenimports=[
         # Claude Agent SDK (kalıcı interaktif session)
         'claude_agent_sdk',
@@ -120,6 +130,14 @@ a = Analysis(
         'unity_ai_mcp.tools.mailbox_tools',
         'unityai_cli',
         'providers.codex_unitymcp_bridge',
+        # Connectors (routes/connector_routes.py imports them; listed so the catalog code ships whole)
+        'connectors',
+        'connectors.catalog',
+        'connectors.detect',
+        'connectors.installer',
+        'connectors.settings',
+        'connectors.views',
+        'routes.connector_routes',
         # MCP SDK 2.x: MCPServer (was mcp.server.fastmcp in 1.x; that module now
         # raises on import) and the wire types, a separate top-level package.
         'mcp',

@@ -43,6 +43,22 @@ EN: dict[str, str] = {
         "The agent browser runtime can only be reported from the app interface.",
     "Tarayıcı çalışma durumu geçersiz.": "Invalid agent browser runtime state.",
     "Tarayıcı portu ve anahtarı geçersiz.": "Invalid agent browser port and token.",
+    "Bağlayıcı bulunamadı.": "Connector not found.",
+    "Bu kanaldan bağlayıcılar değiştirilemez.": "Connectors cannot be changed through this channel.",
+    "Bağlayıcılar yalnız uygulama arayüzünden değiştirilebilir.":
+        "Connectors can only be changed from the app interface.",
+    "replace_addon true ya da false olmalı.": "replace_addon must be true or false.",
+    "Bu bağlayıcının kurulumu zaten sürüyor.": "This connector is already being installed.",
+    "Bağlayıcının uygulaması bulunamadı ya da sürümü çok eski.":
+        "The connector's application was not found or is too old.",
+    "Uygulamada uyumsuz bir eklenti kurulu; değiştirmek için onay gerekli.":
+        "An incompatible add-on is installed in the application; replacing it needs your confirmation.",
+    "Bağlayıcı kurulurken kaldırılamaz.": "A connector cannot be removed while it is being installed.",
+    "Bağlayıcı yalnız kurulu ve hazırken açılabilir.":
+        "A connector can only be turned on when it is installed and ready.",
+    "path bir metin ya da null olmalı.": "path must be a string or null.",
+    "Seçilen dosya sürümü okunabilen bir uygulama değil.":
+        "The chosen file is not an application whose version can be read.",
     "Uygulama izni yalnız uygulama arayüzünden kaldırılabilir.":
         "Application access can only be revoked from the app interface.",
     "İşlem durduruldu.": "Operation stopped.",
