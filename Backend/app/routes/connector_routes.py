@@ -108,9 +108,14 @@ def create_connector_router(db, installer: Optional[Installer] = None, entries: 
             problems = installer.remove(entry)
         except Busy:
             raise HTTPException(status_code=409, detail="Bağlayıcı kurulurken kaldırılamaz.")
-        for problem in problems:
-            logger.warning("[connectors] remove %s: %s", cid, problem)
         settings.set_enabled(db, cid, False)
+        if problems:
+            for problem in problems:
+                logger.warning("[connectors] remove %s: %s", cid, problem)
+            # Never a success while files remain; the next Remove retries what is named here.
+            left = "; ".join(problems)[:600]
+            raise HTTPException(status_code=409,
+                                detail=f"Bağlayıcı tamamen kaldırılamadı; kalanlar: {left}")
         return _view(entry)
 
     @router.put("/connectors/{cid}/enabled")

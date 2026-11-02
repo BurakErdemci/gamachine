@@ -42,7 +42,8 @@ def unity(tool, **args):
     "echo a^b", 'git commit -m "rm the old file"',
     # Local git writes.
     "git add -A", 'git commit -m "msg"', "git checkout -b feature", "git switch main",
-    "git stash", "git stash pop", "git tag v1", "git merge feature", "git restore a.txt",
+    "git stash", "git stash push", "git stash pop", "git tag v1", "git merge feature",
+    "git restore --staged a.txt", "git restore -S a.txt",
     "git mv a.txt b.txt", "git config user.name Me", "git branch -d done",
     "git reset HEAD~1", "git clean -n",
     # Plain inline code, and inline code classified by its inner text.
@@ -126,6 +127,12 @@ def test_routine_unity(tool, args):
     ("git update-ref -d refs/heads/x", "shell_git_write"),
     ("git reflog expire --all", "shell_git_write"), ("git gc --prune=now", "shell_git_write"),
     ("git config --global core.editor x", "shell_git_write"),
+    # Commands that throw away uncommitted work.
+    ("git checkout -- a.txt", "shell_git_write"), ("git checkout HEAD -- a.txt", "shell_git_write"),
+    ("git checkout .", "shell_git_write"), ("git checkout -f main", "shell_git_write"),
+    ("git switch --discard-changes main", "shell_git_write"), ("git restore a.txt", "shell_git_write"),
+    ("git restore --staged --worktree a.txt", "shell_git_write"), ("git stash drop", "shell_git_write"),
+    ("git stash clear", "shell_git_write"),
     ("git -c core.pager=x log", "shell_git_write"),
     # Installs.
     ("npm install left-pad", "shell_installer"), ("npm i", "shell_installer"),

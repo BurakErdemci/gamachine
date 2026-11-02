@@ -30,6 +30,8 @@ ADDON_MODULE = "blender_mcp"
 _ADDON_NAME_RE = re.compile(r"""["']name["']\s*:\s*["'](?:MCP for Blender|Blender MCP)["']""")
 _PROTOCOL_RE = re.compile(r"ADDON_PROTOCOL_VERSION\s*=\s*(\d+)")
 _OK = "GAMACHINE_OK"
+# Written next to the version folders when Remove could not delete an add-on file.
+REMOVE_MARKER = "remove-incomplete.json"
 
 # (argv, spawn_env family, env overrides, cwd, register(proc)) -> (returncode, combined output)
 Runner = Callable[[List[str], Optional[str], Dict[str, str], str, Callable[[subprocess.Popen], None]],
@@ -192,10 +194,14 @@ class Installer:
         decision = self._addon_decision(entry, app)
         return decision.get("conflict")
 
-    def _addon_decision(self, entry: dict, app: dict, records: Optional[List[dict]] = None) -> dict:
+    def _addon_decision(self, entry: dict, app: dict, records: Optional[List[dict]] = None,
+                        bundled_sha: Optional[str] = None) -> dict:
         needed = int(entry["package"].get("addon_protocol") or 0)
         records = self._records(entry) if records is None else records
         ours = {f.get("sha256"): f for r in records for f in r.get("addon_files", [])}
+        if bundled_sha:
+            # The pinned version's own add-on with no record: an install that died after writing it.
+            ours.setdefault(bundled_sha, {})
         others = []
         for path in find_addons(self.addons_dir(app)):
             try:
@@ -213,6 +219,10 @@ class Installer:
         if others:
             return {"conflict": {"path": str(others[0]), "found_protocol": read_protocol(others[0]),
                                  "needed_protocol": needed}}
+        target = self.addons_dir(app) / ADDON_FILENAME
+        if target.exists():
+            # Another add-on's file under the name Gamachine writes: replaced only with consent and a backup.
+            return {"conflict": {"path": str(target), "found_protocol": None, "needed_protocol": needed}}
         return {}
 
     # ---------- jobs ----------
@@ -277,22 +287,40 @@ class Installer:
         argv = [app_path, "--background", "--python-exit-code", "3", "--python-expr", expr]
         return self._exec(job, argv, None, overrides, str(Path(app_path).parent))
 
+    def _build_dir(self, job: Job) -> Path:
+        """An empty folder for this job. A repair builds next to the working install, which stays in use
+        until the new one is finished."""
+        vdir = self.version_dir(job.entry)
+        if any(r.get("dir") == str(vdir) for r in job.previous):
+            vdir = vdir.with_name(f"{vdir.name}-{job.id[:8]}")
+        elif vdir.exists():
+            shutil.rmtree(vdir)  # the leftover of an interrupted install
+        vdir.mkdir(parents=True)
+        return vdir
+
     def _run(self, job: Job) -> None:
         entry = job.entry
-        vdir = self.version_dir(entry)
+        vdir = None
         try:
             job.previous = self._records(entry)
-            if vdir.exists():
-                shutil.rmtree(vdir)  # a repair of this version, or the leftover of an interrupted install
-            vdir.mkdir(parents=True, exist_ok=True)
+            vdir = self._build_dir(job)
             record = self._install(job, vdir)
             # install.json last: its presence is what "installed" means.
             tmp = vdir / "install.json.tmp"
             tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
             os.replace(tmp, vdir / "install.json")
+            for older in job.previous:
+                # The record first: a folder a running server still holds may only partly go.
+                try:
+                    (Path(older["dir"]) / "install.json").unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("[connectors] old install record kept: %s", older["dir"])
             for older in (self.root / entry["id"]).iterdir():
-                if older.is_dir() and older != vdir:
-                    shutil.rmtree(older, ignore_errors=True)
+                if older != vdir:
+                    if older.is_dir():
+                        shutil.rmtree(older, ignore_errors=True)
+                    elif older.name == REMOVE_MARKER:
+                        older.unlink(missing_ok=True)
             job.state = "done"
         except Cancelled:
             self._undo(job, vdir)
@@ -307,17 +335,13 @@ class Installer:
             job.error = {"code": "internal", "message": str(exc)[:600], "retryable": True}
             job.state = "failed"
 
-    def _undo(self, job: Job, vdir: Path) -> None:
+    def _undo(self, job: Job, vdir: Optional[Path]) -> None:
+        """Put back the add-on file this job replaced and drop its folder; the previous install, built
+        elsewhere, is untouched."""
         for item in reversed(job.written):
             _remove_written(item["path"], item["sha256"], item.get("undo"))
-        if not (vdir / "install.json").is_file():
+        if vdir is not None and not (vdir / "install.json").is_file():
             shutil.rmtree(vdir, ignore_errors=True)
-            # A failed repair keeps the old record, so Remove still finds the add-on that install wrote.
-            for record in job.previous:
-                if record.get("dir") == str(vdir):
-                    vdir.mkdir(parents=True, exist_ok=True)
-                    kept = {k: v for k, v in record.items() if k != "dir"}
-                    (vdir / "install.json").write_text(json.dumps(kept, indent=2), encoding="utf-8")
 
     def _step(self, job: Job, step: str) -> None:
         if job.cancel_event.is_set():
@@ -364,31 +388,39 @@ class Installer:
             raise StepError("check_failed", _tail(out) or f"Blender exited {rc}")
         job.steps_done.append("check")
 
+        app = {"path": job.app["path"], "version": job.app["version"]}
+        current = {"path": addon["path"], "module": addon["module"], "sha256": addon["sha256"],
+                   "backup": addon.get("backup")}
+        # Add-ons an earlier install wrote for another Blender build stay on the record, so Remove finds them.
+        addons = {a["path"]: a for r in job.previous for a in addon_entries(r)}
+        addons[addon["path"]] = {**current, "owner": addon["owner"], "app": app}
+        files = {f.get("path"): f for r in job.previous for f in r.get("addon_files", [])}
+        files.update({w["path"]: {"path": w["path"], "sha256": w["sha256"], "backup": w["backup"]}
+                      for w in job.written})
         return {
             "version": pkg["version"],
             "lock_sha256": sha256_file(lock),
             "python": str(python),
             "entry": str(entry_bin),
-            "app": {"path": job.app["path"], "version": job.app["version"]},
+            "app": app,
             "addon_owner": addon["owner"],
-            "addon": {"path": addon["path"], "module": addon["module"], "sha256": addon["sha256"],
-                      "backup": addon.get("backup")},
-            "addon_files": [{"path": w["path"], "sha256": w["sha256"], "backup": w["backup"]}
-                            for w in job.written],
+            "addon": current,
+            "addons": list(addons.values()),
+            "addon_files": list(files.values()),
             "finished_at": _now(),
         }
 
     def _addon_step(self, job: Job, venv: Path) -> dict:
-        decision = self._addon_decision(job.entry, job.app, job.previous)
+        source = self._bundled_addon(venv)
+        decision = self._addon_decision(job.entry, job.app, job.previous, sha256_file(source))
         if "user" in decision:
             target = decision["user"]
             owner = "user"
         else:
             conflict = decision.get("conflict")
             if conflict and not job.replace_addon:
-                raise StepError("addon_conflict", "An incompatible MCP for Blender add-on is installed.",
-                                retryable=False)
-            source = self._bundled_addon(venv)
+                raise StepError("addon_conflict", "Another add-on's file is in the way of the MCP for Blender "
+                                "add-on; replacing it needs your confirmation.", retryable=False)
             backup = undo = None
             if "ours" in decision:
                 target, backup = decision["ours"], decision.get("backup")
@@ -396,7 +428,7 @@ class Installer:
                 shutil.copy2(target, undo)
             elif conflict:
                 target = Path(conflict["path"])
-                backup = undo = str(target.with_suffix(target.suffix + ".bak"))
+                backup = undo = str(_backup_path(target))
                 shutil.copy2(target, backup)
             else:
                 target = self.addons_dir(job.app) / ADDON_FILENAME
@@ -425,49 +457,91 @@ class Installer:
         return Path(matches[0])
 
     # ---------- remove ----------
+    def remove_problems(self, entry: dict) -> List[str]:
+        """What an earlier Remove could not delete (it is retried by the next Remove)."""
+        try:
+            data = json.loads((self.root / entry["id"] / REMOVE_MARKER).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        problems = data.get("problems") if isinstance(data, dict) else None
+        return [str(p) for p in problems] if isinstance(problems, list) else []
+
     def remove(self, entry: dict) -> List[str]:
-        """Disable and delete what Gamachine wrote, then the connector folder. Returns problems."""
+        """Disable and delete what Gamachine wrote, then the connector folder. Returns what is left; an
+        add-on file that could not go keeps the records (and a marker the view shows) for the next Remove."""
         if self.running(entry["id"]):
             raise Busy(entry["id"])
+        records = self._records(entry)
         problems = []
-        for record in self._records(entry):
-            if record.get("addon_owner") != "gamachine":
-                continue  # never disable or delete a user's own add-on
-            addon = record.get("addon") or {}
-            app_path = (record.get("app") or {}).get("path")
-            if addon.get("module") and app_path and os.path.isfile(app_path):
-                try:
-                    rc, out = self._blender(None, app_path,
-                                            "import addon_utils, bpy; addon_utils.disable(%r, default_set=True); "
-                                            "bpy.ops.wm.save_userpref(); print(%r)" % (addon["module"], _OK))
-                    if rc != 0 or _OK not in out:
-                        problems.append(f"disable failed: {_tail(out)}")
-                except (OSError, subprocess.SubprocessError) as exc:
-                    problems.append(f"disable failed: {exc}")
+        for record in records:
+            for addon in addon_entries(record):
+                if addon.get("owner") == "gamachine":  # never disable or delete a user's own add-on
+                    self._disable(addon)
             for item in record.get("addon_files", []):
                 problem = _remove_written(item.get("path", ""), item.get("sha256"), item.get("backup"))
                 if problem:
                     problems.append(problem)
         folder = self.root / entry["id"]
-        if folder.exists():
+        if problems:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / REMOVE_MARKER).write_text(json.dumps({"problems": problems}, indent=2), encoding="utf-8")
+        elif folder.exists():
             try:
+                # The records first, so a folder a running server still holds reads as not installed.
+                for record in records:
+                    (Path(record["dir"]) / "install.json").unlink(missing_ok=True)
                 shutil.rmtree(folder)
             except OSError as exc:
-                problems.append(f"folder not deleted: {exc}")
+                problems.append(f"not deleted: {getattr(exc, 'filename', None) or folder}")
         with self._lock:
             job = self._jobs.get(entry["id"])
             if job and job.state != "running":
                 del self._jobs[entry["id"]]
         return problems
 
+    def _disable(self, addon: dict) -> None:
+        app_path = (addon.get("app") or {}).get("path")
+        if not (addon.get("module") and app_path and os.path.isfile(app_path)):
+            return
+        # A failure is logged, not fatal: with its file gone Blender cannot load the add-on anyway.
+        try:
+            rc, out = self._blender(None, app_path,
+                                    "import addon_utils, bpy; addon_utils.disable(%r, default_set=True); "
+                                    "bpy.ops.wm.save_userpref(); print(%r)" % (addon["module"], _OK))
+            if rc != 0 or _OK not in out:
+                logger.warning("[connectors] disable of %s failed: %s", addon["module"], _tail(out))
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("[connectors] disable of %s failed: %s", addon["module"], exc)
+
+
+def addon_entries(record: dict) -> List[dict]:
+    """Every add-on an install record lists, each with its owner and app; older records hold one."""
+    if isinstance(record.get("addons"), list):
+        return [a for a in record["addons"] if isinstance(a, dict) and a.get("path")]
+    addon = record.get("addon")
+    if not isinstance(addon, dict) or not addon.get("path"):
+        return []
+    return [{**addon, "owner": record.get("addon_owner"), "app": record.get("app")}]
+
+
+def _backup_path(target: Path) -> Path:
+    """`<name>.bak`, or a numbered one when that name is taken: an existing file is never overwritten."""
+    backup, n = target.with_name(target.name + ".bak"), 1
+    while backup.exists():
+        backup, n = target.with_name(f"{target.name}.{n}.bak"), n + 1
+    return backup
+
 
 def _remove_written(path: str, sha256: Optional[str], restore: Optional[str]) -> Optional[str]:
-    """Delete one file Gamachine wrote if its content is still ours; put `restore` back in its place."""
+    """Delete one file Gamachine wrote if its content is still ours; put `restore` back in its place.
+    Returns the problem when a file that should go could not."""
     path = Path(path)
     try:
         if path.is_file():
             if sha256_file(path) != sha256:
-                return f"kept changed file: {path}"
+                # The user changed it: it is theirs now and stays, like any file Gamachine did not write.
+                logger.info("[connectors] kept changed file: %s", path)
+                return None
             path.unlink()
         if restore and Path(restore).is_file() and not path.exists():
             os.replace(restore, path)

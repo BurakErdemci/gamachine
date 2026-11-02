@@ -320,3 +320,81 @@ def test_read_tools_never_ask_even_in_step_mode(env, tool):
     env.answers = [True]
     assert open_(env)["ok"] is True
     assert cards.list_pending() == []
+
+
+@pytest.mark.parametrize("change", ["switch_off", "chat_deleted", "install_removed"])
+def test_an_approved_card_is_refused_when_the_gate_changed_while_it_was_open(env, change):
+    set_mode(env, "step")
+    thread, out = gate_in_background(env, ROUTINE)
+    (gate_id, _), = wait_for_card(env).items()
+    if change == "switch_off":
+        settings.set_enabled(env.db, "blender", False)
+    elif change == "chat_deleted":
+        env.db.get_conversation_owner.return_value = None
+    else:
+        (env.root / "blender" / "2.2.6" / "venv" / "Scripts" / "mcp-for-blender.exe").unlink()
+    env.client.post(f"/mcp-approval-respond/{gate_id}", json={"approved": True})
+    reply = finish(thread, out)
+    assert reply["ok"] is False and reply["error"]
+
+
+def _virtual_clock(start=0):
+    ticks = iter(range(start, start + 10_000))
+    return lambda: float(next(ticks))
+
+
+def test_a_second_open_waits_for_the_app_still_starting_instead_of_launching_another(env, monkeypatch):
+    monkeypatch.setattr(launcher, "_children", {})
+    launches = []
+
+    def launch(entry, path):
+        launches.append(path)
+        return 1000 + len(launches)
+    clock = _virtual_clock()
+    for _ in range(2):
+        reply = launcher.open_app("blender", env.db, launch=launch, answers=lambda c: False,
+                                  sleep=lambda s: None, clock=clock, timeout_s=3)
+        assert reply["ok"] is False
+    assert len(launches) == 1
+    # Past the start window it is not starting any more: the next open launches again.
+    launcher.open_app("blender", env.db, launch=launch, answers=lambda c: False, sleep=lambda s: None,
+                      clock=_virtual_clock(500), timeout_s=3)
+    assert len(launches) == 2
+
+
+def test_an_app_that_already_exited_is_launched_again(env, monkeypatch):
+    monkeypatch.setattr(launcher, "_children", {"blender": SimpleNamespace(pid=77, poll=lambda: 1)})
+    launches = []
+
+    def launch(entry, path):
+        launches.append(path)
+        return 77
+    clock = _virtual_clock()
+    for _ in range(2):
+        launcher.open_app("blender", env.db, launch=launch, answers=lambda c: False, sleep=lambda s: None,
+                          clock=clock, timeout_s=3)
+    assert len(launches) == 2
+
+
+def test_two_opens_at_once_launch_one_app(env, monkeypatch):
+    monkeypatch.setattr(launcher, "_children", {})
+    launches, started, release = [], threading.Event(), threading.Event()
+
+    def launch(entry, path):
+        launches.append(path)
+        started.set()
+        release.wait(5)
+        return 4242
+    answered = iter([False, False, True, True, True])
+    kwargs = dict(launch=launch, answers=lambda c: next(answered, True), sleep=lambda s: None)
+    replies = []
+    threads = [threading.Thread(target=lambda: replies.append(launcher.open_app("blender", env.db, **kwargs)))
+               for _ in range(2)]
+    threads[0].start()
+    assert started.wait(5)
+    threads[1].start()
+    time.sleep(0.2)
+    release.set()
+    for thread in threads:
+        thread.join(10)
+    assert len(launches) == 1 and len(replies) == 2 and all(r["ok"] for r in replies)

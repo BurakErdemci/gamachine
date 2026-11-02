@@ -263,7 +263,7 @@ describe('connectors page · install flow', () => {
     expect(primary()!.getAttribute('data-action')).toBe('install')
   })
 
-  it('a failed job shows its message and Tekrar dene starts it again', async () => {
+  it('a failed job shows its message once, with one Tekrar dene that opens the plan again', async () => {
     const f = fake()
     await open(f)
     fireEvent.click(screen.getByTestId('conn-plan-go-blender'))
@@ -272,12 +272,68 @@ describe('connectors page · install flow', () => {
     f.view = { ...f.view, state: 'error', error: { code: 'net', message: 'Network lost' } }
     await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
     expect(screen.getByTestId('conn-failed-blender').textContent).toContain('Network lost')
+    expect(screen.getAllByRole('button', { name: 'Tekrar dene' })).toHaveLength(1)
+    expect(screen.queryByTestId('conn-retry-blender')).toBeNull()
     const installs = () => f.ops.filter(o => o.op === 'install').length
     expect(installs()).toBe(1)
-    fireEvent.click(screen.getByTestId('conn-retry-blender'))
+    fireEvent.click(primary()!)
+    await flush()
+    expect(screen.getByTestId('conn-plan-blender')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('conn-plan-go-blender'))
     await flush()
     expect(installs()).toBe(2)
     expect(screen.getByTestId('conn-progress-blender')).toBeTruthy()
+  })
+
+  it('a broken install: the primary Tekrar dene opens the repair plan', async () => {
+    const f = fake({ view: view({ state: 'error', installed: { version: '2.2.6', addon_owner: 'gamachine' },
+      error: { code: 'broken_install', message: 'The installed package is missing files.' } }) })
+    await open(f)
+    expect(screen.getByTestId('conn-plan-blender')).toBeTruthy()
+    expect(f.ops.some(o => o.op === 'plan')).toBe(true)
+    expect(f.ops.some(o => o.op === 'install')).toBe(false)
+  })
+
+  it('a failed repair of a working install keeps it ready, with the job error and one Tekrar dene', async () => {
+    const f = fake({ view: view({ state: 'ready', installed: { version: '2.2.6', addon_owner: 'gamachine' } }),
+      job: job({ state: 'failed', error: { code: 'package_failed', message: 'boom', retryable: true } }) })
+    install(f)
+    await mount()
+    expect(primary()).toBeNull()
+    expect(screen.getByTestId('conn-failed-blender').textContent).toContain('boom')
+    expect(screen.getAllByRole('button', { name: 'Tekrar dene' })).toHaveLength(1)
+    fireEvent.click(screen.getByTestId('conn-retry-blender'))
+    await flush()
+    expect(f.ops.filter(o => o.op === 'install').length).toBe(1)
+  })
+
+  it('a file of another add-on under our name gets its own replace line', async () => {
+    const f = fake({ plan: { ...PLAN, replace_addon: { path: 'C:\\addons\\blender_mcp.py', found_protocol: null, needed_protocol: 15 } } })
+    await open(f)
+    expect(screen.getByTestId('conn-plan-replace-blender').textContent).toBe(cevir('conn.plan.replaceFile'))
+    fireEvent.click(screen.getByTestId('conn-plan-go-blender'))
+    await flush()
+    expect(f.installBody).toEqual({ replace_addon: true })
+  })
+
+  it('a Remove that left files reloads the card, which shows what is left', async () => {
+    const f = fake({ view: view({ state: 'ready', installed: { version: '2.2.6', addon_owner: 'gamachine' } }) })
+    const invoke = install(f)
+    const base = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, req: { op: string }) => {
+      if (req.op === 'remove') {
+        f.ops.push(req)
+        f.view = { ...f.view, state: 'error', error: { code: 'remove_incomplete', message: 'Remove did not finish; still there: x' } }
+        return { error: 'http_409' }
+      }
+      return base(channel, req)
+    })
+    await mount()
+    fireEvent.click(screen.getByTestId('conn-remove-blender'))
+    await flush()
+    await flush()
+    expect(f.ops.filter(o => o.op === 'list').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByTestId('conn-status-blender').textContent).toContain('still there: x')
   })
 
   it('leaving and coming back resumes the running job from the backend', async () => {

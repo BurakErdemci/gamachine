@@ -24,6 +24,10 @@ _detector: Callable = detect.detect
 _lock = threading.Lock()
 # Connector id -> pid of the app Gamachine opened for the agent (kept running when the backend exits).
 launched: Dict[str, int] = {}
+# When that app was started (on the clock open_app was given) and its process, while the backend runs.
+_launched_at: Dict[str, float] = {}
+_children: Dict[str, subprocess.Popen] = {}
+_open_locks: Dict[str, threading.Lock] = {}
 
 
 def bind(installer: Optional[Installer] = None, entries: Optional[dict] = None,
@@ -109,19 +113,40 @@ def launch_app(entry: dict, app_path: str) -> int:
         attempts = [0]
     for tried, flags in enumerate(attempts, start=1):
         try:
-            return subprocess.Popen([app_path], env=env, cwd=str(Path(app_path).parent),
+            proc = subprocess.Popen([app_path], env=env, cwd=str(Path(app_path).parent),
                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, close_fds=True, creationflags=flags,
-                                    start_new_session=sys.platform != "win32").pid
+                                    start_new_session=sys.platform != "win32")
+            _children[entry["id"]] = proc
+            return proc.pid
         except OSError:
             if tried == len(attempts):
                 raise
 
 
+def _starting(cid: str, now: float) -> bool:
+    """The app Gamachine launched for `cid` within the last OPEN_TIMEOUT_S and not known to have exited."""
+    pid, at = launched.get(cid), _launched_at.get(cid)
+    if pid is None or at is None or not 0 <= now - at < OPEN_TIMEOUT_S:
+        return False
+    proc = _children.get(cid)
+    # A pid from another launcher (tests) cannot be polled: within the window it counts as starting.
+    return proc is None or proc.pid != pid or proc.poll() is None
+
+
 def open_app(cid: str, db, launch: Optional[Callable[[dict, str], int]] = None,
              answers: Optional[Callable[[str], bool]] = None, sleep: Callable[[float], None] = time.sleep,
              clock: Callable[[], float] = time.monotonic, timeout_s: Optional[float] = None) -> dict:
-    """Attach when the bridge already answers, else start the chosen app and wait for its bridge."""
+    """Attach when the bridge already answers, else start the chosen app and wait for its bridge. One
+    open per connector at a time: a second call waits for the first, then attaches or, while the app
+    the first launched is still starting, waits for it instead of starting another."""
+    with _lock:
+        lock = _open_locks.setdefault(cid, threading.Lock())
+    with lock:
+        return _open(cid, db, launch, answers, sleep, clock, timeout_s)
+
+
+def _open(cid, db, launch, answers, sleep, clock, timeout_s) -> dict:
     # Resolved per call so the route's caller (and its tests) can swap the module's launcher and probe.
     launch, answers = launch or launch_app, answers or views.bridge_answers
     timeout_s = OPEN_TIMEOUT_S if timeout_s is None else timeout_s
@@ -133,13 +158,18 @@ def open_app(cid: str, db, launch: Optional[Callable[[dict, str], int]] = None,
         return {"ok": True, "already_running": True, "version": version}
     if not chosen:
         return {"ok": False, "error": f"{entry['name']} was not found on this computer (Settings > Connectors)."}
-    try:
-        pid = launch(entry, chosen["path"])
-    except OSError as exc:
-        return {"ok": False, "error": f"{entry['name']} could not be started: {exc}"}
-    launched[cid] = pid
-    logger.info("[connectors] opened %s %s (pid %s)", cid, version, pid)
-    deadline = clock() + timeout_s
+    if _starting(cid, clock()):
+        # Within the first open's window, so two opens together stay inside one open's time.
+        logger.info("[connectors] %s is still starting (pid %s); waiting for it", cid, launched[cid])
+        deadline = _launched_at[cid] + timeout_s
+    else:
+        try:
+            pid = launch(entry, chosen["path"])
+        except OSError as exc:
+            return {"ok": False, "error": f"{entry['name']} could not be started: {exc}"}
+        launched[cid], _launched_at[cid] = pid, clock()
+        logger.info("[connectors] opened %s %s (pid %s)", cid, version, pid)
+        deadline = clock() + timeout_s
     while clock() < deadline:
         if answers(cid):
             return {"ok": True, "already_running": False, "version": version}

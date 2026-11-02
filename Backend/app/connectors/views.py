@@ -35,9 +35,15 @@ def state_of(entry: dict, detection: dict, installer: Installer) -> tuple:
     job = installer.job(cid)
     if job and job.state == "running":
         return "installing", record, None
-    if job and job.state == "failed":
+    usable = bool(record) and Path(record.get("entry", "")).is_file()
+    # A failed repair or update leaves the previous install working: it stays usable, the job shows the error.
+    if job and job.state == "failed" and not usable:
         return "error", record, {"code": job.error["code"], "message": job.error["message"]}
-    if record and not Path(record.get("entry", "")).is_file():
+    left = installer.remove_problems(entry)
+    if left:
+        return "error", record, {"code": "remove_incomplete",
+                                 "message": "Remove did not finish; still there: " + "; ".join(left)[:400]}
+    if record and not usable:
         return "error", record, {"code": "broken_install", "message": "The installed package is missing files."}
     chosen = detection["chosen"]
     if not chosen:

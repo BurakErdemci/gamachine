@@ -138,7 +138,11 @@ export const ConnectorInstallFlow = ({ view, consent, onConsentClose, onChanged,
               <li data-testid={`conn-plan-size-${id}`}>{t('conn.plan.size', { mb: plan.download_mb })}</li>
               <li data-testid={`conn-plan-time-${id}`}>{t('conn.plan.time', { time: formatClock(plan.estimated_s) })}</li>
               <li data-testid={`conn-plan-target-${id}`}>{t('conn.plan.target', { target: plan.target })}</li>
-              {plan.replace_addon && <li data-testid={`conn-plan-replace-${id}`}>{t('conn.plan.replaceAddon')}</li>}
+              {plan.replace_addon && (
+                <li data-testid={`conn-plan-replace-${id}`}>
+                  {t(typeof plan.replace_addon.found_protocol !== 'number' ? 'conn.plan.replaceFile' : 'conn.plan.replaceAddon')}
+                </li>
+              )}
               <li>{t('conn.plan.note')}</li>
             </ul>
           )}
@@ -166,10 +170,13 @@ export const ConnectorInstallFlow = ({ view, consent, onConsentClose, onChanged,
           <p className="set-name">{t('conn.failed')}</p>
           <p className="set-hint">{job.error?.message || t('conn.failedGeneric')}</p>
         </div>
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => void begin()} disabled={starting}
-          data-testid={`conn-retry-${id}`}>
-          {t('conn.act.retry')}
-        </button>
+        {/* In the error state the card's own Retry is the one way forward; one button, not two. */}
+        {view.state !== 'error' && (
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => void begin()} disabled={starting}
+            data-testid={`conn-retry-${id}`}>
+            {t('conn.act.retry')}
+          </button>
+        )}
       </div>
     );
   }

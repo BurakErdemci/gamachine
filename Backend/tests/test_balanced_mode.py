@@ -143,7 +143,7 @@ def test_the_route_accepts_balanced_and_still_refuses_unknown_modes():
 
 @pytest.mark.parametrize("tool,params", [
     ("manage_gameobject", {"action": "create", "name": "Cube"}),
-    ("manage_components", {"action": "remove", "component_type": "BoxCollider"}),
+    ("manage_components", {"action": "add", "component_type": "BoxCollider"}),
     ("batch_execute", {"commands": [{"tool": "manage_components", "params": {"action": "add"}}]}),
     ("write_file", {"path": "Assets/Player.cs", "content": "x"}),
     ("bash", {"command": "npm test"}),

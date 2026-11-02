@@ -61,9 +61,8 @@ const ConnectorCard = ({ view, onChanged, onView, showToast, saved }: {
     if (primary === 'download' || primary === 'downloadSupported') {
       const r = await openDownload(id);
       if (!r.ok) showToast?.(t('conn.downloadFailed'), 'error');
-    } else if (primary === 'retry' && view.installed) {
-      onChanged();
     } else {
+      // Install, update and retry (a failed install or a broken one: a repair) all start from the consent step.
       setConsent(true);
     }
   };
@@ -71,6 +70,8 @@ const ConnectorCard = ({ view, onChanged, onView, showToast, saved }: {
   const remove = async () => {
     if (!(await confirmDialog(t('conn.removeConfirm', { name: view.name }), t('conn.remove'), t('confirm.cancel')))) return;
     await run(() => removeConnector(id), 'conn.removeFailed');
+    // A Remove that left files answers with an error; the reloaded card shows what is left.
+    if (alive.current) onChanged();
   };
 
   const primaryLabel: Record<Exclude<Primary, null>, string> = {

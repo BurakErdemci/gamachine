@@ -257,6 +257,17 @@ _UNITY_BALANCED_ROUTINE = {
 }
 
 
+# Owner rule (2 Nov 2026): whatever the ledger says, an action that removes,
+# deletes or destroys something is irreversible, on every Unity tool. clear* is not: it resets logs and
+# transient state (read_console clear, particle_clear); tool_actions.json still marks the destructive ones.
+_UNITY_DESTRUCTIVE = re.compile(r"(?:^|_)(?:remove|delete|destroy)")
+
+
+def _unity_destructive(args: Mapping) -> bool:
+    return any(isinstance(k, str) and k.replace("_", "").lower() == "action" and isinstance(v, str)
+               and _UNITY_DESTRUCTIVE.search(v.lower()) for k, v in args.items())
+
+
 def _unity_balanced_routine(bare: str, args: Mapping) -> bool:
     allowed = _UNITY_BALANCED_ROUTINE.get(bare)
     if not allowed:
@@ -283,6 +294,8 @@ def classify_unity(tool: Any, args: Any) -> Risk:
     action = args.get("action")
     if isinstance(action, str) and action:
         detail = f"{bare}.{action}"
+    if risk in ("read", "routine") and _unity_destructive(args):
+        return _critical("unity_critical_action", detail)
     if risk == "read":
         return _routine("unity_read", detail)
     if risk == "routine" or (risk == "critical" and _unity_balanced_routine(bare, args)):
@@ -305,11 +318,13 @@ _BLENDER_SYSTEM_MODULES = frozenset({
 })
 # A safe list, as for shell commands: an import outside it is critical, since a
 # list of dangerous modules always misses one (io, pickle, tempfile, runpy, nt...).
-# addon_utils stays: upstream's rigging guide enables Rigify with it.
+# addon_utils stays: upstream's rigging guide enables Rigify with it. operator
+# (attrgetter/methodcaller), functools, dataclasses and string (Formatter) reach
+# attributes by run-time names, so they are not on it.
 _BLENDER_MODULES = frozenset({
     "bpy", "bpy_extras", "bmesh", "mathutils", "bl_math", "addon_utils", "math", "cmath",
-    "random", "colorsys", "collections", "itertools", "functools", "operator", "statistics",
-    "typing", "dataclasses", "enum", "copy", "string", "re", "json", "time", "datetime",
+    "random", "colorsys", "collections", "itertools", "statistics",
+    "typing", "enum", "copy", "re", "json", "time", "datetime",
     "decimal", "fractions", "heapq", "bisect", "textwrap", "numpy",
 })
 _BLENDER_BUILTINS = {
@@ -343,6 +358,18 @@ _BLENDER_PREFIXES = (
     ("bpy.data.batch_remove", "mass delete"),
     ("bpy.data.libraries.write", "library file access"),
     ("bpy.data.libraries.load", "library file access"),
+    ("bpy.data.texts.load", "file read"),
+    ("bpy.data.images.load", "file read"),
+    ("bpy.data.fonts.load", "file read"),
+    ("bpy.data.sounds.load", "file read"),
+    ("bpy.data.movieclips.load", "file read"),
+    ("bpy.data.volumes.load", "file read"),
+    ("bpy.ops.sequencer.render_animation", "file write"),
+    ("bpy.ops.ptcache", "cache on disk"),
+    ("bpy.ops.fluid.bake", "cache on disk"),
+    ("bpy.ops.dynamicpaint.bake", "cache on disk"),
+    ("bpy.ops.sound.mixdown", "file write"),
+    ("bpy.ops.console", "runs code"),
     ("bpy.app.handlers", "handlers or timers"),
     ("bpy.app.timers", "handlers or timers"),
     ("bpy.utils.execfile", "runs a file"),
@@ -352,6 +379,8 @@ _LOOPS = (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp, ast.DictC
           ast.GeneratorExp)
 _DATA_REMOVE = re.compile(r"bpy\.data\.[^.]+\.remove")
 _OBJECT_DELETE = frozenset({"bpy.ops.object.delete", "bpy.ops.outliner.delete"})
+_RENDER_OPS = frozenset({"bpy.ops.render.render", "bpy.ops.render.opengl"})
+_BAKE_OPS = frozenset({"bpy.ops.object.bake", "bpy.ops.object.bake_image"})
 _BLENDER_MAX_CHARS = 200_000
 
 
@@ -374,8 +403,11 @@ def _blender_path_reason(path: str) -> Optional[str]:
             return what
     if len(segs) >= 3 and segs[:2] == ["bpy", "ops"]:
         group, op = segs[2], (segs[3] if len(segs) > 3 else "")
-        if group.startswith(("export_", "import_")) or op.startswith(("export", "import")):
-            return "export/import operator"
+        # "open" or "open_*", not "opengl" (a viewport render that writes nothing by itself).
+        if group.startswith(("export_", "import_")) or op.startswith(("export", "import", "open_")) or op == "open":
+            return "file operator"
+        if group == "fluid" and op.startswith("bake"):
+            return "cache on disk"
         if op.startswith("save"):
             return "file write"
     if len(segs) >= 3 and segs[:2] == ["bpy", "utils"] and segs[2].startswith(("register", "unregister")):
@@ -455,6 +487,11 @@ class _BlenderScan(ast.NodeVisitor):
                 self.flag(call, why, f"{root}.{name.value}")
         return True
 
+    def visit_Constant(self, node):
+        # getattr(x, "__cla" + "ss__") and friends: a dunder name assembled from strings.
+        if isinstance(node.value, str) and "__" in node.value:
+            self.flag(node, "dunder string", node.value)
+
     def visit_Attribute(self, node):
         if _dunder(node.attr):
             self.flag(node, "dunder attribute", node.attr)
@@ -481,9 +518,14 @@ class _BlenderScan(ast.NodeVisitor):
     def _op_call(self, call, path: str) -> None:
         pos = (call.lineno, call.col_offset)
         if path.startswith("bpy.ops."):
+            # A render with animation=True writes every frame to the output path.
+            writes = {"write_still"} | ({"animation"} if path in _RENDER_OPS else set())
             for kw in call.keywords:
-                if kw.arg == "write_still" and not (isinstance(kw.value, ast.Constant) and not kw.value.value):
-                    self.flag(call, "file write", f"{path}(write_still)")
+                if kw.arg in writes and not (isinstance(kw.value, ast.Constant) and not kw.value.value):
+                    self.flag(call, "file write", f"{path}({kw.arg})")
+                elif (path in _BAKE_OPS and kw.arg == "save_mode"
+                      and not (isinstance(kw.value, ast.Constant) and kw.value.value == "INTERNAL")):
+                    self.flag(call, "file write", f"{path}(save_mode)")
         if path in _OBJECT_DELETE:
             if self.loops:
                 self.flag(call, "removes data in a loop", path)
@@ -980,6 +1022,17 @@ def _git_risk(args: list) -> Optional[Risk]:
         return _critical("shell_git_write", detail + " --hard")
     if sub == "clean" and "n" not in shorts and "--dry-run" not in rest:
         return _critical("shell_git_write", detail)
+    # Owner rule (2 Nov 2026): commands that throw away uncommitted work are irreversible.
+    force = "f" in shorts or "--force" in rest
+    if sub == "checkout" and ("--" in rest or "." in rest or force):
+        return _critical("shell_git_write", detail)
+    if sub == "switch" and (force or "--discard-changes" in rest):
+        return _critical("shell_git_write", detail)
+    if sub == "restore" and not (("--staged" in rest or "S" in shorts)
+                                 and "--worktree" not in rest and "W" not in shorts):
+        return _critical("shell_git_write", detail)
+    if sub == "stash" and rest[:1] and rest[0].lower() in ("drop", "clear"):
+        return _critical("shell_git_write", f"{detail} {rest[0].lower()}")
     if sub == "branch" and (set(shorts) & {"D", "M", "C"} or (
             ("d" in shorts or "--delete" in rest) and ("f" in shorts or "--force" in rest))):
         return _critical("shell_git_write", detail)

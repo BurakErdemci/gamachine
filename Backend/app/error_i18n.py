@@ -223,6 +223,8 @@ PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"⏳ CLI güvenlik amacıyla (?P<minutes>.+) dakikalık toplam çalışma tavanında durduruldu\. Sonraki mesaj temiz bir oturumda devam edecek\.", re.DOTALL),
      "⏳ CLI stopped at the {minutes}-minute total runtime safety limit. The next message will continue in a fresh session."),
     (re.compile(r"db\.(?P<lookup>.+) yok", re.DOTALL), "db.{lookup} is unavailable"),
+    (re.compile(r"Bağlayıcı tamamen kaldırılamadı; kalanlar: (?P<left>.+)", re.DOTALL),
+     "The connector could not be fully removed; still there: {left}"),
     (re.compile(r"(?P<ne>.+) bulunamadı", re.DOTALL), "{ne} not found"),
     (re.compile(r"Bu (?P<ne>.+) size ait değil", re.DOTALL), "This {ne} does not belong to you"),
     (re.compile(r"'(?P<cli>.+)' için otomatik kurulum desteklenmiyor\.", re.DOTALL),

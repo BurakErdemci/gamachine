@@ -66,6 +66,9 @@ def validate(entry, folder: Path) -> dict:
         value = pkg.get(key)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
             raise CatalogError(f"package.{key} must be a positive number")
+    protocol = pkg.get("addon_protocol")
+    if isinstance(protocol, bool) or not isinstance(protocol, int) or protocol <= 0:
+        raise CatalogError("package.addon_protocol must be a positive integer")
     lock = folder / pkg["lock"]
     if lock.parent != folder or not lock.is_file():
         raise CatalogError("package.lock must be a file next to connector.json")

@@ -63,6 +63,8 @@ def test_lock_without_the_pin_is_rejected(tmp_path):
     (lambda e: e["app"].update(download_url="http://example.org"), "download_url"),
     (lambda e: e["env"].update(X=1), "env"),
     (lambda e: e["tools"].update(allow=[]), "tools.allow"),
+    (lambda e: e["package"].pop("addon_protocol"), "addon_protocol"),
+    (lambda e: e["package"].update(addon_protocol="15"), "addon_protocol"),
 ])
 def test_schema_violations_are_rejected(tmp_path, change, match):
     root, path = _copy_blender(tmp_path)

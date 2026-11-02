@@ -292,7 +292,12 @@ def test_reads(ws, tmp_path_factory):
     ("manage_gameobject", {"action": "delete"}, CRITICAL, "unity_critical_action"),
     ("mcp__unityMCP__manage_gameobject", {"action": "delete"}, CRITICAL, "unity_critical_action"),
     ("manage_gameobject", {"action": "create"}, ROUTINE, "unity_routine_write"),
-    ("manage_components", {"action": "remove"}, ROUTINE, "unity_routine_write"),
+    ("manage_components", {"action": "add"}, ROUTINE, "unity_routine_write"),
+    # Any remove/delete/destroy action is critical, whatever the ledger says; clear* follows the ledger.
+    ("manage_components", {"action": "remove"}, CRITICAL, "unity_critical_action"),
+    ("manage_probuilder", {"action": "delete_faces"}, CRITICAL, "unity_critical_action"),
+    ("manage_graphics", {"action": "feature_remove"}, CRITICAL, "unity_critical_action"),
+    ("manage_components", {"Action": "Remove"}, CRITICAL, "unity_critical_action"),
     ("manage_components", {"action": "no_such_action"}, CRITICAL, "unity_critical_action"),
     ("manage_asset", {"action": "delete"}, CRITICAL, "unity_critical_action"),
     ("manage_asset", {"action": "rename"}, CRITICAL, "unity_critical_action"),

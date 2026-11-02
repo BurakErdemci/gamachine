@@ -11,6 +11,7 @@ from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 
 from connectors import catalog, mcp_server
+from routes import conversation_routes
 from connectors.mcp_server import ConnectorsServer, exposed_tools
 from spawn_env import CONVERSATION_ENV, READ_ONLY_ENV
 
@@ -151,8 +152,9 @@ def test_post_gate_sends_the_arguments_and_waits_longer_for_blender_code(monkeyp
     assert sent[0][:2] == ("/connectors/gate", {"conversation_id": 7, "connector": "blender",
                                                 "tool": "execute_blender_code", "args": {"code": "x = 1"}})
     assert sent[1][1]["args"] == {} and sent[1][2] == mcp_server._GATE_TIMEOUT_S
-    # The backend may hold this call for the user's card (up to 120 s), well under the 180 s tool timeout.
-    assert 120 < sent[0][2] < 170
+    # The backend may hold this call for the user's card; card and upstream call fit the 180 s tool timeout.
+    assert conversation_routes.BLENDER_CARD_WAIT_S < sent[0][2] < mcp_server._TOOL_BUDGET_S
+    assert conversation_routes.BLENDER_CARD_WAIT_S + mcp_server._CALL_TIMEOUT_S <= mcp_server._TOOL_BUDGET_S < 180
 
 
 @pytest.mark.parametrize("reply", [{"ok": False, "error": "The user pressed Stop in this chat."},
@@ -292,3 +294,51 @@ def test_from_env_serves_only_named_installed_connectors(tmp_path, monkeypatch):
     assert list(mcp_server.from_env().upstreams) == ["blender"]
     monkeypatch.setenv("GAMACHINE_CONNECTORS", "")
     assert mcp_server.from_env().upstreams == {}
+
+
+class SlowUpstream:
+    """An upstream whose call runs past its read timeout, as the MCP client reports it."""
+    cid = "blender"
+
+    def __init__(self):
+        self.timeouts = []
+
+    async def responsive(self):
+        return True
+
+    async def stop(self):
+        pass
+
+    async def call(self, tool, arguments, timeout_s):
+        from mcp import MCPError
+        from mcp_types import REQUEST_TIMEOUT
+        self.timeouts.append(timeout_s)
+        raise MCPError(code=REQUEST_TIMEOUT, message="Request 'tools/call' timed out")
+
+
+def test_the_upstream_call_gets_what_the_card_left_of_the_budget_and_says_when_time_ran_out(upstream, monkeypatch):
+    params, _ = upstream
+    monkeypatch.setattr(mcp_server, "_TOOL_BUDGET_S", 50.0)
+
+    async def slow_gate(*args):
+        await anyio.sleep(0.3)  # the user answering the card
+        return {"ok": True}
+    server, _, _ = make(params, gate=slow_gate)
+    slow = SlowUpstream()
+    server.upstreams["blender"], server._started = slow, True
+
+    async def body(client):
+        return await client.call_tool("blender_execute_blender_code", {"code": "print(1)"})
+    result = run(server, body)
+    assert len(slow.timeouts) == 1 and 45 < slow.timeouts[0] <= 49.8
+    assert result.is_error and "ran out of time after 49 s" in text(result)
+    assert "may or may not have finished" in text(result)
+
+
+def test_card_wait_and_upstream_call_fit_the_providers_tool_timeout(monkeypatch):
+    from agentic import stdio_toolset
+    from connectors import registration
+    monkeypatch.setattr(registration, "_server_env", lambda: {"X": "1"})
+    limit = min(stdio_toolset.CALL_TIMEOUT_S, registration.codex_thread_entry(None)["tool_timeout_sec"])
+    assert conversation_routes.BLENDER_CARD_WAIT_S + mcp_server._CALL_TIMEOUT_S <= mcp_server._TOOL_BUDGET_S < limit
+    assert mcp_server._CARD_GATE_TIMEOUT_S + mcp_server._CALL_TIMEOUT_S > mcp_server._TOOL_BUDGET_S  # capped per call

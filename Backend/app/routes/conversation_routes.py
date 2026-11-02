@@ -637,17 +637,19 @@ BROWSER_INACTIVE_REASON = "The agent browser is turned off in Settings."
 CARDS_OFF_REASON = "approval cards are off"
 
 # execute_blender_code follows the global approval mode (owner decision, Burak, 2 Nov 2026). The
-# connectors server's gate POST waits for this card (its budget is 135 s): well under MCP_PENDING_TTL
-# (170 s) and the 180 s an agent gives one MCP call.
+# card wait plus the upstream call (connectors/mcp_server.py _CALL_TIMEOUT_S, 110 s) must fit in the
+# 180 s the providers give one MCP call (Codex tool_timeout_sec, the API loop's CALL_TIMEOUT_S), or the
+# agent gives up on a call that may still run after it.
 BLENDER_CODE_TOOL = "execute_blender_code"
 BLENDER_CARD_TOOL = "blender_execute_code"
-BLENDER_CARD_WAIT_S = 120.0
+BLENDER_CARD_WAIT_S = 60.0
 _BLENDER_CARD_POLL_S = 0.25
 BLENDER_CARD_CODE_MAX = 20_000
 BLENDER_DECLINED_REASON = ("The user declined this Blender code, so it did not run. Do not run it again "
                            "unchanged; ask the user what they want instead.")
-BLENDER_UNANSWERED_REASON = ("The user did not answer the approval card for this Blender code, so it did not "
-                             "run. Do not retry it on your own; tell the user it needs their approval.")
+BLENDER_UNANSWERED_REASON = (f"The user did not answer the approval card for this Blender code within "
+                             f"{int(BLENDER_CARD_WAIT_S)} s, so the time ran out and it did not run. Do not "
+                             "retry it on your own; tell the user it needs their approval.")
 CONNECTOR_HALTED_REASON = "The user pressed Stop in this chat. Do not call connector tools again until the user asks."
 
 
@@ -3079,19 +3081,24 @@ Max 300 kelime. Türkçe yaz.
             "runtime": dict(_browser_runtime), "page_gen": _browser_gen(owner),
             "stop_gen": _browser_stop_gen.get(owner, 0)})
 
+    def _connector_refusal(body: dict, token: str, tool) -> "tuple[Optional[str], Any]":
+        """(refusal or None, owner): the chat, Stop, the switch and the install, checked before a
+        connector call and again after its approval card."""
+        owner, why_unowned = _verified_mcp_owner(body.get("conversation_id"), token)
+        if owner is _UNKNOWN_OWNER:
+            logger.warning("[connectors] call refused (%s)", why_unowned)
+            return "Connectors only work for a chat whose turn is running.", owner
+        if owner in _computer_halted:
+            return CONNECTOR_HALTED_REASON, owner
+        if _names_missing_chat(owner, fail_closed=True):
+            return "This chat was deleted.", owner
+        return connector_launcher.refusal(body.get("connector"), tool, db), owner
+
     def _connector_gate(body: dict, token: str, tool) -> "tuple[Optional[str], Optional[dict]]":
         """(refusal, card) for an agent connector call (CONTRACT.md section 5): a refusal; or the
         approval card execute_blender_code needs in the current mode, for the caller to open on the
         event loop; or (None, None) to go ahead."""
-        owner, why_unowned = _verified_mcp_owner(body.get("conversation_id"), token)
-        if owner is _UNKNOWN_OWNER:
-            logger.warning("[connectors] call refused (%s)", why_unowned)
-            return "Connectors only work for a chat whose turn is running.", None
-        if owner in _computer_halted:
-            return CONNECTOR_HALTED_REASON, None
-        if _names_missing_chat(owner, fail_closed=True):
-            return "This chat was deleted.", None
-        refusal = connector_launcher.refusal(body.get("connector"), tool, db)
+        refusal, owner = _connector_refusal(body, token, tool)
         if refusal or tool != BLENDER_CODE_TOOL:
             return refusal, None
         args = body.get("args")
@@ -3155,6 +3162,9 @@ Max 300 kelime. Türkçe yaz.
         refusal, card = await asyncio.to_thread(_connector_gate, body, x_session_token, body.get("tool"))
         if card is not None:
             refusal = await _blender_card_answer(_blender_card(**card), card["owner"])
+            if refusal is None:
+                # The switch, the install or the chat may have changed while the card was open.
+                refusal, _ = await asyncio.to_thread(_connector_refusal, body, x_session_token, body.get("tool"))
         return {"ok": False, "error": refusal} if refusal else {"ok": True}
 
     @router.post("/connectors/{cid}/open")

@@ -234,3 +234,32 @@ def test_remote_dispatch_allows_reads_and_denies_writes():
     assert ui_dispatch.http_allowed("GET", "/connectors/blender/install")
     for method, path, _ in WRITES:
         assert not ui_dispatch.http_allowed(method.upper(), path)
+
+
+def test_remove_that_leaves_files_answers_409_naming_them_and_a_retry_finishes(env, monkeypatch):
+    _install_and_wait(env)
+    addon = env.tmp / "scripts" / "addons" / "blender_mcp.py"
+    real = inst._remove_written
+    monkeypatch.setattr(inst, "_remove_written", lambda path, sha, restore: f"{path}: in use")
+    response = env.client.post("/connectors/blender/remove", headers=UI)
+    assert response.status_code == 409
+    assert response.json()["detail"].startswith("Bağlayıcı tamamen kaldırılamadı; kalanlar: ")
+    assert str(addon) in response.json()["detail"]
+    english = env.client.post("/connectors/blender/remove", headers={**UI, "X-UI-Lang": "en"})
+    assert english.json()["detail"].startswith("The connector could not be fully removed; still there: ")
+    view = env.client.get("/connectors", headers=AUTH).json()["connectors"][0]
+    assert view["state"] == "error" and view["error"]["code"] == "remove_incomplete"
+    monkeypatch.setattr(inst, "_remove_written", real)
+    response = env.client.post("/connectors/blender/remove", headers=UI)
+    assert response.status_code == 200 and response.json()["state"] == "not_installed"
+    assert not addon.exists()
+
+
+def test_plan_reports_another_addons_file_under_our_name(env):
+    foreign = env.tmp / "scripts" / "addons" / "blender_mcp.py"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_bytes(b'bl_info = {"name": "Mine"}\n')
+    plan = env.client.post("/connectors/blender/plan", headers=UI).json()
+    assert plan["replace_addon"] == {"path": str(foreign), "found_protocol": None, "needed_protocol": 15}
+    assert env.client.post("/connectors/blender/install", headers=UI).status_code == 409
+    assert foreign.read_bytes() == b'bl_info = {"name": "Mine"}\n'

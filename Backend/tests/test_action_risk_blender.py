@@ -179,6 +179,31 @@ OTHER_CRITICAL = {
     "orphans purge": "bpy.ops.outliner.orphans_purge()",
     "system module reached as an attribute": "bpy.utils.os.remove('x')",
     "frame internals": "def f():\n    pass\nf.gi_frame",
+    # Direct file reads and writes, and names built at run time (blind SEC-1).
+    "text load": "bpy.data.texts.load('C:/x.py')",
+    "image load": "bpy.data.images.load('C:/x.png')",
+    "font load": "bpy.data.fonts.load('C:/x.ttf')",
+    "sound load": "bpy.data.sounds.load('C:/x.wav')",
+    "movie clip load": "bpy.data.movieclips.load('C:/x.mp4')",
+    "volume load": "bpy.data.volumes.load('C:/x.vdb')",
+    "cache file open": "bpy.ops.cachefile.open(filepath='C:/x.abc')",
+    "image open operator": "bpy.ops.image.open(filepath='C:/x.png')",
+    "render animation": "bpy.ops.render.render(animation=True)",
+    "viewport render animation": "bpy.ops.render.opengl(animation=True)",
+    "viewport render to disk": "bpy.ops.render.opengl(write_still=True)",
+    "sequencer render": "bpy.ops.sequencer.render_animation()",
+    "point cache bake": "bpy.ops.ptcache.bake_all(bake=True)",
+    "fluid bake": "bpy.ops.fluid.bake_all()",
+    "dynamic paint bake": "bpy.ops.dynamicpaint.bake()",
+    "texture bake to files": "bpy.ops.object.bake(type='DIFFUSE', save_mode='EXTERNAL')",
+    "sound mixdown": "bpy.ops.sound.mixdown(filepath='C:/x.wav')",
+    "console": "bpy.ops.console.execute()",
+    "operator module": "import operator\noperator.attrgetter('x')(bpy)",
+    "functools": "import functools",
+    "dataclasses": "import dataclasses",
+    "string module": "import string",
+    "dunder name in a string": "getattr(bpy, '__loader__')",
+    "dunder name built from strings": "name = '__cla' + 'ss__'",
 }
 
 OTHER_ROUTINE = {
@@ -196,6 +221,11 @@ OTHER_ROUTINE = {
     "render engine in try": ("try:\n    bpy.context.scene.render.engine = 'BLENDER_EEVEE_NEXT'\n"
                              "except TypeError as exc:\n    print(exc)"),
     "list remove is not data removal": "names = ['a', 'b']\nfor n in list(names):\n    names.remove(n)",
+    "plain render": "bpy.ops.render.render()",
+    "plain viewport render": "bpy.ops.render.opengl()",
+    "render animation off": "bpy.ops.render.render(animation=False, write_still=False)",
+    "texture bake into the image": "bpy.ops.object.bake(type='DIFFUSE')",
+    "single underscore names": "obj = bpy.data.objects.new('my_cube_1', None)",
     "empty code": "",
 }
 
