@@ -29,11 +29,24 @@ def app_view(entry: dict, detection: dict) -> dict:
             "download_url": entry["app"]["download_url"]}
 
 
+def _norm(path) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
 def _has_addon_for(installer: Installer, record: dict, chosen: dict) -> bool:
     # The add-on is per Blender major.minor, so a newly selected build needs its own copy.
-    here = os.path.normcase(os.path.abspath(installer.addons_dir(chosen)))
-    return any(os.path.normcase(os.path.abspath(os.path.dirname(a["path"]))) == here and os.path.isfile(a["path"])
-               for a in addon_entries(record))
+    here = _norm(installer.addons_dir(chosen))
+    for a in addon_entries(record):
+        path = a["path"]
+        if not isinstance(path, str) or not os.path.isfile(path):
+            continue    # a hand-edited record must not take the Settings page down
+        folder = os.path.dirname(path)
+        # A package add-on is recorded by its addons/<name>/__init__.py.
+        if os.path.basename(path) == "__init__.py":
+            folder = os.path.dirname(folder)
+        if _norm(folder) == here:
+            return True
+    return False
 
 
 def state_of(entry: dict, detection: dict, installer: Installer) -> tuple:

@@ -330,6 +330,22 @@ def test_view_is_update_available_when_the_selected_build_has_no_addon_of_ours(m
     assert views.connector_view(entry, _db(), per_build, _detection(chosen=other))["state"] == "update_available"
 
 
+def test_a_package_addon_counts_and_a_broken_record_path_does_not_throw(make, entry):
+    installer, _ = make()
+    exe = _write_record(installer, entry, "2.2.6")
+    package = installer.addons_dir(APP) / "blender_mcp" / "__init__.py"
+    package.parent.mkdir()
+    package.write_text("")
+    (installer.addons_dir(APP) / "blender_mcp.py").unlink()
+    record_file = exe.parents[2] / "install.json"
+    for path in (str(package), 5, ["x"], None):
+        record = json.loads(record_file.read_text(encoding="utf-8"))
+        record["addon"] = {"path": path}
+        record_file.write_text(json.dumps(record), encoding="utf-8")
+        state = views.connector_view(entry, _db(), installer, _detection())["state"]
+        assert state == ("ready" if path == str(package) else "update_available"), path
+
+
 def test_installing_for_a_newly_selected_build_returns_the_view_to_ready(make, entry, tmp_path):
     installer = inst.Installer(root=tmp_path / "root", runner=FakeRunner(), uv=lambda: "uv",
                                blender_overrides={"APPDATA": str(tmp_path / "appdata")}, platform="win32")
