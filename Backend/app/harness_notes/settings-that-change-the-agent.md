@@ -1,16 +1,17 @@
 ---
 title: Which settings change what I can do?
-keywords: ayarlar, anahtar, açık kapalı, ek talimat, ayar, settings, switch, toggle, addendum, enabled, computer use switch, browser switch, unity switch
+keywords: ayarlar, anahtar, açık kapalı, ek talimat, ayar, bağlayıcı, settings, switch, toggle, addendum, enabled, computer use switch, browser switch, unity switch, connectors, blender switch
 covers: 
 ---
 Several user-controlled settings change your tools and instructions.
 
 - Unity MCP switch: with it off you have no Unity tools and the prompt tells you so (see unity-connection-states).
 - computer_use_enabled (Settings > Bilgisayar) and browser_use_enabled: off by default; each registers its tools only while on and only outside read-only runs. A switch flipped takes effect on the next turn at the latest.
+- Connectors (Settings > Connectors, Blender first): not installed by default; the user installs one and switches it on. The gamachineConnectors tools are registered only while at least one connector is on and installed, outside read-only runs; a change takes effect on the next turn at the latest (see connectors).
 - Approval mode: auto, balanced or step (see approval-modes).
 - Agent guide addendum (agent_guide_addendum, up to 4000 characters): the user's own text appended after the built-in guide; it cannot override approval or safety rules.
 - Chat model: each chat's provider and model, changeable from the desktop or the phone.
 - Desktop effort level, chosen in the desktop effort panel.
-- harness_status reports the live values it can read: approval_mode, computer_use_enabled, browser_use_enabled, unity_mcp.
+- harness_status reports the live values it can read: approval_mode, computer_use_enabled, browser_use_enabled, connectors_ready (connectors switched on and installed), unity_mcp.
 
-Sources: Backend/app/agent_guide.py, Backend/app/computer_use/settings.py, Backend/app/browser_use/settings.py, docs/computer-use-providers.md, docs/providers.md, docs/remote-control.md.
+Sources: Backend/app/agent_guide.py, Backend/app/computer_use/settings.py, Backend/app/browser_use/settings.py, Backend/app/connectors/launcher.py, docs/computer-use-providers.md, docs/providers.md, docs/remote-control.md.

@@ -3,8 +3,7 @@
 // is declared that way in the renderer source, so the list cannot claim an anchor nobody wrote.
 //
 // Not here, so the topics that name them are not listed:
-//   ws-preview-animation, ws-browser, computer-use-bar, integration-switches,
-//   integration-switch-blender   reserved by announced features
+//   ws-preview-animation, ws-browser, computer-use-bar, integration-switches   reserved by announced features
 export const KNOWN_ANCHORS = [
   // composer and the strip under it
   'composer', 'composer-input', 'composer-attach', 'composer-mic', 'composer-send',
@@ -26,7 +25,7 @@ export const KNOWN_ANCHORS = [
   'profile-shelf',
   // settings
   'settings-search', 'settings-dictation-lang', 'settings-auto-title', 'settings-unity-switch',
-  'settings-remote', 'settings-remote-pair', 'settings-themes', 'settings-fonts',
+  'settings-remote', 'settings-remote-pair', 'settings-themes', 'settings-fonts', 'integration-switch-blender',
 ] as const;
 
 export type AnchorName = typeof KNOWN_ANCHORS[number];

@@ -1,4 +1,4 @@
-"""Gamachine's computer-use and agent-browser MCP servers for one API chat run.
+"""Gamachine's computer-use, agent-browser and connectors MCP servers for one API chat run.
 
 The API loop has no MCP client of its own, so each run starts the same stdio
 servers the Claude path registers (same argv, same env with the chat id), lists
@@ -13,6 +13,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 import agent_guide
 from browser_use import registration as browser_registration
+from connectors import registration as connectors_registration
 from computer_use import registration as computer_registration
 from tools.unity_mcp_tools import _result_to_dict
 
@@ -26,6 +27,7 @@ CLOSE_TIMEOUT_S = 10.0
 _SERVERS = (
     ("gm_computer__", computer_registration, agent_guide.with_computer_use),
     ("gm_browser__", browser_registration, agent_guide.with_browser_use),
+    ("gm_connectors__", connectors_registration, agent_guide.with_connectors),
 )
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 

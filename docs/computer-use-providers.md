@@ -21,6 +21,18 @@ provider: cards (`/computer-use-request`, `/browser/command`), the halt set, the
 the settings switch. A server only needs `GAMACHINE_CONVERSATION_ID` in its environment; without
 it computer-use calls are unowned (no halt) and the browser server refuses every call.
 
+`gamachineConnectors` (`Backend/app/connectors/registration.py`, `mcp_server.py`, 2 Nov 2026) is
+the third server and is registered at every site the other two are (Claude, Codex, the one-shot
+CLIs through `_apply_computer_servers`, kimi's allow rule, agy, the API loop's `stdio_toolset`),
+under the same conditions. Its switch is "at least one connector switched on and installed"
+(`connectors.launcher.ready_ids()`); its env names the connectors (`GAMACHINE_CONNECTORS`) and
+their install root, and Codex rebuilds its thread when that pair (`registration.served()`)
+changes. The server proxies each connector's upstream MCP server (run from its own venv), lists
+only the catalog's allowed tools as `<id>_<tool>` plus `<id>_open`, and asks
+`/connectors/gate` (or `/connectors/{id}/open`) before every call, so Stop, the switch, an
+uninstalled connector and a deleted chat refuse it in the backend. Guide block:
+`agent_guide.with_connectors`.
+
 ## Rule for every new path
 
 1. Register both servers only while their switch is on (`settings.enabled_now()`), never for a

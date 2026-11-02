@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from providers import agy_provider
@@ -68,6 +69,22 @@ class TestAgyMcpRegistration(unittest.TestCase):
         for key in ("cli_settings", "global_settings"):
             self.assertNotIn("unityMCP", self.servers(key))
         self.assertIn("meshy", self.servers("migrated"))
+
+    def test_connectors_entry_follows_the_ready_connectors(self):
+        root = SimpleNamespace(root=os.path.join(self.home, "connectors"))
+        with patch("connectors.launcher.ready_ids", return_value=["blender"]), \
+                patch("connectors.launcher.installer", return_value=root):
+            self.register(URL)
+        entry = self.servers("cli_mcp")["gamachineConnectors"]
+        self.assertTrue(entry["trust"])
+        self.assertEqual(entry["args"][-1], "connectors-mcp-server")
+        self.assertEqual(entry["env"]["GAMACHINE_CONNECTORS"], "blender")
+        self.assertEqual(entry["env"]["GAMACHINE_CONNECTORS_ROOT"], root.root)
+        self.assertEqual(entry["env"]["GEMINI_API_KEY"], "")
+        with patch("connectors.launcher.ready_ids", return_value=[]):
+            self.register(URL)
+        for key in ("migrated", "cli_mcp"):
+            self.assertNotIn("gamachineConnectors", self.servers(key), key)
 
     def test_server_off_removes_every_unity_entry(self):
         self.register(None)

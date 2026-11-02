@@ -1,9 +1,10 @@
-"""API loop's per-run computer/browser stdio toolset, against a fake stdio MCP server."""
+"""API loop's per-run computer/browser/connectors stdio toolset, against a fake stdio MCP server."""
 import asyncio
 import os
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -13,6 +14,7 @@ import agentic.agent_runner as ar
 from agentic import stdio_toolset as st
 from browser_use import registration as browser_reg
 from computer_use import registration as computer_reg
+from connectors import registration as connectors_reg
 from tools import tool_registry
 
 FAKE = os.path.join(os.path.dirname(__file__), "fixtures", "fake_stdio_mcp_server.py")
@@ -27,7 +29,7 @@ def _alive(pid):
 
 def _pids(pidbase):
     found = []
-    for label in ("computer", "browser"):
+    for label in ("computer", "browser", "connectors"):
         path = f"{pidbase}.{label}.pid"
         if os.path.exists(path):
             found.append(int(open(path).read().strip()))
@@ -45,7 +47,7 @@ def _all_dead(pids, timeout=8.0):
 
 @pytest.fixture
 def servers(tmp_path):
-    """Both switches behind `state["on"]`; the real servers replaced by the fake one."""
+    """All switches behind `state["on"]`; the real servers replaced by the fake one."""
     state = {"on": True}
     pidbase = str(tmp_path / "pid")
     patches = [
@@ -53,6 +55,9 @@ def servers(tmp_path):
         mock.patch("browser_use.settings.enabled_now", lambda: state["on"]),
         mock.patch.object(computer_reg, "server_argv", lambda: [sys.executable, FAKE, "computer", pidbase]),
         mock.patch.object(browser_reg, "server_argv", lambda: [sys.executable, FAKE, "browser", pidbase]),
+        mock.patch("connectors.launcher.ready_ids", lambda db=None: ["blender"] if state["on"] else []),
+        mock.patch("connectors.launcher.installer", lambda: SimpleNamespace(root="C:/gm/connectors")),
+        mock.patch.object(connectors_reg, "server_argv", lambda: [sys.executable, FAKE, "connectors", pidbase]),
     ]
     for p in patches:
         p.start()
@@ -78,7 +83,8 @@ async def test_sync_lists_routes_and_maps_images(servers):
         await toolset.sync()
         names = [d["name"] for d in toolset.definitions()]
         assert sorted(names) == ["gm_browser__screenshot", "gm_browser__whoami",
-                                 "gm_computer__screenshot", "gm_computer__whoami"]
+                                 "gm_computer__screenshot", "gm_computer__whoami",
+                                 "gm_connectors__screenshot", "gm_connectors__whoami"]
         assert not set(names) & {t["name"] for t in tool_registry.TOOL_DEFINITIONS}
         assert all(d["parameters"].get("type") == "object" for d in toolset.definitions())
 
@@ -87,7 +93,7 @@ async def test_sync_lists_routes_and_maps_images(servers):
         shot = await toolset.call("gm_computer__screenshot", {})
         assert shot["image_base64"].startswith("data:image/png;base64,")
         assert toolset.owns("gm_computer__whoami") and not toolset.owns("read_file")
-        assert len(_pids(pidbase)) == 2 and all(_alive(p) for p in _pids(pidbase))
+        assert len(_pids(pidbase)) == 3 and all(_alive(p) for p in _pids(pidbase))
     finally:
         await toolset.aclose()
     assert _all_dead(_pids(pidbase))
@@ -103,7 +109,7 @@ async def test_sync_follows_the_switches(servers):
 
         state["on"] = True
         await toolset.sync()
-        assert len(toolset.definitions()) == 4
+        assert len(toolset.definitions()) == 6
         started = _pids(pidbase)
 
         state["on"] = False
@@ -138,6 +144,7 @@ async def test_guide_lines_follow_the_open_servers(servers):
         system = runner._api_system_instruction(toolset)
         assert agent_guide.COMPUTER_USE_LINE_EN in system
         assert agent_guide.BROWSER_GUIDE_EN in system
+        assert agent_guide.CONNECTORS_GUIDE_EN in system
     finally:
         await toolset.aclose()
     assert agent_guide.COMPUTER_USE_LINE_EN not in runner._api_system_instruction(toolset)
@@ -199,7 +206,7 @@ async def test_api_loop_routes_calls_and_closes_on_normal_end(servers):
     assert f"chat={CHAT}" in adapter.results["gm_computer__whoami"]
     assert adapter.screenshots["gm_computer__screenshot"].startswith("data:image/png;base64,")
     assert "image_base64" not in adapter.results["gm_computer__screenshot"]
-    assert len(_pids(pidbase)) == 2 and _all_dead(_pids(pidbase))
+    assert len(_pids(pidbase)) == 3 and _all_dead(_pids(pidbase))
 
 
 async def test_api_loop_closes_servers_when_the_generator_is_closed(servers):
@@ -210,7 +217,7 @@ async def test_api_loop_closes_servers_when_the_generator_is_closed(servers):
         if event.type == "tool_result":
             break
     started = _pids(pidbase)
-    assert len(started) == 2 and all(_alive(p) for p in started)
+    assert len(started) == 3 and all(_alive(p) for p in started)
     await gen.aclose()
     assert _all_dead(started)
 

@@ -15,7 +15,7 @@ export const BUILD_FLAGS: Caps = {
   'feature.agentBrowser': false,
   'feature.computerUse': false,
   'integration.apps': false,
-  'integration.blender': false,
+  'integration.blender': true,
 };
 
 /** Build flags plus the ones read from the open project (re-evaluated when it changes). */

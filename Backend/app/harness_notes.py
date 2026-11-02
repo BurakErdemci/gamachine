@@ -6,6 +6,7 @@ search words, comma separated) and `covers` (exact tool names the note explains)
 one-line summary search returns. `status()` reads live state; it never returns a key, token or secret, because
 only the fields named in `_STATUS_CONTEXT_FIELDS` are copied from the run context.
 """
+import asyncio
 import contextvars
 import logging
 import os
@@ -218,6 +219,7 @@ async def status(context: Optional[dict] = None, tools: Optional[list] = None) -
         "approval_mode": None,
         "computer_use_enabled": None,
         "browser_use_enabled": None,
+        "connectors_ready": None,
         "unity_mcp": None,
         "enabled_tools": sorted(tools) if tools is not None else None,
     }
@@ -236,6 +238,11 @@ async def status(context: Optional[dict] = None, tools: Optional[list] = None) -
         result["browser_use_enabled"] = browser_settings.enabled_now()
     except Exception:
         logger.exception("[harness_notes] browser state unavailable")
+    try:
+        from connectors import launcher as connectors_launcher
+        result["connectors_ready"] = await asyncio.to_thread(connectors_launcher.ready_ids)
+    except Exception:
+        logger.exception("[harness_notes] connectors state unavailable")
     try:
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         result["unity_mcp"] = (await unity_mcp_manager.get_status()).get("status")

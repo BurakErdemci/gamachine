@@ -32,11 +32,11 @@ export const INTEGRATIONS: GuideTopic[] = [
   {
     id: "blender", group: "integrations", since_version: "next", available_when: "integration.blender",
     title: T("Blender", "Blender"),
-    summary: T("Modeli Blender'da düzenleyip Unity'ye getiririm.", "I edit a model in Blender and bring it to Unity."),
+    summary: T("Blender'ı açıp modeli orada yapar ve düzenlerim.", "I open Blender and build or edit the model there."),
     steps: [
       { anchor: "integration-switch-blender", side: "below", align: "start",
         title: T("Blender anahtarı", "The Blender switch"),
-        text: T("Açıkken Blender'ı da sürerim; yaptığım modeli Unity projesine aktarırım.", "While on I drive Blender too, and export what I make into the Unity project."),
+        text: T("Açıkken Blender'ı kendim açıp kullanırım: sahneyi okur, görüntüsüne bakar, kod çalıştırırım.", "While on I open and drive Blender myself: I read the scene, look at it and run code in it."),
       },
     ],
   },

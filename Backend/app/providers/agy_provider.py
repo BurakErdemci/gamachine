@@ -623,7 +623,9 @@ class AgyProvider(BaseCLIProvider):
         # shared by every chat; it reaches the servers through agy's spawn env.
         from computer_use import registration as computer_registration
         from browser_use import registration as browser_registration
-        switched = (("gamachineComputer", computer_registration), ("gamachineBrowser", browser_registration))
+        from connectors import registration as connectors_registration
+        switched = (("gamachineComputer", computer_registration), ("gamachineBrowser", browser_registration),
+                    (connectors_registration.SERVER_NAME, connectors_registration))
         for name, registration in switched:
             entry = registration.stdio_entry()
             if entry is not None:

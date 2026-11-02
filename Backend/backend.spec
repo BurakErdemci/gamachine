@@ -137,6 +137,10 @@ a = Analysis(
         'connectors.installer',
         'connectors.settings',
         'connectors.views',
+        #   backend connectors-mcp-server → connectors.mcp_server.main (agent connector tools)
+        'connectors.launcher',
+        'connectors.registration',
+        'connectors.mcp_server',
         'routes.connector_routes',
         # MCP SDK 2.x: MCPServer (was mcp.server.fastmcp in 1.x; that module now
         # raises on import) and the wire types, a separate top-level package.

@@ -72,11 +72,13 @@ def _updater_env(platform: Optional[str] = None) -> Dict[str, str]:
 
 
 def _switch_state() -> tuple:
-    """Whether the computer-use and agent-browser servers are on right now."""
+    """Whether the computer-use, agent-browser and connectors servers are on right now."""
     from computer_use import registration as computer_registration
     from browser_use import registration as browser_registration
+    from connectors import registration as connectors_registration
     return (computer_registration.stdio_entry() is not None,
-            browser_registration.stdio_entry() is not None)
+            browser_registration.stdio_entry() is not None,
+            connectors_registration.stdio_entry() is not None)
 
 
 def _turn_lock_busy(lock: asyncio.Lock) -> bool:
@@ -838,11 +840,13 @@ class AgyStreamSession(SaglayiciSahipligi):
         agent_guide = agent_guide or getattr(self, "agent_guide", "")
         if agent_guide and not side:
             import agent_guide as guides
-            computer_on, browser_on = _switch_state()
+            computer_on, browser_on, connectors_on = _switch_state()
             if computer_on:
                 agent_guide = guides.with_computer_use(agent_guide)
             if browser_on:
                 agent_guide = guides.with_browser_use(agent_guide)
+            if connectors_on:
+                agent_guide = guides.with_connectors(agent_guide)
         # Global serialization covers the complete turn, not the process life.
         # A queued turn rechecks the closed flag before spawning or writing.
         completed = False

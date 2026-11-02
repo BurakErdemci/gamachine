@@ -31,7 +31,8 @@ class KimiProvider(BaseCLIProvider):
     # kodu bu sağlayıcıda CANLI SINANAMIYOR (abonelik yok, CLI kurulu değil), ve
     # sınanmamış bir dosya-değiştirme kolu kullanıcının config'inde çalıştırılmaz.
     _KIMI_LEGACY_MARKER = "# >>> unity-architect managed (permission rules) >>>"
-    _KIMI_NEWER_ALLOW_PATTERNS = ("mcp__gamachineComputer__*", "mcp__gamachineBrowser__*")
+    _KIMI_NEWER_ALLOW_PATTERNS = ("mcp__gamachineComputer__*", "mcp__gamachineBrowser__*",
+                                  "mcp__gamachineConnectors__*")
     _KIMI_PERMISSION_BLOCK = (
         "\n" + _KIMI_MANAGED_MARKER + "\n"
         "# Built-in yazma/shell araçları DENY (deny mutlak — --print/--yolo bunu ezmez).\n"
@@ -41,7 +42,8 @@ class KimiProvider(BaseCLIProvider):
         '[[permission.rules]]\ndecision = "deny"\npattern = "Bash"\n\n'
         '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__unityai__*"\n\n'
         '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineComputer__*"\n\n'
-        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineBrowser__*"\n'
+        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineBrowser__*"\n\n'
+        '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineConnectors__*"\n'
         + _KIMI_MANAGED_END + "\n"
     )
 

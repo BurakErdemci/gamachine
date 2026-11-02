@@ -33,6 +33,7 @@ from computer_use import policy as computer_policy
 from computer_use import settings as computer_settings
 from browser_use import gateway as browser_gateway
 from browser_use import settings as browser_settings
+from connectors import launcher as connector_launcher
 from computer_use import platform as computer_platform
 from computer_use.platform import valid_app_id as valid_bundle_id
 from unity_ai_mcp import unity_project_presence
@@ -3060,6 +3061,41 @@ Max 300 kelime. Türkçe yaz.
             "deleted": _names_missing_chat(owner, fail_closed=True),
             "runtime": dict(_browser_runtime), "page_gen": _browser_gen(owner),
             "stop_gen": _browser_stop_gen.get(owner, 0)})
+
+    def _connector_gate(body: dict, token: str, tool) -> Optional[str]:
+        """Refusal for an agent connector call (CONTRACT.md section 5), else None."""
+        owner, why_unowned = _verified_mcp_owner(body.get("conversation_id"), token)
+        if owner is _UNKNOWN_OWNER:
+            logger.warning("[connectors] call refused (%s)", why_unowned)
+            return "Connectors only work for a chat whose turn is running."
+        if owner in _computer_halted:
+            return "The user pressed Stop in this chat. Do not call connector tools again until the user asks."
+        if _names_missing_chat(owner, fail_closed=True):
+            return "This chat was deleted."
+        return connector_launcher.refusal(body.get("connector"), tool, db)
+
+    @router.post("/connectors/gate")
+    async def connectors_gate(
+        body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+    ):
+        """Asked by the connectors MCP server before every upstream tool call."""
+        _check_token(x_session_token)
+        refusal = await asyncio.to_thread(_connector_gate, body, x_session_token, body.get("tool"))
+        return {"ok": False, "error": refusal} if refusal else {"ok": True}
+
+    @router.post("/connectors/{cid}/open")
+    async def connectors_open(
+        cid: str,
+        body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+    ):
+        """Starts the connector's app with its add-on for the agent, or attaches to the one already listening."""
+        _check_token(x_session_token)
+        refusal = await asyncio.to_thread(_connector_gate, {**body, "connector": cid}, x_session_token, "open")
+        if refusal:
+            return {"ok": False, "error": refusal}
+        return await asyncio.to_thread(connector_launcher.open_app, cid, db)
 
     @router.put("/browser/settings")
     async def set_browser_settings(

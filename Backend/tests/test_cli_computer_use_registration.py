@@ -1,18 +1,20 @@
-"""copilot, cursor, kimi and opencode register the computer-use and agent-browser servers per turn."""
+"""copilot, cursor, kimi and opencode register the computer-use, agent-browser and connectors servers per turn."""
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
 from browser_use import registration as browser_reg
 from computer_use import registration as computer_reg
+from connectors import registration as connectors_reg
 from providers.copilot_provider import CopilotProvider
 from providers.cursor_provider import CursorProvider
 from providers.kimi_provider import KimiProvider
 from providers.opencode_provider import OpenCodeProvider
 from spawn_env import CONVERSATION_ENV
 
-NAMES = (computer_reg.SERVER_NAME, browser_reg.SERVER_NAME)
+NAMES = (computer_reg.SERVER_NAME, browser_reg.SERVER_NAME, connectors_reg.SERVER_NAME)
 CHAT = 77
 
 
@@ -23,6 +25,9 @@ def switch(monkeypatch):
     state = {"on": True}
     monkeypatch.setattr("computer_use.settings.enabled_now", lambda: state["on"])
     monkeypatch.setattr("browser_use.settings.enabled_now", lambda: state["on"])
+    # Connectors: Blender switched on and installed while "on".
+    monkeypatch.setattr("connectors.launcher.ready_ids", lambda db=None: ["blender"] if state["on"] else [])
+    monkeypatch.setattr("connectors.launcher.installer", lambda: SimpleNamespace(root="C:/gm/connectors"))
     monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: False)
     monkeypatch.setattr(unity_mcp_manager, "mcp_url", lambda *a, **k: None)
     return state
@@ -45,7 +50,7 @@ def _ws(tmp_path, name="ws"):
 
 
 def test_stdio_entry_off_and_chat_id_rules(switch):
-    for reg in (computer_reg, browser_reg):
+    for reg in (computer_reg, browser_reg, connectors_reg):
         entry = reg.stdio_entry(CHAT)
         argv = reg.server_argv()
         assert [entry["command"], *entry["args"]] == argv
@@ -57,7 +62,7 @@ def test_stdio_entry_off_and_chat_id_rules(switch):
         assert reg.claude_server_entry(CHAT) == {"type": "stdio", **entry}
         assert reg.claude_server_entry(None) is None
     switch["on"] = False
-    for reg in (computer_reg, browser_reg):
+    for reg in (computer_reg, browser_reg, connectors_reg):
         assert reg.stdio_entry(CHAT) is None
         assert reg.claude_server_entry(CHAT) is None
 
@@ -159,6 +164,7 @@ def test_kimi_refreshes_a_stale_managed_block(tmp_path, monkeypatch):
     provider._write_kimi_permissions()
     text = open(path, encoding="utf-8").read()
     assert "mcp__gamachineComputer__*" in text and "mcp__gamachineBrowser__*" in text
+    assert "mcp__gamachineConnectors__*" in text
     assert text.startswith("before = 1\n") and text.endswith("after = 2\n")
     assert text.count(provider._KIMI_MANAGED_MARKER) == 1
     provider._write_kimi_permissions()
@@ -195,7 +201,7 @@ def test_opencode_shape_no_chat_id_and_removal(switch, tmp_path, monkeypatch):
     provider = _prepare(OpenCodeProvider("opencode:anthropic/claude-sonnet"), monkeypatch)
     ws = _ws(tmp_path)
     mcp = _opencode_mcp(provider, ws)
-    for name, reg in zip(NAMES, (computer_reg, browser_reg)):
+    for name, reg in zip(NAMES, (computer_reg, browser_reg, connectors_reg)):
         entry = mcp[name]
         assert entry["type"] == "local" and entry["enabled"] is True
         assert entry["command"] == reg.server_argv()
@@ -255,7 +261,8 @@ def test_runner_hands_read_only_and_guide_lines_to_the_provider(switch):
 
     seen, base = _runner_provider(read_only=False)
     assert seen["read_only"] is False and seen["chat"] == CHAT
-    assert seen["guide"] == agent_guide.with_browser_use(agent_guide.with_computer_use(base))
+    assert seen["guide"] == agent_guide.with_connectors(
+        agent_guide.with_browser_use(agent_guide.with_computer_use(base)))
     assert seen["guide"] != base
     switch["on"] = False
     seen, base = _runner_provider(read_only=False)

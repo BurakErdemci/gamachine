@@ -1,0 +1,278 @@
+"""Agent connectors MCP server: tool filter, gate before upstream, pass-through, restart, upstream env."""
+import json
+import os
+import sys
+import textwrap
+from pathlib import Path
+
+import anyio
+import pytest
+from mcp import Client
+from mcp.client.stdio import StdioServerParameters
+
+from connectors import catalog, mcp_server
+from connectors.mcp_server import ConnectorsServer, exposed_tools
+from spawn_env import CONVERSATION_ENV, READ_ONLY_ENV
+
+ENTRY = catalog.load()["blender"]
+ALLOWED = ["blender_execute_blender_code", "blender_get_addon_status", "blender_get_scene_info", "blender_look"]
+UPSTREAM = ["get_scene_info", "look", "execute_blender_code", "get_addon_status", "generate_3d", "search_assets",
+            "import_asset", "record_trajectory_feedback", "disable_telemetry", "something_new"]
+
+# Speaks MCP over stdio like mcp-for-blender: every upstream tool name, look returns an image, die exits.
+FAKE_UPSTREAM = textwrap.dedent('''
+    import json, os, sys, anyio
+    from mcp import types
+    from mcp.server import Server
+    from mcp.server.stdio import stdio_server
+    NAMES = %r
+    LOG = sys.argv[1]
+    async def list_tools(ctx, params):
+        return types.ListToolsResult(tools=[types.Tool(
+            name=n, description="upstream " + n,
+            input_schema={"type": "object", "properties": {"code": {"type": "string"}}}) for n in NAMES])
+    async def call_tool(ctx, params):
+        with open(LOG, "a") as f:
+            f.write(json.dumps([os.getpid(), params.name, params.arguments]) + "\\n")
+        if params.name == "die":
+            os._exit(3)
+        if params.name == "look":
+            return types.CallToolResult(content=[types.ImageContent(type="image", data="iVBORw0K", mime_type="image/png")])
+        return types.CallToolResult(content=[types.TextContent(type="text", text="pid %%d" %% os.getpid())])
+    async def main():
+        server = Server("fake-blender", on_list_tools=list_tools, on_call_tool=call_tool)
+        async with stdio_server() as (r, w):
+            await server.run(r, w, server.create_initialization_options())
+    anyio.run(main)
+''') % (UPSTREAM + ["die"],)
+
+
+class Recorder:
+    def __init__(self, reply=None):
+        self.calls, self.reply = [], reply or {"ok": True}
+
+    async def __call__(self, *args):
+        self.calls.append(args)
+        return self.reply
+
+
+@pytest.fixture
+def upstream(tmp_path, monkeypatch):
+    monkeypatch.setenv(CONVERSATION_ENV, "7")
+    monkeypatch.delenv(READ_ONLY_ENV, raising=False)
+    script = tmp_path / "fake_upstream.py"
+    script.write_text(FAKE_UPSTREAM, encoding="utf-8")
+    log = tmp_path / "calls.jsonl"
+    params = StdioServerParameters(command=sys.executable, args=[str(script), str(log)],
+                                   env={"PYTHONPATH": os.pathsep.join(sys.path)})
+
+    def calls():
+        if not log.is_file():
+            return []
+        return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    return params, calls
+
+
+def run(server: ConnectorsServer, body):
+    async def go():
+        async with Client(server.lowlevel()) as client:
+            return await body(client)
+    return anyio.run(go)
+
+
+def make(params, gate=None, opener=None):
+    gate, opener = gate or Recorder(), opener or Recorder({"ok": True, "already_running": True, "version": "5.2.0"})
+    return ConnectorsServer({"blender": ENTRY}, {"blender": params}, gate=gate, opener=opener), gate, opener
+
+
+def text(result):
+    return " ".join(c.text for c in result.content if c.type == "text")
+
+
+def test_exposed_tools_keeps_only_the_catalog_allow_list():
+    assert sorted(exposed_tools("blender", UPSTREAM)) == ALLOWED
+    assert exposed_tools("blender", ["generate_3d", "disable_telemetry", "unknown"]) == []
+
+
+def test_banned_tools_never_pass_even_if_a_catalog_entry_allowed_them():
+    entry = {**ENTRY, "tools": {"allow": ["look", "generate_3d", "import_asset"]}}
+    assert exposed_tools("blender", UPSTREAM, entry) == ["blender_look"]
+
+
+def test_lists_only_allowed_tools_with_upstream_schemas_plus_open(upstream):
+    params, _ = upstream
+    server, _, _ = make(params)
+
+    async def body(client):
+        return (await client.list_tools()).tools
+    tools = run(server, body)
+    assert sorted(t.name for t in tools) == sorted(ALLOWED + ["blender_open"])
+    scene = next(t for t in tools if t.name == "blender_get_scene_info")
+    assert scene.input_schema["properties"] == {"code": {"type": "string"}}
+    assert scene.description.startswith("upstream get_scene_info")
+
+
+@pytest.mark.parametrize("name", ["blender_generate_3d", "blender_search_assets", "blender_import_asset",
+                                  "blender_record_trajectory_feedback", "blender_disable_telemetry",
+                                  "blender_something_new", "blender_die", "generate_3d", "look"])
+def test_unlisted_and_banned_tools_are_never_callable(upstream, name):
+    params, calls = upstream
+    server, gate, _ = make(params)
+
+    async def body(client):
+        await client.list_tools()
+        return await client.call_tool(name, {})
+    result = run(server, body)
+    assert result.is_error and "Unknown tool" in text(result)
+    assert gate.calls == [] and calls() == []
+
+
+def test_allowed_call_asks_the_gate_then_reaches_upstream_unchanged(upstream):
+    params, calls = upstream
+    server, gate, _ = make(params)
+
+    async def body(client):
+        return await client.call_tool("blender_execute_blender_code", {"code": "print(1)"})
+    result = run(server, body)
+    assert not result.is_error and text(result).startswith("pid ")
+    assert gate.calls == [(7, "blender", "execute_blender_code")]
+    assert [c[1:] for c in calls()] == [["execute_blender_code", {"code": "print(1)"}]]
+
+
+@pytest.mark.parametrize("reply", [{"ok": False, "error": "The user pressed Stop in this chat."},
+                                   {"ok": False}, {"error": "x"}, "not a dict"])
+def test_gate_refusal_never_reaches_upstream(upstream, reply):
+    params, calls = upstream
+    server, gate, _ = make(params, gate=Recorder(reply))
+
+    async def body(client):
+        return await client.call_tool("blender_execute_blender_code", {"code": "import os"})
+    result = run(server, body)
+    assert result.is_error
+    if isinstance(reply, dict) and reply.get("error") and reply.get("ok") is False:
+        assert text(result) == reply["error"]
+    assert calls() == []
+
+
+def test_backend_down_is_a_refusal(upstream):
+    params, calls = upstream
+
+    async def down(*args):
+        raise OSError("refused")
+    server, _, _ = make(params, gate=down)
+
+    async def body(client):
+        return await client.call_tool("blender_get_scene_info", {})
+    result = run(server, body)
+    assert result.is_error and "did not answer" in text(result) and calls() == []
+
+
+def test_image_content_passes_through(upstream):
+    params, _ = upstream
+    server, _, _ = make(params)
+
+    async def body(client):
+        return await client.call_tool("blender_look", {})
+    result = run(server, body)
+    assert not result.is_error
+    assert [(c.type, c.data, c.mime_type) for c in result.content] == [("image", "iVBORw0K", "image/png")]
+
+
+def test_read_only_and_missing_chat_are_refused_before_the_gate(upstream, monkeypatch):
+    params, calls = upstream
+    server, gate, opener = make(params)
+
+    async def body(client):
+        monkeypatch.setenv(READ_ONLY_ENV, "1")
+        read_only = await client.call_tool("blender_get_scene_info", {})
+        monkeypatch.delenv(READ_ONLY_ENV)
+        monkeypatch.delenv(CONVERSATION_ENV)
+        no_chat = await client.call_tool("blender_open", {})
+        return read_only, no_chat
+    read_only, no_chat = run(server, body)
+    assert read_only.is_error and "Read-only" in text(read_only)
+    assert no_chat.is_error and "chat" in text(no_chat)
+    assert gate.calls == [] and opener.calls == [] and calls() == []
+
+
+def test_a_dead_upstream_is_restarted_once_for_the_next_call(upstream):
+    params, calls = upstream
+    server, _, _ = make(params)
+    server.entries = {"blender": {**ENTRY, "tools": {"allow": [*ENTRY["tools"]["allow"], "die"]}}}
+
+    async def body(client):
+        first = await client.call_tool("blender_get_scene_info", {})
+        died = await client.call_tool("blender_die", {})
+        after = await client.call_tool("blender_get_scene_info", {})
+        return first, died, after
+    first, died, after = run(server, body)
+    assert died.is_error and "blender_open" in text(died)
+    assert not after.is_error and text(after) != text(first)
+    pids = [c[0] for c in calls()]
+    assert pids[0] == pids[1] != pids[2]
+
+
+def test_unstartable_upstream_tells_the_agent_to_open(tmp_path, monkeypatch):
+    monkeypatch.setenv(CONVERSATION_ENV, "7")
+    monkeypatch.setattr(mcp_server, "_START_TIMEOUT_S", 20.0)
+    params = StdioServerParameters(command=sys.executable, args=["-c", "import sys; sys.exit(1)"])
+    server, _, _ = make(params)
+
+    async def body(client):
+        return await client.call_tool("blender_get_scene_info", {})
+    result = run(server, body)
+    assert result.is_error and "Call blender_open" in text(result)
+
+
+@pytest.mark.parametrize("reply,expected,error", [
+    ({"ok": True, "already_running": True, "version": "5.2.0"}, "already open", False),
+    ({"ok": True, "already_running": False, "version": "5.2.0"}, "Started Blender 5.2.0", False),
+    ({"ok": False, "error": "Blender was not found."}, "Blender was not found.", True),
+])
+def test_open_goes_to_the_backend_route_and_reports_its_reply(upstream, reply, expected, error):
+    params, calls = upstream
+    server, gate, opener = make(params, opener=Recorder(reply))
+
+    async def body(client):
+        return await client.call_tool("blender_open", {})
+    result = run(server, body)
+    assert result.is_error is error and expected in text(result)
+    assert opener.calls == [(7, "blender")] and gate.calls == [] and calls() == []
+
+
+def _install(root: Path, entry_name: str = "mcp-for-blender.exe") -> Path:
+    vdir = root / "blender" / "2.2.6"
+    exe = vdir / "venv" / "Scripts" / entry_name
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    (vdir / "install.json").write_text(json.dumps({"version": "2.2.6", "entry": str(exe),
+                                                   "finished_at": "2026-11-02T00:00:00+00:00"}))
+    return exe
+
+
+def test_upstream_params_use_the_allow_listed_env_plus_the_catalog_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    exe = _install(tmp_path)
+    params = mcp_server.upstream_params(ENTRY, tmp_path)
+    assert params.command == str(exe) and params.args == []
+    assert "OPENAI_API_KEY" not in params.env
+    for key, value in ENTRY["env"].items():
+        assert params.env[key] == value
+
+
+def test_upstream_params_refuse_a_missing_or_foreign_entry(tmp_path):
+    assert mcp_server.upstream_params(ENTRY, tmp_path) is None
+    exe = _install(tmp_path)
+    record = tmp_path / "blender" / "2.2.6" / "install.json"
+    record.write_text(json.dumps({"version": "2.2.6", "entry": sys.executable, "finished_at": "x"}))
+    assert mcp_server.upstream_params(ENTRY, tmp_path) is None
+    assert exe.is_file()
+
+
+def test_from_env_serves_only_named_installed_connectors(tmp_path, monkeypatch):
+    _install(tmp_path)
+    monkeypatch.setenv("GAMACHINE_CONNECTORS", "blender,unknown")
+    monkeypatch.setenv("GAMACHINE_CONNECTORS_ROOT", str(tmp_path))
+    assert list(mcp_server.from_env().upstreams) == ["blender"]
+    monkeypatch.setenv("GAMACHINE_CONNECTORS", "")
+    assert mcp_server.from_env().upstreams == {}

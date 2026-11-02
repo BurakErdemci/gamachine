@@ -2124,10 +2124,13 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
         if _cli_guide and not _read_only:
             from computer_use import registration as _computer_reg
             from browser_use import registration as _browser_reg
+            from connectors import registration as _connectors_reg
             if _computer_reg.stdio_entry() is not None:
                 _cli_guide = agent_guide.with_computer_use(_cli_guide)
             if _browser_reg.stdio_entry() is not None:
                 _cli_guide = agent_guide.with_browser_use(_cli_guide)
+            if _connectors_reg.stdio_entry() is not None:
+                _cli_guide = agent_guide.with_connectors(_cli_guide)
         _guide_units = len((_cli_guide or "").encode("utf-16-le")) // 2
         _prompt_cap = 24000 - _guide_units
         if _prompt_cap < _MIN_ONESHOT_PROMPT_UNITS or (
@@ -2376,6 +2379,7 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
         # chat never mails, so its read-only session does not get it.
         from computer_use import registration
         from browser_use import registration as browser_registration
+        from connectors import registration as connectors_registration
         # Harness notes: the guide tells every chat to call harness_search, and
         # the three tools only read, so read-only sessions get them too.
         _harness_entry = harness_notes.claude_server_entry(self.conversation_id)
@@ -2392,6 +2396,9 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             _browser_entry = browser_registration.claude_server_entry(self.conversation_id)
             if _browser_entry is not None:
                 mcp_servers_cfg[browser_registration.SERVER_NAME] = _browser_entry
+            _connectors_entry = connectors_registration.claude_server_entry(self.conversation_id)
+            if _connectors_entry is not None:
+                mcp_servers_cfg[connectors_registration.SERVER_NAME] = _connectors_entry
 
         _session_guide = (
             agent_guide.with_computer_use(self._agent_guide)
@@ -2399,6 +2406,8 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
         )
         if browser_registration.SERVER_NAME in mcp_servers_cfg:
             _session_guide = agent_guide.with_browser_use(_session_guide)
+        if connectors_registration.SERVER_NAME in mcp_servers_cfg:
+            _session_guide = agent_guide.with_connectors(_session_guide)
         model = self.model_name if (self.model_name or "").startswith("claude-") else None
 
         # Effort: kayıtçıdan (effort_caps) eşlenir — "auto" veya desteklenmeyen seviye →
@@ -2547,6 +2556,10 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
         desired_browser_use = (
             not bool(getattr(self, "read_only", False)) and browser_use_settings.enabled_now()
         )
+        from connectors import registration as connectors_registration
+        desired_connectors = (
+            ((), "") if bool(getattr(self, "read_only", False)) else connectors_registration.served()
+        )
 
         desired_unity_mcp = False
         try:
@@ -2588,9 +2601,13 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             _existing is not None
             and bool(getattr(_existing, "browser_use", False)) != desired_browser_use
         )
+        _connectors_changed = (
+            _existing is not None
+            and getattr(_existing, "connectors", ((), "")) != desired_connectors
+        )
         if _existing is not None and (
             _effort_changed or _workspace_changed or _ro_changed or _unity_changed or _computer_changed
-            or _browser_changed
+            or _browser_changed or _connectors_changed
         ):
             reasons = []
             if _ro_changed:
@@ -2605,6 +2622,8 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 reasons.append("bilgisayar kullanımı açıldı" if desired_computer_use else "bilgisayar kullanımı kapandı")
             if _browser_changed:
                 reasons.append("tarayıcı kullanımı açıldı" if desired_browser_use else "tarayıcı kullanımı kapandı")
+            if _connectors_changed:
+                reasons.append("bağlayıcılar değişti")
             logger.info(
                 "[CodexSession] %s; session yeniden kuruluyor",
                 ", ".join(reasons),
@@ -2640,6 +2659,7 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             unity_mcp=desired_unity_mcp,
             computer_use=desired_computer_use,
             browser_use=desired_browser_use,
+            connectors=desired_connectors,
         )
         # Oto mod → onay otomatik accept; Adım/Plan modu → her mutasyonda onay kartı.
         session.auto_approve = (self.generation_mode == "auto")
@@ -2675,6 +2695,8 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 )
                 if desired_browser_use:
                     _session_guide = agent_guide.with_browser_use(_session_guide)
+                if desired_connectors[0]:
+                    _session_guide = agent_guide.with_connectors(_session_guide)
                 message = _session_guide + "\n\n" + message
             session._ctx_injected = True
         if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False):

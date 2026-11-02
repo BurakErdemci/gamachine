@@ -53,10 +53,11 @@ os.environ["PATH"] = os.pathsep.join(
 #   backend mail-mcp-server             → unity_ai_mcp.mail_server.main (Claude chats' mail tools)
 #   backend computer-mcp-server         → computer_use.server.main (computer-use tools)
 #   backend browser-mcp-server          → browser_use.server.main (agent browser tools)
+#   backend connectors-mcp-server       → connectors.mcp_server.main (agent connector tools, e.g. Blender)
 # FastAPI/uvicorn app'i kurmadan erken dön — bu komutlar HTTP server başlatmaz.
 if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bridge", "agy-hook",
                                          "mail-mcp-server", "computer-mcp-server", "computer-mcp-standalone",
-                                         "browser-mcp-server"):
+                                         "browser-mcp-server", "connectors-mcp-server"):
     _sub_mode = sys.argv[1]
     sys.argv = [sys.argv[0]] + sys.argv[2:]
     if _sub_mode == "mcp-server":
@@ -73,6 +74,10 @@ if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bri
         sys.exit(0)
     elif _sub_mode == "browser-mcp-server":
         from browser_use.server import main as _sub_main
+        _sub_main()
+        sys.exit(0)
+    elif _sub_mode == "connectors-mcp-server":
+        from connectors.mcp_server import main as _sub_main
         _sub_main()
         sys.exit(0)
     elif _sub_mode == "computer-mcp-standalone":
@@ -392,7 +397,13 @@ app.include_router(create_usage_router(usage_service))
 app.include_router(create_mcp_router())
 app.include_router(create_scene_editor_router(db))
 app.include_router(create_transcribe_router(db))
-app.include_router(create_connector_router(db))
+from connectors import launcher as connectors_launcher  # noqa: E402
+from connectors.installer import Installer as ConnectorInstaller  # noqa: E402
+
+# One installer for the settings routes and the agent's gate, so both see the same running install.
+_connector_installer = ConnectorInstaller()
+connectors_launcher.bind(installer=_connector_installer)
+app.include_router(create_connector_router(db, installer=_connector_installer))
 
 from remote.bridge import RemoteBridge  # noqa: E402
 

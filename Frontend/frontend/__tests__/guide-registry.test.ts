@@ -36,9 +36,10 @@ describe('registry · what this build lists', () => {
     const t = topic({ available_when: 'feature.computerUse' })
     expect(unavailableReason(t, CTX)).toBe('flag')
     expect(unavailableReason(t, { caps: { ...CTX.caps, 'feature.computerUse': true } })).toBeNull()
-    // every announced flag is off in this build; the Unity Hub button is the one shipped feature
-    const { 'feature.unityHubNewProject': hub, ...announced } = BUILD_FLAGS
+    // every announced flag is off in this build; the Unity Hub button and Blender are the shipped features
+    const { 'feature.unityHubNewProject': hub, 'integration.blender': blender, ...announced } = BUILD_FLAGS
     expect(hub).toBe(true)
+    expect(blender).toBe(true)
     expect(Object.values(announced).every(v => v === false)).toBe(true)
   })
 
@@ -57,15 +58,15 @@ describe('registry · what this build lists', () => {
     expect(isSupported('settings:remote')).toBe(true)
   })
 
-  it('placeholders and the Unity Hub topic are hidden; branches and side questions are listed', () => {
+  it('placeholders and the Unity Hub topic are hidden; branches, side questions and Blender are listed', () => {
     const listed = ids(listedTopics(CTX))
-    for (const hidden of ['animation-preview', 'agent-browser', 'computer-use', 'app-support', 'blender', 'new-project', 'name', 'guide']) {
+    for (const hidden of ['animation-preview', 'agent-browser', 'computer-use', 'app-support', 'new-project', 'name', 'guide']) {
       expect(listed).not.toContain(hidden)
     }
-    for (const shown of ['ask', 'branches', 'side-chat', 'code-export', 'changed-files', 'preview', 'themes']) expect(listed).toContain(shown)
-    expect(listed).toHaveLength(35)
-    // the "Diğer araçlar" group has nothing listed, so the guide does not draw it
-    expect(listedTopics(CTX).some(t => t.group === 'integrations')).toBe(false)
+    for (const shown of ['ask', 'branches', 'side-chat', 'code-export', 'changed-files', 'preview', 'themes', 'blender']) expect(listed).toContain(shown)
+    expect(listed).toHaveLength(36)
+    // Blender is the only listed topic of the "Diğer araçlar" group
+    expect(listedTopics(CTX).filter(t => t.group === 'integrations').map(t => t.id)).toEqual(['blender'])
   })
 
   it('changed-files needs a git repository', () => {

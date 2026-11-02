@@ -316,15 +316,16 @@ class BaseCLIProvider(AIProvider):
     _read_only = False
 
     def _apply_computer_servers(self, servers: dict, shape, *, chat_id: bool) -> list:
-        """Sets or removes gamachineComputer / gamachineBrowser in `servers`,
+        """Sets or removes gamachineComputer / gamachineBrowser / gamachineConnectors in `servers`,
         each entry adapted by `shape` to the CLI's config format. chat_id=False
         for a file several chats of one workspace share (the id then reaches
         the server through the spawn env). Returns the names registered."""
         from computer_use import registration as computer_reg
         from browser_use import registration as browser_reg
+        from connectors import registration as connectors_reg
         owner = getattr(self, "_conversation_id", None) if chat_id else None
         registered = []
-        for reg in (computer_reg, browser_reg):
+        for reg in (computer_reg, browser_reg, connectors_reg):
             entry = None if self._read_only else reg.stdio_entry(owner)
             if entry is None:
                 servers.pop(reg.SERVER_NAME, None)
