@@ -346,7 +346,10 @@ handleSecure('open-unity-hub', async () => {
     const hub = findUnityHub(process.platform, process.env, os.homedir(), fs.existsSync)
     if (hub === UNITY_HUB_MSIX_URI) {
       // A Store app cannot be started from its exe path; explorer.exe resolves the AppsFolder URI.
-      spawn('explorer.exe', [hub], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+      // A spawn failure arrives as an 'error' event after this returns; without a listener it is an uncaught exception.
+      const child = spawn('explorer.exe', [hub], { detached: true, stdio: 'ignore', windowsHide: true })
+      child.once('error', (err) => console.error('[open-unity-hub] explorer.exe failed:', err))
+      child.unref()
       return { opened: true }
     }
     return { opened: hub ? await shell.openPath(hub) === '' : false }
