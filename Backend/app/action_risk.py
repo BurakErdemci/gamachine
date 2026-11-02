@@ -319,8 +319,8 @@ def classify_unity(tool: Any, args: Any, _depth: int = 0) -> Risk:
 
 
 def _classify_unity_batch(bare: str, args: Mapping, depth: int) -> Risk:
-    """batch_execute: each nested call is judged by the same
-    balanced rules; the batch is critical when one of them is, or when its shape cannot be read."""
+    """batch_execute: each nested call is judged by the same balanced rules; the batch is critical
+    when one of them is, or when its shape cannot be read."""
     if depth >= _UNITY_MAX_DEPTH:
         return _critical("unity_critical_action", f"{bare}: nested too deep")
     lists = [v for k, v in args.items() if _fold(k) == "commands"]
@@ -997,7 +997,7 @@ def _trigger(words: list, *, inline: bool = False) -> Optional[Risk]:
         # Archivers that delete what they packed.
         if v == "tar" and any(w.lower() == "--remove-files" for w in lows[i + 1:]):
             return _critical("shell_delete_move", "tar --remove-files")
-        if v == "zip" and any(re.fullmatch(r"-[A-Za-z0-9]*m[A-Za-z0-9]*", w) for w in lows[i + 1:]):
+        if v == "zip" and any(w == "--move" or re.fullmatch(r"-[A-Za-z0-9]*m[A-Za-z0-9]*", w) for w in lows[i + 1:]):
             return _critical("shell_delete_move", "zip -m")
         if v in ("7z", "7za", "7zr") and any(w.lower() == "-sdel" for w in lows[i + 1:]):
             return _critical("shell_delete_move", "7z -sdel")
@@ -1043,7 +1043,7 @@ def _trigger(words: list, *, inline: bool = False) -> Optional[Risk]:
             return _critical("shell_permission", v)
         if v in _CONTAINER_ENGINES and nxt:
             return _critical("shell_installer", f"{v} {nxt}")
-        if (v == "sc" and nxt in _SERVICE_CHANGES) or (v == "net" and nxt in ("user", "localgroup", "stop")):
+        if (v == "sc" and nxt in _SERVICE_CHANGES) or (v in ("net", "net1") and nxt in ("user", "localgroup", "stop")):
             return _critical("shell_permission", f"{v} {nxt}")
         if v in _REGISTRY_WRITES and any(w.lower().startswith(("hklm:", "hkcu:", "registry::"))
                                          for w in lows[i + 1:]):
