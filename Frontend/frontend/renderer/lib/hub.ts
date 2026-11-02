@@ -408,10 +408,12 @@ export async function runInstall(target: InstallTarget): Promise<void> {
 
 export async function cancelInstallRun(): Promise<void> {
   if (install.state !== 'installing') return;
+  // Each run has its own target object: a late answer must not touch the next run.
+  const { target } = install;
   setInstall({ ...install, cancelling: true });
   const res = await cancelInstall();
   // Refused: either the CLI is past the point where stopping works ('installing'), or main has no install to stop ('idle').
-  if (!res.cancelled && install.state === 'installing') {
+  if (!res.cancelled && install.state === 'installing' && install.target === target) {
     setInstall({ ...install, cancelling: false, cancelRefused: res.reason === 'installing', cancelIdle: res.reason !== 'installing' });
   }
 }

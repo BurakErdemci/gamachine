@@ -442,6 +442,9 @@ export async function startInstall(
     const needsEula = eulas.length > 0
     if (needsEula && req.acceptedEulas !== true) return fail('eulaNotAccepted')
     const plan = await buildPlan(sel, cli, deps)
+    // The last await before the spawn: an accepted cancel decides the outcome, and everything after this runs
+    // synchronously up to the spawn, so nothing can slip in later.
+    if (mine.cancelRequested) return fail('cancelled')
     if (!plan.enough) return fail('notEnoughSpace')
 
     const version = sel.release.version
@@ -450,8 +453,6 @@ export async function startInstall(
     else args.push('install', version, '--changeset', sel.release.changeset, '--yes')
     for (const m of sel.modules) args.push('-m', m.id)
     if (needsEula) args.push('--accept-eula')
-    // runInstall spawns synchronously, so nothing can slip in between this check and the spawn.
-    if (mine.cancelRequested) return fail('cancelled')
     return await runInstall(cli, args, onProgress, deps, fail)
   } finally {
     busy = false
