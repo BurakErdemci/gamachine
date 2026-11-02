@@ -13,8 +13,57 @@ _DOWNLOAD_SUFFIXES = (
     ".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm", ".apk", ".appimage", ".iso",
     ".jar", ".bat", ".cmd", ".sh", ".unitypackage",
 )
+# Types an agent-started download never saves and browser_download_to_project never copies, with or
+# without approval cards. The host keeps its own copy of this list (main/helpers/browser-host.ts).
+AGENT_BLOCKED_DOWNLOAD_SUFFIXES = (
+    ".exe", ".msi", ".msix", ".appx", ".bat", ".cmd", ".com", ".ps1", ".psm1", ".vbs", ".vbe", ".js",
+    ".jse", ".wsf", ".wsh", ".scr", ".pif", ".cpl", ".msc", ".hta", ".reg", ".lnk", ".dll", ".sys",
+    ".jar", ".py", ".pyw", ".sh", ".bash", ".zsh", ".dmg", ".pkg", ".app", ".appimage", ".deb",
+    ".rpm", ".apk", ".command",
+)
+# What browser_download_to_project never puts into a project, whatever the download was: Unity code,
+# compiler input and native plugins would be compiled or loaded by the editor. Shaders are allowed.
+AGENT_BLOCKED_PROJECT_SUFFIXES = (
+    ".cs", ".asmdef", ".asmref", ".rsp", ".dll", ".so", ".dylib", ".bundle", ".jslib", ".jspre", ".mm",
+    ".m", ".cpp", ".c", ".h", ".hpp", ".aar", ".jar", ".java", ".kt", ".swift",
+)
+# Folders whose contents Unity loads as plugins or editor code.
+_BLOCKED_PROJECT_FOLDERS = frozenset({"plugins", "editor"})
 _NAME_LIMIT = 120
 _FILLERS = "\u115f\u1160\u3164\uffa0"
+
+
+def _file_name(name) -> str:
+    # Windows drops trailing dots and spaces, so "setup.exe. " is an .exe.
+    return re.split(r"[\\/]", name)[-1].rstrip(". ").casefold() if isinstance(name, str) else ""
+
+
+def _ends_in(name, suffixes) -> str:
+    base = _file_name(name)
+    return next((suffix for suffix in suffixes if base.endswith(suffix)), "")
+
+
+def agent_blocked_suffix(name) -> str:
+    """The blocked type `name` ends in ('.exe' for "song.pdf.exe"), or '' when an agent may save it."""
+    return _ends_in(name, AGENT_BLOCKED_DOWNLOAD_SUFFIXES)
+
+
+def project_copy_refusal(path) -> str:
+    """Why a download may not be copied to `path` (a file name or a project-relative path), or ''."""
+    blocked = _ends_in(path, AGENT_BLOCKED_DOWNLOAD_SUFFIXES + AGENT_BLOCKED_PROJECT_SUFFIXES)
+    if blocked:
+        return f"{blocked} files are never copied into the project"
+    parts = re.split(r"[\\/]", path) if isinstance(path, str) else []
+    if any(part.strip().casefold() in _BLOCKED_PROJECT_FOLDERS for part in parts):
+        return "nothing is copied into a Plugins or Editor folder"
+    return ""
+
+
+def file_type(name) -> str:
+    """The last extension of a file name, lower case ('' for none): a copy keeps the download's type."""
+    base = _file_name(name)
+    dot = base.rfind(".")
+    return base[dot:] if dot > 0 else ""
 
 
 def _blocked_address(ip) -> bool:

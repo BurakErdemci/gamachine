@@ -12,6 +12,10 @@ export interface BrowserCardInfo {
   pageUrl: string;
   valuePreview: string;
   riskReason: string;
+  /** browser_download only: the file, its size (null when unknown) and the site it comes from, all measured by the app. */
+  filename: string;
+  bytes: number | null;
+  host: string;
 }
 
 const str = (v: unknown): string => (typeof v === 'string' && v.trim() ? v : '');
@@ -26,7 +30,20 @@ export const browserCardInfo = (tool: string, params: unknown): BrowserCardInfo 
     pageUrl: str(p.page_url),
     valuePreview: str(p.value_preview),
     riskReason: str(p.risk_reason),
+    filename: str(p.filename),
+    bytes: Number.isSafeInteger(p.bytes) && p.bytes >= 0 ? p.bytes : null,
+    host: str(p.host),
   };
+};
+
+/** 1536 -> "1.5 KB"; whole bytes below a kilobyte. */
+export const formatBytes = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 };
 
 const hostOf = (url: string): string => {
@@ -55,21 +72,32 @@ export const BrowserApproval: React.FC<BrowserApprovalProps> = ({ info, onAnswer
   const element = stripBidi(info.element);
   const preview = ['fill', 'select'].includes(info.action) ? stripBidi(info.valuePreview) : '';
   const reason = stripBidi(info.riskReason) || t('bp.card.riskUnknown');
+  const download = info.action === 'download';
+  const site = stripBidi(info.host);
   return (
     <div className="contents" data-risky="true">
       <ApprovalCard
         kind="computer"
         testId="browser-approval"
         who={t('bp.card.who')}
-        name={t('bp.card.name', { ad: host || t('bp.card.unknownHost') })}
-        sentence={t('bp.card.sentence')}
+        name={download ? t('bp.card.downloadName', { ad: site || t('bp.card.unknownHost') }) : t('bp.card.name', { ad: host || t('bp.card.unknownHost') })}
+        sentence={t(download ? 'bp.card.downloadSentence' : 'bp.card.sentence')}
         why={(
           <p className="approval-why cu-card-risk" data-testid="bp-card-risk">
             <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l7.5 13h-15z" /><path d="M10 8v3.6M10 13.6v.2" /></svg>
             <span><b>{t('cu.card.riskLabel')}</b>{reason}</span>
           </p>
         )}
-        body={(
+        body={download ? (
+          <dl className="cu-card-app" data-testid="bp-card-info">
+            <dt>{t('bp.card.file')}</dt>
+            <dd data-testid="bp-card-file">{stripBidi(info.filename) || t('bp.card.sizeUnknown')}</dd>
+            <dt>{t('bp.card.size')}</dt>
+            <dd data-testid="bp-card-size">{info.bytes === null ? t('bp.card.sizeUnknown') : formatBytes(info.bytes)}</dd>
+            <dt>{t('bp.card.site')}</dt>
+            <dd><code className="break-all"><b data-testid="bp-card-host">{site || t('bp.card.unknownHost')}</b></code></dd>
+          </dl>
+        ) : (
           <dl className="cu-card-app" data-testid="bp-card-info">
             <dt>{t('bp.card.action')}</dt>
             <dd><code>{stripBidi(info.action)}</code></dd>

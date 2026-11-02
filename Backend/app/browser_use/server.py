@@ -120,8 +120,9 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
     async def browser_use_tab(tab_id: int) -> CallToolResult:
         return await handler.call("use_tab", {"tab_id": tab_id})
 
-    @tool("browser_click", "Click an element from the latest snapshot. Submitting forms, purchases, deletions, "
-          "publishing and downloads open an approval card; then stop, tell the user and wait." + _ELEMENT_NOTE)
+    @tool("browser_click", "Click an element from the latest snapshot. Submitting forms, purchases, deletions and "
+          "publishing open an approval card; then stop, tell the user and wait. A click that starts a download "
+          "reports it as `download` in this or your next browser reply (see browser_downloads)." + _ELEMENT_NOTE)
     async def browser_click(snapshot_id: str, ref: str | int) -> CallToolResult:
         return await handler.call("click", {"snapshot_id": snapshot_id, "ref": ref})
 
@@ -163,6 +164,26 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
     @tool("browser_screenshot", "Take a screenshot of the current page.")
     async def browser_screenshot() -> CallToolResult:
         return await handler.call("screenshot", {})
+
+    @tool("browser_downloads", "List the files this chat's browser downloaded: id, filename, bytes, received, site "
+          "(host) and state (awaiting_approval, progressing, completed, cancelled, interrupted, blocked). Files go to "
+          "the user's Downloads folder. A download you start needs the user's approval once (a card opens unless "
+          "the click that started it was already approved); executables and scripts (.exe, .msi, .bat, .ps1, .js, "
+          ".py, .sh, .dll, .jar, .apk and similar) are never downloaded for you. wait_ms (up to 30000) waits until "
+          "no download is still in progress. Then copy a completed one into the project with "
+          "browser_download_to_project.")
+    async def browser_downloads(wait_ms: int | None = None) -> CallToolResult:
+        return await handler.call("downloads", {} if wait_ms is None else {"wait_ms": wait_ms})
+
+    @tool("browser_download_to_project", "Copy a completed download (id from browser_downloads) into the open "
+          "project. dest is relative to the project root and includes the file name, for example "
+          "Assets/Audio/theme.mp3; Unity imports what lands under Assets/. Absolute paths, '..', links, blocked "
+          "types and an existing file (unless overwrite is true) are refused. Returns the project path and bytes.")
+    async def browser_download_to_project(id: str, dest: str, overwrite: bool = False) -> CallToolResult:
+        args = {"id": id, "dest": dest}
+        if overwrite:
+            args["overwrite"] = True
+        return await handler.call("download_to_project", args)
 
     return mcp
 

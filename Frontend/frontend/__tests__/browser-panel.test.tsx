@@ -432,3 +432,27 @@ describe('deleting a chat closes its browser tab', () => {
     vi.doUnmock('axios')
   })
 })
+
+describe('BrowserPanel download strip', () => {
+  it('shows the chat downloads with progress or state and opens a completed one in its folder', async () => {
+    render(<BrowserPanel visible conversationId={3} {...props()} />)
+    await waitFor(() => expect(listeners.has('browser-live')).toBe(true))
+    push(live())
+    expect(screen.queryByTestId('bp-downloads')).toBeNull()
+    push(live({ downloads: [
+      { id: 'd1', filename: 'theme.mp3', bytes: 2000, received: 500, state: 'progressing' },
+      { id: 'd2', filename: 'pack.zip', bytes: 10, received: 10, state: 'completed' },
+      { id: 'd3', filename: 'setup.exe', bytes: null, received: 0, state: 'blocked' },
+      { id: 'd4', filename: 'song.wav', bytes: null, received: 0, state: 'awaiting_approval' },
+      { id: 'd5', filename: 'odd', bytes: 1, received: 0, state: 'hacked' },
+    ] }))
+    const rows = screen.getAllByTestId('bp-download')
+    expect(rows.map(r => r.getAttribute('data-state'))).toEqual(['progressing', 'completed', 'blocked', 'awaiting_approval'])
+    const states = screen.getAllByTestId('bp-download-state').map(s => s.textContent)
+    expect(states).toEqual(['25%', tr['bp.dl.completed'], tr['bp.dl.blocked'], tr['bp.dl.awaiting_approval']])
+    const show = screen.getAllByTestId('bp-download-show')
+    expect(show).toHaveLength(1)
+    fireEvent.click(show[0])
+    expect(calls('download_show')).toEqual([{ op: 'download_show', conversationId: 3, id: 'd2' }])
+  })
+})

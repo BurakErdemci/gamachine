@@ -827,10 +827,15 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         op = tool[len("browser_"):]
         url, fingerprint = params.get("page_url"), params.get("fingerprint")
         value_hash = params.get("value_hash", "")
-        valid = (op in _BROWSER_CRITICAL_OPS
-                 and isinstance(url, str) and isinstance(fingerprint, str)
-                 and isinstance(value_hash, str) and re.fullmatch(r"[0-9a-f]{64}|", value_hash) is not None)
-        key = (owner, op, url, fingerprint, value_hash) if valid else None
+        # An agent download's card: one paused file, answered once; it leaves no grant behind.
+        download = op == "download"
+        if download:
+            valid = isinstance(url, str) and isinstance(params.get("filename"), str) and bool(params["filename"])
+        else:
+            valid = (op in _BROWSER_CRITICAL_OPS
+                     and isinstance(url, str) and isinstance(fingerprint, str)
+                     and isinstance(value_hash, str) and re.fullmatch(r"[0-9a-f]{64}|", value_hash) is not None)
+        key = (owner, op, url, fingerprint, value_hash) if valid and not download else None
         now = time()
         for stale in [k for k, expiry in _browser_grants.items() if expiry <= now]:
             del _browser_grants[stale]
@@ -872,7 +877,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                 return {"status": "ok", "gate_id": open_gate}
         opened_gen = _browser_gen(owner)
         _register_gate(gate_id, owner, kind="external")
-        summary = f"browser {op}: {params.get('element_name') or 'element'}"
+        summary = (f"browser download: {params['filename']}" if download
+                   else f"browser {op}: {params.get('element_name') or 'element'}")
         _mcp_pending[gate_id] = {
             "tool": tool, "params": params, "workspace_path": "", "conversation_id": owner,
             "browser_use": True, "grant_key": key, "page_gen": opened_gen, "risk_reason": decision.reason, "summary": summary,
@@ -939,8 +945,14 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         _reject_computer_use_pending(conversation_id, BROWSER_NAVIGATION_REASON, "browser_navigation", flag="browser_use")
         _forget_browser_approvals(conversation_id)
 
+    def _chat_workspace(conversation_id: int) -> Optional[str]:
+        """The project an agent turn of this chat works in (the same lookup the turn itself makes)."""
+        user_id = db.get_conversation_owner(conversation_id)
+        return db.get_last_workspace(user_id) if user_id is not None else None
+
     _browser_gateway = browser_gateway.BrowserGateway(
-        browser_gateway.post_cmd, _browser_card, _browser_card_result, _drop_browser_grants)
+        browser_gateway.post_cmd, _browser_card, _browser_card_result, _drop_browser_grants,
+        workspace=_chat_workspace)
 
     def _sweep_mcp_gates() -> None:
         """İki aşamalı süpürme: önce bekleyeni kalmayan KART, sonra kayıt.

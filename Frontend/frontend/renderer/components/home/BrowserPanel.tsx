@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLang } from '../../lib/i18n';
+import { stripBidi } from '../../lib/modelText';
 import { addressToUrl, displayAddress } from '../../lib/browserAddress';
 import { cleanHistory, isMacPlatform, shortcutLabel, suggest, suggestedSites, tabShortcutOf, type HistoryItem } from '../../lib/browserSuggest';
 import { addNotesFromEvent, addPageChip, BROWSER_NOTES_CHANNEL, isAnnotateShortcut } from '../../lib/browserNotes';
@@ -21,9 +22,31 @@ export interface BrowserState {
   activeTabId: number | null;
   /** The selected tab is in annotate mode. */
   annotating: boolean;
+  /** The chat's last few downloads, oldest first. */
+  downloads: BrowserDownload[];
 }
 
-const EMPTY: BrowserState = { active: false, conversationId: null, url: '', title: '', loading: false, userControl: false, tabs: [], activeTabId: null, annotating: false };
+const DOWNLOAD_STATES = ['awaiting_approval', 'progressing', 'completed', 'cancelled', 'interrupted', 'blocked'] as const;
+
+export interface BrowserDownload {
+  id: string;
+  filename: string;
+  bytes: number | null;
+  received: number;
+  state: typeof DOWNLOAD_STATES[number];
+}
+
+const EMPTY: BrowserState = { active: false, conversationId: null, url: '', title: '', loading: false, userControl: false, tabs: [], activeTabId: null, annotating: false, downloads: [] };
+
+function toDownloads(raw: unknown): BrowserDownload[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((d: any): BrowserDownload[] => (d && typeof d.id === 'string' && typeof d.filename === 'string'
+    && DOWNLOAD_STATES.includes(d.state) ? [{
+      id: d.id, filename: d.filename, state: d.state,
+      bytes: Number.isSafeInteger(d.bytes) && d.bytes > 0 ? d.bytes : null,
+      received: Number.isSafeInteger(d.received) && d.received >= 0 ? d.received : 0,
+    }] : []));
+}
 
 function toTabs(raw: unknown): BrowserTab[] {
   if (!Array.isArray(raw)) return [];
@@ -54,6 +77,7 @@ function toState(raw: any): BrowserState {
     tabs: toTabs(raw.tabs),
     activeTabId: Number.isInteger(raw.activeTabId) ? raw.activeTabId : null,
     annotating: raw.annotating === true,
+    downloads: toDownloads(raw.downloads),
   };
 }
 
@@ -423,6 +447,26 @@ export function BrowserPanel({ visible, conversationId, running, onStop, onNeedC
         </header>
       )}
       {stopFailed && <p className="bp-stop-failed" role="alert">{t('bp.stopFailed')}</p>}
+      {state.downloads.length > 0 && (
+        // Inline layout: the panel's stylesheet is not part of this change.
+        <div className="bp-downloads" data-testid="bp-downloads" role="status" aria-label={t('bp.dl.label')}
+          style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', alignItems: 'center', padding: '3px 10px', fontSize: 12 }}>
+          {state.downloads.map(d => (
+            <span key={d.id} className="bp-download" data-testid="bp-download" data-state={d.state}
+              style={{ display: 'inline-flex', gap: 6, alignItems: 'center', minWidth: 0 }}>
+              <span className="bp-download-name" style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={stripBidi(d.filename)}>{stripBidi(d.filename)}</span>
+              <span className="bp-download-state" data-testid="bp-download-state">
+                {d.state === 'progressing' && d.bytes ? `${Math.min(100, Math.floor((d.received * 100) / d.bytes))}%` : t(`bp.dl.${d.state}`)}
+              </span>
+              {d.state === 'completed' && (
+                <button type="button" className="btn btn-ghost" data-testid="bp-download-show"
+                  onClick={() => send('download_show', { id: d.id })}>{t('bp.dl.show')}</button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="bp-view" ref={hostRef} data-testid="bp-view">
         {!state.active && (
           <div className="bp-idle">

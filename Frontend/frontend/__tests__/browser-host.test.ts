@@ -131,14 +131,21 @@ describe('BrowserHost view and session', () => {
     expect(check(f.wc, 'media', 'https://example.com', {})).toBe(false)
   })
 
-  it('cancels every download', async () => {
+  // The download rules themselves (origin, blocked types, approval, unique paths) are in browser-downloads.test.ts.
+  it('cancels a download from an unknown webContents, and every download without a downloads folder', async () => {
     const f = fixture()
     await navigate(f)
     const event = { preventDefault: vi.fn() }
-    const item = { cancel: vi.fn() }
-    f.session.emit('will-download', event, item, f.wc)
+    const item = { cancel: vi.fn(), getFilename: () => 'a.mp3' }
+    f.session.emit('will-download', event, item, { id: 77 })
     expect(event.preventDefault).toHaveBeenCalled()
     expect(item.cancel).toHaveBeenCalled()
+    // This fixture gives the host no downloads folder: even its own tab's download is cancelled.
+    const own = { preventDefault: vi.fn() }
+    const ownItem = { cancel: vi.fn(), getFilename: () => 'a.mp3' }
+    f.session.emit('will-download', own, ownItem, f.wc)
+    expect(own.preventDefault).toHaveBeenCalled()
+    expect(ownItem.cancel).toHaveBeenCalled()
   })
 
   it('denies pop-ups and hands their URL back in the next reply', async () => {

@@ -1030,6 +1030,8 @@ const browserHost = new BrowserHost({
   http: axios, baseUrl: getBackendBaseUrl, appToken: localAppToken, uiSecret,
   onHalt: conversationId => browserServer?.cancelPending(conversationId ?? undefined),
   history: new BrowserHistory(path.join(app.getPath('userData'), 'browser-history.json')),
+  downloadsDir: () => app.getPath('downloads'),
+  showItemInFolder: file => shell.showItemInFolder(file),
   log: (...args) => console.log(...args),
 })
 handleSecure('browser-live', (_event, req: unknown) => browserHost.invoke(req))
