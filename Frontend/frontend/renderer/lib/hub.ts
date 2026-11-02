@@ -222,3 +222,219 @@ export const clearRunIf = (finished: HubRun) => { if (run === finished) clearRun
 
 /** Test hook: forgets any run and its listener. */
 export const resetHubStore = () => { dropProgress(); setRun({ state: 'idle' }); };
+
+// --- Installing a Unity editor (hub-install-* channels; the main side drives Unity's own `unity` CLI) ---
+// These types mirror the main<->renderer install contract field for field.
+
+export type CliState =
+  | { available: true }
+  | { available: false; reason: 'noHub' }
+  | { available: false; reason: 'openHubOnce' };
+export interface InstallEula { label: string; url: string }
+export interface InstallModule {
+  id: string; name: string; category: string;
+  downloadBytes: number; installedBytes: number;
+  preSelected: boolean;
+  eulas: InstallEula[];
+  parts: { id: string; name: string; downloadBytes: number }[];
+  installed: boolean;
+}
+export interface InstallRelease {
+  version: string; changeset: string;
+  stream: 'LTS' | 'SUPPORTED';
+  releaseDate: string;
+  recommended: boolean;
+  installed: boolean;
+  downloadBytes: number; installedBytes: number;
+  modules: InstallModule[];
+}
+export type CatalogResult =
+  | { ok: true; cli: CliState; releases: InstallRelease[] }
+  | { ok: false; cli: CliState; code: 'offline' | 'catalogFailed' };
+export type PlanErrorCode = 'invalidArguments' | 'unknownVersion' | 'unknownModule' | 'cliMissing';
+export type PlanResult =
+  | { ok: true; installRoot: string; downloadBytes: number; installedBytes: number; freeBytes: number | null; enough: boolean; eulas: InstallEula[] }
+  | { ok: false; code: PlanErrorCode };
+export type InstallErrorCode = 'busy' | 'cliMissing' | 'invalidArguments' | 'unknownVersion' | 'unknownModule'
+  | 'eulaNotAccepted' | 'notEnoughSpace' | 'elevationRefused' | 'cancelled' | 'cliFailed' | 'exitCode';
+export type InstallResult =
+  | { ok: true; completed: string[] }
+  | { ok: false; code: InstallErrorCode; message?: string; completed?: string[] };
+export interface InstallProgress {
+  phase: 'starting' | 'download' | 'install' | 'done' | 'failed';
+  pct: number | null;
+  message: string;
+  stalled: boolean;
+  retrying: boolean;
+  elapsedMs: number;
+}
+export interface InstallRequest { version: string; modules: string[]; acceptedEulas: boolean }
+
+const INSTALL_ERROR_KEYS: Record<InstallErrorCode, TKey> = {
+  busy: 'hub.install.error.busy', cliMissing: 'hub.install.error.cliMissing', invalidArguments: 'hub.install.error.invalidArguments',
+  unknownVersion: 'hub.install.error.unknownVersion', unknownModule: 'hub.install.error.unknownModule',
+  eulaNotAccepted: 'hub.install.error.eulaNotAccepted', notEnoughSpace: 'hub.install.error.notEnoughSpace',
+  elevationRefused: 'hub.install.error.elevationRefused', cancelled: 'hub.install.error.cancelled',
+  cliFailed: 'hub.install.error.cliFailed', exitCode: 'hub.install.error.exitCode',
+};
+export const isInstallErrorCode = (c: unknown): c is InstallErrorCode =>
+  typeof c === 'string' && Object.prototype.hasOwnProperty.call(INSTALL_ERROR_KEYS, c);
+
+/** The plain reason for a failed install or plan; the CLI's own words ride along only for cliFailed. */
+export function installFailureText(r: { code: InstallErrorCode; message?: string }, t: (key: TKey, values?: TValues) => string): string {
+  const text = t(INSTALL_ERROR_KEYS[r.code] ?? 'hub.install.error.exitCode');
+  return r.code === 'cliFailed' && r.message ? `${text} ${t('hub.install.cliSaid', { message: r.message })}` : text;
+}
+
+const isEulas = (v: unknown): v is InstallEula[] =>
+  Array.isArray(v) && v.every(e => e && typeof e.label === 'string' && typeof e.url === 'string');
+const isCli = (c: any): c is CliState =>
+  c?.available === true || (c?.available === false && (c.reason === 'noHub' || c.reason === 'openHubOnce'));
+
+/** null = no desktop bridge, or an answer that does not have the contract's shape. */
+export async function loadInstallCatalog(): Promise<CatalogResult | null> {
+  const res = await call('hub-install-catalog');
+  if (!res || !isCli(res.cli)) return null;
+  if (res.ok === true && Array.isArray(res.releases)) {
+    return { ok: true, cli: res.cli, releases: res.releases.filter((r: any) => r && typeof r.version === 'string' && Array.isArray(r.modules)) };
+  }
+  if (res.ok === false && (res.code === 'offline' || res.code === 'catalogFailed')) return { ok: false, cli: res.cli, code: res.code };
+  return null;
+}
+
+/** null = no bridge or a malformed answer. */
+export async function planInstall(arg: { version: string; modules: string[] }): Promise<PlanResult | null> {
+  const res = await call('hub-install-plan', arg);
+  if (res?.ok === true && typeof res.downloadBytes === 'number' && typeof res.installedBytes === 'number' && isEulas(res.eulas)) {
+    return {
+      ok: true, installRoot: typeof res.installRoot === 'string' ? res.installRoot : '', downloadBytes: res.downloadBytes,
+      installedBytes: res.installedBytes, freeBytes: typeof res.freeBytes === 'number' ? res.freeBytes : null,
+      enough: res.enough !== false, eulas: res.eulas,
+    };
+  }
+  if (res?.ok === false && ['invalidArguments', 'unknownVersion', 'unknownModule', 'cliMissing'].includes(res.code)) return { ok: false, code: res.code };
+  return null;
+}
+
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+
+/** Resolves when the install ends; a missing bridge or a malformed answer reads as the generic exitCode failure. */
+export async function startInstall(arg: InstallRequest): Promise<InstallResult> {
+  const res = await call('hub-install-start', arg);
+  if (res?.ok === true) return { ok: true, completed: strings(res.completed) };
+  return {
+    ok: false, code: isInstallErrorCode(res?.code) ? res.code : 'exitCode',
+    ...(typeof res?.message === 'string' && res.message ? { message: res.message } : {}),
+    ...(Array.isArray(res?.completed) ? { completed: strings(res.completed) } : {}),
+  };
+}
+
+export async function cancelInstall(): Promise<{ cancelled: boolean; reason?: 'installing' | 'idle' }> {
+  const res = await call('hub-install-cancel');
+  return { cancelled: res?.cancelled === true, ...(res?.reason === 'installing' || res?.reason === 'idle' ? { reason: res.reason } : {}) };
+}
+
+/** The existing open-unity-hub channel: Hub fetches its install tool on its first launch. */
+export async function openUnityHub(): Promise<boolean> {
+  return (await call('open-unity-hub'))?.opened === true;
+}
+
+/** Subscribes to install progress; returns the unsubscribe. */
+export function onInstallProgress(cb: (p: InstallProgress) => void): () => void {
+  const channelIpc = ipc();
+  if (!channelIpc?.on) return () => {};
+  return channelIpc.on('hub-install-progress', (p: any) => {
+    if (p && typeof p.phase === 'string' && typeof p.elapsedMs === 'number') {
+      cb({
+        phase: p.phase, pct: typeof p.pct === 'number' ? p.pct : null, message: typeof p.message === 'string' ? p.message : '',
+        stalled: p.stalled === true, retrying: p.retrying === true, elapsedMs: p.elapsedMs,
+      });
+    }
+  });
+}
+
+/** What an install was started with, plus display names, so a remounted screen never needs the catalog again. */
+export interface InstallTarget {
+  req: InstallRequest;
+  /** Adding modules to an installed editor rather than installing a new one. */
+  addTo: boolean;
+  /** module id -> name, to say which parts did install. */
+  names: Record<string, string>;
+}
+export type InstallRun =
+  | { state: 'idle' }
+  | { state: 'installing'; target: InstallTarget; progress: InstallProgress; cancelling: boolean; cancelRefused: boolean }
+  | { state: 'done'; target: InstallTarget; progress: InstallProgress; completed: string[] }
+  | { state: 'failed' | 'cancelled'; target: InstallTarget; progress: InstallProgress; code: InstallErrorCode; message?: string; completed: string[] };
+
+/**
+ * The install run, kept outside any component like the creation run: main runs one install at a
+ * time and it outlives the panel, so a screen that remounts finds the run here. The store holds the
+ * only hub-install-progress listener, and only while an install is active.
+ */
+let install: InstallRun = { state: 'idle' };
+let stopInstallProgress: (() => void) | null = null;
+const installWatchers = new Set<() => void>();
+const setInstall = (next: InstallRun) => { install = next; installWatchers.forEach(w => w()); };
+const dropInstallProgress = () => { stopInstallProgress?.(); stopInstallProgress = null; };
+const START_PROGRESS: InstallProgress = { phase: 'starting', pct: null, message: '', stalled: false, retrying: false, elapsedMs: 0 };
+
+export const getInstall = (): InstallRun => install;
+export const subscribeInstall = (cb: () => void): (() => void) => {
+  installWatchers.add(cb);
+  return () => { installWatchers.delete(cb); };
+};
+
+export async function runInstall(target: InstallTarget): Promise<void> {
+  if (install.state === 'installing') return;
+  setInstall({ state: 'installing', target, progress: START_PROGRESS, cancelling: false, cancelRefused: false });
+  dropInstallProgress();
+  stopInstallProgress = onInstallProgress(p => {
+    if (install.state === 'installing') setInstall({ ...install, progress: p, cancelRefused: install.cancelRefused && p.phase === 'install' });
+  });
+  const res = await startInstall(target.req);
+  dropInstallProgress();
+  // Read the store again: progress events changed it while the install ran.
+  const now = getInstall();
+  const progress = now.state === 'idle' ? START_PROGRESS : now.progress;
+  if (res.ok === true) setInstall({ state: 'done', target, progress, completed: res.completed });
+  else {
+    setInstall({
+      state: res.code === 'cancelled' ? 'cancelled' : 'failed', target, progress, code: res.code,
+      ...(res.message ? { message: res.message } : {}), completed: res.completed ?? [],
+    });
+  }
+}
+
+export async function cancelInstallRun(): Promise<void> {
+  if (install.state !== 'installing') return;
+  setInstall({ ...install, cancelling: true });
+  const res = await cancelInstall();
+  // Refused: either the CLI is past the point where stopping works ('installing'), or it already ended.
+  if (!res.cancelled && install.state === 'installing') setInstall({ ...install, cancelling: false, cancelRefused: res.reason === 'installing' });
+}
+
+/** Leaves a finished install; one in progress stays. */
+export const clearInstall = () => { if (install.state !== 'installing') setInstall({ state: 'idle' }); };
+
+/** Test hook: forgets any install and its listener. */
+export const resetInstallStore = () => { dropInstallProgress(); setInstall({ state: 'idle' }); };
+
+const numberLocale = (lang: string) => (lang === 'tr' ? 'tr-TR' : 'en-GB');
+
+/** Bytes as MB or GB with one decimal, in the UI language's number format. */
+export function formatSize(bytes: number, lang: string): string {
+  const gb = bytes / 1024 ** 3;
+  const big = gb >= 1;
+  const n = new Intl.NumberFormat(numberLocale(lang), { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+    .format(big ? gb : Math.max(0, bytes) / 1024 ** 2);
+  return `${n} ${big ? 'GB' : 'MB'}`;
+}
+
+export const formatPct = (pct: number, lang: string) =>
+  new Intl.NumberFormat(numberLocale(lang), { style: 'percent', maximumFractionDigits: 0 }).format(Math.min(100, Math.max(0, pct)) / 100);
+
+export const formatDate = (iso: string, lang: string) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : new Intl.DateTimeFormat(numberLocale(lang), { day: 'numeric', month: 'short', year: 'numeric' }).format(d);
+};

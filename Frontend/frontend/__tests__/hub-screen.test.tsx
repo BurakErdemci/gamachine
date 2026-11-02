@@ -95,7 +95,7 @@ describe('hub: installed editors', () => {
     expect(screen.getByTestId('hub-tab-editors').textContent).toContain('2')
   })
 
-  it('with none installed it explains how to get Unity and links the download page', async () => {
+  it('with none installed it offers the install, and without Unity Hub links the download page', async () => {
     editors = { editors: [] }
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
     view()
@@ -103,11 +103,18 @@ describe('hub: installed editors', () => {
     const empty = await screen.findByTestId('hub-editors-empty')
     expect(empty.textContent).toContain(en['hub.editorsEmptyTitle'])
     expect(empty.textContent).toContain(en['hub.editorsEmpty'])
-    fireEvent.click(within(empty).getByRole('button', { name: en['hub.getUnity'] }))
-    expect(open).toHaveBeenCalledWith(UNITY_DOWNLOAD_URL, '_blank')
     editors = { editors: EDITORS }
     fireEvent.click(within(empty).getByRole('button', { name: en['hub.refresh'] }))
     expect(await screen.findByTestId('hub-editors')).toBeTruthy()
+
+    editors = { editors: [] }
+    mocks.invoke.mockImplementation(async (channel: string, arg: any) =>
+      channel === 'hub-install-catalog' ? { ok: false, cli: { available: false, reason: 'noHub' }, code: 'catalogFailed' } : ipc(channel, arg))
+    fireEvent.click(screen.getByRole('button', { name: en['hub.refresh'] }))
+    fireEvent.click(within(await screen.findByTestId('hub-editors-empty')).getByRole('button', { name: en['hub.install.fromEmpty'] }))
+    const noHub = await screen.findByTestId('hub-install-cli-noHub')
+    fireEvent.click(within(noHub).getByRole('button', { name: en['hub.getUnity'] }))
+    expect(open).toHaveBeenCalledWith(UNITY_DOWNLOAD_URL, '_blank')
   })
 
   it('a failed read says so instead of claiming nothing is installed', async () => {

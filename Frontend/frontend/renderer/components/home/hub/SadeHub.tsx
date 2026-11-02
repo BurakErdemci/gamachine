@@ -5,7 +5,10 @@ import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameInput, NameNote, Panel, Tabs,
   TemplateChoices, Target, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
+import { InstallFlow, type InstallWords } from './InstallFlow';
 import { estimate } from './useHub';
+
+const INSTALL_WORDS: InstallWords = { title: 'hub.install.title', start: 'hub.install.go', done: 'hub.install.done' };
 
 /**
  * Sade: the Hub reads like a well-made settings page. A quiet segmented control with the one
@@ -26,19 +29,26 @@ export const SadeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
           <section className="sd-sheet">
             <header className="sd-sheet-head">
               <h2 className="sd-h">{t('hub.editorsHead')}</h2>
-              <button type="button" className="set-link" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+              {!h.installShown && (
+                <span className="hub-head-acts">
+                  {!!h.editors?.length && <button type="button" className="btn btn-primary hub-install-entry" onClick={() => h.openInstall()} data-testid="hub-install-entry">{t('hub.install.entry')}</button>}
+                  <button type="button" className="set-link" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+                </span>
+              )}
             </header>
-            {h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
-            {h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} onGetUnity={onGetUnity} />}
-            {!!h.editors?.length && (
+            {h.installShown && <InstallFlow h={h} words={INSTALL_WORDS} onGetUnity={onGetUnity} className="hub-inst sd-inst" />}
+            {!h.installShown && h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
+            {!h.installShown && h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} />}
+            {!h.installShown && !!h.editors?.length && (
               <table className="sd-table" data-testid="hub-editors">
-                <thead><tr><th>{t('hub.colVersion')}</th><th>{t('hub.colPath')}</th><th>{t('hub.colUse')}</th></tr></thead>
+                <thead><tr><th>{t('hub.colVersion')}</th><th>{t('hub.colPath')}</th><th>{t('hub.colUse')}</th><th><span className="hub-sr">{t('hub.install.colAction')}</span></th></tr></thead>
                 <tbody>
                   {h.editors.map((e, i) => (
                     <tr key={e.version}>
                       <td className="num">{e.version}{i === 0 && <span className="sd-pill">{t('hub.editorLatest')}</span>}</td>
                       <td className="sd-path" title={e.path}>{e.path}</td>
                       <td className="num">{h.usage.get(e.version) ?? 0}</td>
+                      <td><button type="button" className="set-link" onClick={() => h.openInstall(e.version)} data-testid={`hub-add-modules-${e.version}`}>{t('hub.install.addModules')}</button></td>
                     </tr>
                   ))}
                 </tbody>

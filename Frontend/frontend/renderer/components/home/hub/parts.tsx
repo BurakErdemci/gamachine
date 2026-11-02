@@ -1,7 +1,7 @@
 import React from 'react';
 
 import { useLang, type TKey } from '../../../lib/i18n';
-import { clock, hubFailureText, joinTarget, templateName, type HubTemplate } from '../../../lib/hub';
+import { clock, formatPct, hubFailureText, joinTarget, templateName, type HubTemplate } from '../../../lib/hub';
 import type { Hub, HubView } from './useHub';
 
 export const Ic = ({ children, className = 'ic' }: { children: React.ReactNode; className?: string }) => (
@@ -174,8 +174,13 @@ export const useResult = (h: Hub) => {
 export const Tabs = ({ h, labels, className = 'hub-tabs', badge = true }: {
   h: Hub; labels: Record<HubView, string>; className?: string; badge?: boolean;
 }) => {
-  const { t } = useLang();
-  const count: Partial<Record<HubView, number | undefined>> = { projects: h.recentCount, editors: h.editors?.length };
+  const { t, lang } = useLang();
+  const inst = h.install;
+  // While an install runs the editors badge carries its percentage instead of the count.
+  const count: Partial<Record<HubView, number | string | undefined>> = {
+    projects: h.recentCount,
+    editors: inst.state === 'installing' ? formatPct(inst.progress.pct ?? 0, lang) : h.editors?.length,
+  };
   const busy = h.run.state === 'creating';
   return (
     <div className={className} role="tablist" aria-label={t('hub.aria')}>
@@ -184,7 +189,10 @@ export const Tabs = ({ h, labels, className = 'hub-tabs', badge = true }: {
           className={`hub-tab hub-tab-${v}${h.view === v ? ' is-on' : ''}`} onClick={() => h.setView(v)} data-testid={`hub-tab-${v}`}>
           {v === 'new' && <Ic className="ic ic-sm"><path d="M10 4v12M4 10h12" /></Ic>}
           <span className="hub-tab-t">{labels[v]}</span>
-          {badge && v !== 'new' && count[v] !== undefined && <span className="hub-tab-n num">{count[v]}</span>}
+          {(badge || (v === 'editors' && inst.state === 'installing')) && v !== 'new' && count[v] !== undefined && (
+            <span className={`hub-tab-n num${v === 'editors' && inst.state === 'installing' ? ' is-installing' : ''}`}
+              data-testid={v === 'editors' ? 'hub-tab-editors-n' : undefined}>{count[v]}</span>
+          )}
           {v === 'new' && busy && <span className="hub-tab-busy" aria-hidden="true" />}
         </button>
       ))}
@@ -192,15 +200,18 @@ export const Tabs = ({ h, labels, className = 'hub-tabs', badge = true }: {
   );
 };
 
-/** Editors: the empty and failed states say how to get Unity; shared words, themed frames. */
-export const EditorsEmpty = ({ h, onGetUnity }: { h: Hub; onGetUnity: () => void }) => {
+/**
+ * Editors: the empty and failed states lead into the install flow (which explains a missing Unity
+ * Hub or install tool itself); shared words, themed frames.
+ */
+export const EditorsEmpty = ({ h }: { h: Hub }) => {
   const { t } = useLang();
   return (
     <div className="hub-empty" data-testid="hub-editors-empty">
       <b className="hub-empty-t">{t(h.editors === null ? 'hub.editorsFailed' : 'hub.editorsEmptyTitle')}</b>
       <p className="hub-empty-s">{t('hub.editorsEmpty')}</p>
       <div className="hub-empty-act">
-        <button type="button" className="btn btn-primary" onClick={onGetUnity}>{t('hub.getUnity')}</button>
+        <button type="button" className="btn btn-primary" onClick={() => h.openInstall()} data-testid="hub-install-empty">{t('hub.install.fromEmpty')}</button>
         <button type="button" className="btn btn-ghost" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
       </div>
     </div>

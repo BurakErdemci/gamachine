@@ -5,11 +5,13 @@ import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameInput, NameNote, Panel, Tabs,
   TemplateChoices, Target, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
+import { InstallFlow, type InstallWords } from './InstallFlow';
 import { estimate } from './useHub';
 
 /** The gauge sweeps 240 degrees, from -120 (rest) to +120. */
 const SWEEP = 240;
 const DIAL_TICKS = Array.from({ length: 13 }, (_, i) => -120 + i * 20);
+const INSTALL_WORDS: InstallWords = { title: 'hub.install.titleShop', start: 'hub.install.goShop', done: 'hub.install.doneShop' };
 
 /**
  * Atölye: the Hub is the workshop. Tabs are drawer pulls, the installed editors hang as tags on
@@ -31,9 +33,10 @@ export const AtolyeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
         {h.view === 'editors' && (
           <section className="at-board">
             <h2 className="at-h">{t('hub.editorsHeadShop')}</h2>
-            {h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
-            {h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} onGetUnity={onGetUnity} />}
-            {!!h.editors?.length && (
+            {h.installShown && <InstallFlow h={h} words={INSTALL_WORDS} onGetUnity={onGetUnity} className="hub-inst at-inst" />}
+            {!h.installShown && h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
+            {!h.installShown && h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} />}
+            {!h.installShown && !!h.editors?.length && (
               <ul className="at-peg" data-testid="hub-editors">
                 {h.editors.map((e, i) => (
                   <li key={e.version} className={`at-tool${i === 0 ? ' is-top' : ''}`} style={{ ['--tilt' as any]: `${((i * 7) % 5) - 2}deg` }}>
@@ -41,12 +44,16 @@ export const AtolyeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
                     <b className="at-tool-v num">{e.version}</b>
                     <span className="at-tool-u">{i === 0 ? `${t('hub.editorLatest')} · ` : ''}{t('hub.editorUsedBy', { n: h.usage.get(e.version) ?? 0 })}</span>
                     <span className="at-tool-p" title={e.path}>{e.path}</span>
+                    <button type="button" className="set-link at-tool-add" onClick={() => h.openInstall(e.version)} data-testid={`hub-add-modules-${e.version}`}>{t('hub.install.addModules')}</button>
                   </li>
                 ))}
               </ul>
             )}
-            {!!h.editors?.length && (
-              <button type="button" className="set-link at-refresh" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+            {!h.installShown && !!h.editors?.length && (
+              <div className="hub-head-acts at-board-acts">
+                <button type="button" className="btn btn-primary hub-install-entry" onClick={() => h.openInstall()} data-testid="hub-install-entry">{t('hub.install.entryShop')}</button>
+                <button type="button" className="set-link at-refresh" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+              </div>
             )}
           </section>
         )}

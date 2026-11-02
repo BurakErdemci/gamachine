@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import { useLang } from '../../../lib/i18n';
 import {
-  cancelRun, clearRun, clearRunIf, getRun, hubFailureText, launchProject, listEditors, listTemplates, nameProblem, pickParentDir, sortTemplates,
-  startCreate, subscribeRun, type HubEditor, type HubRun, type HubTemplate, type NameProblem,
+  cancelInstallRun, cancelRun, clearInstall, clearRun, clearRunIf, getInstall, getRun, hubFailureText, launchProject, listEditors, listTemplates,
+  nameProblem, pickParentDir, runInstall, sortTemplates, startCreate, subscribeInstall, subscribeRun,
+  type HubEditor, type HubRun, type HubTemplate, type InstallRun, type InstallTarget, type NameProblem,
 } from '../../../lib/hub';
 import type { RecentWorkspace } from '../../../hooks/home/useRecentWorkspaces';
 
 export type HubView = 'projects' | 'editors' | 'new';
-export type { HubRun };
+export type { HubRun, InstallRun };
 
 /** Creating from a template took 85-105 s when measured (29 Oct 2026); the bar is an estimate on that. */
 export const EXPECTED_MS = 100_000;
@@ -25,6 +26,7 @@ export interface HubDeps {
 }
 
 const announced = new WeakSet<HubRun>();
+const refreshedFor = new WeakSet<InstallRun>();
 
 /** All of the mini Hub's state; the per-theme compositions only lay it out. */
 export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubDeps) {
@@ -44,6 +46,9 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   const [templateId, setTemplateId] = useState('');
   // The third getter serves the static export prerender, which has no run.
   const run = useSyncExternalStore(subscribeRun, getRun, getRun);
+  const install = useSyncExternalStore(subscribeInstall, getInstall, getInstall);
+  // The install flow is open: undefined = closed, '' = a new version, a version = adding modules to it.
+  const [installFor, setInstallFor] = useState<string | undefined>(undefined);
   const versionRef = useRef('');
   const alive = useRef(true);
   // Set again on every run: StrictMode runs the cleanup once before the real mount.
@@ -80,6 +85,13 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   }, [loadTemplates]);
 
   useEffect(() => { void refreshEditors(); }, [refreshEditors]);
+
+  // Once per finished install, across remounts: the new editor or modules show up in the list.
+  useEffect(() => {
+    if (install.state !== 'done' || refreshedFor.has(install)) return;
+    refreshedFor.add(install);
+    void refreshEditors();
+  }, [install, refreshEditors]);
 
   const setVersion = (v: string) => { versionRef.current = v; setVersionState(v); void loadTemplates(v); };
 
@@ -136,10 +148,19 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
 
   const template = templates?.find(x => x.id === templateId);
 
+  const openInstall = (addTo = '') => { if (install.state !== 'installing') clearInstall(); setInstallFor(addTo); };
+  const closeInstall = () => { clearInstall(); setInstallFor(undefined); };
+  /** The new-project form with a just-installed version already chosen. */
+  const newWithVersion = (v: string) => { closeInstall(); setVersion(v); setView('new'); };
+  // A run under way or just ended keeps the flow on screen even after a remount.
+  const installShown = installFor !== undefined || install.state !== 'idle';
+
   return {
     view, setView, editors, refreshEditors, templates, template, templateId, setTemplateId,
     name, setName, nameTouched, setNameTouched, tried, problem, parent, pickParent, version, setVersion,
     canCreate, create, cancel, retryTemplates: () => void loadTemplates(versionRef.current), run, back, another, openCreated, launch, usage, recentCount: recent.length,
+    install, installShown, installFor: installFor ?? '', openInstall, closeInstall, newWithVersion,
+    startInstall: (target: InstallTarget) => void runInstall(target), cancelInstall: () => void cancelInstallRun(),
   };
 }
 

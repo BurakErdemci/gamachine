@@ -6,9 +6,11 @@ import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameCount, NameInput, NameNote, Panel, Tabs,
   TemplateChoices, TemplateGlyph, Target, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
+import { InstallFlow, type InstallWords } from './InstallFlow';
 import { estimate } from './useHub';
 
 const SEGMENTS = 24;
+const INSTALL_WORDS: InstallWords = { title: 'hub.install.titleQuest', start: 'hub.install.goQuest', done: 'hub.install.doneQuest' };
 
 /**
  * Arena: the Hub is a game's main menu. Tabs are skewed HUD plates, a new project is a
@@ -28,9 +30,10 @@ export const ArenaHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
         {h.view === 'editors' && (
           <section className="ar-engines">
             <h2 className="ar-kick">{t('hub.editorsHeadQuest')}</h2>
-            {h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
-            {h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} onGetUnity={onGetUnity} />}
-            {!!h.editors?.length && (
+            {h.installShown && <InstallFlow h={h} words={INSTALL_WORDS} onGetUnity={onGetUnity} className="hub-inst ar-inst" />}
+            {!h.installShown && h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
+            {!h.installShown && h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} />}
+            {!h.installShown && !!h.editors?.length && (
               <ul className="ar-engine-list" data-testid="hub-editors">
                 {h.editors.map((e, i) => {
                   const [major, ...rest] = e.version.split('.');
@@ -40,13 +43,17 @@ export const ArenaHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
                       {i === 0 && <span className="ar-plate">{t('hub.editorLatest')}</span>}
                       <span className="ar-engine-use">{t('hub.editorUsedBy', { n: h.usage.get(e.version) ?? 0 })}</span>
                       <span className="ar-engine-path" title={e.path}>{e.path}</span>
+                      <button type="button" className="set-link ar-engine-add" onClick={() => h.openInstall(e.version)} data-testid={`hub-add-modules-${e.version}`}>{t('hub.install.addModules')}</button>
                     </li>
                   );
                 })}
               </ul>
             )}
-            {!!h.editors?.length && (
-              <button type="button" className="btn btn-ghost ar-refresh" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+            {!h.installShown && !!h.editors?.length && (
+              <div className="hub-head-acts ar-engine-acts">
+                <button type="button" className="btn btn-primary hub-install-entry" onClick={() => h.openInstall()} data-testid="hub-install-entry">{t('hub.install.entryQuest')}</button>
+                <button type="button" className="btn btn-ghost ar-refresh" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+              </div>
             )}
           </section>
         )}

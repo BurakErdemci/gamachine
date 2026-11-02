@@ -7,7 +7,10 @@ import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameInput, NameNote, Panel, Tabs,
   TemplateChoices, TemplateGlyph, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
+import { InstallFlow, type InstallWords } from './InstallFlow';
 import { estimate } from './useHub';
+
+const INSTALL_WORDS: InstallWords = { title: 'hub.install.title', start: 'hub.install.go', done: 'hub.install.done' };
 
 /**
  * Özel: built only from the user's three colours and font (the --u-* variables). The view names
@@ -49,20 +52,27 @@ export const OzelHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
 
         {h.view === 'editors' && (
           <section className="oz-editors">
-            {h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
-            {h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} onGetUnity={onGetUnity} />}
-            {!!h.editors?.length && (
+            {h.installShown && <InstallFlow h={h} words={INSTALL_WORDS} onGetUnity={onGetUnity} className="hub-inst oz-inst" />}
+            {!h.installShown && h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
+            {!h.installShown && h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} />}
+            {!h.installShown && !!h.editors?.length && (
               <ul className="oz-chips" data-testid="hub-editors">
                 {h.editors.map((e, i) => (
                   <li key={e.version} className={`oz-chip${i === 0 ? ' is-top' : ''}`}>
                     <b className="num">{e.version}</b>
                     <span>{i === 0 ? `${t('hub.editorLatest')} · ` : ''}{t('hub.editorUsedBy', { n: h.usage.get(e.version) ?? 0 })}</span>
                     <span className="oz-chip-p" title={e.path}>{e.path}</span>
+                    <button type="button" className="set-link oz-chip-add" onClick={() => h.openInstall(e.version)} data-testid={`hub-add-modules-${e.version}`}>{t('hub.install.addModules')}</button>
                   </li>
                 ))}
               </ul>
             )}
-            <button type="button" className="set-link" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+            {!h.installShown && (
+              <div className="hub-head-acts oz-editors-acts">
+                {!!h.editors?.length && <button type="button" className="btn btn-primary hub-install-entry" onClick={() => h.openInstall()} data-testid="hub-install-entry">{t('hub.install.entry')}</button>}
+                <button type="button" className="set-link" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+              </div>
+            )}
           </section>
         )}
 

@@ -6,10 +6,12 @@ import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameInput, NameNote, Panel, Tabs,
   TemplateChoices, Target, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
+import { InstallFlow, type InstallWords } from './InstallFlow';
 
 /** The ruler spans two minutes: the measured 85-105 s fall near its right end. */
 const RULER_MS = 120_000;
 const TICKS = Array.from({ length: 25 }, (_, i) => i * 5);
+const INSTALL_WORDS: InstallWords = { title: 'hub.install.titleNote', start: 'hub.install.goNote', done: 'hub.install.doneNote' };
 
 /**
  * Pafta: the Hub is a drawing sheet. Tabs are the sheet index (A, B, C), installs are a bill of
@@ -31,12 +33,13 @@ export const PaftaHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
 
         {h.view === 'editors' && (
           <section className="pf-sheet pf-bom-sheet">
-            {h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
-            {h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} onGetUnity={onGetUnity} />}
-            {!!h.editors?.length && (
+            {h.installShown && <InstallFlow h={h} words={INSTALL_WORDS} onGetUnity={onGetUnity} className="hub-inst pf-inst" />}
+            {!h.installShown && h.editors === undefined && <p className="hub-wait" role="status">{t('hub.editorsLoading')}</p>}
+            {!h.installShown && h.editors !== undefined && !h.editors?.length && <EditorsEmpty h={h} />}
+            {!h.installShown && !!h.editors?.length && (
               <table className="pf-bom" data-testid="hub-editors">
                 <caption>{t('hub.editorsHeadNote')}</caption>
-                <thead><tr><th>{t('hub.colItem')}</th><th>{t('hub.colVersion')}</th><th>{t('hub.colPath')}</th><th>{t('hub.colUse')}</th></tr></thead>
+                <thead><tr><th>{t('hub.colItem')}</th><th>{t('hub.colVersion')}</th><th>{t('hub.colPath')}</th><th>{t('hub.colUse')}</th><th><span className="hub-sr">{t('hub.install.colAction')}</span></th></tr></thead>
                 <tbody>
                   {h.editors.map((e, i) => (
                     <tr key={e.version}>
@@ -44,12 +47,18 @@ export const PaftaHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
                       <td className="num pf-ver">{e.version}</td>
                       <td className="pf-path" title={e.path}>{e.path}</td>
                       <td className="num">{h.usage.get(e.version) ?? 0}</td>
+                      <td><button type="button" className="set-link" onClick={() => h.openInstall(e.version)} data-testid={`hub-add-modules-${e.version}`}>{t('hub.install.addModules')}</button></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-            <button type="button" className="set-link pf-refresh" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+            {!h.installShown && (
+              <div className="hub-head-acts pf-bom-acts">
+                {!!h.editors?.length && <button type="button" className="btn btn-primary hub-install-entry" onClick={() => h.openInstall()} data-testid="hub-install-entry">{t('hub.install.entryNote')}</button>}
+                <button type="button" className="set-link pf-refresh" onClick={() => void h.refreshEditors()}>{t('hub.refresh')}</button>
+              </div>
+            )}
           </section>
         )}
 
