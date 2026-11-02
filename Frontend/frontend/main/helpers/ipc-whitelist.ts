@@ -35,6 +35,7 @@ export const ALLOWED_INVOKE_CHANNELS = new Set([
   'open-unity-hub',
   'authorize-workspace',
   'browser-live',
+  'connectors',
   'hub-list-editors',
   'hub-list-templates',
   'hub-create-project',

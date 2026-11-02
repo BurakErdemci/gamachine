@@ -60,6 +60,7 @@ import { ComputerLive, LIVE_OPEN_EVENT } from './helpers/computer-use-live'
 import { hideOrMinimize } from './helpers/hide-while-live'
 import { reopenMain } from './helpers/reopen-main'
 import { createProfileReset } from './helpers/profile-reset'
+import { createConnectors } from './helpers/connectors'
 import { collectMtimes } from './helpers/stat-mtimes'
 import { BrowserHost } from './helpers/browser-host'
 import { BrowserHistory } from './helpers/browser-history'
@@ -1035,6 +1036,15 @@ const browserHost = new BrowserHost({
   log: (...args) => console.log(...args),
 })
 handleSecure('browser-live', (_event, req: unknown) => browserHost.invoke(req))
+
+// Connectors (Settings > Bağlayıcılar): the /connectors routes, with the UI secret kept here (helpers/connectors.ts).
+const connectors = createConnectors({
+  platform: process.platform, baseUrl: getBackendBaseUrl, appToken: localAppToken, uiSecret, http: axios,
+  dialog: { showOpenDialog: options => dialog.showOpenDialog(options as Electron.OpenDialogOptions) },
+  shell: { openExternal: url => shell.openExternal(url) },
+  log: (...args) => console.log(...args),
+})
+handleSecure('connectors', (_event, req: unknown) => connectors.invoke(req))
 
 async function startBrowserHost(): Promise<void> {
   if (browserServer) return

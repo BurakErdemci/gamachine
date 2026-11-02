@@ -102,8 +102,9 @@ describe('IPC Whitelist — Set doğruluğu', () => {
   // 41 -> 42: workspace-trash (move a saved Unity project to the Trash; desktop only).
   // 42 -> 43: ui-language-set announces only the renderer's tr/en choice.
   // 43 -> 47: hub-install-catalog/plan/start/cancel install a Unity editor through the Unity CLI.
-  it('contains exactly 47 channels', () => {
-    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(47)
+  // 47 -> 48: 'connectors' reaches the backend's /connectors routes (Settings > Bağlayıcılar) and keeps the UI secret in main.
+  it('contains exactly 48 channels', () => {
+    expect(ALLOWED_INVOKE_CHANNELS.size).toBe(48)
     expect(ALLOWED_INVOKE_CHANNELS.has('ui-language-set')).toBe(true)
     expect(() => assertAllowedInvokeChannel('ui-language-set')).not.toThrow()
     expect(ALLOWED_INVOKE_CHANNELS.has('computer-use')).toBe(true)
