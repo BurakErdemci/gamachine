@@ -200,6 +200,7 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
   const { t } = useLang();
   const desktop = ipc() !== null;
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [cardsOff, setCardsOff] = useState(false);
   const [readFailed, setReadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -213,6 +214,7 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
     if (isError(r) || typeof r?.enabled !== 'boolean') { setReadFailed(true); return; }
     setReadFailed(false);
     setEnabled(r.enabled);
+    setCardsOff(r.cardsOff === true);
   }, [desktop]);
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -229,6 +231,26 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
         setEnabled(r.enabled);
         saved();
         window.dispatchEvent(new CustomEvent(LIVE_FEATURES_EVENT));
+      }
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+
+  const toggleCards = async () => {
+    if (busy || enabled !== true) return;
+    if (!cardsOff && !(await confirmDialog(t('bp.set.cardsConfirm'), t('bp.set.cardsConfirmBtn'), t('confirm.cancel')))) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await call({ op: cardsOff ? 'cards-on' : 'cards-off' });
+      if (isError(r) || typeof r?.cardsOff !== 'boolean' || r.cardsOff === cardsOff) {
+        setMsg(t('bp.set.failed'));
+        showToast?.(t('bp.set.failed'), 'error');
+        await refresh();
+      } else {
+        setCardsOff(r.cardsOff);
+        saved();
       }
     } finally {
       if (alive.current) setBusy(false);
@@ -279,6 +301,21 @@ export const BrowserUsePage = ({ saved, showToast }: { saved: () => void; showTo
                 disabled={!desktop || enabled === null || busy}
                 busy={busy}
                 testId="bp-switch"
+              />
+            )}
+          />
+          <SetRow
+            testId="bp-cards-row"
+            name={t('bp.set.cards')}
+            hint={cardsOff ? <span data-testid="bp-cards-warn">{t('bp.set.cardsWarn')}</span> : t('bp.set.cardsHint')}
+            control={(
+              <SetSwitch
+                checked={cardsOff}
+                onToggle={() => { void toggleCards(); }}
+                label={t('bp.set.cards')}
+                disabled={!desktop || enabled !== true || busy}
+                busy={busy}
+                testId="bp-cards-switch"
               />
             )}
           />

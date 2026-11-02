@@ -7,6 +7,7 @@ from . import platform
 
 logger = logging.getLogger(__name__)
 ENABLED_KEY = "computer_use_enabled"
+CARDS_OFF_KEY = "computer_use_cards_off"
 GRANTS_KEY = "computer_use_app_grants"
 CORRUPT_GRANTS_KEY = "computer_use_app_grants_corrupt"
 _store = None
@@ -32,6 +33,14 @@ def enabled(db):
 
 def set_enabled(db, on):
     db.set_setting(ENABLED_KEY, "1" if on else "0")
+
+
+def cards_off(db):
+    return db.get_setting(CARDS_OFF_KEY) == "1"
+
+
+def set_cards_off(db, on):
+    db.set_setting(CARDS_OFF_KEY, "1" if on else "0")
 
 
 def _load_grants(db, *, require_backup=False):

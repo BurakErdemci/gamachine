@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useLang, type TKey } from '../../../lib/i18n';
+import { confirmDialog } from '../../ui/ConfirmDialog';
 import { LIVE_FEATURES_EVENT } from '../../../lib/liveFeatures';
 import { stripBidi } from '../../../lib/modelText';
 import {
   computerUseStatus, hasComputerUseIpc, isComputerUseError, openScreenSettings, removeComputerGrant,
-  requestAccessibility, restartComputerUse, setComputerUseEnabled, type ComputerUseStatus,
+  requestAccessibility, restartComputerUse, setComputerUseCardsOff, setComputerUseEnabled, type ComputerUseStatus,
 } from '../../../lib/computerUse';
 import { Lamp, SetCard, SetGroup, SetPageHead, SetRow, SetSwitch } from './controls';
 
@@ -115,6 +116,17 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
     window.dispatchEvent(new CustomEvent(LIVE_FEATURES_EVENT));
   });
 
+  const cardsOff = status?.settings.cardsOff === true;
+  const toggleCards = async () => {
+    if (busy || !enabled) return;
+    if (!cardsOff && !(await confirmDialog(t('cu.set.cardsConfirm'), t('cu.set.cardsConfirmBtn'), t('confirm.cancel')))) return;
+    await run('cards', () => setComputerUseCardsOff(!cardsOff), r => {
+      const off = (r as { cardsOff?: unknown })?.cardsOff;
+      if (typeof off !== 'boolean' || off === cardsOff) { fail(); return; }
+      saved();
+    });
+  };
+
   const masterHint = !desktop ? t('cu.set.desktopOnly')
     : readFailed ? t('cu.set.readFailed')
     : !status ? t('cu.set.loading')
@@ -150,6 +162,21 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
                 disabled={!desktop || !status || !available || busy !== null}
                 busy={busy === 'switch'}
                 testId="cu-switch"
+              />
+            )}
+          />
+          <SetRow
+            testId="cu-cards-row"
+            name={t('cu.set.cards')}
+            hint={cardsOff ? <span data-testid="cu-cards-warn">{t('cu.set.cardsWarn')}</span> : t('cu.set.cardsHint')}
+            control={(
+              <SetSwitch
+                checked={cardsOff}
+                onToggle={() => { void toggleCards(); }}
+                label={t('cu.set.cards')}
+                disabled={!desktop || !status || !available || !enabled || busy !== null}
+                busy={busy === 'cards'}
+                testId="cu-cards-switch"
               />
             )}
           />

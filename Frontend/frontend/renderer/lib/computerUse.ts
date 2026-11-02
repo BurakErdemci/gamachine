@@ -21,6 +21,8 @@ export interface ComputerUseStatus {
     grants: ComputerGrant[];
     runtime?: { running: boolean; driver_path: string | null; socket_path: string | null };
     halted?: number[];
+    /** Approval cards are turned off for computer use (Settings switch). */
+    cardsOff?: boolean;
   };
   permissions: { accessibility: boolean; screen: string };
 }
@@ -76,6 +78,7 @@ export async function computerUseStatus(): Promise<ComputerUseStatus | ComputerU
 }
 
 export const setComputerUseEnabled = (on: boolean) => computerUseCall({ op: on ? 'enable' : 'disable' });
+export const setComputerUseCardsOff = (on: boolean) => computerUseCall({ op: on ? 'cards-off' : 'cards-on' });
 export const requestAccessibility = () => computerUseCall({ op: 'request-accessibility' });
 export const openScreenSettings = () => computerUseCall({ op: 'open-screen-settings' });
 export const restartComputerUse = () => computerUseCall({ op: 'restart' });

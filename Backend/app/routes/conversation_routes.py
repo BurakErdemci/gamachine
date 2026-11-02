@@ -632,6 +632,7 @@ BROWSER_NAVIGATION_REASON = "The page changed, so this browser approval no longe
 BROWSER_RESTART_REASON = "The agent browser restarted, so this browser approval no longer applies."
 BROWSER_CLEARED_REASON = "The browser data was cleared, so this browser approval no longer applies."
 BROWSER_INACTIVE_REASON = "The agent browser is turned off in Settings."
+CARDS_OFF_REASON = "approval cards are off"
 
 
 def create_conversation_router(db, progress_store=None):  # Kept only for call compatibility.
@@ -745,6 +746,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                 "decision": outcome, "reason": reason,
             })
 
+        if decision.kind == "card" and computer_settings.cards_off(db):
+            # Resolved here, before a card opens, so no grant (persistent or session) is ever written.
+            decision = computer_gate.Decision("allow", CARDS_OFF_REASON)
         log(decision.kind, decision.reason)
         computer_activity.record(None if owner is _UNKNOWN_OWNER else owner, tool, params, decision.kind)
         if decision.kind != "card":
@@ -839,6 +843,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             decision = computer_gate.Decision("deny", BROWSER_HALTED_REASON)
         elif not browser_settings.enabled(db):
             decision = computer_gate.Decision("deny", BROWSER_INACTIVE_REASON)
+        elif browser_settings.cards_off(db):
+            decision = computer_gate.Decision("allow", CARDS_OFF_REASON)
         elif granted:
             decision = computer_gate.Decision("allow")
         else:
@@ -2915,7 +2921,7 @@ Max 300 kelime. Türkçe yaz.
         # `mode` stays for older readers; it no longer affects `active`.
         return {"enabled": on, "mode": approval_mode.current_mode(), "active": on,
                 "grants": computer_settings.grants(db), "runtime": dict(_computer_runtime),
-                "halted": sorted(_computer_halted)}
+                "halted": sorted(_computer_halted), "cards_off": computer_settings.cards_off(db)}
 
     @router.post("/computer-use/runtime")
     async def set_computer_use_runtime(
@@ -2966,6 +2972,24 @@ Max 300 kelime. Türkçe yaz.
         result = await get_computer_use_settings(x_session_token=x_session_token)
         return {**result, "rejected_computer_use": rejected}
 
+    @router.post("/computer-use/settings/cards")
+    async def set_computer_use_cards_off(
+        body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+        x_ui_secret: str = Header(alias="X-Gamachine-UI-Secret", default=""),
+        x_maintenance: str = Header(alias="X-UnityAI-Maintenance", default=""),
+    ):
+        _check_token(x_session_token)
+        if x_maintenance:
+            raise HTTPException(status_code=403, detail="Bu kanaldan bilgisayar kullanımı değiştirilemez.")
+        if not approval_mode.check_ui_secret(x_ui_secret):
+            raise HTTPException(status_code=403, detail="Bilgisayar kullanımı onay kartları yalnız uygulama arayüzünden değiştirilebilir.")
+        off = body.get("cards_off")
+        if type(off) is not bool:
+            raise HTTPException(status_code=400, detail="cards_off true ya da false olmalı.")
+        computer_settings.set_cards_off(db, off)
+        return await get_computer_use_settings(x_session_token=x_session_token)
+
     @router.post("/computer-use/batch-step")
     async def computer_use_batch_step(
         body: dict,
@@ -2998,7 +3022,7 @@ Max 300 kelime. Türkçe yaz.
         _check_token(x_session_token)
         # Never the host port or token: those stay between Electron main and the gateway.
         return {"enabled": browser_settings.enabled(db), "running": _browser_runtime["running"],
-                "halted": sorted(_computer_halted)}
+                "halted": sorted(_computer_halted), "cards_off": browser_settings.cards_off(db)}
 
     @router.post("/browser/command")
     async def browser_command(
@@ -3041,6 +3065,25 @@ Max 300 kelime. Türkçe yaz.
         rejected = _reject_computer_use_pending(reason=BROWSER_INACTIVE_REASON, flag="browser_use") if not on else 0
         result = await get_browser_settings(x_session_token=x_session_token)
         return {**result, "rejected_browser_use": rejected}
+
+    @router.put("/browser/settings/cards")
+    async def set_browser_cards_off(
+        body: dict,
+        x_session_token: str = Header(alias="X-Session-Token", default=""),
+        x_ui_secret: str = Header(alias="X-Gamachine-UI-Secret", default=""),
+        x_maintenance: str = Header(alias="X-UnityAI-Maintenance", default=""),
+    ):
+        _check_token(x_session_token)
+        if x_maintenance:
+            raise HTTPException(status_code=403, detail="Bu kanaldan tarayıcı kullanımı değiştirilemez.")
+        if not approval_mode.check_ui_secret(x_ui_secret):
+            raise HTTPException(status_code=403, detail="Tarayıcı onay kartları yalnız uygulama arayüzünden değiştirilebilir.")
+        off = body.get("cards_off")
+        if type(off) is not bool:
+            raise HTTPException(status_code=400, detail="cards_off true ya da false olmalı.")
+        browser_settings.set_cards_off(db, off)
+        # An open card stays for the user to answer; only new steps skip cards.
+        return await get_browser_settings(x_session_token=x_session_token)
 
     @router.post("/browser/runtime")
     async def set_browser_runtime(

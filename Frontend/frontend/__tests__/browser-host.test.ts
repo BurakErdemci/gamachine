@@ -381,7 +381,7 @@ describe('BrowserHost halt and renderer channel', () => {
 
   it('settings reads with the session token; enable and disable also send the UI secret, which never reaches the renderer', async () => {
     const f = fixture()
-    expect(await f.host.invoke({ op: 'settings' })).toEqual({ enabled: true, running: false })
+    expect(await f.host.invoke({ op: 'settings' })).toEqual({ enabled: true, running: false, cardsOff: false })
     expect(f.http.request.mock.calls[0][0]).toMatchObject({ method: 'get', url: 'http://127.0.0.1:9/browser/settings', headers: { 'X-Session-Token': 'tok' } })
     expect(f.http.request.mock.calls[0][0].headers).not.toHaveProperty('X-Gamachine-UI-Secret')
     const enabled = await f.host.invoke({ op: 'enable' })
@@ -391,6 +391,23 @@ describe('BrowserHost halt and renderer channel', () => {
     expect(await f.host.invoke({ op: 'disable' })).toEqual({ enabled: false })
     f.http.request.mockRejectedValueOnce(Object.assign(new Error('500'), { config: { headers: { 'X-Gamachine-UI-Secret': 'secret' } } }))
     const failed = await f.host.invoke({ op: 'enable' })
+    expect(JSON.stringify(failed)).not.toContain('secret')
+    expect(failed).toHaveProperty('error')
+  })
+})
+
+describe('BrowserHost approval cards switch', () => {
+  it('cards-off and cards-on PUT the cards route with both secrets and return only cardsOff', async () => {
+    const f = fixture()
+    f.http.request.mockResolvedValueOnce({ data: { cards_off: true } } as any)
+    expect(await f.host.invoke({ op: 'cards-off' })).toEqual({ cardsOff: true })
+    expect(f.http.request).toHaveBeenLastCalledWith(expect.objectContaining({ method: 'put', url: 'http://127.0.0.1:9/browser/settings/cards',
+      data: { cards_off: true }, headers: { 'X-Session-Token': 'tok', 'X-Gamachine-UI-Secret': 'secret' } }))
+    f.http.request.mockResolvedValueOnce({ data: { cards_off: false } } as any)
+    expect(await f.host.invoke({ op: 'cards-on' })).toEqual({ cardsOff: false })
+    expect(f.http.request).toHaveBeenLastCalledWith(expect.objectContaining({ data: { cards_off: false } }))
+    f.http.request.mockRejectedValueOnce(Object.assign(new Error('500'), { config: { headers: { 'X-Gamachine-UI-Secret': 'secret' } } }))
+    const failed = await f.host.invoke({ op: 'cards-off' })
     expect(JSON.stringify(failed)).not.toContain('secret')
     expect(failed).toHaveProperty('error')
   })

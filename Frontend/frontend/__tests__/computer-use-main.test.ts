@@ -293,6 +293,19 @@ describe('ComputerUseHost', () => {
     expect(f.host.running).toBe(true)
   })
 
+  it('cards-off and cards-on POST the cards route with the UI secret; status carries cardsOff', async () => {
+    const f = fixture()
+    f.http.request.mockResolvedValueOnce({ data: { cards_off: true } })
+    expect(await f.host.invoke({ op: 'cards-off' })).toEqual({ cardsOff: true })
+    expect(f.http.request).toHaveBeenLastCalledWith(expect.objectContaining({ method: 'post', url: 'http://localhost:9/computer-use/settings/cards',
+      data: { cards_off: true }, headers: expect.objectContaining({ 'X-Gamachine-UI-Secret': 'ui-secret' }) }))
+    f.http.request.mockResolvedValueOnce({ data: { cards_off: false } })
+    expect(await f.host.invoke({ op: 'cards-on' })).toEqual({ cardsOff: false })
+    expect(f.http.request).toHaveBeenLastCalledWith(expect.objectContaining({ data: { cards_off: false } }))
+    f.http.request.mockResolvedValueOnce({ data: { enabled: true, grants: [], cards_off: true } })
+    expect(await f.host.invoke({ op: 'status' })).toMatchObject({ settings: { cardsOff: true } })
+  })
+
   it('allows an explicit restart to clear the crash throttle', async () => {
     const f = fixture()
     await f.host.reconcile()

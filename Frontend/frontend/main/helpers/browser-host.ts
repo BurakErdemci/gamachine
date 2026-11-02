@@ -2478,10 +2478,16 @@ export class BrowserHost {
       case 'settings':
       case 'enable':
       case 'disable':
+      case 'cards-off':
+      case 'cards-on':
         try {
           if (op === 'settings') {
             const { data } = await this.request('get', '/browser/settings')
-            return { enabled: data?.enabled === true, running: this.runtimeBody().running }
+            return { enabled: data?.enabled === true, running: this.runtimeBody().running, cardsOff: data?.cards_off === true }
+          }
+          if (op === 'cards-off' || op === 'cards-on') {
+            const { data } = await this.request('put', '/browser/settings/cards', { cards_off: op === 'cards-off' }, true)
+            return { cardsOff: data?.cards_off === true }
           }
           const { data } = await this.request('put', '/browser/settings', { enabled: op === 'enable' }, true)
           void this.reconcile().catch(() => { this.log('[browser] reconcile failed') })

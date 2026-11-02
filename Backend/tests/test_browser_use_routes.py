@@ -109,10 +109,10 @@ def approve_click(env, conversation_id=1, **args):
 
 def test_settings_never_expose_the_host_port_or_token(env):
     first = env.client.get("/browser/settings")
-    assert first.json() == {"enabled": True, "running": False, "halted": []}
+    assert first.json() == {"enabled": True, "running": False, "halted": [], "cards_off": False}
     assert env.client.post("/browser/runtime", json=runtime_body(), headers=UI).json() == runtime_body()
     view = env.client.get("/browser/settings")
-    assert view.json() == {"enabled": True, "running": True, "halted": []}
+    assert view.json() == {"enabled": True, "running": True, "halted": [], "cards_off": False}
     assert TOKEN not in view.text and "4711" not in view.text
     switched = env.client.put("/browser/settings", json={"enabled": True}, headers=UI)
     assert TOKEN not in switched.text and "4711" not in switched.text

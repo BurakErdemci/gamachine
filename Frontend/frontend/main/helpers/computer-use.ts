@@ -337,7 +337,8 @@ export class ComputerUseHost {
           const appAx = this.deps.platform === 'darwin' && this.deps.systemPreferences.isTrustedAccessibilityClient(false)
           const appScreen = this.deps.platform === 'darwin' ? this.deps.systemPreferences.getMediaAccessStatus('screen') : 'not-determined'
           const drv = await this.driverPermissions()
-          return { available: this.available, running: this.running, platform: this.deps.platform, settings, permissions: {
+          return { available: this.available, running: this.running, platform: this.deps.platform,
+            settings: { ...settings, cardsOff: settings?.cards_off === true }, permissions: {
             accessibility: drv === null ? appAx : drv.accessibility,
             screen: drv === null ? appScreen : (drv.screen ? 'granted' : (appScreen === 'granted' ? 'denied' : appScreen)),
           } }
@@ -348,6 +349,9 @@ export class ComputerUseHost {
           await this.reconcile()
           return data
         }
+        case 'cards-off':
+        case 'cards-on':
+          return { cardsOff: (await this.request('post', '/computer-use/settings/cards', { cards_off: op === 'cards-off' }, true)).data?.cards_off === true }
         case 'request-accessibility':
           if (this.deps.platform === 'darwin') await this.resetPermission('Accessibility')
           return { accessibility: this.deps.platform === 'darwin' && this.deps.systemPreferences.isTrustedAccessibilityClient(true) }
